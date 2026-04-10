@@ -1,0 +1,99 @@
+import QtQuick
+import Pier
+
+// A single tab in the TabBar — title + close button + active accent line.
+Rectangle {
+    id: root
+
+    property string title: ""
+    property bool active: false
+    signal clicked
+    signal closeRequested
+
+    implicitHeight: 32
+    implicitWidth: row.implicitWidth + Theme.sp4 * 2
+
+    color: active                  ? Theme.bgCanvas
+         : tabArea.containsMouse   ? Theme.bgHover
+         : "transparent"
+
+    Behavior on color { ColorAnimation { duration: Theme.durFast } }
+
+    // Right border (subtle separator between tabs)
+    Rectangle {
+        anchors.right: parent.right
+        anchors.top: parent.top
+        anchors.bottom: parent.bottom
+        width: 1
+        color: Theme.borderSubtle
+    }
+
+    // Active indicator (top accent line)
+    Rectangle {
+        anchors.top: parent.top
+        anchors.left: parent.left
+        anchors.right: parent.right
+        height: 2
+        color: Theme.accent
+        visible: root.active
+
+        Behavior on color { ColorAnimation { duration: Theme.durNormal } }
+    }
+
+    // Click area for the whole tab (sits behind the close button)
+    MouseArea {
+        id: tabArea
+        anchors.fill: parent
+        hoverEnabled: true
+        cursorShape: Qt.PointingHandCursor
+        onClicked: root.clicked()
+    }
+
+    Row {
+        id: row
+        anchors.left: parent.left
+        anchors.leftMargin: Theme.sp4
+        anchors.verticalCenter: parent.verticalCenter
+        spacing: Theme.sp2
+
+        Text {
+            anchors.verticalCenter: parent.verticalCenter
+            text: root.title
+            font.family: Theme.fontUi
+            font.pixelSize: Theme.sizeBody
+            font.weight: root.active ? Theme.weightMedium : Theme.weightRegular
+            color: root.active ? Theme.textPrimary : Theme.textSecondary
+
+            Behavior on color { ColorAnimation { duration: Theme.durFast } }
+        }
+
+        // Close button
+        Rectangle {
+            anchors.verticalCenter: parent.verticalCenter
+            width: 16
+            height: 16
+            radius: Theme.radiusXs
+            color: closeArea.containsMouse ? Theme.bgActive : "transparent"
+
+            Behavior on color { ColorAnimation { duration: Theme.durFast } }
+
+            Text {
+                anchors.centerIn: parent
+                text: "×"
+                font.family: Theme.fontUi
+                font.pixelSize: Theme.sizeBodyLg
+                color: closeArea.containsMouse ? Theme.textPrimary : Theme.textTertiary
+
+                Behavior on color { ColorAnimation { duration: Theme.durFast } }
+            }
+
+            MouseArea {
+                id: closeArea
+                anchors.fill: parent
+                hoverEnabled: true
+                cursorShape: Qt.PointingHandCursor
+                onClicked: root.closeRequested()
+            }
+        }
+    }
+}

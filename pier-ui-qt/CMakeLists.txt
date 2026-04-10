@@ -36,10 +36,13 @@ qt_add_qml_module(pier-x
         qml/components/StatusPill.qml
         qml/components/SectionLabel.qml
         qml/components/Separator.qml
+        qml/components/TerminalTab.qml
         qml/shell/TopBar.qml
+        qml/shell/TabBar.qml
         qml/shell/Sidebar.qml
         qml/shell/StatusBar.qml
         qml/shell/WelcomeView.qml
+        qml/views/TerminalView.qml
     RESOURCES
         resources/icons/pier.png
 )

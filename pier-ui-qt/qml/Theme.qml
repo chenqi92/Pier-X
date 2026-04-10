@@ -15,9 +15,15 @@ QtObject {
     // Theme switching --------------------------------------
     property bool dark: true
 
-    function followSystem(scheme) {
-        // Bind to QStyleHints::colorSchemeChanged from C++
-        dark = (scheme === Qt.ColorScheme.Dark)
+    // When true, follow the OS color scheme. Set to false the moment
+    // the user manually toggles the theme — gives them full control.
+    property bool followSystem: true
+
+    // Called from C++ on startup and on QStyleHints::colorSchemeChanged.
+    function setSystemScheme(systemDark) {
+        if (followSystem) {
+            dark = systemDark
+        }
     }
 
     // Background — luminance stacking ----------------------

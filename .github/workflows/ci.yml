@@ -11,6 +11,11 @@ concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: true
 
+env:
+  # Opt into Node.js 24 for JavaScript-based actions, ahead of the
+  # 2026-09-16 deprecation deadline.
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: 'true'
+
 jobs:
   build:
     name: Build · ${{ matrix.name }}

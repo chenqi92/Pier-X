@@ -31,6 +31,7 @@ qt_add_qml_module(pier-x
         qml/components/GhostButton.qml
         qml/components/IconButton.qml
         qml/components/PierTextField.qml
+        qml/components/PierToolTip.qml
         qml/components/Card.qml
         qml/components/StatusPill.qml
         qml/components/SectionLabel.qml

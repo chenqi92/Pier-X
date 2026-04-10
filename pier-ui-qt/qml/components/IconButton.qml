@@ -7,8 +7,11 @@ Rectangle {
     id: root
 
     property string glyph: ""
+    property string tooltip: ""
     property bool active: false
     property bool enabled: true
+    property alias hovered: mouseArea.containsMouse
+    property alias pressed: mouseArea.pressed
     signal clicked
 
     implicitHeight: 28
@@ -41,5 +44,10 @@ Rectangle {
         cursorShape: root.enabled ? Qt.PointingHandCursor : Qt.ArrowCursor
         enabled: root.enabled
         onClicked: root.clicked()
+    }
+
+    PierToolTip {
+        text: root.tooltip
+        visible: root.tooltip.length > 0 && root.hovered
     }
 }

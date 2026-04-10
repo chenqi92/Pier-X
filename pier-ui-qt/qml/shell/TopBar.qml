@@ -33,24 +33,35 @@ Rectangle {
 
         IconButton {
             glyph: "+"
-            onClicked: console.log("New session — TODO")
+            tooltip: qsTr("New session")
+            onClicked: root.newSessionRequested()
         }
         IconButton {
-            glyph: "⌕"
-            onClicked: console.log("Search — TODO")
+            glyph: "⌘"
+            tooltip: qsTr("Command palette  (Ctrl+K)")
+            onClicked: root.commandPaletteRequested()
         }
 
         Item { Layout.fillWidth: true }
 
         IconButton {
             glyph: Theme.dark ? "☾" : "☀"
-            onClicked: Theme.dark = !Theme.dark
+            tooltip: Theme.dark ? qsTr("Switch to light theme") : qsTr("Switch to dark theme")
+            onClicked: {
+                Theme.followSystem = false
+                Theme.dark = !Theme.dark
+            }
         }
         IconButton {
             glyph: "⚙"
-            onClicked: console.log("Settings — TODO")
+            tooltip: qsTr("Settings")
+            onClicked: root.settingsRequested()
         }
     }
+
+    signal newSessionRequested
+    signal commandPaletteRequested
+    signal settingsRequested
 
     // Bottom 1px border
     Rectangle {

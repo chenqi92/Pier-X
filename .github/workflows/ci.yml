@@ -28,12 +28,10 @@ jobs:
             os: windows-latest
             qt-host: windows
             qt-arch: win64_msvc2022_64
-            cmake-extra: ''
           - name: macOS Universal
             os: macos-latest
             qt-host: mac
             qt-arch: clang_64
-            cmake-extra: '-DCMAKE_OSX_ARCHITECTURES=arm64;x86_64'
 
     steps:
       - name: Checkout
@@ -57,7 +55,14 @@ jobs:
       - name: Configure (CMake)
         shell: bash
         run: |
-          cmake -B build -S . -DCMAKE_BUILD_TYPE=Release ${{ matrix.cmake-extra }}
+          ARGS=(-B build -S . -DCMAKE_BUILD_TYPE=Release)
+          if [ "${{ runner.os }}" = "macOS" ]; then
+            # Universal binary — single .app for both arm64 and x86_64.
+            # Quoted as one array element to keep the ; from being parsed
+            # by bash as a command separator.
+            ARGS+=("-DCMAKE_OSX_ARCHITECTURES=arm64;x86_64")
+          fi
+          cmake "${ARGS[@]}"
 
       - name: Build
         run: cmake --build build --config Release --parallel

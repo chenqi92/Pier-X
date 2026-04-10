@@ -32,9 +32,12 @@ jobs:
           # ─── Windows ARM64 (Snapdragon / Surface Pro X) ───
           # Native build on the windows-11-arm runner. ARM64 Windows
           # support landed natively in Qt 6.8.
+          # NOTE: aqt host must be 'windows_arm64' (not 'windows') to
+          # see the native ARM64 Qt packages — using 'windows' returns
+          # "packages not found while parsing XML".
           - name: Windows ARM64
             os: windows-11-arm
-            qt-host: windows
+            qt-host: windows_arm64
             qt-arch: win64_msvc2022_arm64
             artifact-name: pier-x-windows-arm64
 
@@ -132,7 +135,11 @@ jobs:
   publish:
     name: Publish draft release
     needs: build
-    if: always() && needs.build.result != 'failure'
+    # Run as long as we weren't cancelled — publish whatever artifacts
+    # made it through, even if one of the matrix entries (e.g. ARM64)
+    # failed. The draft release can be re-uploaded later once the
+    # missing arch is fixed.
+    if: ${{ !cancelled() }}
     runs-on: ubuntu-latest
     permissions:
       contents: write

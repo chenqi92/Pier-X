@@ -53,9 +53,31 @@ See [docs/ROADMAP.md](./docs/ROADMAP.md) for the detailed status and what's comi
 - **C++17 compiler** (MSVC 2022 / Apple Clang 15+)
 - **Rust 1.75+** (once `pier-core` is wired in)
 
+### Install Qt 6.8 LTS
+
+Pier-X needs Qt 6.8 LTS (or newer). Easiest path is `aqtinstall` — same tool CI uses, no GUI installer needed:
+
+```bash
+pip install aqtinstall
+
+# Windows
+aqt install-qt windows desktop 6.8.1 win64_msvc2022_64 --outputdir C:\Qt
+
+# macOS
+aqt install-qt mac desktop 6.8.1 clang_64 --outputdir ~/Qt
+
+# Linux
+aqt install-qt linux desktop 6.8.1 linux_gcc_64 --outputdir ~/Qt
+```
+
+Alternatives:
+- **Windows / macOS**: official [Qt Online Installer](https://www.qt.io/download-qt-installer)
+- **macOS**: `brew install qt`
+- **Debian / Ubuntu**: `sudo apt install qt6-base-dev qt6-declarative-dev qt6-shadertools-dev`
+
 ### Quickstart
 
-The repo ships with one-shot scripts that configure, build, and launch the app.
+The repo ships with one-shot scripts that auto-detect Qt, configure, build, and launch the app.
 
 ```bash
 # macOS / Linux
@@ -72,13 +94,15 @@ Build only (no launch):
 .\build.ps1       # Windows
 ```
 
-Both scripts honour these environment variables:
+Auto-detection looks at, in order: an explicit `QT_DIR` env var, `qmake` in `PATH`, `C:\Qt\<version>\msvc2022_64\` on Windows, `~/Qt/<version>/macos\` on macOS, `~/Qt/<version>/gcc_64\` on Linux, and Homebrew's `/opt/homebrew/opt/qt`. If Qt isn't found, the script prints exact install commands and exits.
+
+All four scripts honour these environment variables:
 
 | Variable | Default | Purpose |
 |---|---|---|
 | `BUILD_TYPE` | `Release` | CMake build type (`Release`, `Debug`, `RelWithDebInfo`) |
 | `BUILD_DIR` | `build` | Build directory |
-| `QT_DIR` | _(auto-detect)_ | Path to a specific Qt 6.8 install (e.g. `~/Qt/6.8.1/macos`) |
+| `QT_DIR` | _(auto-detect)_ | Override the auto-detected Qt prefix (e.g. `C:\Qt\6.8.1\msvc2022_64`) |
 
 ### Manual build
 

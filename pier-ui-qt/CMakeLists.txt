@@ -27,6 +27,18 @@ qt_add_qml_module(pier-x
     QML_FILES
         qml/Main.qml
         qml/Theme.qml
+        qml/components/PrimaryButton.qml
+        qml/components/GhostButton.qml
+        qml/components/IconButton.qml
+        qml/components/PierTextField.qml
+        qml/components/Card.qml
+        qml/components/StatusPill.qml
+        qml/components/SectionLabel.qml
+        qml/components/Separator.qml
+        qml/shell/TopBar.qml
+        qml/shell/Sidebar.qml
+        qml/shell/StatusBar.qml
+        qml/shell/WelcomeView.qml
     RESOURCES
         resources/icons/pier.png
 )

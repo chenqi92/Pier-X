@@ -42,6 +42,7 @@ qt_add_qml_module(pier-x
         qml/shell/Sidebar.qml
         qml/shell/StatusBar.qml
         qml/shell/WelcomeView.qml
+        qml/shell/CommandPalette.qml
         qml/views/TerminalView.qml
     RESOURCES
         resources/icons/pier.png

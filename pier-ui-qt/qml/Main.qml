@@ -13,6 +13,22 @@ ApplicationWindow {
     visible: true
     title: qsTr("Pier-X")
 
+    // ─────────────────────────────────────────────────────
+    // Global keyboard shortcuts
+    // ─────────────────────────────────────────────────────
+    Shortcut {
+        sequences: ["Ctrl+K", "Meta+K"]
+        onActivated: commandPalette.toggle()
+    }
+    Shortcut {
+        sequences: ["Ctrl+T", "Meta+T"]
+        onActivated: window.openNewTab()
+    }
+    Shortcut {
+        sequences: ["Ctrl+W", "Meta+W"]
+        onActivated: window.closeTab(window.currentTabIndex)
+    }
+
     color: Theme.bgCanvas
     Behavior on color {
         ColorAnimation { duration: Theme.durNormal; easing.type: Theme.easingType }
@@ -63,7 +79,7 @@ ApplicationWindow {
         TopBar {
             Layout.fillWidth: true
             onNewSessionRequested: window.openNewTab()
-            onCommandPaletteRequested: console.log("Command palette — TODO")
+            onCommandPaletteRequested: commandPalette.show()
             onSettingsRequested: console.log("Settings — TODO")
         }
 
@@ -120,5 +136,52 @@ ApplicationWindow {
         StatusBar {
             Layout.fillWidth: true
         }
+    }
+
+    // ─────────────────────────────────────────────────────
+    // Floating overlay — Command Palette
+    // ─────────────────────────────────────────────────────
+    CommandPalette {
+        id: commandPalette
+        commands: [
+            {
+                title: qsTr("New local terminal"),
+                shortcut: "Ctrl+T",
+                action: function() { window.openNewTab() }
+            },
+            {
+                title: qsTr("Close current tab"),
+                shortcut: "Ctrl+W",
+                action: function() { window.closeTab(window.currentTabIndex) }
+            },
+            {
+                title: qsTr("Toggle theme"),
+                shortcut: "",
+                action: function() {
+                    Theme.followSystem = false
+                    Theme.dark = !Theme.dark
+                }
+            },
+            {
+                title: qsTr("Follow system theme"),
+                shortcut: "",
+                action: function() { Theme.followSystem = true }
+            },
+            {
+                title: qsTr("New SSH connection…"),
+                shortcut: "",
+                action: function() { console.log("New SSH — TODO") }
+            },
+            {
+                title: qsTr("Settings…"),
+                shortcut: "",
+                action: function() { console.log("Settings — TODO") }
+            },
+            {
+                title: qsTr("Quit Pier-X"),
+                shortcut: "Ctrl+Q",
+                action: function() { Qt.quit() }
+            }
+        ]
     }
 }

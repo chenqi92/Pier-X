@@ -45,6 +45,7 @@ qt_add_qml_module(pier-x
         qml/shell/WelcomeView.qml
         qml/shell/CommandPalette.qml
         qml/dialogs/NewConnectionDialog.qml
+        qml/dialogs/SettingsDialog.qml
         qml/views/TerminalView.qml
     RESOURCES
         resources/icons/pier.png

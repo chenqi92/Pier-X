@@ -37,6 +37,10 @@ ApplicationWindow {
         sequences: ["Ctrl+N", "Meta+N"]
         onActivated: newConnectionDialog.show()
     }
+    Shortcut {
+        sequences: ["Ctrl+,", "Meta+,"]
+        onActivated: settingsDialog.show()
+    }
 
     // ─────────────────────────────────────────────────────
     // App-wide models — will become C++/Rust models once
@@ -84,7 +88,7 @@ ApplicationWindow {
             Layout.fillWidth: true
             onNewSessionRequested: newConnectionDialog.show()
             onCommandPaletteRequested: commandPalette.show()
-            onSettingsRequested: console.log("Settings — TODO")
+            onSettingsRequested: settingsDialog.show()
         }
 
         RowLayout {
@@ -154,6 +158,11 @@ ApplicationWindow {
         }
     }
 
+    SettingsDialog {
+        id: settingsDialog
+        connectionsModel: connectionsModel
+    }
+
     CommandPalette {
         id: commandPalette
         commands: [
@@ -187,8 +196,8 @@ ApplicationWindow {
             },
             {
                 title: qsTr("Settings…"),
-                shortcut: "",
-                action: function() { console.log("Settings — TODO") }
+                shortcut: "Ctrl+,",
+                action: function() { settingsDialog.show() }
             },
             {
                 title: qsTr("Quit Pier-X"),

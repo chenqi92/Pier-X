@@ -1,0 +1,143 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - 'v*.*.*'
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: 'Release tag (e.g. v0.1.0)'
+        required: true
+        type: string
+
+env:
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: 'true'
+
+jobs:
+  build:
+    name: Build · ${{ matrix.name }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: Windows (MSVC 2022)
+            os: windows-latest
+            qt-host: windows
+            qt-arch: win64_msvc2022_64
+            artifact-name: pier-x-windows-x64
+          - name: macOS (Apple Clang)
+            os: macos-latest
+            qt-host: mac
+            qt-arch: clang_64
+            artifact-name: pier-x-macos-universal
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Read version
+        id: version
+        shell: bash
+        run: echo "version=$(cat VERSION | tr -d '[:space:]')" >> "$GITHUB_OUTPUT"
+
+      - name: Install Qt 6.8 LTS
+        uses: jurplel/install-qt-action@v4
+        with:
+          version: '6.8.1'
+          host: ${{ matrix.qt-host }}
+          target: 'desktop'
+          arch: ${{ matrix.qt-arch }}
+          modules: 'qtshadertools'
+          cache: true
+
+      - name: Configure (CMake)
+        run: cmake -B build -S . -DCMAKE_BUILD_TYPE=Release
+
+      - name: Build
+        run: cmake --build build --config Release --parallel
+
+      # ─────────────────────────────────────────────────
+      # Package — windeployqt on Windows, macdeployqt on macOS
+      # ─────────────────────────────────────────────────
+      - name: Package · Windows
+        if: matrix.os == 'windows-latest'
+        shell: bash
+        run: |
+          set -e
+          mkdir -p dist
+          cp build/pier-ui-qt/Release/pier-x.exe dist/
+          windeployqt --qmldir pier-ui-qt/qml --release dist/pier-x.exe
+          cd dist
+          7z a "../${{ matrix.artifact-name }}-${{ steps.version.outputs.version }}.zip" .
+
+      - name: Package · macOS
+        if: matrix.os == 'macos-latest'
+        shell: bash
+        run: |
+          set -e
+          APP_BUNDLE="build/pier-ui-qt/pier-x.app"
+          if [ ! -d "$APP_BUNDLE" ]; then
+            echo "App bundle not found at $APP_BUNDLE"
+            find build -name 'pier-x.app' -type d -print
+            exit 1
+          fi
+          macdeployqt "$APP_BUNDLE" -qmldir=pier-ui-qt/qml -dmg
+          mv "build/pier-ui-qt/pier-x.dmg" \
+             "${{ matrix.artifact-name }}-${{ steps.version.outputs.version }}.dmg"
+
+      - name: Upload artifact · Windows
+        if: matrix.os == 'windows-latest'
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.artifact-name }}
+          path: ${{ matrix.artifact-name }}-${{ steps.version.outputs.version }}.zip
+          if-no-files-found: error
+
+      - name: Upload artifact · macOS
+        if: matrix.os == 'macos-latest'
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.artifact-name }}
+          path: ${{ matrix.artifact-name }}-${{ steps.version.outputs.version }}.dmg
+          if-no-files-found: error
+
+  publish:
+    name: Publish draft release
+    needs: build
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Read version
+        id: version
+        run: echo "version=$(cat VERSION | tr -d '[:space:]')" >> "$GITHUB_OUTPUT"
+
+      - name: Determine tag
+        id: tag
+        run: |
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
+            echo "tag=${{ inputs.tag }}" >> "$GITHUB_OUTPUT"
+          else
+            echo "tag=${GITHUB_REF#refs/tags/}" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Download all artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+
+      - name: Create draft GitHub release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ steps.tag.outputs.tag }}
+          name: Pier-X ${{ steps.tag.outputs.tag }}
+          draft: true
+          generate_release_notes: true
+          files: |
+            artifacts/**/*.zip
+            artifacts/**/*.dmg

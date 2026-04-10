@@ -17,8 +17,8 @@ env:
   FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: 'true'
 
 jobs:
-  build:
-    name: Build · ${{ matrix.name }}
+  qt-build:
+    name: Qt build · ${{ matrix.name }}
     runs-on: ${{ matrix.os }}
     strategy:
       fail-fast: false
@@ -64,3 +64,47 @@ jobs:
           echo "Pier-X version: ${{ steps.version.outputs.version }}"
           find build -maxdepth 4 -type f \( -name 'pier-x' -o -name 'pier-x.exe' \) -print || true
           find build -maxdepth 4 -type d -name 'pier-x.app' -print || true
+
+  rust-core:
+    name: Rust core · ${{ matrix.os }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest, macos-latest]
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
+
+      - name: Cache cargo
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            pier-core/target
+          key: ${{ runner.os }}-cargo-${{ hashFiles('pier-core/Cargo.toml') }}
+          restore-keys: |
+            ${{ runner.os }}-cargo-
+
+      - name: cargo fmt --check
+        working-directory: pier-core
+        run: cargo fmt --all --check
+
+      - name: cargo clippy
+        working-directory: pier-core
+        run: cargo clippy --all-targets -- -D warnings
+
+      - name: cargo build
+        working-directory: pier-core
+        run: cargo build --release
+
+      - name: cargo test
+        working-directory: pier-core
+        run: cargo test --release

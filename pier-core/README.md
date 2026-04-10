@@ -1,25 +1,45 @@
 # pier-core
 
-Rust core engine for Pier-X. **Not yet implemented in this repository.**
+Cross-platform Rust core engine for Pier-X.
 
-## Plan
+## Status
 
-`pier-core` will house the cross-platform implementation of:
+Skeleton crate. Three modules in place; the protocol modules
+(terminal/SSH/RDP/VNC/databases) will land incrementally.
 
-- Terminal emulation (`vte`) + PTY management (`forkpty` on Unix, `ConPTY` on Windows)
-- SSH / SFTP client (`russh` + `russh-sftp`)
-- RDP client (`ironrdp`)
-- VNC client
-- Database clients (MySQL / PostgreSQL / Redis)
-- Local file search (`ignore`)
-- Crypto (`ring`)
-- Git operations (`git2`)
-- Cross-platform credential storage (`keyring`)
+| Module | Status | Notes |
+|---|---|---|
+| `paths` | ✅ | Cross-platform app data dirs via `directories` |
+| `credentials` | ✅ | OS keyring via `keyring` (Keychain / DPAPI / Secret Service) |
+| `ffi` | ✅ (skeleton) | Stable C ABI surface — `pier_core_version`, etc. |
+| `terminal` | ⬜ | PTY (`forkpty` Unix + `ConPTY` Windows) + VTE |
+| `ssh` | ⬜ | `russh` + `russh-sftp` |
+| `rdp` | ⬜ | `ironrdp` |
+| `vnc` | ⬜ | `vnc-rs` or `libvncclient` wrapper |
+| `db` | ⬜ | MySQL / PostgreSQL / Redis clients |
+| `git` | ⬜ | `git2` |
+| `search` | ⬜ | `ignore` |
+| `crypto` | ⬜ | `ring` (AES-256-GCM) |
 
-The crate will expose a stable C ABI for the Qt UI to consume via `cxx-qt`.
+## Design rules
 
-## Source
+`pier-core` is **the asset**. The Qt UI layer is **the consumable**.
 
-Most of the existing Rust code from the macOS-only [Pier](https://github.com/chenqi92/Pier) project is cross-platform and will be ported here once the Qt UI shell is functional. The only platform-specific work needed is the ConPTY backend for Windows.
+1. `pier-core` MUST NOT depend on any UI types (Qt, QML, Slint, etc.)
+2. Public APIs go through either the C ABI (`ffi` module) or pure Rust traits
+3. The crate must compile and test cleanly on macOS + Windows + Linux
 
-See [../docs/TECH-STACK.md](../docs/TECH-STACK.md) for the full architectural plan.
+See `docs/TECH-STACK.md §12` for the full architectural rationale.
+
+## Build
+
+```bash
+cargo build
+cargo test
+```
+
+## CI
+
+The `cargo` job in `.github/workflows/ci.yml` builds and tests `pier-core`
+on Windows, macOS, and Linux. The keyring round-trip test is `#[ignore]`
+because the Linux runner has no unlocked secret service.

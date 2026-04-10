@@ -53,21 +53,38 @@ See [docs/ROADMAP.md](./docs/ROADMAP.md) for the detailed status and what's comi
 - **C++17 compiler** (MSVC 2022 / Apple Clang 15+)
 - **Rust 1.75+** (once `pier-core` is wired in)
 
-### Build steps
+### Quickstart
+
+The repo ships with one-shot scripts that configure, build, and launch the app.
+
+```bash
+# macOS / Linux
+./run.sh
+
+# Windows (PowerShell)
+.\run.ps1
+```
+
+Build only (no launch):
+
+```bash
+./build.sh        # macOS / Linux
+.\build.ps1       # Windows
+```
+
+Both scripts honour these environment variables:
+
+| Variable | Default | Purpose |
+|---|---|---|
+| `BUILD_TYPE` | `Release` | CMake build type (`Release`, `Debug`, `RelWithDebInfo`) |
+| `BUILD_DIR` | `build` | Build directory |
+| `QT_DIR` | _(auto-detect)_ | Path to a specific Qt 6.8 install (e.g. `~/Qt/6.8.1/macos`) |
+
+### Manual build
 
 ```bash
 cmake -B build -S .
 cmake --build build --config Release
-```
-
-### Run
-
-```bash
-# macOS
-./build/pier-ui-qt/pier-x.app/Contents/MacOS/pier-x
-
-# Windows
-./build/pier-ui-qt/Release/pier-x.exe
 ```
 
 ---

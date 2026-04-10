@@ -9,13 +9,20 @@ The cross-platform successor to [Pier](https://github.com/chenqi92/Pier) (macOS-
 
 ## Status
 
-Early development. The architecture and design system are in place; UI implementation is in progress.
+Foundation complete. The full UI shell, design system, build infrastructure, and Rust core skeleton are in place. Protocol modules (terminal, SSH, RDP, VNC) are next.
 
-- ✅ Technology stack decided: see [docs/TECH-STACK.md](./docs/TECH-STACK.md)
-- ✅ Design system codified: see [`.claude/skills/pier-design-system/SKILL.md`](./.claude/skills/pier-design-system/SKILL.md)
-- ✅ Qt 6 / QML skeleton with Theme singleton + dark/light switching
-- ⬜ pier-core (Rust) port from sibling project
-- ⬜ Terminal / SSH / SFTP / RDP / VNC features
+See [docs/ROADMAP.md](./docs/ROADMAP.md) for the detailed status and what's coming.
+
+- ✅ Technology stack decided — [docs/TECH-STACK.md](./docs/TECH-STACK.md)
+- ✅ Design system codified as a Claude Code skill — [`.claude/skills/pier-design-system/SKILL.md`](./.claude/skills/pier-design-system/SKILL.md)
+- ✅ Qt 6 / QML UI shell with theme follow + dark/light + smooth transitions
+- ✅ Full component library (buttons, inputs, combo, tooltip, card, pill, etc.)
+- ✅ Tab bar + content stack + welcome state
+- ✅ Command palette (Ctrl/Cmd+K) + connection dialog + settings dialog
+- ✅ pier-core Rust skeleton (paths, credentials, FFI surface)
+- ✅ CI on macOS + Windows (Qt) and macOS + Windows + Linux (Rust)
+- ✅ Tag-triggered release workflow producing draft GH releases
+- ⬜ Terminal / SSH / SFTP / RDP / VNC — incremental work, see ROADMAP
 
 ---
 

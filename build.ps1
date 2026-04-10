@@ -28,7 +28,12 @@ function Find-Qt6 {
         }
     }
     $found = @()
-    $roots = @("C:\Qt", "C:\Qt\Tools\Qt", (Join-Path $env:USERPROFILE "Qt"))
+    $roots = @(
+        "C:\Qt", "C:\Qt\Tools\Qt",
+        "D:\Qt", "D:\Qt\Tools\Qt",
+        "E:\Qt", "E:\Qt\Tools\Qt",
+        (Join-Path $env:USERPROFILE "Qt")
+    )
     foreach ($root in $roots) {
         if (-not (Test-Path $root)) { continue }
         $versionDirs = Get-ChildItem $root -Directory -ErrorAction SilentlyContinue |

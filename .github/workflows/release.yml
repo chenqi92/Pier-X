@@ -133,12 +133,12 @@ jobs:
           if-no-files-found: error
 
   publish:
-    name: Publish draft release
+    name: Publish release
     needs: build
     # Run as long as we weren't cancelled — publish whatever artifacts
     # made it through, even if one of the matrix entries (e.g. ARM64)
-    # failed. The draft release can be re-uploaded later once the
-    # missing arch is fixed.
+    # failed. Missing artifacts can be re-uploaded by re-running the
+    # workflow with the same tag input.
     if: ${{ !cancelled() }}
     runs-on: ubuntu-latest
     permissions:
@@ -164,12 +164,15 @@ jobs:
       - name: List artifacts
         run: find artifacts -type f -print
 
-      - name: Create draft GitHub release
+      # Auto-publish — no draft. Versions starting with `v0.` are marked
+      # as prerelease so they don't become the "Latest release" until 1.0.
+      - name: Create GitHub release
         uses: softprops/action-gh-release@v2
         with:
           tag_name: ${{ steps.tag.outputs.tag }}
           name: Pier-X ${{ steps.tag.outputs.tag }}
-          draft: true
+          draft: false
+          prerelease: ${{ startsWith(steps.tag.outputs.tag, 'v0.') }}
           generate_release_notes: true
           fail_on_unmatched_files: false
           files: |

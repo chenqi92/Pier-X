@@ -34,9 +34,16 @@ function Find-Qt6 {
         }
     }
 
-    # 3. Scan common install roots — pick the highest 6.x version
+    # 3. Scan common install roots — pick the highest 6.x version.
+    # Includes D: / E: drives because users frequently install Qt to
+    # a non-system drive (it's ~2 GB per arch).
     $found = @()
-    $roots = @("C:\Qt", "C:\Qt\Tools\Qt", (Join-Path $env:USERPROFILE "Qt"))
+    $roots = @(
+        "C:\Qt", "C:\Qt\Tools\Qt",
+        "D:\Qt", "D:\Qt\Tools\Qt",
+        "E:\Qt", "E:\Qt\Tools\Qt",
+        (Join-Path $env:USERPROFILE "Qt")
+    )
     foreach ($root in $roots) {
         if (-not (Test-Path $root)) { continue }
         $versionDirs = Get-ChildItem $root -Directory -ErrorAction SilentlyContinue |

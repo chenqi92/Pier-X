@@ -41,9 +41,7 @@ mod tests {
     fn paths_are_resolvable() {
         // We don't assert specific values — those are OS-dependent — but
         // at least one of the directories should exist on a sane system.
-        let any = config_dir().is_some()
-            || data_dir().is_some()
-            || cache_dir().is_some();
+        let any = config_dir().is_some() || data_dir().is_some() || cache_dir().is_some();
         assert!(any, "no app directories resolvable");
     }
 }

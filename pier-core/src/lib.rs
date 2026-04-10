@@ -17,9 +17,9 @@
 #![warn(missing_docs)]
 #![warn(rust_2018_idioms)]
 
+pub mod credentials;
 pub mod ffi;
 pub mod paths;
-pub mod credentials;
 
 /// Crate version, derived from `Cargo.toml` at compile time.
 pub const VERSION: &str = env!("CARGO_PKG_VERSION");

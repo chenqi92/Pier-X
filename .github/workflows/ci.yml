@@ -1,0 +1,61 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build:
+    name: Build · ${{ matrix.name }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: Windows (MSVC 2022)
+            os: windows-latest
+            qt-host: windows
+            qt-arch: win64_msvc2022_64
+          - name: macOS (Apple Clang)
+            os: macos-latest
+            qt-host: mac
+            qt-arch: clang_64
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Read version
+        id: version
+        shell: bash
+        run: echo "version=$(cat VERSION | tr -d '[:space:]')" >> "$GITHUB_OUTPUT"
+
+      - name: Install Qt 6.8 LTS
+        uses: jurplel/install-qt-action@v4
+        with:
+          version: '6.8.1'
+          host: ${{ matrix.qt-host }}
+          target: 'desktop'
+          arch: ${{ matrix.qt-arch }}
+          modules: 'qtshadertools'
+          cache: true
+
+      - name: Configure (CMake)
+        run: cmake -B build -S . -DCMAKE_BUILD_TYPE=Release
+
+      - name: Build
+        run: cmake --build build --config Release --parallel
+
+      - name: Show build artifacts
+        shell: bash
+        run: |
+          echo "Pier-X version: ${{ steps.version.outputs.version }}"
+          find build -maxdepth 4 -type f \( -name 'pier-x' -o -name 'pier-x.exe' \) -print || true
+          find build -maxdepth 4 -type d -name 'pier-x.app' -print || true

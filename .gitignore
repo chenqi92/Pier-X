@@ -1,0 +1,70 @@
+# ─────────────────────────────────────────
+# Pier-X gitignore
+# ─────────────────────────────────────────
+
+# Build outputs
+build/
+build-*/
+out/
+target/
+*.o
+*.obj
+*.so
+*.dll
+*.dylib
+*.exe
+*.app/
+*.dSYM/
+
+# CMake
+CMakeCache.txt
+CMakeFiles/
+CMakeUserPresets.json
+cmake_install.cmake
+cmake-build-*/
+Makefile
+!pier-ui-qt/Makefile
+
+# Qt
+*.user
+*.user.*
+moc_*.cpp
+moc_*.h
+qrc_*.cpp
+ui_*.h
+*.qm
+.qmake.stash
+qmltypes/
+
+# Rust (when pier-core lands)
+**/*.rs.bk
+**/target/
+
+# IDE / editor
+.vscode/
+.idea/
+.vs/
+*.swp
+*.swo
+*~
+.fleet/
+
+# OS
+.DS_Store
+Thumbs.db
+desktop.ini
+$RECYCLE.BIN/
+
+# Logs
+*.log
+
+# ─────────────────────────────────────────
+# Claude Code — keep skills, drop personal config
+# ─────────────────────────────────────────
+.claude/settings.local.json
+.claude/cache/
+.claude/.session/
+
+# pier-design-system: drop the cloned reference repo
+# (its content has been extracted to extracted/ and synthesized into SKILL.md)
+.claude/skills/pier-design-system/reference/

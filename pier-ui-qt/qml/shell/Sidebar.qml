@@ -2,10 +2,14 @@ import QtQuick
 import QtQuick.Layouts
 import Pier
 
-// Left sidebar — connection list / navigation.
-// Currently shows an empty state until the connection manager lands.
+// Left sidebar — connection list and local actions.
 Rectangle {
     id: root
+
+    property var connectionsModel: null
+    signal addConnectionRequested
+    signal connectionActivated(int index)
+    signal openLocalTerminalRequested
 
     implicitWidth: 240
     color: Theme.bgPanel
@@ -17,11 +21,24 @@ Rectangle {
         anchors.margins: Theme.sp4
         spacing: Theme.sp3
 
-        SectionLabel { text: "Connections" }
+        // ─── Connections section ───────────────────────
+        RowLayout {
+            Layout.fillWidth: true
+            SectionLabel {
+                text: qsTr("Connections")
+                Layout.fillWidth: true
+            }
+            IconButton {
+                glyph: "+"
+                tooltip: qsTr("Add connection")
+                onClicked: root.addConnectionRequested()
+            }
+        }
 
+        // Empty state
         Text {
-            Layout.topMargin: Theme.sp1
-            text: "No connections yet."
+            visible: !root.connectionsModel || root.connectionsModel.count === 0
+            text: qsTr("No connections yet.")
             font.family: Theme.fontUi
             font.pixelSize: Theme.sizeBody
             color: Theme.textTertiary
@@ -29,31 +46,65 @@ Rectangle {
             Behavior on color { ColorAnimation { duration: Theme.durNormal } }
         }
 
-        Text {
-            id: addLink
-            text: "+ Add connection"
-            font.family: Theme.fontUi
-            font.pixelSize: Theme.sizeBody
-            font.weight: Theme.weightMedium
-            color: addArea.containsMouse ? Theme.accentHover : Theme.accent
+        // Connection list
+        ListView {
+            Layout.fillWidth: true
+            Layout.preferredHeight: contentHeight
+            interactive: false
+            model: root.connectionsModel
+            spacing: Theme.sp0_5
+            visible: root.connectionsModel && root.connectionsModel.count > 0
 
-            Behavior on color { ColorAnimation { duration: Theme.durFast } }
+            delegate: Rectangle {
+                width: ListView.view.width
+                implicitHeight: 32
+                color: connArea.containsMouse ? Theme.bgHover : "transparent"
+                radius: Theme.radiusSm
 
-            MouseArea {
-                id: addArea
-                anchors.fill: parent
-                hoverEnabled: true
-                cursorShape: Qt.PointingHandCursor
-                onClicked: console.log("Add connection — TODO")
+                Behavior on color { ColorAnimation { duration: Theme.durFast } }
+
+                ColumnLayout {
+                    anchors.fill: parent
+                    anchors.leftMargin: Theme.sp2
+                    anchors.rightMargin: Theme.sp2
+                    spacing: 0
+
+                    Text {
+                        text: model.name
+                        font.family: Theme.fontUi
+                        font.pixelSize: Theme.sizeBody
+                        font.weight: Theme.weightMedium
+                        color: Theme.textPrimary
+                        elide: Text.ElideRight
+                        Layout.fillWidth: true
+                    }
+                    Text {
+                        text: model.username + "@" + model.host + ":" + model.port
+                        font.family: Theme.fontMono
+                        font.pixelSize: Theme.sizeSmall
+                        color: Theme.textTertiary
+                        elide: Text.ElideRight
+                        Layout.fillWidth: true
+                    }
+                }
+
+                MouseArea {
+                    id: connArea
+                    anchors.fill: parent
+                    hoverEnabled: true
+                    cursorShape: Qt.PointingHandCursor
+                    onClicked: root.connectionActivated(index)
+                }
             }
         }
 
         Item { Layout.fillHeight: true }
 
-        SectionLabel { text: "Local" }
+        // ─── Local section ─────────────────────────────
+        SectionLabel { text: qsTr("Local") }
 
         Text {
-            text: "Open terminal"
+            text: qsTr("Open terminal")
             font.family: Theme.fontUi
             font.pixelSize: Theme.sizeBody
             color: localArea.containsMouse ? Theme.textPrimary : Theme.textSecondary
@@ -65,12 +116,12 @@ Rectangle {
                 anchors.fill: parent
                 hoverEnabled: true
                 cursorShape: Qt.PointingHandCursor
-                onClicked: console.log("Open local terminal — TODO")
+                onClicked: root.openLocalTerminalRequested()
             }
         }
     }
 
-    // Right 1px border
+    // Right border
     Rectangle {
         anchors.right: parent.right
         anchors.top: parent.top

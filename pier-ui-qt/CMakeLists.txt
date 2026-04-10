@@ -31,6 +31,7 @@ qt_add_qml_module(pier-x
         qml/components/GhostButton.qml
         qml/components/IconButton.qml
         qml/components/PierTextField.qml
+        qml/components/PierComboBox.qml
         qml/components/PierToolTip.qml
         qml/components/Card.qml
         qml/components/StatusPill.qml
@@ -43,6 +44,7 @@ qt_add_qml_module(pier-x
         qml/shell/StatusBar.qml
         qml/shell/WelcomeView.qml
         qml/shell/CommandPalette.qml
+        qml/dialogs/NewConnectionDialog.qml
         qml/views/TerminalView.qml
     RESOURCES
         resources/icons/pier.png

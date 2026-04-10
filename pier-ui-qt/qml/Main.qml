@@ -13,6 +13,11 @@ ApplicationWindow {
     visible: true
     title: qsTr("Pier-X")
 
+    color: Theme.bgCanvas
+    Behavior on color {
+        ColorAnimation { duration: Theme.durNormal; easing.type: Theme.easingType }
+    }
+
     // ─────────────────────────────────────────────────────
     // Global keyboard shortcuts
     // ─────────────────────────────────────────────────────
@@ -28,26 +33,23 @@ ApplicationWindow {
         sequences: ["Ctrl+W", "Meta+W"]
         onActivated: window.closeTab(window.currentTabIndex)
     }
-
-    color: Theme.bgCanvas
-    Behavior on color {
-        ColorAnimation { duration: Theme.durNormal; easing.type: Theme.easingType }
+    Shortcut {
+        sequences: ["Ctrl+N", "Meta+N"]
+        onActivated: newConnectionDialog.show()
     }
 
     // ─────────────────────────────────────────────────────
-    // App-wide tab model — each entry is one terminal session.
-    // Will become a C++/Rust model once pier-core lands; for now
-    // it's a plain QML ListModel so the UI can be exercised.
+    // App-wide models — will become C++/Rust models once
+    // pier-core lands. Plain QML ListModel for now.
     // ─────────────────────────────────────────────────────
-    ListModel {
-        id: tabModel
-    }
+    ListModel { id: tabModel }
+    ListModel { id: connectionsModel }
 
     property int currentTabIndex: 0
 
-    function openNewTab() {
-        const n = tabModel.count + 1
-        tabModel.append({ title: qsTr("Local %1").arg(n) })
+    function openNewTab(title) {
+        const t = title || qsTr("Local %1").arg(tabModel.count + 1)
+        tabModel.append({ title: t })
         currentTabIndex = tabModel.count - 1
     }
 
@@ -60,17 +62,19 @@ ApplicationWindow {
         }
     }
 
+    function addConnection(conn) {
+        connectionsModel.append(conn)
+    }
+
+    function activateConnection(index) {
+        if (index < 0 || index >= connectionsModel.count)
+            return
+        const conn = connectionsModel.get(index)
+        openNewTab(conn.name)
+    }
+
     // ─────────────────────────────────────────────────────
     // IDE shell
-    //   ┌──────────────────────────────────────┐
-    //   │              TopBar                  │
-    //   ├─────────┬────────────────────────────┤
-    //   │         │  TabBar (when tabs > 0)    │
-    //   │ Sidebar │ ───────────────────────────│
-    //   │         │  TerminalView | Welcome    │
-    //   ├─────────┴────────────────────────────┤
-    //   │             StatusBar                │
-    //   └──────────────────────────────────────┘
     // ─────────────────────────────────────────────────────
     ColumnLayout {
         anchors.fill: parent
@@ -78,7 +82,7 @@ ApplicationWindow {
 
         TopBar {
             Layout.fillWidth: true
-            onNewSessionRequested: window.openNewTab()
+            onNewSessionRequested: newConnectionDialog.show()
             onCommandPaletteRequested: commandPalette.show()
             onSettingsRequested: console.log("Settings — TODO")
         }
@@ -90,6 +94,10 @@ ApplicationWindow {
 
             Sidebar {
                 Layout.fillHeight: true
+                connectionsModel: connectionsModel
+                onAddConnectionRequested: newConnectionDialog.show()
+                onConnectionActivated: (i) => window.activateConnection(i)
+                onOpenLocalTerminalRequested: window.openNewTab()
             }
 
             // Main content area
@@ -97,13 +105,11 @@ ApplicationWindow {
                 Layout.fillWidth: true
                 Layout.fillHeight: true
 
-                // Empty state
                 WelcomeView {
                     anchors.fill: parent
                     visible: tabModel.count === 0
                 }
 
-                // Tab area (visible when at least one tab exists)
                 ColumnLayout {
                     anchors.fill: parent
                     visible: tabModel.count > 0
@@ -118,7 +124,6 @@ ApplicationWindow {
                         onNewTabClicked: window.openNewTab()
                     }
 
-                    // Content swap based on currentTabIndex
                     Loader {
                         Layout.fillWidth: true
                         Layout.fillHeight: true
@@ -139,8 +144,16 @@ ApplicationWindow {
     }
 
     // ─────────────────────────────────────────────────────
-    // Floating overlay — Command Palette
+    // Floating overlays
     // ─────────────────────────────────────────────────────
+    NewConnectionDialog {
+        id: newConnectionDialog
+        onSaved: (conn) => {
+            window.addConnection(conn)
+            window.activateConnection(connectionsModel.count - 1)
+        }
+    }
+
     CommandPalette {
         id: commandPalette
         commands: [
@@ -148,6 +161,11 @@ ApplicationWindow {
                 title: qsTr("New local terminal"),
                 shortcut: "Ctrl+T",
                 action: function() { window.openNewTab() }
+            },
+            {
+                title: qsTr("New SSH connection…"),
+                shortcut: "Ctrl+N",
+                action: function() { newConnectionDialog.show() }
             },
             {
                 title: qsTr("Close current tab"),
@@ -166,11 +184,6 @@ ApplicationWindow {
                 title: qsTr("Follow system theme"),
                 shortcut: "",
                 action: function() { Theme.followSystem = true }
-            },
-            {
-                title: qsTr("New SSH connection…"),
-                shortcut: "",
-                action: function() { console.log("New SSH — TODO") }
             },
             {
                 title: qsTr("Settings…"),

@@ -22,16 +22,34 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          - name: Windows (MSVC 2022)
+          # ─── Windows x64 (primary Windows target) ─────────
+          - name: Windows x64
             os: windows-latest
             qt-host: windows
             qt-arch: win64_msvc2022_64
             artifact-name: pier-x-windows-x64
-          - name: macOS (Apple Clang)
+            cmake-extra: ''
+
+          # ─── Windows ARM64 (Snapdragon / Surface Pro X) ───
+          # Native build on the windows-11-arm runner. ARM64 Windows
+          # support landed natively in Qt 6.8.
+          - name: Windows ARM64
+            os: windows-11-arm
+            qt-host: windows
+            qt-arch: win64_msvc2022_arm64
+            artifact-name: pier-x-windows-arm64
+            cmake-extra: ''
+
+          # ─── macOS Universal (Intel + Apple Silicon) ──────
+          # Single .app bundle containing both arm64 and x86_64 slices.
+          # Qt 6 macOS SDK has been universal since 6.5; we just have
+          # to ask CMake to emit both architecture slices.
+          - name: macOS Universal
             os: macos-latest
             qt-host: mac
             qt-arch: clang_64
             artifact-name: pier-x-macos-universal
+            cmake-extra: '-DCMAKE_OSX_ARCHITECTURES=arm64;x86_64'
 
     steps:
       - name: Checkout
@@ -53,7 +71,9 @@ jobs:
           cache: true
 
       - name: Configure (CMake)
-        run: cmake -B build -S . -DCMAKE_BUILD_TYPE=Release
+        shell: bash
+        run: |
+          cmake -B build -S . -DCMAKE_BUILD_TYPE=Release ${{ matrix.cmake-extra }}
 
       - name: Build
         run: cmake --build build --config Release --parallel
@@ -62,7 +82,7 @@ jobs:
       # Package — windeployqt on Windows, macdeployqt on macOS
       # ─────────────────────────────────────────────────
       - name: Package · Windows
-        if: matrix.os == 'windows-latest'
+        if: runner.os == 'Windows'
         shell: bash
         run: |
           set -e
@@ -73,7 +93,7 @@ jobs:
           7z a "../${{ matrix.artifact-name }}-${{ steps.version.outputs.version }}.zip" .
 
       - name: Package · macOS
-        if: matrix.os == 'macos-latest'
+        if: runner.os == 'macOS'
         shell: bash
         run: |
           set -e
@@ -83,12 +103,14 @@ jobs:
             find build -name 'pier-x.app' -type d -print
             exit 1
           fi
+          # Verify the binary is actually universal
+          lipo -info "$APP_BUNDLE/Contents/MacOS/pier-x" || true
           macdeployqt "$APP_BUNDLE" -qmldir=pier-ui-qt/qml -dmg
           mv "build/pier-ui-qt/pier-x.dmg" \
              "${{ matrix.artifact-name }}-${{ steps.version.outputs.version }}.dmg"
 
       - name: Upload artifact · Windows
-        if: matrix.os == 'windows-latest'
+        if: runner.os == 'Windows'
         uses: actions/upload-artifact@v4
         with:
           name: ${{ matrix.artifact-name }}
@@ -96,7 +118,7 @@ jobs:
           if-no-files-found: error
 
       - name: Upload artifact · macOS
-        if: matrix.os == 'macos-latest'
+        if: runner.os == 'macOS'
         uses: actions/upload-artifact@v4
         with:
           name: ${{ matrix.artifact-name }}
@@ -106,16 +128,13 @@ jobs:
   publish:
     name: Publish draft release
     needs: build
+    if: always() && needs.build.result != 'failure'
     runs-on: ubuntu-latest
     permissions:
       contents: write
     steps:
       - name: Checkout
         uses: actions/checkout@v4
-
-      - name: Read version
-        id: version
-        run: echo "version=$(cat VERSION | tr -d '[:space:]')" >> "$GITHUB_OUTPUT"
 
       - name: Determine tag
         id: tag
@@ -131,6 +150,9 @@ jobs:
         with:
           path: artifacts
 
+      - name: List artifacts
+        run: find artifacts -type f -print
+
       - name: Create draft GitHub release
         uses: softprops/action-gh-release@v2
         with:
@@ -138,6 +160,7 @@ jobs:
           name: Pier-X ${{ steps.tag.outputs.tag }}
           draft: true
           generate_release_notes: true
+          fail_on_unmatched_files: false
           files: |
             artifacts/**/*.zip
             artifacts/**/*.dmg

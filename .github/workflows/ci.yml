@@ -24,14 +24,16 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          - name: Windows (MSVC 2022)
+          - name: Windows x64
             os: windows-latest
             qt-host: windows
             qt-arch: win64_msvc2022_64
-          - name: macOS (Apple Clang)
+            cmake-extra: ''
+          - name: macOS Universal
             os: macos-latest
             qt-host: mac
             qt-arch: clang_64
+            cmake-extra: '-DCMAKE_OSX_ARCHITECTURES=arm64;x86_64'
 
     steps:
       - name: Checkout
@@ -53,7 +55,9 @@ jobs:
           cache: true
 
       - name: Configure (CMake)
-        run: cmake -B build -S . -DCMAKE_BUILD_TYPE=Release
+        shell: bash
+        run: |
+          cmake -B build -S . -DCMAKE_BUILD_TYPE=Release ${{ matrix.cmake-extra }}
 
       - name: Build
         run: cmake --build build --config Release --parallel
@@ -64,6 +68,10 @@ jobs:
           echo "Pier-X version: ${{ steps.version.outputs.version }}"
           find build -maxdepth 4 -type f \( -name 'pier-x' -o -name 'pier-x.exe' \) -print || true
           find build -maxdepth 4 -type d -name 'pier-x.app' -print || true
+          # On macOS, verify the binary is actually universal
+          if [ "${{ runner.os }}" = "macOS" ]; then
+            lipo -info build/pier-ui-qt/pier-x.app/Contents/MacOS/pier-x || true
+          fi
 
   rust-core:
     name: Rust core · ${{ matrix.os }}

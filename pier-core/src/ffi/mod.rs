@@ -1,0 +1,43 @@
+//! C ABI surface — the stable boundary between `pier-core` and any UI layer.
+//!
+//! Functions in these submodules are `extern "C"` with C-compatible
+//! types only. They are intended to be consumed from Qt (via a thin
+//! C++ wrapper today, via cxx-qt once signals/slots are needed),
+//! Swift, or any other language that speaks the C ABI.
+//!
+//! ## Memory rules
+//!
+//! - Any `*const c_char` returned from a pier-core function is owned
+//!   by pier-core. Callers MUST NOT free them. They live for the
+//!   lifetime of the process.
+//! - NUL inputs are defined: they are handled gracefully without
+//!   touching memory (documented per function).
+//! - Opaque handles (`*mut PierTerminal`, etc.) are owned by the
+//!   caller until the corresponding `_free` function is called.
+//!   After `_free`, the handle is invalid and must not be reused.
+//! - Numeric return values use `0` for "false/off" and `1` for
+//!   "true/on" unless otherwise documented.
+//!
+//! ## Layout
+//!
+//! - [`core`] — version + build info + feature flags. Zero state.
+//! - [`terminal`] — handle-based API around
+//!   [`crate::terminal::PierTerminal`]: spawn, write, resize,
+//!   snapshot, free.
+//!
+//! New subsystems (SSH, SFTP, database, …) each get their own
+//! submodule here as they land, so the C header layer can be
+//! similarly split.
+
+pub mod core;
+pub mod terminal;
+
+// Re-export the individual C functions at the `ffi` root so
+// symbols in libpier_core.a are not namespaced by submodule — the C
+// header side sees them as flat extern symbols, which is what the
+// hand-written pier_core.h / pier_terminal.h declare.
+pub use self::core::{pier_core_build_info, pier_core_has_feature, pier_core_version};
+pub use self::terminal::{
+    pier_terminal_free, pier_terminal_is_alive, pier_terminal_new, pier_terminal_resize,
+    pier_terminal_snapshot, pier_terminal_write, PierCell, PierGridInfo,
+};

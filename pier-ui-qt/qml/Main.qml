@@ -128,14 +128,19 @@ ApplicationWindow {
                         onNewTabClicked: window.openNewTab()
                     }
 
-                    Loader {
+                    // One TerminalView per tab, kept alive as the user
+                    // switches between them so each tab owns its own
+                    // PierTerminalSession (and its own child shell).
+                    // StackLayout hides inactive tabs without destroying
+                    // them — matches IDE terminal behavior.
+                    StackLayout {
                         Layout.fillWidth: true
                         Layout.fillHeight: true
-                        active: tabModel.count > 0 && window.currentTabIndex < tabModel.count
-                        sourceComponent: TerminalView {
-                            title: tabModel.count > 0 && window.currentTabIndex < tabModel.count
-                                 ? tabModel.get(window.currentTabIndex).title
-                                 : ""
+                        currentIndex: window.currentTabIndex
+
+                        Repeater {
+                            model: tabModel
+                            delegate: TerminalView {}
                         }
                     }
                 }

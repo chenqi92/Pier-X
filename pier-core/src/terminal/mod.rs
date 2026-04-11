@@ -32,9 +32,11 @@
 
 pub mod emulator;
 pub mod pty;
+pub mod session;
 
 pub use emulator::{Cell, Color, VtEmulator};
 pub use pty::{Pty, TerminalError};
+pub use session::{GridSnapshot, NotifyEvent, NotifyFn, PierTerminal};
 
 #[cfg(unix)]
 pub use pty::UnixPty;

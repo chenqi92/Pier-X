@@ -32,6 +32,10 @@ qt_add_qml_module(pier-x
     SOURCES
         src/PierCoreBridge.h
         src/PierCoreBridge.cpp
+        src/PierTerminalSession.h
+        src/PierTerminalSession.cpp
+        src/PierTerminalGrid.h
+        src/PierTerminalGrid.cpp
     QML_FILES
         qml/Main.qml
         qml/Theme.qml

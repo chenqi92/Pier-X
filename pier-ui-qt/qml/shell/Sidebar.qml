@@ -68,18 +68,32 @@ Rectangle {
                 required property string host
                 required property int port
 
+                // Two-state delete: hovered × click flips this
+                // to true, which swaps the row contents to a
+                // small inline confirmation strip. Clicking
+                // anywhere else in the sidebar or on the row
+                // itself resets it.
+                property bool confirmingDelete: false
+
                 width: ListView.view.width
                 implicitHeight: 32
-                color: connArea.containsMouse ? Theme.bgHover : "transparent"
+                color: confirmingDelete
+                       ? Qt.rgba(Theme.statusError.r,
+                                 Theme.statusError.g,
+                                 Theme.statusError.b,
+                                 0.08)
+                       : (connArea.containsMouse ? Theme.bgHover : "transparent")
                 radius: Theme.radiusSm
 
                 Behavior on color { ColorAnimation { duration: Theme.durFast } }
 
+                // ── Default state: name / target / × ──────
                 RowLayout {
                     anchors.fill: parent
                     anchors.leftMargin: Theme.sp2
                     anchors.rightMargin: Theme.sp1
                     spacing: Theme.sp1
+                    visible: !connRow.confirmingDelete
 
                     ColumnLayout {
                         Layout.fillWidth: true
@@ -144,12 +158,109 @@ Rectangle {
                             anchors.fill: parent
                             hoverEnabled: true
                             cursorShape: Qt.PointingHandCursor
-                            // M3c4 polish: a confirmation dialog
-                            // would be nicer than instant delete.
-                            // For M3c3 we accept that the action
-                            // is destructive-but-undoable (the
-                            // user can re-add via the dialog).
                             onClicked: (mouse) => {
+                                connRow.confirmingDelete = true
+                                mouse.accepted = true
+                            }
+                        }
+                    }
+                }
+
+                // ── Confirm state: prompt + Cancel / Delete ──
+                RowLayout {
+                    anchors.fill: parent
+                    anchors.leftMargin: Theme.sp2
+                    anchors.rightMargin: Theme.sp1
+                    spacing: Theme.sp2
+                    visible: connRow.confirmingDelete
+
+                    Text {
+                        Layout.fillWidth: true
+                        text: qsTr("Delete “%1”?").arg(connRow.name)
+                        font.family: Theme.fontUi
+                        font.pixelSize: Theme.sizeCaption
+                        font.weight: Theme.weightMedium
+                        color: Theme.textPrimary
+                        elide: Text.ElideRight
+
+                        Behavior on color { ColorAnimation { duration: Theme.durNormal } }
+                    }
+
+                    // Cancel pill — monochromatic, low visual weight.
+                    Rectangle {
+                        Layout.preferredWidth: cancelLabel.implicitWidth + Theme.sp2 * 2
+                        Layout.preferredHeight: 20
+                        radius: Theme.radiusSm
+                        color: cancelArea.containsMouse ? Theme.bgHover : "transparent"
+                        border.color: Theme.borderDefault
+                        border.width: 1
+
+                        Behavior on color { ColorAnimation { duration: Theme.durFast } }
+
+                        Text {
+                            id: cancelLabel
+                            anchors.centerIn: parent
+                            text: qsTr("Cancel")
+                            font.family: Theme.fontUi
+                            font.pixelSize: Theme.sizeSmall
+                            font.weight: Theme.weightMedium
+                            color: Theme.textSecondary
+                        }
+
+                        MouseArea {
+                            id: cancelArea
+                            anchors.fill: parent
+                            hoverEnabled: true
+                            cursorShape: Qt.PointingHandCursor
+                            onClicked: (mouse) => {
+                                connRow.confirmingDelete = false
+                                mouse.accepted = true
+                            }
+                        }
+                    }
+
+                    // Destructive confirm pill — accent red
+                    // background at 16%, error-colored label.
+                    // Breaks the single-accent rule of the
+                    // design system ONLY because this is a
+                    // destructive action — §2 status colors are
+                    // the explicit exception.
+                    Rectangle {
+                        Layout.preferredWidth: confirmLabel.implicitWidth + Theme.sp2 * 2
+                        Layout.preferredHeight: 20
+                        radius: Theme.radiusSm
+                        color: confirmArea.containsMouse
+                               ? Qt.rgba(Theme.statusError.r,
+                                         Theme.statusError.g,
+                                         Theme.statusError.b,
+                                         0.24)
+                               : Qt.rgba(Theme.statusError.r,
+                                         Theme.statusError.g,
+                                         Theme.statusError.b,
+                                         0.16)
+
+                        Behavior on color { ColorAnimation { duration: Theme.durFast } }
+
+                        Text {
+                            id: confirmLabel
+                            anchors.centerIn: parent
+                            text: qsTr("Delete")
+                            font.family: Theme.fontUi
+                            font.pixelSize: Theme.sizeSmall
+                            font.weight: Theme.weightMedium
+                            color: Theme.statusError
+                        }
+
+                        MouseArea {
+                            id: confirmArea
+                            anchors.fill: parent
+                            hoverEnabled: true
+                            cursorShape: Qt.PointingHandCursor
+                            onClicked: (mouse) => {
+                                // Fire AND leave confirmingDelete
+                                // true — the model removes the
+                                // row so this delegate gets
+                                // unmounted anyway.
                                 root.connectionDeleted(connRow.index)
                                 mouse.accepted = true
                             }
@@ -161,13 +272,25 @@ Rectangle {
                     id: connArea
                     anchors.fill: parent
                     hoverEnabled: true
-                    cursorShape: Qt.PointingHandCursor
+                    cursorShape: connRow.confirmingDelete ? Qt.ArrowCursor : Qt.PointingHandCursor
                     // Higher z stays on the fill of the row but
                     // does NOT receive clicks targeted at the
-                    // deleteBtn above (deleteArea has the higher
+                    // deleteBtn / cancel / confirm rectangles
+                    // above (their MouseAreas have the higher
                     // visual stacking order via the RowLayout).
                     z: -1
-                    onClicked: root.connectionActivated(connRow.index)
+                    // While confirming, clicks on the row body
+                    // cancel the pending delete rather than
+                    // activating the connection. This gives the
+                    // user a generous "tap anywhere to back out"
+                    // escape hatch.
+                    onClicked: {
+                        if (connRow.confirmingDelete) {
+                            connRow.confirmingDelete = false
+                        } else {
+                            root.connectionActivated(connRow.index)
+                        }
+                    }
                 }
             }
         }

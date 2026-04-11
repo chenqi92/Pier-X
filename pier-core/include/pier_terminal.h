@@ -135,6 +135,24 @@ const char *pier_terminal_last_ssh_error(void);
  * Identical handle semantics to pier_terminal_new_ssh: the
  * returned opaque PierTerminal* is consumed by the same _write,
  * _resize, _snapshot, _free functions. */
+/* Spawn a new SSH-backed terminal session authenticated via
+ * the system SSH agent.
+ *
+ * On Unix, $SSH_AUTH_SOCK; on Windows, Pageant's named pipe.
+ * The agent itself holds the keys and signs challenges; no
+ * secret ever crosses this FFI.
+ *
+ * Identical handle semantics to pier_terminal_new_ssh. */
+PierTerminal *pier_terminal_new_ssh_agent(
+    uint16_t cols,
+    uint16_t rows,
+    const char *host,
+    uint16_t port,
+    const char *user,
+    PierTerminalNotifyFn notify,
+    void *user_data
+);
+
 /* Spawn a new SSH-backed terminal session authenticated by a
  * private key file rather than a password.
  *

@@ -41,6 +41,7 @@ QVariant PierConnectionStore::data(const QModelIndex &index, int role) const
     case CredentialIdRole:           return e.credentialId;
     case KeyPathRole:                return e.keyPath;
     case PassphraseCredentialIdRole: return e.passphraseCredentialId;
+    case UsesAgentRole:              return e.usesAgent;
     case TagsRole:                   return e.tags;
     default:                         return {};
     }
@@ -56,6 +57,7 @@ QHash<int, QByteArray> PierConnectionStore::roleNames() const
         { CredentialIdRole,           "credentialId" },
         { KeyPathRole,                "keyPath" },
         { PassphraseCredentialIdRole, "passphraseCredentialId" },
+        { UsesAgentRole,              "usesAgent" },
         { TagsRole,                   "tags" }
     };
 }
@@ -122,6 +124,22 @@ bool PierConnectionStore::addKey(const QString &name, const QString &host, int p
     return appendEntry(std::move(e));
 }
 
+bool PierConnectionStore::addAgent(const QString &name, const QString &host, int port,
+                                   const QString &username)
+{
+    if (name.isEmpty() || host.isEmpty() || username.isEmpty()) {
+        qWarning() << "PierConnectionStore::addAgent rejected empty field";
+        return false;
+    }
+    Entry e;
+    e.name = name;
+    e.host = host;
+    e.port = port > 0 ? port : 22;
+    e.username = username;
+    e.usesAgent = true;
+    return appendEntry(std::move(e));
+}
+
 bool PierConnectionStore::appendEntry(Entry e)
 {
     const int row = static_cast<int>(m_entries.size());
@@ -177,6 +195,7 @@ QVariantMap PierConnectionStore::get(int index) const
     m["credentialId"]           = e.credentialId;
     m["keyPath"]                = e.keyPath;
     m["passphraseCredentialId"] = e.passphraseCredentialId;
+    m["usesAgent"]              = e.usesAgent;
     m["tags"]                   = e.tags;
     return m;
 }
@@ -222,6 +241,8 @@ bool PierConnectionStore::ingestJson(const QByteArray &json)
             if (pp.isString()) {
                 e.passphraseCredentialId = pp.toString();
             }
+        } else if (kind == QStringLiteral("agent")) {
+            e.usesAgent = true;
         }
         // Tags
         const QJsonArray tags = obj.value(QStringLiteral("tags")).toArray();
@@ -248,7 +269,12 @@ bool PierConnectionStore::persist()
     QJsonArray arr;
     for (const Entry &e : m_entries) {
         QJsonObject auth;
-        if (!e.keyPath.isEmpty()) {
+        if (e.usesAgent) {
+            // Matches Rust's `AuthMethod::Agent` unit variant
+            // with serde rename_all = "snake_case" → kind = "agent"
+            // and no extra fields.
+            auth[QStringLiteral("kind")] = QStringLiteral("agent");
+        } else if (!e.keyPath.isEmpty()) {
             auth[QStringLiteral("kind")] = QStringLiteral("public_key_file");
             auth[QStringLiteral("private_key_path")] = e.keyPath;
             // serde Option<String>: None serializes as a missing

@@ -58,6 +58,12 @@ Rectangle {
     property string sshKeyPath: ""
     property string sshPassphraseCredentialId: ""
 
+    // M3c4: SSH agent auth. When sshUsesAgent is true, the
+    // session uses the system SSH agent ($SSH_AUTH_SOCK on
+    // Unix / Pageant on Windows) for auth. No credentials
+    // cross the FFI at all.
+    property bool sshUsesAgent: false
+
     color: Theme.bgCanvas
     focus: true
     activeFocusOnTab: true
@@ -123,13 +129,18 @@ Rectangle {
 
         // Pick the right startSsh* method given which auth
         // fields are populated. Priority:
-        //   1. key path  → startSshWithKey
-        //   2. credential id → startSshWithCredential
-        //   3. plaintext password → startSsh
-        // The three are mutually exclusive in practice — the
+        //   1. usesAgent       → startSshWithAgent
+        //   2. key path        → startSshWithKey
+        //   3. credential id   → startSshWithCredential
+        //   4. plaintext password → startSsh
+        // The four are mutually exclusive in practice — the
         // dialog / Main.qml only ever populates one set per tab.
         function _dispatchSshConnect(cols, rows) {
-            if (root.sshKeyPath.length > 0) {
+            if (root.sshUsesAgent) {
+                session.startSshWithAgent(
+                    root.sshHost, root.sshPort, root.sshUser,
+                    cols, rows)
+            } else if (root.sshKeyPath.length > 0) {
                 session.startSshWithKey(
                     root.sshHost, root.sshPort, root.sshUser,
                     root.sshKeyPath,

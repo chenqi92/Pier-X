@@ -192,11 +192,10 @@ Item {
                 PierComboBox {
                     id: authCombo
                     Layout.fillWidth: true
-                    // M3c3: Private key now wired end-to-end.
-                    // SSH agent is still TODO and labeled.
+                    // M3c4: all three auth methods wired end-to-end.
                     options: [qsTr("Password"),
                               qsTr("Private key"),
-                              qsTr("SSH agent (M3c4)")]
+                              qsTr("SSH agent")]
                     currentIndex: 0
                 }
             }
@@ -272,6 +271,31 @@ Item {
                 }
             }
 
+            // ─── SSH agent info block ────────────────────
+            // The agent path needs no additional fields — it's
+            // the only "zero-credentials-collected" option, so
+            // the visual density drops to a single explanatory
+            // caption so the user isn't confused about why
+            // nothing else appeared.
+            ColumnLayout {
+                Layout.fillWidth: true
+                spacing: Theme.sp2
+                visible: authCombo.currentIndex === 2
+
+                Text {
+                    Layout.fillWidth: true
+                    text: Qt.platform.os === "windows"
+                        ? qsTr("Uses Pageant / the Windows SSH agent. Make sure it's running and has your keys loaded before connecting.")
+                        : qsTr("Uses the SSH agent at $SSH_AUTH_SOCK. Make sure your keys are added (ssh-add -l) before connecting.")
+                    wrapMode: Text.Wrap
+                    font.family: Theme.fontUi
+                    font.pixelSize: Theme.sizeCaption
+                    color: Theme.textTertiary
+
+                    Behavior on color { ColorAnimation { duration: Theme.durNormal } }
+                }
+            }
+
             // Native file picker for the key path field.
             // The FileDialog remembers its last location across
             // invocations, so users only have to navigate to
@@ -311,8 +335,8 @@ Item {
                     text: qsTr("Connect")
                     // Require name + host + user always; then
                     // require the auth-method-specific field.
-                    // SSH agent is still M3c4 so the button
-                    // never enables for that combo option.
+                    // SSH agent needs no extra field — just the
+                    // above.
                     enabled: nameField.text.length > 0
                              && hostField.text.length > 0
                              && userField.text.length > 0
@@ -321,6 +345,7 @@ Item {
                                     && passwordField.text.length > 0)
                                 || (authCombo.currentIndex === 1
                                     && keyPathField.text.length > 0)
+                                || authCombo.currentIndex === 2
                              )
                     onClicked: {
                         const conn = {

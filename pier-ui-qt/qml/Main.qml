@@ -79,7 +79,8 @@ ApplicationWindow {
             sshPassword: "",
             sshCredentialId: "",
             sshKeyPath: "",
-            sshPassphraseCredentialId: ""
+            sshPassphraseCredentialId: "",
+            sshUsesAgent: false
         }
     }
 
@@ -93,7 +94,8 @@ ApplicationWindow {
             sshPassword: conn.password || "",
             sshCredentialId: conn.credentialId || "",
             sshKeyPath: conn.keyPath || "",
-            sshPassphraseCredentialId: conn.passphraseCredentialId || ""
+            sshPassphraseCredentialId: conn.passphraseCredentialId || "",
+            sshUsesAgent: conn.usesAgent === true
         }
     }
 
@@ -134,6 +136,24 @@ ApplicationWindow {
     // on, and the Rust SSH layer reads it back at handshake
     // time.
     function saveAndConnect(conn) {
+        if (conn.authKind === "agent") {
+            // Agent auth: no secrets to collect at all. Just
+            // persist the connection with usesAgent=true and
+            // open the tab — the Rust side will talk to the
+            // OS agent at connect time.
+            if (!connectionsModel.addAgent(conn.name, conn.host, conn.port, conn.username)) {
+                console.warn("Main: failed to persist agent connection")
+                return
+            }
+            openSshTab({
+                name: conn.name,
+                host: conn.host,
+                port: conn.port,
+                username: conn.username,
+                usesAgent: true
+            })
+            return
+        }
         if (conn.authKind === "private_key") {
             if (!conn.privateKeyPath || conn.privateKeyPath.length === 0) {
                 console.warn("Main: private_key path missing")
@@ -197,9 +217,20 @@ ApplicationWindow {
             return
         const conn = connectionsModel.get(index)
         if (!conn) return
-        // Dispatch on whichever auth field is populated. Key
-        // path takes precedence over credential id (the two
-        // never coexist in practice).
+        // Dispatch on whichever auth field is populated.
+        // Priority: agent > key > credential id. The four
+        // never coexist in practice — the add* methods
+        // enforce exclusivity.
+        if (conn.usesAgent === true) {
+            openSshTab({
+                name: conn.name,
+                host: conn.host,
+                port: conn.port,
+                username: conn.username,
+                usesAgent: true
+            })
+            return
+        }
         if (conn.keyPath && conn.keyPath.length > 0) {
             openSshTab({
                 name: conn.name,
@@ -318,9 +349,10 @@ ApplicationWindow {
                                 // _dispatchSshConnect picks the
                                 // right startSsh* path based on
                                 // which fields are populated:
-                                //   keyPath set     → key auth
-                                //   credentialId set → keychain pwd
-                                //   else            → plaintext pwd
+                                //   usesAgent true    → agent auth
+                                //   keyPath set       → key auth
+                                //   credentialId set  → keychain pwd
+                                //   else              → plaintext pwd
                                 backend: model.backend
                                 sshHost: model.sshHost
                                 sshPort: model.sshPort
@@ -329,6 +361,7 @@ ApplicationWindow {
                                 sshCredentialId: model.sshCredentialId
                                 sshKeyPath: model.sshKeyPath
                                 sshPassphraseCredentialId: model.sshPassphraseCredentialId
+                                sshUsesAgent: model.sshUsesAgent
                             }
                         }
                     }

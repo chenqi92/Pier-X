@@ -139,6 +139,14 @@ public slots:
                          const QString &passphraseCredentialId,
                          int cols, int rows);
 
+    // Spawn a remote shell over SSH authenticated via the
+    // system SSH agent. No credentials cross the FFI at all —
+    // the agent signs challenges on its own and pier-core
+    // never sees the private keys.
+    bool startSshWithAgent(const QString &host, int port,
+                           const QString &user,
+                           int cols, int rows);
+
     // Cancel an in-progress SSH handshake. If the worker thread
     // has not yet returned from pier_terminal_new_ssh, we can't
     // interrupt it — instead we flag the request as cancelled, so

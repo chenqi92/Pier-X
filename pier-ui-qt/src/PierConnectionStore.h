@@ -61,6 +61,7 @@ public:
         CredentialIdRole,
         KeyPathRole,
         PassphraseCredentialIdRole,
+        UsesAgentRole,
         TagsRole
     };
 
@@ -94,6 +95,12 @@ public slots:
                 const QString &privateKeyPath,
                 const QString &passphraseCredentialId);
 
+    // Append a new agent-auth connection and persist
+    // atomically. No credential fields at all — the OS SSH
+    // agent holds the keys.
+    bool addAgent(const QString &name, const QString &host, int port,
+                  const QString &username);
+
     // Remove the connection at `index` and persist. Does NOT
     // delete the keychain entry — the caller is responsible
     // for that via PierCredentials::deleteEntry.
@@ -110,11 +117,10 @@ signals:
     void countChanged();
 
 private:
-    // POD struct mirroring one row of the JSON shape. Either
-    // `credentialId` is set (KeychainPassword auth) or
-    // `keyPath` is set (PublicKeyFile auth) — never both. The
-    // `passphraseCredentialId` is only meaningful with
-    // `keyPath` set, and is empty for unencrypted keys.
+    // POD struct mirroring one row of the JSON shape. Exactly
+    // one of (credentialId, keyPath, usesAgent) is set per
+    // row; the other two are empty / false. `passphraseCredentialId`
+    // is only meaningful with `keyPath` set.
     struct Entry {
         QString name;
         QString host;
@@ -123,6 +129,7 @@ private:
         QString credentialId;          // password-auth: keychain id of password
         QString keyPath;               // key-auth: absolute path to private key
         QString passphraseCredentialId; // key-auth: keychain id of passphrase (or empty)
+        bool    usesAgent = false;     // agent-auth: system SSH agent
         QStringList tags;
     };
 

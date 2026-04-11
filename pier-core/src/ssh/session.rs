@@ -80,9 +80,18 @@ impl SshSession {
             ..Default::default()
         });
 
+        // A shared slot the host-key handler writes into when
+        // it rejects. We read it back after the handshake
+        // finishes (success or failure) to translate an opaque
+        // russh protocol error into a structured
+        // SshError::HostKeyMismatch.
+        let verify_error_slot = std::sync::Arc::new(std::sync::Mutex::new(None));
+
         let handler = ClientHandler {
             host: config.host.clone(),
+            port: config.port,
             verifier,
+            last_verify_error: std::sync::Arc::clone(&verify_error_slot),
         };
 
         let addr = config.address();
@@ -90,14 +99,29 @@ impl SshSession {
 
         // Apply the user-configured connect timeout. `0` = OS
         // default (= whatever russh's internal default does).
-        let handle = if config.connect_timeout_secs > 0 {
+        let connect_result = if config.connect_timeout_secs > 0 {
             let timeout = Duration::from_secs(config.connect_timeout_secs);
-            tokio::time::timeout(timeout, connect_fut)
-                .await
-                .map_err(|_| SshError::Timeout(timeout))?
-                .map_err(map_connect_error)?
+            match tokio::time::timeout(timeout, connect_fut).await {
+                Ok(inner) => inner,
+                Err(_) => return Err(SshError::Timeout(timeout)),
+            }
         } else {
-            connect_fut.await.map_err(map_connect_error)?
+            connect_fut.await
+        };
+
+        let handle = match connect_result {
+            Ok(h) => h,
+            Err(e) => {
+                // If our host-key handler rejected the key,
+                // surface the typed error instead of whatever
+                // generic "handshake failed" russh produced.
+                if let Ok(mut slot) = verify_error_slot.lock() {
+                    if let Some(ve) = slot.take() {
+                        return Err(verify_error_to_ssh_error(ve));
+                    }
+                }
+                return Err(map_connect_error(e));
+            }
         };
 
         let mut session = Self {
@@ -160,9 +184,8 @@ impl SshSession {
                 .await?;
             }
             AuthMethod::Agent => {
-                return Err(SshError::InvalidConfig(
-                    "Agent auth not wired yet (lands with M3c3+)".to_string(),
-                ));
+                tried.push("agent".to_string());
+                self.try_agent_auth(&config.user).await?;
             }
         }
 
@@ -187,6 +210,89 @@ impl SshSession {
             });
         }
         Ok(())
+    }
+
+    /// Authenticate via the system SSH agent.
+    ///
+    /// On Unix we connect to `$SSH_AUTH_SOCK`; on Windows we
+    /// use Pageant's named pipe. russh handles both through the
+    /// platform-specific `AgentClient::connect_env` / `connect_pageant`
+    /// constructors. The agent hands us a list of identities;
+    /// we walk them in order and try `authenticate_publickey_with`
+    /// (which uses the agent as a `Signer`) until one succeeds.
+    async fn try_agent_auth(&mut self, user: &str) -> Result<()> {
+        // Grab the handle first; we'll re-grab it inside the
+        // loop because authenticate_publickey_with takes &mut.
+        // No other holder exists during connect() so get_mut
+        // unwraps safely.
+        let handle = Arc::get_mut(&mut self.handle).expect("unique handle during auth");
+
+        // Connect to the agent. On Unix, connect_env reads
+        // $SSH_AUTH_SOCK. If the variable isn't set or the
+        // socket is absent, we surface an InvalidConfig so the
+        // UI can say "no agent found" instead of the generic
+        // AuthRejected path (which would imply the agent HAD
+        // keys and they were rejected).
+        #[cfg(unix)]
+        let mut agent = match russh::keys::agent::client::AgentClient::connect_env().await {
+            Ok(a) => a,
+            Err(e) => {
+                return Err(SshError::InvalidConfig(format!(
+                    "SSH agent not available (SSH_AUTH_SOCK?): {e}",
+                )));
+            }
+        };
+        #[cfg(windows)]
+        let mut agent = match russh::keys::agent::client::AgentClient::connect_pageant().await {
+            Ok(a) => a,
+            Err(e) => {
+                return Err(SshError::InvalidConfig(format!(
+                    "SSH agent (Pageant) not available: {e}",
+                )));
+            }
+        };
+        #[cfg(not(any(unix, windows)))]
+        {
+            let _ = user;
+            return Err(SshError::Unsupported);
+        }
+
+        let identities = agent
+            .request_identities()
+            .await
+            .map_err(|e| SshError::InvalidConfig(format!("SSH agent list failed: {e}")))?;
+
+        if identities.is_empty() {
+            return Err(SshError::AuthRejected {
+                tried: vec!["agent (no identities)".to_string()],
+            });
+        }
+
+        // Walk identities and try each. The first one the
+        // server accepts wins. If none do, fail with AuthRejected
+        // listing how many we tried.
+        let mut attempted = 0usize;
+        for identity in &identities {
+            attempted += 1;
+            let pubkey = identity.public_key().into_owned();
+            match handle
+                .authenticate_publickey_with(user, pubkey, None, &mut agent)
+                .await
+            {
+                Ok(result) => {
+                    if result.success() {
+                        return Ok(());
+                    }
+                }
+                Err(e) => {
+                    log::warn!("agent auth attempt {attempted} failed: {e}");
+                }
+            }
+        }
+
+        Err(SshError::AuthRejected {
+            tried: vec![format!("agent ({attempted} identities rejected)")],
+        })
     }
 
     /// Authenticate via an OpenSSH-format private key file.
@@ -300,15 +406,40 @@ fn map_connect_error(e: russh::Error) -> SshError {
     }
 }
 
+/// Translate a VerifyError from the host-key verifier into the
+/// UI-facing SshError. Mismatches surface as `HostKeyMismatch`
+/// so the Failed overlay can show the fingerprint and prompt
+/// the user; I/O errors surface as `InvalidConfig` since they
+/// indicate an unreadable known_hosts file rather than a bad
+/// connection.
+fn verify_error_to_ssh_error(e: super::known_hosts::VerifyError) -> SshError {
+    use super::known_hosts::VerifyError;
+    match e {
+        VerifyError::Mismatch { host, fingerprint, .. } => {
+            SshError::HostKeyMismatch { host, fingerprint }
+        }
+        VerifyError::Io(msg) => SshError::InvalidConfig(format!("known_hosts: {msg}")),
+    }
+}
+
 /// russh's callback surface for a client-side connection.
 ///
 /// Host key verification lives inside `check_server_key` — we
 /// delegate to the [`HostKeyVerifier`] the session was constructed
-/// with so the accept-all-M3a vs real-known_hosts-M3b swap is a
-/// single-field change in [`SshSession::connect`].
+/// with so the swap from the M3a accept-all verifier to the M3c4
+/// real known_hosts verifier is a single call-site change.
+///
+/// The `last_verify_error` slot captures structured mismatch
+/// details from inside the async handler — russh's
+/// `check_server_key` can only return `Ok(bool)`, so we record
+/// the real reason here and `SshSession::connect` reads it back
+/// after the handshake fails to translate into a typed
+/// [`SshError::HostKeyMismatch`].
 pub struct ClientHandler {
     host: String,
+    port: u16,
     verifier: HostKeyVerifier,
+    last_verify_error: std::sync::Arc<std::sync::Mutex<Option<super::known_hosts::VerifyError>>>,
 }
 
 impl client::Handler for ClientHandler {
@@ -318,13 +449,23 @@ impl client::Handler for ClientHandler {
         &mut self,
         server_public_key: &PublicKey,
     ) -> std::result::Result<bool, Self::Error> {
-        match self.verifier.verify(&self.host, server_public_key) {
+        match self.verifier.verify(&self.host, self.port, server_public_key) {
             Ok(accept) => Ok(accept),
             Err(e) => {
-                log::warn!("host key verifier I/O error for {}: {e}", self.host);
-                // A verifier I/O failure is a hard no — better
-                // safe than silently accepting a key because we
-                // couldn't read known_hosts.
+                log::warn!(
+                    "host key verification failed for {}:{}: {e}",
+                    self.host, self.port,
+                );
+                // Stash the structured error so SshSession::connect
+                // can translate it into SshError::HostKeyMismatch
+                // / SshError::InvalidConfig after the handshake
+                // unwinds. Poisoned mutex is a test-only concern
+                // in practice; just unwrap.
+                if let Ok(mut slot) = self.last_verify_error.lock() {
+                    *slot = Some(e);
+                }
+                // Return false — russh treats this as a rejected
+                // handshake and propagates up a protocol error.
                 Ok(false)
             }
         }

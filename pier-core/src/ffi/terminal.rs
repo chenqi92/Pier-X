@@ -432,6 +432,70 @@ pub unsafe extern "C" fn pier_terminal_new_ssh_credential(
 }
 
 /// Spawn a new SSH-backed terminal session that authenticates
+/// via the system SSH agent.
+///
+/// On Unix, the agent is located via `$SSH_AUTH_SOCK`. On
+/// Windows, Pageant's named pipe is used. No secret ever
+/// crosses this FFI — the agent itself holds the private keys
+/// and signs challenges without ever handing them to the client.
+///
+/// Identical handle semantics to [`pier_terminal_new_ssh`].
+///
+/// # Safety
+///
+/// `host`, `user` must be valid NUL-terminated UTF-8 C strings.
+/// `notify` must be a valid function pointer. `user_data` is
+/// opaque.
+#[no_mangle]
+pub unsafe extern "C" fn pier_terminal_new_ssh_agent(
+    cols: u16,
+    rows: u16,
+    host: *const c_char,
+    port: u16,
+    user: *const c_char,
+    notify: Option<NotifyFn>,
+    user_data: *mut c_void,
+) -> *mut PierTerminal {
+    use crate::ssh::AuthMethod;
+
+    if host.is_null() || user.is_null() {
+        set_last_ssh_error("null argument passed to pier_terminal_new_ssh_agent");
+        return ptr::null_mut();
+    }
+    let Some(notify) = notify else {
+        set_last_ssh_error("notify callback must not be null");
+        return ptr::null_mut();
+    };
+
+    // SAFETY: caller contract — NUL-terminated UTF-8.
+    let host_str = match unsafe { std::ffi::CStr::from_ptr(host) }.to_str() {
+        Ok(s) => s.to_string(),
+        Err(_) => {
+            set_last_ssh_error("host is not valid UTF-8");
+            return ptr::null_mut();
+        }
+    };
+    let user_str = match unsafe { std::ffi::CStr::from_ptr(user) }.to_str() {
+        Ok(s) => s.to_string(),
+        Err(_) => {
+            set_last_ssh_error("user is not valid UTF-8");
+            return ptr::null_mut();
+        }
+    };
+
+    if host_str.is_empty() || user_str.is_empty() {
+        set_last_ssh_error("host and user must not be empty");
+        return ptr::null_mut();
+    }
+
+    new_ssh_with_auth(
+        cols, rows, host_str, port, user_str,
+        AuthMethod::Agent,
+        notify, user_data,
+    )
+}
+
+/// Spawn a new SSH-backed terminal session that authenticates
 /// via a private key file rather than a password.
 ///
 /// `private_key_path` is the on-disk location of the OpenSSH-
@@ -1110,6 +1174,63 @@ mod tests {
         assert!(
             msg.contains("connect failed"),
             "expected connect-failed prefix, got {msg:?}",
+        );
+    }
+
+    // ── pier_terminal_new_ssh_agent ───────────────────────
+
+    #[test]
+    fn new_ssh_agent_rejects_null_strings() {
+        let host = CString::new("example.com").unwrap();
+        let user = CString::new("root").unwrap();
+
+        // SAFETY: each call has at least one null; the function
+        // rejects without touching memory.
+        unsafe {
+            assert!(
+                pier_terminal_new_ssh_agent(
+                    80, 24,
+                    ptr::null(),
+                    22,
+                    user.as_ptr(),
+                    Some(test_notify),
+                    ptr::null_mut(),
+                )
+                .is_null(),
+                "null host must return NULL",
+            );
+            assert!(
+                pier_terminal_new_ssh_agent(
+                    80, 24,
+                    host.as_ptr(),
+                    22,
+                    ptr::null(),
+                    Some(test_notify),
+                    ptr::null_mut(),
+                )
+                .is_null(),
+                "null user must return NULL",
+            );
+            assert!(
+                pier_terminal_new_ssh_agent(
+                    80, 24,
+                    host.as_ptr(),
+                    22,
+                    user.as_ptr(),
+                    None,
+                    ptr::null_mut(),
+                )
+                .is_null(),
+                "null notify must return NULL",
+            );
+        }
+
+        // The null-input error message must contain something
+        // recognizable so the C++ side can forward it.
+        let msg = read_last_ssh_error().unwrap_or_default();
+        assert!(
+            msg.contains("null argument") || msg.contains("null"),
+            "expected null arg error, got {msg:?}",
         );
     }
 

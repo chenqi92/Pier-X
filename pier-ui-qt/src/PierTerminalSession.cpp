@@ -176,6 +176,35 @@ bool PierTerminalSession::startSshWithKey(const QString &host, int port,
     return dispatchSshConnect(target, cols, rows, std::move(factory));
 }
 
+bool PierTerminalSession::startSshWithAgent(const QString &host, int port,
+                                             const QString &user,
+                                             int cols, int rows)
+{
+    if (host.isEmpty() || user.isEmpty()) {
+        qWarning() << "startSshWithAgent: empty host/user";
+        return false;
+    }
+    const QString target = QStringLiteral("%1@%2:%3").arg(user, host).arg(port);
+    const uint16_t portU16 = static_cast<uint16_t>(port);
+    const uint16_t colsU16 = static_cast<uint16_t>(cols);
+    const uint16_t rowsU16 = static_cast<uint16_t>(rows);
+    std::string hostStd = host.toStdString();
+    std::string userStd = user.toStdString();
+
+    auto factory = [hostStd = std::move(hostStd),
+                    userStd = std::move(userStd),
+                    portU16, colsU16, rowsU16](void *user_data) -> PierTerminal * {
+        return pier_terminal_new_ssh_agent(
+            colsU16, rowsU16,
+            hostStd.c_str(),
+            portU16,
+            userStd.c_str(),
+            &PierTerminalSession::notifyTrampoline,
+            user_data);
+    };
+    return dispatchSshConnect(target, cols, rows, std::move(factory));
+}
+
 bool PierTerminalSession::dispatchSshConnect(const QString &targetLabel,
                                              int cols, int rows,
                                              SshConnectFactory factory)

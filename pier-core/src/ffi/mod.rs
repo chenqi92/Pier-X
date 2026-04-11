@@ -40,6 +40,7 @@
 pub mod connections;
 pub mod core;
 pub mod credentials;
+pub mod sftp;
 pub mod terminal;
 
 // Re-export the individual C functions at the `ffi` root so
@@ -51,6 +52,12 @@ pub use self::connections::{
 };
 pub use self::core::{pier_core_build_info, pier_core_has_feature, pier_core_version};
 pub use self::credentials::{pier_credential_delete, pier_credential_set};
+pub use self::sftp::{
+    pier_sftp_canonicalize, pier_sftp_free, pier_sftp_free_string, pier_sftp_list_dir,
+    pier_sftp_mkdir, pier_sftp_new, pier_sftp_remove_dir, pier_sftp_remove_file,
+    pier_sftp_rename, PierSftp, PIER_AUTH_AGENT, PIER_AUTH_CREDENTIAL, PIER_AUTH_KEY,
+    PIER_AUTH_PASSWORD,
+};
 pub use self::terminal::{
     pier_terminal_free, pier_terminal_is_alive, pier_terminal_last_ssh_error, pier_terminal_new,
     pier_terminal_new_ssh, pier_terminal_new_ssh_agent, pier_terminal_new_ssh_credential,

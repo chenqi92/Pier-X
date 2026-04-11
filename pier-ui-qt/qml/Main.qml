@@ -99,6 +99,40 @@ ApplicationWindow {
         }
     }
 
+    // SFTP tab row — same SSH field shape as an ssh tab, just
+    // with backend = "sftp" so the Repeater delegate knows to
+    // load SftpBrowserView instead of TerminalView.
+    function _makeSftpRow(conn) {
+        return {
+            title: qsTr("📁 %1").arg(conn.name),
+            backend: "sftp",
+            sshHost: conn.host,
+            sshPort: conn.port,
+            sshUser: conn.username,
+            sshPassword: conn.password || "",
+            sshCredentialId: conn.credentialId || "",
+            sshKeyPath: conn.keyPath || "",
+            sshPassphraseCredentialId: conn.passphraseCredentialId || "",
+            sshUsesAgent: conn.usesAgent === true
+        }
+    }
+
+    function openSftpTab(conn) {
+        tabModel.append(_makeSftpRow(conn))
+        currentTabIndex = tabModel.count - 1
+    }
+
+    // Open an SFTP file browser for whatever saved connection
+    // the given index points at. Called from the command
+    // palette and from a future sidebar context-menu entry.
+    function openSftpForConnection(index) {
+        if (index < 0 || index >= connectionsModel.count)
+            return
+        const conn = connectionsModel.get(index)
+        if (!conn) return
+        openSftpTab(conn)
+    }
+
     function openNewTab(title) {
         const t = title || qsTr("Local %1").arg(tabModel.count + 1)
         tabModel.append(_makeLocalRow(t))
@@ -343,25 +377,57 @@ ApplicationWindow {
 
                         Repeater {
                             model: tabModel
-                            delegate: TerminalView {
-                                // Bind every backend field from the
-                                // model row. TerminalView's
-                                // _dispatchSshConnect picks the
-                                // right startSsh* path based on
-                                // which fields are populated:
-                                //   usesAgent true    → agent auth
-                                //   keyPath set       → key auth
-                                //   credentialId set  → keychain pwd
-                                //   else              → plaintext pwd
-                                backend: model.backend
-                                sshHost: model.sshHost
-                                sshPort: model.sshPort
-                                sshUser: model.sshUser
-                                sshPassword: model.sshPassword
-                                sshCredentialId: model.sshCredentialId
-                                sshKeyPath: model.sshKeyPath
-                                sshPassphraseCredentialId: model.sshPassphraseCredentialId
-                                sshUsesAgent: model.sshUsesAgent
+                            delegate: Loader {
+                                // Pick the view class by
+                                // backend. Both TerminalView
+                                // and SftpBrowserView have
+                                // the same ssh* property
+                                // shape, so the delegate just
+                                // copies every model field
+                                // through regardless of which
+                                // class the Loader ends up
+                                // instantiating.
+                                required property string backend
+                                required property string sshHost
+                                required property int    sshPort
+                                required property string sshUser
+                                required property string sshPassword
+                                required property string sshCredentialId
+                                required property string sshKeyPath
+                                required property string sshPassphraseCredentialId
+                                required property bool   sshUsesAgent
+
+                                sourceComponent: backend === "sftp"
+                                                 ? sftpComp
+                                                 : terminalComp
+
+                                Component {
+                                    id: terminalComp
+                                    TerminalView {
+                                        backend: parent.backend
+                                        sshHost: parent.sshHost
+                                        sshPort: parent.sshPort
+                                        sshUser: parent.sshUser
+                                        sshPassword: parent.sshPassword
+                                        sshCredentialId: parent.sshCredentialId
+                                        sshKeyPath: parent.sshKeyPath
+                                        sshPassphraseCredentialId: parent.sshPassphraseCredentialId
+                                        sshUsesAgent: parent.sshUsesAgent
+                                    }
+                                }
+                                Component {
+                                    id: sftpComp
+                                    SftpBrowserView {
+                                        sshHost: parent.sshHost
+                                        sshPort: parent.sshPort
+                                        sshUser: parent.sshUser
+                                        sshPassword: parent.sshPassword
+                                        sshCredentialId: parent.sshCredentialId
+                                        sshKeyPath: parent.sshKeyPath
+                                        sshPassphraseCredentialId: parent.sshPassphraseCredentialId
+                                        sshUsesAgent: parent.sshUsesAgent
+                                    }
+                                }
                             }
                         }
                     }
@@ -405,6 +471,23 @@ ApplicationWindow {
                 title: qsTr("New SSH connection…"),
                 shortcut: "Ctrl+N",
                 action: function() { newConnectionDialog.show() }
+            },
+            {
+                title: qsTr("Browse remote files (first saved connection)"),
+                shortcut: "",
+                action: function() {
+                    // Quick entry point: open an SFTP browser
+                    // for the first saved connection. A richer
+                    // picker (list all saved + type to filter)
+                    // lands when the command palette grows
+                    // sub-lists; for M3d2 this is the smoke-
+                    // test hook.
+                    if (connectionsModel.count > 0) {
+                        window.openSftpForConnection(0)
+                    } else {
+                        console.warn("No saved connections to browse.")
+                    }
+                }
             },
             {
                 title: qsTr("Close current tab"),

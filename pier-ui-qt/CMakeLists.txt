@@ -41,6 +41,8 @@ qt_add_qml_module(pier-x
         src/PierConnectionStore.cpp
         src/PierCredentials.h
         src/PierCredentials.cpp
+        src/PierSftpBrowser.h
+        src/PierSftpBrowser.cpp
     QML_FILES
         qml/Main.qml
         qml/Theme.qml
@@ -64,6 +66,7 @@ qt_add_qml_module(pier-x
         qml/dialogs/NewConnectionDialog.qml
         qml/dialogs/SettingsDialog.qml
         qml/views/TerminalView.qml
+        qml/views/SftpBrowserView.qml
     RESOURCES
         resources/icons/pier.png
 )

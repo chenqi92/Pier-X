@@ -112,6 +112,8 @@ ApplicationWindow {
                 WelcomeView {
                     anchors.fill: parent
                     visible: tabModel.count === 0
+                    onOpenLocalTerminalRequested: window.openNewTab()
+                    onNewSshRequested: newConnectionDialog.show()
                 }
 
                 ColumnLayout {

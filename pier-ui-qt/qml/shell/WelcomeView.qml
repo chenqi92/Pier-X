@@ -6,6 +6,12 @@ import Pier
 Item {
     id: root
 
+    // Forwarded to Main.qml which owns the tab model and the
+    // connection dialog. Using signals (not direct imperative
+    // calls) keeps WelcomeView reusable and testable in isolation.
+    signal openLocalTerminalRequested()
+    signal newSshRequested()
+
     ColumnLayout {
         anchors.centerIn: parent
         width: 520
@@ -47,30 +53,33 @@ Item {
 
             PrimaryButton {
                 text: qsTr("New SSH connection")
-                onClicked: console.log("New SSH — TODO")
+                onClicked: root.newSshRequested()
             }
             GhostButton {
                 text: qsTr("Open local terminal")
-                onClicked: console.log("Open local — TODO")
+                onClicked: root.openLocalTerminalRequested()
             }
         }
 
-        // Status pills row — design system showcase
+        // Status pills row — live metadata sourced from pier-core.
+        // Both the Qt runtime version and the pier-core crate
+        // version are real bindings now (M1 bridge); they update
+        // whenever the underlying library changes at build time.
         RowLayout {
             Layout.alignment: Qt.AlignHCenter
             Layout.topMargin: Theme.sp4
             spacing: Theme.sp2
 
             StatusPill {
-                text: "Qt 6.8 LTS"
+                text: "Qt " + PierCore.qtVersion
                 statusColor: Theme.statusSuccess
             }
             StatusPill {
-                text: "Rust core: pending"
-                statusColor: Theme.statusWarning
+                text: qsTr("core ") + PierCore.version
+                statusColor: Theme.statusSuccess
             }
             StatusPill {
-                text: Theme.dark ? "Dark mode" : "Light mode"
+                text: Theme.dark ? qsTr("Dark mode") : qsTr("Light mode")
                 statusColor: Theme.statusInfo
             }
         }

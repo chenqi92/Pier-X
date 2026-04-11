@@ -28,5 +28,15 @@ keyring = "3"
 # Cross-platform paths
 directories = "5"
 
+# Terminal emulation — VT100 / ANSI parser (cross-platform, pure Rust)
+vte = "0.15"
+
+# Unix PTY — forkpty + ioctl wrappers live in libc. Only pulled in on
+# Unix targets; Windows gets its own ConPTY-backed implementation
+# (stub for now). Once the Unix impl needs safer wrappers the `nix`
+# crate slots in here.
+[target.'cfg(unix)'.dependencies]
+libc = "0.2"
+
 [dev-dependencies]
 env_logger = "0.11"

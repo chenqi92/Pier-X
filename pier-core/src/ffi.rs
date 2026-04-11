@@ -51,16 +51,20 @@ pub extern "C" fn pier_core_build_info() -> *const c_char {
 /// A null `name` is treated as an empty feature name (always returns 0).
 /// Recognised names will grow as per-protocol modules land (`ssh`, `sftp`,
 /// `pty`, `rdp`, `vnc`, `git`, etc.). Today no feature flags exist.
+///
+/// # Safety
+///
+/// `name`, if non-null, must point at a NUL-terminated UTF-8 byte
+/// sequence readable for the lifetime of this call. Null is defined
+/// to return 0 without touching memory.
 #[no_mangle]
-pub extern "C" fn pier_core_has_feature(name: *const c_char) -> i32 {
+pub unsafe extern "C" fn pier_core_has_feature(name: *const c_char) -> i32 {
     if name.is_null() {
         return 0;
     }
-    // SAFETY: caller guarantees a NUL-terminated UTF-8 string or null; we
-    // checked for null above.
-    let name = match unsafe { CStr::from_ptr(name) }.to_str() {
-        Ok(s) => s,
-        Err(_) => return 0,
+    // SAFETY: caller contract, and we verified non-null immediately above.
+    let Ok(name) = (unsafe { CStr::from_ptr(name) }).to_str() else {
+        return 0;
     };
     match name {
         // Placeholder — real entries land with each protocol module.
@@ -92,12 +96,15 @@ mod tests {
 
     #[test]
     fn has_feature_null_safe() {
-        assert_eq!(pier_core_has_feature(std::ptr::null()), 0);
+        // SAFETY: null is defined to be handled without touching memory.
+        assert_eq!(unsafe { pier_core_has_feature(std::ptr::null()) }, 0);
     }
 
     #[test]
     fn has_feature_unknown_name_returns_zero() {
         let c = CString::new("not_a_real_feature").unwrap();
-        assert_eq!(pier_core_has_feature(c.as_ptr()), 0);
+        // SAFETY: CString produces a NUL-terminated UTF-8 byte sequence
+        // that lives for the duration of this assertion.
+        assert_eq!(unsafe { pier_core_has_feature(c.as_ptr()) }, 0);
     }
 }

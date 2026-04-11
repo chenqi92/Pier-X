@@ -20,6 +20,7 @@
 pub mod credentials;
 pub mod ffi;
 pub mod paths;
+pub mod terminal;
 
 /// Crate version, derived from `Cargo.toml` at compile time.
 pub const VERSION: &str = env!("CARGO_PKG_VERSION");

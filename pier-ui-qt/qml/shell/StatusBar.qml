@@ -29,20 +29,18 @@ Rectangle {
         Item { Layout.fillWidth: true }
 
         Text {
-            text: qsTr("Qt") + " " + qVersion
+            text: qsTr("Qt") + " " + PierCore.qtVersion
             font.family: Theme.fontMono
             font.pixelSize: Theme.sizeCaption
             color: Theme.textTertiary
-
-            // Qt version isn't exposed as a QML built-in; injected from C++ would be cleaner,
-            // for now we display the literal LTS we target.
-            property string qVersion: "6.8 LTS"
 
             Behavior on color { ColorAnimation { duration: Theme.durNormal } }
         }
 
         Text {
-            text: "v" + Qt.application.version
+            // App version (from CMake) · pier-core build info (from Rust FFI).
+            // The "·" separator groups them visually without a second Text.
+            text: "v" + Qt.application.version + " · core " + PierCore.buildInfo
             font.family: Theme.fontMono
             font.pixelSize: Theme.sizeCaption
             color: Theme.textTertiary

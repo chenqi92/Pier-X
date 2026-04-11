@@ -1,17 +1,20 @@
 //! C ABI surface — the stable boundary between `pier-core` and any UI layer.
 //!
 //! Functions in this module are `extern "C"` with C-compatible types only.
-//! They are intended to be consumed from Qt (via cxx-qt or direct FFI),
-//! Swift, or any other language that speaks the C ABI.
+//! They are intended to be consumed from Qt (via a thin C++ wrapper today,
+//! via cxx-qt once signals/slots are needed), Swift, or any other language
+//! that speaks the C ABI.
 //!
 //! ## Memory rules
 //!
 //! - All `*const c_char` returned from this module are owned by `pier-core`.
 //!   Callers MUST NOT free them. They live for the lifetime of the process.
-//! - All errors are surfaced via return codes (non-zero = error). Detailed
-//!   error messages can be retrieved via `pier_core_last_error`.
+//! - All inputs are `*const c_char` NUL-terminated UTF-8; passing a null
+//!   pointer is defined to return the same result as an empty string.
+//! - Numeric return values use `0` for "false/off" and `1` for "true/on"
+//!   unless otherwise documented.
 
-use std::ffi::CString;
+use std::ffi::{CStr, CString};
 use std::os::raw::c_char;
 use std::sync::OnceLock;
 
@@ -27,19 +30,48 @@ pub extern "C" fn pier_core_version() -> *const c_char {
         .as_ptr()
 }
 
+/// Returns a short human-readable build descriptor: `"<version> (<profile>)"`.
+///
+/// `<profile>` is `release` or `debug` based on how pier-core was compiled.
+/// Statically allocated, do not free.
+#[no_mangle]
+pub extern "C" fn pier_core_build_info() -> *const c_char {
+    static INFO_C: OnceLock<CString> = OnceLock::new();
+    INFO_C
+        .get_or_init(|| {
+            let profile = if cfg!(debug_assertions) { "debug" } else { "release" };
+            let s = format!("{} ({})", crate::VERSION, profile);
+            CString::new(s).expect("build info contains NUL byte")
+        })
+        .as_ptr()
+}
+
 /// Returns 1 if `pier-core` was built with the given feature flag, 0 otherwise.
 ///
-/// Currently always returns 0 — feature flags will land alongside the
-/// per-protocol module ports (ssh, rdp, vnc, etc.).
+/// A null `name` is treated as an empty feature name (always returns 0).
+/// Recognised names will grow as per-protocol modules land (`ssh`, `sftp`,
+/// `pty`, `rdp`, `vnc`, `git`, etc.). Today no feature flags exist.
 #[no_mangle]
-pub extern "C" fn pier_core_has_feature(_name: *const c_char) -> i32 {
-    0
+pub extern "C" fn pier_core_has_feature(name: *const c_char) -> i32 {
+    if name.is_null() {
+        return 0;
+    }
+    // SAFETY: caller guarantees a NUL-terminated UTF-8 string or null; we
+    // checked for null above.
+    let name = match unsafe { CStr::from_ptr(name) }.to_str() {
+        Ok(s) => s,
+        Err(_) => return 0,
+    };
+    match name {
+        // Placeholder — real entries land with each protocol module.
+        "" => 0,
+        _ => 0,
+    }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::ffi::CStr;
 
     #[test]
     fn version_string_is_returned() {
@@ -47,5 +79,25 @@ mod tests {
         assert!(!ptr.is_null());
         let s = unsafe { CStr::from_ptr(ptr) }.to_str().unwrap();
         assert_eq!(s, crate::VERSION);
+    }
+
+    #[test]
+    fn build_info_contains_version_and_profile() {
+        let ptr = pier_core_build_info();
+        assert!(!ptr.is_null());
+        let s = unsafe { CStr::from_ptr(ptr) }.to_str().unwrap();
+        assert!(s.contains(crate::VERSION));
+        assert!(s.contains("release") || s.contains("debug"));
+    }
+
+    #[test]
+    fn has_feature_null_safe() {
+        assert_eq!(pier_core_has_feature(std::ptr::null()), 0);
+    }
+
+    #[test]
+    fn has_feature_unknown_name_returns_zero() {
+        let c = CString::new("not_a_real_feature").unwrap();
+        assert_eq!(pier_core_has_feature(c.as_ptr()), 0);
     }
 }

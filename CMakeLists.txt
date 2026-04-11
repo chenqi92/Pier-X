@@ -27,11 +27,29 @@ if(NOT CMAKE_BUILD_TYPE AND NOT CMAKE_CONFIGURATION_TYPES)
 endif()
 
 # ─────────────────────────────────────────────────────────
+# Rust ↔ CMake integration (Corrosion)
+# ─────────────────────────────────────────────────────────
+# Corrosion drives cargo from CMake so the Rust core is built as part of
+# the normal `cmake --build` flow on every platform. It's the standard
+# approach for cargo-in-CMake and is a prerequisite for cxx-qt later —
+# once M2 needs QObjects with signals/slots, cxx-qt layers on top of the
+# exact same Corrosion-imported crate with no CMake changes here.
+
+include(FetchContent)
+
+FetchContent_Declare(
+    Corrosion
+    GIT_REPOSITORY https://github.com/corrosion-rs/corrosion.git
+    GIT_TAG        v0.5.2
+)
+FetchContent_MakeAvailable(Corrosion)
+
+# ─────────────────────────────────────────────────────────
 # Subprojects
 # ─────────────────────────────────────────────────────────
 
-# pier-core: Rust core engine — wired in once the cxx-qt bridge lands.
-# add_subdirectory(pier-core)
+# pier-core: Rust core engine (static lib, C ABI)
+add_subdirectory(pier-core)
 
 # pier-ui-qt: Qt 6 / QML UI shell
 add_subdirectory(pier-ui-qt)

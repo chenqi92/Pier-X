@@ -16,6 +16,11 @@ qt_add_executable(pier-x
     src/main.cpp
 )
 
+# qmltyperegistrar emits `#if __has_include(<PierCoreBridge.h>)` in its
+# generated bootstrap, so the source directory has to be on the include
+# path even though we don't `#include` anything from it ourselves.
+target_include_directories(pier-x PRIVATE src)
+
 # Mark Theme.qml as a QML singleton — must be set BEFORE qt_add_qml_module
 set_source_files_properties(qml/Theme.qml
     PROPERTIES QT_QML_SINGLETON_TYPE TRUE
@@ -24,6 +29,9 @@ set_source_files_properties(qml/Theme.qml
 qt_add_qml_module(pier-x
     URI Pier
     VERSION 1.0
+    SOURCES
+        src/PierCoreBridge.h
+        src/PierCoreBridge.cpp
     QML_FILES
         qml/Main.qml
         qml/Theme.qml
@@ -57,7 +65,23 @@ target_link_libraries(pier-x PRIVATE
     Qt6::Qml
     Qt6::Quick
     Qt6::QuickControls2
+    pier_core
 )
+
+# Rust staticlibs link against the platform's runtime libraries. Corrosion
+# tells us which ones on each platform, but when linking a staticlib into
+# a Qt executable we need to forward them explicitly.
+if(APPLE)
+    target_link_libraries(pier-x PRIVATE
+        "-framework CoreFoundation"
+        "-framework Security"
+        "-framework SystemConfiguration"
+    )
+elseif(WIN32)
+    target_link_libraries(pier-x PRIVATE
+        ws2_32 userenv advapi32 bcrypt ntdll crypt32 secur32 ncrypt
+    )
+endif()
 
 target_compile_definitions(pier-x PRIVATE
     PIER_X_VERSION="${PROJECT_VERSION}"

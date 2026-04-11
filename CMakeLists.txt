@@ -4,6 +4,35 @@ cmake_minimum_required(VERSION 3.21)
 file(READ "${CMAKE_CURRENT_SOURCE_DIR}/VERSION" PIER_X_VERSION_RAW)
 string(STRIP "${PIER_X_VERSION_RAW}" PIER_X_VERSION)
 
+# ─────────────────────────────────────────────────────────
+# macOS deployment target
+# ─────────────────────────────────────────────────────────
+# Align Qt's deployment target with whatever SDK cargo (and
+# therefore the aws-lc-rs assembly objects pulled in by russh)
+# targeted. Without this, the Rust assembly objects end up with a
+# higher platform version than Qt's C++ compilation units, and
+# every link of pier-x prints hundreds of lines like:
+#
+#   ld: warning: object file (libpier_core.a[aes-xts-dec.o]) was
+#       built for newer 'macOS' version (26.4) than being linked (26.0)
+#
+# These are cosmetic — the binary works fine — but the noise buries
+# real link errors if they ever land. The user can override via
+# `-DCMAKE_OSX_DEPLOYMENT_TARGET=14.0` (or any other value) to
+# deliberately widen the target.
+if(APPLE AND NOT CMAKE_OSX_DEPLOYMENT_TARGET)
+    execute_process(
+        COMMAND xcrun --show-sdk-version
+        OUTPUT_VARIABLE _pier_host_sdk
+        OUTPUT_STRIP_TRAILING_WHITESPACE
+        ERROR_QUIET
+    )
+    if(_pier_host_sdk)
+        set(CMAKE_OSX_DEPLOYMENT_TARGET "${_pier_host_sdk}" CACHE STRING
+            "Minimum macOS version (defaults to host SDK)" FORCE)
+    endif()
+endif()
+
 project(pier-x
     VERSION ${PIER_X_VERSION}
     DESCRIPTION "Cross-platform terminal management built on Qt 6 + Rust"

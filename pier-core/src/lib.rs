@@ -20,6 +20,7 @@
 pub mod credentials;
 pub mod ffi;
 pub mod paths;
+pub mod ssh;
 pub mod terminal;
 
 /// Crate version, derived from `Cargo.toml` at compile time.

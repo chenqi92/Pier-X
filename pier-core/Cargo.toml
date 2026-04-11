@@ -31,6 +31,20 @@ directories = "5"
 # Terminal emulation — VT100 / ANSI parser (cross-platform, pure Rust)
 vte = "0.15"
 
+# SSH client. `russh` drives an async SSH session (TCP handshake,
+# key exchange, authentication, channels, port forwarding). The
+# `Pty` trait in terminal::pty is synchronous, so the ssh module
+# bridges the two worlds via a shared multi-thread tokio runtime
+# behind a `OnceLock`. Default features pull aws-lc-rs for crypto
+# (portable across Apple Silicon / x86_64 / Windows ARM64).
+russh = { version = "0.60", features = ["async-trait"] }
+
+# Async runtime for russh. Only the `rt-multi-thread` + time + net
+# features — we don't need macros or full.
+tokio = { version = "1", default-features = false, features = [
+    "rt-multi-thread", "time", "net", "sync", "io-util", "macros",
+] }
+
 # Unix PTY — forkpty + ioctl wrappers live in libc. Only pulled in on
 # Unix targets; Windows gets its own ConPTY-backed implementation
 # (stub for now). Once the Unix impl needs safer wrappers the `nix`

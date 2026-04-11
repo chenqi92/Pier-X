@@ -17,6 +17,7 @@
 #![warn(missing_docs)]
 #![warn(rust_2018_idioms)]
 
+pub mod connections;
 pub mod credentials;
 pub mod ffi;
 pub mod paths;

@@ -37,6 +37,10 @@ qt_add_qml_module(pier-x
         src/PierTerminalSession.cpp
         src/PierTerminalGrid.h
         src/PierTerminalGrid.cpp
+        src/PierConnectionStore.h
+        src/PierConnectionStore.cpp
+        src/PierCredentials.h
+        src/PierCredentials.cpp
     QML_FILES
         qml/Main.qml
         qml/Theme.qml

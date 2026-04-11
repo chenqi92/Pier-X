@@ -31,14 +31,23 @@ Rectangle {
                            : (Qt.platform.os === "osx" ? "/bin/zsh" : "/bin/bash")
 
     // SSH backend parameters. Only read when `backend === "ssh"`.
-    // These are consumed exactly once at startup and never echoed
-    // or stored on the QML object after the handshake — the C++
-    // layer zeroes the QByteArray it passed into the FFI as soon
-    // as pier_terminal_new_ssh returns.
+    // The plaintext password (sshPassword) is consumed exactly
+    // once at startup and never echoed or stored on the QML
+    // object after the handshake — the C++ layer copies it into
+    // a std::string for the worker closure as soon as
+    // startSsh returns.
+    //
+    // For saved connections, the dialog sets sshCredentialId
+    // instead of sshPassword. When set, TerminalView calls
+    // startSshWithCredential, which goes through the
+    // pier_terminal_new_ssh_credential FFI — no plaintext
+    // crosses the C ABI boundary at all, the Rust SSH layer
+    // pulls the password from the OS keychain by id.
     property string sshHost: ""
     property int sshPort: 22
     property string sshUser: ""
     property string sshPassword: ""
+    property string sshCredentialId: ""
 
     color: Theme.bgCanvas
     focus: true
@@ -88,16 +97,30 @@ Rectangle {
                     console.warn("TerminalView: ssh backend needs sshHost + sshUser")
                     return
                 }
-                // Non-blocking since M3c1: startSsh returns
+                // Non-blocking since M3c1: startSsh* returns
                 // immediately after scheduling a worker thread.
                 // The overlay below tracks session.status and
                 // shows "Connecting…" / "Failed" as appropriate.
-                session.startSsh(
-                    root.sshHost,
-                    root.sshPort,
-                    root.sshUser,
-                    root.sshPassword,
-                    cols, rows)
+                //
+                // M3c2: prefer the credential-id path when one is
+                // set so the saved-connection reconnect flow goes
+                // through the OS keychain and never touches the
+                // plaintext-password FFI.
+                if (root.sshCredentialId.length > 0) {
+                    session.startSshWithCredential(
+                        root.sshHost,
+                        root.sshPort,
+                        root.sshUser,
+                        root.sshCredentialId,
+                        cols, rows)
+                } else {
+                    session.startSsh(
+                        root.sshHost,
+                        root.sshPort,
+                        root.sshUser,
+                        root.sshPassword,
+                        cols, rows)
+                }
             } else {
                 session.start(root.shell, cols, rows)
             }
@@ -109,12 +132,15 @@ Rectangle {
             var cols = Math.max(1, Math.floor(width / grid.cellWidth))
             var rows = Math.max(1, Math.floor(height / grid.cellHeight))
             if (cols <= 0 || rows <= 0) return
-            session.startSsh(
-                root.sshHost,
-                root.sshPort,
-                root.sshUser,
-                root.sshPassword,
-                cols, rows)
+            if (root.sshCredentialId.length > 0) {
+                session.startSshWithCredential(
+                    root.sshHost, root.sshPort, root.sshUser,
+                    root.sshCredentialId, cols, rows)
+            } else {
+                session.startSsh(
+                    root.sshHost, root.sshPort, root.sshUser,
+                    root.sshPassword, cols, rows)
+            }
         }
 
         MouseArea {

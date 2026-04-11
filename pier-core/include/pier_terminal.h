@@ -121,6 +121,31 @@ PierTerminal *pier_terminal_new(
  * copy it immediately. Safe to call from anywhere. */
 const char *pier_terminal_last_ssh_error(void);
 
+/* Spawn a new terminal session backed by a remote SSH shell,
+ * looking the password up from the OS keychain by id rather
+ * than having it cross the FFI boundary.
+ *
+ * The dialog (or sidebar reconnect path) stores the user's
+ * password via pier_credential_set under a generated id, then
+ * passes that id here. The Rust SSH layer pulls the password
+ * from the OS keychain at handshake time and discards it
+ * immediately. **No plaintext password is ever passed across
+ * this function in either direction.**
+ *
+ * Identical handle semantics to pier_terminal_new_ssh: the
+ * returned opaque PierTerminal* is consumed by the same _write,
+ * _resize, _snapshot, _free functions. */
+PierTerminal *pier_terminal_new_ssh_credential(
+    uint16_t cols,
+    uint16_t rows,
+    const char *host,
+    uint16_t port,
+    const char *user,
+    const char *credential_id,
+    PierTerminalNotifyFn notify,
+    void *user_data
+);
+
 /* Spawn a new terminal session backed by a remote SSH shell.
  *
  * Identical handle semantics to pier_terminal_new — the returned

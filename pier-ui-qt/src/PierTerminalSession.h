@@ -118,6 +118,15 @@ public slots:
     bool startSsh(const QString &host, int port, const QString &user,
                   const QString &password, int cols, int rows);
 
+    // Spawn a remote shell over SSH where the password lives in
+    // the OS keychain rather than crossing the FFI boundary.
+    // The Rust SSH layer pulls it from the keychain by id at
+    // handshake time. Same async + status semantics as startSsh.
+    // Used by the sidebar reconnect path so saved connections
+    // never re-prompt for a password.
+    bool startSshWithCredential(const QString &host, int port, const QString &user,
+                                const QString &credentialId, int cols, int rows);
+
     // Cancel an in-progress SSH handshake. If the worker thread
     // has not yet returned from pier_terminal_new_ssh, we can't
     // interrupt it — instead we flag the request as cancelled, so
@@ -183,6 +192,34 @@ private:
     // actually changed. Centralizes the invariant that every
     // status transition notifies QML bindings exactly once.
     void setStatus(SshStatus s);
+
+    // The two pier_terminal_new_ssh* C functions share the same
+    // signature — only the meaning of the 6th argument differs
+    // (plaintext password vs keychain credential id). This
+    // typedef lets the dispatcher accept either via a single
+    // function pointer.
+    using SshConnectFn = PierTerminal *(*)(uint16_t /*cols*/,
+                                           uint16_t /*rows*/,
+                                           const char * /*host*/,
+                                           uint16_t /*port*/,
+                                           const char * /*user*/,
+                                           const char * /*secret_or_id*/,
+                                           void (*)(void *, uint32_t) /*notify*/,
+                                           void * /*user_data*/);
+
+    // Common dispatch path for both SSH start variants. Sets
+    // status=Connecting, spawns the worker thread, and on
+    // completion routes the result through onSshConnectResult.
+    // `ffiCall` is whichever pier_terminal_new_ssh* function the
+    // caller wants to invoke. `secret` is either the plaintext
+    // password or the credential id; the worker passes it
+    // through to the FFI as-is.
+    bool dispatchSshConnect(const QString &targetLabel,
+                            const QString &host, int port,
+                            const QString &user,
+                            const QString &secret,
+                            int cols, int rows,
+                            SshConnectFn ffiCall);
 
     PierTerminal *m_handle = nullptr;
     std::vector<PierCell> m_cells;

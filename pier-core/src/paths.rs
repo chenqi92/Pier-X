@@ -33,6 +33,17 @@ pub fn cache_dir() -> Option<PathBuf> {
     project_dirs().map(|d| d.cache_dir().to_path_buf())
 }
 
+/// Path to the persisted connections JSON file. Lives under the
+/// data directory (not the config directory) because the file is
+/// machine-state, not user-edited config.
+///
+/// Returns `None` only if no home directory can be resolved at
+/// all — every supported platform produces a valid value in
+/// practice.
+pub fn connections_file() -> Option<PathBuf> {
+    data_dir().map(|d| d.join("connections.json"))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

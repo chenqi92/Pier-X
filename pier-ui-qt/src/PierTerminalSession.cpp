@@ -72,13 +72,40 @@ bool PierTerminalSession::start(const QString &shell, int cols, int rows)
 bool PierTerminalSession::startSsh(const QString &host, int port, const QString &user,
                                    const QString &password, int cols, int rows)
 {
+    const QString target = QStringLiteral("%1@%2:%3").arg(user, host).arg(port);
+    return dispatchSshConnect(target, host, port, user, password, cols, rows,
+                              &pier_terminal_new_ssh);
+}
+
+bool PierTerminalSession::startSshWithCredential(const QString &host, int port,
+                                                 const QString &user,
+                                                 const QString &credentialId,
+                                                 int cols, int rows)
+{
+    const QString target = QStringLiteral("%1@%2:%3").arg(user, host).arg(port);
+    return dispatchSshConnect(target, host, port, user, credentialId, cols, rows,
+                              &pier_terminal_new_ssh_credential);
+}
+
+bool PierTerminalSession::dispatchSshConnect(const QString &targetLabel,
+                                             const QString &host, int port,
+                                             const QString &user,
+                                             const QString &secret,
+                                             int cols, int rows,
+                                             SshConnectFn ffiCall)
+{
     if (m_handle || m_status == SshStatus::Connecting) {
-        qWarning() << "PierTerminalSession::startSsh called on already-running session";
+        qWarning() << "PierTerminalSession::startSsh* called on already-running session";
         return false;
     }
-    if (cols <= 0 || rows <= 0 || port <= 0 || port > 65535 || host.isEmpty() || user.isEmpty()) {
-        qWarning() << "PierTerminalSession::startSsh rejected invalid args"
-                   << host << port << user << "size" << cols << "x" << rows;
+    if (cols <= 0 || rows <= 0 || port <= 0 || port > 65535
+        || host.isEmpty() || user.isEmpty()) {
+        qWarning() << "PierTerminalSession::startSsh* rejected invalid args"
+                   << targetLabel << "size" << cols << "x" << rows;
+        return false;
+    }
+    if (!ffiCall) {
+        qWarning() << "PierTerminalSession::dispatchSshConnect: null ffiCall";
         return false;
     }
 
@@ -87,7 +114,7 @@ bool PierTerminalSession::startSsh(const QString &host, int port, const QString 
     const quint64 requestId = ++m_connectRequestId;
     m_connectCancelFlag = std::make_shared<std::atomic<bool>>(false);
     m_sshErrorMessage.clear();
-    m_sshTarget = QStringLiteral("%1@%2:%3").arg(user, host).arg(port);
+    m_sshTarget = targetLabel;
     m_cols = cols;
     m_rows = rows;
     setStatus(SshStatus::Connecting);
@@ -104,13 +131,13 @@ bool PierTerminalSession::startSsh(const QString &host, int port, const QString 
     m_connectThread.reset();
 
     // Capture everything by value into the worker thread closure.
-    // We deliberately copy the password into a std::string so the
-    // QByteArray doesn't have to outlive the main-thread stack
-    // frame; the string dies with the closure as soon as the
+    // We deliberately copy host/user/secret into std::strings so
+    // the QByteArrays don't have to outlive the main-thread stack
+    // frame; the strings die with the closure as soon as the
     // handshake completes and the result is delivered.
-    const std::string hostStd = host.toStdString();
-    const std::string userStd = user.toStdString();
-    const std::string passStd = password.toStdString();
+    std::string hostStd = host.toStdString();
+    std::string userStd = user.toStdString();
+    std::string secretStd = secret.toStdString();
     const uint16_t portU16 = static_cast<uint16_t>(port);
     const uint16_t colsU16 = static_cast<uint16_t>(cols);
     const uint16_t rowsU16 = static_cast<uint16_t>(rows);
@@ -124,8 +151,9 @@ bool PierTerminalSession::startSsh(const QString &host, int port, const QString 
         requestId,
         hostStd = std::move(hostStd),
         userStd = std::move(userStd),
-        passStd = std::move(passStd),
-        portU16, colsU16, rowsU16
+        secretStd = std::move(secretStd),
+        portU16, colsU16, rowsU16,
+        ffiCall
     ]() mutable {
         // ── worker thread ──────────────────────────────────────
         // Blocking FFI call — this is exactly why we're on a
@@ -143,12 +171,12 @@ bool PierTerminalSession::startSsh(const QString &host, int port, const QString 
         // by then, we catch it below by checking selfWeak and
         // freeing the handle before any invoke is posted.
         PierTerminalSession *rawSelf = selfWeak.data();
-        PierTerminal *handle = pier_terminal_new_ssh(
+        PierTerminal *handle = ffiCall(
             colsU16, rowsU16,
             hostStd.c_str(),
             portU16,
             userStd.c_str(),
-            passStd.c_str(),
+            secretStd.c_str(),
             &PierTerminalSession::notifyTrampoline,
             rawSelf);
 

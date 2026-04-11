@@ -308,7 +308,7 @@ pub unsafe extern "C" fn pier_terminal_new_ssh(
     notify: Option<NotifyFn>,
     user_data: *mut c_void,
 ) -> *mut PierTerminal {
-    use crate::ssh::{AuthMethod, HostKeyVerifier, SshConfig, SshSession};
+    use crate::ssh::AuthMethod;
 
     if host.is_null() || user.is_null() || password.is_null() {
         set_last_ssh_error("null argument passed to pier_terminal_new_ssh");
@@ -348,17 +348,116 @@ pub unsafe extern "C" fn pier_terminal_new_ssh(
         return ptr::null_mut();
     }
 
-    let mut config = SshConfig::new(&host_str, &host_str, &user_str);
-    config.port = port;
-    config.auth = AuthMethod::InMemoryPassword {
+    let auth = AuthMethod::InMemoryPassword {
         password: password_str,
     };
+    new_ssh_with_auth(cols, rows, host_str, port, user_str, auth, notify, user_data)
+}
+
+/// Spawn a new SSH-backed terminal session whose password lives
+/// in the OS keychain rather than crossing the FFI boundary.
+///
+/// This is the M3c2 entry point: the dialog (or sidebar
+/// reconnect path) hands us a `credential_id` that was previously
+/// stored via [`pier_credential_set`]. The Rust SSH layer looks
+/// up the password from the OS keychain at handshake time via
+/// [`crate::credentials::get`] and discards it before returning.
+/// **No plaintext password ever crosses this FFI in either
+/// direction.**
+///
+/// Identical handle semantics to [`pier_terminal_new_ssh`]: the
+/// returned opaque `*mut PierTerminal` is consumed by the same
+/// _write / _resize / _snapshot / _free functions.
+///
+/// # Safety
+///
+/// `host`, `user`, `credential_id` must be valid NUL-terminated
+/// UTF-8 C strings. `notify` must be a valid function pointer.
+/// `user_data` is opaque.
+#[no_mangle]
+pub unsafe extern "C" fn pier_terminal_new_ssh_credential(
+    cols: u16,
+    rows: u16,
+    host: *const c_char,
+    port: u16,
+    user: *const c_char,
+    credential_id: *const c_char,
+    notify: Option<NotifyFn>,
+    user_data: *mut c_void,
+) -> *mut PierTerminal {
+    use crate::ssh::AuthMethod;
+
+    if host.is_null() || user.is_null() || credential_id.is_null() {
+        set_last_ssh_error("null argument passed to pier_terminal_new_ssh_credential");
+        return ptr::null_mut();
+    }
+    let Some(notify) = notify else {
+        set_last_ssh_error("notify callback must not be null");
+        return ptr::null_mut();
+    };
+
+    // SAFETY: caller contract — all three pointers are valid
+    // NUL-terminated UTF-8 C strings.
+    let host_str = match unsafe { std::ffi::CStr::from_ptr(host) }.to_str() {
+        Ok(s) => s.to_string(),
+        Err(_) => {
+            set_last_ssh_error("host is not valid UTF-8");
+            return ptr::null_mut();
+        }
+    };
+    let user_str = match unsafe { std::ffi::CStr::from_ptr(user) }.to_str() {
+        Ok(s) => s.to_string(),
+        Err(_) => {
+            set_last_ssh_error("user is not valid UTF-8");
+            return ptr::null_mut();
+        }
+    };
+    let cred_str = match unsafe { std::ffi::CStr::from_ptr(credential_id) }.to_str() {
+        Ok(s) => s.to_string(),
+        Err(_) => {
+            set_last_ssh_error("credential_id is not valid UTF-8");
+            return ptr::null_mut();
+        }
+    };
+
+    if host_str.is_empty() || user_str.is_empty() || cred_str.is_empty() {
+        set_last_ssh_error("host, user and credential_id must not be empty");
+        return ptr::null_mut();
+    }
+
+    let auth = AuthMethod::KeychainPassword {
+        credential_id: cred_str,
+    };
+    new_ssh_with_auth(cols, rows, host_str, port, user_str, auth, notify, user_data)
+}
+
+/// Shared body of both SSH constructors. Builds an `SshConfig`
+/// with whichever auth method the caller picked, runs the
+/// blocking handshake on the current thread, and either returns
+/// the opaque handle or records a typed error in the
+/// thread-local last-error slot.
+#[allow(clippy::too_many_arguments)]
+fn new_ssh_with_auth(
+    cols: u16,
+    rows: u16,
+    host: String,
+    port: u16,
+    user: String,
+    auth: crate::ssh::AuthMethod,
+    notify: NotifyFn,
+    user_data: *mut c_void,
+) -> *mut PierTerminal {
+    use crate::ssh::{HostKeyVerifier, SshConfig, SshSession};
+
+    let mut config = SshConfig::new(&host, &host, &user);
+    config.port = port;
+    config.auth = auth;
 
     let session = match SshSession::connect_blocking(&config, HostKeyVerifier::default()) {
         Ok(s) => s,
         Err(e) => {
             let msg = format!("{e}");
-            log::warn!("pier_terminal_new_ssh connect failed: {msg}");
+            log::warn!("pier_terminal_new_ssh* connect failed: {msg}");
             set_last_ssh_error(format!("connect failed: {msg}"));
             return ptr::null_mut();
         }
@@ -368,7 +467,7 @@ pub unsafe extern "C" fn pier_terminal_new_ssh(
         Ok(p) => p,
         Err(e) => {
             let msg = format!("{e}");
-            log::warn!("pier_terminal_new_ssh open_shell_channel failed: {msg}");
+            log::warn!("pier_terminal_new_ssh* open_shell_channel failed: {msg}");
             set_last_ssh_error(format!("open shell channel failed: {msg}"));
             return ptr::null_mut();
         }
@@ -385,7 +484,7 @@ pub unsafe extern "C" fn pier_terminal_new_ssh(
         }
         Err(e) => {
             let msg = format!("{e}");
-            log::warn!("pier_terminal_new_ssh with_pty failed: {msg}");
+            log::warn!("pier_terminal_new_ssh* with_pty failed: {msg}");
             set_last_ssh_error(format!("with_pty failed: {msg}"));
             ptr::null_mut()
         }

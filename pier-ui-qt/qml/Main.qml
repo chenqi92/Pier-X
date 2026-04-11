@@ -43,11 +43,24 @@ ApplicationWindow {
     }
 
     // ─────────────────────────────────────────────────────
-    // App-wide models — will become C++/Rust models once
-    // pier-core lands. Plain QML ListModel for now.
+    // App-wide models
     // ─────────────────────────────────────────────────────
+    //
+    // Tab model is a transient in-process list — the open tabs
+    // never persist across launches. Connections model, on the
+    // other hand, is backed by pier-core's on-disk JSON store
+    // (M3c2) via PierConnectionStore, with the password living
+    // in the OS keychain via PierCredentials. The Sidebar still
+    // takes a `connectionsModel` property; we just point it at
+    // the backed store instead of an inline ListModel.
     ListModel { id: tabModel }
-    ListModel { id: connectionsModel }
+
+    PierConnectionStore {
+        id: connectionsModel
+        // reload() is called automatically in the C++ ctor, so by
+        // the time this QML root is being instantiated the model
+        // already reflects whatever's on disk.
+    }
 
     property int currentTabIndex: 0
 
@@ -63,7 +76,8 @@ ApplicationWindow {
             sshHost: "",
             sshPort: 22,
             sshUser: "",
-            sshPassword: ""
+            sshPassword: "",
+            sshCredentialId: ""
         }
     }
 
@@ -74,7 +88,8 @@ ApplicationWindow {
             sshHost: conn.host,
             sshPort: conn.port,
             sshUser: conn.username,
-            sshPassword: conn.password || ""
+            sshPassword: conn.password || "",
+            sshCredentialId: conn.credentialId || ""
         }
     }
 
@@ -98,17 +113,34 @@ ApplicationWindow {
         }
     }
 
-    function addConnection(conn) {
-        // Persist a sanitized copy — the password is intentionally
-        // NOT stored in connectionsModel. M3c will replace this
-        // with keychain lookups; for now the password travels from
-        // the dialog straight into the tab and then the SSH handshake.
-        connectionsModel.append({
+    // Take a freshly-collected connection from the dialog,
+    // store its password in the OS keychain under a generated
+    // id, persist a no-secrets entry to the connections JSON,
+    // and open a live SSH tab using the credential id.
+    //
+    // The plaintext password lives in this single function call
+    // and inside the worker thread that pier_terminal_new_ssh
+    // uses; nothing on the JS heap retains it after we return.
+    function saveAndConnect(conn) {
+        const credentialId = PierCredentials.freshId()
+        if (!PierCredentials.setEntry(credentialId, conn.password)) {
+            console.warn("Main: failed to save credential to keychain")
+            return
+        }
+        if (!connectionsModel.add(conn.name, conn.host, conn.port,
+                                  conn.username, credentialId)) {
+            // Persist failed — clean up the orphan keychain entry
+            // so we don't accumulate dead secrets across runs.
+            PierCredentials.deleteEntry(credentialId)
+            console.warn("Main: failed to persist connection")
+            return
+        }
+        openSshTab({
             name: conn.name,
             host: conn.host,
             port: conn.port,
             username: conn.username,
-            authKind: conn.authKind
+            credentialId: credentialId
         })
     }
 
@@ -116,10 +148,35 @@ ApplicationWindow {
         if (index < 0 || index >= connectionsModel.count)
             return
         const conn = connectionsModel.get(index)
-        // Without a stored password the sidebar activate path
-        // can't connect on its own — it just opens a blank local
-        // tab for now. M3c will re-prompt or pull from keychain.
-        openNewTab(conn.name)
+        if (!conn || !conn.credentialId || conn.credentialId.length === 0) {
+            // Pre-M3c2 entries (or future non-keychain auth
+            // methods) may not have a credential id. Open a
+            // local tab as a fallback rather than failing
+            // silently.
+            openNewTab(conn.name)
+            return
+        }
+        openSshTab({
+            name: conn.name,
+            host: conn.host,
+            port: conn.port,
+            username: conn.username,
+            credentialId: conn.credentialId
+        })
+    }
+
+    // Delete a saved connection AND its keychain entry. Bound
+    // by the sidebar's context-menu / delete button (M3c2 ships
+    // the function; the UI hook lands when the sidebar grows
+    // its delete affordance).
+    function removeConnection(index) {
+        if (index < 0 || index >= connectionsModel.count)
+            return
+        const conn = connectionsModel.get(index)
+        if (conn && conn.credentialId && conn.credentialId.length > 0) {
+            PierCredentials.deleteEntry(conn.credentialId)
+        }
+        connectionsModel.removeAt(index)
     }
 
     // ─────────────────────────────────────────────────────
@@ -191,12 +248,16 @@ ApplicationWindow {
                                 // Bind every backend field from the
                                 // model row. For local tabs the ssh
                                 // fields are empty strings / 22 and
-                                // startWhenSized ignores them.
+                                // startWhenSized ignores them. For
+                                // saved-connection tabs sshPassword
+                                // is empty and sshCredentialId is
+                                // set, so the keychain path runs.
                                 backend: model.backend
                                 sshHost: model.sshHost
                                 sshPort: model.sshPort
                                 sshUser: model.sshUser
                                 sshPassword: model.sshPassword
+                                sshCredentialId: model.sshCredentialId
                             }
                         }
                     }
@@ -215,12 +276,11 @@ ApplicationWindow {
     NewConnectionDialog {
         id: newConnectionDialog
         onSaved: (conn) => {
-            // Remember the connection (without the password) in
-            // the sidebar list, then open a live SSH tab that
-            // does the actual handshake using the password we
-            // just collected.
-            window.addConnection(conn)
-            window.openSshTab(conn)
+            // M3c2: store password in OS keychain under a
+            // generated id, persist the connection (without
+            // secrets) to disk, then open a live SSH tab that
+            // reconnects via the credential id.
+            window.saveAndConnect(conn)
         }
     }
 

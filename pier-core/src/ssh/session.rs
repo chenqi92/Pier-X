@@ -123,38 +123,63 @@ impl SshSession {
 
         match &config.auth {
             AuthMethod::InMemoryPassword { password } => {
-                tried.push("password".to_string());
-                // SAFETY: we just Arc::new'd this handle; we're
-                // the only holder at this point so get_mut is fine.
-                let handle = Arc::get_mut(&mut self.handle).expect("unique handle during auth");
-                let ok = handle
-                    .authenticate_password(&config.user, password.clone())
-                    .await?;
-                if ok.success() {
-                    return Ok(());
-                }
+                tried.push("password (in-memory)".to_string());
+                self.try_password_auth(&config.user, password).await?;
             }
             AuthMethod::KeychainPassword { credential_id } => {
-                // M3b wires this into crate::credentials::get().
-                // For now, fail loudly so tests don't silently
-                // misattribute an AuthRejected to the wrong cause.
-                return Err(SshError::InvalidConfig(format!(
-                    "KeychainPassword auth not wired yet; credential_id={credential_id}",
-                )));
+                tried.push(format!("password (keychain={credential_id})"));
+                // Look the password up from the OS keyring at
+                // connect time. The plaintext only ever lives in
+                // this stack frame, never on disk and never on
+                // the SshConfig struct itself.
+                let password = match crate::credentials::get(credential_id) {
+                    Ok(Some(p)) => p,
+                    Ok(None) => {
+                        return Err(SshError::InvalidConfig(format!(
+                            "no keychain entry for credential_id={credential_id}",
+                        )));
+                    }
+                    Err(e) => {
+                        return Err(SshError::InvalidConfig(format!(
+                            "keychain lookup failed for {credential_id}: {e}",
+                        )));
+                    }
+                };
+                self.try_password_auth(&config.user, &password).await?;
             }
             AuthMethod::PublicKeyFile { .. } => {
                 return Err(SshError::InvalidConfig(
-                    "PublicKeyFile auth not wired yet (lands with M3b)".to_string(),
+                    "PublicKeyFile auth not wired yet (lands with M3c3)".to_string(),
                 ));
             }
             AuthMethod::Agent => {
                 return Err(SshError::InvalidConfig(
-                    "Agent auth not wired yet (lands with M3b)".to_string(),
+                    "Agent auth not wired yet (lands with M3c3)".to_string(),
                 ));
             }
         }
 
-        Err(SshError::AuthRejected { tried })
+        // We only reach here if a try_password_auth call returned
+        // Ok(()) without short-circuiting via the early `return`
+        // inside the helper — i.e. authentication succeeded.
+        Ok(())
+    }
+
+    /// Shared body of both password-based auth methods. Tries the
+    /// password against the open SSH session and returns Ok on
+    /// success. On rejection, returns the AuthRejected error
+    /// stamped with `tried` so the UI can show what we attempted.
+    async fn try_password_auth(&mut self, user: &str, password: &str) -> Result<()> {
+        // SAFETY: we just Arc::new'd this handle in connect();
+        // we're the only holder at this point so get_mut is fine.
+        let handle = Arc::get_mut(&mut self.handle).expect("unique handle during auth");
+        let ok = handle.authenticate_password(user, password.to_string()).await?;
+        if !ok.success() {
+            return Err(SshError::AuthRejected {
+                tried: vec!["password".to_string()],
+            });
+        }
+        Ok(())
     }
 
     /// Open a new interactive shell channel on the remote host

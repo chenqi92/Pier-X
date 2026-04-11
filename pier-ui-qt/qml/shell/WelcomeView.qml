@@ -18,7 +18,7 @@ Item {
         spacing: Theme.sp4
 
         SectionLabel {
-            text: "Welcome"
+            text: qsTr("Welcome")
             Layout.alignment: Qt.AlignHCenter
         }
 

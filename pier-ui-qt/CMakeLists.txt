@@ -8,6 +8,7 @@ find_package(Qt6 6.8 REQUIRED COMPONENTS
     Qml
     Quick
     QuickControls2
+    LinguistTools
 )
 
 qt_standard_project_setup(REQUIRES 6.8)
@@ -61,6 +62,15 @@ qt_add_qml_module(pier-x
         qml/views/TerminalView.qml
     RESOURCES
         resources/icons/pier.png
+)
+
+# ─── i18n ─────────────────────────────────────────────
+# lupdate extracts qsTr() strings → .ts files;
+# lrelease compiles them → .qm files embedded in the binary.
+qt_add_translations(pier-x
+    TS_FILES
+        i18n/pier-x_zh_CN.ts
+    RESOURCE_PREFIX /i18n
 )
 
 target_link_libraries(pier-x PRIVATE

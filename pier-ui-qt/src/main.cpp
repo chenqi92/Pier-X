@@ -1,9 +1,11 @@
 #include <QGuiApplication>
 #include <QIcon>
+#include <QLocale>
 #include <QMetaObject>
 #include <QQmlApplicationEngine>
 #include <QQuickStyle>
 #include <QStyleHints>
+#include <QTranslator>
 #include <QVariant>
 
 namespace {
@@ -33,6 +35,16 @@ int main(int argc, char *argv[])
     QGuiApplication::setOrganizationName("kkape");
     QGuiApplication::setOrganizationDomain("kkape.com");
     QGuiApplication::setWindowIcon(QIcon(QStringLiteral(":/qt/qml/Pier/resources/icons/pier.png")));
+
+    // ── i18n ──────────────────────────────────────────
+    // Load the compiled .qm translation that matches the system locale.
+    // qt_add_translations embeds them under :/i18n/pier-x_<locale>.qm.
+    QTranslator translator;
+    const QLocale locale;
+    if (translator.load(locale, QStringLiteral("pier-x"),
+                        QStringLiteral("_"), QStringLiteral(":/i18n"))) {
+        QGuiApplication::installTranslator(&translator);
+    }
 
     // Use the Basic style — we draw our own visuals via the Theme singleton,
     // so we don't want any platform style imposing colors on top of us.

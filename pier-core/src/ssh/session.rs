@@ -388,6 +388,37 @@ impl SshSession {
         runtime::shared().block_on(self.open_shell_channel(cols, rows))
     }
 
+    /// Open an SFTP subsystem channel on this session.
+    ///
+    /// Internally this opens a fresh channel, calls
+    /// `request_subsystem("sftp")`, and hands the channel
+    /// stream to russh-sftp's `SftpSession::new`. The
+    /// resulting [`super::SftpClient`] shares the underlying
+    /// SSH connection with whatever terminal channels are
+    /// already open — no additional TCP connection, no
+    /// additional authentication.
+    ///
+    /// One `SftpClient` per UI panel is the expected usage.
+    /// Multiple SFTP clients on the same session are allowed
+    /// (each opens its own channel) but share the session's
+    /// bandwidth.
+    pub async fn open_sftp(&self) -> Result<super::SftpClient> {
+        let channel = self.handle.channel_open_session().await?;
+        channel
+            .request_subsystem(true, "sftp")
+            .await
+            .map_err(|e| SshError::InvalidConfig(format!("request_subsystem(sftp): {e}")))?;
+        let session = russh_sftp::client::SftpSession::new(channel.into_stream())
+            .await
+            .map_err(|e| SshError::InvalidConfig(format!("SftpSession::new: {e}")))?;
+        Ok(super::SftpClient::new(session))
+    }
+
+    /// Sync convenience for [`Self::open_sftp`].
+    pub fn open_sftp_blocking(&self) -> Result<super::SftpClient> {
+        runtime::shared().block_on(self.open_sftp())
+    }
+
     /// Returns the number of strong references still holding this
     /// session alive. Used by tests and by M3b's connection
     /// manager to decide when a session can be closed.

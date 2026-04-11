@@ -54,9 +54,11 @@ pub mod error;
 pub mod known_hosts;
 pub mod runtime;
 pub mod session;
+pub mod sftp;
 
 pub use channel::SshChannelPty;
 pub use config::{AuthMethod, SshConfig};
 pub use error::SshError;
 pub use known_hosts::HostKeyVerifier;
 pub use session::SshSession;
+pub use sftp::{RemoteFileEntry, SftpClient};

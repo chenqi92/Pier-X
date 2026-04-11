@@ -39,10 +39,18 @@ vte = "0.15"
 # (portable across Apple Silicon / x86_64 / Windows ARM64).
 russh = { version = "0.60", features = ["async-trait"] }
 
+# SFTP subsystem on top of russh. Gives us read_dir / open /
+# read / write / mkdir / remove / rename without us having to
+# reimplement the SFTP protocol framing. Only the client half
+# is used by pier-x today.
+russh-sftp = "2.1"
+
 # Async runtime for russh. Only the `rt-multi-thread` + time + net
-# features — we don't need macros or full.
+# features — we don't need full. `fs` is pulled in for the SFTP
+# upload/download helpers that read/write local files from inside
+# the shared runtime.
 tokio = { version = "1", default-features = false, features = [
-    "rt-multi-thread", "time", "net", "sync", "io-util", "macros",
+    "rt-multi-thread", "time", "net", "sync", "io-util", "macros", "fs",
 ] }
 
 # Unix PTY — forkpty + ioctl wrappers live in libc. Only pulled in on

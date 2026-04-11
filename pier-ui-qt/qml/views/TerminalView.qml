@@ -160,16 +160,41 @@ Rectangle {
                 model: detector
 
                 delegate: Rectangle {
+                    id: pill
                     required property int index
                     required property string name
                     required property string version
                     required property string status
                     required property int port
 
+                    // Each pill owns its own tunnel handle.
+                    // Instantiated lazily — the QObject itself
+                    // is cheap; it only consumes an SSH
+                    // connection when `open()` is called.
+                    PierTunnel {
+                        id: tunnel
+                    }
+
+                    // Only services with a real TCP port can
+                    // be tunneled. Docker's port is 0 because
+                    // it talks over a Unix socket; clicking
+                    // its pill is a no-op for M4b.
+                    readonly property bool tunnelable: pill.port > 0
+                                                       && pill.status === "running"
+                    readonly property bool tunneled: tunnel.state === PierTunnel.Open
+                    readonly property bool opening: tunnel.state === PierTunnel.Opening
+
                     implicitHeight: 22
                     implicitWidth: pillRow.implicitWidth + Theme.sp3 * 2
-                    color: Theme.bgSurface
-                    border.color: Theme.borderSubtle
+
+                    color: {
+                        if (pill.tunneled) return Theme.accentSubtle
+                        if (pillMouse.containsMouse && pill.tunnelable) return Theme.bgHover
+                        return Theme.bgSurface
+                    }
+                    border.color: pill.tunneled
+                                  ? Theme.borderFocus
+                                  : Theme.borderSubtle
                     border.width: 1
                     radius: Theme.radiusPill
 
@@ -187,8 +212,9 @@ Rectangle {
                             radius: 3
                             anchors.verticalCenter: parent.verticalCenter
                             color: {
-                                if (status === "running") return Theme.statusSuccess
-                                if (status === "stopped") return Theme.statusWarning
+                                if (pill.tunneled) return Theme.accent
+                                if (pill.status === "running") return Theme.statusSuccess
+                                if (pill.status === "stopped") return Theme.statusWarning
                                 return Theme.textTertiary
                             }
 
@@ -197,27 +223,101 @@ Rectangle {
 
                         Text {
                             anchors.verticalCenter: parent.verticalCenter
-                            text: name + (version.length > 0
-                                          ? " " + version
-                                          : "")
+                            text: pill.name + (pill.version.length > 0
+                                               ? " " + pill.version
+                                               : "")
                             font.family: Theme.fontUi
                             font.pixelSize: Theme.sizeCaption
                             font.weight: Theme.weightMedium
-                            color: Theme.textSecondary
+                            color: pill.tunneled ? Theme.textPrimary : Theme.textSecondary
 
                             Behavior on color { ColorAnimation { duration: Theme.durNormal } }
                         }
 
+                        // Remote port or tunnel badge. When a
+                        // tunnel is open we show the local
+                        // port in mono with an arrow prefix;
+                        // otherwise we show the remote port.
                         Text {
-                            visible: port > 0
+                            visible: pill.port > 0
                             anchors.verticalCenter: parent.verticalCenter
-                            text: ":" + port
+                            text: pill.tunneled
+                                  ? "→ :" + tunnel.localPort
+                                  : ":" + pill.port
                             font.family: Theme.fontMono
                             font.pixelSize: Theme.sizeCaption
-                            color: Theme.textTertiary
+                            color: pill.tunneled ? Theme.accent : Theme.textTertiary
 
                             Behavior on color { ColorAnimation { duration: Theme.durNormal } }
                         }
+
+                        // Tiny spinner when the tunnel is
+                        // being opened. Reuse the "…" glyph
+                        // to keep things zero-dependency for
+                        // M4b; a real rotating arc like the
+                        // Connecting overlay lands when we
+                        // ship Lucide SVG icons in M6.
+                        Text {
+                            visible: pill.opening
+                            anchors.verticalCenter: parent.verticalCenter
+                            text: "…"
+                            font.family: Theme.fontUi
+                            font.pixelSize: Theme.sizeCaption
+                            color: Theme.accent
+                        }
+                    }
+
+                    MouseArea {
+                        id: pillMouse
+                        anchors.fill: parent
+                        hoverEnabled: true
+                        cursorShape: pill.tunnelable
+                                     ? Qt.PointingHandCursor
+                                     : Qt.ArrowCursor
+                        enabled: pill.tunnelable && !pill.opening
+                        onClicked: {
+                            if (pill.tunneled) {
+                                tunnel.close()
+                            } else {
+                                // Same auth-field priority as
+                                // TerminalView's dispatcher.
+                                var kind = 0
+                                var secret = ""
+                                var extra = ""
+                                if (root.sshUsesAgent) {
+                                    kind = 3
+                                } else if (root.sshKeyPath.length > 0) {
+                                    kind = 2
+                                    secret = root.sshKeyPath
+                                    extra = root.sshPassphraseCredentialId
+                                } else if (root.sshCredentialId.length > 0) {
+                                    kind = 1
+                                    secret = root.sshCredentialId
+                                } else {
+                                    kind = 0
+                                    secret = root.sshPassword
+                                }
+                                // Pier-X convention: 10000 +
+                                // remote port. MySQL 3306 →
+                                // 13306, Redis 6379 → 16379,
+                                // Postgres 5432 → 15432.
+                                var localPort = 10000 + pill.port
+                                tunnel.open(root.sshHost, root.sshPort, root.sshUser,
+                                            kind, secret, extra,
+                                            localPort, "127.0.0.1", pill.port)
+                            }
+                        }
+                    }
+
+                    // Tooltip explaining the interaction.
+                    PierToolTip {
+                        visible: pillMouse.containsMouse && pill.tunnelable && !pill.tunneled
+                        text: qsTr("Click to open a local tunnel to :%1").arg(pill.port)
+                    }
+                    PierToolTip {
+                        visible: pillMouse.containsMouse && pill.tunneled
+                        text: qsTr("Forwarding localhost:%1 → :%2. Click to close.")
+                              .arg(tunnel.localPort).arg(pill.port)
                     }
                 }
             }

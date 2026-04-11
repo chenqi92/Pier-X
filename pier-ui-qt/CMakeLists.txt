@@ -45,6 +45,8 @@ qt_add_qml_module(pier-x
         src/PierSftpBrowser.cpp
         src/PierServiceDetector.h
         src/PierServiceDetector.cpp
+        src/PierTunnel.h
+        src/PierTunnel.cpp
     QML_FILES
         qml/Main.qml
         qml/Theme.qml

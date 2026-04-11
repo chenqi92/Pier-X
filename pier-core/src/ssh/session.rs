@@ -471,6 +471,17 @@ impl SshSession {
     pub fn handle_refcount(&self) -> usize {
         Arc::strong_count(&self.handle)
     }
+
+    /// Internal: expose the underlying russh handle Arc so
+    /// sibling modules (notably [`super::tunnel`]) can hold
+    /// it across task boundaries without smuggling the Arc
+    /// through a private field. Kept `pub(super)` because the
+    /// russh `Handle<ClientHandler>` type is an implementation
+    /// detail — nothing outside the `ssh` module should depend
+    /// on its shape.
+    pub(super) fn handle_arc(&self) -> Arc<Handle<ClientHandler>> {
+        Arc::clone(&self.handle)
+    }
 }
 
 fn map_connect_error(e: russh::Error) -> SshError {

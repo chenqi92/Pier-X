@@ -43,6 +43,7 @@ pub mod credentials;
 pub mod services;
 pub mod sftp;
 pub mod terminal;
+pub mod tunnel;
 
 // Re-export the individual C functions at the `ffi` root so
 // symbols in libpier_core.a are not namespaced by submodule — the C
@@ -54,6 +55,9 @@ pub use self::connections::{
 pub use self::core::{pier_core_build_info, pier_core_has_feature, pier_core_version};
 pub use self::credentials::{pier_credential_delete, pier_credential_set};
 pub use self::services::{pier_services_detect, pier_services_free_json};
+pub use self::tunnel::{
+    pier_tunnel_free, pier_tunnel_is_alive, pier_tunnel_local_port, pier_tunnel_open, PierTunnel,
+};
 pub use self::sftp::{
     pier_sftp_canonicalize, pier_sftp_free, pier_sftp_free_string, pier_sftp_list_dir,
     pier_sftp_mkdir, pier_sftp_new, pier_sftp_remove_dir, pier_sftp_remove_file,

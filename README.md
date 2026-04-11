@@ -11,7 +11,7 @@ The cross-platform successor to [Pier](https://github.com/chenqi92/Pier) (macOS-
 
 Foundation complete. The full UI shell, design system, build infrastructure, and Rust core skeleton are in place. Protocol modules (terminal, SSH, RDP, VNC) are next.
 
-See [docs/ROADMAP.md](./docs/ROADMAP.md) for the detailed status and what's coming.
+See [docs/ROADMAP.md](./docs/ROADMAP.md) for the tag-by-tag release plan, and [docs/PARITY.md](./docs/PARITY.md) for the ground-level porting plan that tracks every feature in the macOS-only upstream Pier and maps it to work in Pier-X.
 
 - ✅ Technology stack decided — [docs/TECH-STACK.md](./docs/TECH-STACK.md)
 - ✅ Design system codified as a Claude Code skill — [`.claude/skills/pier-design-system/SKILL.md`](./.claude/skills/pier-design-system/SKILL.md)

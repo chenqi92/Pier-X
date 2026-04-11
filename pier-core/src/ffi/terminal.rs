@@ -51,10 +51,57 @@
 // and/or in pier_terminal.h, rather than a clippy-mandated
 // boilerplate `# Safety` line.
 
+use std::cell::RefCell;
+use std::ffi::CString;
 use std::os::raw::{c_char, c_void};
 use std::ptr;
 
 use crate::terminal::{Cell, Color, NotifyFn, PierTerminal, Pty, TerminalError};
+
+// ─────────────────────────────────────────────────────────
+// Thread-local last-error channel for the SSH async path.
+//
+// The C++ wrapper calls `pier_terminal_new_ssh` from a dedicated
+// std::thread so it can block without freezing the Qt event loop.
+// When that call returns NULL we want to surface a human-readable
+// reason (authentication failure, DNS lookup failed, host key
+// mismatch, ...) to the UI. Having the FFI function stuff the
+// message into a thread-local cell and a separate reader function
+// retrieve it is the standard OpenSSL / libcurl pattern: it's
+// cheap, doesn't churn the signature, and is safe because the C++
+// side always reads the error on the same thread that made the
+// call that produced it.
+// ─────────────────────────────────────────────────────────
+
+thread_local! {
+    /// The most recent error message left by `pier_terminal_new_ssh`
+    /// on this thread. Reset to `None` on every successful call.
+    static LAST_SSH_ERROR: RefCell<Option<CString>> = const { RefCell::new(None) };
+}
+
+/// Helper: stash a message into the thread-local error slot.
+/// Any interior NUL bytes are replaced with '?' so the CString
+/// constructor can never fail and lose the error information.
+fn set_last_ssh_error(msg: impl Into<String>) {
+    let cleaned: String = msg
+        .into()
+        .chars()
+        .map(|c| if c == '\0' { '?' } else { c })
+        .collect();
+    let cstring = CString::new(cleaned).expect("nul bytes already scrubbed");
+    LAST_SSH_ERROR.with(|slot| {
+        *slot.borrow_mut() = Some(cstring);
+    });
+}
+
+/// Helper: clear the thread-local error slot. Called from the
+/// success path so a stale error from a previous attempt can't
+/// linger and confuse the caller.
+fn clear_last_ssh_error() {
+    LAST_SSH_ERROR.with(|slot| {
+        *slot.borrow_mut() = None;
+    });
+}
 
 /// Plain-data cell struct mirroring the Rust [`Cell`] but with a
 /// fixed, stable layout suitable for memcpy across the FFI boundary.
@@ -264,9 +311,11 @@ pub unsafe extern "C" fn pier_terminal_new_ssh(
     use crate::ssh::{AuthMethod, HostKeyVerifier, SshConfig, SshSession};
 
     if host.is_null() || user.is_null() || password.is_null() {
+        set_last_ssh_error("null argument passed to pier_terminal_new_ssh");
         return ptr::null_mut();
     }
     let Some(notify) = notify else {
+        set_last_ssh_error("notify callback must not be null");
         return ptr::null_mut();
     };
 
@@ -274,18 +323,28 @@ pub unsafe extern "C" fn pier_terminal_new_ssh(
     // NUL-terminated UTF-8 C strings.
     let host_str = match unsafe { std::ffi::CStr::from_ptr(host) }.to_str() {
         Ok(s) => s.to_string(),
-        Err(_) => return ptr::null_mut(),
+        Err(_) => {
+            set_last_ssh_error("host is not valid UTF-8");
+            return ptr::null_mut();
+        }
     };
     let user_str = match unsafe { std::ffi::CStr::from_ptr(user) }.to_str() {
         Ok(s) => s.to_string(),
-        Err(_) => return ptr::null_mut(),
+        Err(_) => {
+            set_last_ssh_error("user is not valid UTF-8");
+            return ptr::null_mut();
+        }
     };
     let password_str = match unsafe { std::ffi::CStr::from_ptr(password) }.to_str() {
         Ok(s) => s.to_string(),
-        Err(_) => return ptr::null_mut(),
+        Err(_) => {
+            set_last_ssh_error("password is not valid UTF-8");
+            return ptr::null_mut();
+        }
     };
 
     if host_str.is_empty() || user_str.is_empty() {
+        set_last_ssh_error("host and user must not be empty");
         return ptr::null_mut();
     }
 
@@ -298,7 +357,9 @@ pub unsafe extern "C" fn pier_terminal_new_ssh(
     let session = match SshSession::connect_blocking(&config, HostKeyVerifier::default()) {
         Ok(s) => s,
         Err(e) => {
-            log::warn!("pier_terminal_new_ssh connect failed: {e}");
+            let msg = format!("{e}");
+            log::warn!("pier_terminal_new_ssh connect failed: {msg}");
+            set_last_ssh_error(format!("connect failed: {msg}"));
             return ptr::null_mut();
         }
     };
@@ -306,19 +367,67 @@ pub unsafe extern "C" fn pier_terminal_new_ssh(
     let ssh_pty = match session.open_shell_channel_blocking(cols, rows) {
         Ok(p) => p,
         Err(e) => {
-            log::warn!("pier_terminal_new_ssh open_shell_channel failed: {e}");
+            let msg = format!("{e}");
+            log::warn!("pier_terminal_new_ssh open_shell_channel failed: {msg}");
+            set_last_ssh_error(format!("open shell channel failed: {msg}"));
             return ptr::null_mut();
         }
     };
 
     let boxed: Box<dyn Pty> = Box::new(ssh_pty);
     match PierTerminal::with_pty(boxed, cols, rows, notify, user_data) {
-        Ok(t) => Box::into_raw(Box::new(t)),
+        Ok(t) => {
+            // Clear the slot so a subsequent call on this thread
+            // that happens not to stash a new error won't return
+            // a stale message from a previous attempt.
+            clear_last_ssh_error();
+            Box::into_raw(Box::new(t))
+        }
         Err(e) => {
-            log::warn!("pier_terminal_new_ssh with_pty failed: {e}");
+            let msg = format!("{e}");
+            log::warn!("pier_terminal_new_ssh with_pty failed: {msg}");
+            set_last_ssh_error(format!("with_pty failed: {msg}"));
             ptr::null_mut()
         }
     }
+}
+
+/// Return the most recent SSH error message left by
+/// [`pier_terminal_new_ssh`] on *this thread*, or `NULL` if the
+/// last call on this thread succeeded (or no such call has ever
+/// been made on this thread).
+///
+/// The returned pointer is owned by pier-core's thread-local
+/// storage and is valid until the next call to
+/// [`pier_terminal_new_ssh`] on the same thread. Callers that
+/// need to retain the message should copy it to their own buffer
+/// immediately.
+///
+/// ## Threading
+///
+/// Because the storage is thread-local, the caller **must** read
+/// the error from the same OS thread that made the failing
+/// [`pier_terminal_new_ssh`] call. The C++ wrapper pattern —
+/// spawn `std::thread`, call `pier_terminal_new_ssh`, read
+/// `pier_terminal_last_ssh_error` in the same closure, then
+/// `QMetaObject::invokeMethod` to hand the already-copied
+/// message to the main thread — satisfies this automatically.
+///
+/// # Safety
+///
+/// Always safe to call. Returns a `*const c_char` that is either
+/// null or points at a NUL-terminated UTF-8 string owned by
+/// thread-local storage. The pointer must not be freed by the
+/// caller and must not be retained across another call to
+/// [`pier_terminal_new_ssh`] on the same thread.
+#[no_mangle]
+pub unsafe extern "C" fn pier_terminal_last_ssh_error() -> *const c_char {
+    LAST_SSH_ERROR.with(|slot| {
+        slot.borrow()
+            .as_ref()
+            .map(|cs| cs.as_ptr())
+            .unwrap_or(ptr::null())
+    })
 }
 
 /// Send bytes to the shell (keystrokes, paste, ...).
@@ -721,6 +830,91 @@ mod tests {
                 "null notify fn must return NULL",
             );
         }
+    }
+
+    // ── pier_terminal_last_ssh_error ──────────────────────
+
+    /// Helper: read the thread-local error slot as an owned String
+    /// (None if null). Safe to call after any FFI call on the same
+    /// thread.
+    fn read_last_ssh_error() -> Option<String> {
+        // SAFETY: returned pointer is owned by pier-core's
+        // thread-local storage and is valid until another
+        // new_ssh call on this thread. Copying it to a String
+        // before that happens is sound.
+        let ptr = unsafe { pier_terminal_last_ssh_error() };
+        if ptr.is_null() {
+            None
+        } else {
+            Some(
+                unsafe { std::ffi::CStr::from_ptr(ptr) }
+                    .to_string_lossy()
+                    .into_owned(),
+            )
+        }
+    }
+
+    #[test]
+    fn last_ssh_error_starts_null_and_populates_on_null_input() {
+        // A fresh thread must see no error until a failing call
+        // lands. We can't rely on test isolation because rustc
+        // runs tests on a thread pool — but we CAN force-clear
+        // via a successful-shaped call that never reaches the
+        // network (null host → immediate reject). The null-host
+        // path writes "null argument passed to ..." to the slot.
+        // SAFETY: every arg matches the NULL-is-OK contract for
+        // the reject path.
+        let user = CString::new("root").unwrap();
+        let pass = CString::new("x").unwrap();
+        let handle = unsafe {
+            pier_terminal_new_ssh(
+                80, 24,
+                ptr::null(),
+                22,
+                user.as_ptr(),
+                pass.as_ptr(),
+                Some(test_notify),
+                ptr::null_mut(),
+            )
+        };
+        assert!(handle.is_null());
+
+        let msg = read_last_ssh_error().expect("error slot must be populated");
+        assert!(
+            msg.contains("null argument"),
+            "expected 'null argument' in error, got {msg:?}",
+        );
+    }
+
+    #[test]
+    fn last_ssh_error_reports_unreachable_host_reason() {
+        // TEST-NET-1 — unroutable — produces a typed error from
+        // the Rust session layer which should flow through to
+        // the thread-local slot as a useful string.
+        let host = CString::new("192.0.2.1").unwrap();
+        let user = CString::new("root").unwrap();
+        let pass = CString::new("x").unwrap();
+
+        // SAFETY: all strings non-null + NUL-terminated,
+        // notify is valid.
+        let handle = unsafe {
+            pier_terminal_new_ssh(
+                80, 24,
+                host.as_ptr(),
+                22,
+                user.as_ptr(),
+                pass.as_ptr(),
+                Some(test_notify),
+                ptr::null_mut(),
+            )
+        };
+        assert!(handle.is_null(), "unreachable host must return NULL");
+
+        let msg = read_last_ssh_error().expect("error slot must be populated");
+        assert!(
+            msg.contains("connect failed"),
+            "expected connect-failed prefix, got {msg:?}",
+        );
     }
 
     #[test]

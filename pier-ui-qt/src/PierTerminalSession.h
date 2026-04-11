@@ -7,27 +7,39 @@
 // subsystem: QML creates one, gets signals when the grid updates,
 // and calls write/resize/snapshot as needed.
 //
-// Threading
-// ─────────
-//   pier-core's reader thread calls us (via `notifyTrampoline`) with
-//   a DataReady or Exited event. We immediately forward that wakeup
-//   to our own thread via `QMetaObject::invokeMethod(...,
-//   Qt::QueuedConnection)`. Every Qt signal this class emits, every
-//   write/resize/snapshot it makes, runs on the main thread.
+// Threading — two boundary crossings
+// ──────────────────────────────────
+// 1. pier-core's reader thread calls us (via `notifyTrampoline`)
+//    with a DataReady or Exited event. We immediately forward
+//    that wakeup to our own thread via
+//    `QMetaObject::invokeMethod(..., Qt::QueuedConnection)`.
 //
-//   The invariant: no Qt type is ever touched from the reader thread
-//   except the QObject pointer itself (which is just a number to
-//   `invokeMethod`). This keeps us clear of Qt's "objects live in a
-//   thread" rule without needing moveToThread dances.
+// 2. For SSH sessions, the blocking `pier_terminal_new_ssh` call
+//    runs on a dedicated `std::thread` we spawn from `startSsh`.
+//    When it finishes (success or failure) it posts its result
+//    to the main thread via another queued invoke. The connect
+//    thread holds a `QPointer<PierTerminalSession>` so if the
+//    user closes the tab mid-handshake the result is cleanly
+//    dropped and any returned PierTerminal handle is freed right
+//    there, without ever touching main-thread state.
+//
+// Invariant: no Qt type is ever touched from a worker thread
+// except the QObject pointer itself (which is just a number to
+// `invokeMethod`). This keeps us clear of Qt's "objects live in a
+// thread" rule without needing moveToThread dances.
 
 #pragma once
 
 #include <QObject>
+#include <QPointer>
 #include <QString>
 #include <QVariant>
 #include <qqml.h>
 
+#include <atomic>
 #include <cstdint>
+#include <memory>
+#include <thread>
 #include <vector>
 
 // We need the full PierCell definition for std::vector<PierCell> and
@@ -40,13 +52,29 @@ class PierTerminalSession : public QObject
     Q_OBJECT
     QML_NAMED_ELEMENT(PierTerminalSession)
 
+public:
+    // Lifecycle of an SSH session from the UI's point of view.
+    // A local-shell `start()` call sets status directly to Connected.
+    // `startSsh()` transitions Idle → Connecting → (Connected|Failed).
+    // `stop()` and the destructor transition into Idle, freeing the
+    // handle and cancelling any in-flight connect.
+    enum class SshStatus {
+        Idle = 0,        // no connection in progress, no child running
+        Connecting = 1,  // async SSH handshake in flight
+        Connected = 2,   // child is running (local or remote)
+        Failed = 3       // last SSH handshake failed; sshErrorMessage is set
+    };
+    Q_ENUM(SshStatus)
+
     Q_PROPERTY(int cols READ cols NOTIFY gridChanged FINAL)
     Q_PROPERTY(int rows READ rows NOTIFY gridChanged FINAL)
     Q_PROPERTY(int cursorX READ cursorX NOTIFY gridChanged FINAL)
     Q_PROPERTY(int cursorY READ cursorY NOTIFY gridChanged FINAL)
     Q_PROPERTY(bool running READ running NOTIFY runningChanged FINAL)
+    Q_PROPERTY(SshStatus status READ status NOTIFY statusChanged FINAL)
+    Q_PROPERTY(QString sshErrorMessage READ sshErrorMessage NOTIFY statusChanged FINAL)
+    Q_PROPERTY(QString sshTarget READ sshTarget NOTIFY statusChanged FINAL)
 
-public:
     explicit PierTerminalSession(QObject *parent = nullptr);
     ~PierTerminalSession() override;
 
@@ -58,6 +86,9 @@ public:
     int cursorX() const { return m_cursorX; }
     int cursorY() const { return m_cursorY; }
     bool running() const { return m_running; }
+    SshStatus status() const { return m_status; }
+    QString sshErrorMessage() const { return m_sshErrorMessage; }
+    QString sshTarget() const { return m_sshTarget; }
 
     // Raw snapshot access for the C++-side renderer. Returns a
     // pointer to the internal cell buffer and fills out_cols/rows.
@@ -72,25 +103,28 @@ public:
 public slots:
     // Spawn a local shell. Returns true on success, false if the
     // backend refused (e.g. null shell path, unsupported platform).
-    // Emits gridChanged once the initial prompt lands.
+    // Transitions status to Connected synchronously on success.
     bool start(const QString &shell, int cols, int rows);
 
-    // Spawn a remote shell over SSH. Same ownership semantics as
-    // start() — the C++ object owns the opaque PierTerminal handle
-    // for the lifetime of the session, and the same gridChanged /
-    // exited signals fire.
+    // Spawn a remote shell over SSH, asynchronously. Returns true
+    // immediately if the handshake was scheduled successfully
+    // (validation passed + worker thread started). The actual
+    // connect runs on a std::thread; watch `status` for the
+    // transition to Connected or Failed. On Failed,
+    // `sshErrorMessage` holds the reason.
     //
-    // BLOCKING: this method runs the full SSH handshake
-    // (TCP + key exchange + auth + pty-req + shell-req) on the
-    // calling thread before returning. Typical LAN latency is
-    // under 300 ms; expect 1–3 s across the internet. Qt's event
-    // loop is blocked for the duration. M3c introduces an async
-    // variant that fires a signal on completion.
-    //
-    // Returns true on success, false on any failure (invalid
-    // args, DNS / TCP / auth / host key / channel open error).
+    // Calling startSsh while already Connecting or Connected is
+    // rejected (returns false). Call stop() first.
     bool startSsh(const QString &host, int port, const QString &user,
                   const QString &password, int cols, int rows);
+
+    // Cancel an in-progress SSH handshake. If the worker thread
+    // has not yet returned from pier_terminal_new_ssh, we can't
+    // interrupt it — instead we flag the request as cancelled, so
+    // when the thread eventually returns it frees the handle
+    // (if any) and discards the result. Transitions status back
+    // to Idle. No-op if no connect is in flight.
+    void cancelSsh();
 
     // Send UTF-8 bytes (keystrokes, paste, etc.) to the shell.
     // Returns the number of bytes written, or -1 on error.
@@ -100,6 +134,7 @@ public slots:
     bool resize(int cols, int rows);
 
     // Shut down and reap the child. Safe to call multiple times.
+    // Also cancels any in-flight SSH handshake.
     void stop();
 
 signals:
@@ -115,10 +150,25 @@ signals:
     // `running` update correctly.
     void runningChanged();
 
+    // Fires when status / sshErrorMessage / sshTarget change.
+    // Combining all three into one signal is deliberate — QML
+    // bindings on any of them update together and there's never a
+    // useful moment to re-render one without the others.
+    void statusChanged();
+
 private slots:
     // Runs on the main thread. Called via queued connection from
     // the reader thread's notify callback.
     void onCoreNotify(int event);
+
+    // Runs on the main thread. Called via queued connection from
+    // the SSH connect worker thread with either a ready handle
+    // (success) or a null handle + error message (failure).
+    // `requestId` identifies which startSsh invocation produced
+    // this result — stale deliveries from a cancelled request
+    // are detected by comparing to m_connectRequestId and
+    // silently dropped.
+    void onSshConnectResult(quint64 requestId, void *handle, const QString &errorMessage);
 
 private:
     // Trampoline entry point for the pier-core reader thread. Must
@@ -129,6 +179,11 @@ private:
     // Pull a fresh snapshot from pier-core into m_cells + metadata.
     void refreshSnapshot();
 
+    // Internal helper: set status + emit statusChanged only if it
+    // actually changed. Centralizes the invariant that every
+    // status transition notifies QML bindings exactly once.
+    void setStatus(SshStatus s);
+
     PierTerminal *m_handle = nullptr;
     std::vector<PierCell> m_cells;
     int m_cols = 0;
@@ -136,4 +191,27 @@ private:
     int m_cursorX = 0;
     int m_cursorY = 0;
     bool m_running = false;
+
+    SshStatus m_status = SshStatus::Idle;
+    QString m_sshErrorMessage;
+    // Human-readable "user@host:port" for display in the
+    // Connecting/Failed overlay. Set at startSsh, cleared on stop.
+    QString m_sshTarget;
+
+    // In-flight SSH handshake bookkeeping.
+    //
+    // m_connectThread:        the worker thread running the blocking
+    //                         FFI. Detached on cancel / destructor
+    //                         so we never block the UI on join.
+    // m_connectCancelFlag:    shared between session and worker.
+    //                         The worker checks it after the FFI
+    //                         returns; if set, the worker frees
+    //                         any returned handle and discards.
+    // m_connectRequestId:     monotonically increasing. onSshConnectResult
+    //                         compares this to the id stamped on
+    //                         the worker's delivery and drops stale
+    //                         ones.
+    std::unique_ptr<std::thread> m_connectThread;
+    std::shared_ptr<std::atomic<bool>> m_connectCancelFlag;
+    quint64 m_connectRequestId = 0;
 };

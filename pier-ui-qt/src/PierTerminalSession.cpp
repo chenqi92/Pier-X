@@ -5,6 +5,9 @@
 #include <QByteArray>
 #include <QDebug>
 #include <QMetaObject>
+#include <QPointer>
+
+#include <utility>
 
 PierTerminalSession::PierTerminalSession(QObject *parent)
     : QObject(parent)
@@ -14,15 +17,24 @@ PierTerminalSession::PierTerminalSession(QObject *parent)
 PierTerminalSession::~PierTerminalSession()
 {
     // Deterministic shutdown. ~QObject runs after this, so any queued
-    // onCoreNotify callbacks scheduled by the reader thread between
-    // now and the pier_terminal_free call will find m_handle == nullptr
-    // on the main thread and just early-return harmlessly.
+    // onCoreNotify / onSshConnectResult callbacks scheduled by other
+    // threads between now and the pier_terminal_free call will find
+    // m_handle == nullptr (for onCoreNotify) or a bumped
+    // m_connectRequestId (for onSshConnectResult) on the main thread
+    // and just early-return harmlessly.
     stop();
+    // If a connect thread is still running after stop() returned,
+    // detach it so the OS reaps it when it finishes. It already
+    // holds the cancel flag (checked inside the worker) so any
+    // handle it produces will be freed there.
+    if (m_connectThread && m_connectThread->joinable()) {
+        m_connectThread->detach();
+    }
 }
 
 bool PierTerminalSession::start(const QString &shell, int cols, int rows)
 {
-    if (m_handle) {
+    if (m_handle || m_status == SshStatus::Connecting) {
         qWarning() << "PierTerminalSession::start called on already-running session";
         return false;
     }
@@ -48,6 +60,9 @@ bool PierTerminalSession::start(const QString &shell, int cols, int rows)
     m_rows = rows;
     m_running = true;
     emit runningChanged();
+    // Local shells transition directly to Connected — there is no
+    // handshake phase to display a "Connecting..." overlay for.
+    setStatus(SshStatus::Connected);
     // Seed an initial snapshot so the grid paints even before the
     // shell has written its prompt.
     refreshSnapshot();
@@ -57,7 +72,7 @@ bool PierTerminalSession::start(const QString &shell, int cols, int rows)
 bool PierTerminalSession::startSsh(const QString &host, int port, const QString &user,
                                    const QString &password, int cols, int rows)
 {
-    if (m_handle) {
+    if (m_handle || m_status == SshStatus::Connecting) {
         qWarning() << "PierTerminalSession::startSsh called on already-running session";
         return false;
     }
@@ -67,41 +82,139 @@ bool PierTerminalSession::startSsh(const QString &host, int port, const QString 
         return false;
     }
 
-    // Keep each UTF-8 byte array alive until the FFI call returns —
-    // pier_terminal_new_ssh copies the contents into Rust-side
-    // strings synchronously, so once the call completes we can
-    // drop them on return.
-    const QByteArray hostUtf8 = host.toUtf8();
-    const QByteArray userUtf8 = user.toUtf8();
-    const QByteArray passUtf8 = password.toUtf8();
-
-    // NOTE: this is a blocking call that runs the whole SSH
-    // handshake on the current thread. M3b accepts the freeze
-    // because the handshake is typically well under a second; a
-    // future M3c variant will surface a "Connecting..." state and
-    // move the work to a worker thread. See the Rust-side doc on
-    // pier_terminal_new_ssh for the full latency discussion.
-    m_handle = pier_terminal_new_ssh(
-        static_cast<uint16_t>(cols),
-        static_cast<uint16_t>(rows),
-        hostUtf8.constData(),
-        static_cast<uint16_t>(port),
-        userUtf8.constData(),
-        passUtf8.constData(),
-        &PierTerminalSession::notifyTrampoline,
-        this);
-
-    if (!m_handle) {
-        qWarning() << "pier_terminal_new_ssh failed for" << user << "@" << host << ":" << port;
-        return false;
-    }
-
+    // Prepare a fresh request: bump the id, install a new cancel
+    // flag, record the target for the "Connecting..." overlay.
+    const quint64 requestId = ++m_connectRequestId;
+    m_connectCancelFlag = std::make_shared<std::atomic<bool>>(false);
+    m_sshErrorMessage.clear();
+    m_sshTarget = QStringLiteral("%1@%2:%3").arg(user, host).arg(port);
     m_cols = cols;
     m_rows = rows;
-    m_running = true;
-    emit runningChanged();
-    refreshSnapshot();
+    setStatus(SshStatus::Connecting);
+
+    // If a previous worker thread is still hanging around (a
+    // cancelled connect that hasn't returned yet), detach it so
+    // the OS reaps it when it finishes. Its cancel flag is
+    // already set, so it will clean up its own PierTerminal handle
+    // if the blocking FFI happens to produce one before the thread
+    // notices cancellation.
+    if (m_connectThread && m_connectThread->joinable()) {
+        m_connectThread->detach();
+    }
+    m_connectThread.reset();
+
+    // Capture everything by value into the worker thread closure.
+    // We deliberately copy the password into a std::string so the
+    // QByteArray doesn't have to outlive the main-thread stack
+    // frame; the string dies with the closure as soon as the
+    // handshake completes and the result is delivered.
+    const std::string hostStd = host.toStdString();
+    const std::string userStd = user.toStdString();
+    const std::string passStd = password.toStdString();
+    const uint16_t portU16 = static_cast<uint16_t>(port);
+    const uint16_t colsU16 = static_cast<uint16_t>(cols);
+    const uint16_t rowsU16 = static_cast<uint16_t>(rows);
+
+    QPointer<PierTerminalSession> selfWeak(this);
+    auto cancelFlag = m_connectCancelFlag;
+
+    m_connectThread = std::make_unique<std::thread>([
+        selfWeak,
+        cancelFlag,
+        requestId,
+        hostStd = std::move(hostStd),
+        userStd = std::move(userStd),
+        passStd = std::move(passStd),
+        portU16, colsU16, rowsU16
+    ]() mutable {
+        // ── worker thread ──────────────────────────────────────
+        // Blocking FFI call — this is exactly why we're on a
+        // dedicated thread. On LAN this returns in ~300 ms; on
+        // a dead host it can take 15+ seconds.
+        //
+        // IMPORTANT: we must not pass the QPointer itself through
+        // as user_data for notifyTrampoline, because the
+        // trampoline runs on pier-core's reader thread (a
+        // different thread from us) and a QPointer is not
+        // Send-safe to share across arbitrary threads. The real
+        // session pointer works because QMetaObject::invokeMethod
+        // with Qt::QueuedConnection is documented thread-safe for
+        // any non-null QObject*. If the session has been deleted
+        // by then, we catch it below by checking selfWeak and
+        // freeing the handle before any invoke is posted.
+        PierTerminalSession *rawSelf = selfWeak.data();
+        PierTerminal *handle = pier_terminal_new_ssh(
+            colsU16, rowsU16,
+            hostStd.c_str(),
+            portU16,
+            userStd.c_str(),
+            passStd.c_str(),
+            &PierTerminalSession::notifyTrampoline,
+            rawSelf);
+
+        QString errorMessage;
+        if (!handle) {
+            // Copy the thread-local error message into an owned
+            // QString RIGHT HERE on the worker thread, before any
+            // cross-thread delivery. The thread-local slot would
+            // be the wrong thread's slot on the main thread.
+            const char *lastErr = pier_terminal_last_ssh_error();
+            if (lastErr && *lastErr) {
+                errorMessage = QString::fromUtf8(lastErr);
+            } else {
+                errorMessage = QStringLiteral("SSH connect failed (no detail)");
+            }
+        }
+
+        // Cancellation / session-deleted checks. If either is set
+        // and we DO have a handle, we must free it here on the
+        // worker thread — the main thread has no way to find out
+        // about it otherwise.
+        const bool cancelled = cancelFlag && cancelFlag->load();
+        if (!selfWeak || cancelled) {
+            if (handle) {
+                pier_terminal_free(handle);
+            }
+            return;
+        }
+
+        // Post the result back to the main thread. Using the
+        // typed slot + Q_ARG form rather than a lambda overload
+        // so moc-generated dispatch handles everything. The
+        // slot itself rechecks m_connectRequestId against
+        // `requestId` to catch races where cancelSsh ran between
+        // our cancelFlag check above and the queued invoke
+        // actually arriving.
+        QMetaObject::invokeMethod(
+            selfWeak.data(),
+            "onSshConnectResult",
+            Qt::QueuedConnection,
+            Q_ARG(quint64, requestId),
+            Q_ARG(void *, static_cast<void *>(handle)),
+            Q_ARG(QString, errorMessage));
+    });
+
     return true;
+}
+
+void PierTerminalSession::cancelSsh()
+{
+    if (m_status != SshStatus::Connecting) {
+        return;
+    }
+    // Flag the in-flight worker as cancelled. It will eventually
+    // return from pier_terminal_new_ssh, see the flag, and either
+    // discard the produced handle or just exit.
+    if (m_connectCancelFlag) {
+        m_connectCancelFlag->store(true);
+    }
+    // Bump the request id so any already-queued onSshConnectResult
+    // delivery from this worker lands with a stale id and is
+    // dropped.
+    ++m_connectRequestId;
+    m_sshErrorMessage.clear();
+    m_sshTarget.clear();
+    setStatus(SshStatus::Idle);
 }
 
 int PierTerminalSession::write(const QString &text)
@@ -139,6 +252,10 @@ bool PierTerminalSession::resize(int cols, int rows)
 
 void PierTerminalSession::stop()
 {
+    // First, cancel any in-flight SSH handshake. Safe no-op if
+    // none is running.
+    cancelSsh();
+
     if (!m_handle) {
         return;
     }
@@ -157,6 +274,13 @@ void PierTerminalSession::stop()
         m_running = false;
         emit runningChanged();
         emit exited();
+    }
+    // Transition out of Connected/Failed into Idle so the overlay
+    // doesn't linger on a torn-down session.
+    if (m_status != SshStatus::Idle) {
+        m_sshErrorMessage.clear();
+        m_sshTarget.clear();
+        setStatus(SshStatus::Idle);
     }
 }
 
@@ -187,7 +311,53 @@ void PierTerminalSession::onCoreNotify(int event)
             emit runningChanged();
             emit exited();
         }
+        // Leave status at Connected — the user should still see
+        // the final grid. A future iteration can show a banner
+        // with the exit code. We intentionally do NOT transition
+        // to Failed because the connect DID succeed; the child
+        // exited later, which is a different event.
     }
+}
+
+void PierTerminalSession::onSshConnectResult(quint64 requestId, void *handle, const QString &errorMessage)
+{
+    // ── main thread ────────────────────────────────────────
+    // Any delivery with a stale request id is from a cancelled
+    // connect — drop it, freeing the handle if there was one.
+    if (requestId != m_connectRequestId) {
+        if (handle) {
+            pier_terminal_free(static_cast<PierTerminal *>(handle));
+        }
+        return;
+    }
+
+    // The worker thread has handed us its final result. Drop our
+    // reference to the thread itself; the join happens below.
+    // detach() is safe because the worker has already returned
+    // from its closure (otherwise we wouldn't be in this slot).
+    if (m_connectThread && m_connectThread->joinable()) {
+        m_connectThread->detach();
+    }
+    m_connectThread.reset();
+    m_connectCancelFlag.reset();
+
+    if (!handle) {
+        // Failure path. Surface the error to the QML overlay.
+        m_sshErrorMessage = errorMessage.isEmpty()
+            ? QStringLiteral("SSH connect failed")
+            : errorMessage;
+        setStatus(SshStatus::Failed);
+        return;
+    }
+
+    // Success path. Adopt the handle and run the same
+    // "session is now live" bookkeeping as the local start().
+    m_handle = static_cast<PierTerminal *>(handle);
+    m_running = true;
+    emit runningChanged();
+    setStatus(SshStatus::Connected);
+    refreshSnapshot();
+    emit gridChanged();
 }
 
 void PierTerminalSession::notifyTrampoline(void *user_data, uint32_t event)
@@ -259,4 +429,13 @@ void PierTerminalSession::refreshSnapshot()
         m_running = nowRunning;
         emit runningChanged();
     }
+}
+
+void PierTerminalSession::setStatus(SshStatus s)
+{
+    if (m_status == s) {
+        return;
+    }
+    m_status = s;
+    emit statusChanged();
 }

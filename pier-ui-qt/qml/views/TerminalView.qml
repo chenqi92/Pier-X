@@ -1,4 +1,5 @@
 import QtQuick
+import QtQuick.Layouts
 import Pier
 
 // Live terminal view. Owns a PierTerminalSession (spawned lazily on
@@ -87,10 +88,10 @@ Rectangle {
                     console.warn("TerminalView: ssh backend needs sshHost + sshUser")
                     return
                 }
-                // Blocks the main thread for the full handshake —
-                // see PierTerminalSession::startSsh for the caveats.
-                // M3c moves this to a worker thread with a
-                // "Connecting..." overlay.
+                // Non-blocking since M3c1: startSsh returns
+                // immediately after scheduling a worker thread.
+                // The overlay below tracks session.status and
+                // shows "Connecting…" / "Failed" as appropriate.
                 session.startSsh(
                     root.sshHost,
                     root.sshPort,
@@ -102,12 +103,226 @@ Rectangle {
             }
         }
 
+        function retryIfSsh() {
+            if (root.backend !== "ssh") return
+            if (session.status === PierTerminalSession.Connecting) return
+            var cols = Math.max(1, Math.floor(width / grid.cellWidth))
+            var rows = Math.max(1, Math.floor(height / grid.cellHeight))
+            if (cols <= 0 || rows <= 0) return
+            session.startSsh(
+                root.sshHost,
+                root.sshPort,
+                root.sshUser,
+                root.sshPassword,
+                cols, rows)
+        }
+
         MouseArea {
             anchors.fill: parent
             acceptedButtons: Qt.LeftButton
             // Clicking the grid gives keyboard focus back to the
             // root so the Keys handler receives events again.
             onClicked: root.forceActiveFocus()
+        }
+    }
+
+    // ─────────────────────────────────────────────────────
+    // SSH Connecting / Failed overlay
+    // ─────────────────────────────────────────────────────
+    // Shown whenever the session is in the middle of dialing an
+    // SSH host (Connecting) or has just failed to (Failed). Sits
+    // on top of the grid — the grid is still there underneath,
+    // blank or frozen on a previous session, which is fine
+    // because we intercept all mouse + keyboard events while the
+    // overlay is visible.
+    //
+    // Design-system compliance: every color / size / font / radius
+    // goes through Theme.*. No raw hex, no magic numbers.
+    Rectangle {
+        id: overlay
+
+        anchors.fill: parent
+        visible: session.status === PierTerminalSession.Connecting
+              || session.status === PierTerminalSession.Failed
+
+        // Scrim that darkens the underlying grid slightly. Using
+        // bgCanvas at ~85% opacity gives us the "modal over a
+        // live view" feel without swallowing the grid colors
+        // completely. `Qt.rgba` on theme tokens keeps the
+        // light/dark theme handoff clean.
+        color: Qt.rgba(Theme.bgCanvas.r, Theme.bgCanvas.g, Theme.bgCanvas.b, 0.88)
+
+        Behavior on opacity { NumberAnimation { duration: Theme.durNormal } }
+
+        // Block every mouse event from reaching the grid
+        // underneath while the overlay is up.
+        MouseArea {
+            anchors.fill: parent
+            acceptedButtons: Qt.AllButtons
+            preventStealing: true
+            onClicked: (mouse) => mouse.accepted = true
+            onPressed: (mouse) => mouse.accepted = true
+        }
+
+        // Centered card — L3 elevated surface per the design skill.
+        Rectangle {
+            id: card
+
+            anchors.centerIn: parent
+            width: Math.min(420, parent.width - Theme.sp8 * 2)
+            implicitHeight: cardColumn.implicitHeight + Theme.sp5 * 2
+
+            color: Theme.bgElevated
+            border.color: Theme.borderDefault
+            border.width: 1
+            radius: Theme.radiusLg
+
+            Behavior on color        { ColorAnimation { duration: Theme.durNormal } }
+            Behavior on border.color { ColorAnimation { duration: Theme.durNormal } }
+
+            ColumnLayout {
+                id: cardColumn
+                anchors.fill: parent
+                anchors.margins: Theme.sp5
+                spacing: Theme.sp3
+
+                // Tiny section label — "CONNECTING" or "FAILED".
+                SectionLabel {
+                    text: session.status === PierTerminalSession.Connecting
+                          ? qsTr("Connecting")
+                          : qsTr("Failed")
+                    Layout.alignment: Qt.AlignHCenter
+                }
+
+                // Primary status line — the host we're dialing.
+                Text {
+                    text: session.sshTarget.length > 0
+                          ? session.sshTarget
+                          : qsTr("SSH session")
+                    Layout.alignment: Qt.AlignHCenter
+                    font.family: Theme.fontMono
+                    font.pixelSize: Theme.sizeH3
+                    font.weight: Theme.weightMedium
+                    color: Theme.textPrimary
+                    elide: Text.ElideMiddle
+                    Layout.maximumWidth: card.width - Theme.sp5 * 2
+
+                    Behavior on color { ColorAnimation { duration: Theme.durNormal } }
+                }
+
+                // Spinner (Connecting) or error message (Failed).
+                Loader {
+                    Layout.fillWidth: true
+                    Layout.alignment: Qt.AlignHCenter
+                    Layout.topMargin: Theme.sp2
+
+                    sourceComponent: session.status === PierTerminalSession.Connecting
+                                     ? spinnerComponent
+                                     : errorComponent
+                }
+
+                // Buttons row — Cancel (always) + Retry (only Failed).
+                RowLayout {
+                    Layout.fillWidth: true
+                    Layout.topMargin: Theme.sp3
+                    spacing: Theme.sp2
+
+                    Item { Layout.fillWidth: true }
+
+                    GhostButton {
+                        text: qsTr("Cancel")
+                        onClicked: {
+                            session.cancelSsh()
+                            session.stop()
+                        }
+                    }
+
+                    PrimaryButton {
+                        text: qsTr("Retry")
+                        visible: session.status === PierTerminalSession.Failed
+                        onClicked: grid.retryIfSsh()
+                    }
+                }
+            }
+        }
+
+        // Connecting: a single rotating arc drawn with Canvas. No
+        // bundled spinner glyph yet (M6 ships real icons), so the
+        // Canvas gives us something that's clearly animated
+        // without introducing a font dependency. IntelliJ blue
+        // arc on subtle circular track.
+        Component {
+            id: spinnerComponent
+            Item {
+                implicitHeight: 40
+                Canvas {
+                    id: spinCanvas
+                    anchors.centerIn: parent
+                    width: 28
+                    height: 28
+
+                    // Named `arcAngle` rather than `rotation` to
+                    // avoid shadowing QQuickItem.rotation (which
+                    // Canvas inherits). The warning surfaced on
+                    // first launch — renaming is the clean fix.
+                    property real arcAngle: 0
+
+                    onPaint: {
+                        const ctx = getContext("2d")
+                        ctx.reset()
+                        const cx = width / 2
+                        const cy = height / 2
+                        const r = Math.min(cx, cy) - 2
+
+                        // Track: subtle full circle.
+                        ctx.beginPath()
+                        ctx.arc(cx, cy, r, 0, Math.PI * 2)
+                        ctx.lineWidth = 2
+                        ctx.strokeStyle = Theme.borderSubtle
+                        ctx.stroke()
+
+                        // Moving arc: 270° of accent color.
+                        ctx.beginPath()
+                        const start = arcAngle
+                        const end = arcAngle + Math.PI * 1.5
+                        ctx.arc(cx, cy, r, start, end)
+                        ctx.lineWidth = 2
+                        ctx.lineCap = "round"
+                        ctx.strokeStyle = Theme.accent
+                        ctx.stroke()
+                    }
+
+                    NumberAnimation on arcAngle {
+                        running: overlay.visible
+                                 && session.status === PierTerminalSession.Connecting
+                        from: 0
+                        to: Math.PI * 2
+                        duration: 900
+                        loops: Animation.Infinite
+                    }
+                    onArcAngleChanged: requestPaint()
+                }
+            }
+        }
+
+        // Failed: multi-line error text. Mono font because most
+        // of these messages contain hostnames, ports, or russh
+        // diagnostic strings.
+        Component {
+            id: errorComponent
+            Text {
+                width: card.width - Theme.sp5 * 2
+                text: session.sshErrorMessage.length > 0
+                      ? session.sshErrorMessage
+                      : qsTr("Unknown error")
+                wrapMode: Text.Wrap
+                horizontalAlignment: Text.AlignHCenter
+                font.family: Theme.fontMono
+                font.pixelSize: Theme.sizeCaption
+                color: Theme.statusError
+
+                Behavior on color { ColorAnimation { duration: Theme.durNormal } }
+            }
         }
     }
 

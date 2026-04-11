@@ -111,6 +111,16 @@ PierTerminal *pier_terminal_new(
     void *user_data
 );
 
+/* Returns the most recent SSH error message left by
+ * pier_terminal_new_ssh on THIS thread, or NULL if the last call
+ * succeeded / there has never been a call on this thread.
+ *
+ * The returned pointer is owned by pier-core's thread-local
+ * storage and is valid until the next pier_terminal_new_ssh call
+ * on this thread. Callers that need to keep the message should
+ * copy it immediately. Safe to call from anywhere. */
+const char *pier_terminal_last_ssh_error(void);
+
 /* Spawn a new terminal session backed by a remote SSH shell.
  *
  * Identical handle semantics to pier_terminal_new — the returned

@@ -40,6 +40,7 @@
 pub mod connections;
 pub mod core;
 pub mod credentials;
+pub mod services;
 pub mod sftp;
 pub mod terminal;
 
@@ -52,6 +53,7 @@ pub use self::connections::{
 };
 pub use self::core::{pier_core_build_info, pier_core_has_feature, pier_core_version};
 pub use self::credentials::{pier_credential_delete, pier_credential_set};
+pub use self::services::{pier_services_detect, pier_services_free_json};
 pub use self::sftp::{
     pier_sftp_canonicalize, pier_sftp_free, pier_sftp_free_string, pier_sftp_list_dir,
     pier_sftp_mkdir, pier_sftp_new, pier_sftp_remove_dir, pier_sftp_remove_file,

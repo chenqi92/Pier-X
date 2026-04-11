@@ -419,6 +419,52 @@ impl SshSession {
         runtime::shared().block_on(self.open_sftp())
     }
 
+    /// Run `command` remotely via SSH exec, wait for it to
+    /// finish, and return `(exit_status, stdout)`. Stderr is
+    /// intentionally dropped — the service_detector and its
+    /// siblings only care about stdout + the exit code. A
+    /// future variant can return `(code, stdout, stderr)`
+    /// when a caller actually needs it.
+    ///
+    /// The returned string is UTF-8; non-UTF-8 output bytes
+    /// are replaced via `String::from_utf8_lossy` so the
+    /// service_detector's substring-based matching never hits
+    /// a decode error from a mis-tagged binary on the remote.
+    pub async fn exec_command(&self, command: &str) -> Result<(i32, String)> {
+        let mut channel = self.handle.channel_open_session().await?;
+        channel.exec(true, command).await?;
+
+        let mut stdout = Vec::new();
+        let mut exit_code: i32 = -1;
+        loop {
+            let Some(msg) = channel.wait().await else {
+                // Channel closed without an ExitStatus — treat
+                // as "command didn't report a status"; callers
+                // check exit_code and default to failure.
+                break;
+            };
+            match msg {
+                russh::ChannelMsg::Data { data } => stdout.extend_from_slice(&data),
+                russh::ChannelMsg::ExtendedData { data: _, ext: _ } => {
+                    // Drop stderr for now. Service detection
+                    // only reads stdout.
+                }
+                russh::ChannelMsg::ExitStatus { exit_status } => {
+                    exit_code = exit_status as i32;
+                }
+                russh::ChannelMsg::Eof | russh::ChannelMsg::Close => break,
+                _ => {}
+            }
+        }
+        let text = String::from_utf8_lossy(&stdout).into_owned();
+        Ok((exit_code, text))
+    }
+
+    /// Sync convenience for [`Self::exec_command`].
+    pub fn exec_command_blocking(&self, command: &str) -> Result<(i32, String)> {
+        runtime::shared().block_on(self.exec_command(command))
+    }
+
     /// Returns the number of strong references still holding this
     /// session alive. Used by tests and by M3b's connection
     /// manager to decide when a session can be closed.

@@ -2,6 +2,12 @@ import QtQuick
 import QtQuick.Layouts
 import Pier
 
+// NOTE for M4: the service pill strip shows at the top of
+// this view (above the terminal grid) when the session is
+// Connected AND we're running against an ssh backend. The
+// grid is re-anchored below the strip so cell sizing picks
+// up the new height.
+
 // Live terminal view. Owns a PierTerminalSession (spawned lazily on
 // first layout) and paints its grid via PierTerminalGrid.
 //
@@ -79,12 +85,161 @@ Rectangle {
         onExited: {
             // no-op for now; grid stays visible frozen.
         }
+
+        // M4: once the SSH handshake completes, fire off service
+        // detection in the background. Local shells skip this
+        // entirely (there's no remote to probe). The pill strip
+        // below binds to `detector.state` and `detector.count`
+        // so the QML flows naturally from there.
+        onStatusChanged: {
+            if (root.backend === "ssh"
+                && session.status === PierTerminalSession.Connected
+                && detector.state === PierServiceDetector.Idle) {
+                root._kickServiceDetection()
+            }
+        }
+    }
+
+    // M4: remote service discovery. Runs after the SSH
+    // handshake lands (see session.onStatusChanged above) and
+    // populates the pill strip at the top of the view.
+    PierServiceDetector {
+        id: detector
+    }
+
+    function _kickServiceDetection() {
+        if (root.sshHost.length === 0 || root.sshUser.length === 0) return
+        var kind = 0
+        var secret = ""
+        var extra = ""
+        if (root.sshUsesAgent) {
+            kind = 3
+        } else if (root.sshKeyPath.length > 0) {
+            kind = 2
+            secret = root.sshKeyPath
+            extra = root.sshPassphraseCredentialId
+        } else if (root.sshCredentialId.length > 0) {
+            kind = 1
+            secret = root.sshCredentialId
+        } else {
+            kind = 0
+            secret = root.sshPassword
+        }
+        detector.detect(root.sshHost, root.sshPort, root.sshUser,
+                        kind, secret, extra)
+    }
+
+    // Service pill strip — shown only when the SSH session is
+    // Connected and the detector has at least one entry. Sits
+    // above the grid, pushes the grid down by (pill height +
+    // padding). Empty / loading state is invisible; we don't
+    // want to eat vertical space while detection is in flight.
+    Rectangle {
+        id: serviceStrip
+
+        anchors.top: parent.top
+        anchors.left: parent.left
+        anchors.right: parent.right
+        anchors.topMargin: Theme.sp3
+        anchors.leftMargin: Theme.sp3
+        anchors.rightMargin: Theme.sp3
+
+        implicitHeight: detector.count > 0 ? 28 : 0
+        visible: detector.count > 0
+                 && root.backend === "ssh"
+                 && session.status === PierTerminalSession.Connected
+        color: "transparent"
+
+        Behavior on implicitHeight { NumberAnimation { duration: Theme.durNormal } }
+
+        RowLayout {
+            anchors.fill: parent
+            spacing: Theme.sp2
+
+            Repeater {
+                model: detector
+
+                delegate: Rectangle {
+                    required property int index
+                    required property string name
+                    required property string version
+                    required property string status
+                    required property int port
+
+                    implicitHeight: 22
+                    implicitWidth: pillRow.implicitWidth + Theme.sp3 * 2
+                    color: Theme.bgSurface
+                    border.color: Theme.borderSubtle
+                    border.width: 1
+                    radius: Theme.radiusPill
+
+                    Behavior on color        { ColorAnimation { duration: Theme.durNormal } }
+                    Behavior on border.color { ColorAnimation { duration: Theme.durNormal } }
+
+                    Row {
+                        id: pillRow
+                        anchors.centerIn: parent
+                        spacing: Theme.sp1
+
+                        Rectangle {
+                            width: 6
+                            height: 6
+                            radius: 3
+                            anchors.verticalCenter: parent.verticalCenter
+                            color: {
+                                if (status === "running") return Theme.statusSuccess
+                                if (status === "stopped") return Theme.statusWarning
+                                return Theme.textTertiary
+                            }
+
+                            Behavior on color { ColorAnimation { duration: Theme.durNormal } }
+                        }
+
+                        Text {
+                            anchors.verticalCenter: parent.verticalCenter
+                            text: name + (version.length > 0
+                                          ? " " + version
+                                          : "")
+                            font.family: Theme.fontUi
+                            font.pixelSize: Theme.sizeCaption
+                            font.weight: Theme.weightMedium
+                            color: Theme.textSecondary
+
+                            Behavior on color { ColorAnimation { duration: Theme.durNormal } }
+                        }
+
+                        Text {
+                            visible: port > 0
+                            anchors.verticalCenter: parent.verticalCenter
+                            text: ":" + port
+                            font.family: Theme.fontMono
+                            font.pixelSize: Theme.sizeCaption
+                            color: Theme.textTertiary
+
+                            Behavior on color { ColorAnimation { duration: Theme.durNormal } }
+                        }
+                    }
+                }
+            }
+        }
     }
 
     PierTerminalGrid {
         id: grid
-        anchors.fill: parent
-        anchors.margins: Theme.sp3
+        // Anchor below the service strip so the grid shrinks
+        // to make room when services are detected. When the
+        // strip is hidden its implicitHeight is 0, so
+        // `serviceStrip.bottom` sits at parent.top +
+        // Theme.sp3 (the strip's own top margin), and the
+        // grid fills the same space it always has.
+        anchors.top: serviceStrip.bottom
+        anchors.left: parent.left
+        anchors.right: parent.right
+        anchors.bottom: parent.bottom
+        anchors.topMargin: serviceStrip.visible ? Theme.sp2 : Theme.sp3
+        anchors.leftMargin: Theme.sp3
+        anchors.rightMargin: Theme.sp3
+        anchors.bottomMargin: Theme.sp3
 
         session: session
         font.family: Theme.fontMono

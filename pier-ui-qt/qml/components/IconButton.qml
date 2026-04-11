@@ -9,7 +9,6 @@ Rectangle {
     property string glyph: ""
     property string tooltip: ""
     property bool active: false
-    property bool enabled: true
     property alias hovered: mouseArea.containsMouse
     property alias pressed: mouseArea.pressed
     signal clicked

@@ -7,7 +7,6 @@ Rectangle {
     id: root
 
     property string text: ""
-    property bool enabled: true
     signal clicked
 
     implicitHeight: 28

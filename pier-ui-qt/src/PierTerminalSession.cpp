@@ -54,6 +54,56 @@ bool PierTerminalSession::start(const QString &shell, int cols, int rows)
     return true;
 }
 
+bool PierTerminalSession::startSsh(const QString &host, int port, const QString &user,
+                                   const QString &password, int cols, int rows)
+{
+    if (m_handle) {
+        qWarning() << "PierTerminalSession::startSsh called on already-running session";
+        return false;
+    }
+    if (cols <= 0 || rows <= 0 || port <= 0 || port > 65535 || host.isEmpty() || user.isEmpty()) {
+        qWarning() << "PierTerminalSession::startSsh rejected invalid args"
+                   << host << port << user << "size" << cols << "x" << rows;
+        return false;
+    }
+
+    // Keep each UTF-8 byte array alive until the FFI call returns —
+    // pier_terminal_new_ssh copies the contents into Rust-side
+    // strings synchronously, so once the call completes we can
+    // drop them on return.
+    const QByteArray hostUtf8 = host.toUtf8();
+    const QByteArray userUtf8 = user.toUtf8();
+    const QByteArray passUtf8 = password.toUtf8();
+
+    // NOTE: this is a blocking call that runs the whole SSH
+    // handshake on the current thread. M3b accepts the freeze
+    // because the handshake is typically well under a second; a
+    // future M3c variant will surface a "Connecting..." state and
+    // move the work to a worker thread. See the Rust-side doc on
+    // pier_terminal_new_ssh for the full latency discussion.
+    m_handle = pier_terminal_new_ssh(
+        static_cast<uint16_t>(cols),
+        static_cast<uint16_t>(rows),
+        hostUtf8.constData(),
+        static_cast<uint16_t>(port),
+        userUtf8.constData(),
+        passUtf8.constData(),
+        &PierTerminalSession::notifyTrampoline,
+        this);
+
+    if (!m_handle) {
+        qWarning() << "pier_terminal_new_ssh failed for" << user << "@" << host << ":" << port;
+        return false;
+    }
+
+    m_cols = cols;
+    m_rows = rows;
+    m_running = true;
+    emit runningChanged();
+    refreshSnapshot();
+    return true;
+}
+
 int PierTerminalSession::write(const QString &text)
 {
     if (!m_handle) {

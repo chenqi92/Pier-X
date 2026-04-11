@@ -111,6 +111,44 @@ PierTerminal *pier_terminal_new(
     void *user_data
 );
 
+/* Spawn a new terminal session backed by a remote SSH shell.
+ *
+ * Identical handle semantics to pier_terminal_new — the returned
+ * opaque `PierTerminal *` is consumed by the same _write / _resize
+ * / _snapshot / _free functions. The backend swap is invisible
+ * above this line.
+ *
+ * BLOCKING: this call synchronously runs TCP connect + SSH
+ * handshake + authentication + channel_open + request_pty +
+ * request_shell on the calling thread. Typical latency on a LAN
+ * is under 300 ms; on long-haul links it can be several seconds.
+ * Call this from a worker thread if UI responsiveness matters.
+ *
+ * Inputs:
+ *   cols, rows  — initial grid size (cells).
+ *   host        — hostname or IP, NUL-terminated UTF-8.
+ *   port        — TCP port, usually 22.
+ *   user        — remote user name, NUL-terminated UTF-8.
+ *   password    — plaintext password, NUL-terminated UTF-8.
+ *                 Used only for the duration of the handshake
+ *                 and not stored by pier-core after that.
+ *   notify      — same contract as pier_terminal_new.
+ *   user_data   — opaque, passed back to notify unchanged.
+ *
+ * Returns NULL on any failure (invalid args, DNS / TCP / host-key
+ * / auth / channel open error). Details are logged via the `log`
+ * crate; M3c introduces a structured last-error API. */
+PierTerminal *pier_terminal_new_ssh(
+    uint16_t cols,
+    uint16_t rows,
+    const char *host,
+    uint16_t port,
+    const char *user,
+    const char *password,
+    PierTerminalNotifyFn notify,
+    void *user_data
+);
+
 /* Send bytes to the shell. Returns bytes written (≥ 0) or a
  * negative error code. */
 int64_t pier_terminal_write(

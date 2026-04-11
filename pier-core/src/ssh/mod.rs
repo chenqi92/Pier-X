@@ -58,4 +58,5 @@ pub mod session;
 pub use channel::SshChannelPty;
 pub use config::{AuthMethod, SshConfig};
 pub use error::SshError;
+pub use known_hosts::HostKeyVerifier;
 pub use session::SshSession;

@@ -15,12 +15,29 @@ import Pier
 Rectangle {
     id: root
 
+    // Backend selector. "local" spawns a local shell via the
+    // default Unix/Win PTY. "ssh" dials a remote via pier-core's
+    // SSH layer and uses the remote shell as the PTY. Both paths
+    // produce identical PierTerminalSession handles above the
+    // M2 `Pty` trait — everything below is backend-agnostic.
+    property string backend: "local"
+
     // Default shell is system-dependent. The caller can override this
     // via the `shell` property before the first layout; we only spawn
     // the PTY once `grid.cellWidth` is known (see startWhenSized).
     property string shell: Qt.platform.os === "windows"
                            ? "powershell.exe"
                            : (Qt.platform.os === "osx" ? "/bin/zsh" : "/bin/bash")
+
+    // SSH backend parameters. Only read when `backend === "ssh"`.
+    // These are consumed exactly once at startup and never echoed
+    // or stored on the QML object after the handshake — the C++
+    // layer zeroes the QByteArray it passed into the FFI as soon
+    // as pier_terminal_new_ssh returns.
+    property string sshHost: ""
+    property int sshPort: 22
+    property string sshUser: ""
+    property string sshPassword: ""
 
     color: Theme.bgCanvas
     focus: true
@@ -64,7 +81,25 @@ Rectangle {
             if (width <= 0 || height <= 0) return
             var cols = Math.max(1, Math.floor(width / grid.cellWidth))
             var rows = Math.max(1, Math.floor(height / grid.cellHeight))
-            session.start(root.shell, cols, rows)
+
+            if (root.backend === "ssh") {
+                if (root.sshHost.length === 0 || root.sshUser.length === 0) {
+                    console.warn("TerminalView: ssh backend needs sshHost + sshUser")
+                    return
+                }
+                // Blocks the main thread for the full handshake —
+                // see PierTerminalSession::startSsh for the caveats.
+                // M3c moves this to a worker thread with a
+                // "Connecting..." overlay.
+                session.startSsh(
+                    root.sshHost,
+                    root.sshPort,
+                    root.sshUser,
+                    root.sshPassword,
+                    cols, rows)
+            } else {
+                session.start(root.shell, cols, rows)
+            }
         }
 
         MouseArea {

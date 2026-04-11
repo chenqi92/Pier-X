@@ -75,6 +75,23 @@ public slots:
     // Emits gridChanged once the initial prompt lands.
     bool start(const QString &shell, int cols, int rows);
 
+    // Spawn a remote shell over SSH. Same ownership semantics as
+    // start() — the C++ object owns the opaque PierTerminal handle
+    // for the lifetime of the session, and the same gridChanged /
+    // exited signals fire.
+    //
+    // BLOCKING: this method runs the full SSH handshake
+    // (TCP + key exchange + auth + pty-req + shell-req) on the
+    // calling thread before returning. Typical LAN latency is
+    // under 300 ms; expect 1–3 s across the internet. Qt's event
+    // loop is blocked for the duration. M3c introduces an async
+    // variant that fires a signal on completion.
+    //
+    // Returns true on success, false on any failure (invalid
+    // args, DNS / TCP / auth / host key / channel open error).
+    bool startSsh(const QString &host, int port, const QString &user,
+                  const QString &password, int cols, int rows);
+
     // Send UTF-8 bytes (keystrokes, paste, etc.) to the shell.
     // Returns the number of bytes written, or -1 on error.
     int write(const QString &text);

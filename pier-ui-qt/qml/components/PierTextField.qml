@@ -9,6 +9,11 @@ Rectangle {
     property alias text: input.text
     property alias readOnly: input.readOnly
     property string placeholder: ""
+    // When true, echo as bullets instead of the raw characters.
+    // Used by the connection dialog's password field. The
+    // TextInput.PasswordEchoOnEdit mode would leak the first
+    // character momentarily — we use Password which is stricter.
+    property bool password: false
 
     implicitHeight: 28
     implicitWidth: 200
@@ -33,6 +38,8 @@ Rectangle {
         color: Theme.textPrimary
         selectionColor: Theme.accentMuted
         selectedTextColor: Theme.textPrimary
+        echoMode: root.password ? TextInput.Password : TextInput.Normal
+        passwordCharacter: "\u2022"
 
         Behavior on color { ColorAnimation { duration: Theme.durNormal } }
 

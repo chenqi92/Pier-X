@@ -54,7 +54,7 @@
 use std::os::raw::{c_char, c_void};
 use std::ptr;
 
-use crate::terminal::{Cell, Color, NotifyFn, PierTerminal, TerminalError};
+use crate::terminal::{Cell, Color, NotifyFn, PierTerminal, Pty, TerminalError};
 
 /// Plain-data cell struct mirroring the Rust [`Cell`] but with a
 /// fixed, stable layout suitable for memcpy across the FFI boundary.
@@ -198,6 +198,124 @@ pub unsafe extern "C" fn pier_terminal_new(
         Ok(t) => Box::into_raw(Box::new(t)),
         Err(e) => {
             log::warn!("pier_terminal_new failed: {e}");
+            ptr::null_mut()
+        }
+    }
+}
+
+/// Spawn a new terminal session backed by a remote SSH shell
+/// instead of a local PTY.
+///
+/// This constructor exists so that every call site above the
+/// opaque `*mut PierTerminal` handle — the C++ `PierTerminalSession`
+/// wrapper, the `PierTerminalGrid` renderer, the QML keyboard
+/// routing, all of M2b's infrastructure — gets to treat a remote
+/// shell as indistinguishable from a local one. The backend is
+/// swapped behind the M2 [`crate::terminal::Pty`] trait by handing
+/// an [`crate::ssh::SshChannelPty`] into
+/// [`PierTerminal::with_pty`] instead of the default `UnixPty`.
+///
+/// ## Inputs
+///
+/// * `host`, `user`, `password` — NUL-terminated UTF-8 C strings.
+///   The password is used only for the duration of authentication
+///   and is not stored anywhere by pier-core after the handshake.
+///   Pass an empty password if your server allows it (e.g. key
+///   authentication via the ssh agent — but note that variant is
+///   not yet wired in M3b; use M3c's full-config constructor).
+/// * `port` — TCP port, usually 22.
+/// * `cols`, `rows` — initial grid size; the remote PTY is
+///   requested at this size via the SSH `pty-req` channel message.
+/// * `notify`, `user_data` — same contract as
+///   [`pier_terminal_new`]. The notify fn is invoked on the
+///   reader thread, not from inside this constructor.
+///
+/// ## Blocking behavior
+///
+/// The call is **synchronous and blocking** on the calling thread
+/// for the full TCP connect + SSH handshake + authentication +
+/// `channel_open_session` + `request_pty` + `request_shell`
+/// sequence. On a LAN this is typically under 300 ms; across
+/// long-haul links it can be several seconds. Callers that care
+/// about UI responsiveness should call this on a worker thread.
+/// M3c will introduce an async variant with progress callbacks.
+///
+/// Returns `NULL` on any failure (config invalid, DNS lookup
+/// failed, TCP refused, auth rejected, channel open refused).
+/// Details are logged at `log::warn!` level via the `log` crate;
+/// M3c exposes a structured `pier_last_error` API.
+///
+/// # Safety
+///
+/// Every `*const c_char` must be a valid NUL-terminated UTF-8 C
+/// string. `notify` must be a valid function pointer. `user_data`
+/// is opaque and not dereferenced by pier-core.
+#[no_mangle]
+pub unsafe extern "C" fn pier_terminal_new_ssh(
+    cols: u16,
+    rows: u16,
+    host: *const c_char,
+    port: u16,
+    user: *const c_char,
+    password: *const c_char,
+    notify: Option<NotifyFn>,
+    user_data: *mut c_void,
+) -> *mut PierTerminal {
+    use crate::ssh::{AuthMethod, HostKeyVerifier, SshConfig, SshSession};
+
+    if host.is_null() || user.is_null() || password.is_null() {
+        return ptr::null_mut();
+    }
+    let Some(notify) = notify else {
+        return ptr::null_mut();
+    };
+
+    // SAFETY: caller contract — all three pointers are valid
+    // NUL-terminated UTF-8 C strings.
+    let host_str = match unsafe { std::ffi::CStr::from_ptr(host) }.to_str() {
+        Ok(s) => s.to_string(),
+        Err(_) => return ptr::null_mut(),
+    };
+    let user_str = match unsafe { std::ffi::CStr::from_ptr(user) }.to_str() {
+        Ok(s) => s.to_string(),
+        Err(_) => return ptr::null_mut(),
+    };
+    let password_str = match unsafe { std::ffi::CStr::from_ptr(password) }.to_str() {
+        Ok(s) => s.to_string(),
+        Err(_) => return ptr::null_mut(),
+    };
+
+    if host_str.is_empty() || user_str.is_empty() {
+        return ptr::null_mut();
+    }
+
+    let mut config = SshConfig::new(&host_str, &host_str, &user_str);
+    config.port = port;
+    config.auth = AuthMethod::InMemoryPassword {
+        password: password_str,
+    };
+
+    let session = match SshSession::connect_blocking(&config, HostKeyVerifier::default()) {
+        Ok(s) => s,
+        Err(e) => {
+            log::warn!("pier_terminal_new_ssh connect failed: {e}");
+            return ptr::null_mut();
+        }
+    };
+
+    let ssh_pty = match session.open_shell_channel_blocking(cols, rows) {
+        Ok(p) => p,
+        Err(e) => {
+            log::warn!("pier_terminal_new_ssh open_shell_channel failed: {e}");
+            return ptr::null_mut();
+        }
+    };
+
+    let boxed: Box<dyn Pty> = Box::new(ssh_pty);
+    match PierTerminal::with_pty(boxed, cols, rows, notify, user_data) {
+        Ok(t) => Box::into_raw(Box::new(t)),
+        Err(e) => {
+            log::warn!("pier_terminal_new_ssh with_pty failed: {e}");
             ptr::null_mut()
         }
     }
@@ -536,5 +654,118 @@ mod tests {
                 -1,
             );
         }
+    }
+
+    // ── pier_terminal_new_ssh ─────────────────────────────
+
+    #[test]
+    fn new_ssh_rejects_null_strings() {
+        let host = CString::new("example.com").unwrap();
+        let user = CString::new("root").unwrap();
+        let pass = CString::new("").unwrap();
+
+        // SAFETY: every call has at least one null argument,
+        // which the function is defined to reject without
+        // touching memory.
+        unsafe {
+            assert!(
+                pier_terminal_new_ssh(
+                    80, 24,
+                    ptr::null(),
+                    22,
+                    user.as_ptr(),
+                    pass.as_ptr(),
+                    Some(test_notify),
+                    ptr::null_mut(),
+                )
+                .is_null(),
+                "null host must return NULL",
+            );
+            assert!(
+                pier_terminal_new_ssh(
+                    80, 24,
+                    host.as_ptr(),
+                    22,
+                    ptr::null(),
+                    pass.as_ptr(),
+                    Some(test_notify),
+                    ptr::null_mut(),
+                )
+                .is_null(),
+                "null user must return NULL",
+            );
+            assert!(
+                pier_terminal_new_ssh(
+                    80, 24,
+                    host.as_ptr(),
+                    22,
+                    user.as_ptr(),
+                    ptr::null(),
+                    Some(test_notify),
+                    ptr::null_mut(),
+                )
+                .is_null(),
+                "null password must return NULL",
+            );
+            assert!(
+                pier_terminal_new_ssh(
+                    80, 24,
+                    host.as_ptr(),
+                    22,
+                    user.as_ptr(),
+                    pass.as_ptr(),
+                    None,
+                    ptr::null_mut(),
+                )
+                .is_null(),
+                "null notify fn must return NULL",
+            );
+        }
+    }
+
+    #[test]
+    fn new_ssh_fails_fast_on_unreachable_host() {
+        // RFC 5737 TEST-NET-1 — guaranteed unroutable. Matches
+        // the session-layer test, but exercised here through the
+        // C ABI surface to prove the blocking connect + error
+        // mapping work from the caller's perspective without
+        // leaking resources on failure.
+        let host = CString::new("192.0.2.1").unwrap();
+        let user = CString::new("root").unwrap();
+        let pass = CString::new("ignored").unwrap();
+        let counter: &'static AtomicUsize = Box::leak(Box::new(AtomicUsize::new(0)));
+        let user_data = counter as *const AtomicUsize as *mut c_void;
+
+        let start = std::time::Instant::now();
+        // SAFETY: all strings are non-null and NUL-terminated;
+        // notify is a valid fn pointer; user_data points at a
+        // leaked AtomicUsize that lives for 'static.
+        let handle = unsafe {
+            pier_terminal_new_ssh(
+                80, 24,
+                host.as_ptr(),
+                22,
+                user.as_ptr(),
+                pass.as_ptr(),
+                Some(test_notify),
+                user_data,
+            )
+        };
+        let elapsed = start.elapsed();
+
+        assert!(
+            handle.is_null(),
+            "unroutable host must return NULL, got handle",
+        );
+        // Must fail in under ~15s (russh default + slop). If this
+        // times out it means error mapping is wrong or the
+        // blocking call leaked the runtime.
+        assert!(
+            elapsed < Duration::from_secs(15),
+            "SSH connect should fail fast on unroutable host, took {elapsed:?}",
+        );
+        // And the callback must NOT have fired — we never got far
+        // enough to install the reader thread.
+        assert_eq!(counter.load(Ordering::Relaxed), 0);
     }
 }

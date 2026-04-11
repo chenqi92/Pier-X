@@ -21,6 +21,7 @@ Item {
         hostField.text = ""
         portField.text = "22"
         userField.text = ""
+        passwordField.text = ""
         authCombo.currentIndex = 0
         open = true
         nameField.forceActiveFocus()
@@ -188,8 +189,37 @@ Item {
                 PierComboBox {
                     id: authCombo
                     Layout.fillWidth: true
-                    options: [qsTr("Password"), qsTr("Private key"), qsTr("SSH agent")]
+                    // M3b wires Password end-to-end; Private key
+                    // and SSH agent exist in the Rust enum but
+                    // aren't plumbed through the dialog yet (M3c).
+                    // Keep them visible so users know what's
+                    // coming, but mark them.
+                    options: [qsTr("Password"),
+                              qsTr("Private key (M3c)"),
+                              qsTr("SSH agent (M3c)")]
                     currentIndex: 0
+                }
+            }
+
+            // Password field — shown only when "Password" is the
+            // selected auth method. Bullet echo via PierTextField's
+            // new `password` property.
+            ColumnLayout {
+                Layout.fillWidth: true
+                spacing: Theme.sp2
+                visible: authCombo.currentIndex === 0
+                Text {
+                    text: qsTr("Password")
+                    font.family: Theme.fontUi
+                    font.pixelSize: Theme.sizeCaption
+                    font.weight: Theme.weightMedium
+                    color: Theme.textSecondary
+                }
+                PierTextField {
+                    id: passwordField
+                    Layout.fillWidth: true
+                    placeholder: qsTr("password")
+                    password: true
                 }
             }
 
@@ -208,15 +238,25 @@ Item {
                 }
 
                 PrimaryButton {
-                    text: qsTr("Save")
-                    enabled: nameField.text.length > 0 && hostField.text.length > 0
+                    text: qsTr("Connect")
+                    // Require the minimum set for a Password
+                    // connection. Private key / agent will get
+                    // their own validation in M3c.
+                    enabled: nameField.text.length > 0
+                             && hostField.text.length > 0
+                             && userField.text.length > 0
+                             && (authCombo.currentIndex !== 0
+                                 || passwordField.text.length > 0)
                     onClicked: {
                         const conn = {
                             name: nameField.text,
                             host: hostField.text,
                             port: parseInt(portField.text) || 22,
                             username: userField.text,
-                            auth: authCombo.options[authCombo.currentIndex] || ""
+                            authKind: authCombo.currentIndex === 0 ? "password"
+                                    : authCombo.currentIndex === 1 ? "private_key"
+                                    : "agent",
+                            password: passwordField.text
                         }
                         root.saved(conn)
                         root.hide()

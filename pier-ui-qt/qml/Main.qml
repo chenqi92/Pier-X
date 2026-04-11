@@ -51,9 +51,41 @@ ApplicationWindow {
 
     property int currentTabIndex: 0
 
+    // Every tabModel row carries the full schema, with unused
+    // fields defaulted, so the Repeater delegate can bind to
+    // model.<role> unconditionally without dealing with undefined
+    // columns. ListModel doesn't grow its role set after the first
+    // append, so we have to bake all of these in from row #1.
+    function _makeLocalRow(title) {
+        return {
+            title: title,
+            backend: "local",
+            sshHost: "",
+            sshPort: 22,
+            sshUser: "",
+            sshPassword: ""
+        }
+    }
+
+    function _makeSshRow(conn) {
+        return {
+            title: conn.name,
+            backend: "ssh",
+            sshHost: conn.host,
+            sshPort: conn.port,
+            sshUser: conn.username,
+            sshPassword: conn.password || ""
+        }
+    }
+
     function openNewTab(title) {
         const t = title || qsTr("Local %1").arg(tabModel.count + 1)
-        tabModel.append({ title: t })
+        tabModel.append(_makeLocalRow(t))
+        currentTabIndex = tabModel.count - 1
+    }
+
+    function openSshTab(conn) {
+        tabModel.append(_makeSshRow(conn))
         currentTabIndex = tabModel.count - 1
     }
 
@@ -67,13 +99,26 @@ ApplicationWindow {
     }
 
     function addConnection(conn) {
-        connectionsModel.append(conn)
+        // Persist a sanitized copy — the password is intentionally
+        // NOT stored in connectionsModel. M3c will replace this
+        // with keychain lookups; for now the password travels from
+        // the dialog straight into the tab and then the SSH handshake.
+        connectionsModel.append({
+            name: conn.name,
+            host: conn.host,
+            port: conn.port,
+            username: conn.username,
+            authKind: conn.authKind
+        })
     }
 
     function activateConnection(index) {
         if (index < 0 || index >= connectionsModel.count)
             return
         const conn = connectionsModel.get(index)
+        // Without a stored password the sidebar activate path
+        // can't connect on its own — it just opens a blank local
+        // tab for now. M3c will re-prompt or pull from keychain.
         openNewTab(conn.name)
     }
 
@@ -142,7 +187,17 @@ ApplicationWindow {
 
                         Repeater {
                             model: tabModel
-                            delegate: TerminalView {}
+                            delegate: TerminalView {
+                                // Bind every backend field from the
+                                // model row. For local tabs the ssh
+                                // fields are empty strings / 22 and
+                                // startWhenSized ignores them.
+                                backend: model.backend
+                                sshHost: model.sshHost
+                                sshPort: model.sshPort
+                                sshUser: model.sshUser
+                                sshPassword: model.sshPassword
+                            }
                         }
                     }
                 }
@@ -160,8 +215,12 @@ ApplicationWindow {
     NewConnectionDialog {
         id: newConnectionDialog
         onSaved: (conn) => {
+            // Remember the connection (without the password) in
+            // the sidebar list, then open a live SSH tab that
+            // does the actual handshake using the password we
+            // just collected.
             window.addConnection(conn)
-            window.activateConnection(connectionsModel.count - 1)
+            window.openSshTab(conn)
         }
     }
 

@@ -49,6 +49,15 @@ Rectangle {
     property string sshPassword: ""
     property string sshCredentialId: ""
 
+    // M3c3: private-key auth. When sshKeyPath is non-empty
+    // TerminalView dispatches startSshWithKey, which goes
+    // through pier_terminal_new_ssh_key — the Rust SSH layer
+    // reads the key file from disk and (if needed) pulls the
+    // passphrase from the OS keychain by id at handshake time.
+    // Empty sshPassphraseCredentialId means "unencrypted key".
+    property string sshKeyPath: ""
+    property string sshPassphraseCredentialId: ""
+
     color: Theme.bgCanvas
     focus: true
     activeFocusOnTab: true
@@ -97,30 +106,7 @@ Rectangle {
                     console.warn("TerminalView: ssh backend needs sshHost + sshUser")
                     return
                 }
-                // Non-blocking since M3c1: startSsh* returns
-                // immediately after scheduling a worker thread.
-                // The overlay below tracks session.status and
-                // shows "Connecting…" / "Failed" as appropriate.
-                //
-                // M3c2: prefer the credential-id path when one is
-                // set so the saved-connection reconnect flow goes
-                // through the OS keychain and never touches the
-                // plaintext-password FFI.
-                if (root.sshCredentialId.length > 0) {
-                    session.startSshWithCredential(
-                        root.sshHost,
-                        root.sshPort,
-                        root.sshUser,
-                        root.sshCredentialId,
-                        cols, rows)
-                } else {
-                    session.startSsh(
-                        root.sshHost,
-                        root.sshPort,
-                        root.sshUser,
-                        root.sshPassword,
-                        cols, rows)
-                }
+                grid._dispatchSshConnect(cols, rows)
             } else {
                 session.start(root.shell, cols, rows)
             }
@@ -132,14 +118,33 @@ Rectangle {
             var cols = Math.max(1, Math.floor(width / grid.cellWidth))
             var rows = Math.max(1, Math.floor(height / grid.cellHeight))
             if (cols <= 0 || rows <= 0) return
-            if (root.sshCredentialId.length > 0) {
+            grid._dispatchSshConnect(cols, rows)
+        }
+
+        // Pick the right startSsh* method given which auth
+        // fields are populated. Priority:
+        //   1. key path  → startSshWithKey
+        //   2. credential id → startSshWithCredential
+        //   3. plaintext password → startSsh
+        // The three are mutually exclusive in practice — the
+        // dialog / Main.qml only ever populates one set per tab.
+        function _dispatchSshConnect(cols, rows) {
+            if (root.sshKeyPath.length > 0) {
+                session.startSshWithKey(
+                    root.sshHost, root.sshPort, root.sshUser,
+                    root.sshKeyPath,
+                    root.sshPassphraseCredentialId,
+                    cols, rows)
+            } else if (root.sshCredentialId.length > 0) {
                 session.startSshWithCredential(
                     root.sshHost, root.sshPort, root.sshUser,
-                    root.sshCredentialId, cols, rows)
+                    root.sshCredentialId,
+                    cols, rows)
             } else {
                 session.startSsh(
                     root.sshHost, root.sshPort, root.sshUser,
-                    root.sshPassword, cols, rows)
+                    root.sshPassword,
+                    cols, rows)
             }
         }
 

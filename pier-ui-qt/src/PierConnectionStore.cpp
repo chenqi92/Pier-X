@@ -34,25 +34,29 @@ QVariant PierConnectionStore::data(const QModelIndex &index, int role) const
     }
     const Entry &e = m_entries[static_cast<size_t>(row)];
     switch (role) {
-    case NameRole:         return e.name;
-    case HostRole:         return e.host;
-    case PortRole:         return e.port;
-    case UsernameRole:     return e.username;
-    case CredentialIdRole: return e.credentialId;
-    case TagsRole:         return e.tags;
-    default:               return {};
+    case NameRole:                   return e.name;
+    case HostRole:                   return e.host;
+    case PortRole:                   return e.port;
+    case UsernameRole:               return e.username;
+    case CredentialIdRole:           return e.credentialId;
+    case KeyPathRole:                return e.keyPath;
+    case PassphraseCredentialIdRole: return e.passphraseCredentialId;
+    case TagsRole:                   return e.tags;
+    default:                         return {};
     }
 }
 
 QHash<int, QByteArray> PierConnectionStore::roleNames() const
 {
     return {
-        { NameRole,         "name" },
-        { HostRole,         "host" },
-        { PortRole,         "port" },
-        { UsernameRole,     "username" },
-        { CredentialIdRole, "credentialId" },
-        { TagsRole,         "tags" }
+        { NameRole,                   "name" },
+        { HostRole,                   "host" },
+        { PortRole,                   "port" },
+        { UsernameRole,               "username" },
+        { CredentialIdRole,           "credentialId" },
+        { KeyPathRole,                "keyPath" },
+        { PassphraseCredentialIdRole, "passphraseCredentialId" },
+        { TagsRole,                   "tags" }
     };
 }
 
@@ -96,7 +100,30 @@ bool PierConnectionStore::add(const QString &name, const QString &host, int port
     e.port = port > 0 ? port : 22;
     e.username = username;
     e.credentialId = credentialId;
+    return appendEntry(std::move(e));
+}
 
+bool PierConnectionStore::addKey(const QString &name, const QString &host, int port,
+                                 const QString &username,
+                                 const QString &privateKeyPath,
+                                 const QString &passphraseCredentialId)
+{
+    if (name.isEmpty() || host.isEmpty() || username.isEmpty() || privateKeyPath.isEmpty()) {
+        qWarning() << "PierConnectionStore::addKey rejected empty field";
+        return false;
+    }
+    Entry e;
+    e.name = name;
+    e.host = host;
+    e.port = port > 0 ? port : 22;
+    e.username = username;
+    e.keyPath = privateKeyPath;
+    e.passphraseCredentialId = passphraseCredentialId; // may be empty
+    return appendEntry(std::move(e));
+}
+
+bool PierConnectionStore::appendEntry(Entry e)
+{
     const int row = static_cast<int>(m_entries.size());
     beginInsertRows(QModelIndex(), row, row);
     m_entries.push_back(std::move(e));
@@ -143,12 +170,14 @@ QVariantMap PierConnectionStore::get(int index) const
     }
     const Entry &e = m_entries[static_cast<size_t>(index)];
     QVariantMap m;
-    m["name"]         = e.name;
-    m["host"]         = e.host;
-    m["port"]         = e.port;
-    m["username"]     = e.username;
-    m["credentialId"] = e.credentialId;
-    m["tags"]         = e.tags;
+    m["name"]                   = e.name;
+    m["host"]                   = e.host;
+    m["port"]                   = e.port;
+    m["username"]               = e.username;
+    m["credentialId"]           = e.credentialId;
+    m["keyPath"]                = e.keyPath;
+    m["passphraseCredentialId"] = e.passphraseCredentialId;
+    m["tags"]                   = e.tags;
     return m;
 }
 
@@ -174,15 +203,25 @@ bool PierConnectionStore::ingestJson(const QByteArray &json)
         e.host = obj.value(QStringLiteral("host")).toString();
         e.port = obj.value(QStringLiteral("port")).toInt(22);
         e.username = obj.value(QStringLiteral("user")).toString();
-        // The Rust SshConfig::AuthMethod is a tagged union. Only
-        // the keychain_password variant carries a credential id;
-        // any other variant on disk we treat as "no credential
-        // wired", which means clicking the entry can't reconnect
-        // until M3c3 lands the other auth methods.
+        // The Rust SshConfig::AuthMethod is a tagged union with
+        // a `kind` discriminator. We support two kinds today:
+        //   keychain_password → password lives in OS keychain
+        //   public_key_file   → key path on disk + optional passphrase id
+        // Any other kind is parsed as "no auth wired" and the
+        // sidebar reconnect path falls back to a local tab.
         const QJsonObject auth = obj.value(QStringLiteral("auth")).toObject();
         const QString kind = auth.value(QStringLiteral("kind")).toString();
         if (kind == QStringLiteral("keychain_password")) {
             e.credentialId = auth.value(QStringLiteral("credential_id")).toString();
+        } else if (kind == QStringLiteral("public_key_file")) {
+            e.keyPath = auth.value(QStringLiteral("private_key_path")).toString();
+            // passphrase_credential_id is `Option<String>` in
+            // Rust — serde serializes None as a missing field,
+            // not as null. Either form parses to an empty string.
+            const QJsonValue pp = auth.value(QStringLiteral("passphrase_credential_id"));
+            if (pp.isString()) {
+                e.passphraseCredentialId = pp.toString();
+            }
         }
         // Tags
         const QJsonArray tags = obj.value(QStringLiteral("tags")).toArray();
@@ -201,13 +240,30 @@ bool PierConnectionStore::ingestJson(const QByteArray &json)
 bool PierConnectionStore::persist()
 {
     // Build the exact JSON shape pier_core::connections::ConnectionStore
-    // expects: { version: 1, connections: [ { name, host, port, user,
-    // auth: { kind, credential_id }, connect_timeout_secs, tags } ] }.
+    // expects. Rust's SshConfig::AuthMethod is a tagged union
+    // with serde rename_all = "snake_case", so the discriminator
+    // strings here have to match exactly:
+    //   keychain_password { credential_id }
+    //   public_key_file   { private_key_path, passphrase_credential_id (Option<String>) }
     QJsonArray arr;
     for (const Entry &e : m_entries) {
         QJsonObject auth;
-        auth[QStringLiteral("kind")] = QStringLiteral("keychain_password");
-        auth[QStringLiteral("credential_id")] = e.credentialId;
+        if (!e.keyPath.isEmpty()) {
+            auth[QStringLiteral("kind")] = QStringLiteral("public_key_file");
+            auth[QStringLiteral("private_key_path")] = e.keyPath;
+            // serde Option<String>: None serializes as a missing
+            // field by default, but we explicitly write null for
+            // empty so the file is round-trip-stable for humans
+            // who hand-edit it.
+            if (e.passphraseCredentialId.isEmpty()) {
+                auth[QStringLiteral("passphrase_credential_id")] = QJsonValue::Null;
+            } else {
+                auth[QStringLiteral("passphrase_credential_id")] = e.passphraseCredentialId;
+            }
+        } else {
+            auth[QStringLiteral("kind")] = QStringLiteral("keychain_password");
+            auth[QStringLiteral("credential_id")] = e.credentialId;
+        }
 
         QJsonArray tagArr;
         for (const QString &t : e.tags) {

@@ -38,6 +38,7 @@
 
 #include <atomic>
 #include <cstdint>
+#include <functional>
 #include <memory>
 #include <thread>
 #include <vector>
@@ -127,6 +128,17 @@ public slots:
     bool startSshWithCredential(const QString &host, int port, const QString &user,
                                 const QString &credentialId, int cols, int rows);
 
+    // Spawn a remote shell over SSH authenticated by an
+    // OpenSSH-format private key file. `passphraseCredentialId`
+    // is empty for an unencrypted key, otherwise the keychain
+    // id holding the passphrase. The Rust SSH layer pulls the
+    // passphrase from the keychain at handshake time —
+    // plaintext passphrases never cross the FFI.
+    bool startSshWithKey(const QString &host, int port, const QString &user,
+                         const QString &privateKeyPath,
+                         const QString &passphraseCredentialId,
+                         int cols, int rows);
+
     // Cancel an in-progress SSH handshake. If the worker thread
     // has not yet returned from pier_terminal_new_ssh, we can't
     // interrupt it — instead we flag the request as cancelled, so
@@ -193,33 +205,28 @@ private:
     // status transition notifies QML bindings exactly once.
     void setStatus(SshStatus s);
 
-    // The two pier_terminal_new_ssh* C functions share the same
-    // signature — only the meaning of the 6th argument differs
-    // (plaintext password vs keychain credential id). This
-    // typedef lets the dispatcher accept either via a single
-    // function pointer.
-    using SshConnectFn = PierTerminal *(*)(uint16_t /*cols*/,
-                                           uint16_t /*rows*/,
-                                           const char * /*host*/,
-                                           uint16_t /*port*/,
-                                           const char * /*user*/,
-                                           const char * /*secret_or_id*/,
-                                           void (*)(void *, uint32_t) /*notify*/,
-                                           void * /*user_data*/);
+    // M3c3: factory-style dispatcher.
+    //
+    // The three pier_terminal_new_ssh* C functions don't share
+    // a single signature anymore — the key-auth variant takes
+    // an extra `passphrase_credential_id` argument that the
+    // password / credential variants don't have. Rather than
+    // forcing them into one typedef, the dispatcher takes a
+    // `std::function<PierTerminal*(void*)>` factory closure
+    // that the worker thread invokes with the notify
+    // trampoline's user_data. Each public start* method
+    // captures whatever args it needs (host, port, user,
+    // secret, key path, passphrase id, ...) into its own
+    // closure and passes a fresh closure to the dispatcher.
+    //
+    // Result: the entire 70-line worker-thread + cancel-flag +
+    // queued-result body lives in dispatchSshConnect() exactly
+    // once, regardless of how many auth methods we add.
+    using SshConnectFactory = std::function<PierTerminal *(void *user_data)>;
 
-    // Common dispatch path for both SSH start variants. Sets
-    // status=Connecting, spawns the worker thread, and on
-    // completion routes the result through onSshConnectResult.
-    // `ffiCall` is whichever pier_terminal_new_ssh* function the
-    // caller wants to invoke. `secret` is either the plaintext
-    // password or the credential id; the worker passes it
-    // through to the FFI as-is.
     bool dispatchSshConnect(const QString &targetLabel,
-                            const QString &host, int port,
-                            const QString &user,
-                            const QString &secret,
                             int cols, int rows,
-                            SshConnectFn ffiCall);
+                            SshConnectFactory factory);
 
     PierTerminal *m_handle = nullptr;
     std::vector<PierCell> m_cells;

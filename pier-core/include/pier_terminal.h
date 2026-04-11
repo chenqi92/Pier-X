@@ -135,6 +135,32 @@ const char *pier_terminal_last_ssh_error(void);
  * Identical handle semantics to pier_terminal_new_ssh: the
  * returned opaque PierTerminal* is consumed by the same _write,
  * _resize, _snapshot, _free functions. */
+/* Spawn a new SSH-backed terminal session authenticated by a
+ * private key file rather than a password.
+ *
+ * `private_key_path` is the on-disk location of an OpenSSH-
+ * format private key (e.g. ~/.ssh/id_ed25519).
+ *
+ * `passphrase_credential_id` is either NULL (key is unencrypted)
+ * or a previously stored keychain id whose entry holds the
+ * passphrase. The Rust SSH layer pulls the passphrase from
+ * the keychain at handshake time and discards it immediately;
+ * **plaintext passphrases never cross this FFI in either
+ * direction.**
+ *
+ * Identical handle semantics to pier_terminal_new_ssh. */
+PierTerminal *pier_terminal_new_ssh_key(
+    uint16_t cols,
+    uint16_t rows,
+    const char *host,
+    uint16_t port,
+    const char *user,
+    const char *private_key_path,
+    const char *passphrase_credential_id, /* may be NULL */
+    PierTerminalNotifyFn notify,
+    void *user_data
+);
+
 PierTerminal *pier_terminal_new_ssh_credential(
     uint16_t cols,
     uint16_t rows,

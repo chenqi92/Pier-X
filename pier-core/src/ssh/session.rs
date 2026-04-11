@@ -147,14 +147,21 @@ impl SshSession {
                 };
                 self.try_password_auth(&config.user, &password).await?;
             }
-            AuthMethod::PublicKeyFile { .. } => {
-                return Err(SshError::InvalidConfig(
-                    "PublicKeyFile auth not wired yet (lands with M3c3)".to_string(),
-                ));
+            AuthMethod::PublicKeyFile {
+                private_key_path,
+                passphrase_credential_id,
+            } => {
+                tried.push(format!("publickey ({private_key_path})"));
+                self.try_publickey_auth(
+                    &config.user,
+                    private_key_path,
+                    passphrase_credential_id.as_deref(),
+                )
+                .await?;
             }
             AuthMethod::Agent => {
                 return Err(SshError::InvalidConfig(
-                    "Agent auth not wired yet (lands with M3c3)".to_string(),
+                    "Agent auth not wired yet (lands with M3c3+)".to_string(),
                 ));
             }
         }
@@ -177,6 +184,69 @@ impl SshSession {
         if !ok.success() {
             return Err(SshError::AuthRejected {
                 tried: vec!["password".to_string()],
+            });
+        }
+        Ok(())
+    }
+
+    /// Authenticate via an OpenSSH-format private key file.
+    ///
+    /// `private_key_path` is the on-disk location of the key
+    /// (typically `~/.ssh/id_ed25519`). If the key is encrypted,
+    /// `passphrase_credential_id` must reference a keychain
+    /// entry holding the passphrase — the same shape used by
+    /// [`AuthMethod::KeychainPassword`]. The plaintext
+    /// passphrase only ever lives in this stack frame, never on
+    /// disk and never on the SshConfig struct.
+    async fn try_publickey_auth(
+        &mut self,
+        user: &str,
+        private_key_path: &str,
+        passphrase_credential_id: Option<&str>,
+    ) -> Result<()> {
+        use std::sync::Arc as StdArc;
+
+        // Resolve the passphrase, if any. A missing keychain
+        // entry is treated as a fatal config error rather than
+        // "no passphrase" — if the user told us to look one up
+        // they meant it, and silently falling back to "no
+        // passphrase" would surface as a confusing decode error.
+        let passphrase: Option<String> = match passphrase_credential_id {
+            None => None,
+            Some(id) => match crate::credentials::get(id) {
+                Ok(Some(p)) => Some(p),
+                Ok(None) => {
+                    return Err(SshError::InvalidConfig(format!(
+                        "no keychain entry for passphrase credential_id={id}",
+                    )));
+                }
+                Err(e) => {
+                    return Err(SshError::InvalidConfig(format!(
+                        "keychain lookup failed for passphrase {id}: {e}",
+                    )));
+                }
+            },
+        };
+
+        let key = russh::keys::load_secret_key(private_key_path, passphrase.as_deref())
+            .map_err(|e| {
+                SshError::InvalidConfig(format!(
+                    "failed to load private key {private_key_path}: {e}",
+                ))
+            })?;
+
+        let key_with_hash =
+            russh::keys::PrivateKeyWithHashAlg::new(StdArc::new(key), None);
+
+        // SAFETY: we just Arc::new'd this handle in connect();
+        // we're the only holder at this point so get_mut is fine.
+        let handle = Arc::get_mut(&mut self.handle).expect("unique handle during auth");
+        let ok = handle
+            .authenticate_publickey(user, key_with_hash)
+            .await?;
+        if !ok.success() {
+            return Err(SshError::AuthRejected {
+                tried: vec!["publickey".to_string()],
             });
         }
         Ok(())

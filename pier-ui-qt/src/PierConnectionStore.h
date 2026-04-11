@@ -59,6 +59,8 @@ public:
         PortRole,
         UsernameRole,
         CredentialIdRole,
+        KeyPathRole,
+        PassphraseCredentialIdRole,
         TagsRole
     };
 
@@ -74,11 +76,23 @@ public slots:
     // call again after an external write (rare).
     void reload();
 
-    // Append a new connection and persist atomically. Returns
-    // true on success. The caller is responsible for storing
-    // the matching keychain entry first via PierCredentials.
+    // Append a new password-auth connection and persist
+    // atomically. Returns true on success. The caller is
+    // responsible for storing the matching keychain entry
+    // first via PierCredentials.
     bool add(const QString &name, const QString &host, int port,
              const QString &username, const QString &credentialId);
+
+    // Append a new key-auth connection and persist atomically.
+    // `privateKeyPath` is an absolute on-disk path to the
+    // OpenSSH-format private key file (NOT a secret — paths
+    // can live in plaintext on disk). `passphraseCredentialId`
+    // is empty for an unencrypted key, or a previously stored
+    // keychain id holding the passphrase.
+    bool addKey(const QString &name, const QString &host, int port,
+                const QString &username,
+                const QString &privateKeyPath,
+                const QString &passphraseCredentialId);
 
     // Remove the connection at `index` and persist. Does NOT
     // delete the keychain entry — the caller is responsible
@@ -96,15 +110,25 @@ signals:
     void countChanged();
 
 private:
-    // POD struct mirroring one row of the JSON shape.
+    // POD struct mirroring one row of the JSON shape. Either
+    // `credentialId` is set (KeychainPassword auth) or
+    // `keyPath` is set (PublicKeyFile auth) — never both. The
+    // `passphraseCredentialId` is only meaningful with
+    // `keyPath` set, and is empty for unencrypted keys.
     struct Entry {
         QString name;
         QString host;
         int port = 22;
         QString username;
-        QString credentialId;
+        QString credentialId;          // password-auth: keychain id of password
+        QString keyPath;               // key-auth: absolute path to private key
+        QString passphraseCredentialId; // key-auth: keychain id of passphrase (or empty)
         QStringList tags;
     };
+
+    // Insert + persist + roll-back-on-failure helper used by
+    // both add() and addKey().
+    bool appendEntry(Entry e);
 
     // Serialize the in-memory entries to JSON in the exact
     // shape expected by pier_core::connections::ConnectionStore,

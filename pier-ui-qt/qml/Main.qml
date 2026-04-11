@@ -77,7 +77,9 @@ ApplicationWindow {
             sshPort: 22,
             sshUser: "",
             sshPassword: "",
-            sshCredentialId: ""
+            sshCredentialId: "",
+            sshKeyPath: "",
+            sshPassphraseCredentialId: ""
         }
     }
 
@@ -89,7 +91,9 @@ ApplicationWindow {
             sshPort: conn.port,
             sshUser: conn.username,
             sshPassword: conn.password || "",
-            sshCredentialId: conn.credentialId || ""
+            sshCredentialId: conn.credentialId || "",
+            sshKeyPath: conn.keyPath || "",
+            sshPassphraseCredentialId: conn.passphraseCredentialId || ""
         }
     }
 
@@ -113,15 +117,59 @@ ApplicationWindow {
         }
     }
 
-    // Take a freshly-collected connection from the dialog,
-    // store its password in the OS keychain under a generated
-    // id, persist a no-secrets entry to the connections JSON,
-    // and open a live SSH tab using the credential id.
+    // Take a freshly-collected connection from the dialog and
+    // dispatch by auth method:
     //
-    // The plaintext password lives in this single function call
-    // and inside the worker thread that pier_terminal_new_ssh
-    // uses; nothing on the JS heap retains it after we return.
+    //   "password"    → store password in keychain under a
+    //                   generated id, persist a no-secrets
+    //                   entry, open a tab via credential id.
+    //   "private_key" → if there's a passphrase, store it in
+    //                   keychain under a generated id; persist
+    //                   the key path + (optional) passphrase
+    //                   credential id; open a tab via key auth.
+    //
+    // The plaintext password / passphrase lives only in this
+    // single function call. Nothing on the JS heap retains it
+    // after we return — the keychain owns the secret from then
+    // on, and the Rust SSH layer reads it back at handshake
+    // time.
     function saveAndConnect(conn) {
+        if (conn.authKind === "private_key") {
+            if (!conn.privateKeyPath || conn.privateKeyPath.length === 0) {
+                console.warn("Main: private_key path missing")
+                return
+            }
+            // Store passphrase in keychain only if provided.
+            // Empty passphrase = unencrypted key.
+            var passphraseCredentialId = ""
+            if (conn.passphrase && conn.passphrase.length > 0) {
+                passphraseCredentialId = PierCredentials.freshId()
+                if (!PierCredentials.setEntry(passphraseCredentialId, conn.passphrase)) {
+                    console.warn("Main: failed to save passphrase to keychain")
+                    return
+                }
+            }
+            if (!connectionsModel.addKey(conn.name, conn.host, conn.port,
+                                         conn.username, conn.privateKeyPath,
+                                         passphraseCredentialId)) {
+                if (passphraseCredentialId.length > 0) {
+                    PierCredentials.deleteEntry(passphraseCredentialId)
+                }
+                console.warn("Main: failed to persist key connection")
+                return
+            }
+            openSshTab({
+                name: conn.name,
+                host: conn.host,
+                port: conn.port,
+                username: conn.username,
+                keyPath: conn.privateKeyPath,
+                passphraseCredentialId: passphraseCredentialId
+            })
+            return
+        }
+
+        // Default = password auth.
         const credentialId = PierCredentials.freshId()
         if (!PierCredentials.setEntry(credentialId, conn.password)) {
             console.warn("Main: failed to save credential to keychain")
@@ -148,33 +196,52 @@ ApplicationWindow {
         if (index < 0 || index >= connectionsModel.count)
             return
         const conn = connectionsModel.get(index)
-        if (!conn || !conn.credentialId || conn.credentialId.length === 0) {
-            // Pre-M3c2 entries (or future non-keychain auth
-            // methods) may not have a credential id. Open a
-            // local tab as a fallback rather than failing
-            // silently.
-            openNewTab(conn.name)
+        if (!conn) return
+        // Dispatch on whichever auth field is populated. Key
+        // path takes precedence over credential id (the two
+        // never coexist in practice).
+        if (conn.keyPath && conn.keyPath.length > 0) {
+            openSshTab({
+                name: conn.name,
+                host: conn.host,
+                port: conn.port,
+                username: conn.username,
+                keyPath: conn.keyPath,
+                passphraseCredentialId: conn.passphraseCredentialId || ""
+            })
             return
         }
-        openSshTab({
-            name: conn.name,
-            host: conn.host,
-            port: conn.port,
-            username: conn.username,
-            credentialId: conn.credentialId
-        })
+        if (conn.credentialId && conn.credentialId.length > 0) {
+            openSshTab({
+                name: conn.name,
+                host: conn.host,
+                port: conn.port,
+                username: conn.username,
+                credentialId: conn.credentialId
+            })
+            return
+        }
+        // Unknown auth shape — fall back to a local tab so the
+        // user at least gets some feedback.
+        openNewTab(conn.name)
     }
 
-    // Delete a saved connection AND its keychain entry. Bound
-    // by the sidebar's context-menu / delete button (M3c2 ships
-    // the function; the UI hook lands when the sidebar grows
-    // its delete affordance).
+    // Delete a saved connection AND any keychain entries it
+    // owns. Both auth kinds may have at most one keychain entry
+    // (password id for password auth; passphrase id for an
+    // encrypted key). Wired to the sidebar's hover-revealed
+    // Delete button (M3c3).
     function removeConnection(index) {
         if (index < 0 || index >= connectionsModel.count)
             return
         const conn = connectionsModel.get(index)
-        if (conn && conn.credentialId && conn.credentialId.length > 0) {
-            PierCredentials.deleteEntry(conn.credentialId)
+        if (conn) {
+            if (conn.credentialId && conn.credentialId.length > 0) {
+                PierCredentials.deleteEntry(conn.credentialId)
+            }
+            if (conn.passphraseCredentialId && conn.passphraseCredentialId.length > 0) {
+                PierCredentials.deleteEntry(conn.passphraseCredentialId)
+            }
         }
         connectionsModel.removeAt(index)
     }
@@ -203,6 +270,7 @@ ApplicationWindow {
                 connectionsModel: connectionsModel
                 onAddConnectionRequested: newConnectionDialog.show()
                 onConnectionActivated: (i) => window.activateConnection(i)
+                onConnectionDeleted: (i) => window.removeConnection(i)
                 onOpenLocalTerminalRequested: window.openNewTab()
             }
 
@@ -246,18 +314,21 @@ ApplicationWindow {
                             model: tabModel
                             delegate: TerminalView {
                                 // Bind every backend field from the
-                                // model row. For local tabs the ssh
-                                // fields are empty strings / 22 and
-                                // startWhenSized ignores them. For
-                                // saved-connection tabs sshPassword
-                                // is empty and sshCredentialId is
-                                // set, so the keychain path runs.
+                                // model row. TerminalView's
+                                // _dispatchSshConnect picks the
+                                // right startSsh* path based on
+                                // which fields are populated:
+                                //   keyPath set     → key auth
+                                //   credentialId set → keychain pwd
+                                //   else            → plaintext pwd
                                 backend: model.backend
                                 sshHost: model.sshHost
                                 sshPort: model.sshPort
                                 sshUser: model.sshUser
                                 sshPassword: model.sshPassword
                                 sshCredentialId: model.sshCredentialId
+                                sshKeyPath: model.sshKeyPath
+                                sshPassphraseCredentialId: model.sshPassphraseCredentialId
                             }
                         }
                     }

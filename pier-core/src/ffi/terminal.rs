@@ -431,7 +431,104 @@ pub unsafe extern "C" fn pier_terminal_new_ssh_credential(
     new_ssh_with_auth(cols, rows, host_str, port, user_str, auth, notify, user_data)
 }
 
-/// Shared body of both SSH constructors. Builds an `SshConfig`
+/// Spawn a new SSH-backed terminal session that authenticates
+/// via a private key file rather than a password.
+///
+/// `private_key_path` is the on-disk location of the OpenSSH-
+/// format private key (e.g. `~/.ssh/id_ed25519`).
+/// `passphrase_credential_id` may be NULL if the key is
+/// unencrypted; otherwise it must reference a previously stored
+/// keychain entry containing the passphrase. The Rust SSH layer
+/// looks the passphrase up at handshake time via
+/// [`crate::credentials::get`] and discards it immediately —
+/// **plaintext passphrases never cross this FFI in either
+/// direction.**
+///
+/// Identical handle semantics to [`pier_terminal_new_ssh`]: the
+/// returned opaque `*mut PierTerminal` is consumed by the same
+/// _write, _resize, _snapshot, _free functions.
+///
+/// # Safety
+///
+/// `host`, `user`, `private_key_path` must be valid NUL-terminated
+/// UTF-8 C strings. `passphrase_credential_id` must be either
+/// null or a valid NUL-terminated UTF-8 C string. `notify` must
+/// be a valid function pointer. `user_data` is opaque.
+#[no_mangle]
+pub unsafe extern "C" fn pier_terminal_new_ssh_key(
+    cols: u16,
+    rows: u16,
+    host: *const c_char,
+    port: u16,
+    user: *const c_char,
+    private_key_path: *const c_char,
+    passphrase_credential_id: *const c_char,
+    notify: Option<NotifyFn>,
+    user_data: *mut c_void,
+) -> *mut PierTerminal {
+    use crate::ssh::AuthMethod;
+
+    if host.is_null() || user.is_null() || private_key_path.is_null() {
+        set_last_ssh_error("null argument passed to pier_terminal_new_ssh_key");
+        return ptr::null_mut();
+    }
+    let Some(notify) = notify else {
+        set_last_ssh_error("notify callback must not be null");
+        return ptr::null_mut();
+    };
+
+    // SAFETY: caller contract — pointers are valid NUL-terminated
+    // UTF-8 C strings (passphrase_credential_id may be null,
+    // checked separately below).
+    let host_str = match unsafe { std::ffi::CStr::from_ptr(host) }.to_str() {
+        Ok(s) => s.to_string(),
+        Err(_) => {
+            set_last_ssh_error("host is not valid UTF-8");
+            return ptr::null_mut();
+        }
+    };
+    let user_str = match unsafe { std::ffi::CStr::from_ptr(user) }.to_str() {
+        Ok(s) => s.to_string(),
+        Err(_) => {
+            set_last_ssh_error("user is not valid UTF-8");
+            return ptr::null_mut();
+        }
+    };
+    let key_path_str = match unsafe { std::ffi::CStr::from_ptr(private_key_path) }.to_str() {
+        Ok(s) => s.to_string(),
+        Err(_) => {
+            set_last_ssh_error("private_key_path is not valid UTF-8");
+            return ptr::null_mut();
+        }
+    };
+
+    if host_str.is_empty() || user_str.is_empty() || key_path_str.is_empty() {
+        set_last_ssh_error("host, user and private_key_path must not be empty");
+        return ptr::null_mut();
+    }
+
+    // Optional passphrase credential id. Null → unencrypted key.
+    let passphrase_id_opt: Option<String> = if passphrase_credential_id.is_null() {
+        None
+    } else {
+        match unsafe { std::ffi::CStr::from_ptr(passphrase_credential_id) }.to_str() {
+            Ok("") => None,
+            Ok(s) => Some(s.to_string()),
+            Err(_) => {
+                set_last_ssh_error("passphrase_credential_id is not valid UTF-8");
+                return ptr::null_mut();
+            }
+        }
+    };
+
+    let auth = AuthMethod::PublicKeyFile {
+        private_key_path: key_path_str,
+        passphrase_credential_id: passphrase_id_opt,
+    };
+    new_ssh_with_auth(cols, rows, host_str, port, user_str, auth, notify, user_data)
+}
+
+/// Shared body of all three SSH constructors. Builds an `SshConfig`
 /// with whichever auth method the caller picked, runs the
 /// blocking handshake on the current thread, and either returns
 /// the opaque handle or records a typed error in the
@@ -1014,6 +1111,124 @@ mod tests {
             msg.contains("connect failed"),
             "expected connect-failed prefix, got {msg:?}",
         );
+    }
+
+    // ── pier_terminal_new_ssh_key ─────────────────────────
+
+    #[test]
+    fn new_ssh_key_rejects_null_strings() {
+        let host = CString::new("example.com").unwrap();
+        let user = CString::new("root").unwrap();
+        let key  = CString::new("/tmp/nonexistent.key").unwrap();
+
+        // SAFETY: every call has at least one null string
+        // (host / user / key path / notify), all of which the
+        // function rejects without touching memory.
+        unsafe {
+            assert!(
+                pier_terminal_new_ssh_key(
+                    80, 24,
+                    ptr::null(),
+                    22,
+                    user.as_ptr(),
+                    key.as_ptr(),
+                    ptr::null(),
+                    Some(test_notify),
+                    ptr::null_mut(),
+                )
+                .is_null(),
+                "null host must return NULL",
+            );
+            assert!(
+                pier_terminal_new_ssh_key(
+                    80, 24,
+                    host.as_ptr(),
+                    22,
+                    ptr::null(),
+                    key.as_ptr(),
+                    ptr::null(),
+                    Some(test_notify),
+                    ptr::null_mut(),
+                )
+                .is_null(),
+                "null user must return NULL",
+            );
+            assert!(
+                pier_terminal_new_ssh_key(
+                    80, 24,
+                    host.as_ptr(),
+                    22,
+                    user.as_ptr(),
+                    ptr::null(),
+                    ptr::null(),
+                    Some(test_notify),
+                    ptr::null_mut(),
+                )
+                .is_null(),
+                "null key path must return NULL",
+            );
+            assert!(
+                pier_terminal_new_ssh_key(
+                    80, 24,
+                    host.as_ptr(),
+                    22,
+                    user.as_ptr(),
+                    key.as_ptr(),
+                    ptr::null(),
+                    None,
+                    ptr::null_mut(),
+                )
+                .is_null(),
+                "null notify must return NULL",
+            );
+        }
+    }
+
+    #[test]
+    fn new_ssh_key_passphrase_id_may_be_null() {
+        // The passphrase credential id slot accepts null and
+        // empty string interchangeably ("no passphrase"). Both
+        // forms must reach the SshSession layer; here we only
+        // assert that NEITHER trips the early null-arg
+        // validation. The actual connect attempt then fails on
+        // the unroutable host below — which is what we want,
+        // it proves the validation passed.
+        let host = CString::new("192.0.2.1").unwrap();
+        let user = CString::new("root").unwrap();
+        let key  = CString::new("/tmp/nonexistent-pier-x-key.key").unwrap();
+        let empty = CString::new("").unwrap();
+
+        for passphrase_ptr in [ptr::null(), empty.as_ptr()] {
+            // SAFETY: all string pointers are valid
+            // NUL-terminated strings or null in the case
+            // explicitly handled by the function.
+            let handle = unsafe {
+                pier_terminal_new_ssh_key(
+                    80, 24,
+                    host.as_ptr(),
+                    22,
+                    user.as_ptr(),
+                    key.as_ptr(),
+                    passphrase_ptr,
+                    Some(test_notify),
+                    ptr::null_mut(),
+                )
+            };
+            // Connect must fail (key file is missing) but it
+            // must fail with a real error, not a validation
+            // reject. Either way the handle is null.
+            assert!(handle.is_null());
+
+            // The error message should mention the key file or
+            // the connect, NOT the validation paths.
+            let msg = read_last_ssh_error()
+                .unwrap_or_else(|| String::from("(none)"));
+            assert!(
+                !msg.contains("must not be empty")
+                    && !msg.contains("not valid UTF-8"),
+                "unexpected validation error: {msg:?}",
+            );
+        }
     }
 
     #[test]

@@ -1,4 +1,5 @@
 import QtQuick
+import QtQuick.Dialogs
 import QtQuick.Effects
 import QtQuick.Layouts
 import Pier
@@ -22,6 +23,8 @@ Item {
         portField.text = "22"
         userField.text = ""
         passwordField.text = ""
+        keyPathField.text = ""
+        passphraseField.text = ""
         authCombo.currentIndex = 0
         open = true
         nameField.forceActiveFocus()
@@ -189,14 +192,11 @@ Item {
                 PierComboBox {
                     id: authCombo
                     Layout.fillWidth: true
-                    // M3b wires Password end-to-end; Private key
-                    // and SSH agent exist in the Rust enum but
-                    // aren't plumbed through the dialog yet (M3c).
-                    // Keep them visible so users know what's
-                    // coming, but mark them.
+                    // M3c3: Private key now wired end-to-end.
+                    // SSH agent is still TODO and labeled.
                     options: [qsTr("Password"),
-                              qsTr("Private key (M3c)"),
-                              qsTr("SSH agent (M3c)")]
+                              qsTr("Private key"),
+                              qsTr("SSH agent (M3c4)")]
                     currentIndex: 0
                 }
             }
@@ -223,6 +223,76 @@ Item {
                 }
             }
 
+            // ─── Private key block ───────────────────────
+            // Visible only when "Private key" is selected.
+            // Two fields: an absolute path to the private key
+            // file (with a Browse button that opens a native
+            // file picker) and an optional passphrase (left
+            // empty for unencrypted keys).
+            ColumnLayout {
+                Layout.fillWidth: true
+                spacing: Theme.sp2
+                visible: authCombo.currentIndex === 1
+
+                Text {
+                    text: qsTr("Private key file")
+                    font.family: Theme.fontUi
+                    font.pixelSize: Theme.sizeCaption
+                    font.weight: Theme.weightMedium
+                    color: Theme.textSecondary
+                }
+                RowLayout {
+                    Layout.fillWidth: true
+                    spacing: Theme.sp2
+
+                    PierTextField {
+                        id: keyPathField
+                        Layout.fillWidth: true
+                        placeholder: qsTr("~/.ssh/id_ed25519")
+                    }
+                    GhostButton {
+                        text: qsTr("Browse…")
+                        onClicked: keyFileDialog.open()
+                    }
+                }
+
+                Text {
+                    text: qsTr("Passphrase (optional)")
+                    font.family: Theme.fontUi
+                    font.pixelSize: Theme.sizeCaption
+                    font.weight: Theme.weightMedium
+                    color: Theme.textSecondary
+                    Layout.topMargin: Theme.sp2
+                }
+                PierTextField {
+                    id: passphraseField
+                    Layout.fillWidth: true
+                    placeholder: qsTr("leave empty if unencrypted")
+                    password: true
+                }
+            }
+
+            // Native file picker for the key path field.
+            // The FileDialog remembers its last location across
+            // invocations, so users only have to navigate to
+            // ~/.ssh once per session.
+            FileDialog {
+                id: keyFileDialog
+                title: qsTr("Select SSH private key")
+                fileMode: FileDialog.OpenFile
+                onAccepted: {
+                    // selectedFile is a file:// URL — strip the
+                    // scheme so the path field shows a friendly
+                    // absolute path that the Rust SSH layer can
+                    // pass directly to load_secret_key.
+                    var url = selectedFile.toString()
+                    if (url.startsWith("file://")) {
+                        url = url.substring(7)
+                    }
+                    keyPathField.text = url
+                }
+            }
+
             Item { Layout.preferredHeight: Theme.sp1 }
 
             // Action buttons
@@ -239,14 +309,19 @@ Item {
 
                 PrimaryButton {
                     text: qsTr("Connect")
-                    // Require the minimum set for a Password
-                    // connection. Private key / agent will get
-                    // their own validation in M3c.
+                    // Require name + host + user always; then
+                    // require the auth-method-specific field.
+                    // SSH agent is still M3c4 so the button
+                    // never enables for that combo option.
                     enabled: nameField.text.length > 0
                              && hostField.text.length > 0
                              && userField.text.length > 0
-                             && (authCombo.currentIndex !== 0
-                                 || passwordField.text.length > 0)
+                             && (
+                                (authCombo.currentIndex === 0
+                                    && passwordField.text.length > 0)
+                                || (authCombo.currentIndex === 1
+                                    && keyPathField.text.length > 0)
+                             )
                     onClicked: {
                         const conn = {
                             name: nameField.text,
@@ -256,7 +331,9 @@ Item {
                             authKind: authCombo.currentIndex === 0 ? "password"
                                     : authCombo.currentIndex === 1 ? "private_key"
                                     : "agent",
-                            password: passwordField.text
+                            password: passwordField.text,
+                            privateKeyPath: keyPathField.text,
+                            passphrase: passphraseField.text
                         }
                         root.saved(conn)
                         root.hide()

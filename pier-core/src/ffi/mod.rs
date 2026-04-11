@@ -53,6 +53,6 @@ pub use self::core::{pier_core_build_info, pier_core_has_feature, pier_core_vers
 pub use self::credentials::{pier_credential_delete, pier_credential_set};
 pub use self::terminal::{
     pier_terminal_free, pier_terminal_is_alive, pier_terminal_last_ssh_error, pier_terminal_new,
-    pier_terminal_new_ssh, pier_terminal_new_ssh_credential, pier_terminal_resize,
-    pier_terminal_snapshot, pier_terminal_write, PierCell, PierGridInfo,
+    pier_terminal_new_ssh, pier_terminal_new_ssh_credential, pier_terminal_new_ssh_key,
+    pier_terminal_resize, pier_terminal_snapshot, pier_terminal_write, PierCell, PierGridInfo,
 };

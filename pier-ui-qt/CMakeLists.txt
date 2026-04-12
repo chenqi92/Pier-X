@@ -92,6 +92,7 @@ qt_add_qml_module(pier-x
         qml/shell/TopBar.qml
         qml/shell/TabBar.qml
         qml/shell/Sidebar.qml
+        qml/shell/LocalFilesPane.qml
         qml/shell/StatusBar.qml
         qml/shell/WelcomeView.qml
         qml/shell/CommandPalette.qml

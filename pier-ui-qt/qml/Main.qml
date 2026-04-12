@@ -590,6 +590,7 @@ ApplicationWindow {
                     toastManager.show(qsTr("Connection duplicated"), "success")
                 }
                 onOpenLocalTerminalRequested: window.openNewTab()
+                onOpenMarkdownRequested: (filePath) => window.openMarkdownTab(filePath)
             }
 
             // Main content area

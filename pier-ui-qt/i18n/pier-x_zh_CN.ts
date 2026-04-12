@@ -130,6 +130,14 @@ built on Qt 6 + Rust core.</source>
 <context>
     <name>Sidebar</name>
     <message>
+        <source>Files</source>
+        <translation>文件</translation>
+    </message>
+    <message>
+        <source>Servers</source>
+        <translation>服务器</translation>
+    </message>
+    <message>
         <source>Connections</source>
         <translation>连接</translation>
     </message>
@@ -148,6 +156,34 @@ built on Qt 6 + Rust core.</source>
     <message>
         <source>Open terminal</source>
         <translation>打开终端</translation>
+    </message>
+    <message>
+        <source>Delete “%1”?</source>
+        <translation>删除“%1”？</translation>
+    </message>
+    <message>
+        <source>Cancel</source>
+        <translation>取消</translation>
+    </message>
+    <message>
+        <source>Delete</source>
+        <translation>删除</translation>
+    </message>
+    <message>
+        <source>Right-click a server to open SFTP, duplicate it, or delete it.</source>
+        <translation>右键服务器可打开 SFTP、复制连接或删除。</translation>
+    </message>
+    <message>
+        <source>Connect</source>
+        <translation>连接</translation>
+    </message>
+    <message>
+        <source>SFTP</source>
+        <translation>SFTP</translation>
+    </message>
+    <message>
+        <source>Duplicate</source>
+        <translation>复制</translation>
     </message>
 </context>
 
@@ -322,6 +358,58 @@ built on Qt 6 + Rust core.</source>
         <translation>等宽字体</translation>
     </message>
     <message>
+        <source>UI font size</source>
+        <translation>界面字号</translation>
+    </message>
+    <message>
+        <source>Size</source>
+        <translation>大小</translation>
+    </message>
+    <message>
+        <source>Cursor</source>
+        <translation>光标</translation>
+    </message>
+    <message>
+        <source>Cursor style</source>
+        <translation>光标样式</translation>
+    </message>
+    <message>
+        <source>Block</source>
+        <translation>方块</translation>
+    </message>
+    <message>
+        <source>Beam</source>
+        <translation>竖线</translation>
+    </message>
+    <message>
+        <source>Underline</source>
+        <translation>下划线</translation>
+    </message>
+    <message>
+        <source>Cursor blink</source>
+        <translation>光标闪烁</translation>
+    </message>
+    <message>
+        <source>Scrollback</source>
+        <translation>回滚</translation>
+    </message>
+    <message>
+        <source>Buffer lines</source>
+        <translation>缓冲行数</translation>
+    </message>
+    <message>
+        <source>Bell</source>
+        <translation>响铃</translation>
+    </message>
+    <message>
+        <source>Visual bell</source>
+        <translation>视觉提醒</translation>
+    </message>
+    <message>
+        <source>Audio bell</source>
+        <translation>声音提醒</translation>
+    </message>
+    <message>
         <source>Defaults</source>
         <translation>默认设置</translation>
     </message>
@@ -336,6 +424,58 @@ built on Qt 6 + Rust core.</source>
     <message>
         <source>No connections saved yet.</source>
         <translation>暂无已保存的连接。</translation>
+    </message>
+</context>
+
+<context>
+    <name>LocalFilesPane</name>
+    <message>
+        <source>Files</source>
+        <translation>文件</translation>
+    </message>
+    <message>
+        <source>Home</source>
+        <translation>主目录</translation>
+    </message>
+    <message>
+        <source>Up</source>
+        <translation>上一级</translation>
+    </message>
+    <message>
+        <source>Terminal</source>
+        <translation>终端</translation>
+    </message>
+    <message>
+        <source>Browse local files and click a Markdown or text file to open a preview tab.</source>
+        <translation>浏览本地文件，点击 Markdown 或文本文件即可在右侧打开预览标签。</translation>
+    </message>
+    <message>
+        <source>DIR</source>
+        <translation>目录</translation>
+    </message>
+    <message>
+        <source>FILE</source>
+        <translation>文件</translation>
+    </message>
+    <message>
+        <source>This folder is empty.</source>
+        <translation>此文件夹为空。</translation>
+    </message>
+    <message>
+        <source>Choose another directory or open a local terminal.</source>
+        <translation>可以切换到其他目录，或直接打开本地终端。</translation>
+    </message>
+</context>
+
+<context>
+    <name>TerminalView</name>
+    <message>
+        <source>Saved credentials were not found in the system keychain. Re-enter the password or update this connection profile.</source>
+        <translation>系统钥匙串中找不到已保存的凭据。请重新输入密码，或更新这条连接配置。</translation>
+    </message>
+    <message>
+        <source>Unknown error</source>
+        <translation>未知错误</translation>
     </message>
 </context>
 

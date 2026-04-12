@@ -11,6 +11,8 @@ Item {
 
     property bool open: false
     property var connectionsModel: null
+    readonly property int navWidth: 172
+    readonly property int contentColumnWidth: 540
 
     signal closed
 
@@ -54,8 +56,8 @@ Item {
     Rectangle {
         id: dialog
         anchors.centerIn: parent
-        width: 720
-        height: 520
+        width: 760
+        height: 540
 
         // Entry animation — scale-up + fade-in
         scale: 0.96
@@ -138,7 +140,7 @@ Item {
 
                 // Section nav
                 Rectangle {
-                    Layout.preferredWidth: 180
+                    Layout.preferredWidth: root.navWidth
                     Layout.fillHeight: true
                     color: Theme.bgPanel
 
@@ -215,7 +217,7 @@ Item {
                     ScrollView {
                         clip: true
                         ColumnLayout {
-                            width: parent.width
+                            width: Math.min(parent.width, root.contentColumnWidth)
                             spacing: Theme.sp4
 
                             Item { Layout.preferredHeight: Theme.sp4 }
@@ -273,7 +275,7 @@ Item {
                     ScrollView {
                         clip: true
                         ColumnLayout {
-                            width: parent.width
+                            width: Math.min(parent.width, root.contentColumnWidth)
                             spacing: Theme.sp4
 
                             Item { Layout.preferredHeight: Theme.sp4 }
@@ -401,7 +403,7 @@ Item {
                     ScrollView {
                         clip: true
                         ColumnLayout {
-                            width: parent.width
+                            width: Math.min(parent.width, root.contentColumnWidth)
                             spacing: Theme.sp4
 
                             Item { Layout.preferredHeight: Theme.sp4 }
@@ -522,7 +524,7 @@ Item {
                     ScrollView {
                         clip: true
                         ColumnLayout {
-                            width: parent.width
+                            width: Math.min(parent.width, root.contentColumnWidth)
                             spacing: Theme.sp4
 
                             Item { Layout.preferredHeight: Theme.sp4 }

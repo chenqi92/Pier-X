@@ -130,6 +130,17 @@ Rectangle {
                         kind, secret, extra)
     }
 
+    function _friendlySshError(message) {
+        var text = String(message || "")
+        if (text.indexOf("no keychain entry for credential_id=") >= 0) {
+            return qsTr("Saved credentials were not found in the system keychain. Re-enter the password or update this connection profile.")
+        }
+        if (text.indexOf("invalid ssh config:") === 0) {
+            return text.replace(/^invalid ssh config:\s*/, "")
+        }
+        return text
+    }
+
     // Service pill strip — shown only when the SSH session is
     // Connected and the detector has at least one entry. Sits
     // above the grid, pushes the grid down by (pill height +
@@ -713,7 +724,7 @@ Rectangle {
             Text {
                 width: card.width - Theme.sp5 * 2
                 text: session.sshErrorMessage.length > 0
-                      ? session.sshErrorMessage
+                      ? root._friendlySshError(session.sshErrorMessage)
                       : qsTr("Unknown error")
                 wrapMode: Text.Wrap
                 horizontalAlignment: Text.AlignHCenter

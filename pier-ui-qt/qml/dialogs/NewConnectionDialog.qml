@@ -102,45 +102,72 @@ Item {
             onPressed: (mouse) => mouse.accepted = true
         }
 
-        ScrollView {
+        ColumnLayout {
             anchors.fill: parent
-            anchors.margins: Theme.sp4
-            clip: true
-            contentWidth: availableWidth
+            spacing: 0
 
-            ColumnLayout {
-                id: form
-                width: parent.width
-                spacing: Theme.sp3
-
-            // Title
-            RowLayout {
+            // Title bar
+            Rectangle {
                 Layout.fillWidth: true
-                spacing: Theme.sp2
+                Layout.preferredHeight: 44
+                color: Theme.bgPanel
+                radius: Theme.radiusLg // For top corners
 
-                ColumnLayout {
-                    Layout.fillWidth: true
-                    spacing: Theme.sp0_5
+                // Bottom corners should be square to blend with content
+                Rectangle {
+                    anchors.bottom: parent.bottom
+                    anchors.left: parent.left
+                    anchors.right: parent.right
+                    height: Theme.radiusLg
+                    color: Theme.bgPanel
+                }
 
-                    SectionLabel { text: qsTr("Connection") }
+                Behavior on color { ColorAnimation { duration: Theme.durNormal } }
+
+                RowLayout {
+                    anchors.fill: parent
+                    anchors.leftMargin: Theme.sp4
+                    anchors.rightMargin: Theme.sp2
 
                     Text {
+                        Layout.fillWidth: true
                         text: qsTr("New SSH connection")
                         font.family: Theme.fontUi
-                        font.pixelSize: Theme.sizeH2
+                        font.pixelSize: Theme.sizeH3
                         font.weight: Theme.weightMedium
                         color: Theme.textPrimary
-
                         Behavior on color { ColorAnimation { duration: Theme.durNormal } }
+                    }
+
+                    IconButton {
+                        icon: "x"
+                        tooltip: qsTr("Close")
+                        onClicked: { root.cancelled(); root.hide() }
                     }
                 }
 
-                IconButton {
-                    icon: "x"
-                    tooltip: qsTr("Close")
-                    onClicked: { root.cancelled(); root.hide() }
+                Rectangle {
+                    anchors.bottom: parent.bottom
+                    anchors.left: parent.left
+                    anchors.right: parent.right
+                    height: 1
+                    color: Theme.borderSubtle
                 }
             }
+
+            ScrollView {
+                Layout.fillWidth: true
+                Layout.fillHeight: true
+                clip: true
+                contentWidth: availableWidth
+                // Removed anchors.margins as it conflicts with Layouts
+
+                ColumnLayout {
+                    id: form
+                    width: parent.width
+                    // We'll add margins via layout margins to keep it clear
+                    Layout.margins: Theme.sp4
+                    spacing: Theme.sp3
 
             Separator { Layout.fillWidth: true; Layout.topMargin: Theme.sp1 }
 
@@ -405,7 +432,8 @@ Item {
                     }
                 }
             }
-            }
+        } // ColumnLayout (form)
         } // ScrollView
-    }
+        } // Outer ColumnLayout
+    } // Dialog card
 }

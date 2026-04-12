@@ -46,6 +46,10 @@ ApplicationWindow {
         sequences: ["Ctrl+R", "Meta+R"]
         onActivated: commandHistoryDialog.open()
     }
+    Shortcut {
+        sequences: ["Ctrl+Shift+G", "Meta+Shift+G"]
+        onActivated: window.toggleGitPanel()
+    }
 
     // ─────────────────────────────────────────────────────
     // App-wide models
@@ -68,6 +72,7 @@ ApplicationWindow {
     }
 
     property int currentTabIndex: 0
+    property bool gitPanelVisible: false
     signal writeToActiveTerminal(string text)
 
     // Every tabModel row carries the full schema, with unused
@@ -193,6 +198,10 @@ ApplicationWindow {
             }
             tabModel.setProperty(currentTabIndex, "rpTool", tool)
         }
+    }
+
+    function toggleGitPanel() {
+        window.gitPanelVisible = !window.gitPanelVisible
     }
 
     function openMarkdownTab(filePath) {
@@ -398,13 +407,16 @@ ApplicationWindow {
             onSettingsRequested: settingsDialog.show()
         }
 
-        RowLayout {
+        SplitView {
             Layout.fillWidth: true
             Layout.fillHeight: true
-            spacing: 0
+            orientation: Qt.Horizontal
 
             Sidebar {
-                Layout.fillHeight: true
+                id: sidebar
+                SplitView.preferredWidth: 220
+                SplitView.minimumWidth: 150
+                // Use a visible property mapped to a toggled state if needed
                 connectionsModel: connectionsModel
                 onAddConnectionRequested: newConnectionDialog.show()
                 onConnectionActivated: (i) => window.activateConnection(i)
@@ -431,10 +443,10 @@ ApplicationWindow {
                 onOpenMarkdownRequested: (filePath) => window.openMarkdownTab(filePath)
             }
 
-            // Main content area
+            // Central Area + Right Panel wrapper
+            // Needs to be wrapped in an Item so WelcomeView overlays correctly without breaking SplitView
             Item {
-                Layout.fillWidth: true
-                Layout.fillHeight: true
+                SplitView.fillWidth: true
 
                 WelcomeView {
                     anchors.fill: parent
@@ -607,6 +619,14 @@ ApplicationWindow {
                             }
                         }
                     }
+
+                    // Git Panel — independent of SSH sessions
+                    GitPanelView {
+                        SplitView.preferredWidth: 360
+                        visible: window.gitPanelVisible
+                        repoPath: "."
+                        onClosePanelRequested: window.toggleGitPanel()
+                    }
                 }
             }
         }
@@ -693,6 +713,13 @@ ApplicationWindow {
                 shortcut: "",
                 action: function() {
                     window.toggleRightPanelTool("docker")
+                }
+            },
+            {
+                title: qsTr("Git panel"),
+                shortcut: "Ctrl+Shift+G",
+                action: function() {
+                    window.toggleGitPanel()
                 }
             },
             {

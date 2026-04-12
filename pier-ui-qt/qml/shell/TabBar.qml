@@ -1,5 +1,6 @@
 import QtQuick
 import QtQuick.Layouts
+import QtQuick.Controls
 import Pier
 
 // Horizontal tab bar — TerminalTab repeater + new tab button.
@@ -27,12 +28,17 @@ Rectangle {
 
         // Tab row — Repeater in a Row so we can control ordering
         // and implement drag-to-reorder.
-        Item {
+        Flickable {
             id: tabContainer
             Layout.fillHeight: true
             Layout.preferredWidth: tabRow.width
             Layout.maximumWidth: parent.width - 40
             clip: true
+            contentWidth: tabRow.width
+            contentHeight: height
+            flickableDirection: Flickable.HorizontalFlick
+            boundsBehavior: Flickable.StopAtBounds
+            ScrollBar.horizontal: ScrollBar { height: 0; active: false; visible: false } // Hide default scrollbar but keep functionality
 
             property int dragFromIndex: -1    // source index being dragged
             property int dragToIndex: -1      // visual drop target
@@ -40,8 +46,7 @@ Rectangle {
 
             Row {
                 id: tabRow
-                anchors.top: parent.top
-                anchors.bottom: parent.bottom
+                height: tabContainer.height
                 spacing: 0
 
                 Repeater {

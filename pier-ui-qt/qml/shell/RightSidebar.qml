@@ -34,6 +34,10 @@ Rectangle {
     property string pgUser: ""
     property string pgDatabase: ""
 
+    // Content area expanded/collapsed. The tool strip is always
+    // visible; only the content pane hides on collapse.
+    property bool contentExpanded: true
+
     signal closePanelRequested()
 
     readonly property bool hasRemoteContext: root.activeBackend === "ssh" || root.sshHost.length > 0
@@ -84,13 +88,13 @@ Rectangle {
             Layout.fillWidth: true
             Layout.fillHeight: true
             spacing: Theme.sp2
+            visible: root.contentExpanded
 
             Rectangle {
                 Layout.fillWidth: true
-                Layout.preferredHeight: 60
-                color: Theme.bgSurface
-                border.color: Theme.borderSubtle
-                border.width: 1
+                Layout.preferredHeight: 48
+                color: Theme.bgPanel
+                border.width: 0
 
                 RowLayout {
                     anchors.fill: parent
@@ -114,7 +118,7 @@ Rectangle {
                         Text {
                             text: root.panelTitle
                             font.family: Theme.fontUi
-                            font.pixelSize: Theme.sizeBody
+                            font.pixelSize: Theme.sizeBodyLg
                             font.weight: Theme.weightSemibold
                             color: Theme.textPrimary
                             elide: Text.ElideRight
@@ -131,22 +135,28 @@ Rectangle {
                     }
 
                     IconButton {
+                        compact: true
                         icon: "x"
-                        tooltip: qsTr("Close panel")
-                        onClicked: root.closePanelRequested()
+                        tooltip: qsTr("Collapse panel")
+                        onClicked: root.contentExpanded = false
                     }
+                }
+
+                Rectangle {
+                    anchors.left: parent.left
+                    anchors.right: parent.right
+                    anchors.bottom: parent.bottom
+                    height: 1
+                    color: Theme.borderSubtle
                 }
             }
 
             Rectangle {
                 Layout.fillWidth: true
                 Layout.fillHeight: true
-                Layout.leftMargin: Theme.sp2
-                Layout.bottomMargin: Theme.sp2
-                color: Theme.bgSurface
-                border.color: Theme.borderSubtle
-                border.width: 1
-                radius: Theme.radiusLg
+                color: Theme.bgPanel
+                border.width: 0
+                radius: 0
 
                 StackLayout {
                     anchors.fill: parent
@@ -175,7 +185,7 @@ Rectangle {
                             anchors.centerIn: parent
                             width: Math.min(parent.width - Theme.sp8, 300)
                             height: 156
-                            radius: Theme.radiusLg
+                            radius: Theme.radiusMd
                             color: Theme.bgInset
                             border.color: Theme.borderSubtle
                             border.width: 1
@@ -306,7 +316,7 @@ Rectangle {
                     tooltip: qsTr("Git")
                     active: root.activeTool === "git"
                     enabled: true
-                    onClicked: root.activeTool = "git"
+                    onClicked: { root.activeTool = "git"; root.contentExpanded = true }
                 }
 
                 Rectangle {
@@ -321,7 +331,7 @@ Rectangle {
                     tooltip: qsTr("Server Monitor")
                     active: root.activeTool === "monitor"
                     enabled: root.toolAvailable("monitor")
-                    onClicked: root.activeTool = "monitor"
+                    onClicked: { root.activeTool = "monitor"; root.contentExpanded = true }
                 }
 
                 ToolStripButton {
@@ -329,7 +339,7 @@ Rectangle {
                     tooltip: qsTr("Docker")
                     active: root.activeTool === "docker"
                     enabled: root.toolAvailable("docker")
-                    onClicked: root.activeTool = "docker"
+                    onClicked: { root.activeTool = "docker"; root.contentExpanded = true }
                 }
 
                 ToolStripButton {
@@ -337,7 +347,7 @@ Rectangle {
                     tooltip: qsTr("MySQL")
                     active: root.activeTool === "mysql"
                     enabled: root.toolAvailable("mysql")
-                    onClicked: root.activeTool = "mysql"
+                    onClicked: { root.activeTool = "mysql"; root.contentExpanded = true }
                 }
 
                 ToolStripButton {
@@ -345,7 +355,7 @@ Rectangle {
                     tooltip: qsTr("Redis")
                     active: root.activeTool === "redis"
                     enabled: root.toolAvailable("redis")
-                    onClicked: root.activeTool = "redis"
+                    onClicked: { root.activeTool = "redis"; root.contentExpanded = true }
                 }
 
                 ToolStripButton {
@@ -353,7 +363,7 @@ Rectangle {
                     tooltip: qsTr("Logs")
                     active: root.activeTool === "log"
                     enabled: root.toolAvailable("log")
-                    onClicked: root.activeTool = "log"
+                    onClicked: { root.activeTool = "log"; root.contentExpanded = true }
                 }
 
                 ToolStripButton {
@@ -361,17 +371,17 @@ Rectangle {
                     tooltip: qsTr("SFTP")
                     active: root.activeTool === "sftp"
                     enabled: root.toolAvailable("sftp")
-                    onClicked: root.activeTool = "sftp"
+                    onClicked: { root.activeTool = "sftp"; root.contentExpanded = true }
                 }
 
                 Item { Layout.fillHeight: true }
 
                 ToolStripButton {
-                    icon: "x"
-                    tooltip: qsTr("Close panel")
+                    icon: root.contentExpanded ? "x" : "plus"
+                    tooltip: root.contentExpanded ? qsTr("Collapse panel") : qsTr("Expand panel")
                     active: false
                     enabled: true
-                    onClicked: root.closePanelRequested()
+                    onClicked: root.contentExpanded = !root.contentExpanded
                 }
             }
         }
@@ -384,8 +394,8 @@ Rectangle {
         signal clicked()
 
         Layout.alignment: Qt.AlignHCenter
-        Layout.preferredWidth: 30
-        Layout.preferredHeight: 30
+        Layout.preferredWidth: 34
+        Layout.preferredHeight: 34
         radius: Theme.radiusMd
         color: active ? Theme.bgSelected : stripMouse.containsMouse ? Theme.bgHover : "transparent"
         border.color: active ? Theme.borderFocus : "transparent"

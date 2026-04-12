@@ -111,11 +111,15 @@ Rectangle {
             }
 
             GhostButton {
+                compact: true
+                minimumWidth: 0
                 text: root.showSource ? qsTr("Source ✓") : qsTr("Source")
                 onClicked: root.showSource = !root.showSource
             }
 
             GhostButton {
+                compact: true
+                minimumWidth: 0
                 text: qsTr("↻ Reload")
                 onClicked: root._reload()
             }

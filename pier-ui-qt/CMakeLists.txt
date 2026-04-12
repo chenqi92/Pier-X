@@ -42,6 +42,77 @@ set_source_files_properties(qml/Theme.qml
     PROPERTIES QT_QML_SINGLETON_TYPE TRUE
 )
 
+set(PIER_QML_FILES
+    qml/Main.qml
+    qml/Theme.qml
+    qml/components/PrimaryButton.qml
+    qml/components/GhostButton.qml
+    qml/components/IconButton.qml
+    qml/components/PierTextField.qml
+    qml/components/PierComboBox.qml
+    qml/components/SegmentedControl.qml
+    qml/components/ToggleSwitch.qml
+    qml/components/PierToolTip.qml
+    qml/components/Card.qml
+    qml/components/StatusPill.qml
+    qml/components/SectionLabel.qml
+    qml/components/Separator.qml
+    qml/components/TerminalTab.qml
+    qml/components/ToastManager.qml
+    qml/shell/TopBar.qml
+    qml/shell/TabBar.qml
+    qml/shell/Sidebar.qml
+    qml/shell/LocalFilesPane.qml
+    qml/shell/StatusBar.qml
+    qml/shell/WelcomeView.qml
+    qml/shell/CommandPalette.qml
+    qml/shell/RightPanel.qml
+    qml/shell/RightSidebar.qml
+    qml/dialogs/NewConnectionDialog.qml
+    qml/dialogs/SettingsDialog.qml
+    qml/dialogs/CommandHistoryDialog.qml
+    qml/views/TerminalView.qml
+    qml/views/SftpBrowserView.qml
+    qml/views/RedisBrowserView.qml
+    qml/views/MySqlBrowserView.qml
+    qml/views/PostgresPanelView.qml
+    qml/views/LogViewerView.qml
+    qml/views/DockerPanelView.qml
+    qml/views/MarkdownPreviewView.qml
+    qml/views/GitPanelView.qml
+    qml/views/ServerMonitorView.qml
+)
+
+set(PIER_QML_RESOURCES
+    resources/icons/pier.png
+    resources/icons/lucide/chevron-down.svg
+    resources/icons/lucide/terminal.svg
+    resources/icons/lucide/file-text.svg
+    resources/icons/lucide/x.svg
+    resources/icons/lucide/refresh-cw.svg
+    resources/icons/lucide/link.svg
+    resources/icons/lucide/settings.svg
+    resources/icons/lucide/plus.svg
+    resources/icons/lucide/loader.svg
+    resources/icons/lucide/sun.svg
+    resources/icons/lucide/command.svg
+    resources/icons/lucide/arrow-left.svg
+    resources/icons/lucide/folder.svg
+    resources/icons/lucide/moon.svg
+    resources/icons/lucide/git-branch.svg
+    resources/icons/lucide/database.svg
+    resources/icons/lucide/container.svg
+    resources/icons/lucide/file-code.svg
+    resources/icons/lucide/server.svg
+    resources/icons/lucide/layers.svg
+    resources/icons/lucide/search.svg
+    resources/fonts/Inter-Medium.ttf
+    resources/fonts/JetBrainsMono-Regular.ttf
+    resources/fonts/Inter-Regular.ttf
+    resources/fonts/JetBrainsMono-Medium.ttf
+    resources/fonts/Inter-SemiBold.ttf
+)
+
 qt_add_qml_module(pier-x
     URI Pier
     VERSION 1.0
@@ -88,72 +159,9 @@ qt_add_qml_module(pier-x
         src/PierServerMonitor.h
         src/PierServerMonitor.cpp
     QML_FILES
-        qml/Main.qml
-        qml/Theme.qml
-        qml/components/PrimaryButton.qml
-        qml/components/GhostButton.qml
-        qml/components/IconButton.qml
-        qml/components/PierTextField.qml
-        qml/components/PierComboBox.qml
-        qml/components/SegmentedControl.qml
-        qml/components/ToggleSwitch.qml
-        qml/components/PierToolTip.qml
-        qml/components/Card.qml
-        qml/components/StatusPill.qml
-        qml/components/SectionLabel.qml
-        qml/components/Separator.qml
-        qml/components/TerminalTab.qml
-        qml/components/ToastManager.qml
-        qml/shell/TopBar.qml
-        qml/shell/TabBar.qml
-        qml/shell/Sidebar.qml
-        qml/shell/LocalFilesPane.qml
-        qml/shell/StatusBar.qml
-        qml/shell/WelcomeView.qml
-        qml/shell/CommandPalette.qml
-        qml/shell/RightPanel.qml
-        qml/shell/RightSidebar.qml
-        qml/dialogs/NewConnectionDialog.qml
-        qml/dialogs/SettingsDialog.qml
-        qml/dialogs/CommandHistoryDialog.qml
-        qml/views/TerminalView.qml
-        qml/views/SftpBrowserView.qml
-        qml/views/RedisBrowserView.qml
-        qml/views/MySqlBrowserView.qml
-        qml/views/PostgresPanelView.qml
-        qml/views/LogViewerView.qml
-        qml/views/DockerPanelView.qml
-        qml/views/MarkdownPreviewView.qml
-        qml/views/GitPanelView.qml
-        qml/views/ServerMonitorView.qml
+        ${PIER_QML_FILES}
     RESOURCES
-        resources/icons/pier.png
-        resources/icons/lucide/chevron-down.svg
-        resources/icons/lucide/terminal.svg
-        resources/icons/lucide/file-text.svg
-        resources/icons/lucide/x.svg
-        resources/icons/lucide/refresh-cw.svg
-        resources/icons/lucide/link.svg
-        resources/icons/lucide/settings.svg
-        resources/icons/lucide/plus.svg
-        resources/icons/lucide/loader.svg
-        resources/icons/lucide/sun.svg
-        resources/icons/lucide/command.svg
-        resources/icons/lucide/arrow-left.svg
-        resources/icons/lucide/folder.svg
-        resources/icons/lucide/moon.svg
-        resources/icons/lucide/git-branch.svg
-        resources/icons/lucide/database.svg
-        resources/icons/lucide/container.svg
-        resources/icons/lucide/file-code.svg
-        resources/icons/lucide/server.svg
-        resources/icons/lucide/layers.svg
-        resources/icons/lucide/search.svg
-        resources/fonts/Inter-Medium.ttf
-        resources/fonts/JetBrainsMono-Regular.ttf
-        resources/fonts/Inter-Regular.ttf
-        resources/fonts/JetBrainsMono-Medium.ttf
-        resources/fonts/Inter-SemiBold.ttf
+        ${PIER_QML_RESOURCES}
 )
 
 # ─── i18n ─────────────────────────────────────────────
@@ -162,6 +170,8 @@ qt_add_qml_module(pier-x
 qt_add_translations(pier-x
     TS_FILES
         i18n/pier-x_zh_CN.ts
+    SOURCES
+        ${PIER_QML_FILES}
     RESOURCE_PREFIX /i18n
 )
 

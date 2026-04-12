@@ -38,6 +38,7 @@
 #include <QObject>
 #include <QPointer>
 #include <QString>
+#include <QVariantList>
 #include <qqml.h>
 
 #include <atomic>
@@ -85,6 +86,11 @@ public:
     Q_PROPERTY(QString inspectTarget READ inspectTarget NOTIFY inspectStateChanged FINAL)
     Q_PROPERTY(QString inspectJson READ inspectJson NOTIFY inspectStateChanged FINAL)
 
+    // Images / Volumes / Networks
+    Q_PROPERTY(QVariantList images READ images NOTIFY imagesChanged FINAL)
+    Q_PROPERTY(QVariantList volumes READ volumes NOTIFY volumesChanged FINAL)
+    Q_PROPERTY(QVariantList networks READ networks NOTIFY networksChanged FINAL)
+
     explicit PierDockerClientModel(QObject *parent = nullptr);
     ~PierDockerClientModel() override;
 
@@ -105,6 +111,9 @@ public:
     QString inspectError() const { return m_inspectError; }
     QString inspectTarget() const { return m_inspectTarget; }
     QString inspectJson() const { return m_inspectJson; }
+    QVariantList images() const { return m_images; }
+    QVariantList volumes() const { return m_volumes; }
+    QVariantList networks() const { return m_networks; }
 
     void setShowStopped(bool v);
 
@@ -129,8 +138,15 @@ public slots:
     void inspect(const QString &id);
     void clearInspect();
 
-    /// Shut down. Cancels any in-flight op and closes the
-    /// handle. Safe to call more than once.
+    /// Image/Volume/Network management
+    void refreshImages();
+    void removeImage(const QString &id, bool force);
+    void refreshVolumes();
+    void removeVolume(const QString &name);
+    void refreshNetworks();
+    void removeNetwork(const QString &name);
+
+    /// Shut down.
     void stop();
 
 signals:
@@ -139,6 +155,9 @@ signals:
     void showStoppedChanged();
     void containerCountChanged();
     void inspectStateChanged();
+    void imagesChanged();
+    void volumesChanged();
+    void networksChanged();
     /// Fired once an action slot completes so the UI can
     /// show a transient toast without binding to the busy
     /// property transitions.
@@ -149,6 +168,9 @@ private slots:
     void onListResult(quint64 requestId, const QString &json, const QString &error);
     void onActionResult(quint64 requestId, bool ok, const QString &message);
     void onInspectResult(quint64 requestId, const QString &id, const QString &json, const QString &error);
+    void onImagesResult(quint64 requestId, const QString &json);
+    void onVolumesResult(quint64 requestId, const QString &json);
+    void onNetworksResult(quint64 requestId, const QString &json);
 
 private:
     void setStatus(Status s);
@@ -185,6 +207,10 @@ private:
     QString m_inspectError;
     QString m_inspectTarget;
     QString m_inspectJson;
+
+    QVariantList m_images;
+    QVariantList m_volumes;
+    QVariantList m_networks;
 
     quint64 m_nextRequestId = 0;
     quint64 m_nextInspectRequestId = 0;

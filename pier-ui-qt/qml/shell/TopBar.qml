@@ -50,13 +50,13 @@ Rectangle {
 
     RowLayout {
         anchors.left: parent.left
-        anchors.leftMargin: Theme.sp4 + root.trafficLightInset
+        anchors.leftMargin: Theme.sp3 + root.trafficLightInset
         anchors.verticalCenter: parent.verticalCenter
         spacing: Theme.sp2
 
         Rectangle {
-            width: 16
-            height: 16
+            width: 18
+            height: 18
             radius: 5
             color: Theme.accentMuted
             border.color: Theme.borderDefault
@@ -64,8 +64,8 @@ Rectangle {
 
             Rectangle {
                 anchors.centerIn: parent
-                width: 6
-                height: 6
+                width: 7
+                height: 7
                 radius: 3
                 color: Theme.accent
             }
@@ -88,7 +88,7 @@ Rectangle {
         Text {
             text: root.contextTitle
             font.family: Theme.fontUi
-            font.pixelSize: Theme.sizeCaption
+            font.pixelSize: Theme.sizeSmall
             font.weight: Theme.weightMedium
             color: Theme.textTertiary
             elide: Text.ElideMiddle
@@ -100,12 +100,12 @@ Rectangle {
         id: commandPaletteButton
         anchors.horizontalCenter: parent.horizontalCenter
         anchors.verticalCenter: parent.verticalCenter
-        width: Math.min(360,
-                        Math.max(250,
+        width: Math.min(400,
+                        Math.max(300,
                                  paletteLabel.implicitWidth
                                  + shortcutText.implicitWidth
                                  + Theme.sp10))
-        height: Theme.controlHeight
+        height: Theme.fieldHeight
         radius: Theme.radiusPill
         color: paletteMouse.pressed ? Theme.bgActive
              : paletteMouse.containsMouse ? Theme.bgHover

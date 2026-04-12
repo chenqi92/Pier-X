@@ -127,7 +127,7 @@ Rectangle {
 
     ColumnLayout {
         anchors.fill: parent
-        anchors.margins: Theme.sp3
+        anchors.margins: Theme.sp2
         spacing: Theme.sp2
 
         // ─── Top bar ─────────────────────────────────────
@@ -158,7 +158,7 @@ Rectangle {
             Rectangle {
                 id: stoppedToggle
                 implicitWidth: stoppedLabel.implicitWidth + Theme.sp3 * 2
-                implicitHeight: 24
+                implicitHeight: 22
                 radius: Theme.radiusPill
                 color: stoppedMouse.containsMouse
                        ? Theme.bgHover
@@ -197,6 +197,8 @@ Rectangle {
             }
 
             GhostButton {
+                compact: true
+                minimumWidth: 0
                 text: qsTr("↻ Refresh")
                 enabled: client.status === PierDockerClient.Connected
                 onClicked: client.refresh()
@@ -247,7 +249,7 @@ Rectangle {
                             root.inspectId === row.containerId
 
                         width: ListView.view.width
-                        implicitHeight: 32
+                        implicitHeight: 34
                         color: row.confirming
                                ? Qt.rgba(Theme.statusError.r, Theme.statusError.g, Theme.statusError.b, 0.08)
                                : (row.selected
@@ -394,6 +396,8 @@ Rectangle {
                                 elide: Text.ElideRight
                             }
                             GhostButton {
+                                compact: true
+                                minimumWidth: 0
                                 text: qsTr("Cancel")
                                 onClicked: root.pendingDeleteId = ""
                             }
@@ -465,12 +469,16 @@ Rectangle {
                         Item { Layout.fillWidth: true }
 
                         GhostButton {
+                            compact: true
+                            minimumWidth: 0
                             text: qsTr("Refresh")
                             enabled: !client.inspectBusy && root.inspectId.length > 0
                             onClicked: client.inspect(root.inspectId)
                         }
 
                         GhostButton {
+                            compact: true
+                            minimumWidth: 0
                             text: qsTr("Close")
                             onClicked: root._clearInspect()
                         }
@@ -481,7 +489,7 @@ Rectangle {
                         color: Theme.bgSurface
                         border.color: Theme.borderSubtle
                         border.width: 1
-                        radius: Theme.radiusSm
+                radius: Theme.radiusSm
                         implicitHeight: inspectMeta.implicitHeight + Theme.sp3 * 2
 
                         Behavior on color        { ColorAnimation { duration: Theme.durNormal } }
@@ -729,6 +737,8 @@ Rectangle {
                     Item { Layout.fillWidth: true }
 
                     GhostButton {
+                        compact: true
+                        minimumWidth: 0
                         text: qsTr("Cancel")
                         onClicked: client.stop()
                     }
@@ -746,7 +756,7 @@ Rectangle {
     // Small pill with a single glyph + hover tooltip.
     // Kept in-file because it's only used by this view and
     // lives under the row layout's hit target.
-    component DockerRowButton : Rectangle {
+component DockerRowButton : Rectangle {
         id: rowBtn
         required property string glyph
         required property string tooltip
@@ -754,20 +764,22 @@ Rectangle {
         property bool active: false
         signal clicked()
 
-        implicitWidth: 22
-        implicitHeight: 22
+        implicitWidth: 20
+        implicitHeight: 20
         radius: Theme.radiusSm
         color: rowBtn.active
                ? Theme.accentSubtle
                : (btnMouse.containsMouse
-                  ? (rowBtn.danger ? Theme.statusError : Theme.accentSubtle)
+                  ? (rowBtn.danger
+                     ? Qt.rgba(Theme.statusError.r, Theme.statusError.g, Theme.statusError.b, 0.12)
+                     : Theme.accentSubtle)
                   : "transparent")
         border.color: rowBtn.active
                       ? Theme.accent
                       : (btnMouse.containsMouse
-                         ? (rowBtn.danger ? Theme.statusError : Theme.accent)
-                         : Theme.borderSubtle)
-        border.width: 1
+                         ? (rowBtn.danger ? Theme.statusError : Theme.borderDefault)
+                         : "transparent")
+        border.width: (rowBtn.active || btnMouse.containsMouse) ? 1 : 0
 
         Behavior on color        { ColorAnimation { duration: Theme.durFast } }
         Behavior on border.color { ColorAnimation { duration: Theme.durFast } }
@@ -780,7 +792,7 @@ Rectangle {
             color: rowBtn.active
                    ? Theme.accent
                    : (btnMouse.containsMouse
-                      ? (rowBtn.danger ? Theme.bgCanvas : Theme.accent)
+                      ? (rowBtn.danger ? Theme.statusError : Theme.textPrimary)
                       : Theme.textSecondary)
 
             Behavior on color { ColorAnimation { duration: Theme.durFast } }

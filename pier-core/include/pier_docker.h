@@ -116,6 +116,30 @@ int32_t pier_docker_restart(PierDocker *h, const char *id);
  * confirm before passing force. */
 int32_t pier_docker_remove(PierDocker *h, const char *id, int32_t force);
 
+/* ── Images ────────────────────────────────────────────── */
+
+/* List images. Returns JSON array or NULL. Caller frees. */
+char *pier_docker_list_images(PierDocker *h);
+
+/* Remove an image by id. Returns 0 or PIER_DOCKER_ERR_*. */
+int32_t pier_docker_remove_image(PierDocker *h, const char *id, int32_t force);
+
+/* ── Volumes ───────────────────────────────────────────── */
+
+/* List volumes. Returns JSON array or NULL. Caller frees. */
+char *pier_docker_list_volumes(PierDocker *h);
+
+/* Remove a volume by name. Returns 0 or PIER_DOCKER_ERR_*. */
+int32_t pier_docker_remove_volume(PierDocker *h, const char *name);
+
+/* ── Networks ──────────────────────────────────────────── */
+
+/* List networks. Returns JSON array or NULL. Caller frees. */
+char *pier_docker_list_networks(PierDocker *h);
+
+/* Remove a network by name. Returns 0 or PIER_DOCKER_ERR_*. */
+int32_t pier_docker_remove_network(PierDocker *h, const char *name);
+
 #ifdef __cplusplus
 } /* extern "C" */
 #endif

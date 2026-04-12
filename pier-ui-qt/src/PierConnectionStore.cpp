@@ -177,6 +177,38 @@ bool PierConnectionStore::appendEntry(Entry e)
     return true;
 }
 
+bool PierConnectionStore::updateAt(int index, const QString &name, const QString &host, int port,
+                                   const QString &username, const QString &password,
+                                   const QString &keyPath, const QString &passphraseCredentialId,
+                                   bool usesAgent)
+{
+    if (index < 0 || index >= static_cast<int>(m_entries.size())) return false;
+    if (name.isEmpty() || host.isEmpty() || username.isEmpty()) return false;
+
+    // Save old entry for rollback
+    Entry old = m_entries[static_cast<size_t>(index)];
+
+    Entry &e = m_entries[static_cast<size_t>(index)];
+    e.name = name;
+    e.host = host;
+    e.port = port > 0 ? port : 22;
+    e.username = username;
+    e.password = password;
+    e.credentialId.clear(); // clear legacy keychain ref
+    e.keyPath = keyPath;
+    e.passphraseCredentialId = passphraseCredentialId;
+    e.usesAgent = usesAgent;
+
+    if (!persist()) {
+        // Rollback
+        m_entries[static_cast<size_t>(index)] = std::move(old);
+        return false;
+    }
+
+    emit dataChanged(createIndex(index, 0), createIndex(index, 0));
+    return true;
+}
+
 bool PierConnectionStore::removeAt(int index)
 {
     if (index < 0 || index >= static_cast<int>(m_entries.size())) {

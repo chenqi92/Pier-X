@@ -228,19 +228,18 @@ Item {
         Rectangle {
             id: headerBar
             Layout.fillWidth: true
-            implicitHeight: 52
-            color: Theme.bgSurface
-            border.color: Theme.borderSubtle
-            border.width: 1
-            radius: Theme.radiusMd
+            implicitHeight: 46
+            color: "transparent"
+            border.width: 0
 
             RowLayout {
                 anchors.fill: parent
-                anchors.leftMargin: Theme.sp3
-                anchors.rightMargin: Theme.sp2
+                anchors.leftMargin: Theme.sp2
+                anchors.rightMargin: Theme.sp1
                 spacing: Theme.sp2
 
                 IconButton {
+                    compact: true
                     icon: "arrow-left"
                     tooltip: qsTr("Up")
                     enabled: root.currentPath.length > 1
@@ -248,8 +247,8 @@ Item {
                 }
 
                 Rectangle {
-                    Layout.preferredWidth: 18
-                    Layout.preferredHeight: 18
+                    Layout.preferredWidth: 16
+                    Layout.preferredHeight: 16
                     radius: Theme.radiusSm
                     color: Theme.accentSubtle
 
@@ -289,19 +288,23 @@ Item {
                     }
                 }
 
-                GhostButton {
+                IconButton {
                     id: placesButton
-                    text: qsTr("Places")
+                    compact: true
+                    glyph: "\u22ef"
+                    tooltip: qsTr("Places")
                     onClicked: placesMenu.open()
                 }
 
                 IconButton {
+                    compact: true
                     icon: "refresh-cw"
                     tooltip: qsTr("Refresh")
                     onClicked: root._refreshFolder()
                 }
 
                 IconButton {
+                    compact: true
                     icon: "terminal"
                     tooltip: qsTr("Terminal")
                     onClicked: root.openTerminalRequested(root.currentPath)
@@ -344,17 +347,14 @@ Item {
 
         Rectangle {
             Layout.fillWidth: true
-            implicitHeight: 32
-            color: Theme.bgInset
-            border.color: Theme.borderSubtle
-            border.width: 1
-            border.pixelAligned: true
-            radius: Theme.radiusMd
+            implicitHeight: 28
+            color: "transparent"
+            border.width: 0
 
             Flickable {
                 anchors.fill: parent
-                anchors.leftMargin: Theme.sp3
-                anchors.rightMargin: Theme.sp3
+                anchors.leftMargin: Theme.sp2
+                anchors.rightMargin: Theme.sp2
                 contentWidth: breadcrumbRow.width
                 contentHeight: height
                 clip: true
@@ -387,8 +387,8 @@ Item {
 
                             Rectangle {
                                 radius: Theme.radiusSm
-                                color: crumbArea.containsMouse ? Theme.bgHover : index === breadcrumbRepeater.count - 1 ? Theme.bgSurface : "transparent"
-                                implicitHeight: 20
+                                color: crumbArea.containsMouse ? Theme.bgHover : index === breadcrumbRepeater.count - 1 ? Theme.bgInset : "transparent"
+                                implicitHeight: 18
                                 implicitWidth: crumbText.implicitWidth + Theme.sp2 * 2
 
                                 Text {
@@ -418,17 +418,17 @@ Item {
 
         Rectangle {
             Layout.fillWidth: true
-            implicitHeight: 38
-            color: Theme.bgSurface
+            implicitHeight: 34
+            color: Theme.bgInset
             border.color: Theme.borderSubtle
             border.width: 1
             border.pixelAligned: true
-            radius: Theme.radiusMd
+            radius: Theme.radiusSm
 
             RowLayout {
                 anchors.fill: parent
-                anchors.leftMargin: Theme.sp3
-                anchors.rightMargin: Theme.sp3
+                anchors.leftMargin: Theme.sp2
+                anchors.rightMargin: Theme.sp2
                 spacing: Theme.sp2
 
                 Image {
@@ -575,10 +575,9 @@ Item {
                     spacing: Theme.sp2
 
                     Rectangle {
-                        Layout.preferredWidth: 18
-                        Layout.preferredHeight: 18
-                        radius: Theme.radiusSm
-                        color: fileRow.fileIsDir ? Theme.accentSubtle : Theme.bgInset
+                        Layout.preferredWidth: 16
+                        Layout.preferredHeight: 16
+                        color: "transparent"
 
                         Image {
                             anchors.centerIn: parent
@@ -681,9 +680,9 @@ Item {
             Rectangle {
                 anchors.centerIn: parent
                 width: Math.min(parent.width - Theme.sp6, 300)
-                height: 132
+                height: 116
                 color: Theme.bgInset
-                radius: Theme.radiusLg
+                radius: Theme.radiusMd
                 border.color: Theme.borderSubtle
                 border.width: 1
                 visible: folderModel.count === 0
@@ -716,9 +715,9 @@ Item {
             Rectangle {
                 anchors.centerIn: parent
                 width: Math.min(parent.width - Theme.sp6, 300)
-                height: 132
+                height: 116
                 color: Theme.bgInset
-                radius: Theme.radiusLg
+                radius: Theme.radiusMd
                 border.color: Theme.borderSubtle
                 border.width: 1
                 visible: folderModel.count > 0

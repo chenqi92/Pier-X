@@ -425,7 +425,7 @@ Rectangle {
 
     ColumnLayout {
         anchors.fill: parent
-        anchors.margins: Theme.sp3
+        anchors.margins: Theme.sp2
         spacing: Theme.sp2
 
         RowLayout {
@@ -433,12 +433,12 @@ Rectangle {
             spacing: Theme.sp2
 
             Rectangle {
-                implicitWidth: 182
-                implicitHeight: 28
-                color: Theme.bgPanel
+                implicitWidth: 176
+                implicitHeight: 26
+                color: Theme.bgInset
                 border.color: Theme.borderSubtle
                 border.width: 1
-                radius: Theme.radiusSm
+                radius: Theme.radiusPill
 
                 Behavior on color { ColorAnimation { duration: Theme.durNormal } }
                 Behavior on border.color { ColorAnimation { duration: Theme.durNormal } }
@@ -526,6 +526,8 @@ Rectangle {
             }
 
             GhostButton {
+                compact: true
+                minimumWidth: 0
                 text: qsTr("Refresh")
                 enabled: client.status === PierMySqlClient.Connected && !client.busy
                 onClicked: root._refreshSchema()
@@ -534,8 +536,8 @@ Rectangle {
 
         Rectangle {
             Layout.fillWidth: true
-            implicitHeight: 36
-            color: Theme.bgPanel
+            implicitHeight: 34
+            color: Theme.bgSurface
             border.color: Theme.borderSubtle
             border.width: 1
             radius: Theme.radiusSm
@@ -572,11 +574,15 @@ Rectangle {
                 }
 
                 GhostButton {
+                    compact: true
+                    minimumWidth: 0
                     text: qsTr("Save")
                     onClicked: root._saveProfile()
                 }
 
                 GhostButton {
+                    compact: true
+                    minimumWidth: 0
                     text: qsTr("Delete")
                     enabled: root.selectedProfileIndex >= 0
                     onClicked: root._removeProfile()
@@ -612,11 +618,15 @@ Rectangle {
                 }
 
                 GhostButton {
+                    compact: true
+                    minimumWidth: 0
                     text: qsTr("Save")
                     onClicked: root._saveFavorite()
                 }
 
                 GhostButton {
+                    compact: true
+                    minimumWidth: 0
                     text: qsTr("Delete")
                     enabled: root.selectedFavoriteIndex >= 0
                     onClicked: root._removeFavorite()
@@ -626,7 +636,7 @@ Rectangle {
 
         Rectangle {
             Layout.fillWidth: true
-            implicitHeight: bannerText.length > 0 ? 24 : 0
+            implicitHeight: bannerText.length > 0 ? 22 : 0
             visible: bannerText.length > 0
             color: bannerKind === "error"
                    ? Qt.rgba(Theme.statusError.r, Theme.statusError.g, Theme.statusError.b, 0.10)
@@ -696,6 +706,8 @@ Rectangle {
                         Item { Layout.fillWidth: true }
 
                         GhostButton {
+                            compact: true
+                            minimumWidth: 0
                             text: qsTr("USE %1").arg(root.selectedDatabase)
                             visible: root.selectedDatabase.length > 0
                             enabled: client.status === PierMySqlClient.Connected
@@ -858,21 +870,29 @@ Rectangle {
                                 spacing: Theme.sp2
 
                                 GhostButton {
+                                    compact: true
+                                    minimumWidth: 0
                                     text: qsTr("SELECT 200")
                                     onClicked: root._previewTable(root.selectedTable)
                                 }
 
                                 GhostButton {
+                                    compact: true
+                                    minimumWidth: 0
                                     text: qsTr("COUNT(*)")
                                     onClicked: root._showCountFor(root.selectedTable)
                                 }
 
                                 GhostButton {
+                                    compact: true
+                                    minimumWidth: 0
                                     text: qsTr("DESCRIBE")
                                     onClicked: root._showDescribeFor(root.selectedTable)
                                 }
 
                                 GhostButton {
+                                    compact: true
+                                    minimumWidth: 0
                                     text: qsTr("SHOW CREATE")
                                     onClicked: root._showCreateFor(root.selectedTable)
                                 }
@@ -1044,22 +1064,30 @@ Rectangle {
                                 spacing: Theme.sp2
 
                                 GhostButton {
+                                    compact: true
+                                    minimumWidth: 0
                                     text: qsTr("Only This")
                                     enabled: root.selectedTable.length > 0
                                     onClicked: root._selectOnlyColumn(root.selectedColumn)
                                 }
 
                                 GhostButton {
+                                    compact: true
+                                    minimumWidth: 0
                                     text: qsTr("Insert")
                                     onClicked: root._insertSelectedColumn()
                                 }
 
                                 GhostButton {
+                                    compact: true
+                                    minimumWidth: 0
                                     text: qsTr("WHERE")
                                     onClicked: root._insertFilterForColumn()
                                 }
 
                                 GhostButton {
+                                    compact: true
+                                    minimumWidth: 0
                                     text: qsTr("ORDER BY")
                                     onClicked: root._insertOrderForColumn()
                                 }
@@ -1105,6 +1133,8 @@ Rectangle {
                             Item { Layout.fillWidth: true }
 
                             GhostButton {
+                                compact: true
+                                minimumWidth: 0
                                 text: qsTr("USE %1").arg(root.selectedDatabase)
                                 visible: root.selectedDatabase.length > 0
                                 enabled: client.status === PierMySqlClient.Connected
@@ -1112,6 +1142,8 @@ Rectangle {
                             }
 
                             GhostButton {
+                                compact: true
+                                minimumWidth: 0
                                 text: qsTr("SELECT 200")
                                 visible: root.selectedTable.length > 0
                                 enabled: client.status === PierMySqlClient.Connected
@@ -1119,6 +1151,8 @@ Rectangle {
                             }
 
                             GhostButton {
+                                compact: true
+                                minimumWidth: 0
                                 text: qsTr("COUNT(*)")
                                 visible: root.selectedTable.length > 0
                                 enabled: client.status === PierMySqlClient.Connected
@@ -1126,6 +1160,8 @@ Rectangle {
                             }
 
                             GhostButton {
+                                compact: true
+                                minimumWidth: 0
                                 text: qsTr("SHOW CREATE")
                                 visible: root.selectedTable.length > 0
                                 enabled: client.status === PierMySqlClient.Connected

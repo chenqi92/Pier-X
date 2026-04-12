@@ -14,9 +14,9 @@ Rectangle {
     implicitHeight: Theme.fieldHeight
     implicitWidth: 220
     color: Theme.bgSurface
-    border.color: popup.visible ? Theme.borderFocus : comboMouse.containsMouse ? Theme.borderStrong : Theme.borderDefault
+    border.color: popup.visible ? Theme.borderFocus : comboMouse.containsMouse ? Theme.borderDefault : Theme.borderSubtle
     border.width: 1
-    radius: Theme.radiusMd
+    radius: Theme.radiusSm
 
     Behavior on color { ColorAnimation { duration: Theme.durNormal } }
     Behavior on border.color { ColorAnimation { duration: Theme.durFast } }

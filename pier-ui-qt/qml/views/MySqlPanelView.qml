@@ -90,12 +90,16 @@ Rectangle {
             Item { Layout.fillWidth: true }
 
             GhostButton {
+                compact: true
+                minimumWidth: 0
                 text: qsTr("↻ Databases")
                 enabled: client.status === PierMySqlClient.Connected
                 onClicked: client.refreshDatabases()
             }
 
             GhostButton {
+                compact: true
+                minimumWidth: 0
                 text: qsTr("Disconnect")
                 enabled: client.status === PierMySqlClient.Connected
                 onClicked: client.stop()

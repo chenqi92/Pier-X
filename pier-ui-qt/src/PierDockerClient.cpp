@@ -449,6 +449,165 @@ QString PierDockerClientModel::formatInspectJson(const QString &json)
     return QString::fromUtf8(doc.toJson(QJsonDocument::Indented)).trimmed();
 }
 
+// ─── Images ─────────────────────────────────────────────
+
+void PierDockerClientModel::refreshImages()
+{
+    if (!m_handle) return;
+    const quint64 id = ++m_nextRequestId;
+    setBusy(true);
+    QPointer<PierDockerClientModel> self(this);
+    auto cancel = m_cancelFlag;
+    ::PierDocker *h = m_handle;
+    auto w = std::make_unique<std::thread>([self, cancel, id, h]() {
+        char *json = pier_docker_list_images(h);
+        QString result = json ? QString::fromUtf8(json) : QStringLiteral("[]");
+        if (json) pier_docker_free_string(json);
+        if (!self || (cancel && cancel->load())) return;
+        QMetaObject::invokeMethod(self.data(), "onImagesResult", Qt::QueuedConnection,
+            Q_ARG(quint64, id), Q_ARG(QString, result));
+    });
+    m_workers.push_back(std::move(w));
+}
+
+void PierDockerClientModel::onImagesResult(quint64 requestId, const QString &json)
+{
+    if (requestId != m_nextRequestId) return;
+    QJsonDocument doc = QJsonDocument::fromJson(json.toUtf8());
+    QVariantList list;
+    if (doc.isArray()) for (const auto &v : doc.array()) list.append(v.toObject().toVariantMap());
+    m_images = list;
+    emit imagesChanged();
+    setBusy(false);
+}
+
+void PierDockerClientModel::removeImage(const QString &id, bool force)
+{
+    if (!m_handle || id.isEmpty()) return;
+    const quint64 reqId = ++m_nextRequestId;
+    setBusy(true);
+    QPointer<PierDockerClientModel> self(this);
+    auto cancel = m_cancelFlag;
+    ::PierDocker *h = m_handle;
+    std::string idStd = id.toStdString();
+    int f = force ? 1 : 0;
+    auto w = std::make_unique<std::thread>([self, cancel, reqId, h, idStd = std::move(idStd), f]() {
+        int rc = pier_docker_remove_image(h, idStd.c_str(), f);
+        bool ok = (rc == 0);
+        if (!self || (cancel && cancel->load())) return;
+        QMetaObject::invokeMethod(self.data(), "onActionResult", Qt::QueuedConnection,
+            Q_ARG(quint64, reqId), Q_ARG(bool, ok),
+            Q_ARG(QString, ok ? QStringLiteral("Image removed") : QStringLiteral("Failed to remove image")));
+    });
+    m_workers.push_back(std::move(w));
+}
+
+// ─── Volumes ────────────────────────────────────────────
+
+void PierDockerClientModel::refreshVolumes()
+{
+    if (!m_handle) return;
+    const quint64 id = ++m_nextRequestId;
+    setBusy(true);
+    QPointer<PierDockerClientModel> self(this);
+    auto cancel = m_cancelFlag;
+    ::PierDocker *h = m_handle;
+    auto w = std::make_unique<std::thread>([self, cancel, id, h]() {
+        char *json = pier_docker_list_volumes(h);
+        QString result = json ? QString::fromUtf8(json) : QStringLiteral("[]");
+        if (json) pier_docker_free_string(json);
+        if (!self || (cancel && cancel->load())) return;
+        QMetaObject::invokeMethod(self.data(), "onVolumesResult", Qt::QueuedConnection,
+            Q_ARG(quint64, id), Q_ARG(QString, result));
+    });
+    m_workers.push_back(std::move(w));
+}
+
+void PierDockerClientModel::onVolumesResult(quint64 requestId, const QString &json)
+{
+    if (requestId != m_nextRequestId) return;
+    QJsonDocument doc = QJsonDocument::fromJson(json.toUtf8());
+    QVariantList list;
+    if (doc.isArray()) for (const auto &v : doc.array()) list.append(v.toObject().toVariantMap());
+    m_volumes = list;
+    emit volumesChanged();
+    setBusy(false);
+}
+
+void PierDockerClientModel::removeVolume(const QString &name)
+{
+    if (!m_handle || name.isEmpty()) return;
+    const quint64 reqId = ++m_nextRequestId;
+    setBusy(true);
+    QPointer<PierDockerClientModel> self(this);
+    auto cancel = m_cancelFlag;
+    ::PierDocker *h = m_handle;
+    std::string n = name.toStdString();
+    auto w = std::make_unique<std::thread>([self, cancel, reqId, h, n = std::move(n)]() {
+        int rc = pier_docker_remove_volume(h, n.c_str());
+        bool ok = (rc == 0);
+        if (!self || (cancel && cancel->load())) return;
+        QMetaObject::invokeMethod(self.data(), "onActionResult", Qt::QueuedConnection,
+            Q_ARG(quint64, reqId), Q_ARG(bool, ok),
+            Q_ARG(QString, ok ? QStringLiteral("Volume removed") : QStringLiteral("Failed to remove volume")));
+    });
+    m_workers.push_back(std::move(w));
+}
+
+// ─── Networks ───────────────────────────────────────────
+
+void PierDockerClientModel::refreshNetworks()
+{
+    if (!m_handle) return;
+    const quint64 id = ++m_nextRequestId;
+    setBusy(true);
+    QPointer<PierDockerClientModel> self(this);
+    auto cancel = m_cancelFlag;
+    ::PierDocker *h = m_handle;
+    auto w = std::make_unique<std::thread>([self, cancel, id, h]() {
+        char *json = pier_docker_list_networks(h);
+        QString result = json ? QString::fromUtf8(json) : QStringLiteral("[]");
+        if (json) pier_docker_free_string(json);
+        if (!self || (cancel && cancel->load())) return;
+        QMetaObject::invokeMethod(self.data(), "onNetworksResult", Qt::QueuedConnection,
+            Q_ARG(quint64, id), Q_ARG(QString, result));
+    });
+    m_workers.push_back(std::move(w));
+}
+
+void PierDockerClientModel::onNetworksResult(quint64 requestId, const QString &json)
+{
+    if (requestId != m_nextRequestId) return;
+    QJsonDocument doc = QJsonDocument::fromJson(json.toUtf8());
+    QVariantList list;
+    if (doc.isArray()) for (const auto &v : doc.array()) list.append(v.toObject().toVariantMap());
+    m_networks = list;
+    emit networksChanged();
+    setBusy(false);
+}
+
+void PierDockerClientModel::removeNetwork(const QString &name)
+{
+    if (!m_handle || name.isEmpty()) return;
+    const quint64 reqId = ++m_nextRequestId;
+    setBusy(true);
+    QPointer<PierDockerClientModel> self(this);
+    auto cancel = m_cancelFlag;
+    ::PierDocker *h = m_handle;
+    std::string n = name.toStdString();
+    auto w = std::make_unique<std::thread>([self, cancel, reqId, h, n = std::move(n)]() {
+        int rc = pier_docker_remove_network(h, n.c_str());
+        bool ok = (rc == 0);
+        if (!self || (cancel && cancel->load())) return;
+        QMetaObject::invokeMethod(self.data(), "onActionResult", Qt::QueuedConnection,
+            Q_ARG(quint64, reqId), Q_ARG(bool, ok),
+            Q_ARG(QString, ok ? QStringLiteral("Network removed") : QStringLiteral("Failed to remove network")));
+    });
+    m_workers.push_back(std::move(w));
+}
+
+// ─── Stop ───────────────────────────────────────────────
+
 void PierDockerClientModel::stop()
 {
     if (m_cancelFlag) {

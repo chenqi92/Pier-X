@@ -92,7 +92,7 @@ QtObject {
     // Shell density
     readonly property int windowMinWidth: 1080
     readonly property int windowMinHeight: 680
-    readonly property int topBarHeight: 40
+    readonly property int topBarHeight: 42
     readonly property int tabBarHeight: 34
     readonly property int tabHeight: 30
     readonly property int statusBarHeight: 22
@@ -100,9 +100,9 @@ QtObject {
     readonly property int fieldHeight: 34
     readonly property int compactRowHeight: 28
     readonly property int listRowHeight: 32
-    readonly property int sidebarWidth: 248
-    readonly property int rightSidebarWidth: 392
-    readonly property int toolRailWidth: 42
+    readonly property int sidebarWidth: 244
+    readonly property int rightSidebarWidth: 396
+    readonly property int toolRailWidth: 44
     readonly property int dialogHeaderHeight: 56
     readonly property int dialogFooterHeight: 60
 

@@ -5,16 +5,22 @@ Rectangle {
     id: root
 
     property string text: ""
+    property bool compact: false
+    property int minimumWidth: 72
     signal clicked
 
-    implicitHeight: Theme.controlHeight
-    implicitWidth: label.implicitWidth + Theme.sp3 * 2
-    radius: Theme.radiusMd
+    readonly property int horizontalPadding: compact ? Theme.sp2 : Theme.sp3
+    readonly property int buttonHeight: compact ? 26 : Theme.controlHeight
+
+    implicitHeight: buttonHeight
+    implicitWidth: Math.max(label.implicitWidth + horizontalPadding * 2, minimumWidth)
+    radius: Theme.radiusSm
     color: mouseArea.pressed ? Theme.bgActive
          : mouseArea.containsMouse ? Theme.bgHover
          : "transparent"
-    border.color: activeFocus ? Theme.borderFocus : Theme.borderDefault
-    border.width: 1
+    border.color: activeFocus ? Theme.borderFocus
+                 : mouseArea.containsMouse ? Theme.borderDefault : "transparent"
+    border.width: (activeFocus || mouseArea.containsMouse) ? 1 : 0
     opacity: enabled ? 1.0 : 0.45
 
     Behavior on color { ColorAnimation { duration: Theme.durFast } }
@@ -28,9 +34,11 @@ Rectangle {
         anchors.centerIn: parent
         text: root.text
         font.family: Theme.fontUi
-        font.pixelSize: Theme.sizeBody
+        font.pixelSize: compact ? Theme.sizeCaption : Theme.sizeBody
         font.weight: Theme.weightMedium
-        color: mouseArea.containsMouse ? Theme.textPrimary : Theme.textSecondary
+        color: mouseArea.pressed ? Theme.textPrimary
+             : mouseArea.containsMouse ? Theme.textPrimary
+             : Theme.textSecondary
         Behavior on color { ColorAnimation { duration: Theme.durFast } }
     }
 

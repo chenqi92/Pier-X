@@ -9,12 +9,12 @@ Rectangle {
     property string text: ""
     property color statusColor: Theme.statusSuccess
 
-    implicitHeight: 20
+    implicitHeight: 22
     implicitWidth: row.implicitWidth + Theme.sp3 * 2
 
-    color: Theme.bgSurface
-    border.color: Theme.borderSubtle
-    border.width: 1
+    color: Qt.rgba(root.statusColor.r, root.statusColor.g, root.statusColor.b, Theme.dark ? 0.14 : 0.10)
+    border.color: "transparent"
+    border.width: 0
     radius: Theme.radiusPill
 
     Behavior on color        { ColorAnimation { duration: Theme.durNormal } }
@@ -26,9 +26,9 @@ Rectangle {
         spacing: Theme.sp1_5
 
         Rectangle {
-            width: 6
-            height: 6
-            radius: 3
+            width: 5
+            height: 5
+            radius: 2.5
             color: root.statusColor
             anchors.verticalCenter: parent.verticalCenter
         }
@@ -38,7 +38,7 @@ Rectangle {
             font.family: Theme.fontUi
             font.pixelSize: Theme.sizeCaption
             font.weight: Theme.weightMedium
-            color: Theme.textSecondary
+            color: root.statusColor
             anchors.verticalCenter: parent.verticalCenter
 
             Behavior on color { ColorAnimation { duration: Theme.durNormal } }

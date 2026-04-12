@@ -91,9 +91,11 @@ pub use self::sqlite::{
 };
 pub use self::docker::{
     pier_docker_free, pier_docker_free_string, pier_docker_inspect_container,
-    pier_docker_list_containers, pier_docker_open, pier_docker_open_on_session,
-    pier_docker_remove, pier_docker_restart, pier_docker_start, pier_docker_stop, PierDocker,
-    PIER_DOCKER_ERR_FAILED, PIER_DOCKER_ERR_NULL, PIER_DOCKER_ERR_UNSAFE_ID,
+    pier_docker_list_containers, pier_docker_list_images, pier_docker_list_networks,
+    pier_docker_list_volumes, pier_docker_open, pier_docker_open_on_session,
+    pier_docker_remove, pier_docker_remove_image, pier_docker_remove_network,
+    pier_docker_remove_volume, pier_docker_restart, pier_docker_start, pier_docker_stop,
+    PierDocker, PIER_DOCKER_ERR_FAILED, PIER_DOCKER_ERR_NULL, PIER_DOCKER_ERR_UNSAFE_ID,
     PIER_DOCKER_ERR_UTF8, PIER_DOCKER_OK,
 };
 pub use self::log_stream::{

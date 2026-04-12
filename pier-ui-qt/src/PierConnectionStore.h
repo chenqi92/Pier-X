@@ -105,6 +105,13 @@ public slots:
     bool addAgent(const QString &name, const QString &host, int port,
                   const QString &username);
 
+    // Update the connection at `index` in-place and persist.
+    // Replaces all fields. Returns true on success.
+    bool updateAt(int index, const QString &name, const QString &host, int port,
+                  const QString &username, const QString &password,
+                  const QString &keyPath, const QString &passphraseCredentialId,
+                  bool usesAgent);
+
     // Remove the connection at `index` and persist. Does NOT
     // delete the keychain entry — the caller is responsible
     // for that via PierCredentials::deleteEntry.

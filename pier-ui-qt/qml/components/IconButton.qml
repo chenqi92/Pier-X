@@ -10,14 +10,17 @@ Rectangle {
     property real iconRotation: 0
     property string tooltip: ""
     property bool active: false
+    property bool compact: false
     property int iconSize: Theme.iconMd
     property alias hovered: mouseArea.containsMouse
     property alias pressed: mouseArea.pressed
     signal clicked
 
-    implicitWidth: Theme.controlHeight
-    implicitHeight: Theme.controlHeight
-    radius: Theme.radiusMd
+    readonly property int buttonSize: compact ? 26 : Theme.controlHeight
+
+    implicitWidth: buttonSize
+    implicitHeight: buttonSize
+    radius: Theme.radiusSm
     color: mouseArea.pressed ? Theme.bgActive
          : active ? Theme.bgSelected
          : mouseArea.containsMouse ? Theme.bgHover

@@ -342,17 +342,17 @@ ApplicationWindow {
             if (context.pgUser) tabModel.setProperty(currentTabIndex, "pgUser", context.pgUser)
             if (context.pgDatabase) tabModel.setProperty(currentTabIndex, "pgDatabase", context.pgDatabase)
         }
-        // Switch tool in the unified sidebar and ensure it's visible
-        if (rightSidebar.activeTool === tool && window.gitPanelVisible) {
-            window.gitPanelVisible = false
+        // Switch tool in the unified sidebar and ensure content is expanded
+        if (rightSidebar.activeTool === tool && rightSidebar.contentExpanded) {
+            rightSidebar.contentExpanded = false
         } else {
             rightSidebar.activeTool = tool
-            window.gitPanelVisible = true
+            rightSidebar.contentExpanded = true
         }
     }
 
     function toggleGitPanel() {
-        window.gitPanelVisible = !window.gitPanelVisible
+        rightSidebar.contentExpanded = !rightSidebar.contentExpanded
     }
 
     function openMarkdownTab(filePath) {
@@ -901,9 +901,9 @@ ApplicationWindow {
             // activeTool is per-tab via the rightTool field.
             RightSidebar {
                 id: rightSidebar
-                SplitView.preferredWidth: Theme.rightSidebarWidth
-                SplitView.minimumWidth: 320
-                visible: window.gitPanelVisible
+                SplitView.preferredWidth: rightSidebar.contentExpanded ? Theme.rightSidebarWidth : Theme.toolRailWidth
+                SplitView.minimumWidth: rightSidebar.contentExpanded ? 320 : Theme.toolRailWidth
+                SplitView.maximumWidth: rightSidebar.contentExpanded ? 99999 : Theme.toolRailWidth
 
                 // Per-tab tool memory
                 activeTool: {

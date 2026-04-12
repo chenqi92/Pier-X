@@ -29,173 +29,221 @@ Item {
 
     ColumnLayout {
         anchors.centerIn: parent
-        width: 520
-        spacing: Theme.sp4
+        anchors.verticalCenterOffset: -56
+        width: Math.min(parent.width - Theme.sp12 * 2, 520)
+        spacing: Theme.sp3
 
-        SectionLabel {
-            text: qsTr("Welcome")
+        Card {
             Layout.alignment: Qt.AlignHCenter
-        }
-
-        Text {
-            text: qsTr("Pier-X is taking shape.")
-            font.family: Theme.fontUi
-            font.pixelSize: Theme.sizeDisplay
-            font.weight: Theme.weightMedium
-            font.letterSpacing: -0.7
-            color: Theme.textPrimary
-            Layout.alignment: Qt.AlignHCenter
-
-            Behavior on color { ColorAnimation { duration: Theme.durNormal } }
-        }
-
-        Text {
-            text: qsTr("Cross-platform terminal management,\nbuilt on Qt 6 + Rust core.")
-            font.family: Theme.fontUi
-            font.pixelSize: Theme.sizeBodyLg
-            color: Theme.textSecondary
-            horizontalAlignment: Text.AlignHCenter
-            Layout.alignment: Qt.AlignHCenter
-
-            Behavior on color { ColorAnimation { duration: Theme.durNormal } }
-        }
-
-        // Action buttons
-        RowLayout {
-            Layout.alignment: Qt.AlignHCenter
-            Layout.topMargin: Theme.sp3
-            spacing: Theme.sp2
-
-            PrimaryButton {
-                text: qsTr("New SSH connection")
-                onClicked: root.newSshRequested()
-            }
-            GhostButton {
-                text: qsTr("Open local terminal")
-                onClicked: root.openLocalTerminalRequested()
-            }
-        }
-
-        // ─── Recent connections ────────────────────────
-        // Show up to 6 saved connections as clickable cards
-        // for one-click reconnection.
-        ColumnLayout {
             Layout.fillWidth: true
-            Layout.topMargin: Theme.sp4
-            spacing: Theme.sp2
-            visible: root.recentConnectionCount > 0
+            padding: Theme.sp6
 
-            Text {
-                text: qsTr("Recent connections")
-                font.family: Theme.fontUi
-                font.pixelSize: Theme.sizeCaption
-                font.weight: Theme.weightMedium
-                color: Theme.textTertiary
-                Layout.alignment: Qt.AlignHCenter
+            ColumnLayout {
+                anchors.fill: parent
+                spacing: Theme.sp3
 
-                Behavior on color { ColorAnimation { duration: Theme.durNormal } }
-            }
+                ColumnLayout {
+                    Layout.fillWidth: true
+                    spacing: Theme.sp1_5
 
-            // Card grid — 2 columns, up to 3 rows (6 connections max).
-            Grid {
-                Layout.alignment: Qt.AlignHCenter
-                columns: 2
-                spacing: Theme.sp2
-
-                Repeater {
-                    model: {
-                        return Math.min(root.recentConnectionCount, 6)
-                    }
-                    delegate: Rectangle {
-                        required property int index
-                        width: 250
-                        height: 56
-                        color: cardMouse.containsMouse ? Theme.bgHover : Theme.bgSurface
-                        border.color: cardMouse.containsMouse ? Theme.borderStrong : Theme.borderSubtle
-                        border.width: 1
+                    Rectangle {
+                        Layout.alignment: Qt.AlignHCenter
+                        Layout.preferredWidth: 28
+                        Layout.preferredHeight: 28
                         radius: Theme.radiusMd
+                        color: Theme.accentSubtle
 
-                        Behavior on color        { ColorAnimation { duration: Theme.durFast } }
-                        Behavior on border.color { ColorAnimation { duration: Theme.durFast } }
-
-                        RowLayout {
-                            anchors.fill: parent
-                            anchors.leftMargin: Theme.sp3
-                            anchors.rightMargin: Theme.sp3
-                            spacing: Theme.sp2
-
-                            // Terminal icon
-                            Image {
-                                source: "qrc:/qt/qml/Pier/resources/icons/lucide/terminal.svg"
-                                sourceSize: Qt.size(16, 16)
-                                Layout.alignment: Qt.AlignVCenter
-                                layer.enabled: true
-                                layer.effect: MultiEffect {
-                                    colorization: 1.0
-                                    colorizationColor: Theme.accent
-                                }
-                            }
-
-                            ColumnLayout {
-                                Layout.fillWidth: true
-                                spacing: 0
-
-                                Text {
-                                    text: root.connectionsModel.get(index).name || ""
-                                    font.family: Theme.fontUi
-                                    font.pixelSize: Theme.sizeBody
-                                    font.weight: Theme.weightMedium
-                                    color: Theme.textPrimary
-                                    elide: Text.ElideRight
-                                    Layout.fillWidth: true
-
-                                    Behavior on color { ColorAnimation { duration: Theme.durFast } }
-                                }
-                                Text {
-                                    text: {
-                                        const c = root.connectionsModel.get(index)
-                                        return (c.username || "") + "@" + (c.host || "") + ":" + (c.port || 22)
-                                    }
-                                    font.family: Theme.fontMono
-                                    font.pixelSize: Theme.sizeSmall
-                                    color: Theme.textTertiary
-                                    elide: Text.ElideRight
-                                    Layout.fillWidth: true
-
-                                    Behavior on color { ColorAnimation { duration: Theme.durFast } }
-                                }
-                            }
+                        Rectangle {
+                            anchors.centerIn: parent
+                            width: 8
+                            height: 8
+                            radius: 4
+                            color: Theme.accent
                         }
+                    }
 
-                        MouseArea {
-                            id: cardMouse
-                            anchors.fill: parent
-                            hoverEnabled: true
-                            cursorShape: Qt.PointingHandCursor
-                            onClicked: root.connectToSaved(index)
-                        }
+                    SectionLabel {
+                        text: qsTr("Welcome")
+                        Layout.alignment: Qt.AlignHCenter
+                    }
+
+                    Text {
+                        Layout.alignment: Qt.AlignHCenter
+                        text: qsTr("Pier-X is taking shape.")
+                        font.family: Theme.fontUi
+                        font.pixelSize: Theme.sizeH1
+                        font.weight: Theme.weightSemibold
+                        font.letterSpacing: -0.3
+                        color: Theme.textPrimary
+                        horizontalAlignment: Text.AlignHCenter
+                    }
+
+                    Text {
+                        Layout.alignment: Qt.AlignHCenter
+                        Layout.maximumWidth: 420
+                        text: qsTr("Cross-platform terminal management built on Qt 6 and the Rust core.")
+                        font.family: Theme.fontUi
+                        font.pixelSize: Theme.sizeBody
+                        color: Theme.textSecondary
+                        horizontalAlignment: Text.AlignHCenter
+                        wrapMode: Text.WordWrap
+                    }
+                }
+
+                RowLayout {
+                    Layout.alignment: Qt.AlignHCenter
+                    spacing: Theme.sp1_5
+
+                    PrimaryButton {
+                        Layout.preferredWidth: 148
+                        text: qsTr("New SSH connection")
+                        onClicked: root.newSshRequested()
+                    }
+
+                    GhostButton {
+                        Layout.preferredWidth: 148
+                        text: qsTr("Open local terminal")
+                        onClicked: root.openLocalTerminalRequested()
+                    }
+                }
+
+                RowLayout {
+                    Layout.alignment: Qt.AlignHCenter
+                    spacing: Theme.sp1_5
+
+                    StatusPill {
+                        text: "Qt " + PierCore.qtVersion
+                        statusColor: Theme.statusSuccess
+                    }
+
+                    StatusPill {
+                        text: qsTr("core ") + PierCore.version
+                        statusColor: Theme.statusSuccess
+                    }
+
+                    StatusPill {
+                        text: Theme.dark ? qsTr("Dark mode") : qsTr("Light mode")
+                        statusColor: Theme.statusInfo
                     }
                 }
             }
         }
 
-        // Status pills row — live metadata sourced from pier-core.
-        RowLayout {
+        Card {
             Layout.alignment: Qt.AlignHCenter
-            Layout.topMargin: Theme.sp4
-            spacing: Theme.sp2
+            Layout.fillWidth: true
+            visible: root.recentConnectionCount > 0
+            padding: Theme.sp3
 
-            StatusPill {
-                text: "Qt " + PierCore.qtVersion
-                statusColor: Theme.statusSuccess
-            }
-            StatusPill {
-                text: qsTr("core ") + PierCore.version
-                statusColor: Theme.statusSuccess
-            }
-            StatusPill {
-                text: Theme.dark ? qsTr("Dark mode") : qsTr("Light mode")
-                statusColor: Theme.statusInfo
+            ColumnLayout {
+                anchors.fill: parent
+                spacing: Theme.sp2
+
+                RowLayout {
+                    Layout.fillWidth: true
+                    spacing: Theme.sp2
+
+                    Text {
+                        text: qsTr("Recent connections")
+                        font.family: Theme.fontUi
+                        font.pixelSize: Theme.sizeBody
+                        font.weight: Theme.weightSemibold
+                        color: Theme.textPrimary
+                    }
+
+                    Text {
+                        text: qsTr("%1 saved").arg(root.recentConnectionCount)
+                        font.family: Theme.fontUi
+                        font.pixelSize: Theme.sizeSmall
+                        color: Theme.textTertiary
+                    }
+
+                    Item { Layout.fillWidth: true }
+                }
+
+                Grid {
+                    Layout.fillWidth: true
+                    columns: 2
+                    rowSpacing: Theme.sp1_5
+                    columnSpacing: Theme.sp2
+
+                    Repeater {
+                        model: Math.min(root.recentConnectionCount, 6)
+
+                        delegate: Rectangle {
+                            required property int index
+                            width: (root.width - Theme.sp4 * 2 - Theme.sp2) / 2
+                            height: 54
+                            color: cardMouse.containsMouse ? Theme.bgHover : Theme.bgInset
+                            border.color: cardMouse.containsMouse ? Theme.borderDefault : "transparent"
+                            border.width: cardMouse.containsMouse ? 1 : 0
+                            radius: Theme.radiusMd
+
+                            Behavior on color { ColorAnimation { duration: Theme.durFast } }
+                            Behavior on border.color { ColorAnimation { duration: Theme.durFast } }
+
+                            RowLayout {
+                                anchors.fill: parent
+                                anchors.leftMargin: Theme.sp3
+                                anchors.rightMargin: Theme.sp3
+                                spacing: Theme.sp2
+
+                                Rectangle {
+                                    Layout.preferredWidth: 20
+                                    Layout.preferredHeight: 20
+                                    radius: Theme.radiusSm
+                                    color: Theme.accentSubtle
+
+                                    Image {
+                                        anchors.centerIn: parent
+                                        source: "qrc:/qt/qml/Pier/resources/icons/lucide/terminal.svg"
+                                        sourceSize: Qt.size(14, 14)
+                                        layer.enabled: true
+                                        layer.effect: MultiEffect {
+                                            colorization: 1.0
+                                            colorizationColor: Theme.accent
+                                        }
+                                    }
+                                }
+
+                                ColumnLayout {
+                                    Layout.fillWidth: true
+                                    spacing: 0
+
+                                    Text {
+                                        text: root.connectionsModel.get(index).name || ""
+                                        font.family: Theme.fontUi
+                                        font.pixelSize: Theme.sizeBody
+                                        font.weight: Theme.weightMedium
+                                        color: Theme.textPrimary
+                                        elide: Text.ElideRight
+                                        Layout.fillWidth: true
+                                    }
+
+                                    Text {
+                                        text: {
+                                            const c = root.connectionsModel.get(index)
+                                            return (c.username || "") + "@" + (c.host || "") + ":" + (c.port || 22)
+                                        }
+                                        font.family: Theme.fontMono
+                                        font.pixelSize: Theme.sizeSmall
+                                        color: Theme.textTertiary
+                                        elide: Text.ElideRight
+                                        Layout.fillWidth: true
+                                    }
+                                }
+                            }
+
+                            MouseArea {
+                                id: cardMouse
+                                anchors.fill: parent
+                                hoverEnabled: true
+                                cursorShape: Qt.PointingHandCursor
+                                onClicked: root.connectToSaved(index)
+                            }
+                        }
+                    }
+                }
             }
         }
     }

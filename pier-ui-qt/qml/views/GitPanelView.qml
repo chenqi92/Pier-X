@@ -82,10 +82,9 @@ Rectangle {
 
         Rectangle {
             Layout.fillWidth: true
-            implicitHeight: 48
-            color: Theme.bgSurface
-            border.color: Theme.borderSubtle
-            border.width: 1
+            implicitHeight: 42
+            color: Theme.bgPanel
+            border.width: 0
 
             RowLayout {
                 anchors.fill: parent
@@ -239,6 +238,7 @@ Rectangle {
                 }
 
                 IconButton {
+                    compact: true
                     icon: "refresh-cw"
                     tooltip: qsTr("Refresh")
                     enabled: !client.busy
@@ -248,11 +248,19 @@ Rectangle {
                     }
                 }
             }
+
+            Rectangle {
+                anchors.left: parent.left
+                anchors.right: parent.right
+                anchors.bottom: parent.bottom
+                height: 1
+                color: Theme.borderSubtle
+            }
         }
 
         Rectangle {
             Layout.fillWidth: true
-            implicitHeight: root.statusBannerVisible ? 32 : 0
+            implicitHeight: root.statusBannerVisible ? 28 : 0
             visible: implicitHeight > 0
             color: root.statusBannerSuccess
                    ? Qt.rgba(95 / 255, 184 / 255, 101 / 255, Theme.dark ? 0.12 : 0.08)
@@ -306,10 +314,9 @@ Rectangle {
 
         Rectangle {
             Layout.fillWidth: true
-            implicitHeight: 42
+            implicitHeight: 36
             color: Theme.bgPanel
-            border.color: Theme.borderSubtle
-            border.width: 1
+            border.width: 0
 
             RowLayout {
                 anchors.fill: parent
@@ -329,7 +336,7 @@ Rectangle {
                         required property var modelData
 
                         implicitWidth: tabRow.implicitWidth + Theme.sp3 * 2
-                        implicitHeight: 28
+                        implicitHeight: 26
                         radius: Theme.radiusPill
                         color: root.selectedTab === modelData.idx
                                ? Theme.bgSelected
@@ -381,6 +388,14 @@ Rectangle {
                     }
                 }
             }
+
+            Rectangle {
+                anchors.left: parent.left
+                anchors.right: parent.right
+                anchors.bottom: parent.bottom
+                height: 1
+                color: Theme.borderSubtle
+            }
         }
 
         Item {
@@ -415,8 +430,8 @@ Rectangle {
 
                     ColumnLayout {
                         anchors.fill: parent
-                        anchors.margins: Theme.sp3
-                        spacing: Theme.sp3
+                        anchors.margins: Theme.sp2
+                        spacing: Theme.sp2
 
                         FileSection {
                             Layout.fillWidth: true
@@ -453,7 +468,7 @@ Rectangle {
                             color: Theme.bgSurface
                             border.color: Theme.borderSubtle
                             border.width: 1
-                            radius: Theme.radiusLg
+                            radius: Theme.radiusMd
 
                             ColumnLayout {
                                 id: composerLayout
@@ -511,6 +526,8 @@ Rectangle {
                                     spacing: Theme.sp2
 
                                     GhostButton {
+                                        compact: true
+                                        minimumWidth: 0
                                         text: qsTr("Stage all")
                                         visible: client.unstagedFiles.length > 0
                                         onClicked: client.stageAll()
@@ -519,12 +536,16 @@ Rectangle {
                                     Item { Layout.fillWidth: true }
 
                                     GhostButton {
+                                        compact: true
+                                        minimumWidth: 0
                                         text: qsTr("Pull")
                                         enabled: client.behindCount > 0 && !client.busy
                                         onClicked: client.pull()
                                     }
 
                                     GhostButton {
+                                        compact: true
+                                        minimumWidth: 0
                                         text: qsTr("Push")
                                         enabled: client.aheadCount > 0 && !client.busy
                                         onClicked: client.push()
@@ -561,12 +582,12 @@ Rectangle {
 
                 ColumnLayout {
                     anchors.fill: parent
-                    anchors.margins: Theme.sp3
-                    spacing: Theme.sp3
+                    anchors.margins: Theme.sp2
+                    spacing: Theme.sp2
 
                     Rectangle {
                         Layout.fillWidth: true
-                        implicitHeight: 34
+                        implicitHeight: 36
                         color: Theme.bgSurface
                         border.color: Theme.borderSubtle
                         border.width: 1
@@ -603,7 +624,7 @@ Rectangle {
                         color: Theme.bgSurface
                         border.color: Theme.borderSubtle
                         border.width: 1
-                        radius: Theme.radiusLg
+                        radius: Theme.radiusMd
                         clip: true
 
                         ListView {
@@ -720,12 +741,12 @@ Rectangle {
 
                 ColumnLayout {
                     anchors.fill: parent
-                    anchors.margins: Theme.sp3
-                    spacing: Theme.sp3
+                    anchors.margins: Theme.sp2
+                    spacing: Theme.sp2
 
                     Rectangle {
                         Layout.fillWidth: true
-                        implicitHeight: 34
+                        implicitHeight: 36
                         color: Theme.bgSurface
                         border.color: Theme.borderSubtle
                         border.width: 1
@@ -757,6 +778,8 @@ Rectangle {
                             }
 
                             GhostButton {
+                                compact: true
+                                minimumWidth: 0
                                 text: qsTr("Stash changes")
                                 enabled: !root.workingTreeClean && !client.busy
                                 onClicked: client.stashPush("")
@@ -770,7 +793,7 @@ Rectangle {
                         color: Theme.bgSurface
                         border.color: Theme.borderSubtle
                         border.width: 1
-                        radius: Theme.radiusLg
+                        radius: Theme.radiusMd
                         clip: true
 
                         ListView {
@@ -837,11 +860,15 @@ Rectangle {
                                         spacing: Theme.sp1
 
                                         GhostButton {
+                                            compact: true
+                                            minimumWidth: 0
                                             text: qsTr("Apply")
                                             onClicked: client.stashApply(modelData.index)
                                         }
 
                                         GhostButton {
+                                            compact: true
+                                            minimumWidth: 0
                                             text: qsTr("Pop")
                                             onClicked: client.stashPop(modelData.index)
                                         }
@@ -896,7 +923,7 @@ Rectangle {
         property color accentColor: Theme.accent
 
         height: 136
-        radius: Theme.radiusLg
+        radius: Theme.radiusMd
         color: Theme.bgInset
         border.color: Theme.borderSubtle
         border.width: 1
@@ -927,7 +954,7 @@ Rectangle {
                 horizontalAlignment: Text.AlignHCenter
                 text: title
                 font.family: Theme.fontUi
-                font.pixelSize: Theme.sizeBody
+                font.pixelSize: Theme.sizeBodyLg
                 font.weight: Theme.weightSemibold
                 color: Theme.textPrimary
                 wrapMode: Text.WordWrap
@@ -962,11 +989,11 @@ Rectangle {
         readonly property int bodyHeight: rowCount > 0 ? Math.min(rowCount, staged ? 4 : 6) * Theme.compactRowHeight : 68
 
         Layout.fillWidth: true
-        implicitHeight: 34 + bodyHeight + 1
+        implicitHeight: 36 + bodyHeight + 1
         color: Theme.bgSurface
         border.color: Theme.borderSubtle
         border.width: 1
-        radius: Theme.radiusLg
+        radius: Theme.radiusMd
         clip: true
 
         ColumnLayout {
@@ -975,8 +1002,8 @@ Rectangle {
 
             Rectangle {
                 Layout.fillWidth: true
-                implicitHeight: 34
-                color: Theme.bgInset
+                implicitHeight: 36
+                color: Theme.bgPanel
 
                 RowLayout {
                     anchors.fill: parent
@@ -1029,6 +1056,8 @@ Rectangle {
 
                     GhostButton {
                         visible: actionLabel.length > 0
+                        compact: true
+                        minimumWidth: 0
                         text: actionLabel
                         onClicked: actionClicked()
                     }
@@ -1200,7 +1229,7 @@ Rectangle {
         color: Theme.bgSurface
         border.color: Theme.borderSubtle
         border.width: 1
-        radius: Theme.radiusLg
+        radius: Theme.radiusMd
         clip: true
 
         ColumnLayout {

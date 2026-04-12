@@ -11,7 +11,7 @@ Rectangle {
     color: Theme.bgSurface
     border.color: Theme.borderSubtle
     border.width: 1
-    radius: Theme.radiusLg
+    radius: Theme.radiusMd
 
     Behavior on color { ColorAnimation { duration: Theme.durNormal } }
     Behavior on border.color { ColorAnimation { duration: Theme.durNormal } }
@@ -20,9 +20,9 @@ Rectangle {
     layer.effect: MultiEffect {
         shadowEnabled: true
         shadowColor: "#000000"
-        shadowOpacity: 0.05
-        shadowBlur: 0.4
-        shadowVerticalOffset: 2
+        shadowOpacity: 0.06
+        shadowBlur: 0.34
+        shadowVerticalOffset: 4
     }
 
     Item {

@@ -366,6 +366,105 @@ pub unsafe extern "C" fn pier_docker_remove(
     unsafe { run_action(h, id, "rm", force != 0) }
 }
 
+// ═══════════════════════════════════════════════════════════
+// Images
+// ═══════════════════════════════════════════════════════════
+
+/// List images. Returns JSON array or NULL.
+#[no_mangle]
+pub unsafe extern "C" fn pier_docker_list_images(h: *mut PierDocker) -> *mut c_char {
+    if h.is_null() { return ptr::null_mut(); }
+    let handle = unsafe { &*h };
+    match docker::list_images_blocking(&handle.session) {
+        Ok(imgs) => match serde_json::to_string(&imgs) {
+            Ok(s) => CString::new(s).map(|c| c.into_raw()).unwrap_or(ptr::null_mut()),
+            Err(_) => ptr::null_mut(),
+        },
+        Err(e) => { log::warn!("pier_docker_list_images: {e}"); ptr::null_mut() }
+    }
+}
+
+/// Remove an image. Returns 0 or PIER_DOCKER_ERR_*.
+#[no_mangle]
+pub unsafe extern "C" fn pier_docker_remove_image(
+    h: *mut PierDocker, id: *const c_char, force: c_int,
+) -> c_int {
+    if h.is_null() || id.is_null() { return PIER_DOCKER_ERR_NULL; }
+    let handle = unsafe { &*h };
+    let id_str = match unsafe { CStr::from_ptr(id) }.to_str() { Ok(s) => s, Err(_) => return PIER_DOCKER_ERR_UTF8 };
+    if !docker::is_safe_id(id_str) { return PIER_DOCKER_ERR_UNSAFE_ID; }
+    match docker::remove_image_blocking(&handle.session, id_str, force != 0) {
+        Ok(()) => PIER_DOCKER_OK,
+        Err(e) => { log::warn!("pier_docker_remove_image: {e}"); PIER_DOCKER_ERR_FAILED }
+    }
+}
+
+// ═══════════════════════════════════════════════════════════
+// Volumes
+// ═══════════════════════════════════════════════════════════
+
+/// List volumes. Returns JSON array or NULL.
+#[no_mangle]
+pub unsafe extern "C" fn pier_docker_list_volumes(h: *mut PierDocker) -> *mut c_char {
+    if h.is_null() { return ptr::null_mut(); }
+    let handle = unsafe { &*h };
+    match docker::list_volumes_blocking(&handle.session) {
+        Ok(vols) => match serde_json::to_string(&vols) {
+            Ok(s) => CString::new(s).map(|c| c.into_raw()).unwrap_or(ptr::null_mut()),
+            Err(_) => ptr::null_mut(),
+        },
+        Err(e) => { log::warn!("pier_docker_list_volumes: {e}"); ptr::null_mut() }
+    }
+}
+
+/// Remove a volume. Returns 0 or PIER_DOCKER_ERR_*.
+#[no_mangle]
+pub unsafe extern "C" fn pier_docker_remove_volume(
+    h: *mut PierDocker, name: *const c_char,
+) -> c_int {
+    if h.is_null() || name.is_null() { return PIER_DOCKER_ERR_NULL; }
+    let handle = unsafe { &*h };
+    let n = match unsafe { CStr::from_ptr(name) }.to_str() { Ok(s) => s, Err(_) => return PIER_DOCKER_ERR_UTF8 };
+    if !docker::is_safe_id(n) { return PIER_DOCKER_ERR_UNSAFE_ID; }
+    match docker::remove_volume_blocking(&handle.session, n) {
+        Ok(()) => PIER_DOCKER_OK,
+        Err(e) => { log::warn!("pier_docker_remove_volume: {e}"); PIER_DOCKER_ERR_FAILED }
+    }
+}
+
+// ═══════════════════════════════════════════════════════════
+// Networks
+// ═══════════════════════════════════════════════════════════
+
+/// List networks. Returns JSON array or NULL.
+#[no_mangle]
+pub unsafe extern "C" fn pier_docker_list_networks(h: *mut PierDocker) -> *mut c_char {
+    if h.is_null() { return ptr::null_mut(); }
+    let handle = unsafe { &*h };
+    match docker::list_networks_blocking(&handle.session) {
+        Ok(nets) => match serde_json::to_string(&nets) {
+            Ok(s) => CString::new(s).map(|c| c.into_raw()).unwrap_or(ptr::null_mut()),
+            Err(_) => ptr::null_mut(),
+        },
+        Err(e) => { log::warn!("pier_docker_list_networks: {e}"); ptr::null_mut() }
+    }
+}
+
+/// Remove a network. Returns 0 or PIER_DOCKER_ERR_*.
+#[no_mangle]
+pub unsafe extern "C" fn pier_docker_remove_network(
+    h: *mut PierDocker, name: *const c_char,
+) -> c_int {
+    if h.is_null() || name.is_null() { return PIER_DOCKER_ERR_NULL; }
+    let handle = unsafe { &*h };
+    let n = match unsafe { CStr::from_ptr(name) }.to_str() { Ok(s) => s, Err(_) => return PIER_DOCKER_ERR_UTF8 };
+    if !docker::is_safe_id(n) { return PIER_DOCKER_ERR_UNSAFE_ID; }
+    match docker::remove_network_blocking(&handle.session, n) {
+        Ok(()) => PIER_DOCKER_OK,
+        Err(e) => { log::warn!("pier_docker_remove_network: {e}"); PIER_DOCKER_ERR_FAILED }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

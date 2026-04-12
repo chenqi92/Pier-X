@@ -192,6 +192,153 @@ pub fn inspect_container_blocking(session: &SshSession, id: &str) -> Result<Stri
     crate::ssh::runtime::shared().block_on(inspect_container(session, id))
 }
 
+// ═══════════════════════════════════════════════════════════
+// Images
+// ═══════════════════════════════════════════════════════════
+
+/// One row from `docker images`.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct DockerImage {
+    #[serde(rename = "ID", default)]
+    pub id: String,
+    #[serde(rename = "Repository", default)]
+    pub repository: String,
+    #[serde(rename = "Tag", default)]
+    pub tag: String,
+    #[serde(rename = "Size", default)]
+    pub size: String,
+    #[serde(rename = "CreatedAt", default)]
+    pub created: String,
+}
+
+/// List images.
+pub async fn list_images(session: &SshSession) -> Result<Vec<DockerImage>> {
+    let cmd = "docker images --format '{{json .}}'";
+    let (exit, stdout) = session.exec_command(cmd).await?;
+    if exit != 0 {
+        return Err(SshError::InvalidConfig(format!(
+            "docker images exited {exit}"
+        )));
+    }
+    Ok(parse_ndjson::<DockerImage>(&stdout))
+}
+
+/// Blocking wrapper.
+pub fn list_images_blocking(session: &SshSession) -> Result<Vec<DockerImage>> {
+    crate::ssh::runtime::shared().block_on(list_images(session))
+}
+
+/// Remove an image.
+pub async fn remove_image(session: &SshSession, id: &str, force: bool) -> Result<()> {
+    if !is_safe_id(id) {
+        return Err(SshError::InvalidConfig(format!("unsafe image id {id:?}")));
+    }
+    let cmd = if force {
+        format!("docker rmi --force {id}")
+    } else {
+        format!("docker rmi {id}")
+    };
+    let (exit, stdout) = session.exec_command(&cmd).await?;
+    if exit != 0 {
+        return Err(SshError::InvalidConfig(format!(
+            "docker rmi exited {exit}: {}",
+            stdout.lines().next().unwrap_or("").trim()
+        )));
+    }
+    Ok(())
+}
+
+/// Blocking wrapper.
+pub fn remove_image_blocking(session: &SshSession, id: &str, force: bool) -> Result<()> {
+    crate::ssh::runtime::shared().block_on(remove_image(session, id, force))
+}
+
+// ═══════════════════════════════════════════════════════════
+// Volumes
+// ═══════════════════════════════════════════════════════════
+
+/// One row from `docker volume ls`.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct DockerVolume {
+    #[serde(rename = "Name", default)]
+    pub name: String,
+    #[serde(rename = "Driver", default)]
+    pub driver: String,
+    #[serde(rename = "Mountpoint", default)]
+    pub mountpoint: String,
+}
+
+/// List volumes.
+pub async fn list_volumes(session: &SshSession) -> Result<Vec<DockerVolume>> {
+    let cmd = "docker volume ls --format '{{json .}}'";
+    let (exit, stdout) = session.exec_command(cmd).await?;
+    if exit != 0 {
+        return Err(SshError::InvalidConfig(format!(
+            "docker volume ls exited {exit}"
+        )));
+    }
+    Ok(parse_ndjson::<DockerVolume>(&stdout))
+}
+
+/// Blocking wrapper.
+pub fn list_volumes_blocking(session: &SshSession) -> Result<Vec<DockerVolume>> {
+    crate::ssh::runtime::shared().block_on(list_volumes(session))
+}
+
+/// Remove a volume.
+pub async fn remove_volume(session: &SshSession, name: &str) -> Result<()> {
+    run_simple_action(session, "volume rm", name, false).await
+}
+
+/// Blocking wrapper.
+pub fn remove_volume_blocking(session: &SshSession, name: &str) -> Result<()> {
+    crate::ssh::runtime::shared().block_on(remove_volume(session, name))
+}
+
+// ═══════════════════════════════════════════════════════════
+// Networks
+// ═══════════════════════════════════════════════════════════
+
+/// One row from `docker network ls`.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct DockerNetwork {
+    #[serde(rename = "ID", default)]
+    pub id: String,
+    #[serde(rename = "Name", default)]
+    pub name: String,
+    #[serde(rename = "Driver", default)]
+    pub driver: String,
+    #[serde(rename = "Scope", default)]
+    pub scope: String,
+}
+
+/// List networks.
+pub async fn list_networks(session: &SshSession) -> Result<Vec<DockerNetwork>> {
+    let cmd = "docker network ls --format '{{json .}}'";
+    let (exit, stdout) = session.exec_command(cmd).await?;
+    if exit != 0 {
+        return Err(SshError::InvalidConfig(format!(
+            "docker network ls exited {exit}"
+        )));
+    }
+    Ok(parse_ndjson::<DockerNetwork>(&stdout))
+}
+
+/// Blocking wrapper.
+pub fn list_networks_blocking(session: &SshSession) -> Result<Vec<DockerNetwork>> {
+    crate::ssh::runtime::shared().block_on(list_networks(session))
+}
+
+/// Remove a network.
+pub async fn remove_network(session: &SshSession, name: &str) -> Result<()> {
+    run_simple_action(session, "network rm", name, false).await
+}
+
+/// Blocking wrapper.
+pub fn remove_network_blocking(session: &SshSession, name: &str) -> Result<()> {
+    crate::ssh::runtime::shared().block_on(remove_network(session, name))
+}
+
 /// Internal: run `docker <verb> [--force] <id>`, returning an
 /// error if the id fails the safety check or if docker exits
 /// non-zero.
@@ -221,23 +368,23 @@ async fn run_simple_action(
     Ok(())
 }
 
-/// Parse an NDJSON-style `docker ps` stdout into a vec of
-/// containers. Malformed lines are logged and skipped rather
-/// than failing the whole listing, because one corrupt entry
-/// shouldn't hide every other container from the user.
-fn parse_ps_lines(stdout: &str) -> Vec<Container> {
+/// Generic NDJSON parser — one JSON object per line.
+fn parse_ndjson<T: serde::de::DeserializeOwned>(stdout: &str) -> Vec<T> {
     let mut out = Vec::new();
     for raw in stdout.lines() {
         let line = raw.trim();
-        if line.is_empty() {
-            continue;
-        }
-        match serde_json::from_str::<Container>(line) {
-            Ok(c) => out.push(c),
-            Err(e) => log::warn!("docker ps: skipping malformed line: {e}"),
+        if line.is_empty() { continue; }
+        match serde_json::from_str::<T>(line) {
+            Ok(v) => out.push(v),
+            Err(e) => log::warn!("docker: skipping malformed line: {e}"),
         }
     }
     out
+}
+
+/// Parse an NDJSON-style `docker ps` stdout into containers.
+fn parse_ps_lines(stdout: &str) -> Vec<Container> {
+    parse_ndjson(stdout)
 }
 
 /// Strict allowlist for docker identifiers. Matches the

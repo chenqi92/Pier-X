@@ -49,6 +49,17 @@ PierMysql *pier_mysql_open(
     const char *database    /* NULL or empty = no default DB */
 );
 
+/* Open a MySQL connection using a password already stored in
+ * the OS keychain under `credential_id`. Returns NULL if the
+ * credential doesn't exist or the connection fails. */
+PierMysql *pier_mysql_open_with_credential(
+    const char *host,
+    uint16_t port,
+    const char *user,
+    const char *credential_id,
+    const char *database    /* NULL or empty = no default DB */
+);
+
 /* Release a MySQL handle. Safe to call with NULL. */
 void pier_mysql_free(PierMysql *h);
 
@@ -90,6 +101,20 @@ char *pier_mysql_list_databases(PierMysql *h);
  * the SQL. Returns a heap JSON array of table names, or
  * NULL on failure. */
 char *pier_mysql_list_tables(PierMysql *h, const char *database);
+
+/* `SHOW COLUMNS FROM <database>.<table>`. Both identifiers are
+ * validated against the same strict allowlist as
+ * pier_mysql_list_tables. Returns a heap JSON array shaped like:
+ *
+ *   [{ "name": "id",
+ *      "column_type": "bigint unsigned",
+ *      "nullable": false,
+ *      "key": "PRI",
+ *      "default_value": null,
+ *      "extra": "auto_increment" }]
+ *
+ * Release with pier_mysql_free_string. */
+char *pier_mysql_list_columns(PierMysql *h, const char *database, const char *table);
 
 #ifdef __cplusplus
 } /* extern "C" */

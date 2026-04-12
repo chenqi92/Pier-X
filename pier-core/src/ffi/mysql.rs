@@ -103,6 +103,74 @@ pub unsafe extern "C" fn pier_mysql_open(
     }
 }
 
+/// Open a MySQL connection using a password stored in the OS
+/// keyring under `credential_id`.
+///
+/// # Safety
+///
+/// `host`, `user`, and `credential_id` must be valid
+/// NUL-terminated UTF-8. `database` may be NULL or empty.
+#[no_mangle]
+pub unsafe extern "C" fn pier_mysql_open_with_credential(
+    host: *const c_char,
+    port: u16,
+    user: *const c_char,
+    credential_id: *const c_char,
+    database: *const c_char,
+) -> *mut PierMysql {
+    if host.is_null() || user.is_null() || credential_id.is_null() || port == 0 {
+        return ptr::null_mut();
+    }
+    let host_str = match unsafe { CStr::from_ptr(host) }.to_str() {
+        Ok(s) if !s.is_empty() => s.to_string(),
+        _ => return ptr::null_mut(),
+    };
+    let user_str = match unsafe { CStr::from_ptr(user) }.to_str() {
+        Ok(s) if !s.is_empty() => s.to_string(),
+        _ => return ptr::null_mut(),
+    };
+    let credential_id_str = match unsafe { CStr::from_ptr(credential_id) }.to_str() {
+        Ok(s) if !s.is_empty() => s,
+        _ => return ptr::null_mut(),
+    };
+    let database_opt = if database.is_null() {
+        None
+    } else {
+        match unsafe { CStr::from_ptr(database) }.to_str() {
+            Ok("") => None,
+            Ok(s) => Some(s.to_string()),
+            Err(_) => return ptr::null_mut(),
+        }
+    };
+
+    let password = match crate::credentials::get(credential_id_str) {
+        Ok(Some(v)) => v,
+        Ok(None) => {
+            log::warn!("pier_mysql_open_with_credential: missing keychain entry {credential_id_str}");
+            return ptr::null_mut();
+        }
+        Err(e) => {
+            log::warn!("pier_mysql_open_with_credential failed to read credential {credential_id_str}: {e}");
+            return ptr::null_mut();
+        }
+    };
+
+    let config = MysqlConfig {
+        host: host_str,
+        port,
+        user: user_str,
+        password,
+        database: database_opt,
+    };
+    match MysqlClient::connect_blocking(config) {
+        Ok(client) => Box::into_raw(Box::new(PierMysql { client })),
+        Err(e) => {
+            log::warn!("pier_mysql_open_with_credential failed: {e}");
+            ptr::null_mut()
+        }
+    }
+}
+
 /// Execute a single SQL statement. Returns a heap JSON string
 /// of shape [`QueryResult`]:
 ///
@@ -202,6 +270,40 @@ pub unsafe extern "C" fn pier_mysql_list_tables(
         Ok(tables) => into_json_cstring(&tables),
         Err(e) => {
             log::warn!("pier_mysql_list_tables failed: {e}");
+            ptr::null_mut()
+        }
+    }
+}
+
+/// `SHOW COLUMNS FROM <database>.<table>`. Returns a heap
+/// JSON array of column metadata objects.
+///
+/// # Safety
+///
+/// `h` must be a live handle. `database` and `table` must be
+/// valid NUL-terminated C strings.
+#[no_mangle]
+pub unsafe extern "C" fn pier_mysql_list_columns(
+    h: *mut PierMysql,
+    database: *const c_char,
+    table: *const c_char,
+) -> *mut c_char {
+    if h.is_null() || database.is_null() || table.is_null() {
+        return ptr::null_mut();
+    }
+    let handle = unsafe { &*h };
+    let db = match unsafe { CStr::from_ptr(database) }.to_str() {
+        Ok(s) => s,
+        Err(_) => return ptr::null_mut(),
+    };
+    let table_name = match unsafe { CStr::from_ptr(table) }.to_str() {
+        Ok(s) => s,
+        Err(_) => return ptr::null_mut(),
+    };
+    match handle.client.list_columns_blocking(db, table_name) {
+        Ok(columns) => into_json_cstring(&columns),
+        Err(e) => {
+            log::warn!("pier_mysql_list_columns failed: {e}");
             ptr::null_mut()
         }
     }

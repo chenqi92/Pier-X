@@ -135,11 +135,33 @@ bool PierMySqlClient::connectTo(const QString &host, int port,
                                  const QString &user, const QString &password,
                                  const QString &database)
 {
+    return connectInternal(host, port, user, password, database, false);
+}
+
+bool PierMySqlClient::connectToWithCredential(
+    const QString &host,
+    int port,
+    const QString &user,
+    const QString &credentialId,
+    const QString &database)
+{
+    return connectInternal(host, port, user, credentialId, database, true);
+}
+
+bool PierMySqlClient::connectInternal(
+    const QString &host,
+    int port,
+    const QString &user,
+    const QString &secret,
+    const QString &database,
+    bool useCredential)
+{
     if (m_handle || m_status == Connecting) {
         qWarning() << "PierMySqlClient::connectTo called on already-connected session";
         return false;
     }
-    if (host.isEmpty() || user.isEmpty() || port <= 0 || port > 65535) {
+    if (host.isEmpty() || user.isEmpty() || port <= 0 || port > 65535
+        || (useCredential && secret.isEmpty())) {
         return false;
     }
 
@@ -154,9 +176,10 @@ bool PierMySqlClient::connectTo(const QString &host, int port,
 
     std::string hostStd = host.toStdString();
     std::string userStd = user.toStdString();
-    std::string passStd = password.toStdString();
+    std::string secretStd = secret.toStdString();
     std::string dbStd = database.toStdString();
     const uint16_t portU16 = static_cast<uint16_t>(port);
+    const bool credentialMode = useCredential;
 
     QPointer<PierMySqlClient> selfWeak(this);
     auto cancelFlag = m_cancelFlag;
@@ -165,19 +188,27 @@ bool PierMySqlClient::connectTo(const QString &host, int port,
         selfWeak, cancelFlag, requestId,
         hostStd = std::move(hostStd),
         userStd = std::move(userStd),
-        passStd = std::move(passStd),
+        secretStd = std::move(secretStd),
         dbStd = std::move(dbStd),
-        portU16
+        portU16,
+        credentialMode
     ]() mutable {
-        const char *passPtr = passStd.empty() ? nullptr : passStd.c_str();
+        const char *secretPtr = secretStd.empty() ? nullptr : secretStd.c_str();
         const char *dbPtr   = dbStd.empty()   ? nullptr : dbStd.c_str();
 
-        ::PierMysql *h = pier_mysql_open(
-            hostStd.c_str(),
-            portU16,
-            userStd.c_str(),
-            passPtr,
-            dbPtr);
+        ::PierMysql *h = credentialMode
+            ? pier_mysql_open_with_credential(
+                hostStd.c_str(),
+                portU16,
+                userStd.c_str(),
+                secretPtr,
+                dbPtr)
+            : pier_mysql_open(
+                hostStd.c_str(),
+                portU16,
+                userStd.c_str(),
+                secretPtr,
+                dbPtr);
 
         QString err;
         if (!h) err = QStringLiteral("MySQL connect failed (see log)");
@@ -382,6 +413,10 @@ void PierMySqlClient::refreshTables(const QString &database)
             m_tables.clear();
             emit tablesChanged();
         }
+        if (!m_columns.isEmpty()) {
+            m_columns.clear();
+            emit columnsChanged();
+        }
         return;
     }
     const quint64 requestId = ++m_nextRequestId;
@@ -448,6 +483,98 @@ void PierMySqlClient::ingestTablesJson(const QString &json)
     emit tablesChanged();
 }
 
+void PierMySqlClient::refreshColumns(const QString &database, const QString &table)
+{
+    if (!m_handle) return;
+    if (database.isEmpty() || table.isEmpty()) {
+        if (!m_columns.isEmpty()) {
+            m_columns.clear();
+            emit columnsChanged();
+        }
+        return;
+    }
+
+    const quint64 requestId = ++m_nextRequestId;
+    setBusy(true);
+
+    std::string dbStd = database.toStdString();
+    std::string tableStd = table.toStdString();
+    QString dbQt = database;
+    QString tableQt = table;
+    ::PierMysql *h = m_handle;
+    QPointer<PierMySqlClient> selfWeak(this);
+    auto cancelFlag = m_cancelFlag;
+
+    auto worker = std::make_unique<std::thread>([
+        selfWeak, cancelFlag, requestId, h,
+        dbStd = std::move(dbStd), tableStd = std::move(tableStd), dbQt, tableQt
+    ]() mutable {
+        char *json = pier_mysql_list_columns(h, dbStd.c_str(), tableStd.c_str());
+        QString jsonStr;
+        if (json) {
+            jsonStr = QString::fromUtf8(json);
+            pier_mysql_free_string(json);
+        }
+        if (!selfWeak || (cancelFlag && cancelFlag->load())) return;
+        QMetaObject::invokeMethod(
+            selfWeak.data(),
+            "onColumnsResult",
+            Qt::QueuedConnection,
+            Q_ARG(quint64, requestId),
+            Q_ARG(QString, dbQt),
+            Q_ARG(QString, tableQt),
+            Q_ARG(QString, jsonStr));
+    });
+    m_workers.push_back(std::move(worker));
+}
+
+void PierMySqlClient::onColumnsResult(
+    quint64 requestId,
+    const QString &database,
+    const QString &table,
+    const QString &json)
+{
+    (void)requestId;
+    (void)database;
+    (void)table;
+    setBusy(false);
+    if (json.isEmpty()) {
+        if (!m_columns.isEmpty()) {
+            m_columns.clear();
+            emit columnsChanged();
+        }
+        return;
+    }
+    ingestColumnsJson(json);
+}
+
+void PierMySqlClient::ingestColumnsJson(const QString &json)
+{
+    QJsonParseError parseErr {};
+    const QJsonDocument doc = QJsonDocument::fromJson(json.toUtf8(), &parseErr);
+    if (parseErr.error != QJsonParseError::NoError || !doc.isArray()) {
+        qWarning() << "PierMySqlClient: malformed columns JSON:" << parseErr.errorString();
+        return;
+    }
+    QVariantList columns;
+    const QJsonArray arr = doc.array();
+    columns.reserve(arr.size());
+    for (const QJsonValue &v : arr) {
+        if (!v.isObject()) continue;
+        const QJsonObject obj = v.toObject();
+        QVariantMap column;
+        column.insert(QStringLiteral("name"), obj.value(QStringLiteral("name")).toString());
+        column.insert(QStringLiteral("type"), obj.value(QStringLiteral("column_type")).toString());
+        column.insert(QStringLiteral("nullable"), obj.value(QStringLiteral("nullable")).toBool());
+        column.insert(QStringLiteral("key"), obj.value(QStringLiteral("key")).toString());
+        column.insert(QStringLiteral("defaultValue"), obj.value(QStringLiteral("default_value")).toVariant());
+        column.insert(QStringLiteral("extra"), obj.value(QStringLiteral("extra")).toString());
+        columns.push_back(column);
+    }
+    m_columns = std::move(columns);
+    emit columnsChanged();
+}
+
 void PierMySqlClient::stop()
 {
     if (m_cancelFlag) {
@@ -467,6 +594,10 @@ void PierMySqlClient::stop()
     if (!m_tables.isEmpty()) {
         m_tables.clear();
         emit tablesChanged();
+    }
+    if (!m_columns.isEmpty()) {
+        m_columns.clear();
+        emit columnsChanged();
     }
     m_lastError.clear();
     m_lastAffectedRows = 0;

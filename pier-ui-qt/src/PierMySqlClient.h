@@ -30,6 +30,7 @@
 #include <QPointer>
 #include <QString>
 #include <QStringList>
+#include <QVariantList>
 #include <qqml.h>
 
 #include <atomic>
@@ -113,6 +114,7 @@ public:
     // schemas stripped). Populated after connect.
     Q_PROPERTY(QStringList databases READ databases NOTIFY databasesChanged FINAL)
     Q_PROPERTY(QStringList tables READ tables NOTIFY tablesChanged FINAL)
+    Q_PROPERTY(QVariantList columns READ columns NOTIFY columnsChanged FINAL)
 
     // Last execute() result metadata.
     Q_PROPERTY(QString lastError READ lastError NOTIFY resultChanged FINAL)
@@ -137,6 +139,7 @@ public:
     bool busy() const { return m_busy; }
     QStringList databases() const { return m_databases; }
     QStringList tables() const { return m_tables; }
+    QVariantList columns() const { return m_columns; }
     QString lastError() const { return m_lastError; }
     qint64 lastAffectedRows() const { return m_lastAffectedRows; }
     qint64 lastElapsedMs() const { return m_lastElapsedMs; }
@@ -150,6 +153,9 @@ public slots:
     bool connectTo(const QString &host, int port,
                    const QString &user, const QString &password,
                    const QString &database);
+    bool connectToWithCredential(const QString &host, int port,
+                                 const QString &user, const QString &credentialId,
+                                 const QString &database);
 
     /// Run a SQL statement. Result goes into resultModel +
     /// last* properties.
@@ -160,6 +166,9 @@ public slots:
     /// `SHOW TABLES FROM <database>` — refreshes the `tables`
     /// property. Empty database clears the list.
     void refreshTables(const QString &database);
+    /// `SHOW COLUMNS FROM <database>.<table>` — refreshes the
+    /// `columns` property. Empty args clear the list.
+    void refreshColumns(const QString &database, const QString &table);
 
     /// Tear down. Closes the handle and cancels in-flight
     /// ops. Safe to call multiple times.
@@ -170,6 +179,7 @@ signals:
     void busyChanged();
     void databasesChanged();
     void tablesChanged();
+    void columnsChanged();
     void resultChanged();
 
 private slots:
@@ -177,13 +187,18 @@ private slots:
     void onExecuteResult(quint64 requestId, const QString &json);
     void onDatabasesResult(quint64 requestId, const QString &json);
     void onTablesResult(quint64 requestId, const QString &database, const QString &json);
+    void onColumnsResult(quint64 requestId, const QString &database, const QString &table, const QString &json);
 
 private:
+    bool connectInternal(const QString &host, int port,
+                         const QString &user, const QString &secret,
+                         const QString &database, bool useCredential);
     void setStatus(Status s);
     void setBusy(bool b);
     void ingestExecuteJson(const QString &json);
     void ingestDatabasesJson(const QString &json);
     void ingestTablesJson(const QString &json);
+    void ingestColumnsJson(const QString &json);
 
     ::PierMysql *m_handle = nullptr;
 
@@ -194,6 +209,7 @@ private:
 
     QStringList m_databases;
     QStringList m_tables;
+    QVariantList m_columns;
 
     QString m_lastError;
     qint64 m_lastAffectedRows = 0;

@@ -76,8 +76,9 @@ pub use self::markdown::{
     pier_markdown_render_html,
 };
 pub use self::mysql::{
-    pier_mysql_execute, pier_mysql_free, pier_mysql_free_string, pier_mysql_list_databases,
-    pier_mysql_list_tables, pier_mysql_open, PierMysql,
+    pier_mysql_execute, pier_mysql_free, pier_mysql_free_string, pier_mysql_list_columns,
+    pier_mysql_list_databases, pier_mysql_list_tables, pier_mysql_open,
+    pier_mysql_open_with_credential, PierMysql,
 };
 pub use self::redis::{
     pier_redis_free, pier_redis_free_string, pier_redis_info, pier_redis_inspect, pier_redis_open,

@@ -39,8 +39,7 @@
 //! * Prepared statements / parameter binding. The UI runs
 //!   whatever the user types in the SQL editor, as-is.
 //! * Schema introspection beyond `SHOW DATABASES` / `SHOW
-//!   TABLES`. Column-level info lives in M5d+ when the
-//!   schema tree grows.
+//!   TABLES` / `SHOW COLUMNS`.
 
 use std::collections::BTreeSet;
 use std::time::Instant;
@@ -137,6 +136,23 @@ impl MysqlConfig {
 /// cell so NULLs are preserved losslessly across the JSON
 /// round-trip: `None` → `null`, `Some(s)` → `"s"`.
 pub type ResultRow = Vec<Option<String>>;
+
+/// One column from `SHOW COLUMNS`.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ColumnInfo {
+    /// Column name.
+    pub name: String,
+    /// Raw MySQL type string, e.g. `varchar(255)`.
+    pub column_type: String,
+    /// True when the column accepts NULL.
+    pub nullable: bool,
+    /// Key marker from MySQL (`PRI`, `UNI`, `MUL`, or empty).
+    pub key: String,
+    /// Default value as displayed by the server.
+    pub default_value: Option<String>,
+    /// Extra metadata, e.g. `auto_increment`.
+    pub extra: String,
+}
 
 /// Full result of a single executed statement.
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -307,6 +323,42 @@ impl MysqlClient {
     /// Blocking wrapper for [`Self::list_tables`].
     pub fn list_tables_blocking(&self, database: &str) -> Result<Vec<String>> {
         crate::ssh::runtime::shared().block_on(self.list_tables(database))
+    }
+
+    /// `SHOW COLUMNS FROM <db>.<table>`.
+    pub async fn list_columns(&self, database: &str, table: &str) -> Result<Vec<ColumnInfo>> {
+        if !is_safe_ident(database) {
+            return Err(MysqlError::InvalidConfig(format!(
+                "refusing unsafe database identifier {database:?}"
+            )));
+        }
+        if !is_safe_ident(table) {
+            return Err(MysqlError::InvalidConfig(format!(
+                "refusing unsafe table identifier {table:?}"
+            )));
+        }
+        let mut conn = self.pool.get_conn().await?;
+        let sql = format!("SHOW COLUMNS FROM `{database}`.`{table}`");
+        let rows: Vec<(String, String, String, String, Option<String>, String)> =
+            sql.fetch(&mut conn).await?;
+        drop(conn);
+
+        Ok(rows
+            .into_iter()
+            .map(|(name, column_type, null_flag, key, default_value, extra)| ColumnInfo {
+                name,
+                column_type,
+                nullable: null_flag.eq_ignore_ascii_case("YES"),
+                key,
+                default_value,
+                extra,
+            })
+            .collect())
+    }
+
+    /// Blocking wrapper for [`Self::list_columns`].
+    pub fn list_columns_blocking(&self, database: &str, table: &str) -> Result<Vec<ColumnInfo>> {
+        crate::ssh::runtime::shared().block_on(self.list_columns(database, table))
     }
 
     /// Tear down the pool. Called when the UI panel closes.

@@ -72,6 +72,8 @@ qt_add_qml_module(pier-x
         src/PierMarkdown.cpp
         src/PierMySqlClient.h
         src/PierMySqlClient.cpp
+        src/PierMySqlWorkspace.h
+        src/PierMySqlWorkspace.cpp
     QML_FILES
         qml/Main.qml
         qml/Theme.qml

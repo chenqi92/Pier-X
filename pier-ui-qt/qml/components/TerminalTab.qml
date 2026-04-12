@@ -8,13 +8,16 @@ Rectangle {
 
     property string title: ""
     property bool active: false
+    property bool menuOpen: false
     signal clicked
     signal closeRequested
+    signal contextMenuRequested(real x, real y)
 
     implicitHeight: 32
     implicitWidth: row.implicitWidth + Theme.sp4 * 2
 
     color: active                  ? Theme.bgCanvas
+         : root.menuOpen           ? Theme.bgActive
          : tabArea.containsMouse   ? Theme.bgHover
          : "transparent"
 
@@ -46,8 +49,15 @@ Rectangle {
         id: tabArea
         anchors.fill: parent
         hoverEnabled: true
+        acceptedButtons: Qt.LeftButton | Qt.RightButton
         cursorShape: Qt.PointingHandCursor
-        onClicked: root.clicked()
+        onClicked: (mouse) => {
+            if (mouse.button === Qt.RightButton) {
+                root.contextMenuRequested(mouse.x, mouse.y)
+                return
+            }
+            root.clicked()
+        }
     }
 
     Row {

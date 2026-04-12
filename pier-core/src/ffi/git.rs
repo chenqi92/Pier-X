@@ -418,6 +418,126 @@ pub unsafe extern "C" fn pier_git_pull(h: *mut PierGit) -> *mut c_char {
 }
 
 // ─────────────────────────────────────────────────────────
+// Log
+// ─────────────────────────────────────────────────────────
+
+/// Get the last N commits as a JSON array.
+#[no_mangle]
+pub unsafe extern "C" fn pier_git_log(h: *mut PierGit, limit: u32) -> *mut c_char {
+    if h.is_null() {
+        return err_json("null handle");
+    }
+    let client = unsafe { &(*h).client };
+    match client.log(limit as usize) {
+        Ok(commits) => {
+            let json = serde_json::to_string(&commits).unwrap_or_else(|_| "[]".into());
+            to_json_cstring(&json)
+        }
+        Err(e) => err_json(&e.to_string()),
+    }
+}
+
+// ─────────────────────────────────────────────────────────
+// Stash
+// ─────────────────────────────────────────────────────────
+
+/// List stash entries as a JSON array.
+#[no_mangle]
+pub unsafe extern "C" fn pier_git_stash_list(h: *mut PierGit) -> *mut c_char {
+    if h.is_null() {
+        return err_json("null handle");
+    }
+    let client = unsafe { &(*h).client };
+    match client.stash_list() {
+        Ok(stashes) => {
+            let json = serde_json::to_string(&stashes).unwrap_or_else(|_| "[]".into());
+            to_json_cstring(&json)
+        }
+        Err(e) => err_json(&e.to_string()),
+    }
+}
+
+/// Stash current changes. message may be NULL for default.
+#[no_mangle]
+pub unsafe extern "C" fn pier_git_stash_push(h: *mut PierGit, message: *const c_char) -> *mut c_char {
+    if h.is_null() { return err_json("null handle"); }
+    let client = unsafe { &(*h).client };
+    let msg = if message.is_null() { "" } else {
+        match unsafe { CStr::from_ptr(message) }.to_str() { Ok(s) => s, Err(_) => "" }
+    };
+    match client.stash_push(msg) {
+        Ok(out) => to_json_cstring(&out),
+        Err(e) => err_json(&e.to_string()),
+    }
+}
+
+/// Apply a stash by index (e.g. "stash@{0}").
+#[no_mangle]
+pub unsafe extern "C" fn pier_git_stash_apply(h: *mut PierGit, index: *const c_char) -> *mut c_char {
+    if h.is_null() || index.is_null() { return err_json("null"); }
+    let client = unsafe { &(*h).client };
+    let idx = match unsafe { CStr::from_ptr(index) }.to_str() { Ok(s) => s, Err(_) => return err_json("utf8") };
+    match client.stash_apply(idx) {
+        Ok(out) => to_json_cstring(&out),
+        Err(e) => err_json(&e.to_string()),
+    }
+}
+
+/// Pop a stash by index.
+#[no_mangle]
+pub unsafe extern "C" fn pier_git_stash_pop(h: *mut PierGit, index: *const c_char) -> *mut c_char {
+    if h.is_null() || index.is_null() { return err_json("null"); }
+    let client = unsafe { &(*h).client };
+    let idx = match unsafe { CStr::from_ptr(index) }.to_str() { Ok(s) => s, Err(_) => return err_json("utf8") };
+    match client.stash_pop(idx) {
+        Ok(out) => to_json_cstring(&out),
+        Err(e) => err_json(&e.to_string()),
+    }
+}
+
+/// Drop a stash by index.
+#[no_mangle]
+pub unsafe extern "C" fn pier_git_stash_drop(h: *mut PierGit, index: *const c_char) -> *mut c_char {
+    if h.is_null() || index.is_null() { return err_json("null"); }
+    let client = unsafe { &(*h).client };
+    let idx = match unsafe { CStr::from_ptr(index) }.to_str() { Ok(s) => s, Err(_) => return err_json("utf8") };
+    match client.stash_drop(idx) {
+        Ok(out) => to_json_cstring(&out),
+        Err(e) => err_json(&e.to_string()),
+    }
+}
+
+// ─────────────────────────────────────────────────────────
+// Branch operations
+// ─────────────────────────────────────────────────────────
+
+/// List local branches as a JSON array of strings.
+#[no_mangle]
+pub unsafe extern "C" fn pier_git_branch_list_local(h: *mut PierGit) -> *mut c_char {
+    if h.is_null() { return err_json("null handle"); }
+    let client = unsafe { &(*h).client };
+    match client.branch_list() {
+        Ok(branches) => {
+            let json = serde_json::to_string(&branches).unwrap_or_else(|_| "[]".into());
+            to_json_cstring(&json)
+        }
+        Err(e) => err_json(&e.to_string()),
+    }
+}
+
+/// Checkout a branch by name.
+#[no_mangle]
+pub unsafe extern "C" fn pier_git_checkout_branch(h: *mut PierGit, name: *const c_char) -> *mut c_char {
+    if h.is_null() || name.is_null() { return err_json("null"); }
+    let client = unsafe { &(*h).client };
+    let n = match unsafe { CStr::from_ptr(name) }.to_str() { Ok(s) => s, Err(_) => return err_json("utf8") };
+    match client.checkout_branch(n) {
+        Ok(out) => to_json_cstring(&out),
+        Err(e) => err_json(&e.to_string()),
+    }
+}
+
+// ─────────────────────────────────────────────────────────
 // Graph functions (from git_graph module)
 // ───────────────────��─────────────────────────────────────
 

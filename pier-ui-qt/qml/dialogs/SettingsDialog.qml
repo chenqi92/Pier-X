@@ -4,15 +4,17 @@ import QtQuick.Effects
 import QtQuick.Layouts
 import Pier
 
-// Modal settings dialog — section nav on the left, content on the right.
-// Pure UI for now; persistence will land alongside pier-core.
+// Modal settings dialog — denser and more structured, closer to
+// the original Pier settings flow: stable nav, readable rows,
+// proper switches, and full-width saved-connection cards.
 Item {
     id: root
 
     property bool open: false
     property var connectionsModel: null
-    readonly property int navWidth: 180
-    readonly property int contentColumnWidth: 560
+    readonly property int navWidth: 188
+    readonly property int pagePadding: 28
+    readonly property int rowLabelWidth: 248
 
     signal closed
 
@@ -21,11 +23,9 @@ Item {
     anchors.fill: parent
 
     function show() {
-        // Reset animation state
         dialog.scale = 0.96
         dialog.opacity = 0
         open = true
-        // Trigger entry animation
         dialog.scale = 1.0
         dialog.opacity = 1.0
         sectionList.currentIndex = 0
@@ -38,7 +38,6 @@ Item {
 
     Keys.onEscapePressed: hide()
 
-    // Backdrop
     Rectangle {
         anchors.fill: parent
         color: "#000000"
@@ -52,38 +51,33 @@ Item {
         }
     }
 
-    // Dialog card
     Rectangle {
         id: dialog
         anchors.centerIn: parent
-        width: Math.min(820, parent.width - 60)
-        height: Math.min(600, parent.height - 60)
-
-        // Entry animation — scale-up + fade-in
+        width: Math.min(920, parent.width - 72)
+        height: Math.min(640, parent.height - 72)
         scale: 0.96
         opacity: 0
-        Behavior on scale   { NumberAnimation { duration: Theme.durNormal; easing.type: Easing.OutCubic } }
-        Behavior on opacity { NumberAnimation { duration: Theme.durNormal; easing.type: Easing.OutCubic } }
         transformOrigin: Item.Center
-
         color: Theme.bgElevated
         border.color: Theme.borderDefault
         border.width: 1
         radius: Theme.radiusLg
 
-        Behavior on color        { ColorAnimation { duration: Theme.durNormal } }
+        Behavior on scale { NumberAnimation { duration: Theme.durNormal; easing.type: Theme.easingType } }
+        Behavior on opacity { NumberAnimation { duration: Theme.durNormal; easing.type: Theme.easingType } }
+        Behavior on color { ColorAnimation { duration: Theme.durNormal } }
         Behavior on border.color { ColorAnimation { duration: Theme.durNormal } }
 
         layer.enabled: true
         layer.effect: MultiEffect {
             shadowEnabled: true
             shadowColor: "#000000"
-            shadowOpacity: 0.5
+            shadowOpacity: 0.46
             shadowBlur: 1.0
-            shadowVerticalOffset: 16
+            shadowVerticalOffset: 18
         }
 
-        // Block clicks on the dialog from reaching the backdrop.
         MouseArea {
             anchors.fill: parent
             onClicked: (mouse) => mouse.accepted = true
@@ -94,27 +88,35 @@ Item {
             anchors.fill: parent
             spacing: 0
 
-            // Title bar
             Rectangle {
                 Layout.fillWidth: true
-                Layout.preferredHeight: 44
+                Layout.preferredHeight: 52
                 color: Theme.bgPanel
-
-                Behavior on color { ColorAnimation { duration: Theme.durNormal } }
 
                 RowLayout {
                     anchors.fill: parent
-                    anchors.leftMargin: Theme.sp4
-                    anchors.rightMargin: Theme.sp2
+                    anchors.leftMargin: Theme.sp5
+                    anchors.rightMargin: Theme.sp3
+                    spacing: Theme.sp3
 
-                    Text {
+                    ColumnLayout {
                         Layout.fillWidth: true
-                        text: qsTr("Settings")
-                        font.family: Theme.fontUi
-                        font.pixelSize: Theme.sizeH3
-                        font.weight: Theme.weightMedium
-                        color: Theme.textPrimary
-                        Behavior on color { ColorAnimation { duration: Theme.durNormal } }
+                        spacing: 0
+
+                        Text {
+                            text: qsTr("Settings")
+                            font.family: Theme.fontUi
+                            font.pixelSize: Theme.sizeH3
+                            font.weight: Theme.weightMedium
+                            color: Theme.textPrimary
+                        }
+
+                        Text {
+                            text: qsTr("Adjust appearance, terminal behavior, and saved connections.")
+                            font.family: Theme.fontUi
+                            font.pixelSize: Theme.sizeSmall
+                            color: Theme.textTertiary
+                        }
                     }
 
                     IconButton {
@@ -125,9 +127,9 @@ Item {
                 }
 
                 Rectangle {
-                    anchors.bottom: parent.bottom
                     anchors.left: parent.left
                     anchors.right: parent.right
+                    anchors.bottom: parent.bottom
                     height: 1
                     color: Theme.borderSubtle
                 }
@@ -138,19 +140,16 @@ Item {
                 Layout.fillHeight: true
                 spacing: 0
 
-                // Section nav
                 Rectangle {
                     Layout.preferredWidth: root.navWidth
                     Layout.fillHeight: true
                     color: Theme.bgPanel
 
-                    Behavior on color { ColorAnimation { duration: Theme.durNormal } }
-
                     ListView {
                         id: sectionList
                         anchors.fill: parent
-                        anchors.margins: Theme.sp2
-                        spacing: Theme.sp0_5
+                        anchors.margins: Theme.sp3
+                        spacing: Theme.sp1
                         interactive: false
                         currentIndex: 0
 
@@ -163,29 +162,28 @@ Item {
 
                         delegate: Rectangle {
                             width: ListView.view.width
-                            implicitHeight: 28
-                            color: ListView.isCurrentItem
-                                 ? Theme.accentMuted
-                                 : navArea.containsMouse ? Theme.bgHover : "transparent"
+                            implicitHeight: 32
                             radius: Theme.radiusSm
+                            color: ListView.isCurrentItem
+                                   ? Theme.accentMuted
+                                   : navArea.containsMouse ? Theme.bgHover : "transparent"
 
                             Behavior on color { ColorAnimation { duration: Theme.durFast } }
 
                             Text {
                                 anchors.fill: parent
-                                anchors.leftMargin: Theme.sp2
+                                anchors.leftMargin: Theme.sp3
+                                anchors.rightMargin: Theme.sp2
                                 verticalAlignment: Text.AlignVCenter
                                 text: model.title
                                 font.family: Theme.fontUi
                                 font.pixelSize: Theme.sizeBody
                                 font.weight: ListView.isCurrentItem
-                                           ? Theme.weightMedium
-                                           : Theme.weightRegular
+                                             ? Theme.weightMedium
+                                             : Theme.weightRegular
                                 color: ListView.isCurrentItem
-                                     ? Theme.textPrimary
-                                     : Theme.textSecondary
-
-                                Behavior on color { ColorAnimation { duration: Theme.durFast } }
+                                       ? Theme.textPrimary
+                                       : Theme.textSecondary
                             }
 
                             MouseArea {
@@ -199,68 +197,57 @@ Item {
                     }
 
                     Rectangle {
-                        anchors.right: parent.right
                         anchors.top: parent.top
                         anchors.bottom: parent.bottom
+                        anchors.right: parent.right
                         width: 1
                         color: Theme.borderSubtle
                     }
                 }
 
-                // Content area
                 StackLayout {
                     Layout.fillWidth: true
                     Layout.fillHeight: true
                     currentIndex: sectionList.currentIndex
 
-                    // ─── General ─────────────────────────
                     ScrollView {
+                        id: generalScroll
                         clip: true
+                        contentWidth: availableWidth
+
                         ColumnLayout {
-                            width: parent ? parent.availableWidth : 0
-                            spacing: Theme.sp4
-
-                            Item { Layout.preferredHeight: Theme.sp4 }
-
-                            SectionLabel { text: qsTr("Theme"); Layout.leftMargin: Theme.sp4 }
+                            width: Math.max(0, generalScroll.availableWidth - root.pagePadding * 2)
+                            x: root.pagePadding
+                            y: root.pagePadding
+                            spacing: Theme.sp5
 
                             ColumnLayout {
                                 Layout.fillWidth: true
-                                Layout.leftMargin: Theme.sp4
-                                Layout.rightMargin: Theme.sp4
-                                spacing: Theme.sp2
+                                spacing: Theme.sp3
 
-                                RowLayout {
+                                SectionLabel { text: qsTr("Theme") }
+
+                                SettingRow {
                                     Layout.fillWidth: true
-                                    Text {
-                                        text: qsTr("Follow system theme")
-                                        Layout.preferredWidth: 200
-                                        font.family: Theme.fontUi
-                                        font.pixelSize: Theme.sizeBody
-                                        color: Theme.textPrimary
-                                    }
-                                    Item { Layout.fillWidth: true }
-                                    GhostButton {
-                                        text: Theme.followSystem ? qsTr("On") : qsTr("Off")
-                                        onClicked: Theme.followSystem = !Theme.followSystem
+                                    title: qsTr("Follow system theme")
+                                    description: qsTr("Automatically mirror the operating system appearance.")
+
+                                    ToggleSwitch {
+                                        checked: Theme.followSystem
+                                        onToggled: (checked) => Theme.followSystem = checked
                                     }
                                 }
 
-                                RowLayout {
+                                SettingRow {
                                     Layout.fillWidth: true
-                                    Text {
-                                        text: qsTr("Color scheme")
-                                        Layout.preferredWidth: 200
-                                        font.family: Theme.fontUi
-                                        font.pixelSize: Theme.sizeBody
-                                        color: Theme.textPrimary
-                                    }
-                                    Item { Layout.fillWidth: true }
-                                    PierComboBox {
-                                        id: schemeCombo
-                                        Layout.preferredWidth: 160
+                                    title: qsTr("Color scheme")
+                                    description: qsTr("Manual override when system sync is turned off.")
+
+                                    SegmentedControl {
+                                        implicitWidth: 168
                                         options: [qsTr("Dark"), qsTr("Light")]
                                         currentIndex: Theme.dark ? 0 : 1
+                                        enabled: !Theme.followSystem
                                         onActivated: (i) => {
                                             Theme.followSystem = false
                                             Theme.dark = (i === 0)
@@ -268,330 +255,428 @@ Item {
                                     }
                                 }
                             }
+
+                            Item { implicitHeight: root.pagePadding }
                         }
                     }
 
-                    // ─── Appearance ──────────────────────
                     ScrollView {
+                        id: appearanceScroll
                         clip: true
+                        contentWidth: availableWidth
+
                         ColumnLayout {
-                            width: parent ? parent.availableWidth : 0
-                            spacing: Theme.sp4
-
-                            Item { Layout.preferredHeight: Theme.sp4 }
-
-                            SectionLabel { text: qsTr("Typography"); Layout.leftMargin: Theme.sp4 }
+                            width: Math.max(0, appearanceScroll.availableWidth - root.pagePadding * 2)
+                            x: root.pagePadding
+                            y: root.pagePadding
+                            spacing: Theme.sp5
 
                             ColumnLayout {
                                 Layout.fillWidth: true
-                                Layout.leftMargin: Theme.sp4
-                                Layout.rightMargin: Theme.sp4
-                                spacing: Theme.sp2
+                                spacing: Theme.sp3
 
-                                RowLayout {
+                                SectionLabel { text: qsTr("Typography") }
+
+                                SettingRow {
                                     Layout.fillWidth: true
-                                    Text {
-                                        text: qsTr("UI font")
-                                        Layout.preferredWidth: 200
-                                        font.family: Theme.fontUi
-                                        font.pixelSize: Theme.sizeBody
-                                        color: Theme.textPrimary
-                                    }
-                                    Item { Layout.fillWidth: true }
+                                    title: qsTr("UI font")
+                                    description: qsTr("Primary interface font used for labels, buttons, and navigation.")
+
                                     Text {
                                         text: Theme.fontUi
                                         font.family: Theme.fontMono
                                         font.pixelSize: Theme.sizeBody
-                                        color: Theme.textTertiary
+                                        color: Theme.textSecondary
                                     }
                                 }
 
-                                RowLayout {
+                                SettingRow {
                                     Layout.fillWidth: true
-                                    Text {
-                                        text: qsTr("Mono font")
-                                        Layout.preferredWidth: 200
-                                        font.family: Theme.fontUi
-                                        font.pixelSize: Theme.sizeBody
-                                        color: Theme.textPrimary
-                                    }
-                                    Item { Layout.fillWidth: true }
+                                    title: qsTr("Mono font")
+                                    description: qsTr("Used for terminal content, paths, ports, and code-like data.")
+
                                     Text {
                                         text: Theme.fontMono
                                         font.family: Theme.fontMono
                                         font.pixelSize: Theme.sizeBody
-                                        color: Theme.textTertiary
+                                        color: Theme.textSecondary
                                     }
                                 }
                             }
-
-                            Separator { Layout.fillWidth: true; Layout.leftMargin: Theme.sp4; Layout.rightMargin: Theme.sp4 }
-
-                            SectionLabel { text: qsTr("UI font size"); Layout.leftMargin: Theme.sp4 }
 
                             ColumnLayout {
                                 Layout.fillWidth: true
-                                Layout.leftMargin: Theme.sp4
-                                Layout.rightMargin: Theme.sp4
-                                spacing: Theme.sp2
+                                spacing: Theme.sp3
 
-                                RowLayout {
+                                SectionLabel { text: qsTr("Preview") }
+
+                                Card {
                                     Layout.fillWidth: true
-                                    Text {
-                                        text: qsTr("Size")
-                                        Layout.preferredWidth: 200
-                                        font.family: Theme.fontUi
-                                        font.pixelSize: Theme.sizeBody
-                                        color: Theme.textPrimary
-                                    }
-                                    Item { Layout.fillWidth: true }
-                                    Text {
-                                        text: Theme.sizeBody + " px"
-                                        font.family: Theme.fontMono
-                                        font.pixelSize: Theme.sizeBody
-                                        color: Theme.textTertiary
+                                    padding: Theme.sp4
+
+                                    ColumnLayout {
+                                        anchors.fill: parent
+                                        spacing: Theme.sp2
+
+                                        Text {
+                                            text: qsTr("The quick brown fox jumps over the lazy dog.")
+                                            font.family: Theme.fontUi
+                                            font.pixelSize: Theme.sizeBody
+                                            color: Theme.textPrimary
+                                        }
+
+                                        Text {
+                                            text: qsTr("Buttons, tabs, and list rows should stay compact while preserving hierarchy.")
+                                            font.family: Theme.fontUi
+                                            font.pixelSize: Theme.sizeSmall
+                                            color: Theme.textSecondary
+                                            wrapMode: Text.WordWrap
+                                        }
                                     }
                                 }
 
-                                // Preview
-                                Rectangle {
+                                Card {
                                     Layout.fillWidth: true
-                                    implicitHeight: previewText.implicitHeight + Theme.sp3 * 2
-                                    color: Theme.bgSurface
-                                    border.color: Theme.borderSubtle
-                                    border.width: 1
-                                    radius: Theme.radiusSm
+                                    padding: Theme.sp4
 
-                                    Text {
-                                        id: previewText
+                                    ColumnLayout {
                                         anchors.fill: parent
-                                        anchors.margins: Theme.sp3
-                                        text: "The quick brown fox jumps over the lazy dog."
-                                        font.family: Theme.fontUi
-                                        font.pixelSize: Theme.sizeBody
-                                        color: Theme.textPrimary
-                                        wrapMode: Text.Wrap
-                                    }
-                                }
+                                        spacing: Theme.sp2
 
-                                // Mono preview
-                                Rectangle {
-                                    Layout.fillWidth: true
-                                    implicitHeight: monoPreview.implicitHeight + Theme.sp3 * 2
-                                    color: Theme.bgSurface
-                                    border.color: Theme.borderSubtle
-                                    border.width: 1
-                                    radius: Theme.radiusSm
+                                        Text {
+                                            text: "$ ssh root@prod-01 'tail -f /var/log/nginx/access.log'"
+                                            font.family: Theme.fontMono
+                                            font.pixelSize: Theme.sizeBody
+                                            color: Theme.textPrimary
+                                            wrapMode: Text.WrapAnywhere
+                                        }
 
-                                    Text {
-                                        id: monoPreview
-                                        anchors.fill: parent
-                                        anchors.margins: Theme.sp3
-                                        text: "$ ssh root@prod-01 'tail -f /var/log/nginx/access.log'"
-                                        font.family: Theme.fontMono
-                                        font.pixelSize: Theme.sizeBody
-                                        color: Theme.textPrimary
-                                        wrapMode: Text.Wrap
+                                        Text {
+                                            text: qsTr("Machine-readable values stay monospaced so hosts, commands, and ports scan immediately.")
+                                            font.family: Theme.fontUi
+                                            font.pixelSize: Theme.sizeSmall
+                                            color: Theme.textSecondary
+                                            wrapMode: Text.WordWrap
+                                        }
                                     }
                                 }
                             }
+
+                            Item { implicitHeight: root.pagePadding }
                         }
                     }
 
-                    // ─── Terminal ────────────────────────
                     ScrollView {
+                        id: terminalScroll
                         clip: true
+                        contentWidth: availableWidth
+
                         ColumnLayout {
-                            width: parent ? parent.availableWidth : 0
-                            spacing: Theme.sp4
-
-                            Item { Layout.preferredHeight: Theme.sp4 }
-
-                            SectionLabel { text: qsTr("Cursor"); Layout.leftMargin: Theme.sp4 }
+                            width: Math.max(0, terminalScroll.availableWidth - root.pagePadding * 2)
+                            x: root.pagePadding
+                            y: root.pagePadding
+                            spacing: Theme.sp5
 
                             ColumnLayout {
                                 Layout.fillWidth: true
-                                Layout.leftMargin: Theme.sp4
-                                Layout.rightMargin: Theme.sp4
-                                spacing: Theme.sp2
+                                spacing: Theme.sp3
 
-                                RowLayout {
+                                SectionLabel { text: qsTr("Cursor") }
+
+                                SettingRow {
                                     Layout.fillWidth: true
-                                    Text {
-                                        text: qsTr("Cursor style")
-                                        Layout.preferredWidth: 200
-                                        font.family: Theme.fontUi
-                                        font.pixelSize: Theme.sizeBody
-                                        color: Theme.textPrimary
-                                    }
-                                    Item { Layout.fillWidth: true }
-                                    PierComboBox {
-                                        Layout.preferredWidth: 120
+                                    title: qsTr("Cursor style")
+                                    description: qsTr("The visual shape used in the terminal.")
+
+                                    SegmentedControl {
+                                        implicitWidth: 228
                                         options: [qsTr("Block"), qsTr("Beam"), qsTr("Underline")]
                                         currentIndex: 0
                                     }
                                 }
 
-                                RowLayout {
+                                SettingRow {
                                     Layout.fillWidth: true
-                                    Text {
-                                        text: qsTr("Cursor blink")
-                                        Layout.preferredWidth: 200
-                                        font.family: Theme.fontUi
-                                        font.pixelSize: Theme.sizeBody
-                                        color: Theme.textPrimary
-                                    }
-                                    Item { Layout.fillWidth: true }
-                                    GhostButton {
-                                        text: qsTr("On")
-                                    }
+                                    title: qsTr("Cursor blink")
+                                    description: qsTr("Animate the cursor when the terminal is focused.")
+
+                                    ToggleSwitch { checked: true }
                                 }
                             }
 
-                            Separator { Layout.fillWidth: true; Layout.leftMargin: Theme.sp4; Layout.rightMargin: Theme.sp4 }
-
-                            SectionLabel { text: qsTr("Scrollback"); Layout.leftMargin: Theme.sp4 }
-
                             ColumnLayout {
                                 Layout.fillWidth: true
-                                Layout.leftMargin: Theme.sp4
-                                Layout.rightMargin: Theme.sp4
-                                spacing: Theme.sp2
+                                spacing: Theme.sp3
 
-                                RowLayout {
+                                SectionLabel { text: qsTr("Scrollback") }
+
+                                SettingRow {
                                     Layout.fillWidth: true
-                                    Text {
-                                        text: qsTr("Buffer lines")
-                                        Layout.preferredWidth: 200
-                                        font.family: Theme.fontUi
-                                        font.pixelSize: Theme.sizeBody
-                                        color: Theme.textPrimary
-                                    }
-                                    Item { Layout.fillWidth: true }
-                                    // Editable field for scrollback buffer size
+                                    title: qsTr("Buffer lines")
+                                    description: qsTr("Number of lines to keep in terminal history.")
+
                                     PierTextField {
-                                        Layout.preferredWidth: 90
+                                        implicitWidth: 108
                                         text: "10000"
                                     }
                                 }
                             }
 
-                            Separator { Layout.fillWidth: true; Layout.leftMargin: Theme.sp4; Layout.rightMargin: Theme.sp4 }
-
-                            SectionLabel { text: qsTr("Bell"); Layout.leftMargin: Theme.sp4 }
-
                             ColumnLayout {
                                 Layout.fillWidth: true
-                                Layout.leftMargin: Theme.sp4
-                                Layout.rightMargin: Theme.sp4
-                                spacing: Theme.sp2
+                                spacing: Theme.sp3
 
-                                RowLayout {
+                                SectionLabel { text: qsTr("Bell") }
+
+                                SettingRow {
                                     Layout.fillWidth: true
-                                    Text {
-                                        text: qsTr("Visual bell")
-                                        Layout.preferredWidth: 200
-                                        font.family: Theme.fontUi
-                                        font.pixelSize: Theme.sizeBody
-                                        color: Theme.textPrimary
-                                    }
-                                    Item { Layout.fillWidth: true }
-                                    GhostButton {
-                                        text: qsTr("On")
-                                    }
+                                    title: qsTr("Visual bell")
+                                    description: qsTr("Flash the terminal instead of playing a sound.")
+
+                                    ToggleSwitch { checked: true }
                                 }
 
-                                RowLayout {
+                                SettingRow {
                                     Layout.fillWidth: true
-                                    Text {
-                                        text: qsTr("Audio bell")
-                                        Layout.preferredWidth: 200
-                                        font.family: Theme.fontUi
-                                        font.pixelSize: Theme.sizeBody
-                                        color: Theme.textPrimary
-                                    }
-                                    Item { Layout.fillWidth: true }
-                                    GhostButton {
-                                        text: qsTr("Off")
-                                    }
+                                    title: qsTr("Audio bell")
+                                    description: qsTr("Play the terminal bell sound when supported.")
+
+                                    ToggleSwitch { checked: false }
                                 }
                             }
+
+                            Item { implicitHeight: root.pagePadding }
                         }
                     }
 
-                    // ─── Connections ─────────────────────
                     ScrollView {
+                        id: connectionsScroll
                         clip: true
+                        contentWidth: availableWidth
+
                         ColumnLayout {
-                            width: parent ? parent.availableWidth : 0
+                            width: Math.max(0, connectionsScroll.availableWidth - root.pagePadding * 2)
+                            x: root.pagePadding
+                            y: root.pagePadding
                             spacing: Theme.sp4
 
-                            Item { Layout.preferredHeight: Theme.sp4 }
-
-                            SectionLabel { text: qsTr("Saved connections"); Layout.leftMargin: Theme.sp4 }
-
-                            // Empty state
-                            Text {
-                                visible: !root.connectionsModel || root.connectionsModel.count === 0
-                                Layout.leftMargin: Theme.sp4
-                                Layout.rightMargin: Theme.sp4
-                                text: qsTr("No connections saved yet.")
-                                font.family: Theme.fontUi
-                                font.pixelSize: Theme.sizeBody
-                                color: Theme.textTertiary
-                                Behavior on color { ColorAnimation { duration: Theme.durNormal } }
-                            }
-
-                            ListView {
+                            ColumnLayout {
                                 Layout.fillWidth: true
-                                Layout.leftMargin: Theme.sp4
-                                Layout.rightMargin: Theme.sp4
-                                Layout.preferredHeight: contentHeight
-                                interactive: false
-                                model: root.connectionsModel
-                                visible: root.connectionsModel && root.connectionsModel.count > 0
                                 spacing: Theme.sp2
 
-                                delegate: Rectangle {
-                                    width: ListView.view.width
-                                    implicitHeight: 52
-                                    color: Theme.bgSurface
-                                    border.color: Theme.borderSubtle
-                                    border.width: 1
-                                    radius: Theme.radiusSm
+                                SectionLabel { text: qsTr("Saved connections") }
 
-                                    ColumnLayout {
-                                        anchors.fill: parent
-                                        anchors.leftMargin: Theme.sp3
-                                        anchors.rightMargin: Theme.sp3
-                                        anchors.topMargin: Theme.sp2
-                                        anchors.bottomMargin: Theme.sp2
-                                        spacing: 2
+                                Text {
+                                    Layout.fillWidth: true
+                                    text: qsTr("Profiles saved here are reused by the sidebar, SFTP browser, and remote service panels.")
+                                    wrapMode: Text.WordWrap
+                                    font.family: Theme.fontUi
+                                    font.pixelSize: Theme.sizeSmall
+                                    color: Theme.textSecondary
+                                }
+                            }
 
-                                        Text {
-                                            text: model.name
-                                            font.family: Theme.fontUi
-                                            font.pixelSize: Theme.sizeBody
-                                            font.weight: Theme.weightMedium
-                                            color: Theme.textPrimary
-                                            elide: Text.ElideRight
-                                            Layout.fillWidth: true
-                                        }
-                                        Text {
-                                            text: (model.username || "") + "@" + model.host + ":" + model.port
-                                            font.family: Theme.fontMono
-                                            font.pixelSize: Theme.sizeSmall
-                                            color: Theme.textTertiary
-                                            elide: Text.ElideRight
-                                            Layout.fillWidth: true
+                            Card {
+                                Layout.fillWidth: true
+                                visible: !root.connectionsModel || root.connectionsModel.count === 0
+                                padding: Theme.sp4
+
+                                ColumnLayout {
+                                    anchors.fill: parent
+                                    spacing: Theme.sp1
+
+                                    Text {
+                                        text: qsTr("No connections saved yet.")
+                                        font.family: Theme.fontUi
+                                        font.pixelSize: Theme.sizeBody
+                                        font.weight: Theme.weightMedium
+                                        color: Theme.textPrimary
+                                    }
+
+                                    Text {
+                                        text: qsTr("Use the New SSH connection dialog to create your first reusable host profile.")
+                                        font.family: Theme.fontUi
+                                        font.pixelSize: Theme.sizeSmall
+                                        color: Theme.textSecondary
+                                        wrapMode: Text.WordWrap
+                                    }
+                                }
+                            }
+
+                            ColumnLayout {
+                                Layout.fillWidth: true
+                                spacing: Theme.sp2
+                                visible: root.connectionsModel && root.connectionsModel.count > 0
+
+                                Repeater {
+                                    model: root.connectionsModel
+
+                                    delegate: Card {
+                                        id: connectionCard
+
+                                        required property string name
+                                        required property string host
+                                        required property int port
+                                        required property string username
+                                        required property string keyPath
+                                        required property bool usesAgent
+                                        required property string credentialId
+
+                                        Layout.fillWidth: true
+                                        padding: Theme.sp3
+
+                                        readonly property string authLabel: usesAgent
+                                                ? qsTr("Agent")
+                                                : keyPath.length > 0 ? qsTr("Key")
+                                                : qsTr("Password")
+                                        readonly property color authTint: usesAgent
+                                                ? Theme.accent
+                                                : keyPath.length > 0 ? Theme.statusSuccess
+                                                : Theme.statusWarning
+                                        readonly property string summary: usesAgent
+                                                ? qsTr("Uses the system SSH agent")
+                                                : keyPath.length > 0
+                                                  ? qsTr("Private key: %1").arg(keyPath.split("/").pop())
+                                                  : (credentialId.length > 0
+                                                     ? qsTr("Password stored in keychain")
+                                                     : qsTr("Password stored directly"))
+
+                                        RowLayout {
+                                            anchors.fill: parent
+                                            spacing: Theme.sp3
+
+                                            Rectangle {
+                                                Layout.alignment: Qt.AlignTop
+                                                Layout.topMargin: Theme.sp1
+                                                width: 8
+                                                height: 8
+                                                radius: 4
+                                                color: connectionCard.authTint
+                                            }
+
+                                            ColumnLayout {
+                                                Layout.fillWidth: true
+                                                spacing: Theme.sp0_5
+
+                                                RowLayout {
+                                                    Layout.fillWidth: true
+                                                    spacing: Theme.sp2
+
+                                                    Text {
+                                                        Layout.fillWidth: true
+                                                        text: name.length > 0 ? name : host
+                                                        font.family: Theme.fontUi
+                                                        font.pixelSize: Theme.sizeBody
+                                                        font.weight: Theme.weightMedium
+                                                        color: Theme.textPrimary
+                                                        elide: Text.ElideRight
+                                                    }
+
+                                                    ConnectionBadge {
+                                                        label: connectionCard.authLabel
+                                                        tint: connectionCard.authTint
+                                                    }
+                                                }
+
+                                                Text {
+                                                    Layout.fillWidth: true
+                                                    text: username + "@" + host + ":" + port
+                                                    font.family: Theme.fontMono
+                                                    font.pixelSize: Theme.sizeCaption
+                                                    color: Theme.textSecondary
+                                                    elide: Text.ElideRight
+                                                }
+
+                                                Text {
+                                                    Layout.fillWidth: true
+                                                    text: connectionCard.summary
+                                                    font.family: Theme.fontUi
+                                                    font.pixelSize: Theme.sizeSmall
+                                                    color: Theme.textTertiary
+                                                    elide: Text.ElideRight
+                                                }
+                                            }
                                         }
                                     }
                                 }
                             }
+
+                            Item { implicitHeight: root.pagePadding }
                         }
                     }
                 }
             }
+        }
+    }
+
+    component SettingRow: Item {
+        id: settingRow
+
+        property string title: ""
+        property string description: ""
+        default property alias trailing: trailingRow.data
+
+        implicitHeight: Math.max(46, labelColumn.implicitHeight + Theme.sp3 * 2)
+
+        RowLayout {
+            anchors.fill: parent
+            spacing: Theme.sp4
+
+            ColumnLayout {
+                id: labelColumn
+                Layout.preferredWidth: root.rowLabelWidth
+                Layout.maximumWidth: root.rowLabelWidth
+                spacing: Theme.sp0_5
+
+                Text {
+                    text: settingRow.title
+                    font.family: Theme.fontUi
+                    font.pixelSize: Theme.sizeBody
+                    font.weight: Theme.weightMedium
+                    color: Theme.textPrimary
+                    wrapMode: Text.WordWrap
+                }
+
+                Text {
+                    visible: settingRow.description.length > 0
+                    text: settingRow.description
+                    font.family: Theme.fontUi
+                    font.pixelSize: Theme.sizeSmall
+                    color: Theme.textTertiary
+                    wrapMode: Text.WordWrap
+                    Layout.fillWidth: true
+                }
+            }
+
+            Item { Layout.fillWidth: true }
+
+            RowLayout {
+                id: trailingRow
+                spacing: Theme.sp2
+                Layout.alignment: Qt.AlignVCenter
+            }
+        }
+    }
+
+    component ConnectionBadge: Rectangle {
+        property string label: ""
+        property color tint: Theme.accent
+
+        implicitHeight: 22
+        implicitWidth: badgeText.implicitWidth + Theme.sp2 * 2
+        radius: Theme.radiusPill
+        color: Qt.rgba(tint.r, tint.g, tint.b, Theme.dark ? 0.18 : 0.12)
+        border.color: Qt.rgba(tint.r, tint.g, tint.b, Theme.dark ? 0.36 : 0.24)
+        border.width: 1
+
+        Text {
+            id: badgeText
+            anchors.centerIn: parent
+            text: parent.label
+            font.family: Theme.fontUi
+            font.pixelSize: Theme.sizeSmall
+            font.weight: Theme.weightMedium
+            color: parent.tint
         }
     }
 }

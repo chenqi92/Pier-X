@@ -105,6 +105,36 @@ pub struct GitFileChange {
     pub staged: bool,
 }
 
+/// A single commit entry from `git log`.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct CommitInfo {
+    /// Full 40-char hash.
+    pub hash: String,
+    /// Short hash (7-8 chars).
+    pub short_hash: String,
+    /// Commit message (first line).
+    pub message: String,
+    /// Author name.
+    pub author: String,
+    /// Unix timestamp.
+    pub timestamp: i64,
+    /// Relative date string (e.g. "2 hours ago").
+    pub relative_date: String,
+    /// Ref decorations (branch names, tags).
+    pub refs: String,
+}
+
+/// A stash entry.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct StashEntry {
+    /// Stash index (e.g. "stash@{0}").
+    pub index: String,
+    /// Stash message.
+    pub message: String,
+    /// Relative date.
+    pub relative_date: String,
+}
+
 /// Current branch information.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct BranchInfo {
@@ -390,16 +420,93 @@ impl GitClient {
         self.git(&["pull"])
     }
 
-    // ── Log (simple, for Phase 1) ────────────────────────
+    // ── Log ──────────────────────────────────────────────
 
-    /// Get the last N commits as a simple list.
-    pub fn log_simple(&self, limit: usize) -> Result<String, GitError> {
-        self.git(&[
+    /// Get the last N commits as a JSON-serializable list.
+    pub fn log(&self, limit: usize) -> Result<Vec<CommitInfo>, GitError> {
+        let sep = "\x1f";
+        let output = self.git(&[
             "log",
             &format!("-{}", limit),
-            "--format=%H\x1f%h\x1f%s\x1f%an\x1f%ct\x1f%cr",
+            &format!("--format=%H{0}%h{0}%s{0}%an{0}%ct{0}%cr{0}%D", sep),
             "--topo-order",
-        ])
+        ])?;
+
+        let mut commits = Vec::new();
+        for line in output.lines() {
+            if line.is_empty() { continue; }
+            let parts: Vec<&str> = line.splitn(7, sep).collect();
+            if parts.len() < 6 { continue; }
+            commits.push(CommitInfo {
+                hash: parts[0].to_string(),
+                short_hash: parts[1].to_string(),
+                message: parts[2].to_string(),
+                author: parts[3].to_string(),
+                timestamp: parts[4].parse().unwrap_or(0),
+                relative_date: parts[5].to_string(),
+                refs: parts.get(6).unwrap_or(&"").to_string(),
+            });
+        }
+        Ok(commits)
+    }
+
+    // ── Stash ────────────────────────────────────────────
+
+    /// List stash entries.
+    pub fn stash_list(&self) -> Result<Vec<StashEntry>, GitError> {
+        let output = self.git(&["stash", "list", "--format=%gd\x1f%gs\x1f%cr"])?;
+        let mut stashes = Vec::new();
+        for line in output.lines() {
+            if line.is_empty() { continue; }
+            let parts: Vec<&str> = line.splitn(3, '\x1f').collect();
+            if parts.len() < 3 { continue; }
+            stashes.push(StashEntry {
+                index: parts[0].to_string(),
+                message: parts[1].to_string(),
+                relative_date: parts[2].to_string(),
+            });
+        }
+        Ok(stashes)
+    }
+
+    /// Stash current changes.
+    pub fn stash_push(&self, message: &str) -> Result<String, GitError> {
+        if message.is_empty() {
+            self.git(&["stash", "push"])
+        } else {
+            self.git(&["stash", "push", "-m", message])
+        }
+    }
+
+    /// Apply a stash (keep it in the stash list).
+    pub fn stash_apply(&self, index: &str) -> Result<String, GitError> {
+        self.git(&["stash", "apply", index])
+    }
+
+    /// Pop a stash (apply + drop).
+    pub fn stash_pop(&self, index: &str) -> Result<String, GitError> {
+        self.git(&["stash", "pop", index])
+    }
+
+    /// Drop a stash.
+    pub fn stash_drop(&self, index: &str) -> Result<String, GitError> {
+        self.git(&["stash", "drop", index])
+    }
+
+    // ── Branch operations ────────────────────────────────
+
+    /// List local branches.
+    pub fn branch_list(&self) -> Result<Vec<String>, GitError> {
+        let output = self.git(&["branch", "--format=%(refname:short)"])?;
+        Ok(output.lines()
+            .filter(|l| !l.is_empty())
+            .map(|l| l.to_string())
+            .collect())
+    }
+
+    /// Switch to a branch.
+    pub fn checkout_branch(&self, name: &str) -> Result<String, GitError> {
+        self.git(&["checkout", name])
     }
 
     // ── Internal ─────────────────────────────────────────

@@ -15,10 +15,10 @@ Rectangle {
     // character momentarily — we use Password which is stricter.
     property bool password: false
 
-    implicitHeight: 28
+    implicitHeight: 32
     implicitWidth: 200
 
-    color: Theme.bgSurface
+    color: Theme.dark ? Theme.bgSurface : Theme.bgPanel
     border.color: input.activeFocus ? Theme.borderFocus : Theme.borderDefault
     border.width: 1
     radius: Theme.radiusSm
@@ -29,8 +29,8 @@ Rectangle {
     TextInput {
         id: input
         anchors.fill: parent
-        anchors.leftMargin: Theme.sp2
-        anchors.rightMargin: Theme.sp2
+        anchors.leftMargin: Theme.sp3
+        anchors.rightMargin: Theme.sp3
         verticalAlignment: TextInput.AlignVCenter
         clip: true
         font.family: Theme.fontUi

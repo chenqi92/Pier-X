@@ -85,6 +85,8 @@ qt_add_qml_module(pier-x
         qml/components/IconButton.qml
         qml/components/PierTextField.qml
         qml/components/PierComboBox.qml
+        qml/components/SegmentedControl.qml
+        qml/components/ToggleSwitch.qml
         qml/components/PierToolTip.qml
         qml/components/Card.qml
         qml/components/StatusPill.qml

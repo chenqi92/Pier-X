@@ -13,9 +13,9 @@ Rectangle {
     property string placeholder: ""
     signal activated(int index)
 
-    implicitHeight: 28
+    implicitHeight: 32
     implicitWidth: 200
-    color: Theme.bgSurface
+    color: Theme.dark ? Theme.bgSurface : Theme.bgPanel
     border.color: popup.visible ? Theme.borderFocus : Theme.borderDefault
     border.width: 1
     radius: Theme.radiusSm
@@ -26,7 +26,7 @@ Rectangle {
     Text {
         id: label
         anchors.left: parent.left
-        anchors.leftMargin: Theme.sp2
+        anchors.leftMargin: Theme.sp3
         anchors.right: chevron.left
         anchors.verticalCenter: parent.verticalCenter
         elide: Text.ElideRight
@@ -45,7 +45,7 @@ Rectangle {
     Image {
         id: chevron
         anchors.right: parent.right
-        anchors.rightMargin: Theme.sp2
+        anchors.rightMargin: Theme.sp3
         anchors.verticalCenter: parent.verticalCenter
         source: "qrc:/qt/qml/Pier/resources/icons/lucide/chevron-down.svg"
         sourceSize: Qt.size(14, 14)
@@ -116,7 +116,7 @@ Rectangle {
                 model: root.options
                 delegate: Rectangle {
                     width: optionsCol.width
-                    implicitHeight: 26
+                    implicitHeight: 28
                     color: optArea.containsMouse
                          ? Theme.bgHover
                          : (index === root.currentIndex ? Theme.accentMuted : "transparent")
@@ -126,7 +126,7 @@ Rectangle {
 
                     Text {
                         anchors.fill: parent
-                        anchors.leftMargin: Theme.sp2
+                        anchors.leftMargin: Theme.sp3
                         verticalAlignment: Text.AlignVCenter
                         text: modelData
                         font.family: Theme.fontUi

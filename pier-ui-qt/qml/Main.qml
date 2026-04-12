@@ -73,6 +73,10 @@ ApplicationWindow {
 
     property int currentTabIndex: 0
     property bool gitPanelVisible: true
+    property var pendingCloseIndexes: []
+    property string pendingCloseTitle: ""
+    property string pendingCloseMessage: ""
+    property string pendingCloseDetail: ""
     signal writeToActiveTerminal(string text)
 
     // Every tabModel row carries the full schema, with unused
@@ -222,13 +226,145 @@ ApplicationWindow {
         currentTabIndex = tabModel.count - 1
     }
 
-    function closeTab(index) {
-        if (index < 0 || index >= tabModel.count)
-            return
-        tabModel.remove(index)
-        if (currentTabIndex >= tabModel.count) {
-            currentTabIndex = Math.max(0, tabModel.count - 1)
+    function _normalizeTabIndexes(indexes) {
+        const seen = {}
+        const normalized = []
+        for (let i = 0; i < indexes.length; ++i) {
+            const index = indexes[i]
+            if (index < 0 || index >= tabModel.count || seen[index])
+                continue
+            seen[index] = true
+            normalized.push(index)
         }
+        normalized.sort(function(a, b) { return a - b })
+        return normalized
+    }
+
+    function _isRemoteTabRow(row) {
+        if (!row)
+            return false
+        return row.backend !== "local" && row.backend !== "markdown"
+    }
+
+    function _remoteTabLabels(indexes) {
+        const labels = []
+        let remoteCount = 0
+        for (let i = 0; i < indexes.length; ++i) {
+            const row = tabModel.get(indexes[i])
+            if (!_isRemoteTabRow(row))
+                continue
+            remoteCount++
+            let label = row.title || qsTr("Untitled tab")
+            const endpoint = (row.sshUser ? row.sshUser + "@" : "")
+                             + (row.sshHost || "")
+                             + (row.sshHost ? ":" + row.sshPort : "")
+            if (endpoint.length > 0)
+                label += "  ·  " + endpoint
+            if (labels.length < 3)
+                labels.push(label)
+        }
+        return {
+            count: remoteCount,
+            preview: labels
+        }
+    }
+
+    function _performCloseTabs(indexes) {
+        const normalized = _normalizeTabIndexes(indexes)
+        if (normalized.length === 0)
+            return
+
+        let nextCurrentIndex = currentTabIndex
+        for (let i = normalized.length - 1; i >= 0; --i) {
+            const index = normalized[i]
+            if (index < nextCurrentIndex) {
+                nextCurrentIndex--
+            } else if (index === nextCurrentIndex && nextCurrentIndex === tabModel.count - 1) {
+                nextCurrentIndex--
+            }
+            tabModel.remove(index)
+        }
+
+        if (tabModel.count === 0) {
+            currentTabIndex = 0
+            return
+        }
+
+        currentTabIndex = Math.max(0, Math.min(nextCurrentIndex, tabModel.count - 1))
+    }
+
+    function requestCloseTabs(indexes) {
+        const normalized = _normalizeTabIndexes(indexes)
+        if (normalized.length === 0)
+            return
+
+        const remoteInfo = _remoteTabLabels(normalized)
+        if (remoteInfo.count === 0) {
+            _performCloseTabs(normalized)
+            return
+        }
+
+        pendingCloseIndexes = normalized
+        if (normalized.length === 1) {
+            pendingCloseTitle = qsTr("Close remote tab?")
+            pendingCloseMessage = qsTr("This tab is connected to a remote host. Close it anyway?")
+            pendingCloseDetail = remoteInfo.preview.length > 0 ? remoteInfo.preview[0] : ""
+        } else {
+            pendingCloseTitle = qsTr("Close %1 tabs?").arg(normalized.length)
+            pendingCloseMessage = remoteInfo.count === normalized.length
+                    ? qsTr("These tabs include active remote connections. Close them anyway?")
+                    : qsTr("Some of these tabs include active remote connections. Close them anyway?")
+            pendingCloseDetail = qsTr("Remote tabs: %1").arg(remoteInfo.preview.join("\n"))
+            if (remoteInfo.count > remoteInfo.preview.length) {
+                pendingCloseDetail += "\n" + qsTr("+%1 more").arg(remoteInfo.count - remoteInfo.preview.length)
+            }
+        }
+        remoteCloseDialog.open()
+    }
+
+    function closeTab(index) {
+        requestCloseTabs([index])
+    }
+
+    function closeOtherTabs(index) {
+        const indexes = []
+        for (let i = 0; i < tabModel.count; ++i) {
+            if (i !== index)
+                indexes.push(i)
+        }
+        requestCloseTabs(indexes)
+    }
+
+    function closeTabsToLeft(index) {
+        const indexes = []
+        for (let i = 0; i < index; ++i)
+            indexes.push(i)
+        requestCloseTabs(indexes)
+    }
+
+    function closeTabsToRight(index) {
+        const indexes = []
+        for (let i = index + 1; i < tabModel.count; ++i)
+            indexes.push(i)
+        requestCloseTabs(indexes)
+    }
+
+    function cancelPendingTabClose() {
+        pendingCloseIndexes = []
+        pendingCloseTitle = ""
+        pendingCloseMessage = ""
+        pendingCloseDetail = ""
+        remoteCloseDialog.close()
+    }
+
+    function confirmPendingTabClose() {
+        const indexes = pendingCloseIndexes
+        pendingCloseIndexes = []
+        pendingCloseTitle = ""
+        pendingCloseMessage = ""
+        pendingCloseDetail = ""
+        remoteCloseDialog.close()
+        _performCloseTabs(indexes)
     }
 
     // Take a freshly-collected connection from the dialog and
@@ -301,17 +437,10 @@ ApplicationWindow {
             return
         }
 
-        // Default = password auth.
-        const credentialId = PierCredentials.freshId()
-        if (!PierCredentials.setEntry(credentialId, conn.password)) {
-            console.warn("Main: failed to save credential to keychain")
-            return
-        }
-        if (!connectionsModel.add(conn.name, conn.host, conn.port,
-                                  conn.username, credentialId)) {
-            // Persist failed — clean up the orphan keychain entry
-            // so we don't accumulate dead secrets across runs.
-            PierCredentials.deleteEntry(credentialId)
+        // Default = password auth. Store password directly in
+        // the connection config — no OS keychain dependency.
+        if (!connectionsModel.addWithPassword(conn.name, conn.host, conn.port,
+                                              conn.username, conn.password)) {
             console.warn("Main: failed to persist connection")
             return
         }
@@ -320,7 +449,7 @@ ApplicationWindow {
             host: conn.host,
             port: conn.port,
             username: conn.username,
-            credentialId: credentialId
+            password: conn.password
         })
     }
 
@@ -354,6 +483,18 @@ ApplicationWindow {
             })
             return
         }
+        // Direct password (preferred — no keychain dependency)
+        if (conn.password && conn.password.length > 0) {
+            openSshTab({
+                name: conn.name,
+                host: conn.host,
+                port: conn.port,
+                username: conn.username,
+                password: conn.password
+            })
+            return
+        }
+        // Legacy: credential id in OS keychain
         if (conn.credentialId && conn.credentialId.length > 0) {
             openSshTab({
                 name: conn.name,
@@ -364,8 +505,6 @@ ApplicationWindow {
             })
             return
         }
-        // Unknown auth shape — fall back to a local tab so the
-        // user at least gets some feedback.
         openNewTab(conn.name)
     }
 
@@ -474,6 +613,9 @@ ApplicationWindow {
                             currentIndex: window.currentTabIndex
                             onTabClicked: (i) => window.currentTabIndex = i
                             onTabClosed: (i) => window.closeTab(i)
+                            onCloseOtherTabsRequested: (i) => window.closeOtherTabs(i)
+                            onCloseTabsToLeftRequested: (i) => window.closeTabsToLeft(i)
+                            onCloseTabsToRightRequested: (i) => window.closeTabsToRight(i)
                             onNewTabClicked: window.openNewTab()
                             onTabMoved: (from, to) => {
                                 tabModel.move(from, 1, to)
@@ -651,6 +793,100 @@ ApplicationWindow {
     // ─────────────────────────────────────────────────────
     // Floating overlays
     // ─────────────────────────────────────────────────────
+    Popup {
+        id: remoteCloseDialog
+        parent: Overlay.overlay
+        modal: true
+        focus: true
+        padding: Theme.sp4
+        width: Math.min(420, window.width - Theme.sp6 * 2)
+        x: Math.round((window.width - width) / 2)
+        y: Math.round((window.height - implicitHeight) / 2)
+        closePolicy: Popup.CloseOnEscape | Popup.CloseOnPressOutside
+        onClosed: {
+            if (window.pendingCloseIndexes.length === 0)
+                return
+            window.pendingCloseIndexes = []
+            window.pendingCloseTitle = ""
+            window.pendingCloseMessage = ""
+            window.pendingCloseDetail = ""
+        }
+
+        background: Rectangle {
+            color: Theme.bgElevated
+            border.color: Theme.borderDefault
+            border.width: 1
+            radius: Theme.radiusLg
+
+            Behavior on color { ColorAnimation { duration: Theme.durNormal } }
+            Behavior on border.color { ColorAnimation { duration: Theme.durNormal } }
+        }
+
+        contentItem: ColumnLayout {
+            spacing: Theme.sp4
+
+            Text {
+                Layout.fillWidth: true
+                text: window.pendingCloseTitle
+                wrapMode: Text.WordWrap
+                font.family: Theme.fontUi
+                font.pixelSize: Theme.sizeH3
+                font.weight: Theme.weightMedium
+                color: Theme.textPrimary
+            }
+
+            Text {
+                Layout.fillWidth: true
+                text: window.pendingCloseMessage
+                wrapMode: Text.WordWrap
+                font.family: Theme.fontUi
+                font.pixelSize: Theme.sizeBody
+                color: Theme.textSecondary
+            }
+
+            Rectangle {
+                Layout.fillWidth: true
+                visible: window.pendingCloseDetail.length > 0
+                color: Theme.bgSurface
+                border.color: Theme.borderSubtle
+                border.width: 1
+                radius: Theme.radiusSm
+                implicitHeight: detailText.implicitHeight + Theme.sp3 * 2
+
+                Text {
+                    id: detailText
+                    anchors.fill: parent
+                    anchors.margins: Theme.sp3
+                    text: window.pendingCloseDetail
+                    wrapMode: Text.WrapAnywhere
+                    font.family: Theme.fontMono
+                    font.pixelSize: Theme.sizeCaption
+                    color: Theme.textTertiary
+                }
+            }
+
+            RowLayout {
+                Layout.fillWidth: true
+                spacing: Theme.sp2
+
+                Item { Layout.fillWidth: true }
+
+                GhostButton {
+                    id: remoteCloseCancelButton
+                    text: qsTr("Cancel")
+                    onClicked: window.cancelPendingTabClose()
+                }
+
+                PrimaryButton {
+                    text: qsTr("Close")
+                    onClicked: window.confirmPendingTabClose()
+                }
+            }
+        }
+
+        onOpened: remoteCloseCancelButton.forceActiveFocus()
+    }
+
     NewConnectionDialog {
         id: newConnectionDialog
         onSaved: (conn) => {

@@ -497,10 +497,8 @@ Rectangle {
         // fields are populated. Priority:
         //   1. usesAgent       → startSshWithAgent
         //   2. key path        → startSshWithKey
-        //   3. credential id   → startSshWithCredential
-        //   4. plaintext password → startSsh
-        // The four are mutually exclusive in practice — the
-        // dialog / Main.qml only ever populates one set per tab.
+        //   3. plaintext password → startSsh (preferred, no keychain)
+        //   4. credential id   → startSshWithCredential (legacy)
         function _dispatchSshConnect(cols, rows) {
             if (root.sshUsesAgent) {
                 session.startSshWithAgent(
@@ -512,6 +510,11 @@ Rectangle {
                     root.sshKeyPath,
                     root.sshPassphraseCredentialId,
                     cols, rows)
+            } else if (root.sshPassword.length > 0) {
+                session.startSsh(
+                    root.sshHost, root.sshPort, root.sshUser,
+                    root.sshPassword,
+                    cols, rows)
             } else if (root.sshCredentialId.length > 0) {
                 session.startSshWithCredential(
                     root.sshHost, root.sshPort, root.sshUser,
@@ -520,7 +523,7 @@ Rectangle {
             } else {
                 session.startSsh(
                     root.sshHost, root.sshPort, root.sshUser,
-                    root.sshPassword,
+                    "",
                     cols, rows)
             }
         }

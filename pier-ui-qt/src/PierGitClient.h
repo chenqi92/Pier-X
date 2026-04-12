@@ -66,6 +66,15 @@ public:
     Q_PROPERTY(QString diffText READ diffText NOTIFY diffChanged FINAL)
     Q_PROPERTY(QString diffPath READ diffPath NOTIFY diffChanged FINAL)
 
+    // History
+    Q_PROPERTY(QVariantList commits READ commits NOTIFY commitsChanged FINAL)
+
+    // Stash
+    Q_PROPERTY(QVariantList stashes READ stashes NOTIFY stashesChanged FINAL)
+
+    // Branches
+    Q_PROPERTY(QStringList branches READ branches NOTIFY branchesChanged FINAL)
+
     // Busy flag
     Q_PROPERTY(bool busy READ busy NOTIFY busyChanged FINAL)
 
@@ -88,6 +97,9 @@ public:
     QVariantList unstagedFiles() const { return m_unstagedFiles; }
     QString diffText() const { return m_diffText; }
     QString diffPath() const { return m_diffPath; }
+    QVariantList commits() const { return m_commits; }
+    QVariantList stashes() const { return m_stashes; }
+    QStringList branches() const { return m_branches; }
     bool busy() const { return m_busy; }
 
 public slots:
@@ -124,6 +136,30 @@ public slots:
     /// Pull from remote.
     void pull();
 
+    /// Load commit history.
+    void loadHistory(int limit = 100);
+
+    /// Load stash list.
+    void loadStashes();
+
+    /// Stash current changes.
+    void stashPush(const QString &message);
+
+    /// Apply a stash by index.
+    void stashApply(const QString &index);
+
+    /// Pop a stash by index.
+    void stashPop(const QString &index);
+
+    /// Drop a stash by index.
+    void stashDrop(const QString &index);
+
+    /// Load local branch list.
+    void loadBranches();
+
+    /// Switch to a branch.
+    void checkoutBranch(const QString &name);
+
     /// Tear down. Releases the handle.
     void close();
 
@@ -133,6 +169,9 @@ signals:
     void branchChanged();
     void filesChanged();
     void diffChanged();
+    void commitsChanged();
+    void stashesChanged();
+    void branchesChanged();
     void busyChanged();
     void operationFinished(const QString &operation, bool success, const QString &message);
 
@@ -141,6 +180,9 @@ private slots:
     void onStatusResult(quint64 requestId, const QString &json);
     void onBranchResult(quint64 requestId, const QString &json);
     void onDiffResult(quint64 requestId, const QString &path, const QString &text);
+    void onHistoryResult(quint64 requestId, const QString &json);
+    void onStashResult(quint64 requestId, const QString &json);
+    void onBranchesResult(quint64 requestId, const QString &json);
     void onOpResult(quint64 requestId, const QString &operation, bool success, const QString &message);
 
 private:
@@ -169,6 +211,15 @@ private:
     // Diff
     QString m_diffText;
     QString m_diffPath;
+
+    // History
+    QVariantList m_commits;
+
+    // Stash
+    QVariantList m_stashes;
+
+    // Branches
+    QStringList m_branches;
 
     quint64 m_nextRequestId = 0;
     std::shared_ptr<std::atomic<bool>> m_cancelFlag;

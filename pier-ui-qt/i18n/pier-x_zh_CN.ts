@@ -47,6 +47,46 @@
         <source>Workspace</source>
         <translation>工作区</translation>
     </message>
+    <message>
+        <source>Untitled tab</source>
+        <translation>未命名标签页</translation>
+    </message>
+    <message>
+        <source>Close remote tab?</source>
+        <translation>关闭远程标签页？</translation>
+    </message>
+    <message>
+        <source>This tab is connected to a remote host. Close it anyway?</source>
+        <translation>此标签页连接着远程主机。仍要关闭吗？</translation>
+    </message>
+    <message>
+        <source>Close %1 tabs?</source>
+        <translation>关闭 %1 个标签页？</translation>
+    </message>
+    <message>
+        <source>These tabs include active remote connections. Close them anyway?</source>
+        <translation>这些标签页中包含活跃的远程连接。仍要关闭吗？</translation>
+    </message>
+    <message>
+        <source>Some of these tabs include active remote connections. Close them anyway?</source>
+        <translation>这些标签页中有部分仍是活跃的远程连接。仍要关闭吗？</translation>
+    </message>
+    <message>
+        <source>Remote tabs: %1</source>
+        <translation>远程标签页：%1</translation>
+    </message>
+    <message>
+        <source>+%1 more</source>
+        <translation>另有 %1 个</translation>
+    </message>
+    <message>
+        <source>Cancel</source>
+        <translation>取消</translation>
+    </message>
+    <message>
+        <source>Close</source>
+        <translation>关闭</translation>
+    </message>
 </context>
 
 <!-- ═══════════════════════════════════════════════════════
@@ -127,6 +167,34 @@ built on Qt 6 + Rust core.</source>
 <context>
     <name>TabBar</name>
     <message>
+        <source>Scroll tabs left</source>
+        <translation>向左滚动标签页</translation>
+    </message>
+    <message>
+        <source>Scroll tabs right</source>
+        <translation>向右滚动标签页</translation>
+    </message>
+    <message>
+        <source>All tabs</source>
+        <translation>所有标签页</translation>
+    </message>
+    <message>
+        <source>Close</source>
+        <translation>关闭</translation>
+    </message>
+    <message>
+        <source>Close others</source>
+        <translation>关闭其他标签页</translation>
+    </message>
+    <message>
+        <source>Close tabs to the left</source>
+        <translation>关闭左侧标签页</translation>
+    </message>
+    <message>
+        <source>Close tabs to the right</source>
+        <translation>关闭右侧标签页</translation>
+    </message>
+    <message>
         <source>New session</source>
         <translation>新建会话</translation>
     </message>
@@ -193,6 +261,18 @@ built on Qt 6 + Rust core.</source>
         <source>Duplicate</source>
         <translation>复制</translation>
     </message>
+    <message>
+        <source>Agent</source>
+        <translation>代理</translation>
+    </message>
+    <message>
+        <source>Key</source>
+        <translation>密钥</translation>
+    </message>
+    <message>
+        <source>Password</source>
+        <translation>密码</translation>
+    </message>
 </context>
 
 <!-- ═══════════════════════════════════════════════════════
@@ -235,12 +315,20 @@ built on Qt 6 + Rust core.</source>
         <translation>连接</translation>
     </message>
     <message>
+        <source>Create a reusable host profile for SSH, SFTP, and service panels.</source>
+        <translation>创建可复用的主机配置，用于 SSH、SFTP 和各类服务面板。</translation>
+    </message>
+    <message>
         <source>New SSH connection</source>
         <translation>新建 SSH 连接</translation>
     </message>
     <message>
         <source>Name</source>
         <translation>名称</translation>
+    </message>
+    <message>
+        <source>Optional display name shown in the sidebar.</source>
+        <translation>可选的显示名称，会出现在侧边栏中。</translation>
     </message>
     <message>
         <source>My production server</source>
@@ -251,6 +339,10 @@ built on Qt 6 + Rust core.</source>
         <translation>主机</translation>
     </message>
     <message>
+        <source>Hostname or IP address.</source>
+        <translation>主机名或 IP 地址。</translation>
+    </message>
+    <message>
         <source>example.com</source>
         <translation>example.com</translation>
     </message>
@@ -259,8 +351,16 @@ built on Qt 6 + Rust core.</source>
         <translation>端口</translation>
     </message>
     <message>
+        <source>SSH</source>
+        <translation>SSH</translation>
+    </message>
+    <message>
         <source>Username</source>
         <translation>用户名</translation>
+    </message>
+    <message>
+        <source>User account on the remote host.</source>
+        <translation>远程主机上的登录用户。</translation>
     </message>
     <message>
         <source>root</source>
@@ -271,8 +371,64 @@ built on Qt 6 + Rust core.</source>
         <translation>认证方式</translation>
     </message>
     <message>
+        <source>Choose how Pier-X should authenticate to this host.</source>
+        <translation>选择 Pier-X 连接此主机时的认证方式。</translation>
+    </message>
+    <message>
         <source>Password</source>
         <translation>密码</translation>
+    </message>
+    <message>
+        <source>Private key</source>
+        <translation>私钥</translation>
+    </message>
+    <message>
+        <source>SSH agent</source>
+        <translation>SSH 代理</translation>
+    </message>
+    <message>
+        <source>Stored securely in the system keychain.</source>
+        <translation>会安全地存储到系统钥匙串中。</translation>
+    </message>
+    <message>
+        <source>Private key file</source>
+        <translation>私钥文件</translation>
+    </message>
+    <message>
+        <source>Absolute path to an OpenSSH private key.</source>
+        <translation>OpenSSH 私钥文件的绝对路径。</translation>
+    </message>
+    <message>
+        <source>Browse…</source>
+        <translation>浏览…</translation>
+    </message>
+    <message>
+        <source>Passphrase</source>
+        <translation>口令</translation>
+    </message>
+    <message>
+        <source>Optional. Leave empty for unencrypted keys.</source>
+        <translation>可选。未加密的私钥可留空。</translation>
+    </message>
+    <message>
+        <source>leave empty if unencrypted</source>
+        <translation>如果私钥未加密可留空</translation>
+    </message>
+    <message>
+        <source>Uses Pageant or the Windows OpenSSH agent. Make sure your key is already loaded before connecting.</source>
+        <translation>使用 Pageant 或 Windows OpenSSH 代理。连接前请确保密钥已经加载。</translation>
+    </message>
+    <message>
+        <source>Uses the agent exposed at $SSH_AUTH_SOCK. Make sure your key is added first, for example with ssh-add.</source>
+        <translation>使用 $SSH_AUTH_SOCK 暴露出的 SSH 代理。连接前请先通过 `ssh-add` 等方式加载密钥。</translation>
+    </message>
+    <message>
+        <source>Host and username are required. Name is optional.</source>
+        <translation>主机和用户名必填，名称可选。</translation>
+    </message>
+    <message>
+        <source>Select SSH private key</source>
+        <translation>选择 SSH 私钥</translation>
     </message>
     <message>
         <source>Private key (M3c)</source>
@@ -306,6 +462,10 @@ built on Qt 6 + Rust core.</source>
         <translation>设置</translation>
     </message>
     <message>
+        <source>Adjust appearance, terminal behavior, and saved connections.</source>
+        <translation>调整外观、终端行为和已保存的连接。</translation>
+    </message>
+    <message>
         <source>Close</source>
         <translation>关闭</translation>
     </message>
@@ -334,6 +494,10 @@ built on Qt 6 + Rust core.</source>
         <translation>跟随系统主题</translation>
     </message>
     <message>
+        <source>Automatically mirror the operating system appearance.</source>
+        <translation>自动同步操作系统当前的明暗外观。</translation>
+    </message>
+    <message>
         <source>On</source>
         <translation>开</translation>
     </message>
@@ -344,6 +508,10 @@ built on Qt 6 + Rust core.</source>
     <message>
         <source>Color scheme</source>
         <translation>配色方案</translation>
+    </message>
+    <message>
+        <source>Manual override when system sync is turned off.</source>
+        <translation>关闭系统同步后，可在这里手动指定主题。</translation>
     </message>
     <message>
         <source>Dark</source>
@@ -362,8 +530,32 @@ built on Qt 6 + Rust core.</source>
         <translation>界面字体</translation>
     </message>
     <message>
+        <source>Primary interface font used for labels, buttons, and navigation.</source>
+        <translation>用于标签、按钮和导航的主界面字体。</translation>
+    </message>
+    <message>
         <source>Mono font</source>
         <translation>等宽字体</translation>
+    </message>
+    <message>
+        <source>Used for terminal content, paths, ports, and code-like data.</source>
+        <translation>用于终端内容、路径、端口和代码类信息。</translation>
+    </message>
+    <message>
+        <source>Preview</source>
+        <translation>预览</translation>
+    </message>
+    <message>
+        <source>The quick brown fox jumps over the lazy dog.</source>
+        <translation>敏捷的棕狐跳过了慵懒的狗。</translation>
+    </message>
+    <message>
+        <source>Buttons, tabs, and list rows should stay compact while preserving hierarchy.</source>
+        <translation>按钮、标签页和列表行应保持紧凑，同时保留清晰的层级。</translation>
+    </message>
+    <message>
+        <source>Machine-readable values stay monospaced so hosts, commands, and ports scan immediately.</source>
+        <translation>机器可读的信息保持等宽，这样主机、命令和端口能被迅速扫描识别。</translation>
     </message>
     <message>
         <source>UI font size</source>
@@ -382,6 +574,10 @@ built on Qt 6 + Rust core.</source>
         <translation>光标样式</translation>
     </message>
     <message>
+        <source>The visual shape used in the terminal.</source>
+        <translation>终端中使用的光标外观。</translation>
+    </message>
+    <message>
         <source>Block</source>
         <translation>方块</translation>
     </message>
@@ -398,12 +594,20 @@ built on Qt 6 + Rust core.</source>
         <translation>光标闪烁</translation>
     </message>
     <message>
+        <source>Animate the cursor when the terminal is focused.</source>
+        <translation>终端获得焦点时让光标闪烁。</translation>
+    </message>
+    <message>
         <source>Scrollback</source>
         <translation>回滚</translation>
     </message>
     <message>
         <source>Buffer lines</source>
         <translation>缓冲行数</translation>
+    </message>
+    <message>
+        <source>Number of lines to keep in terminal history.</source>
+        <translation>终端历史中保留的最大行数。</translation>
     </message>
     <message>
         <source>Bell</source>
@@ -414,8 +618,16 @@ built on Qt 6 + Rust core.</source>
         <translation>视觉提醒</translation>
     </message>
     <message>
+        <source>Flash the terminal instead of playing a sound.</source>
+        <translation>用闪烁提示替代声音提醒。</translation>
+    </message>
+    <message>
         <source>Audio bell</source>
         <translation>声音提醒</translation>
+    </message>
+    <message>
+        <source>Play the terminal bell sound when supported.</source>
+        <translation>在支持时播放终端提示音。</translation>
     </message>
     <message>
         <source>Defaults</source>
@@ -430,8 +642,44 @@ built on Qt 6 + Rust core.</source>
         <translation>已保存的连接</translation>
     </message>
     <message>
+        <source>Profiles saved here are reused by the sidebar, SFTP browser, and remote service panels.</source>
+        <translation>这里保存的配置会被侧边栏、SFTP 浏览器和远程服务面板复用。</translation>
+    </message>
+    <message>
         <source>No connections saved yet.</source>
         <translation>暂无已保存的连接。</translation>
+    </message>
+    <message>
+        <source>Use the New SSH connection dialog to create your first reusable host profile.</source>
+        <translation>使用“新建 SSH 连接”对话框创建你的第一条可复用主机配置。</translation>
+    </message>
+    <message>
+        <source>Agent</source>
+        <translation>代理</translation>
+    </message>
+    <message>
+        <source>Key</source>
+        <translation>密钥</translation>
+    </message>
+    <message>
+        <source>Password</source>
+        <translation>密码</translation>
+    </message>
+    <message>
+        <source>Uses the system SSH agent</source>
+        <translation>使用系统 SSH 代理</translation>
+    </message>
+    <message>
+        <source>Private key: %1</source>
+        <translation>私钥：%1</translation>
+    </message>
+    <message>
+        <source>Password stored in keychain</source>
+        <translation>密码已存入钥匙串</translation>
+    </message>
+    <message>
+        <source>Password stored directly</source>
+        <translation>密码以明文配置方式存储</translation>
     </message>
 </context>
 

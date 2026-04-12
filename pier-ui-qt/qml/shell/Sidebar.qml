@@ -163,11 +163,19 @@ Rectangle {
                             required property string username
                             required property string host
                             required property int port
+                            required property string keyPath
+                            required property bool usesAgent
 
                             property bool confirmingDelete: false
+                            readonly property string authLabel: usesAgent
+                                    ? qsTr("Agent")
+                                    : keyPath.length > 0 ? qsTr("Key") : qsTr("Password")
+                            readonly property color authTint: usesAgent
+                                    ? Theme.accent
+                                    : keyPath.length > 0 ? Theme.statusSuccess : Theme.statusWarning
 
                             width: ListView.view.width
-                            implicitHeight: 40
+                            implicitHeight: 48
                             color: confirmingDelete
                                    ? Qt.rgba(Theme.statusError.r,
                                              Theme.statusError.g,
@@ -175,19 +183,36 @@ Rectangle {
                                              0.08)
                                    : (connArea.containsMouse ? Theme.bgHover : "transparent")
                             radius: Theme.radiusSm
+                            border.color: connArea.containsMouse && !confirmingDelete
+                                          ? Theme.borderDefault
+                                          : "transparent"
+                            border.width: 1
 
                             Behavior on color { ColorAnimation { duration: Theme.durFast } }
+                            Behavior on border.color { ColorAnimation { duration: Theme.durFast } }
 
                             RowLayout {
                                 anchors.fill: parent
                                 anchors.leftMargin: Theme.sp2
                                 anchors.rightMargin: Theme.sp1
-                                spacing: Theme.sp1
+                                spacing: Theme.sp2
                                 visible: !connRow.confirmingDelete
+
+                                Rectangle {
+                                    Layout.alignment: Qt.AlignTop
+                                    Layout.topMargin: Theme.sp1_5
+                                    width: 6
+                                    height: 6
+                                    radius: 3
+                                    color: Qt.rgba(connRow.authTint.r,
+                                                   connRow.authTint.g,
+                                                   connRow.authTint.b,
+                                                   0.9)
+                                }
 
                                 ColumnLayout {
                                     Layout.fillWidth: true
-                                    spacing: 0
+                                    spacing: Theme.sp0_5
 
                                     Text {
                                         text: connRow.name
@@ -202,10 +227,36 @@ Rectangle {
                                     Text {
                                         text: connRow.username + "@" + connRow.host + ":" + connRow.port
                                         font.family: Theme.fontMono
-                                        font.pixelSize: Theme.sizeSmall
+                                        font.pixelSize: Theme.sizeCaption
                                         color: Theme.textTertiary
                                         elide: Text.ElideRight
                                         Layout.fillWidth: true
+                                    }
+                                }
+
+                                Rectangle {
+                                    Layout.alignment: Qt.AlignVCenter
+                                    implicitHeight: 20
+                                    implicitWidth: authText.implicitWidth + Theme.sp2 * 2
+                                    radius: Theme.radiusPill
+                                    color: Qt.rgba(connRow.authTint.r,
+                                                   connRow.authTint.g,
+                                                   connRow.authTint.b,
+                                                   Theme.dark ? 0.16 : 0.10)
+                                    border.color: Qt.rgba(connRow.authTint.r,
+                                                          connRow.authTint.g,
+                                                          connRow.authTint.b,
+                                                          Theme.dark ? 0.32 : 0.18)
+                                    border.width: 1
+
+                                    Text {
+                                        id: authText
+                                        anchors.centerIn: parent
+                                        text: connRow.authLabel
+                                        font.family: Theme.fontUi
+                                        font.pixelSize: Theme.sizeSmall
+                                        font.weight: Theme.weightMedium
+                                        color: connRow.authTint
                                     }
                                 }
 

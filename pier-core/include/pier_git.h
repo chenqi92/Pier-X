@@ -105,6 +105,36 @@ char *pier_git_push(PierGit *h);
 /* Pull from remote. Returns output or error JSON. Caller frees. */
 char *pier_git_pull(PierGit *h);
 
+/* ── Log ──────────────────────────────────────────────── */
+
+/* Last N commits as JSON array. Caller frees. */
+char *pier_git_log(PierGit *h, uint32_t limit);
+
+/* ── Stash ────────────────────────────────────────────── */
+
+/* List stash entries as JSON array. Caller frees. */
+char *pier_git_stash_list(PierGit *h);
+
+/* Stash current changes. message may be NULL. Caller frees. */
+char *pier_git_stash_push(PierGit *h, const char *message);
+
+/* Apply stash by index. Caller frees. */
+char *pier_git_stash_apply(PierGit *h, const char *index);
+
+/* Pop stash by index. Caller frees. */
+char *pier_git_stash_pop(PierGit *h, const char *index);
+
+/* Drop stash by index. Caller frees. */
+char *pier_git_stash_drop(PierGit *h, const char *index);
+
+/* ── Branch operations ────────────────────────────────── */
+
+/* List local branches as JSON array. Caller frees. */
+char *pier_git_branch_list_local(PierGit *h);
+
+/* Checkout branch by name. Caller frees. */
+char *pier_git_checkout_branch(PierGit *h, const char *name);
+
 /* ── Graph (from git_graph module) ─────────────────────── */
 
 /* Load commit graph with filters. Returns JSON array of

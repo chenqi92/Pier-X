@@ -10,6 +10,7 @@ Rectangle {
 
     property string icon: ""       // Lucide SVG name, e.g. "plus"
     property string glyph: ""      // Legacy Unicode glyph (deprecated)
+    property real iconRotation: 0
     property string tooltip: ""
     property bool active: false
     property alias hovered: mouseArea.containsMouse
@@ -38,6 +39,11 @@ Rectangle {
                 : ""
         sourceSize: Qt.size(16, 16)
         visible: root.icon.length > 0
+        transform: Rotation {
+            origin.x: iconImage.width / 2
+            origin.y: iconImage.height / 2
+            angle: root.iconRotation
+        }
         // The SVG is rendered with the default stroke color (currentColor
         // in the file is black). We overlay a tint so the icon follows
         // the theme color. MultiEffect's colorization replaces the

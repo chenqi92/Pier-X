@@ -566,9 +566,255 @@ void PierGitClient::onOpResult(quint64 requestId, const QString &operation, bool
     if (operation == QStringLiteral("stage") || operation == QStringLiteral("unstage")
         || operation == QStringLiteral("stageAll") || operation == QStringLiteral("unstageAll")
         || operation == QStringLiteral("discard") || operation == QStringLiteral("commit")
-        || operation == QStringLiteral("pull")) {
+        || operation == QStringLiteral("pull") || operation == QStringLiteral("checkout")) {
         refresh();
     }
+    if (operation == QStringLiteral("stashPush") || operation == QStringLiteral("stashPop")
+        || operation == QStringLiteral("stashDrop") || operation == QStringLiteral("stashApply")) {
+        loadStashes();
+        refresh();
+    }
+}
+
+// ─── History ────────────────────────────────────────────
+
+void PierGitClient::loadHistory(int limit)
+{
+    if (!m_handle) return;
+    const quint64 requestId = ++m_nextRequestId;
+    setBusy(true);
+
+    QPointer<PierGitClient> selfWeak(this);
+    auto cancelFlag = m_cancelFlag;
+    ::PierGit *h = m_handle;
+    const uint32_t lim = static_cast<uint32_t>(limit > 0 ? limit : 100);
+
+    auto worker = std::make_unique<std::thread>([selfWeak, cancelFlag, requestId, h, lim]() {
+        char *json = pier_git_log(h, lim);
+        QString result = json ? QString::fromUtf8(json) : QStringLiteral("[]");
+        if (json) pier_git_free_string(json);
+        if (!selfWeak || (cancelFlag && cancelFlag->load())) return;
+        QMetaObject::invokeMethod(selfWeak.data(), "onHistoryResult", Qt::QueuedConnection,
+            Q_ARG(quint64, requestId), Q_ARG(QString, result));
+    });
+    m_workers.push_back(std::move(worker));
+}
+
+void PierGitClient::onHistoryResult(quint64 requestId, const QString &json)
+{
+    if (requestId != m_nextRequestId) return;
+    QJsonDocument doc = QJsonDocument::fromJson(json.toUtf8());
+    QVariantList list;
+    if (doc.isArray()) {
+        for (const QJsonValue &v : doc.array()) {
+            QJsonObject obj = v.toObject();
+            QVariantMap m;
+            m[QStringLiteral("hash")] = obj.value(QStringLiteral("hash")).toString();
+            m[QStringLiteral("shortHash")] = obj.value(QStringLiteral("short_hash")).toString();
+            m[QStringLiteral("message")] = obj.value(QStringLiteral("message")).toString();
+            m[QStringLiteral("author")] = obj.value(QStringLiteral("author")).toString();
+            m[QStringLiteral("relativeDate")] = obj.value(QStringLiteral("relative_date")).toString();
+            m[QStringLiteral("refs")] = obj.value(QStringLiteral("refs")).toString();
+            list.append(m);
+        }
+    }
+    m_commits = list;
+    emit commitsChanged();
+    setBusy(false);
+}
+
+// ─── Stash ──────────────────────────────────────────────
+
+void PierGitClient::loadStashes()
+{
+    if (!m_handle) return;
+    const quint64 requestId = ++m_nextRequestId;
+    setBusy(true);
+
+    QPointer<PierGitClient> selfWeak(this);
+    auto cancelFlag = m_cancelFlag;
+    ::PierGit *h = m_handle;
+
+    auto worker = std::make_unique<std::thread>([selfWeak, cancelFlag, requestId, h]() {
+        char *json = pier_git_stash_list(h);
+        QString result = json ? QString::fromUtf8(json) : QStringLiteral("[]");
+        if (json) pier_git_free_string(json);
+        if (!selfWeak || (cancelFlag && cancelFlag->load())) return;
+        QMetaObject::invokeMethod(selfWeak.data(), "onStashResult", Qt::QueuedConnection,
+            Q_ARG(quint64, requestId), Q_ARG(QString, result));
+    });
+    m_workers.push_back(std::move(worker));
+}
+
+void PierGitClient::onStashResult(quint64 requestId, const QString &json)
+{
+    if (requestId != m_nextRequestId) return;
+    QJsonDocument doc = QJsonDocument::fromJson(json.toUtf8());
+    QVariantList list;
+    if (doc.isArray()) {
+        for (const QJsonValue &v : doc.array()) {
+            QJsonObject obj = v.toObject();
+            QVariantMap m;
+            m[QStringLiteral("index")] = obj.value(QStringLiteral("index")).toString();
+            m[QStringLiteral("message")] = obj.value(QStringLiteral("message")).toString();
+            m[QStringLiteral("relativeDate")] = obj.value(QStringLiteral("relative_date")).toString();
+            list.append(m);
+        }
+    }
+    m_stashes = list;
+    emit stashesChanged();
+    setBusy(false);
+}
+
+void PierGitClient::stashPush(const QString &message)
+{
+    if (!m_handle) return;
+    const quint64 requestId = ++m_nextRequestId;
+    setBusy(true);
+    QPointer<PierGitClient> selfWeak(this);
+    auto cancelFlag = m_cancelFlag;
+    ::PierGit *h = m_handle;
+    std::string msg = message.toStdString();
+
+    auto worker = std::make_unique<std::thread>([selfWeak, cancelFlag, requestId, h, msg = std::move(msg)]() {
+        char *r = pier_git_stash_push(h, msg.empty() ? nullptr : msg.c_str());
+        QString out = r ? QString::fromUtf8(r) : QString();
+        if (r) pier_git_free_string(r);
+        bool ok = !out.contains(QStringLiteral("\"error\""));
+        if (!selfWeak || (cancelFlag && cancelFlag->load())) return;
+        QMetaObject::invokeMethod(selfWeak.data(), "onOpResult", Qt::QueuedConnection,
+            Q_ARG(quint64, requestId), Q_ARG(QString, QStringLiteral("stashPush")),
+            Q_ARG(bool, ok), Q_ARG(QString, out));
+    });
+    m_workers.push_back(std::move(worker));
+}
+
+void PierGitClient::stashApply(const QString &index)
+{
+    if (!m_handle) return;
+    const quint64 requestId = ++m_nextRequestId;
+    setBusy(true);
+    QPointer<PierGitClient> selfWeak(this);
+    auto cancelFlag = m_cancelFlag;
+    ::PierGit *h = m_handle;
+    std::string idx = index.toStdString();
+
+    auto worker = std::make_unique<std::thread>([selfWeak, cancelFlag, requestId, h, idx = std::move(idx)]() {
+        char *r = pier_git_stash_apply(h, idx.c_str());
+        QString out = r ? QString::fromUtf8(r) : QString();
+        if (r) pier_git_free_string(r);
+        bool ok = !out.contains(QStringLiteral("\"error\""));
+        if (!selfWeak || (cancelFlag && cancelFlag->load())) return;
+        QMetaObject::invokeMethod(selfWeak.data(), "onOpResult", Qt::QueuedConnection,
+            Q_ARG(quint64, requestId), Q_ARG(QString, QStringLiteral("stashApply")),
+            Q_ARG(bool, ok), Q_ARG(QString, out));
+    });
+    m_workers.push_back(std::move(worker));
+}
+
+void PierGitClient::stashPop(const QString &index)
+{
+    if (!m_handle) return;
+    const quint64 requestId = ++m_nextRequestId;
+    setBusy(true);
+    QPointer<PierGitClient> selfWeak(this);
+    auto cancelFlag = m_cancelFlag;
+    ::PierGit *h = m_handle;
+    std::string idx = index.toStdString();
+
+    auto worker = std::make_unique<std::thread>([selfWeak, cancelFlag, requestId, h, idx = std::move(idx)]() {
+        char *r = pier_git_stash_pop(h, idx.c_str());
+        QString out = r ? QString::fromUtf8(r) : QString();
+        if (r) pier_git_free_string(r);
+        bool ok = !out.contains(QStringLiteral("\"error\""));
+        if (!selfWeak || (cancelFlag && cancelFlag->load())) return;
+        QMetaObject::invokeMethod(selfWeak.data(), "onOpResult", Qt::QueuedConnection,
+            Q_ARG(quint64, requestId), Q_ARG(QString, QStringLiteral("stashPop")),
+            Q_ARG(bool, ok), Q_ARG(QString, out));
+    });
+    m_workers.push_back(std::move(worker));
+}
+
+void PierGitClient::stashDrop(const QString &index)
+{
+    if (!m_handle) return;
+    const quint64 requestId = ++m_nextRequestId;
+    setBusy(true);
+    QPointer<PierGitClient> selfWeak(this);
+    auto cancelFlag = m_cancelFlag;
+    ::PierGit *h = m_handle;
+    std::string idx = index.toStdString();
+
+    auto worker = std::make_unique<std::thread>([selfWeak, cancelFlag, requestId, h, idx = std::move(idx)]() {
+        char *r = pier_git_stash_drop(h, idx.c_str());
+        QString out = r ? QString::fromUtf8(r) : QString();
+        if (r) pier_git_free_string(r);
+        bool ok = !out.contains(QStringLiteral("\"error\""));
+        if (!selfWeak || (cancelFlag && cancelFlag->load())) return;
+        QMetaObject::invokeMethod(selfWeak.data(), "onOpResult", Qt::QueuedConnection,
+            Q_ARG(quint64, requestId), Q_ARG(QString, QStringLiteral("stashDrop")),
+            Q_ARG(bool, ok), Q_ARG(QString, out));
+    });
+    m_workers.push_back(std::move(worker));
+}
+
+// ─── Branches ───────────────────────────────────────────
+
+void PierGitClient::loadBranches()
+{
+    if (!m_handle) return;
+    const quint64 requestId = ++m_nextRequestId;
+
+    QPointer<PierGitClient> selfWeak(this);
+    auto cancelFlag = m_cancelFlag;
+    ::PierGit *h = m_handle;
+
+    auto worker = std::make_unique<std::thread>([selfWeak, cancelFlag, requestId, h]() {
+        char *json = pier_git_branch_list_local(h);
+        QString result = json ? QString::fromUtf8(json) : QStringLiteral("[]");
+        if (json) pier_git_free_string(json);
+        if (!selfWeak || (cancelFlag && cancelFlag->load())) return;
+        QMetaObject::invokeMethod(selfWeak.data(), "onBranchesResult", Qt::QueuedConnection,
+            Q_ARG(quint64, requestId), Q_ARG(QString, result));
+    });
+    m_workers.push_back(std::move(worker));
+}
+
+void PierGitClient::onBranchesResult(quint64 requestId, const QString &json)
+{
+    if (requestId != m_nextRequestId) return;
+    QJsonDocument doc = QJsonDocument::fromJson(json.toUtf8());
+    QStringList list;
+    if (doc.isArray()) {
+        for (const QJsonValue &v : doc.array()) {
+            if (v.isString()) list.append(v.toString());
+        }
+    }
+    m_branches = list;
+    emit branchesChanged();
+}
+
+void PierGitClient::checkoutBranch(const QString &name)
+{
+    if (!m_handle || name.isEmpty()) return;
+    const quint64 requestId = ++m_nextRequestId;
+    setBusy(true);
+    QPointer<PierGitClient> selfWeak(this);
+    auto cancelFlag = m_cancelFlag;
+    ::PierGit *h = m_handle;
+    std::string n = name.toStdString();
+
+    auto worker = std::make_unique<std::thread>([selfWeak, cancelFlag, requestId, h, n = std::move(n)]() {
+        char *r = pier_git_checkout_branch(h, n.c_str());
+        QString out = r ? QString::fromUtf8(r) : QString();
+        if (r) pier_git_free_string(r);
+        bool ok = !out.contains(QStringLiteral("\"error\""));
+        if (!selfWeak || (cancelFlag && cancelFlag->load())) return;
+        QMetaObject::invokeMethod(selfWeak.data(), "onOpResult", Qt::QueuedConnection,
+            Q_ARG(quint64, requestId), Q_ARG(QString, QStringLiteral("checkout")),
+            Q_ARG(bool, ok), Q_ARG(QString, out));
+    });
+    m_workers.push_back(std::move(worker));
 }
 
 // ─── Close ──────────────────────────────────────────────

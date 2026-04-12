@@ -135,6 +135,42 @@ pub struct StashEntry {
     pub relative_date: String,
 }
 
+/// A single blame line.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct BlameLine {
+    pub line_number: u32,
+    pub hash: String,
+    pub short_hash: String,
+    pub author: String,
+    pub timestamp: i64,
+    pub content: String,
+}
+
+/// Tag information.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct TagInfo {
+    pub name: String,
+    pub hash: String,
+    pub timestamp: i64,
+    pub message: String,
+}
+
+/// Remote information.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct RemoteInfo {
+    pub name: String,
+    pub fetch_url: String,
+    pub push_url: String,
+}
+
+/// Git config entry.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ConfigEntry {
+    pub key: String,
+    pub value: String,
+    pub scope: String,
+}
+
 /// Current branch information.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct BranchInfo {
@@ -507,6 +543,159 @@ impl GitClient {
     /// Switch to a branch.
     pub fn checkout_branch(&self, name: &str) -> Result<String, GitError> {
         self.git(&["checkout", name])
+    }
+
+    // ── Blame ────────────────────────────────────────────
+
+    /// Get blame annotation for a file.
+    pub fn blame(&self, path: &str) -> Result<Vec<BlameLine>, GitError> {
+        let output = self.git(&["blame", "--porcelain", path])?;
+        let mut lines = Vec::new();
+        let mut current_hash = String::new();
+        let mut current_author = String::new();
+        let mut current_time = 0i64;
+        let mut line_no = 0u32;
+
+        for raw in output.lines() {
+            if raw.starts_with('\t') {
+                // Content line
+                lines.push(BlameLine {
+                    line_number: line_no,
+                    hash: current_hash.clone(),
+                    short_hash: if current_hash.len() >= 8 { current_hash[..8].to_string() } else { current_hash.clone() },
+                    author: current_author.clone(),
+                    timestamp: current_time,
+                    content: raw[1..].to_string(),
+                });
+            } else if raw.len() >= 40 && raw.as_bytes()[40] == b' ' {
+                // Hash header: <40-char hash> <orig-line> <final-line> [count]
+                current_hash = raw[..40].to_string();
+                let parts: Vec<&str> = raw[41..].split(' ').collect();
+                line_no = parts.get(1).and_then(|s| s.parse().ok()).unwrap_or(0);
+            } else if let Some(author) = raw.strip_prefix("author ") {
+                current_author = author.to_string();
+            } else if let Some(time) = raw.strip_prefix("author-time ") {
+                current_time = time.parse().unwrap_or(0);
+            }
+        }
+        Ok(lines)
+    }
+
+    // ── Tags ─────────────────────────────────────────────
+
+    /// List all tags.
+    pub fn tag_list(&self) -> Result<Vec<TagInfo>, GitError> {
+        let output = self.git(&[
+            "tag", "-l", "--format=%(refname:short)\x1f%(objectname:short)\x1f%(creatordate:unix)\x1f%(subject)"
+        ])?;
+        let mut tags = Vec::new();
+        for line in output.lines() {
+            if line.is_empty() { continue; }
+            let parts: Vec<&str> = line.splitn(4, '\x1f').collect();
+            if parts.len() >= 2 {
+                tags.push(TagInfo {
+                    name: parts[0].to_string(),
+                    hash: parts[1].to_string(),
+                    timestamp: parts.get(2).and_then(|s| s.parse().ok()).unwrap_or(0),
+                    message: parts.get(3).unwrap_or(&"").to_string(),
+                });
+            }
+        }
+        Ok(tags)
+    }
+
+    /// Create a tag.
+    pub fn tag_create(&self, name: &str, message: &str) -> Result<String, GitError> {
+        if message.is_empty() {
+            self.git(&["tag", name])
+        } else {
+            self.git(&["tag", "-a", name, "-m", message])
+        }
+    }
+
+    /// Delete a tag.
+    pub fn tag_delete(&self, name: &str) -> Result<String, GitError> {
+        self.git(&["tag", "-d", name])
+    }
+
+    // ── Remotes ──────────────────────────────────────────
+
+    /// List remotes with URLs.
+    pub fn remote_list(&self) -> Result<Vec<RemoteInfo>, GitError> {
+        let output = self.git(&["remote", "-v"])?;
+        let mut map = std::collections::BTreeMap::new();
+        for line in output.lines() {
+            let parts: Vec<&str> = line.split_whitespace().collect();
+            if parts.len() >= 2 {
+                let entry = map.entry(parts[0].to_string()).or_insert_with(|| RemoteInfo {
+                    name: parts[0].to_string(),
+                    fetch_url: String::new(),
+                    push_url: String::new(),
+                });
+                if line.contains("(fetch)") {
+                    entry.fetch_url = parts[1].to_string();
+                } else if line.contains("(push)") {
+                    entry.push_url = parts[1].to_string();
+                }
+            }
+        }
+        Ok(map.into_values().collect())
+    }
+
+    /// Add a remote.
+    pub fn remote_add(&self, name: &str, url: &str) -> Result<String, GitError> {
+        self.git(&["remote", "add", name, url])
+    }
+
+    /// Remove a remote.
+    pub fn remote_remove(&self, name: &str) -> Result<String, GitError> {
+        self.git(&["remote", "remove", name])
+    }
+
+    // ── Config ───────────────────────────────────────────
+
+    /// List git config (local + global merged).
+    pub fn config_list(&self) -> Result<Vec<ConfigEntry>, GitError> {
+        let output = self.git(&["config", "--list", "--show-origin"])?;
+        let mut entries = Vec::new();
+        for line in output.lines() {
+            // Format: file:<path>\t<key>=<value>
+            if let Some(tab_pos) = line.find('\t') {
+                let origin = &line[..tab_pos];
+                let kv = &line[tab_pos + 1..];
+                if let Some(eq_pos) = kv.find('=') {
+                    let scope = if origin.contains(".gitconfig") || origin.contains("global") {
+                        "global"
+                    } else {
+                        "local"
+                    };
+                    entries.push(ConfigEntry {
+                        key: kv[..eq_pos].to_string(),
+                        value: kv[eq_pos + 1..].to_string(),
+                        scope: scope.to_string(),
+                    });
+                }
+            }
+        }
+        Ok(entries)
+    }
+
+    /// Set a config value.
+    pub fn config_set(&self, key: &str, value: &str, global: bool) -> Result<String, GitError> {
+        if global {
+            self.git(&["config", "--global", key, value])
+        } else {
+            self.git(&["config", key, value])
+        }
+    }
+
+    /// Unset a config value.
+    pub fn config_unset(&self, key: &str, global: bool) -> Result<String, GitError> {
+        if global {
+            self.git(&["config", "--global", "--unset", key])
+        } else {
+            self.git(&["config", "--unset", key])
+        }
     }
 
     // ── Internal ─────────────────────────────────────────

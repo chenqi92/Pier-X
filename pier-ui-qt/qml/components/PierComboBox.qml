@@ -3,24 +3,22 @@ import QtQuick.Effects
 import QtQuick.Window
 import Pier
 
-// Themed combo box — opens an inline popup of options.
-// Lightweight by design (no Qt Quick Controls dependency in markup).
 Rectangle {
     id: root
 
-    property var options: []          // array of strings
+    property var options: []
     property int currentIndex: 0
     property string placeholder: ""
     signal activated(int index)
 
-    implicitHeight: 32
-    implicitWidth: 200
-    color: Theme.dark ? Theme.bgSurface : Theme.bgPanel
-    border.color: popup.visible ? Theme.borderFocus : Theme.borderDefault
+    implicitHeight: Theme.fieldHeight
+    implicitWidth: 220
+    color: Theme.bgSurface
+    border.color: popup.visible ? Theme.borderFocus : comboMouse.containsMouse ? Theme.borderStrong : Theme.borderDefault
     border.width: 1
-    radius: Theme.radiusSm
+    radius: Theme.radiusMd
 
-    Behavior on color        { ColorAnimation { duration: Theme.durNormal } }
+    Behavior on color { ColorAnimation { duration: Theme.durNormal } }
     Behavior on border.color { ColorAnimation { duration: Theme.durFast } }
 
     Text {
@@ -38,8 +36,6 @@ Rectangle {
         color: (root.currentIndex >= 0 && root.currentIndex < root.options.length)
                ? Theme.textPrimary
                : Theme.textTertiary
-
-        Behavior on color { ColorAnimation { duration: Theme.durNormal } }
     }
 
     Image {
@@ -48,16 +44,18 @@ Rectangle {
         anchors.rightMargin: Theme.sp3
         anchors.verticalCenter: parent.verticalCenter
         source: "qrc:/qt/qml/Pier/resources/icons/lucide/chevron-down.svg"
-        sourceSize: Qt.size(14, 14)
+        sourceSize: Qt.size(Theme.iconSm, Theme.iconSm)
         layer.enabled: true
         layer.effect: MultiEffect {
             colorization: 1.0
-            colorizationColor: Theme.textTertiary
+            colorizationColor: popup.visible ? Theme.textPrimary : Theme.textTertiary
         }
     }
 
     MouseArea {
+        id: comboMouse
         anchors.fill: parent
+        hoverEnabled: true
         cursorShape: Qt.PointingHandCursor
         onClicked: {
             popup.visible = !popup.visible
@@ -68,9 +66,6 @@ Rectangle {
 
     Keys.onEscapePressed: popup.visible = false
 
-    // Full-screen overlay — closes the popup when the user clicks
-    // anywhere outside it. Sits behind the popup in z-order but
-    // above everything else in the scene.
     MouseArea {
         id: dismissOverlay
         parent: root.Window.contentItem || root
@@ -80,7 +75,6 @@ Rectangle {
         onClicked: popup.visible = false
     }
 
-    // Inline popup
     Rectangle {
         id: popup
         visible: false
@@ -93,49 +87,50 @@ Rectangle {
         color: Theme.bgElevated
         border.color: Theme.borderDefault
         border.width: 1
-        radius: Theme.radiusMd
+        radius: Theme.radiusLg
 
-        Behavior on color        { ColorAnimation { duration: Theme.durNormal } }
+        Behavior on color { ColorAnimation { duration: Theme.durNormal } }
         Behavior on border.color { ColorAnimation { duration: Theme.durNormal } }
 
         layer.enabled: true
         layer.effect: MultiEffect {
             shadowEnabled: true
             shadowColor: "#000000"
-            shadowOpacity: 0.32
+            shadowOpacity: Theme.dark ? 0.34 : 0.16
             shadowBlur: 1.0
-            shadowVerticalOffset: 6
+            shadowVerticalOffset: 8
         }
 
         Column {
             id: optionsCol
             anchors.fill: parent
             anchors.margins: Theme.sp1
+            spacing: Theme.sp0_5
 
             Repeater {
                 model: root.options
                 delegate: Rectangle {
                     width: optionsCol.width
-                    implicitHeight: 28
-                    color: optArea.containsMouse
-                         ? Theme.bgHover
-                         : (index === root.currentIndex ? Theme.accentMuted : "transparent")
+                    implicitHeight: Theme.controlHeight
                     radius: Theme.radiusSm
-
-                    Behavior on color { ColorAnimation { duration: Theme.durFast } }
+                    color: optionArea.containsMouse
+                         ? Theme.bgHover
+                         : (index === root.currentIndex ? Theme.bgSelected : "transparent")
 
                     Text {
                         anchors.fill: parent
                         anchors.leftMargin: Theme.sp3
+                        anchors.rightMargin: Theme.sp3
                         verticalAlignment: Text.AlignVCenter
                         text: modelData
                         font.family: Theme.fontUi
                         font.pixelSize: Theme.sizeBody
+                        font.weight: index === root.currentIndex ? Theme.weightMedium : Theme.weightRegular
                         color: Theme.textPrimary
                     }
 
                     MouseArea {
-                        id: optArea
+                        id: optionArea
                         anchors.fill: parent
                         hoverEnabled: true
                         cursorShape: Qt.PointingHandCursor

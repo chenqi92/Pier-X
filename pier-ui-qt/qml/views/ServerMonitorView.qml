@@ -268,7 +268,7 @@ Rectangle {
 
     // ─── Inline gauge card component ─────────────────
     component GaugeCard : Rectangle {
-        id: gc
+        id: gaugeCard
         property string title: ""
         property double value: -1    // 0-100 or -1
         property string label: ""
@@ -287,7 +287,7 @@ Rectangle {
             spacing: Theme.sp2
 
             Text {
-                text: gc.title
+                text: gaugeCard.title
                 font.family: Theme.fontUi
                 font.pixelSize: Theme.sizeCaption
                 font.weight: Theme.weightMedium
@@ -303,19 +303,19 @@ Rectangle {
                 Behavior on color { ColorAnimation { duration: Theme.durNormal } }
 
                 Rectangle {
-                    width: gc.value >= 0
-                           ? Math.max(parent.width * gc.value / 100, 2)
+                    width: gaugeCard.value >= 0
+                           ? Math.max(parent.width * gaugeCard.value / 100, 2)
                            : 0
                     height: parent.height
                     radius: parent.radius
-                    color: gc.barColor
+                    color: gaugeCard.barColor
                     Behavior on width { NumberAnimation { duration: Theme.durNormal } }
                     Behavior on color { ColorAnimation { duration: Theme.durNormal } }
                 }
             }
 
             Text {
-                text: gc.label
+                text: gaugeCard.label
                 font.family: Theme.fontMono
                 font.pixelSize: Theme.sizeBody
                 font.weight: Theme.weightMedium

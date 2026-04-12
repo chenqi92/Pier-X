@@ -39,4 +39,6 @@ pub mod git;
 pub mod mysql;
 pub mod postgres;
 pub mod redis;
+pub mod search;
 pub mod server_monitor;
+pub mod sqlite;

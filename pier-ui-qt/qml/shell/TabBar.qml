@@ -2,19 +2,18 @@ import QtQuick
 import QtQuick.Layouts
 import QtQuick.Controls
 import Pier
+import "../components"
 
-// Horizontal tab bar — TerminalTab repeater + new tab button.
-// Supports drag-to-reorder: each tab has a DragHandler that allows
-// the user to grab and drag it to a new position. A visual drop
-// indicator shows where the tab will land.
 Rectangle {
     id: root
 
     property var model: null
     property int currentIndex: 0
+    property int contextTabIndex: -1
     readonly property bool hasOverflow: tabContainer.contentWidth > tabContainer.width + 1
     readonly property bool canScrollLeft: tabContainer.contentX > 0
     readonly property bool canScrollRight: tabContainer.contentX < tabContainer.contentWidth - tabContainer.width - 1
+
     signal tabClicked(int index)
     signal tabClosed(int index)
     signal closeOtherTabsRequested(int index)
@@ -23,12 +22,8 @@ Rectangle {
     signal newTabClicked
     signal tabMoved(int from, int to)
 
-    property int contextTabIndex: -1
-
-    implicitHeight: 32
+    implicitHeight: Theme.tabBarHeight
     color: Theme.bgPanel
-
-    Behavior on color { ColorAnimation { duration: Theme.durNormal } }
 
     function scrollTabs(delta) {
         const maxContentX = Math.max(0, tabContainer.contentWidth - tabContainer.width)
@@ -41,30 +36,27 @@ Rectangle {
             return
         const tabLeft = tab.x
         const tabRight = tabLeft + tab.width
-        if (tabLeft < tabContainer.contentX) {
+        if (tabLeft < tabContainer.contentX)
             tabContainer.contentX = tabLeft
-        } else if (tabRight > tabContainer.contentX + tabContainer.width) {
+        else if (tabRight > tabContainer.contentX + tabContainer.width)
             tabContainer.contentX = tabRight - tabContainer.width
-        }
     }
 
     function openContextMenu(index, x, y) {
         contextTabIndex = index
         tabContextMenu.x = Math.max(Theme.sp2,
-                                    Math.min(root.width - tabContextMenu.width - Theme.sp2,
-                                             x))
+                                    Math.min(root.width - tabContextMenu.width - Theme.sp2, x))
         tabContextMenu.y = root.height - 1
         tabContextMenu.open()
     }
 
     RowLayout {
         anchors.fill: parent
-        anchors.leftMargin: Theme.sp1
-        anchors.rightMargin: Theme.sp1
+        anchors.leftMargin: Theme.sp2
+        anchors.rightMargin: Theme.sp2
         spacing: Theme.sp1
 
         IconButton {
-            Layout.alignment: Qt.AlignVCenter
             visible: root.hasOverflow
             enabled: root.canScrollLeft
             icon: "arrow-left"
@@ -72,29 +64,26 @@ Rectangle {
             onClicked: root.scrollTabs(-Math.max(tabContainer.width * 0.72, 160))
         }
 
-        // Tab row — Repeater in a Row so we can control ordering
-        // and implement drag-to-reorder.
         Flickable {
             id: tabContainer
-            Layout.fillHeight: true
             Layout.fillWidth: true
+            Layout.fillHeight: true
             Layout.minimumWidth: 0
             clip: true
             contentWidth: tabRow.width
             contentHeight: height
             flickableDirection: Flickable.HorizontalFlick
             boundsBehavior: Flickable.StopAtBounds
-            ScrollBar.horizontal: ScrollBar { height: 0; active: false; visible: false } // Hide default scrollbar but keep functionality
+            ScrollBar.horizontal: ScrollBar { height: 0; active: false; visible: false }
             NumberAnimation on contentX { duration: Theme.durNormal; easing.type: Theme.easingType }
 
-            property int dragFromIndex: -1    // source index being dragged
-            property int dragToIndex: -1      // visual drop target
-            property real dragX: 0            // current drag X coordinate
+            property int dragFromIndex: -1
+            property int dragToIndex: -1
 
             Row {
                 id: tabRow
                 height: tabContainer.height
-                spacing: 0
+                spacing: Theme.sp1
 
                 Repeater {
                     id: tabRepeater
@@ -103,14 +92,16 @@ Rectangle {
                     TerminalTab {
                         id: tabDelegate
                         title: model.title
+                        kind: model.backend || ""
                         active: index === root.currentIndex
                         menuOpen: index === root.contextTabIndex && tabContextMenu.visible
 
-                        // Drag state — shift visually when being dragged
                         property bool isDragging: false
                         z: isDragging ? 100 : 0
+                        opacity: isDragging ? 0.72 : 1.0
 
                         Behavior on x { enabled: !tabDelegate.isDragging; NumberAnimation { duration: Theme.durFast } }
+                        Behavior on opacity { NumberAnimation { duration: Theme.durFast } }
 
                         onClicked: root.tabClicked(index)
                         onCloseRequested: root.tabClosed(index)
@@ -119,29 +110,24 @@ Rectangle {
                             root.openContextMenu(index, pos.x, pos.y)
                         }
 
-                        // ── Drag-to-reorder ─────────────────
                         DragHandler {
-                            id: dragHandler
-                            target: null  // we handle positioning ourselves
+                            target: null
                             xAxis.enabled: true
                             yAxis.enabled: false
                             grabPermissions: PointerHandler.CanTakeOverFromAnything
 
                             onActiveChanged: {
                                 if (active) {
-                                    // Start drag
                                     tabContextMenu.close()
                                     tabDelegate.isDragging = true
                                     tabContainer.dragFromIndex = index
                                     tabContainer.dragToIndex = index
                                 } else {
-                                    // Drop — emit move signal if position changed
                                     tabDelegate.isDragging = false
                                     if (tabContainer.dragFromIndex !== tabContainer.dragToIndex
                                         && tabContainer.dragFromIndex >= 0
                                         && tabContainer.dragToIndex >= 0) {
-                                        root.tabMoved(tabContainer.dragFromIndex,
-                                                      tabContainer.dragToIndex)
+                                        root.tabMoved(tabContainer.dragFromIndex, tabContainer.dragToIndex)
                                     }
                                     tabContainer.dragFromIndex = -1
                                     tabContainer.dragToIndex = -1
@@ -149,49 +135,49 @@ Rectangle {
                             }
 
                             onCentroidChanged: {
-                                if (!active) return
-                                // Determine which tab slot the drag centroid is over
+                                if (!active)
+                                    return
                                 const globalPos = tabDelegate.mapToItem(tabContainer,
-                                    centroid.position.x, centroid.position.y)
+                                                                         centroid.position.x,
+                                                                         centroid.position.y)
                                 let targetIdx = 0
                                 let accW = 0
                                 for (let i = 0; i < tabRepeater.count; ++i) {
                                     const tab = tabRepeater.itemAt(i)
-                                    if (!tab) continue
-                                    accW += tab.width
-                                    if (globalPos.x < accW - tab.width / 2) break
+                                    if (!tab)
+                                        continue
+                                    accW += tab.width + tabRow.spacing
+                                    if (globalPos.x < accW - tab.width / 2)
+                                        break
                                     targetIdx = i
                                 }
                                 tabContainer.dragToIndex = Math.min(targetIdx, tabRepeater.count - 1)
                             }
                         }
-
-                        // Visual drag feedback — subtle opacity change
-                        opacity: isDragging ? 0.7 : 1.0
-                        Behavior on opacity { NumberAnimation { duration: Theme.durFast } }
                     }
                 }
             }
 
-            // Drop indicator line — shows where the tab will land
             Rectangle {
-                id: dropIndicator
                 visible: tabContainer.dragFromIndex >= 0
                          && tabContainer.dragFromIndex !== tabContainer.dragToIndex
                 width: 2
-                height: parent.height
-                color: Theme.accent
+                height: parent.height - Theme.sp1
                 radius: 1
+                color: Theme.accent
                 z: 200
+                y: Theme.sp0_5
 
                 x: {
-                    if (tabContainer.dragToIndex < 0) return 0
+                    if (tabContainer.dragToIndex < 0)
+                        return 0
                     let accW = 0
                     for (let i = 0; i <= tabContainer.dragToIndex; ++i) {
                         const tab = tabRepeater.itemAt(i)
-                        if (tab) accW += tab.width
+                        if (tab)
+                            accW += tab.width + tabRow.spacing
                     }
-                    return accW - 1
+                    return accW - tabRow.spacing / 2 - 1
                 }
 
                 Behavior on x { NumberAnimation { duration: Theme.durFast } }
@@ -199,7 +185,6 @@ Rectangle {
         }
 
         IconButton {
-            Layout.alignment: Qt.AlignVCenter
             visible: root.hasOverflow
             enabled: root.canScrollRight
             icon: "arrow-left"
@@ -210,7 +195,6 @@ Rectangle {
 
         IconButton {
             id: overflowButton
-            Layout.alignment: Qt.AlignVCenter
             visible: root.hasOverflow
             icon: "chevron-down"
             tooltip: qsTr("All tabs")
@@ -225,27 +209,23 @@ Rectangle {
         }
 
         IconButton {
-            Layout.alignment: Qt.AlignVCenter
             icon: "plus"
             tooltip: qsTr("New session")
             onClicked: root.newTabClicked()
         }
     }
 
-    // Bottom border
     Rectangle {
-        anchors.bottom: parent.bottom
         anchors.left: parent.left
         anchors.right: parent.right
+        anchors.bottom: parent.bottom
         height: 1
         color: Theme.borderSubtle
-
-        Behavior on color { ColorAnimation { duration: Theme.durNormal } }
     }
 
     Popup {
         id: tabContextMenu
-        width: 184
+        width: 194
         modal: false
         focus: true
         padding: Theme.sp1
@@ -255,10 +235,7 @@ Rectangle {
             color: Theme.bgElevated
             border.color: Theme.borderDefault
             border.width: 1
-            radius: Theme.radiusMd
-
-            Behavior on color { ColorAnimation { duration: Theme.durNormal } }
-            Behavior on border.color { ColorAnimation { duration: Theme.durNormal } }
+            radius: Theme.radiusLg
         }
 
         onClosed: root.contextTabIndex = -1
@@ -312,7 +289,7 @@ Rectangle {
 
     Popup {
         id: overflowMenu
-        width: 260
+        width: 280
         modal: false
         focus: true
         padding: Theme.sp1
@@ -322,10 +299,7 @@ Rectangle {
             color: Theme.bgElevated
             border.color: Theme.borderDefault
             border.width: 1
-            radius: Theme.radiusMd
-
-            Behavior on color { ColorAnimation { duration: Theme.durNormal } }
-            Behavior on border.color { ColorAnimation { duration: Theme.durNormal } }
+            radius: Theme.radiusLg
         }
 
         contentItem: Column {
@@ -357,16 +331,11 @@ Rectangle {
         property bool active: false
         signal clicked()
 
-        implicitWidth: 184
-        implicitHeight: 28
+        implicitWidth: 194
+        implicitHeight: Theme.controlHeight
         radius: Theme.radiusSm
-        color: active
-               ? Theme.bgSelected
-               : menuArea.containsMouse ? Theme.bgHover : "transparent"
+        color: active ? Theme.bgSelected : menuArea.containsMouse ? Theme.bgHover : "transparent"
         opacity: enabled ? 1.0 : 0.48
-
-        Behavior on color { ColorAnimation { duration: Theme.durFast } }
-        Behavior on opacity { NumberAnimation { duration: Theme.durFast } }
 
         Text {
             anchors.fill: parent

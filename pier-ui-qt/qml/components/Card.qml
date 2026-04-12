@@ -1,8 +1,7 @@
 import QtQuick
+import QtQuick.Effects
 import Pier
 
-// Card — surface container with subtle border.
-// Spec: SKILL.md §9.4
 Rectangle {
     id: root
 
@@ -12,10 +11,19 @@ Rectangle {
     color: Theme.bgSurface
     border.color: Theme.borderSubtle
     border.width: 1
-    radius: Theme.radiusMd
+    radius: Theme.radiusLg
 
-    Behavior on color        { ColorAnimation { duration: Theme.durNormal } }
+    Behavior on color { ColorAnimation { duration: Theme.durNormal } }
     Behavior on border.color { ColorAnimation { duration: Theme.durNormal } }
+
+    layer.enabled: !Theme.dark
+    layer.effect: MultiEffect {
+        shadowEnabled: true
+        shadowColor: "#000000"
+        shadowOpacity: 0.05
+        shadowBlur: 0.4
+        shadowVerticalOffset: 2
+    }
 
     Item {
         id: contentItem

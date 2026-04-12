@@ -538,6 +538,114 @@ pub unsafe extern "C" fn pier_git_checkout_branch(h: *mut PierGit, name: *const 
 }
 
 // ─────────────────────────────────────────────────────────
+// Blame
+// ─────────────────────────────────────────────────────────
+
+#[no_mangle]
+pub unsafe extern "C" fn pier_git_blame(h: *mut PierGit, path: *const c_char) -> *mut c_char {
+    if h.is_null() || path.is_null() { return err_json("null"); }
+    let client = unsafe { &(*h).client };
+    let p = match unsafe { CStr::from_ptr(path) }.to_str() { Ok(s) => s, Err(_) => return err_json("utf8") };
+    match client.blame(p) {
+        Ok(lines) => { let j = serde_json::to_string(&lines).unwrap_or_else(|_| "[]".into()); to_json_cstring(&j) }
+        Err(e) => err_json(&e.to_string()),
+    }
+}
+
+// ─────────────────────────────────────────────────────────
+// Tags
+// ─────────────────────────────────────────────────────────
+
+#[no_mangle]
+pub unsafe extern "C" fn pier_git_tag_list(h: *mut PierGit) -> *mut c_char {
+    if h.is_null() { return err_json("null"); }
+    let client = unsafe { &(*h).client };
+    match client.tag_list() {
+        Ok(tags) => { let j = serde_json::to_string(&tags).unwrap_or_else(|_| "[]".into()); to_json_cstring(&j) }
+        Err(e) => err_json(&e.to_string()),
+    }
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn pier_git_tag_create(h: *mut PierGit, name: *const c_char, message: *const c_char) -> *mut c_char {
+    if h.is_null() || name.is_null() { return err_json("null"); }
+    let client = unsafe { &(*h).client };
+    let n = match unsafe { CStr::from_ptr(name) }.to_str() { Ok(s) => s, Err(_) => return err_json("utf8") };
+    let m = if message.is_null() { "" } else { match unsafe { CStr::from_ptr(message) }.to_str() { Ok(s) => s, Err(_) => "" } };
+    match client.tag_create(n, m) { Ok(o) => to_json_cstring(&o), Err(e) => err_json(&e.to_string()) }
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn pier_git_tag_delete(h: *mut PierGit, name: *const c_char) -> *mut c_char {
+    if h.is_null() || name.is_null() { return err_json("null"); }
+    let client = unsafe { &(*h).client };
+    let n = match unsafe { CStr::from_ptr(name) }.to_str() { Ok(s) => s, Err(_) => return err_json("utf8") };
+    match client.tag_delete(n) { Ok(o) => to_json_cstring(&o), Err(e) => err_json(&e.to_string()) }
+}
+
+// ─────────────────────────────────────────────────────────
+// Remotes
+// ─────────────────────────────────────────────────────────
+
+#[no_mangle]
+pub unsafe extern "C" fn pier_git_remote_list(h: *mut PierGit) -> *mut c_char {
+    if h.is_null() { return err_json("null"); }
+    let client = unsafe { &(*h).client };
+    match client.remote_list() {
+        Ok(r) => { let j = serde_json::to_string(&r).unwrap_or_else(|_| "[]".into()); to_json_cstring(&j) }
+        Err(e) => err_json(&e.to_string()),
+    }
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn pier_git_remote_add(h: *mut PierGit, name: *const c_char, url: *const c_char) -> *mut c_char {
+    if h.is_null() || name.is_null() || url.is_null() { return err_json("null"); }
+    let client = unsafe { &(*h).client };
+    let n = match unsafe { CStr::from_ptr(name) }.to_str() { Ok(s) => s, Err(_) => return err_json("utf8") };
+    let u = match unsafe { CStr::from_ptr(url) }.to_str() { Ok(s) => s, Err(_) => return err_json("utf8") };
+    match client.remote_add(n, u) { Ok(o) => to_json_cstring(&o), Err(e) => err_json(&e.to_string()) }
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn pier_git_remote_remove(h: *mut PierGit, name: *const c_char) -> *mut c_char {
+    if h.is_null() || name.is_null() { return err_json("null"); }
+    let client = unsafe { &(*h).client };
+    let n = match unsafe { CStr::from_ptr(name) }.to_str() { Ok(s) => s, Err(_) => return err_json("utf8") };
+    match client.remote_remove(n) { Ok(o) => to_json_cstring(&o), Err(e) => err_json(&e.to_string()) }
+}
+
+// ─────────────────────────────────────────────────────────
+// Config
+// ─────────────────────────────────────────────────────────
+
+#[no_mangle]
+pub unsafe extern "C" fn pier_git_config_list(h: *mut PierGit) -> *mut c_char {
+    if h.is_null() { return err_json("null"); }
+    let client = unsafe { &(*h).client };
+    match client.config_list() {
+        Ok(c) => { let j = serde_json::to_string(&c).unwrap_or_else(|_| "[]".into()); to_json_cstring(&j) }
+        Err(e) => err_json(&e.to_string()),
+    }
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn pier_git_config_set(h: *mut PierGit, key: *const c_char, value: *const c_char, global: i32) -> *mut c_char {
+    if h.is_null() || key.is_null() || value.is_null() { return err_json("null"); }
+    let client = unsafe { &(*h).client };
+    let k = match unsafe { CStr::from_ptr(key) }.to_str() { Ok(s) => s, Err(_) => return err_json("utf8") };
+    let v = match unsafe { CStr::from_ptr(value) }.to_str() { Ok(s) => s, Err(_) => return err_json("utf8") };
+    match client.config_set(k, v, global != 0) { Ok(o) => to_json_cstring(&o), Err(e) => err_json(&e.to_string()) }
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn pier_git_config_unset(h: *mut PierGit, key: *const c_char, global: i32) -> *mut c_char {
+    if h.is_null() || key.is_null() { return err_json("null"); }
+    let client = unsafe { &(*h).client };
+    let k = match unsafe { CStr::from_ptr(key) }.to_str() { Ok(s) => s, Err(_) => return err_json("utf8") };
+    match client.config_unset(k, global != 0) { Ok(o) => to_json_cstring(&o), Err(e) => err_json(&e.to_string()) }
+}
+
+// ─────────────────────────────────────────────────────────
 // Graph functions (from git_graph module)
 // ───────────────────��─────────────────────────────────────
 

@@ -12,6 +12,7 @@ Item {
     id: root
 
     property bool open: false
+    readonly property int pagePadding: 28
     signal saved(var connection)
     signal cancelled
 
@@ -89,8 +90,8 @@ Item {
     Rectangle {
         id: dialog
         anchors.centerIn: parent
-        width: Math.min(580, parent.width - Theme.sp8 * 2)
-        height: Math.min(620, parent.height - Theme.sp8 * 2)
+        width: Math.min(688, parent.width - Theme.sp8 * 2)
+        height: Math.min(720, parent.height - Theme.sp8 * 2)
         scale: 0.96
         opacity: 0
         transformOrigin: Item.Center
@@ -125,8 +126,8 @@ Item {
 
             Rectangle {
                 Layout.fillWidth: true
-                Layout.preferredHeight: 52
-                color: Theme.bgPanel
+                Layout.preferredHeight: Theme.dialogHeaderHeight
+                color: Theme.bgChrome
                 radius: Theme.radiusLg
 
                 Rectangle {
@@ -191,10 +192,10 @@ Item {
 
                 ColumnLayout {
                     id: form
-                    width: Math.max(0, formScroll.availableWidth - Theme.sp6 * 2)
-                    x: Theme.sp5
-                    y: Theme.sp5
-                    spacing: Theme.sp5
+                    width: Math.max(0, formScroll.availableWidth - root.pagePadding * 2)
+                    x: root.pagePadding
+                    y: root.pagePadding
+                    spacing: Theme.sp6
 
                     ColumnLayout {
                         Layout.fillWidth: true
@@ -375,8 +376,8 @@ Item {
 
             Rectangle {
                 Layout.fillWidth: true
-                Layout.preferredHeight: 60
-                color: Theme.bgPanel
+                Layout.preferredHeight: Theme.dialogFooterHeight
+                color: Theme.bgChrome
 
                 Rectangle {
                     anchors.left: parent.left

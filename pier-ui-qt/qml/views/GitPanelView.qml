@@ -1,56 +1,123 @@
 import QtQuick
 import QtQuick.Controls.Basic
+import QtQuick.Effects
 import QtQuick.Layouts
 import Pier
 import "../components"
 
-// Git panel — matches the original Pier layout:
-// Branch bar → Tab bar (Changes/History/Stash/Conflicts) → Content → Diff
 Rectangle {
     id: root
 
     property string repoPath: ""
     property int selectedTab: 0
+    property bool statusBannerVisible: false
+    property bool statusBannerSuccess: true
+    property string statusBannerMessage: ""
 
     signal closePanelRequested()
+
+    readonly property int totalChanges: client.stagedFiles.length + client.unstagedFiles.length
+    readonly property bool workingTreeClean: totalChanges === 0
+    readonly property string repoName: {
+        const normalized = String(root.repoPath || "").replace(/[\\\/]+$/, "")
+        if (normalized.length === 0)
+            return qsTr("Git")
+        const slash = Math.max(normalized.lastIndexOf("/"), normalized.lastIndexOf("\\"))
+        return slash >= 0 ? normalized.slice(slash + 1) : normalized
+    }
+
+    function ensureTabData(index) {
+        if (index === 1 && client.commits.length === 0)
+            client.loadHistory()
+        if (index === 2 && client.stashes.length === 0)
+            client.loadStashes()
+    }
 
     color: Theme.bgPanel
     Behavior on color { ColorAnimation { duration: Theme.durNormal } }
 
     PierGitClient { id: client }
 
-    onRepoPathChanged: {
-        if (repoPath.length > 0) client.open(repoPath)
+    Timer {
+        id: bannerTimer
+        interval: 2800
+        repeat: false
+        onTriggered: root.statusBannerVisible = false
     }
+
+    Connections {
+        target: client
+
+        function onOperationFinished(operation, success, message) {
+            root.statusBannerSuccess = success
+            root.statusBannerMessage = message.length > 0
+                    ? message
+                    : (success
+                       ? qsTr("%1 finished").arg(operation)
+                       : qsTr("%1 failed").arg(operation))
+            root.statusBannerVisible = true
+            bannerTimer.restart()
+            client.refresh()
+            root.ensureTabData(root.selectedTab)
+        }
+    }
+
+    onRepoPathChanged: {
+        if (repoPath.length > 0)
+            client.open(repoPath)
+        else
+            client.close()
+    }
+
     onVisibleChanged: {
-        if (visible && client.isGitRepo) client.refresh()
+        if (!visible || !client.isGitRepo)
+            return
+        client.refresh()
+        root.ensureTabData(root.selectedTab)
     }
 
     ColumnLayout {
         anchors.fill: parent
         spacing: 0
 
-        // ── Branch bar ──────────────────────────────────
         Rectangle {
             Layout.fillWidth: true
-            implicitHeight: 32
+            implicitHeight: 48
             color: Theme.bgSurface
-            visible: client.isGitRepo
-
-            Behavior on color { ColorAnimation { duration: Theme.durNormal } }
+            border.color: Theme.borderSubtle
+            border.width: 1
 
             RowLayout {
                 anchors.fill: parent
-                anchors.leftMargin: Theme.sp2
+                anchors.leftMargin: Theme.sp3
                 anchors.rightMargin: Theme.sp2
-                spacing: Theme.sp1
+                spacing: Theme.sp2
 
-                // Branch selector
+                Rectangle {
+                    Layout.preferredWidth: 18
+                    Layout.preferredHeight: 18
+                    radius: Theme.radiusSm
+                    color: Theme.accentSubtle
+
+                    Image {
+                        anchors.centerIn: parent
+                        source: "qrc:/qt/qml/Pier/resources/icons/lucide/git-branch.svg"
+                        sourceSize: Qt.size(14, 14)
+                        layer.enabled: true
+                        layer.effect: MultiEffect {
+                            colorizationColor: Theme.accent
+                            colorization: 1.0
+                        }
+                    }
+                }
+
                 Rectangle {
                     implicitWidth: branchRow.implicitWidth + Theme.sp2 * 2
-                    implicitHeight: 22
-                    radius: Theme.radiusSm
-                    color: branchMouse.containsMouse ? Theme.bgHover : "transparent"
+                    implicitHeight: 26
+                    radius: Theme.radiusPill
+                    color: branchMouse.containsMouse ? Theme.bgHover : Theme.bgInset
+                    border.color: branchMouse.containsMouse ? Theme.borderDefault : Theme.borderSubtle
+                    border.width: 1
 
                     Row {
                         id: branchRow
@@ -58,17 +125,22 @@ Rectangle {
                         spacing: Theme.sp1
 
                         Text {
-                            text: client.currentBranch
+                            text: client.currentBranch.length > 0 ? client.currentBranch : qsTr("Detached")
                             font.family: Theme.fontMono
                             font.pixelSize: Theme.sizeSmall
-                            font.weight: Theme.weightSemibold
+                            font.weight: Theme.weightMedium
                             color: Theme.textPrimary
                         }
-                        Text {
-                            text: "\u25BE"
-                            font.pixelSize: 8
-                            color: Theme.textTertiary
+
+                        Image {
+                            source: "qrc:/qt/qml/Pier/resources/icons/lucide/chevron-down.svg"
+                            sourceSize: Qt.size(12, 12)
                             anchors.verticalCenter: parent.verticalCenter
+                            layer.enabled: true
+                            layer.effect: MultiEffect {
+                                colorizationColor: Theme.textTertiary
+                                colorization: 1.0
+                            }
                         }
                     }
 
@@ -77,6 +149,7 @@ Rectangle {
                         anchors.fill: parent
                         hoverEnabled: true
                         cursorShape: Qt.PointingHandCursor
+                        enabled: client.isGitRepo
                         onClicked: {
                             client.loadBranches()
                             branchMenu.open()
@@ -85,9 +158,12 @@ Rectangle {
 
                     Menu {
                         id: branchMenu
+
                         Repeater {
                             model: client.branches
+
                             MenuItem {
+                                required property string modelData
                                 text: modelData
                                 checkable: true
                                 checked: modelData === client.currentBranch
@@ -97,453 +173,782 @@ Rectangle {
                     }
                 }
 
-                // Tracking
                 Text {
+                    Layout.fillWidth: true
                     visible: client.trackingBranch.length > 0
                     text: "\u2192 " + client.trackingBranch
                     font.family: Theme.fontMono
                     font.pixelSize: Theme.sizeSmall
                     color: Theme.textTertiary
-                    elide: Text.ElideRight
-                    Layout.fillWidth: true
+                    elide: Text.ElideMiddle
                 }
-                Item { Layout.fillWidth: true; visible: client.trackingBranch.length === 0 }
 
-                // Ahead/behind
-                Text {
+                Rectangle {
                     visible: client.aheadCount > 0
-                    text: "\u2191" + client.aheadCount
-                    font.family: Theme.fontMono
-                    font.pixelSize: Theme.sizeSmall
-                    color: Theme.statusInfo
-                }
-                Text {
-                    visible: client.behindCount > 0
-                    text: "\u2193" + client.behindCount
-                    font.family: Theme.fontMono
-                    font.pixelSize: Theme.sizeSmall
-                    color: Theme.statusWarning
+                    implicitWidth: aheadText.implicitWidth + Theme.sp2 * 2
+                    implicitHeight: 22
+                    radius: Theme.radiusPill
+                    color: Theme.accentSubtle
+
+                    Text {
+                        id: aheadText
+                        anchors.centerIn: parent
+                        text: "\u2191 " + client.aheadCount
+                        font.family: Theme.fontMono
+                        font.pixelSize: Theme.sizeSmall
+                        color: Theme.statusInfo
+                    }
                 }
 
-                // Pull / Push / Refresh
+                Rectangle {
+                    visible: client.behindCount > 0
+                    implicitWidth: behindText.implicitWidth + Theme.sp2 * 2
+                    implicitHeight: 22
+                    radius: Theme.radiusPill
+                    color: Qt.rgba(240 / 255, 168 / 255, 58 / 255, Theme.dark ? 0.16 : 0.12)
+
+                    Text {
+                        id: behindText
+                        anchors.centerIn: parent
+                        text: "\u2193 " + client.behindCount
+                        font.family: Theme.fontMono
+                        font.pixelSize: Theme.sizeSmall
+                        color: Theme.statusWarning
+                    }
+                }
+
+                Rectangle {
+                    implicitWidth: summaryText.implicitWidth + Theme.sp2 * 2
+                    implicitHeight: 22
+                    radius: Theme.radiusPill
+                    color: root.workingTreeClean
+                           ? Qt.rgba(95 / 255, 184 / 255, 101 / 255, Theme.dark ? 0.14 : 0.10)
+                           : Theme.accentSubtle
+
+                    Text {
+                        id: summaryText
+                        anchors.centerIn: parent
+                        text: root.workingTreeClean
+                              ? qsTr("Clean")
+                              : qsTr("%1 files").arg(root.totalChanges)
+                        font.family: Theme.fontUi
+                        font.pixelSize: Theme.sizeSmall
+                        font.weight: Theme.weightMedium
+                        color: root.workingTreeClean ? Theme.statusSuccess : Theme.accent
+                    }
+                }
+
                 IconButton {
                     icon: "refresh-cw"
                     tooltip: qsTr("Refresh")
+                    enabled: !client.busy
                     onClicked: {
                         client.refresh()
-                        if (selectedTab === 1) client.loadHistory()
-                        if (selectedTab === 2) client.loadStashes()
+                        root.ensureTabData(root.selectedTab)
                     }
-                    Layout.preferredWidth: 22; Layout.preferredHeight: 22
-                    enabled: !client.busy
                 }
-            }
-
-            Rectangle {
-                anchors.bottom: parent.bottom; width: parent.width; height: 1
-                color: Theme.borderSubtle
             }
         }
 
-        // ── Tab bar ─────────────────────────────────────
         Rectangle {
             Layout.fillWidth: true
-            implicitHeight: 28
-            color: Theme.bgPanel
-            visible: client.isGitRepo
+            implicitHeight: root.statusBannerVisible ? 32 : 0
+            visible: implicitHeight > 0
+            color: root.statusBannerSuccess
+                   ? Qt.rgba(95 / 255, 184 / 255, 101 / 255, Theme.dark ? 0.12 : 0.08)
+                   : Qt.rgba(250 / 255, 102 / 255, 117 / 255, Theme.dark ? 0.14 : 0.10)
+            border.color: root.statusBannerSuccess ? Theme.statusSuccess : Theme.statusError
+            border.width: 1
+            clip: true
 
-            Row {
+            RowLayout {
                 anchors.fill: parent
-                anchors.leftMargin: Theme.sp2
-                spacing: 0
+                anchors.leftMargin: Theme.sp3
+                anchors.rightMargin: Theme.sp3
+                spacing: Theme.sp2
 
-                Repeater {
-                    model: [
-                        { label: qsTr("Changes"), idx: 0 },
-                        { label: qsTr("History"), idx: 1 },
-                        { label: qsTr("Stash"),   idx: 2 },
-                        { label: qsTr("Conflicts"), idx: 3 }
-                    ]
-                    delegate: Rectangle {
-                        required property var modelData
-                        width: tabLabel.implicitWidth + Theme.sp3 * 2
-                        height: 28
-                        color: selectedTab === modelData.idx
-                               ? Theme.accentMuted
-                               : tabArea.containsMouse ? Theme.bgHover : "transparent"
-                        radius: Theme.radiusSm
-
-                        Behavior on color { ColorAnimation { duration: Theme.durFast } }
-
-                        Text {
-                            id: tabLabel
-                            anchors.centerIn: parent
-                            text: modelData.label
-                            font.family: Theme.fontUi
-                            font.pixelSize: Theme.sizeSmall
-                            font.weight: selectedTab === modelData.idx ? Theme.weightSemibold : Theme.weightRegular
-                            color: selectedTab === modelData.idx ? Theme.textPrimary : Theme.textSecondary
-                        }
-
-                        MouseArea {
-                            id: tabArea
-                            anchors.fill: parent
-                            hoverEnabled: true
-                            cursorShape: Qt.PointingHandCursor
-                            onClicked: {
-                                selectedTab = modelData.idx
-                                if (modelData.idx === 1 && client.commits.length === 0) client.loadHistory()
-                                if (modelData.idx === 2) client.loadStashes()
-                            }
-                        }
-                    }
-                }
-            }
-
-            Rectangle {
-                anchors.bottom: parent.bottom; width: parent.width; height: 1
-                color: Theme.borderSubtle
-            }
-        }
-
-        // ── Not a repo / Loading ────────────────────────
-        Item {
-            Layout.fillWidth: true; Layout.fillHeight: true
-            visible: !client.isGitRepo
-
-            Text {
-                anchors.centerIn: parent
-                text: client.status === PierGitClient.Loading ? qsTr("Loading...") : qsTr("Not a Git repository")
-                font.family: Theme.fontUi; font.pixelSize: Theme.sizeBody; color: Theme.textTertiary
-            }
-        }
-
-        // ── Tab content ─────────────────────────────────
-        StackLayout {
-            Layout.fillWidth: true
-            Layout.fillHeight: true
-            visible: client.isGitRepo
-            currentIndex: selectedTab
-
-            // ═══ TAB 0: Changes ═════════════════════════
-            SplitView {
-                orientation: Qt.Vertical
-
-                ColumnLayout {
-                    SplitView.fillWidth: true
-                    SplitView.preferredHeight: 300
-                    SplitView.minimumHeight: 100
-                    spacing: 0
-
-                    // Staged section
-                    FileSection {
-                        Layout.fillWidth: true
-                        Layout.maximumHeight: 200
-                        visible: client.stagedFiles.length > 0
-                        title: qsTr("Staged (%1)").arg(client.stagedFiles.length)
-                        dotColor: Theme.statusSuccess
-                        actionLabel: qsTr("Unstage All")
-                        onActionClicked: client.unstageAll()
-                        model: client.stagedFiles
-                        staged: true
-                        onFileClicked: (path) => client.loadDiff(path, true)
-                        onFileAction: (path) => client.unstageFile(path)
-                    }
-
-                    // Unstaged section
-                    FileSection {
-                        Layout.fillWidth: true
-                        Layout.fillHeight: true
-                        title: qsTr("Unstaged (%1)").arg(client.unstagedFiles.length)
-                        dotColor: Theme.statusWarning
-                        actionLabel: qsTr("Stage All")
-                        onActionClicked: client.stageAll()
-                        model: client.unstagedFiles
-                        staged: false
-                        onFileClicked: (path) => client.loadDiff(path, false)
-                        onFileAction: (path) => client.stageFile(path)
-                        onFileDiscard: (path) => client.discardFile(path)
-                    }
-
-                    // Commit form
-                    Rectangle {
-                        Layout.fillWidth: true
-                        implicitHeight: commitCol.implicitHeight + Theme.sp2 * 2
-                        color: Theme.bgSurface
-                        border.color: Theme.borderSubtle; border.width: 1
-
-                        ColumnLayout {
-                            id: commitCol
-                            anchors.fill: parent; anchors.margins: Theme.sp2
-                            spacing: Theme.sp1
-
-                            TextArea {
-                                id: commitMsg
-                                Layout.fillWidth: true
-                                Layout.preferredHeight: 48
-                                placeholderText: qsTr("Commit message...")
-                                font.family: Theme.fontMono; font.pixelSize: Theme.sizeSmall
-                                color: Theme.textPrimary; placeholderTextColor: Theme.textTertiary
-                                wrapMode: TextEdit.Wrap
-                                background: Rectangle {
-                                    color: Theme.bgPanel; radius: Theme.radiusSm
-                                    border.color: commitMsg.activeFocus ? Theme.borderFocus : Theme.borderDefault
-                                    border.width: 1
-                                }
-                            }
-
-                            RowLayout {
-                                Layout.fillWidth: true; spacing: Theme.sp1
-
-                                GhostButton {
-                                    text: qsTr("Stage All")
-                                    visible: client.unstagedFiles.length > 0
-                                    onClicked: client.stageAll()
-                                }
-                                Item { Layout.fillWidth: true }
-
-                                PrimaryButton {
-                                    text: qsTr("Commit")
-                                    enabled: commitMsg.text.length > 0 && client.stagedFiles.length > 0 && !client.busy
-                                    onClicked: { client.commit(commitMsg.text); commitMsg.text = "" }
-                                }
-                                GhostButton {
-                                    text: qsTr("Push"); enabled: client.aheadCount > 0 && !client.busy
-                                    onClicked: client.push()
-                                }
-                                GhostButton {
-                                    text: qsTr("Pull"); enabled: client.behindCount > 0 && !client.busy
-                                    onClicked: client.pull()
-                                }
-                            }
-                        }
-                    }
-                }
-
-                // Diff viewer
-                DiffViewer {
-                    SplitView.fillWidth: true
-                    SplitView.preferredHeight: 200
-                    SplitView.minimumHeight: 60
-                    diffPath: client.diffPath
-                    diffText: client.diffText
-                }
-            }
-
-            // ═══ TAB 1: History ═════════════════════════
-            ColumnLayout {
-                spacing: 0
-
-                ListView {
-                    Layout.fillWidth: true
-                    Layout.fillHeight: true
-                    clip: true
-                    model: client.commits
-
-                    delegate: Rectangle {
-                        required property var modelData
-                        required property int index
-                        width: ListView.view.width
-                        height: 36
-                        color: histMouse.containsMouse ? Theme.bgHover : "transparent"
-
-                        Behavior on color { ColorAnimation { duration: Theme.durFast } }
-
-                        MouseArea {
-                            id: histMouse; anchors.fill: parent; hoverEnabled: true
-                        }
-
-                        RowLayout {
-                            anchors.fill: parent
-                            anchors.leftMargin: Theme.sp2; anchors.rightMargin: Theme.sp2
-                            spacing: Theme.sp2
-
-                            // Hash
-                            Text {
-                                text: modelData.shortHash
-                                font.family: Theme.fontMono; font.pixelSize: Theme.sizeSmall
-                                color: Theme.accent
-                                Layout.preferredWidth: 60
-                            }
-
-                            // Refs badge
-                            Rectangle {
-                                visible: modelData.refs.length > 0
-                                implicitWidth: refText.implicitWidth + Theme.sp1 * 2
-                                implicitHeight: 16
-                                radius: Theme.radiusPill
-                                color: Theme.accentMuted
-
-                                Text {
-                                    id: refText; anchors.centerIn: parent
-                                    text: modelData.refs.split(",")[0].trim()
-                                    font.family: Theme.fontMono; font.pixelSize: 9
-                                    color: Theme.accent
-                                }
-                            }
-
-                            // Message
-                            Text {
-                                text: modelData.message
-                                font.family: Theme.fontUi; font.pixelSize: Theme.sizeSmall
-                                color: Theme.textPrimary
-                                elide: Text.ElideRight
-                                Layout.fillWidth: true
-                            }
-
-                            // Author
-                            Text {
-                                text: modelData.author
-                                font.family: Theme.fontUi; font.pixelSize: Theme.sizeSmall
-                                color: Theme.textTertiary
-                                Layout.preferredWidth: 80
-                                elide: Text.ElideRight
-                            }
-
-                            // Date
-                            Text {
-                                text: modelData.relativeDate
-                                font.family: Theme.fontUi; font.pixelSize: Theme.sizeSmall
-                                color: Theme.textTertiary
-                                Layout.preferredWidth: 80
-                                horizontalAlignment: Text.AlignRight
-                            }
-                        }
-                    }
-                }
-            }
-
-            // ═══ TAB 2: Stash ═══════════════════════════
-            ColumnLayout {
-                spacing: 0
-
-                // Stash button bar
                 Rectangle {
-                    Layout.fillWidth: true; implicitHeight: 32
-                    color: Theme.bgSurface
-
-                    RowLayout {
-                        anchors.fill: parent
-                        anchors.leftMargin: Theme.sp2; anchors.rightMargin: Theme.sp2
-
-                        Item { Layout.fillWidth: true }
-                        GhostButton {
-                            text: qsTr("Stash Changes")
-                            enabled: (client.stagedFiles.length > 0 || client.unstagedFiles.length > 0) && !client.busy
-                            onClicked: client.stashPush("")
-                        }
-                    }
-
-                    Rectangle {
-                        anchors.bottom: parent.bottom; width: parent.width; height: 1
-                        color: Theme.borderSubtle
-                    }
+                    Layout.preferredWidth: 6
+                    Layout.preferredHeight: 6
+                    radius: 3
+                    color: root.statusBannerSuccess ? Theme.statusSuccess : Theme.statusError
                 }
 
-                ListView {
+                Text {
                     Layout.fillWidth: true
-                    Layout.fillHeight: true
-                    clip: true
-                    model: client.stashes
+                    text: root.statusBannerMessage
+                    font.family: Theme.fontUi
+                    font.pixelSize: Theme.sizeSmall
+                    color: Theme.textPrimary
+                    elide: Text.ElideRight
+                }
 
-                    delegate: Rectangle {
-                        required property var modelData
-                        required property int index
-                        width: ListView.view.width
-                        height: 40
-                        color: stashMouse.containsMouse ? Theme.bgHover : "transparent"
-
-                        Behavior on color { ColorAnimation { duration: Theme.durFast } }
-
-                        MouseArea {
-                            id: stashMouse; anchors.fill: parent; hoverEnabled: true
-                            acceptedButtons: Qt.LeftButton | Qt.RightButton
-                            onClicked: (mouse) => {
-                                if (mouse.button === Qt.RightButton) stashCtx.popup()
-                            }
-                        }
-
-                        RowLayout {
-                            anchors.fill: parent
-                            anchors.leftMargin: Theme.sp3; anchors.rightMargin: Theme.sp2
-                            spacing: Theme.sp2
-
-                            Rectangle {
-                                width: 6; height: 6; radius: 3
-                                color: "#c77dff"
-                                Layout.alignment: Qt.AlignVCenter
-                            }
-
-                            ColumnLayout {
-                                Layout.fillWidth: true; spacing: 0
-
-                                Text {
-                                    text: modelData.message
-                                    font.family: Theme.fontUi; font.pixelSize: Theme.sizeSmall
-                                    color: Theme.textPrimary
-                                    elide: Text.ElideRight
-                                    Layout.fillWidth: true
-                                }
-                                Text {
-                                    text: modelData.relativeDate
-                                    font.family: Theme.fontUi; font.pixelSize: Theme.sizeSmall
-                                    color: Theme.textTertiary
-                                }
-                            }
-
-                            // Apply / Pop / Drop buttons on hover
-                            Row {
-                                visible: stashMouse.containsMouse
-                                spacing: Theme.sp1
-
-                                GhostButton {
-                                    text: qsTr("Apply")
-                                    onClicked: client.stashApply(modelData.index)
-                                }
-                                GhostButton {
-                                    text: qsTr("Pop")
-                                    onClicked: client.stashPop(modelData.index)
-                                }
-                            }
-                        }
-
-                        Menu {
-                            id: stashCtx
-                            MenuItem { text: qsTr("Apply"); onTriggered: client.stashApply(modelData.index) }
-                            MenuItem { text: qsTr("Pop"); onTriggered: client.stashPop(modelData.index) }
-                            MenuSeparator {}
-                            MenuItem { text: qsTr("Drop"); onTriggered: client.stashDrop(modelData.index) }
-                        }
+                MouseArea {
+                    Layout.preferredWidth: 18
+                    Layout.preferredHeight: 18
+                    hoverEnabled: true
+                    cursorShape: Qt.PointingHandCursor
+                    onClicked: {
+                        bannerTimer.stop()
+                        root.statusBannerVisible = false
                     }
 
-                    // Empty state
                     Text {
                         anchors.centerIn: parent
-                        visible: client.stashes.length === 0
-                        text: qsTr("No stashes")
-                        font.family: Theme.fontUi; font.pixelSize: Theme.sizeBody
+                        text: "\u2715"
+                        font.family: Theme.fontUi
+                        font.pixelSize: Theme.sizeSmall
                         color: Theme.textTertiary
                     }
                 }
             }
+        }
 
-            // ═══ TAB 3: Conflicts ═══════════════════════
+        Rectangle {
+            Layout.fillWidth: true
+            implicitHeight: 42
+            color: Theme.bgPanel
+            border.color: Theme.borderSubtle
+            border.width: 1
+
+            RowLayout {
+                anchors.fill: parent
+                anchors.leftMargin: Theme.sp3
+                anchors.rightMargin: Theme.sp3
+                spacing: Theme.sp2
+
+                Repeater {
+                    model: [
+                        { label: qsTr("Changes"), idx: 0, badge: root.totalChanges > 0 ? String(root.totalChanges) : "" },
+                        { label: qsTr("History"), idx: 1, badge: "" },
+                        { label: qsTr("Stash"), idx: 2, badge: client.stashes.length > 0 ? String(client.stashes.length) : "" },
+                        { label: qsTr("Conflicts"), idx: 3, badge: "" }
+                    ]
+
+                    delegate: Rectangle {
+                        required property var modelData
+
+                        implicitWidth: tabRow.implicitWidth + Theme.sp3 * 2
+                        implicitHeight: 28
+                        radius: Theme.radiusPill
+                        color: root.selectedTab === modelData.idx
+                               ? Theme.bgSelected
+                               : tabMouse.containsMouse ? Theme.bgHover : "transparent"
+                        border.color: root.selectedTab === modelData.idx ? Theme.borderFocus : "transparent"
+                        border.width: root.selectedTab === modelData.idx ? 1 : 0
+
+                        Row {
+                            id: tabRow
+                            anchors.centerIn: parent
+                            spacing: Theme.sp1
+
+                            Text {
+                                text: modelData.label
+                                font.family: Theme.fontUi
+                                font.pixelSize: Theme.sizeBody
+                                font.weight: root.selectedTab === modelData.idx ? Theme.weightSemibold : Theme.weightMedium
+                                color: root.selectedTab === modelData.idx ? Theme.textPrimary : Theme.textSecondary
+                            }
+
+                            Rectangle {
+                                visible: modelData.badge.length > 0
+                                implicitWidth: badgeText.implicitWidth + Theme.sp1 * 2
+                                implicitHeight: 16
+                                radius: Theme.radiusPill
+                                color: root.selectedTab === modelData.idx ? Theme.accentSubtle : Theme.bgInset
+
+                                Text {
+                                    id: badgeText
+                                    anchors.centerIn: parent
+                                    text: modelData.badge
+                                    font.family: Theme.fontMono
+                                    font.pixelSize: 9
+                                    color: root.selectedTab === modelData.idx ? Theme.accent : Theme.textTertiary
+                                }
+                            }
+                        }
+
+                        MouseArea {
+                            id: tabMouse
+                            anchors.fill: parent
+                            hoverEnabled: true
+                            cursorShape: Qt.PointingHandCursor
+                            onClicked: {
+                                root.selectedTab = modelData.idx
+                                root.ensureTabData(modelData.idx)
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
+        Item {
+            Layout.fillWidth: true
+            Layout.fillHeight: true
+            visible: !client.isGitRepo
+
+            EmptyStateCard {
+                anchors.centerIn: parent
+                width: Math.min(parent.width - Theme.sp8, 280)
+                title: client.status === PierGitClient.Loading ? qsTr("Loading repository") : qsTr("No repository")
+                description: client.status === PierGitClient.Loading
+                             ? qsTr("Pier-X is resolving the current working tree.")
+                             : qsTr("Open a Git working directory from the file browser to activate this panel.")
+                accentColor: Theme.accent
+            }
+        }
+
+        StackLayout {
+            Layout.fillWidth: true
+            Layout.fillHeight: true
+            visible: client.isGitRepo
+            currentIndex: root.selectedTab
+
+            SplitView {
+                orientation: Qt.Vertical
+
+                Item {
+                    SplitView.fillWidth: true
+                    SplitView.preferredHeight: 368
+                    SplitView.minimumHeight: 220
+
+                    ColumnLayout {
+                        anchors.fill: parent
+                        anchors.margins: Theme.sp3
+                        spacing: Theme.sp3
+
+                        FileSection {
+                            Layout.fillWidth: true
+                            title: qsTr("Staged")
+                            countText: client.stagedFiles.length > 0 ? String(client.stagedFiles.length) : ""
+                            helperText: qsTr("Files ready to commit")
+                            dotColor: Theme.statusSuccess
+                            actionLabel: client.stagedFiles.length > 0 ? qsTr("Unstage all") : ""
+                            model: client.stagedFiles
+                            staged: true
+                            onActionClicked: client.unstageAll()
+                            onFileClicked: (path) => client.loadDiff(path, true)
+                            onFileAction: (path) => client.unstageFile(path)
+                        }
+
+                        FileSection {
+                            Layout.fillWidth: true
+                            title: qsTr("Working tree")
+                            countText: client.unstagedFiles.length > 0 ? String(client.unstagedFiles.length) : ""
+                            helperText: qsTr("Modified and untracked files")
+                            dotColor: Theme.statusWarning
+                            actionLabel: client.unstagedFiles.length > 0 ? qsTr("Stage all") : ""
+                            model: client.unstagedFiles
+                            staged: false
+                            onActionClicked: client.stageAll()
+                            onFileClicked: (path) => client.loadDiff(path, false)
+                            onFileAction: (path) => client.stageFile(path)
+                            onFileDiscard: (path) => client.discardFile(path)
+                        }
+
+                        Rectangle {
+                            Layout.fillWidth: true
+                            implicitHeight: composerLayout.implicitHeight + Theme.sp3 * 2
+                            color: Theme.bgSurface
+                            border.color: Theme.borderSubtle
+                            border.width: 1
+                            radius: Theme.radiusLg
+
+                            ColumnLayout {
+                                id: composerLayout
+                                anchors.fill: parent
+                                anchors.margins: Theme.sp3
+                                spacing: Theme.sp2
+
+                                RowLayout {
+                                    Layout.fillWidth: true
+                                    spacing: Theme.sp2
+
+                                    Text {
+                                        text: qsTr("Commit")
+                                        font.family: Theme.fontUi
+                                        font.pixelSize: Theme.sizeBody
+                                        font.weight: Theme.weightSemibold
+                                        color: Theme.textPrimary
+                                    }
+
+                                    Text {
+                                        text: client.stagedFiles.length > 0
+                                              ? qsTr("%1 staged file(s)").arg(client.stagedFiles.length)
+                                              : qsTr("Stage changes to enable commit")
+                                        font.family: Theme.fontUi
+                                        font.pixelSize: Theme.sizeSmall
+                                        color: Theme.textTertiary
+                                        elide: Text.ElideRight
+                                        Layout.fillWidth: true
+                                    }
+                                }
+
+                                TextArea {
+                                    id: commitMsg
+                                    Layout.fillWidth: true
+                                    Layout.preferredHeight: 72
+                                    placeholderText: qsTr("Write a focused commit message…")
+                                    wrapMode: TextEdit.Wrap
+                                    color: Theme.textPrimary
+                                    placeholderTextColor: Theme.textTertiary
+                                    font.family: Theme.fontMono
+                                    font.pixelSize: Theme.sizeBody
+                                    selectionColor: Theme.accentMuted
+                                    selectedTextColor: Theme.textPrimary
+
+                                    background: Rectangle {
+                                        color: Theme.bgInset
+                                        border.color: commitMsg.activeFocus ? Theme.borderFocus : Theme.borderDefault
+                                        border.width: 1
+                                        radius: Theme.radiusMd
+                                    }
+                                }
+
+                                RowLayout {
+                                    Layout.fillWidth: true
+                                    spacing: Theme.sp2
+
+                                    GhostButton {
+                                        text: qsTr("Stage all")
+                                        visible: client.unstagedFiles.length > 0
+                                        onClicked: client.stageAll()
+                                    }
+
+                                    Item { Layout.fillWidth: true }
+
+                                    GhostButton {
+                                        text: qsTr("Pull")
+                                        enabled: client.behindCount > 0 && !client.busy
+                                        onClicked: client.pull()
+                                    }
+
+                                    GhostButton {
+                                        text: qsTr("Push")
+                                        enabled: client.aheadCount > 0 && !client.busy
+                                        onClicked: client.push()
+                                    }
+
+                                    PrimaryButton {
+                                        text: qsTr("Commit")
+                                        enabled: commitMsg.text.trim().length > 0
+                                                 && client.stagedFiles.length > 0
+                                                 && !client.busy
+                                        onClicked: {
+                                            client.commit(commitMsg.text.trim())
+                                            commitMsg.text = ""
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+
+                DiffViewer {
+                    SplitView.fillWidth: true
+                    SplitView.fillHeight: true
+                    SplitView.minimumHeight: 120
+                    diffPath: client.diffPath
+                    diffText: client.diffText
+                    workingTreeClean: root.workingTreeClean
+                }
+            }
+
+            Rectangle {
+                color: Theme.bgPanel
+
+                ColumnLayout {
+                    anchors.fill: parent
+                    anchors.margins: Theme.sp3
+                    spacing: Theme.sp3
+
+                    Rectangle {
+                        Layout.fillWidth: true
+                        implicitHeight: 34
+                        color: Theme.bgSurface
+                        border.color: Theme.borderSubtle
+                        border.width: 1
+                        radius: Theme.radiusMd
+
+                        RowLayout {
+                            anchors.fill: parent
+                            anchors.leftMargin: Theme.sp3
+                            anchors.rightMargin: Theme.sp3
+                            spacing: Theme.sp2
+
+                            Text {
+                                text: qsTr("Recent commits")
+                                font.family: Theme.fontUi
+                                font.pixelSize: Theme.sizeBody
+                                font.weight: Theme.weightSemibold
+                                color: Theme.textPrimary
+                            }
+
+                            Text {
+                                text: client.currentBranch.length > 0 ? client.currentBranch : root.repoName
+                                font.family: Theme.fontMono
+                                font.pixelSize: Theme.sizeSmall
+                                color: Theme.textTertiary
+                                Layout.fillWidth: true
+                                elide: Text.ElideMiddle
+                            }
+                        }
+                    }
+
+                    Rectangle {
+                        Layout.fillWidth: true
+                        Layout.fillHeight: true
+                        color: Theme.bgSurface
+                        border.color: Theme.borderSubtle
+                        border.width: 1
+                        radius: Theme.radiusLg
+                        clip: true
+
+                        ListView {
+                            anchors.fill: parent
+                            clip: true
+                            model: client.commits
+
+                            delegate: Rectangle {
+                                required property var modelData
+                                width: ListView.view.width
+                                height: 46
+                                color: historyMouse.containsMouse ? Theme.bgHover : "transparent"
+
+                                Behavior on color { ColorAnimation { duration: Theme.durFast } }
+
+                                MouseArea {
+                                    id: historyMouse
+                                    anchors.fill: parent
+                                    hoverEnabled: true
+                                    cursorShape: Qt.PointingHandCursor
+                                }
+
+                                ColumnLayout {
+                                    anchors.fill: parent
+                                    anchors.leftMargin: Theme.sp3
+                                    anchors.rightMargin: Theme.sp3
+                                    spacing: 0
+
+                                    RowLayout {
+                                        Layout.fillWidth: true
+                                        spacing: Theme.sp2
+
+                                        Text {
+                                            text: modelData.shortHash
+                                            font.family: Theme.fontMono
+                                            font.pixelSize: Theme.sizeSmall
+                                            color: Theme.accent
+                                        }
+
+                                        Rectangle {
+                                            visible: modelData.refs.length > 0
+                                            implicitWidth: refsText.implicitWidth + Theme.sp1 * 2
+                                            implicitHeight: 16
+                                            radius: Theme.radiusPill
+                                            color: Theme.accentSubtle
+
+                                            Text {
+                                                id: refsText
+                                                anchors.centerIn: parent
+                                                text: modelData.refs.split(",")[0].trim()
+                                                font.family: Theme.fontMono
+                                                font.pixelSize: 9
+                                                color: Theme.accent
+                                            }
+                                        }
+
+                                        Text {
+                                            text: modelData.message
+                                            font.family: Theme.fontUi
+                                            font.pixelSize: Theme.sizeBody
+                                            color: Theme.textPrimary
+                                            elide: Text.ElideRight
+                                            Layout.fillWidth: true
+                                        }
+                                    }
+
+                                    RowLayout {
+                                        Layout.fillWidth: true
+                                        spacing: Theme.sp2
+
+                                        Text {
+                                            text: modelData.author
+                                            font.family: Theme.fontUi
+                                            font.pixelSize: Theme.sizeSmall
+                                            color: Theme.textTertiary
+                                            elide: Text.ElideRight
+                                        }
+
+                                        Item { Layout.fillWidth: true }
+
+                                        Text {
+                                            text: modelData.relativeDate
+                                            font.family: Theme.fontUi
+                                            font.pixelSize: Theme.sizeSmall
+                                            color: Theme.textTertiary
+                                        }
+                                    }
+                                }
+
+                                Rectangle {
+                                    anchors.left: parent.left
+                                    anchors.right: parent.right
+                                    anchors.bottom: parent.bottom
+                                    height: 1
+                                    color: Theme.borderSubtle
+                                }
+                            }
+
+                            EmptyStateCard {
+                                anchors.centerIn: parent
+                                width: Math.min(parent.width - Theme.sp8, 250)
+                                visible: client.commits.length === 0
+                                title: qsTr("No history yet")
+                                description: qsTr("Commit history will appear here after Git metadata is loaded.")
+                                accentColor: Theme.accent
+                            }
+                        }
+                    }
+                }
+            }
+
+            Rectangle {
+                color: Theme.bgPanel
+
+                ColumnLayout {
+                    anchors.fill: parent
+                    anchors.margins: Theme.sp3
+                    spacing: Theme.sp3
+
+                    Rectangle {
+                        Layout.fillWidth: true
+                        implicitHeight: 34
+                        color: Theme.bgSurface
+                        border.color: Theme.borderSubtle
+                        border.width: 1
+                        radius: Theme.radiusMd
+
+                        RowLayout {
+                            anchors.fill: parent
+                            anchors.leftMargin: Theme.sp3
+                            anchors.rightMargin: Theme.sp3
+                            spacing: Theme.sp2
+
+                            Text {
+                                text: qsTr("Stash")
+                                font.family: Theme.fontUi
+                                font.pixelSize: Theme.sizeBody
+                                font.weight: Theme.weightSemibold
+                                color: Theme.textPrimary
+                            }
+
+                            Text {
+                                text: client.stashes.length > 0
+                                      ? qsTr("%1 entries").arg(client.stashes.length)
+                                      : qsTr("Snapshot unfinished work")
+                                font.family: Theme.fontUi
+                                font.pixelSize: Theme.sizeSmall
+                                color: Theme.textTertiary
+                                Layout.fillWidth: true
+                                elide: Text.ElideRight
+                            }
+
+                            GhostButton {
+                                text: qsTr("Stash changes")
+                                enabled: !root.workingTreeClean && !client.busy
+                                onClicked: client.stashPush("")
+                            }
+                        }
+                    }
+
+                    Rectangle {
+                        Layout.fillWidth: true
+                        Layout.fillHeight: true
+                        color: Theme.bgSurface
+                        border.color: Theme.borderSubtle
+                        border.width: 1
+                        radius: Theme.radiusLg
+                        clip: true
+
+                        ListView {
+                            anchors.fill: parent
+                            clip: true
+                            model: client.stashes
+
+                            delegate: Rectangle {
+                                required property var modelData
+                                width: ListView.view.width
+                                height: 48
+                                color: stashMouse.containsMouse ? Theme.bgHover : "transparent"
+
+                                Behavior on color { ColorAnimation { duration: Theme.durFast } }
+
+                                MouseArea {
+                                    id: stashMouse
+                                    anchors.fill: parent
+                                    hoverEnabled: true
+                                    acceptedButtons: Qt.LeftButton | Qt.RightButton
+                                    cursorShape: Qt.PointingHandCursor
+                                    onClicked: (mouse) => {
+                                        if (mouse.button === Qt.RightButton)
+                                            stashMenu.popup()
+                                    }
+                                }
+
+                                RowLayout {
+                                    anchors.fill: parent
+                                    anchors.leftMargin: Theme.sp3
+                                    anchors.rightMargin: Theme.sp3
+                                    spacing: Theme.sp2
+
+                                    Rectangle {
+                                        Layout.preferredWidth: 8
+                                        Layout.preferredHeight: 8
+                                        radius: 4
+                                        color: "#c77dff"
+                                    }
+
+                                    ColumnLayout {
+                                        Layout.fillWidth: true
+                                        spacing: 0
+
+                                        Text {
+                                            text: modelData.message
+                                            font.family: Theme.fontUi
+                                            font.pixelSize: Theme.sizeBody
+                                            color: Theme.textPrimary
+                                            elide: Text.ElideRight
+                                            Layout.fillWidth: true
+                                        }
+
+                                        Text {
+                                            text: modelData.relativeDate
+                                            font.family: Theme.fontUi
+                                            font.pixelSize: Theme.sizeSmall
+                                            color: Theme.textTertiary
+                                        }
+                                    }
+
+                                    Row {
+                                        visible: stashMouse.containsMouse
+                                        spacing: Theme.sp1
+
+                                        GhostButton {
+                                            text: qsTr("Apply")
+                                            onClicked: client.stashApply(modelData.index)
+                                        }
+
+                                        GhostButton {
+                                            text: qsTr("Pop")
+                                            onClicked: client.stashPop(modelData.index)
+                                        }
+                                    }
+                                }
+
+                                Rectangle {
+                                    anchors.left: parent.left
+                                    anchors.right: parent.right
+                                    anchors.bottom: parent.bottom
+                                    height: 1
+                                    color: Theme.borderSubtle
+                                }
+
+                                Menu {
+                                    id: stashMenu
+                                    MenuItem { text: qsTr("Apply"); onTriggered: client.stashApply(modelData.index) }
+                                    MenuItem { text: qsTr("Pop"); onTriggered: client.stashPop(modelData.index) }
+                                    MenuSeparator {}
+                                    MenuItem { text: qsTr("Drop"); onTriggered: client.stashDrop(modelData.index) }
+                                }
+                            }
+
+                            EmptyStateCard {
+                                anchors.centerIn: parent
+                                width: Math.min(parent.width - Theme.sp8, 250)
+                                visible: client.stashes.length === 0
+                                title: qsTr("No stashes")
+                                description: qsTr("Use stash to park unfinished work without leaving the current branch.")
+                                accentColor: "#c77dff"
+                            }
+                        }
+                    }
+                }
+            }
+
             Item {
-                Text {
+                EmptyStateCard {
                     anchors.centerIn: parent
-                    text: qsTr("No merge conflicts")
-                    font.family: Theme.fontUi; font.pixelSize: Theme.sizeBody
-                    color: Theme.textTertiary
+                    width: Math.min(parent.width - Theme.sp8, 280)
+                    title: qsTr("No merge conflicts")
+                    description: qsTr("Conflicted files will appear here when Git requires manual resolution.")
+                    accentColor: Theme.statusWarning
                 }
             }
         }
     }
 
-    // ── Inline components ───────────────────────────────
-
-    // Reusable file section (Staged / Unstaged)
-    component FileSection: ColumnLayout {
+    component EmptyStateCard: Rectangle {
         property string title: ""
+        property string description: ""
+        property color accentColor: Theme.accent
+
+        height: 136
+        radius: Theme.radiusLg
+        color: Theme.bgInset
+        border.color: Theme.borderSubtle
+        border.width: 1
+
+        ColumnLayout {
+            anchors.centerIn: parent
+            width: parent.width - Theme.sp6 * 2
+            spacing: Theme.sp2
+
+            Rectangle {
+                Layout.alignment: Qt.AlignHCenter
+                Layout.preferredWidth: 26
+                Layout.preferredHeight: 26
+                radius: Theme.radiusMd
+                color: Qt.rgba(accentColor.r, accentColor.g, accentColor.b, Theme.dark ? 0.16 : 0.10)
+
+                Rectangle {
+                    anchors.centerIn: parent
+                    width: 8
+                    height: 8
+                    radius: 4
+                    color: accentColor
+                }
+            }
+
+            Text {
+                Layout.fillWidth: true
+                horizontalAlignment: Text.AlignHCenter
+                text: title
+                font.family: Theme.fontUi
+                font.pixelSize: Theme.sizeBody
+                font.weight: Theme.weightSemibold
+                color: Theme.textPrimary
+                wrapMode: Text.WordWrap
+            }
+
+            Text {
+                Layout.fillWidth: true
+                horizontalAlignment: Text.AlignHCenter
+                text: description
+                font.family: Theme.fontUi
+                font.pixelSize: Theme.sizeSmall
+                color: Theme.textTertiary
+                wrapMode: Text.WordWrap
+            }
+        }
+    }
+
+    component FileSection: Rectangle {
+        property string title: ""
+        property string helperText: ""
+        property string countText: ""
         property color dotColor: Theme.textTertiary
         property string actionLabel: ""
         property var model: []
@@ -553,115 +958,313 @@ Rectangle {
         signal fileAction(string path)
         signal fileDiscard(string path)
 
-        spacing: 0
+        readonly property int rowCount: model ? model.length : 0
+        readonly property int bodyHeight: rowCount > 0 ? Math.min(rowCount, staged ? 4 : 6) * Theme.compactRowHeight : 68
 
-        Rectangle {
-            Layout.fillWidth: true; implicitHeight: 24; color: Theme.bgHover
+        Layout.fillWidth: true
+        implicitHeight: 34 + bodyHeight + 1
+        color: Theme.bgSurface
+        border.color: Theme.borderSubtle
+        border.width: 1
+        radius: Theme.radiusLg
+        clip: true
 
-            RowLayout {
-                anchors.fill: parent
-                anchors.leftMargin: Theme.sp2; anchors.rightMargin: Theme.sp2
+        ColumnLayout {
+            anchors.fill: parent
+            spacing: 0
 
-                Rectangle { width: 6; height: 6; radius: 3; color: dotColor; Layout.alignment: Qt.AlignVCenter }
-                Text {
-                    text: title; font.family: Theme.fontUi; font.pixelSize: Theme.sizeSmall
-                    font.weight: Theme.weightSemibold; color: Theme.textSecondary; Layout.fillWidth: true
-                }
-                Text {
-                    text: actionLabel; font.family: Theme.fontUi; font.pixelSize: Theme.sizeSmall
-                    color: Theme.accent
-                    MouseArea { anchors.fill: parent; cursorShape: Qt.PointingHandCursor; onClicked: actionClicked() }
-                }
-            }
-        }
-
-        ListView {
-            Layout.fillWidth: true; Layout.fillHeight: true; clip: true
-            model: parent.model
-
-            delegate: Rectangle {
-                required property var modelData
-                required property int index
-                width: ListView.view.width; height: 24
-                color: fMouse.containsMouse ? Theme.bgHover : "transparent"
-                Behavior on color { ColorAnimation { duration: Theme.durFast } }
-
-                MouseArea { id: fMouse; anchors.fill: parent; hoverEnabled: true; onClicked: fileClicked(modelData.path) }
+            Rectangle {
+                Layout.fillWidth: true
+                implicitHeight: 34
+                color: Theme.bgInset
 
                 RowLayout {
-                    anchors.fill: parent; anchors.leftMargin: Theme.sp3; anchors.rightMargin: Theme.sp2; spacing: Theme.sp2
+                    anchors.fill: parent
+                    anchors.leftMargin: Theme.sp3
+                    anchors.rightMargin: Theme.sp3
+                    spacing: Theme.sp2
 
                     Rectangle {
-                        width: 16; height: 16; radius: Theme.radiusXs; color: statusColor(modelData.status)
-                        Text { anchors.centerIn: parent; text: modelData.status; font.family: Theme.fontMono; font.pixelSize: 9; font.weight: Theme.weightSemibold; color: "#fff" }
+                        Layout.preferredWidth: 7
+                        Layout.preferredHeight: 7
+                        radius: 3.5
+                        color: dotColor
                     }
+
                     Text {
-                        text: modelData.fileName || modelData.path.split("/").pop()
-                        font.family: Theme.fontMono; font.pixelSize: Theme.sizeSmall; color: Theme.textPrimary; elide: Text.ElideRight
+                        text: title
+                        font.family: Theme.fontUi
+                        font.pixelSize: Theme.sizeBody
+                        font.weight: Theme.weightSemibold
+                        color: Theme.textPrimary
+                    }
+
+                    Rectangle {
+                        visible: countText.length > 0
+                        implicitWidth: countLabel.implicitWidth + Theme.sp1 * 2
+                        implicitHeight: 16
+                        radius: Theme.radiusPill
+                        color: Theme.bgSurface
+                        border.color: Theme.borderSubtle
+                        border.width: 1
+
+                        Text {
+                            id: countLabel
+                            anchors.centerIn: parent
+                            text: countText
+                            font.family: Theme.fontMono
+                            font.pixelSize: 9
+                            color: Theme.textTertiary
+                        }
+                    }
+
+                    Text {
                         Layout.fillWidth: true
+                        text: helperText
+                        font.family: Theme.fontUi
+                        font.pixelSize: Theme.sizeSmall
+                        color: Theme.textTertiary
+                        elide: Text.ElideRight
                     }
-                    Text {
-                        text: modelData.path.substring(0, modelData.path.lastIndexOf("/"))
-                        font.family: Theme.fontUi; font.pixelSize: Theme.sizeSmall; font.italic: true; color: Theme.textTertiary
-                        elide: Text.ElideMiddle; Layout.maximumWidth: 120
-                        visible: modelData.path.indexOf("/") >= 0
+
+                    GhostButton {
+                        visible: actionLabel.length > 0
+                        text: actionLabel
+                        onClicked: actionClicked()
                     }
-                    // Action button (+/-)
-                    Text {
-                        text: staged ? "\u2212" : "+"; font.pixelSize: Theme.sizeBody; color: Theme.textTertiary
-                        visible: fMouse.containsMouse
-                        MouseArea { anchors.fill: parent; cursorShape: Qt.PointingHandCursor; onClicked: fileAction(modelData.path) }
+                }
+            }
+
+            Rectangle {
+                Layout.fillWidth: true
+                implicitHeight: 1
+                color: Theme.borderSubtle
+            }
+
+            Item {
+                Layout.fillWidth: true
+                Layout.preferredHeight: bodyHeight
+
+                ListView {
+                    anchors.fill: parent
+                    clip: true
+                    model: parent.parent.parent.model
+                    visible: parent.parent.parent.rowCount > 0
+
+                    delegate: Rectangle {
+                        required property var modelData
+                        width: ListView.view.width
+                        height: Theme.compactRowHeight
+                        color: rowMouse.containsMouse ? Theme.bgHover : "transparent"
+
+                        Behavior on color { ColorAnimation { duration: Theme.durFast } }
+
+                        MouseArea {
+                            id: rowMouse
+                            anchors.fill: parent
+                            hoverEnabled: true
+                            cursorShape: Qt.PointingHandCursor
+                            onClicked: parent.parent.parent.parent.parent.fileClicked(modelData.path)
+                        }
+
+                        RowLayout {
+                            anchors.fill: parent
+                            anchors.leftMargin: Theme.sp3
+                            anchors.rightMargin: Theme.sp3
+                            spacing: Theme.sp2
+
+                            Rectangle {
+                                Layout.preferredWidth: 16
+                                Layout.preferredHeight: 16
+                                radius: Theme.radiusXs
+                                color: root.statusColor(modelData.status)
+
+                                Text {
+                                    anchors.centerIn: parent
+                                    text: modelData.status
+                                    font.family: Theme.fontMono
+                                    font.pixelSize: 9
+                                    font.weight: Theme.weightSemibold
+                                    color: "#ffffff"
+                                }
+                            }
+
+                            ColumnLayout {
+                                Layout.fillWidth: true
+                                spacing: 0
+
+                                Text {
+                                    Layout.fillWidth: true
+                                    text: modelData.fileName || modelData.path.split("/").pop()
+                                    font.family: Theme.fontMono
+                                    font.pixelSize: Theme.sizeBody
+                                    color: Theme.textPrimary
+                                    elide: Text.ElideRight
+                                }
+
+                                Text {
+                                    Layout.fillWidth: true
+                                    visible: modelData.path.indexOf("/") >= 0
+                                    text: modelData.path.substring(0, modelData.path.lastIndexOf("/"))
+                                    font.family: Theme.fontUi
+                                    font.pixelSize: Theme.sizeSmall
+                                    color: Theme.textTertiary
+                                    elide: Text.ElideMiddle
+                                }
+                            }
+
+                            Text {
+                                visible: rowMouse.containsMouse
+                                text: parent.parent.parent.parent.parent.staged ? "\u2212" : "+"
+                                font.family: Theme.fontUi
+                                font.pixelSize: Theme.sizeBodyLg
+                                color: Theme.textSecondary
+
+                                MouseArea {
+                                    anchors.fill: parent
+                                    cursorShape: Qt.PointingHandCursor
+                                    onClicked: {
+                                        mouse.accepted = true
+                                        parent.parent.parent.parent.parent.parent.fileAction(modelData.path)
+                                    }
+                                }
+                            }
+
+                            Text {
+                                visible: !parent.parent.parent.parent.parent.staged
+                                         && rowMouse.containsMouse
+                                         && modelData.status !== "?"
+                                text: "\u2715"
+                                font.family: Theme.fontUi
+                                font.pixelSize: Theme.sizeSmall
+                                color: Theme.statusError
+
+                                MouseArea {
+                                    anchors.fill: parent
+                                    cursorShape: Qt.PointingHandCursor
+                                    onClicked: {
+                                        mouse.accepted = true
+                                        parent.parent.parent.parent.parent.parent.fileDiscard(modelData.path)
+                                    }
+                                }
+                            }
+                        }
+
+                        Rectangle {
+                            anchors.left: parent.left
+                            anchors.right: parent.right
+                            anchors.bottom: parent.bottom
+                            height: 1
+                            color: Theme.borderSubtle
+                        }
                     }
-                    // Discard (unstaged only)
+                }
+
+                ColumnLayout {
+                    anchors.centerIn: parent
+                    visible: parent.parent.parent.rowCount === 0
+                    width: Math.min(parent.width - Theme.sp6, 220)
+                    spacing: Theme.sp1
+
                     Text {
-                        text: "\u2715"; font.pixelSize: Theme.sizeSmall; color: Theme.statusError
-                        visible: !staged && fMouse.containsMouse && modelData.status !== "?"
-                        MouseArea { anchors.fill: parent; cursorShape: Qt.PointingHandCursor; onClicked: fileDiscard(modelData.path) }
+                        Layout.fillWidth: true
+                        horizontalAlignment: Text.AlignHCenter
+                        text: parent.parent.parent.staged ? qsTr("Nothing staged") : qsTr("Working tree clean")
+                        font.family: Theme.fontUi
+                        font.pixelSize: Theme.sizeBody
+                        font.weight: Theme.weightMedium
+                        color: Theme.textSecondary
+                    }
+
+                    Text {
+                        Layout.fillWidth: true
+                        horizontalAlignment: Text.AlignHCenter
+                        text: parent.parent.parent.staged
+                              ? qsTr("Stage files from the working tree to prepare a commit.")
+                              : qsTr("Modified files will appear here automatically.")
+                        font.family: Theme.fontUi
+                        font.pixelSize: Theme.sizeSmall
+                        color: Theme.textTertiary
+                        wrapMode: Text.WordWrap
                     }
                 }
             }
         }
     }
 
-    // Reusable diff viewer
     component DiffViewer: Rectangle {
         property string diffPath: ""
         property string diffText: ""
+        property bool workingTreeClean: false
 
         color: Theme.bgSurface
-        Behavior on color { ColorAnimation { duration: Theme.durNormal } }
+        border.color: Theme.borderSubtle
+        border.width: 1
+        radius: Theme.radiusLg
+        clip: true
 
         ColumnLayout {
-            anchors.fill: parent; spacing: 0
+            anchors.fill: parent
+            spacing: 0
 
             Rectangle {
-                Layout.fillWidth: true; implicitHeight: 24; color: Theme.bgHover; visible: diffPath.length > 0
-                Text {
-                    anchors.verticalCenter: parent.verticalCenter; x: Theme.sp2
-                    text: diffPath; font.family: Theme.fontMono; font.pixelSize: Theme.sizeSmall; color: Theme.textSecondary
-                    elide: Text.ElideMiddle; width: parent.width - Theme.sp4
+                Layout.fillWidth: true
+                implicitHeight: 30
+                color: Theme.bgInset
+
+                RowLayout {
+                    anchors.fill: parent
+                    anchors.leftMargin: Theme.sp3
+                    anchors.rightMargin: Theme.sp3
+                    spacing: Theme.sp2
+
+                    Text {
+                        text: diffPath.length > 0 ? diffPath : qsTr("Diff")
+                        font.family: diffPath.length > 0 ? Theme.fontMono : Theme.fontUi
+                        font.pixelSize: Theme.sizeSmall
+                        color: diffPath.length > 0 ? Theme.textSecondary : Theme.textTertiary
+                        elide: Text.ElideMiddle
+                        Layout.fillWidth: true
+                    }
                 }
             }
 
-            ScrollView {
-                Layout.fillWidth: true; Layout.fillHeight: true; clip: true
+            Item {
+                Layout.fillWidth: true
+                Layout.fillHeight: true
 
-                TextArea {
-                    readOnly: true; font.family: Theme.fontMono; font.pixelSize: Theme.sizeSmall
-                    color: Theme.textPrimary; wrapMode: TextEdit.NoWrap; textFormat: TextEdit.RichText
-                    text: diffText.length > 0 ? colorizeDiff(diffText) : qsTr("Select a file to view diff")
-                    background: Rectangle { color: "transparent" }
+                ScrollView {
+                    anchors.fill: parent
+                    clip: true
+                    visible: diffText.length > 0
+
+                    TextArea {
+                        readOnly: true
+                        textFormat: TextEdit.RichText
+                        wrapMode: TextEdit.NoWrap
+                        text: root.colorizeDiff(diffText)
+                        color: Theme.textPrimary
+                        font.family: Theme.fontMono
+                        font.pixelSize: Theme.sizeSmall
+                        selectionColor: Theme.accentMuted
+                        selectedTextColor: Theme.textPrimary
+                        background: Rectangle { color: "transparent" }
+                    }
                 }
-            }
 
-            Text {
-                Layout.alignment: Qt.AlignHCenter; visible: diffText.length === 0 && client.stagedFiles.length === 0 && client.unstagedFiles.length === 0
-                text: qsTr("Working tree clean"); font.family: Theme.fontUi; font.pixelSize: Theme.sizeBody; color: Theme.textTertiary; topPadding: Theme.sp6
+                EmptyStateCard {
+                    anchors.centerIn: parent
+                    width: Math.min(parent.width - Theme.sp8, 250)
+                    visible: diffText.length === 0
+                    title: workingTreeClean ? qsTr("Working tree clean") : qsTr("Select a file")
+                    description: workingTreeClean
+                                 ? qsTr("Git diff output will appear here once files change.")
+                                 : qsTr("Choose a staged or modified file to inspect its patch.")
+                    accentColor: workingTreeClean ? Theme.statusSuccess : Theme.accent
+                }
             }
         }
     }
-
-    // ── Helpers ──────────────────────────────────────────
 
     function statusColor(code) {
         switch (code) {

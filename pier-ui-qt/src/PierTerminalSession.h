@@ -75,6 +75,14 @@ public:
     Q_PROPERTY(SshStatus status READ status NOTIFY statusChanged FINAL)
     Q_PROPERTY(QString sshErrorMessage READ sshErrorMessage NOTIFY statusChanged FINAL)
     Q_PROPERTY(QString sshTarget READ sshTarget NOTIFY statusChanged FINAL)
+    Q_PROPERTY(QString sshHost READ sshHost NOTIFY statusChanged FINAL)
+    Q_PROPERTY(int sshPort READ sshPort NOTIFY statusChanged FINAL)
+    Q_PROPERTY(QString sshUser READ sshUser NOTIFY statusChanged FINAL)
+    Q_PROPERTY(QString sshPassword READ sshPassword NOTIFY statusChanged FINAL)
+    Q_PROPERTY(QString sshCredentialId READ sshCredentialId NOTIFY statusChanged FINAL)
+    Q_PROPERTY(QString sshKeyPath READ sshKeyPath NOTIFY statusChanged FINAL)
+    Q_PROPERTY(QString sshPassphraseCredentialId READ sshPassphraseCredentialId NOTIFY statusChanged FINAL)
+    Q_PROPERTY(bool sshUsesAgent READ sshUsesAgent NOTIFY statusChanged FINAL)
 
     explicit PierTerminalSession(QObject *parent = nullptr);
     ~PierTerminalSession() override;
@@ -90,6 +98,14 @@ public:
     SshStatus status() const { return m_status; }
     QString sshErrorMessage() const { return m_sshErrorMessage; }
     QString sshTarget() const { return m_sshTarget; }
+    QString sshHost() const { return m_sshHost; }
+    int sshPort() const { return m_sshPort; }
+    QString sshUser() const { return m_sshUser; }
+    QString sshPassword() const { return m_sshPassword; }
+    QString sshCredentialId() const { return m_sshCredentialId; }
+    QString sshKeyPath() const { return m_sshKeyPath; }
+    QString sshPassphraseCredentialId() const { return m_sshPassphraseCredentialId; }
+    bool sshUsesAgent() const { return m_sshUsesAgent; }
 
     // Raw snapshot access for the C++-side renderer. Returns a
     // pointer to the internal cell buffer and fills out_cols/rows.
@@ -212,6 +228,7 @@ private:
     // actually changed. Centralizes the invariant that every
     // status transition notifies QML bindings exactly once.
     void setStatus(SshStatus s);
+    void clearSshContext();
 
     // M3c3: factory-style dispatcher.
     //
@@ -246,9 +263,17 @@ private:
 
     SshStatus m_status = SshStatus::Idle;
     QString m_sshErrorMessage;
-    // Human-readable "user@host:port" for display in the
-    // Connecting/Failed overlay. Set at startSsh, cleared on stop.
     QString m_sshTarget;
+
+    // Cached SSH auth context from the most recent startSsh* call.
+    QString m_sshHost;
+    int     m_sshPort = 22;
+    QString m_sshUser;
+    QString m_sshPassword;
+    QString m_sshCredentialId;
+    QString m_sshKeyPath;
+    QString m_sshPassphraseCredentialId;
+    bool    m_sshUsesAgent = false;
 
     // In-flight SSH handshake bookkeeping.
     //

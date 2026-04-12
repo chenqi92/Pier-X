@@ -75,6 +75,18 @@ public:
     // Branches
     Q_PROPERTY(QStringList branches READ branches NOTIFY branchesChanged FINAL)
 
+    // Blame
+    Q_PROPERTY(QVariantList blameLines READ blameLines NOTIFY blameChanged FINAL)
+
+    // Tags
+    Q_PROPERTY(QVariantList tags READ tags NOTIFY tagsChanged FINAL)
+
+    // Remotes
+    Q_PROPERTY(QVariantList remotes READ remotes NOTIFY remotesChanged FINAL)
+
+    // Config
+    Q_PROPERTY(QVariantList configEntries READ configEntries NOTIFY configChanged FINAL)
+
     // Busy flag
     Q_PROPERTY(bool busy READ busy NOTIFY busyChanged FINAL)
 
@@ -100,6 +112,10 @@ public:
     QVariantList commits() const { return m_commits; }
     QVariantList stashes() const { return m_stashes; }
     QStringList branches() const { return m_branches; }
+    QVariantList blameLines() const { return m_blameLines; }
+    QVariantList tags() const { return m_tags; }
+    QVariantList remotes() const { return m_remotes; }
+    QVariantList configEntries() const { return m_configEntries; }
     bool busy() const { return m_busy; }
 
 public slots:
@@ -160,6 +176,23 @@ public slots:
     /// Switch to a branch.
     void checkoutBranch(const QString &name);
 
+    /// Load blame for a file.
+    void loadBlame(const QString &path);
+
+    /// Load tags.
+    void loadTags();
+    void createTag(const QString &name, const QString &message);
+    void deleteTag(const QString &name);
+
+    /// Load remotes.
+    void loadRemotes();
+    void addRemote(const QString &name, const QString &url);
+    void removeRemote(const QString &name);
+
+    /// Load git config.
+    void loadConfig();
+    void setConfigValue(const QString &key, const QString &value, bool global);
+
     /// Tear down. Releases the handle.
     void close();
 
@@ -172,6 +205,10 @@ signals:
     void commitsChanged();
     void stashesChanged();
     void branchesChanged();
+    void blameChanged();
+    void tagsChanged();
+    void remotesChanged();
+    void configChanged();
     void busyChanged();
     void operationFinished(const QString &operation, bool success, const QString &message);
 
@@ -183,6 +220,10 @@ private slots:
     void onHistoryResult(quint64 requestId, const QString &json);
     void onStashResult(quint64 requestId, const QString &json);
     void onBranchesResult(quint64 requestId, const QString &json);
+    void onBlameResult(quint64 requestId, const QString &json);
+    void onTagsResult(quint64 requestId, const QString &json);
+    void onRemotesResult(quint64 requestId, const QString &json);
+    void onConfigResult(quint64 requestId, const QString &json);
     void onOpResult(quint64 requestId, const QString &operation, bool success, const QString &message);
 
 private:
@@ -220,6 +261,12 @@ private:
 
     // Branches
     QStringList m_branches;
+
+    // Blame / Tags / Remotes / Config
+    QVariantList m_blameLines;
+    QVariantList m_tags;
+    QVariantList m_remotes;
+    QVariantList m_configEntries;
 
     quint64 m_nextRequestId = 0;
     std::shared_ptr<std::atomic<bool>> m_cancelFlag;

@@ -47,9 +47,11 @@ pub mod markdown;
 pub mod mysql;
 pub mod postgres;
 pub mod redis;
+pub mod search;
 pub mod server_monitor;
 pub mod services;
 pub mod sftp;
+pub mod sqlite;
 pub mod ssh_session;
 pub mod terminal;
 pub mod tunnel;
@@ -64,16 +66,28 @@ pub use self::connections::{
 pub use self::core::{pier_core_build_info, pier_core_has_feature, pier_core_version};
 pub use self::credentials::{pier_credential_delete, pier_credential_set};
 pub use self::git::{
-    pier_git_branch_info, pier_git_branch_list_local, pier_git_checkout_branch,
+    pier_git_blame, pier_git_branch_info, pier_git_branch_list_local, pier_git_checkout_branch,
     pier_git_commit, pier_git_compute_graph_layout,
+    pier_git_config_list, pier_git_config_set, pier_git_config_unset,
     pier_git_detect_default_branch, pier_git_diff, pier_git_diff_untracked, pier_git_discard,
     pier_git_first_parent_chain, pier_git_free, pier_git_free_string, pier_git_graph_log,
     pier_git_list_authors, pier_git_list_branches, pier_git_log, pier_git_open,
     pier_git_pull, pier_git_push,
+    pier_git_remote_add, pier_git_remote_list, pier_git_remote_remove,
     pier_git_stage, pier_git_stage_all, pier_git_stash_apply, pier_git_stash_drop,
     pier_git_stash_list, pier_git_stash_pop, pier_git_stash_push,
-    pier_git_status, pier_git_unstage, pier_git_unstage_all,
+    pier_git_status,
+    pier_git_tag_create, pier_git_tag_delete, pier_git_tag_list,
+    pier_git_unstage, pier_git_unstage_all,
     PierGit,
+};
+pub use self::search::{
+    pier_search_content, pier_search_files, pier_search_free_string,
+};
+pub use self::sqlite::{
+    pier_sqlite_execute, pier_sqlite_free, pier_sqlite_free_string,
+    pier_sqlite_list_tables, pier_sqlite_open, pier_sqlite_table_columns,
+    PierSqlite,
 };
 pub use self::docker::{
     pier_docker_free, pier_docker_free_string, pier_docker_inspect_container,

@@ -44,8 +44,148 @@
         <translation>退出 Pier-X</translation>
     </message>
     <message>
+        <source>About Pier-X</source>
+        <translation>关于 Pier-X</translation>
+    </message>
+    <message>
         <source>Workspace</source>
         <translation>工作区</translation>
+    </message>
+    <message>
+        <source>File</source>
+        <translation>文件</translation>
+    </message>
+    <message>
+        <source>Edit</source>
+        <translation>编辑</translation>
+    </message>
+    <message>
+        <source>View</source>
+        <translation>视图</translation>
+    </message>
+    <message>
+        <source>Window</source>
+        <translation>窗口</translation>
+    </message>
+    <message>
+        <source>Help</source>
+        <translation>帮助</translation>
+    </message>
+    <message>
+        <source>Undo</source>
+        <translation>撤销</translation>
+    </message>
+    <message>
+        <source>Redo</source>
+        <translation>重做</translation>
+    </message>
+    <message>
+        <source>Cut</source>
+        <translation>剪切</translation>
+    </message>
+    <message>
+        <source>Copy</source>
+        <translation>复制</translation>
+    </message>
+    <message>
+        <source>Paste</source>
+        <translation>粘贴</translation>
+    </message>
+    <message>
+        <source>Select All</source>
+        <translation>全选</translation>
+    </message>
+    <message>
+        <source>Command palette…</source>
+        <translation>命令面板…</translation>
+    </message>
+    <message>
+        <source>Open Markdown preview…</source>
+        <translation>打开 Markdown 预览…</translation>
+    </message>
+    <message>
+        <source>Preview: %1</source>
+        <translation>预览：%1</translation>
+    </message>
+    <message>
+        <source>Connection %1 deleted</source>
+        <translation>连接 %1 已删除</translation>
+    </message>
+    <message>
+        <source>Connection duplicated</source>
+        <translation>连接已复制</translation>
+    </message>
+    <message>
+        <source>Connection %1 saved</source>
+        <translation>连接 %1 已保存</translation>
+    </message>
+    <message>
+        <source>Open Markdown file</source>
+        <translation>打开 Markdown 文件</translation>
+    </message>
+    <message>
+        <source>Markdown files (*.md *.markdown *.mdx)</source>
+        <translation>Markdown 文件 (*.md *.markdown *.mdx)</translation>
+    </message>
+    <message>
+        <source>Text files (*.txt)</source>
+        <translation>文本文件 (*.txt)</translation>
+    </message>
+    <message>
+        <source>All files (*)</source>
+        <translation>所有文件 (*)</translation>
+    </message>
+    <message>
+        <source>Tail syslog</source>
+        <translation>跟踪 syslog</translation>
+    </message>
+    <message>
+        <source>Docker containers</source>
+        <translation>Docker 容器</translation>
+    </message>
+    <message>
+        <source>Git panel</source>
+        <translation>Git 面板</translation>
+    </message>
+    <message>
+        <source>MySQL client (127.0.0.1:13306)</source>
+        <translation>MySQL 客户端 (127.0.0.1:13306)</translation>
+    </message>
+    <message>
+        <source>📁 %1</source>
+        <translation>📁 %1</translation>
+    </message>
+    <message>
+        <source>Hide right sidebar</source>
+        <translation>隐藏右侧边栏</translation>
+    </message>
+    <message>
+        <source>Show right sidebar</source>
+        <translation>显示右侧边栏</translation>
+    </message>
+    <message>
+        <source>Minimize</source>
+        <translation>最小化</translation>
+    </message>
+    <message>
+        <source>Restore</source>
+        <translation>还原</translation>
+    </message>
+    <message>
+        <source>Zoom</source>
+        <translation>缩放</translation>
+    </message>
+    <message>
+        <source>A visual operations workspace for terminals, services, and remote infrastructure.</source>
+        <translation>一个面向终端、服务与远程基础设施的可视化运维工作区。</translation>
+    </message>
+    <message>
+        <source>Version %1
+Qt %2
+Core %3</source>
+        <translation>版本 %1
+Qt %2
+核心 %3</translation>
     </message>
     <message>
         <source>Untitled tab</source>
@@ -142,6 +282,10 @@ built on Qt 6 + Rust core.</source>
     <message>
         <source>Command Palette</source>
         <translation>命令面板</translation>
+    </message>
+    <message>
+        <source>New session</source>
+        <translation>新建会话</translation>
     </message>
     <message>
         <source>Open command palette</source>
@@ -272,6 +416,71 @@ built on Qt 6 + Rust core.</source>
     <message>
         <source>Password</source>
         <translation>密码</translation>
+    </message>
+    <message>
+        <source>Saved Connections</source>
+        <translation>已保存连接</translation>
+    </message>
+    <message>
+        <source>%1 hosts ready for SSH, SFTP, and service panels.</source>
+        <translation>%1 台主机已就绪，可用于 SSH、SFTP 和服务面板。</translation>
+    </message>
+    <message>
+        <source>No saved connections yet.
+Create one to unlock SSH, SFTP, Docker, logs, and database tools.</source>
+        <translation>还没有已保存连接。
+创建一个连接以解锁 SSH、SFTP、Docker、日志与数据库工具。</translation>
+    </message>
+</context>
+
+<!-- ═══════════════════════════════════════════════════════
+     RightSidebar.qml
+     ═══════════════════════════════════════════════════════ -->
+<context>
+    <name>RightSidebar</name>
+    <message>
+        <source>Git</source>
+        <translation>Git</translation>
+    </message>
+    <message>
+        <source>Server Monitor</source>
+        <translation>服务器监控</translation>
+    </message>
+    <message>
+        <source>Docker</source>
+        <translation>Docker</translation>
+    </message>
+    <message>
+        <source>MySQL</source>
+        <translation>MySQL</translation>
+    </message>
+    <message>
+        <source>Redis</source>
+        <translation>Redis</translation>
+    </message>
+    <message>
+        <source>Logs</source>
+        <translation>日志</translation>
+    </message>
+    <message>
+        <source>SFTP</source>
+        <translation>SFTP</translation>
+    </message>
+    <message>
+        <source>Tool Panel</source>
+        <translation>工具面板</translation>
+    </message>
+    <message>
+        <source>Connect to a server or open a supported context to unlock this panel.</source>
+        <translation>连接到服务器或打开受支持的上下文后，即可启用此面板。</translation>
+    </message>
+    <message>
+        <source>Close panel</source>
+        <translation>关闭面板</translation>
+    </message>
+    <message>
+        <source>This panel becomes available once an SSH session or supported service context is active.</source>
+        <translation>当 SSH 会话或受支持的服务上下文处于激活状态时，此面板才可用。</translation>
     </message>
 </context>
 
@@ -681,6 +890,10 @@ built on Qt 6 + Rust core.</source>
         <source>Password stored directly</source>
         <translation>密码以明文配置方式存储</translation>
     </message>
+    <message>
+        <source>%1 saved</source>
+        <translation>已保存 %1 条</translation>
+    </message>
 </context>
 
 <context>
@@ -694,12 +907,88 @@ built on Qt 6 + Rust core.</source>
         <translation>主目录</translation>
     </message>
     <message>
+        <source>Places</source>
+        <translation>常用位置</translation>
+    </message>
+    <message>
+        <source>Desktop</source>
+        <translation>桌面</translation>
+    </message>
+    <message>
+        <source>Documents</source>
+        <translation>文稿</translation>
+    </message>
+    <message>
+        <source>Downloads</source>
+        <translation>下载</translation>
+    </message>
+    <message>
+        <source>Choose folder…</source>
+        <translation>选择文件夹…</translation>
+    </message>
+    <message>
         <source>Up</source>
         <translation>上一级</translation>
     </message>
     <message>
+        <source>Refresh</source>
+        <translation>刷新</translation>
+    </message>
+    <message>
         <source>Terminal</source>
         <translation>终端</translation>
+    </message>
+    <message>
+        <source>Search files…</source>
+        <translation>搜索文件…</translation>
+    </message>
+    <message>
+        <source>Open folder</source>
+        <translation>打开文件夹</translation>
+    </message>
+    <message>
+        <source>Open preview</source>
+        <translation>打开预览</translation>
+    </message>
+    <message>
+        <source>Open with default app</source>
+        <translation>用默认应用打开</translation>
+    </message>
+    <message>
+        <source>Open in terminal here</source>
+        <translation>在这里打开终端</translation>
+    </message>
+    <message>
+        <source>Reveal in file manager</source>
+        <translation>在文件管理器中显示</translation>
+    </message>
+    <message>
+        <source>Copy path</source>
+        <translation>复制路径</translation>
+    </message>
+    <message>
+        <source>Copy name</source>
+        <translation>复制名称</translation>
+    </message>
+    <message>
+        <source>Modified</source>
+        <translation>修改时间</translation>
+    </message>
+    <message>
+        <source>Kind</source>
+        <translation>类型</translation>
+    </message>
+    <message>
+        <source>Size</source>
+        <translation>大小</translation>
+    </message>
+    <message>
+        <source>Folder</source>
+        <translation>文件夹</translation>
+    </message>
+    <message>
+        <source>File</source>
+        <translation>文件</translation>
     </message>
     <message>
         <source>Browse local files and click a Markdown or text file to open a preview tab.</source>
@@ -720,6 +1009,14 @@ built on Qt 6 + Rust core.</source>
     <message>
         <source>Choose another directory or open a local terminal.</source>
         <translation>可以切换到其他目录，或直接打开本地终端。</translation>
+    </message>
+    <message>
+        <source>No matching files.</source>
+        <translation>没有匹配的文件。</translation>
+    </message>
+    <message>
+        <source>Try a different keyword or clear the search.</source>
+        <translation>试试别的关键词，或清空搜索。</translation>
     </message>
 </context>
 

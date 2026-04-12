@@ -1,29 +1,22 @@
 import QtQuick
 import Pier
 
-// Text input — semi-transparent surface, accent focus border.
-// Spec: SKILL.md §9.3
 Rectangle {
     id: root
 
     property alias text: input.text
     property alias readOnly: input.readOnly
     property string placeholder: ""
-    // When true, echo as bullets instead of the raw characters.
-    // Used by the connection dialog's password field. The
-    // TextInput.PasswordEchoOnEdit mode would leak the first
-    // character momentarily — we use Password which is stricter.
     property bool password: false
 
-    implicitHeight: 32
-    implicitWidth: 200
-
-    color: Theme.dark ? Theme.bgSurface : Theme.bgPanel
-    border.color: input.activeFocus ? Theme.borderFocus : Theme.borderDefault
+    implicitHeight: Theme.fieldHeight
+    implicitWidth: 220
+    color: Theme.bgSurface
+    border.color: input.activeFocus ? Theme.borderFocus : fieldMouse.containsMouse ? Theme.borderStrong : Theme.borderDefault
     border.width: 1
-    radius: Theme.radiusSm
+    radius: Theme.radiusMd
 
-    Behavior on color        { ColorAnimation { duration: Theme.durNormal } }
+    Behavior on color { ColorAnimation { duration: Theme.durNormal } }
     Behavior on border.color { ColorAnimation { duration: Theme.durFast } }
 
     TextInput {
@@ -41,8 +34,6 @@ Rectangle {
         echoMode: root.password ? TextInput.Password : TextInput.Normal
         passwordCharacter: "\u2022"
 
-        Behavior on color { ColorAnimation { duration: Theme.durNormal } }
-
         Text {
             anchors.fill: parent
             verticalAlignment: Text.AlignVCenter
@@ -50,8 +41,13 @@ Rectangle {
             font: input.font
             color: Theme.textTertiary
             visible: input.text.length === 0
-
-            Behavior on color { ColorAnimation { duration: Theme.durNormal } }
         }
+    }
+
+    MouseArea {
+        id: fieldMouse
+        anchors.fill: parent
+        hoverEnabled: true
+        acceptedButtons: Qt.NoButton
     }
 }

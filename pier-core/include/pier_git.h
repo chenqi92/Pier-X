@@ -110,6 +110,9 @@ char *pier_git_pull(PierGit *h);
 /* Last N commits as JSON array. Caller frees. */
 char *pier_git_log(PierGit *h, uint32_t limit);
 
+/* Blame a file. Returns JSON array. Caller frees. */
+char *pier_git_blame(PierGit *h, const char *path);
+
 /* ── Stash ────────────────────────────────────────────── */
 
 /* List stash entries as JSON array. Caller frees. */
@@ -134,6 +137,39 @@ char *pier_git_branch_list_local(PierGit *h);
 
 /* Checkout branch by name. Caller frees. */
 char *pier_git_checkout_branch(PierGit *h, const char *name);
+
+/* ── Tags ─────────────────────────────────────────────── */
+
+/* List tags as JSON array. Caller frees. */
+char *pier_git_tag_list(PierGit *h);
+
+/* Create a tag. Caller frees. */
+char *pier_git_tag_create(PierGit *h, const char *name, const char *message);
+
+/* Delete a tag. Caller frees. */
+char *pier_git_tag_delete(PierGit *h, const char *name);
+
+/* ── Remotes ──────────────────────────────────────────── */
+
+/* List remotes as JSON array. Caller frees. */
+char *pier_git_remote_list(PierGit *h);
+
+/* Add a remote. Caller frees. */
+char *pier_git_remote_add(PierGit *h, const char *name, const char *url);
+
+/* Remove a remote. Caller frees. */
+char *pier_git_remote_remove(PierGit *h, const char *name);
+
+/* ── Config ───────────────────────────────────────────── */
+
+/* List config entries as JSON array. Caller frees. */
+char *pier_git_config_list(PierGit *h);
+
+/* Set a config entry. Caller frees. */
+char *pier_git_config_set(PierGit *h, const char *key, const char *value, int global);
+
+/* Unset a config entry. Caller frees. */
+char *pier_git_config_unset(PierGit *h, const char *key, int global);
 
 /* ── Graph (from git_graph module) ─────────────────────── */
 

@@ -1,5 +1,6 @@
 import QtQuick
 import QtQuick.Window
+import QtQuick.Controls
 import QtQuick.Controls.Basic
 import QtQuick.Dialogs
 import QtQuick.Layouts
@@ -7,16 +8,134 @@ import Pier
 
 ApplicationWindow {
     id: window
-    width: 1280
-    height: 800
-    minimumWidth: 800
-    minimumHeight: 500
+    width: 1400
+    height: 900
+    minimumWidth: Theme.windowMinWidth
+    minimumHeight: Theme.windowMinHeight
     visible: true
     title: qsTr("Pier-X")
 
     color: Theme.bgCanvas
     Behavior on color {
         ColorAnimation { duration: Theme.durNormal; easing.type: Theme.easingType }
+    }
+
+    menuBar: MenuBar {
+        Menu {
+            title: qsTr("Pier-X")
+
+            MenuItem { text: qsTr("About Pier-X"); onTriggered: aboutDialog.open() }
+            MenuSeparator {}
+            MenuItem {
+                action: Action {
+                    text: qsTr("Settings…")
+                    shortcut: Qt.platform.os === "osx" ? "Meta+," : "Ctrl+,"
+                    onTriggered: settingsDialog.show()
+                }
+            }
+            MenuSeparator {}
+            MenuItem {
+                action: Action {
+                    text: qsTr("Quit Pier-X")
+                    shortcut: StandardKey.Quit
+                    onTriggered: Qt.quit()
+                }
+            }
+        }
+
+        Menu {
+            title: qsTr("File")
+
+            MenuItem {
+                action: Action {
+                    text: qsTr("New local terminal")
+                    shortcut: Qt.platform.os === "osx" ? "Meta+T" : "Ctrl+T"
+                    onTriggered: window.openNewTab()
+                }
+            }
+            MenuItem {
+                action: Action {
+                    text: qsTr("New SSH connection…")
+                    shortcut: Qt.platform.os === "osx" ? "Meta+N" : "Ctrl+N"
+                    onTriggered: newConnectionDialog.show()
+                }
+            }
+            MenuItem { text: qsTr("Open Markdown preview…"); onTriggered: markdownFileDialog.open() }
+            MenuSeparator {}
+            MenuItem {
+                action: Action {
+                    text: qsTr("Close current tab")
+                    shortcut: StandardKey.Close
+                    enabled: tabModel.count > 0
+                    onTriggered: window.closeTab(window.currentTabIndex)
+                }
+            }
+        }
+
+        Menu {
+            title: qsTr("Edit")
+
+            MenuItem { action: Action { text: qsTr("Undo"); shortcut: StandardKey.Undo; enabled: window._focusMethodAvailable("undo"); onTriggered: window._invokeFocusMethod("undo") } }
+            MenuItem { action: Action { text: qsTr("Redo"); shortcut: StandardKey.Redo; enabled: window._focusMethodAvailable("redo"); onTriggered: window._invokeFocusMethod("redo") } }
+            MenuSeparator {}
+            MenuItem { action: Action { text: qsTr("Cut"); shortcut: StandardKey.Cut; enabled: window._focusMethodAvailable("cut"); onTriggered: window._invokeFocusMethod("cut") } }
+            MenuItem { action: Action { text: qsTr("Copy"); shortcut: StandardKey.Copy; enabled: window._focusMethodAvailable("copy"); onTriggered: window._invokeFocusMethod("copy") } }
+            MenuItem { action: Action { text: qsTr("Paste"); shortcut: StandardKey.Paste; enabled: window._focusMethodAvailable("paste"); onTriggered: window._invokeFocusMethod("paste") } }
+            MenuItem { action: Action { text: qsTr("Select All"); shortcut: StandardKey.SelectAll; enabled: window._focusMethodAvailable("selectAll"); onTriggered: window._invokeFocusMethod("selectAll") } }
+        }
+
+        Menu {
+            title: qsTr("View")
+
+            MenuItem {
+                action: Action {
+                    text: qsTr("Command palette…")
+                    shortcut: Qt.platform.os === "osx" ? "Meta+K" : "Ctrl+K"
+                    onTriggered: commandPalette.show()
+                }
+            }
+            MenuItem {
+                text: Theme.dark ? qsTr("Switch to light theme") : qsTr("Switch to dark theme")
+                onTriggered: { Theme.followSystem = false; Theme.dark = !Theme.dark }
+            }
+            MenuItem {
+                text: qsTr("Follow system theme")
+                checkable: true; checked: Theme.followSystem
+                onTriggered: Theme.followSystem = checked
+            }
+            MenuSeparator {}
+            MenuItem {
+                action: Action {
+                    text: window.gitPanelVisible ? qsTr("Hide right sidebar") : qsTr("Show right sidebar")
+                    shortcut: Qt.platform.os === "osx" ? "Meta+Shift+G" : "Ctrl+Shift+G"
+                    onTriggered: window.toggleGitPanel()
+                }
+            }
+        }
+
+        Menu {
+            title: qsTr("Window")
+
+            MenuItem {
+                action: Action {
+                    text: qsTr("Minimize")
+                    shortcut: StandardKey.Minimize
+                    onTriggered: window.showMinimized()
+                }
+            }
+            MenuItem {
+                text: window.visibility === Window.Maximized ? qsTr("Restore") : qsTr("Zoom")
+                onTriggered: {
+                    if (window.visibility === Window.Maximized) window.showNormal()
+                    else window.showMaximized()
+                }
+            }
+        }
+
+        Menu {
+            title: qsTr("Help")
+            MenuItem { text: qsTr("About Pier-X"); onTriggered: aboutDialog.open() }
+        }
     }
 
     // ─────────────────────────────────────────────────────
@@ -73,6 +192,18 @@ ApplicationWindow {
 
     property int currentTabIndex: 0
     property bool gitPanelVisible: true
+
+    // Live SSH session from the current tab's TerminalView.
+    // Returns the PierTerminalSession if the active tab is a
+    // terminal (local or SSH); null for SFTP/Markdown tabs.
+    readonly property var activeSession: {
+        if (typeof tabRepeater === "undefined" || !tabRepeater) return null
+        if (currentTabIndex < 0 || currentTabIndex >= tabModel.count) return null
+        var loader = tabRepeater.itemAt(currentTabIndex)
+        if (!loader || !loader.item) return null
+        // TerminalView exposes `terminalSession`; SFTP/Markdown don't
+        return loader.item.terminalSession || null
+    }
     property var pendingCloseIndexes: []
     property string pendingCloseTitle: ""
     property string pendingCloseMessage: ""
@@ -88,6 +219,7 @@ ApplicationWindow {
         return {
             title: title,
             backend: "local",
+            startupCommand: "",
             sshHost: "",
             sshPort: 22,
             sshUser: "",
@@ -110,14 +242,27 @@ ApplicationWindow {
             pgPort: 5432,
             pgUser: "",
             pgDatabase: "",
-            rpTool: ""
+            rpTool: "",
+            rightTool: "git"
         }
+    }
+
+    function _focusMethodAvailable(name) {
+        const item = window.activeFocusItem
+        return !!(item && typeof item[name] === "function")
+    }
+
+    function _invokeFocusMethod(name) {
+        const item = window.activeFocusItem
+        if (item && typeof item[name] === "function")
+            item[name]()
     }
 
     function _makeSshRow(conn) {
         return {
             title: conn.name,
             backend: "ssh",
+            startupCommand: "",
             sshHost: conn.host,
             sshPort: conn.port,
             sshUser: conn.username,
@@ -140,7 +285,8 @@ ApplicationWindow {
             pgPort: 5432,
             pgUser: "",
             pgDatabase: "",
-            rpTool: "docker"
+            rpTool: "docker",
+            rightTool: "monitor"
         }
     }
 
@@ -151,6 +297,7 @@ ApplicationWindow {
         return {
             title: qsTr("📁 %1").arg(conn.name),
             backend: "sftp",
+            startupCommand: "",
             sshHost: conn.host,
             sshPort: conn.port,
             sshUser: conn.username,
@@ -173,7 +320,8 @@ ApplicationWindow {
             pgPort: 5432,
             pgUser: "",
             pgDatabase: "",
-            rpTool: ""
+            rpTool: "",
+            rightTool: "sftp"
         }
     }
 
@@ -215,10 +363,45 @@ ApplicationWindow {
         currentTabIndex = tabModel.count - 1
     }
 
-    function openNewTab(title) {
+    function _quoteShellPath(path) {
+        const value = String(path || "")
+        if (Qt.platform.os === "windows")
+            return "\"" + value.replace(/`/g, "``").replace(/"/g, "`\"") + "\""
+        return "'" + value.replace(/'/g, "'\\''") + "'"
+    }
+
+    function _buildLocalStartupCommand(path) {
+        const target = String(path || "").trim()
+        if (target.length === 0)
+            return ""
+        if (Qt.platform.os === "windows")
+            return "Set-Location -LiteralPath " + _quoteShellPath(target) + "\r"
+        return "cd -- " + _quoteShellPath(target) + "\n"
+    }
+
+    function _pathLeaf(path) {
+        const value = String(path || "").replace(/[\\\/]+$/, "")
+        const parts = value.split(/[\\\/]+/).filter(function(part) { return part.length > 0 })
+        return parts.length > 0 ? parts[parts.length - 1] : ""
+    }
+
+    function openNewTab(title, startupCommand) {
         const t = title || qsTr("Local %1").arg(tabModel.count + 1)
-        tabModel.append(_makeLocalRow(t))
+        const row = _makeLocalRow(t)
+        row.startupCommand = startupCommand || ""
+        tabModel.append(row)
         currentTabIndex = tabModel.count - 1
+    }
+
+    function openLocalTerminalAt(path) {
+        const target = String(path || "").trim()
+        if (target.length === 0) {
+            openNewTab()
+            return
+        }
+        const leaf = _pathLeaf(target)
+        const title = leaf.length > 0 ? leaf : qsTr("Local %1").arg(tabModel.count + 1)
+        openNewTab(title, _buildLocalStartupCommand(target))
     }
 
     function openSshTab(conn) {
@@ -540,6 +723,9 @@ ApplicationWindow {
 
         TopBar {
             Layout.fillWidth: true
+            contextTitle: tabModel.count > 0 && currentTabIndex >= 0 && currentTabIndex < tabModel.count
+                          ? (tabModel.get(currentTabIndex).title || qsTr("Workspace"))
+                          : qsTr("Workspace")
             onNewSessionRequested: newConnectionDialog.show()
             onCommandPaletteRequested: commandPalette.show()
             onSettingsRequested: settingsDialog.show()
@@ -552,8 +738,8 @@ ApplicationWindow {
 
             Sidebar {
                 id: sidebar
-                SplitView.preferredWidth: 220
-                SplitView.minimumWidth: 150
+                SplitView.preferredWidth: Theme.sidebarWidth
+                SplitView.minimumWidth: 190
                 // Use a visible property mapped to a toggled state if needed
                 connectionsModel: connectionsModel
                 onAddConnectionRequested: newConnectionDialog.show()
@@ -577,7 +763,12 @@ ApplicationWindow {
                     }
                     toastManager.show(qsTr("Connection duplicated"), "success")
                 }
-                onOpenLocalTerminalRequested: window.openNewTab()
+                onOpenLocalTerminalRequested: (path) => {
+                    if (path && path.length > 0)
+                        window.openLocalTerminalAt(path)
+                    else
+                        window.openNewTab()
+                }
                 onOpenMarkdownRequested: (filePath) => window.openMarkdownTab(filePath)
             }
 
@@ -634,15 +825,18 @@ ApplicationWindow {
                         // StackLayout hides inactive tabs without destroying
                         // them — matches IDE terminal behavior.
                         StackLayout {
+                            id: tabContentStack
                             Layout.fillWidth: true
                             Layout.fillHeight: true
                             currentIndex: window.currentTabIndex
 
                             Repeater {
+                                id: tabRepeater
                                 model: tabModel
                                 delegate: Loader {
                                     // Main tab views
                                     required property string backend
+                                    required property string startupCommand
                                     required property string sshHost
                                     required property int    sshPort
                                     required property string sshUser
@@ -663,6 +857,7 @@ ApplicationWindow {
                                         id: terminalComp
                                         TerminalView {
                                             backend: parent.backend
+                                            startupCommand: parent.startupCommand
                                             sshHost: parent.sshHost
                                             sshPort: parent.sshPort
                                             sshUser: parent.sshUser
@@ -700,50 +895,42 @@ ApplicationWindow {
                 }
             }
 
-            // Unified Right Sidebar — permanent, hosts all tools
+            // Unified Right Sidebar — permanent, hosts all tools.
+            // SSH context is read from the LIVE session (not static
+            // tab model) so it tracks the actual connected host.
+            // activeTool is per-tab via the rightTool field.
             RightSidebar {
                 id: rightSidebar
-                SplitView.preferredWidth: 380
-                SplitView.minimumWidth: 280
+                SplitView.preferredWidth: Theme.rightSidebarWidth
+                SplitView.minimumWidth: 320
                 visible: window.gitPanelVisible
 
-                // Bind SSH context from the active tab
+                // Per-tab tool memory
+                activeTool: {
+                    if (window.currentTabIndex < 0 || window.currentTabIndex >= tabModel.count) return "git"
+                    return tabModel.get(window.currentTabIndex).rightTool || "git"
+                }
+                onActiveToolChanged: {
+                    if (window.currentTabIndex >= 0 && window.currentTabIndex < tabModel.count)
+                        tabModel.setProperty(window.currentTabIndex, "rightTool", activeTool)
+                }
+
+                // Live SSH context from the active terminal session
                 activeBackend: {
                     if (window.currentTabIndex < 0 || window.currentTabIndex >= tabModel.count) return ""
                     return tabModel.get(window.currentTabIndex).backend || ""
                 }
-                sshHost: {
-                    if (window.currentTabIndex < 0 || window.currentTabIndex >= tabModel.count) return ""
-                    return tabModel.get(window.currentTabIndex).sshHost || ""
-                }
-                sshPort: {
-                    if (window.currentTabIndex < 0 || window.currentTabIndex >= tabModel.count) return 22
-                    return tabModel.get(window.currentTabIndex).sshPort || 22
-                }
-                sshUser: {
-                    if (window.currentTabIndex < 0 || window.currentTabIndex >= tabModel.count) return ""
-                    return tabModel.get(window.currentTabIndex).sshUser || ""
-                }
-                sshPassword: {
-                    if (window.currentTabIndex < 0 || window.currentTabIndex >= tabModel.count) return ""
-                    return tabModel.get(window.currentTabIndex).sshPassword || ""
-                }
-                sshCredentialId: {
-                    if (window.currentTabIndex < 0 || window.currentTabIndex >= tabModel.count) return ""
-                    return tabModel.get(window.currentTabIndex).sshCredentialId || ""
-                }
-                sshKeyPath: {
-                    if (window.currentTabIndex < 0 || window.currentTabIndex >= tabModel.count) return ""
-                    return tabModel.get(window.currentTabIndex).sshKeyPath || ""
-                }
-                sshPassphraseCredentialId: {
-                    if (window.currentTabIndex < 0 || window.currentTabIndex >= tabModel.count) return ""
-                    return tabModel.get(window.currentTabIndex).sshPassphraseCredentialId || ""
-                }
-                sshUsesAgent: {
-                    if (window.currentTabIndex < 0 || window.currentTabIndex >= tabModel.count) return false
-                    return tabModel.get(window.currentTabIndex).sshUsesAgent || false
-                }
+                sshHost:     window.activeSession ? window.activeSession.sshHost     : ""
+                sshPort:     window.activeSession ? window.activeSession.sshPort     : 22
+                sshUser:     window.activeSession ? window.activeSession.sshUser     : ""
+                sshPassword: window.activeSession ? window.activeSession.sshPassword : ""
+                sshCredentialId: window.activeSession ? window.activeSession.sshCredentialId : ""
+                sshKeyPath:  window.activeSession ? window.activeSession.sshKeyPath  : ""
+                sshPassphraseCredentialId: window.activeSession ? window.activeSession.sshPassphraseCredentialId : ""
+                sshUsesAgent: window.activeSession ? window.activeSession.sshUsesAgent : false
+
+                // Service context still comes from tab model (set by
+                // service pill clicks in TerminalView)
                 redisHost: {
                     if (window.currentTabIndex < 0 || window.currentTabIndex >= tabModel.count) return ""
                     return tabModel.get(window.currentTabIndex).redisHost || ""
@@ -905,6 +1092,80 @@ ApplicationWindow {
     SettingsDialog {
         id: settingsDialog
         connectionsModel: connectionsModel
+    }
+
+    Popup {
+        id: aboutDialog
+        parent: Overlay.overlay
+        modal: true
+        focus: true
+        padding: Theme.sp4
+        width: Math.min(380, window.width - Theme.sp6 * 2)
+        x: Math.round((window.width - width) / 2)
+        y: Math.round((window.height - implicitHeight) / 2)
+        closePolicy: Popup.CloseOnEscape | Popup.CloseOnPressOutside
+
+        background: Rectangle {
+            color: Theme.bgElevated
+            border.color: Theme.borderDefault
+            border.width: 1
+            radius: Theme.radiusLg
+
+            Behavior on color { ColorAnimation { duration: Theme.durNormal } }
+            Behavior on border.color { ColorAnimation { duration: Theme.durNormal } }
+        }
+
+        contentItem: ColumnLayout {
+            spacing: Theme.sp3
+
+            Text {
+                text: qsTr("Pier-X")
+                font.family: Theme.fontUi
+                font.pixelSize: Theme.sizeH3
+                font.weight: Theme.weightMedium
+                color: Theme.textPrimary
+            }
+
+            Text {
+                text: qsTr("A visual operations workspace for terminals, services, and remote infrastructure.")
+                wrapMode: Text.WordWrap
+                font.family: Theme.fontUi
+                font.pixelSize: Theme.sizeBody
+                color: Theme.textSecondary
+            }
+
+            Rectangle {
+                Layout.fillWidth: true
+                color: Theme.bgSurface
+                border.color: Theme.borderSubtle
+                border.width: 1
+                radius: Theme.radiusSm
+                implicitHeight: aboutMeta.implicitHeight + Theme.sp3 * 2
+
+                Text {
+                    id: aboutMeta
+                    anchors.fill: parent
+                    anchors.margins: Theme.sp3
+                    text: qsTr("Version %1\nQt %2\nCore %3")
+                        .arg(Qt.application.version)
+                        .arg(PierCore.qtVersion)
+                        .arg(PierCore.buildInfo)
+                    font.family: Theme.fontMono
+                    font.pixelSize: Theme.sizeCaption
+                    color: Theme.textTertiary
+                }
+            }
+
+            RowLayout {
+                Layout.fillWidth: true
+                Item { Layout.fillWidth: true }
+
+                PrimaryButton {
+                    text: qsTr("Close")
+                    onClicked: aboutDialog.close()
+                }
+            }
+        }
     }
 
     CommandHistoryDialog {

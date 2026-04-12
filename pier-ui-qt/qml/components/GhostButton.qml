@@ -1,28 +1,25 @@
 import QtQuick
 import Pier
 
-// Secondary button — transparent fill with subtle border.
-// Spec: SKILL.md §9.2
 Rectangle {
     id: root
 
     property string text: ""
     signal clicked
 
-    implicitHeight: 28
-    implicitWidth: label.implicitWidth + Theme.sp4 * 2
-
-    color: mouseArea.pressed       ? Theme.bgActive
+    implicitHeight: Theme.controlHeight
+    implicitWidth: label.implicitWidth + Theme.sp3 * 2
+    radius: Theme.radiusMd
+    color: mouseArea.pressed ? Theme.bgActive
          : mouseArea.containsMouse ? Theme.bgHover
          : "transparent"
     border.color: activeFocus ? Theme.borderFocus : Theme.borderDefault
     border.width: 1
-    radius: Theme.radiusSm
-    opacity: enabled ? 1.0 : 0.5
+    opacity: enabled ? 1.0 : 0.45
 
-    Behavior on color        { ColorAnimation  { duration: Theme.durFast } }
-    Behavior on border.color { ColorAnimation  { duration: Theme.durNormal } }
-    Behavior on opacity      { NumberAnimation { duration: Theme.durFast } }
+    Behavior on color { ColorAnimation { duration: Theme.durFast } }
+    Behavior on border.color { ColorAnimation { duration: Theme.durFast } }
+    Behavior on opacity { NumberAnimation { duration: Theme.durFast } }
 
     focusPolicy: Qt.TabFocus
 
@@ -33,9 +30,8 @@ Rectangle {
         font.family: Theme.fontUi
         font.pixelSize: Theme.sizeBody
         font.weight: Theme.weightMedium
-        color: Theme.textPrimary
-
-        Behavior on color { ColorAnimation { duration: Theme.durNormal } }
+        color: mouseArea.containsMouse ? Theme.textPrimary : Theme.textSecondary
+        Behavior on color { ColorAnimation { duration: Theme.durFast } }
     }
 
     MouseArea {

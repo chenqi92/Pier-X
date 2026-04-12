@@ -57,6 +57,8 @@ qt_add_qml_module(pier-x
         src/PierConnectionStore.cpp
         src/PierCredentials.h
         src/PierCredentials.cpp
+        src/PierLocalSystem.h
+        src/PierLocalSystem.cpp
         src/PierSftpBrowser.h
         src/PierSftpBrowser.cpp
         src/PierServiceDetector.h
@@ -75,8 +77,16 @@ qt_add_qml_module(pier-x
         src/PierMySqlClient.cpp
         src/PierMySqlWorkspace.h
         src/PierMySqlWorkspace.cpp
+        src/PierPostgresClient.h
+        src/PierPostgresClient.cpp
         src/PierGitClient.h
         src/PierGitClient.cpp
+        src/PierSqliteClient.h
+        src/PierSqliteClient.cpp
+        src/PierSearch.h
+        src/PierSearch.cpp
+        src/PierServerMonitor.h
+        src/PierServerMonitor.cpp
     QML_FILES
         qml/Main.qml
         qml/Theme.qml
@@ -110,10 +120,12 @@ qt_add_qml_module(pier-x
         qml/views/SftpBrowserView.qml
         qml/views/RedisBrowserView.qml
         qml/views/MySqlBrowserView.qml
+        qml/views/PostgresPanelView.qml
         qml/views/LogViewerView.qml
         qml/views/DockerPanelView.qml
         qml/views/MarkdownPreviewView.qml
         qml/views/GitPanelView.qml
+        qml/views/ServerMonitorView.qml
     RESOURCES
         resources/icons/pier.png
         resources/icons/lucide/chevron-down.svg

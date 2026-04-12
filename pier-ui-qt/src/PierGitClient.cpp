@@ -574,6 +574,15 @@ void PierGitClient::onOpResult(quint64 requestId, const QString &operation, bool
         loadStashes();
         refresh();
     }
+    if (operation == QStringLiteral("tagCreate") || operation == QStringLiteral("tagDelete")) {
+        loadTags();
+    }
+    if (operation == QStringLiteral("remoteAdd") || operation == QStringLiteral("remoteRemove")) {
+        loadRemotes();
+    }
+    if (operation == QStringLiteral("configSet")) {
+        loadConfig();
+    }
 }
 
 // ─── History ────────────────────────────────────────────
@@ -815,6 +824,240 @@ void PierGitClient::checkoutBranch(const QString &name)
             Q_ARG(bool, ok), Q_ARG(QString, out));
     });
     m_workers.push_back(std::move(worker));
+}
+
+// ─── Blame ──────────────────────────────────────────────
+
+void PierGitClient::loadBlame(const QString &path)
+{
+    if (!m_handle || path.isEmpty()) return;
+    const quint64 requestId = ++m_nextRequestId;
+    setBusy(true);
+    QPointer<PierGitClient> selfWeak(this);
+    auto cancelFlag = m_cancelFlag;
+    ::PierGit *h = m_handle;
+    std::string p = path.toStdString();
+    auto w = std::make_unique<std::thread>([selfWeak, cancelFlag, requestId, h, p = std::move(p)]() {
+        char *json = pier_git_blame(h, p.c_str());
+        QString result = json ? QString::fromUtf8(json) : QStringLiteral("[]");
+        if (json) pier_git_free_string(json);
+        if (!selfWeak || (cancelFlag && cancelFlag->load())) return;
+        QMetaObject::invokeMethod(selfWeak.data(), "onBlameResult", Qt::QueuedConnection,
+            Q_ARG(quint64, requestId), Q_ARG(QString, result));
+    });
+    m_workers.push_back(std::move(w));
+}
+
+void PierGitClient::onBlameResult(quint64 requestId, const QString &json)
+{
+    if (requestId != m_nextRequestId) return;
+    QJsonDocument doc = QJsonDocument::fromJson(json.toUtf8());
+    QVariantList list;
+    if (doc.isArray()) for (const auto &v : doc.array()) list.append(v.toObject().toVariantMap());
+    m_blameLines = list;
+    emit blameChanged();
+    setBusy(false);
+}
+
+// ─── Tags ───────────────────────────────────────────────
+
+void PierGitClient::loadTags()
+{
+    if (!m_handle) return;
+    const quint64 requestId = ++m_nextRequestId;
+    QPointer<PierGitClient> selfWeak(this);
+    auto cancelFlag = m_cancelFlag;
+    ::PierGit *h = m_handle;
+    auto w = std::make_unique<std::thread>([selfWeak, cancelFlag, requestId, h]() {
+        char *json = pier_git_tag_list(h);
+        QString result = json ? QString::fromUtf8(json) : QStringLiteral("[]");
+        if (json) pier_git_free_string(json);
+        if (!selfWeak || (cancelFlag && cancelFlag->load())) return;
+        QMetaObject::invokeMethod(selfWeak.data(), "onTagsResult", Qt::QueuedConnection,
+            Q_ARG(quint64, requestId), Q_ARG(QString, result));
+    });
+    m_workers.push_back(std::move(w));
+}
+
+void PierGitClient::onTagsResult(quint64 requestId, const QString &json)
+{
+    if (requestId != m_nextRequestId) return;
+    QJsonDocument doc = QJsonDocument::fromJson(json.toUtf8());
+    QVariantList list;
+    if (doc.isArray()) for (const auto &v : doc.array()) list.append(v.toObject().toVariantMap());
+    m_tags = list;
+    emit tagsChanged();
+}
+
+void PierGitClient::createTag(const QString &name, const QString &message)
+{
+    if (!m_handle || name.isEmpty()) return;
+    const quint64 requestId = ++m_nextRequestId;
+    setBusy(true);
+    QPointer<PierGitClient> selfWeak(this);
+    auto cancelFlag = m_cancelFlag;
+    ::PierGit *h = m_handle;
+    std::string n = name.toStdString(), m = message.toStdString();
+    auto w = std::make_unique<std::thread>([selfWeak, cancelFlag, requestId, h, n = std::move(n), m = std::move(m)]() {
+        char *r = pier_git_tag_create(h, n.c_str(), m.empty() ? nullptr : m.c_str());
+        QString out = r ? QString::fromUtf8(r) : QString();
+        if (r) pier_git_free_string(r);
+        bool ok = !out.contains(QStringLiteral("\"error\""));
+        if (!selfWeak || (cancelFlag && cancelFlag->load())) return;
+        QMetaObject::invokeMethod(selfWeak.data(), "onOpResult", Qt::QueuedConnection,
+            Q_ARG(quint64, requestId), Q_ARG(QString, QStringLiteral("tagCreate")),
+            Q_ARG(bool, ok), Q_ARG(QString, out));
+    });
+    m_workers.push_back(std::move(w));
+}
+
+void PierGitClient::deleteTag(const QString &name)
+{
+    if (!m_handle || name.isEmpty()) return;
+    const quint64 requestId = ++m_nextRequestId;
+    setBusy(true);
+    QPointer<PierGitClient> selfWeak(this);
+    auto cancelFlag = m_cancelFlag;
+    ::PierGit *h = m_handle;
+    std::string n = name.toStdString();
+    auto w = std::make_unique<std::thread>([selfWeak, cancelFlag, requestId, h, n = std::move(n)]() {
+        char *r = pier_git_tag_delete(h, n.c_str());
+        QString out = r ? QString::fromUtf8(r) : QString();
+        if (r) pier_git_free_string(r);
+        bool ok = !out.contains(QStringLiteral("\"error\""));
+        if (!selfWeak || (cancelFlag && cancelFlag->load())) return;
+        QMetaObject::invokeMethod(selfWeak.data(), "onOpResult", Qt::QueuedConnection,
+            Q_ARG(quint64, requestId), Q_ARG(QString, QStringLiteral("tagDelete")),
+            Q_ARG(bool, ok), Q_ARG(QString, out));
+    });
+    m_workers.push_back(std::move(w));
+}
+
+// ─── Remotes ────────────────────────────────────────────
+
+void PierGitClient::loadRemotes()
+{
+    if (!m_handle) return;
+    const quint64 requestId = ++m_nextRequestId;
+    QPointer<PierGitClient> selfWeak(this);
+    auto cancelFlag = m_cancelFlag;
+    ::PierGit *h = m_handle;
+    auto w = std::make_unique<std::thread>([selfWeak, cancelFlag, requestId, h]() {
+        char *json = pier_git_remote_list(h);
+        QString result = json ? QString::fromUtf8(json) : QStringLiteral("[]");
+        if (json) pier_git_free_string(json);
+        if (!selfWeak || (cancelFlag && cancelFlag->load())) return;
+        QMetaObject::invokeMethod(selfWeak.data(), "onRemotesResult", Qt::QueuedConnection,
+            Q_ARG(quint64, requestId), Q_ARG(QString, result));
+    });
+    m_workers.push_back(std::move(w));
+}
+
+void PierGitClient::onRemotesResult(quint64 requestId, const QString &json)
+{
+    if (requestId != m_nextRequestId) return;
+    QJsonDocument doc = QJsonDocument::fromJson(json.toUtf8());
+    QVariantList list;
+    if (doc.isArray()) for (const auto &v : doc.array()) list.append(v.toObject().toVariantMap());
+    m_remotes = list;
+    emit remotesChanged();
+}
+
+void PierGitClient::addRemote(const QString &name, const QString &url)
+{
+    if (!m_handle || name.isEmpty() || url.isEmpty()) return;
+    const quint64 requestId = ++m_nextRequestId;
+    setBusy(true);
+    QPointer<PierGitClient> selfWeak(this);
+    auto cancelFlag = m_cancelFlag;
+    ::PierGit *h = m_handle;
+    std::string n = name.toStdString(), u = url.toStdString();
+    auto w = std::make_unique<std::thread>([selfWeak, cancelFlag, requestId, h, n = std::move(n), u = std::move(u)]() {
+        char *r = pier_git_remote_add(h, n.c_str(), u.c_str());
+        QString out = r ? QString::fromUtf8(r) : QString();
+        if (r) pier_git_free_string(r);
+        bool ok = !out.contains(QStringLiteral("\"error\""));
+        if (!selfWeak || (cancelFlag && cancelFlag->load())) return;
+        QMetaObject::invokeMethod(selfWeak.data(), "onOpResult", Qt::QueuedConnection,
+            Q_ARG(quint64, requestId), Q_ARG(QString, QStringLiteral("remoteAdd")),
+            Q_ARG(bool, ok), Q_ARG(QString, out));
+    });
+    m_workers.push_back(std::move(w));
+}
+
+void PierGitClient::removeRemote(const QString &name)
+{
+    if (!m_handle || name.isEmpty()) return;
+    const quint64 requestId = ++m_nextRequestId;
+    setBusy(true);
+    QPointer<PierGitClient> selfWeak(this);
+    auto cancelFlag = m_cancelFlag;
+    ::PierGit *h = m_handle;
+    std::string n = name.toStdString();
+    auto w = std::make_unique<std::thread>([selfWeak, cancelFlag, requestId, h, n = std::move(n)]() {
+        char *r = pier_git_remote_remove(h, n.c_str());
+        QString out = r ? QString::fromUtf8(r) : QString();
+        if (r) pier_git_free_string(r);
+        bool ok = !out.contains(QStringLiteral("\"error\""));
+        if (!selfWeak || (cancelFlag && cancelFlag->load())) return;
+        QMetaObject::invokeMethod(selfWeak.data(), "onOpResult", Qt::QueuedConnection,
+            Q_ARG(quint64, requestId), Q_ARG(QString, QStringLiteral("remoteRemove")),
+            Q_ARG(bool, ok), Q_ARG(QString, out));
+    });
+    m_workers.push_back(std::move(w));
+}
+
+// ─── Config ─────────────────────────────────────────────
+
+void PierGitClient::loadConfig()
+{
+    if (!m_handle) return;
+    const quint64 requestId = ++m_nextRequestId;
+    QPointer<PierGitClient> selfWeak(this);
+    auto cancelFlag = m_cancelFlag;
+    ::PierGit *h = m_handle;
+    auto w = std::make_unique<std::thread>([selfWeak, cancelFlag, requestId, h]() {
+        char *json = pier_git_config_list(h);
+        QString result = json ? QString::fromUtf8(json) : QStringLiteral("[]");
+        if (json) pier_git_free_string(json);
+        if (!selfWeak || (cancelFlag && cancelFlag->load())) return;
+        QMetaObject::invokeMethod(selfWeak.data(), "onConfigResult", Qt::QueuedConnection,
+            Q_ARG(quint64, requestId), Q_ARG(QString, result));
+    });
+    m_workers.push_back(std::move(w));
+}
+
+void PierGitClient::onConfigResult(quint64 requestId, const QString &json)
+{
+    if (requestId != m_nextRequestId) return;
+    QJsonDocument doc = QJsonDocument::fromJson(json.toUtf8());
+    QVariantList list;
+    if (doc.isArray()) for (const auto &v : doc.array()) list.append(v.toObject().toVariantMap());
+    m_configEntries = list;
+    emit configChanged();
+}
+
+void PierGitClient::setConfigValue(const QString &key, const QString &value, bool global)
+{
+    if (!m_handle || key.isEmpty()) return;
+    const quint64 requestId = ++m_nextRequestId;
+    setBusy(true);
+    QPointer<PierGitClient> selfWeak(this);
+    auto cancelFlag = m_cancelFlag;
+    ::PierGit *h = m_handle;
+    std::string k = key.toStdString(), v = value.toStdString();
+    int g = global ? 1 : 0;
+    auto w = std::make_unique<std::thread>([selfWeak, cancelFlag, requestId, h, k = std::move(k), v = std::move(v), g]() {
+        char *r = pier_git_config_set(h, k.c_str(), v.c_str(), g);
+        QString out = r ? QString::fromUtf8(r) : QString();
+        if (r) pier_git_free_string(r);
+        bool ok = !out.contains(QStringLiteral("\"error\""));
+        if (!selfWeak || (cancelFlag && cancelFlag->load())) return;
+        QMetaObject::invokeMethod(selfWeak.data(), "onOpResult", Qt::QueuedConnection,
+            Q_ARG(quint64, requestId), Q_ARG(QString, QStringLiteral("configSet")),
+            Q_ARG(bool, ok), Q_ARG(QString, out));
+    });
+    m_workers.push_back(std::move(w));
 }
 
 // ─── Close ──────────────────────────────────────────────

@@ -29,6 +29,13 @@ Rectangle {
     // produce identical PierTerminalSession handles above the
     // M2 `Pty` trait — everything below is backend-agnostic.
     property string backend: "local"
+    property string startupCommand: ""
+    property bool startupCommandSent: false
+
+    // Expose the session so that Main.qml / RightSidebar can read
+    // live SSH context (host, port, user, auth method) directly
+    // from the session's cached Q_PROPERTYs.
+    readonly property PierTerminalSession terminalSession: session
 
     // Default shell is system-dependent. The caller can override this
     // via the `shell` property before the first layout; we only spawn
@@ -97,6 +104,13 @@ Rectangle {
                 && session.status === PierTerminalSession.Connected
                 && detector.state === PierServiceDetector.Idle) {
                 root._kickServiceDetection()
+            }
+            if (root.backend === "local"
+                && session.status === PierTerminalSession.Connected
+                && !root.startupCommandSent
+                && root.startupCommand.length > 0) {
+                root.startupCommandSent = true
+                session.write(root.startupCommand)
             }
         }
     }

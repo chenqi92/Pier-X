@@ -19,6 +19,13 @@ Item {
     // The connections model — wired by Main.qml to the
     // PierConnectionStore instance.
     property var connectionsModel: null
+    readonly property int recentConnectionCount: {
+        if (!root.connectionsModel)
+            return 0
+        if (typeof root.connectionsModel.count === "number")
+            return root.connectionsModel.count
+        return 0
+    }
 
     ColumnLayout {
         anchors.centerIn: parent
@@ -76,7 +83,7 @@ Item {
             Layout.fillWidth: true
             Layout.topMargin: Theme.sp4
             spacing: Theme.sp2
-            visible: root.connectionsModel !== null && root.connectionsModel.count > 0
+            visible: root.recentConnectionCount > 0
 
             Text {
                 text: qsTr("Recent connections")
@@ -97,8 +104,7 @@ Item {
 
                 Repeater {
                     model: {
-                        if (!root.connectionsModel) return 0
-                        return Math.min(root.connectionsModel.count, 6)
+                        return Math.min(root.recentConnectionCount, 6)
                     }
                     delegate: Rectangle {
                         required property int index

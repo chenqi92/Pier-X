@@ -2,8 +2,6 @@ import QtQuick
 import QtQuick.Layouts
 import Pier
 
-// Small segmented control — used where the original Pier UI
-// prefers direct mode switching over a dropdown.
 Rectangle {
     id: root
 
@@ -11,12 +9,12 @@ Rectangle {
     property int currentIndex: 0
     signal activated(int index)
 
-    implicitHeight: 32
-    implicitWidth: segRow.implicitWidth + 6
-    color: Theme.dark ? Theme.bgSurface : Theme.bgPanel
+    implicitHeight: Theme.controlHeight + Theme.sp0_5
+    implicitWidth: segRow.implicitWidth + Theme.sp1
+    color: Theme.bgInset
     border.color: Theme.borderDefault
     border.width: 1
-    radius: Theme.radiusSm
+    radius: Theme.radiusMd
 
     Behavior on color { ColorAnimation { duration: Theme.durNormal } }
     Behavior on border.color { ColorAnimation { duration: Theme.durNormal } }
@@ -24,37 +22,32 @@ Rectangle {
     RowLayout {
         id: segRow
         anchors.fill: parent
-        anchors.margins: 3
-        spacing: 3
+        anchors.margins: Theme.sp0_5
+        spacing: Theme.sp0_5
 
         Repeater {
             model: root.options
 
             delegate: Rectangle {
                 required property var modelData
+                required property int index
 
                 Layout.fillWidth: true
                 Layout.fillHeight: true
-                radius: Theme.radiusSm - 1
+                radius: Theme.radiusSm
                 color: index === root.currentIndex
-                       ? Theme.bgElevated
+                       ? Theme.bgSurface
                        : segArea.containsMouse ? Theme.bgHover : "transparent"
-
-                Behavior on color { ColorAnimation { duration: Theme.durFast } }
+                border.color: index === root.currentIndex ? Theme.borderSubtle : "transparent"
+                border.width: index === root.currentIndex ? 1 : 0
 
                 Text {
                     anchors.centerIn: parent
                     text: modelData
                     font.family: Theme.fontUi
                     font.pixelSize: Theme.sizeBody
-                    font.weight: index === root.currentIndex
-                                 ? Theme.weightMedium
-                                 : Theme.weightRegular
-                    color: index === root.currentIndex
-                           ? Theme.textPrimary
-                           : Theme.textSecondary
-
-                    Behavior on color { ColorAnimation { duration: Theme.durFast } }
+                    font.weight: index === root.currentIndex ? Theme.weightMedium : Theme.weightRegular
+                    color: index === root.currentIndex ? Theme.textPrimary : Theme.textSecondary
                 }
 
                 MouseArea {

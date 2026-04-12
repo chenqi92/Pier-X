@@ -12,9 +12,9 @@ Item {
 
     property bool open: false
     property var connectionsModel: null
-    readonly property int navWidth: 188
+    readonly property int navWidth: 208
     readonly property int pagePadding: 28
-    readonly property int rowLabelWidth: 248
+    readonly property int rowLabelWidth: 224
 
     signal closed
 
@@ -54,8 +54,8 @@ Item {
     Rectangle {
         id: dialog
         anchors.centerIn: parent
-        width: Math.min(920, parent.width - 72)
-        height: Math.min(640, parent.height - 72)
+        width: Math.min(980, parent.width - 72)
+        height: Math.min(700, parent.height - 72)
         scale: 0.96
         opacity: 0
         transformOrigin: Item.Center
@@ -90,8 +90,8 @@ Item {
 
             Rectangle {
                 Layout.fillWidth: true
-                Layout.preferredHeight: 52
-                color: Theme.bgPanel
+                Layout.preferredHeight: Theme.dialogHeaderHeight
+                color: Theme.bgChrome
 
                 RowLayout {
                     anchors.fill: parent
@@ -143,7 +143,7 @@ Item {
                 Rectangle {
                     Layout.preferredWidth: root.navWidth
                     Layout.fillHeight: true
-                    color: Theme.bgPanel
+                    color: Theme.bgChrome
 
                     ListView {
                         id: sectionList
@@ -460,20 +460,43 @@ Item {
                             y: root.pagePadding
                             spacing: Theme.sp4
 
-                            ColumnLayout {
+                            RowLayout {
                                 Layout.fillWidth: true
                                 spacing: Theme.sp2
 
-                                SectionLabel { text: qsTr("Saved connections") }
-
-                                Text {
+                                SectionLabel {
+                                    text: qsTr("Saved connections")
                                     Layout.fillWidth: true
-                                    text: qsTr("Profiles saved here are reused by the sidebar, SFTP browser, and remote service panels.")
-                                    wrapMode: Text.WordWrap
-                                    font.family: Theme.fontUi
-                                    font.pixelSize: Theme.sizeSmall
-                                    color: Theme.textSecondary
                                 }
+
+                                Rectangle {
+                                    visible: root.connectionsModel && root.connectionsModel.count > 0
+                                    implicitHeight: 22
+                                    implicitWidth: countText.implicitWidth + Theme.sp2 * 2
+                                    radius: Theme.radiusPill
+                                    color: Theme.accentSubtle
+                                    border.color: Theme.accentMuted
+                                    border.width: 1
+
+                                    Text {
+                                        id: countText
+                                        anchors.centerIn: parent
+                                        text: qsTr("%1 saved").arg(root.connectionsModel ? root.connectionsModel.count : 0)
+                                        font.family: Theme.fontUi
+                                        font.pixelSize: Theme.sizeSmall
+                                        font.weight: Theme.weightMedium
+                                        color: Theme.accent
+                                    }
+                                }
+                            }
+
+                            Text {
+                                Layout.fillWidth: true
+                                text: qsTr("Profiles saved here are reused by the sidebar, SFTP browser, and remote service panels.")
+                                wrapMode: Text.WordWrap
+                                font.family: Theme.fontUi
+                                font.pixelSize: Theme.sizeSmall
+                                color: Theme.textSecondary
                             }
 
                             Card {
@@ -523,7 +546,9 @@ Item {
                                         required property string credentialId
 
                                         Layout.fillWidth: true
-                                        padding: Theme.sp3
+                                        padding: Theme.sp4
+                                        border.color: Theme.borderDefault
+                                        radius: Theme.radiusLg
 
                                         readonly property string authLabel: usesAgent
                                                 ? qsTr("Agent")
@@ -547,11 +572,30 @@ Item {
 
                                             Rectangle {
                                                 Layout.alignment: Qt.AlignTop
-                                                Layout.topMargin: Theme.sp1
-                                                width: 8
-                                                height: 8
-                                                radius: 4
-                                                color: connectionCard.authTint
+                                                Layout.topMargin: Theme.sp0_5
+                                                width: 22
+                                                height: 22
+                                                radius: Theme.radiusMd
+                                                color: Qt.rgba(connectionCard.authTint.r,
+                                                               connectionCard.authTint.g,
+                                                               connectionCard.authTint.b,
+                                                               Theme.dark ? 0.18 : 0.10)
+                                                border.color: Qt.rgba(connectionCard.authTint.r,
+                                                                      connectionCard.authTint.g,
+                                                                      connectionCard.authTint.b,
+                                                                      Theme.dark ? 0.34 : 0.18)
+                                                border.width: 1
+
+                                                Image {
+                                                    anchors.centerIn: parent
+                                                    source: "qrc:/qt/qml/Pier/resources/icons/lucide/server.svg"
+                                                    sourceSize: Qt.size(14, 14)
+                                                    layer.enabled: true
+                                                    layer.effect: MultiEffect {
+                                                        colorization: 1.0
+                                                        colorizationColor: connectionCard.authTint
+                                                    }
+                                                }
                                             }
 
                                             ColumnLayout {

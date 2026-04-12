@@ -69,6 +69,18 @@ bool PierTerminalSession::start(const QString &shell, int cols, int rows)
     return true;
 }
 
+void PierTerminalSession::clearSshContext()
+{
+    m_sshHost.clear();
+    m_sshPort = 22;
+    m_sshUser.clear();
+    m_sshPassword.clear();
+    m_sshCredentialId.clear();
+    m_sshKeyPath.clear();
+    m_sshPassphraseCredentialId.clear();
+    m_sshUsesAgent = false;
+}
+
 bool PierTerminalSession::startSsh(const QString &host, int port, const QString &user,
                                    const QString &password, int cols, int rows)
 {
@@ -76,6 +88,11 @@ bool PierTerminalSession::startSsh(const QString &host, int port, const QString 
         qWarning() << "startSsh: empty host/user";
         return false;
     }
+    clearSshContext();
+    m_sshHost = host;
+    m_sshPort = port;
+    m_sshUser = user;
+    m_sshPassword = password;
     const QString target = QStringLiteral("%1@%2:%3").arg(user, host).arg(port);
     const uint16_t portU16 = static_cast<uint16_t>(port);
     const uint16_t colsU16 = static_cast<uint16_t>(cols);
@@ -111,6 +128,12 @@ bool PierTerminalSession::startSshWithCredential(const QString &host, int port,
         qWarning() << "startSshWithCredential: empty host/user/credentialId";
         return false;
     }
+    clearSshContext();
+    m_sshHost = host;
+    m_sshPort = port;
+    m_sshUser = user;
+    m_sshCredentialId = credentialId;
+
     const QString target = QStringLiteral("%1@%2:%3").arg(user, host).arg(port);
     const uint16_t portU16 = static_cast<uint16_t>(port);
     const uint16_t colsU16 = static_cast<uint16_t>(cols);
@@ -145,6 +168,13 @@ bool PierTerminalSession::startSshWithKey(const QString &host, int port,
         qWarning() << "startSshWithKey: empty host/user/keyPath";
         return false;
     }
+    clearSshContext();
+    m_sshHost = host;
+    m_sshPort = port;
+    m_sshUser = user;
+    m_sshKeyPath = privateKeyPath;
+    m_sshPassphraseCredentialId = passphraseCredentialId;
+
     const QString target = QStringLiteral("%1@%2:%3").arg(user, host).arg(port);
     const uint16_t portU16 = static_cast<uint16_t>(port);
     const uint16_t colsU16 = static_cast<uint16_t>(cols);
@@ -184,6 +214,12 @@ bool PierTerminalSession::startSshWithAgent(const QString &host, int port,
         qWarning() << "startSshWithAgent: empty host/user";
         return false;
     }
+    clearSshContext();
+    m_sshHost = host;
+    m_sshPort = port;
+    m_sshUser = user;
+    m_sshUsesAgent = true;
+
     const QString target = QStringLiteral("%1@%2:%3").arg(user, host).arg(port);
     const uint16_t portU16 = static_cast<uint16_t>(port);
     const uint16_t colsU16 = static_cast<uint16_t>(cols);
@@ -399,6 +435,7 @@ void PierTerminalSession::stop()
     if (m_status != SshStatus::Idle) {
         m_sshErrorMessage.clear();
         m_sshTarget.clear();
+        clearSshContext();
         setStatus(SshStatus::Idle);
     }
 }

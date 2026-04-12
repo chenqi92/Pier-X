@@ -160,6 +160,41 @@ pub unsafe extern "C" fn pier_services_detect(
     }
 }
 
+/// M3e: run remote service detection on an existing shared
+/// session instead of dialling fresh. Same JSON result
+/// shape as [`pier_services_detect`]; release the returned
+/// string with [`pier_services_free_json`].
+///
+/// # Safety
+///
+/// `session`, if non-null, must be a live handle produced
+/// by [`super::ssh_session::pier_ssh_session_open`].
+#[no_mangle]
+pub unsafe extern "C" fn pier_services_detect_on_session(
+    session: *const super::ssh_session::PierSshSession,
+) -> *mut c_char {
+    if session.is_null() {
+        return ptr::null_mut();
+    }
+    // SAFETY: live handle.
+    let shared = unsafe { &*session };
+    let cloned = shared.session();
+    let services = detect_all_blocking(&cloned);
+    drop(cloned);
+
+    let json = match serde_json::to_string(&services) {
+        Ok(s) => s,
+        Err(e) => {
+            log::warn!("pier_services_detect_on_session serialize failed: {e}");
+            return ptr::null_mut();
+        }
+    };
+    match CString::new(json) {
+        Ok(c) => c.into_raw(),
+        Err(_) => ptr::null_mut(),
+    }
+}
+
 /// Release a JSON string previously returned by
 /// [`pier_services_detect`]. Safe to call with NULL.
 ///

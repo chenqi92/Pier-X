@@ -192,6 +192,50 @@ pub unsafe extern "C" fn pier_sftp_new(
     }))
 }
 
+/// M3e: open a new SFTP channel on an existing shared
+/// session handle instead of building a brand-new session
+/// from auth params. The caller must have already obtained a
+/// `*mut PierSshSession` via
+/// [`super::ssh_session::pier_ssh_session_open`]; we clone
+/// its internal [`SshSession`] (cheap Arc bump), open a
+/// fresh SFTP channel on top, and box the pair.
+///
+/// Dropping the returned handle drops the private clone of
+/// the session — the original `PierSshSession` handle is
+/// unaffected and the underlying russh connection stays
+/// alive as long as any clone remains.
+///
+/// Returns NULL if `session` is null or if the SFTP channel
+/// open fails (e.g. the SFTP subsystem isn't enabled on the
+/// remote).
+///
+/// # Safety
+///
+/// `session`, if non-null, must be a live handle produced by
+/// [`super::ssh_session::pier_ssh_session_open`].
+#[no_mangle]
+pub unsafe extern "C" fn pier_sftp_new_on_session(
+    session: *const super::ssh_session::PierSshSession,
+) -> *mut PierSftp {
+    if session.is_null() {
+        return ptr::null_mut();
+    }
+    // SAFETY: caller contract — live handle.
+    let shared = unsafe { &*session };
+    let cloned = shared.session();
+    let client = match cloned.open_sftp_blocking() {
+        Ok(c) => c,
+        Err(e) => {
+            log::warn!("pier_sftp_new_on_session open_sftp failed: {e}");
+            return ptr::null_mut();
+        }
+    };
+    Box::into_raw(Box::new(PierSftp {
+        _session: cloned,
+        client,
+    }))
+}
+
 /// Release a Rust-owned heap C-string returned by
 /// `pier_sftp_list_dir` or `pier_sftp_canonicalize`.
 /// Safe to call with null.

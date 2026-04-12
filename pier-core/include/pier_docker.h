@@ -64,6 +64,14 @@ PierDocker *pier_docker_open(
     const char *extra     /* NULL unless AUTH_KEY passphrase */
 );
 
+/* M3e: open a Docker panel on an existing shared SSH
+ * session (see pier_ssh_session.h). No auth parameters —
+ * the session is pre-authenticated. The panel clones the
+ * session and drives every subsequent `docker <verb>` exec
+ * through it. */
+struct PierSshSession;
+PierDocker *pier_docker_open_on_session(const struct PierSshSession *session);
+
 /* Release a Docker handle. Safe on NULL. */
 void pier_docker_free(PierDocker *h);
 

@@ -59,6 +59,16 @@ PierLogStream *pier_log_open(
     const char *command
 );
 
+/* M3e: spawn a streaming remote command on an existing
+ * shared SSH session (see pier_ssh_session.h). No auth
+ * parameters — the session is pre-authenticated. Same
+ * drain / free / stop semantics as pier_log_open. */
+struct PierSshSession;
+PierLogStream *pier_log_open_on_session(
+    const struct PierSshSession *session,
+    const char *command
+);
+
 /* Drain every event currently buffered. Returns a heap JSON
  * array of events, or NULL if no events are pending.
  *

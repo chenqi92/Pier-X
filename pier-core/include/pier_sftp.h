@@ -66,6 +66,15 @@ PierSftp *pier_sftp_new(
     const char *extra    /* NULL unless AUTH_KEY passphrase */
 );
 
+/* M3e: open a new SFTP channel on an existing shared SSH
+ * session (see pier_ssh_session.h). Clones the session
+ * internally — the caller keeps ownership of the master
+ * handle and may pass it to any number of panels. Returns
+ * NULL if `session` is null or if the SFTP subsystem
+ * refuses the channel open. */
+struct PierSshSession;
+PierSftp *pier_sftp_new_on_session(const struct PierSshSession *session);
+
 /* Release an SFTP handle. Safe to call with NULL. */
 void pier_sftp_free(PierSftp *t);
 

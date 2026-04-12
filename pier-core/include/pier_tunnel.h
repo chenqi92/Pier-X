@@ -46,6 +46,18 @@ PierTunnel *pier_tunnel_open(
     uint16_t remote_port
 );
 
+/* M3e: open a local port forward on an existing shared SSH
+ * session (see pier_ssh_session.h). No auth parameters —
+ * the session is pre-authenticated. Returns NULL on any
+ * failure. */
+struct PierSshSession;
+PierTunnel *pier_tunnel_open_on_session(
+    const struct PierSshSession *session,
+    uint16_t local_port,       /* 0 = OS picks */
+    const char *remote_host,   /* e.g. "127.0.0.1" */
+    uint16_t remote_port
+);
+
 /* Return the port the listener is actually bound to (same
  * value that was passed in unless local_port was 0). */
 uint16_t pier_tunnel_local_port(const PierTunnel *t);

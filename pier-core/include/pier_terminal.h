@@ -190,6 +190,22 @@ PierTerminal *pier_terminal_new_ssh_credential(
     void *user_data
 );
 
+/* M3e: spawn a terminal session on an existing shared SSH
+ * session (see pier_ssh_session.h). No auth parameters —
+ * the session is pre-authenticated. The same thread-local
+ * last-error channel as the other pier_terminal_new_ssh_*
+ * constructors is used; on NULL return, call
+ * pier_terminal_last_ssh_error on the same thread for
+ * details. */
+struct PierSshSession;
+PierTerminal *pier_terminal_new_ssh_on_session(
+    const struct PierSshSession *session,
+    uint16_t cols,
+    uint16_t rows,
+    PierTerminalNotifyFn notify,
+    void *user_data
+);
+
 /* Spawn a new terminal session backed by a remote SSH shell.
  *
  * Identical handle semantics to pier_terminal_new — the returned

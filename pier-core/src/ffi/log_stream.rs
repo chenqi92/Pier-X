@@ -211,6 +211,45 @@ pub unsafe extern "C" fn pier_log_open(
     }))
 }
 
+/// M3e: spawn a streaming remote command on an existing
+/// shared session instead of dialling fresh. Same behaviour
+/// as [`pier_log_open`] minus the connect + auth; the
+/// session is expected to already be authenticated.
+///
+/// # Safety
+///
+/// `session`, if non-null, must be a live handle produced
+/// by [`super::ssh_session::pier_ssh_session_open`].
+/// `command` must be a valid NUL-terminated UTF-8 C string.
+#[no_mangle]
+pub unsafe extern "C" fn pier_log_open_on_session(
+    session: *const super::ssh_session::PierSshSession,
+    command: *const c_char,
+) -> *mut PierLogStream {
+    if session.is_null() || command.is_null() {
+        return ptr::null_mut();
+    }
+    // SAFETY: caller contract.
+    let command_str = match unsafe { CStr::from_ptr(command) }.to_str() {
+        Ok(s) if !s.is_empty() => s.to_string(),
+        _ => return ptr::null_mut(),
+    };
+    // SAFETY: live handle.
+    let shared = unsafe { &*session };
+    let cloned = shared.session();
+    let stream = match cloned.spawn_exec_stream_blocking(&command_str) {
+        Ok(s) => s,
+        Err(e) => {
+            log::warn!("pier_log_open_on_session exec failed: {e}");
+            return ptr::null_mut();
+        }
+    };
+    Box::into_raw(Box::new(PierLogStream {
+        _stream: stream,
+        _session: cloned,
+    }))
+}
+
 /// Drain every currently available event from `h`. Returns
 /// a heap-allocated JSON array (release with
 /// [`pier_log_free_string`]) or NULL when there are no

@@ -150,6 +150,29 @@ pub unsafe extern "C" fn pier_docker_open(
     Box::into_raw(Box::new(PierDocker { session }))
 }
 
+/// M3e: open a Docker panel on an existing shared session
+/// instead of dialling fresh. The panel clones the session
+/// and drives every subsequent `docker <verb>` exec through
+/// it. Returns NULL if `session` is null.
+///
+/// # Safety
+///
+/// `session`, if non-null, must be a live handle produced
+/// by [`super::ssh_session::pier_ssh_session_open`].
+#[no_mangle]
+pub unsafe extern "C" fn pier_docker_open_on_session(
+    session: *const super::ssh_session::PierSshSession,
+) -> *mut PierDocker {
+    if session.is_null() {
+        return ptr::null_mut();
+    }
+    // SAFETY: live handle.
+    let shared = unsafe { &*session };
+    Box::into_raw(Box::new(PierDocker {
+        session: shared.session(),
+    }))
+}
+
 /// Release a Docker handle. Safe on NULL.
 ///
 /// # Safety

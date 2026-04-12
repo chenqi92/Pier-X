@@ -58,6 +58,12 @@ char *pier_services_detect(
     const char *extra    /* NULL unless AUTH_KEY passphrase */
 );
 
+/* M3e: run service detection on an existing shared SSH
+ * session (see pier_ssh_session.h). Same JSON result shape
+ * as pier_services_detect; release with pier_services_free_json. */
+struct PierSshSession;
+char *pier_services_detect_on_session(const struct PierSshSession *session);
+
 /* Release a JSON string returned by pier_services_detect.
  * Safe to call with NULL. */
 void pier_services_free_json(char *s);

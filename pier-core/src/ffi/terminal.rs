@@ -652,6 +652,71 @@ fn new_ssh_with_auth(
     }
 }
 
+/// M3e: spawn a terminal session on an existing shared SSH
+/// session instead of dialling fresh. The caller must have
+/// already obtained a `*mut PierSshSession` via
+/// [`super::ssh_session::pier_ssh_session_open`]; we clone
+/// its internal [`crate::ssh::SshSession`] (cheap Arc bump),
+/// open a fresh shell channel on top, and box the
+/// [`PierTerminal`].
+///
+/// The same thread-local last-error channel as
+/// [`pier_terminal_new_ssh`] is used — on NULL return the
+/// caller may fetch details via
+/// [`pier_terminal_last_ssh_error`].
+///
+/// Returns NULL if `session` is null, the shell channel
+/// fails to open, or the `PierTerminal` constructor fails.
+///
+/// # Safety
+///
+/// `session`, if non-null, must be a live handle produced
+/// by [`super::ssh_session::pier_ssh_session_open`].
+#[no_mangle]
+pub unsafe extern "C" fn pier_terminal_new_ssh_on_session(
+    session: *const super::ssh_session::PierSshSession,
+    cols: u16,
+    rows: u16,
+    notify: Option<NotifyFn>,
+    user_data: *mut c_void,
+) -> *mut PierTerminal {
+    if session.is_null() {
+        set_last_ssh_error("null session".to_string());
+        return ptr::null_mut();
+    }
+    let Some(notify) = notify else {
+        set_last_ssh_error("null notify callback".to_string());
+        return ptr::null_mut();
+    };
+    // SAFETY: live handle.
+    let shared = unsafe { &*session };
+    let cloned = shared.session();
+
+    let ssh_pty = match cloned.open_shell_channel_blocking(cols, rows) {
+        Ok(p) => p,
+        Err(e) => {
+            let msg = format!("{e}");
+            log::warn!("pier_terminal_new_ssh_on_session open_shell_channel failed: {msg}");
+            set_last_ssh_error(format!("open shell channel failed: {msg}"));
+            return ptr::null_mut();
+        }
+    };
+
+    let boxed: Box<dyn Pty> = Box::new(ssh_pty);
+    match PierTerminal::with_pty(boxed, cols, rows, notify, user_data) {
+        Ok(t) => {
+            clear_last_ssh_error();
+            Box::into_raw(Box::new(t))
+        }
+        Err(e) => {
+            let msg = format!("{e}");
+            log::warn!("pier_terminal_new_ssh_on_session with_pty failed: {msg}");
+            set_last_ssh_error(format!("with_pty failed: {msg}"));
+            ptr::null_mut()
+        }
+    }
+}
+
 /// Return the most recent SSH error message left by
 /// [`pier_terminal_new_ssh`] on *this thread*, or `NULL` if the
 /// last call on this thread succeeded (or no such call has ever

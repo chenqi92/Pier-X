@@ -163,6 +163,52 @@ pub unsafe extern "C" fn pier_tunnel_open(
     }))
 }
 
+/// M3e: open a new local port forward on an existing shared
+/// session instead of dialling fresh. Same semantics as
+/// [`pier_tunnel_open`] minus the auth parameters — the
+/// session is pre-authenticated. Returns NULL if `session`
+/// is null or the forward fails to bind.
+///
+/// # Safety
+///
+/// `session`, if non-null, must be a live handle produced by
+/// [`super::ssh_session::pier_ssh_session_open`].
+/// `remote_host` must be a valid NUL-terminated UTF-8 C
+/// string.
+#[no_mangle]
+pub unsafe extern "C" fn pier_tunnel_open_on_session(
+    session: *const super::ssh_session::PierSshSession,
+    local_port: u16,
+    remote_host: *const c_char,
+    remote_port: u16,
+) -> *mut PierTunnel {
+    if session.is_null() || remote_host.is_null() || remote_port == 0 {
+        return ptr::null_mut();
+    }
+    // SAFETY: caller contract.
+    let remote_host_str = match unsafe { CStr::from_ptr(remote_host) }.to_str() {
+        Ok(s) if !s.is_empty() => s.to_string(),
+        _ => return ptr::null_mut(),
+    };
+    // SAFETY: live handle.
+    let shared = unsafe { &*session };
+    let cloned = shared.session();
+    let tunnel = match cloned.open_local_forward_blocking(local_port, &remote_host_str, remote_port)
+    {
+        Ok(t) => t,
+        Err(e) => {
+            log::warn!("pier_tunnel_open_on_session open_local_forward failed: {e}");
+            return ptr::null_mut();
+        }
+    };
+    let actual_local_port = tunnel.local_port();
+    Box::into_raw(Box::new(PierTunnel {
+        _tunnel: tunnel,
+        _session: cloned,
+        actual_local_port,
+    }))
+}
+
 /// Return the port the tunnel is actually listening on. This
 /// is the same value the caller passed to [`pier_tunnel_open`]
 /// unless they passed `0` and let the OS pick, in which case

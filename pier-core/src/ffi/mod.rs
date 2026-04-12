@@ -47,6 +47,7 @@ pub mod mysql;
 pub mod redis;
 pub mod services;
 pub mod sftp;
+pub mod ssh_session;
 pub mod terminal;
 pub mod tunnel;
 
@@ -61,13 +62,13 @@ pub use self::core::{pier_core_build_info, pier_core_has_feature, pier_core_vers
 pub use self::credentials::{pier_credential_delete, pier_credential_set};
 pub use self::docker::{
     pier_docker_free, pier_docker_free_string, pier_docker_list_containers, pier_docker_open,
-    pier_docker_remove, pier_docker_restart, pier_docker_start, pier_docker_stop, PierDocker,
-    PIER_DOCKER_ERR_FAILED, PIER_DOCKER_ERR_NULL, PIER_DOCKER_ERR_UNSAFE_ID, PIER_DOCKER_ERR_UTF8,
-    PIER_DOCKER_OK,
+    pier_docker_open_on_session, pier_docker_remove, pier_docker_restart, pier_docker_start,
+    pier_docker_stop, PierDocker, PIER_DOCKER_ERR_FAILED, PIER_DOCKER_ERR_NULL,
+    PIER_DOCKER_ERR_UNSAFE_ID, PIER_DOCKER_ERR_UTF8, PIER_DOCKER_OK,
 };
 pub use self::log_stream::{
     pier_log_drain, pier_log_exit_code, pier_log_free, pier_log_free_string, pier_log_is_alive,
-    pier_log_open, pier_log_stop, PierLogStream,
+    pier_log_open, pier_log_open_on_session, pier_log_stop, PierLogStream,
 };
 pub use self::markdown::{
     pier_markdown_free_string, pier_markdown_load_html, pier_markdown_load_source,
@@ -81,19 +82,27 @@ pub use self::redis::{
     pier_redis_free, pier_redis_free_string, pier_redis_info, pier_redis_inspect, pier_redis_open,
     pier_redis_ping, pier_redis_scan_keys, PierRedis,
 };
-pub use self::services::{pier_services_detect, pier_services_free_json};
+pub use self::services::{
+    pier_services_detect, pier_services_detect_on_session, pier_services_free_json,
+};
+pub use self::ssh_session::{
+    pier_ssh_session_free, pier_ssh_session_is_alive, pier_ssh_session_last_error,
+    pier_ssh_session_last_error_kind, pier_ssh_session_open, pier_ssh_session_refcount,
+    PierSshSession,
+};
 pub use self::tunnel::{
-    pier_tunnel_free, pier_tunnel_is_alive, pier_tunnel_local_port, pier_tunnel_open, PierTunnel,
+    pier_tunnel_free, pier_tunnel_is_alive, pier_tunnel_local_port, pier_tunnel_open,
+    pier_tunnel_open_on_session, PierTunnel,
 };
 pub use self::sftp::{
     pier_sftp_canonicalize, pier_sftp_free, pier_sftp_free_string, pier_sftp_list_dir,
-    pier_sftp_mkdir, pier_sftp_new, pier_sftp_remove_dir, pier_sftp_remove_file,
-    pier_sftp_rename, PierSftp, PIER_AUTH_AGENT, PIER_AUTH_CREDENTIAL, PIER_AUTH_KEY,
-    PIER_AUTH_PASSWORD,
+    pier_sftp_mkdir, pier_sftp_new, pier_sftp_new_on_session, pier_sftp_remove_dir,
+    pier_sftp_remove_file, pier_sftp_rename, PierSftp, PIER_AUTH_AGENT, PIER_AUTH_CREDENTIAL,
+    PIER_AUTH_KEY, PIER_AUTH_PASSWORD,
 };
 pub use self::terminal::{
     pier_terminal_free, pier_terminal_is_alive, pier_terminal_last_ssh_error, pier_terminal_new,
     pier_terminal_new_ssh, pier_terminal_new_ssh_agent, pier_terminal_new_ssh_credential,
-    pier_terminal_new_ssh_key, pier_terminal_resize, pier_terminal_snapshot, pier_terminal_write,
-    PierCell, PierGridInfo,
+    pier_terminal_new_ssh_key, pier_terminal_new_ssh_on_session, pier_terminal_resize,
+    pier_terminal_snapshot, pier_terminal_write, PierCell, PierGridInfo,
 };

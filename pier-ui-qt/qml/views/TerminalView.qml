@@ -251,6 +251,67 @@ Rectangle {
                             Behavior on color { ColorAnimation { duration: Theme.durNormal } }
                         }
 
+                        // M5a: a "▸" launcher chip that opens
+                        // a per-service browser tab pointing at
+                        // the local tunnel port. Only shown for
+                        // services we have a panel for (just
+                        // Redis today), and only while the
+                        // tunnel is actually open. Sits inside
+                        // pillRow so its own MouseArea wins
+                        // over pillMouse for this region.
+                        Rectangle {
+                            id: launcherChip
+                            visible: pill.tunneled
+                                     && pill.name === "redis"
+                            anchors.verticalCenter: parent.verticalCenter
+                            implicitWidth: launcherText.implicitWidth + Theme.sp2 * 2
+                            implicitHeight: 16
+                            radius: Theme.radiusSm
+                            color: launcherMouse.containsMouse
+                                   ? Theme.accent
+                                   : "transparent"
+                            border.color: Theme.accent
+                            border.width: 1
+
+                            Behavior on color        { ColorAnimation { duration: Theme.durFast } }
+                            Behavior on border.color { ColorAnimation { duration: Theme.durNormal } }
+
+                            Text {
+                                id: launcherText
+                                anchors.centerIn: parent
+                                text: qsTr("Open ▸")
+                                font.family: Theme.fontUi
+                                font.pixelSize: Theme.sizeCaption
+                                font.weight: Theme.weightMedium
+                                color: launcherMouse.containsMouse
+                                       ? Theme.bgCanvas
+                                       : Theme.accent
+
+                                Behavior on color { ColorAnimation { duration: Theme.durFast } }
+                            }
+
+                            MouseArea {
+                                id: launcherMouse
+                                anchors.fill: parent
+                                hoverEnabled: true
+                                cursorShape: Qt.PointingHandCursor
+                                onClicked: {
+                                    // Bubble through Main.qml's
+                                    // openRedisTab rather than
+                                    // calling the model directly
+                                    // — keeps the tab-creation
+                                    // logic in one place.
+                                    var label = pill.name
+                                                + " @ " + root.sshHost
+                                    window.openRedisTab(
+                                        "127.0.0.1",
+                                        tunnel.localPort,
+                                        0,
+                                        label)
+                                }
+                            }
+                        }
+
                         // Tiny spinner when the tunnel is
                         // being opened. Reuse the "…" glyph
                         // to keep things zero-dependency for

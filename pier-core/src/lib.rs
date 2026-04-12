@@ -21,6 +21,7 @@ pub mod connections;
 pub mod credentials;
 pub mod ffi;
 pub mod paths;
+pub mod services;
 pub mod ssh;
 pub mod terminal;
 

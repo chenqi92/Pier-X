@@ -80,7 +80,10 @@ ApplicationWindow {
             sshCredentialId: "",
             sshKeyPath: "",
             sshPassphraseCredentialId: "",
-            sshUsesAgent: false
+            sshUsesAgent: false,
+            redisHost: "",
+            redisPort: 0,
+            redisDb: 0
         }
     }
 
@@ -95,7 +98,10 @@ ApplicationWindow {
             sshCredentialId: conn.credentialId || "",
             sshKeyPath: conn.keyPath || "",
             sshPassphraseCredentialId: conn.passphraseCredentialId || "",
-            sshUsesAgent: conn.usesAgent === true
+            sshUsesAgent: conn.usesAgent === true,
+            redisHost: "",
+            redisPort: 0,
+            redisDb: 0
         }
     }
 
@@ -113,8 +119,39 @@ ApplicationWindow {
             sshCredentialId: conn.credentialId || "",
             sshKeyPath: conn.keyPath || "",
             sshPassphraseCredentialId: conn.passphraseCredentialId || "",
-            sshUsesAgent: conn.usesAgent === true
+            sshUsesAgent: conn.usesAgent === true,
+            redisHost: "",
+            redisPort: 0,
+            redisDb: 0
         }
+    }
+
+    // Redis tab row — M5a per-service panel. Connects to a
+    // plain TCP endpoint (typically the local side of an SSH
+    // tunnel, e.g. 127.0.0.1:16379). No SSH auth — the
+    // encryption is already provided by the tunnel that opened
+    // the port.
+    function _makeRedisRow(host, port, db, label) {
+        return {
+            title: qsTr("⧉ %1").arg(label),
+            backend: "redis",
+            sshHost: "",
+            sshPort: 22,
+            sshUser: "",
+            sshPassword: "",
+            sshCredentialId: "",
+            sshKeyPath: "",
+            sshPassphraseCredentialId: "",
+            sshUsesAgent: false,
+            redisHost: host,
+            redisPort: port,
+            redisDb: db
+        }
+    }
+
+    function openRedisTab(host, port, db, label) {
+        tabModel.append(_makeRedisRow(host, port, db, label || (host + ":" + port)))
+        currentTabIndex = tabModel.count - 1
     }
 
     function openSftpTab(conn) {
@@ -379,13 +416,13 @@ ApplicationWindow {
                             model: tabModel
                             delegate: Loader {
                                 // Pick the view class by
-                                // backend. Both TerminalView
-                                // and SftpBrowserView have
-                                // the same ssh* property
-                                // shape, so the delegate just
-                                // copies every model field
-                                // through regardless of which
-                                // class the Loader ends up
+                                // backend. TerminalView /
+                                // SftpBrowserView / RedisBrowserView
+                                // each bind a disjoint set of
+                                // model fields; the delegate
+                                // copies every field through
+                                // regardless of which class
+                                // the Loader ends up
                                 // instantiating.
                                 required property string backend
                                 required property string sshHost
@@ -396,10 +433,15 @@ ApplicationWindow {
                                 required property string sshKeyPath
                                 required property string sshPassphraseCredentialId
                                 required property bool   sshUsesAgent
+                                required property string redisHost
+                                required property int    redisPort
+                                required property int    redisDb
 
                                 sourceComponent: backend === "sftp"
                                                  ? sftpComp
-                                                 : terminalComp
+                                                 : (backend === "redis"
+                                                    ? redisComp
+                                                    : terminalComp)
 
                                 Component {
                                     id: terminalComp
@@ -426,6 +468,14 @@ ApplicationWindow {
                                         sshKeyPath: parent.sshKeyPath
                                         sshPassphraseCredentialId: parent.sshPassphraseCredentialId
                                         sshUsesAgent: parent.sshUsesAgent
+                                    }
+                                }
+                                Component {
+                                    id: redisComp
+                                    RedisBrowserView {
+                                        redisHost: parent.redisHost
+                                        redisPort: parent.redisPort
+                                        redisDb: parent.redisDb
                                     }
                                 }
                             }

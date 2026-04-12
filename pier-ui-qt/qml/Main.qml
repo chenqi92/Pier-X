@@ -83,7 +83,8 @@ ApplicationWindow {
             sshUsesAgent: false,
             redisHost: "",
             redisPort: 0,
-            redisDb: 0
+            redisDb: 0,
+            logCommand: ""
         }
     }
 
@@ -101,7 +102,8 @@ ApplicationWindow {
             sshUsesAgent: conn.usesAgent === true,
             redisHost: "",
             redisPort: 0,
-            redisDb: 0
+            redisDb: 0,
+            logCommand: ""
         }
     }
 
@@ -122,7 +124,8 @@ ApplicationWindow {
             sshUsesAgent: conn.usesAgent === true,
             redisHost: "",
             redisPort: 0,
-            redisDb: 0
+            redisDb: 0,
+            logCommand: ""
         }
     }
 
@@ -145,13 +148,55 @@ ApplicationWindow {
             sshUsesAgent: false,
             redisHost: host,
             redisPort: port,
-            redisDb: db
+            redisDb: db,
+            logCommand: ""
         }
     }
 
     function openRedisTab(host, port, db, label) {
         tabModel.append(_makeRedisRow(host, port, db, label || (host + ":" + port)))
         currentTabIndex = tabModel.count - 1
+    }
+
+    // Log viewer tab row — M5b per-service panel. Uses the
+    // same SSH field shape as an ssh/sftp tab (the log stream
+    // connects via its own SshSession under the hood) and
+    // carries the remote `command` to exec in the logCommand
+    // field.
+    function _makeLogRow(conn, command, label) {
+        return {
+            title: qsTr("Log: %1").arg(label || conn.name),
+            backend: "log",
+            sshHost: conn.host,
+            sshPort: conn.port,
+            sshUser: conn.username,
+            sshPassword: conn.password || "",
+            sshCredentialId: conn.credentialId || "",
+            sshKeyPath: conn.keyPath || "",
+            sshPassphraseCredentialId: conn.passphraseCredentialId || "",
+            sshUsesAgent: conn.usesAgent === true,
+            redisHost: "",
+            redisPort: 0,
+            redisDb: 0,
+            logCommand: command
+        }
+    }
+
+    function openLogTab(conn, command, label) {
+        tabModel.append(_makeLogRow(conn, command, label))
+        currentTabIndex = tabModel.count - 1
+    }
+
+    // Quick entry: tail syslog on the saved connection at
+    // `index`. Used by the command palette; a sidebar context
+    // menu will grow more options later.
+    function openLogForConnection(index, command) {
+        if (index < 0 || index >= connectionsModel.count)
+            return
+        const conn = connectionsModel.get(index)
+        if (!conn) return
+        openLogTab(conn, command || "tail -f /var/log/syslog",
+                   command ? conn.name : "syslog")
     }
 
     function openSftpTab(conn) {
@@ -436,12 +481,15 @@ ApplicationWindow {
                                 required property string redisHost
                                 required property int    redisPort
                                 required property int    redisDb
+                                required property string logCommand
 
                                 sourceComponent: backend === "sftp"
                                                  ? sftpComp
                                                  : (backend === "redis"
                                                     ? redisComp
-                                                    : terminalComp)
+                                                    : (backend === "log"
+                                                       ? logComp
+                                                       : terminalComp))
 
                                 Component {
                                     id: terminalComp
@@ -476,6 +524,20 @@ ApplicationWindow {
                                         redisHost: parent.redisHost
                                         redisPort: parent.redisPort
                                         redisDb: parent.redisDb
+                                    }
+                                }
+                                Component {
+                                    id: logComp
+                                    LogViewerView {
+                                        sshHost: parent.sshHost
+                                        sshPort: parent.sshPort
+                                        sshUser: parent.sshUser
+                                        sshPassword: parent.sshPassword
+                                        sshCredentialId: parent.sshCredentialId
+                                        sshKeyPath: parent.sshKeyPath
+                                        sshPassphraseCredentialId: parent.sshPassphraseCredentialId
+                                        sshUsesAgent: parent.sshUsesAgent
+                                        logCommand: parent.logCommand
                                     }
                                 }
                             }
@@ -536,6 +598,22 @@ ApplicationWindow {
                         window.openSftpForConnection(0)
                     } else {
                         console.warn("No saved connections to browse.")
+                    }
+                }
+            },
+            {
+                title: qsTr("Tail syslog (first saved connection)"),
+                shortcut: "",
+                action: function() {
+                    // M5b smoke-test hook: opens a Log viewer
+                    // tab that runs `tail -f /var/log/syslog`
+                    // on the first saved SSH connection. A
+                    // richer picker + custom-command form lands
+                    // when the palette grows sub-lists.
+                    if (connectionsModel.count > 0) {
+                        window.openLogForConnection(0, "")
+                    } else {
+                        console.warn("No saved connections to tail.")
                     }
                 }
             },

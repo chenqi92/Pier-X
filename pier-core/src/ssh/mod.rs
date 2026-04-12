@@ -51,6 +51,7 @@
 pub mod channel;
 pub mod config;
 pub mod error;
+pub mod exec_stream;
 pub mod known_hosts;
 pub mod runtime;
 pub mod service_detector;
@@ -61,6 +62,7 @@ pub mod tunnel;
 pub use channel::SshChannelPty;
 pub use config::{AuthMethod, SshConfig};
 pub use error::SshError;
+pub use exec_stream::{ExecEvent, ExecStream, EXIT_UNKNOWN};
 pub use known_hosts::HostKeyVerifier;
 pub use service_detector::{detect_all, detect_all_blocking, DetectedService, ServiceStatus};
 pub use session::SshSession;

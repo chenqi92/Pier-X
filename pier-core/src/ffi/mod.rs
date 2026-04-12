@@ -40,6 +40,7 @@
 pub mod connections;
 pub mod core;
 pub mod credentials;
+pub mod log_stream;
 pub mod redis;
 pub mod services;
 pub mod sftp;
@@ -55,6 +56,10 @@ pub use self::connections::{
 };
 pub use self::core::{pier_core_build_info, pier_core_has_feature, pier_core_version};
 pub use self::credentials::{pier_credential_delete, pier_credential_set};
+pub use self::log_stream::{
+    pier_log_drain, pier_log_exit_code, pier_log_free, pier_log_free_string, pier_log_is_alive,
+    pier_log_open, pier_log_stop, PierLogStream,
+};
 pub use self::redis::{
     pier_redis_free, pier_redis_free_string, pier_redis_info, pier_redis_inspect, pier_redis_open,
     pier_redis_ping, pier_redis_scan_keys, PierRedis,

@@ -49,6 +49,8 @@ qt_add_qml_module(pier-x
         src/PierTunnel.cpp
         src/PierRedisClient.h
         src/PierRedisClient.cpp
+        src/PierLogStream.h
+        src/PierLogStream.cpp
     QML_FILES
         qml/Main.qml
         qml/Theme.qml
@@ -74,6 +76,7 @@ qt_add_qml_module(pier-x
         qml/views/TerminalView.qml
         qml/views/SftpBrowserView.qml
         qml/views/RedisBrowserView.qml
+        qml/views/LogViewerView.qml
     RESOURCES
         resources/icons/pier.png
 )

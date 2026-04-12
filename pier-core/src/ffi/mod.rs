@@ -46,6 +46,7 @@ pub mod markdown;
 pub mod mysql;
 pub mod postgres;
 pub mod redis;
+pub mod server_monitor;
 pub mod services;
 pub mod sftp;
 pub mod ssh_session;
@@ -85,6 +86,10 @@ pub use self::postgres::{
     pier_postgres_execute, pier_postgres_free, pier_postgres_free_string,
     pier_postgres_list_columns, pier_postgres_list_databases, pier_postgres_list_tables,
     pier_postgres_open, PierPostgres,
+};
+pub use self::server_monitor::{
+    pier_server_monitor_free, pier_server_monitor_free_string, pier_server_monitor_open,
+    pier_server_monitor_open_on_session, pier_server_monitor_probe, PierServerMonitor,
 };
 pub use self::redis::{
     pier_redis_free, pier_redis_free_string, pier_redis_info, pier_redis_inspect, pier_redis_open,

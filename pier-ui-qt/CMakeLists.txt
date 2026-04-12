@@ -76,6 +76,8 @@ qt_add_qml_module(pier-x
         src/PierMySqlWorkspace.cpp
         src/PierPostgresClient.h
         src/PierPostgresClient.cpp
+        src/PierServerMonitor.h
+        src/PierServerMonitor.cpp
     QML_FILES
         qml/Main.qml
         qml/Theme.qml
@@ -108,6 +110,7 @@ qt_add_qml_module(pier-x
         qml/views/LogViewerView.qml
         qml/views/DockerPanelView.qml
         qml/views/MarkdownPreviewView.qml
+        qml/views/ServerMonitorView.qml
     RESOURCES
         resources/icons/pier.png
 )

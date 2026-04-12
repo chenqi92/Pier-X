@@ -95,7 +95,8 @@ ApplicationWindow {
             pgHost: "",
             pgPort: 5432,
             pgUser: "",
-            pgDatabase: ""
+            pgDatabase: "",
+            monitorEnabled: false
         }
     }
 
@@ -124,7 +125,8 @@ ApplicationWindow {
             pgHost: "",
             pgPort: 5432,
             pgUser: "",
-            pgDatabase: ""
+            pgDatabase: "",
+            monitorEnabled: false
         }
     }
 
@@ -156,7 +158,8 @@ ApplicationWindow {
             pgHost: "",
             pgPort: 5432,
             pgUser: "",
-            pgDatabase: ""
+            pgDatabase: "",
+            monitorEnabled: false
         }
     }
 
@@ -190,7 +193,8 @@ ApplicationWindow {
             pgHost: "",
             pgPort: 5432,
             pgUser: "",
-            pgDatabase: ""
+            pgDatabase: "",
+            monitorEnabled: false
         }
     }
 
@@ -229,7 +233,8 @@ ApplicationWindow {
             pgHost: "",
             pgPort: 5432,
             pgUser: "",
-            pgDatabase: ""
+            pgDatabase: "",
+            monitorEnabled: false
         }
     }
 
@@ -280,7 +285,8 @@ ApplicationWindow {
             pgHost: "",
             pgPort: 5432,
             pgUser: "",
-            pgDatabase: ""
+            pgDatabase: "",
+            monitorEnabled: false
         }
     }
 
@@ -331,7 +337,8 @@ ApplicationWindow {
             pgHost: "",
             pgPort: 5432,
             pgUser: "",
-            pgDatabase: ""
+            pgDatabase: "",
+            monitorEnabled: false
         }
     }
 
@@ -372,7 +379,8 @@ ApplicationWindow {
             pgHost: "",
             pgPort: 5432,
             pgUser: "",
-            pgDatabase: ""
+            pgDatabase: "",
+            monitorEnabled: false
         }
     }
 
@@ -414,6 +422,49 @@ ApplicationWindow {
     function openPostgresTab(host, port, user, password, database, label) {
         tabModel.append(_makePostgresRow(host, port, user, password, database, label))
         currentTabIndex = tabModel.count - 1
+    }
+
+    // Server monitor tab row — M7b.
+    function _makeMonitorRow(conn) {
+        return {
+            title: qsTr("Monitor: %1").arg(conn.name),
+            backend: "monitor",
+            sshHost: conn.host,
+            sshPort: conn.port,
+            sshUser: conn.username,
+            sshPassword: conn.password || "",
+            sshCredentialId: conn.credentialId || "",
+            sshKeyPath: conn.keyPath || "",
+            sshPassphraseCredentialId: conn.passphraseCredentialId || "",
+            sshUsesAgent: conn.usesAgent === true,
+            redisHost: "",
+            redisPort: 0,
+            redisDb: 0,
+            logCommand: "",
+            markdownPath: "",
+            mysqlHost: "",
+            mysqlPort: 3306,
+            mysqlUser: "",
+            mysqlPassword: "",
+            mysqlDatabase: "",
+            pgHost: "",
+            pgPort: 5432,
+            pgUser: "",
+            pgDatabase: "",
+            monitorEnabled: true
+        }
+    }
+
+    function openMonitorTab(conn) {
+        tabModel.append(_makeMonitorRow(conn))
+        currentTabIndex = tabModel.count - 1
+    }
+
+    function openMonitorForConnection(index) {
+        if (index < 0 || index >= connectionsModel.count) return
+        const conn = connectionsModel.get(index)
+        if (!conn) return
+        openMonitorTab(conn)
     }
 
     function openSftpTab(conn) {
@@ -745,6 +796,7 @@ ApplicationWindow {
                                 required property int    pgPort
                                 required property string pgUser
                                 required property string pgDatabase
+                                required property bool   monitorEnabled
 
                                 sourceComponent: backend === "sftp"
                                                  ? sftpComp
@@ -760,7 +812,9 @@ ApplicationWindow {
                                                                 ? mysqlComp
                                                                 : (backend === "postgres"
                                                                    ? postgresComp
-                                                                   : terminalComp))))))
+                                                                   : (backend === "monitor"
+                                                                      ? monitorComp
+                                                                      : terminalComp)))))))
 
                                 Component {
                                     id: terminalComp
@@ -847,6 +901,19 @@ ApplicationWindow {
                                         pgPort: parent.pgPort
                                         pgUser: parent.pgUser
                                         pgDatabase: parent.pgDatabase
+                                    }
+                                }
+                                Component {
+                                    id: monitorComp
+                                    ServerMonitorView {
+                                        sshHost: parent.sshHost
+                                        sshPort: parent.sshPort
+                                        sshUser: parent.sshUser
+                                        sshPassword: parent.sshPassword
+                                        sshCredentialId: parent.sshCredentialId
+                                        sshKeyPath: parent.sshKeyPath
+                                        sshPassphraseCredentialId: parent.sshPassphraseCredentialId
+                                        sshUsesAgent: parent.sshUsesAgent
                                     }
                                 }
                             }
@@ -990,6 +1057,17 @@ ApplicationWindow {
                 shortcut: "",
                 action: function() {
                     window.openPostgresTab("127.0.0.1", 15432, "postgres", "", "", "")
+                }
+            },
+            {
+                title: qsTr("Server monitor (first saved connection)"),
+                shortcut: "",
+                action: function() {
+                    if (connectionsModel.count > 0) {
+                        window.openMonitorForConnection(0)
+                    } else {
+                        console.warn("No saved connections for monitor.")
+                    }
                 }
             },
             {

@@ -38,3 +38,4 @@ pub mod docker;
 pub mod mysql;
 pub mod postgres;
 pub mod redis;
+pub mod server_monitor;

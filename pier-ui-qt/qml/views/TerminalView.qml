@@ -108,6 +108,15 @@ Rectangle {
         id: detector
     }
 
+    Connections {
+        target: window
+        function onWriteToActiveTerminal(text) {
+            if (root.visible && session.running) {
+                session.write(text)
+            }
+        }
+    }
+
     function _kickServiceDetection() {
         if (root.sshHost.length === 0 || root.sshUser.length === 0) return
         var kind = 0
@@ -317,39 +326,26 @@ Rectangle {
                                 onClicked: {
                                     // Bubble through Main.qml rather
                                     // than calling the model directly
-                                    // — keeps tab-creation logic in
+                                    // — keeps component binding logic in
                                     // one place. M5d adds the MySQL
                                     // dispatch alongside the existing
                                     // Redis one.
-                                    var label = pill.name
-                                                + " @ " + root.sshHost
                                     if (pill.name === "redis") {
-                                        window.openRedisTab(
-                                            "127.0.0.1",
-                                            tunnel.localPort,
-                                            0,
-                                            label)
+                                        window.toggleRightPanelTool("redis", { 
+                                            redisHost: "127.0.0.1", 
+                                            redisPort: tunnel.localPort, 
+                                            redisDb: 0 
+                                        })
                                     } else if (pill.name === "mysql") {
-                                        window.openMysqlTab(
-                                            "127.0.0.1",
-                                            tunnel.localPort,
-                                            "",
-                                            "",
-                                            "",
-                                            label)
+                                        window.toggleRightPanelTool("mysql", { 
+                                            mysqlHost: "127.0.0.1", 
+                                            mysqlPort: tunnel.localPort, 
+                                            mysqlUser: "", 
+                                            mysqlPassword: "", 
+                                            mysqlDatabase: "" 
+                                        })
                                     } else if (pill.name === "docker") {
-                                        var conn = {
-                                            name: root.sshUser + "@" + root.sshHost,
-                                            host: root.sshHost,
-                                            port: root.sshPort,
-                                            username: root.sshUser,
-                                            password: root.sshPassword,
-                                            credentialId: root.sshCredentialId,
-                                            keyPath: root.sshKeyPath,
-                                            passphraseCredentialId: root.sshPassphraseCredentialId,
-                                            usesAgent: root.sshUsesAgent
-                                        }
-                                        window.openDockerTab(conn)
+                                        window.toggleRightPanelTool("docker")
                                     }
                                 }
                             }
@@ -528,12 +524,31 @@ Rectangle {
             }
         }
 
+        property string hoveredUrl: ""
+
         MouseArea {
             anchors.fill: parent
             acceptedButtons: Qt.LeftButton
-            // Clicking the grid gives keyboard focus back to the
-            // root so the Keys handler receives events again.
-            onClicked: root.forceActiveFocus()
+            hoverEnabled: true
+
+            cursorShape: grid.hoveredUrl.length > 0 ? Qt.PointingHandCursor : Qt.IBeamCursor
+
+            onPositionChanged: (mouse) => {
+                var url = grid.urlAt(mouse.x, mouse.y)
+                if (url !== grid.hoveredUrl) {
+                    grid.hoveredUrl = url
+                }
+            }
+
+            onClicked: (mouse) => {
+                if (grid.hoveredUrl.length > 0) {
+                    Qt.openUrlExternally(grid.hoveredUrl)
+                } else {
+                    // Clicking the grid gives keyboard focus back to the
+                    // root so the Keys handler receives events again.
+                    root.forceActiveFocus()
+                }
+            }
         }
     }
 
@@ -789,8 +804,12 @@ Rectangle {
             session.write("\x1b[3~")
             break
         default:
+            // Let Ctrl+R / Meta+R bubble up to global shortcuts for CommandHistoryDialog
+            if ((event.modifiers & (Qt.ControlModifier | Qt.MetaModifier)) && event.key === Qt.Key_R) {
+                handled = false
+            }
             // Ctrl+letter → corresponding control character.
-            if ((event.modifiers & Qt.ControlModifier) && event.key >= Qt.Key_A && event.key <= Qt.Key_Z) {
+            else if ((event.modifiers & Qt.ControlModifier) && event.key >= Qt.Key_A && event.key <= Qt.Key_Z) {
                 var code = (event.key - Qt.Key_A) + 1
                 session.write(String.fromCharCode(code))
             } else if (event.text.length > 0) {

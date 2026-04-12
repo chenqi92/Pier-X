@@ -42,4 +42,7 @@ public:
 
     // Returns true if pier-core was built with the named feature.
     Q_INVOKABLE bool hasFeature(const QString &name) const;
+
+    // Returns combined local shell history (~/.zsh_history, ~/.bash_history).
+    Q_INVOKABLE QStringList localHistory() const;
 };

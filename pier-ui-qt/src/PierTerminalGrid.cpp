@@ -5,6 +5,7 @@
 
 #include <QFontMetricsF>
 #include <QPainter>
+#include <QRegularExpression>
 
 namespace {
 
@@ -258,4 +259,51 @@ void PierTerminalGrid::paint(QPainter *painter)
             QRectF(cx * m_cellWidth, cy * m_cellHeight, m_cellWidth, m_cellHeight),
             QColor(m_defaultFg.red(), m_defaultFg.green(), m_defaultFg.blue(), 140));
     }
+}
+
+QString PierTerminalGrid::urlAt(qreal x, qreal y) const
+{
+    if (!m_session || m_cellWidth <= 0 || m_cellHeight <= 0) {
+        return QString();
+    }
+
+    int cols = 0;
+    int rows = 0;
+    const PierCell *cells = m_session->rawCells(&cols, &rows);
+    if (!cells || cols <= 0 || rows <= 0) {
+        return QString();
+    }
+
+    const int col = static_cast<int>(x / m_cellWidth);
+    const int row = static_cast<int>(y / m_cellHeight);
+
+    if (col < 0 || col >= cols || row < 0 || row >= rows) {
+        return QString();
+    }
+
+    // Extract the full text of the line
+    QString lineText;
+    lineText.reserve(cols);
+    for (int c = 0; c < cols; ++c) {
+        uint32_t ch = cells[row * cols + c].ch;
+        if (ch == 0) {
+            lineText.append(QLatin1Char(' '));
+        } else {
+            lineText.append(QChar(static_cast<char32_t>(ch)));
+        }
+    }
+
+    // Match HTTP/HTTPS URLs flexibly
+    // Simplistic regex matching http:// or https:// followed by non-whitespace/quotes/brackets
+    static const QRegularExpression urlRegex("https?://[^\\s\"'<>]+");
+
+    QRegularExpressionMatchIterator i = urlRegex.globalMatch(lineText);
+    while (i.hasNext()) {
+        QRegularExpressionMatch match = i.next();
+        if (col >= match.capturedStart() && col < match.capturedEnd()) {
+            return match.captured(0);
+        }
+    }
+
+    return QString();
 }

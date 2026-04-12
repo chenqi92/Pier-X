@@ -74,10 +74,6 @@ qt_add_qml_module(pier-x
         src/PierMySqlClient.cpp
         src/PierMySqlWorkspace.h
         src/PierMySqlWorkspace.cpp
-        src/PierPostgresClient.h
-        src/PierPostgresClient.cpp
-        src/PierServerMonitor.h
-        src/PierServerMonitor.cpp
     QML_FILES
         qml/Main.qml
         qml/Theme.qml
@@ -100,19 +96,38 @@ qt_add_qml_module(pier-x
         qml/shell/StatusBar.qml
         qml/shell/WelcomeView.qml
         qml/shell/CommandPalette.qml
+        qml/shell/RightPanel.qml
         qml/dialogs/NewConnectionDialog.qml
         qml/dialogs/SettingsDialog.qml
+        qml/dialogs/CommandHistoryDialog.qml
         qml/views/TerminalView.qml
         qml/views/SftpBrowserView.qml
         qml/views/RedisBrowserView.qml
         qml/views/MySqlBrowserView.qml
-        qml/views/PostgresPanelView.qml
         qml/views/LogViewerView.qml
         qml/views/DockerPanelView.qml
         qml/views/MarkdownPreviewView.qml
-        qml/views/ServerMonitorView.qml
     RESOURCES
         resources/icons/pier.png
+        resources/icons/lucide/chevron-down.svg
+        resources/icons/lucide/terminal.svg
+        resources/icons/lucide/file-text.svg
+        resources/icons/lucide/x.svg
+        resources/icons/lucide/refresh-cw.svg
+        resources/icons/lucide/link.svg
+        resources/icons/lucide/settings.svg
+        resources/icons/lucide/plus.svg
+        resources/icons/lucide/loader.svg
+        resources/icons/lucide/sun.svg
+        resources/icons/lucide/command.svg
+        resources/icons/lucide/arrow-left.svg
+        resources/icons/lucide/folder.svg
+        resources/icons/lucide/moon.svg
+        resources/fonts/Inter-Medium.ttf
+        resources/fonts/JetBrainsMono-Regular.ttf
+        resources/fonts/Inter-Regular.ttf
+        resources/fonts/JetBrainsMono-Medium.ttf
+        resources/fonts/Inter-SemiBold.ttf
 )
 
 # ─── i18n ─────────────────────────────────────────────

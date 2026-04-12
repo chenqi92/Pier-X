@@ -90,19 +90,22 @@ Item {
                 Layout.fillWidth: true
             }
 
-            GhostButton {
-                text: qsTr("Home")
+            IconButton {
+                icon: "folder"
+                tooltip: qsTr("Home")
                 onClicked: root.currentPath = root.homePath
             }
 
-            GhostButton {
-                text: qsTr("Up")
+            IconButton {
+                icon: "arrow-left"
+                tooltip: qsTr("Up")
                 enabled: root.currentPath.length > 1
                 onClicked: root._goUp()
             }
 
-            GhostButton {
-                text: qsTr("Terminal")
+            IconButton {
+                icon: "terminal"
+                tooltip: qsTr("Terminal")
                 onClicked: root.openTerminalRequested()
             }
         }
@@ -167,26 +170,17 @@ Item {
                     anchors.rightMargin: Theme.sp2
                     spacing: Theme.sp2
 
-                    Rectangle {
-                        Layout.preferredWidth: typeLabel.implicitWidth + Theme.sp2 * 2
-                        Layout.preferredHeight: 18
-                        radius: Theme.radiusPill
-                        color: fileRow.fileIsDir ? Theme.accentSubtle : Theme.bgSurface
-                        border.color: fileRow.fileIsDir ? Theme.borderFocus : Theme.borderSubtle
-                        border.width: 1
-
-                        Text {
-                            id: typeLabel
-                            anchors.centerIn: parent
-                            text: fileRow.fileIsDir
-                                  ? qsTr("DIR")
-                                  : ((fileRow.fileSuffix || "").length > 0
-                                     ? String(fileRow.fileSuffix).toUpperCase()
-                                     : qsTr("FILE"))
-                            font.family: Theme.fontUi
-                            font.pixelSize: Theme.sizeSmall
-                            font.weight: Theme.weightMedium
-                            color: fileRow.fileIsDir ? Theme.accent : Theme.textTertiary
+                    Image {
+                        Layout.preferredWidth: 16
+                        Layout.preferredHeight: 16
+                        source: fileRow.fileIsDir 
+                                ? "qrc:/qt/qml/Pier/resources/icons/lucide/folder.svg"
+                                : "qrc:/qt/qml/Pier/resources/icons/lucide/file-text.svg"
+                        sourceSize: Qt.size(16, 16)
+                        layer.enabled: true
+                        layer.effect: MultiEffect {
+                            colorizationColor: fileRow.fileIsDir ? Theme.accent : Theme.textTertiary
+                            colorization: 1.0
                         }
                     }
 

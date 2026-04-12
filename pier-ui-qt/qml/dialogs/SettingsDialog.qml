@@ -233,13 +233,13 @@ Item {
                                 RowLayout {
                                     Layout.fillWidth: true
                                     Text {
-                                        Layout.fillWidth: true
                                         text: qsTr("Follow system theme")
+                                        Layout.preferredWidth: 200
                                         font.family: Theme.fontUi
                                         font.pixelSize: Theme.sizeBody
                                         color: Theme.textPrimary
-                                        Behavior on color { ColorAnimation { duration: Theme.durNormal } }
                                     }
+                                    Item { Layout.fillWidth: true }
                                     GhostButton {
                                         text: Theme.followSystem ? qsTr("On") : qsTr("Off")
                                         onClicked: Theme.followSystem = !Theme.followSystem
@@ -249,13 +249,13 @@ Item {
                                 RowLayout {
                                     Layout.fillWidth: true
                                     Text {
-                                        Layout.fillWidth: true
                                         text: qsTr("Color scheme")
+                                        Layout.preferredWidth: 200
                                         font.family: Theme.fontUi
                                         font.pixelSize: Theme.sizeBody
                                         color: Theme.textPrimary
-                                        Behavior on color { ColorAnimation { duration: Theme.durNormal } }
                                     }
+                                    Item { Layout.fillWidth: true }
                                     PierComboBox {
                                         id: schemeCombo
                                         Layout.preferredWidth: 160
@@ -291,38 +291,36 @@ Item {
                                 RowLayout {
                                     Layout.fillWidth: true
                                     Text {
-                                        Layout.fillWidth: true
                                         text: qsTr("UI font")
+                                        Layout.preferredWidth: 200
                                         font.family: Theme.fontUi
                                         font.pixelSize: Theme.sizeBody
                                         color: Theme.textPrimary
-                                        Behavior on color { ColorAnimation { duration: Theme.durNormal } }
                                     }
+                                    Item { Layout.fillWidth: true }
                                     Text {
                                         text: Theme.fontUi
                                         font.family: Theme.fontMono
                                         font.pixelSize: Theme.sizeBody
                                         color: Theme.textTertiary
-                                        Behavior on color { ColorAnimation { duration: Theme.durNormal } }
                                     }
                                 }
 
                                 RowLayout {
                                     Layout.fillWidth: true
                                     Text {
-                                        Layout.fillWidth: true
                                         text: qsTr("Mono font")
+                                        Layout.preferredWidth: 200
                                         font.family: Theme.fontUi
                                         font.pixelSize: Theme.sizeBody
                                         color: Theme.textPrimary
-                                        Behavior on color { ColorAnimation { duration: Theme.durNormal } }
                                     }
+                                    Item { Layout.fillWidth: true }
                                     Text {
                                         text: Theme.fontMono
                                         font.family: Theme.fontMono
                                         font.pixelSize: Theme.sizeBody
                                         color: Theme.textTertiary
-                                        Behavior on color { ColorAnimation { duration: Theme.durNormal } }
                                     }
                                 }
                             }
@@ -341,6 +339,7 @@ Item {
                                     Layout.fillWidth: true
                                     Text {
                                         text: qsTr("Size")
+                                        Layout.preferredWidth: 200
                                         font.family: Theme.fontUi
                                         font.pixelSize: Theme.sizeBody
                                         color: Theme.textPrimary
@@ -419,13 +418,13 @@ Item {
                                 RowLayout {
                                     Layout.fillWidth: true
                                     Text {
-                                        Layout.fillWidth: true
                                         text: qsTr("Cursor style")
+                                        Layout.preferredWidth: 200
                                         font.family: Theme.fontUi
                                         font.pixelSize: Theme.sizeBody
                                         color: Theme.textPrimary
-                                        Behavior on color { ColorAnimation { duration: Theme.durNormal } }
                                     }
+                                    Item { Layout.fillWidth: true }
                                     PierComboBox {
                                         Layout.preferredWidth: 120
                                         options: [qsTr("Block"), qsTr("Beam"), qsTr("Underline")]
@@ -436,13 +435,13 @@ Item {
                                 RowLayout {
                                     Layout.fillWidth: true
                                     Text {
-                                        Layout.fillWidth: true
                                         text: qsTr("Cursor blink")
+                                        Layout.preferredWidth: 200
                                         font.family: Theme.fontUi
                                         font.pixelSize: Theme.sizeBody
                                         color: Theme.textPrimary
-                                        Behavior on color { ColorAnimation { duration: Theme.durNormal } }
                                     }
+                                    Item { Layout.fillWidth: true }
                                     GhostButton {
                                         text: qsTr("On")
                                     }
@@ -462,13 +461,13 @@ Item {
                                 RowLayout {
                                     Layout.fillWidth: true
                                     Text {
-                                        Layout.fillWidth: true
                                         text: qsTr("Buffer lines")
+                                        Layout.preferredWidth: 200
                                         font.family: Theme.fontUi
                                         font.pixelSize: Theme.sizeBody
                                         color: Theme.textPrimary
-                                        Behavior on color { ColorAnimation { duration: Theme.durNormal } }
                                     }
+                                    Item { Layout.fillWidth: true }
                                     // Editable field for scrollback buffer size
                                     PierTextField {
                                         Layout.preferredWidth: 90
@@ -490,13 +489,13 @@ Item {
                                 RowLayout {
                                     Layout.fillWidth: true
                                     Text {
-                                        Layout.fillWidth: true
                                         text: qsTr("Visual bell")
+                                        Layout.preferredWidth: 200
                                         font.family: Theme.fontUi
                                         font.pixelSize: Theme.sizeBody
                                         color: Theme.textPrimary
-                                        Behavior on color { ColorAnimation { duration: Theme.durNormal } }
                                     }
+                                    Item { Layout.fillWidth: true }
                                     GhostButton {
                                         text: qsTr("On")
                                     }
@@ -505,13 +504,13 @@ Item {
                                 RowLayout {
                                     Layout.fillWidth: true
                                     Text {
-                                        Layout.fillWidth: true
                                         text: qsTr("Audio bell")
+                                        Layout.preferredWidth: 200
                                         font.family: Theme.fontUi
                                         font.pixelSize: Theme.sizeBody
                                         color: Theme.textPrimary
-                                        Behavior on color { ColorAnimation { duration: Theme.durNormal } }
                                     }
+                                    Item { Layout.fillWidth: true }
                                     GhostButton {
                                         text: qsTr("Off")
                                     }

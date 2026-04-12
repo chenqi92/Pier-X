@@ -42,6 +42,10 @@ ApplicationWindow {
         sequences: ["Ctrl+,", "Meta+,"]
         onActivated: settingsDialog.show()
     }
+    Shortcut {
+        sequences: ["Ctrl+R", "Meta+R"]
+        onActivated: commandHistoryDialog.open()
+    }
 
     // ─────────────────────────────────────────────────────
     // App-wide models
@@ -64,6 +68,7 @@ ApplicationWindow {
     }
 
     property int currentTabIndex: 0
+    signal writeToActiveTerminal(string text)
 
     // Every tabModel row carries the full schema, with unused
     // fields defaulted, so the Repeater delegate can bind to
@@ -96,7 +101,7 @@ ApplicationWindow {
             pgPort: 5432,
             pgUser: "",
             pgDatabase: "",
-            monitorEnabled: false
+            rpTool: ""
         }
     }
 
@@ -126,7 +131,7 @@ ApplicationWindow {
             pgPort: 5432,
             pgUser: "",
             pgDatabase: "",
-            monitorEnabled: false
+            rpTool: ""
         }
     }
 
@@ -159,328 +164,43 @@ ApplicationWindow {
             pgPort: 5432,
             pgUser: "",
             pgDatabase: "",
-            monitorEnabled: false
+            rpTool: ""
         }
     }
 
-    // Redis tab row — M5a per-service panel. Connects to a
-    // plain TCP endpoint (typically the local side of an SSH
-    // tunnel, e.g. 127.0.0.1:16379). No SSH auth — the
-    // encryption is already provided by the tunnel that opened
-    // the port.
-    function _makeRedisRow(host, port, db, label) {
-        return {
-            title: qsTr("⧉ %1").arg(label),
-            backend: "redis",
-            sshHost: "",
-            sshPort: 22,
-            sshUser: "",
-            sshPassword: "",
-            sshCredentialId: "",
-            sshKeyPath: "",
-            sshPassphraseCredentialId: "",
-            sshUsesAgent: false,
-            redisHost: host,
-            redisPort: port,
-            redisDb: db,
-            logCommand: "",
-            markdownPath: "",
-            mysqlHost: "",
-            mysqlPort: 3306,
-            mysqlUser: "",
-            mysqlPassword: "",
-            mysqlDatabase: "",
-            pgHost: "",
-            pgPort: 5432,
-            pgUser: "",
-            pgDatabase: "",
-            monitorEnabled: false
-        }
-    }
-
-    function openRedisTab(host, port, db, label) {
-        tabModel.append(_makeRedisRow(host, port, db, label || (host + ":" + port)))
-        currentTabIndex = tabModel.count - 1
-    }
-
-    // Log viewer tab row — M5b per-service panel. Uses the
-    // same SSH field shape as an ssh/sftp tab (the log stream
-    // connects via its own SshSession under the hood) and
-    // carries the remote `command` to exec in the logCommand
-    // field.
-    function _makeLogRow(conn, command, label) {
-        return {
-            title: qsTr("Log: %1").arg(label || conn.name),
-            backend: "log",
-            sshHost: conn.host,
-            sshPort: conn.port,
-            sshUser: conn.username,
-            sshPassword: conn.password || "",
-            sshCredentialId: conn.credentialId || "",
-            sshKeyPath: conn.keyPath || "",
-            sshPassphraseCredentialId: conn.passphraseCredentialId || "",
-            sshUsesAgent: conn.usesAgent === true,
-            redisHost: "",
-            redisPort: 0,
-            redisDb: 0,
-            logCommand: command,
-            markdownPath: "",
-            mysqlHost: "",
-            mysqlPort: 3306,
-            mysqlUser: "",
-            mysqlPassword: "",
-            mysqlDatabase: "",
-            pgHost: "",
-            pgPort: 5432,
-            pgUser: "",
-            pgDatabase: "",
-            monitorEnabled: false
-        }
-    }
-
-    function openLogTab(conn, command, label) {
-        tabModel.append(_makeLogRow(conn, command, label))
-        currentTabIndex = tabModel.count - 1
-    }
-
-    // Quick entry: tail syslog on the saved connection at
-    // `index`. Used by the command palette; a sidebar context
-    // menu will grow more options later.
-    function openLogForConnection(index, command) {
-        if (index < 0 || index >= connectionsModel.count)
-            return
-        const conn = connectionsModel.get(index)
-        if (!conn) return
-        openLogTab(conn, command || "tail -f /var/log/syslog",
-                   command ? conn.name : "syslog")
-    }
-
-    // Docker panel tab row — M5c per-service panel. Uses the
-    // same SSH field shape as an ssh/sftp tab; the panel runs
-    // `docker ps` / `start` / `stop` / `rm` via one-shot
-    // exec_command and links out to the Log viewer for live
-    // `docker logs -f`.
-    function _makeDockerRow(conn) {
-        return {
-            title: qsTr("Docker: %1").arg(conn.name),
-            backend: "docker",
-            sshHost: conn.host,
-            sshPort: conn.port,
-            sshUser: conn.username,
-            sshPassword: conn.password || "",
-            sshCredentialId: conn.credentialId || "",
-            sshKeyPath: conn.keyPath || "",
-            sshPassphraseCredentialId: conn.passphraseCredentialId || "",
-            sshUsesAgent: conn.usesAgent === true,
-            redisHost: "",
-            redisPort: 0,
-            redisDb: 0,
-            logCommand: "",
-            markdownPath: "",
-            mysqlHost: "",
-            mysqlPort: 3306,
-            mysqlUser: "",
-            mysqlPassword: "",
-            mysqlDatabase: "",
-            pgHost: "",
-            pgPort: 5432,
-            pgUser: "",
-            pgDatabase: "",
-            monitorEnabled: false
-        }
-    }
-
-    function openDockerTab(conn) {
-        tabModel.append(_makeDockerRow(conn))
-        currentTabIndex = tabModel.count - 1
-    }
-
-    // Quick entry: Docker panel on the saved connection at
-    // `index`. Used by the command palette.
-    function openDockerForConnection(index) {
-        if (index < 0 || index >= connectionsModel.count)
-            return
-        const conn = connectionsModel.get(index)
-        if (!conn) return
-        openDockerTab(conn)
-    }
-
-    // Markdown preview tab row — M5e per-service panel. Pure
-    // local: no SSH, no sessions, no services. Carries only a
-    // filesystem path; the view loads + renders on mount.
-    function _makeMarkdownRow(filePath) {
-        // Strip path to basename for the tab title.
-        var slash = filePath.lastIndexOf("/")
-        if (slash < 0) slash = filePath.lastIndexOf("\\")
-        var name = slash >= 0 ? filePath.slice(slash + 1) : filePath
-        return {
-            title: qsTr("MD: %1").arg(name),
-            backend: "markdown",
-            sshHost: "",
-            sshPort: 22,
-            sshUser: "",
-            sshPassword: "",
-            sshCredentialId: "",
-            sshKeyPath: "",
-            sshPassphraseCredentialId: "",
-            sshUsesAgent: false,
-            redisHost: "",
-            redisPort: 0,
-            redisDb: 0,
-            logCommand: "",
-            markdownPath: filePath,
-            mysqlHost: "",
-            mysqlPort: 3306,
-            mysqlUser: "",
-            mysqlPassword: "",
-            mysqlDatabase: "",
-            pgHost: "",
-            pgPort: 5432,
-            pgUser: "",
-            pgDatabase: "",
-            monitorEnabled: false
+    function toggleRightPanelTool(tool, context) {
+        if (currentTabIndex < 0 || currentTabIndex >= tabModel.count) return
+        var currentTool = tabModel.get(currentTabIndex).rpTool
+        
+        if (currentTool === tool) {
+            // Toggle off
+            tabModel.setProperty(currentTabIndex, "rpTool", "")
+        } else {
+            // Apply context changes if provided
+            if (context) {
+                if (context.redisHost) tabModel.setProperty(currentTabIndex, "redisHost", context.redisHost)
+                if (context.redisPort) tabModel.setProperty(currentTabIndex, "redisPort", context.redisPort)
+                if (context.redisDb !== undefined) tabModel.setProperty(currentTabIndex, "redisDb", context.redisDb)
+                if (context.mysqlHost) tabModel.setProperty(currentTabIndex, "mysqlHost", context.mysqlHost)
+                if (context.mysqlPort) tabModel.setProperty(currentTabIndex, "mysqlPort", context.mysqlPort)
+                if (context.mysqlUser) tabModel.setProperty(currentTabIndex, "mysqlUser", context.mysqlUser)
+                if (context.mysqlPassword) tabModel.setProperty(currentTabIndex, "mysqlPassword", context.mysqlPassword)
+                if (context.logCommand) tabModel.setProperty(currentTabIndex, "logCommand", context.logCommand)
+                if (context.pgHost) tabModel.setProperty(currentTabIndex, "pgHost", context.pgHost)
+                if (context.pgPort) tabModel.setProperty(currentTabIndex, "pgPort", context.pgPort)
+                if (context.pgUser) tabModel.setProperty(currentTabIndex, "pgUser", context.pgUser)
+                if (context.pgDatabase) tabModel.setProperty(currentTabIndex, "pgDatabase", context.pgDatabase)
+            }
+            tabModel.setProperty(currentTabIndex, "rpTool", tool)
         }
     }
 
     function openMarkdownTab(filePath) {
-        if (!filePath || filePath.length === 0) return
-        tabModel.append(_makeMarkdownRow(filePath))
+        var row = _makeLocalRow(qsTr("Preview: %1").arg(filePath.split("/").pop()))
+        row.backend = "markdown"
+        row.markdownPath = filePath
+        tabModel.append(row)
         currentTabIndex = tabModel.count - 1
-    }
-
-    // MySQL client tab row — M5d per-service panel. Connects
-    // to a plain TCP endpoint (typically the local side of an
-    // SSH tunnel, e.g. 127.0.0.1:13306). The panel shows a
-    // connect form up front; the fields below are
-    // prefill hints, not authoritative — the user can edit
-    // them in the form before clicking Connect.
-    function _makeMysqlRow(host, port, user, password, database, label) {
-        return {
-            title: qsTr("MySQL: %1").arg(label || (user + "@" + host + ":" + port)),
-            backend: "mysql",
-            sshHost: "",
-            sshPort: 22,
-            sshUser: "",
-            sshPassword: "",
-            sshCredentialId: "",
-            sshKeyPath: "",
-            sshPassphraseCredentialId: "",
-            sshUsesAgent: false,
-            redisHost: "",
-            redisPort: 0,
-            redisDb: 0,
-            logCommand: "",
-            markdownPath: "",
-            mysqlHost: host,
-            mysqlPort: port,
-            mysqlUser: user,
-            mysqlPassword: password || "",
-            mysqlDatabase: database || "",
-            pgHost: "",
-            pgPort: 5432,
-            pgUser: "",
-            pgDatabase: "",
-            monitorEnabled: false
-        }
-    }
-
-    function openMysqlTab(host, port, user, password, database, label) {
-        tabModel.append(_makeMysqlRow(host, port, user, password, database, label))
-        currentTabIndex = tabModel.count - 1
-    }
-
-    // PostgreSQL client tab row — M7a.
-    function _makePostgresRow(host, port, user, password, database, label) {
-        return {
-            title: qsTr("PG: %1").arg(label || (user + "@" + host + ":" + port)),
-            backend: "postgres",
-            sshHost: "",
-            sshPort: 22,
-            sshUser: "",
-            sshPassword: "",
-            sshCredentialId: "",
-            sshKeyPath: "",
-            sshPassphraseCredentialId: "",
-            sshUsesAgent: false,
-            redisHost: "",
-            redisPort: 0,
-            redisDb: 0,
-            logCommand: "",
-            markdownPath: "",
-            mysqlHost: "",
-            mysqlPort: 3306,
-            mysqlUser: "",
-            mysqlPassword: "",
-            mysqlDatabase: "",
-            pgHost: host,
-            pgPort: port,
-            pgUser: user,
-            pgDatabase: database || ""
-        }
-    }
-
-    function openPostgresTab(host, port, user, password, database, label) {
-        tabModel.append(_makePostgresRow(host, port, user, password, database, label))
-        currentTabIndex = tabModel.count - 1
-    }
-
-    // Server monitor tab row — M7b.
-    function _makeMonitorRow(conn) {
-        return {
-            title: qsTr("Monitor: %1").arg(conn.name),
-            backend: "monitor",
-            sshHost: conn.host,
-            sshPort: conn.port,
-            sshUser: conn.username,
-            sshPassword: conn.password || "",
-            sshCredentialId: conn.credentialId || "",
-            sshKeyPath: conn.keyPath || "",
-            sshPassphraseCredentialId: conn.passphraseCredentialId || "",
-            sshUsesAgent: conn.usesAgent === true,
-            redisHost: "",
-            redisPort: 0,
-            redisDb: 0,
-            logCommand: "",
-            markdownPath: "",
-            mysqlHost: "",
-            mysqlPort: 3306,
-            mysqlUser: "",
-            mysqlPassword: "",
-            mysqlDatabase: "",
-            pgHost: "",
-            pgPort: 5432,
-            pgUser: "",
-            pgDatabase: "",
-            monitorEnabled: true
-        }
-    }
-
-    function openMonitorTab(conn) {
-        tabModel.append(_makeMonitorRow(conn))
-        currentTabIndex = tabModel.count - 1
-    }
-
-    function openMonitorForConnection(index) {
-        if (index < 0 || index >= connectionsModel.count) return
-        const conn = connectionsModel.get(index)
-        if (!conn) return
-        openMonitorTab(conn)
-    }
-
-    function openSftpTab(conn) {
-        tabModel.append(_makeSftpRow(conn))
-        currentTabIndex = tabModel.count - 1
-    }
-
-    // Open an SFTP file browser for whatever saved connection
-    // the given index points at. Called from the command
-    // palette and from a future sidebar context-menu entry.
-    function openSftpForConnection(index) {
-        if (index < 0 || index >= connectionsModel.count)
-            return
-        const conn = connectionsModel.get(index)
-        if (!conn) return
-        openSftpTab(conn)
     }
 
     function openNewTab(title) {
@@ -728,51 +448,113 @@ ApplicationWindow {
                     }
                 }
 
-                ColumnLayout {
+                SplitView {
                     anchors.fill: parent
                     visible: tabModel.count > 0
-                    spacing: 0
+                    orientation: Qt.Horizontal
 
-                    TabBar {
-                        Layout.fillWidth: true
-                        model: tabModel
-                        currentIndex: window.currentTabIndex
-                        onTabClicked: (i) => window.currentTabIndex = i
-                        onTabClosed: (i) => window.closeTab(i)
-                        onNewTabClicked: window.openNewTab()
-                        onTabMoved: (from, to) => {
-                            tabModel.move(from, 1, to)
-                            if (window.currentTabIndex === from)
-                                window.currentTabIndex = to
-                            else if (from < window.currentTabIndex && to >= window.currentTabIndex)
-                                window.currentTabIndex--
-                            else if (from > window.currentTabIndex && to <= window.currentTabIndex)
-                                window.currentTabIndex++
+                    ColumnLayout {
+                        SplitView.fillWidth: true
+                        spacing: 0
+
+                        TabBar {
+                            Layout.fillWidth: true
+                            model: tabModel
+                            currentIndex: window.currentTabIndex
+                            onTabClicked: (i) => window.currentTabIndex = i
+                            onTabClosed: (i) => window.closeTab(i)
+                            onNewTabClicked: window.openNewTab()
+                            onTabMoved: (from, to) => {
+                                tabModel.move(from, 1, to)
+                                if (window.currentTabIndex === from)
+                                    window.currentTabIndex = to
+                                else if (from < window.currentTabIndex && to >= window.currentTabIndex)
+                                    window.currentTabIndex--
+                                else if (from > window.currentTabIndex && to <= window.currentTabIndex)
+                                    window.currentTabIndex++
+                            }
+                        }
+
+                        // One TerminalView per tab, kept alive as the user
+                        // switches between them so each tab owns its own
+                        // PierTerminalSession (and its own child shell).
+                        // StackLayout hides inactive tabs without destroying
+                        // them — matches IDE terminal behavior.
+                        StackLayout {
+                            Layout.fillWidth: true
+                            Layout.fillHeight: true
+                            currentIndex: window.currentTabIndex
+
+                            Repeater {
+                                model: tabModel
+                                delegate: Loader {
+                                    // Main tab views
+                                    required property string backend
+                                    required property string sshHost
+                                    required property int    sshPort
+                                    required property string sshUser
+                                    required property string sshPassword
+                                    required property string sshCredentialId
+                                    required property string sshKeyPath
+                                    required property string sshPassphraseCredentialId
+                                    required property bool   sshUsesAgent
+                                    required property string markdownPath
+
+                                    sourceComponent: backend === "sftp"
+                                                     ? sftpComp
+                                                     : (backend === "markdown"
+                                                        ? markdownComp
+                                                        : terminalComp)
+
+                                    Component {
+                                        id: terminalComp
+                                        TerminalView {
+                                            backend: parent.backend
+                                            sshHost: parent.sshHost
+                                            sshPort: parent.sshPort
+                                            sshUser: parent.sshUser
+                                            sshPassword: parent.sshPassword
+                                            sshCredentialId: parent.sshCredentialId
+                                            sshKeyPath: parent.sshKeyPath
+                                            sshPassphraseCredentialId: parent.sshPassphraseCredentialId
+                                            sshUsesAgent: parent.sshUsesAgent
+                                        }
+                                    }
+                                    Component {
+                                        id: sftpComp
+                                        SftpBrowserView {
+                                            sshHost: parent.sshHost
+                                            sshPort: parent.sshPort
+                                            sshUser: parent.sshUser
+                                            sshPassword: parent.sshPassword
+                                            sshCredentialId: parent.sshCredentialId
+                                            sshKeyPath: parent.sshKeyPath
+                                            sshPassphraseCredentialId: parent.sshPassphraseCredentialId
+                                            sshUsesAgent: parent.sshUsesAgent
+                                        }
+                                    }
+                                    Component {
+                                        id: markdownComp
+                                        MarkdownPreviewView {
+                                            filePath: parent.markdownPath
+                                        }
+                                    }
+                                }
+                            }
                         }
                     }
 
-                    // One TerminalView per tab, kept alive as the user
-                    // switches between them so each tab owns its own
-                    // PierTerminalSession (and its own child shell).
-                    // StackLayout hides inactive tabs without destroying
-                    // them — matches IDE terminal behavior.
+                    // Right Panel Area
                     StackLayout {
-                        Layout.fillWidth: true
-                        Layout.fillHeight: true
+                        SplitView.preferredWidth: 340
+                        visible: window.currentTabIndex >= 0 && window.currentTabIndex < tabModel.count && tabModel.get(window.currentTabIndex).rpTool !== ""
                         currentIndex: window.currentTabIndex
 
                         Repeater {
                             model: tabModel
                             delegate: Loader {
-                                // Pick the view class by
-                                // backend. TerminalView /
-                                // SftpBrowserView / RedisBrowserView
-                                // each bind a disjoint set of
-                                // model fields; the delegate
-                                // copies every field through
-                                // regardless of which class
-                                // the Loader ends up
-                                // instantiating.
+                                active: parent.visible && parent.currentIndex === index && rpTool !== ""
+                                required property string rpTool
                                 required property string backend
                                 required property string sshHost
                                 required property int    sshPort
@@ -786,7 +568,6 @@ ApplicationWindow {
                                 required property int    redisPort
                                 required property int    redisDb
                                 required property string logCommand
-                                required property string markdownPath
                                 required property string mysqlHost
                                 required property int    mysqlPort
                                 required property string mysqlUser
@@ -796,125 +577,32 @@ ApplicationWindow {
                                 required property int    pgPort
                                 required property string pgUser
                                 required property string pgDatabase
-                                required property bool   monitorEnabled
 
-                                sourceComponent: backend === "sftp"
-                                                 ? sftpComp
-                                                 : (backend === "redis"
-                                                    ? redisComp
-                                                    : (backend === "log"
-                                                       ? logComp
-                                                       : (backend === "docker"
-                                                          ? dockerComp
-                                                          : (backend === "markdown"
-                                                             ? markdownComp
-                                                             : (backend === "mysql"
-                                                                ? mysqlComp
-                                                                : (backend === "postgres"
-                                                                   ? postgresComp
-                                                                   : (backend === "monitor"
-                                                                      ? monitorComp
-                                                                      : terminalComp)))))))
-
-                                Component {
-                                    id: terminalComp
-                                    TerminalView {
-                                        backend: parent.backend
-                                        sshHost: parent.sshHost
-                                        sshPort: parent.sshPort
-                                        sshUser: parent.sshUser
-                                        sshPassword: parent.sshPassword
-                                        sshCredentialId: parent.sshCredentialId
-                                        sshKeyPath: parent.sshKeyPath
-                                        sshPassphraseCredentialId: parent.sshPassphraseCredentialId
-                                        sshUsesAgent: parent.sshUsesAgent
-                                    }
-                                }
-                                Component {
-                                    id: sftpComp
-                                    SftpBrowserView {
-                                        sshHost: parent.sshHost
-                                        sshPort: parent.sshPort
-                                        sshUser: parent.sshUser
-                                        sshPassword: parent.sshPassword
-                                        sshCredentialId: parent.sshCredentialId
-                                        sshKeyPath: parent.sshKeyPath
-                                        sshPassphraseCredentialId: parent.sshPassphraseCredentialId
-                                        sshUsesAgent: parent.sshUsesAgent
-                                    }
-                                }
-                                Component {
-                                    id: redisComp
-                                    RedisBrowserView {
-                                        redisHost: parent.redisHost
-                                        redisPort: parent.redisPort
-                                        redisDb: parent.redisDb
-                                    }
-                                }
-                                Component {
-                                    id: logComp
-                                    LogViewerView {
-                                        sshHost: parent.sshHost
-                                        sshPort: parent.sshPort
-                                        sshUser: parent.sshUser
-                                        sshPassword: parent.sshPassword
-                                        sshCredentialId: parent.sshCredentialId
-                                        sshKeyPath: parent.sshKeyPath
-                                        sshPassphraseCredentialId: parent.sshPassphraseCredentialId
-                                        sshUsesAgent: parent.sshUsesAgent
-                                        logCommand: parent.logCommand
-                                    }
-                                }
-                                Component {
-                                    id: dockerComp
-                                    DockerPanelView {
-                                        sshHost: parent.sshHost
-                                        sshPort: parent.sshPort
-                                        sshUser: parent.sshUser
-                                        sshPassword: parent.sshPassword
-                                        sshCredentialId: parent.sshCredentialId
-                                        sshKeyPath: parent.sshKeyPath
-                                        sshPassphraseCredentialId: parent.sshPassphraseCredentialId
-                                        sshUsesAgent: parent.sshUsesAgent
-                                    }
-                                }
-                                Component {
-                                    id: markdownComp
-                                    MarkdownPreviewView {
-                                        filePath: parent.markdownPath
-                                    }
-                                }
-                                Component {
-                                    id: mysqlComp
-                                    MySqlBrowserView {
-                                        mysqlHost: parent.mysqlHost
-                                        mysqlPort: parent.mysqlPort
-                                        mysqlUser: parent.mysqlUser
-                                        mysqlPassword: parent.mysqlPassword
-                                        mysqlDatabase: parent.mysqlDatabase
-                                    }
-                                }
-                                Component {
-                                    id: postgresComp
-                                    PostgresPanelView {
-                                        pgHost: parent.pgHost
-                                        pgPort: parent.pgPort
-                                        pgUser: parent.pgUser
-                                        pgDatabase: parent.pgDatabase
-                                    }
-                                }
-                                Component {
-                                    id: monitorComp
-                                    ServerMonitorView {
-                                        sshHost: parent.sshHost
-                                        sshPort: parent.sshPort
-                                        sshUser: parent.sshUser
-                                        sshPassword: parent.sshPassword
-                                        sshCredentialId: parent.sshCredentialId
-                                        sshKeyPath: parent.sshKeyPath
-                                        sshPassphraseCredentialId: parent.sshPassphraseCredentialId
-                                        sshUsesAgent: parent.sshUsesAgent
-                                    }
+                                sourceComponent: RightPanel {
+                                    rpTool: parent.rpTool
+                                    backend: parent.backend
+                                    sshHost: parent.sshHost
+                                    sshPort: parent.sshPort
+                                    sshUser: parent.sshUser
+                                    sshPassword: parent.sshPassword
+                                    sshCredentialId: parent.sshCredentialId
+                                    sshKeyPath: parent.sshKeyPath
+                                    sshPassphraseCredentialId: parent.sshPassphraseCredentialId
+                                    sshUsesAgent: parent.sshUsesAgent
+                                    redisHost: parent.redisHost
+                                    redisPort: parent.redisPort
+                                    redisDb: parent.redisDb
+                                    logCommand: parent.logCommand
+                                    mysqlHost: parent.mysqlHost
+                                    mysqlPort: parent.mysqlPort
+                                    mysqlUser: parent.mysqlUser
+                                    mysqlPassword: parent.mysqlPassword
+                                    mysqlDatabase: parent.mysqlDatabase
+                                    pgHost: parent.pgHost
+                                    pgPort: parent.pgPort
+                                    pgUser: parent.pgUser
+                                    pgDatabase: parent.pgDatabase
+                                    onClosePanelRequested: window.toggleRightPanelTool(parent.rpTool)
                                 }
                             }
                         }
@@ -949,6 +637,13 @@ ApplicationWindow {
     SettingsDialog {
         id: settingsDialog
         connectionsModel: connectionsModel
+    }
+
+    CommandHistoryDialog {
+        id: commandHistoryDialog
+        onCommandSelected: (cmd) => {
+            window.writeToActiveTerminal(cmd + "\n")
+        }
     }
 
     // M5e: Native file picker for the "Open Markdown preview"
@@ -987,56 +682,23 @@ ApplicationWindow {
                 action: function() { newConnectionDialog.show() }
             },
             {
-                title: qsTr("Browse remote files (first saved connection)"),
+                title: qsTr("Tail syslog"),
                 shortcut: "",
                 action: function() {
-                    // Quick entry point: open an SFTP browser
-                    // for the first saved connection. A richer
-                    // picker (list all saved + type to filter)
-                    // lands when the command palette grows
-                    // sub-lists; for M3d2 this is the smoke-
-                    // test hook.
-                    if (connectionsModel.count > 0) {
-                        window.openSftpForConnection(0)
-                    } else {
-                        console.warn("No saved connections to browse.")
-                    }
+                    window.toggleRightPanelTool("log", { logCommand: "tail -f /var/log/syslog" })
                 }
             },
             {
-                title: qsTr("Tail syslog (first saved connection)"),
+                title: qsTr("Docker containers"),
                 shortcut: "",
                 action: function() {
-                    // M5b smoke-test hook: opens a Log viewer
-                    // tab that runs `tail -f /var/log/syslog`
-                    // on the first saved SSH connection. A
-                    // richer picker + custom-command form lands
-                    // when the palette grows sub-lists.
-                    if (connectionsModel.count > 0) {
-                        window.openLogForConnection(0, "")
-                    } else {
-                        console.warn("No saved connections to tail.")
-                    }
-                }
-            },
-            {
-                title: qsTr("Docker containers (first saved connection)"),
-                shortcut: "",
-                action: function() {
-                    // M5c smoke-test hook: opens a Docker panel
-                    // tab on the first saved SSH connection.
-                    if (connectionsModel.count > 0) {
-                        window.openDockerForConnection(0)
-                    } else {
-                        console.warn("No saved connections for Docker panel.")
-                    }
+                    window.toggleRightPanelTool("docker")
                 }
             },
             {
                 title: qsTr("Open Markdown preview…"),
                 shortcut: "",
                 action: function() {
-                    // M5e: native file picker → markdown tab.
                     markdownFileDialog.open()
                 }
             },
@@ -1050,24 +712,6 @@ ApplicationWindow {
                     // front, so the user still fills in the
                     // user / password / database fields.
                     window.openMysqlTab("127.0.0.1", 13306, "root", "", "")
-                }
-            },
-            {
-                title: qsTr("PostgreSQL client (127.0.0.1:15432)"),
-                shortcut: "",
-                action: function() {
-                    window.openPostgresTab("127.0.0.1", 15432, "postgres", "", "", "")
-                }
-            },
-            {
-                title: qsTr("Server monitor (first saved connection)"),
-                shortcut: "",
-                action: function() {
-                    if (connectionsModel.count > 0) {
-                        window.openMonitorForConnection(0)
-                    } else {
-                        console.warn("No saved connections for monitor.")
-                    }
                 }
             },
             {

@@ -67,6 +67,8 @@ public:
     qreal cellWidth() const { return m_cellWidth; }
     qreal cellHeight() const { return m_cellHeight; }
 
+    Q_INVOKABLE QString urlAt(qreal x, qreal y) const;
+
     void paint(QPainter *painter) override;
 
 public slots:

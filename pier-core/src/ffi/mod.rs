@@ -43,6 +43,7 @@ pub mod credentials;
 pub mod docker;
 pub mod log_stream;
 pub mod markdown;
+pub mod mysql;
 pub mod redis;
 pub mod services;
 pub mod sftp;
@@ -71,6 +72,10 @@ pub use self::log_stream::{
 pub use self::markdown::{
     pier_markdown_free_string, pier_markdown_load_html, pier_markdown_load_source,
     pier_markdown_render_html,
+};
+pub use self::mysql::{
+    pier_mysql_execute, pier_mysql_free, pier_mysql_free_string, pier_mysql_list_databases,
+    pier_mysql_list_tables, pier_mysql_open, PierMysql,
 };
 pub use self::redis::{
     pier_redis_free, pier_redis_free_string, pier_redis_info, pier_redis_inspect, pier_redis_open,

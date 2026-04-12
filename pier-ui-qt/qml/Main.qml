@@ -86,7 +86,12 @@ ApplicationWindow {
             redisPort: 0,
             redisDb: 0,
             logCommand: "",
-            markdownPath: ""
+            markdownPath: "",
+            mysqlHost: "",
+            mysqlPort: 3306,
+            mysqlUser: "",
+            mysqlPassword: "",
+            mysqlDatabase: ""
         }
     }
 
@@ -106,7 +111,12 @@ ApplicationWindow {
             redisPort: 0,
             redisDb: 0,
             logCommand: "",
-            markdownPath: ""
+            markdownPath: "",
+            mysqlHost: "",
+            mysqlPort: 3306,
+            mysqlUser: "",
+            mysqlPassword: "",
+            mysqlDatabase: ""
         }
     }
 
@@ -129,7 +139,12 @@ ApplicationWindow {
             redisPort: 0,
             redisDb: 0,
             logCommand: "",
-            markdownPath: ""
+            markdownPath: "",
+            mysqlHost: "",
+            mysqlPort: 3306,
+            mysqlUser: "",
+            mysqlPassword: "",
+            mysqlDatabase: ""
         }
     }
 
@@ -154,7 +169,12 @@ ApplicationWindow {
             redisPort: port,
             redisDb: db,
             logCommand: "",
-            markdownPath: ""
+            markdownPath: "",
+            mysqlHost: "",
+            mysqlPort: 3306,
+            mysqlUser: "",
+            mysqlPassword: "",
+            mysqlDatabase: ""
         }
     }
 
@@ -184,7 +204,12 @@ ApplicationWindow {
             redisPort: 0,
             redisDb: 0,
             logCommand: command,
-            markdownPath: ""
+            markdownPath: "",
+            mysqlHost: "",
+            mysqlPort: 3306,
+            mysqlUser: "",
+            mysqlPassword: "",
+            mysqlDatabase: ""
         }
     }
 
@@ -226,7 +251,12 @@ ApplicationWindow {
             redisPort: 0,
             redisDb: 0,
             logCommand: "",
-            markdownPath: ""
+            markdownPath: "",
+            mysqlHost: "",
+            mysqlPort: 3306,
+            mysqlUser: "",
+            mysqlPassword: "",
+            mysqlDatabase: ""
         }
     }
 
@@ -268,13 +298,54 @@ ApplicationWindow {
             redisPort: 0,
             redisDb: 0,
             logCommand: "",
-            markdownPath: filePath
+            markdownPath: filePath,
+            mysqlHost: "",
+            mysqlPort: 3306,
+            mysqlUser: "",
+            mysqlPassword: "",
+            mysqlDatabase: ""
         }
     }
 
     function openMarkdownTab(filePath) {
         if (!filePath || filePath.length === 0) return
         tabModel.append(_makeMarkdownRow(filePath))
+        currentTabIndex = tabModel.count - 1
+    }
+
+    // MySQL client tab row — M5d per-service panel. Connects
+    // to a plain TCP endpoint (typically the local side of an
+    // SSH tunnel, e.g. 127.0.0.1:13306). The panel itself
+    // shows a connect form up front; the fields below are
+    // prefill hints only — the user can override them in the
+    // form before clicking Connect.
+    function _makeMysqlRow(host, port, user, password, database, label) {
+        return {
+            title: qsTr("MySQL: %1").arg(label || (user + "@" + host + ":" + port)),
+            backend: "mysql",
+            sshHost: "",
+            sshPort: 22,
+            sshUser: "",
+            sshPassword: "",
+            sshCredentialId: "",
+            sshKeyPath: "",
+            sshPassphraseCredentialId: "",
+            sshUsesAgent: false,
+            redisHost: "",
+            redisPort: 0,
+            redisDb: 0,
+            logCommand: "",
+            markdownPath: "",
+            mysqlHost: host,
+            mysqlPort: port,
+            mysqlUser: user,
+            mysqlPassword: password || "",
+            mysqlDatabase: database || ""
+        }
+    }
+
+    function openMysqlTab(host, port, user, password, database, label) {
+        tabModel.append(_makeMysqlRow(host, port, user, password, database, label))
         currentTabIndex = tabModel.count - 1
     }
 
@@ -562,6 +633,11 @@ ApplicationWindow {
                                 required property int    redisDb
                                 required property string logCommand
                                 required property string markdownPath
+                                required property string mysqlHost
+                                required property int    mysqlPort
+                                required property string mysqlUser
+                                required property string mysqlPassword
+                                required property string mysqlDatabase
 
                                 sourceComponent: backend === "sftp"
                                                  ? sftpComp
@@ -573,7 +649,9 @@ ApplicationWindow {
                                                           ? dockerComp
                                                           : (backend === "markdown"
                                                              ? markdownComp
-                                                             : terminalComp))))
+                                                             : (backend === "mysql"
+                                                                ? mysqlComp
+                                                                : terminalComp)))))
 
                                 Component {
                                     id: terminalComp
@@ -641,6 +719,15 @@ ApplicationWindow {
                                     id: markdownComp
                                     MarkdownPreviewView {
                                         filePath: parent.markdownPath
+                                    }
+                                }
+                                Component {
+                                    id: mysqlComp
+                                    MySqlPanelView {
+                                        mysqlHost: parent.mysqlHost
+                                        mysqlPort: parent.mysqlPort
+                                        mysqlUser: parent.mysqlUser
+                                        mysqlDatabase: parent.mysqlDatabase
                                     }
                                 }
                             }
@@ -761,6 +848,18 @@ ApplicationWindow {
                 action: function() {
                     // M5e: native file picker → markdown tab.
                     markdownFileDialog.open()
+                }
+            },
+            {
+                title: qsTr("MySQL client (127.0.0.1:13306)"),
+                shortcut: "",
+                action: function() {
+                    // M5d: open a MySQL panel tab pointing at
+                    // the Pier-X tunnel convention port. The
+                    // panel itself shows a connect form up
+                    // front, so the user still fills in the
+                    // user / password / database fields.
+                    window.openMysqlTab("127.0.0.1", 13306, "root", "", "", "")
                 }
             },
             {

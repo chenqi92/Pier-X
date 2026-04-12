@@ -35,4 +35,5 @@
 //! stash them inside QObjects that cross thread boundaries.
 
 pub mod docker;
+pub mod mysql;
 pub mod redis;

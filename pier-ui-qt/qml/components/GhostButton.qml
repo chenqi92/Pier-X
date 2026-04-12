@@ -31,7 +31,11 @@ Rectangle {
 
     Text {
         id: label
-        anchors.centerIn: parent
+        anchors.fill: parent
+        anchors.leftMargin: root.horizontalPadding
+        anchors.rightMargin: root.horizontalPadding
+        verticalAlignment: Text.AlignVCenter
+        horizontalAlignment: Text.AlignHCenter
         text: root.text
         font.family: Theme.fontUi
         font.pixelSize: compact ? Theme.sizeCaption : Theme.sizeBody
@@ -39,6 +43,8 @@ Rectangle {
         color: mouseArea.pressed ? Theme.textPrimary
              : mouseArea.containsMouse ? Theme.textPrimary
              : Theme.textSecondary
+        wrapMode: Text.NoWrap
+        elide: Text.ElideRight
         Behavior on color { ColorAnimation { duration: Theme.durFast } }
     }
 

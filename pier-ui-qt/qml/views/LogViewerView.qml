@@ -2,6 +2,7 @@ import QtQuick
 import QtQuick.Controls
 import QtQuick.Layouts
 import Pier
+import "../components"
 
 // Streaming log viewer — M5b per-service tool.
 //
@@ -22,6 +23,9 @@ import Pier
 // appends rows.
 Rectangle {
     id: root
+
+    clip: true
+    property var sharedSession: null
 
     // Backend params — same SSH field shape as TerminalView /
     // SftpBrowserView so Main.qml can feed every tab row
@@ -50,9 +54,24 @@ Rectangle {
         id: stream
     }
 
-    Component.onCompleted: _dispatchConnect()
+    Component.onCompleted: Qt.callLater(_dispatchConnect)
+
+    Connections {
+        target: root.sharedSession
+        function onConnectedChanged() {
+            if (root.sharedSession && root.sharedSession.connected)
+                root._dispatchConnect()
+        }
+    }
 
     function _dispatchConnect() {
+        if (stream.status === PierLogStream.Connecting
+                || stream.status === PierLogStream.Connected)
+            return
+        if (root.sharedSession && root.sharedSession.connected) {
+            stream.connectToSession(root.sharedSession, root.logCommand)
+            return
+        }
         if (root.sshHost.length === 0 || root.sshUser.length === 0) {
             console.warn("LogViewerView: missing host/user")
             return
@@ -142,319 +161,301 @@ Rectangle {
         anchors.margins: Theme.sp3
         spacing: Theme.sp2
 
-        // ─── Top bar ─────────────────────────────────────
-        RowLayout {
+        ToolPanelSurface {
             Layout.fillWidth: true
-            spacing: Theme.sp2
+            padding: Theme.sp2
+            implicitHeight: logHeader.implicitHeight + Theme.sp2 * 2
 
-            Text {
-                text: stream.target.length > 0 ? stream.target : qsTr("Log")
-                font.family: Theme.fontMono
-                font.pixelSize: Theme.sizeBody
-                font.weight: Theme.weightMedium
-                color: Theme.textPrimary
-                elide: Text.ElideMiddle
-                Layout.minimumWidth: 120
-                Layout.maximumWidth: 240
+            ColumnLayout {
+                id: logHeader
+                anchors.fill: parent
+                spacing: Theme.sp2
 
-                Behavior on color { ColorAnimation { duration: Theme.durNormal } }
-            }
+                RowLayout {
+                    Layout.fillWidth: true
+                    spacing: Theme.sp2
 
-            Rectangle {
-                Layout.fillWidth: true
-                implicitHeight: 24
-                color: Theme.bgSurface
-                border.color: Theme.borderSubtle
-                border.width: 1
-                radius: Theme.radiusSm
+                    Text {
+                        text: stream.target.length > 0 ? stream.target : qsTr("Logs")
+                        font.family: Theme.fontMono
+                        font.pixelSize: Theme.sizeBody
+                        font.weight: Theme.weightMedium
+                        color: Theme.textPrimary
+                        elide: Text.ElideMiddle
+                        Layout.minimumWidth: 120
+                        Layout.maximumWidth: 240
+                    }
 
-                Behavior on color        { ColorAnimation { duration: Theme.durNormal } }
-                Behavior on border.color { ColorAnimation { duration: Theme.durNormal } }
+                    StatusPill {
+                        text: stream.alive
+                              ? qsTr("Live")
+                              : (stream.status === PierLogStream.Finished
+                                 ? qsTr("Exit %1").arg(stream.exitCode)
+                                 : qsTr("Idle"))
+                        tone: stream.alive ? "success" : "neutral"
+                    }
 
-                Text {
-                    anchors.fill: parent
-                    anchors.leftMargin: Theme.sp2
-                    anchors.rightMargin: Theme.sp2
-                    verticalAlignment: Text.AlignVCenter
-                    text: stream.command.length > 0
-                          ? stream.command
-                          : root.logCommand
-                    font.family: Theme.fontMono
-                    font.pixelSize: Theme.sizeCaption
-                    color: Theme.textSecondary
-                    elide: Text.ElideRight
+                    Item { Layout.fillWidth: true }
 
-                    Behavior on color { ColorAnimation { duration: Theme.durNormal } }
+                    GhostButton {
+                        compact: true
+                        minimumWidth: 0
+                        text: root.autoScroll ? qsTr("Auto ✓") : qsTr("Auto")
+                        onClicked: root.autoScroll = !root.autoScroll
+                    }
+
+                    GhostButton {
+                        compact: true
+                        minimumWidth: 0
+                        text: qsTr("Clear")
+                        onClicked: stream.clear()
+                    }
+
+                    GhostButton {
+                        compact: true
+                        minimumWidth: 0
+                        text: stream.alive ? qsTr("Stop") : qsTr("Retry")
+                        onClicked: {
+                            if (stream.alive) {
+                                stream.stop()
+                            } else {
+                                stream.clear()
+                                _dispatchConnect()
+                            }
+                        }
+                    }
                 }
-            }
 
-            // Live dot — pulses green while the remote process
-            // is running, goes gray when it exits.
-            Rectangle {
-                implicitWidth: 8
-                implicitHeight: 8
-                radius: 4
-                color: stream.alive
-                       ? Theme.statusSuccess
-                       : Theme.textTertiary
+                Rectangle {
+                    Layout.fillWidth: true
+                    implicitHeight: 26
+                    color: Theme.bgInset
+                    border.color: Theme.borderSubtle
+                    border.width: 1
+                    radius: Theme.radiusSm
 
-                Behavior on color { ColorAnimation { duration: Theme.durNormal } }
-
-                SequentialAnimation on opacity {
-                    running: stream.alive
-                    loops: Animation.Infinite
-                    NumberAnimation { from: 1.0; to: 0.4; duration: 800 }
-                    NumberAnimation { from: 0.4; to: 1.0; duration: 800 }
-                }
-            }
-
-            Text {
-                text: stream.alive
-                      ? qsTr("live")
-                      : (stream.status === PierLogStream.Finished
-                         ? qsTr("exit %1").arg(stream.exitCode)
-                         : qsTr("—"))
-                font.family: Theme.fontMono
-                font.pixelSize: Theme.sizeCaption
-                color: Theme.textTertiary
-
-                Behavior on color { ColorAnimation { duration: Theme.durNormal } }
-            }
-
-            GhostButton {
-                text: root.autoScroll ? qsTr("Auto ✓") : qsTr("Auto")
-                onClicked: root.autoScroll = !root.autoScroll
-            }
-
-            GhostButton {
-                text: qsTr("Clear")
-                onClicked: stream.clear()
-            }
-
-            GhostButton {
-                text: stream.alive ? qsTr("Stop") : qsTr("Retry")
-                onClicked: {
-                    if (stream.alive) {
-                        stream.stop()
-                    } else {
-                        stream.clear()
-                        _dispatchConnect()
+                    Text {
+                        anchors.fill: parent
+                        anchors.leftMargin: Theme.sp2
+                        anchors.rightMargin: Theme.sp2
+                        verticalAlignment: Text.AlignVCenter
+                        text: stream.command.length > 0 ? stream.command : root.logCommand
+                        font.family: Theme.fontMono
+                        font.pixelSize: Theme.sizeCaption
+                        color: Theme.textSecondary
+                        elide: Text.ElideRight
                     }
                 }
             }
         }
 
         // ─── Filter bar ──────────────────────────────────
-        Rectangle {
+        ToolPanelSurface {
             Layout.fillWidth: true
-            implicitHeight: 36
-            color: Theme.bgPanel
-            border.color: Theme.borderSubtle
-            border.width: 1
-            radius: Theme.radiusSm
+            padding: Theme.sp2
+            implicitHeight: filterColumn.implicitHeight + Theme.sp2 * 2
 
-            Behavior on color        { ColorAnimation { duration: Theme.durNormal } }
-            Behavior on border.color { ColorAnimation { duration: Theme.durNormal } }
-
-            RowLayout {
+            ColumnLayout {
+                id: filterColumn
                 anchors.fill: parent
-                anchors.leftMargin: Theme.sp2
-                anchors.rightMargin: Theme.sp2
                 spacing: Theme.sp2
 
-                Text {
-                    text: qsTr("Filter")
-                    font.family: Theme.fontUi
-                    font.pixelSize: Theme.sizeCaption
-                    font.weight: Theme.weightMedium
-                    color: Theme.textSecondary
-                }
-
-                PierTextField {
-                    id: filterField
+                ToolSectionHeader {
                     Layout.fillWidth: true
-                    placeholder: qsTr("Search logs or enter a regex")
-                    text: stream.filterText
-                    onTextChanged: stream.filterText = text
+                    title: qsTr("Filters")
+                    subtitle: qsTr("Search, regex, and level-based visibility")
                 }
 
-                Rectangle {
-                    id: regexToggle
-                    implicitWidth: regexLabel.implicitWidth + Theme.sp2 * 2
-                    implicitHeight: 22
-                    radius: Theme.radiusSm
-                    color: regexMouse.containsMouse
-                           ? Theme.bgHover
-                           : (stream.regexMode ? Theme.accentSubtle : "transparent")
-                    border.color: stream.regexMode ? Theme.borderFocus : Theme.borderSubtle
-                    border.width: 1
+                Flow {
+                    Layout.fillWidth: true
+                    spacing: Theme.sp2
 
-                    Text {
-                        id: regexLabel
-                        anchors.centerIn: parent
-                        text: ".*"
-                        font.family: Theme.fontMono
-                        font.pixelSize: Theme.sizeCaption
-                        font.weight: Theme.weightMedium
-                        color: stream.regexMode ? Theme.accent : Theme.textSecondary
+                    PierTextField {
+                        id: filterField
+                        width: Math.max(220, root.width - Theme.sp12 * 2)
+                        placeholder: qsTr("Search logs or enter a regex")
+                        text: stream.filterText
+                        onTextChanged: stream.filterText = text
                     }
 
-                    MouseArea {
-                        id: regexMouse
-                        anchors.fill: parent
-                        hoverEnabled: true
-                        cursorShape: Qt.PointingHandCursor
-                        onClicked: stream.regexMode = !stream.regexMode
+                    Rectangle {
+                        id: regexToggle
+                        implicitWidth: regexLabel.implicitWidth + Theme.sp2 * 2
+                        implicitHeight: 22
+                        radius: Theme.radiusSm
+                        color: regexMouse.containsMouse
+                               ? Theme.bgHover
+                               : (stream.regexMode ? Theme.accentSubtle : "transparent")
+                        border.color: stream.regexMode ? Theme.borderFocus : Theme.borderSubtle
+                        border.width: 1
+
+                        Text {
+                            id: regexLabel
+                            anchors.centerIn: parent
+                            text: ".*"
+                            font.family: Theme.fontMono
+                            font.pixelSize: Theme.sizeCaption
+                            font.weight: Theme.weightMedium
+                            color: stream.regexMode ? Theme.accent : Theme.textSecondary
+                        }
+
+                        MouseArea {
+                            id: regexMouse
+                            anchors.fill: parent
+                            hoverEnabled: true
+                            cursorShape: Qt.PointingHandCursor
+                            onClicked: stream.regexMode = !stream.regexMode
+                        }
                     }
-                }
 
-                Rectangle {
-                    implicitWidth: levelRepeaterRow.implicitWidth
-                    implicitHeight: 22
-                    color: "transparent"
+                    Rectangle {
+                        implicitWidth: levelRepeaterRow.implicitWidth
+                        implicitHeight: 22
+                        color: "transparent"
 
-                    Row {
-                        id: levelRepeaterRow
-                        anchors.centerIn: parent
-                        spacing: Theme.sp1
+                        Row {
+                            id: levelRepeaterRow
+                            anchors.centerIn: parent
+                            spacing: Theme.sp1
 
-                        Rectangle {
-                            implicitWidth: debugText.implicitWidth + Theme.sp2 * 2
-                            implicitHeight: 22
-                            radius: Theme.radiusSm
-                            color: debugMouse.containsMouse
-                                   ? Theme.bgHover
-                                   : (stream.debugEnabled ? _badgeFill(PierLogStream.DebugLevel) : "transparent")
-                            border.color: stream.debugEnabled ? Theme.borderDefault : Theme.borderSubtle
-                            border.width: 1
+                            Rectangle {
+                                implicitWidth: debugText.implicitWidth + Theme.sp2 * 2
+                                implicitHeight: 22
+                                radius: Theme.radiusSm
+                                color: debugMouse.containsMouse
+                                       ? Theme.bgHover
+                                       : (stream.debugEnabled ? _badgeFill(PierLogStream.DebugLevel) : "transparent")
+                                border.color: stream.debugEnabled ? Theme.borderDefault : Theme.borderSubtle
+                                border.width: 1
 
-                            Text {
-                                id: debugText
-                                anchors.centerIn: parent
-                                text: "DBG"
-                                font.family: Theme.fontMono
-                                font.pixelSize: Theme.sizeCaption
-                                color: stream.debugEnabled ? _badgeTextColor(PierLogStream.DebugLevel) : Theme.textTertiary
+                                Text {
+                                    id: debugText
+                                    anchors.centerIn: parent
+                                    text: "DBG"
+                                    font.family: Theme.fontMono
+                                    font.pixelSize: Theme.sizeCaption
+                                    color: stream.debugEnabled ? _badgeTextColor(PierLogStream.DebugLevel) : Theme.textTertiary
+                                }
+
+                                MouseArea {
+                                    id: debugMouse
+                                    anchors.fill: parent
+                                    hoverEnabled: true
+                                    cursorShape: Qt.PointingHandCursor
+                                    onClicked: stream.debugEnabled = !stream.debugEnabled
+                                }
                             }
 
-                            MouseArea {
-                                id: debugMouse
-                                anchors.fill: parent
-                                hoverEnabled: true
-                                cursorShape: Qt.PointingHandCursor
-                                onClicked: stream.debugEnabled = !stream.debugEnabled
-                            }
-                        }
+                            Rectangle {
+                                implicitWidth: infoText.implicitWidth + Theme.sp2 * 2
+                                implicitHeight: 22
+                                radius: Theme.radiusSm
+                                color: infoMouse.containsMouse
+                                       ? Theme.bgHover
+                                       : (stream.infoEnabled ? _badgeFill(PierLogStream.InfoLevel) : "transparent")
+                                border.color: stream.infoEnabled ? Theme.borderDefault : Theme.borderSubtle
+                                border.width: 1
 
-                        Rectangle {
-                            implicitWidth: infoText.implicitWidth + Theme.sp2 * 2
-                            implicitHeight: 22
-                            radius: Theme.radiusSm
-                            color: infoMouse.containsMouse
-                                   ? Theme.bgHover
-                                   : (stream.infoEnabled ? _badgeFill(PierLogStream.InfoLevel) : "transparent")
-                            border.color: stream.infoEnabled ? Theme.borderDefault : Theme.borderSubtle
-                            border.width: 1
+                                Text {
+                                    id: infoText
+                                    anchors.centerIn: parent
+                                    text: "INF"
+                                    font.family: Theme.fontMono
+                                    font.pixelSize: Theme.sizeCaption
+                                    color: stream.infoEnabled ? _badgeTextColor(PierLogStream.InfoLevel) : Theme.textTertiary
+                                }
 
-                            Text {
-                                id: infoText
-                                anchors.centerIn: parent
-                                text: "INF"
-                                font.family: Theme.fontMono
-                                font.pixelSize: Theme.sizeCaption
-                                color: stream.infoEnabled ? _badgeTextColor(PierLogStream.InfoLevel) : Theme.textTertiary
-                            }
-
-                            MouseArea {
-                                id: infoMouse
-                                anchors.fill: parent
-                                hoverEnabled: true
-                                cursorShape: Qt.PointingHandCursor
-                                onClicked: stream.infoEnabled = !stream.infoEnabled
-                            }
-                        }
-
-                        Rectangle {
-                            implicitWidth: warnText.implicitWidth + Theme.sp2 * 2
-                            implicitHeight: 22
-                            radius: Theme.radiusSm
-                            color: warnMouse.containsMouse
-                                   ? Theme.bgHover
-                                   : (stream.warnEnabled ? _badgeFill(PierLogStream.WarnLevel) : "transparent")
-                            border.color: stream.warnEnabled ? Theme.borderDefault : Theme.borderSubtle
-                            border.width: 1
-
-                            Text {
-                                id: warnText
-                                anchors.centerIn: parent
-                                text: "WRN"
-                                font.family: Theme.fontMono
-                                font.pixelSize: Theme.sizeCaption
-                                color: stream.warnEnabled ? _badgeTextColor(PierLogStream.WarnLevel) : Theme.textTertiary
+                                MouseArea {
+                                    id: infoMouse
+                                    anchors.fill: parent
+                                    hoverEnabled: true
+                                    cursorShape: Qt.PointingHandCursor
+                                    onClicked: stream.infoEnabled = !stream.infoEnabled
+                                }
                             }
 
-                            MouseArea {
-                                id: warnMouse
-                                anchors.fill: parent
-                                hoverEnabled: true
-                                cursorShape: Qt.PointingHandCursor
-                                onClicked: stream.warnEnabled = !stream.warnEnabled
-                            }
-                        }
+                            Rectangle {
+                                implicitWidth: warnText.implicitWidth + Theme.sp2 * 2
+                                implicitHeight: 22
+                                radius: Theme.radiusSm
+                                color: warnMouse.containsMouse
+                                       ? Theme.bgHover
+                                       : (stream.warnEnabled ? _badgeFill(PierLogStream.WarnLevel) : "transparent")
+                                border.color: stream.warnEnabled ? Theme.borderDefault : Theme.borderSubtle
+                                border.width: 1
 
-                        Rectangle {
-                            implicitWidth: errorText.implicitWidth + Theme.sp2 * 2
-                            implicitHeight: 22
-                            radius: Theme.radiusSm
-                            color: errorMouse.containsMouse
-                                   ? Theme.bgHover
-                                   : (stream.errorEnabled ? _badgeFill(PierLogStream.ErrorLevel) : "transparent")
-                            border.color: stream.errorEnabled ? Theme.borderDefault : Theme.borderSubtle
-                            border.width: 1
+                                Text {
+                                    id: warnText
+                                    anchors.centerIn: parent
+                                    text: "WRN"
+                                    font.family: Theme.fontMono
+                                    font.pixelSize: Theme.sizeCaption
+                                    color: stream.warnEnabled ? _badgeTextColor(PierLogStream.WarnLevel) : Theme.textTertiary
+                                }
 
-                            Text {
-                                id: errorText
-                                anchors.centerIn: parent
-                                text: "ERR"
-                                font.family: Theme.fontMono
-                                font.pixelSize: Theme.sizeCaption
-                                color: stream.errorEnabled ? _badgeTextColor(PierLogStream.ErrorLevel) : Theme.textTertiary
-                            }
-
-                            MouseArea {
-                                id: errorMouse
-                                anchors.fill: parent
-                                hoverEnabled: true
-                                cursorShape: Qt.PointingHandCursor
-                                onClicked: stream.errorEnabled = !stream.errorEnabled
-                            }
-                        }
-
-                        Rectangle {
-                            implicitWidth: fatalText.implicitWidth + Theme.sp2 * 2
-                            implicitHeight: 22
-                            radius: Theme.radiusSm
-                            color: fatalMouse.containsMouse
-                                   ? Theme.bgHover
-                                   : (stream.fatalEnabled ? _badgeFill(PierLogStream.FatalLevel) : "transparent")
-                            border.color: stream.fatalEnabled ? Theme.borderDefault : Theme.borderSubtle
-                            border.width: 1
-
-                            Text {
-                                id: fatalText
-                                anchors.centerIn: parent
-                                text: "FTL"
-                                font.family: Theme.fontMono
-                                font.pixelSize: Theme.sizeCaption
-                                color: stream.fatalEnabled ? _badgeTextColor(PierLogStream.FatalLevel) : Theme.textTertiary
+                                MouseArea {
+                                    id: warnMouse
+                                    anchors.fill: parent
+                                    hoverEnabled: true
+                                    cursorShape: Qt.PointingHandCursor
+                                    onClicked: stream.warnEnabled = !stream.warnEnabled
+                                }
                             }
 
-                            MouseArea {
-                                id: fatalMouse
-                                anchors.fill: parent
-                                hoverEnabled: true
-                                cursorShape: Qt.PointingHandCursor
-                                onClicked: stream.fatalEnabled = !stream.fatalEnabled
+                            Rectangle {
+                                implicitWidth: errorText.implicitWidth + Theme.sp2 * 2
+                                implicitHeight: 22
+                                radius: Theme.radiusSm
+                                color: errorMouse.containsMouse
+                                       ? Theme.bgHover
+                                       : (stream.errorEnabled ? _badgeFill(PierLogStream.ErrorLevel) : "transparent")
+                                border.color: stream.errorEnabled ? Theme.borderDefault : Theme.borderSubtle
+                                border.width: 1
+
+                                Text {
+                                    id: errorText
+                                    anchors.centerIn: parent
+                                    text: "ERR"
+                                    font.family: Theme.fontMono
+                                    font.pixelSize: Theme.sizeCaption
+                                    color: stream.errorEnabled ? _badgeTextColor(PierLogStream.ErrorLevel) : Theme.textTertiary
+                                }
+
+                                MouseArea {
+                                    id: errorMouse
+                                    anchors.fill: parent
+                                    hoverEnabled: true
+                                    cursorShape: Qt.PointingHandCursor
+                                    onClicked: stream.errorEnabled = !stream.errorEnabled
+                                }
+                            }
+
+                            Rectangle {
+                                implicitWidth: fatalText.implicitWidth + Theme.sp2 * 2
+                                implicitHeight: 22
+                                radius: Theme.radiusSm
+                                color: fatalMouse.containsMouse
+                                       ? Theme.bgHover
+                                       : (stream.fatalEnabled ? _badgeFill(PierLogStream.FatalLevel) : "transparent")
+                                border.color: stream.fatalEnabled ? Theme.borderDefault : Theme.borderSubtle
+                                border.width: 1
+
+                                Text {
+                                    id: fatalText
+                                    anchors.centerIn: parent
+                                    text: "FTL"
+                                    font.family: Theme.fontMono
+                                    font.pixelSize: Theme.sizeCaption
+                                    color: stream.fatalEnabled ? _badgeTextColor(PierLogStream.FatalLevel) : Theme.textTertiary
+                                }
+
+                                MouseArea {
+                                    id: fatalMouse
+                                    anchors.fill: parent
+                                    hoverEnabled: true
+                                    cursorShape: Qt.PointingHandCursor
+                                    onClicked: stream.fatalEnabled = !stream.fatalEnabled
+                                }
                             }
                         }
                     }
@@ -462,135 +463,125 @@ Rectangle {
             }
         }
 
-        Rectangle {
+        ToolBanner {
             Layout.fillWidth: true
-            implicitHeight: stream.regexError.length > 0 ? 22 : 0
-            visible: stream.regexError.length > 0
-            color: Qt.rgba(Theme.statusWarning.r, Theme.statusWarning.g, Theme.statusWarning.b, 0.10)
-            border.color: Theme.statusWarning
-            border.width: 1
-            radius: Theme.radiusSm
-
-            Text {
-                anchors.fill: parent
-                anchors.leftMargin: Theme.sp2
-                anchors.rightMargin: Theme.sp2
-                verticalAlignment: Text.AlignVCenter
-                text: stream.regexError
-                font.family: Theme.fontMono
-                font.pixelSize: Theme.sizeCaption
-                color: Theme.statusWarning
-                elide: Text.ElideRight
-            }
+            tone: "warning"
+            text: stream.regexError
         }
 
         // ─── Line list ───────────────────────────────────
-        Rectangle {
+        ToolPanelSurface {
             Layout.fillWidth: true
             Layout.fillHeight: true
-            color: Theme.bgPanel
-            border.color: Theme.borderSubtle
-            border.width: 1
-            radius: Theme.radiusSm
+            padding: Theme.sp2
 
-            Behavior on color        { ColorAnimation { duration: Theme.durNormal } }
-            Behavior on border.color { ColorAnimation { duration: Theme.durNormal } }
-
-            ListView {
-                id: listView
+            ColumnLayout {
                 anchors.fill: parent
-                anchors.margins: Theme.sp1
-                clip: true
-                model: stream
-                spacing: 0
-                reuseItems: true
+                spacing: Theme.sp2
 
-                // Follow the tail as rows arrive, but only
-                // when the user hasn't scrolled away — this is
-                // the same affordance every tail -f viewer has.
-                // We inspect `atYEnd` on each count change:
-                // - autoScroll ON + atYEnd or count just grew:
-                //   positionViewAtEnd().
-                onCountChanged: {
-                    if (root.autoScroll) {
-                        Qt.callLater(listView.positionViewAtEnd)
-                    }
+                ToolSectionHeader {
+                    Layout.fillWidth: true
+                    title: qsTr("Output")
+                    subtitle: stream.lineCount === stream.totalLineCount
+                              ? qsTr("%1 visible lines").arg(stream.totalLineCount)
+                              : qsTr("%1 of %2 lines visible").arg(stream.lineCount).arg(stream.totalLineCount)
                 }
 
-                delegate: Rectangle {
-                    id: row
-                    required property int    index
-                    required property int    kind
-                    required property int    level
-                    required property string text
-
-                    width: ListView.view.width
-                    implicitHeight: 24
-                    color: index % 2 === 0 ? "transparent" : Theme.bgHover
+                Rectangle {
+                    Layout.fillWidth: true
+                    Layout.fillHeight: true
+                    color: Theme.bgInset
+                    border.color: Theme.borderSubtle
+                    border.width: 1
                     radius: Theme.radiusSm
 
-                    RowLayout {
+                    ListView {
+                        id: listView
                         anchors.fill: parent
-                        anchors.leftMargin: Theme.sp2
-                        anchors.rightMargin: Theme.sp2
-                        spacing: Theme.sp2
+                        anchors.margins: Theme.sp1
+                        clip: true
+                        model: stream
+                        spacing: 0
+                        reuseItems: true
 
-                        Rectangle {
-                            visible: row.level !== PierLogStream.UnknownLevel
-                            implicitWidth: badgeText.implicitWidth + Theme.sp1_5 * 2
-                            implicitHeight: 16
-                            radius: Theme.radiusXs
-                            color: _badgeFill(row.level)
-                            border.color: "transparent"
-                            Layout.alignment: Qt.AlignVCenter
+                        onCountChanged: {
+                            if (root.autoScroll) {
+                                Qt.callLater(listView.positionViewAtEnd)
+                            }
+                        }
 
-                            Text {
-                                id: badgeText
-                                anchors.centerIn: parent
-                                text: _badgeText(row.level)
-                                font.family: Theme.fontMono
-                                font.pixelSize: Theme.sizeSmall
-                                font.weight: Theme.weightMedium
-                                color: _badgeTextColor(row.level)
+                        delegate: Rectangle {
+                            id: row
+                            required property int index
+                            required property int kind
+                            required property int level
+                            required property string text
+
+                            width: ListView.view.width
+                            implicitHeight: 24
+                            color: index % 2 === 0 ? "transparent" : Theme.bgHover
+                            radius: Theme.radiusSm
+
+                            RowLayout {
+                                anchors.fill: parent
+                                anchors.leftMargin: Theme.sp2
+                                anchors.rightMargin: Theme.sp2
+                                spacing: Theme.sp2
+
+                                Rectangle {
+                                    visible: row.level !== PierLogStream.UnknownLevel
+                                    implicitWidth: badgeText.implicitWidth + Theme.sp1_5 * 2
+                                    implicitHeight: 16
+                                    radius: Theme.radiusXs
+                                    color: _badgeFill(row.level)
+                                    border.color: "transparent"
+                                    Layout.alignment: Qt.AlignVCenter
+
+                                    Text {
+                                        id: badgeText
+                                        anchors.centerIn: parent
+                                        text: _badgeText(row.level)
+                                        font.family: Theme.fontMono
+                                        font.pixelSize: Theme.sizeSmall
+                                        font.weight: Theme.weightMedium
+                                        color: _badgeTextColor(row.level)
+                                    }
+                                }
+
+                                Text {
+                                    id: rowText
+                                    Layout.fillWidth: true
+                                    text: row.text
+                                    font.family: Theme.fontMono
+                                    font.pixelSize: Theme.sizeCaption
+                                    font.weight: row.kind === PierLogStream.Stderr
+                                                 || row.kind === PierLogStream.ErrorKind
+                                                 || row.level === PierLogStream.ErrorLevel
+                                                 || row.level === PierLogStream.FatalLevel
+                                                 ? Theme.weightMedium
+                                                 : Theme.weightRegular
+                                    color: _colorForLevel(row.level, row.kind, row.text)
+                                    wrapMode: Text.NoWrap
+                                    elide: Text.ElideRight
+                                    verticalAlignment: Text.AlignVCenter
+                                }
                             }
                         }
 
                         Text {
-                            id: rowText
-                            Layout.fillWidth: true
-                            text: row.text
-                            font.family: Theme.fontMono
-                            font.pixelSize: Theme.sizeCaption
-                            font.weight: row.kind === PierLogStream.Stderr
-                                         || row.kind === PierLogStream.ErrorKind
-                                         || row.level === PierLogStream.ErrorLevel
-                                         || row.level === PierLogStream.FatalLevel
-                                         ? Theme.weightMedium
-                                         : Theme.weightRegular
-                            color: _colorForLevel(row.level, row.kind, row.text)
-                            wrapMode: Text.NoWrap
-                            elide: Text.ElideRight
-                            verticalAlignment: Text.AlignVCenter
-
-                            Behavior on color { ColorAnimation { duration: Theme.durNormal } }
+                            anchors.centerIn: parent
+                            visible: listView.count === 0
+                            text: stream.status === PierLogStream.Connected
+                                  && stream.totalLineCount === 0
+                                  ? qsTr("Waiting for output…")
+                                  : (stream.totalLineCount > 0
+                                     ? qsTr("No lines match the current filters")
+                                     : qsTr("Waiting for output…"))
+                            font.family: Theme.fontUi
+                            font.pixelSize: Theme.sizeBody
+                            color: Theme.textTertiary
                         }
                     }
-                }
-
-                // Busy placeholder while waiting for first
-                // row to arrive.
-                Text {
-                    anchors.centerIn: parent
-                    visible: listView.count === 0
-                    text: stream.status === PierLogStream.Connected
-                          && stream.totalLineCount === 0
-                          ? qsTr("Waiting for output…")
-                          : (stream.totalLineCount > 0
-                             ? qsTr("No lines match the current filters")
-                             : qsTr("Waiting for output…"))
-                    font.family: Theme.fontUi
-                    font.pixelSize: Theme.sizeBody
-                    color: Theme.textTertiary
                 }
             }
         }

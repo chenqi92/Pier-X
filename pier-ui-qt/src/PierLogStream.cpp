@@ -1,4 +1,5 @@
 #include "PierLogStream.h"
+#include "PierSshSessionHandle.h"
 
 #include "pier_log.h"
 
@@ -204,6 +205,36 @@ bool PierLogStreamModel::connectTo(const QString &host, int port, const QString 
             Q_ARG(quint64, requestId),
             Q_ARG(void *, static_cast<void *>(h)),
             Q_ARG(QString, err));
+    });
+    m_workers.push_back(std::move(worker));
+    return true;
+}
+
+bool PierLogStreamModel::connectToSession(QObject *sessionObj, const QString &command)
+{
+    if (m_handle || m_status == Connecting) return false;
+    auto *sh = qobject_cast<PierSshSessionHandle *>(sessionObj);
+    if (!sh || !sh->handle() || command.isEmpty()) return false;
+
+    const quint64 requestId = ++m_nextRequestId;
+    m_cancelFlag = std::make_shared<std::atomic<bool>>(false);
+    m_errorMessage.clear();
+    m_target = sh->target();
+    setCommand(command);
+    setStatus(Connecting);
+
+    ::PierSshSession *session = sh->handle();
+    std::string cmdStd = command.toStdString();
+    QPointer<PierLogStreamModel> selfWeak(this);
+    auto cancelFlag = m_cancelFlag;
+
+    auto worker = std::make_unique<std::thread>([selfWeak, cancelFlag, requestId, session, cmdStd = std::move(cmdStd)]() {
+        ::PierLogStream *h = pier_log_open_on_session(session, cmdStd.c_str());
+        QString err;
+        if (!h) err = QStringLiteral("Log open_on_session failed");
+        if (!selfWeak || (cancelFlag && cancelFlag->load())) { if (h) pier_log_free(h); return; }
+        QMetaObject::invokeMethod(selfWeak.data(), "onConnectResult", Qt::QueuedConnection,
+            Q_ARG(quint64, requestId), Q_ARG(void*, static_cast<void*>(h)), Q_ARG(QString, err));
     });
     m_workers.push_back(std::move(worker));
     return true;

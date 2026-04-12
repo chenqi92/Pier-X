@@ -7,28 +7,35 @@ Rectangle {
 
     property string title: ""
     property string kind: ""
+    property int colorTag: -1
     property bool active: false
     property bool menuOpen: false
     signal clicked
     signal closeRequested
     signal contextMenuRequested(real x, real y)
 
+    readonly property var colorPalette: [
+        "#e05555", "#f08d49", "#d9b44a", "#5fb865",
+        "#3574f0", "#9b6df2", "#dc6ea8", "#33a6a6"
+    ]
     readonly property string iconName: {
         if (root.kind === "sftp")
             return "folder"
         if (root.kind === "markdown")
             return "file-text"
+        if (root.kind === "ssh")
+            return "server"
         return "terminal"
     }
 
     implicitHeight: Theme.tabHeight
-    implicitWidth: Math.max(118, row.implicitWidth + Theme.sp3 * 2)
+    implicitWidth: Math.max(108, row.implicitWidth + Theme.sp3 * 2)
     radius: Theme.radiusMd
-    color: active ? Theme.bgSurface
+    color: active ? Theme.accentSubtle
          : root.menuOpen ? Theme.bgActive
          : tabArea.containsMouse ? Theme.bgHover
          : "transparent"
-    border.color: active ? Theme.borderDefault : "transparent"
+    border.color: active ? Theme.borderFocus : "transparent"
     border.width: active ? 1 : 0
 
     Behavior on color { ColorAnimation { duration: Theme.durFast } }
@@ -66,14 +73,25 @@ Rectangle {
         anchors.verticalCenter: parent.verticalCenter
         spacing: Theme.sp2
 
+        Rectangle {
+            visible: root.colorTag >= 0 && root.colorTag < root.colorPalette.length
+            anchors.verticalCenter: parent.verticalCenter
+            width: 3
+            height: 18
+            radius: 1.5
+            color: root.colorPalette[root.colorTag]
+        }
+
         Image {
             anchors.verticalCenter: parent.verticalCenter
             source: "qrc:/qt/qml/Pier/resources/icons/lucide/" + root.iconName + ".svg"
-            sourceSize: Qt.size(Theme.iconSm, Theme.iconSm)
+            sourceSize: Qt.size(12, 12)
             layer.enabled: true
             layer.effect: MultiEffect {
                 colorization: 1.0
-                colorizationColor: root.active ? Theme.textPrimary : Theme.textTertiary
+                colorizationColor: root.kind === "ssh"
+                                   ? Theme.statusSuccess
+                                   : (root.active ? Theme.accent : Theme.textTertiary)
             }
         }
 
@@ -82,7 +100,7 @@ Rectangle {
             width: Math.min(220, implicitWidth)
             text: root.title
             font.family: Theme.fontUi
-            font.pixelSize: Theme.sizeBody
+            font.pixelSize: Theme.sizeSmall
             font.weight: root.active ? Theme.weightMedium : Theme.weightRegular
             color: root.active ? Theme.textPrimary : Theme.textSecondary
             elide: Text.ElideRight
@@ -90,8 +108,8 @@ Rectangle {
 
         Rectangle {
             anchors.verticalCenter: parent.verticalCenter
-            width: 18
-            height: 18
+            width: 16
+            height: 16
             radius: Theme.radiusSm
             visible: root.active || closeArea.containsMouse || tabArea.containsMouse
             color: closeArea.containsMouse ? Theme.bgActive : "transparent"

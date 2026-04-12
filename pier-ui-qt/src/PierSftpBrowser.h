@@ -99,6 +99,7 @@ public slots:
     // pier_sftp.h.
     bool connectTo(const QString &host, int port, const QString &user,
                    int authKind, const QString &secret, const QString &extra);
+    bool connectToSession(QObject *sessionHandle);
 
     // Navigate to `path` and refresh the listing. Async —
     // watch `busy` + `currentPath` for completion. On error

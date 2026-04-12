@@ -71,6 +71,8 @@ public:
 public slots:
     bool connectTo(const QString &host, int port, const QString &user,
                    int authKind, const QString &secret, const QString &extra);
+    bool connectToSession(QObject *sessionHandle);
+    bool connectLocal();
     void probeOnce();
     void stop();
 
@@ -89,6 +91,7 @@ private:
     void ingestSnapshotJson(const QString &json);
 
     ::PierServerMonitor *m_handle = nullptr;
+    bool m_localMode = false;
     Status m_status = Idle;
     QString m_errorMessage;
     QString m_target;

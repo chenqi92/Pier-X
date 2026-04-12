@@ -55,17 +55,17 @@ Rectangle {
         spacing: Theme.sp2
 
         Rectangle {
-            width: 18
-            height: 18
-            radius: 5
+            width: 16
+            height: 16
+            radius: 4
             color: Theme.accentMuted
             border.color: Theme.borderDefault
             border.width: 1
 
             Rectangle {
                 anchors.centerIn: parent
-                width: 7
-                height: 7
+                width: 6
+                height: 6
                 radius: 3
                 color: Theme.accent
             }
@@ -101,16 +101,16 @@ Rectangle {
         anchors.horizontalCenter: parent.horizontalCenter
         anchors.verticalCenter: parent.verticalCenter
         width: Math.min(400,
-                        Math.max(300,
+                        Math.max(260,
                                  paletteLabel.implicitWidth
                                  + shortcutText.implicitWidth
-                                 + Theme.sp10))
-        height: Theme.fieldHeight
+                                 + Theme.sp8))
+        height: Theme.controlHeight + 2
         radius: Theme.radiusPill
         color: paletteMouse.pressed ? Theme.bgActive
              : paletteMouse.containsMouse ? Theme.bgHover
              : Theme.bgInset
-        border.color: paletteMouse.containsMouse ? Theme.borderStrong : Theme.borderDefault
+        border.color: paletteMouse.containsMouse ? Theme.borderDefault : Theme.borderSubtle
         border.width: 1
 
         Behavior on color { ColorAnimation { duration: Theme.durFast } }
@@ -169,12 +169,14 @@ Rectangle {
         spacing: Theme.sp1
 
         IconButton {
+            compact: true
             icon: "plus"
             tooltip: qsTr("New session")
             onClicked: root.newSessionRequested()
         }
 
         IconButton {
+            compact: true
             icon: Theme.dark ? "sun" : "moon"
             tooltip: Theme.dark ? qsTr("Switch to light theme") : qsTr("Switch to dark theme")
             onClicked: {
@@ -184,6 +186,7 @@ Rectangle {
         }
 
         IconButton {
+            compact: true
             icon: "settings"
             tooltip: qsTr("Settings")
             onClicked: root.settingsRequested()

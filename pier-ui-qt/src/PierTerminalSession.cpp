@@ -1,6 +1,8 @@
 #include "PierTerminalSession.h"
+#include "PierSshSessionHandle.h"
 
 #include "pier_terminal.h"
+#include "pier_ssh_session.h"
 
 #include <QByteArray>
 #include <QDebug>
@@ -239,6 +241,48 @@ bool PierTerminalSession::startSshWithAgent(const QString &host, int port,
             user_data);
     };
     return dispatchSshConnect(target, cols, rows, std::move(factory));
+}
+
+bool PierTerminalSession::startSshOnSession(QObject *sessionObj, int cols, int rows)
+{
+    auto *sh = qobject_cast<PierSshSessionHandle *>(sessionObj);
+    if (!sh || !sh->handle()) {
+        qWarning() << "startSshOnSession: invalid session handle";
+        return false;
+    }
+
+    // Cache SSH context from the session handle
+    clearSshContext();
+    m_sshHost = sh->target().section('@', 1).section(':', 0, 0);
+    m_sshPort = sh->target().section(':', -1).toInt();
+    m_sshUser = sh->target().section('@', 0, 0);
+
+    const QString target = sh->target();
+    ::PierSshSession *session = sh->handle();
+
+    auto factory = [session](void *user_data) -> PierTerminal * {
+        return pier_terminal_new_ssh_on_session(
+            session,
+            0, 0,  // cols/rows set by dispatchSshConnect
+            &PierTerminalSession::notifyTrampoline,
+            user_data);
+    };
+
+    // dispatchSshConnect will set proper cols/rows in its own factory wrapper
+    // But since pier_terminal_new_ssh_on_session takes cols/rows directly,
+    // we need to capture them properly.
+    const uint16_t colsU16 = static_cast<uint16_t>(cols);
+    const uint16_t rowsU16 = static_cast<uint16_t>(rows);
+
+    auto factoryWithSize = [session, colsU16, rowsU16](void *user_data) -> PierTerminal * {
+        return pier_terminal_new_ssh_on_session(
+            session,
+            colsU16, rowsU16,
+            &PierTerminalSession::notifyTrampoline,
+            user_data);
+    };
+
+    return dispatchSshConnect(target, cols, rows, std::move(factoryWithSize));
 }
 
 bool PierTerminalSession::dispatchSshConnect(const QString &targetLabel,

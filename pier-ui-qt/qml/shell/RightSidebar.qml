@@ -11,6 +11,11 @@ Rectangle {
     property string activeTool: "git"
     property string activeBackend: ""
 
+    // Shared SSH session from the active terminal tab.
+    // Tools use connectToSession(sharedSession) instead of
+    // opening their own independent SSH connections.
+    property var sharedSession: null
+
     property string sshHost: ""
     property int sshPort: 22
     property string sshUser: ""
@@ -37,10 +42,13 @@ Rectangle {
     // Content area expanded/collapsed. The tool strip is always
     // visible; only the content pane hides on collapse.
     property bool contentExpanded: true
+    clip: true
 
     signal closePanelRequested()
 
-    readonly property bool hasRemoteContext: root.activeBackend === "ssh" || root.sshHost.length > 0
+    readonly property bool hasRemoteContext: root.activeBackend === "ssh"
+                                            || root.sshHost.length > 0
+                                            || (root.sharedSession && root.sharedSession.connected)
     readonly property bool currentToolReady: root.toolAvailable(root.activeTool)
     readonly property string panelTitle: {
         switch (root.activeTool) {
@@ -65,16 +73,22 @@ Rectangle {
                     : root.mysqlHost + ":" + root.mysqlPort
         if (root.activeTool === "redis" && root.redisHost.length > 0)
             return root.redisHost + ":" + root.redisPort
-        return root.sshUser.length > 0 ? root.sshUser + "@" + root.sshHost + ":" + root.sshPort : root.sshHost
+        if (root.sshHost.length > 0)
+            return root.sshUser.length > 0 ? root.sshUser + "@" + root.sshHost + ":" + root.sshPort : root.sshHost
+        return "localhost"
     }
 
     function toolAvailable(tool) {
-        if (tool === "git")
-            return true
-        if (tool === "mysql")
-            return root.mysqlHost.length > 0 || root.hasRemoteContext
-        if (tool === "redis")
-            return root.redisHost.length > 0 || root.hasRemoteContext
+        // Git is always available (local repo)
+        if (tool === "git") return true
+        // These tools work both locally and remotely
+        if (tool === "monitor") return true
+        if (tool === "docker") return true
+        if (tool === "mysql") return true
+        if (tool === "redis") return true
+        if (tool === "log") return true
+        // SFTP only makes sense for remote connections
+        if (tool === "sftp") return root.hasRemoteContext
         return root.hasRemoteContext
     }
 
@@ -161,18 +175,15 @@ Rectangle {
                 StackLayout {
                     anchors.fill: parent
                     currentIndex: {
-                        if (root.activeTool === "git")
-                            return 0
-                        if (!root.currentToolReady)
-                            return 1
                         switch (root.activeTool) {
+                        case "git":     return 0
                         case "monitor": return 2
-                        case "docker": return 3
-                        case "mysql": return 4
-                        case "redis": return 5
-                        case "log": return 6
-                        case "sftp": return 7
-                        default: return 0
+                        case "docker":  return 3
+                        case "mysql":   return 4
+                        case "redis":   return 5
+                        case "log":     return 6
+                        case "sftp":    return root.hasRemoteContext ? 7 : 1
+                        default:        return 0
                         }
                     }
 
@@ -219,8 +230,9 @@ Rectangle {
                     }
 
                     Loader {
-                        active: root.activeTool === "monitor" && root.currentToolReady
+                        active: root.activeTool === "monitor"
                         sourceComponent: ServerMonitorView {
+                            sharedSession: root.sharedSession
                             sshHost: root.sshHost
                             sshPort: root.sshPort
                             sshUser: root.sshUser
@@ -233,8 +245,9 @@ Rectangle {
                     }
 
                     Loader {
-                        active: root.activeTool === "docker" && root.currentToolReady
+                        active: root.activeTool === "docker"
                         sourceComponent: DockerPanelView {
+                            sharedSession: root.sharedSession
                             sshHost: root.sshHost
                             sshPort: root.sshPort
                             sshUser: root.sshUser
@@ -247,7 +260,7 @@ Rectangle {
                     }
 
                     Loader {
-                        active: root.activeTool === "mysql" && root.currentToolReady
+                        active: root.activeTool === "mysql"
                         sourceComponent: MySqlBrowserView {
                             mysqlHost: root.mysqlHost
                             mysqlPort: root.mysqlPort
@@ -258,7 +271,7 @@ Rectangle {
                     }
 
                     Loader {
-                        active: root.activeTool === "redis" && root.currentToolReady
+                        active: root.activeTool === "redis"
                         sourceComponent: RedisBrowserView {
                             redisHost: root.redisHost
                             redisPort: root.redisPort
@@ -267,8 +280,9 @@ Rectangle {
                     }
 
                     Loader {
-                        active: root.activeTool === "log" && root.currentToolReady
+                        active: root.activeTool === "log"
                         sourceComponent: LogViewerView {
+                            sharedSession: root.sharedSession
                             sshHost: root.sshHost
                             sshPort: root.sshPort
                             sshUser: root.sshUser
@@ -284,6 +298,7 @@ Rectangle {
                     Loader {
                         active: root.activeTool === "sftp" && root.currentToolReady
                         sourceComponent: SftpBrowserView {
+                            sharedSession: root.sharedSession
                             sshHost: root.sshHost
                             sshPort: root.sshPort
                             sshUser: root.sshUser
@@ -371,6 +386,7 @@ Rectangle {
                     tooltip: qsTr("SFTP")
                     active: root.activeTool === "sftp"
                     enabled: root.toolAvailable("sftp")
+                    visible: root.hasRemoteContext
                     onClicked: { root.activeTool = "sftp"; root.contentExpanded = true }
                 }
 

@@ -24,6 +24,8 @@ import Pier
 Rectangle {
     id: root
 
+    clip: true
+    property var sharedSession: null
     property string sshHost: ""
     property int    sshPort: 22
     property string sshUser: ""
@@ -56,11 +58,27 @@ Rectangle {
     property string inspectPorts: ""
     property string inspectState: ""
 
-    Component.onCompleted: _dispatchConnect()
+    Component.onCompleted: Qt.callLater(_dispatchConnect)
+
+    Connections {
+        target: root.sharedSession
+        function onConnectedChanged() {
+            if (root.sharedSession && root.sharedSession.connected)
+                root._dispatchConnect()
+        }
+    }
 
     function _dispatchConnect() {
+        if (client.status === PierDockerClient.Connecting
+                || client.status === PierDockerClient.Connected)
+            return
+        if (root.sharedSession && root.sharedSession.connected) {
+            client.connectToSession(root.sharedSession)
+            return
+        }
         if (root.sshHost.length === 0 || root.sshUser.length === 0) {
-            console.warn("DockerPanelView: missing host/user")
+            // No SSH context — connect to local Docker
+            client.connectLocal()
             return
         }
         var kind = 0

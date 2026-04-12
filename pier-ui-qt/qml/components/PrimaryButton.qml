@@ -31,12 +31,18 @@ Rectangle {
 
     Text {
         id: label
-        anchors.centerIn: parent
+        anchors.fill: parent
+        anchors.leftMargin: root.horizontalPadding
+        anchors.rightMargin: root.horizontalPadding
+        verticalAlignment: Text.AlignVCenter
+        horizontalAlignment: Text.AlignHCenter
         text: root.text
         font.family: Theme.fontUi
         font.pixelSize: compact ? Theme.sizeCaption : Theme.sizeBody
         font.weight: Theme.weightMedium
         color: Theme.textInverse
+        wrapMode: Text.NoWrap
+        elide: Text.ElideRight
     }
 
     MouseArea {

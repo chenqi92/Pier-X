@@ -1,6 +1,8 @@
 #include "PierDockerClient.h"
 
 #include "pier_docker.h"
+#include "pier_local.h"
+#include "PierSshSessionHandle.h"
 
 #include <QByteArray>
 #include <QDebug>
@@ -160,6 +162,71 @@ bool PierDockerClientModel::connectTo(const QString &host, int port, const QStri
     return true;
 }
 
+bool PierDockerClientModel::connectToSession(QObject *sessionObj)
+{
+    if (m_handle || m_status == Connecting) return false;
+    auto *sh = qobject_cast<PierSshSessionHandle *>(sessionObj);
+    if (!sh || !sh->handle()) return false;
+
+    const quint64 requestId = ++m_nextRequestId;
+    m_cancelFlag = std::make_shared<std::atomic<bool>>(false);
+    m_errorMessage.clear();
+    m_target = sh->target();
+    setStatus(Connecting);
+    setBusy(true);
+
+    ::PierSshSession *session = sh->handle();
+    QPointer<PierDockerClientModel> selfWeak(this);
+    auto cancelFlag = m_cancelFlag;
+
+    auto worker = std::make_unique<std::thread>([
+        selfWeak, cancelFlag, requestId, session
+    ]() {
+        ::PierDocker *h = pier_docker_open_on_session(session);
+        QString err;
+        if (!h) err = QStringLiteral("Docker open_on_session failed");
+        if (!selfWeak || (cancelFlag && cancelFlag->load())) {
+            if (h) pier_docker_free(h);
+            return;
+        }
+        QMetaObject::invokeMethod(selfWeak.data(), "onConnectResult", Qt::QueuedConnection,
+            Q_ARG(quint64, requestId), Q_ARG(void *, static_cast<void *>(h)), Q_ARG(QString, err));
+    });
+    m_workers.push_back(std::move(worker));
+    return true;
+}
+
+bool PierDockerClientModel::connectLocal()
+{
+    if (m_handle || m_localMode || m_status == Connecting) return false;
+
+    m_localMode = true;
+    m_errorMessage.clear();
+    m_target = QStringLiteral("localhost");
+    setStatus(Connected);
+
+    // Immediately refresh using local Docker commands
+    const quint64 rid = ++m_nextRequestId;
+    m_cancelFlag = std::make_shared<std::atomic<bool>>(false);
+    setBusy(true);
+
+    QPointer<PierDockerClientModel> self(this);
+    auto cf = m_cancelFlag;
+
+    auto worker = std::make_unique<std::thread>([self, cf, rid]() {
+        char *json = pier_local_docker_list_containers(1);
+        QString result = json ? QString::fromUtf8(json) : QString();
+        if (json) pier_local_free_string(json);
+        QString err;
+        if (result.isEmpty()) err = QStringLiteral("Local Docker not available");
+        if (!self || (cf && cf->load())) return;
+        QMetaObject::invokeMethod(self.data(), "onListResult", Qt::QueuedConnection,
+            Q_ARG(quint64, rid), Q_ARG(QString, result), Q_ARG(QString, err));
+    });
+    m_workers.push_back(std::move(worker));
+    return true;
+}
+
 void PierDockerClientModel::onConnectResult(quint64 requestId, void *handle, const QString &error)
 {
     if (requestId != m_nextRequestId) {
@@ -180,31 +247,35 @@ void PierDockerClientModel::onConnectResult(quint64 requestId, void *handle, con
 
 void PierDockerClientModel::refresh()
 {
-    if (!m_handle) return;
+    if (!m_handle && !m_localMode) return;
     spawnList(++m_nextRequestId);
 }
 
 void PierDockerClientModel::spawnList(quint64 requestId)
 {
-    if (!m_handle) return;
+    if (!m_handle && !m_localMode) return;
     setBusy(true);
 
     ::PierDocker *h = m_handle;
     const int all = m_showStopped ? 1 : 0;
+    const bool local = m_localMode;
     QPointer<PierDockerClientModel> selfWeak(this);
     auto cancelFlag = m_cancelFlag;
 
     auto worker = std::make_unique<std::thread>([
-        selfWeak, cancelFlag, requestId, h, all
+        selfWeak, cancelFlag, requestId, h, all, local
     ]() mutable {
-        char *json = pier_docker_list_containers(h, all);
+        char *json = local
+            ? pier_local_docker_list_containers(all)
+            : pier_docker_list_containers(h, all);
         QString jsonStr;
         QString err;
         if (json) {
             jsonStr = QString::fromUtf8(json);
-            pier_docker_free_string(json);
+            if (local) pier_local_free_string(json);
+            else pier_docker_free_string(json);
         } else {
-            err = QStringLiteral("docker ps failed (see log)");
+            err = QStringLiteral("docker ps failed");
         }
         if (!selfWeak || (cancelFlag && cancelFlag->load())) return;
         QMetaObject::invokeMethod(
@@ -346,23 +417,27 @@ void PierDockerClientModel::spawnAction(quint64 requestId,
                                          const QString &id,
                                          bool force)
 {
-    if (!m_handle || id.isEmpty()) return;
+    if ((!m_handle && !m_localMode) || id.isEmpty()) return;
     setBusy(true);
 
     std::string idStd = id.toStdString();
     std::string verbStd = verb.toStdString();
     ::PierDocker *h = m_handle;
+    const bool local = m_localMode;
     QPointer<PierDockerClientModel> selfWeak(this);
     auto cancelFlag = m_cancelFlag;
 
     auto worker = std::make_unique<std::thread>([
-        selfWeak, cancelFlag, requestId, h,
+        selfWeak, cancelFlag, requestId, h, local,
         verbStd = std::move(verbStd),
         idStd = std::move(idStd),
         force
     ]() mutable {
         int32_t rc = PIER_DOCKER_ERR_FAILED;
-        if (verbStd == "start") {
+        if (local) {
+            rc = pier_local_docker_action(verbStd.c_str(), idStd.c_str(), force ? 1 : 0) == 0
+                 ? PIER_DOCKER_OK : PIER_DOCKER_ERR_FAILED;
+        } else if (verbStd == "start") {
             rc = pier_docker_start(h, idStd.c_str());
         } else if (verbStd == "stop") {
             rc = pier_docker_stop(h, idStd.c_str());
@@ -614,6 +689,7 @@ void PierDockerClientModel::stop()
         m_cancelFlag->store(true);
     }
     ++m_nextRequestId;
+    m_localMode = false;
     if (m_handle) {
         ::PierDocker *h = m_handle;
         m_handle = nullptr;

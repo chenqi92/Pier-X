@@ -1,4 +1,5 @@
 #include "PierSftpBrowser.h"
+#include "PierSshSessionHandle.h"
 
 #include "pier_sftp.h"
 
@@ -152,6 +153,43 @@ bool PierSftpBrowser::connectTo(const QString &host, int port, const QString &us
             Q_ARG(void *, static_cast<void *>(h)),
             Q_ARG(QString, err),
             Q_ARG(QString, cwd));
+    });
+    m_workers.push_back(std::move(worker));
+    return true;
+}
+
+bool PierSftpBrowser::connectToSession(QObject *sessionObj)
+{
+    if (m_handle || m_status == Connecting) return false;
+    auto *sh = qobject_cast<PierSshSessionHandle *>(sessionObj);
+    if (!sh || !sh->handle()) return false;
+
+    const quint64 requestId = ++m_nextRequestId;
+    m_cancelFlag = std::make_shared<std::atomic<bool>>(false);
+    m_errorMessage.clear();
+    m_target = sh->target();
+    setStatus(Connecting);
+    setBusy(true);
+
+    ::PierSshSession *session = sh->handle();
+    QPointer<PierSftpBrowser> selfWeak(this);
+    auto cancelFlag = m_cancelFlag;
+
+    auto worker = std::make_unique<std::thread>([selfWeak, cancelFlag, requestId, session]() {
+        PierSftp *h = pier_sftp_new_on_session(session);
+        QString err;
+        QString cwd;
+        if (!h) {
+            err = QStringLiteral("SFTP open_on_session failed");
+        } else {
+            char *resolved = pier_sftp_canonicalize(h, ".");
+            if (resolved) { cwd = QString::fromUtf8(resolved); pier_sftp_free_string(resolved); }
+            else { cwd = QStringLiteral("/"); }
+        }
+        if (!selfWeak || (cancelFlag && cancelFlag->load())) { if (h) pier_sftp_free(h); return; }
+        QMetaObject::invokeMethod(selfWeak.data(), "onConnectResult", Qt::QueuedConnection,
+            Q_ARG(quint64, requestId), Q_ARG(void*, static_cast<void*>(h)),
+            Q_ARG(QString, err), Q_ARG(QString, cwd));
     });
     m_workers.push_back(std::move(worker));
     return true;

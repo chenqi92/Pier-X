@@ -727,10 +727,20 @@
         <translation>新建本地终端</translation>
     </message>
     <message>
+        <location filename="../qml/Main.qml" line="1039"/>
+        <source>Open a fresh local shell tab.</source>
+        <translation>打开一个新的本地 Shell 标签页。</translation>
+    </message>
+    <message>
         <location filename="../qml/Main.qml" line="58"/>
         <location filename="../qml/Main.qml" line="1209"/>
         <source>New SSH connection…</source>
         <translation>新建 SSH 连接…</translation>
+    </message>
+    <message>
+        <location filename="../qml/Main.qml" line="1049"/>
+        <source>Create or connect to a saved remote profile.</source>
+        <translation>创建新远程连接，或连接到已保存的主机配置。</translation>
     </message>
     <message>
         <location filename="../qml/Main.qml" line="67"/>
@@ -2556,6 +2566,46 @@ Create one to unlock SSH, SFTP, Docker, logs, and database tools.</source>
 <context>
     <name>TabBar</name>
     <message>
+        <location filename="../qml/shell/TabBar.qml" line="30"/>
+        <source>Red</source>
+        <translation>红色</translation>
+    </message>
+    <message>
+        <location filename="../qml/shell/TabBar.qml" line="31"/>
+        <source>Orange</source>
+        <translation>橙色</translation>
+    </message>
+    <message>
+        <location filename="../qml/shell/TabBar.qml" line="32"/>
+        <source>Yellow</source>
+        <translation>黄色</translation>
+    </message>
+    <message>
+        <location filename="../qml/shell/TabBar.qml" line="33"/>
+        <source>Green</source>
+        <translation>绿色</translation>
+    </message>
+    <message>
+        <location filename="../qml/shell/TabBar.qml" line="34"/>
+        <source>Blue</source>
+        <translation>蓝色</translation>
+    </message>
+    <message>
+        <location filename="../qml/shell/TabBar.qml" line="35"/>
+        <source>Purple</source>
+        <translation>紫色</translation>
+    </message>
+    <message>
+        <location filename="../qml/shell/TabBar.qml" line="36"/>
+        <source>Pink</source>
+        <translation>粉色</translation>
+    </message>
+    <message>
+        <location filename="../qml/shell/TabBar.qml" line="37"/>
+        <source>Teal</source>
+        <translation>青色</translation>
+    </message>
+    <message>
         <location filename="../qml/shell/TabBar.qml" line="63"/>
         <source>Scroll tabs left</source>
         <translation>向左滚动标签页</translation>
@@ -2594,6 +2644,16 @@ Create one to unlock SSH, SFTP, Docker, logs, and database tools.</source>
         <location filename="../qml/shell/TabBar.qml" line="213"/>
         <source>New session</source>
         <translation>新建会话</translation>
+    </message>
+    <message>
+        <location filename="../qml/shell/TabBar.qml" line="314"/>
+        <source>Set color tag</source>
+        <translation>设置标签颜色</translation>
+    </message>
+    <message>
+        <location filename="../qml/shell/TabBar.qml" line="383"/>
+        <source>Clear</source>
+        <translation>清除</translation>
     </message>
 </context>
 <context>

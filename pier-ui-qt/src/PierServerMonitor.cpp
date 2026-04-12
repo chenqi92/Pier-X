@@ -1,5 +1,7 @@
 #include "PierServerMonitor.h"
+#include "PierSshSessionHandle.h"
 #include "pier_server_monitor.h"
+#include "pier_local.h"
 
 #include <QDebug>
 #include <QJsonDocument>
@@ -63,6 +65,47 @@ bool PierServerMonitorModel::connectTo(const QString &host, int port, const QStr
     return true;
 }
 
+bool PierServerMonitorModel::connectToSession(QObject *sessionObj)
+{
+    if (m_handle || m_status == Connecting) return false;
+    auto *sh = qobject_cast<PierSshSessionHandle *>(sessionObj);
+    if (!sh || !sh->handle()) return false;
+
+    const quint64 rid = ++m_nextRequestId;
+    m_cancelFlag = std::make_shared<std::atomic<bool>>(false);
+    m_errorMessage.clear();
+    m_target = sh->target();
+    setStatus(Connecting);
+    setBusy(true);
+
+    ::PierSshSession *session = sh->handle();
+    QPointer<PierServerMonitorModel> self(this);
+    auto cf = m_cancelFlag;
+
+    auto worker = std::make_unique<std::thread>([self, cf, rid, session]() {
+        ::PierServerMonitor *handle = pier_server_monitor_open_on_session(session);
+        QString err;
+        if (!handle) err = QStringLiteral("Monitor open_on_session failed");
+        if (!self || (cf && cf->load())) { if (handle) pier_server_monitor_free(handle); return; }
+        QMetaObject::invokeMethod(self.data(), "onConnectResult", Qt::QueuedConnection,
+            Q_ARG(quint64, rid), Q_ARG(void*, static_cast<void*>(handle)), Q_ARG(QString, err));
+    });
+    m_workers.push_back(std::move(worker));
+    return true;
+}
+
+bool PierServerMonitorModel::connectLocal()
+{
+    if (m_handle || m_localMode || m_status == Connecting) return false;
+    m_localMode = true;
+    m_errorMessage.clear();
+    m_target = QStringLiteral("localhost");
+    setStatus(Connected);
+    probeOnce();
+    m_pollTimer.start();
+    return true;
+}
+
 void PierServerMonitorModel::onConnectResult(quint64 rid, void *handle, const QString &error)
 {
     if (rid != m_nextRequestId) { if (handle) pier_server_monitor_free(static_cast<::PierServerMonitor*>(handle)); return; }
@@ -76,18 +119,24 @@ void PierServerMonitorModel::onConnectResult(quint64 rid, void *handle, const QS
 
 void PierServerMonitorModel::probeOnce()
 {
-    if (!m_handle || m_busy) return;
+    if ((!m_handle && !m_localMode) || m_busy) return;
     const quint64 rid = ++m_nextRequestId;
     setBusy(true);
 
     ::PierServerMonitor *h = m_handle;
+    const bool local = m_localMode;
     QPointer<PierServerMonitorModel> self(this);
     auto cf = m_cancelFlag;
 
-    auto worker = std::make_unique<std::thread>([self, cf, rid, h]() {
-        char *json = pier_server_monitor_probe(h);
+    auto worker = std::make_unique<std::thread>([self, cf, rid, h, local]() {
         QString js;
-        if (json) { js = QString::fromUtf8(json); pier_server_monitor_free_string(json); }
+        if (local) {
+            char *json = pier_local_system_metrics();
+            if (json) { js = QString::fromUtf8(json); pier_local_free_string(json); }
+        } else {
+            char *json = pier_server_monitor_probe(h);
+            if (json) { js = QString::fromUtf8(json); pier_server_monitor_free_string(json); }
+        }
         if (!self || (cf && cf->load())) return;
         QMetaObject::invokeMethod(self.data(), "onProbeResult", Qt::QueuedConnection,
             Q_ARG(quint64, rid), Q_ARG(QString, js));

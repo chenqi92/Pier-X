@@ -163,6 +163,11 @@ public slots:
                            const QString &user,
                            int cols, int rows);
 
+    // Spawn a remote shell over an existing shared SSH session.
+    // No handshake — the session is already authenticated.
+    // The session handle is obtained from PierSshSessionHandle.
+    bool startSshOnSession(QObject *sessionHandle, int cols, int rows);
+
     // Cancel an in-progress SSH handshake. If the worker thread
     // has not yet returned from pier_terminal_new_ssh, we can't
     // interrupt it — instead we flag the request as cancelled, so

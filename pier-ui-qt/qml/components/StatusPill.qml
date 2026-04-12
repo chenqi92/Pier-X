@@ -7,7 +7,21 @@ Rectangle {
     id: root
 
     property string text: ""
-    property color statusColor: Theme.statusSuccess
+    property string tone: ""
+    property color statusColor: {
+        switch (root.tone) {
+        case "neutral":
+            return Theme.textTertiary
+        case "info":
+            return Theme.accent
+        case "warning":
+            return Theme.statusWarning
+        case "error":
+            return Theme.statusError
+        default:
+            return Theme.statusSuccess
+        }
+    }
 
     implicitHeight: 22
     implicitWidth: row.implicitWidth + Theme.sp3 * 2

@@ -155,6 +155,7 @@ public slots:
     bool connectTo(const QString &host, int port, const QString &user,
                    int authKind, const QString &secret, const QString &extra,
                    const QString &command);
+    bool connectToSession(QObject *sessionHandle, const QString &command);
 
     /// Drop every row currently in the model.
     void clear();

@@ -118,11 +118,15 @@ public:
     void setShowStopped(bool v);
 
 public slots:
-    /// Open the SSH session behind the panel. Same auth-kind
-    /// table as every other session-based QObject here
-    /// (0=password, 1=credential, 2=key, 3=agent).
+    /// Open the SSH session behind the panel.
     bool connectTo(const QString &host, int port, const QString &user,
                    int authKind, const QString &secret, const QString &extra);
+
+    /// Reuse an existing shared SSH session (no extra handshake).
+    bool connectToSession(QObject *sessionHandle);
+
+    /// Connect to the local Docker daemon (no SSH needed).
+    bool connectLocal();
 
     /// Re-run `docker ps` and replace the model contents.
     void refresh();
@@ -196,6 +200,7 @@ private:
     };
 
     ::PierDocker *m_handle = nullptr;
+    bool m_localMode = false;
     std::vector<Row> m_rows;
 
     Status m_status = Status::Idle;

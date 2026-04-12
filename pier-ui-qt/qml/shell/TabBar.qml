@@ -19,11 +19,25 @@ Rectangle {
     signal closeOtherTabsRequested(int index)
     signal closeTabsToLeftRequested(int index)
     signal closeTabsToRightRequested(int index)
+    signal tabColorChanged(int index, int colorTag)
     signal newTabClicked
     signal tabMoved(int from, int to)
 
     implicitHeight: Theme.tabBarHeight
     color: Theme.bgPanel
+
+    readonly property var tabColors: [
+        { name: qsTr("Red"), value: 0, color: "#e05555" },
+        { name: qsTr("Orange"), value: 1, color: "#f08d49" },
+        { name: qsTr("Yellow"), value: 2, color: "#d9b44a" },
+        { name: qsTr("Green"), value: 3, color: "#5fb865" },
+        { name: qsTr("Blue"), value: 4, color: "#3574f0" },
+        { name: qsTr("Purple"), value: 5, color: "#9b6df2" },
+        { name: qsTr("Pink"), value: 6, color: "#dc6ea8" },
+        { name: qsTr("Teal"), value: 7, color: "#33a6a6" }
+    ]
+
+    onCurrentIndexChanged: Qt.callLater(function() { root.ensureTabVisible(root.currentIndex) })
 
     function scrollTabs(delta) {
         const maxContentX = Math.max(0, tabContainer.contentWidth - tabContainer.width)
@@ -93,6 +107,7 @@ Rectangle {
                         id: tabDelegate
                         title: model.title
                         kind: model.backend || ""
+                        colorTag: model.tabColor !== undefined ? model.tabColor : -1
                         active: index === root.currentIndex
                         menuOpen: index === root.contextTabIndex && tabContextMenu.visible
 
@@ -187,6 +202,7 @@ Rectangle {
         IconButton {
             visible: root.hasOverflow
             enabled: root.canScrollRight
+            compact: true
             icon: "arrow-left"
             iconRotation: 180
             tooltip: qsTr("Scroll tabs right")
@@ -196,6 +212,7 @@ Rectangle {
         IconButton {
             id: overflowButton
             visible: root.hasOverflow
+            compact: true
             icon: "chevron-down"
             tooltip: qsTr("All tabs")
             onClicked: {
@@ -209,6 +226,7 @@ Rectangle {
         }
 
         IconButton {
+            compact: true
             icon: "plus"
             tooltip: qsTr("New session")
             onClicked: root.newTabClicked()
@@ -225,7 +243,7 @@ Rectangle {
 
     Popup {
         id: tabContextMenu
-        width: 194
+        width: 224
         modal: false
         focus: true
         padding: Theme.sp1
@@ -284,6 +302,103 @@ Rectangle {
                     root.closeTabsToRightRequested(index)
                 }
             }
+
+            Rectangle {
+                width: parent.width
+                height: 1
+                color: Theme.borderSubtle
+            }
+
+            Text {
+                width: parent.width
+                text: qsTr("Set color tag")
+                font.family: Theme.fontUi
+                font.pixelSize: Theme.sizeSmall
+                font.weight: Theme.weightMedium
+                color: Theme.textTertiary
+                leftPadding: Theme.sp3
+                rightPadding: Theme.sp3
+                topPadding: Theme.sp1
+                bottomPadding: Theme.sp0_5
+            }
+
+            Flow {
+                width: parent.width
+                spacing: Theme.sp1
+
+                Repeater {
+                    model: root.tabColors
+
+                    Rectangle {
+                        required property var modelData
+
+                        width: 22
+                        height: 22
+                        radius: 11
+                        color: colorMouse.containsMouse ? Theme.bgHover : "transparent"
+                        border.color: root.contextTabIndex >= 0
+                                      && root.model
+                                      && root.model.get(root.contextTabIndex).tabColor === modelData.value
+                                      ? Theme.borderFocus
+                                      : "transparent"
+                        border.width: root.contextTabIndex >= 0
+                                      && root.model
+                                      && root.model.get(root.contextTabIndex).tabColor === modelData.value ? 1 : 0
+
+                        Rectangle {
+                            anchors.centerIn: parent
+                            width: 10
+                            height: 10
+                            radius: 5
+                            color: modelData.color
+                        }
+
+                        MouseArea {
+                            id: colorMouse
+                            anchors.fill: parent
+                            hoverEnabled: true
+                            cursorShape: Qt.PointingHandCursor
+                            onClicked: {
+                                const index = root.contextTabIndex
+                                tabContextMenu.close()
+                                root.tabColorChanged(index, modelData.value)
+                            }
+                        }
+
+                        PierToolTip {
+                            visible: colorMouse.containsMouse
+                            text: modelData.name
+                        }
+                    }
+                }
+
+                Rectangle {
+                    width: 56
+                    height: 22
+                    radius: Theme.radiusSm
+                    color: clearArea.containsMouse ? Theme.bgHover : "transparent"
+
+                    Text {
+                        anchors.centerIn: parent
+                        text: qsTr("Clear")
+                        font.family: Theme.fontUi
+                        font.pixelSize: Theme.sizeSmall
+                        color: Theme.textSecondary
+                    }
+
+                    MouseArea {
+                        id: clearArea
+                        anchors.fill: parent
+                        hoverEnabled: true
+                        cursorShape: Qt.PointingHandCursor
+                        onClicked: {
+                            const index = root.contextTabIndex
+                            tabContextMenu.close()
+                            root.tabColorChanged(index, -1)
+                        }
+                    }
+                }
+            }
         }
     }
 
@@ -331,7 +446,7 @@ Rectangle {
         property bool active: false
         signal clicked()
 
-        implicitWidth: 194
+        implicitWidth: 224
         implicitHeight: Theme.controlHeight
         radius: Theme.radiusSm
         color: active ? Theme.bgSelected : menuArea.containsMouse ? Theme.bgHover : "transparent"
@@ -360,7 +475,6 @@ Rectangle {
         }
     }
 
-    onCurrentIndexChanged: Qt.callLater(function() { root.ensureTabVisible(root.currentIndex) })
     onWidthChanged: Qt.callLater(function() { root.ensureTabVisible(root.currentIndex) })
     Component.onCompleted: Qt.callLater(function() { root.ensureTabVisible(root.currentIndex) })
 }

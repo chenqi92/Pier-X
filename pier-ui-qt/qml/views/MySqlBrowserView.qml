@@ -2,6 +2,7 @@ import QtQuick
 import QtQuick.Controls
 import QtQuick.Layouts
 import Pier
+import "../components"
 
 // MySQL browser panel — tunnel-first service tool with a
 // persistent workspace. The panel is designed for repeated
@@ -10,6 +11,7 @@ import Pier
 Rectangle {
     id: root
 
+    clip: true
     property string mysqlHost: "127.0.0.1"
     property int    mysqlPort: 0
     property string mysqlUser: ""
@@ -425,129 +427,130 @@ Rectangle {
 
     ColumnLayout {
         anchors.fill: parent
-        anchors.margins: Theme.sp2
+        anchors.margins: Theme.sp3
         spacing: Theme.sp2
 
-        RowLayout {
+        ToolPanelSurface {
             Layout.fillWidth: true
-            spacing: Theme.sp2
+            padding: Theme.sp2
+            implicitHeight: connectFlow.implicitHeight + Theme.sp2 * 2
 
-            Rectangle {
-                implicitWidth: 176
-                implicitHeight: 26
-                color: Theme.bgInset
-                border.color: Theme.borderSubtle
-                border.width: 1
-                radius: Theme.radiusPill
+            Flow {
+                id: connectFlow
+                anchors.fill: parent
+                spacing: Theme.sp2
 
-                Behavior on color { ColorAnimation { duration: Theme.durNormal } }
-                Behavior on border.color { ColorAnimation { duration: Theme.durNormal } }
+                Rectangle {
+                    implicitWidth: 176
+                    implicitHeight: 26
+                    color: Theme.bgInset
+                    border.color: Theme.borderSubtle
+                    border.width: 1
+                    radius: Theme.radiusPill
 
-                Text {
-                    anchors.fill: parent
-                    anchors.leftMargin: Theme.sp2
-                    anchors.rightMargin: Theme.sp2
-                    verticalAlignment: Text.AlignVCenter
-                    text: client.target.length > 0
-                          ? client.target
-                          : (root.formHost + ":" + root.formPortText)
-                    font.family: Theme.fontMono
-                    font.pixelSize: Theme.sizeBody
-                    font.weight: Theme.weightMedium
-                    color: Theme.textPrimary
-                    elide: Text.ElideMiddle
+                    Behavior on color { ColorAnimation { duration: Theme.durNormal } }
+                    Behavior on border.color { ColorAnimation { duration: Theme.durNormal } }
+
+                    Text {
+                        anchors.fill: parent
+                        anchors.leftMargin: Theme.sp2
+                        anchors.rightMargin: Theme.sp2
+                        verticalAlignment: Text.AlignVCenter
+                        text: client.target.length > 0
+                              ? client.target
+                              : (root.formHost + ":" + root.formPortText)
+                        font.family: Theme.fontMono
+                        font.pixelSize: Theme.sizeBody
+                        font.weight: Theme.weightMedium
+                        color: Theme.textPrimary
+                        elide: Text.ElideMiddle
+                    }
                 }
-            }
 
-            PierTextField {
-                implicitWidth: 150
-                placeholder: qsTr("Host")
-                text: root.formHost
-                onTextChanged: root.formHost = text
-            }
-
-            PierTextField {
-                implicitWidth: 76
-                placeholder: qsTr("Port")
-                text: root.formPortText
-                onTextChanged: root.formPortText = text
-            }
-
-            PierTextField {
-                implicitWidth: 118
-                placeholder: qsTr("User")
-                text: root.formUser
-                onTextChanged: root.formUser = text
-            }
-
-            PierTextField {
-                implicitWidth: 134
-                placeholder: root.hasSavedCredential
-                             ? qsTr("Password (saved in keychain)")
-                             : qsTr("Password")
-                password: true
-                text: root.formPassword
-                onTextChanged: root.formPassword = text
-            }
-
-            PierTextField {
-                implicitWidth: 148
-                placeholder: qsTr("Default DB")
-                text: root.formDatabase
-                onTextChanged: root.formDatabase = text
-            }
-
-            Rectangle {
-                visible: root.hasSavedCredential
-                implicitWidth: credentialText.implicitWidth + Theme.sp3 * 2
-                implicitHeight: 24
-                radius: Theme.radiusPill
-                color: Theme.bgSurface
-                border.color: Theme.borderSubtle
-                border.width: 1
-
-                Text {
-                    id: credentialText
-                    anchors.centerIn: parent
-                    text: qsTr("Keychain")
-                    font.family: Theme.fontUi
-                    font.pixelSize: Theme.sizeCaption
-                    font.weight: Theme.weightMedium
-                    color: Theme.textSecondary
+                PierTextField {
+                    implicitWidth: 152
+                    placeholder: qsTr("Host")
+                    text: root.formHost
+                    onTextChanged: root.formHost = text
                 }
-            }
 
-            PrimaryButton {
-                text: client.status === PierMySqlClient.Connected
-                      ? qsTr("Reconnect")
-                      : qsTr("Connect")
-                enabled: !client.busy
-                onClicked: root._connect()
-            }
+                PierTextField {
+                    implicitWidth: 84
+                    placeholder: qsTr("Port")
+                    text: root.formPortText
+                    onTextChanged: root.formPortText = text
+                }
 
-            GhostButton {
-                compact: true
-                minimumWidth: 0
-                text: qsTr("Refresh")
-                enabled: client.status === PierMySqlClient.Connected && !client.busy
-                onClicked: root._refreshSchema()
+                PierTextField {
+                    implicitWidth: 132
+                    placeholder: qsTr("User")
+                    text: root.formUser
+                    onTextChanged: root.formUser = text
+                }
+
+                PierTextField {
+                    implicitWidth: 150
+                    placeholder: root.hasSavedCredential
+                                 ? qsTr("Password (saved in keychain)")
+                                 : qsTr("Password")
+                    password: true
+                    text: root.formPassword
+                    onTextChanged: root.formPassword = text
+                }
+
+                PierTextField {
+                    implicitWidth: 162
+                    placeholder: qsTr("Default DB")
+                    text: root.formDatabase
+                    onTextChanged: root.formDatabase = text
+                }
+
+                Rectangle {
+                    visible: root.hasSavedCredential
+                    implicitWidth: credentialText.implicitWidth + Theme.sp3 * 2
+                    implicitHeight: 24
+                    radius: Theme.radiusPill
+                    color: Theme.bgSurface
+                    border.color: Theme.borderSubtle
+                    border.width: 1
+
+                    Text {
+                        id: credentialText
+                        anchors.centerIn: parent
+                        text: qsTr("Keychain")
+                        font.family: Theme.fontUi
+                        font.pixelSize: Theme.sizeCaption
+                        font.weight: Theme.weightMedium
+                        color: Theme.textSecondary
+                    }
+                }
+
+                PrimaryButton {
+                    text: client.status === PierMySqlClient.Connected
+                          ? qsTr("Reconnect")
+                          : qsTr("Connect")
+                    enabled: !client.busy
+                    onClicked: root._connect()
+                }
+
+                GhostButton {
+                    compact: true
+                    minimumWidth: 0
+                    text: qsTr("Refresh")
+                    enabled: client.status === PierMySqlClient.Connected && !client.busy
+                    onClicked: root._refreshSchema()
+                }
             }
         }
 
-        Rectangle {
+        ToolPanelSurface {
             Layout.fillWidth: true
-            implicitHeight: 34
-            color: Theme.bgSurface
-            border.color: Theme.borderSubtle
-            border.width: 1
-            radius: Theme.radiusSm
+            implicitHeight: profileFlow.implicitHeight + Theme.sp2 * 2
+            padding: Theme.sp2
 
-            Behavior on color { ColorAnimation { duration: Theme.durNormal } }
-            Behavior on border.color { ColorAnimation { duration: Theme.durNormal } }
-
-            RowLayout {
+            Flow {
+                id: profileFlow
                 anchors.fill: parent
-                anchors.margins: Theme.sp2
                 spacing: Theme.sp2
 
                 Text {
@@ -559,14 +562,14 @@ Rectangle {
                 }
 
                 PierTextField {
-                    Layout.preferredWidth: 160
+                    implicitWidth: 160
                     placeholder: qsTr("Profile name")
                     text: root.profileDraftName
                     onTextChanged: root.profileDraftName = text
                 }
 
                 PierComboBox {
-                    Layout.preferredWidth: 180
+                    implicitWidth: 180
                     options: workspace.profileNames
                     currentIndex: root.selectedProfileIndex
                     placeholder: qsTr("Saved profiles")
@@ -590,7 +593,7 @@ Rectangle {
 
                 Rectangle {
                     width: 1
-                    Layout.fillHeight: true
+                    height: 18
                     color: Theme.borderSubtle
                 }
 
@@ -603,14 +606,14 @@ Rectangle {
                 }
 
                 PierTextField {
-                    Layout.preferredWidth: 160
+                    implicitWidth: 160
                     placeholder: qsTr("Favorite name")
                     text: root.favoriteDraftName
                     onTextChanged: root.favoriteDraftName = text
                 }
 
                 PierComboBox {
-                    Layout.preferredWidth: 180
+                    implicitWidth: 180
                     options: workspace.favoriteNames
                     currentIndex: root.selectedFavoriteIndex
                     placeholder: qsTr("Saved queries")
@@ -634,39 +637,12 @@ Rectangle {
             }
         }
 
-        Rectangle {
+        ToolBanner {
             Layout.fillWidth: true
-            implicitHeight: bannerText.length > 0 ? 22 : 0
-            visible: bannerText.length > 0
-            color: bannerKind === "error"
-                   ? Qt.rgba(Theme.statusError.r, Theme.statusError.g, Theme.statusError.b, 0.10)
-                   : (bannerKind === "success"
-                      ? Qt.rgba(Theme.statusSuccess.r, Theme.statusSuccess.g, Theme.statusSuccess.b, 0.10)
-                      : Theme.bgSurface)
-            border.color: bannerKind === "error"
-                          ? Theme.statusError
-                          : (bannerKind === "success"
-                             ? Theme.statusSuccess
-                             : Theme.borderSubtle)
-            border.width: 1
-            radius: Theme.radiusSm
-
-            Behavior on color { ColorAnimation { duration: Theme.durNormal } }
-            Behavior on border.color { ColorAnimation { duration: Theme.durNormal } }
-
-            Text {
-                anchors.fill: parent
-                anchors.leftMargin: Theme.sp2
-                anchors.rightMargin: Theme.sp2
-                verticalAlignment: Text.AlignVCenter
-                text: bannerText
-                font.family: bannerKind === "error" ? Theme.fontUi : Theme.fontMono
-                font.pixelSize: Theme.sizeCaption
-                color: bannerKind === "error"
-                       ? Theme.statusError
-                       : (bannerKind === "success" ? Theme.statusSuccess : Theme.textSecondary)
-                elide: Text.ElideRight
-            }
+            text: bannerText
+            tone: bannerKind === "error"
+                  ? "error"
+                  : (bannerKind === "success" ? "success" : "neutral")
         }
 
         RowLayout {
@@ -674,21 +650,14 @@ Rectangle {
             Layout.fillHeight: true
             spacing: Theme.sp2
 
-            Rectangle {
+            ToolPanelSurface {
                 Layout.preferredWidth: 336
                 Layout.minimumWidth: 300
                 Layout.fillHeight: true
-                color: Theme.bgPanel
-                border.color: Theme.borderSubtle
-                border.width: 1
-                radius: Theme.radiusSm
-
-                Behavior on color { ColorAnimation { duration: Theme.durNormal } }
-                Behavior on border.color { ColorAnimation { duration: Theme.durNormal } }
+                padding: Theme.sp2
 
                 ColumnLayout {
                     anchors.fill: parent
-                    anchors.margins: Theme.sp2
                     spacing: Theme.sp2
 
                     RowLayout {
@@ -1102,20 +1071,13 @@ Rectangle {
                 Layout.fillHeight: true
                 spacing: Theme.sp2
 
-                Rectangle {
+                ToolPanelSurface {
                     Layout.fillWidth: true
                     Layout.preferredHeight: 224
-                    color: Theme.bgPanel
-                    border.color: Theme.borderSubtle
-                    border.width: 1
-                    radius: Theme.radiusSm
-
-                    Behavior on color { ColorAnimation { duration: Theme.durNormal } }
-                    Behavior on border.color { ColorAnimation { duration: Theme.durNormal } }
+                    padding: Theme.sp2
 
                     ColumnLayout {
                         anchors.fill: parent
-                        anchors.margins: Theme.sp2
                         spacing: Theme.sp2
 
                         RowLayout {
@@ -1217,56 +1179,31 @@ Rectangle {
                     }
                 }
 
-                Rectangle {
+                ToolBanner {
                     Layout.fillWidth: true
-                    implicitHeight: 24
-                    color: Theme.bgSurface
-                    border.color: Theme.borderSubtle
-                    border.width: 1
-                    radius: Theme.radiusSm
-
-                    Behavior on color { ColorAnimation { duration: Theme.durNormal } }
-                    Behavior on border.color { ColorAnimation { duration: Theme.durNormal } }
-
-                    Text {
-                        anchors.fill: parent
-                        anchors.leftMargin: Theme.sp2
-                        anchors.rightMargin: Theme.sp2
-                        verticalAlignment: Text.AlignVCenter
-                        text: client.lastError.length > 0
-                              ? client.lastError
-                              : (!root.hasResult
-                                 ? qsTr("Saved profiles and favorite queries persist across launches.")
-                                 : (client.resultColumnCount > 0
-                                    ? qsTr("%1 rows · %2 columns · %3 ms%4")
-                                        .arg(client.resultRowCount)
-                                        .arg(client.resultColumnCount)
-                                        .arg(client.lastElapsedMs)
-                                        .arg(client.lastTruncated ? qsTr(" · truncated") : "")
-                                    : qsTr("%1 rows affected · %2 ms")
-                                        .arg(client.lastAffectedRows)
-                                        .arg(client.lastElapsedMs)))
-                        font.family: client.lastError.length > 0 ? Theme.fontUi : Theme.fontMono
-                        font.pixelSize: Theme.sizeCaption
-                        color: client.lastError.length > 0 ? Theme.statusError : Theme.textSecondary
-                        elide: Text.ElideRight
-                    }
+                    tone: client.lastError.length > 0 ? "error" : "neutral"
+                    text: client.lastError.length > 0
+                          ? client.lastError
+                          : (!root.hasResult
+                             ? qsTr("Saved profiles and favorite queries persist across launches.")
+                             : (client.resultColumnCount > 0
+                                ? qsTr("%1 rows · %2 columns · %3 ms%4")
+                                    .arg(client.resultRowCount)
+                                    .arg(client.resultColumnCount)
+                                    .arg(client.lastElapsedMs)
+                                    .arg(client.lastTruncated ? qsTr(" · truncated") : "")
+                                : qsTr("%1 rows affected · %2 ms")
+                                    .arg(client.lastAffectedRows)
+                                    .arg(client.lastElapsedMs)))
                 }
 
-                Rectangle {
+                ToolPanelSurface {
                     Layout.fillWidth: true
                     Layout.fillHeight: true
-                    color: Theme.bgPanel
-                    border.color: Theme.borderSubtle
-                    border.width: 1
-                    radius: Theme.radiusSm
-
-                    Behavior on color { ColorAnimation { duration: Theme.durNormal } }
-                    Behavior on border.color { ColorAnimation { duration: Theme.durNormal } }
+                    padding: Theme.sp1
 
                     ColumnLayout {
                         anchors.fill: parent
-                        anchors.margins: Theme.sp1
                         spacing: 1
 
                         HorizontalHeaderView {
@@ -1349,31 +1286,16 @@ Rectangle {
                                 }
                             }
 
-                            Column {
+                            ToolEmptyState {
                                 anchors.centerIn: parent
-                                spacing: Theme.sp1
                                 visible: client.resultColumnCount === 0
-
-                                Text {
-                                    anchors.horizontalCenter: parent.horizontalCenter
-                                    text: root.selectedTable.length > 0
-                                          ? qsTr("Schema ready for %1").arg(root.selectedTable)
-                                          : qsTr("No result set yet")
-                                    font.family: Theme.fontUi
-                                    font.pixelSize: Theme.sizeBody
-                                    font.weight: Theme.weightMedium
-                                    color: Theme.textPrimary
-                                }
-
-                                Text {
-                                    anchors.horizontalCenter: parent.horizontalCenter
-                                    text: root.selectedTable.length > 0
-                                          ? qsTr("Use quick actions or a saved query to keep working.")
-                                          : qsTr("Save a profile, browse a table, or load a favorite query to start.")
-                                    font.family: Theme.fontUi
-                                    font.pixelSize: Theme.sizeCaption
-                                    color: Theme.textTertiary
-                                }
+                                icon: "database"
+                                title: root.selectedTable.length > 0
+                                       ? qsTr("Schema ready for %1").arg(root.selectedTable)
+                                       : qsTr("No result set yet")
+                                description: root.selectedTable.length > 0
+                                             ? qsTr("Use quick actions or a saved query to keep working.")
+                                             : qsTr("Save a profile, browse a table, or load a favorite query to start.")
                             }
                         }
                     }

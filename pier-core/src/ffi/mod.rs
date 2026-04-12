@@ -42,6 +42,7 @@ pub mod core;
 pub mod credentials;
 pub mod docker;
 pub mod git;
+pub mod local_exec;
 pub mod log_stream;
 pub mod markdown;
 pub mod mysql;

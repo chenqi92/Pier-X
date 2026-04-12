@@ -1,4 +1,5 @@
 import QtQuick
+import QtQuick.Effects
 import QtQuick.Window
 import QtQuick.Controls
 import QtQuick.Controls.Basic
@@ -204,6 +205,16 @@ ApplicationWindow {
         // TerminalView exposes `terminalSession`; SFTP/Markdown don't
         return loader.item.terminalSession || null
     }
+
+    // Shared SSH session from the active terminal tab.
+    // Right-panel tools use this to avoid redundant SSH handshakes.
+    readonly property var activeSharedSession: {
+        if (typeof tabRepeater === "undefined" || !tabRepeater) return null
+        if (currentTabIndex < 0 || currentTabIndex >= tabModel.count) return null
+        var loader = tabRepeater.itemAt(currentTabIndex)
+        if (!loader || !loader.item) return null
+        return loader.item.sharedSshSession || null
+    }
     property var pendingCloseIndexes: []
     property string pendingCloseTitle: ""
     property string pendingCloseMessage: ""
@@ -218,6 +229,7 @@ ApplicationWindow {
     function _makeLocalRow(title) {
         return {
             title: title,
+            tabColor: -1,
             backend: "local",
             startupCommand: "",
             sshHost: "",
@@ -261,6 +273,7 @@ ApplicationWindow {
     function _makeSshRow(conn) {
         return {
             title: conn.name,
+            tabColor: -1,
             backend: "ssh",
             startupCommand: "",
             sshHost: conn.host,
@@ -295,7 +308,8 @@ ApplicationWindow {
     // load SftpBrowserView instead of TerminalView.
     function _makeSftpRow(conn) {
         return {
-            title: qsTr("📁 %1").arg(conn.name),
+            title: conn.name,
+            tabColor: -1,
             backend: "sftp",
             startupCommand: "",
             sshHost: conn.host,
@@ -386,11 +400,15 @@ ApplicationWindow {
     }
 
     function openNewTab(title, startupCommand) {
-        const t = title || qsTr("Local %1").arg(tabModel.count + 1)
+        const t = title || qsTr("Terminal")
         const row = _makeLocalRow(t)
         row.startupCommand = startupCommand || ""
         tabModel.append(row)
         currentTabIndex = tabModel.count - 1
+    }
+
+    function openNewSessionMenu() {
+        newSessionPopup.open()
     }
 
     function openLocalTerminalAt(path) {
@@ -726,7 +744,7 @@ ApplicationWindow {
             contextTitle: tabModel.count > 0 && currentTabIndex >= 0 && currentTabIndex < tabModel.count
                           ? (tabModel.get(currentTabIndex).title || qsTr("Workspace"))
                           : qsTr("Workspace")
-            onNewSessionRequested: newConnectionDialog.show()
+            onNewSessionRequested: window.openNewSessionMenu()
             onCommandPaletteRequested: commandPalette.show()
             onSettingsRequested: settingsDialog.show()
         }
@@ -775,6 +793,7 @@ ApplicationWindow {
             // Central Area + Right Panel wrapper
             // Needs to be wrapped in an Item so WelcomeView overlays correctly without breaking SplitView
             Item {
+                SplitView.minimumWidth: 620
                 SplitView.fillWidth: true
 
                 WelcomeView {
@@ -795,6 +814,7 @@ ApplicationWindow {
                     orientation: Qt.Horizontal
 
                     ColumnLayout {
+                        SplitView.minimumWidth: 560
                         SplitView.fillWidth: true
                         spacing: 0
 
@@ -807,7 +827,11 @@ ApplicationWindow {
                             onCloseOtherTabsRequested: (i) => window.closeOtherTabs(i)
                             onCloseTabsToLeftRequested: (i) => window.closeTabsToLeft(i)
                             onCloseTabsToRightRequested: (i) => window.closeTabsToRight(i)
-                            onNewTabClicked: window.openNewTab()
+                            onTabColorChanged: (i, colorTag) => {
+                                if (i >= 0 && i < tabModel.count)
+                                    tabModel.setProperty(i, "tabColor", colorTag)
+                            }
+                            onNewTabClicked: window.openNewSessionMenu()
                             onTabMoved: (from, to) => {
                                 tabModel.move(from, 1, to)
                                 if (window.currentTabIndex === from)
@@ -902,7 +926,7 @@ ApplicationWindow {
             RightSidebar {
                 id: rightSidebar
                 SplitView.preferredWidth: rightSidebar.contentExpanded ? Theme.rightSidebarWidth : Theme.toolRailWidth
-                SplitView.minimumWidth: rightSidebar.contentExpanded ? 320 : Theme.toolRailWidth
+                SplitView.minimumWidth: rightSidebar.contentExpanded ? 340 : Theme.toolRailWidth
                 SplitView.maximumWidth: rightSidebar.contentExpanded ? 99999 : Theme.toolRailWidth
 
                 // Per-tab tool memory
@@ -914,6 +938,9 @@ ApplicationWindow {
                     if (window.currentTabIndex >= 0 && window.currentTabIndex < tabModel.count)
                         tabModel.setProperty(window.currentTabIndex, "rightTool", activeTool)
                 }
+
+                // Shared SSH session for right-panel tool reuse
+                sharedSession: window.activeSharedSession
 
                 // Live SSH context from the active terminal session
                 activeBackend: {
@@ -974,6 +1001,181 @@ ApplicationWindow {
 
         StatusBar {
             Layout.fillWidth: true
+        }
+    }
+
+    Popup {
+        id: newSessionPopup
+        width: 344
+        modal: false
+        focus: true
+        padding: Theme.sp1
+        closePolicy: Popup.CloseOnEscape | Popup.CloseOnPressOutside
+        x: Math.round((window.width - width) / 2)
+        y: Theme.topBarHeight + Theme.sp2
+
+        background: Rectangle {
+            color: Theme.bgElevated
+            border.color: Theme.borderDefault
+            border.width: 1
+            radius: Theme.radiusLg
+        }
+
+        contentItem: ColumnLayout {
+            spacing: Theme.sp1
+
+            Rectangle {
+                Layout.fillWidth: true
+                implicitHeight: 34
+                color: "transparent"
+
+                RowLayout {
+                    anchors.fill: parent
+                    anchors.leftMargin: Theme.sp3
+                    anchors.rightMargin: Theme.sp2
+                    spacing: Theme.sp2
+
+                    Text {
+                        text: qsTr("New session")
+                        font.family: Theme.fontUi
+                        font.pixelSize: Theme.sizeBody
+                        font.weight: Theme.weightSemibold
+                        color: Theme.textPrimary
+                    }
+
+                    Item { Layout.fillWidth: true }
+
+                    Item { Layout.preferredWidth: 26 }
+                }
+            }
+
+            QuickSessionItem {
+                title: qsTr("New local terminal")
+                subtitle: qsTr("Open a fresh local shell tab.")
+                icon: "terminal"
+                onClicked: {
+                    newSessionPopup.close()
+                    window.openNewTab()
+                }
+            }
+
+            QuickSessionItem {
+                title: qsTr("New SSH connection…")
+                subtitle: qsTr("Create or connect to a saved remote profile.")
+                icon: "server"
+                onClicked: {
+                    newSessionPopup.close()
+                    newConnectionDialog.show()
+                }
+            }
+
+            Rectangle {
+                Layout.fillWidth: true
+                height: 1
+                color: Theme.borderSubtle
+                visible: connectionsModel.count > 0
+            }
+
+            Text {
+                visible: connectionsModel.count > 0
+                text: qsTr("Saved Connections")
+                font.family: Theme.fontUi
+                font.pixelSize: Theme.sizeSmall
+                font.weight: Theme.weightMedium
+                color: Theme.textTertiary
+                leftPadding: Theme.sp3
+                topPadding: Theme.sp1
+                bottomPadding: Theme.sp0_5
+            }
+
+            Repeater {
+                model: Math.min(connectionsModel.count, 6)
+
+                delegate: QuickSessionItem {
+                    required property int index
+
+                    readonly property var conn: connectionsModel.get(index)
+                    title: conn ? (conn.name || conn.host || qsTr("Connection")) : ""
+                    subtitle: conn ? ((conn.username || "") + "@" + (conn.host || "") + ":" + (conn.port || 22)) : ""
+                    icon: "server"
+                    subtitleMono: true
+                    onClicked: {
+                        newSessionPopup.close()
+                        window.activateConnection(index)
+                    }
+                }
+            }
+        }
+    }
+
+    component QuickSessionItem: Rectangle {
+        property string title: ""
+        property string subtitle: ""
+        property string icon: "terminal"
+        property bool subtitleMono: false
+        signal clicked()
+
+        Layout.fillWidth: true
+        implicitHeight: 48
+        radius: Theme.radiusMd
+        color: quickArea.containsMouse ? Theme.bgHover : "transparent"
+
+        RowLayout {
+            anchors.fill: parent
+            anchors.leftMargin: Theme.sp3
+            anchors.rightMargin: Theme.sp3
+            spacing: Theme.sp2
+
+            Rectangle {
+                Layout.preferredWidth: 20
+                Layout.preferredHeight: 20
+                radius: Theme.radiusSm
+                color: Theme.accentSubtle
+
+                Image {
+                    anchors.centerIn: parent
+                    source: "qrc:/qt/qml/Pier/resources/icons/lucide/" + icon + ".svg"
+                    sourceSize: Qt.size(12, 12)
+                    layer.enabled: true
+                    layer.effect: MultiEffect {
+                        colorization: 1.0
+                        colorizationColor: Theme.accent
+                    }
+                }
+            }
+
+            ColumnLayout {
+                Layout.fillWidth: true
+                spacing: 0
+
+                Text {
+                    Layout.fillWidth: true
+                    text: title
+                    font.family: Theme.fontUi
+                    font.pixelSize: Theme.sizeBody
+                    font.weight: Theme.weightMedium
+                    color: Theme.textPrimary
+                    elide: Text.ElideRight
+                }
+
+                Text {
+                    Layout.fillWidth: true
+                    visible: subtitle.length > 0
+                    text: subtitle
+                    font.family: subtitleMono ? Theme.fontMono : Theme.fontUi
+                    font.pixelSize: Theme.sizeSmall
+                    color: Theme.textTertiary
+                    elide: Text.ElideMiddle
+                }
+            }
+        }
+
+        MouseArea {
+            id: quickArea
+            anchors.fill: parent
+            hoverEnabled: true
+            cursorShape: Qt.PointingHandCursor
+            onClicked: parent.clicked()
         }
     }
 

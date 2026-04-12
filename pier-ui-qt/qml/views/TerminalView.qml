@@ -37,6 +37,10 @@ Rectangle {
     // from the session's cached Q_PROPERTYs.
     readonly property PierTerminalSession terminalSession: session
 
+    // Shared SSH session handle — right-panel tools reuse this
+    // instead of opening their own SSH connections.
+    readonly property PierSshSessionHandle sharedSshSession: _sharedSession
+
     // Default shell is system-dependent. The caller can override this
     // via the `shell` property before the first layout; we only spawn
     // the PTY once `grid.cellWidth` is known (see startWhenSized).
@@ -83,6 +87,15 @@ Rectangle {
     activeFocusOnTab: true
 
     Behavior on color { ColorAnimation { duration: Theme.durNormal } }
+
+    PierSshSessionHandle {
+        id: _sharedSession
+
+        onConnectedChanged: {
+            if (_sharedSession.connected && root.backend === "ssh")
+                root._startTerminalOnSharedSession()
+        }
+    }
 
     PierTerminalSession {
         id: session
@@ -151,6 +164,32 @@ Rectangle {
         }
         detector.detect(root.sshHost, root.sshPort, root.sshUser,
                         kind, secret, extra)
+    }
+
+    function _startTerminalOnSharedSession() {
+        if (!_sharedSession.connected
+                || root.backend !== "ssh"
+                || session.running
+                || grid.cellWidth <= 0
+                || grid.cellHeight <= 0
+                || grid.width <= 24
+                || grid.height <= 24) {
+            return
+        }
+
+        Qt.callLater(function() {
+            if (!_sharedSession.connected
+                    || session.running
+                    || grid.cellWidth <= 0
+                    || grid.cellHeight <= 0
+                    || grid.width <= 24
+                    || grid.height <= 24) {
+                return
+            }
+            var cols = Math.max(40, Math.floor(grid.width / grid.cellWidth))
+            var rows = Math.max(12, Math.floor(grid.height / grid.cellHeight))
+            session.startSshOnSession(_sharedSession, cols, rows)
+        })
     }
 
     function _friendlySshError(message) {
@@ -507,39 +546,38 @@ Rectangle {
             grid._dispatchSshConnect(cols, rows)
         }
 
-        // Pick the right startSsh* method given which auth
-        // fields are populated. Priority:
-        //   1. usesAgent       → startSshWithAgent
-        //   2. key path        → startSshWithKey
-        //   3. plaintext password → startSsh (preferred, no keychain)
-        //   4. credential id   → startSshWithCredential (legacy)
+        // Open a shared SSH session first, then start the
+        // terminal on it. Right-panel tools reuse the same
+        // shared session via `sharedSshSession`.
         function _dispatchSshConnect(cols, rows) {
-            if (root.sshUsesAgent) {
-                session.startSshWithAgent(
-                    root.sshHost, root.sshPort, root.sshUser,
-                    cols, rows)
-            } else if (root.sshKeyPath.length > 0) {
-                session.startSshWithKey(
-                    root.sshHost, root.sshPort, root.sshUser,
-                    root.sshKeyPath,
-                    root.sshPassphraseCredentialId,
-                    cols, rows)
-            } else if (root.sshPassword.length > 0) {
-                session.startSsh(
-                    root.sshHost, root.sshPort, root.sshUser,
-                    root.sshPassword,
-                    cols, rows)
-            } else if (root.sshCredentialId.length > 0) {
-                session.startSshWithCredential(
-                    root.sshHost, root.sshPort, root.sshUser,
-                    root.sshCredentialId,
-                    cols, rows)
-            } else {
-                session.startSsh(
-                    root.sshHost, root.sshPort, root.sshUser,
-                    "",
-                    cols, rows)
+            // Determine auth kind + secret + extra
+            var kind = 0
+            var secret = ""
+            var extra = ""
+            if (_sharedSession.connected) {
+                root._startTerminalOnSharedSession()
+                return
             }
+            if (_sharedSession.busy)
+                return
+            if (root.sshUsesAgent) {
+                kind = 3
+            } else if (root.sshKeyPath.length > 0) {
+                kind = 2
+                secret = root.sshKeyPath
+                extra = root.sshPassphraseCredentialId
+            } else if (root.sshPassword.length > 0) {
+                kind = 0
+                secret = root.sshPassword
+            } else if (root.sshCredentialId.length > 0) {
+                kind = 1
+                secret = root.sshCredentialId
+            }
+            // Open the shared session — when it connects,
+            // _sharedSession.onConnectedChanged fires and
+            // starts the terminal via startSshOnSession.
+            _sharedSession.open(root.sshHost, root.sshPort,
+                                root.sshUser, kind, secret, extra)
         }
 
         property string hoveredUrl: ""

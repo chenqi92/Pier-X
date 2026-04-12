@@ -9,6 +9,7 @@ Rectangle {
 
     property var connectionsModel: null
     property int selectedSection: 0
+    clip: true
 
     signal addConnectionRequested
     signal connectionActivated(int index)
@@ -126,10 +127,13 @@ Rectangle {
                                 Text {
                                     text: qsTr("%1 hosts ready for SSH, SFTP, and service panels.")
                                           .arg(root.connectionsModel ? root.connectionsModel.count : 0)
+                                    Layout.fillWidth: true
                                     font.family: Theme.fontUi
                                     font.pixelSize: Theme.sizeSmall
                                     color: Theme.textTertiary
                                     wrapMode: Text.WordWrap
+                                    maximumLineCount: 2
+                                    elide: Text.ElideRight
                                 }
                             }
 
@@ -453,13 +457,14 @@ Rectangle {
         border.color: active ? Theme.borderSubtle : "transparent"
         border.width: active ? 1 : 0
 
-        Row {
+        RowLayout {
             anchors.centerIn: parent
             spacing: Theme.sp1_5
 
             Image {
+                Layout.alignment: Qt.AlignVCenter
                 source: "qrc:/qt/qml/Pier/resources/icons/lucide/" + icon + ".svg"
-                sourceSize: Qt.size(Theme.iconSm, Theme.iconSm)
+                sourceSize: Qt.size(Theme.iconXs, Theme.iconXs)
                 layer.enabled: true
                 layer.effect: MultiEffect {
                     colorization: 1.0
@@ -468,11 +473,14 @@ Rectangle {
             }
 
             Text {
+                Layout.alignment: Qt.AlignVCenter
                 text: title
                 font.family: Theme.fontUi
-                font.pixelSize: Theme.sizeBody
-                font.weight: active ? Theme.weightMedium : Theme.weightRegular
+                font.pixelSize: Theme.sizeSmall
+                font.weight: active ? Theme.weightSemibold : Theme.weightMedium
                 color: active ? Theme.textPrimary : Theme.textSecondary
+                wrapMode: Text.NoWrap
+                elide: Text.ElideRight
             }
         }
 

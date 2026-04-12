@@ -36,6 +36,7 @@
 
 pub mod docker;
 pub mod git;
+pub mod local_exec;
 pub mod mysql;
 pub mod postgres;
 pub mod redis;

@@ -2,6 +2,7 @@ import QtQuick
 import QtQuick.Controls
 import QtQuick.Layouts
 import Pier
+import "../components"
 
 // Redis browser panel — M5a per-service tool.
 //
@@ -26,6 +27,7 @@ import Pier
 Rectangle {
     id: root
 
+    clip: true
     // Bound from Main.qml's tab model. M5a always targets a
     // localhost port (the tunnel), so no auth — just host/port/db.
     property string redisHost: "127.0.0.1"
@@ -72,7 +74,7 @@ Rectangle {
         spacing: Theme.sp2
 
         // ─── Top bar ─────────────────────────────────────
-        RowLayout {
+        Flow {
             Layout.fillWidth: true
             spacing: Theme.sp2
 
@@ -91,8 +93,6 @@ Rectangle {
                 Behavior on color { ColorAnimation { duration: Theme.durNormal } }
             }
 
-            Item { Layout.fillWidth: true }
-
             PierTextField {
                 id: patternField
                 implicitWidth: 220
@@ -109,32 +109,30 @@ Rectangle {
         }
 
         // ─── Split: key list | inspector ────────────────
-        Rectangle {
+        Item {
             Layout.fillWidth: true
             Layout.fillHeight: true
-            color: "transparent"
 
             RowLayout {
                 anchors.fill: parent
                 spacing: Theme.sp2
 
                 // Key list.
-                Rectangle {
+                ToolPanelSurface {
                     Layout.preferredWidth: 260
                     Layout.minimumWidth: 200
                     Layout.fillHeight: true
-                    color: Theme.bgPanel
-                    border.color: Theme.borderSubtle
-                    border.width: 1
-                    radius: Theme.radiusSm
-
-                    Behavior on color        { ColorAnimation { duration: Theme.durNormal } }
-                    Behavior on border.color { ColorAnimation { duration: Theme.durNormal } }
 
                     ColumnLayout {
                         anchors.fill: parent
-                        anchors.margins: Theme.sp1
+                        anchors.margins: Theme.sp2
                         spacing: 0
+
+                        ToolSectionHeader {
+                            Layout.fillWidth: true
+                            title: qsTr("Keys")
+                            subtitle: qsTr("%1 matches").arg(client.keys.length)
+                        }
 
                         ListView {
                             id: keyList
@@ -230,35 +228,34 @@ Rectangle {
                 }
 
                 // Inspector.
-                Rectangle {
+                ToolPanelSurface {
                     Layout.fillWidth: true
                     Layout.fillHeight: true
-                    color: Theme.bgPanel
-                    border.color: Theme.borderSubtle
-                    border.width: 1
-                    radius: Theme.radiusSm
-
-                    Behavior on color        { ColorAnimation { duration: Theme.durNormal } }
-                    Behavior on border.color { ColorAnimation { duration: Theme.durNormal } }
 
                     ColumnLayout {
                         anchors.fill: parent
                         anchors.margins: Theme.sp3
                         spacing: Theme.sp2
 
+                        ToolSectionHeader {
+                            Layout.fillWidth: true
+                            title: client.selectedKey.length > 0 ? client.selectedKey : qsTr("Inspector")
+                            subtitle: client.selectedKey.length > 0
+                                      ? (client.selectedKind.length > 0 ? client.selectedKind : qsTr("Redis key"))
+                                      : qsTr("Select a key from the list to inspect its payload.")
+                        }
+
                         // Empty state: no key selected.
-                        Text {
+                        ToolEmptyState {
                             visible: client.selectedKey.length === 0
                             Layout.alignment: Qt.AlignHCenter
-                            Layout.topMargin: Theme.sp8
-                            text: client.status === PierRedisClient.Connected
-                                  ? qsTr("Select a key to inspect")
-                                  : qsTr("Connecting…")
-                            font.family: Theme.fontUi
-                            font.pixelSize: Theme.sizeBody
-                            color: Theme.textTertiary
-
-                            Behavior on color { ColorAnimation { duration: Theme.durNormal } }
+                            Layout.fillWidth: true
+                            Layout.fillHeight: true
+                            icon: "database"
+                            title: client.status === PierRedisClient.Connected
+                                   ? qsTr("Select a key to inspect")
+                                   : qsTr("Connecting…")
+                            description: qsTr("Preview, type, TTL, encoding, and sampled values will appear here.")
                         }
 
                         // Header: key name.
@@ -323,7 +320,6 @@ Rectangle {
                         Separator {
                             visible: client.selectedKey.length > 0
                             Layout.fillWidth: true
-                            Layout.topMargin: Theme.sp2
                         }
 
                         // Preview list.
@@ -355,26 +351,15 @@ Rectangle {
         }
 
         // ─── Server info footer ──────────────────────────
-        Rectangle {
+        ToolBanner {
             Layout.fillWidth: true
-            implicitHeight: 22
-            color: "transparent"
-
-            Text {
-                anchors.verticalCenter: parent.verticalCenter
-                anchors.left: parent.left
-                text: {
-                    var v = client.serverInfo.redis_version
-                    var m = client.serverInfo.redis_mode
-                    if (v && m) return qsTr("Redis %1 (%2)").arg(v).arg(m)
-                    if (v)      return qsTr("Redis %1").arg(v)
-                    return ""
-                }
-                font.family: Theme.fontMono
-                font.pixelSize: Theme.sizeCaption
-                color: Theme.textTertiary
-
-                Behavior on color { ColorAnimation { duration: Theme.durNormal } }
+            tone: "neutral"
+            text: {
+                var version = client.serverInfo.redis_version
+                var mode = client.serverInfo.redis_mode
+                if (version && mode) return qsTr("Redis %1 · %2 mode").arg(version).arg(mode)
+                if (version) return qsTr("Redis %1").arg(version)
+                return ""
             }
         }
     }

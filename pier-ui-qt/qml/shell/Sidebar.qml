@@ -19,66 +19,84 @@ Rectangle {
     signal openLocalTerminalRequested
     signal openMarkdownRequested(string filePath)
 
-    implicitWidth: 276
+    implicitWidth: 220
     color: Theme.bgPanel
 
     Behavior on color { ColorAnimation { duration: Theme.durNormal } }
 
     ColumnLayout {
         anchors.fill: parent
-        anchors.margins: Theme.sp3
-        spacing: Theme.sp3
+        anchors.margins: Theme.sp2
+        spacing: Theme.sp2
 
-        RowLayout {
+        // Segmented tab switcher
+        Rectangle {
             Layout.fillWidth: true
-            spacing: Theme.sp1
+            implicitHeight: 32
+            radius: Theme.radiusSm
+            color: Theme.bgSurface
+            border.color: Theme.borderSubtle
+            border.width: 1
 
-            Repeater {
-                model: [
-                    { title: qsTr("Files"), index: 0 },
-                    { title: qsTr("Servers"), index: 1 }
-                ]
+            Behavior on color { ColorAnimation { duration: Theme.durFast } }
 
-                delegate: Rectangle {
-                    required property var modelData
+            RowLayout {
+                anchors.fill: parent
+                anchors.margins: 3
+                spacing: 2
 
-                    Layout.preferredWidth: tabText.implicitWidth + Theme.sp3 * 2
-                    Layout.preferredHeight: 28
-                    radius: Theme.radiusSm
-                    color: root.selectedSection === modelData.index
-                           ? Theme.accentMuted
-                           : (tabMouse.containsMouse ? Theme.bgHover : "transparent")
-                    border.color: root.selectedSection === modelData.index
-                                  ? Theme.borderFocus
-                                  : "transparent"
-                    border.width: 1
+                Repeater {
+                    model: [
+                        { title: qsTr("Files"), index: 0 },
+                        { title: qsTr("Servers"), index: 1 }
+                    ]
 
-                    Behavior on color { ColorAnimation { duration: Theme.durFast } }
-                    Behavior on border.color { ColorAnimation { duration: Theme.durFast } }
+                    delegate: Rectangle {
+                        required property var modelData
 
-                    Text {
-                        id: tabText
-                        anchors.centerIn: parent
-                        text: modelData.title
-                        font.family: Theme.fontUi
-                        font.pixelSize: Theme.sizeCaption
-                        font.weight: Theme.weightMedium
+                        Layout.fillWidth: true
+                        Layout.fillHeight: true
+                        radius: Theme.radiusSm - 1
                         color: root.selectedSection === modelData.index
-                               ? Theme.textPrimary
-                               : Theme.textSecondary
-                    }
+                               ? Theme.bgElevated
+                               : "transparent"
 
-                    MouseArea {
-                        id: tabMouse
-                        anchors.fill: parent
-                        hoverEnabled: true
-                        cursorShape: Qt.PointingHandCursor
-                        onClicked: root.selectedSection = modelData.index
+                        Behavior on color { ColorAnimation { duration: Theme.durFast } }
+
+                        // Subtle shadow on the active tab
+                        layer.enabled: root.selectedSection === modelData.index
+                        layer.effect: MultiEffect {
+                            shadowEnabled: true
+                            shadowColor: "#000000"
+                            shadowOpacity: 0.08
+                            shadowBlur: 0.2
+                            shadowVerticalOffset: 1
+                        }
+
+                        Text {
+                            anchors.centerIn: parent
+                            text: modelData.title
+                            font.family: Theme.fontUi
+                            font.pixelSize: Theme.sizeCaption
+                            font.weight: root.selectedSection === modelData.index
+                                         ? Theme.weightSemibold
+                                         : Theme.weightRegular
+                            color: root.selectedSection === modelData.index
+                                   ? Theme.textPrimary
+                                   : Theme.textTertiary
+
+                            Behavior on color { ColorAnimation { duration: Theme.durFast } }
+                        }
+
+                        MouseArea {
+                            anchors.fill: parent
+                            hoverEnabled: true
+                            cursorShape: Qt.PointingHandCursor
+                            onClicked: root.selectedSection = modelData.index
+                        }
                     }
                 }
             }
-
-            Item { Layout.fillWidth: true }
         }
 
         StackLayout {

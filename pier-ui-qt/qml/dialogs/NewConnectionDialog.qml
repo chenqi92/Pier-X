@@ -1,4 +1,5 @@
 import QtQuick
+import QtQuick.Controls
 import QtQuick.Dialogs
 import QtQuick.Effects
 import QtQuick.Layouts
@@ -64,8 +65,9 @@ Item {
     Rectangle {
         id: dialog
         anchors.centerIn: parent
-        width: 480
-        height: form.implicitHeight + Theme.sp4 * 2
+        width: 520
+        // Cap height: content + padding, but never taller than 90% of window
+        height: Math.min(form.implicitHeight + Theme.sp4 * 2, parent.height * 0.9)
 
         // Entry animation — scale-up + fade-in
         scale: 0.96
@@ -100,11 +102,16 @@ Item {
             onPressed: (mouse) => mouse.accepted = true
         }
 
-        ColumnLayout {
-            id: form
+        ScrollView {
             anchors.fill: parent
             anchors.margins: Theme.sp4
-            spacing: Theme.sp3
+            clip: true
+            contentWidth: availableWidth
+
+            ColumnLayout {
+                id: form
+                width: parent.width
+                spacing: Theme.sp3
 
             // Title
             RowLayout {
@@ -398,6 +405,7 @@ Item {
                     }
                 }
             }
-        }
+            }
+        } // ScrollView
     }
 }

@@ -1,5 +1,6 @@
 import QtCore
 import QtQuick
+import QtQuick.Effects
 import QtQuick.Layouts
 import Qt.labs.folderlistmodel
 import Pier

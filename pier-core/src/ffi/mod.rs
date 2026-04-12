@@ -41,6 +41,7 @@ pub mod connections;
 pub mod core;
 pub mod credentials;
 pub mod docker;
+pub mod git;
 pub mod log_stream;
 pub mod markdown;
 pub mod mysql;
@@ -62,6 +63,14 @@ pub use self::connections::{
 };
 pub use self::core::{pier_core_build_info, pier_core_has_feature, pier_core_version};
 pub use self::credentials::{pier_credential_delete, pier_credential_set};
+pub use self::git::{
+    pier_git_branch_info, pier_git_commit, pier_git_compute_graph_layout,
+    pier_git_detect_default_branch, pier_git_diff, pier_git_diff_untracked, pier_git_discard,
+    pier_git_first_parent_chain, pier_git_free, pier_git_free_string, pier_git_graph_log,
+    pier_git_list_authors, pier_git_list_branches, pier_git_open, pier_git_pull, pier_git_push,
+    pier_git_stage, pier_git_stage_all, pier_git_status, pier_git_unstage, pier_git_unstage_all,
+    PierGit,
+};
 pub use self::docker::{
     pier_docker_free, pier_docker_free_string, pier_docker_inspect_container,
     pier_docker_list_containers, pier_docker_open, pier_docker_open_on_session,

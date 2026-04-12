@@ -34,13 +34,12 @@ Rectangle {
             Behavior on color { ColorAnimation { duration: Theme.durNormal } }
         }
 
-        Item { Layout.preferredWidth: Theme.sp3 }
-
         IconButton {
             icon: "plus"
-            tooltip: qsTr("New session")
+            tooltip: qsTr("New connection")
             onClicked: root.newSessionRequested()
         }
+
         IconButton {
             icon: "command"
             tooltip: qsTr("Command palette  (Ctrl+K)")

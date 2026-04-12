@@ -161,9 +161,9 @@ Rectangle {
         anchors.top: parent.top
         anchors.left: parent.left
         anchors.right: parent.right
-        anchors.topMargin: Theme.sp3
-        anchors.leftMargin: Theme.sp3
-        anchors.rightMargin: Theme.sp3
+        anchors.topMargin: Theme.sp1
+        anchors.leftMargin: Theme.sp2
+        anchors.rightMargin: Theme.sp2
 
         implicitHeight: detector.count > 0 ? 28 : 0
         visible: detector.count > 0
@@ -446,10 +446,10 @@ Rectangle {
         anchors.left: parent.left
         anchors.right: parent.right
         anchors.bottom: parent.bottom
-        anchors.topMargin: serviceStrip.visible ? Theme.sp2 : Theme.sp3
-        anchors.leftMargin: Theme.sp3
-        anchors.rightMargin: Theme.sp3
-        anchors.bottomMargin: Theme.sp3
+        anchors.topMargin: serviceStrip.visible ? Theme.sp1 : Theme.sp1
+        anchors.leftMargin: Theme.sp2
+        anchors.rightMargin: Theme.sp2
+        anchors.bottomMargin: Theme.sp1
 
         session: session
         font.family: Theme.fontMono

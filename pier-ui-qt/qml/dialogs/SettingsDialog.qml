@@ -11,8 +11,8 @@ Item {
 
     property bool open: false
     property var connectionsModel: null
-    readonly property int navWidth: 172
-    readonly property int contentColumnWidth: 540
+    readonly property int navWidth: 180
+    readonly property int contentColumnWidth: 560
 
     signal closed
 
@@ -56,8 +56,8 @@ Item {
     Rectangle {
         id: dialog
         anchors.centerIn: parent
-        width: 760
-        height: 540
+        width: Math.min(820, parent.width - 60)
+        height: Math.min(600, parent.height - 60)
 
         // Entry animation — scale-up + fade-in
         scale: 0.96
@@ -217,7 +217,7 @@ Item {
                     ScrollView {
                         clip: true
                         ColumnLayout {
-                            width: Math.min(parent.width, root.contentColumnWidth)
+                            width: parent ? parent.availableWidth : 0
                             spacing: Theme.sp4
 
                             Item { Layout.preferredHeight: Theme.sp4 }
@@ -275,7 +275,7 @@ Item {
                     ScrollView {
                         clip: true
                         ColumnLayout {
-                            width: Math.min(parent.width, root.contentColumnWidth)
+                            width: parent ? parent.availableWidth : 0
                             spacing: Theme.sp4
 
                             Item { Layout.preferredHeight: Theme.sp4 }
@@ -402,7 +402,7 @@ Item {
                     ScrollView {
                         clip: true
                         ColumnLayout {
-                            width: Math.min(parent.width, root.contentColumnWidth)
+                            width: parent ? parent.availableWidth : 0
                             spacing: Theme.sp4
 
                             Item { Layout.preferredHeight: Theme.sp4 }
@@ -523,7 +523,7 @@ Item {
                     ScrollView {
                         clip: true
                         ColumnLayout {
-                            width: Math.min(parent.width, root.contentColumnWidth)
+                            width: parent ? parent.availableWidth : 0
                             spacing: Theme.sp4
 
                             Item { Layout.preferredHeight: Theme.sp4 }
@@ -550,23 +550,23 @@ Item {
                                 interactive: false
                                 model: root.connectionsModel
                                 visible: root.connectionsModel && root.connectionsModel.count > 0
-                                spacing: Theme.sp1
+                                spacing: Theme.sp2
 
                                 delegate: Rectangle {
                                     width: ListView.view.width
-                                    implicitHeight: 44
+                                    implicitHeight: 52
                                     color: Theme.bgSurface
                                     border.color: Theme.borderSubtle
                                     border.width: 1
                                     radius: Theme.radiusSm
 
-                                    Behavior on color { ColorAnimation { duration: Theme.durNormal } }
-
                                     ColumnLayout {
                                         anchors.fill: parent
                                         anchors.leftMargin: Theme.sp3
                                         anchors.rightMargin: Theme.sp3
-                                        spacing: 0
+                                        anchors.topMargin: Theme.sp2
+                                        anchors.bottomMargin: Theme.sp2
+                                        spacing: 2
 
                                         Text {
                                             text: model.name
@@ -576,7 +576,6 @@ Item {
                                             color: Theme.textPrimary
                                             elide: Text.ElideRight
                                             Layout.fillWidth: true
-                                            Behavior on color { ColorAnimation { duration: Theme.durNormal } }
                                         }
                                         Text {
                                             text: (model.username || "") + "@" + model.host + ":" + model.port
@@ -585,7 +584,6 @@ Item {
                                             color: Theme.textTertiary
                                             elide: Text.ElideRight
                                             Layout.fillWidth: true
-                                            Behavior on color { ColorAnimation { duration: Theme.durNormal } }
                                         }
                                     }
                                 }

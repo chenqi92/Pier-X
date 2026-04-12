@@ -61,6 +61,14 @@ redis = { version = "1.2", default-features = false, features = [
 # and Redis: the SSH tunnel encrypts the transport.
 tokio-postgres = "0.7"
 
+# Git graph engine — libgit2 binding for in-process ref
+# decoration, revwalk, tree diff, and branch enumeration.
+# The heavy `graph_log()` uses subprocess `git log` for exact
+# IDEA-matching topo order, but enriches results with libgit2
+# for ref decorations. Also used by `list_branches()`,
+# `first_parent_chain()`, and `detect_default_branch()`.
+git2 = "0.19"
+
 # Markdown → HTML renderer for the local Markdown preview
 # panel (M5e). `pulldown-cmark` is the reference CommonMark
 # implementation in the Rust ecosystem; we enable a superset

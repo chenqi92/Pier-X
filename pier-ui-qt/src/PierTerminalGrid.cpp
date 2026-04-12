@@ -227,23 +227,61 @@ void PierTerminalGrid::paint(QPainter *painter)
             const QColor fg = cellForeground(c, m_defaultFg);
             painter->setPen(fg);
 
+            // Determine if this is a wide (CJK) character that spans 2 cells.
+            // Wide chars are followed by a placeholder cell with ch == 0.
+            bool isWide = false;
+            if (col + 1 < cols) {
+                const PierCell &next = cells[row * cols + col + 1];
+                // A wide char is detected when:
+                // 1. The codepoint is in CJK ranges, AND
+                // 2. The next cell is a zero-char placeholder
+                const uint32_t cp = c.ch;
+                if (next.ch == 0) {
+                    // CJK Unified Ideographs and common fullwidth ranges
+                    if ((cp >= 0x1100 && cp <= 0x115F) ||    // Hangul Jamo
+                        cp == 0x2329 || cp == 0x232A ||      // Angle brackets
+                        (cp >= 0x2E80 && cp <= 0x303E) ||    // CJK Radicals, Kangxi
+                        (cp >= 0x3040 && cp <= 0x33BF) ||    // Hiragana, Katakana, CJK compat
+                        (cp >= 0x3400 && cp <= 0x4DBF) ||    // CJK Extension A
+                        (cp >= 0x4E00 && cp <= 0x9FFF) ||    // CJK Unified Ideographs
+                        (cp >= 0xA000 && cp <= 0xA4CF) ||    // Yi
+                        (cp >= 0xAC00 && cp <= 0xD7AF) ||    // Hangul Syllables
+                        (cp >= 0xF900 && cp <= 0xFAFF) ||    // CJK Compatibility Ideographs
+                        (cp >= 0xFE10 && cp <= 0xFE6F) ||    // CJK Compat Forms, Halfwidth
+                        (cp >= 0xFF01 && cp <= 0xFF60) ||    // Fullwidth Latin
+                        (cp >= 0xFFE0 && cp <= 0xFFE6) ||    // Fullwidth Signs
+                        (cp >= 0x20000 && cp <= 0x2FFFF) ||  // CJK Extension B..
+                        (cp >= 0x30000 && cp <= 0x3FFFF))    // CJK Extension G..
+                    {
+                        isWide = true;
+                    }
+                }
+            }
+
+            const qreal drawWidth = isWide ? m_cellWidth * 2.0 : m_cellWidth;
+
             // Reverse video swaps fg/bg at paint time.
             if (c.attrs & 0x04 /* reverse */) {
                 const QColor bg = cellBackground(c, m_defaultBg);
                 painter->fillRect(
-                    QRectF(col * m_cellWidth, row * m_cellHeight, m_cellWidth, m_cellHeight),
+                    QRectF(col * m_cellWidth, row * m_cellHeight, drawWidth, m_cellHeight),
                     fg);
                 painter->setPen(bg);
             }
 
-            const QChar glyph(static_cast<char32_t>(c.ch));
+            const QString glyph = QString::fromUcs4(&c.ch, 1);
             const qreal x = col * m_cellWidth;
             const qreal y = row * m_cellHeight + m_ascent;
-            painter->drawText(QPointF(x, y), QString(glyph));
+            painter->drawText(QPointF(x, y), glyph);
 
             if (c.attrs & 0x02 /* underline */) {
                 const qreal uy = row * m_cellHeight + m_cellHeight - 1;
-                painter->drawLine(QPointF(x, uy), QPointF(x + m_cellWidth, uy));
+                painter->drawLine(QPointF(x, uy), QPointF(x + drawWidth, uy));
+            }
+
+            // Skip the trailing placeholder cell for wide characters
+            if (isWide) {
+                ++col;
             }
         }
     }

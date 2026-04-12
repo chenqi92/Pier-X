@@ -240,10 +240,13 @@ impl Performer<'_> {
 
 impl Perform for Performer<'_> {
     fn print(&mut self, ch: char) {
-        // Wrap at right edge: commit the character into the last
-        // column first, then advance cursor past cols so the next
-        // print triggers a line feed.
-        if *self.cursor_x >= self.cols {
+        // Determine display width of the character.
+        // CJK / fullwidth chars take 2 cells; most others take 1.
+        let char_width = if is_wide_char(ch) { 2 } else { 1 };
+
+        // Wrap at right edge: if the cursor is past the last column,
+        // or a wide char won't fit, wrap to the next line first.
+        if *self.cursor_x + char_width > self.cols {
             *self.cursor_x = 0;
             self.line_feed();
         }
@@ -252,6 +255,15 @@ impl Perform for Performer<'_> {
             cell.ch = ch;
             self.cells[*self.cursor_y][*self.cursor_x] = cell;
             *self.cursor_x += 1;
+
+            // For wide characters, insert a zero-width placeholder in
+            // the next cell so the C++ renderer knows to skip it.
+            if char_width == 2 && *self.cursor_x < self.cols {
+                let mut placeholder = Cell::default();
+                placeholder.ch = '\0';
+                self.cells[*self.cursor_y][*self.cursor_x] = placeholder;
+                *self.cursor_x += 1;
+            }
         }
     }
 
@@ -481,6 +493,37 @@ impl Performer<'_> {
             }
         }
     }
+}
+
+// ─────────────────────────────────────────────────────────
+// Unicode East Asian width detection (subset).
+//
+// Returns true for characters that occupy two terminal cells.
+// This covers CJK Unified Ideographs, Hangul, Katakana,
+// fullwidth Latin, and other common double-width ranges.
+// A full implementation would use the `unicode-width` crate,
+// but this inline table avoids an extra dependency for the
+// ranges that matter in practice.
+// ─────────────────────────────────────────────────────────
+
+fn is_wide_char(ch: char) -> bool {
+    let cp = ch as u32;
+    matches!(cp,
+        0x1100..=0x115F      // Hangul Jamo
+        | 0x2329..=0x232A    // Angle brackets
+        | 0x2E80..=0x303E    // CJK Radicals, Kangxi, Ideographic Description
+        | 0x3040..=0x33BF    // Hiragana, Katakana, Bopomofo, CJK Compat
+        | 0x3400..=0x4DBF    // CJK Unified Ideographs Extension A
+        | 0x4E00..=0x9FFF    // CJK Unified Ideographs
+        | 0xA000..=0xA4CF    // Yi Syllables and Radicals
+        | 0xAC00..=0xD7AF    // Hangul Syllables
+        | 0xF900..=0xFAFF    // CJK Compatibility Ideographs
+        | 0xFE10..=0xFE6F    // CJK Compatibility Forms, Small Forms
+        | 0xFF01..=0xFF60    // Fullwidth Latin, Halfwidth Katakana boundary
+        | 0xFFE0..=0xFFE6    // Fullwidth Signs
+        | 0x20000..=0x2FFFF  // CJK Extension B, C, D, E, F
+        | 0x30000..=0x3FFFF  // CJK Extension G, H
+    )
 }
 
 // ─────────────────────────────────────────────────────────

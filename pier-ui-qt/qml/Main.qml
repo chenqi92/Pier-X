@@ -131,7 +131,7 @@ ApplicationWindow {
             pgPort: 5432,
             pgUser: "",
             pgDatabase: "",
-            rpTool: ""
+            rpTool: "docker"
         }
     }
 

@@ -367,43 +367,81 @@ Rectangle {
         anchors.margins: Theme.sp3
         spacing: Theme.sp2
 
-        ToolPanelSurface {
+        ToolHeroPanel {
             Layout.fillWidth: true
-            padding: Theme.sp2
-            implicitHeight: topBar.implicitHeight + Theme.sp2 * 2
+            accentColor: Theme.accent
 
-            RowLayout {
+            ColumnLayout {
                 id: topBar
                 anchors.fill: parent
                 spacing: Theme.sp2
 
-                Text {
-                    Layout.minimumWidth: 160
-                    Layout.maximumWidth: 280
-                    text: client.target.length > 0 ? client.target : qsTr("Docker")
-                    font.family: Theme.fontMono
-                    font.pixelSize: Theme.sizeBody
-                    font.weight: Theme.weightMedium
-                    color: Theme.textPrimary
-                    elide: Text.ElideMiddle
+                ToolSectionHeader {
+                    Layout.fillWidth: true
+                    prominent: true
+                    title: client.target.length > 0 ? client.target : "localhost"
+                    subtitle: root.currentTab === 0 ? qsTr("Containers")
+                              : (root.currentTab === 1 ? qsTr("Images")
+                                 : (root.currentTab === 2 ? qsTr("Volumes")
+                                    : (root.currentTab === 3 ? qsTr("Networks")
+                                       : qsTr("Compose"))))
+
+                    GhostButton {
+                        compact: true
+                        minimumWidth: 0
+                        text: qsTr("Refresh")
+                        enabled: client.status === PierDockerClient.Connected
+                        onClicked: root._refreshCurrentTab()
+                    }
                 }
 
-                StatusPill {
-                    text: root.sshHost.length > 0 || (root.sharedSession && root.sharedSession.connected)
-                          ? qsTr("Remote")
-                          : qsTr("Local")
-                    tone: "info"
+                Flow {
+                    Layout.fillWidth: true
+                    spacing: Theme.sp2
+
+                    StatusPill {
+                        text: root.sshHost.length > 0 || (root.sharedSession && root.sharedSession.connected)
+                              ? qsTr("Remote")
+                              : qsTr("Local")
+                        tone: "info"
+                    }
+
+                    StatusPill {
+                        text: client.busy ? qsTr("Busy") : qsTr("Ready")
+                        tone: client.busy ? "warning" : "success"
+                    }
+
+                    StatusPill {
+                        text: qsTr("%1 items").arg(root._currentCount())
+                        tone: "neutral"
+                    }
                 }
 
-                StatusPill {
-                    text: client.busy ? qsTr("Busy") : qsTr("Ready")
-                    tone: client.busy ? "warning" : "success"
-                }
+                Flow {
+                    Layout.fillWidth: true
+                    spacing: Theme.sp2
 
-                Item { Layout.fillWidth: true }
+                    ToolFactChip {
+                        label: qsTr("Target")
+                        value: client.target
+                        monoValue: true
+                    }
+
+                    ToolFactChip {
+                        label: qsTr("Mode")
+                        value: root.sshHost.length > 0 || (root.sharedSession && root.sharedSession.connected)
+                               ? qsTr("SSH")
+                               : qsTr("Local")
+                    }
+
+                    ToolFactChip {
+                        label: qsTr("View")
+                        value: root.tabLabels[root.currentTab]
+                    }
+                }
 
                 SegmentedControl {
-                    Layout.preferredWidth: 420
+                    Layout.fillWidth: true
                     options: root.tabLabels
                     currentIndex: root.currentTab
                     onActivated: (index) => {
@@ -411,14 +449,6 @@ Rectangle {
                         root.pendingDeleteId = ""
                         root._refreshCurrentTab()
                     }
-                }
-
-                GhostButton {
-                    compact: true
-                    minimumWidth: 0
-                    text: qsTr("Refresh")
-                    enabled: client.status === PierDockerClient.Connected
-                    onClicked: root._refreshCurrentTab()
                 }
             }
         }
@@ -437,7 +467,7 @@ Rectangle {
             ToolPanelSurface {
                 Layout.fillWidth: true
                 Layout.fillHeight: true
-                Layout.minimumWidth: 520
+                Layout.minimumWidth: 460
                 padding: Theme.sp2
 
                 Loader {
@@ -642,7 +672,7 @@ Rectangle {
                     readonly property bool confirming: root.pendingDeleteId === row.containerId
 
                     width: ListView.view.width
-                    implicitHeight: row.confirming ? 72 : 58
+                    implicitHeight: row.confirming ? 72 : 54
                     radius: Theme.radiusSm
                     color: row.confirming
                            ? Qt.rgba(Theme.statusError.r, Theme.statusError.g, Theme.statusError.b, 0.08)
@@ -1589,157 +1619,167 @@ Rectangle {
         bodyPadding: Theme.sp4
         onRequestClose: root.runDialogOpen = false
 
-        PierScrollView {
+        body: PierScrollView {
+            id: runDialogScroll
             anchors.fill: parent
             clip: true
+            contentWidth: width
 
-            ColumnLayout {
-                width: parent.width
-                spacing: Theme.sp3
+            Item {
+                width: runDialogScroll.width
+                implicitHeight: runDialogBody.implicitHeight
 
-                ToolPanelSurface {
-                    Layout.fillWidth: true
-                    inset: true
-                    padding: Theme.sp3
+                ColumnLayout {
+                    id: runDialogBody
+                    anchors.left: parent.left
+                    anchors.right: parent.right
+                    anchors.top: parent.top
+                    spacing: Theme.sp3
 
-                    ColumnLayout {
-                        anchors.fill: parent
-                        spacing: Theme.sp2
+                    ToolPanelSurface {
+                        Layout.fillWidth: true
+                        inset: true
+                        padding: Theme.sp3
 
-                        SectionLabel { text: qsTr("Container name") }
-                        PierTextField {
-                            Layout.fillWidth: true
-                            text: root.runContainerName
-                            placeholder: qsTr("Optional")
-                            onTextChanged: root.runContainerName = text
+                        ColumnLayout {
+                            anchors.fill: parent
+                            spacing: Theme.sp2
+
+                            SectionLabel { text: qsTr("Container name") }
+                            PierTextField {
+                                Layout.fillWidth: true
+                                text: root.runContainerName
+                                placeholder: qsTr("Optional")
+                                onTextChanged: root.runContainerName = text
+                            }
                         }
                     }
-                }
 
-                ToolPanelSurface {
-                    Layout.fillWidth: true
-                    inset: true
-                    padding: Theme.sp3
+                    ToolPanelSurface {
+                        Layout.fillWidth: true
+                        inset: true
+                        padding: Theme.sp3
 
-                    ColumnLayout {
-                        anchors.fill: parent
-                        spacing: Theme.sp2
+                        ColumnLayout {
+                            anchors.fill: parent
+                            spacing: Theme.sp2
 
-                        SectionLabel { text: qsTr("Port mappings") }
-                        Text {
-                            Layout.fillWidth: true
-                            text: qsTr("One per line, format HOST:CONTAINER")
-                            font.family: Theme.fontUi
-                            font.pixelSize: Theme.sizeSmall
-                            color: Theme.textTertiary
-                        }
-                        PierTextArea {
-                            Layout.fillWidth: true
-                            Layout.preferredHeight: 88
-                            mono: true
-                            text: root.runPortsText
-                            wrapMode: TextArea.Wrap
-                            font.pixelSize: Theme.sizeCaption
-                            selectByMouse: true
-                            onTextChanged: root.runPortsText = text
-                        }
-                    }
-                }
-
-                ToolPanelSurface {
-                    Layout.fillWidth: true
-                    inset: true
-                    padding: Theme.sp3
-
-                    ColumnLayout {
-                        anchors.fill: parent
-                        spacing: Theme.sp2
-
-                        SectionLabel { text: qsTr("Environment variables") }
-                        Text {
-                            Layout.fillWidth: true
-                            text: qsTr("One per line, format KEY=value")
-                            font.family: Theme.fontUi
-                            font.pixelSize: Theme.sizeSmall
-                            color: Theme.textTertiary
-                        }
-                        PierTextArea {
-                            Layout.fillWidth: true
-                            Layout.preferredHeight: 88
-                            mono: true
-                            text: root.runEnvText
-                            wrapMode: TextArea.Wrap
-                            font.pixelSize: Theme.sizeCaption
-                            selectByMouse: true
-                            onTextChanged: root.runEnvText = text
+                            SectionLabel { text: qsTr("Port mappings") }
+                            Text {
+                                Layout.fillWidth: true
+                                text: qsTr("One per line, format HOST:CONTAINER")
+                                font.family: Theme.fontUi
+                                font.pixelSize: Theme.sizeSmall
+                                color: Theme.textTertiary
+                            }
+                            PierTextArea {
+                                Layout.fillWidth: true
+                                Layout.preferredHeight: 88
+                                mono: true
+                                text: root.runPortsText
+                                wrapMode: TextArea.Wrap
+                                font.pixelSize: Theme.sizeCaption
+                                selectByMouse: true
+                                onTextChanged: root.runPortsText = text
+                            }
                         }
                     }
-                }
 
-                ToolPanelSurface {
-                    Layout.fillWidth: true
-                    inset: true
-                    padding: Theme.sp3
+                    ToolPanelSurface {
+                        Layout.fillWidth: true
+                        inset: true
+                        padding: Theme.sp3
 
-                    ColumnLayout {
-                        anchors.fill: parent
-                        spacing: Theme.sp2
+                        ColumnLayout {
+                            anchors.fill: parent
+                            spacing: Theme.sp2
 
-                        SectionLabel { text: qsTr("Volume mounts") }
-                        Text {
-                            Layout.fillWidth: true
-                            text: qsTr("One per line, format HOST_PATH:CONTAINER_PATH")
-                            font.family: Theme.fontUi
-                            font.pixelSize: Theme.sizeSmall
-                            color: Theme.textTertiary
-                        }
-                        PierTextArea {
-                            Layout.fillWidth: true
-                            Layout.preferredHeight: 88
-                            mono: true
-                            text: root.runVolumesText
-                            wrapMode: TextArea.Wrap
-                            font.pixelSize: Theme.sizeCaption
-                            selectByMouse: true
-                            onTextChanged: root.runVolumesText = text
-                        }
-                    }
-                }
-
-                ToolPanelSurface {
-                    Layout.fillWidth: true
-                    inset: true
-                    padding: Theme.sp3
-
-                    ColumnLayout {
-                        anchors.fill: parent
-                        spacing: Theme.sp2
-
-                        SectionLabel { text: qsTr("Restart policy") }
-                        PierComboBox {
-                            Layout.fillWidth: true
-                            options: root.restartLabels
-                            currentIndex: root.runRestartIndex
-                            onActivated: (index) => root.runRestartIndex = index
+                            SectionLabel { text: qsTr("Environment variables") }
+                            Text {
+                                Layout.fillWidth: true
+                                text: qsTr("One per line, format KEY=value")
+                                font.family: Theme.fontUi
+                                font.pixelSize: Theme.sizeSmall
+                                color: Theme.textTertiary
+                            }
+                            PierTextArea {
+                                Layout.fillWidth: true
+                                Layout.preferredHeight: 88
+                                mono: true
+                                text: root.runEnvText
+                                wrapMode: TextArea.Wrap
+                                font.pixelSize: Theme.sizeCaption
+                                selectByMouse: true
+                                onTextChanged: root.runEnvText = text
+                            }
                         }
                     }
-                }
 
-                ToolPanelSurface {
-                    Layout.fillWidth: true
-                    inset: true
-                    padding: Theme.sp3
+                    ToolPanelSurface {
+                        Layout.fillWidth: true
+                        inset: true
+                        padding: Theme.sp3
 
-                    ColumnLayout {
-                        anchors.fill: parent
-                        spacing: Theme.sp2
+                        ColumnLayout {
+                            anchors.fill: parent
+                            spacing: Theme.sp2
 
-                        SectionLabel { text: qsTr("Command override") }
-                        PierTextField {
-                            Layout.fillWidth: true
-                            text: root.runCommand
-                            placeholder: qsTr("Optional, e.g. /bin/sh")
-                            onTextChanged: root.runCommand = text
+                            SectionLabel { text: qsTr("Volume mounts") }
+                            Text {
+                                Layout.fillWidth: true
+                                text: qsTr("One per line, format HOST_PATH:CONTAINER_PATH")
+                                font.family: Theme.fontUi
+                                font.pixelSize: Theme.sizeSmall
+                                color: Theme.textTertiary
+                            }
+                            PierTextArea {
+                                Layout.fillWidth: true
+                                Layout.preferredHeight: 88
+                                mono: true
+                                text: root.runVolumesText
+                                wrapMode: TextArea.Wrap
+                                font.pixelSize: Theme.sizeCaption
+                                selectByMouse: true
+                                onTextChanged: root.runVolumesText = text
+                            }
+                        }
+                    }
+
+                    ToolPanelSurface {
+                        Layout.fillWidth: true
+                        inset: true
+                        padding: Theme.sp3
+
+                        ColumnLayout {
+                            anchors.fill: parent
+                            spacing: Theme.sp2
+
+                            SectionLabel { text: qsTr("Restart policy") }
+                            PierComboBox {
+                                Layout.fillWidth: true
+                                options: root.restartLabels
+                                currentIndex: root.runRestartIndex
+                                onActivated: (index) => root.runRestartIndex = index
+                            }
+                        }
+                    }
+
+                    ToolPanelSurface {
+                        Layout.fillWidth: true
+                        inset: true
+                        padding: Theme.sp3
+
+                        ColumnLayout {
+                            anchors.fill: parent
+                            spacing: Theme.sp2
+
+                            SectionLabel { text: qsTr("Command override") }
+                            PierTextField {
+                                Layout.fillWidth: true
+                                text: root.runCommand
+                                placeholder: qsTr("Optional, e.g. /bin/sh")
+                                onTextChanged: root.runCommand = text
+                            }
                         }
                     }
                 }
@@ -1751,7 +1791,7 @@ Rectangle {
 
             RowLayout {
                 id: runDialogFooter
-                anchors.fill: parent
+                width: parent.width
                 spacing: Theme.sp2
 
                 GhostButton {

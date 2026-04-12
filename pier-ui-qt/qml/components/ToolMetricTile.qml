@@ -12,9 +12,11 @@ Rectangle {
     property real progress: -1
     property color accentColor: Theme.accent
 
-    implicitHeight: Math.max(72, tileColumn.implicitHeight + Theme.sp3 * 2)
-    color: Theme.bgPanel
-    border.color: Theme.borderSubtle
+    readonly property color strokeColor: Qt.rgba(root.accentColor.r, root.accentColor.g, root.accentColor.b, Theme.dark ? 0.20 : 0.14)
+
+    implicitHeight: Math.max(92, tileColumn.implicitHeight + Theme.sp3 * 2)
+    color: Theme.bgSurface
+    border.color: root.strokeColor
     border.width: 1
     radius: Theme.radiusSm
     clip: true
@@ -26,23 +28,35 @@ Rectangle {
         id: tileColumn
         anchors.fill: parent
         anchors.margins: Theme.sp3
-        spacing: Theme.sp1
+        spacing: Theme.sp1_5
 
-        Text {
+        RowLayout {
             Layout.fillWidth: true
-            text: root.title
-            font.family: Theme.fontUi
-            font.pixelSize: Theme.sizeCaption
-            font.weight: Theme.weightMedium
-            color: Theme.textSecondary
-            elide: Text.ElideRight
+            spacing: Theme.sp1_5
+
+            Rectangle {
+                width: 6
+                height: 6
+                radius: 3
+                color: root.accentColor
+            }
+
+            Text {
+                Layout.fillWidth: true
+                text: root.title
+                font.family: Theme.fontUi
+                font.pixelSize: Theme.sizeCaption
+                font.weight: Theme.weightMedium
+                color: Theme.textSecondary
+                elide: Text.ElideRight
+            }
         }
 
         Text {
             Layout.fillWidth: true
             text: root.valueText
             font.family: Theme.fontMono
-            font.pixelSize: 18
+            font.pixelSize: 20
             font.weight: Theme.weightMedium
             color: Theme.textPrimary
             elide: Text.ElideRight
@@ -79,7 +93,7 @@ Rectangle {
             text: root.footerText
             font.family: Theme.fontMono
             font.pixelSize: Theme.sizeCaption
-            color: Theme.textSecondary
+            color: Theme.textTertiary
             elide: Text.ElideRight
         }
     }

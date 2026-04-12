@@ -101,10 +101,9 @@ Rectangle {
         anchors.margins: Theme.sp3
         spacing: Theme.sp2
 
-        ToolPanelSurface {
+        ToolHeroPanel {
             Layout.fillWidth: true
-            padding: Theme.sp2
-            implicitHeight: sftpHeader.implicitHeight + Theme.sp2 * 2
+            accentColor: Theme.accent
 
             ColumnLayout {
                 id: sftpHeader
@@ -113,8 +112,9 @@ Rectangle {
 
                 ToolSectionHeader {
                     Layout.fillWidth: true
-                    title: qsTr("SFTP")
-                    subtitle: browser.target.length > 0 ? browser.target : qsTr("Remote Files")
+                    prominent: true
+                    title: browser.currentPath.length > 0 ? browser.currentPath : qsTr("Remote Files")
+                    subtitle: browser.target.length > 0 ? browser.target : qsTr("SFTP")
 
                     IconButton {
                         compact: true
@@ -150,6 +150,23 @@ Rectangle {
                         visible: listView.count > 0
                         text: qsTr("%1 entries").arg(listView.count)
                         tone: "neutral"
+                    }
+                }
+
+                Flow {
+                    Layout.fillWidth: true
+                    spacing: Theme.sp2
+
+                    ToolFactChip {
+                        label: qsTr("Path")
+                        value: browser.currentPath
+                        monoValue: true
+                    }
+
+                    ToolFactChip {
+                        label: qsTr("Entries")
+                        value: listView.count > 0 ? String(listView.count) : ""
+                        monoValue: true
                     }
                 }
 
@@ -189,7 +206,7 @@ Rectangle {
 
                 ToolSectionHeader {
                     Layout.fillWidth: true
-                    title: qsTr("Remote Files")
+                    title: qsTr("Directory")
                     subtitle: browser.currentPath.length > 0 ? browser.currentPath : qsTr("Waiting for directory listing.")
                 }
 
@@ -295,8 +312,8 @@ Rectangle {
                          && !browser.busy
                          && listView.count === 0
                 icon: "folder"
-                title: qsTr("Empty directory")
-                description: qsTr("This folder has no visible entries yet.")
+                title: qsTr("No files")
+                description: qsTr("This directory is ready for browsing.")
             }
 
             // Busy spinner during list_dir requests.

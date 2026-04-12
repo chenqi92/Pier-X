@@ -101,20 +101,24 @@ Rectangle {
             width: Math.max(root.width - Theme.sp6, 280)
             spacing: Theme.sp2
 
-            ToolPanelSurface {
+            ToolHeroPanel {
                 Layout.fillWidth: true
-                implicitHeight: monitorHeader.implicitHeight + Theme.sp3 * 2
+                accentColor: Theme.statusInfo
 
                 ColumnLayout {
                     id: monitorHeader
                     anchors.fill: parent
-                    anchors.margins: Theme.sp3
                     spacing: Theme.sp2
 
                     ToolSectionHeader {
                         Layout.fillWidth: true
-                        title: monitor.target.length > 0 ? monitor.target : qsTr("Server Monitor")
-                        subtitle: monitor.uptime.length > 0 ? monitor.uptime : qsTr("Waiting for system snapshot.")
+                        prominent: true
+                        title: monitor.hostname.length > 0
+                               ? monitor.hostname
+                               : (monitor.target.length > 0 ? monitor.target : qsTr("Server Monitor"))
+                        subtitle: monitor.target.length > 0
+                                  ? monitor.target
+                                  : (monitor.os.length > 0 ? monitor.os : qsTr("Waiting for system snapshot."))
 
                         GhostButton {
                             compact: true
@@ -157,6 +161,51 @@ Rectangle {
                             text: qsTr("Disk %1").arg(_pctBar(monitor.diskUsePct))
                             tone: "neutral"
                         }
+                    }
+
+                    Flow {
+                        Layout.fillWidth: true
+                        spacing: Theme.sp2
+
+                        ToolFactChip {
+                            label: qsTr("Uptime")
+                            value: monitor.uptime
+                            monoValue: true
+                        }
+
+                        ToolFactChip {
+                            label: qsTr("Load")
+                            value: monitor.load1 >= 0
+                                   ? (monitor.load1.toFixed(2) + " / "
+                                      + monitor.load5.toFixed(2) + " / "
+                                      + monitor.load15.toFixed(2))
+                                   : ""
+                            monoValue: true
+                        }
+
+                        ToolFactChip {
+                            label: qsTr("Memory")
+                            value: monitor.memTotalMb > 0
+                                   ? (_fmtMb(monitor.memUsedMb) + " / " + _fmtMb(monitor.memTotalMb))
+                                   : ""
+                            monoValue: true
+                        }
+
+                        ToolFactChip {
+                            label: qsTr("Disk")
+                            value: monitor.diskUsed.length > 0 && monitor.diskTotal.length > 0
+                                   ? (monitor.diskUsed + " / " + monitor.diskTotal)
+                                   : ""
+                            monoValue: true
+                        }
+                    }
+
+                    ToolBanner {
+                        Layout.fillWidth: true
+                        tone: monitor.status === PierServerMonitor.Connected ? "neutral" : "info"
+                        text: monitor.os.length > 0
+                              ? monitor.os
+                              : qsTr("Waiting for host details")
                     }
                 }
             }

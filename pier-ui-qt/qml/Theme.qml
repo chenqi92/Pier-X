@@ -111,6 +111,17 @@ QtObject {
     // Used by TerminalView's PierTerminalGrid binding.
     property int terminalFontSize: 13
 
+    // Cursor style: 0 = Block, 1 = Beam, 2 = Underline
+    property int cursorStyle: 0
+    property bool cursorBlink: true
+
+    // Scrollback buffer size (lines). Default matches Rust emulator.
+    property int scrollbackLines: 10000
+
+    // Bell behavior
+    property bool visualBell: true
+    property bool audioBell: false
+
     readonly property int sizeDisplay: 32
     readonly property int sizeH1: 24
     readonly property int sizeH2: 20

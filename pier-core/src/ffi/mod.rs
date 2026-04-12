@@ -38,6 +38,7 @@
 //! submodule here as they land.
 
 pub mod connections;
+pub mod control_master;
 pub mod core;
 pub mod credentials;
 pub mod docker;

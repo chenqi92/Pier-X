@@ -81,9 +81,11 @@ set(PIER_QML_FILES
     qml/components/PierToolTip.qml
     qml/components/Card.qml
     qml/components/ToolPanelSurface.qml
+    qml/components/ToolHeroPanel.qml
     qml/components/ToolSectionHeader.qml
     qml/components/ToolEmptyState.qml
     qml/components/ToolBanner.qml
+    qml/components/ToolFactChip.qml
     qml/components/ToolMetricTile.qml
     qml/components/StatusPill.qml
     qml/components/ModalDialogShell.qml
@@ -171,6 +173,8 @@ qt_add_qml_module(pier-x
         src/PierLocalSystem.cpp
         src/PierSshSessionHandle.h
         src/PierSshSessionHandle.cpp
+        src/PierControlMasterHandle.h
+        src/PierControlMasterHandle.cpp
         src/PierSftpBrowser.h
         src/PierSftpBrowser.cpp
         src/PierServiceDetector.h

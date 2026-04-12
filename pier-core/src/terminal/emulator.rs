@@ -181,6 +181,10 @@ impl VtEmulator {
             bell_pending: &mut self.bell_pending,
             window_title: &mut self.window_title,
             osc52_clipboard: &mut self.osc52_clipboard,
+            ssh_command_detected: &mut self.ssh_command_detected,
+            ssh_detected_host: &mut self.ssh_detected_host,
+            ssh_detected_user: &mut self.ssh_detected_user,
+            ssh_detected_port: &mut self.ssh_detected_port,
         };
         // Remember cursor row before processing to detect line changes
         let prev_y = *performer.cursor_y;
@@ -345,6 +349,10 @@ struct Performer<'a> {
     bell_pending: &'a mut bool,
     window_title: &'a mut String,
     osc52_clipboard: &'a mut String,
+    ssh_command_detected: &'a mut bool,
+    ssh_detected_host: &'a mut String,
+    ssh_detected_user: &'a mut String,
+    ssh_detected_port: &'a mut u16,
 }
 
 impl Performer<'_> {
@@ -404,7 +412,21 @@ impl Perform for Performer<'_> {
     fn execute(&mut self, byte: u8) {
         match byte {
             // LF / VT / FF — all move down one row.
-            b'\n' | 0x0B | 0x0C => self.line_feed(),
+            b'\n' | 0x0B | 0x0C => {
+                // Before line feed, check if current line has an SSH command.
+                // This detects `ssh user@host` typed by the user.
+                let line: String = self.cells[*self.cursor_y]
+                    .iter()
+                    .map(|c| c.ch)
+                    .collect();
+                if let Some((host, user, port)) = parse_ssh_command(&line) {
+                    *self.ssh_detected_host = host;
+                    *self.ssh_detected_user = user;
+                    *self.ssh_detected_port = port;
+                    *self.ssh_command_detected = true;
+                }
+                self.line_feed();
+            }
             // CR — back to column 0.
             b'\r' => *self.cursor_x = 0,
             // BS — one column left (but not below 0).

@@ -120,6 +120,15 @@ PierTerminalGrid::PierTerminalGrid(QQuickItem *parent)
     // Children don't need to paint over us; the item paints the
     // entire rect every frame.
     setFlag(ItemHasContents, true);
+
+    // Cursor blink timer — 530ms matches typical terminal blink rate.
+    m_blinkTimer.setInterval(530);
+    connect(&m_blinkTimer, &QTimer::timeout, this, [this]() {
+        m_cursorVisible = !m_cursorVisible;
+        update();
+    });
+    if (m_cursorBlink)
+        m_blinkTimer.start();
 }
 
 void PierTerminalGrid::setSession(PierTerminalSession *s)
@@ -181,6 +190,30 @@ void PierTerminalGrid::setPaletteColors(const QList<QColor> &colors)
     m_palette = colors;
     emit paletteColorsChanged();
     update();
+}
+
+void PierTerminalGrid::setCursorStyle(int style)
+{
+    style = qBound(0, style, 2);
+    if (m_cursorStyle == style) return;
+    m_cursorStyle = style;
+    emit cursorStyleChanged();
+    update();
+}
+
+void PierTerminalGrid::setCursorBlink(bool blink)
+{
+    if (m_cursorBlink == blink) return;
+    m_cursorBlink = blink;
+    if (blink) {
+        m_cursorVisible = true;
+        m_blinkTimer.start();
+    } else {
+        m_blinkTimer.stop();
+        m_cursorVisible = true;
+        update();
+    }
+    emit cursorBlinkChanged();
 }
 
 void PierTerminalGrid::geometryChange(const QRectF &newGeometry, const QRectF &oldGeometry)
@@ -331,16 +364,26 @@ void PierTerminalGrid::paint(QPainter *painter)
         }
     }
 
-    // Cursor block — simple filled rectangle at cursor position.
-    // M2b ships non-blinking; a QTimer-driven blink animation lands
-    // in v1.1. We draw it last so it's on top of any cell that
-    // happens to share the cursor position.
+    // Cursor — drawn last so it's on top of any cell content.
+    // Supports Block, Beam, and Underline styles with optional blink.
     const int cx = m_session->cursorX();
     const int cy = m_session->cursorY();
-    if (cx >= 0 && cy >= 0 && cx < cols && cy < rows) {
-        painter->fillRect(
-            QRectF(cx * m_cellWidth, cy * m_cellHeight, m_cellWidth, m_cellHeight),
-            QColor(m_defaultFg.red(), m_defaultFg.green(), m_defaultFg.blue(), 140));
+    if (cx >= 0 && cy >= 0 && cx < cols && cy < rows && m_cursorVisible) {
+        const QColor cursorColor(m_defaultFg.red(), m_defaultFg.green(), m_defaultFg.blue(), 140);
+        const qreal x0 = cx * m_cellWidth;
+        const qreal y0 = cy * m_cellHeight;
+
+        switch (m_cursorStyle) {
+        case 1: // Beam
+            painter->fillRect(QRectF(x0, y0, 2.0, m_cellHeight), cursorColor);
+            break;
+        case 2: // Underline
+            painter->fillRect(QRectF(x0, y0 + m_cellHeight - 2.0, m_cellWidth, 2.0), cursorColor);
+            break;
+        default: // Block
+            painter->fillRect(QRectF(x0, y0, m_cellWidth, m_cellHeight), cursorColor);
+            break;
+        }
     }
 }
 

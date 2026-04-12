@@ -28,6 +28,7 @@
 #include <QList>
 #include <QQuickPaintedItem>
 #include <QSize>
+#include <QTimer>
 #include <qqml.h>
 
 // Qt moc registers Q_PROPERTY(PierTerminalSession *) as a meta-type,
@@ -46,6 +47,10 @@ class PierTerminalGrid : public QQuickPaintedItem
     Q_PROPERTY(QColor defaultBackground READ defaultBackground WRITE setDefaultBackground NOTIFY defaultBackgroundChanged FINAL)
     Q_PROPERTY(bool isDarkTheme READ isDarkTheme WRITE setIsDarkTheme NOTIFY isDarkThemeChanged FINAL)
     Q_PROPERTY(QList<QColor> paletteColors READ paletteColors WRITE setPaletteColors NOTIFY paletteColorsChanged FINAL)
+
+    // Cursor appearance: 0 = Block, 1 = Beam, 2 = Underline
+    Q_PROPERTY(int cursorStyle READ cursorStyle WRITE setCursorStyle NOTIFY cursorStyleChanged FINAL)
+    Q_PROPERTY(bool cursorBlink READ cursorBlink WRITE setCursorBlink NOTIFY cursorBlinkChanged FINAL)
 
     // Exposed for QML to lay out the containing view. Changes with
     // the font and with the current session cell count.
@@ -73,6 +78,12 @@ public:
     QList<QColor> paletteColors() const { return m_palette; }
     void setPaletteColors(const QList<QColor> &colors);
 
+    int cursorStyle() const { return m_cursorStyle; }
+    void setCursorStyle(int style);
+
+    bool cursorBlink() const { return m_cursorBlink; }
+    void setCursorBlink(bool blink);
+
     qreal cellWidth() const { return m_cellWidth; }
     qreal cellHeight() const { return m_cellHeight; }
 
@@ -92,6 +103,8 @@ signals:
     void defaultBackgroundChanged();
     void isDarkThemeChanged();
     void paletteColorsChanged();
+    void cursorStyleChanged();
+    void cursorBlinkChanged();
     void metricsChanged();
 
 protected:
@@ -109,6 +122,10 @@ private:
     QColor m_defaultBg = Qt::transparent;
     bool m_isDarkTheme = true;
     QList<QColor> m_palette; // 16 ANSI colors from QML; empty = use built-in
+    int m_cursorStyle = 0;   // 0=Block, 1=Beam, 2=Underline
+    bool m_cursorBlink = true;
+    bool m_cursorVisible = true;
+    QTimer m_blinkTimer;
     qreal m_cellWidth = 0;
     qreal m_cellHeight = 0;
     qreal m_ascent = 0;

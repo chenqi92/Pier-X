@@ -15,7 +15,7 @@ Item {
     property var connectionsModel: null
     readonly property int navWidth: 208
     readonly property int pagePadding: 28
-    readonly property int rowLabelWidth: 224
+    readonly property int rowLabelWidth: 196
 
     signal closed
 
@@ -26,11 +26,21 @@ Item {
         property int themeIndex: 0
         property string fontFamily: "JetBrains Mono"
         property int fontSize: 13
+        property int cursorStyle: 0
+        property bool cursorBlink: true
+        property int scrollbackLines: 10000
+        property bool visualBell: true
+        property bool audioBell: false
     }
     Component.onCompleted: {
         Theme.terminalThemeIndex = terminalSettings.themeIndex
         Theme.fontMono = terminalSettings.fontFamily
         Theme.terminalFontSize = terminalSettings.fontSize
+        Theme.cursorStyle = terminalSettings.cursorStyle
+        Theme.cursorBlink = terminalSettings.cursorBlink
+        Theme.scrollbackLines = terminalSettings.scrollbackLines
+        Theme.visualBell = terminalSettings.visualBell
+        Theme.audioBell = terminalSettings.audioBell
     }
 
     visible: open
@@ -132,15 +142,10 @@ Item {
                     Layout.fillHeight: true
                     currentIndex: sectionList.currentIndex
 
-                    PierScrollView {
+                    SettingsPageScroll {
                         id: generalScroll
-                        clip: true
-                        contentWidth: availableWidth
-
                         ColumnLayout {
-                            width: Math.max(0, generalScroll.availableWidth - root.pagePadding * 2)
-                            x: root.pagePadding
-                            y: root.pagePadding
+                            Layout.fillWidth: true
                             spacing: Theme.sp5
 
                             ColumnLayout {
@@ -270,19 +275,13 @@ Item {
                                 }
                             }
 
-                            Item { implicitHeight: root.pagePadding }
                         }
                     }
 
-                    PierScrollView {
+                    SettingsPageScroll {
                         id: appearanceScroll
-                        clip: true
-                        contentWidth: availableWidth
-
                         ColumnLayout {
-                            width: Math.max(0, appearanceScroll.availableWidth - root.pagePadding * 2)
-                            x: root.pagePadding
-                            y: root.pagePadding
+                            Layout.fillWidth: true
                             spacing: Theme.sp5
 
                             ColumnLayout {
@@ -376,19 +375,13 @@ Item {
                                 }
                             }
 
-                            Item { implicitHeight: root.pagePadding }
                         }
                     }
 
-                    PierScrollView {
+                    SettingsPageScroll {
                         id: terminalScroll
-                        clip: true
-                        contentWidth: availableWidth
-
                         ColumnLayout {
-                            width: Math.max(0, terminalScroll.availableWidth - root.pagePadding * 2)
-                            x: root.pagePadding
-                            y: root.pagePadding
+                            Layout.fillWidth: true
                             spacing: Theme.sp5
 
                             // ── Terminal Theme ───────────────────────
@@ -632,7 +625,11 @@ Item {
                                     SegmentedControl {
                                         implicitWidth: 228
                                         options: [qsTr("Block"), qsTr("Beam"), qsTr("Underline")]
-                                        currentIndex: 0
+                                        currentIndex: Theme.cursorStyle
+                                        onActivated: (i) => {
+                                            Theme.cursorStyle = i
+                                            terminalSettings.cursorStyle = i
+                                        }
                                     }
                                 }
 
@@ -641,7 +638,13 @@ Item {
                                     title: qsTr("Cursor blink")
                                     description: qsTr("Animate the cursor when the terminal is focused.")
 
-                                    ToggleSwitch { checked: true }
+                                    ToggleSwitch {
+                                        checked: Theme.cursorBlink
+                                        onToggled: (checked) => {
+                                            Theme.cursorBlink = checked
+                                            terminalSettings.cursorBlink = checked
+                                        }
+                                    }
                                 }
                             }
 
@@ -658,7 +661,17 @@ Item {
 
                                     PierTextField {
                                         implicitWidth: 108
-                                        text: "10000"
+                                        text: Theme.scrollbackLines.toString()
+                                        validator: IntValidator { bottom: 1000; top: 100000 }
+                                        onEditingFinished: {
+                                            var val = parseInt(text)
+                                            if (!isNaN(val)) {
+                                                val = Math.max(1000, Math.min(100000, val))
+                                                Theme.scrollbackLines = val
+                                                terminalSettings.scrollbackLines = val
+                                                text = val.toString()
+                                            }
+                                        }
                                     }
                                 }
                             }
@@ -674,7 +687,13 @@ Item {
                                     title: qsTr("Visual bell")
                                     description: qsTr("Flash the terminal instead of playing a sound.")
 
-                                    ToggleSwitch { checked: true }
+                                    ToggleSwitch {
+                                        checked: Theme.visualBell
+                                        onToggled: (checked) => {
+                                            Theme.visualBell = checked
+                                            terminalSettings.visualBell = checked
+                                        }
+                                    }
                                 }
 
                                 SettingRow {
@@ -682,23 +701,23 @@ Item {
                                     title: qsTr("Audio bell")
                                     description: qsTr("Play the terminal bell sound when supported.")
 
-                                    ToggleSwitch { checked: false }
+                                    ToggleSwitch {
+                                        checked: Theme.audioBell
+                                        onToggled: (checked) => {
+                                            Theme.audioBell = checked
+                                            terminalSettings.audioBell = checked
+                                        }
+                                    }
                                 }
                             }
 
-                            Item { implicitHeight: root.pagePadding }
                         }
                     }
 
-                    PierScrollView {
+                    SettingsPageScroll {
                         id: connectionsScroll
-                        clip: true
-                        contentWidth: availableWidth
-
                         ColumnLayout {
-                            width: Math.max(0, connectionsScroll.availableWidth - root.pagePadding * 2)
-                            x: root.pagePadding
-                            y: root.pagePadding
+                            Layout.fillWidth: true
                             spacing: Theme.sp4
 
                             RowLayout {
@@ -886,10 +905,31 @@ Item {
                                 }
                             }
 
-                            Item { implicitHeight: root.pagePadding }
                         }
                     }
                 }
+        }
+    }
+
+    component SettingsPageScroll: PierScrollView {
+        id: pageScroll
+        default property alias content: pageColumn.data
+
+        clip: true
+        contentWidth: width
+
+        Item {
+            width: pageScroll.width
+            implicitHeight: pageColumn.implicitHeight + root.pagePadding * 2
+
+            ColumnLayout {
+                id: pageColumn
+                width: Math.min(parent.width - root.pagePadding * 2, 720)
+                anchors.horizontalCenter: parent.horizontalCenter
+                anchors.top: parent.top
+                anchors.topMargin: root.pagePadding
+                spacing: Theme.sp5
+            }
         }
     }
 
@@ -900,6 +940,8 @@ Item {
         property string description: ""
         default property alias trailing: trailingRow.data
 
+        Layout.fillWidth: true
+        Layout.minimumWidth: 0
         implicitHeight: Math.max(46, labelColumn.implicitHeight + Theme.sp3 * 2)
 
         RowLayout {
@@ -910,6 +952,7 @@ Item {
                 id: labelColumn
                 Layout.preferredWidth: root.rowLabelWidth
                 Layout.maximumWidth: root.rowLabelWidth
+                Layout.minimumWidth: root.rowLabelWidth
                 spacing: Theme.sp0_5
 
                 Text {
@@ -937,7 +980,8 @@ Item {
             RowLayout {
                 id: trailingRow
                 spacing: Theme.sp2
-                Layout.alignment: Qt.AlignVCenter
+                Layout.minimumWidth: 0
+                Layout.alignment: Qt.AlignTop
             }
         }
     }
@@ -946,6 +990,7 @@ Item {
         Layout.fillWidth: true
         padding: Theme.sp4
         inset: true
+        implicitHeight: groupColumn.implicitHeight + padding * 2
 
         default property alias content: groupColumn.data
 

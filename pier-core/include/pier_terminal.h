@@ -268,6 +268,14 @@ int32_t pier_terminal_snapshot(
 /* Returns 1 if the child is still running, 0 otherwise. */
 int32_t pier_terminal_is_alive(const PierTerminal *t);
 
+/* Returns a JSON blob describing a detected SSH command in the
+ * terminal buffer, or NULL when nothing was detected. */
+char *pier_terminal_ssh_detected(PierTerminal *t);
+
+/* Frees strings returned by terminal FFI helpers such as
+ * `pier_terminal_ssh_detected`. Safe to call with NULL. */
+void pier_terminal_free_string(char *s);
+
 /* Joins the reader thread, reaps the child, releases the handle.
  * Safe to call with NULL. After this call `t` is invalid. */
 void pier_terminal_free(PierTerminal *t);

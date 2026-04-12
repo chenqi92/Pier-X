@@ -3740,6 +3740,11 @@ Qt %2
         <translation>搜索服务器</translation>
     </message>
     <message>
+        <location filename="../qml/shell/Sidebar.qml" line="154"/>
+        <source>New group</source>
+        <translation>新建分组</translation>
+    </message>
+    <message>
         <location filename="../qml/shell/Sidebar.qml" line="206"/>
         <source>Clear search</source>
         <translation>清除搜索</translation>
@@ -3774,6 +3779,51 @@ Qt %2
 Create one to unlock SSH, SFTP, Docker, logs, and database tools.</source>
         <translation>还没有已保存连接。
 创建一个连接以解锁 SSH、SFTP、Docker、日志与数据库工具。</translation>
+    </message>
+    <message>
+        <location filename="../qml/shell/Sidebar.qml" line="475"/>
+        <source>Rename Group</source>
+        <translation>重命名分组</translation>
+    </message>
+    <message>
+        <location filename="../qml/shell/Sidebar.qml" line="475"/>
+        <source>New Group</source>
+        <translation>新建分组</translation>
+    </message>
+    <message>
+        <location filename="../qml/shell/Sidebar.qml" line="477"/>
+        <source>Update the section name for these saved connections.</source>
+        <translation>更新这组已保存连接的分组名称。</translation>
+    </message>
+    <message>
+        <location filename="../qml/shell/Sidebar.qml" line="478"/>
+        <source>Create a persistent server group for organizing saved connections.</source>
+        <translation>创建一个持久化服务器分组，用于整理已保存的连接。</translation>
+    </message>
+    <message>
+        <location filename="../qml/shell/Sidebar.qml" line="498"/>
+        <source>Group Name</source>
+        <translation>分组名称</translation>
+    </message>
+    <message>
+        <location filename="../qml/shell/Sidebar.qml" line="508"/>
+        <source>Connections dropped onto this group will inherit the tag automatically.</source>
+        <translation>拖放到此分组的连接会自动继承该标签。</translation>
+    </message>
+    <message>
+        <location filename="../qml/shell/Sidebar.qml" line="534"/>
+        <source>Rename</source>
+        <translation>重命名</translation>
+    </message>
+    <message>
+        <location filename="../qml/shell/Sidebar.qml" line="896"/>
+        <source>Rename group</source>
+        <translation>重命名分组</translation>
+    </message>
+    <message>
+        <location filename="../qml/shell/Sidebar.qml" line="905"/>
+        <source>Ungroup connections</source>
+        <translation>移出分组</translation>
     </message>
 </context>
 <context>

@@ -58,7 +58,7 @@ Item {
         bodyPadding: 0
         onRequestClose: root.closeDialog()
 
-        ColumnLayout {
+        body: ColumnLayout {
             anchors.fill: parent
             spacing: 0
 
@@ -209,27 +209,32 @@ Item {
             }
         }
 
-        RowLayout {
-            anchors.fill: parent
-            spacing: Theme.sp2
+        footer: Item {
+            implicitHeight: footerRow.implicitHeight
 
-            Text {
-                Layout.fillWidth: true
-                text: qsTr("%1 command(s)").arg(filteredHistory.length)
-                font.family: Theme.fontUi
-                font.pixelSize: Theme.sizeSmall
-                color: Theme.textTertiary
-            }
+            RowLayout {
+                id: footerRow
+                width: parent.width
+                spacing: Theme.sp2
 
-            GhostButton {
-                text: qsTr("Close")
-                onClicked: root.closeDialog()
-            }
+                Text {
+                    Layout.fillWidth: true
+                    text: qsTr("%1 command(s)").arg(filteredHistory.length)
+                    font.family: Theme.fontUi
+                    font.pixelSize: Theme.sizeSmall
+                    color: Theme.textTertiary
+                }
 
-            PrimaryButton {
-                text: qsTr("Insert")
-                enabled: listView.currentIndex >= 0
-                onClicked: root.acceptCurrent()
+                GhostButton {
+                    text: qsTr("Close")
+                    onClicked: root.closeDialog()
+                }
+
+                PrimaryButton {
+                    text: qsTr("Insert")
+                    enabled: listView.currentIndex >= 0
+                    onClicked: root.acceptCurrent()
+                }
             }
         }
     }

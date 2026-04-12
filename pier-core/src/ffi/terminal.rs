@@ -900,6 +900,56 @@ pub unsafe extern "C" fn pier_terminal_is_alive(t: *const PierTerminal) -> i32 {
     }
 }
 
+/// Check if the terminal detected an SSH command typed by the user.
+/// Returns a heap JSON string:
+///   `{"detected":true,"host":"...","user":"...","port":22}`
+/// or `{"detected":false}` if no SSH command was detected since
+/// the last call. The detection flag is cleared after reading.
+///
+/// Release with `pier_terminal_free` (no — with standard C free…
+/// actually we need a dedicated free). Use the same pattern as
+/// other FFI: caller frees via the terminal module's free_string
+/// or we reuse pier_local_free_string. For simplicity we return
+/// NULL when nothing detected to avoid allocating.
+///
+/// Returns NULL if no SSH detected (or null handle), otherwise a
+/// heap JSON string the caller must free with `pier_git_free_string`
+/// (or any pier free_string — they all call CString::from_raw).
+///
+/// # Safety
+///
+/// `t` must be null or a live handle.
+#[no_mangle]
+pub unsafe extern "C" fn pier_terminal_ssh_detected(t: *mut PierTerminal) -> *mut c_char {
+    if t.is_null() {
+        return ptr::null_mut();
+    }
+    let term = unsafe { &*t };
+    match term.take_ssh_detected() {
+        Some((host, user, port)) => {
+            let json = format!(
+                r#"{{"detected":true,"host":"{}","user":"{}","port":{}}}"#,
+                host.replace('"', "\\\""),
+                user.replace('"', "\\\""),
+                port
+            );
+            match CString::new(json) {
+                Ok(cs) => cs.into_raw(),
+                Err(_) => ptr::null_mut(),
+            }
+        }
+        None => ptr::null_mut(),
+    }
+}
+
+/// Free a string returned by `pier_terminal_ssh_detected`.
+#[no_mangle]
+pub unsafe extern "C" fn pier_terminal_free_string(s: *mut c_char) {
+    if !s.is_null() {
+        drop(unsafe { CString::from_raw(s) });
+    }
+}
+
 /// Destroy a terminal session. Joins the reader thread and reaps
 /// the child before returning. Safe to call with null.
 ///

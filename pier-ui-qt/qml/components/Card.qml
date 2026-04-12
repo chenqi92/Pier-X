@@ -8,11 +8,14 @@ Rectangle {
     default property alias content: contentItem.data
     property int padding: Theme.sp4
     property bool inset: false
+    implicitWidth: contentItem.childrenRect.width + root.padding * 2
+    implicitHeight: contentItem.childrenRect.height + root.padding * 2
 
     color: inset ? Theme.bgInset : Theme.bgSurface
     border.color: inset ? Theme.borderSubtle : Theme.borderSubtle
     border.width: 1
     radius: Theme.radiusMd
+    clip: true
 
     Behavior on color { ColorAnimation { duration: Theme.durNormal } }
     Behavior on border.color { ColorAnimation { duration: Theme.durNormal } }

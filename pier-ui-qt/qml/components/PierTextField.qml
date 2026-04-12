@@ -6,8 +6,11 @@ Rectangle {
 
     property alias text: input.text
     property alias readOnly: input.readOnly
+    property alias validator: input.validator
+    property alias inputMethodHints: input.inputMethodHints
     property string placeholder: ""
     property bool password: false
+    signal editingFinished()
 
     implicitHeight: Theme.fieldHeight
     implicitWidth: 220
@@ -33,6 +36,11 @@ Rectangle {
         selectedTextColor: Theme.textPrimary
         echoMode: root.password ? TextInput.Password : TextInput.Normal
         passwordCharacter: "\u2022"
+        onAccepted: root.editingFinished()
+        onActiveFocusChanged: {
+            if (!activeFocus)
+                root.editingFinished()
+        }
 
         Text {
             anchors.fill: parent

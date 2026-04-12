@@ -11,8 +11,6 @@ Rectangle {
     color: Theme.bgChrome
     property string contextTitle: qsTr("Workspace")
     readonly property var appWindow: root.Window.window
-    property point pressPoint: Qt.point(0, 0)
-    property bool moveStarted: false
 
     // Keep the brand aligned with macOS traffic lights without leaving
     // an oversized dead zone before the Pier-X mark.
@@ -48,19 +46,19 @@ Rectangle {
         toggleWindowZoom()
     }
 
-    function beginSystemMove(mouse) {
+    function beginSystemMove(localX, localY) {
         if (!appWindow || appWindow.visibility === Window.FullScreen)
             return
 
         if (appWindow.visibility === Window.Maximized) {
-            const globalPoint = root.mapToGlobal(Qt.point(mouse.x, mouse.y))
-            const horizontalRatio = Math.max(0.12, Math.min(0.88, mouse.x / Math.max(1, root.width)))
+            const globalPoint = root.mapToGlobal(Qt.point(localX, localY))
+            const horizontalRatio = Math.max(0.12, Math.min(0.88, localX / Math.max(1, root.width)))
             const restoredWidth = Math.max(1, appWindow.windowedWidth || appWindow.width)
 
             appWindow.showNormal()
 
             const restoredX = globalPoint.x - restoredWidth * horizontalRatio
-            const restoredY = globalPoint.y - Math.min(mouse.y, Theme.topBarHeight / 2)
+            const restoredY = globalPoint.y - Math.min(localY, Theme.topBarHeight / 2)
 
             appWindow.x = Math.round(restoredX)
             appWindow.y = Math.max(0, Math.round(restoredY))
@@ -69,49 +67,42 @@ Rectangle {
         appWindow.startSystemMove()
     }
 
-    MouseArea {
+    Item {
+        id: dragRegion
         anchors.left: parent.left
         anchors.right: rightControls.left
         anchors.leftMargin: root.leadingContentMargin
         anchors.rightMargin: Theme.sp2
         anchors.top: parent.top
         anchors.bottom: parent.bottom
-        acceptedButtons: Qt.LeftButton | Qt.RightButton
-        cursorShape: Qt.ArrowCursor
-        onPressed: (mouse) => {
-            if (mouse.button !== Qt.LeftButton)
-                return
 
-            root.pressPoint = Qt.point(mouse.x, mouse.y)
-            root.moveStarted = false
+        DragHandler {
+            id: moveHandler
+            target: null
+            grabPermissions: PointerHandler.CanTakeOverFromAnything
+
+            onActiveChanged: {
+                if (active)
+                    root.beginSystemMove(centroid.position.x, centroid.position.y)
+            }
         }
-        onPositionChanged: (mouse) => {
-            if (root.moveStarted || !root.appWindow || !(mouse.buttons & Qt.LeftButton))
-                return
 
-            const dx = mouse.x - root.pressPoint.x
-            const dy = mouse.y - root.pressPoint.y
-            const dragDistanceSquared = dx * dx + dy * dy
+        MouseArea {
+            anchors.fill: parent
+            acceptedButtons: Qt.LeftButton | Qt.RightButton
+            hoverEnabled: true
+            cursorShape: Qt.ArrowCursor
+            onClicked: (mouse) => {
+                if (mouse.button !== Qt.RightButton || !root.appWindow)
+                    return
 
-            if (dragDistanceSquared < 16)
-                return
-
-            root.moveStarted = true
-            root.beginSystemMove(mouse)
-        }
-        onReleased: root.moveStarted = false
-        onCanceled: root.moveStarted = false
-        onClicked: (mouse) => {
-            if (mouse.button !== Qt.RightButton || !root.appWindow)
-                return
-
-            const globalPoint = root.mapToGlobal(Qt.point(mouse.x, mouse.y))
-            PierWindowChrome.showSystemMenu(root.appWindow, globalPoint.x, globalPoint.y)
-        }
-        onDoubleClicked: {
-            mouse.accepted = true
-            root.moveStarted = false
-            root.handleTitleBarDoubleClick()
+                const globalPoint = dragRegion.mapToGlobal(Qt.point(mouse.x, mouse.y))
+                PierWindowChrome.showSystemMenu(root.appWindow, globalPoint.x, globalPoint.y)
+            }
+            onDoubleClicked: {
+                mouse.accepted = true
+                root.handleTitleBarDoubleClick()
+            }
         }
     }
 

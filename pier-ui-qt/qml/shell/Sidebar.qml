@@ -81,6 +81,7 @@ Rectangle {
         root.groupDialogTarget = groupName || ""
         root.groupDialogText = groupName || ""
         groupDialog.open = true
+        Qt.callLater(() => groupNameField.forceActiveFocus())
     }
 
     function _submitGroupDialog() {
@@ -477,47 +478,65 @@ Rectangle {
                   ? qsTr("Update the section name for these saved connections.")
                   : qsTr("Create a persistent server group for organizing saved connections.")
         dialogWidth: 420
-        dialogHeight: 224
-        bodyPadding: Theme.sp5
+        dialogHeight: 246
+        bodyPadding: 0
         onRequestClose: open = false
 
-        body: ColumnLayout {
-            width: parent.width
-            spacing: Theme.sp3
+        body: Item {
+            anchors.fill: parent
 
-            Text {
-                text: qsTr("Group Name")
-                font.family: Theme.fontUi
-                font.pixelSize: Theme.sizeBody
-                font.weight: Theme.weightMedium
-                color: Theme.textPrimary
-            }
+            ColumnLayout {
+                anchors.fill: parent
+                anchors.margins: Theme.sp5
+                spacing: Theme.sp3
 
-            PierTextField {
-                id: groupNameField
-                Layout.fillWidth: true
-                text: root.groupDialogText
-                placeholder: qsTr("Production")
-                onTextChanged: root.groupDialogText = text
-            }
+                Card {
+                    id: groupCard
+                    Layout.fillWidth: true
+                    inset: true
+                    padding: Theme.sp4
+                    implicitHeight: groupCardColumn.implicitHeight + padding * 2
 
-            Text {
-                Layout.fillWidth: true
-                text: qsTr("Connections dropped onto this group will inherit the tag automatically.")
-                wrapMode: Text.WordWrap
-                font.family: Theme.fontUi
-                font.pixelSize: Theme.sizeSmall
-                color: Theme.textTertiary
+                    ColumnLayout {
+                        id: groupCardColumn
+                        anchors.fill: parent
+                        spacing: Theme.sp2
+
+                        Text {
+                            text: qsTr("Group Name")
+                            font.family: Theme.fontUi
+                            font.pixelSize: Theme.sizeBody
+                            font.weight: Theme.weightMedium
+                            color: Theme.textPrimary
+                        }
+
+                        PierTextField {
+                            id: groupNameField
+                            Layout.fillWidth: true
+                            text: root.groupDialogText
+                            placeholder: qsTr("Production")
+                            onTextChanged: root.groupDialogText = text
+                        }
+
+                        Text {
+                            Layout.fillWidth: true
+                            text: qsTr("Connections dropped onto this group will inherit the tag automatically.")
+                            wrapMode: Text.WordWrap
+                            font.family: Theme.fontUi
+                            font.pixelSize: Theme.sizeSmall
+                            color: Theme.textTertiary
+                        }
+                    }
+                }
             }
         }
 
         footer: Item {
-            implicitHeight: Theme.controlHeight
+            implicitHeight: footerRow.implicitHeight
 
             RowLayout {
-                anchors.left: parent.left
-                anchors.right: parent.right
-                anchors.verticalCenter: parent.verticalCenter
+                id: footerRow
+                width: parent.width
                 spacing: Theme.sp2
 
                 Item { Layout.fillWidth: true }

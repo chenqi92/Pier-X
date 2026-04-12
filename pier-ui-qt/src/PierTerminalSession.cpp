@@ -6,6 +6,8 @@
 
 #include <QByteArray>
 #include <QDebug>
+#include <QJsonDocument>
+#include <QJsonObject>
 #include <QMetaObject>
 #include <QPointer>
 
@@ -628,6 +630,23 @@ void PierTerminalSession::refreshSnapshot()
     if (nowRunning != m_running) {
         m_running = nowRunning;
         emit runningChanged();
+    }
+
+    // Check if the emulator detected an SSH command
+    char *sshJson = pier_terminal_ssh_detected(m_handle);
+    if (sshJson) {
+        QString json = QString::fromUtf8(sshJson);
+        pier_terminal_free_string(sshJson);
+        QJsonDocument doc = QJsonDocument::fromJson(json.toUtf8());
+        if (doc.isObject()) {
+            QJsonObject obj = doc.object();
+            if (obj.value(QStringLiteral("detected")).toBool()) {
+                m_detectedSshHost = obj.value(QStringLiteral("host")).toString();
+                m_detectedSshPort = obj.value(QStringLiteral("port")).toInt(22);
+                m_detectedSshUser = obj.value(QStringLiteral("user")).toString();
+                emit sshCommandDetected();
+            }
+        }
     }
 }
 

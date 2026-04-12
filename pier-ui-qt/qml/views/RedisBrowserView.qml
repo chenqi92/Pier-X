@@ -73,10 +73,9 @@ Rectangle {
         anchors.margins: Theme.sp3
         spacing: Theme.sp2
 
-        ToolPanelSurface {
+        ToolHeroPanel {
             Layout.fillWidth: true
-            padding: Theme.sp2
-            implicitHeight: redisHeader.implicitHeight + Theme.sp2 * 2
+            accentColor: Theme.accent
 
             ColumnLayout {
                 id: redisHeader
@@ -85,10 +84,11 @@ Rectangle {
 
                 ToolSectionHeader {
                     Layout.fillWidth: true
-                    title: qsTr("Redis")
-                    subtitle: client.target.length > 0
-                              ? client.target
-                              : (root.redisHost + ":" + root.redisPort)
+                    prominent: true
+                    title: client.target.length > 0
+                           ? client.target
+                           : (root.redisHost + ":" + root.redisPort)
+                    subtitle: qsTr("DB %1").arg(root.redisDb)
 
                     GhostButton {
                         compact: true
@@ -135,6 +135,29 @@ Rectangle {
                     StatusPill {
                         text: qsTr("%1 matches").arg(client.keys.length)
                         tone: client.keysTruncated ? "warning" : "neutral"
+                    }
+                }
+
+                Flow {
+                    Layout.fillWidth: true
+                    spacing: Theme.sp2
+
+                    ToolFactChip {
+                        label: qsTr("DB")
+                        value: String(root.redisDb)
+                        monoValue: true
+                    }
+
+                    ToolFactChip {
+                        label: qsTr("Pattern")
+                        value: root.scanPattern
+                        monoValue: true
+                    }
+
+                    ToolFactChip {
+                        label: qsTr("Matches")
+                        value: String(client.keys.length)
+                        monoValue: true
                     }
                 }
 
@@ -199,7 +222,9 @@ Rectangle {
                         ToolSectionHeader {
                             Layout.fillWidth: true
                             title: qsTr("Keys")
-                            subtitle: qsTr("%1 matches").arg(client.keys.length)
+                            subtitle: root.scanPattern.length > 0
+                                      ? qsTr("%1 matches · %2").arg(client.keys.length).arg(root.scanPattern)
+                                      : qsTr("%1 matches").arg(client.keys.length)
                         }
 
                         ToolPanelSurface {

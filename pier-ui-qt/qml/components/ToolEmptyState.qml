@@ -10,18 +10,18 @@ Item {
     property string title: ""
     property string description: ""
 
-    implicitWidth: 240
-    implicitHeight: 148
+    implicitWidth: 220
+    implicitHeight: 120
 
     ColumnLayout {
         anchors.centerIn: parent
-        width: Math.min(root.width, 280)
-        spacing: Theme.sp2
+        width: Math.min(root.width, 248)
+        spacing: Theme.sp1_5
 
         Rectangle {
             Layout.alignment: Qt.AlignHCenter
-            width: 28
-            height: 28
+            width: 24
+            height: 24
             radius: Theme.radiusMd
             color: Theme.bgInset
             border.color: Theme.borderSubtle
@@ -44,7 +44,7 @@ Item {
             text: root.title
             horizontalAlignment: Text.AlignHCenter
             font.family: Theme.fontUi
-            font.pixelSize: Theme.sizeBody
+            font.pixelSize: Theme.sizeCaption
             font.weight: Theme.weightMedium
             color: Theme.textPrimary
             wrapMode: Text.WordWrap

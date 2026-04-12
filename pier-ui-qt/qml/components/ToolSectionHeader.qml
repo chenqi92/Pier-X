@@ -7,9 +7,10 @@ Item {
 
     property string title: ""
     property string subtitle: ""
+    property bool prominent: false
     default property alias actions: actionRow.data
 
-    implicitHeight: Math.max(34, textColumn.implicitHeight)
+    implicitHeight: Math.max(root.prominent ? 40 : 34, textColumn.implicitHeight)
 
     RowLayout {
         anchors.fill: parent
@@ -24,7 +25,7 @@ Item {
                 Layout.fillWidth: true
                 text: root.title
                 font.family: Theme.fontUi
-                font.pixelSize: Theme.sizeBody
+                font.pixelSize: root.prominent ? Theme.sizeBodyLg : Theme.sizeBody
                 font.weight: Theme.weightSemibold
                 color: Theme.textPrimary
                 elide: Text.ElideRight
@@ -35,8 +36,8 @@ Item {
                 Layout.fillWidth: true
                 text: root.subtitle
                 font.family: Theme.fontUi
-                font.pixelSize: Theme.sizeCaption
-                color: Theme.textTertiary
+                font.pixelSize: root.prominent ? Theme.sizeSmall : Theme.sizeCaption
+                color: root.prominent ? Theme.textSecondary : Theme.textTertiary
                 elide: Text.ElideRight
             }
         }

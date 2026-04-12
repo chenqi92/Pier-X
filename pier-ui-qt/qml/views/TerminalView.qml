@@ -107,6 +107,21 @@ Rectangle {
     PierTerminalSession {
         id: session
 
+        // SSH command detected in terminal output — auto-create a
+        // shared SSH session so right-panel tools can use it.
+        // Uses agent auth (kind=3) to avoid prompting for a password.
+        onSshCommandDetected: {
+            if (root.backend === "local"
+                && !_sharedSession.connected
+                && !_sharedSession.busy) {
+                _sharedSession.open(
+                    session.detectedSshHost,
+                    session.detectedSshPort,
+                    session.detectedSshUser,
+                    3, "", "")  // agent auth — no password needed
+            }
+        }
+
         // When the shell exits we don't tear down the view — let the
         // user see the final state. A future iteration can surface
         // an "exited (code N)" banner and offer a Restart button.
@@ -521,6 +536,8 @@ Rectangle {
             defaultForeground: Theme.currentTerminalTheme.fg
             defaultBackground: Theme.currentTerminalTheme.bg
             isDarkTheme: Theme.dark
+            cursorStyle: Theme.cursorStyle
+            cursorBlink: Theme.cursorBlink
 
             // Feed the 16-color ANSI palette from the selected terminal theme.
             paletteColors: {

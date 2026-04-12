@@ -352,6 +352,25 @@ impl PierTerminal {
     pub fn is_alive(&self) -> bool {
         self.alive.load(Ordering::Relaxed)
     }
+
+    /// Check if the emulator detected an SSH command and return
+    /// the details. Clears the detection flag after reading.
+    pub fn take_ssh_detected(&self) -> Option<(String, String, u16)> {
+        let mut guard = match self.inner.lock() {
+            Ok(g) => g,
+            Err(poisoned) => poisoned.into_inner(),
+        };
+        if guard.emu.ssh_command_detected {
+            guard.emu.ssh_command_detected = false;
+            Some((
+                guard.emu.ssh_detected_host.clone(),
+                guard.emu.ssh_detected_user.clone(),
+                guard.emu.ssh_detected_port,
+            ))
+        } else {
+            None
+        }
+    }
 }
 
 impl Drop for PierTerminal {

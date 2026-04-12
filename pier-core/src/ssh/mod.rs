@@ -50,6 +50,7 @@
 
 pub mod channel;
 pub mod config;
+pub mod control_master;
 pub mod error;
 pub mod exec_stream;
 pub mod known_hosts;

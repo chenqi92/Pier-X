@@ -46,6 +46,7 @@ Rectangle {
     clip: true
 
     // Effective session = tab's shared SSH session (null when local)
+    // Effective session: shared SSH session from the active terminal tab
     readonly property var effectiveSession: (root.sharedSession && root.sharedSession.connected)
                                            ? root.sharedSession : null
 

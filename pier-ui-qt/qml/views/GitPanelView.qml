@@ -26,6 +26,24 @@ Rectangle {
         const slash = Math.max(normalized.lastIndexOf("/"), normalized.lastIndexOf("\\"))
         return slash >= 0 ? normalized.slice(slash + 1) : normalized
     }
+    readonly property int conflictCount: {
+        let total = 0
+        const groups = [client.stagedFiles, client.unstagedFiles]
+        for (let groupIndex = 0; groupIndex < groups.length; ++groupIndex) {
+            const entries = groups[groupIndex] || []
+            for (let entryIndex = 0; entryIndex < entries.length; ++entryIndex) {
+                if ((entries[entryIndex].status || "") === "U")
+                    total += 1
+            }
+        }
+        return total
+    }
+    readonly property var navigationTabs: [
+        { label: qsTr("Changes"), icon: "file-text", idx: 0, badge: root.totalChanges > 0 ? String(root.totalChanges) : "" },
+        { label: qsTr("History"), icon: "scroll-text", idx: 1, badge: "" },
+        { label: qsTr("Stash"), icon: "hard-drive", idx: 2, badge: client.stashes.length > 0 ? String(client.stashes.length) : "" },
+        { label: qsTr("Conflicts"), icon: "layers", idx: 3, badge: root.conflictCount > 0 ? String(root.conflictCount) : "" }
+    ]
 
     function ensureTabData(index) {
         if (index === 1 && client.commits.length === 0)
@@ -83,176 +101,166 @@ Rectangle {
 
         Rectangle {
             Layout.fillWidth: true
-            implicitHeight: 42
+            implicitHeight: 66
             color: Theme.bgPanel
             border.width: 0
 
-            RowLayout {
+            ColumnLayout {
                 anchors.fill: parent
                 anchors.leftMargin: Theme.sp3
                 anchors.rightMargin: Theme.sp2
-                spacing: Theme.sp2
+                anchors.topMargin: Theme.sp2
+                anchors.bottomMargin: Theme.sp2
+                spacing: Theme.sp1_5
 
-                Rectangle {
-                    Layout.preferredWidth: 18
-                    Layout.preferredHeight: 18
-                    radius: Theme.radiusSm
-                    color: Theme.accentSubtle
+                RowLayout {
+                    Layout.fillWidth: true
+                    spacing: Theme.sp2
 
-                    Image {
-                        anchors.centerIn: parent
-                        source: "qrc:/qt/qml/Pier/resources/icons/lucide/git-branch.svg"
-                        sourceSize: Qt.size(14, 14)
-                        layer.enabled: true
-                        layer.effect: MultiEffect {
-                            colorizationColor: Theme.accent
-                            colorization: 1.0
-                        }
-                    }
-                }
-
-                Rectangle {
-                    implicitWidth: branchRow.implicitWidth + Theme.sp2 * 2
-                    implicitHeight: 26
-                    radius: Theme.radiusPill
-                    color: branchMouse.containsMouse ? Theme.bgHover : Theme.bgInset
-                    border.color: branchMouse.containsMouse ? Theme.borderDefault : Theme.borderSubtle
-                    border.width: 1
-
-                    Row {
-                        id: branchRow
-                        anchors.centerIn: parent
-                        spacing: Theme.sp1
-
-                        Text {
-                            text: client.currentBranch.length > 0 ? client.currentBranch : qsTr("Detached")
-                            font.family: Theme.fontMono
-                            font.pixelSize: Theme.sizeSmall
-                            font.weight: Theme.weightMedium
-                            color: Theme.textPrimary
-                        }
+                    Rectangle {
+                        Layout.preferredWidth: 18
+                        Layout.preferredHeight: 18
+                        radius: Theme.radiusSm
+                        color: Theme.accentSubtle
 
                         Image {
-                            source: "qrc:/qt/qml/Pier/resources/icons/lucide/chevron-down.svg"
-                            sourceSize: Qt.size(12, 12)
-                            anchors.verticalCenter: parent.verticalCenter
+                            anchors.centerIn: parent
+                            source: "qrc:/qt/qml/Pier/resources/icons/lucide/git-branch.svg"
+                            sourceSize: Qt.size(14, 14)
                             layer.enabled: true
                             layer.effect: MultiEffect {
-                                colorizationColor: Theme.textTertiary
+                                colorizationColor: Theme.accent
                                 colorization: 1.0
                             }
                         }
                     }
 
-                    MouseArea {
-                        id: branchMouse
-                        anchors.fill: parent
-                        hoverEnabled: true
-                        cursorShape: Qt.PointingHandCursor
-                        enabled: client.isGitRepo
-                        onClicked: {
-                            client.loadBranches()
-                            const pos = branchMouse.mapToItem(root, 0, branchMouse.height + Theme.sp1)
-                            branchMenu.x = Math.max(Theme.sp2,
-                                                    Math.min(root.width - branchMenu.width - Theme.sp2, pos.x))
-                            branchMenu.y = Math.max(Theme.sp2, pos.y)
-                            branchMenu.open()
+                    Rectangle {
+                        implicitWidth: branchRow.implicitWidth + Theme.sp2 * 2
+                        implicitHeight: 26
+                        radius: Theme.radiusPill
+                        color: branchMouse.containsMouse ? Theme.bgHover : Theme.bgInset
+                        border.color: branchMouse.containsMouse ? Theme.borderDefault : Theme.borderSubtle
+                        border.width: 1
+
+                        Row {
+                            id: branchRow
+                            anchors.centerIn: parent
+                            spacing: Theme.sp1
+
+                            Text {
+                                text: client.currentBranch.length > 0 ? client.currentBranch : qsTr("Detached")
+                                font.family: Theme.fontMono
+                                font.pixelSize: Theme.sizeSmall
+                                font.weight: Theme.weightMedium
+                                color: Theme.textPrimary
+                            }
+
+                            Image {
+                                source: "qrc:/qt/qml/Pier/resources/icons/lucide/chevron-down.svg"
+                                sourceSize: Qt.size(12, 12)
+                                anchors.verticalCenter: parent.verticalCenter
+                                layer.enabled: true
+                                layer.effect: MultiEffect {
+                                    colorizationColor: Theme.textTertiary
+                                    colorization: 1.0
+                                }
+                            }
                         }
-                    }
 
-                    PopoverPanel {
-                        id: branchMenu
-                        width: 220
+                        MouseArea {
+                            id: branchMouse
+                            anchors.fill: parent
+                            hoverEnabled: true
+                            cursorShape: Qt.PointingHandCursor
+                            enabled: client.isGitRepo
+                            onClicked: {
+                                client.loadBranches()
+                                const pos = branchMouse.mapToItem(root, 0, branchMouse.height + Theme.sp1)
+                                branchMenu.x = Math.max(Theme.sp2,
+                                                        Math.min(root.width - branchMenu.width - Theme.sp2, pos.x))
+                                branchMenu.y = Math.max(Theme.sp2, pos.y)
+                                branchMenu.open()
+                            }
+                        }
 
-                        Repeater {
-                            model: client.branches
+                        PopoverPanel {
+                            id: branchMenu
+                            width: 224
 
-                            PierMenuItem {
-                                required property string modelData
-                                text: modelData
-                                active: modelData === client.currentBranch
-                                onClicked: {
-                                    branchMenu.close()
-                                    client.checkoutBranch(modelData)
+                            Repeater {
+                                model: client.branches
+
+                                PierMenuItem {
+                                    required property string modelData
+                                    text: modelData
+                                    active: modelData === client.currentBranch
+                                    onClicked: {
+                                        branchMenu.close()
+                                        client.checkoutBranch(modelData)
+                                    }
                                 }
                             }
                         }
                     }
-                }
-
-                Text {
-                    Layout.fillWidth: true
-                    visible: client.trackingBranch.length > 0
-                    text: "\u2192 " + client.trackingBranch
-                    font.family: Theme.fontMono
-                    font.pixelSize: Theme.sizeSmall
-                    color: Theme.textTertiary
-                    elide: Text.ElideMiddle
-                }
-
-                Rectangle {
-                    visible: client.aheadCount > 0
-                    implicitWidth: aheadText.implicitWidth + Theme.sp2 * 2
-                    implicitHeight: 22
-                    radius: Theme.radiusPill
-                    color: Theme.accentSubtle
 
                     Text {
-                        id: aheadText
-                        anchors.centerIn: parent
-                        text: "\u2191 " + client.aheadCount
+                        Layout.fillWidth: true
+                        text: client.trackingBranch.length > 0
+                              ? qsTr("Tracking %1").arg(client.trackingBranch)
+                              : qsTr("No upstream branch configured")
                         font.family: Theme.fontMono
                         font.pixelSize: Theme.sizeSmall
-                        color: Theme.statusInfo
+                        color: Theme.textTertiary
+                        elide: Text.ElideMiddle
                     }
-                }
 
-                Rectangle {
-                    visible: client.behindCount > 0
-                    implicitWidth: behindText.implicitWidth + Theme.sp2 * 2
-                    implicitHeight: 22
-                    radius: Theme.radiusPill
-                    color: Qt.rgba(240 / 255, 168 / 255, 58 / 255, Theme.dark ? 0.16 : 0.12)
-
-                    Text {
-                        id: behindText
-                        anchors.centerIn: parent
-                        text: "\u2193 " + client.behindCount
-                        font.family: Theme.fontMono
-                        font.pixelSize: Theme.sizeSmall
-                        color: Theme.statusWarning
-                    }
-                }
-
-                Rectangle {
-                    implicitWidth: summaryText.implicitWidth + Theme.sp2 * 2
-                    implicitHeight: 22
-                    radius: Theme.radiusPill
-                    color: root.workingTreeClean
-                           ? Qt.rgba(95 / 255, 184 / 255, 101 / 255, Theme.dark ? 0.14 : 0.10)
-                           : Theme.accentSubtle
-
-                    Text {
-                        id: summaryText
-                        anchors.centerIn: parent
+                    StatusPill {
                         text: root.workingTreeClean
-                              ? qsTr("Clean")
-                              : qsTr("%1 files").arg(root.totalChanges)
-                        font.family: Theme.fontUi
-                        font.pixelSize: Theme.sizeSmall
-                        font.weight: Theme.weightMedium
-                        color: root.workingTreeClean ? Theme.statusSuccess : Theme.accent
+                              ? qsTr("Workspace Clean")
+                              : root.conflictCount > 0
+                                ? qsTr("%1 Changes, %2 Conflicts").arg(root.totalChanges).arg(root.conflictCount)
+                                : qsTr("%1 Changes").arg(root.totalChanges)
+                        tone: root.workingTreeClean ? "success" : root.conflictCount > 0 ? "warning" : "info"
+                    }
+
+                    IconButton {
+                        compact: true
+                        icon: "refresh-cw"
+                        tooltip: qsTr("Refresh")
+                        enabled: !client.busy
+                        onClicked: {
+                            client.refresh()
+                            root.ensureTabData(root.selectedTab)
+                        }
                     }
                 }
 
-                IconButton {
-                    compact: true
-                    icon: "refresh-cw"
-                    tooltip: qsTr("Refresh")
-                    enabled: !client.busy
-                    onClicked: {
-                        client.refresh()
-                        root.ensureTabData(root.selectedTab)
+                RowLayout {
+                    Layout.fillWidth: true
+                    spacing: Theme.sp2
+
+                    Text {
+                        Layout.fillWidth: true
+                        text: client.currentBranch.length > 0
+                              ? qsTr("Repository %1").arg(root.repoName)
+                              : qsTr("Detached HEAD")
+                        font.family: Theme.fontUi
+                        font.pixelSize: Theme.sizeCaption
+                        color: Theme.textTertiary
+                        elide: Text.ElideRight
+                    }
+
+                    StatusPill {
+                        visible: client.aheadCount > 0
+                        text: qsTr("Ahead %1").arg(client.aheadCount)
+                        tone: "info"
+                    }
+
+                    StatusPill {
+                        visible: client.behindCount > 0
+                        text: qsTr("Behind %1").arg(client.behindCount)
+                        tone: "warning"
                     }
                 }
             }
@@ -320,74 +328,37 @@ Rectangle {
             }
         }
 
-        Rectangle {
+        Item {
             Layout.fillWidth: true
-            implicitHeight: 36
-            color: Theme.bgPanel
-            border.width: 0
+            implicitHeight: 34
 
-            RowLayout {
-                anchors.fill: parent
+            Rectangle {
+                anchors.left: parent.left
                 anchors.leftMargin: Theme.sp3
-                anchors.rightMargin: Theme.sp3
-                spacing: Theme.sp2
+                anchors.verticalCenter: parent.verticalCenter
+                width: Math.min(parent.width - Theme.sp3 * 2, gitTabsRow.implicitWidth + Theme.sp1)
+                height: 30
+                radius: Theme.radiusMd
+                color: Theme.bgInset
+                border.color: Theme.borderSubtle
+                border.width: 1
 
-                Repeater {
-                    model: [
-                        { label: qsTr("Changes"), idx: 0, badge: root.totalChanges > 0 ? String(root.totalChanges) : "" },
-                        { label: qsTr("History"), idx: 1, badge: "" },
-                        { label: qsTr("Stash"), idx: 2, badge: client.stashes.length > 0 ? String(client.stashes.length) : "" },
-                        { label: qsTr("Conflicts"), idx: 3, badge: "" }
-                    ]
+                RowLayout {
+                    id: gitTabsRow
+                    anchors.fill: parent
+                    anchors.leftMargin: Theme.sp0_5
+                    anchors.rightMargin: Theme.sp0_5
+                    spacing: Theme.sp0_5
 
-                    delegate: Rectangle {
-                        required property var modelData
+                    Repeater {
+                        model: root.navigationTabs
 
-                        implicitWidth: tabRow.implicitWidth + Theme.sp3 * 2
-                        implicitHeight: 26
-                        radius: Theme.radiusPill
-                        color: root.selectedTab === modelData.idx
-                               ? Theme.bgSelected
-                               : tabMouse.containsMouse ? Theme.bgHover : "transparent"
-                        border.color: root.selectedTab === modelData.idx ? Theme.borderFocus : "transparent"
-                        border.width: root.selectedTab === modelData.idx ? 1 : 0
-
-                        Row {
-                            id: tabRow
-                            anchors.centerIn: parent
-                            spacing: Theme.sp1
-
-                            Text {
-                                text: modelData.label
-                                font.family: Theme.fontUi
-                                font.pixelSize: Theme.sizeBody
-                                font.weight: root.selectedTab === modelData.idx ? Theme.weightSemibold : Theme.weightMedium
-                                color: root.selectedTab === modelData.idx ? Theme.textPrimary : Theme.textSecondary
-                            }
-
-                            Rectangle {
-                                visible: modelData.badge.length > 0
-                                implicitWidth: badgeText.implicitWidth + Theme.sp1 * 2
-                                implicitHeight: 16
-                                radius: Theme.radiusPill
-                                color: root.selectedTab === modelData.idx ? Theme.accentSubtle : Theme.bgInset
-
-                                Text {
-                                    id: badgeText
-                                    anchors.centerIn: parent
-                                    text: modelData.badge
-                                    font.family: Theme.fontMono
-                                    font.pixelSize: 9
-                                    color: root.selectedTab === modelData.idx ? Theme.accent : Theme.textTertiary
-                                }
-                            }
-                        }
-
-                        MouseArea {
-                            id: tabMouse
-                            anchors.fill: parent
-                            hoverEnabled: true
-                            cursorShape: Qt.PointingHandCursor
+                        delegate: GitTabButton {
+                            required property var modelData
+                            title: modelData.label
+                            icon: modelData.icon
+                            badge: modelData.badge
+                            active: root.selectedTab === modelData.idx
                             onClicked: {
                                 root.selectedTab = modelData.idx
                                 root.ensureTabData(modelData.idx)
@@ -513,28 +484,12 @@ Rectangle {
                                 anchors.margins: Theme.sp3
                                 spacing: Theme.sp2
 
-                                RowLayout {
+                                ToolSectionHeader {
                                     Layout.fillWidth: true
-                                    spacing: Theme.sp2
-
-                                    Text {
-                                        text: qsTr("Commit")
-                                        font.family: Theme.fontUi
-                                        font.pixelSize: Theme.sizeBody
-                                        font.weight: Theme.weightSemibold
-                                        color: Theme.textPrimary
-                                    }
-
-                                    Text {
-                                        text: client.stagedFiles.length > 0
-                                              ? qsTr("%1 staged file(s)").arg(client.stagedFiles.length)
+                                    title: qsTr("Commit")
+                                    subtitle: client.stagedFiles.length > 0
+                                              ? qsTr("%1 staged file(s) ready to commit").arg(client.stagedFiles.length)
                                               : qsTr("Stage changes to enable commit")
-                                        font.family: Theme.fontUi
-                                        font.pixelSize: Theme.sizeSmall
-                                        color: Theme.textTertiary
-                                        elide: Text.ElideRight
-                                        Layout.fillWidth: true
-                                    }
                                 }
 
                                 PierTextArea {
@@ -619,28 +574,12 @@ Rectangle {
                         border.width: 1
                         radius: Theme.radiusMd
 
-                        RowLayout {
+                        ToolSectionHeader {
                             anchors.fill: parent
                             anchors.leftMargin: Theme.sp3
                             anchors.rightMargin: Theme.sp3
-                            spacing: Theme.sp2
-
-                            Text {
-                                text: qsTr("Recent commits")
-                                font.family: Theme.fontUi
-                                font.pixelSize: Theme.sizeBody
-                                font.weight: Theme.weightSemibold
-                                color: Theme.textPrimary
-                            }
-
-                            Text {
-                                text: client.currentBranch.length > 0 ? client.currentBranch : root.repoName
-                                font.family: Theme.fontMono
-                                font.pixelSize: Theme.sizeSmall
-                                color: Theme.textTertiary
-                                Layout.fillWidth: true
-                                elide: Text.ElideMiddle
-                            }
+                            title: qsTr("Recent commits")
+                            subtitle: client.currentBranch.length > 0 ? client.currentBranch : root.repoName
                         }
                     }
 
@@ -778,30 +717,14 @@ Rectangle {
                         border.width: 1
                         radius: Theme.radiusMd
 
-                        RowLayout {
+                        ToolSectionHeader {
                             anchors.fill: parent
                             anchors.leftMargin: Theme.sp3
                             anchors.rightMargin: Theme.sp3
-                            spacing: Theme.sp2
-
-                            Text {
-                                text: qsTr("Stash")
-                                font.family: Theme.fontUi
-                                font.pixelSize: Theme.sizeBody
-                                font.weight: Theme.weightSemibold
-                                color: Theme.textPrimary
-                            }
-
-                            Text {
-                                text: client.stashes.length > 0
+                            title: qsTr("Stash")
+                            subtitle: client.stashes.length > 0
                                       ? qsTr("%1 entries").arg(client.stashes.length)
                                       : qsTr("Snapshot unfinished work")
-                                font.family: Theme.fontUi
-                                font.pixelSize: Theme.sizeSmall
-                                color: Theme.textTertiary
-                                Layout.fillWidth: true
-                                elide: Text.ElideRight
-                            }
 
                             GhostButton {
                                 compact: true
@@ -863,7 +786,7 @@ Rectangle {
                                         Layout.preferredWidth: 8
                                         Layout.preferredHeight: 8
                                         radius: 4
-                                        color: "#c77dff"
+                                        color: Theme.accent
                                     }
 
                                     ColumnLayout {
@@ -954,7 +877,7 @@ Rectangle {
                                 visible: client.stashes.length === 0
                                 title: qsTr("No stashes")
                                 description: qsTr("Use stash to park unfinished work without leaving the current branch.")
-                                accentColor: "#c77dff"
+                                accentColor: Theme.accent
                             }
                         }
                     }
@@ -970,6 +893,81 @@ Rectangle {
                     accentColor: Theme.statusWarning
                 }
             }
+        }
+    }
+
+    component GitTabButton: Rectangle {
+        property string title: ""
+        property string icon: ""
+        property string badge: ""
+        property bool active: false
+        signal clicked
+
+        implicitHeight: 25
+        implicitWidth: row.implicitWidth + Theme.sp2 * 2
+        radius: Theme.radiusSm
+        color: active ? Qt.rgba(Theme.accent.r, Theme.accent.g, Theme.accent.b, Theme.dark ? 0.14 : 0.11)
+                      : tabMouse.containsMouse ? Theme.bgHover : "transparent"
+        border.width: 0
+
+        RowLayout {
+            id: row
+            anchors.fill: parent
+            anchors.leftMargin: Theme.sp2
+            anchors.rightMargin: Theme.sp2
+            spacing: Theme.sp1
+
+            Item {
+                Layout.alignment: Qt.AlignVCenter
+                Layout.preferredWidth: 12
+                Layout.preferredHeight: 12
+
+                Image {
+                    anchors.centerIn: parent
+                    source: "qrc:/qt/qml/Pier/resources/icons/lucide/" + icon + ".svg"
+                    sourceSize: Qt.size(12, 12)
+                    layer.enabled: true
+                    layer.effect: MultiEffect {
+                        colorization: 1.0
+                        colorizationColor: active ? Theme.accent : Theme.textSecondary
+                    }
+                }
+            }
+
+            Text {
+                Layout.alignment: Qt.AlignVCenter
+                text: title
+                font.family: Theme.fontUi
+                font.pixelSize: Theme.sizeCaption
+                font.weight: active ? Theme.weightMedium : Theme.weightRegular
+                color: active ? Theme.accent : Theme.textSecondary
+                elide: Text.ElideRight
+            }
+
+            Rectangle {
+                visible: badge.length > 0
+                implicitWidth: badgeLabel.implicitWidth + Theme.sp1 * 2
+                implicitHeight: 14
+                radius: Theme.radiusPill
+                color: active ? Theme.accentSubtle : Theme.bgSurface
+
+                Text {
+                    id: badgeLabel
+                    anchors.centerIn: parent
+                    text: badge
+                    font.family: Theme.fontMono
+                    font.pixelSize: 9
+                    color: active ? Theme.accent : Theme.textTertiary
+                }
+            }
+        }
+
+        MouseArea {
+            id: tabMouse
+            anchors.fill: parent
+            hoverEnabled: true
+            cursorShape: Qt.PointingHandCursor
+            onClicked: parent.clicked()
         }
     }
 
@@ -1350,14 +1348,14 @@ Rectangle {
 
     function statusColor(code) {
         switch (code) {
-        case "M": return "#4f8aff"
-        case "A": return "#5fb865"
-        case "D": return "#fa6675"
-        case "R": return "#c77dff"
-        case "?": return "#868a91"
-        case "U": return "#f0a83a"
-        case "C": return "#4f8aff"
-        default:  return "#868a91"
+        case "M": return Theme.accent
+        case "A": return Theme.statusSuccess
+        case "D": return Theme.statusError
+        case "R": return Theme.accent
+        case "?": return Theme.textTertiary
+        case "U": return Theme.statusWarning
+        case "C": return Theme.accent
+        default:  return Theme.textTertiary
         }
     }
 
@@ -1370,11 +1368,11 @@ Rectangle {
             if (line.startsWith("+++") || line.startsWith("---"))
                 html += "<span style='color:" + Theme.textSecondary + ";'>" + line + "</span>\n"
             else if (line.startsWith("@@"))
-                html += "<span style='color:#c77dff;'>" + line + "</span>\n"
+                html += "<span style='color:" + Theme.accent + ";'>" + line + "</span>\n"
             else if (line.startsWith("+"))
-                html += "<span style='color:#5fb865;'>" + line + "</span>\n"
+                html += "<span style='color:" + Theme.statusSuccess + ";'>" + line + "</span>\n"
             else if (line.startsWith("-"))
-                html += "<span style='color:#fa6675;'>" + line + "</span>\n"
+                html += "<span style='color:" + Theme.statusError + ";'>" + line + "</span>\n"
             else
                 html += "<span style='color:" + Theme.textPrimary + ";'>" + line + "</span>\n"
         }

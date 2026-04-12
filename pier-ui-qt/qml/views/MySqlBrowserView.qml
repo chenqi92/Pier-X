@@ -430,10 +430,9 @@ Rectangle {
         anchors.margins: Theme.sp3
         spacing: Theme.sp2
 
-        ToolPanelSurface {
+        ToolHeroPanel {
             Layout.fillWidth: true
-            padding: Theme.sp2
-            implicitHeight: connectColumn.implicitHeight + Theme.sp2 * 2
+            accentColor: Theme.statusInfo
 
             ColumnLayout {
                 id: connectColumn
@@ -442,10 +441,11 @@ Rectangle {
 
                 ToolSectionHeader {
                     Layout.fillWidth: true
-                    title: qsTr("Connection")
-                    subtitle: client.target.length > 0
-                              ? client.target
-                              : (root.formHost + ":" + root.formPortText)
+                    prominent: true
+                    title: client.target.length > 0
+                           ? client.target
+                           : (root.formHost + ":" + root.formPortText)
+                    subtitle: root.formUser.length > 0 ? root.formUser : qsTr("Connection")
 
                     GhostButton {
                         compact: true
@@ -510,10 +510,39 @@ Rectangle {
                     }
                 }
 
+                Flow {
+                    Layout.fillWidth: true
+                    spacing: Theme.sp2
+
+                    ToolFactChip {
+                        label: qsTr("Host")
+                        value: root.formHost
+                        monoValue: true
+                    }
+
+                    ToolFactChip {
+                        label: qsTr("Port")
+                        value: root.formPortText
+                        monoValue: true
+                    }
+
+                    ToolFactChip {
+                        label: qsTr("User")
+                        value: root.formUser
+                        monoValue: true
+                    }
+
+                    ToolFactChip {
+                        label: qsTr("Database")
+                        value: root.formDatabase
+                        monoValue: true
+                    }
+                }
+
                 GridLayout {
                     id: connectFields
                     Layout.fillWidth: true
-                    columns: width >= 860 ? 5 : (width >= 620 ? 3 : 2)
+                    columns: width >= 820 ? 4 : (width >= 620 ? 3 : 2)
                     rowSpacing: Theme.sp2
                     columnSpacing: Theme.sp2
 
@@ -602,7 +631,7 @@ Rectangle {
 
                     ColumnLayout {
                         Layout.fillWidth: true
-                        Layout.columnSpan: connectFields.columns === 2 ? 2 : 1
+                        Layout.columnSpan: connectFields.columns <= 2 ? 2 : 1
                         spacing: Theme.sp1
 
                         Text {
@@ -663,6 +692,12 @@ Rectangle {
                                 subtitle: qsTr("Host, auth, and default database presets")
                             }
 
+                            ToolFactChip {
+                                label: qsTr("Active")
+                                value: root.profileDraftName
+                                monoValue: false
+                            }
+
                             Flow {
                                 Layout.fillWidth: true
                                 spacing: Theme.sp2
@@ -715,6 +750,12 @@ Rectangle {
                                 Layout.fillWidth: true
                                 title: qsTr("Favorites")
                                 subtitle: qsTr("Reusable query snippets scoped to a database")
+                            }
+
+                            ToolFactChip {
+                                label: qsTr("Active")
+                                value: root.favoriteDraftName
+                                monoValue: false
                             }
 
                             Flow {

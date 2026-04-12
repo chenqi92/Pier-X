@@ -84,6 +84,11 @@ public:
     Q_PROPERTY(QString sshPassphraseCredentialId READ sshPassphraseCredentialId NOTIFY statusChanged FINAL)
     Q_PROPERTY(bool sshUsesAgent READ sshUsesAgent NOTIFY statusChanged FINAL)
 
+    // SSH command detected in terminal output (local terminal manual ssh)
+    Q_PROPERTY(QString detectedSshHost READ detectedSshHost NOTIFY sshCommandDetected FINAL)
+    Q_PROPERTY(int detectedSshPort READ detectedSshPort NOTIFY sshCommandDetected FINAL)
+    Q_PROPERTY(QString detectedSshUser READ detectedSshUser NOTIFY sshCommandDetected FINAL)
+
     explicit PierTerminalSession(QObject *parent = nullptr);
     ~PierTerminalSession() override;
 
@@ -106,6 +111,9 @@ public:
     QString sshKeyPath() const { return m_sshKeyPath; }
     QString sshPassphraseCredentialId() const { return m_sshPassphraseCredentialId; }
     bool sshUsesAgent() const { return m_sshUsesAgent; }
+    QString detectedSshHost() const { return m_detectedSshHost; }
+    int detectedSshPort() const { return m_detectedSshPort; }
+    QString detectedSshUser() const { return m_detectedSshUser; }
 
     // Raw snapshot access for the C++-side renderer. Returns a
     // pointer to the internal cell buffer and fills out_cols/rows.
@@ -206,6 +214,10 @@ signals:
     // useful moment to re-render one without the others.
     void statusChanged();
 
+    // Fired when the emulator detects an SSH command in terminal output
+    // (user typed `ssh user@host` in a local terminal).
+    void sshCommandDetected();
+
 private slots:
     // Runs on the main thread. Called via queued connection from
     // the reader thread's notify callback.
@@ -279,6 +291,11 @@ private:
     QString m_sshKeyPath;
     QString m_sshPassphraseCredentialId;
     bool    m_sshUsesAgent = false;
+
+    // SSH command detected in terminal output
+    QString m_detectedSshHost;
+    int     m_detectedSshPort = 22;
+    QString m_detectedSshUser;
 
     // In-flight SSH handshake bookkeeping.
     //

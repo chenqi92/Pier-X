@@ -210,10 +210,8 @@ ApplicationWindow {
     property bool restoreMaximizedAfterFullScreen: false
 
     // Per-tab session references, keyed by tab index.
-    // Updated by the Repeater delegate when TerminalView's session
-    // connects or the shared session becomes available.
-    property var _tabSessions: ({})     // { index: PierTerminalSession }
-    property var _tabSharedSessions: ({}) // { index: PierSshSessionHandle }
+    property var _tabSessions: ({})          // { index: PierTerminalSession }
+    property var _tabSharedSessions: ({})    // { index: PierSshSessionHandle }
 
     // Live session from the CURRENT tab.
     readonly property var activeSession: _tabSessions[currentTabIndex] || null
@@ -1020,12 +1018,10 @@ ApplicationWindow {
                 // SSH context — prefer live sharedSession, fall back to tab model
                 activeBackend: {
                     if (window.currentTabIndex < 0 || window.currentTabIndex >= tabModel.count) return ""
-                    // If shared session is connected, treat as SSH regardless of tab backend
                     if (window.activeSharedSession && window.activeSharedSession.connected) return "ssh"
                     return tabModel.get(window.currentTabIndex).backend || ""
                 }
                 sshHost: {
-                    // From sharedSession target "user@host:port"
                     var ss = window.activeSharedSession
                     if (ss && ss.connected && ss.target.length > 0) {
                         var t = ss.target
@@ -1332,7 +1328,7 @@ ApplicationWindow {
             bodyPadding: Theme.sp5
             onRequestClose: remoteCloseDialog.close()
 
-            ColumnLayout {
+            body: ColumnLayout {
                 anchors.fill: parent
                 spacing: Theme.sp4
 
@@ -1363,7 +1359,7 @@ ApplicationWindow {
 
                 RowLayout {
                     id: remoteCloseFooter
-                    anchors.fill: parent
+                    width: parent.width
                     spacing: Theme.sp2
 
                     Item { Layout.fillWidth: true }
@@ -1429,7 +1425,7 @@ ApplicationWindow {
             bodyPadding: Theme.sp5
             onRequestClose: aboutDialog.close()
 
-            ColumnLayout {
+            body: ColumnLayout {
                 anchors.fill: parent
                 spacing: Theme.sp3
 
@@ -1461,7 +1457,7 @@ ApplicationWindow {
 
                 RowLayout {
                     id: aboutFooter
-                    anchors.fill: parent
+                    width: parent.width
 
                     Item { Layout.fillWidth: true }
 

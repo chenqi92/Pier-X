@@ -50,6 +50,7 @@ class PierConnectionStore : public QAbstractListModel
     // future "Connections (3)" header bindings work without
     // wrapper code on the QML side.
     Q_PROPERTY(int count READ count NOTIFY countChanged FINAL)
+    Q_PROPERTY(QStringList groups READ groups NOTIFY groupsChanged FINAL)
 
 public:
     // QML-facing roles. Each maps to a column on the JSON shape.
@@ -121,11 +122,18 @@ public slots:
     // an empty map if out of range. QML uses this to look up
     // the credential id and SSH params for a sidebar entry.
     QVariantMap get(int index) const;
+    QStringList groups() const { return m_groups; }
+    bool setPrimaryTag(int index, const QString &tag);
+    bool clearPrimaryTag(int index);
+    bool createGroup(const QString &name);
+    bool renameGroup(const QString &oldName, const QString &newName);
+    bool deleteGroup(const QString &name);
 
     int count() const { return static_cast<int>(m_entries.size()); }
 
 signals:
     void countChanged();
+    void groupsChanged();
 
 private:
     // POD struct mirroring one row of the JSON shape. Exactly
@@ -160,6 +168,11 @@ private:
     // success; on parse failure leaves m_entries untouched and
     // logs the error.
     bool ingestJson(const QByteArray &json);
+    bool persistGroups() const;
+    void loadGroups();
+    void mergeGroupsFromEntries();
+    static QString normalizeGroupName(const QString &name);
 
     std::vector<Entry> m_entries;
+    QStringList m_groups;
 };

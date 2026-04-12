@@ -115,6 +115,25 @@ pub struct VtEmulator {
     /// Current pen style that the next printed character will take.
     /// CSI `m` mutates this.
     pen: Cell,
+
+    /// Set to true when a BEL character (0x07) is received.
+    /// The UI layer reads and resets this flag per snapshot.
+    pub bell_pending: bool,
+
+    /// Window title set via OSC 0/1/2.
+    pub window_title: String,
+
+    /// Clipboard content set via OSC 52. The UI layer decides
+    /// whether to honor clipboard writes from the terminal.
+    pub osc52_clipboard: String,
+
+    /// SSH command detected in terminal output. Set when the user
+    /// presses Enter on a line containing `ssh [user@]host`.
+    /// The UI reads these and clears `ssh_command_detected`.
+    pub ssh_command_detected: bool,
+    pub ssh_detected_host: String,
+    pub ssh_detected_user: String,
+    pub ssh_detected_port: u16,
 }
 
 impl VtEmulator {
@@ -132,6 +151,13 @@ impl VtEmulator {
             scrollback: VecDeque::new(),
             scrollback_limit: 10_000,
             pen: Cell::default(),
+            bell_pending: false,
+            window_title: String::new(),
+            osc52_clipboard: String::new(),
+            ssh_command_detected: false,
+            ssh_detected_host: String::new(),
+            ssh_detected_user: String::new(),
+            ssh_detected_port: 22,
         }
     }
 
@@ -152,9 +178,28 @@ impl VtEmulator {
             scrollback: &mut self.scrollback,
             scrollback_limit: self.scrollback_limit,
             pen: &mut self.pen,
+            bell_pending: &mut self.bell_pending,
+            window_title: &mut self.window_title,
+            osc52_clipboard: &mut self.osc52_clipboard,
         };
+        // Remember cursor row before processing to detect line changes
+        let prev_y = *performer.cursor_y;
         parser.advance(&mut performer, bytes);
         self.parser = parser;
+
+        // If cursor moved to a new line (user pressed Enter), check
+        // the previous line for an SSH command.
+        if self.cursor_y != prev_y || bytes.contains(&b'\n') || bytes.contains(&b'\r') {
+            // Check the line the cursor was on before the LF
+            let check_row = if prev_y < self.rows { prev_y } else { 0 };
+            let line = self.line_text(check_row);
+            if let Some((host, user, port)) = parse_ssh_command(&line) {
+                self.ssh_detected_host = host;
+                self.ssh_detected_user = user;
+                self.ssh_detected_port = port;
+                self.ssh_command_detected = true;
+            }
+        }
     }
 
     /// Resize the grid. If the new size is smaller, rows are trimmed
@@ -189,6 +234,92 @@ impl VtEmulator {
             .map(|r| r.iter().map(|c| c.ch).collect())
             .unwrap_or_default()
     }
+    /// Check if the current line contains an SSH command and extract
+    /// host/user/port. Called when the user presses Enter (LF).
+    pub fn detect_ssh_in_current_line(&mut self) {
+        let line = self.line_text(self.cursor_y);
+        if let Some((host, user, port)) = parse_ssh_command(&line) {
+            self.ssh_detected_host = host;
+            self.ssh_detected_user = user;
+            self.ssh_detected_port = port;
+            self.ssh_command_detected = true;
+        }
+    }
+}
+
+/// Parse an SSH command from a terminal line.
+///
+/// Recognizes: `ssh [-p port] [-i key] [-o opt] [user@]host`
+/// Returns `Some((host, user, port))` or `None`.
+fn parse_ssh_command(line: &str) -> Option<(String, String, u16)> {
+    // Strip shell prompt: find last `$ `, `# `, or `% ` and take everything after
+    let cmd_part = line
+        .rfind("$ ")
+        .or_else(|| line.rfind("# "))
+        .or_else(|| line.rfind("% "))
+        .map(|pos| &line[pos + 2..])
+        .unwrap_or(line)
+        .trim();
+
+    let tokens: Vec<&str> = cmd_part.split_whitespace().collect();
+    if tokens.is_empty() || tokens[0] != "ssh" {
+        return None;
+    }
+
+    let mut host = String::new();
+    let mut user = String::from("root");
+    let mut port: u16 = 22;
+
+    // Flags that consume the next argument
+    let flags_with_arg = [
+        "-p", "-i", "-o", "-l", "-L", "-R", "-D", "-F", "-J", "-w", "-W", "-b", "-c",
+        "-E", "-e", "-I", "-m", "-O", "-Q", "-S",
+    ];
+
+    let mut i = 1; // skip "ssh"
+    while i < tokens.len() {
+        let t = tokens[i];
+
+        if t == "-p" {
+            // Next token is port
+            if i + 1 < tokens.len() {
+                port = tokens[i + 1].parse().unwrap_or(22);
+                i += 2;
+                continue;
+            }
+        } else if t == "-l" {
+            // Next token is username
+            if i + 1 < tokens.len() {
+                user = tokens[i + 1].to_string();
+                i += 2;
+                continue;
+            }
+        } else if flags_with_arg.contains(&t) {
+            // Skip flag and its argument
+            i += 2;
+            continue;
+        } else if t.starts_with('-') {
+            // Skip boolean flags (e.g., -v, -N, -f, -T, -t)
+            i += 1;
+            continue;
+        } else {
+            // This should be the [user@]host target
+            if let Some(at_pos) = t.find('@') {
+                user = t[..at_pos].to_string();
+                host = t[at_pos + 1..].to_string();
+            } else {
+                host = t.to_string();
+            }
+            break;
+        }
+        i += 1;
+    }
+
+    if host.is_empty() {
+        return None;
+    }
+
+    Some((host, user, port))
 }
 
 // `Default` so `std::mem::take` works in `process`.
@@ -211,6 +342,9 @@ struct Performer<'a> {
     scrollback: &'a mut VecDeque<ScrollbackLine>,
     scrollback_limit: usize,
     pen: &'a mut Cell,
+    bell_pending: &'a mut bool,
+    window_title: &'a mut String,
+    osc52_clipboard: &'a mut String,
 }
 
 impl Performer<'_> {
@@ -284,18 +418,49 @@ impl Perform for Performer<'_> {
                 let next = (*self.cursor_x / 8 + 1) * 8;
                 *self.cursor_x = next.min(self.cols - 1);
             }
-            // BEL — ignored. TODO: emit a visual-bell event in M2b.
-            0x07 => {}
+            // BEL — visual bell. Set the bell flag so the UI can
+            // flash the terminal border or play a sound.
+            0x07 => {
+                *self.bell_pending = true;
+            }
             _ => {}
         }
     }
 
-    fn hook(&mut self, _params: &vte::Params, _intermediates: &[u8], _ignore: bool, _action: char) {}
+    fn hook(&mut self, _params: &vte::Params, _intermediates: &[u8], _ignore: bool, _action: char) {
+    }
     fn put(&mut self, _byte: u8) {}
     fn unhook(&mut self) {}
-    fn osc_dispatch(&mut self, _params: &[&[u8]], _bell_terminated: bool) {
-        // TODO: OSC 0/1/2 (window title), OSC 52 (clipboard),
-        // OSC 10/11 (default fg/bg query) — all land in M2b.
+    fn osc_dispatch(&mut self, params: &[&[u8]], _bell_terminated: bool) {
+        if params.is_empty() {
+            return;
+        }
+        match params[0] {
+            // OSC 0 — set icon name + window title
+            // OSC 1 — set icon name
+            // OSC 2 — set window title
+            b"0" | b"1" | b"2" => {
+                if params.len() >= 2 {
+                    if let Ok(title) = std::str::from_utf8(params[1]) {
+                        *self.window_title = title.to_string();
+                    }
+                }
+            }
+            // OSC 52 — clipboard access (read/write)
+            // Security: we store the payload but don't auto-paste.
+            // The UI layer decides whether to honor it.
+            b"52" => {
+                if params.len() >= 3 {
+                    if let Ok(data) = std::str::from_utf8(params[2]) {
+                        *self.osc52_clipboard = data.to_string();
+                    }
+                }
+            }
+            // OSC 10/11 — default fg/bg color query — silently ignored
+            // (responding would require writing back to the PTY, which
+            // the emulator doesn't own)
+            _ => {}
+        }
     }
     fn esc_dispatch(&mut self, _intermediates: &[u8], _ignore: bool, _byte: u8) {}
 
@@ -458,25 +623,14 @@ impl Performer<'_> {
                     let mode = mode_p.first().copied().unwrap_or(0);
                     let color = match mode {
                         5 => {
-                            let idx = iter
-                                .next()
-                                .and_then(|p| p.first().copied())
-                                .unwrap_or(0) as u8;
+                            let idx =
+                                iter.next().and_then(|p| p.first().copied()).unwrap_or(0) as u8;
                             Color::Indexed(idx)
                         }
                         2 => {
-                            let r = iter
-                                .next()
-                                .and_then(|p| p.first().copied())
-                                .unwrap_or(0) as u8;
-                            let g = iter
-                                .next()
-                                .and_then(|p| p.first().copied())
-                                .unwrap_or(0) as u8;
-                            let b = iter
-                                .next()
-                                .and_then(|p| p.first().copied())
-                                .unwrap_or(0) as u8;
+                            let r = iter.next().and_then(|p| p.first().copied()).unwrap_or(0) as u8;
+                            let g = iter.next().and_then(|p| p.first().copied()).unwrap_or(0) as u8;
+                            let b = iter.next().and_then(|p| p.first().copied()).unwrap_or(0) as u8;
                             Color::Rgb(r, g, b)
                         }
                         _ => continue,

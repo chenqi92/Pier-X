@@ -240,6 +240,42 @@ bool PierLogStreamModel::connectToSession(QObject *sessionObj, const QString &co
     return true;
 }
 
+bool PierLogStreamModel::connectLocal(const QString &command)
+{
+    if (m_handle || m_localProcess || m_status == Connecting) return false;
+    if (command.isEmpty()) return false;
+
+    m_errorMessage.clear();
+    m_target = QStringLiteral("localhost");
+    setCommand(command);
+    setStatus(Connected);
+
+    m_localProcess = new QProcess(this);
+    const QString shell = QStringLiteral("/bin/sh");
+    m_localProcess->start(shell, {QStringLiteral("-c"), command});
+
+    // Read stdout lines on a timer, same cadence as remote polling
+    connect(&m_pollTimer, &QTimer::timeout, this, [this]() {
+        if (!m_localProcess) return;
+        while (m_localProcess->canReadLine()) {
+            const QString line = QString::fromUtf8(m_localProcess->readLine()).trimmed();
+            if (line.isEmpty()) continue;
+            // Wrap in a minimal JSON event like the remote stream produces
+            QString escaped = line;
+            escaped.replace(QLatin1Char('\\'), QStringLiteral("\\\\"));
+            escaped.replace(QLatin1Char('"'), QStringLiteral("\\\""));
+            const QString json = QStringLiteral("[{\"kind\":\"stdout\",\"text\":\"%1\"}]").arg(escaped);
+            ingestEventsJson(json);
+        }
+        if (m_localProcess->state() == QProcess::NotRunning && m_status == Connected) {
+            m_exitCode = m_localProcess->exitCode();
+            setStatus(Finished);
+        }
+    });
+    m_pollTimer.start();
+    return true;
+}
+
 void PierLogStreamModel::onConnectResult(quint64 requestId, void *handle, const QString &error)
 {
     if (requestId != m_nextRequestId) {
@@ -399,6 +435,12 @@ void PierLogStreamModel::stop()
     }
     ++m_nextRequestId;
     m_pollTimer.stop();
+    if (m_localProcess) {
+        m_localProcess->kill();
+        m_localProcess->waitForFinished(500);
+        m_localProcess->deleteLater();
+        m_localProcess = nullptr;
+    }
     if (m_handle) {
         ::PierLogStream *h = m_handle;
         m_handle = nullptr;

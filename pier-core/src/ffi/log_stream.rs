@@ -381,9 +381,13 @@ mod tests {
         // SAFETY: all nulls documented as safe.
         unsafe {
             assert!(pier_log_open(
-                ptr::null(), 22, ptr::null(),
+                ptr::null(),
+                22,
+                ptr::null(),
                 PIER_AUTH_PASSWORD,
-                ptr::null(), ptr::null(), ptr::null()
+                ptr::null(),
+                ptr::null(),
+                ptr::null()
             )
             .is_null());
             assert!(pier_log_drain(ptr::null_mut()).is_null());
@@ -405,9 +409,12 @@ mod tests {
         // SAFETY: valid NUL-terminated strings.
         let h = unsafe {
             pier_log_open(
-                host.as_ptr(), 22, user.as_ptr(),
+                host.as_ptr(),
+                22,
+                user.as_ptr(),
                 PIER_AUTH_PASSWORD,
-                pass.as_ptr(), ptr::null(),
+                pass.as_ptr(),
+                ptr::null(),
                 cmd.as_ptr(),
             )
         };

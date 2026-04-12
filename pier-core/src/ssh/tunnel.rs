@@ -130,7 +130,14 @@ impl SshSession {
         let stop_clone = Arc::clone(&stop);
 
         let task = runtime::shared().spawn(async move {
-            accept_loop(listener, handle_clone, remote_host_owned, remote_port, stop_clone).await;
+            accept_loop(
+                listener,
+                handle_clone,
+                remote_host_owned,
+                remote_port,
+                stop_clone,
+            )
+            .await;
         });
 
         Ok(Tunnel {

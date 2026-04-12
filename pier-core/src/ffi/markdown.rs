@@ -162,8 +162,7 @@ mod tests {
 
     #[test]
     fn load_html_from_temp_file() {
-        let path = std::env::temp_dir()
-            .join(format!("pier_md_ffi_{}.md", std::process::id()));
+        let path = std::env::temp_dir().join(format!("pier_md_ffi_{}.md", std::process::id()));
         {
             let mut f = std::fs::File::create(&path).unwrap();
             writeln!(f, "## Title\n\n- a\n- b").unwrap();

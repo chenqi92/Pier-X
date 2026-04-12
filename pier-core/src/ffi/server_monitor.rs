@@ -75,9 +75,7 @@ pub unsafe extern "C" fn pier_server_monitor_open_on_session(
 /// Returns NULL on failure. Release with
 /// [`pier_server_monitor_free_string`].
 #[no_mangle]
-pub unsafe extern "C" fn pier_server_monitor_probe(
-    h: *mut PierServerMonitor,
-) -> *mut c_char {
+pub unsafe extern "C" fn pier_server_monitor_probe(h: *mut PierServerMonitor) -> *mut c_char {
     if h.is_null() {
         return ptr::null_mut();
     }
@@ -129,9 +127,14 @@ mod tests {
     fn null_inputs_are_safe() {
         unsafe {
             assert!(pier_server_monitor_open(
-                ptr::null(), 22, ptr::null(),
-                PIER_AUTH_PASSWORD, ptr::null(), ptr::null()
-            ).is_null());
+                ptr::null(),
+                22,
+                ptr::null(),
+                PIER_AUTH_PASSWORD,
+                ptr::null(),
+                ptr::null()
+            )
+            .is_null());
             assert!(pier_server_monitor_probe(ptr::null_mut()).is_null());
             assert!(pier_server_monitor_open_on_session(ptr::null()).is_null());
             pier_server_monitor_free_string(ptr::null_mut());

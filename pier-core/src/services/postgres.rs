@@ -238,7 +238,10 @@ impl PostgresClient {
     pub async fn list_databases(&self) -> Result<Vec<String>> {
         let rows = self
             .client
-            .query("SELECT datname FROM pg_database WHERE datistemplate = false ORDER BY datname", &[])
+            .query(
+                "SELECT datname FROM pg_database WHERE datistemplate = false ORDER BY datname",
+                &[],
+            )
             .await?;
         let hidden: BTreeSet<&str> = ["template0", "template1"].into_iter().collect();
         Ok(rows
@@ -364,9 +367,7 @@ fn try_get_string(row: &Row, i: usize) -> Option<String> {
         Type::INT8 => row.get::<_, Option<i64>>(i).map(|v| v.to_string()),
         Type::FLOAT4 => row.get::<_, Option<f32>>(i).map(|v| v.to_string()),
         Type::FLOAT8 => row.get::<_, Option<f64>>(i).map(|v| v.to_string()),
-        Type::TEXT | Type::VARCHAR | Type::NAME | Type::BPCHAR => {
-            row.get::<_, Option<String>>(i)
-        }
+        Type::TEXT | Type::VARCHAR | Type::NAME | Type::BPCHAR => row.get::<_, Option<String>>(i),
         Type::BYTEA => row
             .get::<_, Option<Vec<u8>>>(i)
             .map(|v| format!("\\x{}", hex_prefix(&v))),

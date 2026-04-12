@@ -29,102 +29,91 @@ Item {
 
     ColumnLayout {
         anchors.centerIn: parent
-        anchors.verticalCenterOffset: -56
-        width: Math.min(parent.width - Theme.sp12 * 2, 520)
-        spacing: Theme.sp3
+        width: Math.min(parent.width - Theme.sp12 * 2, 480)
+        spacing: Theme.sp4
 
-        Card {
+        ColumnLayout {
             Layout.alignment: Qt.AlignHCenter
             Layout.fillWidth: true
-            padding: Theme.sp6
+            spacing: Theme.sp2
 
-            ColumnLayout {
-                anchors.fill: parent
-                spacing: Theme.sp3
+            Rectangle {
+                Layout.alignment: Qt.AlignHCenter
+                Layout.preferredWidth: 28
+                Layout.preferredHeight: 28
+                radius: Theme.radiusMd
+                color: Theme.accentSubtle
 
-                ColumnLayout {
-                    Layout.fillWidth: true
-                    spacing: Theme.sp1_5
+                Rectangle {
+                    anchors.centerIn: parent
+                    width: 8
+                    height: 8
+                    radius: 4
+                    color: Theme.accent
+                }
+            }
 
-                    Rectangle {
-                        Layout.alignment: Qt.AlignHCenter
-                        Layout.preferredWidth: 28
-                        Layout.preferredHeight: 28
-                        radius: Theme.radiusMd
-                        color: Theme.accentSubtle
+            SectionLabel {
+                text: qsTr("Welcome")
+                Layout.alignment: Qt.AlignHCenter
+            }
 
-                        Rectangle {
-                            anchors.centerIn: parent
-                            width: 8
-                            height: 8
-                            radius: 4
-                            color: Theme.accent
-                        }
-                    }
+            Text {
+                Layout.alignment: Qt.AlignHCenter
+                text: qsTr("Pier-X workspace")
+                font.family: Theme.fontUi
+                font.pixelSize: 28
+                font.weight: Theme.weightSemibold
+                font.letterSpacing: -0.4
+                color: Theme.textPrimary
+                horizontalAlignment: Text.AlignHCenter
+            }
 
-                    SectionLabel {
-                        text: qsTr("Welcome")
-                        Layout.alignment: Qt.AlignHCenter
-                    }
+            Text {
+                Layout.alignment: Qt.AlignHCenter
+                Layout.maximumWidth: 420
+                text: qsTr("Open a local terminal or connect to a server to start working.")
+                font.family: Theme.fontUi
+                font.pixelSize: Theme.sizeBody
+                color: Theme.textSecondary
+                horizontalAlignment: Text.AlignHCenter
+                wrapMode: Text.WordWrap
+            }
 
-                    Text {
-                        Layout.alignment: Qt.AlignHCenter
-                        text: qsTr("Pier-X is taking shape.")
-                        font.family: Theme.fontUi
-                        font.pixelSize: Theme.sizeH1
-                        font.weight: Theme.weightSemibold
-                        font.letterSpacing: -0.3
-                        color: Theme.textPrimary
-                        horizontalAlignment: Text.AlignHCenter
-                    }
+            RowLayout {
+                Layout.alignment: Qt.AlignHCenter
+                spacing: Theme.sp1_5
 
-                    Text {
-                        Layout.alignment: Qt.AlignHCenter
-                        Layout.maximumWidth: 420
-                        text: qsTr("Cross-platform terminal management built on Qt 6 and the Rust core.")
-                        font.family: Theme.fontUi
-                        font.pixelSize: Theme.sizeBody
-                        color: Theme.textSecondary
-                        horizontalAlignment: Text.AlignHCenter
-                        wrapMode: Text.WordWrap
-                    }
+                PrimaryButton {
+                    Layout.preferredWidth: 148
+                    text: qsTr("New SSH connection")
+                    onClicked: root.newSshRequested()
                 }
 
-                RowLayout {
-                    Layout.alignment: Qt.AlignHCenter
-                    spacing: Theme.sp1_5
+                GhostButton {
+                    Layout.preferredWidth: 148
+                    text: qsTr("Open local terminal")
+                    onClicked: root.openLocalTerminalRequested()
+                }
+            }
 
-                    PrimaryButton {
-                        Layout.preferredWidth: 148
-                        text: qsTr("New SSH connection")
-                        onClicked: root.newSshRequested()
-                    }
+            RowLayout {
+                Layout.alignment: Qt.AlignHCenter
+                spacing: Theme.sp1_5
 
-                    GhostButton {
-                        Layout.preferredWidth: 148
-                        text: qsTr("Open local terminal")
-                        onClicked: root.openLocalTerminalRequested()
-                    }
+                StatusPill {
+                    text: "Qt " + PierCore.qtVersion
+                    statusColor: Theme.statusSuccess
                 }
 
-                RowLayout {
-                    Layout.alignment: Qt.AlignHCenter
-                    spacing: Theme.sp1_5
+                StatusPill {
+                    text: qsTr("core ") + PierCore.version
+                    statusColor: Theme.statusSuccess
+                }
 
-                    StatusPill {
-                        text: "Qt " + PierCore.qtVersion
-                        statusColor: Theme.statusSuccess
-                    }
-
-                    StatusPill {
-                        text: qsTr("core ") + PierCore.version
-                        statusColor: Theme.statusSuccess
-                    }
-
-                    StatusPill {
-                        text: Theme.dark ? qsTr("Dark mode") : qsTr("Light mode")
-                        statusColor: Theme.statusInfo
-                    }
+                StatusPill {
+                    text: Theme.dark ? qsTr("Dark mode") : qsTr("Light mode")
+                    statusColor: Theme.statusInfo
                 }
             }
         }

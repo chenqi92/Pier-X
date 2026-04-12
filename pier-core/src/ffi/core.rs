@@ -39,7 +39,11 @@ pub extern "C" fn pier_core_build_info() -> *const c_char {
     static INFO_C: OnceLock<CString> = OnceLock::new();
     INFO_C
         .get_or_init(|| {
-            let profile = if cfg!(debug_assertions) { "debug" } else { "release" };
+            let profile = if cfg!(debug_assertions) {
+                "debug"
+            } else {
+                "release"
+            };
             let s = format!("{} ({})", crate::VERSION, profile);
             CString::new(s).expect("build info contains NUL byte")
         })

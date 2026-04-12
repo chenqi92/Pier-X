@@ -118,11 +118,15 @@ pub unsafe extern "C" fn pier_tunnel_open(
             password: secret_str.unwrap_or_default(),
         },
         PIER_AUTH_CREDENTIAL => {
-            let Some(id) = secret_str else { return ptr::null_mut() };
+            let Some(id) = secret_str else {
+                return ptr::null_mut();
+            };
             AuthMethod::KeychainPassword { credential_id: id }
         }
         PIER_AUTH_KEY => {
-            let Some(path) = secret_str else { return ptr::null_mut() };
+            let Some(path) = secret_str else {
+                return ptr::null_mut();
+            };
             AuthMethod::PublicKeyFile {
                 private_key_path: path,
                 passphrase_credential_id: extra_str,
@@ -147,13 +151,14 @@ pub unsafe extern "C" fn pier_tunnel_open(
         }
     };
 
-    let tunnel = match session.open_local_forward_blocking(local_port, &remote_host_str, remote_port) {
-        Ok(t) => t,
-        Err(e) => {
-            log::warn!("pier_tunnel_open open_local_forward failed: {e}");
-            return ptr::null_mut();
-        }
-    };
+    let tunnel =
+        match session.open_local_forward_blocking(local_port, &remote_host_str, remote_port) {
+            Ok(t) => t,
+            Err(e) => {
+                log::warn!("pier_tunnel_open open_local_forward failed: {e}");
+                return ptr::null_mut();
+            }
+        };
     let actual_local_port = tunnel.local_port();
 
     Box::into_raw(Box::new(PierTunnel {
@@ -276,9 +281,15 @@ mod tests {
         // SAFETY: null handling is documented per function.
         unsafe {
             assert!(pier_tunnel_open(
-                ptr::null(), 22, ptr::null(),
-                PIER_AUTH_PASSWORD, ptr::null(), ptr::null(),
-                13306, ptr::null(), 3306,
+                ptr::null(),
+                22,
+                ptr::null(),
+                PIER_AUTH_PASSWORD,
+                ptr::null(),
+                ptr::null(),
+                13306,
+                ptr::null(),
+                3306,
             )
             .is_null());
             assert_eq!(pier_tunnel_local_port(ptr::null()), 0);
@@ -295,10 +306,15 @@ mod tests {
         // SAFETY: strings are all valid NUL-terminated C strings.
         let h = unsafe {
             pier_tunnel_open(
-                host.as_ptr(), 22, user.as_ptr(),
+                host.as_ptr(),
+                22,
+                user.as_ptr(),
                 999,
-                ptr::null(), ptr::null(),
-                13306, rhost.as_ptr(), 3306,
+                ptr::null(),
+                ptr::null(),
+                13306,
+                rhost.as_ptr(),
+                3306,
             )
         };
         assert!(h.is_null());
@@ -315,10 +331,15 @@ mod tests {
         // SAFETY: all valid strings.
         let h = unsafe {
             pier_tunnel_open(
-                host.as_ptr(), 22, user.as_ptr(),
+                host.as_ptr(),
+                22,
+                user.as_ptr(),
                 PIER_AUTH_PASSWORD,
-                pass.as_ptr(), ptr::null(),
-                13306, rhost.as_ptr(), 3306,
+                pass.as_ptr(),
+                ptr::null(),
+                13306,
+                rhost.as_ptr(),
+                3306,
             )
         };
         let elapsed = start.elapsed();

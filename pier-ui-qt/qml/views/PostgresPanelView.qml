@@ -2,6 +2,7 @@ import QtQuick
 import QtQuick.Controls
 import QtQuick.Layouts
 import Pier
+import "../components"
 
 // PostgreSQL client panel — M7a per-service tool.
 // Mirrors MySqlPanelView in layout + flow: connect form overlay
@@ -43,216 +44,266 @@ Rectangle {
         anchors.margins: Theme.sp3
         spacing: Theme.sp2
 
-        // ─── Top bar ─────────────────────────────────────
-        RowLayout {
+        ToolPanelSurface {
             Layout.fillWidth: true
-            spacing: Theme.sp2
+            padding: Theme.sp2
+            implicitHeight: pgHeader.implicitHeight + Theme.sp2 * 2
 
-            Text {
-                text: client.target.length > 0 ? client.target : qsTr("PostgreSQL")
-                font.family: Theme.fontMono
-                font.pixelSize: Theme.sizeBody
-                font.weight: Theme.weightMedium
-                color: Theme.textPrimary
-                elide: Text.ElideMiddle
-                Layout.minimumWidth: 180
-                Layout.maximumWidth: 320
-                Behavior on color { ColorAnimation { duration: Theme.durNormal } }
-            }
-            Item { Layout.fillWidth: true }
-            GhostButton {
-                compact: true
-                minimumWidth: 0
-                text: qsTr("↻ Databases")
-                enabled: client.status === PierPostgresClient.Connected
-                onClicked: client.refreshDatabases()
-            }
-            GhostButton {
-                compact: true
-                minimumWidth: 0
-                text: qsTr("Disconnect")
-                enabled: client.status === PierPostgresClient.Connected
-                onClicked: client.stop()
+            RowLayout {
+                id: pgHeader
+                anchors.fill: parent
+                spacing: Theme.sp2
+
+                Text {
+                    text: client.target.length > 0 ? client.target : qsTr("PostgreSQL")
+                    font.family: Theme.fontMono
+                    font.pixelSize: Theme.sizeBody
+                    font.weight: Theme.weightMedium
+                    color: Theme.textPrimary
+                    elide: Text.ElideMiddle
+                    Layout.minimumWidth: 180
+                    Layout.maximumWidth: 320
+                    Behavior on color { ColorAnimation { duration: Theme.durNormal } }
+                }
+
+                StatusPill {
+                    text: client.status === PierPostgresClient.Connected
+                          ? qsTr("Connected")
+                          : (client.status === PierPostgresClient.Connecting
+                             ? qsTr("Connecting")
+                             : qsTr("Idle"))
+                    tone: client.status === PierPostgresClient.Connected ? "info" : "neutral"
+                }
+
+                Item { Layout.fillWidth: true }
+
+                GhostButton {
+                    compact: true
+                    minimumWidth: 0
+                    text: qsTr("Databases")
+                    enabled: client.status === PierPostgresClient.Connected
+                    onClicked: client.refreshDatabases()
+                }
+                GhostButton {
+                    compact: true
+                    minimumWidth: 0
+                    text: qsTr("Disconnect")
+                    enabled: client.status === PierPostgresClient.Connected
+                    onClicked: client.stop()
+                }
             }
         }
 
-        // ─── SQL editor ─────────────────────────────────
-        Rectangle {
+        ToolPanelSurface {
             Layout.fillWidth: true
             Layout.preferredHeight: Math.max(100, root.height * 0.28)
-            color: Theme.bgPanel
-            border.color: sqlEditor.activeFocus ? Theme.borderFocus : Theme.borderSubtle
-            border.width: 1
-            radius: Theme.radiusSm
-            Behavior on color { ColorAnimation { duration: Theme.durNormal } }
-            Behavior on border.color { ColorAnimation { duration: Theme.durFast } }
+            padding: Theme.sp2
 
-            ScrollView {
+            ColumnLayout {
                 anchors.fill: parent
-                anchors.margins: Theme.sp2
-                clip: true
-                TextArea {
-                    id: sqlEditor
-                    placeholderText: qsTr("SELECT * FROM … ")
-                    wrapMode: TextArea.WrapAtWordBoundaryOrAnywhere
-                    font.family: Theme.fontMono
-                    font.pixelSize: Theme.sizeBody
-                    color: Theme.textPrimary
-                    background: Rectangle { color: "transparent" }
-                    selectByMouse: true
-                    Keys.onPressed: (event) => {
-                        if ((event.modifiers & Qt.ControlModifier)
-                            && (event.key === Qt.Key_Return || event.key === Qt.Key_Enter)) {
-                            event.accepted = true
-                            client.execute(sqlEditor.text)
+                spacing: Theme.sp2
+
+                ToolSectionHeader {
+                    Layout.fillWidth: true
+                    title: qsTr("Query")
+                    subtitle: qsTr("Press Ctrl+Enter to run the current statement")
+
+                    PrimaryButton {
+                        text: qsTr("Run")
+                        enabled: client.status === PierPostgresClient.Connected
+                                 && sqlEditor.text.trim().length > 0 && !client.busy
+                        onClicked: client.execute(sqlEditor.text)
+                    }
+                }
+
+                ToolPanelSurface {
+                    Layout.fillWidth: true
+                    Layout.fillHeight: true
+                    inset: true
+                    padding: Theme.sp0
+                    border.color: sqlEditor.activeFocus ? Theme.borderFocus : Theme.borderSubtle
+
+                    Behavior on border.color { ColorAnimation { duration: Theme.durFast } }
+
+                    PierScrollView {
+                        anchors.fill: parent
+                        clip: true
+
+                        PierTextArea {
+                            id: sqlEditor
+                            mono: true
+                            frameVisible: false
+                            placeholderText: qsTr("SELECT * FROM …")
+                            wrapMode: TextArea.WrapAtWordBoundaryOrAnywhere
+                            selectByMouse: true
+                            Keys.onPressed: (event) => {
+                                if ((event.modifiers & Qt.ControlModifier)
+                                    && (event.key === Qt.Key_Return || event.key === Qt.Key_Enter)) {
+                                    event.accepted = true
+                                    client.execute(sqlEditor.text)
+                                }
+                            }
                         }
                     }
                 }
             }
-            PrimaryButton {
-                anchors.right: parent.right
-                anchors.bottom: parent.bottom
-                anchors.rightMargin: Theme.sp2
-                anchors.bottomMargin: Theme.sp2
-                text: qsTr("Run ▸")
-                enabled: client.status === PierPostgresClient.Connected
-                         && sqlEditor.text.trim().length > 0 && !client.busy
-                onClicked: client.execute(sqlEditor.text)
-            }
         }
 
-        // ─── Result area ────────────────────────────────
-        Rectangle {
+        ToolBanner {
+            Layout.fillWidth: true
+            tone: "error"
+            text: client.lastError
+        }
+
+        ToolPanelSurface {
             Layout.fillWidth: true
             Layout.fillHeight: true
-            color: Theme.bgPanel
-            border.color: Theme.borderSubtle
-            border.width: 1
-            radius: Theme.radiusSm
-            Behavior on color { ColorAnimation { duration: Theme.durNormal } }
-
-            // Error
             ColumnLayout {
                 anchors.fill: parent
-                anchors.margins: Theme.sp3
                 spacing: Theme.sp2
-                visible: client.lastError.length > 0
-                SectionLabel { text: qsTr("Error") }
-                Text {
+
+                ToolSectionHeader {
                     Layout.fillWidth: true
-                    text: client.lastError
-                    font.family: Theme.fontMono
-                    font.pixelSize: Theme.sizeBody
-                    color: Theme.statusError
-                    wrapMode: Text.Wrap
+                    title: qsTr("Results")
+                    subtitle: client.resultColumnCount > 0
+                              ? _rowLabel(client.resultRowCount)
+                              : (client.lastAffectedRows > 0
+                                 ? qsTr("%1 rows affected").arg(client.lastAffectedRows)
+                                 : qsTr("Latest query output"))
                 }
-            }
 
-            // Grid
-            ColumnLayout {
-                anchors.fill: parent
-                anchors.margins: Theme.sp1
-                spacing: 0
-                visible: client.lastError.length === 0 && client.resultColumnCount > 0
-
-                HorizontalHeaderView {
+                ToolPanelSurface {
                     Layout.fillWidth: true
-                    syncView: resultTable
-                    clip: true
-                    delegate: Rectangle {
-                        implicitHeight: 22; implicitWidth: 120
-                        color: Theme.bgSurface
-                        border.color: Theme.borderSubtle; border.width: 1
-                        Text {
+                    Layout.fillHeight: true
+                    inset: true
+                    padding: Theme.sp1
+
+                    Item {
+                        anchors.fill: parent
+
+                        ColumnLayout {
                             anchors.fill: parent
-                            anchors.leftMargin: Theme.sp2; anchors.rightMargin: Theme.sp2
-                            verticalAlignment: Text.AlignVCenter
-                            text: display
-                            font.family: Theme.fontMono
-                            font.pixelSize: Theme.sizeCaption
-                            font.weight: Theme.weightMedium
+                            spacing: 0
+                            visible: client.lastError.length === 0 && client.resultColumnCount > 0
+
+                            HorizontalHeaderView {
+                                Layout.fillWidth: true
+                                syncView: resultTable
+                                clip: true
+                                delegate: Rectangle {
+                                    implicitHeight: 24
+                                    implicitWidth: 120
+                                    color: Theme.bgSurface
+                                    border.color: Theme.borderSubtle
+                                    border.width: 1
+
+                                    Text {
+                                        anchors.fill: parent
+                                        anchors.leftMargin: Theme.sp2
+                                        anchors.rightMargin: Theme.sp2
+                                        verticalAlignment: Text.AlignVCenter
+                                        text: display
+                                        font.family: Theme.fontMono
+                                        font.pixelSize: Theme.sizeCaption
+                                        font.weight: Theme.weightMedium
+                                        color: Theme.textSecondary
+                                        elide: Text.ElideRight
+                                    }
+                                }
+                            }
+
+                            TableView {
+                                id: resultTable
+                                Layout.fillWidth: true
+                                Layout.fillHeight: true
+                                clip: true
+                                model: client.resultModel
+                                columnSpacing: 0
+                                rowSpacing: 0
+                                reuseItems: true
+
+                                delegate: Rectangle {
+                                    implicitHeight: 24
+                                    implicitWidth: 120
+                                    required property var display
+                                    required property bool isNull
+                                    color: "transparent"
+                                    border.color: Theme.borderSubtle
+                                    border.width: 1
+
+                                    Text {
+                                        anchors.fill: parent
+                                        anchors.leftMargin: Theme.sp2
+                                        anchors.rightMargin: Theme.sp2
+                                        verticalAlignment: Text.AlignVCenter
+                                        text: parent.isNull ? "NULL" : (parent.display !== undefined ? parent.display : "")
+                                        font.family: Theme.fontMono
+                                        font.pixelSize: Theme.sizeCaption
+                                        color: parent.isNull ? Theme.textTertiary : Theme.textPrimary
+                                        font.italic: parent.isNull
+                                        elide: Text.ElideRight
+                                    }
+                                }
+                            }
+                        }
+
+                        ToolEmptyState {
+                            anchors.centerIn: parent
+                            visible: client.status === PierPostgresClient.Connected
+                                     && client.lastError.length === 0
+                                     && !client.busy
+                                     && client.resultColumnCount === 0
+                                     && client.lastAffectedRows === 0
+                            icon: "database"
+                            title: qsTr("No results yet")
+                            description: qsTr("Run a SQL statement above to inspect rows or affected counts.")
+                        }
+
+                        ToolEmptyState {
+                            anchors.centerIn: parent
+                            visible: client.status === PierPostgresClient.Connected
+                                     && client.lastError.length === 0
+                                     && client.resultColumnCount === 0
+                                     && client.lastAffectedRows > 0
+                            icon: "check"
+                            title: qsTr("%1 rows affected").arg(client.lastAffectedRows)
+                            description: qsTr("The latest statement completed successfully.")
+                        }
+
+                        Text {
+                            anchors.centerIn: parent
+                            visible: client.status === PierPostgresClient.Connected
+                                     && client.busy
+                            text: qsTr("Running query…")
+                            font.family: Theme.fontUi
+                            font.pixelSize: Theme.sizeBody
                             color: Theme.textSecondary
-                            elide: Text.ElideRight
                         }
                     }
                 }
 
-                TableView {
-                    id: resultTable
-                    Layout.fillWidth: true; Layout.fillHeight: true
-                    clip: true; model: client.resultModel
-                    columnSpacing: 0; rowSpacing: 0; reuseItems: true
-                    delegate: Rectangle {
-                        implicitHeight: 22; implicitWidth: 120
-                        required property var display
-                        required property bool isNull
-                        color: "transparent"
-                        border.color: Theme.borderSubtle; border.width: 1
-                        Text {
-                            anchors.fill: parent
-                            anchors.leftMargin: Theme.sp2; anchors.rightMargin: Theme.sp2
-                            verticalAlignment: Text.AlignVCenter
-                            text: parent.isNull ? "NULL" : (parent.display !== undefined ? parent.display : "")
-                            font.family: Theme.fontMono
-                            font.pixelSize: Theme.sizeCaption
-                            color: parent.isNull ? Theme.textTertiary : Theme.textPrimary
-                            font.italic: parent.isNull
-                            elide: Text.ElideRight
-                        }
-                    }
-                }
-            }
-
-            // DML success
-            Text {
-                anchors.centerIn: parent
-                visible: client.lastError.length === 0
-                         && client.resultColumnCount === 0
-                         && client.lastAffectedRows > 0
-                text: qsTr("%1 rows affected").arg(client.lastAffectedRows)
-                font.family: Theme.fontUi; font.pixelSize: Theme.sizeBody
-                color: Theme.statusSuccess
-            }
-
-            // Empty placeholder
-            Text {
-                anchors.centerIn: parent
-                visible: client.status === PierPostgresClient.Connected
-                         && !client.busy
-                         && client.lastError.length === 0
-                         && client.resultColumnCount === 0
-                         && client.lastAffectedRows === 0
-                text: qsTr("Type SQL above and press Ctrl+Enter to run")
-                font.family: Theme.fontUi; font.pixelSize: Theme.sizeBody
-                color: Theme.textTertiary
-            }
-        }
-
-        // ─── Footer ──────────────────────────────────────
-        Rectangle {
-            Layout.fillWidth: true
-            implicitHeight: 20; color: "transparent"
-            RowLayout {
-                anchors.fill: parent; spacing: Theme.sp3
-                Text {
+                ToolBanner {
+                    Layout.fillWidth: true
+                    tone: client.lastTruncated ? "warning" : "neutral"
                     text: client.resultRowCount > 0
                           ? _rowLabel(client.resultRowCount) + (client.lastTruncated ? qsTr(" (truncated)") : "")
                           : (client.lastAffectedRows > 0 ? qsTr("%1 affected").arg(client.lastAffectedRows) : "")
-                    font.family: Theme.fontMono; font.pixelSize: Theme.sizeCaption
-                    color: client.lastTruncated ? Theme.statusWarning : Theme.textTertiary
-                }
-                Item { Layout.fillWidth: true }
-                Text {
-                    visible: client.lastElapsedMs > 0
-                    text: qsTr("%1 ms").arg(client.lastElapsedMs)
-                    font.family: Theme.fontMono; font.pixelSize: Theme.sizeCaption
-                    color: Theme.textTertiary
-                }
-                Text {
-                    visible: client.databases.length > 0
-                    text: qsTr("%1 dbs").arg(client.databases.length)
-                    font.family: Theme.fontMono; font.pixelSize: Theme.sizeCaption
-                    color: Theme.textTertiary
+
+                    Text {
+                        visible: client.lastElapsedMs > 0
+                        text: qsTr("%1 ms").arg(client.lastElapsedMs)
+                        font.family: Theme.fontMono
+                        font.pixelSize: Theme.sizeCaption
+                        color: Theme.textTertiary
+                    }
+
+                    Text {
+                        visible: client.databases.length > 0
+                        text: qsTr("%1 dbs").arg(client.databases.length)
+                        font.family: Theme.fontMono
+                        font.pixelSize: Theme.sizeCaption
+                        color: Theme.textTertiary
+                    }
                 }
             }
         }

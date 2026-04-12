@@ -586,9 +586,18 @@ mod tests {
     fn parse_info_drops_section_headers_and_blanks() {
         let raw = "# Server\r\nredis_version:7.2.4\r\nredis_mode:standalone\r\n\r\n# Clients\r\nconnected_clients:12\r\n";
         let parsed = parse_info(raw);
-        assert_eq!(parsed.get("redis_version").map(|s| s.as_str()), Some("7.2.4"));
-        assert_eq!(parsed.get("redis_mode").map(|s| s.as_str()), Some("standalone"));
-        assert_eq!(parsed.get("connected_clients").map(|s| s.as_str()), Some("12"));
+        assert_eq!(
+            parsed.get("redis_version").map(|s| s.as_str()),
+            Some("7.2.4")
+        );
+        assert_eq!(
+            parsed.get("redis_mode").map(|s| s.as_str()),
+            Some("standalone")
+        );
+        assert_eq!(
+            parsed.get("connected_clients").map(|s| s.as_str()),
+            Some("12")
+        );
         assert!(!parsed.contains_key("# Server"));
     }
 

@@ -260,7 +260,9 @@ mod tests {
     #[test]
     fn parse_uptime_extracts_load_averages() {
         let mut snap = ServerSnapshot {
-            load_1: -1.0, load_5: -1.0, load_15: -1.0,
+            load_1: -1.0,
+            load_5: -1.0,
+            load_15: -1.0,
             ..Default::default()
         };
         parse_uptime(

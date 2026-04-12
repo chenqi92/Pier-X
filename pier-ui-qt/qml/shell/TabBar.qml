@@ -66,13 +66,14 @@ Rectangle {
 
     RowLayout {
         anchors.fill: parent
-        anchors.leftMargin: Theme.sp2
-        anchors.rightMargin: Theme.sp2
-        spacing: Theme.sp1
+        anchors.leftMargin: Theme.sp1
+        anchors.rightMargin: Theme.sp1
+        spacing: Theme.sp0_5
 
         IconButton {
             visible: root.hasOverflow
             enabled: root.canScrollLeft
+            compact: true
             icon: "arrow-left"
             tooltip: qsTr("Scroll tabs left")
             onClicked: root.scrollTabs(-Math.max(tabContainer.width * 0.72, 160))
@@ -88,7 +89,7 @@ Rectangle {
             contentHeight: height
             flickableDirection: Flickable.HorizontalFlick
             boundsBehavior: Flickable.StopAtBounds
-            ScrollBar.horizontal: ScrollBar { height: 0; active: false; visible: false }
+            ScrollBar.horizontal: PierScrollBar { height: 0; active: false; visible: false }
             NumberAnimation on contentX { duration: Theme.durNormal; easing.type: Theme.easingType }
 
             property int dragFromIndex: -1
@@ -97,7 +98,7 @@ Rectangle {
             Row {
                 id: tabRow
                 height: tabContainer.height
-                spacing: Theme.sp1
+                spacing: Theme.sp0_5
 
                 Repeater {
                     id: tabRepeater
@@ -241,59 +242,48 @@ Rectangle {
         color: Theme.borderSubtle
     }
 
-    Popup {
+    PopoverPanel {
         id: tabContextMenu
         width: 224
-        modal: false
-        focus: true
-        padding: Theme.sp1
-        closePolicy: Popup.CloseOnEscape | Popup.CloseOnPressOutside
-
-        background: Rectangle {
-            color: Theme.bgElevated
-            border.color: Theme.borderDefault
-            border.width: 1
-            radius: Theme.radiusLg
-        }
 
         onClosed: root.contextTabIndex = -1
 
         contentItem: Column {
             spacing: Theme.sp0_5
 
-            TabMenuItem {
-                text: qsTr("Close")
-                enabled: root.contextTabIndex >= 0
-                onClicked: {
+                PierMenuItem {
+                    text: qsTr("Close")
+                    enabled: root.contextTabIndex >= 0
+                    onClicked: {
                     const index = root.contextTabIndex
                     tabContextMenu.close()
                     root.tabClosed(index)
                 }
             }
 
-            TabMenuItem {
-                text: qsTr("Close others")
-                enabled: root.contextTabIndex >= 0 && root.model && root.model.count > 1
-                onClicked: {
+                PierMenuItem {
+                    text: qsTr("Close others")
+                    enabled: root.contextTabIndex >= 0 && root.model && root.model.count > 1
+                    onClicked: {
                     const index = root.contextTabIndex
                     tabContextMenu.close()
                     root.closeOtherTabsRequested(index)
                 }
             }
 
-            TabMenuItem {
-                text: qsTr("Close tabs to the left")
-                enabled: root.contextTabIndex > 0
-                onClicked: {
+                PierMenuItem {
+                    text: qsTr("Close tabs to the left")
+                    enabled: root.contextTabIndex > 0
+                    onClicked: {
                     const index = root.contextTabIndex
                     tabContextMenu.close()
                     root.closeTabsToLeftRequested(index)
                 }
             }
 
-            TabMenuItem {
-                text: qsTr("Close tabs to the right")
-                enabled: root.contextTabIndex >= 0
+                PierMenuItem {
+                    text: qsTr("Close tabs to the right")
+                    enabled: root.contextTabIndex >= 0
                          && root.model
                          && root.contextTabIndex < root.model.count - 1
                 onClicked: {
@@ -402,20 +392,9 @@ Rectangle {
         }
     }
 
-    Popup {
+    PopoverPanel {
         id: overflowMenu
         width: 280
-        modal: false
-        focus: true
-        padding: Theme.sp1
-        closePolicy: Popup.CloseOnEscape | Popup.CloseOnPressOutside
-
-        background: Rectangle {
-            color: Theme.bgElevated
-            border.color: Theme.borderDefault
-            border.width: 1
-            radius: Theme.radiusLg
-        }
 
         contentItem: Column {
             spacing: Theme.sp0_5
@@ -423,7 +402,7 @@ Rectangle {
             Repeater {
                 model: root.model
 
-                TabMenuItem {
+                PierMenuItem {
                     required property string title
                     required property int index
 
@@ -436,42 +415,6 @@ Rectangle {
                     }
                 }
             }
-        }
-    }
-
-    component TabMenuItem: Rectangle {
-        id: menuItem
-
-        property string text: ""
-        property bool active: false
-        signal clicked()
-
-        implicitWidth: 224
-        implicitHeight: Theme.controlHeight
-        radius: Theme.radiusSm
-        color: active ? Theme.bgSelected : menuArea.containsMouse ? Theme.bgHover : "transparent"
-        opacity: enabled ? 1.0 : 0.48
-
-        Text {
-            anchors.fill: parent
-            anchors.leftMargin: Theme.sp3
-            anchors.rightMargin: Theme.sp3
-            verticalAlignment: Text.AlignVCenter
-            elide: Text.ElideRight
-            text: menuItem.text
-            font.family: Theme.fontUi
-            font.pixelSize: Theme.sizeBody
-            font.weight: active ? Theme.weightMedium : Theme.weightRegular
-            color: active ? Theme.textPrimary : Theme.textSecondary
-        }
-
-        MouseArea {
-            id: menuArea
-            anchors.fill: parent
-            hoverEnabled: true
-            enabled: menuItem.enabled
-            cursorShape: menuItem.enabled ? Qt.PointingHandCursor : Qt.ArrowCursor
-            onClicked: menuItem.clicked()
         }
     }
 

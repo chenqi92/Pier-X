@@ -101,33 +101,63 @@ Rectangle {
         anchors.margins: Theme.sp3
         spacing: Theme.sp2
 
-        // ─── Path bar ────────────────────────────────────
         ToolPanelSurface {
             Layout.fillWidth: true
-            implicitHeight: 40
             padding: Theme.sp2
+            implicitHeight: sftpHeader.implicitHeight + Theme.sp2 * 2
 
-            RowLayout {
+            ColumnLayout {
+                id: sftpHeader
                 anchors.fill: parent
                 spacing: Theme.sp2
 
-                IconButton {
-                    icon: "arrow-left"
-                    tooltip: qsTr("Go up")
-                    onClicked: browser.navigateUp()
-                    enabled: browser.currentPath !== "/" && browser.currentPath.length > 0
+                ToolSectionHeader {
+                    Layout.fillWidth: true
+                    title: qsTr("SFTP")
+                    subtitle: browser.target.length > 0 ? browser.target : qsTr("Remote Files")
+
+                    IconButton {
+                        compact: true
+                        icon: "arrow-left"
+                        tooltip: qsTr("Go up")
+                        onClicked: browser.navigateUp()
+                        enabled: browser.currentPath !== "/" && browser.currentPath.length > 0
+                    }
+
+                    IconButton {
+                        compact: true
+                        icon: "refresh-cw"
+                        tooltip: qsTr("Refresh")
+                        onClicked: browser.refresh()
+                        enabled: browser.status === PierSftpBrowser.Connected
+                    }
                 }
 
-                Rectangle {
+                Flow {
                     Layout.fillWidth: true
-                    implicitHeight: 28
-                    color: Theme.bgSurface
-                    border.color: Theme.borderDefault
-                    border.width: 1
-                    radius: Theme.radiusSm
+                    spacing: Theme.sp2
 
-                    Behavior on color        { ColorAnimation { duration: Theme.durNormal } }
-                    Behavior on border.color { ColorAnimation { duration: Theme.durNormal } }
+                    StatusPill {
+                        text: browser.status === PierSftpBrowser.Connected
+                              ? qsTr("Connected")
+                              : (browser.status === PierSftpBrowser.Connecting
+                                 ? qsTr("Connecting")
+                                 : qsTr("Idle"))
+                        tone: browser.status === PierSftpBrowser.Connected ? "info" : "neutral"
+                    }
+
+                    StatusPill {
+                        visible: listView.count > 0
+                        text: qsTr("%1 entries").arg(listView.count)
+                        tone: "neutral"
+                    }
+                }
+
+                ToolPanelSurface {
+                    Layout.fillWidth: true
+                    inset: true
+                    padding: Theme.sp0
+                    implicitHeight: 30
 
                     Text {
                         anchors.verticalCenter: parent.verticalCenter
@@ -143,13 +173,6 @@ Rectangle {
 
                         Behavior on color { ColorAnimation { duration: Theme.durNormal } }
                     }
-                }
-
-                IconButton {
-                    icon: "refresh-cw"
-                    tooltip: qsTr("Refresh")
-                    onClicked: browser.refresh()
-                    enabled: browser.status === PierSftpBrowser.Connected
                 }
             }
         }
@@ -170,86 +193,93 @@ Rectangle {
                     subtitle: browser.currentPath.length > 0 ? browser.currentPath : qsTr("Waiting for directory listing.")
                 }
 
-                ListView {
-                    id: listView
+                ToolPanelSurface {
                     Layout.fillWidth: true
                     Layout.fillHeight: true
-                    clip: true
-                    model: browser
+                    inset: true
+                    padding: Theme.sp1_5
 
-                    delegate: Rectangle {
-                        id: entry
-                        required property int index
-                        required property string name
-                        required property string path
-                        required property bool isDir
-                        required property bool isLink
-                        required property var size
+                    ListView {
+                        id: listView
+                        anchors.fill: parent
+                        clip: true
+                        boundsBehavior: Flickable.StopAtBounds
+                        model: browser
 
-                        width: ListView.view.width
-                        implicitHeight: 26
-                        color: mouseArea.containsMouse ? Theme.bgHover : "transparent"
-                        radius: Theme.radiusSm
+                        delegate: Rectangle {
+                            id: entry
+                            required property int index
+                            required property string name
+                            required property string path
+                            required property bool isDir
+                            required property bool isLink
+                            required property var size
 
-                        Behavior on color { ColorAnimation { duration: Theme.durFast } }
+                            width: ListView.view.width
+                            implicitHeight: 28
+                            color: mouseArea.containsMouse ? Theme.bgHover : "transparent"
+                            radius: Theme.radiusSm
 
-                        RowLayout {
-                            anchors.fill: parent
-                            anchors.leftMargin: Theme.sp2
-                            anchors.rightMargin: Theme.sp2
-                            spacing: Theme.sp2
+                            Behavior on color { ColorAnimation { duration: Theme.durFast } }
 
-                            Image {
-                                source: entry.isDir
-                                        ? "qrc:/qt/qml/Pier/resources/icons/lucide/folder.svg"
-                                        : (entry.isLink
-                                           ? "qrc:/qt/qml/Pier/resources/icons/lucide/link.svg"
-                                           : "qrc:/qt/qml/Pier/resources/icons/lucide/file-text.svg")
-                                sourceSize: Qt.size(14, 14)
-                                Layout.alignment: Qt.AlignVCenter
-                                layer.enabled: true
-                                layer.effect: MultiEffect {
-                                    colorization: 1.0
-                                    colorizationColor: entry.isDir ? Theme.accent : Theme.textTertiary
+                            RowLayout {
+                                anchors.fill: parent
+                                anchors.leftMargin: Theme.sp2
+                                anchors.rightMargin: Theme.sp2
+                                spacing: Theme.sp2
+
+                                Image {
+                                    source: entry.isDir
+                                            ? "qrc:/qt/qml/Pier/resources/icons/lucide/folder.svg"
+                                            : (entry.isLink
+                                               ? "qrc:/qt/qml/Pier/resources/icons/lucide/link.svg"
+                                               : "qrc:/qt/qml/Pier/resources/icons/lucide/file-text.svg")
+                                    sourceSize: Qt.size(14, 14)
+                                    Layout.alignment: Qt.AlignVCenter
+                                    layer.enabled: true
+                                    layer.effect: MultiEffect {
+                                        colorization: 1.0
+                                        colorizationColor: entry.isDir ? Theme.accent : Theme.textTertiary
+                                    }
+                                }
+
+                                Text {
+                                    Layout.fillWidth: true
+                                    text: entry.name
+                                    font.family: Theme.fontUi
+                                    font.pixelSize: Theme.sizeBody
+                                    font.weight: entry.isDir
+                                                 ? Theme.weightMedium
+                                                 : Theme.weightRegular
+                                    color: Theme.textPrimary
+                                    elide: Text.ElideRight
+
+                                    Behavior on color { ColorAnimation { duration: Theme.durNormal } }
+                                }
+
+                                Text {
+                                    visible: !entry.isDir && entry.size > 0
+                                    text: formatSize(entry.size)
+                                    font.family: Theme.fontMono
+                                    font.pixelSize: Theme.sizeCaption
+                                    color: Theme.textTertiary
+                                    Layout.alignment: Qt.AlignRight
+
+                                    Behavior on color { ColorAnimation { duration: Theme.durNormal } }
                                 }
                             }
 
-                            Text {
-                                Layout.fillWidth: true
-                                text: entry.name
-                                font.family: Theme.fontUi
-                                font.pixelSize: Theme.sizeBody
-                                font.weight: entry.isDir
-                                             ? Theme.weightMedium
-                                             : Theme.weightRegular
-                                color: Theme.textPrimary
-                                elide: Text.ElideRight
-
-                                Behavior on color { ColorAnimation { duration: Theme.durNormal } }
-                            }
-
-                            Text {
-                                visible: !entry.isDir && entry.size > 0
-                                text: formatSize(entry.size)
-                                font.family: Theme.fontMono
-                                font.pixelSize: Theme.sizeCaption
-                                color: Theme.textTertiary
-                                Layout.alignment: Qt.AlignRight
-
-                                Behavior on color { ColorAnimation { duration: Theme.durNormal } }
-                            }
-                        }
-
-                        MouseArea {
-                            id: mouseArea
-                            anchors.fill: parent
-                            hoverEnabled: true
-                            cursorShape: entry.isDir
-                                         ? Qt.PointingHandCursor
-                                         : Qt.ArrowCursor
-                            onDoubleClicked: {
-                                if (entry.isDir) {
-                                    browser.listDir(entry.path)
+                            MouseArea {
+                                id: mouseArea
+                                anchors.fill: parent
+                                hoverEnabled: true
+                                cursorShape: entry.isDir
+                                             ? Qt.PointingHandCursor
+                                             : Qt.ArrowCursor
+                                onDoubleClicked: {
+                                    if (entry.isDir) {
+                                        browser.listDir(entry.path)
+                                    }
                                 }
                             }
                         }
@@ -280,6 +310,12 @@ Rectangle {
 
                 Behavior on color { ColorAnimation { duration: Theme.durNormal } }
             }
+        }
+
+        ToolBanner {
+            Layout.fillWidth: true
+            tone: "neutral"
+            text: qsTr("%1 entries").arg(listView.count)
         }
     }
 

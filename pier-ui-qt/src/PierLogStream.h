@@ -35,6 +35,7 @@
 #include <QAbstractListModel>
 #include <QObject>
 #include <QPointer>
+#include <QProcess>
 #include <QRegularExpression>
 #include <QString>
 #include <QTimer>
@@ -156,6 +157,7 @@ public slots:
                    int authKind, const QString &secret, const QString &extra,
                    const QString &command);
     bool connectToSession(QObject *sessionHandle, const QString &command);
+    bool connectLocal(const QString &command);
 
     /// Drop every row currently in the model.
     void clear();
@@ -194,6 +196,7 @@ private:
     static Level detectLevel(Kind kind, const QString &text);
 
     ::PierLogStream *m_handle = nullptr;
+    QProcess *m_localProcess = nullptr;
     std::deque<Row> m_rows;
     std::vector<int> m_visibleRows;
 

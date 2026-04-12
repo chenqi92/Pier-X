@@ -237,7 +237,12 @@ impl SshSession {
                     russh::ChannelMsg::ExitStatus { exit_status } => {
                         exit_for_task.store(exit_status as i32, Ordering::Release);
                     }
-                    russh::ChannelMsg::Eof | russh::ChannelMsg::Close => break,
+                    russh::ChannelMsg::Eof | russh::ChannelMsg::Close => {
+                        // Match `SshSession::exec_command()`: a
+                        // few servers send Close before the final
+                        // ExitStatus, so keep draining until
+                        // `channel.wait()` returns None.
+                    }
                     _ => {}
                 }
             }
@@ -271,11 +276,7 @@ impl SshSession {
 /// Pull complete lines (ending in `\n`) out of `buf`, decoding
 /// each as UTF-8 with lossy fallback, wrapping in `ctor`, and
 /// sending through `tx`. Partial tail remains in `buf`.
-fn drain_lines(
-    buf: &mut Vec<u8>,
-    tx: &mpsc::Sender<ExecEvent>,
-    ctor: fn(String) -> ExecEvent,
-) {
+fn drain_lines(buf: &mut Vec<u8>, tx: &mpsc::Sender<ExecEvent>, ctor: fn(String) -> ExecEvent) {
     loop {
         let Some(nl_idx) = buf.iter().position(|&b| b == b'\n') else {
             return;
@@ -299,11 +300,7 @@ fn drain_lines(
 
 /// Flush any remaining bytes in `buf` as a single (possibly
 /// newline-less) line, then clear the buffer.
-fn flush_partial(
-    buf: &mut Vec<u8>,
-    tx: &mpsc::Sender<ExecEvent>,
-    ctor: fn(String) -> ExecEvent,
-) {
+fn flush_partial(buf: &mut Vec<u8>, tx: &mpsc::Sender<ExecEvent>, ctor: fn(String) -> ExecEvent) {
     if buf.is_empty() {
         return;
     }

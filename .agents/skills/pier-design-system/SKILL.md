@@ -244,6 +244,61 @@ shadow.modal (L5)
   inset 0 1px 0 rgba(255,255,255,0.06)
 ```
 
+---
+
+## Implementation Protocol
+
+Pier-X must not style pages by composing raw Qt controls ad hoc. All new UI work must follow this order:
+
+1. Use tokens from `pier-ui-qt/qml/Theme.qml`
+2. Prefer an existing control in `pier-ui-qt/qml/components/`
+3. If no fitting control exists, create a new reusable component in `qml/components/`
+4. Only then use that component in feature pages
+
+### Foundation control whitelist
+
+Use these controls by default:
+
+- Buttons: `PrimaryButton`, `GhostButton`, `IconButton`
+- Inputs: `PierTextField`, `PierTextArea`, `PierSearchField`, `PierComboBox`, `PierScrollView`, `ToggleSwitch`, `PierSlider`
+- Surfaces: `Card`, `ToolPanelSurface`, `ModalDialogShell`, `PopoverPanel`
+- Utility: `SegmentedControl`, `StatusPill`, `PierToolTip`, `PierMenuItem`, `PierScrollBar`
+
+### Forbidden in feature pages
+
+Do not instantiate these directly in page/view/dialog files:
+
+- `Popup`
+- `TextField`
+- `TextArea`
+- `TextInput`
+- `ScrollView`
+- `ScrollBar`
+- page-local menu row rectangles
+- one-off slider styling
+
+### Allowed exceptions
+
+- Native application menu bar entries may use `MenuBar` and `MenuItem`
+- Foundation wrapper components may internally use raw Qt controls where necessary:
+  - `PopoverPanel.qml`
+  - `PierComboBox.qml`
+  - `PierTextArea.qml`
+  - `PierTextField.qml`
+  - `PierSearchField.qml`
+  - `PierScrollView.qml`
+  - `PierSlider.qml`
+  - `PierScrollBar.qml`
+
+### Review gate
+
+Reject any UI change that:
+
+- introduces new page-local control styling already covered by a foundation control
+- adds a second accent color
+- uses a solid dark-on-dark border
+- uses oversized spacing or marketing-page typography
+
 ### 6.3 阴影定义（浅色主题）
 
 ```

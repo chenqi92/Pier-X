@@ -2,6 +2,7 @@ import QtQuick
 import QtQuick.Controls
 import QtQuick.Layouts
 import Pier
+import "../components"
 
 // MySQL client panel — M5d per-service tool. Final M5 slice.
 //
@@ -120,19 +121,17 @@ Rectangle {
             Behavior on color        { ColorAnimation { duration: Theme.durNormal } }
             Behavior on border.color { ColorAnimation { duration: Theme.durFast } }
 
-            ScrollView {
+            PierScrollView {
                 anchors.fill: parent
                 anchors.margins: Theme.sp2
                 clip: true
 
-                TextArea {
+                PierTextArea {
                     id: sqlEditor
+                    frameVisible: false
+                    mono: true
                     placeholderText: qsTr("SELECT * FROM … ")
                     wrapMode: TextArea.WrapAtWordBoundaryOrAnywhere
-                    font.family: Theme.fontMono
-                    font.pixelSize: Theme.sizeBody
-                    color: Theme.textPrimary
-                    background: Rectangle { color: "transparent" }
                     selectByMouse: true
 
                     // Ctrl/Cmd+Enter runs the query. Fall back
@@ -146,8 +145,6 @@ Rectangle {
                             client.execute(sqlEditor.text)
                         }
                     }
-
-                    Behavior on color { ColorAnimation { duration: Theme.durNormal } }
                 }
             }
 

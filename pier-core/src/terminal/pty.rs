@@ -140,7 +140,9 @@ mod unix {
                 if let Ok(home) = std::env::var("HOME") {
                     if let Ok(home_c) = std::ffi::CString::new(home) {
                         // SAFETY: chdir with a valid NUL-terminated path.
-                        unsafe { libc::chdir(home_c.as_ptr()); }
+                        unsafe {
+                            libc::chdir(home_c.as_ptr());
+                        }
                     }
                 }
 
@@ -153,7 +155,10 @@ mod unix {
                 };
                 let args_c: Vec<std::ffi::CString> = std::iter::once(program.to_string())
                     .chain(args.iter().map(|s| s.to_string()))
-                    .map(|s| std::ffi::CString::new(s).unwrap_or_else(|_| std::ffi::CString::new("").unwrap()))
+                    .map(|s| {
+                        std::ffi::CString::new(s)
+                            .unwrap_or_else(|_| std::ffi::CString::new("").unwrap())
+                    })
                     .collect();
                 let args_ptrs: Vec<*const libc::c_char> = args_c
                     .iter()
@@ -252,9 +257,8 @@ mod unix {
                 ws_ypixel: 0,
             };
             // SAFETY: TIOCSWINSZ takes a struct winsize*; we pass our own.
-            let result = unsafe {
-                libc::ioctl(self.master_fd.as_raw_fd(), libc::TIOCSWINSZ, &win_size)
-            };
+            let result =
+                unsafe { libc::ioctl(self.master_fd.as_raw_fd(), libc::TIOCSWINSZ, &win_size) };
             if result < 0 {
                 Err(TerminalError::Io(io::Error::last_os_error()))
             } else {
@@ -330,11 +334,7 @@ mod windows_impl {
             Err(TerminalError::Unsupported)
         }
 
-        pub fn spawn_shell(
-            _cols: u16,
-            _rows: u16,
-            _shell: &str,
-        ) -> Result<Self, TerminalError> {
+        pub fn spawn_shell(_cols: u16, _rows: u16, _shell: &str) -> Result<Self, TerminalError> {
             Err(TerminalError::Unsupported)
         }
     }
@@ -380,8 +380,8 @@ mod tests {
 
     #[test]
     fn spawn_echo_captures_output() {
-        let mut pty = UnixPty::spawn(80, 24, "/bin/echo", &["hello-pier"])
-            .expect("forkpty spawn failed");
+        let mut pty =
+            UnixPty::spawn(80, 24, "/bin/echo", &["hello-pier"]).expect("forkpty spawn failed");
         assert_eq!(pty.size(), (80, 24));
         let out = drain_until(&mut pty, Duration::from_secs(2));
         let s = String::from_utf8_lossy(&out);
@@ -395,8 +395,7 @@ mod tests {
     #[test]
     fn resize_updates_size_accessor() {
         // /bin/cat with no args stays alive on stdin until we drop.
-        let mut pty = UnixPty::spawn(80, 24, "/bin/cat", &[])
-            .expect("forkpty spawn failed");
+        let mut pty = UnixPty::spawn(80, 24, "/bin/cat", &[]).expect("forkpty spawn failed");
         assert_eq!(pty.size(), (80, 24));
         pty.resize(120, 40).expect("resize failed");
         assert_eq!(pty.size(), (120, 40));
@@ -407,8 +406,7 @@ mod tests {
     fn write_roundtrips_through_cat() {
         // cat echoes its stdin back on stdout through the pty, which
         // gives us a simple loopback to prove write+read work.
-        let mut pty = UnixPty::spawn(80, 24, "/bin/cat", &[])
-            .expect("forkpty spawn failed");
+        let mut pty = UnixPty::spawn(80, 24, "/bin/cat", &[]).expect("forkpty spawn failed");
         let msg = b"pier-x-roundtrip\n";
         let n = pty.write(msg).expect("write failed");
         assert_eq!(n, msg.len());

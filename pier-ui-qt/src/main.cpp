@@ -1,3 +1,4 @@
+#include <QElapsedTimer>
 #include <QFontDatabase>
 #include <QGuiApplication>
 #include <QIcon>
@@ -6,11 +7,13 @@
 #include <QQmlApplicationEngine>
 #include <QQuickStyle>
 #include <QStyleHints>
-#include <QTranslator>
 #include <QVariant>
 #include <QWindow>
 
+#include "PierI18n.h"
 #include "PierNativeWindow.h"
+#include "PierProfiler.h"
+#include "PierUpdater.h"
 
 namespace {
 
@@ -31,6 +34,11 @@ void syncSystemThemeToQml(QQmlApplicationEngine &engine)
 
 int main(int argc, char *argv[])
 {
+    // ── Startup timer ─────────────────────────────────
+    // Capture wall-clock time from process start to QML ready.
+    QElapsedTimer startupTimer;
+    startupTimer.start();
+
     QGuiApplication app(argc, argv);
 
     QGuiApplication::setApplicationName("Pier-X");
@@ -41,14 +49,12 @@ int main(int argc, char *argv[])
     QGuiApplication::setWindowIcon(QIcon(QStringLiteral(":/qt/qml/Pier/resources/icons/pier.png")));
 
     // ── i18n ──────────────────────────────────────────
-    // Load the compiled .qm translation that matches the system locale.
-    // qt_add_translations embeds them under :/i18n/pier-x_<locale>.qm.
-    QTranslator translator;
-    const QLocale locale;
-    if (translator.load(locale, QStringLiteral("pier-x"),
-                        QStringLiteral("_"), QStringLiteral(":/i18n"))) {
-        QGuiApplication::installTranslator(&translator);
-    }
+    // PierI18n is a QML_SINGLETON that manages the translator
+    // lifecycle. We pass the app + engine pointers so the
+    // singleton can install/remove QTranslator at runtime and
+    // call engine->retranslate() when the user switches language.
+    // The singleton itself is instantiated by the QML engine during
+    // loadFromModule; init() just stores the pointers.
 
     // ── Bundled fonts ─────────────────────────────────
     // Guarantees Inter + JetBrains Mono are available even when
@@ -70,6 +76,11 @@ int main(int argc, char *argv[])
 
     QQmlApplicationEngine engine;
 
+    // Give PierI18n access to app + engine before the QML tree
+    // is instantiated — the singleton factory will use these to
+    // install the initial translator matching the saved language.
+    PierI18n::init(&app, &engine);
+
     QObject::connect(
         &engine,
         &QQmlApplicationEngine::objectCreationFailed,
@@ -78,6 +89,15 @@ int main(int argc, char *argv[])
         Qt::QueuedConnection);
 
     engine.loadFromModule("Pier", "Main");
+
+    // ── i18n post-init ───────────────────────────────
+    // Retranslate the QML tree now that it's fully loaded.
+    // This catches any qsTr() bindings that evaluated before
+    // the translator was installed.
+    PierI18n::postInit();
+
+    // ── Startup profiling ─────────────────────────────
+    PierProfiler::setStartupElapsed(startupTimer.elapsed());
 
     // ── Frameless chrome (macOS) ──────────────────────
     // Apply native window adjustments (transparent title bar +
@@ -93,6 +113,11 @@ int main(int argc, char *argv[])
             }
         }
     }
+
+    // ── Auto-update ───────────────────────────────────
+    // Initialize platform-specific update framework (Sparkle on
+    // macOS, WinSparkle on Windows). No-op on other platforms.
+    PierUpdater::initialize();
 
     // Initial sync after the engine has loaded the singleton, then live-sync
     // on subsequent OS color scheme changes.

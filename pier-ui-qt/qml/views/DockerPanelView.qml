@@ -2,61 +2,90 @@ import QtQuick
 import QtQuick.Controls
 import QtQuick.Layouts
 import Pier
+import "../components"
 
-// Docker container panel — M5c per-service tool.
-//
-// Layout
-// ──────
-//   ┌───────────────────────────────────────────────────┐
-//   │ user@host     [show stopped ✓]  [↻ Refresh]       │  top bar
-//   ├───────────────────────────────────────────────────┤
-//   │ ● web         nginx:stable      Up 5m   [▶][⏸][↻][📜][✕]
-//   │ ● cache       redis:7-alpine    Up 5m   ...
-//   │ ○ db          postgres:16       Exited  ...
-//   │ ...                                               │
-//   └───────────────────────────────────────────────────┘
-//
-// Click a row's "logs" button to open a new Log viewer tab
-// that runs `docker logs -f --tail 500 <id>`.
-//
-// Backend params mirror TerminalView / SftpBrowserView so
-// the Main.qml Loader delegate can dispatch uniformly.
 Rectangle {
     id: root
 
     clip: true
+    color: Theme.bgCanvas
+    focus: true
+    activeFocusOnTab: true
+
     property var sharedSession: null
     property string sshHost: ""
-    property int    sshPort: 22
+    property int sshPort: 22
     property string sshUser: ""
     property string sshPassword: ""
     property string sshCredentialId: ""
     property string sshKeyPath: ""
     property string sshPassphraseCredentialId: ""
-    property bool   sshUsesAgent: false
+    property bool sshUsesAgent: false
 
-    color: Theme.bgCanvas
-    focus: true
-    activeFocusOnTab: true
+    readonly property var tabLabels: [
+        qsTr("Containers"),
+        qsTr("Images"),
+        qsTr("Volumes"),
+        qsTr("Networks"),
+        qsTr("Compose")
+    ]
+    readonly property var restartLabels: [
+        qsTr("No restart"),
+        qsTr("Always"),
+        qsTr("On failure"),
+        qsTr("Unless stopped")
+    ]
+    readonly property var restartValues: [
+        "no",
+        "always",
+        "on-failure",
+        "unless-stopped"
+    ]
+    readonly property var networkDrivers: [
+        "bridge",
+        "overlay",
+        "macvlan",
+        "ipvlan"
+    ]
+
+    property int currentTab: 0
+    property string feedbackText: ""
+    property string feedbackTone: "neutral"
+    property string pendingDeleteId: ""
+
+    property string inspectKind: ""
+    property string inspectKey: ""
+    property string inspectTitle: ""
+    property string inspectSubtitle: ""
+    property var inspectFacts: []
+
+    property string pullImageName: ""
+    property string networkName: ""
+    property int networkDriverIndex: 0
+    property string composeFilePath: ""
+
+    property bool runDialogOpen: false
+    property string runImageRef: ""
+    property string runContainerName: ""
+    property string runPortsText: ""
+    property string runEnvText: ""
+    property string runVolumesText: ""
+    property string runCommand: ""
+    property int runRestartIndex: 0
 
     Behavior on color { ColorAnimation { duration: Theme.durNormal } }
 
     PierDockerClient {
         id: client
-        onActionFinished: (ok, message) => {
-            if (!ok) console.warn("docker action:", message)
-        }
+        onActionFinished: (ok, message) => root._showFeedback(ok, message)
     }
 
-    // The delete-confirm row state lives up here so it
-    // survives the ListView delegate's reuseItems recycle.
-    property string pendingDeleteId: ""
-    property string inspectId: ""
-    property string inspectName: ""
-    property string inspectImage: ""
-    property string inspectStatus: ""
-    property string inspectPorts: ""
-    property string inspectState: ""
+    Timer {
+        id: feedbackTimer
+        interval: 3200
+        repeat: false
+        onTriggered: root.feedbackText = ""
+    }
 
     Component.onCompleted: Qt.callLater(_dispatchConnect)
 
@@ -68,19 +97,37 @@ Rectangle {
         }
     }
 
+    Connections {
+        target: client
+        function onStatusChanged() {
+            if (client.status === PierDockerClient.Connected && root.currentTab !== 0)
+                root._refreshCurrentTab()
+        }
+    }
+
+    function _showFeedback(ok, message) {
+        if (!message || message.length === 0)
+            return
+        root.feedbackText = message
+        root.feedbackTone = ok ? "success" : "error"
+        feedbackTimer.restart()
+    }
+
     function _dispatchConnect() {
         if (client.status === PierDockerClient.Connecting
                 || client.status === PierDockerClient.Connected)
             return
+
         if (root.sharedSession && root.sharedSession.connected) {
             client.connectToSession(root.sharedSession)
             return
         }
+
         if (root.sshHost.length === 0 || root.sshUser.length === 0) {
-            // No SSH context — connect to local Docker
             client.connectLocal()
             return
         }
+
         var kind = 0
         var secret = ""
         var extra = ""
@@ -97,14 +144,78 @@ Rectangle {
             kind = 0
             secret = root.sshPassword
         }
-        client.connectTo(root.sshHost, root.sshPort, root.sshUser,
-                         kind, secret, extra)
+        client.connectTo(root.sshHost, root.sshPort, root.sshUser, kind, secret, extra)
     }
 
-    // Open a new Log viewer tab tailing this container. Goes
-    // through Main.qml because tab creation isn't a per-view
-    // responsibility.
+    function _refreshCurrentTab() {
+        if (client.status !== PierDockerClient.Connected)
+            return
+        switch (root.currentTab) {
+        case 0:
+            client.refresh()
+            break
+        case 1:
+            client.refreshImages()
+            break
+        case 2:
+            client.refreshVolumes()
+            break
+        case 3:
+            client.refreshNetworks()
+            break
+        case 4:
+            client.refreshCompose(root.composeFilePath)
+            break
+        }
+    }
+
+    function _shellQuote(value) {
+        var raw = String(value || "")
+        if (raw.length === 0)
+            return "''"
+        return "'" + raw.replace(/'/g, "'\\''") + "'"
+    }
+
+    function _clearInspect() {
+        root.inspectKind = ""
+        root.inspectKey = ""
+        root.inspectTitle = ""
+        root.inspectSubtitle = ""
+        root.inspectFacts = []
+        client.clearInspect()
+    }
+
+    function _refreshInspect() {
+        switch (root.inspectKind) {
+        case "container":
+            client.inspect(root.inspectKey)
+            break
+        case "image":
+            client.inspectImage(root.inspectKey)
+            break
+        case "volume":
+            client.inspectVolume(root.inspectKey)
+            break
+        case "network":
+            client.inspectNetwork(root.inspectKey)
+            break
+        }
+    }
+
+    function _openInspect(kind, key, title, subtitle, facts) {
+        root.inspectKind = kind
+        root.inspectKey = key
+        root.inspectTitle = title || key
+        root.inspectSubtitle = subtitle || ""
+        root.inspectFacts = facts || []
+        root._refreshInspect()
+    }
+
     function _openLogsFor(id, name) {
+        if (typeof window.openLogTab !== "function") {
+            root._showFeedback(false, qsTr("Log tab integration is unavailable in this build."))
+            return
+        }
         var conn = {
             name: name || id,
             host: root.sshHost,
@@ -116,382 +227,257 @@ Rectangle {
             passphraseCredentialId: root.sshPassphraseCredentialId,
             usesAgent: root.sshUsesAgent
         }
-        // docker logs -f --tail 500 <id>: 500 lines of history
-        // so the user doesn't open into a blank viewer, then
-        // live tail from there.
         var cmd = "docker logs -f --tail 500 " + id
         window.openLogTab(conn, cmd, name || id)
     }
 
-    function _openInspectFor(id, name, image, statusText, ports, state) {
-        root.inspectId = id
-        root.inspectName = name || ""
-        root.inspectImage = image || ""
-        root.inspectStatus = statusText || ""
-        root.inspectPorts = ports || ""
-        root.inspectState = state || ""
-        client.inspect(id)
+    function _openComposeLogsFor(service) {
+        if (root.composeFilePath.trim().length === 0) {
+            root._showFeedback(false, qsTr("Set a compose file path first."))
+            return
+        }
+        if (typeof window.openLogTab !== "function") {
+            root._showFeedback(false, qsTr("Log tab integration is unavailable in this build."))
+            return
+        }
+        var conn = {
+            name: service,
+            host: root.sshHost,
+            port: root.sshPort,
+            username: root.sshUser,
+            password: root.sshPassword,
+            credentialId: root.sshCredentialId,
+            keyPath: root.sshKeyPath,
+            passphraseCredentialId: root.sshPassphraseCredentialId,
+            usesAgent: root.sshUsesAgent
+        }
+        var cmd = "docker compose -f " + root._shellQuote(root.composeFilePath.trim()) + " logs -f --tail 500 " + service
+        window.openLogTab(conn, cmd, service)
     }
 
-    function _clearInspect() {
-        root.inspectId = ""
-        root.inspectName = ""
-        root.inspectImage = ""
-        root.inspectStatus = ""
-        root.inspectPorts = ""
-        root.inspectState = ""
-        client.clearInspect()
+    function _openRunDialog(imageRef) {
+        root.runImageRef = imageRef
+        root.runContainerName = ""
+        root.runPortsText = ""
+        root.runEnvText = ""
+        root.runVolumesText = ""
+        root.runCommand = ""
+        root.runRestartIndex = 0
+        root.runDialogOpen = true
+    }
+
+    function _lines(text) {
+        return String(text || "")
+            .split(/\r?\n/)
+            .map(function(line) { return line.trim() })
+            .filter(function(line) { return line.length > 0 })
+    }
+
+    function _parsePortMappings(text) {
+        return root._lines(text).map(function(line) {
+            var parts = line.split(":")
+            return {
+                host: parts.length > 0 ? parts[0].trim() : "",
+                container: parts.length > 1 ? parts.slice(1).join(":").trim() : ""
+            }
+        }).filter(function(entry) {
+            return entry.host.length > 0 && entry.container.length > 0
+        })
+    }
+
+    function _parseEnvMappings(text) {
+        return root._lines(text).map(function(line) {
+            var idx = line.indexOf("=")
+            if (idx < 0)
+                return { key: line.trim(), value: "" }
+            return {
+                key: line.slice(0, idx).trim(),
+                value: line.slice(idx + 1)
+            }
+        }).filter(function(entry) {
+            return entry.key.length > 0
+        })
+    }
+
+    function _parseVolumeMappings(text) {
+        return root._lines(text).map(function(line) {
+            var idx = line.indexOf(":")
+            if (idx < 0)
+                return { host: "", container: "" }
+            return {
+                host: line.slice(0, idx).trim(),
+                container: line.slice(idx + 1).trim()
+            }
+        }).filter(function(entry) {
+            return entry.host.length > 0 && entry.container.length > 0
+        })
+    }
+
+    function _submitRunDialog() {
+        client.runImage(
+            root.runImageRef,
+            root.runContainerName,
+            root._parsePortMappings(root.runPortsText),
+            root._parseEnvMappings(root.runEnvText),
+            root._parseVolumeMappings(root.runVolumesText),
+            root.restartValues[root.runRestartIndex],
+            root.runCommand,
+            true
+        )
+        root.runDialogOpen = false
+    }
+
+    function _currentCount() {
+        switch (root.currentTab) {
+        case 0:
+            return client.containerCount
+        case 1:
+            return client.images.length
+        case 2:
+            return client.volumes.length
+        case 3:
+            return client.networks.length
+        case 4:
+            return client.composeServices.length
+        default:
+            return 0
+        }
+    }
+
+    function _footerText() {
+        var count = root._currentCount()
+        switch (root.currentTab) {
+        case 0:
+            return count + " " + (count === 1 ? qsTr("container") : qsTr("containers"))
+        case 1:
+            return count + " " + (count === 1 ? qsTr("image") : qsTr("images"))
+        case 2:
+            return count + " " + (count === 1 ? qsTr("volume") : qsTr("volumes"))
+        case 3:
+            return count + " " + (count === 1 ? qsTr("network") : qsTr("networks"))
+        case 4:
+            return count + " " + (count === 1 ? qsTr("compose service") : qsTr("compose services"))
+        default:
+            return ""
+        }
     }
 
     ColumnLayout {
         anchors.fill: parent
-        anchors.margins: Theme.sp2
+        anchors.margins: Theme.sp3
         spacing: Theme.sp2
 
-        // ─── Top bar ─────────────────────────────────────
-        RowLayout {
+        ToolPanelSurface {
             Layout.fillWidth: true
-            spacing: Theme.sp2
+            padding: Theme.sp2
+            implicitHeight: topBar.implicitHeight + Theme.sp2 * 2
 
-            Text {
-                text: client.target.length > 0
-                      ? client.target
-                      : qsTr("Docker")
-                font.family: Theme.fontMono
-                font.pixelSize: Theme.sizeBody
-                font.weight: Theme.weightMedium
-                color: Theme.textPrimary
-                elide: Text.ElideMiddle
-                Layout.minimumWidth: 160
-                Layout.maximumWidth: 280
-
-                Behavior on color { ColorAnimation { duration: Theme.durNormal } }
-            }
-
-            Item { Layout.fillWidth: true }
-
-            // Show-stopped toggle. Clicking refreshes with the
-            // new flag (setShowStopped triggers refresh on the
-            // C++ side).
-            Rectangle {
-                id: stoppedToggle
-                implicitWidth: stoppedLabel.implicitWidth + Theme.sp3 * 2
-                implicitHeight: 22
-                radius: Theme.radiusPill
-                color: stoppedMouse.containsMouse
-                       ? Theme.bgHover
-                       : (client.showStopped
-                          ? Theme.accentSubtle
-                          : Theme.bgSurface)
-                border.color: client.showStopped
-                              ? Theme.borderFocus
-                              : Theme.borderSubtle
-                border.width: 1
-
-                Behavior on color        { ColorAnimation { duration: Theme.durFast } }
-                Behavior on border.color { ColorAnimation { duration: Theme.durNormal } }
+            RowLayout {
+                id: topBar
+                anchors.fill: parent
+                spacing: Theme.sp2
 
                 Text {
-                    id: stoppedLabel
-                    anchors.centerIn: parent
-                    text: client.showStopped
-                          ? qsTr("Show stopped ✓")
-                          : qsTr("Show stopped")
-                    font.family: Theme.fontUi
-                    font.pixelSize: Theme.sizeCaption
+                    Layout.minimumWidth: 160
+                    Layout.maximumWidth: 280
+                    text: client.target.length > 0 ? client.target : qsTr("Docker")
+                    font.family: Theme.fontMono
+                    font.pixelSize: Theme.sizeBody
                     font.weight: Theme.weightMedium
-                    color: client.showStopped ? Theme.accent : Theme.textSecondary
-
-                    Behavior on color { ColorAnimation { duration: Theme.durNormal } }
+                    color: Theme.textPrimary
+                    elide: Text.ElideMiddle
                 }
 
-                MouseArea {
-                    id: stoppedMouse
-                    anchors.fill: parent
-                    hoverEnabled: true
-                    cursorShape: Qt.PointingHandCursor
-                    onClicked: client.showStopped = !client.showStopped
+                StatusPill {
+                    text: root.sshHost.length > 0 || (root.sharedSession && root.sharedSession.connected)
+                          ? qsTr("Remote")
+                          : qsTr("Local")
+                    tone: "info"
                 }
-            }
 
-            GhostButton {
-                compact: true
-                minimumWidth: 0
-                text: qsTr("↻ Refresh")
-                enabled: client.status === PierDockerClient.Connected
-                onClicked: client.refresh()
+                StatusPill {
+                    text: client.busy ? qsTr("Busy") : qsTr("Ready")
+                    tone: client.busy ? "warning" : "success"
+                }
+
+                Item { Layout.fillWidth: true }
+
+                SegmentedControl {
+                    Layout.preferredWidth: 420
+                    options: root.tabLabels
+                    currentIndex: root.currentTab
+                    onActivated: (index) => {
+                        root.currentTab = index
+                        root.pendingDeleteId = ""
+                        root._refreshCurrentTab()
+                    }
+                }
+
+                GhostButton {
+                    compact: true
+                    minimumWidth: 0
+                    text: qsTr("Refresh")
+                    enabled: client.status === PierDockerClient.Connected
+                    onClicked: root._refreshCurrentTab()
+                }
             }
         }
 
-        // ─── Container list ─────────────────────────────
+        ToolBanner {
+            Layout.fillWidth: true
+            text: root.feedbackText
+            tone: root.feedbackTone
+        }
+
         RowLayout {
             Layout.fillWidth: true
             Layout.fillHeight: true
             spacing: Theme.sp2
 
-            Rectangle {
+            ToolPanelSurface {
                 Layout.fillWidth: true
                 Layout.fillHeight: true
-                Layout.minimumWidth: 420
-                color: Theme.bgPanel
-                border.color: Theme.borderSubtle
-                border.width: 1
-                radius: Theme.radiusSm
+                Layout.minimumWidth: 520
+                padding: Theme.sp2
 
-                Behavior on color        { ColorAnimation { duration: Theme.durNormal } }
-                Behavior on border.color { ColorAnimation { duration: Theme.durNormal } }
-
-                ListView {
-                    id: listView
+                Loader {
                     anchors.fill: parent
-                    anchors.margins: Theme.sp1
-                    clip: true
-                    model: client
-                    spacing: 0
-                    reuseItems: true
-
-                    delegate: Rectangle {
-                        id: row
-                        required property int    index
-                        required property string containerId
-                        required property string image
-                        required property string names
-                        required property string statusText
-                        required property string state
-                        required property bool   isRunning
-                        required property string ports
-
-                        readonly property bool confirming:
-                            root.pendingDeleteId === row.containerId
-                        readonly property bool selected:
-                            root.inspectId === row.containerId
-
-                        width: ListView.view.width
-                        implicitHeight: 34
-                        color: row.confirming
-                               ? Qt.rgba(Theme.statusError.r, Theme.statusError.g, Theme.statusError.b, 0.08)
-                               : (row.selected
-                                  ? Theme.bgSelected
-                                  : (rowMouse.containsMouse ? Theme.bgHover : "transparent"))
-                        radius: Theme.radiusSm
-
-                        Behavior on color { ColorAnimation { duration: Theme.durFast } }
-
-                        MouseArea {
-                            id: rowMouse
-                            anchors.fill: parent
-                            hoverEnabled: true
-                            acceptedButtons: Qt.NoButton
-                        }
-
-                        // ── Idle layout (name + image + status + actions) ──
-                        RowLayout {
-                            anchors.fill: parent
-                            anchors.leftMargin: Theme.sp2
-                            anchors.rightMargin: Theme.sp2
-                            spacing: Theme.sp2
-                            visible: !row.confirming
-
-                            Rectangle {
-                                width: 8
-                                height: 8
-                                radius: 4
-                                color: row.isRunning
-                                       ? Theme.statusSuccess
-                                       : Theme.textTertiary
-
-                                Behavior on color { ColorAnimation { duration: Theme.durNormal } }
-
-                                SequentialAnimation on opacity {
-                                    running: row.isRunning
-                                    loops: Animation.Infinite
-                                    NumberAnimation { from: 1.0; to: 0.5; duration: 1200 }
-                                    NumberAnimation { from: 0.5; to: 1.0; duration: 1200 }
-                                }
-                            }
-
-                            Text {
-                                Layout.preferredWidth: 160
-                                text: row.names.length > 0
-                                      ? row.names
-                                      : row.containerId.slice(0, 12)
-                                font.family: Theme.fontMono
-                                font.pixelSize: Theme.sizeBody
-                                font.weight: row.isRunning
-                                             ? Theme.weightMedium
-                                             : Theme.weightRegular
-                                color: Theme.textPrimary
-                                elide: Text.ElideRight
-
-                                Behavior on color { ColorAnimation { duration: Theme.durNormal } }
-                            }
-
-                            Text {
-                                Layout.fillWidth: true
-                                text: row.image
-                                font.family: Theme.fontMono
-                                font.pixelSize: Theme.sizeCaption
-                                color: Theme.textSecondary
-                                elide: Text.ElideRight
-
-                                Behavior on color { ColorAnimation { duration: Theme.durNormal } }
-                            }
-
-                            Text {
-                                Layout.preferredWidth: 180
-                                text: row.statusText
-                                font.family: Theme.fontUi
-                                font.pixelSize: Theme.sizeCaption
-                                color: row.isRunning
-                                       ? Theme.statusSuccess
-                                       : Theme.textTertiary
-                                horizontalAlignment: Text.AlignRight
-                                elide: Text.ElideRight
-
-                                Behavior on color { ColorAnimation { duration: Theme.durNormal } }
-                            }
-
-                            DockerRowButton {
-                                glyph: "{}"
-                                tooltip: qsTr("Inspect")
-                                active: row.selected
-                                onClicked: root._openInspectFor(
-                                               row.containerId,
-                                               row.names,
-                                               row.image,
-                                               row.statusText,
-                                               row.ports,
-                                               row.state)
-                            }
-                            DockerRowButton {
-                                glyph: "▶"
-                                tooltip: qsTr("Start")
-                                visible: !row.isRunning
-                                onClicked: client.start(row.containerId)
-                            }
-                            DockerRowButton {
-                                glyph: "⏸"
-                                tooltip: qsTr("Stop")
-                                visible: row.isRunning
-                                onClicked: client.stopContainer(row.containerId)
-                            }
-                            DockerRowButton {
-                                glyph: "↻"
-                                tooltip: qsTr("Restart")
-                                visible: row.isRunning
-                                onClicked: client.restart(row.containerId)
-                            }
-                            DockerRowButton {
-                                glyph: "📜"
-                                tooltip: qsTr("Live logs")
-                                onClicked: root._openLogsFor(row.containerId, row.names)
-                            }
-                            DockerRowButton {
-                                glyph: "✕"
-                                tooltip: qsTr("Remove")
-                                danger: true
-                                onClicked: root.pendingDeleteId = row.containerId
-                            }
-                        }
-
-                        RowLayout {
-                            anchors.fill: parent
-                            anchors.leftMargin: Theme.sp2
-                            anchors.rightMargin: Theme.sp2
-                            spacing: Theme.sp2
-                            visible: row.confirming
-
-                            Text {
-                                Layout.fillWidth: true
-                                text: qsTr("Remove '%1'?")
-                                          .arg(row.names.length > 0
-                                               ? row.names
-                                               : row.containerId.slice(0, 12))
-                                font.family: Theme.fontUi
-                                font.pixelSize: Theme.sizeBody
-                                font.weight: Theme.weightMedium
-                                color: Theme.statusError
-                                elide: Text.ElideRight
-                            }
-                            GhostButton {
-                                compact: true
-                                minimumWidth: 0
-                                text: qsTr("Cancel")
-                                onClicked: root.pendingDeleteId = ""
-                            }
-                            PrimaryButton {
-                                text: row.isRunning
-                                      ? qsTr("Force remove")
-                                      : qsTr("Remove")
-                                onClicked: {
-                                    client.remove(row.containerId, row.isRunning)
-                                    root.pendingDeleteId = ""
-                                }
-                            }
-                        }
-                    }
-
-                    Text {
-                        anchors.centerIn: parent
-                        visible: client.busy && listView.count === 0
-                        text: qsTr("Querying docker…")
-                        font.family: Theme.fontUi
-                        font.pixelSize: Theme.sizeBody
-                        color: Theme.textSecondary
-                    }
-                    Text {
-                        anchors.centerIn: parent
-                        visible: client.status === PierDockerClient.Connected
-                                 && !client.busy
-                                 && listView.count === 0
-                        text: client.showStopped
-                              ? qsTr("(no containers)")
-                              : qsTr("(no running containers)")
-                        font.family: Theme.fontUi
-                        font.pixelSize: Theme.sizeBody
-                        color: Theme.textTertiary
-                    }
+                    sourceComponent: root.currentTab === 0 ? containersPanel
+                                      : (root.currentTab === 1 ? imagesPanel
+                                         : (root.currentTab === 2 ? volumesPanel
+                                            : (root.currentTab === 3 ? networksPanel : composePanel)))
                 }
             }
 
-            Rectangle {
-                Layout.preferredWidth: 420
+            ToolPanelSurface {
+                Layout.preferredWidth: 400
                 Layout.minimumWidth: 360
                 Layout.fillHeight: true
-                visible: root.inspectId.length > 0
-                color: Theme.bgPanel
-                border.color: Theme.borderSubtle
-                border.width: 1
-                radius: Theme.radiusSm
-
-                Behavior on color        { ColorAnimation { duration: Theme.durNormal } }
-                Behavior on border.color { ColorAnimation { duration: Theme.durNormal } }
+                visible: root.inspectKind.length > 0
+                padding: Theme.sp3
 
                 ColumnLayout {
                     anchors.fill: parent
-                    anchors.margins: Theme.sp3
                     spacing: Theme.sp2
 
-                    RowLayout {
+                    ToolSectionHeader {
                         Layout.fillWidth: true
-                        spacing: Theme.sp2
+                        title: qsTr("Inspect")
+                        subtitle: root.inspectTitle
 
-                        Text {
-                            text: qsTr("Container Inspect")
-                            font.family: Theme.fontUi
-                            font.pixelSize: Theme.sizeBody
-                            font.weight: Theme.weightMedium
-                            color: Theme.textPrimary
+                        StatusPill {
+                            text: root.inspectKind.length > 0
+                                  ? root.inspectKind.charAt(0).toUpperCase() + root.inspectKind.slice(1)
+                                  : ""
+                            tone: "neutral"
                         }
-
-                        Item { Layout.fillWidth: true }
 
                         GhostButton {
                             compact: true
                             minimumWidth: 0
                             text: qsTr("Refresh")
-                            enabled: !client.inspectBusy && root.inspectId.length > 0
-                            onClicked: client.inspect(root.inspectId)
+                            enabled: !client.inspectBusy
+                            onClicked: root._refreshInspect()
                         }
 
                         GhostButton {
@@ -502,119 +488,69 @@ Rectangle {
                         }
                     }
 
-                    Rectangle {
+                    ToolPanelSurface {
                         Layout.fillWidth: true
-                        color: Theme.bgSurface
-                        border.color: Theme.borderSubtle
-                        border.width: 1
-                radius: Theme.radiusSm
-                        implicitHeight: inspectMeta.implicitHeight + Theme.sp3 * 2
+                        inset: true
+                        implicitHeight: factsColumn.implicitHeight + Theme.sp3 * 2
 
-                        Behavior on color        { ColorAnimation { duration: Theme.durNormal } }
-                        Behavior on border.color { ColorAnimation { duration: Theme.durNormal } }
-
-                        GridLayout {
-                            id: inspectMeta
+                        ColumnLayout {
+                            id: factsColumn
                             anchors.fill: parent
                             anchors.margins: Theme.sp3
-                            columns: 2
-                            columnSpacing: Theme.sp2
-                            rowSpacing: Theme.sp1
+                            spacing: Theme.sp1
 
-                            SectionLabel { text: qsTr("Name") }
                             Text {
+                                visible: root.inspectSubtitle.length > 0
                                 Layout.fillWidth: true
-                                text: root.inspectName.length > 0
-                                      ? root.inspectName
-                                      : root.inspectId.slice(0, 12)
-                                font.family: Theme.fontMono
-                                font.pixelSize: Theme.sizeBody
-                                color: Theme.textPrimary
-                                elide: Text.ElideRight
-                            }
-
-                            SectionLabel { text: qsTr("ID") }
-                            Text {
-                                Layout.fillWidth: true
-                                text: root.inspectId
-                                font.family: Theme.fontMono
-                                font.pixelSize: Theme.sizeCaption
-                                color: Theme.textSecondary
-                                elide: Text.ElideMiddle
-                            }
-
-                            SectionLabel { text: qsTr("State") }
-                            Text {
-                                Layout.fillWidth: true
-                                text: root.inspectStatus.length > 0
-                                      ? root.inspectStatus
-                                      : root.inspectState
+                                text: root.inspectSubtitle
                                 font.family: Theme.fontUi
                                 font.pixelSize: Theme.sizeCaption
-                                color: root.inspectState === "running"
-                                       ? Theme.statusSuccess
-                                       : Theme.textSecondary
+                                color: Theme.textTertiary
                                 wrapMode: Text.Wrap
                             }
 
-                            SectionLabel { text: qsTr("Image") }
-                            Text {
-                                Layout.fillWidth: true
-                                text: root.inspectImage.length > 0 ? root.inspectImage : "—"
-                                font.family: Theme.fontMono
-                                font.pixelSize: Theme.sizeCaption
-                                color: Theme.textSecondary
-                                elide: Text.ElideMiddle
-                            }
+                            Repeater {
+                                model: root.inspectFacts
 
-                            SectionLabel { text: qsTr("Ports") }
-                            Text {
-                                Layout.fillWidth: true
-                                text: root.inspectPorts.length > 0 ? root.inspectPorts : "—"
-                                font.family: Theme.fontMono
-                                font.pixelSize: Theme.sizeCaption
-                                color: Theme.textSecondary
-                                wrapMode: Text.WrapAnywhere
+                                delegate: RowLayout {
+                                    required property var modelData
+                                    Layout.fillWidth: true
+                                    spacing: Theme.sp2
+
+                                    SectionLabel {
+                                        text: modelData.label
+                                        Layout.preferredWidth: 72
+                                    }
+
+                                    Text {
+                                        Layout.fillWidth: true
+                                        text: modelData.value && String(modelData.value).length > 0
+                                              ? String(modelData.value)
+                                              : "—"
+                                        font.family: Theme.fontMono
+                                        font.pixelSize: Theme.sizeCaption
+                                        color: Theme.textSecondary
+                                        wrapMode: Text.WrapAnywhere
+                                    }
+                                }
                             }
                         }
                     }
 
-                    Rectangle {
+                    ToolBanner {
                         Layout.fillWidth: true
-                        implicitHeight: 24
-                        visible: client.inspectError.length > 0
-                        color: Qt.rgba(Theme.statusError.r, Theme.statusError.g, Theme.statusError.b, 0.10)
-                        border.color: Theme.statusError
-                        border.width: 1
-                        radius: Theme.radiusSm
-
-                        Text {
-                            anchors.fill: parent
-                            anchors.leftMargin: Theme.sp2
-                            anchors.rightMargin: Theme.sp2
-                            verticalAlignment: Text.AlignVCenter
-                            text: client.inspectError
-                            font.family: Theme.fontUi
-                            font.pixelSize: Theme.sizeCaption
-                            color: Theme.statusError
-                            elide: Text.ElideRight
-                        }
+                        tone: "error"
+                        text: client.inspectError
                     }
 
-                    Rectangle {
+                    ToolPanelSurface {
                         Layout.fillWidth: true
                         Layout.fillHeight: true
-                        color: Theme.bgSurface
-                        border.color: Theme.borderSubtle
-                        border.width: 1
-                        radius: Theme.radiusSm
-
-                        Behavior on color        { ColorAnimation { duration: Theme.durNormal } }
-                        Behavior on border.color { ColorAnimation { duration: Theme.durNormal } }
+                        inset: true
+                        padding: Theme.sp2
 
                         Item {
                             anchors.fill: parent
-                            anchors.margins: Theme.sp2
 
                             Text {
                                 anchors.centerIn: parent
@@ -625,27 +561,22 @@ Rectangle {
                                 color: Theme.textSecondary
                             }
 
-                            ScrollView {
+                            PierScrollView {
                                 anchors.fill: parent
                                 clip: true
                                 visible: !client.inspectBusy
 
-                                TextArea {
-                                    id: inspectText
+                                PierTextArea {
                                     readOnly: true
+                                    frameVisible: false
+                                    mono: true
                                     wrapMode: TextArea.NoWrap
                                     text: client.inspectJson.length > 0
                                           ? client.inspectJson
                                           : qsTr("// No inspect data yet")
-                                    font.family: Theme.fontMono
                                     font.pixelSize: Theme.sizeCaption
-                                    color: client.inspectJson.length > 0
-                                           ? Theme.textPrimary
-                                           : Theme.textTertiary
+                                    color: client.inspectJson.length > 0 ? Theme.textPrimary : Theme.textTertiary
                                     selectByMouse: true
-                                    background: Rectangle { color: "transparent" }
-
-                                    Behavior on color { ColorAnimation { duration: Theme.durNormal } }
                                 }
                             }
                         }
@@ -654,36 +585,922 @@ Rectangle {
             }
         }
 
-        // ─── Footer ──────────────────────────────────────
-        Rectangle {
+        ToolBanner {
             Layout.fillWidth: true
-            implicitHeight: 20
-            color: "transparent"
+            tone: "neutral"
+            text: root._footerText()
+        }
+    }
 
-            Text {
-                anchors.verticalCenter: parent.verticalCenter
-                anchors.left: parent.left
-                text: client.containerCount + " "
-                      + (client.containerCount === 1 ? qsTr("container") : qsTr("containers"))
-                font.family: Theme.fontMono
-                font.pixelSize: Theme.sizeCaption
-                color: Theme.textTertiary
+    Component {
+        id: containersPanel
 
-                Behavior on color { ColorAnimation { duration: Theme.durNormal } }
+        ColumnLayout {
+            anchors.fill: parent
+            spacing: Theme.sp2
+
+            ToolSectionHeader {
+                Layout.fillWidth: true
+                title: qsTr("Containers")
+                subtitle: client.showStopped
+                          ? qsTr("%1 total containers").arg(client.containerCount)
+                          : qsTr("Running containers only")
+
+                StatusPill {
+                    text: client.showStopped ? qsTr("All") : qsTr("Running")
+                    tone: "neutral"
+                }
+
+                GhostButton {
+                    compact: true
+                    minimumWidth: 0
+                    text: client.showStopped ? qsTr("Hide stopped") : qsTr("Show stopped")
+                    onClicked: client.showStopped = !client.showStopped
+                }
+            }
+
+            ListView {
+                id: containerList
+                Layout.fillWidth: true
+                Layout.fillHeight: true
+                clip: true
+                model: client
+                spacing: Theme.sp1
+                reuseItems: true
+
+                delegate: Rectangle {
+                    id: row
+                    required property string containerId
+                    required property string image
+                    required property string names
+                    required property string statusText
+                    required property string state
+                    required property bool isRunning
+                    required property string ports
+                    required property string created
+
+                    readonly property bool confirming: root.pendingDeleteId === row.containerId
+
+                    width: ListView.view.width
+                    implicitHeight: row.confirming ? 72 : 58
+                    radius: Theme.radiusSm
+                    color: row.confirming
+                           ? Qt.rgba(Theme.statusError.r, Theme.statusError.g, Theme.statusError.b, 0.08)
+                           : (rowMouse.containsMouse ? Theme.bgHover : "transparent")
+
+                    Behavior on color { ColorAnimation { duration: Theme.durFast } }
+
+                    MouseArea {
+                        id: rowMouse
+                        anchors.fill: parent
+                        hoverEnabled: true
+                        acceptedButtons: Qt.NoButton
+                    }
+
+                    ColumnLayout {
+                        anchors.fill: parent
+                        anchors.margins: Theme.sp2
+                        spacing: Theme.sp1
+                        visible: !row.confirming
+
+                        RowLayout {
+                            Layout.fillWidth: true
+                            spacing: Theme.sp2
+
+                            Rectangle {
+                                width: 8
+                                height: 8
+                                radius: 4
+                                color: row.isRunning ? Theme.statusSuccess : Theme.textTertiary
+                            }
+
+                            Text {
+                                Layout.preferredWidth: 170
+                                text: row.names.length > 0 ? row.names : row.containerId.slice(0, 12)
+                                font.family: Theme.fontMono
+                                font.pixelSize: Theme.sizeBody
+                                font.weight: Theme.weightMedium
+                                color: Theme.textPrimary
+                                elide: Text.ElideRight
+                            }
+
+                            Text {
+                                Layout.fillWidth: true
+                                text: row.image
+                                font.family: Theme.fontMono
+                                font.pixelSize: Theme.sizeCaption
+                                color: Theme.textSecondary
+                                elide: Text.ElideRight
+                            }
+
+                            StatusPill {
+                                text: row.isRunning ? qsTr("Running") : qsTr("Stopped")
+                                tone: row.isRunning ? "success" : "neutral"
+                            }
+                        }
+
+                        RowLayout {
+                            Layout.fillWidth: true
+                            spacing: Theme.sp2
+
+                            Text {
+                                Layout.fillWidth: true
+                                text: row.statusText.length > 0 ? row.statusText : row.created
+                                font.family: Theme.fontUi
+                                font.pixelSize: Theme.sizeCaption
+                                color: Theme.textTertiary
+                                elide: Text.ElideRight
+                            }
+
+                            Text {
+                                Layout.preferredWidth: 190
+                                text: row.ports.length > 0 ? row.ports : "—"
+                                font.family: Theme.fontMono
+                                font.pixelSize: Theme.sizeSmall
+                                color: Theme.textTertiary
+                                elide: Text.ElideRight
+                                horizontalAlignment: Text.AlignRight
+                            }
+
+                            DockerRowButton {
+                                glyph: "{}"
+                                tooltip: qsTr("Inspect")
+                                onClicked: root._openInspect(
+                                               "container",
+                                               row.containerId,
+                                               row.names.length > 0 ? row.names : row.containerId.slice(0, 12),
+                                               row.image,
+                                               [
+                                                   { "label": qsTr("ID"), "value": row.containerId },
+                                                   { "label": qsTr("State"), "value": row.statusText },
+                                                   { "label": qsTr("Image"), "value": row.image },
+                                                   { "label": qsTr("Ports"), "value": row.ports }
+                                               ])
+                            }
+
+                            DockerRowButton {
+                                glyph: ">"
+                                tooltip: qsTr("Start")
+                                visible: !row.isRunning
+                                onClicked: client.start(row.containerId)
+                            }
+
+                            DockerRowButton {
+                                glyph: "[]"
+                                tooltip: qsTr("Stop")
+                                visible: row.isRunning
+                                onClicked: client.stopContainer(row.containerId)
+                            }
+
+                            DockerRowButton {
+                                glyph: "R"
+                                tooltip: qsTr("Restart")
+                                visible: row.isRunning
+                                onClicked: client.restart(row.containerId)
+                            }
+
+                            DockerRowButton {
+                                glyph: "L"
+                                tooltip: qsTr("Live logs")
+                                onClicked: root._openLogsFor(row.containerId, row.names)
+                            }
+
+                            DockerRowButton {
+                                glyph: "X"
+                                tooltip: qsTr("Remove")
+                                danger: true
+                                onClicked: root.pendingDeleteId = row.containerId
+                            }
+                        }
+                    }
+
+                    RowLayout {
+                        anchors.fill: parent
+                        anchors.margins: Theme.sp2
+                        spacing: Theme.sp2
+                        visible: row.confirming
+
+                        Text {
+                            Layout.fillWidth: true
+                            text: qsTr("Remove '%1'?")
+                                      .arg(row.names.length > 0 ? row.names : row.containerId.slice(0, 12))
+                            font.family: Theme.fontUi
+                            font.pixelSize: Theme.sizeBody
+                            font.weight: Theme.weightMedium
+                            color: Theme.statusError
+                            elide: Text.ElideRight
+                        }
+
+                        GhostButton {
+                            compact: true
+                            minimumWidth: 0
+                            text: qsTr("Cancel")
+                            onClicked: root.pendingDeleteId = ""
+                        }
+
+                        PrimaryButton {
+                            compact: true
+                            minimumWidth: 0
+                            text: row.isRunning ? qsTr("Force remove") : qsTr("Remove")
+                            onClicked: {
+                                client.remove(row.containerId, row.isRunning)
+                                root.pendingDeleteId = ""
+                            }
+                        }
+                    }
+                }
+
+                Text {
+                    anchors.centerIn: parent
+                    visible: client.busy && containerList.count === 0
+                    text: qsTr("Querying docker…")
+                    font.family: Theme.fontUi
+                    font.pixelSize: Theme.sizeBody
+                    color: Theme.textSecondary
+                }
+
+                ToolEmptyState {
+                    anchors.centerIn: parent
+                    visible: client.status === PierDockerClient.Connected
+                             && !client.busy
+                             && containerList.count === 0
+                    icon: "container"
+                    title: client.showStopped ? qsTr("No containers") : qsTr("No running containers")
+                    description: qsTr("Containers for this host will appear here when Docker returns results.")
+                }
             }
         }
     }
 
-    // ─── Connecting / Failed overlay ───────────────────
+    Component {
+        id: imagesPanel
+
+        ColumnLayout {
+            anchors.fill: parent
+            spacing: Theme.sp2
+
+            ToolSectionHeader {
+                Layout.fillWidth: true
+                title: qsTr("Images")
+                subtitle: qsTr("%1 images").arg(client.images.length)
+            }
+
+            RowLayout {
+                Layout.fillWidth: true
+                spacing: Theme.sp2
+
+                PierTextField {
+                    Layout.fillWidth: true
+                    text: root.pullImageName
+                    placeholder: qsTr("Pull image, e.g. redis:7-alpine")
+                    onTextChanged: root.pullImageName = text
+                }
+
+                PrimaryButton {
+                    compact: true
+                    minimumWidth: 0
+                    text: qsTr("Pull")
+                    enabled: root.pullImageName.trim().length > 0
+                    onClicked: {
+                        client.pullImage(root.pullImageName)
+                        root.pullImageName = ""
+                    }
+                }
+
+                GhostButton {
+                    compact: true
+                    minimumWidth: 0
+                    text: qsTr("Prune")
+                    onClicked: client.pruneImages()
+                }
+            }
+
+            ListView {
+                id: imagesList
+                Layout.fillWidth: true
+                Layout.fillHeight: true
+                clip: true
+                model: client.images
+                spacing: Theme.sp1
+
+                delegate: Rectangle {
+                    id: imageRow
+                    required property var modelData
+
+                    readonly property string imageId: String(modelData.id || "")
+                    readonly property string repository: String(modelData.repository || "<none>")
+                    readonly property string tag: String(modelData.tag || "<none>")
+                    readonly property string size: String(modelData.size || "")
+                    readonly property string created: String(modelData.created || "")
+
+                    width: ListView.view.width
+                    implicitHeight: 58
+                    radius: Theme.radiusSm
+                    color: rowMouse.containsMouse ? Theme.bgHover : "transparent"
+
+                    MouseArea {
+                        id: rowMouse
+                        anchors.fill: parent
+                        hoverEnabled: true
+                        acceptedButtons: Qt.NoButton
+                    }
+
+                    ColumnLayout {
+                        anchors.fill: parent
+                        anchors.margins: Theme.sp2
+                        spacing: Theme.sp1
+
+                        RowLayout {
+                            Layout.fillWidth: true
+                            spacing: Theme.sp2
+
+                            Text {
+                                Layout.fillWidth: true
+                                text: imageRow.repository
+                                font.family: Theme.fontMono
+                                font.pixelSize: Theme.sizeBody
+                                font.weight: Theme.weightMedium
+                                color: Theme.textPrimary
+                                elide: Text.ElideRight
+                            }
+
+                            StatusPill {
+                                text: imageRow.tag
+                                tone: "info"
+                            }
+
+                            Text {
+                                text: imageRow.size.length > 0 ? imageRow.size : "—"
+                                font.family: Theme.fontMono
+                                font.pixelSize: Theme.sizeCaption
+                                color: Theme.textTertiary
+                            }
+                        }
+
+                        RowLayout {
+                            Layout.fillWidth: true
+                            spacing: Theme.sp2
+
+                            Text {
+                                Layout.fillWidth: true
+                                text: imageRow.created.length > 0 ? imageRow.created : imageRow.imageId
+                                font.family: Theme.fontUi
+                                font.pixelSize: Theme.sizeCaption
+                                color: Theme.textTertiary
+                                elide: Text.ElideRight
+                            }
+
+                            DockerRowButton {
+                                glyph: "{}"
+                                tooltip: qsTr("Inspect")
+                                onClicked: root._openInspect(
+                                               "image",
+                                               imageRow.imageId,
+                                               imageRow.repository,
+                                               imageRow.tag,
+                                               [
+                                                   { "label": qsTr("ID"), "value": imageRow.imageId },
+                                                   { "label": qsTr("Tag"), "value": imageRow.tag },
+                                                   { "label": qsTr("Size"), "value": imageRow.size },
+                                                   { "label": qsTr("Created"), "value": imageRow.created }
+                                               ])
+                            }
+
+                            DockerRowButton {
+                                glyph: ">"
+                                tooltip: qsTr("Run container")
+                                onClicked: root._openRunDialog(
+                                               imageRow.repository === "<none>"
+                                               ? imageRow.imageId
+                                               : imageRow.repository + ":" + imageRow.tag)
+                            }
+
+                            DockerRowButton {
+                                glyph: "X"
+                                tooltip: qsTr("Remove")
+                                danger: true
+                                onClicked: client.removeImage(imageRow.imageId, false)
+                            }
+
+                            DockerRowButton {
+                                glyph: "!"
+                                tooltip: qsTr("Force remove")
+                                danger: true
+                                onClicked: client.removeImage(imageRow.imageId, true)
+                            }
+                        }
+                    }
+                }
+
+                ToolEmptyState {
+                    anchors.centerIn: parent
+                    visible: client.status === PierDockerClient.Connected
+                             && !client.busy
+                             && imagesList.count === 0
+                    icon: "container"
+                    title: qsTr("No images")
+                    description: qsTr("Pulled and built images will appear here.")
+                }
+            }
+        }
+    }
+
+    Component {
+        id: volumesPanel
+
+        ColumnLayout {
+            anchors.fill: parent
+            spacing: Theme.sp2
+
+            ToolSectionHeader {
+                Layout.fillWidth: true
+                title: qsTr("Volumes")
+                subtitle: qsTr("%1 volumes").arg(client.volumes.length)
+
+                GhostButton {
+                    compact: true
+                    minimumWidth: 0
+                    text: qsTr("Prune")
+                    onClicked: client.pruneVolumes()
+                }
+            }
+
+            ListView {
+                id: volumesList
+                Layout.fillWidth: true
+                Layout.fillHeight: true
+                clip: true
+                model: client.volumes
+                spacing: Theme.sp1
+
+                delegate: Rectangle {
+                    id: volumeRow
+                    required property var modelData
+
+                    readonly property string volumeName: String(modelData.name || "")
+                    readonly property string driver: String(modelData.driver || "")
+                    readonly property string mountpoint: String(modelData.mountpoint || "")
+
+                    width: ListView.view.width
+                    implicitHeight: 58
+                    radius: Theme.radiusSm
+                    color: rowMouse.containsMouse ? Theme.bgHover : "transparent"
+
+                    MouseArea {
+                        id: rowMouse
+                        anchors.fill: parent
+                        hoverEnabled: true
+                        acceptedButtons: Qt.NoButton
+                    }
+
+                    ColumnLayout {
+                        anchors.fill: parent
+                        anchors.margins: Theme.sp2
+                        spacing: Theme.sp1
+
+                        RowLayout {
+                            Layout.fillWidth: true
+                            spacing: Theme.sp2
+
+                            Text {
+                                Layout.fillWidth: true
+                                text: volumeRow.volumeName
+                                font.family: Theme.fontMono
+                                font.pixelSize: Theme.sizeBody
+                                font.weight: Theme.weightMedium
+                                color: Theme.textPrimary
+                                elide: Text.ElideRight
+                            }
+
+                            StatusPill {
+                                text: volumeRow.driver.length > 0 ? volumeRow.driver : qsTr("Volume")
+                                tone: "warning"
+                            }
+                        }
+
+                        RowLayout {
+                            Layout.fillWidth: true
+                            spacing: Theme.sp2
+
+                            Text {
+                                Layout.fillWidth: true
+                                text: volumeRow.mountpoint.length > 0 ? volumeRow.mountpoint : qsTr("Inspect to view mountpoint")
+                                font.family: Theme.fontMono
+                                font.pixelSize: Theme.sizeSmall
+                                color: Theme.textTertiary
+                                elide: Text.ElideMiddle
+                            }
+
+                            DockerRowButton {
+                                glyph: "{}"
+                                tooltip: qsTr("Inspect")
+                                onClicked: root._openInspect(
+                                               "volume",
+                                               volumeRow.volumeName,
+                                               volumeRow.volumeName,
+                                               volumeRow.driver,
+                                               [
+                                                   { "label": qsTr("Name"), "value": volumeRow.volumeName },
+                                                   { "label": qsTr("Driver"), "value": volumeRow.driver },
+                                                   { "label": qsTr("Mount"), "value": volumeRow.mountpoint }
+                                               ])
+                            }
+
+                            DockerRowButton {
+                                glyph: "X"
+                                tooltip: qsTr("Remove")
+                                danger: true
+                                onClicked: client.removeVolume(volumeRow.volumeName)
+                            }
+                        }
+                    }
+                }
+
+                ToolEmptyState {
+                    anchors.centerIn: parent
+                    visible: client.status === PierDockerClient.Connected
+                             && !client.busy
+                             && volumesList.count === 0
+                    icon: "container"
+                    title: qsTr("No volumes")
+                    description: qsTr("Named volumes will appear here when Docker reports them.")
+                }
+            }
+        }
+    }
+
+    Component {
+        id: networksPanel
+
+        ColumnLayout {
+            anchors.fill: parent
+            spacing: Theme.sp2
+
+            ToolSectionHeader {
+                Layout.fillWidth: true
+                title: qsTr("Networks")
+                subtitle: qsTr("%1 networks").arg(client.networks.length)
+            }
+
+            RowLayout {
+                Layout.fillWidth: true
+                spacing: Theme.sp2
+
+                PierTextField {
+                    Layout.fillWidth: true
+                    text: root.networkName
+                    placeholder: qsTr("Create network, e.g. pier-app-net")
+                    onTextChanged: root.networkName = text
+                }
+
+                PierComboBox {
+                    Layout.preferredWidth: 140
+                    options: root.networkDrivers
+                    currentIndex: root.networkDriverIndex
+                    onActivated: (index) => root.networkDriverIndex = index
+                }
+
+                PrimaryButton {
+                    compact: true
+                    minimumWidth: 0
+                    text: qsTr("Create")
+                    enabled: root.networkName.trim().length > 0
+                    onClicked: {
+                        client.createNetwork(root.networkName, root.networkDrivers[root.networkDriverIndex])
+                        root.networkName = ""
+                    }
+                }
+            }
+
+            ListView {
+                id: networksList
+                Layout.fillWidth: true
+                Layout.fillHeight: true
+                clip: true
+                model: client.networks
+                spacing: Theme.sp1
+
+                delegate: Rectangle {
+                    id: networkRow
+                    required property var modelData
+
+                    readonly property string networkId: String(modelData.id || "")
+                    readonly property string networkName: String(modelData.name || "")
+                    readonly property string driver: String(modelData.driver || "")
+                    readonly property string scope: String(modelData.scope || "")
+                    readonly property bool removable: ["bridge", "host", "none"].indexOf(networkName) < 0
+
+                    width: ListView.view.width
+                    implicitHeight: 58
+                    radius: Theme.radiusSm
+                    color: rowMouse.containsMouse ? Theme.bgHover : "transparent"
+
+                    MouseArea {
+                        id: rowMouse
+                        anchors.fill: parent
+                        hoverEnabled: true
+                        acceptedButtons: Qt.NoButton
+                    }
+
+                    ColumnLayout {
+                        anchors.fill: parent
+                        anchors.margins: Theme.sp2
+                        spacing: Theme.sp1
+
+                        RowLayout {
+                            Layout.fillWidth: true
+                            spacing: Theme.sp2
+
+                            Text {
+                                Layout.fillWidth: true
+                                text: networkRow.networkName
+                                font.family: Theme.fontMono
+                                font.pixelSize: Theme.sizeBody
+                                font.weight: Theme.weightMedium
+                                color: Theme.textPrimary
+                                elide: Text.ElideRight
+                            }
+
+                            StatusPill {
+                                text: networkRow.driver.length > 0 ? networkRow.driver : qsTr("Network")
+                                tone: "info"
+                            }
+                        }
+
+                        RowLayout {
+                            Layout.fillWidth: true
+                            spacing: Theme.sp2
+
+                            Text {
+                                Layout.fillWidth: true
+                                text: networkRow.scope.length > 0 ? networkRow.scope : networkRow.networkId
+                                font.family: Theme.fontUi
+                                font.pixelSize: Theme.sizeCaption
+                                color: Theme.textTertiary
+                                elide: Text.ElideRight
+                            }
+
+                            DockerRowButton {
+                                glyph: "{}"
+                                tooltip: qsTr("Inspect")
+                                onClicked: root._openInspect(
+                                               "network",
+                                               networkRow.networkName,
+                                               networkRow.networkName,
+                                               networkRow.networkId,
+                                               [
+                                                   { "label": qsTr("ID"), "value": networkRow.networkId },
+                                                   { "label": qsTr("Driver"), "value": networkRow.driver },
+                                                   { "label": qsTr("Scope"), "value": networkRow.scope }
+                                               ])
+                            }
+
+                            DockerRowButton {
+                                glyph: "X"
+                                tooltip: qsTr("Remove")
+                                danger: true
+                                visible: networkRow.removable
+                                onClicked: client.removeNetwork(networkRow.networkName)
+                            }
+                        }
+                    }
+                }
+
+                ToolEmptyState {
+                    anchors.centerIn: parent
+                    visible: client.status === PierDockerClient.Connected
+                             && !client.busy
+                             && networksList.count === 0
+                    icon: "container"
+                    title: qsTr("No networks")
+                    description: qsTr("Docker networks for this host will appear here.")
+                }
+            }
+        }
+    }
+
+    Component {
+        id: composePanel
+
+        ColumnLayout {
+            anchors.fill: parent
+            spacing: Theme.sp2
+
+            ToolSectionHeader {
+                Layout.fillWidth: true
+                title: qsTr("Compose")
+                subtitle: root.composeFilePath.trim().length > 0
+                          ? root.composeFilePath
+                          : qsTr("Manage a compose stack by explicit file path")
+            }
+
+            ToolPanelSurface {
+                Layout.fillWidth: true
+                inset: true
+                padding: Theme.sp3
+
+                ColumnLayout {
+                    anchors.fill: parent
+                    spacing: Theme.sp2
+
+                    Text {
+                        Layout.fillWidth: true
+                        text: qsTr("Use an absolute compose file path so local and remote hosts behave predictably.")
+                        font.family: Theme.fontUi
+                        font.pixelSize: Theme.sizeSmall
+                        color: Theme.textTertiary
+                        wrapMode: Text.Wrap
+                    }
+
+                    RowLayout {
+                        Layout.fillWidth: true
+                        spacing: Theme.sp2
+
+                        PierTextField {
+                            Layout.fillWidth: true
+                            text: root.composeFilePath
+                            placeholder: qsTr("/path/to/docker-compose.yml")
+                            onTextChanged: root.composeFilePath = text
+                        }
+
+                        PrimaryButton {
+                            compact: true
+                            minimumWidth: 0
+                            text: qsTr("Load")
+                            enabled: root.composeFilePath.trim().length > 0
+                            onClicked: client.refreshCompose(root.composeFilePath)
+                        }
+                    }
+
+                    RowLayout {
+                        Layout.fillWidth: true
+                        spacing: Theme.sp2
+
+                        GhostButton {
+                            compact: true
+                            minimumWidth: 0
+                            text: qsTr("Up")
+                            enabled: root.composeFilePath.trim().length > 0
+                            onClicked: client.composeUp(root.composeFilePath)
+                        }
+
+                        GhostButton {
+                            compact: true
+                            minimumWidth: 0
+                            text: qsTr("Down")
+                            enabled: root.composeFilePath.trim().length > 0
+                            onClicked: client.composeDown(root.composeFilePath)
+                        }
+
+                        GhostButton {
+                            compact: true
+                            minimumWidth: 0
+                            text: qsTr("Restart all")
+                            enabled: root.composeFilePath.trim().length > 0
+                            onClicked: client.composeRestart(root.composeFilePath, "")
+                        }
+                    }
+                }
+            }
+
+            ListView {
+                id: composeList
+                Layout.fillWidth: true
+                Layout.fillHeight: true
+                clip: true
+                model: client.composeServices
+                spacing: Theme.sp1
+
+                delegate: Rectangle {
+                    id: composeRow
+                    required property var modelData
+
+                    readonly property string service: String(modelData.service || modelData.name || "")
+                    readonly property string status: String(modelData.status || "")
+                    readonly property string state: String(modelData.state || "")
+                    readonly property bool isRunning: Boolean(modelData.isRunning)
+                    readonly property string image: String(modelData.image || "")
+                    readonly property string ports: String(modelData.ports || "")
+
+                    width: ListView.view.width
+                    implicitHeight: 58
+                    radius: Theme.radiusSm
+                    color: rowMouse.containsMouse ? Theme.bgHover : "transparent"
+
+                    MouseArea {
+                        id: rowMouse
+                        anchors.fill: parent
+                        hoverEnabled: true
+                        acceptedButtons: Qt.NoButton
+                    }
+
+                    ColumnLayout {
+                        anchors.fill: parent
+                        anchors.margins: Theme.sp2
+                        spacing: Theme.sp1
+
+                        RowLayout {
+                            Layout.fillWidth: true
+                            spacing: Theme.sp2
+
+                            Rectangle {
+                                width: 8
+                                height: 8
+                                radius: 4
+                                color: composeRow.isRunning ? Theme.statusSuccess : Theme.textTertiary
+                            }
+
+                            Text {
+                                Layout.preferredWidth: 180
+                                text: composeRow.service
+                                font.family: Theme.fontMono
+                                font.pixelSize: Theme.sizeBody
+                                font.weight: Theme.weightMedium
+                                color: Theme.textPrimary
+                                elide: Text.ElideRight
+                            }
+
+                            Text {
+                                Layout.fillWidth: true
+                                text: composeRow.image
+                                font.family: Theme.fontMono
+                                font.pixelSize: Theme.sizeCaption
+                                color: Theme.textSecondary
+                                elide: Text.ElideRight
+                            }
+
+                            StatusPill {
+                                text: composeRow.isRunning ? qsTr("Running") : qsTr("Stopped")
+                                tone: composeRow.isRunning ? "success" : "neutral"
+                            }
+                        }
+
+                        RowLayout {
+                            Layout.fillWidth: true
+                            spacing: Theme.sp2
+
+                            Text {
+                                Layout.fillWidth: true
+                                text: composeRow.status.length > 0 ? composeRow.status : composeRow.state
+                                font.family: Theme.fontUi
+                                font.pixelSize: Theme.sizeCaption
+                                color: Theme.textTertiary
+                                elide: Text.ElideRight
+                            }
+
+                            Text {
+                                Layout.preferredWidth: 180
+                                text: composeRow.ports.length > 0 ? composeRow.ports : "—"
+                                font.family: Theme.fontMono
+                                font.pixelSize: Theme.sizeSmall
+                                color: Theme.textTertiary
+                                elide: Text.ElideRight
+                                horizontalAlignment: Text.AlignRight
+                            }
+
+                            DockerRowButton {
+                                glyph: "R"
+                                tooltip: qsTr("Restart service")
+                                onClicked: client.composeRestart(root.composeFilePath, composeRow.service)
+                            }
+
+                            DockerRowButton {
+                                glyph: "L"
+                                tooltip: qsTr("Service logs")
+                                onClicked: root._openComposeLogsFor(composeRow.service)
+                            }
+                        }
+                    }
+                }
+
+                ToolEmptyState {
+                    anchors.centerIn: parent
+                    visible: !client.busy
+                             && composeList.count === 0
+                             && root.composeFilePath.trim().length > 0
+                    icon: "container"
+                    title: qsTr("No compose services")
+                    description: qsTr("Load a compose file and its services will appear here.")
+                }
+
+                ToolEmptyState {
+                    anchors.centerIn: parent
+                    visible: !client.busy
+                             && root.composeFilePath.trim().length === 0
+                    icon: "container"
+                    title: qsTr("Compose path required")
+                    description: qsTr("Enter a compose file path to manage a stack on this host.")
+                }
+            }
+        }
+    }
+
     Rectangle {
         id: overlay
         anchors.fill: parent
         visible: client.status === PierDockerClient.Connecting
               || client.status === PierDockerClient.Failed
-
         color: Qt.rgba(Theme.bgCanvas.r, Theme.bgCanvas.g, Theme.bgCanvas.b, 0.88)
-
-        Behavior on opacity { NumberAnimation { duration: Theme.durNormal } }
 
         MouseArea {
             anchors.fill: parent
@@ -694,52 +1511,42 @@ Rectangle {
         }
 
         Rectangle {
-            id: card
             anchors.centerIn: parent
             width: Math.min(420, parent.width - Theme.sp8 * 2)
-            implicitHeight: cardColumn.implicitHeight + Theme.sp5 * 2
-
+            implicitHeight: overlayColumn.implicitHeight + Theme.sp5 * 2
             color: Theme.bgElevated
             border.color: Theme.borderDefault
             border.width: 1
             radius: Theme.radiusLg
 
-            Behavior on color        { ColorAnimation { duration: Theme.durNormal } }
-            Behavior on border.color { ColorAnimation { duration: Theme.durNormal } }
-
             ColumnLayout {
-                id: cardColumn
+                id: overlayColumn
                 anchors.fill: parent
                 anchors.margins: Theme.sp5
                 spacing: Theme.sp3
 
                 SectionLabel {
+                    Layout.alignment: Qt.AlignHCenter
                     text: client.status === PierDockerClient.Connecting
                           ? qsTr("Connecting to Docker")
                           : qsTr("Failed")
-                    Layout.alignment: Qt.AlignHCenter
                 }
 
                 Text {
-                    text: client.target.length > 0 ? client.target : qsTr("Docker")
                     Layout.alignment: Qt.AlignHCenter
+                    Layout.maximumWidth: parent.width - Theme.sp5 * 2
+                    text: client.target.length > 0 ? client.target : qsTr("Docker")
                     font.family: Theme.fontMono
                     font.pixelSize: Theme.sizeH3
                     font.weight: Theme.weightMedium
                     color: Theme.textPrimary
                     elide: Text.ElideMiddle
-                    Layout.maximumWidth: card.width - Theme.sp5 * 2
-
-                    Behavior on color { ColorAnimation { duration: Theme.durNormal } }
                 }
 
                 Text {
                     visible: client.status === PierDockerClient.Failed
                     Layout.fillWidth: true
-                    Layout.topMargin: Theme.sp2
-                    text: client.errorMessage.length > 0
-                          ? client.errorMessage
-                          : qsTr("Unknown error")
+                    text: client.errorMessage.length > 0 ? client.errorMessage : qsTr("Unknown error")
                     wrapMode: Text.Wrap
                     horizontalAlignment: Text.AlignHCenter
                     font.family: Theme.fontMono
@@ -749,7 +1556,6 @@ Rectangle {
 
                 RowLayout {
                     Layout.fillWidth: true
-                    Layout.topMargin: Theme.sp3
                     spacing: Theme.sp2
 
                     Item { Layout.fillWidth: true }
@@ -760,21 +1566,211 @@ Rectangle {
                         text: qsTr("Cancel")
                         onClicked: client.stop()
                     }
+
                     PrimaryButton {
-                        text: qsTr("Retry")
+                        compact: true
+                        minimumWidth: 0
                         visible: client.status === PierDockerClient.Failed
-                        onClicked: _dispatchConnect()
+                        text: qsTr("Retry")
+                        onClicked: root._dispatchConnect()
                     }
                 }
             }
         }
     }
 
-    // ─── Local row-button component ──────────────────────
-    // Small pill with a single glyph + hover tooltip.
-    // Kept in-file because it's only used by this view and
-    // lives under the row layout's hit target.
-component DockerRowButton : Rectangle {
+    ModalDialogShell {
+        id: runDialog
+        open: root.runDialogOpen
+        title: qsTr("Run Image")
+        subtitle: root.runImageRef
+        dialogWidth: 720
+        dialogHeight: 620
+        bodyPadding: Theme.sp4
+        onRequestClose: root.runDialogOpen = false
+
+        PierScrollView {
+            anchors.fill: parent
+            clip: true
+
+            ColumnLayout {
+                width: parent.width
+                spacing: Theme.sp3
+
+                ToolPanelSurface {
+                    Layout.fillWidth: true
+                    inset: true
+                    padding: Theme.sp3
+
+                    ColumnLayout {
+                        anchors.fill: parent
+                        spacing: Theme.sp2
+
+                        SectionLabel { text: qsTr("Container name") }
+                        PierTextField {
+                            Layout.fillWidth: true
+                            text: root.runContainerName
+                            placeholder: qsTr("Optional")
+                            onTextChanged: root.runContainerName = text
+                        }
+                    }
+                }
+
+                ToolPanelSurface {
+                    Layout.fillWidth: true
+                    inset: true
+                    padding: Theme.sp3
+
+                    ColumnLayout {
+                        anchors.fill: parent
+                        spacing: Theme.sp2
+
+                        SectionLabel { text: qsTr("Port mappings") }
+                        Text {
+                            Layout.fillWidth: true
+                            text: qsTr("One per line, format HOST:CONTAINER")
+                            font.family: Theme.fontUi
+                            font.pixelSize: Theme.sizeSmall
+                            color: Theme.textTertiary
+                        }
+                        PierTextArea {
+                            Layout.fillWidth: true
+                            Layout.preferredHeight: 88
+                            mono: true
+                            text: root.runPortsText
+                            wrapMode: TextArea.Wrap
+                            font.pixelSize: Theme.sizeCaption
+                            selectByMouse: true
+                            onTextChanged: root.runPortsText = text
+                        }
+                    }
+                }
+
+                ToolPanelSurface {
+                    Layout.fillWidth: true
+                    inset: true
+                    padding: Theme.sp3
+
+                    ColumnLayout {
+                        anchors.fill: parent
+                        spacing: Theme.sp2
+
+                        SectionLabel { text: qsTr("Environment variables") }
+                        Text {
+                            Layout.fillWidth: true
+                            text: qsTr("One per line, format KEY=value")
+                            font.family: Theme.fontUi
+                            font.pixelSize: Theme.sizeSmall
+                            color: Theme.textTertiary
+                        }
+                        PierTextArea {
+                            Layout.fillWidth: true
+                            Layout.preferredHeight: 88
+                            mono: true
+                            text: root.runEnvText
+                            wrapMode: TextArea.Wrap
+                            font.pixelSize: Theme.sizeCaption
+                            selectByMouse: true
+                            onTextChanged: root.runEnvText = text
+                        }
+                    }
+                }
+
+                ToolPanelSurface {
+                    Layout.fillWidth: true
+                    inset: true
+                    padding: Theme.sp3
+
+                    ColumnLayout {
+                        anchors.fill: parent
+                        spacing: Theme.sp2
+
+                        SectionLabel { text: qsTr("Volume mounts") }
+                        Text {
+                            Layout.fillWidth: true
+                            text: qsTr("One per line, format HOST_PATH:CONTAINER_PATH")
+                            font.family: Theme.fontUi
+                            font.pixelSize: Theme.sizeSmall
+                            color: Theme.textTertiary
+                        }
+                        PierTextArea {
+                            Layout.fillWidth: true
+                            Layout.preferredHeight: 88
+                            mono: true
+                            text: root.runVolumesText
+                            wrapMode: TextArea.Wrap
+                            font.pixelSize: Theme.sizeCaption
+                            selectByMouse: true
+                            onTextChanged: root.runVolumesText = text
+                        }
+                    }
+                }
+
+                ToolPanelSurface {
+                    Layout.fillWidth: true
+                    inset: true
+                    padding: Theme.sp3
+
+                    ColumnLayout {
+                        anchors.fill: parent
+                        spacing: Theme.sp2
+
+                        SectionLabel { text: qsTr("Restart policy") }
+                        PierComboBox {
+                            Layout.fillWidth: true
+                            options: root.restartLabels
+                            currentIndex: root.runRestartIndex
+                            onActivated: (index) => root.runRestartIndex = index
+                        }
+                    }
+                }
+
+                ToolPanelSurface {
+                    Layout.fillWidth: true
+                    inset: true
+                    padding: Theme.sp3
+
+                    ColumnLayout {
+                        anchors.fill: parent
+                        spacing: Theme.sp2
+
+                        SectionLabel { text: qsTr("Command override") }
+                        PierTextField {
+                            Layout.fillWidth: true
+                            text: root.runCommand
+                            placeholder: qsTr("Optional, e.g. /bin/sh")
+                            onTextChanged: root.runCommand = text
+                        }
+                    }
+                }
+            }
+        }
+
+        footer: Item {
+            implicitHeight: runDialogFooter.implicitHeight
+
+            RowLayout {
+                id: runDialogFooter
+                anchors.fill: parent
+                spacing: Theme.sp2
+
+                GhostButton {
+                    text: qsTr("Cancel")
+                    onClicked: root.runDialogOpen = false
+                }
+
+                Item { Layout.fillWidth: true }
+
+                PrimaryButton {
+                    text: qsTr("Create and run")
+                    enabled: root.runImageRef.length > 0
+                    onClicked: root._submitRunDialog()
+                }
+            }
+        }
+    }
+
+    component DockerRowButton : Rectangle {
         id: rowBtn
         required property string glyph
         required property string tooltip
@@ -782,8 +1778,8 @@ component DockerRowButton : Rectangle {
         property bool active: false
         signal clicked()
 
-        implicitWidth: 20
-        implicitHeight: 20
+        implicitWidth: 22
+        implicitHeight: 22
         radius: Theme.radiusSm
         color: rowBtn.active
                ? Theme.accentSubtle
@@ -799,7 +1795,7 @@ component DockerRowButton : Rectangle {
                          : "transparent")
         border.width: (rowBtn.active || btnMouse.containsMouse) ? 1 : 0
 
-        Behavior on color        { ColorAnimation { duration: Theme.durFast } }
+        Behavior on color { ColorAnimation { duration: Theme.durFast } }
         Behavior on border.color { ColorAnimation { duration: Theme.durFast } }
 
         Text {
@@ -812,8 +1808,6 @@ component DockerRowButton : Rectangle {
                    : (btnMouse.containsMouse
                       ? (rowBtn.danger ? Theme.statusError : Theme.textPrimary)
                       : Theme.textSecondary)
-
-            Behavior on color { ColorAnimation { duration: Theme.durFast } }
         }
 
         MouseArea {
@@ -825,8 +1819,8 @@ component DockerRowButton : Rectangle {
         }
 
         PierToolTip {
-            visible: btnMouse.containsMouse
             text: rowBtn.tooltip
+            visible: btnMouse.containsMouse
         }
     }
 }

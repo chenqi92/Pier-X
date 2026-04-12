@@ -223,8 +223,12 @@ mod tests {
         // touching memory.
         unsafe {
             assert!(pier_services_detect(
-                ptr::null(), 22, ptr::null(),
-                PIER_AUTH_PASSWORD, ptr::null(), ptr::null(),
+                ptr::null(),
+                22,
+                ptr::null(),
+                PIER_AUTH_PASSWORD,
+                ptr::null(),
+                ptr::null(),
             )
             .is_null());
             pier_services_free_json(ptr::null_mut()); // no-op

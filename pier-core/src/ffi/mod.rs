@@ -66,38 +66,26 @@ pub use self::connections::{
 };
 pub use self::core::{pier_core_build_info, pier_core_has_feature, pier_core_version};
 pub use self::credentials::{pier_credential_delete, pier_credential_set};
+pub use self::docker::{
+    pier_docker_exec_json, pier_docker_free, pier_docker_free_string,
+    pier_docker_inspect_container, pier_docker_list_containers, pier_docker_list_images,
+    pier_docker_list_networks, pier_docker_list_volumes, pier_docker_open,
+    pier_docker_open_on_session, pier_docker_remove, pier_docker_remove_image,
+    pier_docker_remove_network, pier_docker_remove_volume, pier_docker_restart, pier_docker_start,
+    pier_docker_stop, PierDocker, PIER_DOCKER_ERR_FAILED, PIER_DOCKER_ERR_NULL,
+    PIER_DOCKER_ERR_UNSAFE_ID, PIER_DOCKER_ERR_UTF8, PIER_DOCKER_OK,
+};
 pub use self::git::{
     pier_git_blame, pier_git_branch_info, pier_git_branch_list_local, pier_git_checkout_branch,
-    pier_git_commit, pier_git_compute_graph_layout,
-    pier_git_config_list, pier_git_config_set, pier_git_config_unset,
-    pier_git_detect_default_branch, pier_git_diff, pier_git_diff_untracked, pier_git_discard,
-    pier_git_first_parent_chain, pier_git_free, pier_git_free_string, pier_git_graph_log,
-    pier_git_list_authors, pier_git_list_branches, pier_git_log, pier_git_open,
-    pier_git_pull, pier_git_push,
-    pier_git_remote_add, pier_git_remote_list, pier_git_remote_remove,
-    pier_git_stage, pier_git_stage_all, pier_git_stash_apply, pier_git_stash_drop,
-    pier_git_stash_list, pier_git_stash_pop, pier_git_stash_push,
-    pier_git_status,
-    pier_git_tag_create, pier_git_tag_delete, pier_git_tag_list,
-    pier_git_unstage, pier_git_unstage_all,
-    PierGit,
-};
-pub use self::search::{
-    pier_search_content, pier_search_files, pier_search_free_string,
-};
-pub use self::sqlite::{
-    pier_sqlite_execute, pier_sqlite_free, pier_sqlite_free_string,
-    pier_sqlite_list_tables, pier_sqlite_open, pier_sqlite_table_columns,
-    PierSqlite,
-};
-pub use self::docker::{
-    pier_docker_free, pier_docker_free_string, pier_docker_inspect_container,
-    pier_docker_list_containers, pier_docker_list_images, pier_docker_list_networks,
-    pier_docker_list_volumes, pier_docker_open, pier_docker_open_on_session,
-    pier_docker_remove, pier_docker_remove_image, pier_docker_remove_network,
-    pier_docker_remove_volume, pier_docker_restart, pier_docker_start, pier_docker_stop,
-    PierDocker, PIER_DOCKER_ERR_FAILED, PIER_DOCKER_ERR_NULL, PIER_DOCKER_ERR_UNSAFE_ID,
-    PIER_DOCKER_ERR_UTF8, PIER_DOCKER_OK,
+    pier_git_commit, pier_git_compute_graph_layout, pier_git_config_list, pier_git_config_set,
+    pier_git_config_unset, pier_git_detect_default_branch, pier_git_diff, pier_git_diff_untracked,
+    pier_git_discard, pier_git_first_parent_chain, pier_git_free, pier_git_free_string,
+    pier_git_graph_log, pier_git_list_authors, pier_git_list_branches, pier_git_log, pier_git_open,
+    pier_git_pull, pier_git_push, pier_git_remote_add, pier_git_remote_list,
+    pier_git_remote_remove, pier_git_stage, pier_git_stage_all, pier_git_stash_apply,
+    pier_git_stash_drop, pier_git_stash_list, pier_git_stash_pop, pier_git_stash_push,
+    pier_git_status, pier_git_tag_create, pier_git_tag_delete, pier_git_tag_list, pier_git_unstage,
+    pier_git_unstage_all, PierGit,
 };
 pub use self::log_stream::{
     pier_log_drain, pier_log_exit_code, pier_log_free, pier_log_free_string, pier_log_is_alive,
@@ -117,25 +105,17 @@ pub use self::postgres::{
     pier_postgres_list_columns, pier_postgres_list_databases, pier_postgres_list_tables,
     pier_postgres_open, PierPostgres,
 };
-pub use self::server_monitor::{
-    pier_server_monitor_free, pier_server_monitor_free_string, pier_server_monitor_open,
-    pier_server_monitor_open_on_session, pier_server_monitor_probe, PierServerMonitor,
-};
 pub use self::redis::{
     pier_redis_free, pier_redis_free_string, pier_redis_info, pier_redis_inspect, pier_redis_open,
     pier_redis_ping, pier_redis_scan_keys, PierRedis,
 };
+pub use self::search::{pier_search_content, pier_search_files, pier_search_free_string};
+pub use self::server_monitor::{
+    pier_server_monitor_free, pier_server_monitor_free_string, pier_server_monitor_open,
+    pier_server_monitor_open_on_session, pier_server_monitor_probe, PierServerMonitor,
+};
 pub use self::services::{
     pier_services_detect, pier_services_detect_on_session, pier_services_free_json,
-};
-pub use self::ssh_session::{
-    pier_ssh_session_free, pier_ssh_session_is_alive, pier_ssh_session_last_error,
-    pier_ssh_session_last_error_kind, pier_ssh_session_open, pier_ssh_session_refcount,
-    PierSshSession,
-};
-pub use self::tunnel::{
-    pier_tunnel_free, pier_tunnel_is_alive, pier_tunnel_local_port, pier_tunnel_open,
-    pier_tunnel_open_on_session, PierTunnel,
 };
 pub use self::sftp::{
     pier_sftp_canonicalize, pier_sftp_free, pier_sftp_free_string, pier_sftp_list_dir,
@@ -143,9 +123,22 @@ pub use self::sftp::{
     pier_sftp_remove_file, pier_sftp_rename, PierSftp, PIER_AUTH_AGENT, PIER_AUTH_CREDENTIAL,
     PIER_AUTH_KEY, PIER_AUTH_PASSWORD,
 };
+pub use self::sqlite::{
+    pier_sqlite_execute, pier_sqlite_free, pier_sqlite_free_string, pier_sqlite_list_tables,
+    pier_sqlite_open, pier_sqlite_table_columns, PierSqlite,
+};
+pub use self::ssh_session::{
+    pier_ssh_session_free, pier_ssh_session_is_alive, pier_ssh_session_last_error,
+    pier_ssh_session_last_error_kind, pier_ssh_session_open, pier_ssh_session_refcount,
+    PierSshSession,
+};
 pub use self::terminal::{
     pier_terminal_free, pier_terminal_is_alive, pier_terminal_last_ssh_error, pier_terminal_new,
     pier_terminal_new_ssh, pier_terminal_new_ssh_agent, pier_terminal_new_ssh_credential,
     pier_terminal_new_ssh_key, pier_terminal_new_ssh_on_session, pier_terminal_resize,
     pier_terminal_snapshot, pier_terminal_write, PierCell, PierGridInfo,
+};
+pub use self::tunnel::{
+    pier_tunnel_free, pier_tunnel_is_alive, pier_tunnel_local_port, pier_tunnel_open,
+    pier_tunnel_open_on_session, PierTunnel,
 };

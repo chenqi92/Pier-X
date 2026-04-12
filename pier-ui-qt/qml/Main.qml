@@ -15,11 +15,25 @@ ApplicationWindow {
     minimumHeight: Theme.windowMinHeight
     visible: true
     title: qsTr("Pier-X")
+    // Qt 6.9+ auto-insets ApplicationWindow.contentItem by safe-area
+    // margins. On macOS that pushes our custom TopBar below the native
+    // traffic lights, making the title-bar content look like a second
+    // row. We own the chrome geometry ourselves, so opt out here.
+    topPadding: 0
+    leftPadding: 0
+    rightPadding: 0
+    bottomPadding: 0
 
     color: Theme.bgCanvas
     Behavior on color {
         ColorAnimation { duration: Theme.durNormal; easing.type: Theme.easingType }
     }
+
+    property string fileBrowserContextPath: PierCore.workingDirectory
+    property real windowedX: x
+    property real windowedY: y
+    property real windowedWidth: width
+    property real windowedHeight: height
 
     menuBar: MenuBar {
         Menu {
@@ -89,13 +103,6 @@ ApplicationWindow {
             title: qsTr("View")
 
             MenuItem {
-                action: Action {
-                    text: qsTr("Command palette…")
-                    shortcut: Qt.platform.os === "osx" ? "Meta+K" : "Ctrl+K"
-                    onTriggered: commandPalette.show()
-                }
-            }
-            MenuItem {
                 text: Theme.dark ? qsTr("Switch to light theme") : qsTr("Switch to dark theme")
                 onTriggered: { Theme.followSystem = false; Theme.dark = !Theme.dark }
             }
@@ -131,6 +138,13 @@ ApplicationWindow {
                     else window.showMaximized()
                 }
             }
+            MenuItem {
+                action: Action {
+                    text: window.visibility === Window.FullScreen ? qsTr("Exit Full Screen") : qsTr("Enter Full Screen")
+                    shortcut: Qt.platform.os === "osx" ? "Ctrl+Meta+F" : "F11"
+                    onTriggered: window.toggleFullScreen()
+                }
+            }
         }
 
         Menu {
@@ -142,10 +156,6 @@ ApplicationWindow {
     // ─────────────────────────────────────────────────────
     // Global keyboard shortcuts
     // ─────────────────────────────────────────────────────
-    Shortcut {
-        sequences: ["Ctrl+K", "Meta+K"]
-        onActivated: commandPalette.toggle()
-    }
     Shortcut {
         sequences: ["Ctrl+T", "Meta+T"]
         onActivated: window.openNewTab()
@@ -170,6 +180,10 @@ ApplicationWindow {
         sequences: ["Ctrl+Shift+G", "Meta+Shift+G"]
         onActivated: window.toggleGitPanel()
     }
+    Shortcut {
+        sequences: Qt.platform.os === "osx" ? ["Ctrl+Meta+F"] : ["F11"]
+        onActivated: window.toggleFullScreen()
+    }
 
     // ─────────────────────────────────────────────────────
     // App-wide models
@@ -193,27 +207,59 @@ ApplicationWindow {
 
     property int currentTabIndex: 0
     property bool gitPanelVisible: true
+    property bool restoreMaximizedAfterFullScreen: false
 
-    // Live SSH session from the current tab's TerminalView.
-    // Returns the PierTerminalSession if the active tab is a
-    // terminal (local or SSH); null for SFTP/Markdown tabs.
-    readonly property var activeSession: {
-        if (typeof tabRepeater === "undefined" || !tabRepeater) return null
-        if (currentTabIndex < 0 || currentTabIndex >= tabModel.count) return null
-        var loader = tabRepeater.itemAt(currentTabIndex)
-        if (!loader || !loader.item) return null
-        // TerminalView exposes `terminalSession`; SFTP/Markdown don't
-        return loader.item.terminalSession || null
+    // Per-tab session references, keyed by tab index.
+    // Updated by the Repeater delegate when TerminalView's session
+    // connects or the shared session becomes available.
+    property var _tabSessions: ({})     // { index: PierTerminalSession }
+    property var _tabSharedSessions: ({}) // { index: PierSshSessionHandle }
+
+    // Live session from the CURRENT tab.
+    readonly property var activeSession: _tabSessions[currentTabIndex] || null
+    readonly property var activeSharedSession: _tabSharedSessions[currentTabIndex] || null
+
+    function toggleFullScreen() {
+        if (visibility === Window.FullScreen) {
+            if (restoreMaximizedAfterFullScreen)
+                showMaximized()
+            else
+                showNormal()
+            return
+        }
+
+        restoreMaximizedAfterFullScreen = visibility === Window.Maximized
+        showFullScreen()
     }
 
-    // Shared SSH session from the active terminal tab.
-    // Right-panel tools use this to avoid redundant SSH handshakes.
-    readonly property var activeSharedSession: {
-        if (typeof tabRepeater === "undefined" || !tabRepeater) return null
-        if (currentTabIndex < 0 || currentTabIndex >= tabModel.count) return null
-        var loader = tabRepeater.itemAt(currentTabIndex)
-        if (!loader || !loader.item) return null
-        return loader.item.sharedSshSession || null
+    function rememberWindowedGeometry() {
+        if (visibility !== Window.Windowed)
+            return
+
+        windowedX = x
+        windowedY = y
+        windowedWidth = width
+        windowedHeight = height
+    }
+
+    onXChanged: rememberWindowedGeometry()
+    onYChanged: rememberWindowedGeometry()
+    onWidthChanged: rememberWindowedGeometry()
+    onHeightChanged: rememberWindowedGeometry()
+
+    function _registerTabSession(idx, session) {
+        var m = _tabSessions
+        m[idx] = session
+        _tabSessions = m  // trigger binding update
+    }
+    function _registerTabSharedSession(idx, session) {
+        var m = _tabSharedSessions
+        m[idx] = session
+        _tabSharedSessions = m
+    }
+    function _unregisterTab(idx) {
+        var m1 = _tabSessions; delete m1[idx]; _tabSessions = m1
+        var m2 = _tabSharedSessions; delete m2[idx]; _tabSharedSessions = m2
     }
     property var pendingCloseIndexes: []
     property string pendingCloseTitle: ""
@@ -745,19 +791,23 @@ ApplicationWindow {
                           ? (tabModel.get(currentTabIndex).title || qsTr("Workspace"))
                           : qsTr("Workspace")
             onNewSessionRequested: window.openNewSessionMenu()
-            onCommandPaletteRequested: commandPalette.show()
             onSettingsRequested: settingsDialog.show()
         }
 
         SplitView {
+            id: shellSplit
             Layout.fillWidth: true
             Layout.fillHeight: true
             orientation: Qt.Horizontal
+            handle: PierSplitHandle {
+                vertical: shellSplit.orientation === Qt.Horizontal
+            }
 
             Sidebar {
                 id: sidebar
-                SplitView.preferredWidth: Theme.sidebarWidth
-                SplitView.minimumWidth: 190
+                SplitView.preferredWidth: 304
+                SplitView.minimumWidth: 208
+                SplitView.maximumWidth: 760
                 // Use a visible property mapped to a toggled state if needed
                 connectionsModel: connectionsModel
                 onAddConnectionRequested: newConnectionDialog.show()
@@ -787,13 +837,14 @@ ApplicationWindow {
                     else
                         window.openNewTab()
                 }
+                onFileContextChanged: (path) => window.fileBrowserContextPath = path
                 onOpenMarkdownRequested: (filePath) => window.openMarkdownTab(filePath)
             }
 
             // Central Area + Right Panel wrapper
             // Needs to be wrapped in an Item so WelcomeView overlays correctly without breaking SplitView
             Item {
-                SplitView.minimumWidth: 620
+                SplitView.minimumWidth: 200
                 SplitView.fillWidth: true
 
                 WelcomeView {
@@ -809,12 +860,16 @@ ApplicationWindow {
                 }
 
                 SplitView {
+                    id: workspaceSplit
                     anchors.fill: parent
                     visible: tabModel.count > 0
                     orientation: Qt.Horizontal
+                    handle: PierSplitHandle {
+                        vertical: workspaceSplit.orientation === Qt.Horizontal
+                    }
 
                     ColumnLayout {
-                        SplitView.minimumWidth: 560
+                        SplitView.minimumWidth: 220
                         SplitView.fillWidth: true
                         spacing: 0
 
@@ -858,7 +913,9 @@ ApplicationWindow {
                                 id: tabRepeater
                                 model: tabModel
                                 delegate: Loader {
+                                    id: tabLoader
                                     // Main tab views
+                                    required property int index
                                     required property string backend
                                     required property string startupCommand
                                     required property string sshHost
@@ -876,6 +933,23 @@ ApplicationWindow {
                                                      : (backend === "markdown"
                                                         ? markdownComp
                                                         : terminalComp)
+
+                                    // Register session references when loaded and when SSH context changes
+                                    onLoaded: _syncSessions()
+                                    Component.onDestruction: window._unregisterTab(index)
+
+                                    function _syncSessions() {
+                                        if (item && item.terminalSession)
+                                            window._registerTabSession(index, item.terminalSession)
+                                        if (item && item.sharedSshSession)
+                                            window._registerTabSharedSession(index, item.sharedSshSession)
+                                    }
+
+                                    Connections {
+                                        target: tabLoader.item
+                                        ignoreUnknownSignals: true
+                                        function onSshContextChanged() { tabLoader._syncSessions() }
+                                    }
 
                                     Component {
                                         id: terminalComp
@@ -925,9 +999,9 @@ ApplicationWindow {
             // activeTool is per-tab via the rightTool field.
             RightSidebar {
                 id: rightSidebar
-                SplitView.preferredWidth: rightSidebar.contentExpanded ? Theme.rightSidebarWidth : Theme.toolRailWidth
-                SplitView.minimumWidth: rightSidebar.contentExpanded ? 340 : Theme.toolRailWidth
-                SplitView.maximumWidth: rightSidebar.contentExpanded ? 99999 : Theme.toolRailWidth
+                SplitView.preferredWidth: rightSidebar.contentExpanded ? 392 : Theme.toolRailWidth
+                SplitView.minimumWidth: rightSidebar.contentExpanded ? 248 : Theme.toolRailWidth
+                SplitView.maximumWidth: rightSidebar.contentExpanded ? 960 : Theme.toolRailWidth
 
                 // Per-tab tool memory
                 activeTool: {
@@ -941,20 +1015,70 @@ ApplicationWindow {
 
                 // Shared SSH session for right-panel tool reuse
                 sharedSession: window.activeSharedSession
+                gitContextPath: window.fileBrowserContextPath
 
-                // Live SSH context from the active terminal session
+                // SSH context — prefer live sharedSession, fall back to tab model
                 activeBackend: {
                     if (window.currentTabIndex < 0 || window.currentTabIndex >= tabModel.count) return ""
+                    // If shared session is connected, treat as SSH regardless of tab backend
+                    if (window.activeSharedSession && window.activeSharedSession.connected) return "ssh"
                     return tabModel.get(window.currentTabIndex).backend || ""
                 }
-                sshHost:     window.activeSession ? window.activeSession.sshHost     : ""
-                sshPort:     window.activeSession ? window.activeSession.sshPort     : 22
-                sshUser:     window.activeSession ? window.activeSession.sshUser     : ""
-                sshPassword: window.activeSession ? window.activeSession.sshPassword : ""
-                sshCredentialId: window.activeSession ? window.activeSession.sshCredentialId : ""
-                sshKeyPath:  window.activeSession ? window.activeSession.sshKeyPath  : ""
-                sshPassphraseCredentialId: window.activeSession ? window.activeSession.sshPassphraseCredentialId : ""
-                sshUsesAgent: window.activeSession ? window.activeSession.sshUsesAgent : false
+                sshHost: {
+                    // From sharedSession target "user@host:port"
+                    var ss = window.activeSharedSession
+                    if (ss && ss.connected && ss.target.length > 0) {
+                        var t = ss.target
+                        return t.indexOf("@") >= 0 ? t.substring(t.indexOf("@") + 1).split(":")[0] : t.split(":")[0]
+                    }
+                    // Fallback to tab model
+                    if (window.currentTabIndex >= 0 && window.currentTabIndex < tabModel.count)
+                        return tabModel.get(window.currentTabIndex).sshHost || ""
+                    return ""
+                }
+                sshPort: {
+                    var ss = window.activeSharedSession
+                    if (ss && ss.connected && ss.target.length > 0) {
+                        var parts = ss.target.split(":")
+                        return parts.length > 1 ? parseInt(parts[parts.length - 1]) || 22 : 22
+                    }
+                    if (window.currentTabIndex >= 0 && window.currentTabIndex < tabModel.count)
+                        return tabModel.get(window.currentTabIndex).sshPort || 22
+                    return 22
+                }
+                sshUser: {
+                    var ss = window.activeSharedSession
+                    if (ss && ss.connected && ss.target.indexOf("@") >= 0)
+                        return ss.target.substring(0, ss.target.indexOf("@"))
+                    if (window.currentTabIndex >= 0 && window.currentTabIndex < tabModel.count)
+                        return tabModel.get(window.currentTabIndex).sshUser || ""
+                    return ""
+                }
+                sshPassword: {
+                    if (window.currentTabIndex >= 0 && window.currentTabIndex < tabModel.count)
+                        return tabModel.get(window.currentTabIndex).sshPassword || ""
+                    return ""
+                }
+                sshCredentialId: {
+                    if (window.currentTabIndex >= 0 && window.currentTabIndex < tabModel.count)
+                        return tabModel.get(window.currentTabIndex).sshCredentialId || ""
+                    return ""
+                }
+                sshKeyPath: {
+                    if (window.currentTabIndex >= 0 && window.currentTabIndex < tabModel.count)
+                        return tabModel.get(window.currentTabIndex).sshKeyPath || ""
+                    return ""
+                }
+                sshPassphraseCredentialId: {
+                    if (window.currentTabIndex >= 0 && window.currentTabIndex < tabModel.count)
+                        return tabModel.get(window.currentTabIndex).sshPassphraseCredentialId || ""
+                    return ""
+                }
+                sshUsesAgent: {
+                    if (window.currentTabIndex >= 0 && window.currentTabIndex < tabModel.count)
+                        return tabModel.get(window.currentTabIndex).sshUsesAgent || false
+                    return false
+                }
 
                 // Service context still comes from tab model (set by
                 // service pill clicks in TerminalView)
@@ -1004,22 +1128,11 @@ ApplicationWindow {
         }
     }
 
-    Popup {
+    PopoverPanel {
         id: newSessionPopup
         width: 344
-        modal: false
-        focus: true
-        padding: Theme.sp1
-        closePolicy: Popup.CloseOnEscape | Popup.CloseOnPressOutside
         x: Math.round((window.width - width) / 2)
         y: Theme.topBarHeight + Theme.sp2
-
-        background: Rectangle {
-            color: Theme.bgElevated
-            border.color: Theme.borderDefault
-            border.width: 1
-            radius: Theme.radiusLg
-        }
 
         contentItem: ColumnLayout {
             spacing: Theme.sp1
@@ -1182,17 +1295,25 @@ ApplicationWindow {
     // ─────────────────────────────────────────────────────
     // Floating overlays
     // ─────────────────────────────────────────────────────
-    Popup {
+    Item {
         id: remoteCloseDialog
-        parent: Overlay.overlay
-        modal: true
-        focus: true
-        padding: Theme.sp4
-        width: Math.min(420, window.width - Theme.sp6 * 2)
-        x: Math.round((window.width - width) / 2)
-        y: Math.round((window.height - implicitHeight) / 2)
-        closePolicy: Popup.CloseOnEscape | Popup.CloseOnPressOutside
-        onClosed: {
+        property bool opened: false
+
+        anchors.fill: parent
+        visible: opened
+        z: 9480
+
+        function open() {
+            opened = true
+            Qt.callLater(function() {
+                remoteCloseCancelButton.forceActiveFocus()
+            })
+        }
+
+        function close() {
+            if (!opened)
+                return
+            opened = false
             if (window.pendingCloseIndexes.length === 0)
                 return
             window.pendingCloseIndexes = []
@@ -1201,79 +1322,65 @@ ApplicationWindow {
             window.pendingCloseDetail = ""
         }
 
-        background: Rectangle {
-            color: Theme.bgElevated
-            border.color: Theme.borderDefault
-            border.width: 1
-            radius: Theme.radiusLg
+        ModalDialogShell {
+            open: remoteCloseDialog.opened
+            dialogWidth: 420
+            dialogHeight: 0
+            edgePadding: Theme.sp8 * 2
+            title: window.pendingCloseTitle
+            subtitle: window.pendingCloseMessage
+            bodyPadding: Theme.sp5
+            onRequestClose: remoteCloseDialog.close()
 
-            Behavior on color { ColorAnimation { duration: Theme.durNormal } }
-            Behavior on border.color { ColorAnimation { duration: Theme.durNormal } }
-        }
+            ColumnLayout {
+                anchors.fill: parent
+                spacing: Theme.sp4
 
-        contentItem: ColumnLayout {
-            spacing: Theme.sp4
+                Rectangle {
+                    Layout.fillWidth: true
+                    visible: window.pendingCloseDetail.length > 0
+                    color: Theme.bgSurface
+                    border.color: Theme.borderSubtle
+                    border.width: 1
+                    radius: Theme.radiusSm
+                    implicitHeight: detailText.implicitHeight + Theme.sp3 * 2
 
-            Text {
-                Layout.fillWidth: true
-                text: window.pendingCloseTitle
-                wrapMode: Text.WordWrap
-                font.family: Theme.fontUi
-                font.pixelSize: Theme.sizeH3
-                font.weight: Theme.weightMedium
-                color: Theme.textPrimary
+                    Text {
+                        id: detailText
+                        anchors.fill: parent
+                        anchors.margins: Theme.sp3
+                        text: window.pendingCloseDetail
+                        wrapMode: Text.WrapAnywhere
+                        font.family: Theme.fontMono
+                        font.pixelSize: Theme.sizeCaption
+                        color: Theme.textTertiary
+                    }
+                }
             }
 
-            Text {
-                Layout.fillWidth: true
-                text: window.pendingCloseMessage
-                wrapMode: Text.WordWrap
-                font.family: Theme.fontUi
-                font.pixelSize: Theme.sizeBody
-                color: Theme.textSecondary
-            }
+            footer: Item {
+                implicitHeight: remoteCloseFooter.implicitHeight
 
-            Rectangle {
-                Layout.fillWidth: true
-                visible: window.pendingCloseDetail.length > 0
-                color: Theme.bgSurface
-                border.color: Theme.borderSubtle
-                border.width: 1
-                radius: Theme.radiusSm
-                implicitHeight: detailText.implicitHeight + Theme.sp3 * 2
-
-                Text {
-                    id: detailText
+                RowLayout {
+                    id: remoteCloseFooter
                     anchors.fill: parent
-                    anchors.margins: Theme.sp3
-                    text: window.pendingCloseDetail
-                    wrapMode: Text.WrapAnywhere
-                    font.family: Theme.fontMono
-                    font.pixelSize: Theme.sizeCaption
-                    color: Theme.textTertiary
-                }
-            }
+                    spacing: Theme.sp2
 
-            RowLayout {
-                Layout.fillWidth: true
-                spacing: Theme.sp2
+                    Item { Layout.fillWidth: true }
 
-                Item { Layout.fillWidth: true }
+                    GhostButton {
+                        id: remoteCloseCancelButton
+                        text: qsTr("Cancel")
+                        onClicked: window.cancelPendingTabClose()
+                    }
 
-                GhostButton {
-                    id: remoteCloseCancelButton
-                    text: qsTr("Cancel")
-                    onClicked: window.cancelPendingTabClose()
-                }
-
-                PrimaryButton {
-                    text: qsTr("Close")
-                    onClicked: window.confirmPendingTabClose()
+                    PrimaryButton {
+                        text: qsTr("Close")
+                        onClicked: window.confirmPendingTabClose()
+                    }
                 }
             }
         }
-
-        onOpened: remoteCloseCancelButton.forceActiveFocus()
     }
 
     NewConnectionDialog {
@@ -1296,75 +1403,72 @@ ApplicationWindow {
         connectionsModel: connectionsModel
     }
 
-    Popup {
+    Item {
         id: aboutDialog
-        parent: Overlay.overlay
-        modal: true
-        focus: true
-        padding: Theme.sp4
-        width: Math.min(380, window.width - Theme.sp6 * 2)
-        x: Math.round((window.width - width) / 2)
-        y: Math.round((window.height - implicitHeight) / 2)
-        closePolicy: Popup.CloseOnEscape | Popup.CloseOnPressOutside
+        property bool opened: false
 
-        background: Rectangle {
-            color: Theme.bgElevated
-            border.color: Theme.borderDefault
-            border.width: 1
-            radius: Theme.radiusLg
+        anchors.fill: parent
+        visible: opened
+        z: 9480
 
-            Behavior on color { ColorAnimation { duration: Theme.durNormal } }
-            Behavior on border.color { ColorAnimation { duration: Theme.durNormal } }
+        function open() {
+            opened = true
         }
 
-        contentItem: ColumnLayout {
-            spacing: Theme.sp3
+        function close() {
+            opened = false
+        }
 
-            Text {
-                text: qsTr("Pier-X")
-                font.family: Theme.fontUi
-                font.pixelSize: Theme.sizeH3
-                font.weight: Theme.weightMedium
-                color: Theme.textPrimary
-            }
+        ModalDialogShell {
+            open: aboutDialog.opened
+            dialogWidth: 380
+            dialogHeight: 0
+            edgePadding: Theme.sp8 * 2
+            title: qsTr("Pier-X")
+            subtitle: qsTr("A visual operations workspace for terminals, services, and remote infrastructure.")
+            bodyPadding: Theme.sp5
+            onRequestClose: aboutDialog.close()
 
-            Text {
-                text: qsTr("A visual operations workspace for terminals, services, and remote infrastructure.")
-                wrapMode: Text.WordWrap
-                font.family: Theme.fontUi
-                font.pixelSize: Theme.sizeBody
-                color: Theme.textSecondary
-            }
+            ColumnLayout {
+                anchors.fill: parent
+                spacing: Theme.sp3
 
-            Rectangle {
-                Layout.fillWidth: true
-                color: Theme.bgSurface
-                border.color: Theme.borderSubtle
-                border.width: 1
-                radius: Theme.radiusSm
-                implicitHeight: aboutMeta.implicitHeight + Theme.sp3 * 2
+                Rectangle {
+                    Layout.fillWidth: true
+                    color: Theme.bgSurface
+                    border.color: Theme.borderSubtle
+                    border.width: 1
+                    radius: Theme.radiusSm
+                    implicitHeight: aboutMeta.implicitHeight + Theme.sp3 * 2
 
-                Text {
-                    id: aboutMeta
-                    anchors.fill: parent
-                    anchors.margins: Theme.sp3
-                    text: qsTr("Version %1\nQt %2\nCore %3")
-                        .arg(Qt.application.version)
-                        .arg(PierCore.qtVersion)
-                        .arg(PierCore.buildInfo)
-                    font.family: Theme.fontMono
-                    font.pixelSize: Theme.sizeCaption
-                    color: Theme.textTertiary
+                    Text {
+                        id: aboutMeta
+                        anchors.fill: parent
+                        anchors.margins: Theme.sp3
+                        text: qsTr("Version %1\nQt %2\nCore %3")
+                            .arg(Qt.application.version)
+                            .arg(PierCore.qtVersion)
+                            .arg(PierCore.buildInfo)
+                        font.family: Theme.fontMono
+                        font.pixelSize: Theme.sizeCaption
+                        color: Theme.textTertiary
+                    }
                 }
             }
 
-            RowLayout {
-                Layout.fillWidth: true
-                Item { Layout.fillWidth: true }
+            footer: Item {
+                implicitHeight: aboutFooter.implicitHeight
 
-                PrimaryButton {
-                    text: qsTr("Close")
-                    onClicked: aboutDialog.close()
+                RowLayout {
+                    id: aboutFooter
+                    anchors.fill: parent
+
+                    Item { Layout.fillWidth: true }
+
+                    PrimaryButton {
+                        text: qsTr("Close")
+                        onClicked: aboutDialog.close()
+                    }
                 }
             }
         }
@@ -1399,87 +1503,4 @@ ApplicationWindow {
         }
     }
 
-    CommandPalette {
-        id: commandPalette
-        commands: [
-            {
-                title: qsTr("New local terminal"),
-                shortcut: "Ctrl+T",
-                action: function() { window.openNewTab() }
-            },
-            {
-                title: qsTr("New SSH connection…"),
-                shortcut: "Ctrl+N",
-                action: function() { newConnectionDialog.show() }
-            },
-            {
-                title: qsTr("Tail syslog"),
-                shortcut: "",
-                action: function() {
-                    window.toggleRightPanelTool("log", { logCommand: "tail -f /var/log/syslog" })
-                }
-            },
-            {
-                title: qsTr("Docker containers"),
-                shortcut: "",
-                action: function() {
-                    window.toggleRightPanelTool("docker")
-                }
-            },
-            {
-                title: qsTr("Git panel"),
-                shortcut: "Ctrl+Shift+G",
-                action: function() {
-                    window.toggleGitPanel()
-                }
-            },
-            {
-                title: qsTr("Open Markdown preview…"),
-                shortcut: "",
-                action: function() {
-                    markdownFileDialog.open()
-                }
-            },
-            {
-                title: qsTr("MySQL client (127.0.0.1:13306)"),
-                shortcut: "",
-                action: function() {
-                    // M5d: open a MySQL panel tab pointing at
-                    // the Pier-X tunnel convention port. The
-                    // panel itself shows a connect form up
-                    // front, so the user still fills in the
-                    // user / password / database fields.
-                    window.openMysqlTab("127.0.0.1", 13306, "root", "", "")
-                }
-            },
-            {
-                title: qsTr("Close current tab"),
-                shortcut: "Ctrl+W",
-                action: function() { window.closeTab(window.currentTabIndex) }
-            },
-            {
-                title: qsTr("Toggle theme"),
-                shortcut: "",
-                action: function() {
-                    Theme.followSystem = false
-                    Theme.dark = !Theme.dark
-                }
-            },
-            {
-                title: qsTr("Follow system theme"),
-                shortcut: "",
-                action: function() { Theme.followSystem = true }
-            },
-            {
-                title: qsTr("Settings…"),
-                shortcut: "Ctrl+,",
-                action: function() { settingsDialog.show() }
-            },
-            {
-                title: qsTr("Quit Pier-X"),
-                shortcut: "Ctrl+Q",
-                action: function() { Qt.quit() }
-            }
-        ]
-    }
 }

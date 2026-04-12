@@ -280,10 +280,7 @@ pub unsafe extern "C" fn pier_sftp_free(t: *mut PierSftp) {
 /// `t` must be a live handle from [`pier_sftp_new`]. `path`
 /// must be a valid NUL-terminated UTF-8 C string.
 #[no_mangle]
-pub unsafe extern "C" fn pier_sftp_list_dir(
-    t: *mut PierSftp,
-    path: *const c_char,
-) -> *mut c_char {
+pub unsafe extern "C" fn pier_sftp_list_dir(t: *mut PierSftp, path: *const c_char) -> *mut c_char {
     if t.is_null() || path.is_null() {
         return ptr::null_mut();
     }
@@ -340,7 +337,9 @@ pub unsafe extern "C" fn pier_sftp_canonicalize(
         Err(_) => return ptr::null_mut(),
     };
     match sftp.client.canonicalize_blocking(path_str) {
-        Ok(resolved) => CString::new(resolved).map(|c| c.into_raw()).unwrap_or(ptr::null_mut()),
+        Ok(resolved) => CString::new(resolved)
+            .map(|c| c.into_raw())
+            .unwrap_or(ptr::null_mut()),
         Err(e) => {
             log::warn!("pier_sftp_canonicalize({path_str}) failed: {e}");
             ptr::null_mut()
@@ -443,8 +442,12 @@ mod tests {
         // memory.
         unsafe {
             assert!(pier_sftp_new(
-                ptr::null(), 22, ptr::null(),
-                PIER_AUTH_PASSWORD, ptr::null(), ptr::null(),
+                ptr::null(),
+                22,
+                ptr::null(),
+                PIER_AUTH_PASSWORD,
+                ptr::null(),
+                ptr::null(),
             )
             .is_null());
             assert!(pier_sftp_list_dir(ptr::null_mut(), ptr::null()).is_null());
@@ -468,7 +471,14 @@ mod tests {
         // SAFETY: all strings non-null; auth_kind 999 is
         // explicitly unknown.
         let h = unsafe {
-            pier_sftp_new(host.as_ptr(), 22, user.as_ptr(), 999, ptr::null(), ptr::null())
+            pier_sftp_new(
+                host.as_ptr(),
+                22,
+                user.as_ptr(),
+                999,
+                ptr::null(),
+                ptr::null(),
+            )
         };
         assert!(h.is_null());
     }

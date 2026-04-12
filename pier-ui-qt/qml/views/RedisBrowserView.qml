@@ -73,38 +73,106 @@ Rectangle {
         anchors.margins: Theme.sp3
         spacing: Theme.sp2
 
-        // ─── Top bar ─────────────────────────────────────
-        Flow {
+        ToolPanelSurface {
             Layout.fillWidth: true
-            spacing: Theme.sp2
+            padding: Theme.sp2
+            implicitHeight: redisHeader.implicitHeight + Theme.sp2 * 2
 
-            Text {
-                text: client.target.length > 0
-                      ? client.target
-                      : qsTr("Redis")
-                font.family: Theme.fontMono
-                font.pixelSize: Theme.sizeBody
-                font.weight: Theme.weightMedium
-                color: Theme.textPrimary
-                elide: Text.ElideMiddle
-                Layout.minimumWidth: 180
-                Layout.maximumWidth: 260
+            ColumnLayout {
+                id: redisHeader
+                anchors.fill: parent
+                spacing: Theme.sp2
 
-                Behavior on color { ColorAnimation { duration: Theme.durNormal } }
-            }
+                ToolSectionHeader {
+                    Layout.fillWidth: true
+                    title: qsTr("Redis")
+                    subtitle: client.target.length > 0
+                              ? client.target
+                              : (root.redisHost + ":" + root.redisPort)
 
-            PierTextField {
-                id: patternField
-                implicitWidth: 220
-                placeholder: qsTr("SCAN pattern (e.g. user:*)")
-                text: root.scanPattern
-                onTextChanged: root.scanPattern = text
-            }
+                    GhostButton {
+                        compact: true
+                        minimumWidth: 0
+                        text: qsTr("Retry")
+                        visible: client.status === PierRedisClient.Failed
+                        onClicked: _dispatchConnect()
+                    }
 
-            PrimaryButton {
-                text: qsTr("Scan")
-                enabled: client.status === PierRedisClient.Connected
-                onClicked: client.scanKeys(root.scanPattern, root.scanLimit)
+                    PrimaryButton {
+                        compact: true
+                        text: qsTr("Scan")
+                        enabled: client.status === PierRedisClient.Connected
+                        onClicked: client.scanKeys(root.scanPattern, root.scanLimit)
+                    }
+                }
+
+                Flow {
+                    Layout.fillWidth: true
+                    spacing: Theme.sp2
+
+                    StatusPill {
+                        text: client.status === PierRedisClient.Connected
+                              ? qsTr("Connected")
+                              : (client.status === PierRedisClient.Connecting
+                                 ? qsTr("Connecting")
+                                 : qsTr("Idle"))
+                        tone: client.status === PierRedisClient.Connected ? "info" : "neutral"
+                    }
+
+                    StatusPill {
+                        text: qsTr("DB %1").arg(root.redisDb)
+                        tone: "neutral"
+                    }
+
+                    StatusPill {
+                        visible: client.selectedKey.length > 0
+                        text: client.selectedKind.length > 0
+                              ? client.selectedKind
+                              : qsTr("Inspector")
+                        tone: "neutral"
+                    }
+
+                    StatusPill {
+                        text: qsTr("%1 matches").arg(client.keys.length)
+                        tone: client.keysTruncated ? "warning" : "neutral"
+                    }
+                }
+
+                ToolPanelSurface {
+                    Layout.fillWidth: true
+                    inset: true
+                    padding: Theme.sp2
+                    implicitHeight: scanControls.implicitHeight + Theme.sp2 * 2
+
+                    Flow {
+                        id: scanControls
+                        anchors.fill: parent
+                        spacing: Theme.sp2
+
+                        PierTextField {
+                            id: patternField
+                            width: Math.max(220, Math.min(320, root.width * 0.4))
+                            placeholder: qsTr("SCAN pattern (e.g. user:*)")
+                            text: root.scanPattern
+                            onTextChanged: root.scanPattern = text
+                        }
+
+                        GhostButton {
+                            compact: true
+                            minimumWidth: 0
+                            text: qsTr("Retry")
+                            enabled: client.status === PierRedisClient.Failed
+                            visible: client.status === PierRedisClient.Failed
+                            onClicked: _dispatchConnect()
+                        }
+
+                        PrimaryButton {
+                            text: qsTr("Scan")
+                            enabled: client.status === PierRedisClient.Connected
+                            onClicked: client.scanKeys(root.scanPattern, root.scanLimit)
+                        }
+                    }
+                }
             }
         }
 
@@ -134,85 +202,75 @@ Rectangle {
                             subtitle: qsTr("%1 matches").arg(client.keys.length)
                         }
 
-                        ListView {
-                            id: keyList
+                        ToolPanelSurface {
                             Layout.fillWidth: true
                             Layout.fillHeight: true
-                            clip: true
-                            model: client.keys
-                            currentIndex: -1
+                            inset: true
+                            padding: Theme.sp1_5
 
-                            delegate: Rectangle {
-                                id: row
-                                required property int index
-                                required property string modelData
+                            ListView {
+                                id: keyList
+                                anchors.fill: parent
+                                clip: true
+                                boundsBehavior: Flickable.StopAtBounds
+                                model: client.keys
+                                currentIndex: -1
 
-                                width: ListView.view.width
-                                implicitHeight: 24
-                                color: ListView.isCurrentItem
-                                       ? Theme.accentSubtle
-                                       : (mouseArea.containsMouse
-                                          ? Theme.bgHover
-                                          : "transparent")
-                                radius: Theme.radiusSm
+                                delegate: Rectangle {
+                                    id: row
+                                    required property int index
+                                    required property string modelData
 
-                                Behavior on color { ColorAnimation { duration: Theme.durFast } }
+                                    width: ListView.view.width
+                                    implicitHeight: 24
+                                    color: ListView.isCurrentItem
+                                           ? Theme.accentSubtle
+                                           : (mouseArea.containsMouse
+                                              ? Theme.bgHover
+                                              : "transparent")
+                                    radius: Theme.radiusSm
 
-                                Text {
-                                    anchors.left: parent.left
-                                    anchors.right: parent.right
-                                    anchors.verticalCenter: parent.verticalCenter
-                                    anchors.leftMargin: Theme.sp2
-                                    anchors.rightMargin: Theme.sp2
-                                    text: row.modelData
-                                    font.family: Theme.fontMono
-                                    font.pixelSize: Theme.sizeBody
-                                    font.weight: row.ListView.isCurrentItem
-                                                 ? Theme.weightMedium
-                                                 : Theme.weightRegular
-                                    color: Theme.textPrimary
-                                    elide: Text.ElideRight
+                                    Behavior on color { ColorAnimation { duration: Theme.durFast } }
 
-                                    Behavior on color { ColorAnimation { duration: Theme.durNormal } }
-                                }
+                                    Text {
+                                        anchors.left: parent.left
+                                        anchors.right: parent.right
+                                        anchors.verticalCenter: parent.verticalCenter
+                                        anchors.leftMargin: Theme.sp2
+                                        anchors.rightMargin: Theme.sp2
+                                        text: row.modelData
+                                        font.family: Theme.fontMono
+                                        font.pixelSize: Theme.sizeBody
+                                        font.weight: row.ListView.isCurrentItem
+                                                     ? Theme.weightMedium
+                                                     : Theme.weightRegular
+                                        color: Theme.textPrimary
+                                        elide: Text.ElideRight
 
-                                MouseArea {
-                                    id: mouseArea
-                                    anchors.fill: parent
-                                    hoverEnabled: true
-                                    cursorShape: Qt.PointingHandCursor
-                                    onClicked: {
-                                        keyList.currentIndex = row.index
-                                        client.inspect(row.modelData)
+                                        Behavior on color { ColorAnimation { duration: Theme.durNormal } }
+                                    }
+
+                                    MouseArea {
+                                        id: mouseArea
+                                        anchors.fill: parent
+                                        hoverEnabled: true
+                                        cursorShape: Qt.PointingHandCursor
+                                        onClicked: {
+                                            keyList.currentIndex = row.index
+                                            client.inspect(row.modelData)
+                                        }
                                     }
                                 }
                             }
                         }
 
                         // Footer: count + truncated hint.
-                        Rectangle {
+                        ToolBanner {
                             Layout.fillWidth: true
-                            implicitHeight: 22
-                            color: Theme.bgSurface
-                            radius: Theme.radiusSm
-
-                            Behavior on color { ColorAnimation { duration: Theme.durNormal } }
-
-                            Text {
-                                anchors.verticalCenter: parent.verticalCenter
-                                anchors.left: parent.left
-                                anchors.leftMargin: Theme.sp2
-                                text: client.keys.length + " "
-                                      + (client.keys.length === 1 ? qsTr("key") : qsTr("keys"))
-                                      + (client.keysTruncated ? " (truncated)" : "")
-                                font.family: Theme.fontUi
-                                font.pixelSize: Theme.sizeCaption
-                                color: client.keysTruncated
-                                       ? Theme.statusWarning
-                                       : Theme.textTertiary
-
-                                Behavior on color { ColorAnimation { duration: Theme.durNormal } }
-                            }
+                            tone: client.keysTruncated ? "warning" : "neutral"
+                            text: client.keys.length + " "
+                                  + (client.keys.length === 1 ? qsTr("key") : qsTr("keys"))
+                                  + (client.keysTruncated ? " (truncated)" : "")
                         }
                     }
 
@@ -231,6 +289,7 @@ Rectangle {
                 ToolPanelSurface {
                     Layout.fillWidth: true
                     Layout.fillHeight: true
+                    Layout.minimumWidth: 360
 
                     ColumnLayout {
                         anchors.fill: parent
@@ -245,7 +304,6 @@ Rectangle {
                                       : qsTr("Select a key from the list to inspect its payload.")
                         }
 
-                        // Empty state: no key selected.
                         ToolEmptyState {
                             visible: client.selectedKey.length === 0
                             Layout.alignment: Qt.AlignHCenter
@@ -258,91 +316,111 @@ Rectangle {
                             description: qsTr("Preview, type, TTL, encoding, and sampled values will appear here.")
                         }
 
-                        // Header: key name.
-                        Text {
+                        ToolPanelSurface {
                             visible: client.selectedKey.length > 0
                             Layout.fillWidth: true
-                            text: client.selectedKey
-                            font.family: Theme.fontMono
-                            font.pixelSize: Theme.sizeH3
-                            font.weight: Theme.weightMedium
-                            color: Theme.textPrimary
-                            elide: Text.ElideMiddle
+                            inset: true
+                            padding: Theme.sp3
+                            implicitHeight: overviewColumn.implicitHeight + Theme.sp3 * 2
 
-                            Behavior on color { ColorAnimation { duration: Theme.durNormal } }
+                            ColumnLayout {
+                                id: overviewColumn
+                                anchors.fill: parent
+                                spacing: Theme.sp2
+
+                                ToolSectionHeader {
+                                    Layout.fillWidth: true
+                                    title: qsTr("Overview")
+                                    subtitle: client.selectedKey
+                                }
+
+                                GridLayout {
+                                    Layout.fillWidth: true
+                                    columns: width >= 360 ? 4 : 2
+                                    rowSpacing: Theme.sp1
+                                    columnSpacing: Theme.sp3
+
+                                    SectionLabel { text: qsTr("Type") }
+                                    Text {
+                                        text: client.selectedKind.length > 0 ? client.selectedKind : "—"
+                                        font.family: Theme.fontMono
+                                        font.pixelSize: Theme.sizeBody
+                                        color: Theme.textPrimary
+                                        Behavior on color { ColorAnimation { duration: Theme.durNormal } }
+                                    }
+                                    SectionLabel { text: qsTr("TTL") }
+                                    Text {
+                                        text: _formatTtl(client.selectedTtl)
+                                        font.family: Theme.fontMono
+                                        font.pixelSize: Theme.sizeBody
+                                        color: Theme.textPrimary
+                                        Behavior on color { ColorAnimation { duration: Theme.durNormal } }
+                                    }
+
+                                    SectionLabel { text: qsTr("Length") }
+                                    Text {
+                                        text: client.selectedLength + ""
+                                        font.family: Theme.fontMono
+                                        font.pixelSize: Theme.sizeBody
+                                        color: Theme.textPrimary
+                                        Behavior on color { ColorAnimation { duration: Theme.durNormal } }
+                                    }
+                                    SectionLabel { text: qsTr("Encoding") }
+                                    Text {
+                                        text: client.selectedEncoding.length > 0
+                                              ? client.selectedEncoding
+                                              : "—"
+                                        font.family: Theme.fontMono
+                                        font.pixelSize: Theme.sizeBody
+                                        color: Theme.textPrimary
+                                        Behavior on color { ColorAnimation { duration: Theme.durNormal } }
+                                    }
+                                }
+                            }
                         }
 
-                        // Metadata row: type, ttl, length, encoding.
-                        GridLayout {
-                            visible: client.selectedKey.length > 0
-                            Layout.fillWidth: true
-                            columns: 4
-                            rowSpacing: Theme.sp1
-                            columnSpacing: Theme.sp3
-
-                            SectionLabel { text: qsTr("Type") }
-                            Text {
-                                text: client.selectedKind.length > 0 ? client.selectedKind : "—"
-                                font.family: Theme.fontMono
-                                font.pixelSize: Theme.sizeBody
-                                color: Theme.textPrimary
-                                Behavior on color { ColorAnimation { duration: Theme.durNormal } }
-                            }
-                            SectionLabel { text: qsTr("TTL") }
-                            Text {
-                                text: _formatTtl(client.selectedTtl)
-                                font.family: Theme.fontMono
-                                font.pixelSize: Theme.sizeBody
-                                color: Theme.textPrimary
-                                Behavior on color { ColorAnimation { duration: Theme.durNormal } }
-                            }
-
-                            SectionLabel { text: qsTr("Length") }
-                            Text {
-                                text: client.selectedLength + ""
-                                font.family: Theme.fontMono
-                                font.pixelSize: Theme.sizeBody
-                                color: Theme.textPrimary
-                                Behavior on color { ColorAnimation { duration: Theme.durNormal } }
-                            }
-                            SectionLabel { text: qsTr("Encoding") }
-                            Text {
-                                text: client.selectedEncoding.length > 0
-                                      ? client.selectedEncoding
-                                      : "—"
-                                font.family: Theme.fontMono
-                                font.pixelSize: Theme.sizeBody
-                                color: Theme.textPrimary
-                                Behavior on color { ColorAnimation { duration: Theme.durNormal } }
-                            }
-                        }
-
-                        Separator {
-                            visible: client.selectedKey.length > 0
-                            Layout.fillWidth: true
-                        }
-
-                        // Preview list.
-                        ScrollView {
+                        ToolPanelSurface {
                             visible: client.selectedKey.length > 0
                             Layout.fillWidth: true
                             Layout.fillHeight: true
-                            clip: true
+                            inset: true
+                            padding: Theme.sp3
 
-                            TextArea {
-                                readOnly: true
-                                wrapMode: TextArea.NoWrap
-                                text: client.selectedPreview.join("\n")
-                                      + (client.selectedPreviewTruncated
-                                         ? "\n\n" + qsTr("… preview truncated")
-                                         : "")
-                                font.family: Theme.fontMono
-                                font.pixelSize: Theme.sizeBody
-                                color: Theme.textPrimary
-                                background: Rectangle { color: "transparent" }
-                                selectByMouse: true
+                            ColumnLayout {
+                                anchors.fill: parent
+                                spacing: Theme.sp2
 
-                                Behavior on color { ColorAnimation { duration: Theme.durNormal } }
+                                ToolSectionHeader {
+                                    Layout.fillWidth: true
+                                    title: qsTr("Preview")
+                                    subtitle: client.selectedPreviewTruncated
+                                              ? qsTr("Preview, type, TTL, encoding, and sampled values will appear here.")
+                                              : ""
+                                }
+
+                                ToolPanelSurface {
+                                    Layout.fillWidth: true
+                                    Layout.fillHeight: true
+                                    inset: true
+                                    padding: Theme.sp0
+
+                                    PierScrollView {
+                                        anchors.fill: parent
+                                        clip: true
+
+                                        PierTextArea {
+                                            readOnly: true
+                                            frameVisible: false
+                                            mono: true
+                                            wrapMode: TextArea.NoWrap
+                                            text: client.selectedPreview.join("\n")
+                                                  + (client.selectedPreviewTruncated
+                                                     ? "\n\n" + qsTr("… preview truncated")
+                                                     : "")
+                                            selectByMouse: true
+                                        }
+                                    }
+                                }
                             }
                         }
                     }

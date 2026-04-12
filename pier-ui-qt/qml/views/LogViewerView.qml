@@ -73,7 +73,9 @@ Rectangle {
             return
         }
         if (root.sshHost.length === 0 || root.sshUser.length === 0) {
-            console.warn("LogViewerView: missing host/user")
+            // No SSH context — run command locally
+            if (root.logCommand.length > 0)
+                stream.connectLocal(root.logCommand)
             return
         }
         var kind = 0
@@ -171,31 +173,10 @@ Rectangle {
                 anchors.fill: parent
                 spacing: Theme.sp2
 
-                RowLayout {
+                ToolSectionHeader {
                     Layout.fillWidth: true
-                    spacing: Theme.sp2
-
-                    Text {
-                        text: stream.target.length > 0 ? stream.target : qsTr("Logs")
-                        font.family: Theme.fontMono
-                        font.pixelSize: Theme.sizeBody
-                        font.weight: Theme.weightMedium
-                        color: Theme.textPrimary
-                        elide: Text.ElideMiddle
-                        Layout.minimumWidth: 120
-                        Layout.maximumWidth: 240
-                    }
-
-                    StatusPill {
-                        text: stream.alive
-                              ? qsTr("Live")
-                              : (stream.status === PierLogStream.Finished
-                                 ? qsTr("Exit %1").arg(stream.exitCode)
-                                 : qsTr("Idle"))
-                        tone: stream.alive ? "success" : "neutral"
-                    }
-
-                    Item { Layout.fillWidth: true }
+                    title: qsTr("Logs")
+                    subtitle: stream.target.length > 0 ? stream.target : root.logCommand
 
                     GhostButton {
                         compact: true
@@ -226,24 +207,38 @@ Rectangle {
                     }
                 }
 
-                Rectangle {
+                Flow {
                     Layout.fillWidth: true
-                    implicitHeight: 26
-                    color: Theme.bgInset
-                    border.color: Theme.borderSubtle
-                    border.width: 1
-                    radius: Theme.radiusSm
+                    spacing: Theme.sp2
 
-                    Text {
-                        anchors.fill: parent
-                        anchors.leftMargin: Theme.sp2
-                        anchors.rightMargin: Theme.sp2
-                        verticalAlignment: Text.AlignVCenter
-                        text: stream.command.length > 0 ? stream.command : root.logCommand
-                        font.family: Theme.fontMono
-                        font.pixelSize: Theme.sizeCaption
-                        color: Theme.textSecondary
-                        elide: Text.ElideRight
+                    StatusPill {
+                        text: stream.alive
+                              ? qsTr("Live")
+                              : (stream.status === PierLogStream.Finished
+                                 ? qsTr("Exit %1").arg(stream.exitCode)
+                                 : qsTr("Idle"))
+                        tone: stream.alive ? "success" : "neutral"
+                    }
+
+                    ToolPanelSurface {
+                        visible: stream.command.length > 0 || root.logCommand.length > 0
+                        inset: true
+                        padding: Theme.sp0
+                        implicitWidth: Math.min(logCommandText.implicitWidth + Theme.sp4, Math.max(180, root.width * 0.45))
+                        implicitHeight: 24
+
+                        Text {
+                            id: logCommandText
+                            anchors.fill: parent
+                            anchors.leftMargin: Theme.sp2
+                            anchors.rightMargin: Theme.sp2
+                            verticalAlignment: Text.AlignVCenter
+                            text: stream.command.length > 0 ? stream.command : root.logCommand
+                            font.family: Theme.fontMono
+                            font.pixelSize: Theme.sizeCaption
+                            color: Theme.textSecondary
+                            elide: Text.ElideRight
+                        }
                     }
                 }
             }
@@ -266,195 +261,204 @@ Rectangle {
                     subtitle: qsTr("Search, regex, and level-based visibility")
                 }
 
-                Flow {
+                ToolPanelSurface {
                     Layout.fillWidth: true
-                    spacing: Theme.sp2
+                    inset: true
+                    padding: Theme.sp2
+                    implicitHeight: filterFlow.implicitHeight + Theme.sp2 * 2
 
-                    PierTextField {
-                        id: filterField
-                        width: Math.max(220, root.width - Theme.sp12 * 2)
-                        placeholder: qsTr("Search logs or enter a regex")
-                        text: stream.filterText
-                        onTextChanged: stream.filterText = text
-                    }
+                    Flow {
+                        id: filterFlow
+                        anchors.fill: parent
+                        spacing: Theme.sp2
 
-                    Rectangle {
-                        id: regexToggle
-                        implicitWidth: regexLabel.implicitWidth + Theme.sp2 * 2
-                        implicitHeight: 22
-                        radius: Theme.radiusSm
-                        color: regexMouse.containsMouse
-                               ? Theme.bgHover
-                               : (stream.regexMode ? Theme.accentSubtle : "transparent")
-                        border.color: stream.regexMode ? Theme.borderFocus : Theme.borderSubtle
-                        border.width: 1
-
-                        Text {
-                            id: regexLabel
-                            anchors.centerIn: parent
-                            text: ".*"
-                            font.family: Theme.fontMono
-                            font.pixelSize: Theme.sizeCaption
-                            font.weight: Theme.weightMedium
-                            color: stream.regexMode ? Theme.accent : Theme.textSecondary
+                        PierSearchField {
+                            id: filterField
+                            width: Math.max(220, Math.min(420, root.width - Theme.sp12 * 2))
+                            placeholder: qsTr("Search logs or enter a regex")
+                            clearable: true
+                            text: stream.filterText
+                            onTextChanged: stream.filterText = text
                         }
 
-                        MouseArea {
-                            id: regexMouse
-                            anchors.fill: parent
-                            hoverEnabled: true
-                            cursorShape: Qt.PointingHandCursor
-                            onClicked: stream.regexMode = !stream.regexMode
+                        Rectangle {
+                            id: regexToggle
+                            implicitWidth: regexLabel.implicitWidth + Theme.sp2 * 2
+                            implicitHeight: 22
+                            radius: Theme.radiusSm
+                            color: regexMouse.containsMouse
+                                   ? Theme.bgHover
+                                   : (stream.regexMode ? Theme.accentSubtle : "transparent")
+                            border.color: stream.regexMode ? Theme.borderFocus : Theme.borderSubtle
+                            border.width: 1
+
+                            Text {
+                                id: regexLabel
+                                anchors.centerIn: parent
+                                text: ".*"
+                                font.family: Theme.fontMono
+                                font.pixelSize: Theme.sizeCaption
+                                font.weight: Theme.weightMedium
+                                color: stream.regexMode ? Theme.accent : Theme.textSecondary
+                            }
+
+                            MouseArea {
+                                id: regexMouse
+                                anchors.fill: parent
+                                hoverEnabled: true
+                                cursorShape: Qt.PointingHandCursor
+                                onClicked: stream.regexMode = !stream.regexMode
+                            }
                         }
-                    }
 
-                    Rectangle {
-                        implicitWidth: levelRepeaterRow.implicitWidth
-                        implicitHeight: 22
-                        color: "transparent"
+                        Rectangle {
+                            implicitWidth: levelRepeaterRow.implicitWidth
+                            implicitHeight: 22
+                            color: "transparent"
 
-                        Row {
-                            id: levelRepeaterRow
-                            anchors.centerIn: parent
-                            spacing: Theme.sp1
+                            Row {
+                                id: levelRepeaterRow
+                                anchors.centerIn: parent
+                                spacing: Theme.sp1
 
-                            Rectangle {
-                                implicitWidth: debugText.implicitWidth + Theme.sp2 * 2
-                                implicitHeight: 22
-                                radius: Theme.radiusSm
-                                color: debugMouse.containsMouse
-                                       ? Theme.bgHover
-                                       : (stream.debugEnabled ? _badgeFill(PierLogStream.DebugLevel) : "transparent")
-                                border.color: stream.debugEnabled ? Theme.borderDefault : Theme.borderSubtle
-                                border.width: 1
+                                Rectangle {
+                                    implicitWidth: debugText.implicitWidth + Theme.sp2 * 2
+                                    implicitHeight: 22
+                                    radius: Theme.radiusSm
+                                    color: debugMouse.containsMouse
+                                           ? Theme.bgHover
+                                           : (stream.debugEnabled ? _badgeFill(PierLogStream.DebugLevel) : "transparent")
+                                    border.color: stream.debugEnabled ? Theme.borderDefault : Theme.borderSubtle
+                                    border.width: 1
 
-                                Text {
-                                    id: debugText
-                                    anchors.centerIn: parent
-                                    text: "DBG"
-                                    font.family: Theme.fontMono
-                                    font.pixelSize: Theme.sizeCaption
-                                    color: stream.debugEnabled ? _badgeTextColor(PierLogStream.DebugLevel) : Theme.textTertiary
+                                    Text {
+                                        id: debugText
+                                        anchors.centerIn: parent
+                                        text: "DBG"
+                                        font.family: Theme.fontMono
+                                        font.pixelSize: Theme.sizeCaption
+                                        color: stream.debugEnabled ? _badgeTextColor(PierLogStream.DebugLevel) : Theme.textTertiary
+                                    }
+
+                                    MouseArea {
+                                        id: debugMouse
+                                        anchors.fill: parent
+                                        hoverEnabled: true
+                                        cursorShape: Qt.PointingHandCursor
+                                        onClicked: stream.debugEnabled = !stream.debugEnabled
+                                    }
                                 }
 
-                                MouseArea {
-                                    id: debugMouse
-                                    anchors.fill: parent
-                                    hoverEnabled: true
-                                    cursorShape: Qt.PointingHandCursor
-                                    onClicked: stream.debugEnabled = !stream.debugEnabled
-                                }
-                            }
+                                Rectangle {
+                                    implicitWidth: infoText.implicitWidth + Theme.sp2 * 2
+                                    implicitHeight: 22
+                                    radius: Theme.radiusSm
+                                    color: infoMouse.containsMouse
+                                           ? Theme.bgHover
+                                           : (stream.infoEnabled ? _badgeFill(PierLogStream.InfoLevel) : "transparent")
+                                    border.color: stream.infoEnabled ? Theme.borderDefault : Theme.borderSubtle
+                                    border.width: 1
 
-                            Rectangle {
-                                implicitWidth: infoText.implicitWidth + Theme.sp2 * 2
-                                implicitHeight: 22
-                                radius: Theme.radiusSm
-                                color: infoMouse.containsMouse
-                                       ? Theme.bgHover
-                                       : (stream.infoEnabled ? _badgeFill(PierLogStream.InfoLevel) : "transparent")
-                                border.color: stream.infoEnabled ? Theme.borderDefault : Theme.borderSubtle
-                                border.width: 1
+                                    Text {
+                                        id: infoText
+                                        anchors.centerIn: parent
+                                        text: "INF"
+                                        font.family: Theme.fontMono
+                                        font.pixelSize: Theme.sizeCaption
+                                        color: stream.infoEnabled ? _badgeTextColor(PierLogStream.InfoLevel) : Theme.textTertiary
+                                    }
 
-                                Text {
-                                    id: infoText
-                                    anchors.centerIn: parent
-                                    text: "INF"
-                                    font.family: Theme.fontMono
-                                    font.pixelSize: Theme.sizeCaption
-                                    color: stream.infoEnabled ? _badgeTextColor(PierLogStream.InfoLevel) : Theme.textTertiary
-                                }
-
-                                MouseArea {
-                                    id: infoMouse
-                                    anchors.fill: parent
-                                    hoverEnabled: true
-                                    cursorShape: Qt.PointingHandCursor
-                                    onClicked: stream.infoEnabled = !stream.infoEnabled
-                                }
-                            }
-
-                            Rectangle {
-                                implicitWidth: warnText.implicitWidth + Theme.sp2 * 2
-                                implicitHeight: 22
-                                radius: Theme.radiusSm
-                                color: warnMouse.containsMouse
-                                       ? Theme.bgHover
-                                       : (stream.warnEnabled ? _badgeFill(PierLogStream.WarnLevel) : "transparent")
-                                border.color: stream.warnEnabled ? Theme.borderDefault : Theme.borderSubtle
-                                border.width: 1
-
-                                Text {
-                                    id: warnText
-                                    anchors.centerIn: parent
-                                    text: "WRN"
-                                    font.family: Theme.fontMono
-                                    font.pixelSize: Theme.sizeCaption
-                                    color: stream.warnEnabled ? _badgeTextColor(PierLogStream.WarnLevel) : Theme.textTertiary
+                                    MouseArea {
+                                        id: infoMouse
+                                        anchors.fill: parent
+                                        hoverEnabled: true
+                                        cursorShape: Qt.PointingHandCursor
+                                        onClicked: stream.infoEnabled = !stream.infoEnabled
+                                    }
                                 }
 
-                                MouseArea {
-                                    id: warnMouse
-                                    anchors.fill: parent
-                                    hoverEnabled: true
-                                    cursorShape: Qt.PointingHandCursor
-                                    onClicked: stream.warnEnabled = !stream.warnEnabled
-                                }
-                            }
+                                Rectangle {
+                                    implicitWidth: warnText.implicitWidth + Theme.sp2 * 2
+                                    implicitHeight: 22
+                                    radius: Theme.radiusSm
+                                    color: warnMouse.containsMouse
+                                           ? Theme.bgHover
+                                           : (stream.warnEnabled ? _badgeFill(PierLogStream.WarnLevel) : "transparent")
+                                    border.color: stream.warnEnabled ? Theme.borderDefault : Theme.borderSubtle
+                                    border.width: 1
 
-                            Rectangle {
-                                implicitWidth: errorText.implicitWidth + Theme.sp2 * 2
-                                implicitHeight: 22
-                                radius: Theme.radiusSm
-                                color: errorMouse.containsMouse
-                                       ? Theme.bgHover
-                                       : (stream.errorEnabled ? _badgeFill(PierLogStream.ErrorLevel) : "transparent")
-                                border.color: stream.errorEnabled ? Theme.borderDefault : Theme.borderSubtle
-                                border.width: 1
+                                    Text {
+                                        id: warnText
+                                        anchors.centerIn: parent
+                                        text: "WRN"
+                                        font.family: Theme.fontMono
+                                        font.pixelSize: Theme.sizeCaption
+                                        color: stream.warnEnabled ? _badgeTextColor(PierLogStream.WarnLevel) : Theme.textTertiary
+                                    }
 
-                                Text {
-                                    id: errorText
-                                    anchors.centerIn: parent
-                                    text: "ERR"
-                                    font.family: Theme.fontMono
-                                    font.pixelSize: Theme.sizeCaption
-                                    color: stream.errorEnabled ? _badgeTextColor(PierLogStream.ErrorLevel) : Theme.textTertiary
-                                }
-
-                                MouseArea {
-                                    id: errorMouse
-                                    anchors.fill: parent
-                                    hoverEnabled: true
-                                    cursorShape: Qt.PointingHandCursor
-                                    onClicked: stream.errorEnabled = !stream.errorEnabled
-                                }
-                            }
-
-                            Rectangle {
-                                implicitWidth: fatalText.implicitWidth + Theme.sp2 * 2
-                                implicitHeight: 22
-                                radius: Theme.radiusSm
-                                color: fatalMouse.containsMouse
-                                       ? Theme.bgHover
-                                       : (stream.fatalEnabled ? _badgeFill(PierLogStream.FatalLevel) : "transparent")
-                                border.color: stream.fatalEnabled ? Theme.borderDefault : Theme.borderSubtle
-                                border.width: 1
-
-                                Text {
-                                    id: fatalText
-                                    anchors.centerIn: parent
-                                    text: "FTL"
-                                    font.family: Theme.fontMono
-                                    font.pixelSize: Theme.sizeCaption
-                                    color: stream.fatalEnabled ? _badgeTextColor(PierLogStream.FatalLevel) : Theme.textTertiary
+                                    MouseArea {
+                                        id: warnMouse
+                                        anchors.fill: parent
+                                        hoverEnabled: true
+                                        cursorShape: Qt.PointingHandCursor
+                                        onClicked: stream.warnEnabled = !stream.warnEnabled
+                                    }
                                 }
 
-                                MouseArea {
-                                    id: fatalMouse
-                                    anchors.fill: parent
-                                    hoverEnabled: true
-                                    cursorShape: Qt.PointingHandCursor
-                                    onClicked: stream.fatalEnabled = !stream.fatalEnabled
+                                Rectangle {
+                                    implicitWidth: errorText.implicitWidth + Theme.sp2 * 2
+                                    implicitHeight: 22
+                                    radius: Theme.radiusSm
+                                    color: errorMouse.containsMouse
+                                           ? Theme.bgHover
+                                           : (stream.errorEnabled ? _badgeFill(PierLogStream.ErrorLevel) : "transparent")
+                                    border.color: stream.errorEnabled ? Theme.borderDefault : Theme.borderSubtle
+                                    border.width: 1
+
+                                    Text {
+                                        id: errorText
+                                        anchors.centerIn: parent
+                                        text: "ERR"
+                                        font.family: Theme.fontMono
+                                        font.pixelSize: Theme.sizeCaption
+                                        color: stream.errorEnabled ? _badgeTextColor(PierLogStream.ErrorLevel) : Theme.textTertiary
+                                    }
+
+                                    MouseArea {
+                                        id: errorMouse
+                                        anchors.fill: parent
+                                        hoverEnabled: true
+                                        cursorShape: Qt.PointingHandCursor
+                                        onClicked: stream.errorEnabled = !stream.errorEnabled
+                                    }
+                                }
+
+                                Rectangle {
+                                    implicitWidth: fatalText.implicitWidth + Theme.sp2 * 2
+                                    implicitHeight: 22
+                                    radius: Theme.radiusSm
+                                    color: fatalMouse.containsMouse
+                                           ? Theme.bgHover
+                                           : (stream.fatalEnabled ? _badgeFill(PierLogStream.FatalLevel) : "transparent")
+                                    border.color: stream.fatalEnabled ? Theme.borderDefault : Theme.borderSubtle
+                                    border.width: 1
+
+                                    Text {
+                                        id: fatalText
+                                        anchors.centerIn: parent
+                                        text: "FTL"
+                                        font.family: Theme.fontMono
+                                        font.pixelSize: Theme.sizeCaption
+                                        color: stream.fatalEnabled ? _badgeTextColor(PierLogStream.FatalLevel) : Theme.textTertiary
+                                    }
+
+                                    MouseArea {
+                                        id: fatalMouse
+                                        anchors.fill: parent
+                                        hoverEnabled: true
+                                        cursorShape: Qt.PointingHandCursor
+                                        onClicked: stream.fatalEnabled = !stream.fatalEnabled
+                                    }
                                 }
                             }
                         }
@@ -568,18 +572,19 @@ Rectangle {
                             }
                         }
 
-                        Text {
+                        ToolEmptyState {
                             anchors.centerIn: parent
                             visible: listView.count === 0
-                            text: stream.status === PierLogStream.Connected
-                                  && stream.totalLineCount === 0
-                                  ? qsTr("Waiting for output…")
-                                  : (stream.totalLineCount > 0
-                                     ? qsTr("No lines match the current filters")
-                                     : qsTr("Waiting for output…"))
-                            font.family: Theme.fontUi
-                            font.pixelSize: Theme.sizeBody
-                            color: Theme.textTertiary
+                            icon: stream.totalLineCount > 0 ? "search" : "file-text"
+                            title: stream.status === PierLogStream.Connected
+                                   && stream.totalLineCount === 0
+                                   ? qsTr("Waiting for output…")
+                                   : (stream.totalLineCount > 0
+                                      ? qsTr("No lines match the current filters")
+                                      : qsTr("Waiting for output…"))
+                            description: stream.totalLineCount > 0
+                                         ? qsTr("Adjust the search text, regex option, or level visibility to broaden the result set.")
+                                         : qsTr("The stream is connected and new log lines will appear here automatically.")
                         }
                     }
                 }
@@ -587,25 +592,22 @@ Rectangle {
         }
 
         // ─── Footer: count + exit code ──────────────────
-        Rectangle {
+        ToolBanner {
             Layout.fillWidth: true
-            implicitHeight: 20
-            color: "transparent"
+            tone: stream.alive ? "neutral" : "warning"
+            text: stream.lineCount === stream.totalLineCount
+                  ? (stream.totalLineCount + " "
+                     + (stream.totalLineCount === 1 ? qsTr("line") : qsTr("lines")))
+                  : qsTr("%1 of %2 lines")
+                        .arg(stream.lineCount)
+                        .arg(stream.totalLineCount)
 
             Text {
-                anchors.verticalCenter: parent.verticalCenter
-                anchors.left: parent.left
-                text: stream.lineCount === stream.totalLineCount
-                      ? (stream.totalLineCount + " "
-                         + (stream.totalLineCount === 1 ? qsTr("line") : qsTr("lines")))
-                      : qsTr("%1 of %2 lines")
-                            .arg(stream.lineCount)
-                            .arg(stream.totalLineCount)
+                visible: !stream.alive && stream.status === PierLogStream.Finished
+                text: qsTr("Exit %1").arg(stream.exitCode)
                 font.family: Theme.fontMono
                 font.pixelSize: Theme.sizeCaption
                 color: Theme.textTertiary
-
-                Behavior on color { ColorAnimation { duration: Theme.durNormal } }
             }
         }
     }

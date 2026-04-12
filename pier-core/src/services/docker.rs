@@ -71,26 +71,26 @@ use crate::ssh::SshSession;
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Container {
     /// Short (12-char) container id.
-    #[serde(rename = "ID", default)]
+    #[serde(rename(serialize = "id", deserialize = "ID"), alias = "id", default)]
     pub id: String,
     /// Image reference, e.g. `redis:7-alpine`.
-    #[serde(rename = "Image", default)]
+    #[serde(rename(serialize = "image", deserialize = "Image"), alias = "image", default)]
     pub image: String,
     /// Friendly name assigned by the user or docker.
-    #[serde(rename = "Names", default)]
+    #[serde(rename(serialize = "names", deserialize = "Names"), alias = "names", default)]
     pub names: String,
     /// Human status, e.g. `"Up 5 minutes"` / `"Exited (0) 3 hours ago"`.
-    #[serde(rename = "Status", default)]
+    #[serde(rename(serialize = "status", deserialize = "Status"), alias = "status", default)]
     pub status: String,
     /// Low-level state: `"running"`, `"exited"`, `"paused"`,
     /// `"created"`, `"restarting"`, etc.
-    #[serde(rename = "State", default)]
+    #[serde(rename(serialize = "state", deserialize = "State"), alias = "state", default)]
     pub state: String,
     /// Freeform "X minutes ago" description of creation time.
-    #[serde(rename = "CreatedAt", default)]
+    #[serde(rename(serialize = "created", deserialize = "CreatedAt"), alias = "created", default)]
     pub created: String,
     /// Port bindings, e.g. `"0.0.0.0:8080->80/tcp"`.
-    #[serde(rename = "Ports", default)]
+    #[serde(rename(serialize = "ports", deserialize = "Ports"), alias = "ports", default)]
     pub ports: String,
 }
 
@@ -170,6 +170,29 @@ pub async fn inspect_container(session: &SshSession, id: &str) -> Result<String>
     Ok(stdout)
 }
 
+/// Run `docker <args...>` on the remote and return the raw
+/// `(exit_code, stdout)` pair without interpreting success.
+///
+/// This is used for the richer UI flows (inspect image,
+/// pull/prune, run, network create, etc.) that don't fit the
+/// narrow container-only action API above.
+pub async fn exec(session: &SshSession, args: &[String]) -> Result<(i32, String)> {
+    let cmd = if args.is_empty() {
+        String::from("docker")
+    } else {
+        format!(
+            "docker {}",
+            join_shell_args(args.iter().map(String::as_str))
+        )
+    };
+    session.exec_command(&cmd).await
+}
+
+/// Blocking wrapper for [`exec`].
+pub fn exec_blocking(session: &SshSession, args: &[String]) -> Result<(i32, String)> {
+    crate::ssh::runtime::shared().block_on(exec(session, args))
+}
+
 /// Blocking wrappers for each action. Explicit instead of a
 /// macro so clippy / docs can see them.
 pub fn start_blocking(session: &SshSession, id: &str) -> Result<()> {
@@ -199,15 +222,15 @@ pub fn inspect_container_blocking(session: &SshSession, id: &str) -> Result<Stri
 /// One row from `docker images`.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct DockerImage {
-    #[serde(rename = "ID", default)]
+    #[serde(rename(serialize = "id", deserialize = "ID"), alias = "id", default)]
     pub id: String,
-    #[serde(rename = "Repository", default)]
+    #[serde(rename(serialize = "repository", deserialize = "Repository"), alias = "repository", default)]
     pub repository: String,
-    #[serde(rename = "Tag", default)]
+    #[serde(rename(serialize = "tag", deserialize = "Tag"), alias = "tag", default)]
     pub tag: String,
-    #[serde(rename = "Size", default)]
+    #[serde(rename(serialize = "size", deserialize = "Size"), alias = "size", default)]
     pub size: String,
-    #[serde(rename = "CreatedAt", default)]
+    #[serde(rename(serialize = "created", deserialize = "CreatedAt"), alias = "created", default)]
     pub created: String,
 }
 
@@ -260,11 +283,11 @@ pub fn remove_image_blocking(session: &SshSession, id: &str, force: bool) -> Res
 /// One row from `docker volume ls`.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct DockerVolume {
-    #[serde(rename = "Name", default)]
+    #[serde(rename(serialize = "name", deserialize = "Name"), alias = "name", default)]
     pub name: String,
-    #[serde(rename = "Driver", default)]
+    #[serde(rename(serialize = "driver", deserialize = "Driver"), alias = "driver", default)]
     pub driver: String,
-    #[serde(rename = "Mountpoint", default)]
+    #[serde(rename(serialize = "mountpoint", deserialize = "Mountpoint"), alias = "mountpoint", default)]
     pub mountpoint: String,
 }
 
@@ -302,13 +325,13 @@ pub fn remove_volume_blocking(session: &SshSession, name: &str) -> Result<()> {
 /// One row from `docker network ls`.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct DockerNetwork {
-    #[serde(rename = "ID", default)]
+    #[serde(rename(serialize = "id", deserialize = "ID"), alias = "id", default)]
     pub id: String,
-    #[serde(rename = "Name", default)]
+    #[serde(rename(serialize = "name", deserialize = "Name"), alias = "name", default)]
     pub name: String,
-    #[serde(rename = "Driver", default)]
+    #[serde(rename(serialize = "driver", deserialize = "Driver"), alias = "driver", default)]
     pub driver: String,
-    #[serde(rename = "Scope", default)]
+    #[serde(rename(serialize = "scope", deserialize = "Scope"), alias = "scope", default)]
     pub scope: String,
 }
 
@@ -342,12 +365,7 @@ pub fn remove_network_blocking(session: &SshSession, name: &str) -> Result<()> {
 /// Internal: run `docker <verb> [--force] <id>`, returning an
 /// error if the id fails the safety check or if docker exits
 /// non-zero.
-async fn run_simple_action(
-    session: &SshSession,
-    verb: &str,
-    id: &str,
-    force: bool,
-) -> Result<()> {
+async fn run_simple_action(session: &SshSession, verb: &str, id: &str, force: bool) -> Result<()> {
     if !is_safe_id(id) {
         return Err(SshError::InvalidConfig(format!(
             "refusing unsafe docker id {id:?}"
@@ -369,11 +387,13 @@ async fn run_simple_action(
 }
 
 /// Generic NDJSON parser — one JSON object per line.
-fn parse_ndjson<T: serde::de::DeserializeOwned>(stdout: &str) -> Vec<T> {
+pub fn parse_ndjson<T: serde::de::DeserializeOwned>(stdout: &str) -> Vec<T> {
     let mut out = Vec::new();
     for raw in stdout.lines() {
         let line = raw.trim();
-        if line.is_empty() { continue; }
+        if line.is_empty() {
+            continue;
+        }
         match serde_json::from_str::<T>(line) {
             Ok(v) => out.push(v),
             Err(e) => log::warn!("docker: skipping malformed line: {e}"),
@@ -383,8 +403,31 @@ fn parse_ndjson<T: serde::de::DeserializeOwned>(stdout: &str) -> Vec<T> {
 }
 
 /// Parse an NDJSON-style `docker ps` stdout into containers.
-fn parse_ps_lines(stdout: &str) -> Vec<Container> {
+pub fn parse_ps_lines(stdout: &str) -> Vec<Container> {
     parse_ndjson(stdout)
+}
+
+/// Single-quote a shell argument for safe interpolation into a
+/// POSIX-compatible shell command string.
+pub fn shell_quote(arg: &str) -> String {
+    if arg.is_empty() {
+        return "''".to_string();
+    }
+    if arg
+        .bytes()
+        .all(|b| matches!(b, b'a'..=b'z' | b'A'..=b'Z' | b'0'..=b'9' | b'_' | b'/' | b':' | b'.' | b'-' | b'@' | b'=' | b'+' | b','))
+    {
+        return arg.to_string();
+    }
+    format!("'{}'", arg.replace('\'', "'\\''"))
+}
+
+/// Join shell arguments into one safely-quoted command tail.
+pub fn join_shell_args<'a>(args: impl IntoIterator<Item = &'a str>) -> String {
+    args.into_iter()
+        .map(shell_quote)
+        .collect::<Vec<_>>()
+        .join(" ")
 }
 
 /// Strict allowlist for docker identifiers. Matches the
@@ -466,19 +509,31 @@ not-json-at-all
 
     #[test]
     fn is_safe_id_accepts_canonical_forms() {
-        assert!(is_safe_id("abc123"));              // short id
+        assert!(is_safe_id("abc123")); // short id
         assert!(is_safe_id("0123456789abcdef0123456789abcdef01234567")); // 40-char full id
-        assert!(is_safe_id("my_service"));          // compose-style
-        assert!(is_safe_id("my-service.1"));        // swarm task name
-        assert!(is_safe_id("Z9"));                  // 2 chars
+        assert!(is_safe_id("my_service")); // compose-style
+        assert!(is_safe_id("my-service.1")); // swarm task name
+        assert!(is_safe_id("Z9")); // 2 chars
     }
 
     #[test]
     fn is_safe_id_rejects_shell_metacharacters() {
         for evil in [
-            "", "a b", "a;rm -rf /", "a|b", "a&&b", "a$PATH",
-            "a`whoami`", "a\nb", "a\"b", "a'b", "a/b", "a\\b",
-            "-flag", ".leading-dot", "_leading-under",
+            "",
+            "a b",
+            "a;rm -rf /",
+            "a|b",
+            "a&&b",
+            "a$PATH",
+            "a`whoami`",
+            "a\nb",
+            "a\"b",
+            "a'b",
+            "a/b",
+            "a\\b",
+            "-flag",
+            ".leading-dot",
+            "_leading-under",
         ] {
             assert!(!is_safe_id(evil), "{evil:?} must be rejected");
         }

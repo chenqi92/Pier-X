@@ -286,15 +286,13 @@ impl MysqlClient {
         let rows: Vec<String> = "SHOW DATABASES".fetch(&mut conn).await?;
         drop(conn);
 
-        let hidden: BTreeSet<&str> = [
-            "information_schema",
-            "performance_schema",
-            "mysql",
-            "sys",
-        ]
-        .into_iter()
-        .collect();
-        Ok(rows.into_iter().filter(|n| !hidden.contains(n.as_str())).collect())
+        let hidden: BTreeSet<&str> = ["information_schema", "performance_schema", "mysql", "sys"]
+            .into_iter()
+            .collect();
+        Ok(rows
+            .into_iter()
+            .filter(|n| !hidden.contains(n.as_str()))
+            .collect())
     }
 
     /// Blocking wrapper for [`Self::list_databases`].
@@ -345,14 +343,16 @@ impl MysqlClient {
 
         Ok(rows
             .into_iter()
-            .map(|(name, column_type, null_flag, key, default_value, extra)| ColumnInfo {
-                name,
-                column_type,
-                nullable: null_flag.eq_ignore_ascii_case("YES"),
-                key,
-                default_value,
-                extra,
-            })
+            .map(
+                |(name, column_type, null_flag, key, default_value, extra)| ColumnInfo {
+                    name,
+                    column_type,
+                    nullable: null_flag.eq_ignore_ascii_case("YES"),
+                    key,
+                    default_value,
+                    extra,
+                },
+            )
             .collect())
     }
 
@@ -400,9 +400,9 @@ fn value_to_display(v: &Value) -> String {
         Value::UInt(u) => u.to_string(),
         Value::Float(f) => f.to_string(),
         Value::Double(d) => d.to_string(),
-        Value::Date(y, mo, d, h, mi, s, us) => format!(
-            "{y:04}-{mo:02}-{d:02} {h:02}:{mi:02}:{s:02}.{us:06}"
-        ),
+        Value::Date(y, mo, d, h, mi, s, us) => {
+            format!("{y:04}-{mo:02}-{d:02} {h:02}:{mi:02}:{s:02}.{us:06}")
+        }
         Value::Time(neg, d, h, mi, s, us) => {
             let sign = if *neg { "-" } else { "" };
             format!("{sign}{}:{h:02}:{mi:02}:{s:02}.{us:06}", d)

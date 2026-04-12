@@ -32,6 +32,25 @@ elseif(WIN32)
     )
 endif()
 
+# ─── Auto-update (platform-conditional) ───────────────
+set(PIER_UPDATER_SOURCES
+    src/PierUpdater.h
+)
+
+if(APPLE)
+    list(APPEND PIER_UPDATER_SOURCES
+        src/PierUpdater_mac.mm
+    )
+elseif(WIN32)
+    list(APPEND PIER_UPDATER_SOURCES
+        src/PierUpdater_win.cpp
+    )
+else()
+    list(APPEND PIER_UPDATER_SOURCES
+        src/PierUpdater_stub.cpp
+    )
+endif()
+
 # qmltyperegistrar emits `#if __has_include(<PierCoreBridge.h>)` in its
 # generated bootstrap, so the source directory has to be on the include
 # path even though we don't `#include` anything from it ourselves.
@@ -49,7 +68,14 @@ set(PIER_QML_FILES
     qml/components/GhostButton.qml
     qml/components/IconButton.qml
     qml/components/PierTextField.qml
+    qml/components/PierTextArea.qml
+    qml/components/PierSearchField.qml
     qml/components/PierComboBox.qml
+    qml/components/PierSplitHandle.qml
+    qml/components/PierScrollView.qml
+    qml/components/PierScrollBar.qml
+    qml/components/PierMenuItem.qml
+    qml/components/PierSlider.qml
     qml/components/SegmentedControl.qml
     qml/components/ToggleSwitch.qml
     qml/components/PierToolTip.qml
@@ -60,6 +86,8 @@ set(PIER_QML_FILES
     qml/components/ToolBanner.qml
     qml/components/ToolMetricTile.qml
     qml/components/StatusPill.qml
+    qml/components/ModalDialogShell.qml
+    qml/components/PopoverPanel.qml
     qml/components/SectionLabel.qml
     qml/components/Separator.qml
     qml/components/TerminalTab.qml
@@ -86,6 +114,7 @@ set(PIER_QML_FILES
     qml/views/MarkdownPreviewView.qml
     qml/views/GitPanelView.qml
     qml/views/ServerMonitorView.qml
+    qml/views/SqliteBrowserView.qml
 )
 
 set(PIER_QML_RESOURCES
@@ -99,10 +128,14 @@ set(PIER_QML_RESOURCES
     resources/icons/lucide/settings.svg
     resources/icons/lucide/plus.svg
     resources/icons/lucide/loader.svg
+    resources/icons/lucide/activity.svg
+    resources/icons/lucide/bolt.svg
+    resources/icons/lucide/scroll-text.svg
     resources/icons/lucide/sun.svg
     resources/icons/lucide/command.svg
     resources/icons/lucide/arrow-left.svg
     resources/icons/lucide/folder.svg
+    resources/icons/lucide/folder-sync.svg
     resources/icons/lucide/moon.svg
     resources/icons/lucide/git-branch.svg
     resources/icons/lucide/database.svg
@@ -111,6 +144,7 @@ set(PIER_QML_RESOURCES
     resources/icons/lucide/server.svg
     resources/icons/lucide/layers.svg
     resources/icons/lucide/search.svg
+    resources/icons/lucide/hard-drive.svg
     resources/fonts/Inter-Medium.ttf
     resources/fonts/JetBrainsMono-Regular.ttf
     resources/fonts/Inter-Regular.ttf
@@ -165,6 +199,15 @@ qt_add_qml_module(pier-x
         src/PierSearch.cpp
         src/PierServerMonitor.h
         src/PierServerMonitor.cpp
+        src/PierI18n.h
+        src/PierI18n.cpp
+        src/PierProfiler.h
+        src/PierProfiler.cpp
+        src/PierWindowChrome.h
+        src/PierWindowChrome.cpp
+        ${PIER_UPDATER_SOURCES}
+        src/PierUpdaterBridge.h
+        src/PierUpdaterBridge.cpp
     QML_FILES
         ${PIER_QML_FILES}
     RESOURCES
@@ -196,6 +239,27 @@ target_link_libraries(pier-x PRIVATE
 # tells us which ones on each platform, but when linking a staticlib into
 # a Qt executable we need to forward them explicitly.
 if(APPLE)
+    # ── Sparkle auto-update framework ──────────────────
+    # Look for a local copy first (thirdparty/ or system),
+    # fall back gracefully if not found — the stub compiles
+    # but PierUpdater::available() returns false at runtime.
+    find_library(SPARKLE_FRAMEWORK Sparkle
+        PATHS ${CMAKE_CURRENT_SOURCE_DIR}/thirdparty/sparkle
+              /Library/Frameworks
+              ~/Library/Frameworks
+    )
+    if(SPARKLE_FRAMEWORK)
+        target_link_libraries(pier-x PRIVATE ${SPARKLE_FRAMEWORK})
+        target_compile_definitions(pier-x PRIVATE PIER_HAS_SPARKLE=1)
+        # Ensure the framework is found at runtime inside the bundle.
+        set_target_properties(pier-x PROPERTIES
+            BUILD_WITH_INSTALL_RPATH TRUE
+            INSTALL_RPATH "@loader_path/../Frameworks"
+        )
+    else()
+        message(STATUS "Sparkle.framework not found — auto-update disabled")
+    endif()
+
     target_link_libraries(pier-x PRIVATE
         "-framework CoreFoundation"
         "-framework Security"
@@ -204,6 +268,17 @@ if(APPLE)
         z
     )
 elseif(WIN32)
+    # ── WinSparkle auto-update library ─────────────────
+    if(EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/thirdparty/winsparkle/include/winsparkle.h")
+        target_include_directories(pier-x PRIVATE
+            ${CMAKE_CURRENT_SOURCE_DIR}/thirdparty/winsparkle/include)
+        target_link_libraries(pier-x PRIVATE
+            ${CMAKE_CURRENT_SOURCE_DIR}/thirdparty/winsparkle/lib/WinSparkle.lib)
+        target_compile_definitions(pier-x PRIVATE PIER_HAS_WINSPARKLE=1)
+    else()
+        message(STATUS "WinSparkle not found — auto-update disabled")
+    endif()
+
     target_link_libraries(pier-x PRIVATE
         ws2_32 userenv advapi32 bcrypt ntdll crypt32 secur32 ncrypt
     )

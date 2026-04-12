@@ -39,8 +39,6 @@ pub struct CommitEntry {
     pub date_timestamp: i64,
 }
 
-
-
 // ═══════════════════════════════════════════════════════════
 // Helper: build ref decoration string for a commit
 // ═══════════════════════════════════════════════════════════
@@ -131,10 +129,7 @@ pub fn graph_log(
     // Build git log command
     // Format: hash<SEP>parents<SEP>message<SEP>author<SEP>timestamp
     let separator = "\x1f"; // ASCII Unit Separator
-    let format_str = format!(
-        "%H{0}%P{0}%s{0}%an{0}%ct",
-        separator
-    );
+    let format_str = format!("%H{0}%P{0}%s{0}%an{0}%ct", separator);
 
     let mut cmd = Command::new("git");
     cmd.current_dir(repo_path);
@@ -143,7 +138,7 @@ pub fn graph_log(
 
     // Limit & skip
     cmd.arg(format!("-n{}", limit + skip)); // fetch enough to skip + limit
-    // We handle skip ourselves after parsing to support path-filter skipping
+                                            // We handle skip ourselves after parsing to support path-filter skipping
 
     // First-parent only
     if filter.first_parent_only {
@@ -246,7 +241,6 @@ pub fn graph_log(
     Ok(results)
 }
 
-
 /// Check if a commit touches any of the specified paths.
 #[allow(dead_code)]
 fn commit_touches_paths(repo: &Repository, commit: &git2::Commit, paths: &[String]) -> bool {
@@ -277,10 +271,20 @@ fn commit_touches_paths(repo: &Repository, commit: &git2::Commit, paths: &[Strin
     };
 
     for delta in diff.deltas() {
-        let old_path = delta.old_file().path().and_then(|p| p.to_str()).unwrap_or("");
-        let new_path = delta.new_file().path().and_then(|p| p.to_str()).unwrap_or("");
+        let old_path = delta
+            .old_file()
+            .path()
+            .and_then(|p| p.to_str())
+            .unwrap_or("");
+        let new_path = delta
+            .new_file()
+            .path()
+            .and_then(|p| p.to_str())
+            .unwrap_or("");
         for filter_path in paths {
-            if old_path.starts_with(filter_path.as_str()) || new_path.starts_with(filter_path.as_str()) {
+            if old_path.starts_with(filter_path.as_str())
+                || new_path.starts_with(filter_path.as_str())
+            {
                 return true;
             }
         }
@@ -296,12 +300,15 @@ pub fn first_parent_chain(
 ) -> Result<Vec<String>, String> {
     let repo = Repository::open(repo_path).map_err(|e| format!("Failed to open repo: {}", e))?;
 
-    let mut revwalk = repo.revwalk().map_err(|e| format!("Failed to create revwalk: {}", e))?;
+    let mut revwalk = repo
+        .revwalk()
+        .map_err(|e| format!("Failed to create revwalk: {}", e))?;
     revwalk.set_sorting(Sort::TOPOLOGICAL | Sort::TIME).ok();
     revwalk.simplify_first_parent().ok();
 
     // Push the ref
-    if let Ok(reference) = repo.find_reference(&format!("refs/heads/{}", ref_name))
+    if let Ok(reference) = repo
+        .find_reference(&format!("refs/heads/{}", ref_name))
         .or_else(|_| repo.find_reference(&format!("refs/remotes/{}", ref_name)))
         .or_else(|_| repo.find_reference(ref_name))
     {
@@ -357,7 +364,9 @@ pub fn list_branches(repo_path: &str) -> Result<Vec<String>, String> {
 pub fn list_authors(repo_path: &str, limit: usize) -> Result<Vec<String>, String> {
     let repo = Repository::open(repo_path).map_err(|e| format!("Failed to open repo: {}", e))?;
 
-    let mut revwalk = repo.revwalk().map_err(|e| format!("Revwalk error: {}", e))?;
+    let mut revwalk = repo
+        .revwalk()
+        .map_err(|e| format!("Revwalk error: {}", e))?;
     revwalk.set_sorting(Sort::TIME).ok();
     revwalk.push_glob("refs/heads/*").ok();
     revwalk.push_glob("refs/remotes/*").ok();
@@ -365,7 +374,9 @@ pub fn list_authors(repo_path: &str, limit: usize) -> Result<Vec<String>, String
     let mut authors = HashSet::new();
     let mut count = 0;
     for oid_result in revwalk {
-        if count >= limit { break; }
+        if count >= limit {
+            break;
+        }
         if let Ok(oid) = oid_result {
             if let Ok(commit) = repo.find_commit(oid) {
                 if let Some(name) = commit.author().name() {
@@ -399,7 +410,8 @@ pub fn list_tracked_files(repo_path: &str) -> Result<Vec<String>, String> {
             files.push(path);
         }
         git2::TreeWalkResult::Ok
-    }).ok();
+    })
+    .ok();
 
     Ok(files)
 }
@@ -426,7 +438,10 @@ pub fn detect_default_branch(repo_path: &str) -> Result<String, String> {
 
     // Strategy 2: Try common remote tracking branches
     for name in &["origin/master", "origin/main"] {
-        if repo.find_reference(&format!("refs/remotes/{}", name)).is_ok() {
+        if repo
+            .find_reference(&format!("refs/remotes/{}", name))
+            .is_ok()
+        {
             return Ok(name.to_string());
         }
     }
@@ -588,7 +603,11 @@ pub fn compute_graph_layout(
             }
 
             let child_li = layout_index[child_row];
-            let parent_li = if parent_row < n { layout_index[parent_row] } else { child_li };
+            let parent_li = if parent_row < n {
+                layout_index[parent_row]
+            } else {
+                child_li
+            };
 
             // Color: first-parent edges inherit child color;
             // merge edges (2nd+ parent) use parent color
@@ -621,7 +640,10 @@ pub fn compute_graph_layout(
         let first_intermediate = edge.child_row + 1;
         let last_intermediate = edge.parent_row.saturating_sub(1).min(n - 1);
         if first_intermediate <= last_intermediate {
-            edges_by_start.entry(first_intermediate).or_default().push(ei);
+            edges_by_start
+                .entry(first_intermediate)
+                .or_default()
+                .push(ei);
         }
     }
 
@@ -664,28 +686,44 @@ pub fn compute_graph_layout(
                 if lhs.up_row == rhs.up_row {
                     if lhs.down_row < rhs.down_row {
                         let vn = RowElement {
-                            is_node: true, edge_index: 0, up_li: lhs.down_li,
-                            down_li: lhs.down_li, up_row: lhs.down_row, down_row: lhs.down_row,
+                            is_node: true,
+                            edge_index: 0,
+                            up_li: lhs.down_li,
+                            down_li: lhs.down_li,
+                            up_row: lhs.down_row,
+                            down_row: lhs.down_row,
                         };
                         return -compare2(rhs, &vn);
                     } else {
                         let vn = RowElement {
-                            is_node: true, edge_index: 0, up_li: rhs.down_li,
-                            down_li: rhs.down_li, up_row: rhs.down_row, down_row: rhs.down_row,
+                            is_node: true,
+                            edge_index: 0,
+                            up_li: rhs.down_li,
+                            down_li: rhs.down_li,
+                            up_row: rhs.down_row,
+                            down_row: rhs.down_row,
                         };
                         return compare2(lhs, &vn);
                     }
                 }
                 if lhs.up_row < rhs.up_row {
                     let vn = RowElement {
-                        is_node: true, edge_index: 0, up_li: rhs.up_li,
-                        down_li: rhs.up_li, up_row: rhs.up_row, down_row: rhs.up_row,
+                        is_node: true,
+                        edge_index: 0,
+                        up_li: rhs.up_li,
+                        down_li: rhs.up_li,
+                        up_row: rhs.up_row,
+                        down_row: rhs.up_row,
                     };
                     return compare2(lhs, &vn);
                 } else {
                     let vn = RowElement {
-                        is_node: true, edge_index: 0, up_li: lhs.up_li,
-                        down_li: lhs.up_li, up_row: lhs.up_row, down_row: lhs.up_row,
+                        is_node: true,
+                        edge_index: 0,
+                        up_li: lhs.up_li,
+                        down_li: lhs.up_li,
+                        up_row: lhs.up_row,
+                        down_row: lhs.up_row,
                     };
                     return -compare2(rhs, &vn);
                 }
@@ -714,8 +752,12 @@ pub fn compute_graph_layout(
             let e = &all_edges[ei];
             let clamped_pr = e.parent_row.min(n - 1);
             if !is_edge_visible_in_row(
-                e.child_row as i32, clamped_pr as i32, row as i32,
-                long_edge_size, visible_part_size, edge_with_arrow_size,
+                e.child_row as i32,
+                clamped_pr as i32,
+                row as i32,
+                long_edge_size,
+                visible_part_size,
+                edge_with_arrow_size,
             ) {
                 continue;
             }
@@ -770,10 +812,16 @@ pub fn compute_graph_layout(
         anchors.push((edge.child_row, x_pos(node_columns[edge.child_row])));
 
         for r in (edge.child_row + 1)..clamped_parent {
-            if r >= n { break; }
+            if r >= n {
+                break;
+            }
             if !is_edge_visible_in_row(
-                edge.child_row as i32, clamped_parent as i32, r as i32,
-                long_edge_size, visible_part_size, edge_with_arrow_size,
+                edge.child_row as i32,
+                clamped_parent as i32,
+                r as i32,
+                long_edge_size,
+                visible_part_size,
+                edge_with_arrow_size,
             ) {
                 continue;
             }
@@ -805,7 +853,9 @@ pub fn compute_graph_layout(
         for ai in 0..anchors.len().saturating_sub(1) {
             let (row_a, x_a) = anchors[ai];
             let (row_b, x_b) = anchors[ai + 1];
-            if row_a >= n { continue; }
+            if row_a >= n {
+                continue;
+            }
 
             if row_b == row_a + 1 {
                 let x_mid = (x_a + x_b) / 2.0;
@@ -814,18 +864,34 @@ pub fn compute_graph_layout(
                 // Bottom half of row_a
                 if up_arrow_rows.contains(&row_a) && is_diagonal {
                     row_segments[row_a].push(PrintSegment {
-                        x_top: x_a, y_top: 0.0, x_bottom: x_a, y_bottom: approach_len, color_index: ci,
+                        x_top: x_a,
+                        y_top: 0.0,
+                        x_bottom: x_a,
+                        y_bottom: approach_len,
+                        color_index: ci,
                     });
                     row_segments[row_a].push(PrintSegment {
-                        x_top: x_a, y_top: approach_len, x_bottom: x_mid, y_bottom: rh, color_index: ci,
+                        x_top: x_a,
+                        y_top: approach_len,
+                        x_bottom: x_mid,
+                        y_bottom: rh,
+                        color_index: ci,
                     });
                 } else if up_arrow_rows.contains(&row_a) {
                     row_segments[row_a].push(PrintSegment {
-                        x_top: x_a, y_top: 0.0, x_bottom: x_mid, y_bottom: rh, color_index: ci,
+                        x_top: x_a,
+                        y_top: 0.0,
+                        x_bottom: x_mid,
+                        y_bottom: rh,
+                        color_index: ci,
                     });
                 } else {
                     row_segments[row_a].push(PrintSegment {
-                        x_top: x_a, y_top: rh / 2.0, x_bottom: x_mid, y_bottom: rh, color_index: ci,
+                        x_top: x_a,
+                        y_top: rh / 2.0,
+                        x_bottom: x_mid,
+                        y_bottom: rh,
+                        color_index: ci,
                     });
                 }
 
@@ -833,18 +899,34 @@ pub fn compute_graph_layout(
                 if row_b < n {
                     if down_arrow_rows.contains(&row_b) && is_diagonal {
                         row_segments[row_b].push(PrintSegment {
-                            x_top: x_mid, y_top: 0.0, x_bottom: x_b, y_bottom: rh - approach_len, color_index: ci,
+                            x_top: x_mid,
+                            y_top: 0.0,
+                            x_bottom: x_b,
+                            y_bottom: rh - approach_len,
+                            color_index: ci,
                         });
                         row_segments[row_b].push(PrintSegment {
-                            x_top: x_b, y_top: rh - approach_len, x_bottom: x_b, y_bottom: rh, color_index: ci,
+                            x_top: x_b,
+                            y_top: rh - approach_len,
+                            x_bottom: x_b,
+                            y_bottom: rh,
+                            color_index: ci,
                         });
                     } else if down_arrow_rows.contains(&row_b) {
                         row_segments[row_b].push(PrintSegment {
-                            x_top: x_mid, y_top: 0.0, x_bottom: x_b, y_bottom: rh, color_index: ci,
+                            x_top: x_mid,
+                            y_top: 0.0,
+                            x_bottom: x_b,
+                            y_bottom: rh,
+                            color_index: ci,
                         });
                     } else {
                         row_segments[row_b].push(PrintSegment {
-                            x_top: x_mid, y_top: 0.0, x_bottom: x_b, y_bottom: rh / 2.0, color_index: ci,
+                            x_top: x_mid,
+                            y_top: 0.0,
+                            x_bottom: x_b,
+                            y_bottom: rh / 2.0,
+                            color_index: ci,
                         });
                     }
                 }
@@ -858,20 +940,28 @@ pub fn compute_graph_layout(
             let down_row = edge.child_row + visible_part_size as usize;
             if down_row < n {
                 let col = edge_column_at_row[down_row]
-                    .get(&ei).copied()
+                    .get(&ei)
+                    .copied()
                     .unwrap_or(node_columns[edge.child_row]);
                 row_arrows[down_row].push(ArrowElement {
-                    x: x_pos(col), y: rh, color_index: ci, is_down: true,
+                    x: x_pos(col),
+                    y: rh,
+                    color_index: ci,
+                    is_down: true,
                 });
             }
             if clamped_parent >= visible_part_size as usize {
                 let up_row = clamped_parent - visible_part_size as usize;
                 if up_row < n {
                     let col = edge_column_at_row[up_row]
-                        .get(&ei).copied()
+                        .get(&ei)
+                        .copied()
                         .unwrap_or(node_columns[clamped_parent]);
                     row_arrows[up_row].push(ArrowElement {
-                        x: x_pos(col), y: 0.0, color_index: ci, is_down: false,
+                        x: x_pos(col),
+                        y: 0.0,
+                        color_index: ci,
+                        is_down: false,
                     });
                 }
             }
@@ -881,20 +971,28 @@ pub fn compute_graph_layout(
             let down_row = edge.child_row + 1;
             if down_row < n {
                 let col = edge_column_at_row[down_row]
-                    .get(&ei).copied()
+                    .get(&ei)
+                    .copied()
                     .unwrap_or(node_columns[edge.child_row]);
                 row_arrows[down_row].push(ArrowElement {
-                    x: x_pos(col), y: rh, color_index: ci, is_down: true,
+                    x: x_pos(col),
+                    y: rh,
+                    color_index: ci,
+                    is_down: true,
                 });
             }
             if clamped_parent >= 1 {
                 let up_row = clamped_parent - 1;
                 if up_row < n {
                     let col = edge_column_at_row[up_row]
-                        .get(&ei).copied()
+                        .get(&ei)
+                        .copied()
                         .unwrap_or(node_columns[clamped_parent]);
                     row_arrows[up_row].push(ArrowElement {
-                        x: x_pos(col), y: 0.0, color_index: ci, is_down: false,
+                        x: x_pos(col),
+                        y: 0.0,
+                        color_index: ci,
+                        is_down: false,
                     });
                 }
             }
@@ -950,7 +1048,9 @@ fn assign_layout_indices(
 
     // DFS walk from each head
     let dfs_walk = |head: usize, li: &mut Vec<i32>, current: &mut i32| {
-        if li[head] != 0 { return; }
+        if li[head] != 0 {
+            return;
+        }
         let mut stack = vec![head];
         while let Some(&cur) = stack.last() {
             let first_visit = li[cur] == 0;
@@ -994,8 +1094,12 @@ fn assign_layout_indices(
 // ── Visibility helpers ──
 
 fn is_edge_visible_in_row(
-    child_row: i32, parent_row: i32, row: i32,
-    long_edge_size: i32, visible_part_size: i32, edge_with_arrow_size: i32,
+    child_row: i32,
+    parent_row: i32,
+    row: i32,
+    long_edge_size: i32,
+    visible_part_size: i32,
+    edge_with_arrow_size: i32,
 ) -> bool {
     let span = parent_row - child_row;
     if span >= long_edge_size {

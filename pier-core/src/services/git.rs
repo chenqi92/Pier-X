@@ -209,7 +209,10 @@ impl GitClient {
         }
         let p = Path::new(path);
         if !p.exists() {
-            return Err(GitError::InvalidPath(format!("path does not exist: {}", path)));
+            return Err(GitError::InvalidPath(format!(
+                "path does not exist: {}",
+                path
+            )));
         }
 
         let output = Command::new("git")
@@ -307,7 +310,8 @@ impl GitClient {
             args.push("--");
             args.push(path);
         }
-        self.git(&args).map_err(|e| GitError::Command(e.to_string()))
+        self.git(&args)
+            .map_err(|e| GitError::Command(e.to_string()))
     }
 
     /// Get the diff for an untracked file (shows full content).
@@ -470,9 +474,13 @@ impl GitClient {
 
         let mut commits = Vec::new();
         for line in output.lines() {
-            if line.is_empty() { continue; }
+            if line.is_empty() {
+                continue;
+            }
             let parts: Vec<&str> = line.splitn(7, sep).collect();
-            if parts.len() < 6 { continue; }
+            if parts.len() < 6 {
+                continue;
+            }
             commits.push(CommitInfo {
                 hash: parts[0].to_string(),
                 short_hash: parts[1].to_string(),
@@ -493,9 +501,13 @@ impl GitClient {
         let output = self.git(&["stash", "list", "--format=%gd\x1f%gs\x1f%cr"])?;
         let mut stashes = Vec::new();
         for line in output.lines() {
-            if line.is_empty() { continue; }
+            if line.is_empty() {
+                continue;
+            }
             let parts: Vec<&str> = line.splitn(3, '\x1f').collect();
-            if parts.len() < 3 { continue; }
+            if parts.len() < 3 {
+                continue;
+            }
             stashes.push(StashEntry {
                 index: parts[0].to_string(),
                 message: parts[1].to_string(),
@@ -534,7 +546,8 @@ impl GitClient {
     /// List local branches.
     pub fn branch_list(&self) -> Result<Vec<String>, GitError> {
         let output = self.git(&["branch", "--format=%(refname:short)"])?;
-        Ok(output.lines()
+        Ok(output
+            .lines()
             .filter(|l| !l.is_empty())
             .map(|l| l.to_string())
             .collect())
@@ -562,7 +575,11 @@ impl GitClient {
                 lines.push(BlameLine {
                     line_number: line_no,
                     hash: current_hash.clone(),
-                    short_hash: if current_hash.len() >= 8 { current_hash[..8].to_string() } else { current_hash.clone() },
+                    short_hash: if current_hash.len() >= 8 {
+                        current_hash[..8].to_string()
+                    } else {
+                        current_hash.clone()
+                    },
                     author: current_author.clone(),
                     timestamp: current_time,
                     content: raw[1..].to_string(),
@@ -586,11 +603,15 @@ impl GitClient {
     /// List all tags.
     pub fn tag_list(&self) -> Result<Vec<TagInfo>, GitError> {
         let output = self.git(&[
-            "tag", "-l", "--format=%(refname:short)\x1f%(objectname:short)\x1f%(creatordate:unix)\x1f%(subject)"
+            "tag",
+            "-l",
+            "--format=%(refname:short)\x1f%(objectname:short)\x1f%(creatordate:unix)\x1f%(subject)",
         ])?;
         let mut tags = Vec::new();
         for line in output.lines() {
-            if line.is_empty() { continue; }
+            if line.is_empty() {
+                continue;
+            }
             let parts: Vec<&str> = line.splitn(4, '\x1f').collect();
             if parts.len() >= 2 {
                 tags.push(TagInfo {
@@ -627,11 +648,13 @@ impl GitClient {
         for line in output.lines() {
             let parts: Vec<&str> = line.split_whitespace().collect();
             if parts.len() >= 2 {
-                let entry = map.entry(parts[0].to_string()).or_insert_with(|| RemoteInfo {
-                    name: parts[0].to_string(),
-                    fetch_url: String::new(),
-                    push_url: String::new(),
-                });
+                let entry = map
+                    .entry(parts[0].to_string())
+                    .or_insert_with(|| RemoteInfo {
+                        name: parts[0].to_string(),
+                        fetch_url: String::new(),
+                        push_url: String::new(),
+                    });
                 if line.contains("(fetch)") {
                     entry.fetch_url = parts[1].to_string();
                 } else if line.contains("(push)") {
@@ -706,7 +729,9 @@ impl GitClient {
             .current_dir(&self.repo_path)
             .args(args)
             .output()
-            .map_err(|e| GitError::Command(format!("failed to run git {}: {}", args.join(" "), e)))?;
+            .map_err(|e| {
+                GitError::Command(format!("failed to run git {}: {}", args.join(" "), e))
+            })?;
 
         if !output.status.success() {
             let stderr = String::from_utf8_lossy(&output.stderr);

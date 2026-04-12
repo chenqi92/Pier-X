@@ -203,7 +203,9 @@ impl SshSession {
         // SAFETY: we just Arc::new'd this handle in connect();
         // we're the only holder at this point so get_mut is fine.
         let handle = Arc::get_mut(&mut self.handle).expect("unique handle during auth");
-        let ok = handle.authenticate_password(user, password.to_string()).await?;
+        let ok = handle
+            .authenticate_password(user, password.to_string())
+            .await?;
         if !ok.success() {
             return Err(SshError::AuthRejected {
                 tried: vec!["password".to_string()],
@@ -334,22 +336,19 @@ impl SshSession {
             },
         };
 
-        let key = russh::keys::load_secret_key(private_key_path, passphrase.as_deref())
-            .map_err(|e| {
+        let key =
+            russh::keys::load_secret_key(private_key_path, passphrase.as_deref()).map_err(|e| {
                 SshError::InvalidConfig(format!(
                     "failed to load private key {private_key_path}: {e}",
                 ))
             })?;
 
-        let key_with_hash =
-            russh::keys::PrivateKeyWithHashAlg::new(StdArc::new(key), None);
+        let key_with_hash = russh::keys::PrivateKeyWithHashAlg::new(StdArc::new(key), None);
 
         // SAFETY: we just Arc::new'd this handle in connect();
         // we're the only holder at this point so get_mut is fine.
         let handle = Arc::get_mut(&mut self.handle).expect("unique handle during auth");
-        let ok = handle
-            .authenticate_publickey(user, key_with_hash)
-            .await?;
+        let ok = handle.authenticate_publickey(user, key_with_hash).await?;
         if !ok.success() {
             return Err(SshError::AuthRejected {
                 tried: vec!["publickey".to_string()],
@@ -452,7 +451,12 @@ impl SshSession {
                 russh::ChannelMsg::ExitStatus { exit_status } => {
                     exit_code = exit_status as i32;
                 }
-                russh::ChannelMsg::Eof | russh::ChannelMsg::Close => break,
+                russh::ChannelMsg::Eof | russh::ChannelMsg::Close => {
+                    // Some servers deliver Close before the
+                    // final ExitStatus. Keep draining until the
+                    // channel reports `None` so successful execs
+                    // do not get misclassified as exit -1.
+                }
                 _ => {}
             }
         }
@@ -503,9 +507,9 @@ fn map_connect_error(e: russh::Error) -> SshError {
 fn verify_error_to_ssh_error(e: super::known_hosts::VerifyError) -> SshError {
     use super::known_hosts::VerifyError;
     match e {
-        VerifyError::Mismatch { host, fingerprint, .. } => {
-            SshError::HostKeyMismatch { host, fingerprint }
-        }
+        VerifyError::Mismatch {
+            host, fingerprint, ..
+        } => SshError::HostKeyMismatch { host, fingerprint },
         VerifyError::Io(msg) => SshError::InvalidConfig(format!("known_hosts: {msg}")),
     }
 }
@@ -537,12 +541,16 @@ impl client::Handler for ClientHandler {
         &mut self,
         server_public_key: &PublicKey,
     ) -> std::result::Result<bool, Self::Error> {
-        match self.verifier.verify(&self.host, self.port, server_public_key) {
+        match self
+            .verifier
+            .verify(&self.host, self.port, server_public_key)
+        {
             Ok(accept) => Ok(accept),
             Err(e) => {
                 log::warn!(
                     "host key verification failed for {}:{}: {e}",
-                    self.host, self.port,
+                    self.host,
+                    self.port,
                 );
                 // Stash the structured error so SshSession::connect
                 // can translate it into SshError::HostKeyMismatch
@@ -603,7 +611,10 @@ mod tests {
         // here is "it fails fast, with a typed error, and
         // doesn't panic or hang".
         assert!(
-            matches!(err, SshError::Timeout(_) | SshError::Connect(_) | SshError::Protocol(_)),
+            matches!(
+                err,
+                SshError::Timeout(_) | SshError::Connect(_) | SshError::Protocol(_)
+            ),
             "expected Timeout / Connect / Protocol, got {err:?}",
         );
     }

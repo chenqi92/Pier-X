@@ -89,11 +89,7 @@ impl SshChannelPty {
     /// wire up the two bridge queues. This is only called from
     /// [`super::SshSession::open_shell_channel`] — every other
     /// constructor path is either for tests or future protocols.
-    pub(super) fn spawn(
-        channel: russh::Channel<russh::client::Msg>,
-        cols: u16,
-        rows: u16,
-    ) -> Self {
+    pub(super) fn spawn(channel: russh::Channel<russh::client::Msg>, cols: u16, rows: u16) -> Self {
         let (control_tx, control_rx) = unbounded_channel::<ControlMsg>();
         let (data_tx, data_rx) = unbounded_channel::<Vec<u8>>();
 
@@ -200,10 +196,7 @@ impl Pty for SshChannelPty {
         // `process` call (which is slightly more efficient than
         // one call per chunk).
         let mut out = Vec::new();
-        let mut guard = self
-            .data_rx
-            .lock()
-            .unwrap_or_else(|p| p.into_inner());
+        let mut guard = self.data_rx.lock().unwrap_or_else(|p| p.into_inner());
         while let Ok(chunk) = guard.try_recv() {
             out.extend_from_slice(&chunk);
         }

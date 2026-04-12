@@ -38,6 +38,7 @@
 #include <QObject>
 #include <QPointer>
 #include <QString>
+#include <QStringList>
 #include <QVariantList>
 #include <qqml.h>
 
@@ -90,6 +91,7 @@ public:
     Q_PROPERTY(QVariantList images READ images NOTIFY imagesChanged FINAL)
     Q_PROPERTY(QVariantList volumes READ volumes NOTIFY volumesChanged FINAL)
     Q_PROPERTY(QVariantList networks READ networks NOTIFY networksChanged FINAL)
+    Q_PROPERTY(QVariantList composeServices READ composeServices NOTIFY composeServicesChanged FINAL)
 
     explicit PierDockerClientModel(QObject *parent = nullptr);
     ~PierDockerClientModel() override;
@@ -114,6 +116,7 @@ public:
     QVariantList images() const { return m_images; }
     QVariantList volumes() const { return m_volumes; }
     QVariantList networks() const { return m_networks; }
+    QVariantList composeServices() const { return m_composeServices; }
 
     void setShowStopped(bool v);
 
@@ -144,11 +147,30 @@ public slots:
 
     /// Image/Volume/Network management
     void refreshImages();
+    void inspectImage(const QString &id);
+    void pullImage(const QString &imageRef);
+    void pruneImages();
+    void runImage(const QString &imageRef,
+                  const QString &containerName,
+                  const QVariantList &ports,
+                  const QVariantList &envVars,
+                  const QVariantList &volumes,
+                  const QString &restartPolicy,
+                  const QString &command,
+                  bool detached = true);
     void removeImage(const QString &id, bool force);
     void refreshVolumes();
+    void inspectVolume(const QString &name);
+    void pruneVolumes();
     void removeVolume(const QString &name);
     void refreshNetworks();
+    void inspectNetwork(const QString &name);
+    void createNetwork(const QString &name, const QString &driver = QStringLiteral("bridge"));
     void removeNetwork(const QString &name);
+    void refreshCompose(const QString &composeFilePath);
+    void composeUp(const QString &composeFilePath);
+    void composeDown(const QString &composeFilePath);
+    void composeRestart(const QString &composeFilePath, const QString &service = QString());
 
     /// Shut down.
     void stop();
@@ -162,6 +184,7 @@ signals:
     void imagesChanged();
     void volumesChanged();
     void networksChanged();
+    void composeServicesChanged();
     /// Fired once an action slot completes so the UI can
     /// show a transient toast without binding to the busy
     /// property transitions.
@@ -172,9 +195,12 @@ private slots:
     void onListResult(quint64 requestId, const QString &json, const QString &error);
     void onActionResult(quint64 requestId, bool ok, const QString &message);
     void onInspectResult(quint64 requestId, const QString &id, const QString &json, const QString &error);
+    void onInspectExecResult(quint64 requestId, const QString &target, bool ok, const QString &output, const QString &error);
+    void onDockerExecResult(quint64 requestId, const QString &op, bool ok, const QString &output, const QString &error);
     void onImagesResult(quint64 requestId, const QString &json);
     void onVolumesResult(quint64 requestId, const QString &json);
     void onNetworksResult(quint64 requestId, const QString &json);
+    void onComposeResult(quint64 requestId, const QString &output, const QString &error);
 
 private:
     void setStatus(Status s);
@@ -186,6 +212,12 @@ private:
                      const QString &verb,
                      const QString &id,
                      bool force);
+    void spawnInspectExec(quint64 requestId,
+                          const QString &target,
+                          const QStringList &args);
+    void spawnDockerExec(quint64 requestId,
+                         const QString &op,
+                         const QStringList &args);
     static QString formatInspectJson(const QString &json);
 
     struct Row {
@@ -216,6 +248,7 @@ private:
     QVariantList m_images;
     QVariantList m_volumes;
     QVariantList m_networks;
+    QVariantList m_composeServices;
 
     quint64 m_nextRequestId = 0;
     quint64 m_nextInspectRequestId = 0;

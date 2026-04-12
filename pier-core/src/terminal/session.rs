@@ -463,8 +463,8 @@ mod tests {
     fn resize_updates_snapshot_dimensions() {
         let (_counter, user_data) = fresh_counter();
 
-        let mut term = PierTerminal::new(80, 24, "/bin/cat", test_notify, user_data)
-            .expect("spawn failed");
+        let mut term =
+            PierTerminal::new(80, 24, "/bin/cat", test_notify, user_data).expect("spawn failed");
 
         assert_eq!(term.size(), (80, 24));
         term.resize(120, 40).expect("resize failed");
@@ -480,8 +480,8 @@ mod tests {
     fn dropping_session_reaps_reader_thread_and_child() {
         let (_counter, user_data) = fresh_counter();
 
-        let term = PierTerminal::new(80, 24, "/bin/cat", test_notify, user_data)
-            .expect("spawn failed");
+        let term =
+            PierTerminal::new(80, 24, "/bin/cat", test_notify, user_data).expect("spawn failed");
         assert!(term.is_alive());
 
         // Explicit drop. This should:
@@ -501,8 +501,8 @@ mod tests {
         // preserves the per-cell fg color.
         let (counter, user_data) = fresh_counter();
 
-        let term = PierTerminal::new(80, 24, "/bin/sh", test_notify, user_data)
-            .expect("spawn failed");
+        let term =
+            PierTerminal::new(80, 24, "/bin/sh", test_notify, user_data).expect("spawn failed");
 
         // Send the printf command and exit so we can wait for stable
         // output. Use single quotes so the shell does no expansion.

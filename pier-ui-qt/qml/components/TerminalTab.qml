@@ -1,4 +1,5 @@
 import QtQuick
+import QtQuick.Layouts
 import QtQuick.Effects
 import Pier
 
@@ -29,13 +30,13 @@ Rectangle {
     }
 
     implicitHeight: Theme.tabHeight
-    implicitWidth: Math.max(108, row.implicitWidth + Theme.sp3 * 2)
-    radius: Theme.radiusMd
-    color: active ? Theme.accentSubtle
+    implicitWidth: Math.max(108, row.implicitWidth + Theme.sp3 + Theme.sp2)
+    radius: Theme.radiusSm
+    color: active ? Theme.bgSurface
          : root.menuOpen ? Theme.bgActive
          : tabArea.containsMouse ? Theme.bgHover
          : "transparent"
-    border.color: active ? Theme.borderFocus : "transparent"
+    border.color: active ? Theme.borderDefault : "transparent"
     border.width: active ? 1 : 0
 
     Behavior on color { ColorAnimation { duration: Theme.durFast } }
@@ -64,28 +65,28 @@ Rectangle {
         }
     }
 
-    Row {
+    RowLayout {
         id: row
         anchors.left: parent.left
-        anchors.leftMargin: Theme.sp3
+        anchors.leftMargin: Theme.sp2
         anchors.right: parent.right
         anchors.rightMargin: Theme.sp2
         anchors.verticalCenter: parent.verticalCenter
-        spacing: Theme.sp2
+        spacing: Theme.sp1_5
 
         Rectangle {
             visible: root.colorTag >= 0 && root.colorTag < root.colorPalette.length
-            anchors.verticalCenter: parent.verticalCenter
-            width: 3
-            height: 18
-            radius: 1.5
+            Layout.alignment: Qt.AlignVCenter
+            width: 2
+            height: 14
+            radius: 1
             color: root.colorPalette[root.colorTag]
         }
 
         Image {
-            anchors.verticalCenter: parent.verticalCenter
+            Layout.alignment: Qt.AlignVCenter
             source: "qrc:/qt/qml/Pier/resources/icons/lucide/" + root.iconName + ".svg"
-            sourceSize: Qt.size(12, 12)
+            sourceSize: Qt.size(Theme.iconSm, Theme.iconSm)
             layer.enabled: true
             layer.effect: MultiEffect {
                 colorization: 1.0
@@ -96,18 +97,21 @@ Rectangle {
         }
 
         Text {
-            anchors.verticalCenter: parent.verticalCenter
-            width: Math.min(220, implicitWidth)
+            Layout.alignment: Qt.AlignVCenter
+            Layout.fillWidth: true
+            Layout.minimumWidth: 0
+            Layout.maximumWidth: 220
             text: root.title
             font.family: Theme.fontUi
-            font.pixelSize: Theme.sizeSmall
+            font.pixelSize: Theme.sizeBody
             font.weight: root.active ? Theme.weightMedium : Theme.weightRegular
             color: root.active ? Theme.textPrimary : Theme.textSecondary
+            wrapMode: Text.NoWrap
             elide: Text.ElideRight
         }
 
         Rectangle {
-            anchors.verticalCenter: parent.verticalCenter
+            Layout.alignment: Qt.AlignVCenter
             width: 16
             height: 16
             radius: Theme.radiusSm
@@ -121,7 +125,7 @@ Rectangle {
             Image {
                 anchors.centerIn: parent
                 source: "qrc:/qt/qml/Pier/resources/icons/lucide/x.svg"
-                sourceSize: Qt.size(Theme.iconXs, Theme.iconXs)
+                sourceSize: Qt.size(10, 10)
                 layer.enabled: true
                 layer.effect: MultiEffect {
                     colorization: 1.0

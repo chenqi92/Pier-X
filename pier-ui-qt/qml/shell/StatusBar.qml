@@ -3,6 +3,8 @@ import QtQuick.Layouts
 import Pier
 
 // Bottom status bar — short status text + version label.
+// When the performance overlay is enabled (Settings → Developer),
+// shows live FPS and memory usage between the status and version.
 Rectangle {
     id: root
 
@@ -26,8 +28,47 @@ Rectangle {
             Behavior on color { ColorAnimation { duration: Theme.durNormal } }
         }
 
+        // Startup time — shown once, only when profiling is on.
+        Text {
+            visible: PierProfiler.enabled && PierProfiler.startupMs > 0
+            text: qsTr("startup %1 ms").arg(PierProfiler.startupMs)
+            font.family: Theme.fontMono
+            font.pixelSize: Theme.sizeCaption
+            color: Theme.textTertiary
+            opacity: 0.7
+
+            Behavior on color { ColorAnimation { duration: Theme.durNormal } }
+        }
+
         Item { Layout.fillWidth: true }
 
+        // ── Performance overlay ──────────────────────
+        Text {
+            visible: PierProfiler.enabled
+            text: PierProfiler.fps + " FPS"
+            font.family: Theme.fontMono
+            font.pixelSize: Theme.sizeCaption
+            font.weight: Theme.weightMedium
+            color: PierProfiler.fps < 30
+                   ? Theme.statusWarning
+                   : (PierProfiler.fps < 50
+                      ? Theme.statusInfo
+                      : Theme.statusSuccess)
+
+            Behavior on color { ColorAnimation { duration: Theme.durNormal } }
+        }
+
+        Text {
+            visible: PierProfiler.enabled
+            text: PierProfiler.memoryUsage
+            font.family: Theme.fontMono
+            font.pixelSize: Theme.sizeCaption
+            color: Theme.textTertiary
+
+            Behavior on color { ColorAnimation { duration: Theme.durNormal } }
+        }
+
+        // ── Version info ─────────────────────────────
         Text {
             text: qsTr("Qt") + " " + PierCore.qtVersion
             font.family: Theme.fontMono

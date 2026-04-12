@@ -32,6 +32,8 @@ use std::ffi::{CStr, CString};
 use std::os::raw::{c_char, c_int};
 use std::ptr;
 
+use serde::Serialize;
+
 use crate::services::docker;
 use crate::ssh::{AuthMethod, HostKeyVerifier, SshConfig, SshSession};
 
@@ -59,6 +61,13 @@ pub const PIER_DOCKER_ERR_UTF8: c_int = -2;
 pub const PIER_DOCKER_ERR_FAILED: c_int = -3;
 /// Container id failed [`docker::is_safe_id`].
 pub const PIER_DOCKER_ERR_UNSAFE_ID: c_int = -4;
+
+#[derive(Serialize)]
+struct DockerExecResponse {
+    ok: bool,
+    exit_code: i32,
+    output: String,
+}
 
 /// Open a Docker panel. Runs the SSH handshake synchronously
 /// and returns a handle that survives every subsequent
@@ -282,14 +291,54 @@ pub unsafe extern "C" fn pier_docker_inspect_container(
     }
 }
 
+/// Execute `docker <args...>` on the current handle session
+/// using a JSON array of arguments. Returns
+/// `{ "ok": bool, "exit_code": number, "output": string }`
+/// as a heap string, or NULL on invalid input / transport
+/// failure. The output contains stdout only, matching
+/// [`crate::ssh::SshSession::exec_command`].
+#[no_mangle]
+pub unsafe extern "C" fn pier_docker_exec_json(
+    h: *mut PierDocker,
+    args_json: *const c_char,
+) -> *mut c_char {
+    if h.is_null() || args_json.is_null() {
+        return ptr::null_mut();
+    }
+    let handle = unsafe { &*h };
+    let raw = match unsafe { CStr::from_ptr(args_json) }.to_str() {
+        Ok(s) => s,
+        Err(_) => return ptr::null_mut(),
+    };
+    let args: Vec<String> = match serde_json::from_str(raw) {
+        Ok(v) => v,
+        Err(e) => {
+            log::warn!("pier_docker_exec_json: invalid args json: {e}");
+            return ptr::null_mut();
+        }
+    };
+    let response = match docker::exec_blocking(&handle.session, &args) {
+        Ok((exit_code, output)) => DockerExecResponse {
+            ok: exit_code == 0,
+            exit_code,
+            output,
+        },
+        Err(e) => {
+            log::warn!("pier_docker_exec_json failed: {e}");
+            return ptr::null_mut();
+        }
+    };
+    match serde_json::to_string(&response) {
+        Ok(json) => CString::new(json)
+            .map(|c| c.into_raw())
+            .unwrap_or(ptr::null_mut()),
+        Err(_) => ptr::null_mut(),
+    }
+}
+
 /// Internal helper: dispatch a simple action by verb.
 /// Returns one of the `PIER_DOCKER_ERR_*` codes.
-unsafe fn run_action(
-    h: *mut PierDocker,
-    id: *const c_char,
-    verb: &str,
-    force: bool,
-) -> c_int {
+unsafe fn run_action(h: *mut PierDocker, id: *const c_char, verb: &str, force: bool) -> c_int {
     if h.is_null() || id.is_null() {
         return PIER_DOCKER_ERR_NULL;
     }
@@ -373,29 +422,48 @@ pub unsafe extern "C" fn pier_docker_remove(
 /// List images. Returns JSON array or NULL.
 #[no_mangle]
 pub unsafe extern "C" fn pier_docker_list_images(h: *mut PierDocker) -> *mut c_char {
-    if h.is_null() { return ptr::null_mut(); }
+    if h.is_null() {
+        return ptr::null_mut();
+    }
     let handle = unsafe { &*h };
     match docker::list_images_blocking(&handle.session) {
         Ok(imgs) => match serde_json::to_string(&imgs) {
-            Ok(s) => CString::new(s).map(|c| c.into_raw()).unwrap_or(ptr::null_mut()),
+            Ok(s) => CString::new(s)
+                .map(|c| c.into_raw())
+                .unwrap_or(ptr::null_mut()),
             Err(_) => ptr::null_mut(),
         },
-        Err(e) => { log::warn!("pier_docker_list_images: {e}"); ptr::null_mut() }
+        Err(e) => {
+            log::warn!("pier_docker_list_images: {e}");
+            ptr::null_mut()
+        }
     }
 }
 
 /// Remove an image. Returns 0 or PIER_DOCKER_ERR_*.
 #[no_mangle]
 pub unsafe extern "C" fn pier_docker_remove_image(
-    h: *mut PierDocker, id: *const c_char, force: c_int,
+    h: *mut PierDocker,
+    id: *const c_char,
+    force: c_int,
 ) -> c_int {
-    if h.is_null() || id.is_null() { return PIER_DOCKER_ERR_NULL; }
+    if h.is_null() || id.is_null() {
+        return PIER_DOCKER_ERR_NULL;
+    }
     let handle = unsafe { &*h };
-    let id_str = match unsafe { CStr::from_ptr(id) }.to_str() { Ok(s) => s, Err(_) => return PIER_DOCKER_ERR_UTF8 };
-    if !docker::is_safe_id(id_str) { return PIER_DOCKER_ERR_UNSAFE_ID; }
+    let id_str = match unsafe { CStr::from_ptr(id) }.to_str() {
+        Ok(s) => s,
+        Err(_) => return PIER_DOCKER_ERR_UTF8,
+    };
+    if !docker::is_safe_id(id_str) {
+        return PIER_DOCKER_ERR_UNSAFE_ID;
+    }
     match docker::remove_image_blocking(&handle.session, id_str, force != 0) {
         Ok(()) => PIER_DOCKER_OK,
-        Err(e) => { log::warn!("pier_docker_remove_image: {e}"); PIER_DOCKER_ERR_FAILED }
+        Err(e) => {
+            log::warn!("pier_docker_remove_image: {e}");
+            PIER_DOCKER_ERR_FAILED
+        }
     }
 }
 
@@ -406,29 +474,47 @@ pub unsafe extern "C" fn pier_docker_remove_image(
 /// List volumes. Returns JSON array or NULL.
 #[no_mangle]
 pub unsafe extern "C" fn pier_docker_list_volumes(h: *mut PierDocker) -> *mut c_char {
-    if h.is_null() { return ptr::null_mut(); }
+    if h.is_null() {
+        return ptr::null_mut();
+    }
     let handle = unsafe { &*h };
     match docker::list_volumes_blocking(&handle.session) {
         Ok(vols) => match serde_json::to_string(&vols) {
-            Ok(s) => CString::new(s).map(|c| c.into_raw()).unwrap_or(ptr::null_mut()),
+            Ok(s) => CString::new(s)
+                .map(|c| c.into_raw())
+                .unwrap_or(ptr::null_mut()),
             Err(_) => ptr::null_mut(),
         },
-        Err(e) => { log::warn!("pier_docker_list_volumes: {e}"); ptr::null_mut() }
+        Err(e) => {
+            log::warn!("pier_docker_list_volumes: {e}");
+            ptr::null_mut()
+        }
     }
 }
 
 /// Remove a volume. Returns 0 or PIER_DOCKER_ERR_*.
 #[no_mangle]
 pub unsafe extern "C" fn pier_docker_remove_volume(
-    h: *mut PierDocker, name: *const c_char,
+    h: *mut PierDocker,
+    name: *const c_char,
 ) -> c_int {
-    if h.is_null() || name.is_null() { return PIER_DOCKER_ERR_NULL; }
+    if h.is_null() || name.is_null() {
+        return PIER_DOCKER_ERR_NULL;
+    }
     let handle = unsafe { &*h };
-    let n = match unsafe { CStr::from_ptr(name) }.to_str() { Ok(s) => s, Err(_) => return PIER_DOCKER_ERR_UTF8 };
-    if !docker::is_safe_id(n) { return PIER_DOCKER_ERR_UNSAFE_ID; }
+    let n = match unsafe { CStr::from_ptr(name) }.to_str() {
+        Ok(s) => s,
+        Err(_) => return PIER_DOCKER_ERR_UTF8,
+    };
+    if !docker::is_safe_id(n) {
+        return PIER_DOCKER_ERR_UNSAFE_ID;
+    }
     match docker::remove_volume_blocking(&handle.session, n) {
         Ok(()) => PIER_DOCKER_OK,
-        Err(e) => { log::warn!("pier_docker_remove_volume: {e}"); PIER_DOCKER_ERR_FAILED }
+        Err(e) => {
+            log::warn!("pier_docker_remove_volume: {e}");
+            PIER_DOCKER_ERR_FAILED
+        }
     }
 }
 
@@ -439,29 +525,47 @@ pub unsafe extern "C" fn pier_docker_remove_volume(
 /// List networks. Returns JSON array or NULL.
 #[no_mangle]
 pub unsafe extern "C" fn pier_docker_list_networks(h: *mut PierDocker) -> *mut c_char {
-    if h.is_null() { return ptr::null_mut(); }
+    if h.is_null() {
+        return ptr::null_mut();
+    }
     let handle = unsafe { &*h };
     match docker::list_networks_blocking(&handle.session) {
         Ok(nets) => match serde_json::to_string(&nets) {
-            Ok(s) => CString::new(s).map(|c| c.into_raw()).unwrap_or(ptr::null_mut()),
+            Ok(s) => CString::new(s)
+                .map(|c| c.into_raw())
+                .unwrap_or(ptr::null_mut()),
             Err(_) => ptr::null_mut(),
         },
-        Err(e) => { log::warn!("pier_docker_list_networks: {e}"); ptr::null_mut() }
+        Err(e) => {
+            log::warn!("pier_docker_list_networks: {e}");
+            ptr::null_mut()
+        }
     }
 }
 
 /// Remove a network. Returns 0 or PIER_DOCKER_ERR_*.
 #[no_mangle]
 pub unsafe extern "C" fn pier_docker_remove_network(
-    h: *mut PierDocker, name: *const c_char,
+    h: *mut PierDocker,
+    name: *const c_char,
 ) -> c_int {
-    if h.is_null() || name.is_null() { return PIER_DOCKER_ERR_NULL; }
+    if h.is_null() || name.is_null() {
+        return PIER_DOCKER_ERR_NULL;
+    }
     let handle = unsafe { &*h };
-    let n = match unsafe { CStr::from_ptr(name) }.to_str() { Ok(s) => s, Err(_) => return PIER_DOCKER_ERR_UTF8 };
-    if !docker::is_safe_id(n) { return PIER_DOCKER_ERR_UNSAFE_ID; }
+    let n = match unsafe { CStr::from_ptr(name) }.to_str() {
+        Ok(s) => s,
+        Err(_) => return PIER_DOCKER_ERR_UTF8,
+    };
+    if !docker::is_safe_id(n) {
+        return PIER_DOCKER_ERR_UNSAFE_ID;
+    }
     match docker::remove_network_blocking(&handle.session, n) {
         Ok(()) => PIER_DOCKER_OK,
-        Err(e) => { log::warn!("pier_docker_remove_network: {e}"); PIER_DOCKER_ERR_FAILED }
+        Err(e) => {
+            log::warn!("pier_docker_remove_network: {e}");
+            PIER_DOCKER_ERR_FAILED
+        }
     }
 }
 
@@ -474,16 +578,32 @@ mod tests {
         // SAFETY: every null path is documented.
         unsafe {
             assert!(pier_docker_open(
-                ptr::null(), 22, ptr::null(),
-                PIER_AUTH_PASSWORD, ptr::null(), ptr::null()
+                ptr::null(),
+                22,
+                ptr::null(),
+                PIER_AUTH_PASSWORD,
+                ptr::null(),
+                ptr::null()
             )
             .is_null());
             assert!(pier_docker_list_containers(ptr::null_mut(), 0).is_null());
             assert!(pier_docker_inspect_container(ptr::null_mut(), ptr::null()).is_null());
-            assert_eq!(pier_docker_start(ptr::null_mut(), ptr::null()), PIER_DOCKER_ERR_NULL);
-            assert_eq!(pier_docker_stop(ptr::null_mut(), ptr::null()), PIER_DOCKER_ERR_NULL);
-            assert_eq!(pier_docker_restart(ptr::null_mut(), ptr::null()), PIER_DOCKER_ERR_NULL);
-            assert_eq!(pier_docker_remove(ptr::null_mut(), ptr::null(), 0), PIER_DOCKER_ERR_NULL);
+            assert_eq!(
+                pier_docker_start(ptr::null_mut(), ptr::null()),
+                PIER_DOCKER_ERR_NULL
+            );
+            assert_eq!(
+                pier_docker_stop(ptr::null_mut(), ptr::null()),
+                PIER_DOCKER_ERR_NULL
+            );
+            assert_eq!(
+                pier_docker_restart(ptr::null_mut(), ptr::null()),
+                PIER_DOCKER_ERR_NULL
+            );
+            assert_eq!(
+                pier_docker_remove(ptr::null_mut(), ptr::null(), 0),
+                PIER_DOCKER_ERR_NULL
+            );
             pier_docker_free_string(ptr::null_mut());
             pier_docker_free(ptr::null_mut());
         }
@@ -498,8 +618,12 @@ mod tests {
         // SAFETY: all valid NUL-terminated strings.
         let h = unsafe {
             pier_docker_open(
-                host.as_ptr(), 22, user.as_ptr(),
-                PIER_AUTH_PASSWORD, pass.as_ptr(), ptr::null(),
+                host.as_ptr(),
+                22,
+                user.as_ptr(),
+                PIER_AUTH_PASSWORD,
+                pass.as_ptr(),
+                ptr::null(),
             )
         };
         let elapsed = start.elapsed();

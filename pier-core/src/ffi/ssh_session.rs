@@ -382,8 +382,12 @@ mod tests {
         // SAFETY: all null paths documented.
         unsafe {
             assert!(pier_ssh_session_open(
-                ptr::null(), 22, ptr::null(),
-                PIER_AUTH_PASSWORD, ptr::null(), ptr::null()
+                ptr::null(),
+                22,
+                ptr::null(),
+                PIER_AUTH_PASSWORD,
+                ptr::null(),
+                ptr::null()
             )
             .is_null());
             assert_eq!(pier_ssh_session_is_alive(ptr::null()), 0);
@@ -401,8 +405,12 @@ mod tests {
         // SAFETY: user and pass valid.
         let h = unsafe {
             pier_ssh_session_open(
-                ptr::null(), 22, user.as_ptr(),
-                PIER_AUTH_PASSWORD, pass.as_ptr(), ptr::null()
+                ptr::null(),
+                22,
+                user.as_ptr(),
+                PIER_AUTH_PASSWORD,
+                pass.as_ptr(),
+                ptr::null(),
             )
         };
         assert!(h.is_null());
@@ -460,13 +468,20 @@ mod tests {
         // SAFETY: strings valid; auth_kind = 99 is bogus.
         let h = unsafe {
             pier_ssh_session_open(
-                host.as_ptr(), 22, user.as_ptr(),
-                99, ptr::null(), ptr::null()
+                host.as_ptr(),
+                22,
+                user.as_ptr(),
+                99,
+                ptr::null(),
+                ptr::null(),
             )
         };
         assert!(h.is_null());
         // SAFETY: thread-local read.
-        assert_eq!(unsafe { pier_ssh_session_last_error_kind() }, ERR_KIND_INVALID_ARG);
+        assert_eq!(
+            unsafe { pier_ssh_session_last_error_kind() },
+            ERR_KIND_INVALID_ARG
+        );
     }
 
     #[test]

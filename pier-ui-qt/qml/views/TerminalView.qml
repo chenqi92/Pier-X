@@ -1,7 +1,9 @@
 import QtQuick
+import QtQuick.Controls
 import QtQuick.Effects
 import QtQuick.Layouts
 import Pier
+import "../components"
 
 // NOTE for M4: the service pill strip shows at the top of
 // this view (above the terminal grid) when the session is
@@ -40,6 +42,10 @@ Rectangle {
     // Shared SSH session handle — right-panel tools reuse this
     // instead of opening their own SSH connections.
     readonly property PierSshSessionHandle sharedSshSession: _sharedSession
+
+    // Emitted when the shared SSH session connects or disconnects.
+    // Main.qml's Loader delegate listens to update the sidebar bindings.
+    signal sshContextChanged()
 
     // Default shell is system-dependent. The caller can override this
     // via the `shell` property before the first layout; we only spawn
@@ -82,7 +88,7 @@ Rectangle {
     // cross the FFI at all.
     property bool sshUsesAgent: false
 
-    color: Theme.bgCanvas
+    color: Theme.bgPanel
     focus: true
     activeFocusOnTab: true
 
@@ -94,6 +100,7 @@ Rectangle {
         onConnectedChanged: {
             if (_sharedSession.connected && root.backend === "ssh")
                 root._startTerminalOnSharedSession()
+            root.sshContextChanged()
         }
     }
 
@@ -205,404 +212,406 @@ Rectangle {
 
     // Service pill strip — shown only when the SSH session is
     // Connected and the detector has at least one entry. Sits
-    // above the grid, pushes the grid down by (pill height +
-    // padding). Empty / loading state is invisible; we don't
-    // want to eat vertical space while detection is in flight.
-    Rectangle {
+    // above the grid and scrolls horizontally instead of letting
+    // the center view collapse into unusable widths.
+    Item {
         id: serviceStrip
 
         anchors.top: parent.top
         anchors.left: parent.left
         anchors.right: parent.right
-        anchors.topMargin: Theme.sp1
+        anchors.topMargin: Theme.sp2
         anchors.leftMargin: Theme.sp2
         anchors.rightMargin: Theme.sp2
 
-        implicitHeight: detector.count > 0 ? 28 : 0
+        implicitHeight: detector.count > 0 ? 34 : 0
         visible: detector.count > 0
                  && root.backend === "ssh"
                  && session.status === PierTerminalSession.Connected
-        color: "transparent"
+        clip: true
 
         Behavior on implicitHeight { NumberAnimation { duration: Theme.durNormal } }
 
-        RowLayout {
+        ToolPanelSurface {
             anchors.fill: parent
-            spacing: Theme.sp2
+            inset: true
+            padding: Theme.sp1
 
-            Repeater {
-                model: detector
+            RowLayout {
+                anchors.fill: parent
+                spacing: Theme.sp2
 
-                delegate: Rectangle {
-                    id: pill
-                    required property int index
-                    required property string name
-                    required property string version
-                    required property string status
-                    required property int port
+                Text {
+                    text: qsTr("Services")
+                    font.family: Theme.fontUi
+                    font.pixelSize: Theme.sizeCaption
+                    font.weight: Theme.weightSemibold
+                    color: Theme.textSecondary
+                    Layout.alignment: Qt.AlignVCenter
+                }
 
-                    // Each pill owns its own tunnel handle.
-                    // Instantiated lazily — the QObject itself
-                    // is cheap; it only consumes an SSH
-                    // connection when `open()` is called.
-                    PierTunnel {
-                        id: tunnel
-                    }
+                Rectangle {
+                    width: 1
+                    height: 14
+                    color: Theme.borderSubtle
+                    Layout.alignment: Qt.AlignVCenter
+                }
 
-                    // Only services with a real TCP port can
-                    // be tunneled. Docker's port is 0 because
-                    // it talks over a Unix socket; clicking
-                    // its pill is a no-op for M4b.
-                    readonly property bool tunnelable: pill.port > 0
-                                                       && pill.status === "running"
-                    readonly property bool directOpenable: pill.name === "docker"
-                                                           && pill.status === "running"
-                    readonly property bool tunneled: tunnel.state === PierTunnel.Open
-                    readonly property bool opening: tunnel.state === PierTunnel.Opening
-
-                    implicitHeight: 22
-                    implicitWidth: pillRow.implicitWidth + Theme.sp3 * 2
-
-                    color: {
-                        if (pill.tunneled) return Theme.accentSubtle
-                        if (pillMouse.containsMouse
-                            && (pill.tunnelable || pill.directOpenable)) {
-                            return Theme.bgHover
-                        }
-                        return Theme.bgSurface
-                    }
-                    border.color: pill.tunneled
-                                  ? Theme.borderFocus
-                                  : Theme.borderSubtle
-                    border.width: 1
-                    radius: Theme.radiusPill
-
-                    Behavior on color        { ColorAnimation { duration: Theme.durNormal } }
-                    Behavior on border.color { ColorAnimation { duration: Theme.durNormal } }
+                Flickable {
+                    id: serviceScroller
+                    Layout.fillWidth: true
+                    Layout.fillHeight: true
+                    clip: true
+                    contentWidth: serviceRow.width
+                    contentHeight: height
+                    flickableDirection: Flickable.HorizontalFlick
+                    boundsBehavior: Flickable.StopAtBounds
+                    interactive: contentWidth > width
+                    ScrollBar.horizontal: PierScrollBar { height: 0; active: false; visible: false }
 
                     Row {
-                        id: pillRow
-                        anchors.centerIn: parent
-                        spacing: Theme.sp1
+                        id: serviceRow
+                        height: serviceScroller.height
+                        spacing: Theme.sp1_5
 
-                        Rectangle {
-                            width: 6
-                            height: 6
-                            radius: 3
-                            anchors.verticalCenter: parent.verticalCenter
-                            color: {
-                                if (pill.tunneled) return Theme.accent
-                                if (pill.status === "running") return Theme.statusSuccess
-                                if (pill.status === "stopped") return Theme.statusWarning
-                                return Theme.textTertiary
-                            }
+                        Repeater {
+                            model: detector
 
-                            Behavior on color { ColorAnimation { duration: Theme.durNormal } }
-                        }
+                            delegate: Rectangle {
+                                id: pill
+                                required property int index
+                                required property string name
+                                required property string version
+                                required property string status
+                                required property int port
 
-                        Text {
-                            anchors.verticalCenter: parent.verticalCenter
-                            text: pill.name + (pill.version.length > 0
-                                               ? " " + pill.version
-                                               : "")
-                            font.family: Theme.fontUi
-                            font.pixelSize: Theme.sizeCaption
-                            font.weight: Theme.weightMedium
-                            color: pill.tunneled ? Theme.textPrimary : Theme.textSecondary
+                                PierTunnel {
+                                    id: tunnel
+                                }
 
-                            Behavior on color { ColorAnimation { duration: Theme.durNormal } }
-                        }
+                                readonly property bool tunnelable: pill.port > 0
+                                                                   && pill.status === "running"
+                                readonly property bool directOpenable: pill.name === "docker"
+                                                                       && pill.status === "running"
+                                readonly property bool tunneled: tunnel.state === PierTunnel.Open
+                                readonly property bool opening: tunnel.state === PierTunnel.Opening
 
-                        // Remote port or tunnel badge. When a
-                        // tunnel is open we show the local
-                        // port in mono with an arrow prefix;
-                        // otherwise we show the remote port.
-                        Text {
-                            visible: pill.port > 0
-                            anchors.verticalCenter: parent.verticalCenter
-                            text: pill.tunneled
-                                  ? "→ :" + tunnel.localPort
-                                  : ":" + pill.port
-                            font.family: Theme.fontMono
-                            font.pixelSize: Theme.sizeCaption
-                            color: pill.tunneled ? Theme.accent : Theme.textTertiary
+                                implicitHeight: 22
+                                implicitWidth: pillRow.implicitWidth + Theme.sp2 * 2
+                                color: {
+                                    if (pill.tunneled) return Theme.accentSubtle
+                                    if (pillMouse.containsMouse
+                                        && (pill.tunnelable || pill.directOpenable)) {
+                                        return Theme.bgHover
+                                    }
+                                    return Theme.bgSurface
+                                }
+                                border.color: pill.tunneled ? Theme.borderFocus : Theme.borderSubtle
+                                border.width: 1
+                                radius: Theme.radiusPill
 
-                            Behavior on color { ColorAnimation { duration: Theme.durNormal } }
-                        }
+                                Behavior on color { ColorAnimation { duration: Theme.durNormal } }
+                                Behavior on border.color { ColorAnimation { duration: Theme.durNormal } }
 
-                        // M5a: a "▸" launcher chip that opens
-                        // a per-service browser tab pointing at
-                        // the local tunnel port. Only shown for
-                        // services we have a panel for (just
-                        // Redis today), and only while the
-                        // tunnel is actually open. Sits inside
-                        // pillRow so its own MouseArea wins
-                        // over pillMouse for this region.
-                        Rectangle {
-                            id: launcherChip
-                            visible: pill.directOpenable
-                                     || (pill.tunneled
-                                         && (pill.name === "redis"
-                                             || pill.name === "mysql"))
-                            anchors.verticalCenter: parent.verticalCenter
-                            implicitWidth: launcherText.implicitWidth + Theme.sp2 * 2
-                            implicitHeight: 16
-                            radius: Theme.radiusSm
-                            color: launcherMouse.containsMouse
-                                   ? Theme.accent
-                                   : "transparent"
-                            border.color: Theme.accent
-                            border.width: 1
+                                Row {
+                                    id: pillRow
+                                    anchors.centerIn: parent
+                                    spacing: Theme.sp1
 
-                            Behavior on color        { ColorAnimation { duration: Theme.durFast } }
-                            Behavior on border.color { ColorAnimation { duration: Theme.durNormal } }
+                                    Rectangle {
+                                        width: 6
+                                        height: 6
+                                        radius: 3
+                                        anchors.verticalCenter: parent.verticalCenter
+                                        color: {
+                                            if (pill.tunneled) return Theme.accent
+                                            if (pill.status === "running") return Theme.statusSuccess
+                                            if (pill.status === "stopped") return Theme.statusWarning
+                                            return Theme.textTertiary
+                                        }
 
-                            Text {
-                                id: launcherText
-                                anchors.centerIn: parent
-                                text: qsTr("Open ▸")
-                                font.family: Theme.fontUi
-                                font.pixelSize: Theme.sizeCaption
-                                font.weight: Theme.weightMedium
-                                color: launcherMouse.containsMouse
-                                       ? Theme.bgCanvas
-                                       : Theme.accent
+                                        Behavior on color { ColorAnimation { duration: Theme.durNormal } }
+                                    }
 
-                                Behavior on color { ColorAnimation { duration: Theme.durFast } }
-                            }
+                                    Text {
+                                        anchors.verticalCenter: parent.verticalCenter
+                                        text: pill.name + (pill.version.length > 0 ? " " + pill.version : "")
+                                        font.family: Theme.fontUi
+                                        font.pixelSize: Theme.sizeCaption
+                                        font.weight: Theme.weightMedium
+                                        color: pill.tunneled ? Theme.textPrimary : Theme.textSecondary
+                                        elide: Text.ElideRight
+                                        width: Math.min(120, implicitWidth)
 
-                            MouseArea {
-                                id: launcherMouse
-                                anchors.fill: parent
-                                hoverEnabled: true
-                                cursorShape: Qt.PointingHandCursor
-                                onClicked: {
-                                    // Bubble through Main.qml rather
-                                    // than calling the model directly
-                                    // — keeps component binding logic in
-                                    // one place. M5d adds the MySQL
-                                    // dispatch alongside the existing
-                                    // Redis one.
-                                    if (pill.name === "redis") {
-                                        window.toggleRightPanelTool("redis", { 
-                                            redisHost: "127.0.0.1", 
-                                            redisPort: tunnel.localPort, 
-                                            redisDb: 0 
-                                        })
-                                    } else if (pill.name === "mysql") {
-                                        window.toggleRightPanelTool("mysql", { 
-                                            mysqlHost: "127.0.0.1", 
-                                            mysqlPort: tunnel.localPort, 
-                                            mysqlUser: "", 
-                                            mysqlPassword: "", 
-                                            mysqlDatabase: "" 
-                                        })
-                                    } else if (pill.name === "docker") {
-                                        window.toggleRightPanelTool("docker")
+                                        Behavior on color { ColorAnimation { duration: Theme.durNormal } }
+                                    }
+
+                                    Text {
+                                        visible: pill.port > 0
+                                        anchors.verticalCenter: parent.verticalCenter
+                                        text: pill.tunneled ? "→ :" + tunnel.localPort : ":" + pill.port
+                                        font.family: Theme.fontMono
+                                        font.pixelSize: Theme.sizeCaption
+                                        color: pill.tunneled ? Theme.accent : Theme.textTertiary
+
+                                        Behavior on color { ColorAnimation { duration: Theme.durNormal } }
+                                    }
+
+                                    Rectangle {
+                                        id: launcherChip
+                                        visible: pill.directOpenable
+                                                 || (pill.tunneled
+                                                     && (pill.name === "redis"
+                                                         || pill.name === "mysql"))
+                                        anchors.verticalCenter: parent.verticalCenter
+                                        implicitWidth: launcherText.implicitWidth + Theme.sp2 * 2
+                                        implicitHeight: 16
+                                        radius: Theme.radiusSm
+                                        color: launcherMouse.containsMouse ? Theme.accent : "transparent"
+                                        border.color: Theme.accent
+                                        border.width: 1
+
+                                        Behavior on color { ColorAnimation { duration: Theme.durFast } }
+                                        Behavior on border.color { ColorAnimation { duration: Theme.durNormal } }
+
+                                        Text {
+                                            id: launcherText
+                                            anchors.centerIn: parent
+                                            text: qsTr("Open")
+                                            font.family: Theme.fontUi
+                                            font.pixelSize: Theme.sizeCaption
+                                            font.weight: Theme.weightMedium
+                                            color: launcherMouse.containsMouse ? Theme.bgCanvas : Theme.accent
+
+                                            Behavior on color { ColorAnimation { duration: Theme.durFast } }
+                                        }
+
+                                        MouseArea {
+                                            id: launcherMouse
+                                            anchors.fill: parent
+                                            hoverEnabled: true
+                                            cursorShape: Qt.PointingHandCursor
+                                            onClicked: {
+                                                if (pill.name === "redis") {
+                                                    window.toggleRightPanelTool("redis", {
+                                                        redisHost: "127.0.0.1",
+                                                        redisPort: tunnel.localPort,
+                                                        redisDb: 0
+                                                    })
+                                                } else if (pill.name === "mysql") {
+                                                    window.toggleRightPanelTool("mysql", {
+                                                        mysqlHost: "127.0.0.1",
+                                                        mysqlPort: tunnel.localPort,
+                                                        mysqlUser: "",
+                                                        mysqlPassword: "",
+                                                        mysqlDatabase: ""
+                                                    })
+                                                } else if (pill.name === "docker") {
+                                                    window.toggleRightPanelTool("docker")
+                                                }
+                                            }
+                                        }
+                                    }
+
+                                    Image {
+                                        id: tunnelLoader
+                                        visible: pill.opening
+                                        anchors.verticalCenter: parent.verticalCenter
+                                        source: "qrc:/qt/qml/Pier/resources/icons/lucide/loader.svg"
+                                        sourceSize: Qt.size(12, 12)
+                                        layer.enabled: true
+                                        layer.effect: MultiEffect {
+                                            colorization: 1.0
+                                            colorizationColor: Theme.accent
+                                        }
+
+                                        RotationAnimation on rotation {
+                                            from: 0
+                                            to: 360
+                                            duration: 1500
+                                            loops: Animation.Infinite
+                                            running: pill.opening
+                                        }
                                     }
                                 }
-                            }
-                        }
 
-                        // Loading indicator while the tunnel is opening.
-                        Image {
-                            id: tunnelLoader
-                            visible: pill.opening
-                            anchors.verticalCenter: parent.verticalCenter
-                            source: "qrc:/qt/qml/Pier/resources/icons/lucide/loader.svg"
-                            sourceSize: Qt.size(12, 12)
-                            layer.enabled: true
-                            layer.effect: MultiEffect {
-                                colorization: 1.0
-                                colorizationColor: Theme.accent
-                            }
-
-                            RotationAnimation on rotation {
-                                from: 0; to: 360
-                                duration: 1500
-                                loops: Animation.Infinite
-                                running: pill.opening
-                            }
-                        }
-                    }
-
-                    MouseArea {
-                        id: pillMouse
-                        anchors.fill: parent
-                        hoverEnabled: true
-                        cursorShape: pill.tunnelable
-                                     ? Qt.PointingHandCursor
-                                     : Qt.ArrowCursor
-                        enabled: pill.tunnelable && !pill.opening
-                        onClicked: {
-                            if (pill.tunneled) {
-                                tunnel.close()
-                            } else {
-                                // Same auth-field priority as
-                                // TerminalView's dispatcher.
-                                var kind = 0
-                                var secret = ""
-                                var extra = ""
-                                if (root.sshUsesAgent) {
-                                    kind = 3
-                                } else if (root.sshKeyPath.length > 0) {
-                                    kind = 2
-                                    secret = root.sshKeyPath
-                                    extra = root.sshPassphraseCredentialId
-                                } else if (root.sshCredentialId.length > 0) {
-                                    kind = 1
-                                    secret = root.sshCredentialId
-                                } else {
-                                    kind = 0
-                                    secret = root.sshPassword
+                                MouseArea {
+                                    id: pillMouse
+                                    anchors.fill: parent
+                                    hoverEnabled: true
+                                    cursorShape: pill.tunnelable ? Qt.PointingHandCursor : Qt.ArrowCursor
+                                    enabled: pill.tunnelable && !pill.opening
+                                    onClicked: {
+                                        if (pill.tunneled) {
+                                            tunnel.close()
+                                        } else {
+                                            var kind = 0
+                                            var secret = ""
+                                            var extra = ""
+                                            if (root.sshUsesAgent) {
+                                                kind = 3
+                                            } else if (root.sshKeyPath.length > 0) {
+                                                kind = 2
+                                                secret = root.sshKeyPath
+                                                extra = root.sshPassphraseCredentialId
+                                            } else if (root.sshCredentialId.length > 0) {
+                                                kind = 1
+                                                secret = root.sshCredentialId
+                                            } else {
+                                                kind = 0
+                                                secret = root.sshPassword
+                                            }
+                                            var localPort = 10000 + pill.port
+                                            tunnel.open(root.sshHost, root.sshPort, root.sshUser,
+                                                        kind, secret, extra,
+                                                        localPort, "127.0.0.1", pill.port)
+                                        }
+                                    }
                                 }
-                                // Pier-X convention: 10000 +
-                                // remote port. MySQL 3306 →
-                                // 13306, Redis 6379 → 16379,
-                                // Postgres 5432 → 15432.
-                                var localPort = 10000 + pill.port
-                                tunnel.open(root.sshHost, root.sshPort, root.sshUser,
-                                            kind, secret, extra,
-                                            localPort, "127.0.0.1", pill.port)
+
+                                PierToolTip {
+                                    visible: pillMouse.containsMouse && pill.tunnelable && !pill.tunneled
+                                    text: qsTr("Click to open a local tunnel to :%1").arg(pill.port)
+                                }
+                                PierToolTip {
+                                    visible: pillMouse.containsMouse && pill.directOpenable
+                                    text: qsTr("Open the Docker panel for this host")
+                                }
+                                PierToolTip {
+                                    visible: pillMouse.containsMouse && pill.tunneled
+                                    text: qsTr("Forwarding localhost:%1 → :%2. Click to close.")
+                                          .arg(tunnel.localPort).arg(pill.port)
+                                }
                             }
                         }
-                    }
-
-                    // Tooltip explaining the interaction.
-                    PierToolTip {
-                        visible: pillMouse.containsMouse && pill.tunnelable && !pill.tunneled
-                        text: qsTr("Click to open a local tunnel to :%1").arg(pill.port)
-                    }
-                    PierToolTip {
-                        visible: pillMouse.containsMouse && pill.directOpenable
-                        text: qsTr("Open the Docker panel for this host")
-                    }
-                    PierToolTip {
-                        visible: pillMouse.containsMouse && pill.tunneled
-                        text: qsTr("Forwarding localhost:%1 → :%2. Click to close.")
-                              .arg(tunnel.localPort).arg(pill.port)
                     }
                 }
             }
         }
     }
 
-    PierTerminalGrid {
-        id: grid
-        // Anchor below the service strip so the grid shrinks
-        // to make room when services are detected. When the
-        // strip is hidden its implicitHeight is 0, so
-        // `serviceStrip.bottom` sits at parent.top +
-        // Theme.sp3 (the strip's own top margin), and the
-        // grid fills the same space it always has.
-        anchors.top: serviceStrip.bottom
+    Rectangle {
+        id: terminalSurface
+
+        anchors.top: serviceStrip.visible ? serviceStrip.bottom : parent.top
         anchors.left: parent.left
         anchors.right: parent.right
         anchors.bottom: parent.bottom
-        anchors.topMargin: serviceStrip.visible ? Theme.sp1 : Theme.sp1
+        anchors.topMargin: Theme.sp2
         anchors.leftMargin: Theme.sp2
         anchors.rightMargin: Theme.sp2
-        anchors.bottomMargin: Theme.sp1
+        anchors.bottomMargin: Theme.sp2
+        radius: Theme.radiusLg
+        color: Theme.bgSurface
+        border.color: Theme.borderSubtle
+        border.width: 1
+        clip: true
 
-        session: session
-        font.family: Theme.fontMono
-        font.pixelSize: Theme.sizeBody
-        defaultForeground: Theme.textPrimary
-        defaultBackground: "transparent"
-        isDarkTheme: Theme.dark
+        PierTerminalGrid {
+            id: grid
+            anchors.fill: parent
+            anchors.leftMargin: Theme.sp2
+            anchors.rightMargin: Theme.sp2
+            anchors.topMargin: Theme.sp2
+            anchors.bottomMargin: Theme.sp2
 
-        // Kick off the shell on first layout when we actually know
-        // how many cell columns/rows fit. Doing it earlier would
-        // spawn the shell at a bogus size and then immediately
-        // resize it, which some TUI apps dislike.
-        Component.onCompleted: startWhenSized()
-        onWidthChanged: startWhenSized()
-        onHeightChanged: startWhenSized()
+            session: session
+            font.family: Theme.fontMono
+            font.pixelSize: Theme.terminalFontSize
+            defaultForeground: Theme.currentTerminalTheme.fg
+            defaultBackground: Theme.currentTerminalTheme.bg
+            isDarkTheme: Theme.dark
 
-        function startWhenSized() {
-            if (session.running) return
-            if (grid.cellWidth <= 0 || grid.cellHeight <= 0) return
-            if (width <= 0 || height <= 0) return
-            var cols = Math.max(1, Math.floor(width / grid.cellWidth))
-            var rows = Math.max(1, Math.floor(height / grid.cellHeight))
+            // Feed the 16-color ANSI palette from the selected terminal theme.
+            paletteColors: {
+                var ansi = Theme.currentTerminalTheme.ansi
+                if (!ansi || ansi.length < 16) return []
+                var colors = []
+                for (var i = 0; i < 16; i++)
+                    colors.push(ansi[i])
+                return colors
+            }
 
-            if (root.backend === "ssh") {
-                if (root.sshHost.length === 0 || root.sshUser.length === 0) {
-                    console.warn("TerminalView: ssh backend needs sshHost + sshUser")
+            Component.onCompleted: startWhenSized()
+            onWidthChanged: startWhenSized()
+            onHeightChanged: startWhenSized()
+
+            function startWhenSized() {
+                if (session.running) return
+                if (grid.cellWidth <= 0 || grid.cellHeight <= 0) return
+                if (width <= 0 || height <= 0) return
+                var cols = Math.max(40, Math.floor(width / grid.cellWidth))
+                var rows = Math.max(12, Math.floor(height / grid.cellHeight))
+
+                if (root.backend === "ssh") {
+                    if (root.sshHost.length === 0 || root.sshUser.length === 0) {
+                        console.warn("TerminalView: ssh backend needs sshHost + sshUser")
+                        return
+                    }
+                    grid._dispatchSshConnect(cols, rows)
+                } else {
+                    session.start(root.shell, cols, rows)
+                }
+            }
+
+            function retryIfSsh() {
+                if (root.backend !== "ssh") return
+                if (session.status === PierTerminalSession.Connecting) return
+                var cols = Math.max(40, Math.floor(width / grid.cellWidth))
+                var rows = Math.max(12, Math.floor(height / grid.cellHeight))
+                if (cols <= 0 || rows <= 0) return
+                grid._dispatchSshConnect(cols, rows)
+            }
+
+            function _dispatchSshConnect(cols, rows) {
+                var kind = 0
+                var secret = ""
+                var extra = ""
+                if (_sharedSession.connected) {
+                    root._startTerminalOnSharedSession()
                     return
                 }
-                grid._dispatchSshConnect(cols, rows)
-            } else {
-                session.start(root.shell, cols, rows)
-            }
-        }
-
-        function retryIfSsh() {
-            if (root.backend !== "ssh") return
-            if (session.status === PierTerminalSession.Connecting) return
-            var cols = Math.max(1, Math.floor(width / grid.cellWidth))
-            var rows = Math.max(1, Math.floor(height / grid.cellHeight))
-            if (cols <= 0 || rows <= 0) return
-            grid._dispatchSshConnect(cols, rows)
-        }
-
-        // Open a shared SSH session first, then start the
-        // terminal on it. Right-panel tools reuse the same
-        // shared session via `sharedSshSession`.
-        function _dispatchSshConnect(cols, rows) {
-            // Determine auth kind + secret + extra
-            var kind = 0
-            var secret = ""
-            var extra = ""
-            if (_sharedSession.connected) {
-                root._startTerminalOnSharedSession()
-                return
-            }
-            if (_sharedSession.busy)
-                return
-            if (root.sshUsesAgent) {
-                kind = 3
-            } else if (root.sshKeyPath.length > 0) {
-                kind = 2
-                secret = root.sshKeyPath
-                extra = root.sshPassphraseCredentialId
-            } else if (root.sshPassword.length > 0) {
-                kind = 0
-                secret = root.sshPassword
-            } else if (root.sshCredentialId.length > 0) {
-                kind = 1
-                secret = root.sshCredentialId
-            }
-            // Open the shared session — when it connects,
-            // _sharedSession.onConnectedChanged fires and
-            // starts the terminal via startSshOnSession.
-            _sharedSession.open(root.sshHost, root.sshPort,
-                                root.sshUser, kind, secret, extra)
-        }
-
-        property string hoveredUrl: ""
-
-        MouseArea {
-            anchors.fill: parent
-            acceptedButtons: Qt.LeftButton
-            hoverEnabled: true
-
-            cursorShape: grid.hoveredUrl.length > 0 ? Qt.PointingHandCursor : Qt.IBeamCursor
-
-            onPositionChanged: (mouse) => {
-                var url = grid.urlAt(mouse.x, mouse.y)
-                if (url !== grid.hoveredUrl) {
-                    grid.hoveredUrl = url
+                if (_sharedSession.busy)
+                    return
+                if (root.sshUsesAgent) {
+                    kind = 3
+                } else if (root.sshKeyPath.length > 0) {
+                    kind = 2
+                    secret = root.sshKeyPath
+                    extra = root.sshPassphraseCredentialId
+                } else if (root.sshPassword.length > 0) {
+                    kind = 0
+                    secret = root.sshPassword
+                } else if (root.sshCredentialId.length > 0) {
+                    kind = 1
+                    secret = root.sshCredentialId
                 }
+                _sharedSession.open(root.sshHost, root.sshPort,
+                                    root.sshUser, kind, secret, extra)
             }
 
-            onClicked: (mouse) => {
-                if (grid.hoveredUrl.length > 0) {
-                    Qt.openUrlExternally(grid.hoveredUrl)
-                } else {
-                    // Clicking the grid gives keyboard focus back to the
-                    // root so the Keys handler receives events again.
-                    root.forceActiveFocus()
+            property string hoveredUrl: ""
+
+            MouseArea {
+                anchors.fill: parent
+                acceptedButtons: Qt.LeftButton
+                hoverEnabled: true
+
+                cursorShape: grid.hoveredUrl.length > 0 ? Qt.PointingHandCursor : Qt.IBeamCursor
+
+                onPositionChanged: (mouse) => {
+                    var url = grid.urlAt(mouse.x, mouse.y)
+                    if (url !== grid.hoveredUrl) {
+                        grid.hoveredUrl = url
+                    }
+                }
+
+                onClicked: (mouse) => {
+                    if (grid.hoveredUrl.length > 0) {
+                        Qt.openUrlExternally(grid.hoveredUrl)
+                    } else {
+                        root.forceActiveFocus()
+                    }
                 }
             }
         }
@@ -623,7 +632,7 @@ Rectangle {
     Rectangle {
         id: overlay
 
-        anchors.fill: parent
+        anchors.fill: terminalSurface
         visible: session.status === PierTerminalSession.Connecting
               || session.status === PierTerminalSession.Failed
 

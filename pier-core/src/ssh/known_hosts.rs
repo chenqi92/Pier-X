@@ -71,12 +71,7 @@ impl HostKeyVerifier {
     /// key to the file — that's the accept-on-first-use
     /// behaviour. Callers that want stricter behaviour should
     /// wrap this in a higher-level check.
-    pub fn verify(
-        &self,
-        host: &str,
-        port: u16,
-        key: &PublicKey,
-    ) -> Result<bool, VerifyError> {
+    pub fn verify(&self, host: &str, port: u16, key: &PublicKey) -> Result<bool, VerifyError> {
         match self {
             Self::AcceptAllLogFingerprint => {
                 let fingerprint = key.fingerprint(russh::keys::HashAlg::Sha256);
@@ -121,9 +116,7 @@ impl HostKeyVerifier {
                         russh::keys::known_hosts::learn_known_hosts_path(host, port, key, path)
                             .map_err(|e| VerifyError::Io(format!("{e}")))?;
                         let fingerprint = key.fingerprint(russh::keys::HashAlg::Sha256);
-                        log::info!(
-                            "learned new host key for {host}:{port} (TOFU): {fingerprint}",
-                        );
+                        log::info!("learned new host key for {host}:{port} (TOFU): {fingerprint}",);
                         Ok(true)
                     }
                     // An existing entry that doesn't match →
@@ -159,9 +152,7 @@ impl Default for HostKeyVerifier {
         match default_known_hosts_path() {
             Some(path) => Self::OpenSshKnownHosts { path },
             None => {
-                log::warn!(
-                    "no resolvable home directory; falling back to AcceptAllLogFingerprint",
-                );
+                log::warn!("no resolvable home directory; falling back to AcceptAllLogFingerprint",);
                 Self::AcceptAllLogFingerprint
             }
         }
@@ -295,7 +286,9 @@ mod tests {
             .verify("mismatch.example.com", 22, &key_b)
             .expect_err("mismatch must surface as Err(VerifyError::Mismatch)");
         match err {
-            VerifyError::Mismatch { host, fingerprint, .. } => {
+            VerifyError::Mismatch {
+                host, fingerprint, ..
+            } => {
                 assert_eq!(host, "mismatch.example.com");
                 assert!(
                     fingerprint.contains("SHA256:"),

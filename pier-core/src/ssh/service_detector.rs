@@ -321,7 +321,10 @@ mod tests {
 
     #[test]
     fn parse_version_docker() {
-        assert_eq!(parse_version("Docker version 24.0.5, build ced0996"), "24.0.5");
+        assert_eq!(
+            parse_version("Docker version 24.0.5, build ced0996"),
+            "24.0.5"
+        );
     }
 
     #[test]

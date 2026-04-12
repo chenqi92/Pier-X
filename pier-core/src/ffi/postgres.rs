@@ -272,11 +272,16 @@ mod tests {
     #[test]
     fn null_inputs_are_safe() {
         unsafe {
-            assert!(pier_postgres_open(ptr::null(), 5432, ptr::null(), ptr::null(), ptr::null()).is_null());
+            assert!(
+                pier_postgres_open(ptr::null(), 5432, ptr::null(), ptr::null(), ptr::null())
+                    .is_null()
+            );
             assert!(pier_postgres_execute(ptr::null_mut(), ptr::null()).is_null());
             assert!(pier_postgres_list_databases(ptr::null_mut()).is_null());
             assert!(pier_postgres_list_tables(ptr::null_mut(), ptr::null()).is_null());
-            assert!(pier_postgres_list_columns(ptr::null_mut(), ptr::null(), ptr::null()).is_null());
+            assert!(
+                pier_postgres_list_columns(ptr::null_mut(), ptr::null(), ptr::null()).is_null()
+            );
             pier_postgres_free_string(ptr::null_mut());
             pier_postgres_free(ptr::null_mut());
         }

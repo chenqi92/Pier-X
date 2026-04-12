@@ -202,8 +202,11 @@ mod tests {
         };
         let json = serde_json::to_string(&c).expect("serialize");
         let parsed: SshConfig = serde_json::from_str(&json).expect("deserialize");
-        assert_eq!(parsed.auth, AuthMethod::DirectPassword {
-            password: "hunter2".into(),
-        });
+        assert_eq!(
+            parsed.auth,
+            AuthMethod::DirectPassword {
+                password: "hunter2".into(),
+            }
+        );
     }
 }

@@ -6,6 +6,7 @@ import QtQuick.Effects
 import QtQuick.Layouts
 import Qt.labs.folderlistmodel
 import Pier
+import "../components"
 
 // Local file browser for the left panel. Reworked toward the original
 // Pier file pane: clear header, breadcrumb path, search, and a compact
@@ -15,11 +16,15 @@ Item {
 
     signal markdownRequested(string filePath)
     signal openTerminalRequested(string path)
+    signal contextPathChanged(string path)
 
     readonly property string homePath: StandardPaths.writableLocation(StandardPaths.HomeLocation)
     readonly property int modifiedColumnWidth: 56
-    readonly property int kindColumnWidth: 54
+    readonly property int kindColumnWidth: 50
     readonly property int sizeColumnWidth: 58
+    readonly property bool showModifiedColumn: width >= 214
+    readonly property bool showSizeColumn: width >= 288
+    readonly property bool showKindColumn: width >= 356
     property string currentPath: homePath
     property string searchQuery: ""
     property string folderUrl: root._toFolderUrl(root.currentPath)
@@ -39,6 +44,7 @@ Item {
     onCurrentPathChanged: {
         searchQuery = ""
         folderUrl = root._toFolderUrl(root.currentPath)
+        root.contextPathChanged(root.currentPath)
     }
 
     function _refreshFolder() {
@@ -228,15 +234,15 @@ Item {
         Rectangle {
             id: headerBar
             Layout.fillWidth: true
-            implicitHeight: 46
+            implicitHeight: 32
             color: "transparent"
             border.width: 0
 
             RowLayout {
                 anchors.fill: parent
-                anchors.leftMargin: Theme.sp2
+                anchors.leftMargin: Theme.sp1
                 anchors.rightMargin: Theme.sp1
-                spacing: Theme.sp2
+                spacing: Theme.sp1
 
                 IconButton {
                     compact: true
@@ -247,15 +253,14 @@ Item {
                 }
 
                 Rectangle {
-                    Layout.preferredWidth: 16
-                    Layout.preferredHeight: 16
-                    radius: Theme.radiusSm
-                    color: Theme.accentSubtle
+                    Layout.preferredWidth: 14
+                    Layout.preferredHeight: 14
+                    color: "transparent"
 
                     Image {
                         anchors.centerIn: parent
                         source: "qrc:/qt/qml/Pier/resources/icons/lucide/folder.svg"
-                        sourceSize: Qt.size(14, 14)
+                        sourceSize: Qt.size(13, 13)
                         layer.enabled: true
                         layer.effect: MultiEffect {
                             colorizationColor: Theme.accent
@@ -264,28 +269,15 @@ Item {
                     }
                 }
 
-                ColumnLayout {
+                Text {
                     Layout.fillWidth: true
-                    spacing: 0
-
-                    Text {
-                        Layout.fillWidth: true
-                        text: root.currentFolderName
-                        font.family: Theme.fontUi
-                        font.pixelSize: Theme.sizeBody
-                        font.weight: Theme.weightSemibold
-                        color: Theme.textPrimary
-                        elide: Text.ElideRight
-                    }
-
-                    Text {
-                        Layout.fillWidth: true
-                        text: root._displayPath(root.currentPath) + "  ·  " + qsTr("%1 items").arg(folderModel.count)
-                        font.family: Theme.fontUi
-                        font.pixelSize: Theme.sizeSmall
-                        color: Theme.textTertiary
-                        elide: Text.ElideMiddle
-                    }
+                    Layout.minimumWidth: 0
+                    text: root.currentFolderName
+                    font.family: Theme.fontUi
+                    font.pixelSize: Theme.sizeBody
+                    font.weight: Theme.weightMedium
+                    color: Theme.textPrimary
+                    elide: Text.ElideRight
                 }
 
                 IconButton {
@@ -293,7 +285,13 @@ Item {
                     compact: true
                     glyph: "\u22ef"
                     tooltip: qsTr("Places")
-                    onClicked: placesMenu.open()
+                    onClicked: {
+                        const pos = placesButton.mapToItem(root, 0, placesButton.height + Theme.sp1)
+                        placesMenu.x = Math.max(Theme.sp2,
+                                                Math.min(root.width - placesMenu.width - Theme.sp2, pos.x))
+                        placesMenu.y = Math.max(Theme.sp2, pos.y)
+                        placesMenu.open()
+                    }
                 }
 
                 IconButton {
@@ -302,52 +300,77 @@ Item {
                     tooltip: qsTr("Refresh")
                     onClicked: root._refreshFolder()
                 }
-
-                IconButton {
-                    compact: true
-                    icon: "terminal"
-                    tooltip: qsTr("Terminal")
-                    onClicked: root.openTerminalRequested(root.currentPath)
-                }
             }
 
-            Menu {
+            PopoverPanel {
                 id: placesMenu
-                x: placesButton.x
-                y: headerBar.height - 1
+                width: 208
 
-                MenuItem {
+                PierMenuItem {
                     text: qsTr("Home")
-                    onTriggered: root.currentPath = root.homePath
+                    onClicked: {
+                        placesMenu.close()
+                        root.currentPath = root.homePath
+                    }
                 }
 
-                MenuItem {
+                PierMenuItem {
                     text: qsTr("Desktop")
-                    onTriggered: root.currentPath = StandardPaths.writableLocation(StandardPaths.DesktopLocation)
+                    onClicked: {
+                        placesMenu.close()
+                        root.currentPath = StandardPaths.writableLocation(StandardPaths.DesktopLocation)
+                    }
                 }
 
-                MenuItem {
+                PierMenuItem {
                     text: qsTr("Documents")
-                    onTriggered: root.currentPath = StandardPaths.writableLocation(StandardPaths.DocumentsLocation)
+                    onClicked: {
+                        placesMenu.close()
+                        root.currentPath = StandardPaths.writableLocation(StandardPaths.DocumentsLocation)
+                    }
                 }
 
-                MenuItem {
+                PierMenuItem {
                     text: qsTr("Downloads")
-                    onTriggered: root.currentPath = StandardPaths.writableLocation(StandardPaths.DownloadLocation)
+                    onClicked: {
+                        placesMenu.close()
+                        root.currentPath = StandardPaths.writableLocation(StandardPaths.DownloadLocation)
+                    }
                 }
 
-                MenuSeparator {}
+                Rectangle {
+                    width: placesMenu.width - placesMenu.leftPadding - placesMenu.rightPadding
+                    height: 1
+                    color: Theme.borderSubtle
+                }
 
-                MenuItem {
+                PierMenuItem {
                     text: qsTr("Choose folder…")
-                    onTriggered: folderDialog.open()
+                    onClicked: {
+                        placesMenu.close()
+                        folderDialog.open()
+                    }
+                }
+
+                Rectangle {
+                    width: placesMenu.width - placesMenu.leftPadding - placesMenu.rightPadding
+                    height: 1
+                    color: Theme.borderSubtle
+                }
+
+                PierMenuItem {
+                    text: qsTr("Open terminal here")
+                    onClicked: {
+                        placesMenu.close()
+                        root.openTerminalRequested(root.currentPath)
+                    }
                 }
             }
         }
 
         Rectangle {
             Layout.fillWidth: true
-            implicitHeight: 28
+            implicitHeight: 24
             color: "transparent"
             border.width: 0
 
@@ -387,16 +410,16 @@ Item {
 
                             Rectangle {
                                 radius: Theme.radiusSm
-                                color: crumbArea.containsMouse ? Theme.bgHover : index === breadcrumbRepeater.count - 1 ? Theme.bgInset : "transparent"
-                                implicitHeight: 18
-                                implicitWidth: crumbText.implicitWidth + Theme.sp2 * 2
+                                color: crumbArea.containsMouse ? Theme.bgHover : "transparent"
+                                implicitHeight: 16
+                                implicitWidth: crumbText.implicitWidth + Theme.sp1 * 2
 
                                 Text {
                                     id: crumbText
                                     anchors.centerIn: parent
                                     text: modelData.name
                                     font.family: Theme.fontUi
-                                    font.pixelSize: Theme.sizeSmall
+                                    font.pixelSize: 10
                                     color: index === breadcrumbRepeater.count - 1
                                            ? Theme.textPrimary
                                            : Theme.accent
@@ -416,14 +439,21 @@ Item {
             }
         }
 
+        PierSearchField {
+            id: searchInput
+            Layout.fillWidth: true
+            Layout.preferredHeight: 24
+            text: root.searchQuery
+            placeholder: qsTr("Search files…")
+            clearable: true
+            compact: true
+            onTextChanged: root.searchQuery = text
+        }
+
         Rectangle {
             Layout.fillWidth: true
-            implicitHeight: 34
-            color: Theme.bgInset
-            border.color: Theme.borderSubtle
-            border.width: 1
-            border.pixelAligned: true
-            radius: Theme.radiusSm
+            implicitHeight: 22
+            color: Theme.bgPanel
 
             RowLayout {
                 anchors.fill: parent
@@ -431,90 +461,45 @@ Item {
                 anchors.rightMargin: Theme.sp2
                 spacing: Theme.sp2
 
-                Image {
-                    source: "qrc:/qt/qml/Pier/resources/icons/lucide/search.svg"
-                    sourceSize: Qt.size(14, 14)
-                    Layout.alignment: Qt.AlignVCenter
-                    layer.enabled: true
-                    layer.effect: MultiEffect {
-                        colorizationColor: Theme.textTertiary
-                        colorization: 1.0
-                    }
-                }
-
-                TextInput {
-                    id: searchInput
-                    Layout.fillWidth: true
-                    Layout.alignment: Qt.AlignVCenter
-                    text: root.searchQuery
-                    onTextChanged: root.searchQuery = text
-                    font.family: Theme.fontUi
-                    font.pixelSize: Theme.sizeBody
-                    color: Theme.textPrimary
-                    clip: true
-                    selectByMouse: true
-                    selectionColor: Theme.accentMuted
-                    selectedTextColor: Theme.textPrimary
-
-                    Text {
-                        anchors.fill: parent
-                        verticalAlignment: Text.AlignVCenter
-                        text: qsTr("Search files…")
-                        visible: searchInput.text.length === 0
-                        font: searchInput.font
-                        color: Theme.textTertiary
-                    }
-                }
-            }
-        }
-
-        Rectangle {
-            Layout.fillWidth: true
-            implicitHeight: 26
-            color: Theme.bgPanel
-
-            RowLayout {
-                anchors.fill: parent
-                anchors.leftMargin: Theme.sp3
-                anchors.rightMargin: Theme.sp3
-                spacing: Theme.sp2
-
                 Text {
                     Layout.fillWidth: true
-                    text: qsTr("Name").toUpperCase()
+                    text: qsTr("Name")
                     font.family: Theme.fontUi
-                    font.pixelSize: Theme.sizeSmall
-                    font.weight: Theme.weightSemibold
+                    font.pixelSize: 10
+                    font.weight: Theme.weightMedium
                     color: Theme.textTertiary
                 }
 
                 Text {
                     Layout.preferredWidth: root.modifiedColumnWidth
+                    visible: root.showModifiedColumn
                     horizontalAlignment: Text.AlignRight
-                    text: qsTr("Modified").toUpperCase()
+                    text: qsTr("Modified")
                     font.family: Theme.fontUi
-                    font.pixelSize: Theme.sizeSmall
-                    font.weight: Theme.weightSemibold
-                    color: Theme.textTertiary
-                }
-
-                Text {
-                    Layout.preferredWidth: root.kindColumnWidth
-                    horizontalAlignment: Text.AlignRight
-                    text: qsTr("Kind").toUpperCase()
-                    font.family: Theme.fontUi
-                    font.pixelSize: Theme.sizeSmall
-                    font.weight: Theme.weightSemibold
+                    font.pixelSize: 10
+                    font.weight: Theme.weightMedium
                     color: Theme.textTertiary
                 }
 
                 Text {
                     Layout.preferredWidth: root.sizeColumnWidth
+                    visible: root.showSizeColumn
                     horizontalAlignment: Text.AlignRight
-                    text: qsTr("Size").toUpperCase()
+                    text: qsTr("Size")
                     font.family: Theme.fontUi
-                    font.pixelSize: Theme.sizeSmall
-                    font.weight: Theme.weightSemibold
+                    font.pixelSize: 10
+                    font.weight: Theme.weightMedium
+                    color: Theme.textTertiary
+                }
+
+                Text {
+                    Layout.preferredWidth: root.kindColumnWidth
+                    visible: root.showKindColumn
+                    horizontalAlignment: Text.AlignRight
+                    text: qsTr("Kind")
+                    font.family: Theme.fontUi
+                    font.pixelSize: 10
+                    font.weight: Theme.weightMedium
                     color: Theme.textTertiary
                 }
             }
@@ -550,7 +535,7 @@ Item {
                 readonly property bool selected: root.selectedPath === filePath
 
                 width: ListView.view.width
-                implicitHeight: matchesSearch ? Theme.listRowHeight : 0
+                implicitHeight: matchesSearch ? 28 : 0
                 height: implicitHeight
                 visible: matchesSearch
                 color: selected ? Theme.bgSelected : fileMouse.containsMouse ? Theme.bgHover : "transparent"
@@ -570,13 +555,13 @@ Item {
 
                 RowLayout {
                     anchors.fill: parent
-                    anchors.leftMargin: Theme.sp3
-                    anchors.rightMargin: Theme.sp3
-                    spacing: Theme.sp2
+                    anchors.leftMargin: Theme.sp2
+                    anchors.rightMargin: Theme.sp2
+                    spacing: Theme.sp1_5
 
                     Rectangle {
-                        Layout.preferredWidth: 16
-                        Layout.preferredHeight: 16
+                        Layout.preferredWidth: 13
+                        Layout.preferredHeight: 13
                         color: "transparent"
 
                         Image {
@@ -584,7 +569,7 @@ Item {
                             source: fileRow.fileIsDir
                                     ? "qrc:/qt/qml/Pier/resources/icons/lucide/folder.svg"
                                     : "qrc:/qt/qml/Pier/resources/icons/lucide/file-text.svg"
-                            sourceSize: Qt.size(14, 14)
+                            sourceSize: Qt.size(12, 12)
                             layer.enabled: true
                             layer.effect: MultiEffect {
                                 colorizationColor: fileRow.fileIsDir ? Theme.accent : Theme.textTertiary
@@ -596,8 +581,8 @@ Item {
                     Text {
                         Layout.fillWidth: true
                         text: fileRow.fileName
-                        font.family: fileRow.fileIsDir ? Theme.fontUi : Theme.fontMono
-                        font.pixelSize: Theme.sizeBody
+                        font.family: Theme.fontUi
+                        font.pixelSize: Theme.sizeSmall
                         font.weight: fileRow.fileIsDir ? Theme.weightMedium : Theme.weightRegular
                         color: Theme.textPrimary
                         elide: Text.ElideRight
@@ -605,30 +590,33 @@ Item {
 
                     Text {
                         Layout.preferredWidth: root.modifiedColumnWidth
+                        visible: root.showModifiedColumn
                         horizontalAlignment: Text.AlignRight
                         text: root._formatModified(fileRow.fileModified)
                         font.family: Theme.fontUi
-                        font.pixelSize: Theme.sizeSmall
-                        color: Theme.textTertiary
-                        elide: Text.ElideRight
-                    }
-
-                    Text {
-                        Layout.preferredWidth: root.kindColumnWidth
-                        horizontalAlignment: Text.AlignRight
-                        text: root._formatKind(fileRow.fileSuffix, fileRow.fileIsDir)
-                        font.family: Theme.fontUi
-                        font.pixelSize: Theme.sizeSmall
+                        font.pixelSize: 10
                         color: Theme.textTertiary
                         elide: Text.ElideRight
                     }
 
                     Text {
                         Layout.preferredWidth: root.sizeColumnWidth
+                        visible: root.showSizeColumn
                         horizontalAlignment: Text.AlignRight
                         text: root._formatSize(fileRow.fileSize, fileRow.fileIsDir)
                         font.family: Theme.fontMono
-                        font.pixelSize: Theme.sizeSmall
+                        font.pixelSize: 10
+                        color: Theme.textTertiary
+                        elide: Text.ElideRight
+                    }
+
+                    Text {
+                        Layout.preferredWidth: root.kindColumnWidth
+                        visible: root.showKindColumn
+                        horizontalAlignment: Text.AlignRight
+                        text: root._formatKind(fileRow.fileSuffix, fileRow.fileIsDir)
+                        font.family: Theme.fontUi
+                        font.pixelSize: 10
                         color: Theme.textTertiary
                         elide: Text.ElideRight
                     }
@@ -685,41 +673,6 @@ Item {
                 radius: Theme.radiusMd
                 border.color: Theme.borderSubtle
                 border.width: 1
-                visible: folderModel.count === 0
-
-                Column {
-                    anchors.centerIn: parent
-                    width: parent.width - Theme.sp6 * 2
-                    spacing: Theme.sp1
-
-                    Text {
-                        width: parent.width
-                        horizontalAlignment: Text.AlignHCenter
-                        text: qsTr("This folder is empty.")
-                        font.family: Theme.fontUi
-                        font.pixelSize: Theme.sizeBody
-                        color: Theme.textSecondary
-                    }
-
-                    Text {
-                        width: parent.width
-                        horizontalAlignment: Text.AlignHCenter
-                        text: qsTr("Choose another directory or open a local terminal.")
-                        font.family: Theme.fontUi
-                        font.pixelSize: Theme.sizeSmall
-                        color: Theme.textTertiary
-                    }
-                }
-            }
-
-            Rectangle {
-                anchors.centerIn: parent
-                width: Math.min(parent.width - Theme.sp6, 300)
-                height: 116
-                color: Theme.bgInset
-                radius: Theme.radiusMd
-                border.color: Theme.borderSubtle
-                border.width: 1
                 visible: folderModel.count > 0
                          && root.searchQuery.trim().length > 0
                          && filesView.contentHeight === 0
@@ -757,28 +710,15 @@ Item {
         onAccepted: root.currentPath = root._normalizePath(selectedFolder.toString())
     }
 
-    Popup {
+    PopoverPanel {
         id: fileContextMenu
         width: 208
-        modal: false
-        focus: true
-        padding: Theme.sp1
-        closePolicy: Popup.CloseOnEscape | Popup.CloseOnPressOutside
-
-        background: Rectangle {
-            color: Theme.bgElevated
-            border.color: Theme.borderDefault
-            border.width: 1
-            radius: Theme.radiusMd
-
-            Behavior on color { ColorAnimation { duration: Theme.durNormal } }
-            Behavior on border.color { ColorAnimation { duration: Theme.durNormal } }
-        }
+        cornerRadius: Theme.radiusMd
 
         contentItem: Column {
             spacing: Theme.sp0_5
 
-            FileMenuItem {
+            PierMenuItem {
                 text: root._contextOpenLabel()
                 enabled: root.contextFilePath.length > 0
                 onClicked: {
@@ -789,7 +729,7 @@ Item {
                 }
             }
 
-            FileMenuItem {
+            PierMenuItem {
                 text: qsTr("Open in terminal here")
                 enabled: root.contextFilePath.length > 0
                 onClicked: {
@@ -805,7 +745,7 @@ Item {
                 color: Theme.borderSubtle
             }
 
-            FileMenuItem {
+            PierMenuItem {
                 text: qsTr("Reveal in file manager")
                 enabled: root.contextFilePath.length > 0
                 onClicked: {
@@ -814,7 +754,7 @@ Item {
                 }
             }
 
-            FileMenuItem {
+            PierMenuItem {
                 text: qsTr("Copy path")
                 enabled: root.contextFilePath.length > 0
                 onClicked: {
@@ -823,7 +763,7 @@ Item {
                 }
             }
 
-            FileMenuItem {
+            PierMenuItem {
                 text: qsTr("Copy name")
                 enabled: root.contextFileName.length > 0
                 onClicked: {
@@ -834,40 +774,4 @@ Item {
         }
     }
 
-    component FileMenuItem: Rectangle {
-        id: menuItem
-
-        property string text: ""
-        signal clicked()
-
-        implicitWidth: 208
-        implicitHeight: 28
-        radius: Theme.radiusSm
-        color: menuArea.containsMouse ? Theme.bgHover : "transparent"
-        opacity: enabled ? 1.0 : 0.48
-
-        Behavior on color { ColorAnimation { duration: Theme.durFast } }
-        Behavior on opacity { NumberAnimation { duration: Theme.durFast } }
-
-        Text {
-            anchors.fill: parent
-            anchors.leftMargin: Theme.sp3
-            anchors.rightMargin: Theme.sp3
-            verticalAlignment: Text.AlignVCenter
-            elide: Text.ElideRight
-            text: menuItem.text
-            font.family: Theme.fontUi
-            font.pixelSize: Theme.sizeBody
-            color: Theme.textSecondary
-        }
-
-        MouseArea {
-            id: menuArea
-            anchors.fill: parent
-            hoverEnabled: true
-            enabled: menuItem.enabled
-            cursorShape: menuItem.enabled ? Qt.PointingHandCursor : Qt.ArrowCursor
-            onClicked: menuItem.clicked()
-        }
-    }
 }

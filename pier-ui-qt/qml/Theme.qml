@@ -14,6 +14,54 @@ QtObject {
             dark = systemDark
     }
 
+    // ── Terminal theme ────────────────────────────────────
+    // Index into `terminalThemes`. Persisted by the Settings
+    // dialog via PierTerminalTheme singleton.
+    property int terminalThemeIndex: 0
+
+    // Each entry: { name, fg, bg, ansi[16] }
+    readonly property var terminalThemes: [
+        {
+            name: "Default Dark",
+            fg: "#e8eaed", bg: "#0f1115",
+            ansi: ["#000000","#CD0000","#00CD00","#CDCD00","#3B78FF","#CD00CD","#00CDCD","#E5E5E5",
+                   "#7F7F7F","#FF0000","#00FF00","#FFFF00","#5C5CFF","#FF00FF","#00FFFF","#FFFFFF"]
+        },
+        {
+            name: "Default Light",
+            fg: "#1f2329", bg: "#fbfcfd",
+            ansi: ["#000000","#CD0000","#00A000","#A07000","#0000EE","#CD00CD","#00A0A0","#666666",
+                   "#555555","#FF0000","#00CD00","#CDCD00","#5C5CFF","#FF00FF","#00CDCD","#444444"]
+        },
+        {
+            name: "Solarized Dark",
+            fg: "#839496", bg: "#002B36",
+            ansi: ["#073642","#DC322F","#859900","#B58900","#268BD2","#D33682","#2AA198","#EEE8D5",
+                   "#002B36","#CB4B16","#586E75","#657B83","#839496","#6C71C4","#93A1A1","#FDF6E3"]
+        },
+        {
+            name: "Dracula",
+            fg: "#F8F8F2", bg: "#282A36",
+            ansi: ["#21222C","#FF5555","#50FA7B","#F1FA8C","#BD93F9","#FF79C6","#8BE9FD","#F8F8F2",
+                   "#6272A4","#FF6E6E","#69FF94","#FFFFA5","#D6ACFF","#FF92DF","#A4FFFF","#FFFFFF"]
+        },
+        {
+            name: "Monokai",
+            fg: "#F8F8F2", bg: "#272822",
+            ansi: ["#272822","#F92672","#A6E22E","#F4BF75","#66D9EF","#AE81FF","#A1EFE4","#F8F8F2",
+                   "#75715E","#F92672","#A6E22E","#F4BF75","#66D9EF","#AE81FF","#A1EFE4","#F9F8F5"]
+        },
+        {
+            name: "Nord",
+            fg: "#D8DEE9", bg: "#2E3440",
+            ansi: ["#3B4252","#BF616A","#A3BE8C","#EBCB8B","#81A1C1","#B48EAD","#88C0D0","#E5E9F0",
+                   "#4C566A","#BF616A","#A3BE8C","#EBCB8B","#81A1C1","#B48EAD","#8FBCBB","#ECEFF4"]
+        }
+    ]
+
+    // Convenience — current palette resolved from index.
+    readonly property var currentTerminalTheme: terminalThemes[terminalThemeIndex] || terminalThemes[0]
+
     // Backgrounds — luminance stacking
     readonly property color bgCanvas: dark ? "#0f1115" : "#fbfcfd"
     readonly property color bgChrome: dark ? "#14171c" : "#f5f6f8"
@@ -37,6 +85,11 @@ QtObject {
     readonly property color borderDefault: dark ? Qt.rgba(1, 1, 1, 0.09) : Qt.rgba(0, 0, 0, 0.10)
     readonly property color borderStrong: dark ? Qt.rgba(1, 1, 1, 0.14) : Qt.rgba(0, 0, 0, 0.18)
     readonly property color borderFocus: "#3574f0"
+    readonly property color splitHandleIdle: "transparent"
+    readonly property color splitHandleHover: dark ? Qt.rgba(1, 1, 1, 0.028) : Qt.rgba(0, 0, 0, 0.024)
+    readonly property color splitHandleActive: Qt.rgba(53 / 255, 116 / 255, 240 / 255, dark ? 0.12 : 0.08)
+    readonly property color splitHandleLine: dark ? Qt.rgba(1, 1, 1, 0.08) : Qt.rgba(0, 0, 0, 0.09)
+    readonly property color splitHandleLineActive: Qt.rgba(53 / 255, 116 / 255, 240 / 255, dark ? 0.52 : 0.40)
 
     // Accent
     readonly property color accent: "#3574f0"
@@ -52,7 +105,11 @@ QtObject {
 
     // Typography
     readonly property string fontUi: "Inter"
-    readonly property string fontMono: "JetBrains Mono"
+    property string fontMono: "JetBrains Mono"
+
+    // Terminal font size — adjustable via Settings slider.
+    // Used by TerminalView's PierTerminalGrid binding.
+    property int terminalFontSize: 13
 
     readonly property int sizeDisplay: 32
     readonly property int sizeH1: 24
@@ -92,7 +149,7 @@ QtObject {
     // Shell density
     readonly property int windowMinWidth: 1080
     readonly property int windowMinHeight: 680
-    readonly property int topBarHeight: 44
+    readonly property int topBarHeight: 38
     readonly property int tabBarHeight: 36
     readonly property int tabHeight: 30
     readonly property int statusBarHeight: 24
@@ -100,7 +157,7 @@ QtObject {
     readonly property int fieldHeight: 34
     readonly property int compactRowHeight: 28
     readonly property int listRowHeight: 32
-    readonly property int sidebarWidth: 300
+    readonly property int sidebarWidth: 272
     readonly property int rightSidebarWidth: 400
     readonly property int toolRailWidth: 44
     readonly property int dialogHeaderHeight: 56

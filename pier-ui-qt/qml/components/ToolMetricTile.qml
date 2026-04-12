@@ -12,7 +12,7 @@ Rectangle {
     property real progress: -1
     property color accentColor: Theme.accent
 
-    implicitHeight: 104
+    implicitHeight: Math.max(72, tileColumn.implicitHeight + Theme.sp3 * 2)
     color: Theme.bgPanel
     border.color: Theme.borderSubtle
     border.width: 1
@@ -23,9 +23,10 @@ Rectangle {
     Behavior on border.color { ColorAnimation { duration: Theme.durNormal } }
 
     ColumnLayout {
+        id: tileColumn
         anchors.fill: parent
         anchors.margins: Theme.sp3
-        spacing: Theme.sp1_5
+        spacing: Theme.sp1
 
         Text {
             Layout.fillWidth: true
@@ -37,13 +38,11 @@ Rectangle {
             elide: Text.ElideRight
         }
 
-        Item { Layout.fillHeight: true }
-
         Text {
             Layout.fillWidth: true
             text: root.valueText
             font.family: Theme.fontMono
-            font.pixelSize: Theme.sizeH3
+            font.pixelSize: 18
             font.weight: Theme.weightMedium
             color: Theme.textPrimary
             elide: Text.ElideRight

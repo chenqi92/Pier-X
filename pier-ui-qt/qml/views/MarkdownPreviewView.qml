@@ -2,6 +2,7 @@ import QtQuick
 import QtQuick.Controls
 import QtQuick.Layouts
 import Pier
+import "../components"
 
 // Local Markdown preview — M5e per-service tool.
 //
@@ -167,21 +168,18 @@ Rectangle {
 
                     Behavior on border.color { ColorAnimation { duration: Theme.durNormal } }
 
-                    ScrollView {
+                    PierScrollView {
                         anchors.fill: parent
                         clip: true
 
-                        TextArea {
+                        PierTextArea {
                             readOnly: true
+                            frameVisible: false
+                            mono: true
                             wrapMode: TextArea.NoWrap
                             text: root.markdownSource
-                            font.family: Theme.fontMono
                             font.pixelSize: Theme.sizeCaption
-                            color: Theme.textPrimary
                             selectByMouse: true
-                            background: Rectangle { color: "transparent" }
-
-                            Behavior on color { ColorAnimation { duration: Theme.durNormal } }
                         }
                     }
                 }
@@ -197,47 +195,39 @@ Rectangle {
 
                     Behavior on border.color { ColorAnimation { duration: Theme.durNormal } }
 
-                    ScrollView {
+                    PierScrollView {
                         anchors.fill: parent
                         anchors.margins: Theme.sp2
                         clip: true
 
-                        TextArea {
+                        PierTextArea {
                             readOnly: true
+                            frameVisible: false
                             wrapMode: TextArea.Wrap
                             textFormat: TextEdit.RichText
                             text: root.markdownHtml
-                            font.family: Theme.fontUi
                             font.pixelSize: Theme.sizeBody
-                            color: Theme.textPrimary
                             selectByMouse: true
-                            background: Rectangle { color: "transparent" }
-
-                            Behavior on color { ColorAnimation { duration: Theme.durNormal } }
                         }
                     }
                 }
             }
 
             // Preview-only pane.
-            ScrollView {
+            PierScrollView {
                 anchors.fill: parent
                 anchors.margins: Theme.sp3
                 clip: true
                 visible: !root.showSource && !root.loadFailed
 
-                TextArea {
+                PierTextArea {
                     readOnly: true
+                    frameVisible: false
                     wrapMode: TextArea.Wrap
                     textFormat: TextEdit.RichText
                     text: root.markdownHtml
-                    font.family: Theme.fontUi
                     font.pixelSize: Theme.sizeBody
-                    color: Theme.textPrimary
                     selectByMouse: true
-                    background: Rectangle { color: "transparent" }
-
-                    Behavior on color { ColorAnimation { duration: Theme.durNormal } }
                 }
             }
         }

@@ -11,6 +11,65 @@
 #include <QJsonObject>
 #include <QJsonValue>
 #include <QMetaObject>
+#include <QProcess>
+#include <QRegularExpression>
+
+namespace {
+
+struct DockerExecPayload {
+    bool ok = false;
+    QString output;
+    QString error;
+};
+
+DockerExecPayload decodeDockerExecResponse(const QString &json, const QString &fallbackError)
+{
+    DockerExecPayload payload;
+    QJsonParseError parseErr {};
+    const QJsonDocument doc = QJsonDocument::fromJson(json.toUtf8(), &parseErr);
+    if (parseErr.error != QJsonParseError::NoError || !doc.isObject()) {
+        payload.error = fallbackError;
+        return payload;
+    }
+    const QJsonObject obj = doc.object();
+    payload.ok = obj.value(QStringLiteral("ok")).toBool(false);
+    payload.output = obj.value(QStringLiteral("output")).toString();
+    if (!payload.ok) {
+        const QString trimmed = payload.output.trimmed();
+        payload.error = trimmed.isEmpty() ? fallbackError : trimmed;
+    }
+    return payload;
+}
+
+QStringList splitCommandWords(const QString &command)
+{
+    if (command.trimmed().isEmpty()) {
+        return {};
+    }
+    return QProcess::splitCommand(command);
+}
+
+QString composePsFormat()
+{
+    return QStringLiteral("{{.Service}}|||{{.Status}}|||{{.State}}|||{{.Image}}|||{{.Ports}}");
+}
+
+QString readJsonString(const QJsonObject &obj, const QString &key, const QString &legacyKey = QString())
+{
+    const QJsonValue primary = obj.value(key);
+    if (!primary.isUndefined() && !primary.isNull()) {
+        return primary.toVariant().toString();
+    }
+    if (!legacyKey.isEmpty()) {
+        const QJsonValue legacy = obj.value(legacyKey);
+        if (!legacy.isUndefined() && !legacy.isNull()) {
+            return legacy.toVariant().toString();
+        }
+    }
+    return {};
+}
+
+} // namespace
 
 PierDockerClientModel::PierDockerClientModel(QObject *parent)
     : QAbstractListModel(parent)
@@ -92,7 +151,7 @@ void PierDockerClientModel::setShowStopped(bool v)
     if (m_showStopped == v) return;
     m_showStopped = v;
     emit showStoppedChanged();
-    if (m_handle) refresh();
+    if (m_handle || m_localMode) refresh();
 }
 
 bool PierDockerClientModel::connectTo(const QString &host, int port, const QString &user,
@@ -201,29 +260,11 @@ bool PierDockerClientModel::connectLocal()
     if (m_handle || m_localMode || m_status == Connecting) return false;
 
     m_localMode = true;
+    m_cancelFlag = std::make_shared<std::atomic<bool>>(false);
     m_errorMessage.clear();
     m_target = QStringLiteral("localhost");
     setStatus(Connected);
-
-    // Immediately refresh using local Docker commands
-    const quint64 rid = ++m_nextRequestId;
-    m_cancelFlag = std::make_shared<std::atomic<bool>>(false);
-    setBusy(true);
-
-    QPointer<PierDockerClientModel> self(this);
-    auto cf = m_cancelFlag;
-
-    auto worker = std::make_unique<std::thread>([self, cf, rid]() {
-        char *json = pier_local_docker_list_containers(1);
-        QString result = json ? QString::fromUtf8(json) : QString();
-        if (json) pier_local_free_string(json);
-        QString err;
-        if (result.isEmpty()) err = QStringLiteral("Local Docker not available");
-        if (!self || (cf && cf->load())) return;
-        QMetaObject::invokeMethod(self.data(), "onListResult", Qt::QueuedConnection,
-            Q_ARG(quint64, rid), Q_ARG(QString, result), Q_ARG(QString, err));
-    });
-    m_workers.push_back(std::move(worker));
+    spawnList(++m_nextRequestId);
     return true;
 }
 
@@ -317,14 +358,14 @@ void PierDockerClientModel::ingestListJson(const QString &json)
         if (!v.isObject()) continue;
         const QJsonObject obj = v.toObject();
         Row r;
-        r.id         = obj.value(QStringLiteral("id")).toString();
-        r.image      = obj.value(QStringLiteral("image")).toString();
-        r.names      = obj.value(QStringLiteral("names")).toString();
-        r.statusText = obj.value(QStringLiteral("status")).toString();
-        r.state      = obj.value(QStringLiteral("state")).toString();
+        r.id         = readJsonString(obj, QStringLiteral("id"), QStringLiteral("ID"));
+        r.image      = readJsonString(obj, QStringLiteral("image"), QStringLiteral("Image"));
+        r.names      = readJsonString(obj, QStringLiteral("names"), QStringLiteral("Names"));
+        r.statusText = readJsonString(obj, QStringLiteral("status"), QStringLiteral("Status"));
+        r.state      = readJsonString(obj, QStringLiteral("state"), QStringLiteral("State"));
         r.isRunning  = r.state.compare(QStringLiteral("running"), Qt::CaseInsensitive) == 0;
-        r.created    = obj.value(QStringLiteral("created")).toString();
-        r.ports      = obj.value(QStringLiteral("ports")).toString();
+        r.created    = readJsonString(obj, QStringLiteral("created"), QStringLiteral("CreatedAt"));
+        r.ports      = readJsonString(obj, QStringLiteral("ports"), QStringLiteral("Ports"));
         m_rows.push_back(std::move(r));
     }
     endResetModel();
@@ -353,7 +394,7 @@ void PierDockerClientModel::remove(const QString &id, bool force)
 
 void PierDockerClientModel::inspect(const QString &id)
 {
-    if (!m_handle || id.isEmpty()) return;
+    if ((!m_handle && !m_localMode) || id.isEmpty()) return;
 
     const quint64 requestId = ++m_nextInspectRequestId;
     if (!m_cancelFlag) {
@@ -368,19 +409,26 @@ void PierDockerClientModel::inspect(const QString &id)
 
     std::string idStd = id.toStdString();
     ::PierDocker *h = m_handle;
+    const bool local = m_localMode;
     QPointer<PierDockerClientModel> selfWeak(this);
     auto cancelFlag = m_cancelFlag;
 
     auto worker = std::make_unique<std::thread>([
-        selfWeak, cancelFlag, requestId, h,
+        selfWeak, cancelFlag, requestId, h, local,
         idStd = std::move(idStd)
     ]() mutable {
-        char *json = pier_docker_inspect_container(h, idStd.c_str());
+        char *json = local
+            ? pier_local_docker_inspect(idStd.c_str())
+            : pier_docker_inspect_container(h, idStd.c_str());
         QString jsonStr;
         QString err;
         if (json) {
             jsonStr = QString::fromUtf8(json);
-            pier_docker_free_string(json);
+            if (local) {
+                pier_local_free_string(json);
+            } else {
+                pier_docker_free_string(json);
+            }
         } else {
             err = QStringLiteral("docker inspect failed (see log)");
         }
@@ -410,6 +458,27 @@ void PierDockerClientModel::clearInspect()
     if (changed) {
         emit inspectStateChanged();
     }
+}
+
+void PierDockerClientModel::inspectImage(const QString &id)
+{
+    if (id.isEmpty()) return;
+    spawnInspectExec(++m_nextInspectRequestId, id,
+                     QStringList{ QStringLiteral("inspect"), QStringLiteral("--type"), QStringLiteral("image"), id });
+}
+
+void PierDockerClientModel::inspectVolume(const QString &name)
+{
+    if (name.isEmpty()) return;
+    spawnInspectExec(++m_nextInspectRequestId, name,
+                     QStringList{ QStringLiteral("volume"), QStringLiteral("inspect"), name });
+}
+
+void PierDockerClientModel::inspectNetwork(const QString &name)
+{
+    if (name.isEmpty()) return;
+    spawnInspectExec(++m_nextInspectRequestId, name,
+                     QStringList{ QStringLiteral("network"), QStringLiteral("inspect"), name });
 }
 
 void PierDockerClientModel::spawnAction(quint64 requestId,
@@ -514,6 +583,28 @@ void PierDockerClientModel::onInspectResult(
     emit inspectStateChanged();
 }
 
+void PierDockerClientModel::onInspectExecResult(
+    quint64 requestId,
+    const QString &target,
+    bool ok,
+    const QString &output,
+    const QString &error)
+{
+    if (requestId != m_nextInspectRequestId) {
+        return;
+    }
+    setInspectBusy(false);
+    m_inspectTarget = target;
+    if (!ok) {
+        m_inspectJson.clear();
+        m_inspectError = error;
+    } else {
+        m_inspectError.clear();
+        m_inspectJson = formatInspectJson(output);
+    }
+    emit inspectStateChanged();
+}
+
 QString PierDockerClientModel::formatInspectJson(const QString &json)
 {
     QJsonParseError parseErr {};
@@ -524,20 +615,365 @@ QString PierDockerClientModel::formatInspectJson(const QString &json)
     return QString::fromUtf8(doc.toJson(QJsonDocument::Indented)).trimmed();
 }
 
+void PierDockerClientModel::spawnInspectExec(
+    quint64 requestId,
+    const QString &target,
+    const QStringList &args)
+{
+    if ((!m_handle && !m_localMode) || args.isEmpty()) return;
+    if (!m_cancelFlag) {
+        m_cancelFlag = std::make_shared<std::atomic<bool>>(false);
+    }
+
+    m_inspectTarget = target;
+    m_inspectError.clear();
+    m_inspectJson.clear();
+    emit inspectStateChanged();
+    setInspectBusy(true);
+
+    const QByteArray argsJson = QJsonDocument(QJsonArray::fromStringList(args)).toJson(QJsonDocument::Compact);
+    const std::string argsStd = argsJson.toStdString();
+    ::PierDocker *h = m_handle;
+    const bool local = m_localMode;
+    QPointer<PierDockerClientModel> self(this);
+    auto cancel = m_cancelFlag;
+
+    auto w = std::make_unique<std::thread>([self, cancel, requestId, h, local,
+                                            target, argsStd = std::move(argsStd)]() {
+        char *json = local
+            ? pier_local_docker_exec_json(argsStd.c_str())
+            : pier_docker_exec_json(h, argsStd.c_str());
+        QString response;
+        if (json) {
+            response = QString::fromUtf8(json);
+            if (local) {
+                pier_local_free_string(json);
+            } else {
+                pier_docker_free_string(json);
+            }
+        }
+        if (!self || (cancel && cancel->load())) return;
+        const DockerExecPayload payload = response.isEmpty()
+            ? DockerExecPayload{ false, QString(), QStringLiteral("docker command failed (see log)") }
+            : decodeDockerExecResponse(response, QStringLiteral("docker command failed (see log)"));
+        QMetaObject::invokeMethod(
+            self.data(),
+            "onInspectExecResult",
+            Qt::QueuedConnection,
+            Q_ARG(quint64, requestId),
+            Q_ARG(QString, target),
+            Q_ARG(bool, payload.ok),
+            Q_ARG(QString, payload.output),
+            Q_ARG(QString, payload.error));
+    });
+    m_workers.push_back(std::move(w));
+}
+
+void PierDockerClientModel::spawnDockerExec(
+    quint64 requestId,
+    const QString &op,
+    const QStringList &args)
+{
+    if ((!m_handle && !m_localMode) || args.isEmpty()) return;
+    setBusy(true);
+
+    const QByteArray argsJson = QJsonDocument(QJsonArray::fromStringList(args)).toJson(QJsonDocument::Compact);
+    const std::string argsStd = argsJson.toStdString();
+    ::PierDocker *h = m_handle;
+    const bool local = m_localMode;
+    QPointer<PierDockerClientModel> self(this);
+    auto cancel = m_cancelFlag;
+
+    auto w = std::make_unique<std::thread>([self, cancel, requestId, h, local, op,
+                                            argsStd = std::move(argsStd)]() {
+        char *json = local
+            ? pier_local_docker_exec_json(argsStd.c_str())
+            : pier_docker_exec_json(h, argsStd.c_str());
+        QString response;
+        if (json) {
+            response = QString::fromUtf8(json);
+            if (local) {
+                pier_local_free_string(json);
+            } else {
+                pier_docker_free_string(json);
+            }
+        }
+        if (!self || (cancel && cancel->load())) return;
+        const DockerExecPayload payload = response.isEmpty()
+            ? DockerExecPayload{ false, QString(), QStringLiteral("docker command failed (see log)") }
+            : decodeDockerExecResponse(response, QStringLiteral("docker command failed (see log)"));
+        QMetaObject::invokeMethod(
+            self.data(),
+            "onDockerExecResult",
+            Qt::QueuedConnection,
+            Q_ARG(quint64, requestId),
+            Q_ARG(QString, op),
+            Q_ARG(bool, payload.ok),
+            Q_ARG(QString, payload.output),
+            Q_ARG(QString, payload.error));
+    });
+    m_workers.push_back(std::move(w));
+}
+
+void PierDockerClientModel::onDockerExecResult(
+    quint64 requestId,
+    const QString &op,
+    bool ok,
+    const QString &output,
+    const QString &error)
+{
+    if (requestId != m_nextRequestId) {
+        return;
+    }
+
+    setBusy(false);
+
+    QString message = error;
+    if (ok) {
+        if (op.startsWith(QStringLiteral("composeUp::"))) {
+            const QString composeFilePath = op.section(QStringLiteral("::"), 1);
+            emit actionFinished(true, QStringLiteral("Compose stack started"));
+            refreshCompose(composeFilePath);
+            return;
+        }
+        if (op.startsWith(QStringLiteral("composeDown::"))) {
+            const QString composeFilePath = op.section(QStringLiteral("::"), 1);
+            emit actionFinished(true, QStringLiteral("Compose stack stopped"));
+            refreshCompose(composeFilePath);
+            return;
+        }
+        if (op.startsWith(QStringLiteral("composeRestart::"))) {
+            const QString composeFilePath = op.section(QStringLiteral("::"), 1, 1);
+            emit actionFinished(true, QStringLiteral("Compose service restarted"));
+            refreshCompose(composeFilePath);
+            return;
+        }
+        if (op == QStringLiteral("pullImage")) {
+            message = QStringLiteral("Image pulled");
+            emit actionFinished(true, message);
+            refreshImages();
+            return;
+        }
+        if (op == QStringLiteral("pruneImages")) {
+            message = QStringLiteral("Unused images pruned");
+            emit actionFinished(true, message);
+            refreshImages();
+            return;
+        }
+        if (op == QStringLiteral("runImage")) {
+            message = QStringLiteral("Container created");
+            emit actionFinished(true, message);
+            refresh();
+            return;
+        }
+        if (op == QStringLiteral("removeImage")) {
+            message = QStringLiteral("Image removed");
+            emit actionFinished(true, message);
+            refreshImages();
+            return;
+        }
+        if (op == QStringLiteral("pruneVolumes")) {
+            message = QStringLiteral("Unused volumes pruned");
+            emit actionFinished(true, message);
+            refreshVolumes();
+            return;
+        }
+        if (op == QStringLiteral("removeVolume")) {
+            message = QStringLiteral("Volume removed");
+            emit actionFinished(true, message);
+            refreshVolumes();
+            return;
+        }
+        if (op == QStringLiteral("createNetwork")) {
+            message = QStringLiteral("Network created");
+            emit actionFinished(true, message);
+            refreshNetworks();
+            return;
+        }
+        if (op == QStringLiteral("removeNetwork")) {
+            message = QStringLiteral("Network removed");
+            emit actionFinished(true, message);
+            refreshNetworks();
+            return;
+        }
+        message = output.trimmed();
+        if (message.isEmpty()) {
+            message = QStringLiteral("Docker command completed");
+        }
+    }
+
+    emit actionFinished(ok, message);
+}
+
+void PierDockerClientModel::refreshCompose(const QString &composeFilePath)
+{
+    if ((!m_handle && !m_localMode) || composeFilePath.trimmed().isEmpty()) {
+        if (!m_composeServices.isEmpty()) {
+            m_composeServices.clear();
+            emit composeServicesChanged();
+        }
+        return;
+    }
+
+    const quint64 requestId = ++m_nextRequestId;
+    setBusy(true);
+
+    const QString path = composeFilePath.trimmed();
+    const QByteArray argsJson = QJsonDocument(QJsonArray::fromStringList(
+        QStringList{
+            QStringLiteral("compose"),
+            QStringLiteral("-f"),
+            path,
+            QStringLiteral("ps"),
+            QStringLiteral("--format"),
+            composePsFormat()
+        }
+    )).toJson(QJsonDocument::Compact);
+    const std::string argsStd = argsJson.toStdString();
+    ::PierDocker *h = m_handle;
+    const bool local = m_localMode;
+    QPointer<PierDockerClientModel> self(this);
+    auto cancel = m_cancelFlag;
+
+    auto w = std::make_unique<std::thread>([self, cancel, requestId, h, local,
+                                            argsStd = std::move(argsStd)]() {
+        char *json = local
+            ? pier_local_docker_exec_json(argsStd.c_str())
+            : pier_docker_exec_json(h, argsStd.c_str());
+        QString response;
+        if (json) {
+            response = QString::fromUtf8(json);
+            if (local) {
+                pier_local_free_string(json);
+            } else {
+                pier_docker_free_string(json);
+            }
+        }
+        if (!self || (cancel && cancel->load())) return;
+        const DockerExecPayload payload = response.isEmpty()
+            ? DockerExecPayload{ false, QString(), QStringLiteral("docker compose ps failed") }
+            : decodeDockerExecResponse(response, QStringLiteral("docker compose ps failed"));
+        QMetaObject::invokeMethod(
+            self.data(),
+            "onComposeResult",
+            Qt::QueuedConnection,
+            Q_ARG(quint64, requestId),
+            Q_ARG(QString, payload.output),
+            Q_ARG(QString, payload.ok ? QString() : payload.error));
+    });
+    m_workers.push_back(std::move(w));
+}
+
+void PierDockerClientModel::composeUp(const QString &composeFilePath)
+{
+    const QString path = composeFilePath.trimmed();
+    if (path.isEmpty()) return;
+    spawnDockerExec(++m_nextRequestId,
+                    QStringLiteral("composeUp::") + path,
+                    QStringList{
+                        QStringLiteral("compose"),
+                        QStringLiteral("-f"),
+                        path,
+                        QStringLiteral("up"),
+                        QStringLiteral("-d")
+                    });
+}
+
+void PierDockerClientModel::composeDown(const QString &composeFilePath)
+{
+    const QString path = composeFilePath.trimmed();
+    if (path.isEmpty()) return;
+    spawnDockerExec(++m_nextRequestId,
+                    QStringLiteral("composeDown::") + path,
+                    QStringList{
+                        QStringLiteral("compose"),
+                        QStringLiteral("-f"),
+                        path,
+                        QStringLiteral("down")
+                    });
+}
+
+void PierDockerClientModel::composeRestart(const QString &composeFilePath, const QString &service)
+{
+    const QString path = composeFilePath.trimmed();
+    if (path.isEmpty()) return;
+    QStringList args{
+        QStringLiteral("compose"),
+        QStringLiteral("-f"),
+        path,
+        QStringLiteral("restart")
+    };
+    const QString trimmedService = service.trimmed();
+    if (!trimmedService.isEmpty()) {
+        args << trimmedService;
+    }
+    spawnDockerExec(++m_nextRequestId,
+                    QStringLiteral("composeRestart::") + path + QStringLiteral("::") + trimmedService,
+                    args);
+}
+
+void PierDockerClientModel::onComposeResult(quint64 requestId, const QString &output, const QString &error)
+{
+    if (requestId != m_nextRequestId) {
+        return;
+    }
+
+    setBusy(false);
+
+    if (!error.isEmpty()) {
+        if (!m_composeServices.isEmpty()) {
+            m_composeServices.clear();
+            emit composeServicesChanged();
+        }
+        emit actionFinished(false, error);
+        return;
+    }
+
+    QVariantList list;
+    const QStringList lines = output.split(QRegularExpression(QStringLiteral("[\r\n]+")),
+                                           Qt::SkipEmptyParts);
+    for (const QString &rawLine : lines) {
+        const QStringList parts = rawLine.split(QStringLiteral("|||"));
+        if (parts.size() < 3) continue;
+        QVariantMap row;
+        const QString service = parts.value(0).trimmed();
+        const QString status = parts.value(1).trimmed();
+        const QString state = parts.value(2).trimmed();
+        row.insert(QStringLiteral("service"), service);
+        row.insert(QStringLiteral("name"), service);
+        row.insert(QStringLiteral("status"), status);
+        row.insert(QStringLiteral("state"), state);
+        row.insert(QStringLiteral("isRunning"), state.compare(QStringLiteral("running"), Qt::CaseInsensitive) == 0);
+        row.insert(QStringLiteral("image"), parts.value(3).trimmed());
+        row.insert(QStringLiteral("ports"), parts.value(4).trimmed());
+        list.append(row);
+    }
+
+    m_composeServices = list;
+    emit composeServicesChanged();
+}
+
 // ─── Images ─────────────────────────────────────────────
 
 void PierDockerClientModel::refreshImages()
 {
-    if (!m_handle) return;
+    if (!m_handle && !m_localMode) return;
     const quint64 id = ++m_nextRequestId;
     setBusy(true);
     QPointer<PierDockerClientModel> self(this);
     auto cancel = m_cancelFlag;
     ::PierDocker *h = m_handle;
-    auto w = std::make_unique<std::thread>([self, cancel, id, h]() {
-        char *json = pier_docker_list_images(h);
+    const bool local = m_localMode;
+    auto w = std::make_unique<std::thread>([self, cancel, id, h, local]() {
+        char *json = local ? pier_local_docker_list_images() : pier_docker_list_images(h);
         QString result = json ? QString::fromUtf8(json) : QStringLiteral("[]");
-        if (json) pier_docker_free_string(json);
+        if (json) {
+            if (local) {
+                pier_local_free_string(json);
+            } else {
+                pier_docker_free_string(json);
+            }
+        }
         if (!self || (cancel && cancel->load())) return;
         QMetaObject::invokeMethod(self.data(), "onImagesResult", Qt::QueuedConnection,
             Q_ARG(quint64, id), Q_ARG(QString, result));
@@ -550,47 +986,125 @@ void PierDockerClientModel::onImagesResult(quint64 requestId, const QString &jso
     if (requestId != m_nextRequestId) return;
     QJsonDocument doc = QJsonDocument::fromJson(json.toUtf8());
     QVariantList list;
-    if (doc.isArray()) for (const auto &v : doc.array()) list.append(v.toObject().toVariantMap());
+    if (doc.isArray()) {
+        for (const auto &v : doc.array()) {
+            if (!v.isObject()) continue;
+            const QJsonObject obj = v.toObject();
+            QVariantMap map;
+            map.insert(QStringLiteral("id"), readJsonString(obj, QStringLiteral("id"), QStringLiteral("ID")));
+            map.insert(QStringLiteral("repository"), readJsonString(obj, QStringLiteral("repository"), QStringLiteral("Repository")));
+            map.insert(QStringLiteral("tag"), readJsonString(obj, QStringLiteral("tag"), QStringLiteral("Tag")));
+            map.insert(QStringLiteral("size"), readJsonString(obj, QStringLiteral("size"), QStringLiteral("Size")));
+            map.insert(QStringLiteral("created"), readJsonString(obj, QStringLiteral("created"), QStringLiteral("CreatedAt")));
+            list.append(map);
+        }
+    }
     m_images = list;
     emit imagesChanged();
     setBusy(false);
 }
 
+void PierDockerClientModel::pullImage(const QString &imageRef)
+{
+    if (imageRef.trimmed().isEmpty()) return;
+    spawnDockerExec(++m_nextRequestId, QStringLiteral("pullImage"),
+                    QStringList{ QStringLiteral("pull"), imageRef.trimmed() });
+}
+
+void PierDockerClientModel::pruneImages()
+{
+    spawnDockerExec(++m_nextRequestId, QStringLiteral("pruneImages"),
+                    QStringList{ QStringLiteral("image"), QStringLiteral("prune"), QStringLiteral("-f") });
+}
+
+void PierDockerClientModel::runImage(
+    const QString &imageRef,
+    const QString &containerName,
+    const QVariantList &ports,
+    const QVariantList &envVars,
+    const QVariantList &volumes,
+    const QString &restartPolicy,
+    const QString &command,
+    bool detached)
+{
+    const QString image = imageRef.trimmed();
+    if (image.isEmpty()) return;
+
+    QStringList args{ QStringLiteral("run") };
+    if (detached) {
+        args << QStringLiteral("-d");
+    }
+    if (!containerName.trimmed().isEmpty()) {
+        args << QStringLiteral("--name") << containerName.trimmed();
+    }
+
+    for (const QVariant &entry : ports) {
+        const QVariantMap map = entry.toMap();
+        const QString hostPort = map.value(QStringLiteral("host")).toString().trimmed();
+        const QString containerPort = map.value(QStringLiteral("container")).toString().trimmed();
+        if (hostPort.isEmpty() || containerPort.isEmpty()) continue;
+        args << QStringLiteral("-p") << (hostPort + QStringLiteral(":") + containerPort);
+    }
+
+    for (const QVariant &entry : envVars) {
+        const QVariantMap map = entry.toMap();
+        const QString key = map.value(QStringLiteral("key")).toString().trimmed();
+        if (key.isEmpty()) continue;
+        const QString value = map.value(QStringLiteral("value")).toString();
+        args << QStringLiteral("-e") << (key + QStringLiteral("=") + value);
+    }
+
+    for (const QVariant &entry : volumes) {
+        const QVariantMap map = entry.toMap();
+        const QString hostPath = map.value(QStringLiteral("host")).toString().trimmed();
+        const QString containerPath = map.value(QStringLiteral("container")).toString().trimmed();
+        if (hostPath.isEmpty() || containerPath.isEmpty()) continue;
+        args << QStringLiteral("-v") << (hostPath + QStringLiteral(":") + containerPath);
+    }
+
+    const QString restart = restartPolicy.trimmed();
+    if (!restart.isEmpty() && restart != QStringLiteral("no")) {
+        args << QStringLiteral("--restart") << restart;
+    }
+
+    args << image;
+    args.append(splitCommandWords(command));
+
+    spawnDockerExec(++m_nextRequestId, QStringLiteral("runImage"), args);
+}
+
 void PierDockerClientModel::removeImage(const QString &id, bool force)
 {
-    if (!m_handle || id.isEmpty()) return;
-    const quint64 reqId = ++m_nextRequestId;
-    setBusy(true);
-    QPointer<PierDockerClientModel> self(this);
-    auto cancel = m_cancelFlag;
-    ::PierDocker *h = m_handle;
-    std::string idStd = id.toStdString();
-    int f = force ? 1 : 0;
-    auto w = std::make_unique<std::thread>([self, cancel, reqId, h, idStd = std::move(idStd), f]() {
-        int rc = pier_docker_remove_image(h, idStd.c_str(), f);
-        bool ok = (rc == 0);
-        if (!self || (cancel && cancel->load())) return;
-        QMetaObject::invokeMethod(self.data(), "onActionResult", Qt::QueuedConnection,
-            Q_ARG(quint64, reqId), Q_ARG(bool, ok),
-            Q_ARG(QString, ok ? QStringLiteral("Image removed") : QStringLiteral("Failed to remove image")));
-    });
-    m_workers.push_back(std::move(w));
+    if (id.isEmpty()) return;
+    QStringList args{ QStringLiteral("rmi") };
+    if (force) {
+        args << QStringLiteral("--force");
+    }
+    args << id;
+    spawnDockerExec(++m_nextRequestId, QStringLiteral("removeImage"), args);
 }
 
 // ─── Volumes ────────────────────────────────────────────
 
 void PierDockerClientModel::refreshVolumes()
 {
-    if (!m_handle) return;
+    if (!m_handle && !m_localMode) return;
     const quint64 id = ++m_nextRequestId;
     setBusy(true);
     QPointer<PierDockerClientModel> self(this);
     auto cancel = m_cancelFlag;
     ::PierDocker *h = m_handle;
-    auto w = std::make_unique<std::thread>([self, cancel, id, h]() {
-        char *json = pier_docker_list_volumes(h);
+    const bool local = m_localMode;
+    auto w = std::make_unique<std::thread>([self, cancel, id, h, local]() {
+        char *json = local ? pier_local_docker_list_volumes() : pier_docker_list_volumes(h);
         QString result = json ? QString::fromUtf8(json) : QStringLiteral("[]");
-        if (json) pier_docker_free_string(json);
+        if (json) {
+            if (local) {
+                pier_local_free_string(json);
+            } else {
+                pier_docker_free_string(json);
+            }
+        }
         if (!self || (cancel && cancel->load())) return;
         QMetaObject::invokeMethod(self.data(), "onVolumesResult", Qt::QueuedConnection,
             Q_ARG(quint64, id), Q_ARG(QString, result));
@@ -603,46 +1117,56 @@ void PierDockerClientModel::onVolumesResult(quint64 requestId, const QString &js
     if (requestId != m_nextRequestId) return;
     QJsonDocument doc = QJsonDocument::fromJson(json.toUtf8());
     QVariantList list;
-    if (doc.isArray()) for (const auto &v : doc.array()) list.append(v.toObject().toVariantMap());
+    if (doc.isArray()) {
+        for (const auto &v : doc.array()) {
+            if (!v.isObject()) continue;
+            const QJsonObject obj = v.toObject();
+            QVariantMap map;
+            map.insert(QStringLiteral("name"), readJsonString(obj, QStringLiteral("name"), QStringLiteral("Name")));
+            map.insert(QStringLiteral("driver"), readJsonString(obj, QStringLiteral("driver"), QStringLiteral("Driver")));
+            map.insert(QStringLiteral("mountpoint"), readJsonString(obj, QStringLiteral("mountpoint"), QStringLiteral("Mountpoint")));
+            list.append(map);
+        }
+    }
     m_volumes = list;
     emit volumesChanged();
     setBusy(false);
 }
 
+void PierDockerClientModel::pruneVolumes()
+{
+    spawnDockerExec(++m_nextRequestId, QStringLiteral("pruneVolumes"),
+                    QStringList{ QStringLiteral("volume"), QStringLiteral("prune"), QStringLiteral("-f") });
+}
+
 void PierDockerClientModel::removeVolume(const QString &name)
 {
-    if (!m_handle || name.isEmpty()) return;
-    const quint64 reqId = ++m_nextRequestId;
-    setBusy(true);
-    QPointer<PierDockerClientModel> self(this);
-    auto cancel = m_cancelFlag;
-    ::PierDocker *h = m_handle;
-    std::string n = name.toStdString();
-    auto w = std::make_unique<std::thread>([self, cancel, reqId, h, n = std::move(n)]() {
-        int rc = pier_docker_remove_volume(h, n.c_str());
-        bool ok = (rc == 0);
-        if (!self || (cancel && cancel->load())) return;
-        QMetaObject::invokeMethod(self.data(), "onActionResult", Qt::QueuedConnection,
-            Q_ARG(quint64, reqId), Q_ARG(bool, ok),
-            Q_ARG(QString, ok ? QStringLiteral("Volume removed") : QStringLiteral("Failed to remove volume")));
-    });
-    m_workers.push_back(std::move(w));
+    if (name.isEmpty()) return;
+    spawnDockerExec(++m_nextRequestId, QStringLiteral("removeVolume"),
+                    QStringList{ QStringLiteral("volume"), QStringLiteral("rm"), name });
 }
 
 // ─── Networks ───────────────────────────────────────────
 
 void PierDockerClientModel::refreshNetworks()
 {
-    if (!m_handle) return;
+    if (!m_handle && !m_localMode) return;
     const quint64 id = ++m_nextRequestId;
     setBusy(true);
     QPointer<PierDockerClientModel> self(this);
     auto cancel = m_cancelFlag;
     ::PierDocker *h = m_handle;
-    auto w = std::make_unique<std::thread>([self, cancel, id, h]() {
-        char *json = pier_docker_list_networks(h);
+    const bool local = m_localMode;
+    auto w = std::make_unique<std::thread>([self, cancel, id, h, local]() {
+        char *json = local ? pier_local_docker_list_networks() : pier_docker_list_networks(h);
         QString result = json ? QString::fromUtf8(json) : QStringLiteral("[]");
-        if (json) pier_docker_free_string(json);
+        if (json) {
+            if (local) {
+                pier_local_free_string(json);
+            } else {
+                pier_docker_free_string(json);
+            }
+        }
         if (!self || (cancel && cancel->load())) return;
         QMetaObject::invokeMethod(self.data(), "onNetworksResult", Qt::QueuedConnection,
             Q_ARG(quint64, id), Q_ARG(QString, result));
@@ -655,30 +1179,43 @@ void PierDockerClientModel::onNetworksResult(quint64 requestId, const QString &j
     if (requestId != m_nextRequestId) return;
     QJsonDocument doc = QJsonDocument::fromJson(json.toUtf8());
     QVariantList list;
-    if (doc.isArray()) for (const auto &v : doc.array()) list.append(v.toObject().toVariantMap());
+    if (doc.isArray()) {
+        for (const auto &v : doc.array()) {
+            if (!v.isObject()) continue;
+            const QJsonObject obj = v.toObject();
+            QVariantMap map;
+            map.insert(QStringLiteral("id"), readJsonString(obj, QStringLiteral("id"), QStringLiteral("ID")));
+            map.insert(QStringLiteral("name"), readJsonString(obj, QStringLiteral("name"), QStringLiteral("Name")));
+            map.insert(QStringLiteral("driver"), readJsonString(obj, QStringLiteral("driver"), QStringLiteral("Driver")));
+            map.insert(QStringLiteral("scope"), readJsonString(obj, QStringLiteral("scope"), QStringLiteral("Scope")));
+            list.append(map);
+        }
+    }
     m_networks = list;
     emit networksChanged();
     setBusy(false);
 }
 
+void PierDockerClientModel::createNetwork(const QString &name, const QString &driver)
+{
+    const QString trimmedName = name.trimmed();
+    if (trimmedName.isEmpty()) return;
+    const QString driverName = driver.trimmed().isEmpty() ? QStringLiteral("bridge") : driver.trimmed();
+    spawnDockerExec(++m_nextRequestId, QStringLiteral("createNetwork"),
+                    QStringList{
+                        QStringLiteral("network"),
+                        QStringLiteral("create"),
+                        QStringLiteral("--driver"),
+                        driverName,
+                        trimmedName
+                    });
+}
+
 void PierDockerClientModel::removeNetwork(const QString &name)
 {
-    if (!m_handle || name.isEmpty()) return;
-    const quint64 reqId = ++m_nextRequestId;
-    setBusy(true);
-    QPointer<PierDockerClientModel> self(this);
-    auto cancel = m_cancelFlag;
-    ::PierDocker *h = m_handle;
-    std::string n = name.toStdString();
-    auto w = std::make_unique<std::thread>([self, cancel, reqId, h, n = std::move(n)]() {
-        int rc = pier_docker_remove_network(h, n.c_str());
-        bool ok = (rc == 0);
-        if (!self || (cancel && cancel->load())) return;
-        QMetaObject::invokeMethod(self.data(), "onActionResult", Qt::QueuedConnection,
-            Q_ARG(quint64, reqId), Q_ARG(bool, ok),
-            Q_ARG(QString, ok ? QStringLiteral("Network removed") : QStringLiteral("Failed to remove network")));
-    });
-    m_workers.push_back(std::move(w));
+    if (name.isEmpty()) return;
+    spawnDockerExec(++m_nextRequestId, QStringLiteral("removeNetwork"),
+                    QStringList{ QStringLiteral("network"), QStringLiteral("rm"), name });
 }
 
 // ─── Stop ───────────────────────────────────────────────
@@ -700,6 +1237,22 @@ void PierDockerClientModel::stop()
         m_rows.clear();
         endResetModel();
         emit containerCountChanged();
+    }
+    if (!m_images.isEmpty()) {
+        m_images.clear();
+        emit imagesChanged();
+    }
+    if (!m_volumes.isEmpty()) {
+        m_volumes.clear();
+        emit volumesChanged();
+    }
+    if (!m_networks.isEmpty()) {
+        m_networks.clear();
+        emit networksChanged();
+    }
+    if (!m_composeServices.isEmpty()) {
+        m_composeServices.clear();
+        emit composeServicesChanged();
     }
     clearInspect();
     if (m_status != Idle) {

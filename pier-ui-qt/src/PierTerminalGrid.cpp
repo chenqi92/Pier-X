@@ -9,12 +9,16 @@
 
 namespace {
 
-// Minimal 16-color ANSI palette. Enough to render anything shells
-// typically spit out; full 256-color + truecolor is handled below
-// via the PierCell encoding.
-QColor ansiIndexToColor(uint8_t idx, const QColor &defaultFg, bool isDark)
+// Minimal 16-color ANSI palette. When a custom palette is supplied
+// (from QML via PierTerminalGrid::paletteColors), use it directly.
+// Otherwise fall back to the built-in dark/light palettes.
+QColor ansiIndexToColor(uint8_t idx, const QColor &defaultFg, bool isDark,
+                        const QList<QColor> &palette)
 {
     if (idx < 16) {
+        // Custom palette takes priority.
+        if (palette.size() >= 16)
+            return palette[idx];
         if (isDark) {
             static const QColor darkPalette[16] = {
                 QColor(0x00, 0x00, 0x00), // 0  black
@@ -75,21 +79,23 @@ QColor ansiIndexToColor(uint8_t idx, const QColor &defaultFg, bool isDark)
     return defaultFg;
 }
 
-QColor cellForeground(const PierCell &c, const QColor &defaultFg, bool isDark)
+QColor cellForeground(const PierCell &c, const QColor &defaultFg, bool isDark,
+                      const QList<QColor> &palette)
 {
     switch (c.fg_kind) {
     case 0:  return defaultFg;
-    case 1:  return ansiIndexToColor(c.fg_r, defaultFg, isDark);
+    case 1:  return ansiIndexToColor(c.fg_r, defaultFg, isDark, palette);
     case 2:  return QColor(c.fg_r, c.fg_g, c.fg_b);
     default: return defaultFg;
     }
 }
 
-QColor cellBackground(const PierCell &c, const QColor &defaultBg, bool isDark)
+QColor cellBackground(const PierCell &c, const QColor &defaultBg, bool isDark,
+                      const QList<QColor> &palette)
 {
     switch (c.bg_kind) {
     case 0:  return defaultBg;
-    case 1:  return ansiIndexToColor(c.bg_r, defaultBg, isDark);
+    case 1:  return ansiIndexToColor(c.bg_r, defaultBg, isDark, palette);
     case 2:  return QColor(c.bg_r, c.bg_g, c.bg_b);
     default: return defaultBg;
     }
@@ -169,6 +175,14 @@ void PierTerminalGrid::setIsDarkTheme(bool dark)
     update();
 }
 
+void PierTerminalGrid::setPaletteColors(const QList<QColor> &colors)
+{
+    if (m_palette == colors) return;
+    m_palette = colors;
+    emit paletteColorsChanged();
+    update();
+}
+
 void PierTerminalGrid::geometryChange(const QRectF &newGeometry, const QRectF &oldGeometry)
 {
     QQuickPaintedItem::geometryChange(newGeometry, oldGeometry);
@@ -242,7 +256,7 @@ void PierTerminalGrid::paint(QPainter *painter)
         for (int col = 0; col < cols; ++col) {
             const PierCell &c = cells[row * cols + col];
             if (c.bg_kind == 0) continue;
-            const QColor bg = cellBackground(c, m_defaultBg, m_isDarkTheme);
+            const QColor bg = cellBackground(c, m_defaultBg, m_isDarkTheme, m_palette);
             painter->fillRect(
                 QRectF(col * m_cellWidth, row * m_cellHeight, m_cellWidth, m_cellHeight),
                 bg);
@@ -254,7 +268,7 @@ void PierTerminalGrid::paint(QPainter *painter)
         for (int col = 0; col < cols; ++col) {
             const PierCell &c = cells[row * cols + col];
             if (c.ch == 0 || c.ch == static_cast<uint32_t>(' ')) continue;
-            const QColor fg = cellForeground(c, m_defaultFg, m_isDarkTheme);
+            const QColor fg = cellForeground(c, m_defaultFg, m_isDarkTheme, m_palette);
             painter->setPen(fg);
 
             // Determine if this is a wide (CJK) character that spans 2 cells.
@@ -292,7 +306,7 @@ void PierTerminalGrid::paint(QPainter *painter)
 
             // Reverse video swaps fg/bg at paint time.
             if (c.attrs & 0x04 /* reverse */) {
-                const QColor bg = cellBackground(c, m_defaultBg, m_isDarkTheme);
+                const QColor bg = cellBackground(c, m_defaultBg, m_isDarkTheme, m_palette);
                 painter->fillRect(
                     QRectF(col * m_cellWidth, row * m_cellHeight, drawWidth, m_cellHeight),
                     fg);

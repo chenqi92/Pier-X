@@ -65,7 +65,9 @@ pub fn search_files(
     let mut results = Vec::new();
     for line in file_list.lines() {
         let name = line.strip_prefix("./").unwrap_or(line);
-        if name.is_empty() { continue; }
+        if name.is_empty() {
+            continue;
+        }
         if name.to_lowercase().contains(&pat_lower) {
             let file_name = Path::new(name)
                 .file_name()
@@ -79,7 +81,9 @@ pub fn search_files(
                 line: 0,
                 text: String::new(),
             });
-            if results.len() >= max { break; }
+            if results.len() >= max {
+                break;
+            }
         }
     }
     Ok(results)
@@ -119,7 +123,9 @@ pub fn search_content(
 
     let mut results = Vec::new();
     for line in grep_output.lines() {
-        if line.is_empty() { continue; }
+        if line.is_empty() {
+            continue;
+        }
         // Format: path:line:content
         let parts: Vec<&str> = line.splitn(3, ':').collect();
         if parts.len() >= 3 {
@@ -136,7 +142,9 @@ pub fn search_content(
                 line: parts[1].parse().unwrap_or(0),
                 text: parts[2].to_string(),
             });
-            if results.len() >= max { break; }
+            if results.len() >= max {
+                break;
+            }
         }
     }
     Ok(results)

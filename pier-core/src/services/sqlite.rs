@@ -46,7 +46,10 @@ impl SqliteClient {
         }
         let p = PathBuf::from(path);
         if !p.exists() {
-            return Err(SqliteError::InvalidPath(format!("file not found: {}", path)));
+            return Err(SqliteError::InvalidPath(format!(
+                "file not found: {}",
+                path
+            )));
         }
         // Verify it's a valid sqlite database
         let output = Command::new("sqlite3")
@@ -57,7 +60,10 @@ impl SqliteClient {
 
         if !output.status.success() {
             let err = String::from_utf8_lossy(&output.stderr);
-            return Err(SqliteError::Command(format!("not a valid database: {}", err)));
+            return Err(SqliteError::Command(format!(
+                "not a valid database: {}",
+                err
+            )));
         }
         Ok(Self { db_path: p })
     }
@@ -76,7 +82,8 @@ impl SqliteClient {
     pub fn table_columns(&self, table: &str) -> Result<Vec<ColumnInfo>, SqliteError> {
         let output = self.sqlite(&[
             "-header",
-            "-separator", "\x1f",
+            "-separator",
+            "\x1f",
             &format!("PRAGMA table_info('{}');", table.replace('\'', "''")),
         ])?;
         let mut cols = Vec::new();
@@ -116,13 +123,13 @@ impl SqliteClient {
                         }
                     }
                 };
-                let columns: Vec<String> =
-                    header.split('\x1f').map(|s| s.to_string()).collect();
+                let columns: Vec<String> = header.split('\x1f').map(|s| s.to_string()).collect();
                 let mut rows = Vec::new();
                 for line in lines {
-                    if line.is_empty() { continue; }
-                    let row: Vec<String> =
-                        line.split('\x1f').map(|s| s.to_string()).collect();
+                    if line.is_empty() {
+                        continue;
+                    }
+                    let row: Vec<String> = line.split('\x1f').map(|s| s.to_string()).collect();
                     rows.push(row);
                 }
                 SqliteQueryResult {

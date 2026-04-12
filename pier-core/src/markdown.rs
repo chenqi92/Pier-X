@@ -215,8 +215,7 @@ mod tests {
         // don't step on each other. tempfile isn't a dev-dep
         // for pier-core, and load_file is trivial enough that
         // a hand-rolled temp path suffices.
-        let path = std::env::temp_dir()
-            .join(format!("pier_md_test_{}.md", std::process::id()));
+        let path = std::env::temp_dir().join(format!("pier_md_test_{}.md", std::process::id()));
         {
             let mut f = std::fs::File::create(&path).expect("create temp md");
             writeln!(f, "# hi").unwrap();

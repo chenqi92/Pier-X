@@ -351,7 +351,9 @@ pub unsafe extern "C" fn pier_terminal_new_ssh(
     let auth = AuthMethod::DirectPassword {
         password: password_str,
     };
-    new_ssh_with_auth(cols, rows, host_str, port, user_str, auth, notify, user_data)
+    new_ssh_with_auth(
+        cols, rows, host_str, port, user_str, auth, notify, user_data,
+    )
 }
 
 /// Spawn a new SSH-backed terminal session whose password lives
@@ -428,7 +430,9 @@ pub unsafe extern "C" fn pier_terminal_new_ssh_credential(
     let auth = AuthMethod::KeychainPassword {
         credential_id: cred_str,
     };
-    new_ssh_with_auth(cols, rows, host_str, port, user_str, auth, notify, user_data)
+    new_ssh_with_auth(
+        cols, rows, host_str, port, user_str, auth, notify, user_data,
+    )
 }
 
 /// Spawn a new SSH-backed terminal session that authenticates
@@ -489,9 +493,14 @@ pub unsafe extern "C" fn pier_terminal_new_ssh_agent(
     }
 
     new_ssh_with_auth(
-        cols, rows, host_str, port, user_str,
+        cols,
+        rows,
+        host_str,
+        port,
+        user_str,
         AuthMethod::Agent,
-        notify, user_data,
+        notify,
+        user_data,
     )
 }
 
@@ -589,7 +598,9 @@ pub unsafe extern "C" fn pier_terminal_new_ssh_key(
         private_key_path: key_path_str,
         passphrase_credential_id: passphrase_id_opt,
     };
-    new_ssh_with_auth(cols, rows, host_str, port, user_str, auth, notify, user_data)
+    new_ssh_with_auth(
+        cols, rows, host_str, port, user_str, auth, notify, user_data,
+    )
 }
 
 /// Shared body of all three SSH constructors. Builds an `SshConfig`
@@ -796,11 +807,7 @@ pub unsafe extern "C" fn pier_terminal_write(
 ///
 /// `t` must be either null or a valid, not-yet-freed handle.
 #[no_mangle]
-pub unsafe extern "C" fn pier_terminal_resize(
-    t: *mut PierTerminal,
-    cols: u16,
-    rows: u16,
-) -> i32 {
+pub unsafe extern "C" fn pier_terminal_resize(t: *mut PierTerminal, cols: u16, rows: u16) -> i32 {
     if t.is_null() {
         return -1;
     }
@@ -947,9 +954,7 @@ mod tests {
         // SAFETY: shell is a valid NUL-terminated C string,
         // test_notify is a valid function pointer, user_data
         // is the leaked counter.
-        let t = unsafe {
-            pier_terminal_new(80, 24, shell.as_ptr(), Some(test_notify), user_data)
-        };
+        let t = unsafe { pier_terminal_new(80, 24, shell.as_ptr(), Some(test_notify), user_data) };
         assert!(!t.is_null(), "spawn should succeed on Unix");
 
         let msg = b"ffi-roundtrip\n";
@@ -958,7 +963,10 @@ mod tests {
         assert_eq!(n, msg.len() as i64);
 
         assert!(
-            wait_for(|| counter.load(Ordering::Relaxed) > 0, Duration::from_secs(2)),
+            wait_for(
+                || counter.load(Ordering::Relaxed) > 0,
+                Duration::from_secs(2)
+            ),
             "notify callback should have fired after cat echoed our input",
         );
 
@@ -989,9 +997,7 @@ mod tests {
         ];
         // SAFETY: info + cells are both caller-owned writable memory
         // sized for cols*rows = 80*24.
-        let rc = unsafe {
-            pier_terminal_snapshot(t, &mut info, cells.as_mut_ptr(), cells.len())
-        };
+        let rc = unsafe { pier_terminal_snapshot(t, &mut info, cells.as_mut_ptr(), cells.len()) };
         assert_eq!(rc, 0);
         assert_eq!(info.cols, 80);
         assert_eq!(info.rows, 24);
@@ -1023,9 +1029,7 @@ mod tests {
         let user_data = counter as *const AtomicUsize as *mut c_void;
         let shell = CString::new("/bin/cat").unwrap();
         // SAFETY: see above test.
-        let t = unsafe {
-            pier_terminal_new(80, 24, shell.as_ptr(), Some(test_notify), user_data)
-        };
+        let t = unsafe { pier_terminal_new(80, 24, shell.as_ptr(), Some(test_notify), user_data) };
         assert!(!t.is_null());
 
         let mut info = PierGridInfo {
@@ -1054,9 +1058,7 @@ mod tests {
             10
         ];
         // SAFETY: info + cells are writable.
-        let rc = unsafe {
-            pier_terminal_snapshot(t, &mut info, cells.as_mut_ptr(), cells.len())
-        };
+        let rc = unsafe { pier_terminal_snapshot(t, &mut info, cells.as_mut_ptr(), cells.len()) };
         assert_eq!(rc, -2);
         // info should still be populated so the caller can retry.
         assert_eq!(info.cols, 80);
@@ -1104,7 +1106,8 @@ mod tests {
         unsafe {
             assert!(
                 pier_terminal_new_ssh(
-                    80, 24,
+                    80,
+                    24,
                     ptr::null(),
                     22,
                     user.as_ptr(),
@@ -1117,7 +1120,8 @@ mod tests {
             );
             assert!(
                 pier_terminal_new_ssh(
-                    80, 24,
+                    80,
+                    24,
                     host.as_ptr(),
                     22,
                     ptr::null(),
@@ -1130,7 +1134,8 @@ mod tests {
             );
             assert!(
                 pier_terminal_new_ssh(
-                    80, 24,
+                    80,
+                    24,
                     host.as_ptr(),
                     22,
                     user.as_ptr(),
@@ -1143,7 +1148,8 @@ mod tests {
             );
             assert!(
                 pier_terminal_new_ssh(
-                    80, 24,
+                    80,
+                    24,
                     host.as_ptr(),
                     22,
                     user.as_ptr(),
@@ -1193,7 +1199,8 @@ mod tests {
         let pass = CString::new("x").unwrap();
         let handle = unsafe {
             pier_terminal_new_ssh(
-                80, 24,
+                80,
+                24,
                 ptr::null(),
                 22,
                 user.as_ptr(),
@@ -1224,7 +1231,8 @@ mod tests {
         // notify is valid.
         let handle = unsafe {
             pier_terminal_new_ssh(
-                80, 24,
+                80,
+                24,
                 host.as_ptr(),
                 22,
                 user.as_ptr(),
@@ -1254,7 +1262,8 @@ mod tests {
         unsafe {
             assert!(
                 pier_terminal_new_ssh_agent(
-                    80, 24,
+                    80,
+                    24,
                     ptr::null(),
                     22,
                     user.as_ptr(),
@@ -1266,7 +1275,8 @@ mod tests {
             );
             assert!(
                 pier_terminal_new_ssh_agent(
-                    80, 24,
+                    80,
+                    24,
                     host.as_ptr(),
                     22,
                     ptr::null(),
@@ -1278,7 +1288,8 @@ mod tests {
             );
             assert!(
                 pier_terminal_new_ssh_agent(
-                    80, 24,
+                    80,
+                    24,
                     host.as_ptr(),
                     22,
                     user.as_ptr(),
@@ -1305,7 +1316,7 @@ mod tests {
     fn new_ssh_key_rejects_null_strings() {
         let host = CString::new("example.com").unwrap();
         let user = CString::new("root").unwrap();
-        let key  = CString::new("/tmp/nonexistent.key").unwrap();
+        let key = CString::new("/tmp/nonexistent.key").unwrap();
 
         // SAFETY: every call has at least one null string
         // (host / user / key path / notify), all of which the
@@ -1313,7 +1324,8 @@ mod tests {
         unsafe {
             assert!(
                 pier_terminal_new_ssh_key(
-                    80, 24,
+                    80,
+                    24,
                     ptr::null(),
                     22,
                     user.as_ptr(),
@@ -1327,7 +1339,8 @@ mod tests {
             );
             assert!(
                 pier_terminal_new_ssh_key(
-                    80, 24,
+                    80,
+                    24,
                     host.as_ptr(),
                     22,
                     ptr::null(),
@@ -1341,7 +1354,8 @@ mod tests {
             );
             assert!(
                 pier_terminal_new_ssh_key(
-                    80, 24,
+                    80,
+                    24,
                     host.as_ptr(),
                     22,
                     user.as_ptr(),
@@ -1355,7 +1369,8 @@ mod tests {
             );
             assert!(
                 pier_terminal_new_ssh_key(
-                    80, 24,
+                    80,
+                    24,
                     host.as_ptr(),
                     22,
                     user.as_ptr(),
@@ -1381,7 +1396,7 @@ mod tests {
         // it proves the validation passed.
         let host = CString::new("192.0.2.1").unwrap();
         let user = CString::new("root").unwrap();
-        let key  = CString::new("/tmp/nonexistent-pier-x-key.key").unwrap();
+        let key = CString::new("/tmp/nonexistent-pier-x-key.key").unwrap();
         let empty = CString::new("").unwrap();
 
         for passphrase_ptr in [ptr::null(), empty.as_ptr()] {
@@ -1390,7 +1405,8 @@ mod tests {
             // explicitly handled by the function.
             let handle = unsafe {
                 pier_terminal_new_ssh_key(
-                    80, 24,
+                    80,
+                    24,
                     host.as_ptr(),
                     22,
                     user.as_ptr(),
@@ -1407,11 +1423,9 @@ mod tests {
 
             // The error message should mention the key file or
             // the connect, NOT the validation paths.
-            let msg = read_last_ssh_error()
-                .unwrap_or_else(|| String::from("(none)"));
+            let msg = read_last_ssh_error().unwrap_or_else(|| String::from("(none)"));
             assert!(
-                !msg.contains("must not be empty")
-                    && !msg.contains("not valid UTF-8"),
+                !msg.contains("must not be empty") && !msg.contains("not valid UTF-8"),
                 "unexpected validation error: {msg:?}",
             );
         }
@@ -1436,7 +1450,8 @@ mod tests {
         // leaked AtomicUsize that lives for 'static.
         let handle = unsafe {
             pier_terminal_new_ssh(
-                80, 24,
+                80,
+                24,
                 host.as_ptr(),
                 22,
                 user.as_ptr(),

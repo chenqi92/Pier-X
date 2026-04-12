@@ -1,7 +1,6 @@
 import QtQuick
 import QtQuick.Controls
 import QtQuick.Dialogs
-import QtQuick.Effects
 import QtQuick.Layouts
 import Pier
 
@@ -33,12 +32,8 @@ Item {
         keyPathField.text = ""
         passphraseField.text = ""
         authMode.currentIndex = 0
-        dialog.scale = 0.96
-        dialog.opacity = 0
         open = true
-        dialog.scale = 1.0
-        dialog.opacity = 1.0
-        hostField.forceActiveFocus()
+        Qt.callLater(() => hostField.forceActiveFocus())
     }
 
     function hide() {
@@ -70,139 +65,38 @@ Item {
         root.hide()
     }
 
-    Rectangle {
-        anchors.fill: parent
-        color: "#000000"
-        opacity: root.open ? 0.5 : 0.0
-
-        Behavior on opacity { NumberAnimation { duration: Theme.durFast } }
-
-        MouseArea {
-            anchors.fill: parent
-            enabled: root.open
-            onClicked: {
-                root.cancelled()
-                root.hide()
-            }
-        }
-    }
-
-    Rectangle {
-        id: dialog
-        anchors.centerIn: parent
-        width: Math.min(688, parent.width - Theme.sp8 * 2)
-        height: Math.min(720, parent.height - Theme.sp8 * 2)
-        scale: 0.96
-        opacity: 0
-        transformOrigin: Item.Center
-        color: Theme.bgElevated
-        border.color: Theme.borderDefault
-        border.width: 1
-        radius: Theme.radiusLg
-
-        Behavior on scale { NumberAnimation { duration: Theme.durNormal; easing.type: Theme.easingType } }
-        Behavior on opacity { NumberAnimation { duration: Theme.durNormal; easing.type: Theme.easingType } }
-        Behavior on color { ColorAnimation { duration: Theme.durNormal } }
-        Behavior on border.color { ColorAnimation { duration: Theme.durNormal } }
-
-        layer.enabled: true
-        layer.effect: MultiEffect {
-            shadowEnabled: true
-            shadowColor: "#000000"
-            shadowOpacity: 0.42
-            shadowBlur: 1.0
-            shadowVerticalOffset: 16
+    ModalDialogShell {
+        open: root.open
+        dialogWidth: 688
+        dialogHeight: 660
+        title: qsTr("New SSH connection")
+        subtitle: qsTr("Create a reusable host profile for SSH, SFTP, and service panels.")
+        bodyPadding: 0
+        onRequestClose: {
+            root.cancelled()
+            root.hide()
         }
 
-        MouseArea {
+        body: PierScrollView {
+            id: formScroll
             anchors.fill: parent
-            onClicked: (mouse) => mouse.accepted = true
-            onPressed: (mouse) => mouse.accepted = true
-        }
+            clip: true
+            contentWidth: width
 
-        ColumnLayout {
-            anchors.fill: parent
-            spacing: 0
-
-            Rectangle {
-                Layout.fillWidth: true
-                Layout.preferredHeight: Theme.dialogHeaderHeight
-                color: Theme.bgChrome
-                radius: Theme.radiusLg
-
-                Rectangle {
-                    anchors.left: parent.left
-                    anchors.right: parent.right
-                    anchors.bottom: parent.bottom
-                    height: Theme.radiusLg
-                    color: Theme.bgPanel
-                }
-
-                RowLayout {
-                    anchors.fill: parent
-                    anchors.leftMargin: Theme.sp5
-                    anchors.rightMargin: Theme.sp3
-                    spacing: Theme.sp3
-
-                    ColumnLayout {
-                        Layout.fillWidth: true
-                        spacing: 0
-
-                        Text {
-                            text: qsTr("New SSH connection")
-                            font.family: Theme.fontUi
-                            font.pixelSize: Theme.sizeH3
-                            font.weight: Theme.weightMedium
-                            color: Theme.textPrimary
-                        }
-
-                        Text {
-                            text: qsTr("Create a reusable host profile for SSH, SFTP, and service panels.")
-                            font.family: Theme.fontUi
-                            font.pixelSize: Theme.sizeSmall
-                            color: Theme.textTertiary
-                        }
-                    }
-
-                    IconButton {
-                        icon: "x"
-                        tooltip: qsTr("Close")
-                        onClicked: {
-                            root.cancelled()
-                            root.hide()
-                        }
-                    }
-                }
-
-                Rectangle {
-                    anchors.left: parent.left
-                    anchors.right: parent.right
-                    anchors.bottom: parent.bottom
-                    height: 1
-                    color: Theme.borderSubtle
-                }
-            }
-
-            ScrollView {
-                id: formScroll
-                Layout.fillWidth: true
-                Layout.fillHeight: true
-                clip: true
-                contentWidth: availableWidth
+            ColumnLayout {
+                id: form
+                width: Math.max(0, formScroll.width - root.pagePadding * 2)
+                x: root.pagePadding
+                y: root.pagePadding
+                spacing: Theme.sp6
 
                 ColumnLayout {
-                    id: form
-                    width: Math.max(0, formScroll.availableWidth - root.pagePadding * 2)
-                    x: root.pagePadding
-                    y: root.pagePadding
-                    spacing: Theme.sp6
+                    Layout.fillWidth: true
+                    spacing: Theme.sp3
 
-                    ColumnLayout {
-                        Layout.fillWidth: true
-                        spacing: Theme.sp3
+                    SectionLabel { text: qsTr("Connection") }
 
-                        SectionLabel { text: qsTr("Connection") }
-
+                    FormSectionCard {
                         FieldGroup {
                             label: qsTr("Name")
                             description: qsTr("Optional display name shown in the sidebar.")
@@ -254,34 +148,32 @@ Item {
                             }
                         }
                     }
+                }
 
-                    Rectangle {
+                ColumnLayout {
+                    Layout.fillWidth: true
+                    spacing: Theme.sp3
+
+                    SectionLabel { text: qsTr("Authentication") }
+
+                    Text {
                         Layout.fillWidth: true
-                        height: 1
-                        color: Theme.borderSubtle
+                        text: qsTr("Choose how Pier-X should authenticate to this host.")
+                        wrapMode: Text.WordWrap
+                        font.family: Theme.fontUi
+                        font.pixelSize: Theme.sizeSmall
+                        color: Theme.textTertiary
                     }
 
-                    ColumnLayout {
+                    SegmentedControl {
+                        id: authMode
                         Layout.fillWidth: true
-                        spacing: Theme.sp3
+                        options: [qsTr("Password"), qsTr("Private key"), qsTr("SSH agent")]
+                        currentIndex: 0
+                    }
 
-                        SectionLabel { text: qsTr("Authentication") }
-
-                        Text {
-                            Layout.fillWidth: true
-                            text: qsTr("Choose how Pier-X should authenticate to this host.")
-                            wrapMode: Text.WordWrap
-                            font.family: Theme.fontUi
-                            font.pixelSize: Theme.sizeSmall
-                            color: Theme.textTertiary
-                        }
-
-                        SegmentedControl {
-                            id: authMode
-                            Layout.fillWidth: true
-                            options: [qsTr("Password"), qsTr("Private key"), qsTr("SSH agent")]
-                            currentIndex: 0
-                        }
+                    FormSectionCard {
+                        visible: root.passwordAuth || root.keyAuth || root.agentAuth
 
                         FieldGroup {
                             visible: root.passwordAuth
@@ -342,6 +234,7 @@ Item {
                             Layout.fillWidth: true
                             visible: root.agentAuth
                             padding: Theme.sp3
+                            inset: true
 
                             ColumnLayout {
                                 anchors.fill: parent
@@ -369,57 +262,48 @@ Item {
                             }
                         }
                     }
-
-                    Item { implicitHeight: Theme.sp1 }
                 }
+
+                Item { implicitHeight: Theme.sp1 }
             }
+        }
 
-            Rectangle {
-                Layout.fillWidth: true
-                Layout.preferredHeight: Theme.dialogFooterHeight
-                color: Theme.bgChrome
+        footer: Item {
+            implicitHeight: footerRow.implicitHeight
 
-                Rectangle {
-                    anchors.left: parent.left
-                    anchors.right: parent.right
-                    anchors.top: parent.top
-                    height: 1
-                    color: Theme.borderSubtle
+            RowLayout {
+                id: footerRow
+                anchors.fill: parent
+                spacing: Theme.sp2
+
+                Text {
+                    Layout.fillWidth: true
+                    text: qsTr("Host and username are required. Name is optional.")
+                    font.family: Theme.fontUi
+                    font.pixelSize: Theme.sizeSmall
+                    color: Theme.textTertiary
+                    wrapMode: Text.WordWrap
+                    Layout.alignment: Qt.AlignVCenter
                 }
 
-                RowLayout {
-                    anchors.fill: parent
-                    anchors.leftMargin: Theme.sp5
-                    anchors.rightMargin: Theme.sp5
-                    spacing: Theme.sp2
-
-                    Text {
-                        Layout.fillWidth: true
-                        text: qsTr("Host and username are required. Name is optional.")
-                        font.family: Theme.fontUi
-                        font.pixelSize: Theme.sizeSmall
-                        color: Theme.textTertiary
+                GhostButton {
+                    text: qsTr("Cancel")
+                    onClicked: {
+                        root.cancelled()
+                        root.hide()
                     }
+                }
 
-                    GhostButton {
-                        text: qsTr("Cancel")
-                        onClicked: {
-                            root.cancelled()
-                            root.hide()
-                        }
-                    }
-
-                    PrimaryButton {
-                        text: qsTr("Connect")
-                        enabled: hostField.text.trim().length > 0
-                                 && userField.text.trim().length > 0
-                                 && (
-                                     (root.passwordAuth && passwordField.text.length > 0)
-                                     || (root.keyAuth && keyPathField.text.trim().length > 0)
-                                     || root.agentAuth
-                                 )
-                        onClicked: root.submit()
-                    }
+                PrimaryButton {
+                    text: qsTr("Connect")
+                    enabled: hostField.text.trim().length > 0
+                             && userField.text.trim().length > 0
+                             && (
+                                 (root.passwordAuth && passwordField.text.length > 0)
+                                 || (root.keyAuth && keyPathField.text.trim().length > 0)
+                                 || root.agentAuth
+                             )
+                    onClicked: root.submit()
                 }
             }
         }
@@ -466,6 +350,20 @@ Item {
             id: fieldSlot
             Layout.fillWidth: true
             spacing: Theme.sp2
+        }
+    }
+
+    component FormSectionCard: Card {
+        Layout.fillWidth: true
+        padding: Theme.sp4
+        inset: true
+
+        default property alias content: contentColumn.data
+
+        ColumnLayout {
+            id: contentColumn
+            anchors.fill: parent
+            spacing: Theme.sp3
         }
     }
 }

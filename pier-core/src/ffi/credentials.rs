@@ -37,10 +37,7 @@ use std::os::raw::c_char;
 ///
 /// Both pointers must be valid NUL-terminated UTF-8 C strings.
 #[no_mangle]
-pub unsafe extern "C" fn pier_credential_set(
-    id: *const c_char,
-    value: *const c_char,
-) -> i32 {
+pub unsafe extern "C" fn pier_credential_set(id: *const c_char, value: *const c_char) -> i32 {
     if id.is_null() || value.is_null() {
         return -1;
     }

@@ -433,206 +433,326 @@ Rectangle {
         ToolPanelSurface {
             Layout.fillWidth: true
             padding: Theme.sp2
-            implicitHeight: connectFlow.implicitHeight + Theme.sp2 * 2
+            implicitHeight: connectColumn.implicitHeight + Theme.sp2 * 2
 
-            Flow {
-                id: connectFlow
+            ColumnLayout {
+                id: connectColumn
                 anchors.fill: parent
                 spacing: Theme.sp2
 
-                Rectangle {
-                    implicitWidth: 176
-                    implicitHeight: 26
-                    color: Theme.bgInset
-                    border.color: Theme.borderSubtle
-                    border.width: 1
-                    radius: Theme.radiusPill
-
-                    Behavior on color { ColorAnimation { duration: Theme.durNormal } }
-                    Behavior on border.color { ColorAnimation { duration: Theme.durNormal } }
-
-                    Text {
-                        anchors.fill: parent
-                        anchors.leftMargin: Theme.sp2
-                        anchors.rightMargin: Theme.sp2
-                        verticalAlignment: Text.AlignVCenter
-                        text: client.target.length > 0
+                ToolSectionHeader {
+                    Layout.fillWidth: true
+                    title: qsTr("Connection")
+                    subtitle: client.target.length > 0
                               ? client.target
                               : (root.formHost + ":" + root.formPortText)
-                        font.family: Theme.fontMono
-                        font.pixelSize: Theme.sizeBody
-                        font.weight: Theme.weightMedium
-                        color: Theme.textPrimary
-                        elide: Text.ElideMiddle
+
+                    GhostButton {
+                        compact: true
+                        minimumWidth: 0
+                        text: qsTr("Refresh")
+                        enabled: client.status === PierMySqlClient.Connected && !client.busy
+                        onClicked: root._refreshSchema()
+                    }
+
+                    PrimaryButton {
+                        text: client.status === PierMySqlClient.Connected
+                              ? qsTr("Reconnect")
+                              : qsTr("Connect")
+                        enabled: !client.busy
+                        onClicked: root._connect()
                     }
                 }
 
-                PierTextField {
-                    implicitWidth: 152
-                    placeholder: qsTr("Host")
-                    text: root.formHost
-                    onTextChanged: root.formHost = text
-                }
+                Flow {
+                    Layout.fillWidth: true
+                    spacing: Theme.sp2
 
-                PierTextField {
-                    implicitWidth: 84
-                    placeholder: qsTr("Port")
-                    text: root.formPortText
-                    onTextChanged: root.formPortText = text
-                }
+                    StatusPill {
+                        text: client.status === PierMySqlClient.Connected
+                              ? qsTr("Connected")
+                              : (client.status === PierMySqlClient.Connecting
+                                 ? qsTr("Connecting")
+                                 : qsTr("Idle"))
+                        tone: client.status === PierMySqlClient.Connected ? "info" : "neutral"
+                    }
 
-                PierTextField {
-                    implicitWidth: 132
-                    placeholder: qsTr("User")
-                    text: root.formUser
-                    onTextChanged: root.formUser = text
-                }
+                    StatusPill {
+                        visible: root.selectedDatabase.length > 0
+                        text: qsTr("DB %1").arg(root.selectedDatabase)
+                        tone: "neutral"
+                    }
 
-                PierTextField {
-                    implicitWidth: 150
-                    placeholder: root.hasSavedCredential
-                                 ? qsTr("Password (saved in keychain)")
-                                 : qsTr("Password")
-                    password: true
-                    text: root.formPassword
-                    onTextChanged: root.formPassword = text
-                }
+                    StatusPill {
+                        visible: root.selectedTable.length > 0
+                        text: qsTr("Table %1").arg(root.selectedTable)
+                        tone: "neutral"
+                    }
 
-                PierTextField {
-                    implicitWidth: 162
-                    placeholder: qsTr("Default DB")
-                    text: root.formDatabase
-                    onTextChanged: root.formDatabase = text
-                }
+                    Rectangle {
+                        visible: root.hasSavedCredential
+                        implicitWidth: credentialText.implicitWidth + Theme.sp3 * 2
+                        implicitHeight: 24
+                        radius: Theme.radiusPill
+                        color: Theme.bgSurface
+                        border.color: Theme.borderSubtle
+                        border.width: 1
 
-                Rectangle {
-                    visible: root.hasSavedCredential
-                    implicitWidth: credentialText.implicitWidth + Theme.sp3 * 2
-                    implicitHeight: 24
-                    radius: Theme.radiusPill
-                    color: Theme.bgSurface
-                    border.color: Theme.borderSubtle
-                    border.width: 1
-
-                    Text {
-                        id: credentialText
-                        anchors.centerIn: parent
-                        text: qsTr("Keychain")
-                        font.family: Theme.fontUi
-                        font.pixelSize: Theme.sizeCaption
-                        font.weight: Theme.weightMedium
-                        color: Theme.textSecondary
+                        Text {
+                            id: credentialText
+                            anchors.centerIn: parent
+                            text: qsTr("Keychain")
+                            font.family: Theme.fontUi
+                            font.pixelSize: Theme.sizeCaption
+                            font.weight: Theme.weightMedium
+                            color: Theme.textSecondary
+                        }
                     }
                 }
 
-                PrimaryButton {
-                    text: client.status === PierMySqlClient.Connected
-                          ? qsTr("Reconnect")
-                          : qsTr("Connect")
-                    enabled: !client.busy
-                    onClicked: root._connect()
-                }
+                GridLayout {
+                    id: connectFields
+                    Layout.fillWidth: true
+                    columns: width >= 860 ? 5 : (width >= 620 ? 3 : 2)
+                    rowSpacing: Theme.sp2
+                    columnSpacing: Theme.sp2
 
-                GhostButton {
-                    compact: true
-                    minimumWidth: 0
-                    text: qsTr("Refresh")
-                    enabled: client.status === PierMySqlClient.Connected && !client.busy
-                    onClicked: root._refreshSchema()
+                    ColumnLayout {
+                        Layout.fillWidth: true
+                        spacing: Theme.sp1
+
+                        Text {
+                            text: qsTr("Host")
+                            font.family: Theme.fontUi
+                            font.pixelSize: Theme.sizeCaption
+                            font.weight: Theme.weightMedium
+                            color: Theme.textSecondary
+                        }
+
+                        PierTextField {
+                            Layout.fillWidth: true
+                            placeholder: qsTr("Host")
+                            text: root.formHost
+                            onTextChanged: root.formHost = text
+                        }
+                    }
+
+                    ColumnLayout {
+                        Layout.fillWidth: true
+                        spacing: Theme.sp1
+
+                        Text {
+                            text: qsTr("Port")
+                            font.family: Theme.fontUi
+                            font.pixelSize: Theme.sizeCaption
+                            font.weight: Theme.weightMedium
+                            color: Theme.textSecondary
+                        }
+
+                        PierTextField {
+                            Layout.fillWidth: true
+                            placeholder: qsTr("Port")
+                            text: root.formPortText
+                            onTextChanged: root.formPortText = text
+                        }
+                    }
+
+                    ColumnLayout {
+                        Layout.fillWidth: true
+                        spacing: Theme.sp1
+
+                        Text {
+                            text: qsTr("User")
+                            font.family: Theme.fontUi
+                            font.pixelSize: Theme.sizeCaption
+                            font.weight: Theme.weightMedium
+                            color: Theme.textSecondary
+                        }
+
+                        PierTextField {
+                            Layout.fillWidth: true
+                            placeholder: qsTr("User")
+                            text: root.formUser
+                            onTextChanged: root.formUser = text
+                        }
+                    }
+
+                    ColumnLayout {
+                        Layout.fillWidth: true
+                        spacing: Theme.sp1
+
+                        Text {
+                            text: qsTr("Password")
+                            font.family: Theme.fontUi
+                            font.pixelSize: Theme.sizeCaption
+                            font.weight: Theme.weightMedium
+                            color: Theme.textSecondary
+                        }
+
+                        PierTextField {
+                            Layout.fillWidth: true
+                            placeholder: root.hasSavedCredential
+                                         ? qsTr("Password (saved in keychain)")
+                                         : qsTr("Password")
+                            password: true
+                            text: root.formPassword
+                            onTextChanged: root.formPassword = text
+                        }
+                    }
+
+                    ColumnLayout {
+                        Layout.fillWidth: true
+                        Layout.columnSpan: connectFields.columns === 2 ? 2 : 1
+                        spacing: Theme.sp1
+
+                        Text {
+                            text: qsTr("Default DB")
+                            font.family: Theme.fontUi
+                            font.pixelSize: Theme.sizeCaption
+                            font.weight: Theme.weightMedium
+                            color: Theme.textSecondary
+                        }
+
+                        PierTextField {
+                            Layout.fillWidth: true
+                            placeholder: qsTr("Default DB")
+                            text: root.formDatabase
+                            onTextChanged: root.formDatabase = text
+                        }
+                    }
                 }
             }
         }
 
         ToolPanelSurface {
             Layout.fillWidth: true
-            implicitHeight: profileFlow.implicitHeight + Theme.sp2 * 2
+            implicitHeight: workspaceGroups.implicitHeight + Theme.sp2 * 2
             padding: Theme.sp2
 
-            Flow {
-                id: profileFlow
+            ColumnLayout {
+                id: workspaceGroups
                 anchors.fill: parent
                 spacing: Theme.sp2
 
-                Text {
-                    text: qsTr("Profile")
-                    font.family: Theme.fontUi
-                    font.pixelSize: Theme.sizeCaption
-                    font.weight: Theme.weightMedium
-                    color: Theme.textSecondary
+                ToolSectionHeader {
+                    Layout.fillWidth: true
+                    title: qsTr("Workspace")
+                    subtitle: qsTr("Profiles and saved queries for repeated operations")
                 }
 
-                PierTextField {
-                    implicitWidth: 160
-                    placeholder: qsTr("Profile name")
-                    text: root.profileDraftName
-                    onTextChanged: root.profileDraftName = text
-                }
+                GridLayout {
+                    Layout.fillWidth: true
+                    columns: width >= 760 ? 2 : 1
+                    rowSpacing: Theme.sp2
+                    columnSpacing: Theme.sp2
 
-                PierComboBox {
-                    implicitWidth: 180
-                    options: workspace.profileNames
-                    currentIndex: root.selectedProfileIndex
-                    placeholder: qsTr("Saved profiles")
-                    onActivated: (index) => root._applyProfile(index)
-                }
+                    ToolPanelSurface {
+                        Layout.fillWidth: true
+                        inset: true
+                        padding: Theme.sp2
+                        implicitHeight: profileGroup.implicitHeight + Theme.sp2 * 2
 
-                GhostButton {
-                    compact: true
-                    minimumWidth: 0
-                    text: qsTr("Save")
-                    onClicked: root._saveProfile()
-                }
+                        ColumnLayout {
+                            id: profileGroup
+                            anchors.fill: parent
+                            spacing: Theme.sp2
 
-                GhostButton {
-                    compact: true
-                    minimumWidth: 0
-                    text: qsTr("Delete")
-                    enabled: root.selectedProfileIndex >= 0
-                    onClicked: root._removeProfile()
-                }
+                            ToolSectionHeader {
+                                Layout.fillWidth: true
+                                title: qsTr("Profiles")
+                                subtitle: qsTr("Host, auth, and default database presets")
+                            }
 
-                Rectangle {
-                    width: 1
-                    height: 18
-                    color: Theme.borderSubtle
-                }
+                            Flow {
+                                Layout.fillWidth: true
+                                spacing: Theme.sp2
 
-                Text {
-                    text: qsTr("Favorite")
-                    font.family: Theme.fontUi
-                    font.pixelSize: Theme.sizeCaption
-                    font.weight: Theme.weightMedium
-                    color: Theme.textSecondary
-                }
+                                PierTextField {
+                                    implicitWidth: 160
+                                    placeholder: qsTr("Profile name")
+                                    text: root.profileDraftName
+                                    onTextChanged: root.profileDraftName = text
+                                }
 
-                PierTextField {
-                    implicitWidth: 160
-                    placeholder: qsTr("Favorite name")
-                    text: root.favoriteDraftName
-                    onTextChanged: root.favoriteDraftName = text
-                }
+                                PierComboBox {
+                                    implicitWidth: 180
+                                    options: workspace.profileNames
+                                    currentIndex: root.selectedProfileIndex
+                                    placeholder: qsTr("Saved profiles")
+                                    onActivated: (index) => root._applyProfile(index)
+                                }
 
-                PierComboBox {
-                    implicitWidth: 180
-                    options: workspace.favoriteNames
-                    currentIndex: root.selectedFavoriteIndex
-                    placeholder: qsTr("Saved queries")
-                    onActivated: (index) => root._applyFavorite(index)
-                }
+                                GhostButton {
+                                    compact: true
+                                    minimumWidth: 0
+                                    text: qsTr("Save")
+                                    onClicked: root._saveProfile()
+                                }
 
-                GhostButton {
-                    compact: true
-                    minimumWidth: 0
-                    text: qsTr("Save")
-                    onClicked: root._saveFavorite()
-                }
+                                GhostButton {
+                                    compact: true
+                                    minimumWidth: 0
+                                    text: qsTr("Delete")
+                                    enabled: root.selectedProfileIndex >= 0
+                                    onClicked: root._removeProfile()
+                                }
+                            }
+                        }
+                    }
 
-                GhostButton {
-                    compact: true
-                    minimumWidth: 0
-                    text: qsTr("Delete")
-                    enabled: root.selectedFavoriteIndex >= 0
-                    onClicked: root._removeFavorite()
+                    ToolPanelSurface {
+                        Layout.fillWidth: true
+                        inset: true
+                        padding: Theme.sp2
+                        implicitHeight: favoriteGroup.implicitHeight + Theme.sp2 * 2
+
+                        ColumnLayout {
+                            id: favoriteGroup
+                            anchors.fill: parent
+                            spacing: Theme.sp2
+
+                            ToolSectionHeader {
+                                Layout.fillWidth: true
+                                title: qsTr("Favorites")
+                                subtitle: qsTr("Reusable query snippets scoped to a database")
+                            }
+
+                            Flow {
+                                Layout.fillWidth: true
+                                spacing: Theme.sp2
+
+                                PierTextField {
+                                    implicitWidth: 160
+                                    placeholder: qsTr("Favorite name")
+                                    text: root.favoriteDraftName
+                                    onTextChanged: root.favoriteDraftName = text
+                                }
+
+                                PierComboBox {
+                                    implicitWidth: 180
+                                    options: workspace.favoriteNames
+                                    currentIndex: root.selectedFavoriteIndex
+                                    placeholder: qsTr("Saved queries")
+                                    onActivated: (index) => root._applyFavorite(index)
+                                }
+
+                                GhostButton {
+                                    compact: true
+                                    minimumWidth: 0
+                                    text: qsTr("Save")
+                                    onClicked: root._saveFavorite()
+                                }
+
+                                GhostButton {
+                                    compact: true
+                                    minimumWidth: 0
+                                    text: qsTr("Delete")
+                                    enabled: root.selectedFavoriteIndex >= 0
+                                    onClicked: root._removeFavorite()
+                                }
+                            }
+                        }
+                    }
                 }
             }
         }
@@ -660,19 +780,12 @@ Rectangle {
                     anchors.fill: parent
                     spacing: Theme.sp2
 
-                    RowLayout {
+                    ToolSectionHeader {
                         Layout.fillWidth: true
-                        spacing: Theme.sp2
-
-                        Text {
-                            text: qsTr("Schema")
-                            font.family: Theme.fontUi
-                            font.pixelSize: Theme.sizeCaption
-                            font.weight: Theme.weightMedium
-                            color: Theme.textSecondary
-                        }
-
-                        Item { Layout.fillWidth: true }
+                        title: qsTr("Schema")
+                        subtitle: root.selectedDatabase.length > 0
+                                  ? root.selectedDatabase
+                                  : qsTr("Browse databases, tables, and columns")
 
                         GhostButton {
                             compact: true
@@ -684,154 +797,175 @@ Rectangle {
                         }
                     }
 
-                    Text {
-                        text: qsTr("Databases")
-                        font.family: Theme.fontUi
-                        font.pixelSize: Theme.sizeCaption
-                        font.weight: Theme.weightMedium
-                        color: Theme.textSecondary
-                    }
-
-                    PierTextField {
+                    ToolPanelSurface {
                         Layout.fillWidth: true
-                        placeholder: qsTr("Filter databases")
-                        text: root.databaseFilter
-                        onTextChanged: root.databaseFilter = text
-                    }
+                        inset: true
+                        padding: Theme.sp2
+                        implicitHeight: databasePane.implicitHeight + Theme.sp2 * 2
 
-                    ListView {
-                        id: databasesView
-                        Layout.fillWidth: true
-                        Layout.preferredHeight: 112
-                        clip: true
-                        spacing: 0
-                        model: root.filteredDatabases
+                        ColumnLayout {
+                            id: databasePane
+                            anchors.fill: parent
+                            spacing: Theme.sp2
 
-                        delegate: Rectangle {
-                            id: dbRow
-                            required property int index
-                            required property string modelData
-
-                            width: ListView.view.width
-                            implicitHeight: 24
-                            radius: Theme.radiusSm
-                            color: root.selectedDatabase === dbRow.modelData
-                                   ? Theme.accentSubtle
-                                   : (dbMouse.containsMouse ? Theme.bgHover : "transparent")
-
-                            Behavior on color { ColorAnimation { duration: Theme.durFast } }
-
-                            Text {
-                                anchors.fill: parent
-                                anchors.leftMargin: Theme.sp2
-                                anchors.rightMargin: Theme.sp2
-                                verticalAlignment: Text.AlignVCenter
-                                text: dbRow.modelData
-                                font.family: Theme.fontMono
-                                font.pixelSize: Theme.sizeBody
-                                color: Theme.textPrimary
-                                elide: Text.ElideRight
+                            ToolSectionHeader {
+                                Layout.fillWidth: true
+                                title: qsTr("Databases")
+                                subtitle: root.selectedDatabase.length > 0
+                                          ? root.selectedDatabase
+                                          : ""
                             }
 
-                            MouseArea {
-                                id: dbMouse
-                                anchors.fill: parent
-                                hoverEnabled: true
-                                cursorShape: Qt.PointingHandCursor
-                                onClicked: {
-                                    root.selectedDatabase = dbRow.modelData
-                                    root.formDatabase = dbRow.modelData
-                                    root.selectedTable = ""
-                                    root.selectedColumn = ""
-                                    client.refreshTables(dbRow.modelData)
-                                    client.refreshColumns("", "")
+                            PierTextField {
+                                Layout.fillWidth: true
+                                placeholder: qsTr("Filter databases")
+                                text: root.databaseFilter
+                                onTextChanged: root.databaseFilter = text
+                            }
+
+                            ListView {
+                                id: databasesView
+                                Layout.fillWidth: true
+                                Layout.preferredHeight: 104
+                                clip: true
+                                spacing: 0
+                                model: root.filteredDatabases
+
+                                delegate: Rectangle {
+                                    id: dbRow
+                                    required property int index
+                                    required property string modelData
+
+                                    width: ListView.view.width
+                                    implicitHeight: 24
+                                    radius: Theme.radiusSm
+                                    color: root.selectedDatabase === dbRow.modelData
+                                           ? Theme.accentSubtle
+                                           : (dbMouse.containsMouse ? Theme.bgHover : "transparent")
+
+                                    Behavior on color { ColorAnimation { duration: Theme.durFast } }
+
+                                    Text {
+                                        anchors.fill: parent
+                                        anchors.leftMargin: Theme.sp2
+                                        anchors.rightMargin: Theme.sp2
+                                        verticalAlignment: Text.AlignVCenter
+                                        text: dbRow.modelData
+                                        font.family: Theme.fontMono
+                                        font.pixelSize: Theme.sizeBody
+                                        color: Theme.textPrimary
+                                        elide: Text.ElideRight
+                                    }
+
+                                    MouseArea {
+                                        id: dbMouse
+                                        anchors.fill: parent
+                                        hoverEnabled: true
+                                        cursorShape: Qt.PointingHandCursor
+                                        onClicked: {
+                                            root.selectedDatabase = dbRow.modelData
+                                            root.formDatabase = dbRow.modelData
+                                            root.selectedTable = ""
+                                            root.selectedColumn = ""
+                                            client.refreshTables(dbRow.modelData)
+                                            client.refreshColumns("", "")
+                                        }
+                                    }
                                 }
                             }
                         }
                     }
 
-                    Text {
-                        text: qsTr("Tables")
-                        font.family: Theme.fontUi
-                        font.pixelSize: Theme.sizeCaption
-                        font.weight: Theme.weightMedium
-                        color: Theme.textSecondary
-                    }
-
-                    PierTextField {
+                    ToolPanelSurface {
                         Layout.fillWidth: true
-                        placeholder: qsTr("Filter tables")
-                        text: root.tableFilter
-                        onTextChanged: root.tableFilter = text
-                    }
+                        inset: true
+                        padding: Theme.sp2
+                        implicitHeight: tablesPane.implicitHeight + Theme.sp2 * 2
 
-                    ListView {
-                        id: tablesView
-                        Layout.fillWidth: true
-                        Layout.preferredHeight: 140
-                        clip: true
-                        spacing: 0
-                        model: root.filteredTables
+                        ColumnLayout {
+                            id: tablesPane
+                            anchors.fill: parent
+                            spacing: Theme.sp2
 
-                        delegate: Rectangle {
-                            id: tableRow
-                            required property int index
-                            required property string modelData
-
-                            width: ListView.view.width
-                            implicitHeight: 24
-                            radius: Theme.radiusSm
-                            color: root.selectedTable === tableRow.modelData
-                                   ? Theme.accentSubtle
-                                   : (tableMouse.containsMouse ? Theme.bgHover : "transparent")
-
-                            Behavior on color { ColorAnimation { duration: Theme.durFast } }
-
-                            Text {
-                                anchors.fill: parent
-                                anchors.leftMargin: Theme.sp2
-                                anchors.rightMargin: Theme.sp2
-                                verticalAlignment: Text.AlignVCenter
-                                text: tableRow.modelData
-                                font.family: Theme.fontMono
-                                font.pixelSize: Theme.sizeBody
-                                color: Theme.textPrimary
-                                elide: Text.ElideRight
+                            ToolSectionHeader {
+                                Layout.fillWidth: true
+                                title: qsTr("Tables")
+                                subtitle: root.selectedDatabase.length > 0
+                                          ? root.selectedDatabase
+                                          : ""
                             }
 
-                            MouseArea {
-                                id: tableMouse
-                                anchors.fill: parent
-                                hoverEnabled: true
-                                cursorShape: Qt.PointingHandCursor
-                                onClicked: root._previewTable(tableRow.modelData)
+                            PierTextField {
+                                Layout.fillWidth: true
+                                placeholder: qsTr("Filter tables")
+                                text: root.tableFilter
+                                onTextChanged: root.tableFilter = text
+                            }
+
+                            ListView {
+                                id: tablesView
+                                Layout.fillWidth: true
+                                Layout.preferredHeight: 132
+                                clip: true
+                                spacing: 0
+                                model: root.filteredTables
+
+                                delegate: Rectangle {
+                                    id: tableRow
+                                    required property int index
+                                    required property string modelData
+
+                                    width: ListView.view.width
+                                    implicitHeight: 24
+                                    radius: Theme.radiusSm
+                                    color: root.selectedTable === tableRow.modelData
+                                           ? Theme.accentSubtle
+                                           : (tableMouse.containsMouse ? Theme.bgHover : "transparent")
+
+                                    Behavior on color { ColorAnimation { duration: Theme.durFast } }
+
+                                    Text {
+                                        anchors.fill: parent
+                                        anchors.leftMargin: Theme.sp2
+                                        anchors.rightMargin: Theme.sp2
+                                        verticalAlignment: Text.AlignVCenter
+                                        text: tableRow.modelData
+                                        font.family: Theme.fontMono
+                                        font.pixelSize: Theme.sizeBody
+                                        color: Theme.textPrimary
+                                        elide: Text.ElideRight
+                                    }
+
+                                    MouseArea {
+                                        id: tableMouse
+                                        anchors.fill: parent
+                                        hoverEnabled: true
+                                        cursorShape: Qt.PointingHandCursor
+                                        onClicked: root._previewTable(tableRow.modelData)
+                                    }
+                                }
                             }
                         }
                     }
 
-                    Rectangle {
+                    ToolPanelSurface {
                         Layout.fillWidth: true
                         visible: root.selectedTable.length > 0
-                        color: Theme.bgSurface
-                        border.color: Theme.borderSubtle
-                        border.width: 1
-                        radius: Theme.radiusSm
+                        inset: true
+                        padding: Theme.sp2
                         implicitHeight: tableActions.implicitHeight + Theme.sp2 * 2
 
                         ColumnLayout {
                             id: tableActions
                             anchors.fill: parent
-                            anchors.margins: Theme.sp2
                             spacing: Theme.sp2
 
-                            Text {
-                                text: root.selectedDatabase.length > 0
-                                      ? (root.selectedDatabase + "." + root.selectedTable)
-                                      : root.selectedTable
-                                font.family: Theme.fontMono
-                                font.pixelSize: Theme.sizeCaption
-                                color: Theme.textPrimary
-                                elide: Text.ElideMiddle
+                            ToolSectionHeader {
+                                Layout.fillWidth: true
+                                title: root.selectedTable
+                                subtitle: root.selectedDatabase.length > 0
+                                          ? root.selectedDatabase
+                                          : qsTr("Selected table")
                             }
 
                             RowLayout {
@@ -869,142 +1003,153 @@ Rectangle {
                         }
                     }
 
-                    Text {
-                        text: qsTr("Columns")
-                        font.family: Theme.fontUi
-                        font.pixelSize: Theme.sizeCaption
-                        font.weight: Theme.weightMedium
-                        color: Theme.textSecondary
-                    }
-
-                    PierTextField {
-                        Layout.fillWidth: true
-                        placeholder: qsTr("Filter columns")
-                        text: root.columnFilter
-                        onTextChanged: root.columnFilter = text
-                    }
-
-                    ListView {
-                        id: columnsView
+                    ToolPanelSurface {
                         Layout.fillWidth: true
                         Layout.fillHeight: true
-                        clip: true
-                        spacing: Theme.sp1
-                        model: root.filteredColumns
+                        inset: true
+                        padding: Theme.sp2
+                        implicitHeight: columnPane.implicitHeight + Theme.sp2 * 2
 
-                        delegate: Rectangle {
-                            id: columnRow
-                            required property var modelData
+                        ColumnLayout {
+                            id: columnPane
+                            anchors.fill: parent
+                            spacing: Theme.sp2
 
-                            width: ListView.view.width
-                            implicitHeight: 44
-                            radius: Theme.radiusSm
-                            color: root.selectedColumn === (modelData.name || "")
-                                   ? Theme.accentSubtle
-                                   : (columnMouse.containsMouse ? Theme.bgHover : "transparent")
-
-                            Behavior on color { ColorAnimation { duration: Theme.durFast } }
-
-                            Column {
-                                anchors.fill: parent
-                                anchors.leftMargin: Theme.sp2
-                                anchors.rightMargin: Theme.sp2
-                                anchors.topMargin: Theme.sp1
-                                anchors.bottomMargin: Theme.sp1
-                                spacing: Theme.sp0_5
-
-                                Row {
-                                    width: parent.width
-                                    spacing: Theme.sp1
-
-                                    Text {
-                                        text: modelData.name || ""
-                                        font.family: Theme.fontMono
-                                        font.pixelSize: Theme.sizeBody
-                                        color: Theme.textPrimary
-                                        width: parent.width - (keyBadge.visible ? keyBadge.width + Theme.sp1 : 0)
-                                        elide: Text.ElideRight
-                                    }
-
-                                    Rectangle {
-                                        id: keyBadge
-                                        visible: (modelData.key || "").length > 0
-                                        implicitWidth: badgeText.implicitWidth + Theme.sp2 * 2
-                                        implicitHeight: 18
-                                        radius: Theme.radiusPill
-                                        color: Theme.accentSubtle
-                                        border.color: Theme.borderSubtle
-                                        border.width: 1
-
-                                        Text {
-                                            id: badgeText
-                                            anchors.centerIn: parent
-                                            text: modelData.key || ""
-                                            font.family: Theme.fontUi
-                                            font.pixelSize: Theme.sizeSmall
-                                            font.weight: Theme.weightMedium
-                                            color: Theme.accent
-                                        }
-                                    }
-                                }
-
-                                Text {
-                                    width: parent.width
-                                    text: {
-                                        var parts = []
-                                        if ((modelData.type || "").length > 0)
-                                            parts.push(modelData.type)
-                                        parts.push(modelData.nullable ? qsTr("nullable") : qsTr("not null"))
-                                        if ((modelData.extra || "").length > 0)
-                                            parts.push(modelData.extra)
-                                        if (modelData.defaultValue !== null
-                                                && modelData.defaultValue !== undefined
-                                                && String(modelData.defaultValue).length > 0)
-                                            parts.push(qsTr("default %1").arg(modelData.defaultValue))
-                                        return parts.join(" · ")
-                                    }
-                                    font.family: Theme.fontUi
-                                    font.pixelSize: Theme.sizeSmall
-                                    color: Theme.textTertiary
-                                    elide: Text.ElideRight
-                                }
+                            ToolSectionHeader {
+                                Layout.fillWidth: true
+                                title: qsTr("Columns")
+                                subtitle: root.selectedTable.length > 0
+                                          ? root.selectedTable
+                                          : ""
                             }
 
-                            MouseArea {
-                                id: columnMouse
-                                anchors.fill: parent
-                                hoverEnabled: true
-                                cursorShape: Qt.PointingHandCursor
-                                onClicked: root._selectColumn(modelData.name || "")
+                            PierTextField {
+                                Layout.fillWidth: true
+                                placeholder: qsTr("Filter columns")
+                                text: root.columnFilter
+                                onTextChanged: root.columnFilter = text
+                            }
+
+                            ListView {
+                                id: columnsView
+                                Layout.fillWidth: true
+                                Layout.fillHeight: true
+                                clip: true
+                                spacing: Theme.sp1
+                                model: root.filteredColumns
+
+                                delegate: Rectangle {
+                                    id: columnRow
+                                    required property var modelData
+
+                                    width: ListView.view.width
+                                    implicitHeight: 44
+                                    radius: Theme.radiusSm
+                                    color: root.selectedColumn === (modelData.name || "")
+                                           ? Theme.accentSubtle
+                                           : (columnMouse.containsMouse ? Theme.bgHover : "transparent")
+
+                                    Behavior on color { ColorAnimation { duration: Theme.durFast } }
+
+                                    Column {
+                                        anchors.fill: parent
+                                        anchors.leftMargin: Theme.sp2
+                                        anchors.rightMargin: Theme.sp2
+                                        anchors.topMargin: Theme.sp1
+                                        anchors.bottomMargin: Theme.sp1
+                                        spacing: Theme.sp0_5
+
+                                        Row {
+                                            width: parent.width
+                                            spacing: Theme.sp1
+
+                                            Text {
+                                                text: modelData.name || ""
+                                                font.family: Theme.fontMono
+                                                font.pixelSize: Theme.sizeBody
+                                                color: Theme.textPrimary
+                                                width: parent.width - (keyBadge.visible ? keyBadge.width + Theme.sp1 : 0)
+                                                elide: Text.ElideRight
+                                            }
+
+                                            Rectangle {
+                                                id: keyBadge
+                                                visible: (modelData.key || "").length > 0
+                                                implicitWidth: badgeText.implicitWidth + Theme.sp2 * 2
+                                                implicitHeight: 18
+                                                radius: Theme.radiusPill
+                                                color: Theme.accentSubtle
+                                                border.color: Theme.borderSubtle
+                                                border.width: 1
+
+                                                Text {
+                                                    id: badgeText
+                                                    anchors.centerIn: parent
+                                                    text: modelData.key || ""
+                                                    font.family: Theme.fontUi
+                                                    font.pixelSize: Theme.sizeSmall
+                                                    font.weight: Theme.weightMedium
+                                                    color: Theme.accent
+                                                }
+                                            }
+                                        }
+
+                                        Text {
+                                            width: parent.width
+                                            text: {
+                                                var parts = []
+                                                if ((modelData.type || "").length > 0)
+                                                    parts.push(modelData.type)
+                                                parts.push(modelData.nullable ? qsTr("nullable") : qsTr("not null"))
+                                                if ((modelData.extra || "").length > 0)
+                                                    parts.push(modelData.extra)
+                                                if (modelData.defaultValue !== null
+                                                        && modelData.defaultValue !== undefined
+                                                        && String(modelData.defaultValue).length > 0)
+                                                    parts.push(qsTr("default %1").arg(modelData.defaultValue))
+                                                return parts.join(" · ")
+                                            }
+                                            font.family: Theme.fontUi
+                                            font.pixelSize: Theme.sizeSmall
+                                            color: Theme.textTertiary
+                                            elide: Text.ElideRight
+                                        }
+                                    }
+
+                                    MouseArea {
+                                        id: columnMouse
+                                        anchors.fill: parent
+                                        hoverEnabled: true
+                                        cursorShape: Qt.PointingHandCursor
+                                        onClicked: root._selectColumn(modelData.name || "")
+                                    }
+                                }
                             }
                         }
                     }
 
-                    Rectangle {
+                    ToolPanelSurface {
                         Layout.fillWidth: true
                         visible: root.selectedColumn.length > 0
-                        color: Theme.bgSurface
-                        border.color: Theme.borderSubtle
-                        border.width: 1
-                        radius: Theme.radiusSm
+                        inset: true
+                        padding: Theme.sp2
                         implicitHeight: selectedColumnCard.implicitHeight + Theme.sp2 * 2
 
                         ColumnLayout {
                             id: selectedColumnCard
                             anchors.fill: parent
-                            anchors.margins: Theme.sp2
                             spacing: Theme.sp2
 
-                            Text {
-                                text: qsTr("Column %1").arg(root.selectedColumn)
-                                font.family: Theme.fontMono
-                                font.pixelSize: Theme.sizeCaption
-                                color: Theme.textPrimary
-                                elide: Text.ElideRight
+                            ToolSectionHeader {
+                                Layout.fillWidth: true
+                                title: qsTr("Column %1").arg(root.selectedColumn)
+                                subtitle: root.selectedTable.length > 0
+                                          ? root.selectedTable
+                                          : qsTr("Selected column actions")
                             }
 
                             Text {
-                                width: parent.width
+                                Layout.fillWidth: true
                                 text: {
                                     for (var i = 0; i < client.columns.length; ++i) {
                                         var column = client.columns[i]
@@ -1067,6 +1212,7 @@ Rectangle {
             }
 
             ColumnLayout {
+                Layout.minimumWidth: 520
                 Layout.fillWidth: true
                 Layout.fillHeight: true
                 spacing: Theme.sp2
@@ -1080,19 +1226,25 @@ Rectangle {
                         anchors.fill: parent
                         spacing: Theme.sp2
 
-                        RowLayout {
+                        ToolSectionHeader {
+                            Layout.fillWidth: true
+                            title: qsTr("Query")
+                            subtitle: root.selectedTable.length > 0
+                                      ? root.selectedTable
+                                      : qsTr("Compose SQL and run against the current connection")
+
+                            PrimaryButton {
+                                text: client.busy ? qsTr("Running…") : qsTr("Run")
+                                enabled: client.status === PierMySqlClient.Connected
+                                         && !client.busy
+                                         && root.sqlText.trim().length > 0
+                                onClicked: client.execute(root.sqlText)
+                            }
+                        }
+
+                        Flow {
                             Layout.fillWidth: true
                             spacing: Theme.sp2
-
-                            Text {
-                                text: qsTr("Query")
-                                font.family: Theme.fontUi
-                                font.pixelSize: Theme.sizeCaption
-                                font.weight: Theme.weightMedium
-                                color: Theme.textSecondary
-                            }
-
-                            Item { Layout.fillWidth: true }
 
                             GhostButton {
                                 compact: true
@@ -1129,14 +1281,6 @@ Rectangle {
                                 enabled: client.status === PierMySqlClient.Connected
                                 onClicked: root._showCreateFor(root.selectedTable)
                             }
-
-                            PrimaryButton {
-                                text: client.busy ? qsTr("Running…") : qsTr("Run")
-                                enabled: client.status === PierMySqlClient.Connected
-                                         && !client.busy
-                                         && root.sqlText.trim().length > 0
-                                onClicked: client.execute(root.sqlText)
-                            }
                         }
 
                         Rectangle {
@@ -1147,21 +1291,17 @@ Rectangle {
                             border.width: 1
                             radius: Theme.radiusSm
 
-                            ScrollView {
+                            PierScrollView {
                                 anchors.fill: parent
                                 anchors.margins: Theme.sp1
                                 clip: true
 
-                                TextArea {
+                                PierTextArea {
                                     id: sqlEditor
+                                    frameVisible: false
+                                    mono: true
                                     text: root.sqlText
                                     wrapMode: TextArea.NoWrap
-                                    font.family: Theme.fontMono
-                                    font.pixelSize: Theme.sizeBody
-                                    color: Theme.textPrimary
-                                    selectionColor: Theme.accentMuted
-                                    selectedTextColor: Theme.textPrimary
-                                    background: Rectangle { color: "transparent" }
                                     selectByMouse: true
                                     onTextChanged: root.sqlText = text
 
@@ -1179,24 +1319,6 @@ Rectangle {
                     }
                 }
 
-                ToolBanner {
-                    Layout.fillWidth: true
-                    tone: client.lastError.length > 0 ? "error" : "neutral"
-                    text: client.lastError.length > 0
-                          ? client.lastError
-                          : (!root.hasResult
-                             ? qsTr("Saved profiles and favorite queries persist across launches.")
-                             : (client.resultColumnCount > 0
-                                ? qsTr("%1 rows · %2 columns · %3 ms%4")
-                                    .arg(client.resultRowCount)
-                                    .arg(client.resultColumnCount)
-                                    .arg(client.lastElapsedMs)
-                                    .arg(client.lastTruncated ? qsTr(" · truncated") : "")
-                                : qsTr("%1 rows affected · %2 ms")
-                                    .arg(client.lastAffectedRows)
-                                    .arg(client.lastElapsedMs)))
-                }
-
                 ToolPanelSurface {
                     Layout.fillWidth: true
                     Layout.fillHeight: true
@@ -1204,46 +1326,81 @@ Rectangle {
 
                     ColumnLayout {
                         anchors.fill: parent
-                        spacing: 1
+                        spacing: Theme.sp1
 
-                        HorizontalHeaderView {
-                            id: headerView
+                        ToolSectionHeader {
                             Layout.fillWidth: true
-                            implicitHeight: 28
-                            syncView: resultTable
-                            visible: client.resultColumnCount > 0
+                            Layout.leftMargin: Theme.sp1
+                            Layout.rightMargin: Theme.sp1
+                            Layout.topMargin: Theme.sp1
+                            title: qsTr("Results")
+                            subtitle: !root.hasResult
+                                      ? qsTr("Run a query to inspect rows and execution status.")
+                                      : (client.resultColumnCount > 0
+                                         ? qsTr("%1 rows · %2 columns · %3 ms%4")
+                                             .arg(client.resultRowCount)
+                                             .arg(client.resultColumnCount)
+                                             .arg(client.lastElapsedMs)
+                                             .arg(client.lastTruncated ? qsTr(" · truncated") : "")
+                                         : qsTr("%1 rows affected · %2 ms")
+                                             .arg(client.lastAffectedRows)
+                                             .arg(client.lastElapsedMs))
+                        }
 
-                            delegate: Rectangle {
-                                required property string display
-
-                                implicitWidth: 180
-                                implicitHeight: 28
-                                color: Theme.bgSurface
-                                border.color: Theme.borderSubtle
-                                border.width: 1
-
-                                Text {
-                                    anchors.fill: parent
-                                    anchors.leftMargin: Theme.sp2
-                                    anchors.rightMargin: Theme.sp2
-                                    verticalAlignment: Text.AlignVCenter
-                                    text: display
-                                    font.family: Theme.fontUi
-                                    font.pixelSize: Theme.sizeCaption
-                                    font.weight: Theme.weightMedium
-                                    color: Theme.textSecondary
-                                    elide: Text.ElideRight
-                                }
-                            }
+                        ToolBanner {
+                            Layout.fillWidth: true
+                            Layout.leftMargin: Theme.sp1
+                            Layout.rightMargin: Theme.sp1
+                            visible: client.lastError.length > 0 || !root.hasResult
+                            tone: client.lastError.length > 0 ? "error" : "neutral"
+                            text: client.lastError.length > 0
+                                  ? client.lastError
+                                  : qsTr("Saved profiles and favorite queries persist across launches.")
                         }
 
                         Item {
                             Layout.fillWidth: true
                             Layout.fillHeight: true
 
+                            HorizontalHeaderView {
+                                id: headerView
+                                anchors.top: parent.top
+                                anchors.left: parent.left
+                                anchors.right: parent.right
+                                implicitHeight: 28
+                                syncView: resultTable
+                                visible: client.resultColumnCount > 0
+
+                                delegate: Rectangle {
+                                    required property string display
+
+                                    implicitWidth: 180
+                                    implicitHeight: 28
+                                    color: Theme.bgSurface
+                                    border.color: Theme.borderSubtle
+                                    border.width: 1
+
+                                    Text {
+                                        anchors.fill: parent
+                                        anchors.leftMargin: Theme.sp2
+                                        anchors.rightMargin: Theme.sp2
+                                        verticalAlignment: Text.AlignVCenter
+                                        text: display
+                                        font.family: Theme.fontUi
+                                        font.pixelSize: Theme.sizeCaption
+                                        font.weight: Theme.weightMedium
+                                        color: Theme.textSecondary
+                                        elide: Text.ElideRight
+                                    }
+                                }
+                            }
+
                             TableView {
                                 id: resultTable
-                                anchors.fill: parent
+                                anchors.top: headerView.visible ? headerView.bottom : parent.top
+                                anchors.left: parent.left
+                                anchors.right: parent.right
+                                anchors.bottom: parent.bottom
                                 clip: true
                                 boundsBehavior: Flickable.StopAtBounds
                                 columnSpacing: 1

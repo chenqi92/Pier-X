@@ -92,7 +92,7 @@ Rectangle {
         return Theme.statusError
     }
 
-    ScrollView {
+    PierScrollView {
         anchors.fill: parent
         anchors.margins: Theme.sp3
         clip: true
@@ -161,92 +161,279 @@ Rectangle {
                 }
             }
 
-            GridLayout {
+            ToolPanelSurface {
                 Layout.fillWidth: true
-                columns: width >= 420 ? 2 : 1
-                rowSpacing: Theme.sp2
-                columnSpacing: Theme.sp2
+                implicitHeight: overviewSections.implicitHeight + Theme.sp2 * 2
+                padding: Theme.sp2
 
-                ToolMetricTile {
-                    Layout.fillWidth: true
-                    title: qsTr("CPU")
-                    valueText: _pctBar(monitor.cpuPct)
-                    subtitle: monitor.busy ? qsTr("Refreshing snapshot") : qsTr("Processor usage")
-                    progress: monitor.cpuPct
-                    accentColor: _barColor(monitor.cpuPct)
-                }
+                GridLayout {
+                    id: overviewSections
+                    anchors.fill: parent
+                    columns: width >= 640 ? 2 : 1
+                    rowSpacing: Theme.sp2
+                    columnSpacing: Theme.sp2
 
-                ToolMetricTile {
-                    Layout.fillWidth: true
-                    title: qsTr("Memory")
-                    valueText: monitor.memTotalMb > 0
-                               ? _fmtMb(monitor.memUsedMb)
-                               : "—"
-                    subtitle: monitor.memTotalMb > 0
-                              ? qsTr("%1 free of %2")
-                                    .arg(_fmtMb(monitor.memFreeMb))
-                                    .arg(_fmtMb(monitor.memTotalMb))
-                              : qsTr("Waiting for memory stats")
-                    footerText: monitor.memTotalMb > 0
-                                ? _pctBar(monitor.memUsedMb / monitor.memTotalMb * 100)
-                                : ""
-                    progress: monitor.memTotalMb > 0
-                              ? (monitor.memUsedMb / monitor.memTotalMb * 100)
-                              : -1
-                    accentColor: _barColor(monitor.memTotalMb > 0
-                                            ? (monitor.memUsedMb / monitor.memTotalMb * 100)
-                                            : -1)
-                }
+                    ToolPanelSurface {
+                        Layout.fillWidth: true
+                        inset: true
+                        padding: Theme.sp2
+                        implicitHeight: overviewColumn.implicitHeight + Theme.sp2 * 2
 
-                ToolMetricTile {
-                    Layout.fillWidth: true
-                    title: qsTr("Swap")
-                    valueText: monitor.swapTotalMb > 0
-                               ? _fmtMb(monitor.swapUsedMb)
-                               : qsTr("Not configured")
-                    subtitle: monitor.swapTotalMb > 0
-                              ? qsTr("%1 total").arg(_fmtMb(monitor.swapTotalMb))
-                              : qsTr("No swap partition detected")
-                    footerText: monitor.swapTotalMb > 0
-                                ? _pctBar(monitor.swapUsedMb / monitor.swapTotalMb * 100)
-                                : ""
-                    progress: monitor.swapTotalMb > 0
-                              ? (monitor.swapUsedMb / monitor.swapTotalMb * 100)
-                              : -1
-                    accentColor: _barColor(monitor.swapTotalMb > 0
-                                            ? (monitor.swapUsedMb / monitor.swapTotalMb * 100)
-                                            : -1)
-                }
+                        ColumnLayout {
+                            id: overviewColumn
+                            anchors.fill: parent
+                            spacing: Theme.sp2
 
-                ToolMetricTile {
-                    Layout.fillWidth: true
-                    title: qsTr("Disk")
-                    valueText: monitor.diskUsed.length > 0 ? monitor.diskUsed : "—"
-                    subtitle: monitor.diskTotal.length > 0
-                              ? qsTr("%1 free").arg(monitor.diskAvail)
-                              : qsTr("Waiting for filesystem stats")
-                    footerText: monitor.diskTotal.length > 0
-                                ? qsTr("%1 total").arg(monitor.diskTotal)
-                                : ""
-                    progress: monitor.diskUsePct
-                    accentColor: _barColor(monitor.diskUsePct)
+                            ToolSectionHeader {
+                                Layout.fillWidth: true
+                                title: qsTr("Overview")
+                                subtitle: monitor.os.length > 0 ? monitor.os : qsTr("Waiting for host details")
+                            }
+
+                            RowLayout {
+                                Layout.fillWidth: true
+                                spacing: Theme.sp3
+
+                                ColumnLayout {
+                                    Layout.fillWidth: true
+                                    spacing: Theme.sp0_5
+
+                                    Text {
+                                        text: qsTr("Host")
+                                        font.family: Theme.fontUi
+                                        font.pixelSize: Theme.sizeSmall
+                                        color: Theme.textTertiary
+                                    }
+
+                                    Text {
+                                        text: monitor.hostname.length > 0 ? monitor.hostname : "—"
+                                        font.family: Theme.fontMono
+                                        font.pixelSize: Theme.sizeBody
+                                        font.weight: Theme.weightMedium
+                                        color: Theme.textPrimary
+                                        elide: Text.ElideRight
+                                    }
+                                }
+
+                                ColumnLayout {
+                                    Layout.fillWidth: true
+                                    spacing: Theme.sp0_5
+
+                                    Text {
+                                        text: qsTr("Uptime")
+                                        font.family: Theme.fontUi
+                                        font.pixelSize: Theme.sizeSmall
+                                        color: Theme.textTertiary
+                                    }
+
+                                    Text {
+                                        text: monitor.uptime.length > 0 ? monitor.uptime : "—"
+                                        font.family: Theme.fontMono
+                                        font.pixelSize: Theme.sizeBody
+                                        font.weight: Theme.weightMedium
+                                        color: Theme.textPrimary
+                                        elide: Text.ElideRight
+                                    }
+                                }
+                            }
+                        }
+                    }
+
+                    ToolPanelSurface {
+                        Layout.fillWidth: true
+                        inset: true
+                        padding: Theme.sp2
+                        implicitHeight: capacityColumn.implicitHeight + Theme.sp2 * 2
+
+                        ColumnLayout {
+                            id: capacityColumn
+                            anchors.fill: parent
+                            spacing: Theme.sp2
+
+                            ToolSectionHeader {
+                                Layout.fillWidth: true
+                                title: qsTr("Capacity")
+                                subtitle: qsTr("Available memory, swap, and storage")
+                            }
+
+                            RowLayout {
+                                Layout.fillWidth: true
+                                spacing: Theme.sp3
+
+                                ColumnLayout {
+                                    Layout.fillWidth: true
+                                    spacing: Theme.sp0_5
+
+                                    Text {
+                                        text: qsTr("Free memory")
+                                        font.family: Theme.fontUi
+                                        font.pixelSize: Theme.sizeSmall
+                                        color: Theme.textTertiary
+                                    }
+
+                                    Text {
+                                        text: monitor.memTotalMb > 0 ? _fmtMb(monitor.memFreeMb) : "—"
+                                        font.family: Theme.fontMono
+                                        font.pixelSize: Theme.sizeBody
+                                        font.weight: Theme.weightMedium
+                                        color: Theme.textPrimary
+                                        elide: Text.ElideRight
+                                    }
+                                }
+
+                                ColumnLayout {
+                                    Layout.fillWidth: true
+                                    spacing: Theme.sp0_5
+
+                                    Text {
+                                        text: qsTr("Swap")
+                                        font.family: Theme.fontUi
+                                        font.pixelSize: Theme.sizeSmall
+                                        color: Theme.textTertiary
+                                    }
+
+                                    Text {
+                                        text: monitor.swapTotalMb > 0
+                                              ? _fmtMb(monitor.swapUsedMb) + " / " + _fmtMb(monitor.swapTotalMb)
+                                              : qsTr("Not configured")
+                                        font.family: Theme.fontMono
+                                        font.pixelSize: Theme.sizeBody
+                                        font.weight: Theme.weightMedium
+                                        color: Theme.textPrimary
+                                        elide: Text.ElideRight
+                                    }
+                                }
+
+                                ColumnLayout {
+                                    Layout.fillWidth: true
+                                    spacing: Theme.sp0_5
+
+                                    Text {
+                                        text: qsTr("Storage available")
+                                        font.family: Theme.fontUi
+                                        font.pixelSize: Theme.sizeSmall
+                                        color: Theme.textTertiary
+                                    }
+
+                                    Text {
+                                        text: monitor.diskAvail.length > 0 ? monitor.diskAvail : "—"
+                                        font.family: Theme.fontMono
+                                        font.pixelSize: Theme.sizeBody
+                                        font.weight: Theme.weightMedium
+                                        color: Theme.textPrimary
+                                        elide: Text.ElideRight
+                                    }
+                                }
+                            }
+                        }
+                    }
                 }
             }
 
             ToolPanelSurface {
                 Layout.fillWidth: true
-                implicitHeight: loadSection.implicitHeight + Theme.sp3 * 2
+                implicitHeight: resourceSection.implicitHeight + Theme.sp2 * 2
+                padding: Theme.sp2
 
                 ColumnLayout {
-                    id: loadSection
+                    id: resourceSection
                     anchors.fill: parent
-                    anchors.margins: Theme.sp3
                     spacing: Theme.sp2
 
                     ToolSectionHeader {
                         Layout.fillWidth: true
-                        title: qsTr("Load Averages")
-                        subtitle: qsTr("1, 5, and 15 minute system load")
+                        title: qsTr("Resources")
+                        subtitle: qsTr("Processor, memory, swap, and storage pressure")
+                    }
+
+                    GridLayout {
+                        Layout.fillWidth: true
+                        columns: width >= 560 ? 2 : 1
+                        rowSpacing: Theme.sp2
+                        columnSpacing: Theme.sp2
+
+                        ToolMetricTile {
+                            Layout.fillWidth: true
+                            title: qsTr("CPU")
+                            valueText: _pctBar(monitor.cpuPct)
+                            subtitle: monitor.busy ? qsTr("Refreshing snapshot") : qsTr("Processor usage")
+                            progress: monitor.cpuPct
+                            accentColor: _barColor(monitor.cpuPct)
+                        }
+
+                        ToolMetricTile {
+                            Layout.fillWidth: true
+                            title: qsTr("Memory")
+                            valueText: monitor.memTotalMb > 0
+                                       ? _fmtMb(monitor.memUsedMb)
+                                       : "—"
+                            subtitle: monitor.memTotalMb > 0
+                                      ? qsTr("%1 free of %2")
+                                            .arg(_fmtMb(monitor.memFreeMb))
+                                            .arg(_fmtMb(monitor.memTotalMb))
+                                      : qsTr("Waiting for memory stats")
+                            footerText: monitor.memTotalMb > 0
+                                        ? _pctBar(monitor.memUsedMb / monitor.memTotalMb * 100)
+                                        : ""
+                            progress: monitor.memTotalMb > 0
+                                      ? (monitor.memUsedMb / monitor.memTotalMb * 100)
+                                      : -1
+                            accentColor: _barColor(monitor.memTotalMb > 0
+                                                    ? (monitor.memUsedMb / monitor.memTotalMb * 100)
+                                                    : -1)
+                        }
+
+                        ToolMetricTile {
+                            Layout.fillWidth: true
+                            title: qsTr("Swap")
+                            valueText: monitor.swapTotalMb > 0
+                                       ? _fmtMb(monitor.swapUsedMb)
+                                       : qsTr("Not configured")
+                            subtitle: monitor.swapTotalMb > 0
+                                      ? qsTr("%1 total").arg(_fmtMb(monitor.swapTotalMb))
+                                      : qsTr("No swap partition detected")
+                            footerText: monitor.swapTotalMb > 0
+                                        ? _pctBar(monitor.swapUsedMb / monitor.swapTotalMb * 100)
+                                        : ""
+                            progress: monitor.swapTotalMb > 0
+                                      ? (monitor.swapUsedMb / monitor.swapTotalMb * 100)
+                                      : -1
+                            accentColor: _barColor(monitor.swapTotalMb > 0
+                                                    ? (monitor.swapUsedMb / monitor.swapTotalMb * 100)
+                                                    : -1)
+                        }
+
+                        ToolMetricTile {
+                            Layout.fillWidth: true
+                            title: qsTr("Disk")
+                            valueText: monitor.diskUsed.length > 0 ? monitor.diskUsed : "—"
+                            subtitle: monitor.diskTotal.length > 0
+                                      ? qsTr("%1 free").arg(monitor.diskAvail)
+                                      : qsTr("Waiting for filesystem stats")
+                            footerText: monitor.diskTotal.length > 0
+                                        ? qsTr("%1 total").arg(monitor.diskTotal)
+                                        : ""
+                            progress: monitor.diskUsePct
+                            accentColor: _barColor(monitor.diskUsePct)
+                        }
+                    }
+                }
+            }
+
+            ToolPanelSurface {
+                Layout.fillWidth: true
+                implicitHeight: snapshotSection.implicitHeight + Theme.sp2 * 2
+                padding: Theme.sp2
+
+                ColumnLayout {
+                    id: snapshotSection
+                    anchors.fill: parent
+                    spacing: Theme.sp2
+
+                    ToolSectionHeader {
+                        Layout.fillWidth: true
+                        title: qsTr("Snapshot")
+                        subtitle: qsTr("Host details and load averages")
                     }
 
                     Flow {
@@ -295,6 +482,14 @@ Rectangle {
                                 }
                             }
                         }
+                    }
+
+                    ToolBanner {
+                        Layout.fillWidth: true
+                        tone: monitor.busy ? "info" : "neutral"
+                        text: monitor.hostname.length > 0
+                              ? qsTr("%1 · %2").arg(monitor.hostname).arg(monitor.os)
+                              : qsTr("Waiting for host details")
                     }
                 }
             }

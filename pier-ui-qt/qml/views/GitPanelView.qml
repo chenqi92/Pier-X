@@ -13,6 +13,7 @@ Rectangle {
     property bool statusBannerVisible: false
     property bool statusBannerSuccess: true
     property string statusBannerMessage: ""
+    property bool initInProgress: false
 
     signal closePanelRequested()
 
@@ -151,22 +152,29 @@ Rectangle {
                         enabled: client.isGitRepo
                         onClicked: {
                             client.loadBranches()
+                            const pos = branchMouse.mapToItem(root, 0, branchMouse.height + Theme.sp1)
+                            branchMenu.x = Math.max(Theme.sp2,
+                                                    Math.min(root.width - branchMenu.width - Theme.sp2, pos.x))
+                            branchMenu.y = Math.max(Theme.sp2, pos.y)
                             branchMenu.open()
                         }
                     }
 
-                    Menu {
+                    PopoverPanel {
                         id: branchMenu
+                        width: 220
 
                         Repeater {
                             model: client.branches
 
-                            MenuItem {
+                            PierMenuItem {
                                 required property string modelData
                                 text: modelData
-                                checkable: true
-                                checked: modelData === client.currentBranch
-                                onTriggered: client.checkoutBranch(modelData)
+                                active: modelData === client.currentBranch
+                                onClicked: {
+                                    branchMenu.close()
+                                    client.checkoutBranch(modelData)
+                                }
                             }
                         }
                     }
@@ -403,14 +411,39 @@ Rectangle {
             Layout.fillHeight: true
             visible: !client.isGitRepo
 
-            EmptyStateCard {
+            ColumnLayout {
                 anchors.centerIn: parent
-                width: Math.min(parent.width - Theme.sp8, 280)
-                title: client.status === PierGitClient.Loading ? qsTr("Loading repository") : qsTr("No repository")
-                description: client.status === PierGitClient.Loading
-                             ? qsTr("Pier-X is resolving the current working tree.")
-                             : qsTr("Open a Git working directory from the file browser to activate this panel.")
-                accentColor: Theme.accent
+                width: Math.min(parent.width - Theme.sp8, 320)
+                spacing: Theme.sp3
+
+                EmptyStateCard {
+                    Layout.fillWidth: true
+                    title: client.status === PierGitClient.Loading ? qsTr("Loading repository") : qsTr("No repository")
+                    description: client.status === PierGitClient.Loading
+                                 ? qsTr("Pier-X is resolving the current working tree.")
+                                 : qsTr("This folder is not initialized as a Git repository yet.")
+                    accentColor: Theme.accent
+                }
+
+                PrimaryButton {
+                    Layout.alignment: Qt.AlignHCenter
+                    text: root.initInProgress ? qsTr("Initializing…") : qsTr("Initialize Git")
+                    visible: client.status !== PierGitClient.Loading && root.repoPath.length > 0
+                    enabled: !root.initInProgress
+                    onClicked: {
+                        root.initInProgress = true
+                        const ok = PierLocalSystem.initGitRepository(root.repoPath)
+                        root.initInProgress = false
+                        root.statusBannerSuccess = ok
+                        root.statusBannerMessage = ok
+                                ? qsTr("Initialized a Git repository in %1.").arg(root.repoName)
+                                : qsTr("Failed to initialize a Git repository in %1.").arg(root.repoName)
+                        root.statusBannerVisible = true
+                        bannerTimer.restart()
+                        if (ok)
+                            client.open(root.repoPath)
+                    }
+                }
             }
         }
 
@@ -421,7 +454,11 @@ Rectangle {
             currentIndex: root.selectedTab
 
             SplitView {
+                id: gitWorkSplit
                 orientation: Qt.Vertical
+                handle: PierSplitHandle {
+                    vertical: gitWorkSplit.orientation === Qt.Horizontal
+                }
 
                 Item {
                     SplitView.fillWidth: true
@@ -500,25 +537,14 @@ Rectangle {
                                     }
                                 }
 
-                                TextArea {
+                                PierTextArea {
                                     id: commitMsg
                                     Layout.fillWidth: true
                                     Layout.preferredHeight: 72
+                                    mono: true
+                                    inset: true
                                     placeholderText: qsTr("Write a focused commit message…")
                                     wrapMode: TextEdit.Wrap
-                                    color: Theme.textPrimary
-                                    placeholderTextColor: Theme.textTertiary
-                                    font.family: Theme.fontMono
-                                    font.pixelSize: Theme.sizeBody
-                                    selectionColor: Theme.accentMuted
-                                    selectedTextColor: Theme.textPrimary
-
-                                    background: Rectangle {
-                                        color: Theme.bgInset
-                                        border.color: commitMsg.activeFocus ? Theme.borderFocus : Theme.borderDefault
-                                        border.width: 1
-                                        radius: Theme.radiusMd
-                                    }
                                 }
 
                                 RowLayout {
@@ -815,9 +841,15 @@ Rectangle {
                                     hoverEnabled: true
                                     acceptedButtons: Qt.LeftButton | Qt.RightButton
                                     cursorShape: Qt.PointingHandCursor
-                                    onClicked: (mouse) => {
-                                        if (mouse.button === Qt.RightButton)
-                                            stashMenu.popup()
+                                    onPressed: (mouse) => {
+                                        if (mouse.button === Qt.RightButton) {
+                                            const pos = stashMouse.mapToItem(root, mouse.x, mouse.y)
+                                            stashMenu.x = Math.max(Theme.sp2,
+                                                                   Math.min(root.width - stashMenu.width - Theme.sp2, pos.x))
+                                            stashMenu.y = Math.max(Theme.sp2, pos.y)
+                                            stashMenu.open()
+                                            mouse.accepted = true
+                                        }
                                     }
                                 }
 
@@ -883,12 +915,36 @@ Rectangle {
                                     color: Theme.borderSubtle
                                 }
 
-                                Menu {
+                                PopoverPanel {
                                     id: stashMenu
-                                    MenuItem { text: qsTr("Apply"); onTriggered: client.stashApply(modelData.index) }
-                                    MenuItem { text: qsTr("Pop"); onTriggered: client.stashPop(modelData.index) }
-                                    MenuSeparator {}
-                                    MenuItem { text: qsTr("Drop"); onTriggered: client.stashDrop(modelData.index) }
+                                    width: 188
+                                    PierMenuItem {
+                                        text: qsTr("Apply")
+                                        onClicked: {
+                                            stashMenu.close()
+                                            client.stashApply(modelData.index)
+                                        }
+                                    }
+                                    PierMenuItem {
+                                        text: qsTr("Pop")
+                                        onClicked: {
+                                            stashMenu.close()
+                                            client.stashPop(modelData.index)
+                                        }
+                                    }
+                                    Rectangle {
+                                        width: stashMenu.width - stashMenu.leftPadding - stashMenu.rightPadding
+                                        height: 1
+                                        color: Theme.borderSubtle
+                                    }
+                                    PierMenuItem {
+                                        text: qsTr("Drop")
+                                        destructive: true
+                                        onClicked: {
+                                            stashMenu.close()
+                                            client.stashDrop(modelData.index)
+                                        }
+                                    }
                                 }
                             }
 
@@ -1262,22 +1318,19 @@ Rectangle {
                 Layout.fillWidth: true
                 Layout.fillHeight: true
 
-                ScrollView {
+                PierScrollView {
                     anchors.fill: parent
                     clip: true
                     visible: diffText.length > 0
 
-                    TextArea {
+                    PierTextArea {
                         readOnly: true
+                        frameVisible: false
+                        mono: true
                         textFormat: TextEdit.RichText
                         wrapMode: TextEdit.NoWrap
                         text: root.colorizeDiff(diffText)
-                        color: Theme.textPrimary
-                        font.family: Theme.fontMono
                         font.pixelSize: Theme.sizeSmall
-                        selectionColor: Theme.accentMuted
-                        selectedTextColor: Theme.textPrimary
-                        background: Rectangle { color: "transparent" }
                     }
                 }
 

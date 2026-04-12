@@ -2,6 +2,7 @@ import QtQuick
 import QtQuick.Controls
 import QtQuick.Effects
 import QtQuick.Layouts
+import QtCore
 import Pier
 
 // Modal settings dialog — denser and more structured, closer to
@@ -18,16 +19,26 @@ Item {
 
     signal closed
 
+    // Persist terminal theme selection across restarts.
+    Settings {
+        id: terminalSettings
+        category: "terminal"
+        property int themeIndex: 0
+        property string fontFamily: "JetBrains Mono"
+        property int fontSize: 13
+    }
+    Component.onCompleted: {
+        Theme.terminalThemeIndex = terminalSettings.themeIndex
+        Theme.fontMono = terminalSettings.fontFamily
+        Theme.terminalFontSize = terminalSettings.fontSize
+    }
+
     visible: open
     z: 9400
     anchors.fill: parent
 
     function show() {
-        dialog.scale = 0.96
-        dialog.opacity = 0
         open = true
-        dialog.scale = 1.0
-        dialog.opacity = 1.0
         sectionList.currentIndex = 0
     }
 
@@ -38,107 +49,18 @@ Item {
 
     Keys.onEscapePressed: hide()
 
-    Rectangle {
-        anchors.fill: parent
-        color: "#000000"
-        opacity: root.open ? 0.5 : 0.0
-        Behavior on opacity { NumberAnimation { duration: Theme.durFast } }
+    ModalDialogShell {
+        open: root.open
+        dialogWidth: 980
+        dialogHeight: 700
+        title: qsTr("Settings")
+        subtitle: qsTr("Adjust appearance, terminal behavior, and saved connections.")
+        bodyPadding: 0
+        onRequestClose: root.hide()
 
-        MouseArea {
-            anchors.fill: parent
-            enabled: root.open
-            onClicked: root.hide()
-        }
-    }
-
-    Rectangle {
-        id: dialog
-        anchors.centerIn: parent
-        width: Math.min(980, parent.width - 72)
-        height: Math.min(700, parent.height - 72)
-        scale: 0.96
-        opacity: 0
-        transformOrigin: Item.Center
-        color: Theme.bgElevated
-        border.color: Theme.borderDefault
-        border.width: 1
-        radius: Theme.radiusLg
-
-        Behavior on scale { NumberAnimation { duration: Theme.durNormal; easing.type: Theme.easingType } }
-        Behavior on opacity { NumberAnimation { duration: Theme.durNormal; easing.type: Theme.easingType } }
-        Behavior on color { ColorAnimation { duration: Theme.durNormal } }
-        Behavior on border.color { ColorAnimation { duration: Theme.durNormal } }
-
-        layer.enabled: true
-        layer.effect: MultiEffect {
-            shadowEnabled: true
-            shadowColor: "#000000"
-            shadowOpacity: 0.46
-            shadowBlur: 1.0
-            shadowVerticalOffset: 18
-        }
-
-        MouseArea {
-            anchors.fill: parent
-            onClicked: (mouse) => mouse.accepted = true
-            onPressed: (mouse) => mouse.accepted = true
-        }
-
-        ColumnLayout {
+        body: RowLayout {
             anchors.fill: parent
             spacing: 0
-
-            Rectangle {
-                Layout.fillWidth: true
-                Layout.preferredHeight: Theme.dialogHeaderHeight
-                color: Theme.bgChrome
-
-                RowLayout {
-                    anchors.fill: parent
-                    anchors.leftMargin: Theme.sp5
-                    anchors.rightMargin: Theme.sp3
-                    spacing: Theme.sp3
-
-                    ColumnLayout {
-                        Layout.fillWidth: true
-                        spacing: 0
-
-                        Text {
-                            text: qsTr("Settings")
-                            font.family: Theme.fontUi
-                            font.pixelSize: Theme.sizeH3
-                            font.weight: Theme.weightMedium
-                            color: Theme.textPrimary
-                        }
-
-                        Text {
-                            text: qsTr("Adjust appearance, terminal behavior, and saved connections.")
-                            font.family: Theme.fontUi
-                            font.pixelSize: Theme.sizeSmall
-                            color: Theme.textTertiary
-                        }
-                    }
-
-                    IconButton {
-                        icon: "x"
-                        tooltip: qsTr("Close")
-                        onClicked: root.hide()
-                    }
-                }
-
-                Rectangle {
-                    anchors.left: parent.left
-                    anchors.right: parent.right
-                    anchors.bottom: parent.bottom
-                    height: 1
-                    color: Theme.borderSubtle
-                }
-            }
-
-            RowLayout {
-                Layout.fillWidth: true
-                Layout.fillHeight: true
-                spacing: 0
 
                 Rectangle {
                     Layout.preferredWidth: root.navWidth
@@ -210,7 +132,7 @@ Item {
                     Layout.fillHeight: true
                     currentIndex: sectionList.currentIndex
 
-                    ScrollView {
+                    PierScrollView {
                         id: generalScroll
                         clip: true
                         contentWidth: availableWidth
@@ -227,30 +149,122 @@ Item {
 
                                 SectionLabel { text: qsTr("Theme") }
 
-                                SettingRow {
-                                    Layout.fillWidth: true
-                                    title: qsTr("Follow system theme")
-                                    description: qsTr("Automatically mirror the operating system appearance.")
+                                SettingGroupCard {
+                                    SettingRow {
+                                        Layout.fillWidth: true
+                                        title: qsTr("Follow system theme")
+                                        description: qsTr("Automatically mirror the operating system appearance.")
 
-                                    ToggleSwitch {
-                                        checked: Theme.followSystem
-                                        onToggled: (checked) => Theme.followSystem = checked
+                                        ToggleSwitch {
+                                            checked: Theme.followSystem
+                                            onToggled: (checked) => Theme.followSystem = checked
+                                        }
+                                    }
+
+                                    SettingDivider { }
+
+                                    SettingRow {
+                                        Layout.fillWidth: true
+                                        title: qsTr("Color scheme")
+                                        description: qsTr("Manual override when system sync is turned off.")
+
+                                        SegmentedControl {
+                                            implicitWidth: 168
+                                            options: [qsTr("Dark"), qsTr("Light")]
+                                            currentIndex: Theme.dark ? 0 : 1
+                                            enabled: !Theme.followSystem
+                                            onActivated: (i) => {
+                                                Theme.followSystem = false
+                                                Theme.dark = (i === 0)
+                                            }
+                                        }
                                     }
                                 }
+                            }
 
-                                SettingRow {
-                                    Layout.fillWidth: true
-                                    title: qsTr("Color scheme")
-                                    description: qsTr("Manual override when system sync is turned off.")
+                            ColumnLayout {
+                                Layout.fillWidth: true
+                                spacing: Theme.sp3
 
-                                    SegmentedControl {
-                                        implicitWidth: 168
-                                        options: [qsTr("Dark"), qsTr("Light")]
-                                        currentIndex: Theme.dark ? 0 : 1
-                                        enabled: !Theme.followSystem
-                                        onActivated: (i) => {
-                                            Theme.followSystem = false
-                                            Theme.dark = (i === 0)
+                                SectionLabel { text: qsTr("Language") }
+
+                                SettingGroupCard {
+                                    SettingRow {
+                                        Layout.fillWidth: true
+                                        title: qsTr("Interface language")
+                                        description: qsTr("Change the display language. Takes effect immediately for most text.")
+
+                                        PierComboBox {
+                                            implicitWidth: 168
+                                            options: PierI18n.displayNames
+                                            currentIndex: PierI18n.currentIndex
+                                            onActivated: (i) => {
+                                                PierI18n.switchLanguage(PierI18n.codes[i])
+                                            }
+                                        }
+                                    }
+
+                                    Text {
+                                        Layout.fillWidth: true
+                                        visible: PierI18n.language !== "en"
+                                        text: qsTr("Some labels may require restarting Pier-X to update fully.")
+                                        font.family: Theme.fontUi
+                                        font.pixelSize: Theme.sizeSmall
+                                        color: Theme.textTertiary
+                                        wrapMode: Text.WordWrap
+                                    }
+                                }
+                            }
+
+                            ColumnLayout {
+                                Layout.fillWidth: true
+                                spacing: Theme.sp3
+                                visible: PierUpdate.available
+
+                                SectionLabel { text: qsTr("Updates") }
+
+                                SettingGroupCard {
+                                    SettingRow {
+                                        Layout.fillWidth: true
+                                        title: qsTr("Automatic updates")
+                                        description: qsTr("Periodically check for new versions in the background.")
+
+                                        ToggleSwitch {
+                                            checked: PierUpdate.autoCheck
+                                            onToggled: (checked) => PierUpdate.autoCheck = checked
+                                        }
+                                    }
+
+                                    SettingDivider { }
+
+                                    SettingRow {
+                                        Layout.fillWidth: true
+                                        title: qsTr("Check now")
+                                        description: qsTr("Manually check for a newer version of Pier-X.")
+
+                                        GhostButton {
+                                            text: qsTr("Check for updates…")
+                                            onClicked: PierUpdate.checkForUpdates()
+                                        }
+                                    }
+                                }
+                            }
+
+                            ColumnLayout {
+                                Layout.fillWidth: true
+                                spacing: Theme.sp3
+
+                                SectionLabel { text: qsTr("Developer") }
+
+                                SettingGroupCard {
+                                    SettingRow {
+                                        Layout.fillWidth: true
+                                        title: qsTr("Performance overlay")
+                                        description: qsTr("Show FPS, memory usage, and startup time in the status bar.")
+
+                                        ToggleSwitch {
+                                            checked: PierProfiler.enabled
+                                            onToggled: (checked) => PierProfiler.enabled = checked
                                         }
                                     }
                                 }
@@ -260,7 +274,7 @@ Item {
                         }
                     }
 
-                    ScrollView {
+                    PierScrollView {
                         id: appearanceScroll
                         clip: true
                         contentWidth: availableWidth
@@ -366,7 +380,7 @@ Item {
                         }
                     }
 
-                    ScrollView {
+                    PierScrollView {
                         id: terminalScroll
                         clip: true
                         contentWidth: availableWidth
@@ -377,6 +391,233 @@ Item {
                             y: root.pagePadding
                             spacing: Theme.sp5
 
+                            // ── Terminal Theme ───────────────────────
+                            ColumnLayout {
+                                Layout.fillWidth: true
+                                spacing: Theme.sp3
+
+                                SectionLabel { text: qsTr("Terminal Theme") }
+
+                                Card {
+                                    Layout.fillWidth: true
+                                    padding: Theme.sp1
+
+                                    ColumnLayout {
+                                        anchors.fill: parent
+                                        spacing: 0
+
+                                        Repeater {
+                                            model: Theme.terminalThemes
+
+                                            delegate: Rectangle {
+                                                id: themeRow
+                                                required property int index
+                                                required property var modelData
+                                                Layout.fillWidth: true
+                                                implicitHeight: 40
+                                                radius: Theme.radiusSm
+                                                color: themeMouseArea.containsMouse
+                                                       ? Theme.bgHover
+                                                       : (themeRow.index === Theme.terminalThemeIndex
+                                                          ? Theme.bgSelected : "transparent")
+
+                                                Behavior on color { ColorAnimation { duration: Theme.durFast } }
+
+                                                RowLayout {
+                                                    anchors.fill: parent
+                                                    anchors.leftMargin: Theme.sp3
+                                                    anchors.rightMargin: Theme.sp3
+                                                    spacing: Theme.sp2
+
+                                                    // Color swatches — show first 8 ANSI colors
+                                                    Row {
+                                                        spacing: Theme.sp0_5
+
+                                                        Repeater {
+                                                            model: 8
+                                                            delegate: Rectangle {
+                                                                required property int index
+                                                                width: 14
+                                                                height: 14
+                                                                radius: 7
+                                                                color: themeRow.modelData.ansi[index]
+                                                                border.color: Qt.rgba(0,0,0,0.15)
+                                                                border.width: 1
+                                                            }
+                                                        }
+                                                    }
+
+                                                    Text {
+                                                        text: themeRow.modelData.name
+                                                        font.family: Theme.fontUi
+                                                        font.pixelSize: Theme.sizeBody
+                                                        font.weight: themeRow.index === Theme.terminalThemeIndex
+                                                                     ? Theme.weightMedium
+                                                                     : Theme.weightRegular
+                                                        color: Theme.textPrimary
+                                                    }
+
+                                                    Item { Layout.fillWidth: true }
+
+                                                    // Checkmark for selected theme
+                                                    Text {
+                                                        visible: themeRow.index === Theme.terminalThemeIndex
+                                                        text: "✓"
+                                                        font.pixelSize: Theme.sizeBodyLg
+                                                        font.weight: Theme.weightSemibold
+                                                        color: Theme.statusSuccess
+                                                    }
+                                                }
+
+                                                MouseArea {
+                                                    id: themeMouseArea
+                                                    anchors.fill: parent
+                                                    hoverEnabled: true
+                                                    cursorShape: Qt.PointingHandCursor
+                                                    onClicked: {
+                                                        Theme.terminalThemeIndex = themeRow.index
+                                                        terminalSettings.themeIndex = themeRow.index
+                                                    }
+                                                }
+                                            }
+                                        }
+                                    }
+                                }
+
+                                // Preview card — shows what the theme looks like.
+                                Card {
+                                    Layout.fillWidth: true
+                                    padding: 0
+
+                                    Rectangle {
+                                        anchors.fill: parent
+                                        color: Theme.currentTerminalTheme.bg
+                                        radius: Theme.radiusMd
+
+                                        Column {
+                                            anchors.fill: parent
+                                            anchors.margins: Theme.sp3
+                                            spacing: 2
+
+                                            Text {
+                                                text: "$ ssh admin@prod-02"
+                                                font.family: Theme.fontMono
+                                                font.pixelSize: Theme.sizeBody
+                                                color: Theme.currentTerminalTheme.fg
+                                            }
+
+                                            Row {
+                                                spacing: 0
+                                                Text { text: "admin"; font.family: Theme.fontMono; font.pixelSize: Theme.sizeBody; color: Theme.currentTerminalTheme.ansi[2] }
+                                                Text { text: "@"; font.family: Theme.fontMono; font.pixelSize: Theme.sizeBody; color: Theme.currentTerminalTheme.fg }
+                                                Text { text: "prod-02"; font.family: Theme.fontMono; font.pixelSize: Theme.sizeBody; color: Theme.currentTerminalTheme.ansi[4] }
+                                                Text { text: ":"; font.family: Theme.fontMono; font.pixelSize: Theme.sizeBody; color: Theme.currentTerminalTheme.fg }
+                                                Text { text: "~"; font.family: Theme.fontMono; font.pixelSize: Theme.sizeBody; color: Theme.currentTerminalTheme.ansi[5] }
+                                                Text { text: "$ "; font.family: Theme.fontMono; font.pixelSize: Theme.sizeBody; color: Theme.currentTerminalTheme.fg }
+                                                Text { text: "ls"; font.family: Theme.fontMono; font.pixelSize: Theme.sizeBody; color: Theme.currentTerminalTheme.ansi[3] }
+                                            }
+
+                                            Row {
+                                                spacing: Theme.sp3
+                                                Text { text: "README.md"; font.family: Theme.fontMono; font.pixelSize: Theme.sizeBody; color: Theme.currentTerminalTheme.fg }
+                                                Text { text: "src/"; font.family: Theme.fontMono; font.pixelSize: Theme.sizeBody; color: Theme.currentTerminalTheme.ansi[4] }
+                                                Text { text: "docs/"; font.family: Theme.fontMono; font.pixelSize: Theme.sizeBody; color: Theme.currentTerminalTheme.ansi[4] }
+                                                Text { text: "Makefile"; font.family: Theme.fontMono; font.pixelSize: Theme.sizeBody; color: Theme.currentTerminalTheme.ansi[2] }
+                                                Text { text: ".env"; font.family: Theme.fontMono; font.pixelSize: Theme.sizeBody; color: Theme.currentTerminalTheme.ansi[8] }
+                                            }
+
+                                            Row {
+                                                spacing: 0
+                                                Text { text: "Error: "; font.family: Theme.fontMono; font.pixelSize: Theme.sizeBody; color: Theme.currentTerminalTheme.ansi[1] }
+                                                Text { text: "connection refused"; font.family: Theme.fontMono; font.pixelSize: Theme.sizeBody; color: Theme.currentTerminalTheme.fg }
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+
+                            // ── Font ─────────────────────────────────
+                            ColumnLayout {
+                                Layout.fillWidth: true
+                                spacing: Theme.sp3
+
+                                SectionLabel { text: qsTr("Font") }
+
+                                SettingRow {
+                                    Layout.fillWidth: true
+                                    title: qsTr("Font family")
+                                    description: qsTr("Monospace font used in the terminal.")
+
+                                    PierComboBox {
+                                        implicitWidth: 200
+                                        options: [
+                                            "JetBrains Mono",
+                                            "Menlo",
+                                            "Monaco",
+                                            "SF Mono",
+                                            "Fira Code",
+                                            "Source Code Pro",
+                                            "Cascadia Code",
+                                            "Consolas",
+                                            "Courier New"
+                                        ]
+                                        currentIndex: {
+                                            var idx = options.indexOf(Theme.fontMono)
+                                            return idx >= 0 ? idx : 0
+                                        }
+                                        onActivated: (i) => {
+                                            Theme.fontMono = options[i]
+                                            terminalSettings.fontFamily = options[i]
+                                        }
+                                    }
+                                }
+
+                                SettingRow {
+                                    Layout.fillWidth: true
+                                    title: qsTr("Font size")
+                                    description: qsTr("Pixel size for terminal text.")
+
+                                    RowLayout {
+                                        spacing: Theme.sp2
+
+                                        PierSlider {
+                                            id: fontSizeSlider
+                                            implicitWidth: 160
+                                            from: 9
+                                            to: 24
+                                            stepSize: 1
+                                            value: Theme.terminalFontSize
+                                            onValueChanged: {
+                                                Theme.terminalFontSize = value
+                                                terminalSettings.fontSize = value
+                                            }
+                                        }
+
+                                        Text {
+                                            text: Theme.terminalFontSize + "pt"
+                                            font.family: Theme.fontMono
+                                            font.pixelSize: Theme.sizeBody
+                                            color: Theme.textSecondary
+                                            Layout.preferredWidth: 32
+                                        }
+                                    }
+                                }
+
+                                // Font preview
+                                Card {
+                                    Layout.fillWidth: true
+                                    padding: Theme.sp3
+
+                                    Text {
+                                        text: "天地玄黄宇宙洪荒 The quick brown fox"
+                                        font.family: Theme.fontMono
+                                        font.pixelSize: Theme.terminalFontSize
+                                        color: Theme.textPrimary
+                                    }
+                                }
+                            }
+
+                            // ── Cursor ───────────────────────────────
                             ColumnLayout {
                                 Layout.fillWidth: true
                                 spacing: Theme.sp3
@@ -449,7 +690,7 @@ Item {
                         }
                     }
 
-                    ScrollView {
+                    PierScrollView {
                         id: connectionsScroll
                         clip: true
                         contentWidth: availableWidth
@@ -649,7 +890,6 @@ Item {
                         }
                     }
                 }
-            }
         }
     }
 
@@ -700,6 +940,26 @@ Item {
                 Layout.alignment: Qt.AlignVCenter
             }
         }
+    }
+
+    component SettingGroupCard: Card {
+        Layout.fillWidth: true
+        padding: Theme.sp4
+        inset: true
+
+        default property alias content: groupColumn.data
+
+        ColumnLayout {
+            id: groupColumn
+            anchors.fill: parent
+            spacing: Theme.sp3
+        }
+    }
+
+    component SettingDivider: Rectangle {
+        Layout.fillWidth: true
+        height: 1
+        color: Theme.borderSubtle
     }
 
     component ConnectionBadge: Rectangle {

@@ -69,3 +69,35 @@ bool PierLocalSystem::revealPath(const QString &path) const
     return QDesktopServices::openUrl(QUrl::fromLocalFile(dirPath));
 #endif
 }
+
+bool PierLocalSystem::initGitRepository(const QString &path) const
+{
+    if (path.isEmpty()) {
+        return false;
+    }
+
+    const QFileInfo info(path);
+    const QString localPath = info.exists()
+        ? info.absoluteFilePath()
+        : QDir::cleanPath(path);
+    const QString targetDir = info.isDir() ? localPath : QFileInfo(localPath).absolutePath();
+    if (targetDir.isEmpty()) {
+        return false;
+    }
+
+    QProcess process;
+    process.setProgram(QStringLiteral("git"));
+    process.setArguments({QStringLiteral("init"), targetDir});
+    process.start();
+    if (!process.waitForStarted(3000)) {
+        qWarning() << "PierLocalSystem::initGitRepository: failed to start git";
+        return false;
+    }
+    if (!process.waitForFinished(10000)) {
+        qWarning() << "PierLocalSystem::initGitRepository: git init timed out";
+        process.kill();
+        return false;
+    }
+
+    return process.exitStatus() == QProcess::NormalExit && process.exitCode() == 0;
+}

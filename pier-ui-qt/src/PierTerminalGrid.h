@@ -25,6 +25,7 @@
 
 #include <QColor>
 #include <QFont>
+#include <QList>
 #include <QQuickPaintedItem>
 #include <QSize>
 #include <qqml.h>
@@ -44,6 +45,7 @@ class PierTerminalGrid : public QQuickPaintedItem
     Q_PROPERTY(QColor defaultForeground READ defaultForeground WRITE setDefaultForeground NOTIFY defaultForegroundChanged FINAL)
     Q_PROPERTY(QColor defaultBackground READ defaultBackground WRITE setDefaultBackground NOTIFY defaultBackgroundChanged FINAL)
     Q_PROPERTY(bool isDarkTheme READ isDarkTheme WRITE setIsDarkTheme NOTIFY isDarkThemeChanged FINAL)
+    Q_PROPERTY(QList<QColor> paletteColors READ paletteColors WRITE setPaletteColors NOTIFY paletteColorsChanged FINAL)
 
     // Exposed for QML to lay out the containing view. Changes with
     // the font and with the current session cell count.
@@ -68,6 +70,9 @@ public:
     bool isDarkTheme() const { return m_isDarkTheme; }
     void setIsDarkTheme(bool dark);
 
+    QList<QColor> paletteColors() const { return m_palette; }
+    void setPaletteColors(const QList<QColor> &colors);
+
     qreal cellWidth() const { return m_cellWidth; }
     qreal cellHeight() const { return m_cellHeight; }
 
@@ -86,6 +91,7 @@ signals:
     void defaultForegroundChanged();
     void defaultBackgroundChanged();
     void isDarkThemeChanged();
+    void paletteColorsChanged();
     void metricsChanged();
 
 protected:
@@ -102,6 +108,7 @@ private:
     QColor m_defaultFg = Qt::white;
     QColor m_defaultBg = Qt::transparent;
     bool m_isDarkTheme = true;
+    QList<QColor> m_palette; // 16 ANSI colors from QML; empty = use built-in
     qreal m_cellWidth = 0;
     qreal m_cellHeight = 0;
     qreal m_ascent = 0;

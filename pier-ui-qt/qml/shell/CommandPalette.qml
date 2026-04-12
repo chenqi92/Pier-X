@@ -132,23 +132,24 @@ Item {
             anchors.margins: Theme.sp3
             spacing: Theme.sp2
 
-            PierTextField {
+            PierSearchField {
                 id: searchBox
                 Layout.fillWidth: true
                 placeholder: qsTr("Type a command…")
+                clearable: true
                 onTextChanged: root.rebuildFiltered()
 
-                Keys.onDownPressed: {
+                input.Keys.onDownPressed: {
                     if (resultsList.currentIndex < resultsList.count - 1)
                         resultsList.currentIndex++
                 }
-                Keys.onUpPressed: {
+                input.Keys.onUpPressed: {
                     if (resultsList.currentIndex > 0)
                         resultsList.currentIndex--
                 }
-                Keys.onReturnPressed: root.invokeCurrent()
-                Keys.onEnterPressed: root.invokeCurrent()
-                Keys.onEscapePressed: root.hide()
+                input.Keys.onReturnPressed: root.invokeCurrent()
+                input.Keys.onEnterPressed: root.invokeCurrent()
+                input.Keys.onEscapePressed: root.hide()
             }
 
             Separator { Layout.fillWidth: true }

@@ -1,6 +1,6 @@
 import QtQuick
-import QtQuick.Effects
 import QtQuick.Layouts
+import QtQuick.Window
 import Pier
 import "../components"
 
@@ -10,65 +10,120 @@ Rectangle {
     implicitHeight: Theme.topBarHeight
     color: Theme.bgChrome
     property string contextTitle: qsTr("Workspace")
+    readonly property var appWindow: root.Window.window
+    property point pressPoint: Qt.point(0, 0)
+    property bool moveStarted: false
 
-    readonly property int trafficLightInset: Qt.platform.os === "osx" ? 78 : 0
-    readonly property string shortcutLabel: Qt.platform.os === "osx" ? "Cmd+K" : "Ctrl+K"
-
+    // Keep the brand aligned with macOS traffic lights without leaving
+    // an oversized dead zone before the Pier-X mark.
+    readonly property int trafficLightReservedWidth: Qt.platform.os === "osx" ? 60 : 0
+    readonly property int leadingContentMargin: trafficLightReservedWidth > 0
+                                                ? trafficLightReservedWidth + Theme.sp2
+                                                : Theme.sp3
     signal newSessionRequested
-    signal commandPaletteRequested
     signal settingsRequested
 
-    MouseArea {
-        anchors.left: parent.left
-        anchors.right: commandPaletteButton.left
-        anchors.leftMargin: root.trafficLightInset
-        anchors.rightMargin: Theme.sp3
-        anchors.top: parent.top
-        anchors.bottom: parent.bottom
-        acceptedButtons: Qt.LeftButton
-        cursorShape: Qt.ArrowCursor
-        onPressed: (mouse) => {
-            if (mouse.button === Qt.LeftButton)
-                window.startSystemMove()
+    function toggleWindowZoom() {
+        if (!appWindow)
+            return
+
+        if (appWindow.visibility === Window.Maximized)
+            appWindow.showNormal()
+        else
+            appWindow.showMaximized()
+    }
+
+    function handleTitleBarDoubleClick() {
+        if (!appWindow || appWindow.visibility === Window.FullScreen)
+            return
+
+        const action = PierWindowChrome.titleBarDoubleClickAction()
+        if (action === PierWindowChrome.MinimizeAction) {
+            appWindow.showMinimized()
+            return
         }
+        if (action === PierWindowChrome.NoAction)
+            return
+
+        toggleWindowZoom()
+    }
+
+    function beginSystemMove(mouse) {
+        if (!appWindow || appWindow.visibility === Window.FullScreen)
+            return
+
+        if (appWindow.visibility === Window.Maximized) {
+            const globalPoint = root.mapToGlobal(Qt.point(mouse.x, mouse.y))
+            const horizontalRatio = Math.max(0.12, Math.min(0.88, mouse.x / Math.max(1, root.width)))
+            const restoredWidth = Math.max(1, appWindow.windowedWidth || appWindow.width)
+
+            appWindow.showNormal()
+
+            const restoredX = globalPoint.x - restoredWidth * horizontalRatio
+            const restoredY = globalPoint.y - Math.min(mouse.y, Theme.topBarHeight / 2)
+
+            appWindow.x = Math.round(restoredX)
+            appWindow.y = Math.max(0, Math.round(restoredY))
+        }
+
+        appWindow.startSystemMove()
     }
 
     MouseArea {
-        anchors.left: commandPaletteButton.right
+        anchors.left: parent.left
         anchors.right: rightControls.left
-        anchors.leftMargin: Theme.sp3
+        anchors.leftMargin: root.leadingContentMargin
         anchors.rightMargin: Theme.sp2
         anchors.top: parent.top
         anchors.bottom: parent.bottom
-        acceptedButtons: Qt.LeftButton
+        acceptedButtons: Qt.LeftButton | Qt.RightButton
         cursorShape: Qt.ArrowCursor
         onPressed: (mouse) => {
-            if (mouse.button === Qt.LeftButton)
-                window.startSystemMove()
+            if (mouse.button !== Qt.LeftButton)
+                return
+
+            root.pressPoint = Qt.point(mouse.x, mouse.y)
+            root.moveStarted = false
+        }
+        onPositionChanged: (mouse) => {
+            if (root.moveStarted || !root.appWindow || !(mouse.buttons & Qt.LeftButton))
+                return
+
+            const dx = mouse.x - root.pressPoint.x
+            const dy = mouse.y - root.pressPoint.y
+            const dragDistanceSquared = dx * dx + dy * dy
+
+            if (dragDistanceSquared < 16)
+                return
+
+            root.moveStarted = true
+            root.beginSystemMove(mouse)
+        }
+        onReleased: root.moveStarted = false
+        onCanceled: root.moveStarted = false
+        onClicked: (mouse) => {
+            if (mouse.button !== Qt.RightButton || !root.appWindow)
+                return
+
+            const globalPoint = root.mapToGlobal(Qt.point(mouse.x, mouse.y))
+            PierWindowChrome.showSystemMenu(root.appWindow, globalPoint.x, globalPoint.y)
+        }
+        onDoubleClicked: {
+            mouse.accepted = true
+            root.moveStarted = false
+            root.handleTitleBarDoubleClick()
         }
     }
 
     RowLayout {
         anchors.left: parent.left
-        anchors.leftMargin: Theme.sp3 + root.trafficLightInset
+        anchors.leftMargin: root.leadingContentMargin
         anchors.verticalCenter: parent.verticalCenter
         spacing: Theme.sp2
 
-        Rectangle {
-            width: 16
-            height: 16
-            radius: 4
-            color: Theme.accentMuted
-            border.color: Theme.borderDefault
-            border.width: 1
-
-            Rectangle {
-                anchors.centerIn: parent
-                width: 6
-                height: 6
-                radius: 3
-                color: Theme.accent
-            }
+        Item {
+            Layout.preferredWidth: 16
+            Layout.preferredHeight: 16
         }
 
         Text {
@@ -93,71 +148,6 @@ Rectangle {
             color: Theme.textTertiary
             elide: Text.ElideMiddle
             Layout.maximumWidth: 260
-        }
-    }
-
-    Rectangle {
-        id: commandPaletteButton
-        anchors.horizontalCenter: parent.horizontalCenter
-        anchors.verticalCenter: parent.verticalCenter
-        width: Math.min(400,
-                        Math.max(260,
-                                 paletteLabel.implicitWidth
-                                 + shortcutText.implicitWidth
-                                 + Theme.sp8))
-        height: Theme.controlHeight + 2
-        radius: Theme.radiusPill
-        color: paletteMouse.pressed ? Theme.bgActive
-             : paletteMouse.containsMouse ? Theme.bgHover
-             : Theme.bgInset
-        border.color: paletteMouse.containsMouse ? Theme.borderDefault : Theme.borderSubtle
-        border.width: 1
-
-        Behavior on color { ColorAnimation { duration: Theme.durFast } }
-        Behavior on border.color { ColorAnimation { duration: Theme.durFast } }
-
-        RowLayout {
-            anchors.fill: parent
-            anchors.leftMargin: Theme.sp3
-            anchors.rightMargin: Theme.sp3
-            spacing: Theme.sp2
-
-            Image {
-                source: "qrc:/qt/qml/Pier/resources/icons/lucide/command.svg"
-                sourceSize: Qt.size(Theme.iconSm, Theme.iconSm)
-                layer.enabled: true
-                layer.effect: MultiEffect {
-                    colorization: 1.0
-                    colorizationColor: Theme.textTertiary
-                }
-            }
-
-            Text {
-                id: paletteLabel
-                Layout.fillWidth: true
-                text: qsTr("Command Palette")
-                font.family: Theme.fontUi
-                font.pixelSize: Theme.sizeBody
-                font.weight: Theme.weightMedium
-                color: Theme.textSecondary
-                elide: Text.ElideRight
-            }
-
-            Text {
-                id: shortcutText
-                text: root.shortcutLabel
-                font.family: Theme.fontMono
-                font.pixelSize: Theme.sizeSmall
-                color: Theme.textTertiary
-            }
-        }
-
-        MouseArea {
-            id: paletteMouse
-            anchors.fill: parent
-            hoverEnabled: true
-            cursorShape: Qt.PointingHandCursor
-            onClicked: root.commandPaletteRequested()
         }
     }
 

@@ -152,10 +152,7 @@ pub unsafe extern "C" fn pier_redis_scan_keys(
 /// `h`, if non-null, must be a live handle. `key` must be a
 /// valid NUL-terminated C string.
 #[no_mangle]
-pub unsafe extern "C" fn pier_redis_inspect(
-    h: *mut PierRedis,
-    key: *const c_char,
-) -> *mut c_char {
+pub unsafe extern "C" fn pier_redis_inspect(h: *mut PierRedis, key: *const c_char) -> *mut c_char {
     if h.is_null() || key.is_null() {
         return ptr::null_mut();
     }
@@ -186,10 +183,7 @@ pub unsafe extern "C" fn pier_redis_inspect(
 /// `h`, if non-null, must be a live handle. `section`, if
 /// non-null, must be a valid NUL-terminated C string.
 #[no_mangle]
-pub unsafe extern "C" fn pier_redis_info(
-    h: *mut PierRedis,
-    section: *const c_char,
-) -> *mut c_char {
+pub unsafe extern "C" fn pier_redis_info(h: *mut PierRedis, section: *const c_char) -> *mut c_char {
     if h.is_null() {
         return ptr::null_mut();
     }

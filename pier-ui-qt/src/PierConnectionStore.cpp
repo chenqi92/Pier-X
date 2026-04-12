@@ -8,6 +8,7 @@
 #include <QJsonDocument>
 #include <QJsonObject>
 #include <QJsonValue>
+#include <QSettings>
 
 PierConnectionStore::PierConnectionStore(QObject *parent)
     : QAbstractListModel(parent)
@@ -67,12 +68,14 @@ QHash<int, QByteArray> PierConnectionStore::roleNames() const
 void PierConnectionStore::reload()
 {
     char *raw = pier_connections_load_json();
+    loadGroups();
     if (!raw) {
         // No data dir or malformed file. Treat as empty store —
         // the next add() persists a fresh document on top.
         beginResetModel();
         m_entries.clear();
         endResetModel();
+        mergeGroupsFromEntries();
         emit countChanged();
         return;
     }
@@ -88,6 +91,7 @@ void PierConnectionStore::reload()
         qWarning() << "PierConnectionStore: failed to ingest connections JSON";
     }
     endResetModel();
+    mergeGroupsFromEntries();
     emit countChanged();
 }
 
@@ -164,6 +168,7 @@ bool PierConnectionStore::appendEntry(Entry e)
     beginInsertRows(QModelIndex(), row, row);
     m_entries.push_back(std::move(e));
     endInsertRows();
+    mergeGroupsFromEntries();
 
     if (!persist()) {
         // Roll back the in-memory insert so model state matches
@@ -171,6 +176,7 @@ bool PierConnectionStore::appendEntry(Entry e)
         beginRemoveRows(QModelIndex(), row, row);
         m_entries.pop_back();
         endRemoveRows();
+        mergeGroupsFromEntries();
         return false;
     }
     emit countChanged();
@@ -205,6 +211,7 @@ bool PierConnectionStore::updateAt(int index, const QString &name, const QString
         return false;
     }
 
+    mergeGroupsFromEntries();
     emit dataChanged(createIndex(index, 0), createIndex(index, 0));
     return true;
 }
@@ -227,6 +234,7 @@ bool PierConnectionStore::removeAt(int index)
         endInsertRows();
         return false;
     }
+    mergeGroupsFromEntries();
     emit countChanged();
     return true;
 }
@@ -249,6 +257,133 @@ QVariantMap PierConnectionStore::get(int index) const
     m["usesAgent"]              = e.usesAgent;
     m["tags"]                   = e.tags;
     return m;
+}
+
+bool PierConnectionStore::setPrimaryTag(int index, const QString &tag)
+{
+    if (index < 0 || index >= static_cast<int>(m_entries.size()))
+        return false;
+
+    const QString normalized = normalizeGroupName(tag);
+    Entry old = m_entries[static_cast<size_t>(index)];
+    Entry &entry = m_entries[static_cast<size_t>(index)];
+
+    QStringList nextTags;
+    if (!normalized.isEmpty())
+        nextTags.append(normalized);
+    for (int i = 1; i < entry.tags.size(); ++i) {
+        const QString extra = normalizeGroupName(entry.tags.at(i));
+        if (!extra.isEmpty() && !nextTags.contains(extra))
+            nextTags.append(extra);
+    }
+    entry.tags = nextTags;
+    mergeGroupsFromEntries();
+
+    if (!persist()) {
+        m_entries[static_cast<size_t>(index)] = std::move(old);
+        mergeGroupsFromEntries();
+        return false;
+    }
+
+    emit dataChanged(createIndex(index, 0), createIndex(index, 0), { TagsRole });
+    return true;
+}
+
+bool PierConnectionStore::clearPrimaryTag(int index)
+{
+    return setPrimaryTag(index, QString());
+}
+
+bool PierConnectionStore::createGroup(const QString &name)
+{
+    const QString normalized = normalizeGroupName(name);
+    if (normalized.isEmpty() || m_groups.contains(normalized))
+        return false;
+    m_groups.append(normalized);
+    std::sort(m_groups.begin(), m_groups.end(), [](const QString &a, const QString &b) {
+        return a.localeAwareCompare(b) < 0;
+    });
+    if (!persistGroups()) {
+        m_groups.removeAll(normalized);
+        return false;
+    }
+    emit groupsChanged();
+    return true;
+}
+
+bool PierConnectionStore::renameGroup(const QString &oldName, const QString &newName)
+{
+    const QString oldNormalized = normalizeGroupName(oldName);
+    const QString newNormalized = normalizeGroupName(newName);
+    if (oldNormalized.isEmpty() || newNormalized.isEmpty())
+        return false;
+    if (oldNormalized == newNormalized)
+        return true;
+    if (m_groups.contains(newNormalized))
+        return false;
+
+    const QStringList oldGroups = m_groups;
+    std::vector<Entry> oldEntries = m_entries;
+    bool anyChanged = false;
+
+    for (Entry &entry : m_entries) {
+        if (!entry.tags.isEmpty() && normalizeGroupName(entry.tags.first()) == oldNormalized) {
+            entry.tags[0] = newNormalized;
+            anyChanged = true;
+        }
+    }
+
+    const int idx = m_groups.indexOf(oldNormalized);
+    if (idx >= 0)
+        m_groups[idx] = newNormalized;
+    else
+        m_groups.append(newNormalized);
+    std::sort(m_groups.begin(), m_groups.end(), [](const QString &a, const QString &b) {
+        return a.localeAwareCompare(b) < 0;
+    });
+    emit groupsChanged();
+
+    if (!persistGroups() || (anyChanged && !persist())) {
+        m_groups = oldGroups;
+        m_entries = std::move(oldEntries);
+        emit groupsChanged();
+        return false;
+    }
+
+    if (!m_entries.empty())
+        emit dataChanged(createIndex(0, 0), createIndex(static_cast<int>(m_entries.size()) - 1, 0), { TagsRole });
+    return true;
+}
+
+bool PierConnectionStore::deleteGroup(const QString &name)
+{
+    const QString normalized = normalizeGroupName(name);
+    if (normalized.isEmpty())
+        return false;
+
+    const QStringList oldGroups = m_groups;
+    std::vector<Entry> oldEntries = m_entries;
+    bool anyChanged = false;
+
+    m_groups.removeAll(normalized);
+    for (Entry &entry : m_entries) {
+        if (!entry.tags.isEmpty() && normalizeGroupName(entry.tags.first()) == normalized) {
+            entry.tags.removeFirst();
+            anyChanged = true;
+        }
+    }
+    emit groupsChanged();
+
+    if (!persistGroups() || (anyChanged && !persist())) {
+        m_groups = oldGroups;
+        m_entries = std::move(oldEntries);
+        emit groupsChanged();
+        return false;
+    }
+
+    if (!m_entries.empty())
+        emit dataChanged(createIndex(0, 0), createIndex(static_cast<int>(m_entries.size()) - 1, 0), { TagsRole });
+    return true;
 }
 
 bool PierConnectionStore::ingestJson(const QByteArray &json)
@@ -370,4 +505,50 @@ bool PierConnectionStore::persist()
         return false;
     }
     return true;
+}
+
+bool PierConnectionStore::persistGroups() const
+{
+    QSettings settings;
+    settings.setValue(QStringLiteral("sidebar/connectionGroups"), m_groups);
+    return settings.status() == QSettings::NoError;
+}
+
+void PierConnectionStore::loadGroups()
+{
+    QSettings settings;
+    m_groups = settings.value(QStringLiteral("sidebar/connectionGroups")).toStringList();
+    for (QString &group : m_groups)
+        group = normalizeGroupName(group);
+    m_groups.removeAll(QString());
+    m_groups.removeDuplicates();
+    std::sort(m_groups.begin(), m_groups.end(), [](const QString &a, const QString &b) {
+        return a.localeAwareCompare(b) < 0;
+    });
+}
+
+void PierConnectionStore::mergeGroupsFromEntries()
+{
+    QStringList merged = m_groups;
+    for (const Entry &entry : m_entries) {
+        for (const QString &tag : entry.tags) {
+            const QString normalized = normalizeGroupName(tag);
+            if (!normalized.isEmpty() && !merged.contains(normalized))
+                merged.append(normalized);
+        }
+    }
+    merged.removeDuplicates();
+    std::sort(merged.begin(), merged.end(), [](const QString &a, const QString &b) {
+        return a.localeAwareCompare(b) < 0;
+    });
+    if (merged == m_groups)
+        return;
+    m_groups = merged;
+    persistGroups();
+    emit groupsChanged();
+}
+
+QString PierConnectionStore::normalizeGroupName(const QString &name)
+{
+    return name.trimmed();
 }

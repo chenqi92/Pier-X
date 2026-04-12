@@ -24,4 +24,5 @@ public:
     Q_INVOKABLE bool copyText(const QString &text) const;
     Q_INVOKABLE bool openPath(const QString &path) const;
     Q_INVOKABLE bool revealPath(const QString &path) const;
+    Q_INVOKABLE bool initGitRepository(const QString &path) const;
 };

@@ -146,7 +146,9 @@ pub unsafe extern "C" fn pier_mysql_open_with_credential(
     let password = match crate::credentials::get(credential_id_str) {
         Ok(Some(v)) => v,
         Ok(None) => {
-            log::warn!("pier_mysql_open_with_credential: missing keychain entry {credential_id_str}");
+            log::warn!(
+                "pier_mysql_open_with_credential: missing keychain entry {credential_id_str}"
+            );
             return ptr::null_mut();
         }
         Err(e) => {
@@ -193,10 +195,7 @@ pub unsafe extern "C" fn pier_mysql_open_with_credential(
 /// [`pier_mysql_open`]. `sql` must be a valid NUL-terminated
 /// C string.
 #[no_mangle]
-pub unsafe extern "C" fn pier_mysql_execute(
-    h: *mut PierMysql,
-    sql: *const c_char,
-) -> *mut c_char {
+pub unsafe extern "C" fn pier_mysql_execute(h: *mut PierMysql, sql: *const c_char) -> *mut c_char {
     if h.is_null() || sql.is_null() {
         return ptr::null_mut();
     }
@@ -395,10 +394,9 @@ mod tests {
     fn null_inputs_are_safe() {
         // SAFETY: all null paths documented as safe.
         unsafe {
-            assert!(pier_mysql_open(
-                ptr::null(), 3306, ptr::null(), ptr::null(), ptr::null()
-            )
-            .is_null());
+            assert!(
+                pier_mysql_open(ptr::null(), 3306, ptr::null(), ptr::null(), ptr::null()).is_null()
+            );
             assert!(pier_mysql_execute(ptr::null_mut(), ptr::null()).is_null());
             assert!(pier_mysql_list_databases(ptr::null_mut()).is_null());
             assert!(pier_mysql_list_tables(ptr::null_mut(), ptr::null()).is_null());
@@ -416,7 +414,11 @@ mod tests {
         // SAFETY: all strings valid.
         let h = unsafe {
             pier_mysql_open(
-                host.as_ptr(), 3306, user.as_ptr(), pass.as_ptr(), ptr::null()
+                host.as_ptr(),
+                3306,
+                user.as_ptr(),
+                pass.as_ptr(),
+                ptr::null(),
             )
         };
         let elapsed = start.elapsed();
@@ -432,9 +434,8 @@ mod tests {
         let host = CString::new("127.0.0.1").unwrap();
         let user = CString::new("root").unwrap();
         // SAFETY: all strings valid.
-        let h = unsafe {
-            pier_mysql_open(host.as_ptr(), 0, user.as_ptr(), ptr::null(), ptr::null())
-        };
+        let h =
+            unsafe { pier_mysql_open(host.as_ptr(), 0, user.as_ptr(), ptr::null(), ptr::null()) };
         assert!(h.is_null());
     }
 

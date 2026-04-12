@@ -161,7 +161,7 @@ pub unsafe extern "C" fn pier_log_open(
     };
 
     let auth = match auth_kind {
-        PIER_AUTH_PASSWORD => AuthMethod::InMemoryPassword {
+        PIER_AUTH_PASSWORD => AuthMethod::DirectPassword {
             password: secret_str.unwrap_or_default(),
         },
         PIER_AUTH_CREDENTIAL => {

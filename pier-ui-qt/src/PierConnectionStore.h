@@ -58,6 +58,7 @@ public:
         HostRole,
         PortRole,
         UsernameRole,
+        PasswordRole,
         CredentialIdRole,
         KeyPathRole,
         PassphraseCredentialIdRole,
@@ -77,10 +78,13 @@ public slots:
     // call again after an external write (rare).
     void reload();
 
-    // Append a new password-auth connection and persist
-    // atomically. Returns true on success. The caller is
-    // responsible for storing the matching keychain entry
-    // first via PierCredentials.
+    // Append a new password-auth connection with the password
+    // stored directly in the config file (no keychain needed).
+    bool addWithPassword(const QString &name, const QString &host, int port,
+                         const QString &username, const QString &password);
+
+    // Append a new password-auth connection using a keychain
+    // credential id. Legacy — prefer addWithPassword.
     bool add(const QString &name, const QString &host, int port,
              const QString &username, const QString &credentialId);
 
@@ -126,7 +130,8 @@ private:
         QString host;
         int port = 22;
         QString username;
-        QString credentialId;          // password-auth: keychain id of password
+        QString password;              // direct password storage (preferred)
+        QString credentialId;          // password-auth: keychain id (legacy)
         QString keyPath;               // key-auth: absolute path to private key
         QString passphraseCredentialId; // key-auth: keychain id of passphrase (or empty)
         bool    usesAgent = false;     // agent-auth: system SSH agent

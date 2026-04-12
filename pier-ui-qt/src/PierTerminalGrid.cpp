@@ -12,28 +12,50 @@ namespace {
 // Minimal 16-color ANSI palette. Enough to render anything shells
 // typically spit out; full 256-color + truecolor is handled below
 // via the PierCell encoding.
-QColor ansiIndexToColor(uint8_t idx, const QColor &defaultFg)
+QColor ansiIndexToColor(uint8_t idx, const QColor &defaultFg, bool isDark)
 {
-    static const QColor basic[16] = {
-        QColor(0x00, 0x00, 0x00), // 0  black
-        QColor(0xCD, 0x00, 0x00), // 1  red
-        QColor(0x00, 0xCD, 0x00), // 2  green
-        QColor(0xCD, 0xCD, 0x00), // 3  yellow
-        QColor(0x3B, 0x78, 0xFF), // 4  blue  (tuned for dark theme)
-        QColor(0xCD, 0x00, 0xCD), // 5  magenta
-        QColor(0x00, 0xCD, 0xCD), // 6  cyan
-        QColor(0xE5, 0xE5, 0xE5), // 7  white
-        QColor(0x7F, 0x7F, 0x7F), // 8  bright black
-        QColor(0xFF, 0x00, 0x00), // 9  bright red
-        QColor(0x00, 0xFF, 0x00), // 10 bright green
-        QColor(0xFF, 0xFF, 0x00), // 11 bright yellow
-        QColor(0x5C, 0x5C, 0xFF), // 12 bright blue
-        QColor(0xFF, 0x00, 0xFF), // 13 bright magenta
-        QColor(0x00, 0xFF, 0xFF), // 14 bright cyan
-        QColor(0xFF, 0xFF, 0xFF), // 15 bright white
-    };
     if (idx < 16) {
-        return basic[idx];
+        if (isDark) {
+            static const QColor darkPalette[16] = {
+                QColor(0x00, 0x00, 0x00), // 0  black
+                QColor(0xCD, 0x00, 0x00), // 1  red
+                QColor(0x00, 0xCD, 0x00), // 2  green
+                QColor(0xCD, 0xCD, 0x00), // 3  yellow
+                QColor(0x3B, 0x78, 0xFF), // 4  blue  (tuned for dark theme)
+                QColor(0xCD, 0x00, 0xCD), // 5  magenta
+                QColor(0x00, 0xCD, 0xCD), // 6  cyan
+                QColor(0xE5, 0xE5, 0xE5), // 7  white
+                QColor(0x7F, 0x7F, 0x7F), // 8  bright black
+                QColor(0xFF, 0x00, 0x00), // 9  bright red
+                QColor(0x00, 0xFF, 0x00), // 10 bright green
+                QColor(0xFF, 0xFF, 0x00), // 11 bright yellow
+                QColor(0x5C, 0x5C, 0xFF), // 12 bright blue
+                QColor(0xFF, 0x00, 0xFF), // 13 bright magenta
+                QColor(0x00, 0xFF, 0xFF), // 14 bright cyan
+                QColor(0xFF, 0xFF, 0xFF), // 15 bright white
+            };
+            return darkPalette[idx];
+        } else {
+            static const QColor lightPalette[16] = {
+                QColor(0x00, 0x00, 0x00), // 0  black
+                QColor(0xCD, 0x00, 0x00), // 1  red
+                QColor(0x00, 0xA0, 0x00), // 2  green
+                QColor(0xA0, 0x70, 0x00), // 3  yellow
+                QColor(0x00, 0x00, 0xEE), // 4  blue
+                QColor(0xCD, 0x00, 0xCD), // 5  magenta
+                QColor(0x00, 0xA0, 0xA0), // 6  cyan
+                QColor(0x66, 0x66, 0x66), // 7  white (darker for light bg)
+                QColor(0x55, 0x55, 0x55), // 8  bright black
+                QColor(0xFF, 0x00, 0x00), // 9  bright red
+                QColor(0x00, 0xCD, 0x00), // 10 bright green
+                QColor(0xCD, 0xCD, 0x00), // 11 bright yellow
+                QColor(0x5C, 0x5C, 0xFF), // 12 bright blue
+                QColor(0xFF, 0x00, 0xFF), // 13 bright magenta
+                QColor(0x00, 0xCD, 0xCD), // 14 bright cyan
+                QColor(0x44, 0x44, 0x44), // 15 bright white (darker for light bg)
+            };
+            return lightPalette[idx];
+        }
     }
     // 256-color cube + grayscale ramp. Good-enough approximations;
     // the exact xterm palette has subtle variations that no one
@@ -53,21 +75,21 @@ QColor ansiIndexToColor(uint8_t idx, const QColor &defaultFg)
     return defaultFg;
 }
 
-QColor cellForeground(const PierCell &c, const QColor &defaultFg)
+QColor cellForeground(const PierCell &c, const QColor &defaultFg, bool isDark)
 {
     switch (c.fg_kind) {
     case 0:  return defaultFg;
-    case 1:  return ansiIndexToColor(c.fg_r, defaultFg);
+    case 1:  return ansiIndexToColor(c.fg_r, defaultFg, isDark);
     case 2:  return QColor(c.fg_r, c.fg_g, c.fg_b);
     default: return defaultFg;
     }
 }
 
-QColor cellBackground(const PierCell &c, const QColor &defaultBg)
+QColor cellBackground(const PierCell &c, const QColor &defaultBg, bool isDark)
 {
     switch (c.bg_kind) {
     case 0:  return defaultBg;
-    case 1:  return ansiIndexToColor(c.bg_r, defaultBg);
+    case 1:  return ansiIndexToColor(c.bg_r, defaultBg, isDark);
     case 2:  return QColor(c.bg_r, c.bg_g, c.bg_b);
     default: return defaultBg;
     }
@@ -136,6 +158,14 @@ void PierTerminalGrid::setDefaultBackground(const QColor &c)
     if (m_defaultBg == c) return;
     m_defaultBg = c;
     emit defaultBackgroundChanged();
+    update();
+}
+
+void PierTerminalGrid::setIsDarkTheme(bool dark)
+{
+    if (m_isDarkTheme == dark) return;
+    m_isDarkTheme = dark;
+    emit isDarkThemeChanged();
     update();
 }
 
@@ -212,7 +242,7 @@ void PierTerminalGrid::paint(QPainter *painter)
         for (int col = 0; col < cols; ++col) {
             const PierCell &c = cells[row * cols + col];
             if (c.bg_kind == 0) continue;
-            const QColor bg = cellBackground(c, m_defaultBg);
+            const QColor bg = cellBackground(c, m_defaultBg, m_isDarkTheme);
             painter->fillRect(
                 QRectF(col * m_cellWidth, row * m_cellHeight, m_cellWidth, m_cellHeight),
                 bg);
@@ -224,7 +254,7 @@ void PierTerminalGrid::paint(QPainter *painter)
         for (int col = 0; col < cols; ++col) {
             const PierCell &c = cells[row * cols + col];
             if (c.ch == 0 || c.ch == static_cast<uint32_t>(' ')) continue;
-            const QColor fg = cellForeground(c, m_defaultFg);
+            const QColor fg = cellForeground(c, m_defaultFg, m_isDarkTheme);
             painter->setPen(fg);
 
             // Determine if this is a wide (CJK) character that spans 2 cells.
@@ -262,14 +292,15 @@ void PierTerminalGrid::paint(QPainter *painter)
 
             // Reverse video swaps fg/bg at paint time.
             if (c.attrs & 0x04 /* reverse */) {
-                const QColor bg = cellBackground(c, m_defaultBg);
+                const QColor bg = cellBackground(c, m_defaultBg, m_isDarkTheme);
                 painter->fillRect(
                     QRectF(col * m_cellWidth, row * m_cellHeight, drawWidth, m_cellHeight),
                     fg);
                 painter->setPen(bg);
             }
 
-            const QString glyph = QString::fromUcs4(&c.ch, 1);
+            const char32_t cp = static_cast<char32_t>(c.ch);
+            const QString glyph = QString::fromUcs4(&cp, 1);
             const qreal x = col * m_cellWidth;
             const qreal y = row * m_cellHeight + m_ascent;
             painter->drawText(QPointF(x, y), glyph);

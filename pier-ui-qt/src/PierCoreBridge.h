@@ -33,12 +33,16 @@ class PierCoreBridge : public QObject
     // Qt runtime version string from qVersion(), e.g. "6.11.0"
     Q_PROPERTY(QString qtVersion READ qtVersion CONSTANT FINAL)
 
+    // Process working directory at startup (for Git panel).
+    Q_PROPERTY(QString workingDirectory READ workingDirectory CONSTANT FINAL)
+
 public:
     explicit PierCoreBridge(QObject *parent = nullptr);
 
     QString version() const;
     QString buildInfo() const;
     QString qtVersion() const;
+    QString workingDirectory() const;
 
     // Returns true if pier-core was built with the named feature.
     Q_INVOKABLE bool hasFeature(const QString &name) const;

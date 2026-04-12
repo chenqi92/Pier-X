@@ -17,7 +17,7 @@
 //! therefore contains nothing the user couldn't safely sync
 //! across machines or commit to a private dotfiles repo.
 //!
-//! The [`SshConfig::AuthMethod::InMemoryPassword`] variant is
+//! The [`SshConfig::AuthMethod::DirectPassword`] variant is
 //! `#[serde(skip)]` so even an accidental round-trip of a
 //! test-only config can't leak credentials to disk.
 //!

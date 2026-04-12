@@ -456,6 +456,7 @@ Rectangle {
         font.pixelSize: Theme.sizeBody
         defaultForeground: Theme.textPrimary
         defaultBackground: "transparent"
+        isDarkTheme: Theme.dark
 
         // Kick off the shell on first layout when we actually know
         // how many cell columns/rows fit. Doing it earlier would

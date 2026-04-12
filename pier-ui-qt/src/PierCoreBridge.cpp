@@ -33,6 +33,11 @@ QString PierCoreBridge::qtVersion() const
     return QString::fromUtf8(qVersion());
 }
 
+QString PierCoreBridge::workingDirectory() const
+{
+    return QDir::currentPath();
+}
+
 bool PierCoreBridge::hasFeature(const QString &name) const
 {
     const QByteArray utf8 = name.toUtf8();

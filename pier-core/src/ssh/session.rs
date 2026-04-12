@@ -146,7 +146,7 @@ impl SshSession {
         let mut tried = Vec::new();
 
         match &config.auth {
-            AuthMethod::InMemoryPassword { password } => {
+            AuthMethod::DirectPassword { password } => {
                 tried.push("password (in-memory)".to_string());
                 self.try_password_auth(&config.user, password).await?;
             }
@@ -582,7 +582,7 @@ mod tests {
         // This test hits the timeout branch of connect() without
         // depending on any DNS lookup or real network state.
         let mut cfg = SshConfig::new("test", "192.0.2.1", "root");
-        cfg.auth = AuthMethod::InMemoryPassword {
+        cfg.auth = AuthMethod::DirectPassword {
             password: "x".into(),
         };
         cfg.connect_timeout_secs = 1;

@@ -103,11 +103,11 @@ pub enum AuthMethod {
     /// No secret is stored by pier-core at all — the agent holds
     /// the key.
     Agent,
-    /// In-memory password. Tests only. NOT serialized to disk
-    /// because of `skip_serializing_if = "always_true"`.
-    #[serde(skip)]
-    InMemoryPassword {
-        /// The actual password bytes. Never persisted.
+    /// Password stored directly in the connection config file.
+    /// Simpler than the keychain path — works even when the OS
+    /// keychain is unavailable or has been cleared.
+    DirectPassword {
+        /// The password in plaintext.
         password: String,
     },
 }
@@ -122,7 +122,7 @@ impl AuthMethod {
                 private_key_path, ..
             } => !private_key_path.is_empty(),
             Self::Agent => true,
-            Self::InMemoryPassword { password } => !password.is_empty(),
+            Self::DirectPassword { password } => !password.is_empty(),
         }
     }
 }
@@ -188,27 +188,22 @@ mod tests {
     }
 
     #[test]
-    fn in_memory_password_is_never_serialized() {
+    fn direct_password_round_trips() {
         let c = SshConfig {
             name: "tmp".into(),
             host: "h".into(),
             port: 22,
             user: "u".into(),
-            auth: AuthMethod::InMemoryPassword {
+            auth: AuthMethod::DirectPassword {
                 password: "hunter2".into(),
             },
             connect_timeout_secs: 5,
             tags: vec![],
         };
-        // InMemoryPassword is marked #[serde(skip)] — serialization
-        // should fail or produce a placeholder rather than include
-        // the secret.
-        let json_result = serde_json::to_string(&c);
-        if let Ok(json) = &json_result {
-            assert!(
-                !json.contains("hunter2"),
-                "password leaked into serialized form: {json}",
-            );
-        }
+        let json = serde_json::to_string(&c).expect("serialize");
+        let parsed: SshConfig = serde_json::from_str(&json).expect("deserialize");
+        assert_eq!(parsed.auth, AuthMethod::DirectPassword {
+            password: "hunter2".into(),
+        });
     }
 }

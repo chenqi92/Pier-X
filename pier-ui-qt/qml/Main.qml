@@ -72,7 +72,7 @@ ApplicationWindow {
     }
 
     property int currentTabIndex: 0
-    property bool gitPanelVisible: false
+    property bool gitPanelVisible: true
     signal writeToActiveTerminal(string text)
 
     // Every tabModel row carries the full schema, with unused
@@ -174,29 +174,28 @@ ApplicationWindow {
     }
 
     function toggleRightPanelTool(tool, context) {
-        if (currentTabIndex < 0 || currentTabIndex >= tabModel.count) return
-        var currentTool = tabModel.get(currentTabIndex).rpTool
-        
-        if (currentTool === tool) {
-            // Toggle off
-            tabModel.setProperty(currentTabIndex, "rpTool", "")
+        // Apply context to the tab model so the RightSidebar
+        // bindings pick it up automatically.
+        if (currentTabIndex >= 0 && currentTabIndex < tabModel.count && context) {
+            if (context.redisHost) tabModel.setProperty(currentTabIndex, "redisHost", context.redisHost)
+            if (context.redisPort) tabModel.setProperty(currentTabIndex, "redisPort", context.redisPort)
+            if (context.redisDb !== undefined) tabModel.setProperty(currentTabIndex, "redisDb", context.redisDb)
+            if (context.mysqlHost) tabModel.setProperty(currentTabIndex, "mysqlHost", context.mysqlHost)
+            if (context.mysqlPort) tabModel.setProperty(currentTabIndex, "mysqlPort", context.mysqlPort)
+            if (context.mysqlUser) tabModel.setProperty(currentTabIndex, "mysqlUser", context.mysqlUser)
+            if (context.mysqlPassword) tabModel.setProperty(currentTabIndex, "mysqlPassword", context.mysqlPassword)
+            if (context.logCommand) tabModel.setProperty(currentTabIndex, "logCommand", context.logCommand)
+            if (context.pgHost) tabModel.setProperty(currentTabIndex, "pgHost", context.pgHost)
+            if (context.pgPort) tabModel.setProperty(currentTabIndex, "pgPort", context.pgPort)
+            if (context.pgUser) tabModel.setProperty(currentTabIndex, "pgUser", context.pgUser)
+            if (context.pgDatabase) tabModel.setProperty(currentTabIndex, "pgDatabase", context.pgDatabase)
+        }
+        // Switch tool in the unified sidebar and ensure it's visible
+        if (rightSidebar.activeTool === tool && window.gitPanelVisible) {
+            window.gitPanelVisible = false
         } else {
-            // Apply context changes if provided
-            if (context) {
-                if (context.redisHost) tabModel.setProperty(currentTabIndex, "redisHost", context.redisHost)
-                if (context.redisPort) tabModel.setProperty(currentTabIndex, "redisPort", context.redisPort)
-                if (context.redisDb !== undefined) tabModel.setProperty(currentTabIndex, "redisDb", context.redisDb)
-                if (context.mysqlHost) tabModel.setProperty(currentTabIndex, "mysqlHost", context.mysqlHost)
-                if (context.mysqlPort) tabModel.setProperty(currentTabIndex, "mysqlPort", context.mysqlPort)
-                if (context.mysqlUser) tabModel.setProperty(currentTabIndex, "mysqlUser", context.mysqlUser)
-                if (context.mysqlPassword) tabModel.setProperty(currentTabIndex, "mysqlPassword", context.mysqlPassword)
-                if (context.logCommand) tabModel.setProperty(currentTabIndex, "logCommand", context.logCommand)
-                if (context.pgHost) tabModel.setProperty(currentTabIndex, "pgHost", context.pgHost)
-                if (context.pgPort) tabModel.setProperty(currentTabIndex, "pgPort", context.pgPort)
-                if (context.pgUser) tabModel.setProperty(currentTabIndex, "pgUser", context.pgUser)
-                if (context.pgDatabase) tabModel.setProperty(currentTabIndex, "pgDatabase", context.pgDatabase)
-            }
-            tabModel.setProperty(currentTabIndex, "rpTool", tool)
+            rightSidebar.activeTool = tool
+            window.gitPanelVisible = true
         }
     }
 
@@ -556,78 +555,91 @@ ApplicationWindow {
                         }
                     }
 
-                    // Right Panel Area
-                    StackLayout {
-                        SplitView.preferredWidth: 340
-                        visible: window.currentTabIndex >= 0 && window.currentTabIndex < tabModel.count && tabModel.get(window.currentTabIndex).rpTool !== ""
-                        currentIndex: window.currentTabIndex
-
-                        Repeater {
-                            model: tabModel
-                            delegate: Loader {
-                                active: parent.visible && parent.currentIndex === index && rpTool !== ""
-                                required property string rpTool
-                                required property string backend
-                                required property string sshHost
-                                required property int    sshPort
-                                required property string sshUser
-                                required property string sshPassword
-                                required property string sshCredentialId
-                                required property string sshKeyPath
-                                required property string sshPassphraseCredentialId
-                                required property bool   sshUsesAgent
-                                required property string redisHost
-                                required property int    redisPort
-                                required property int    redisDb
-                                required property string logCommand
-                                required property string mysqlHost
-                                required property int    mysqlPort
-                                required property string mysqlUser
-                                required property string mysqlPassword
-                                required property string mysqlDatabase
-                                required property string pgHost
-                                required property int    pgPort
-                                required property string pgUser
-                                required property string pgDatabase
-
-                                sourceComponent: RightPanel {
-                                    rpTool: parent.rpTool
-                                    backend: parent.backend
-                                    sshHost: parent.sshHost
-                                    sshPort: parent.sshPort
-                                    sshUser: parent.sshUser
-                                    sshPassword: parent.sshPassword
-                                    sshCredentialId: parent.sshCredentialId
-                                    sshKeyPath: parent.sshKeyPath
-                                    sshPassphraseCredentialId: parent.sshPassphraseCredentialId
-                                    sshUsesAgent: parent.sshUsesAgent
-                                    redisHost: parent.redisHost
-                                    redisPort: parent.redisPort
-                                    redisDb: parent.redisDb
-                                    logCommand: parent.logCommand
-                                    mysqlHost: parent.mysqlHost
-                                    mysqlPort: parent.mysqlPort
-                                    mysqlUser: parent.mysqlUser
-                                    mysqlPassword: parent.mysqlPassword
-                                    mysqlDatabase: parent.mysqlDatabase
-                                    pgHost: parent.pgHost
-                                    pgPort: parent.pgPort
-                                    pgUser: parent.pgUser
-                                    pgDatabase: parent.pgDatabase
-                                    onClosePanelRequested: window.toggleRightPanelTool(parent.rpTool)
-                                }
-                            }
-                        }
-                    }
-
-                    // Git Panel — independent of SSH sessions
-                    GitPanelView {
-                        SplitView.preferredWidth: 360
-                        visible: window.gitPanelVisible
-                        repoPath: "."
-                        onClosePanelRequested: window.toggleGitPanel()
-                    }
                 }
+            }
+
+            // Unified Right Sidebar — permanent, hosts all tools
+            RightSidebar {
+                id: rightSidebar
+                SplitView.preferredWidth: 380
+                SplitView.minimumWidth: 280
+                visible: window.gitPanelVisible
+
+                // Bind SSH context from the active tab
+                activeBackend: {
+                    if (window.currentTabIndex < 0 || window.currentTabIndex >= tabModel.count) return ""
+                    return tabModel.get(window.currentTabIndex).backend || ""
+                }
+                sshHost: {
+                    if (window.currentTabIndex < 0 || window.currentTabIndex >= tabModel.count) return ""
+                    return tabModel.get(window.currentTabIndex).sshHost || ""
+                }
+                sshPort: {
+                    if (window.currentTabIndex < 0 || window.currentTabIndex >= tabModel.count) return 22
+                    return tabModel.get(window.currentTabIndex).sshPort || 22
+                }
+                sshUser: {
+                    if (window.currentTabIndex < 0 || window.currentTabIndex >= tabModel.count) return ""
+                    return tabModel.get(window.currentTabIndex).sshUser || ""
+                }
+                sshPassword: {
+                    if (window.currentTabIndex < 0 || window.currentTabIndex >= tabModel.count) return ""
+                    return tabModel.get(window.currentTabIndex).sshPassword || ""
+                }
+                sshCredentialId: {
+                    if (window.currentTabIndex < 0 || window.currentTabIndex >= tabModel.count) return ""
+                    return tabModel.get(window.currentTabIndex).sshCredentialId || ""
+                }
+                sshKeyPath: {
+                    if (window.currentTabIndex < 0 || window.currentTabIndex >= tabModel.count) return ""
+                    return tabModel.get(window.currentTabIndex).sshKeyPath || ""
+                }
+                sshPassphraseCredentialId: {
+                    if (window.currentTabIndex < 0 || window.currentTabIndex >= tabModel.count) return ""
+                    return tabModel.get(window.currentTabIndex).sshPassphraseCredentialId || ""
+                }
+                sshUsesAgent: {
+                    if (window.currentTabIndex < 0 || window.currentTabIndex >= tabModel.count) return false
+                    return tabModel.get(window.currentTabIndex).sshUsesAgent || false
+                }
+                redisHost: {
+                    if (window.currentTabIndex < 0 || window.currentTabIndex >= tabModel.count) return ""
+                    return tabModel.get(window.currentTabIndex).redisHost || ""
+                }
+                redisPort: {
+                    if (window.currentTabIndex < 0 || window.currentTabIndex >= tabModel.count) return 0
+                    return tabModel.get(window.currentTabIndex).redisPort || 0
+                }
+                redisDb: {
+                    if (window.currentTabIndex < 0 || window.currentTabIndex >= tabModel.count) return 0
+                    return tabModel.get(window.currentTabIndex).redisDb || 0
+                }
+                logCommand: {
+                    if (window.currentTabIndex < 0 || window.currentTabIndex >= tabModel.count) return ""
+                    return tabModel.get(window.currentTabIndex).logCommand || ""
+                }
+                mysqlHost: {
+                    if (window.currentTabIndex < 0 || window.currentTabIndex >= tabModel.count) return ""
+                    return tabModel.get(window.currentTabIndex).mysqlHost || ""
+                }
+                mysqlPort: {
+                    if (window.currentTabIndex < 0 || window.currentTabIndex >= tabModel.count) return 3306
+                    return tabModel.get(window.currentTabIndex).mysqlPort || 3306
+                }
+                mysqlUser: {
+                    if (window.currentTabIndex < 0 || window.currentTabIndex >= tabModel.count) return ""
+                    return tabModel.get(window.currentTabIndex).mysqlUser || ""
+                }
+                mysqlPassword: {
+                    if (window.currentTabIndex < 0 || window.currentTabIndex >= tabModel.count) return ""
+                    return tabModel.get(window.currentTabIndex).mysqlPassword || ""
+                }
+                mysqlDatabase: {
+                    if (window.currentTabIndex < 0 || window.currentTabIndex >= tabModel.count) return ""
+                    return tabModel.get(window.currentTabIndex).mysqlDatabase || ""
+                }
+
+                onClosePanelRequested: window.toggleGitPanel()
             }
         }
 

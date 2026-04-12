@@ -43,6 +43,7 @@ class PierTerminalGrid : public QQuickPaintedItem
     Q_PROPERTY(QFont font READ font WRITE setFont NOTIFY fontChanged FINAL)
     Q_PROPERTY(QColor defaultForeground READ defaultForeground WRITE setDefaultForeground NOTIFY defaultForegroundChanged FINAL)
     Q_PROPERTY(QColor defaultBackground READ defaultBackground WRITE setDefaultBackground NOTIFY defaultBackgroundChanged FINAL)
+    Q_PROPERTY(bool isDarkTheme READ isDarkTheme WRITE setIsDarkTheme NOTIFY isDarkThemeChanged FINAL)
 
     // Exposed for QML to lay out the containing view. Changes with
     // the font and with the current session cell count.
@@ -64,6 +65,9 @@ public:
     QColor defaultBackground() const { return m_defaultBg; }
     void setDefaultBackground(const QColor &c);
 
+    bool isDarkTheme() const { return m_isDarkTheme; }
+    void setIsDarkTheme(bool dark);
+
     qreal cellWidth() const { return m_cellWidth; }
     qreal cellHeight() const { return m_cellHeight; }
 
@@ -81,6 +85,7 @@ signals:
     void fontChanged();
     void defaultForegroundChanged();
     void defaultBackgroundChanged();
+    void isDarkThemeChanged();
     void metricsChanged();
 
 protected:
@@ -96,6 +101,7 @@ private:
     QFont m_font;
     QColor m_defaultFg = Qt::white;
     QColor m_defaultBg = Qt::transparent;
+    bool m_isDarkTheme = true;
     qreal m_cellWidth = 0;
     qreal m_cellHeight = 0;
     qreal m_ascent = 0;

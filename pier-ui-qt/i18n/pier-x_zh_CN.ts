@@ -43,6 +43,10 @@
         <source>Quit Pier-X</source>
         <translation>退出 Pier-X</translation>
     </message>
+    <message>
+        <source>Workspace</source>
+        <translation>工作区</translation>
+    </message>
 </context>
 
 <!-- ═══════════════════════════════════════════════════════
@@ -92,12 +96,16 @@ built on Qt 6 + Rust core.</source>
 <context>
     <name>TopBar</name>
     <message>
-        <source>New session</source>
-        <translation>新建会话</translation>
-    </message>
-    <message>
         <source>Command palette  (Ctrl+K)</source>
         <translation>命令面板 (Ctrl+K)</translation>
+    </message>
+    <message>
+        <source>Command Palette</source>
+        <translation>命令面板</translation>
+    </message>
+    <message>
+        <source>Open command palette</source>
+        <translation>打开命令面板</translation>
     </message>
     <message>
         <source>Switch to light theme</source>

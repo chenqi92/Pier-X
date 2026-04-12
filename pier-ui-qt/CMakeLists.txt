@@ -9,6 +9,7 @@ find_package(Qt6 6.8 REQUIRED COMPONENTS
     Quick
     QuickControls2
     LinguistTools
+    Svg
 )
 
 qt_standard_project_setup(REQUIRES 6.8)
@@ -99,6 +100,7 @@ qt_add_qml_module(pier-x
         qml/shell/WelcomeView.qml
         qml/shell/CommandPalette.qml
         qml/shell/RightPanel.qml
+        qml/shell/RightSidebar.qml
         qml/dialogs/NewConnectionDialog.qml
         qml/dialogs/SettingsDialog.qml
         qml/dialogs/CommandHistoryDialog.qml
@@ -126,6 +128,13 @@ qt_add_qml_module(pier-x
         resources/icons/lucide/arrow-left.svg
         resources/icons/lucide/folder.svg
         resources/icons/lucide/moon.svg
+        resources/icons/lucide/git-branch.svg
+        resources/icons/lucide/database.svg
+        resources/icons/lucide/container.svg
+        resources/icons/lucide/file-code.svg
+        resources/icons/lucide/server.svg
+        resources/icons/lucide/layers.svg
+        resources/icons/lucide/search.svg
         resources/fonts/Inter-Medium.ttf
         resources/fonts/JetBrainsMono-Regular.ttf
         resources/fonts/Inter-Regular.ttf
@@ -148,6 +157,7 @@ target_link_libraries(pier-x PRIVATE
     Qt6::Qml
     Qt6::Quick
     Qt6::QuickControls2
+    Qt6::Svg
     pier_core
 )
 

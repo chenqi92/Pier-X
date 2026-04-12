@@ -348,7 +348,7 @@ pub unsafe extern "C" fn pier_terminal_new_ssh(
         return ptr::null_mut();
     }
 
-    let auth = AuthMethod::InMemoryPassword {
+    let auth = AuthMethod::DirectPassword {
         password: password_str,
     };
     new_ssh_with_auth(cols, rows, host_str, port, user_str, auth, notify, user_data)

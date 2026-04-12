@@ -76,7 +76,7 @@ Item {
             Layout.fillWidth: true
             Layout.topMargin: Theme.sp4
             spacing: Theme.sp2
-            visible: root.connectionsModel && root.connectionsModel.count > 0
+            visible: root.connectionsModel !== null && root.connectionsModel.count > 0
 
             Text {
                 text: qsTr("Recent connections")

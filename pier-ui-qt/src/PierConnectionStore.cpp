@@ -38,6 +38,7 @@ QVariant PierConnectionStore::data(const QModelIndex &index, int role) const
     case HostRole:                   return e.host;
     case PortRole:                   return e.port;
     case UsernameRole:               return e.username;
+    case PasswordRole:               return e.password;
     case CredentialIdRole:           return e.credentialId;
     case KeyPathRole:                return e.keyPath;
     case PassphraseCredentialIdRole: return e.passphraseCredentialId;
@@ -54,6 +55,7 @@ QHash<int, QByteArray> PierConnectionStore::roleNames() const
         { HostRole,                   "host" },
         { PortRole,                   "port" },
         { UsernameRole,               "username" },
+        { PasswordRole,               "password" },
         { CredentialIdRole,           "credentialId" },
         { KeyPathRole,                "keyPath" },
         { PassphraseCredentialIdRole, "passphraseCredentialId" },
@@ -87,6 +89,22 @@ void PierConnectionStore::reload()
     }
     endResetModel();
     emit countChanged();
+}
+
+bool PierConnectionStore::addWithPassword(const QString &name, const QString &host, int port,
+                                          const QString &username, const QString &password)
+{
+    if (name.isEmpty() || host.isEmpty() || username.isEmpty()) {
+        qWarning() << "PierConnectionStore::addWithPassword rejected empty field";
+        return false;
+    }
+    Entry e;
+    e.name = name;
+    e.host = host;
+    e.port = port > 0 ? port : 22;
+    e.username = username;
+    e.password = password;
+    return appendEntry(std::move(e));
 }
 
 bool PierConnectionStore::add(const QString &name, const QString &host, int port,
@@ -192,6 +210,7 @@ QVariantMap PierConnectionStore::get(int index) const
     m["host"]                   = e.host;
     m["port"]                   = e.port;
     m["username"]               = e.username;
+    m["password"]               = e.password;
     m["credentialId"]           = e.credentialId;
     m["keyPath"]                = e.keyPath;
     m["passphraseCredentialId"] = e.passphraseCredentialId;
@@ -230,7 +249,9 @@ bool PierConnectionStore::ingestJson(const QByteArray &json)
         // sidebar reconnect path falls back to a local tab.
         const QJsonObject auth = obj.value(QStringLiteral("auth")).toObject();
         const QString kind = auth.value(QStringLiteral("kind")).toString();
-        if (kind == QStringLiteral("keychain_password")) {
+        if (kind == QStringLiteral("direct_password")) {
+            e.password = auth.value(QStringLiteral("password")).toString();
+        } else if (kind == QStringLiteral("keychain_password")) {
             e.credentialId = auth.value(QStringLiteral("credential_id")).toString();
         } else if (kind == QStringLiteral("public_key_file")) {
             e.keyPath = auth.value(QStringLiteral("private_key_path")).toString();
@@ -270,10 +291,10 @@ bool PierConnectionStore::persist()
     for (const Entry &e : m_entries) {
         QJsonObject auth;
         if (e.usesAgent) {
-            // Matches Rust's `AuthMethod::Agent` unit variant
-            // with serde rename_all = "snake_case" → kind = "agent"
-            // and no extra fields.
             auth[QStringLiteral("kind")] = QStringLiteral("agent");
+        } else if (!e.password.isEmpty()) {
+            auth[QStringLiteral("kind")] = QStringLiteral("direct_password");
+            auth[QStringLiteral("password")] = e.password;
         } else if (!e.keyPath.isEmpty()) {
             auth[QStringLiteral("kind")] = QStringLiteral("public_key_file");
             auth[QStringLiteral("private_key_path")] = e.keyPath;

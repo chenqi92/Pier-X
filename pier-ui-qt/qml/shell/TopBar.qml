@@ -34,12 +34,13 @@ Rectangle {
             Behavior on color { ColorAnimation { duration: Theme.durNormal } }
         }
 
+        Item { Layout.preferredWidth: Theme.sp3 }
+
         IconButton {
             icon: "plus"
-            tooltip: qsTr("New connection")
+            tooltip: qsTr("New session")
             onClicked: root.newSessionRequested()
         }
-
         IconButton {
             icon: "command"
             tooltip: qsTr("Command palette  (Ctrl+K)")
@@ -71,10 +72,6 @@ Rectangle {
     // (frameless chrome removes the native title bar drag).
     TapHandler {
         onTapped: (eventPoint, button) => {
-            // no-op: TapHandler consumes clicks that should go to
-            // children only when nothing else matches, so toolbar
-            // buttons keep working. This is here to prevent the
-            // DragHandler below from swallowing single-click events.
         }
     }
     DragHandler {

@@ -29,12 +29,11 @@ Rectangle {
         }
     }
 
-    // Periodic refresh (every 5 seconds when panel is visible)
-    Timer {
-        interval: 5000
-        running: root.visible && client.isGitRepo
-        repeat: true
-        onTriggered: client.refresh()
+    // Refresh when panel becomes visible
+    onVisibleChanged: {
+        if (visible && client.isGitRepo) {
+            client.refresh()
+        }
     }
 
     ColumnLayout {
@@ -93,13 +92,6 @@ Rectangle {
                     Layout.preferredWidth: 24
                     Layout.preferredHeight: 24
                     enabled: !client.busy
-                }
-
-                IconButton {
-                    icon: "x"
-                    onClicked: root.closePanelRequested()
-                    Layout.preferredWidth: 24
-                    Layout.preferredHeight: 24
                 }
             }
         }

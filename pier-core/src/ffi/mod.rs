@@ -44,6 +44,7 @@ pub mod docker;
 pub mod log_stream;
 pub mod markdown;
 pub mod mysql;
+pub mod postgres;
 pub mod redis;
 pub mod services;
 pub mod sftp;
@@ -79,6 +80,11 @@ pub use self::mysql::{
     pier_mysql_execute, pier_mysql_free, pier_mysql_free_string, pier_mysql_list_columns,
     pier_mysql_list_databases, pier_mysql_list_tables, pier_mysql_open,
     pier_mysql_open_with_credential, PierMysql,
+};
+pub use self::postgres::{
+    pier_postgres_execute, pier_postgres_free, pier_postgres_free_string,
+    pier_postgres_list_columns, pier_postgres_list_databases, pier_postgres_list_tables,
+    pier_postgres_open, PierPostgres,
 };
 pub use self::redis::{
     pier_redis_free, pier_redis_free_string, pier_redis_info, pier_redis_inspect, pier_redis_open,

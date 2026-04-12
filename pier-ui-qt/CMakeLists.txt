@@ -74,6 +74,8 @@ qt_add_qml_module(pier-x
         src/PierMySqlClient.cpp
         src/PierMySqlWorkspace.h
         src/PierMySqlWorkspace.cpp
+        src/PierPostgresClient.h
+        src/PierPostgresClient.cpp
     QML_FILES
         qml/Main.qml
         qml/Theme.qml
@@ -102,6 +104,7 @@ qt_add_qml_module(pier-x
         qml/views/SftpBrowserView.qml
         qml/views/RedisBrowserView.qml
         qml/views/MySqlBrowserView.qml
+        qml/views/PostgresPanelView.qml
         qml/views/LogViewerView.qml
         qml/views/DockerPanelView.qml
         qml/views/MarkdownPreviewView.qml

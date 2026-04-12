@@ -54,6 +54,13 @@ redis = { version = "1.2", default-features = false, features = [
     "tokio-comp", "connection-manager", "acl", "script",
 ] }
 
+# PostgreSQL client for the M7a panel. `tokio-postgres` is
+# the canonical async PG client in the Rust ecosystem. Default
+# features pull in `runtime` (tokio net+time) which we already
+# have via the shared runtime. No TLS — same rationale as MySQL
+# and Redis: the SSH tunnel encrypts the transport.
+tokio-postgres = "0.7"
+
 # Markdown → HTML renderer for the local Markdown preview
 # panel (M5e). `pulldown-cmark` is the reference CommonMark
 # implementation in the Rust ecosystem; we enable a superset

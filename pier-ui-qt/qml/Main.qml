@@ -91,7 +91,11 @@ ApplicationWindow {
             mysqlPort: 3306,
             mysqlUser: "",
             mysqlPassword: "",
-            mysqlDatabase: ""
+            mysqlDatabase: "",
+            pgHost: "",
+            pgPort: 5432,
+            pgUser: "",
+            pgDatabase: ""
         }
     }
 
@@ -116,7 +120,11 @@ ApplicationWindow {
             mysqlPort: 3306,
             mysqlUser: "",
             mysqlPassword: "",
-            mysqlDatabase: ""
+            mysqlDatabase: "",
+            pgHost: "",
+            pgPort: 5432,
+            pgUser: "",
+            pgDatabase: ""
         }
     }
 
@@ -144,7 +152,11 @@ ApplicationWindow {
             mysqlPort: 3306,
             mysqlUser: "",
             mysqlPassword: "",
-            mysqlDatabase: ""
+            mysqlDatabase: "",
+            pgHost: "",
+            pgPort: 5432,
+            pgUser: "",
+            pgDatabase: ""
         }
     }
 
@@ -174,7 +186,11 @@ ApplicationWindow {
             mysqlPort: 3306,
             mysqlUser: "",
             mysqlPassword: "",
-            mysqlDatabase: ""
+            mysqlDatabase: "",
+            pgHost: "",
+            pgPort: 5432,
+            pgUser: "",
+            pgDatabase: ""
         }
     }
 
@@ -209,7 +225,11 @@ ApplicationWindow {
             mysqlPort: 3306,
             mysqlUser: "",
             mysqlPassword: "",
-            mysqlDatabase: ""
+            mysqlDatabase: "",
+            pgHost: "",
+            pgPort: 5432,
+            pgUser: "",
+            pgDatabase: ""
         }
     }
 
@@ -256,7 +276,11 @@ ApplicationWindow {
             mysqlPort: 3306,
             mysqlUser: "",
             mysqlPassword: "",
-            mysqlDatabase: ""
+            mysqlDatabase: "",
+            pgHost: "",
+            pgPort: 5432,
+            pgUser: "",
+            pgDatabase: ""
         }
     }
 
@@ -303,7 +327,11 @@ ApplicationWindow {
             mysqlPort: 3306,
             mysqlUser: "",
             mysqlPassword: "",
-            mysqlDatabase: ""
+            mysqlDatabase: "",
+            pgHost: "",
+            pgPort: 5432,
+            pgUser: "",
+            pgDatabase: ""
         }
     }
 
@@ -340,12 +368,51 @@ ApplicationWindow {
             mysqlPort: port,
             mysqlUser: user,
             mysqlPassword: password || "",
-            mysqlDatabase: database || ""
+            mysqlDatabase: database || "",
+            pgHost: "",
+            pgPort: 5432,
+            pgUser: "",
+            pgDatabase: ""
         }
     }
 
     function openMysqlTab(host, port, user, password, database, label) {
         tabModel.append(_makeMysqlRow(host, port, user, password, database, label))
+        currentTabIndex = tabModel.count - 1
+    }
+
+    // PostgreSQL client tab row — M7a.
+    function _makePostgresRow(host, port, user, password, database, label) {
+        return {
+            title: qsTr("PG: %1").arg(label || (user + "@" + host + ":" + port)),
+            backend: "postgres",
+            sshHost: "",
+            sshPort: 22,
+            sshUser: "",
+            sshPassword: "",
+            sshCredentialId: "",
+            sshKeyPath: "",
+            sshPassphraseCredentialId: "",
+            sshUsesAgent: false,
+            redisHost: "",
+            redisPort: 0,
+            redisDb: 0,
+            logCommand: "",
+            markdownPath: "",
+            mysqlHost: "",
+            mysqlPort: 3306,
+            mysqlUser: "",
+            mysqlPassword: "",
+            mysqlDatabase: "",
+            pgHost: host,
+            pgPort: port,
+            pgUser: user,
+            pgDatabase: database || ""
+        }
+    }
+
+    function openPostgresTab(host, port, user, password, database, label) {
+        tabModel.append(_makePostgresRow(host, port, user, password, database, label))
         currentTabIndex = tabModel.count - 1
     }
 
@@ -674,6 +741,10 @@ ApplicationWindow {
                                 required property string mysqlUser
                                 required property string mysqlPassword
                                 required property string mysqlDatabase
+                                required property string pgHost
+                                required property int    pgPort
+                                required property string pgUser
+                                required property string pgDatabase
 
                                 sourceComponent: backend === "sftp"
                                                  ? sftpComp
@@ -687,7 +758,9 @@ ApplicationWindow {
                                                              ? markdownComp
                                                              : (backend === "mysql"
                                                                 ? mysqlComp
-                                                                : terminalComp)))))
+                                                                : (backend === "postgres"
+                                                                   ? postgresComp
+                                                                   : terminalComp))))))
 
                                 Component {
                                     id: terminalComp
@@ -765,6 +838,15 @@ ApplicationWindow {
                                         mysqlUser: parent.mysqlUser
                                         mysqlPassword: parent.mysqlPassword
                                         mysqlDatabase: parent.mysqlDatabase
+                                    }
+                                }
+                                Component {
+                                    id: postgresComp
+                                    PostgresPanelView {
+                                        pgHost: parent.pgHost
+                                        pgPort: parent.pgPort
+                                        pgUser: parent.pgUser
+                                        pgDatabase: parent.pgDatabase
                                     }
                                 }
                             }
@@ -901,6 +983,13 @@ ApplicationWindow {
                     // front, so the user still fills in the
                     // user / password / database fields.
                     window.openMysqlTab("127.0.0.1", 13306, "root", "", "")
+                }
+            },
+            {
+                title: qsTr("PostgreSQL client (127.0.0.1:15432)"),
+                shortcut: "",
+                action: function() {
+                    window.openPostgresTab("127.0.0.1", 15432, "postgres", "", "", "")
                 }
             },
             {

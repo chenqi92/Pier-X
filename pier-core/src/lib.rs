@@ -20,6 +20,7 @@
 pub mod connections;
 pub mod credentials;
 pub mod ffi;
+pub mod markdown;
 pub mod paths;
 pub mod services;
 pub mod ssh;

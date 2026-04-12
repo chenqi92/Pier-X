@@ -1,6 +1,7 @@
 import QtQuick
 import QtQuick.Window
 import QtQuick.Controls.Basic
+import QtQuick.Dialogs
 import QtQuick.Layouts
 import Pier
 
@@ -84,7 +85,8 @@ ApplicationWindow {
             redisHost: "",
             redisPort: 0,
             redisDb: 0,
-            logCommand: ""
+            logCommand: "",
+            markdownPath: ""
         }
     }
 
@@ -103,7 +105,8 @@ ApplicationWindow {
             redisHost: "",
             redisPort: 0,
             redisDb: 0,
-            logCommand: ""
+            logCommand: "",
+            markdownPath: ""
         }
     }
 
@@ -125,7 +128,8 @@ ApplicationWindow {
             redisHost: "",
             redisPort: 0,
             redisDb: 0,
-            logCommand: ""
+            logCommand: "",
+            markdownPath: ""
         }
     }
 
@@ -149,7 +153,8 @@ ApplicationWindow {
             redisHost: host,
             redisPort: port,
             redisDb: db,
-            logCommand: ""
+            logCommand: "",
+            markdownPath: ""
         }
     }
 
@@ -178,7 +183,8 @@ ApplicationWindow {
             redisHost: "",
             redisPort: 0,
             redisDb: 0,
-            logCommand: command
+            logCommand: command,
+            markdownPath: ""
         }
     }
 
@@ -219,7 +225,8 @@ ApplicationWindow {
             redisHost: "",
             redisPort: 0,
             redisDb: 0,
-            logCommand: ""
+            logCommand: "",
+            markdownPath: ""
         }
     }
 
@@ -236,6 +243,39 @@ ApplicationWindow {
         const conn = connectionsModel.get(index)
         if (!conn) return
         openDockerTab(conn)
+    }
+
+    // Markdown preview tab row — M5e per-service panel. Pure
+    // local: no SSH, no sessions, no services. Carries only a
+    // filesystem path; the view loads + renders on mount.
+    function _makeMarkdownRow(filePath) {
+        // Strip path to basename for the tab title.
+        var slash = filePath.lastIndexOf("/")
+        if (slash < 0) slash = filePath.lastIndexOf("\\")
+        var name = slash >= 0 ? filePath.slice(slash + 1) : filePath
+        return {
+            title: qsTr("MD: %1").arg(name),
+            backend: "markdown",
+            sshHost: "",
+            sshPort: 22,
+            sshUser: "",
+            sshPassword: "",
+            sshCredentialId: "",
+            sshKeyPath: "",
+            sshPassphraseCredentialId: "",
+            sshUsesAgent: false,
+            redisHost: "",
+            redisPort: 0,
+            redisDb: 0,
+            logCommand: "",
+            markdownPath: filePath
+        }
+    }
+
+    function openMarkdownTab(filePath) {
+        if (!filePath || filePath.length === 0) return
+        tabModel.append(_makeMarkdownRow(filePath))
+        currentTabIndex = tabModel.count - 1
     }
 
     function openSftpTab(conn) {
@@ -521,6 +561,7 @@ ApplicationWindow {
                                 required property int    redisPort
                                 required property int    redisDb
                                 required property string logCommand
+                                required property string markdownPath
 
                                 sourceComponent: backend === "sftp"
                                                  ? sftpComp
@@ -530,7 +571,9 @@ ApplicationWindow {
                                                        ? logComp
                                                        : (backend === "docker"
                                                           ? dockerComp
-                                                          : terminalComp)))
+                                                          : (backend === "markdown"
+                                                             ? markdownComp
+                                                             : terminalComp))))
 
                                 Component {
                                     id: terminalComp
@@ -594,6 +637,12 @@ ApplicationWindow {
                                         sshUsesAgent: parent.sshUsesAgent
                                     }
                                 }
+                                Component {
+                                    id: markdownComp
+                                    MarkdownPreviewView {
+                                        filePath: parent.markdownPath
+                                    }
+                                }
                             }
                         }
                     }
@@ -623,6 +672,28 @@ ApplicationWindow {
     SettingsDialog {
         id: settingsDialog
         connectionsModel: connectionsModel
+    }
+
+    // M5e: Native file picker for the "Open Markdown preview"
+    // palette entry. Accepts .md / .markdown / .txt — the
+    // renderer doesn't care about extension, but filtering
+    // keeps the picker clean.
+    FileDialog {
+        id: markdownFileDialog
+        title: qsTr("Open Markdown file")
+        nameFilters: [
+            qsTr("Markdown files (*.md *.markdown *.mdx)"),
+            qsTr("Text files (*.txt)"),
+            qsTr("All files (*)")
+        ]
+        fileMode: FileDialog.OpenFile
+        onAccepted: {
+            // `selectedFile` is a URL; convert to a filesystem
+            // path before handing it to the Rust FFI.
+            const path = markdownFileDialog.selectedFile.toString()
+                .replace(/^file:\/\//, "")
+            window.openMarkdownTab(path)
+        }
     }
 
     CommandPalette {
@@ -682,6 +753,14 @@ ApplicationWindow {
                     } else {
                         console.warn("No saved connections for Docker panel.")
                     }
+                }
+            },
+            {
+                title: qsTr("Open Markdown preview…"),
+                shortcut: "",
+                action: function() {
+                    // M5e: native file picker → markdown tab.
+                    markdownFileDialog.open()
                 }
             },
             {

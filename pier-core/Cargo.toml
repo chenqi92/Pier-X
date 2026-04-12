@@ -54,6 +54,16 @@ redis = { version = "1.2", default-features = false, features = [
     "tokio-comp", "connection-manager", "acl", "script",
 ] }
 
+# Markdown → HTML renderer for the local Markdown preview
+# panel (M5e). `pulldown-cmark` is the reference CommonMark
+# implementation in the Rust ecosystem; we enable a superset
+# of GFM extensions (tables, strikethrough, task lists,
+# footnotes) so typical README.md files render the way the
+# user expects on GitHub. No HTML passthrough — we escape
+# everything by default to avoid rendering untrusted HTML
+# embedded in a .md file we just opened from disk.
+pulldown-cmark = { version = "0.13", default-features = false, features = ["html"] }
+
 # Async runtime for russh. Only the `rt-multi-thread` + time + net
 # features — we don't need full. `fs` is pulled in for the SFTP
 # upload/download helpers that read/write local files from inside

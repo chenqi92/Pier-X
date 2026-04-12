@@ -53,6 +53,8 @@ qt_add_qml_module(pier-x
         src/PierLogStream.cpp
         src/PierDockerClient.h
         src/PierDockerClient.cpp
+        src/PierMarkdown.h
+        src/PierMarkdown.cpp
     QML_FILES
         qml/Main.qml
         qml/Theme.qml
@@ -80,6 +82,7 @@ qt_add_qml_module(pier-x
         qml/views/RedisBrowserView.qml
         qml/views/LogViewerView.qml
         qml/views/DockerPanelView.qml
+        qml/views/MarkdownPreviewView.qml
     RESOURCES
         resources/icons/pier.png
 )

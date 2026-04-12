@@ -199,6 +199,45 @@ ApplicationWindow {
                    command ? conn.name : "syslog")
     }
 
+    // Docker panel tab row — M5c per-service panel. Uses the
+    // same SSH field shape as an ssh/sftp tab; the panel runs
+    // `docker ps` / `start` / `stop` / `rm` via one-shot
+    // exec_command and links out to the Log viewer for live
+    // `docker logs -f`.
+    function _makeDockerRow(conn) {
+        return {
+            title: qsTr("Docker: %1").arg(conn.name),
+            backend: "docker",
+            sshHost: conn.host,
+            sshPort: conn.port,
+            sshUser: conn.username,
+            sshPassword: conn.password || "",
+            sshCredentialId: conn.credentialId || "",
+            sshKeyPath: conn.keyPath || "",
+            sshPassphraseCredentialId: conn.passphraseCredentialId || "",
+            sshUsesAgent: conn.usesAgent === true,
+            redisHost: "",
+            redisPort: 0,
+            redisDb: 0,
+            logCommand: ""
+        }
+    }
+
+    function openDockerTab(conn) {
+        tabModel.append(_makeDockerRow(conn))
+        currentTabIndex = tabModel.count - 1
+    }
+
+    // Quick entry: Docker panel on the saved connection at
+    // `index`. Used by the command palette.
+    function openDockerForConnection(index) {
+        if (index < 0 || index >= connectionsModel.count)
+            return
+        const conn = connectionsModel.get(index)
+        if (!conn) return
+        openDockerTab(conn)
+    }
+
     function openSftpTab(conn) {
         tabModel.append(_makeSftpRow(conn))
         currentTabIndex = tabModel.count - 1
@@ -489,7 +528,9 @@ ApplicationWindow {
                                                     ? redisComp
                                                     : (backend === "log"
                                                        ? logComp
-                                                       : terminalComp))
+                                                       : (backend === "docker"
+                                                          ? dockerComp
+                                                          : terminalComp)))
 
                                 Component {
                                     id: terminalComp
@@ -538,6 +579,19 @@ ApplicationWindow {
                                         sshPassphraseCredentialId: parent.sshPassphraseCredentialId
                                         sshUsesAgent: parent.sshUsesAgent
                                         logCommand: parent.logCommand
+                                    }
+                                }
+                                Component {
+                                    id: dockerComp
+                                    DockerPanelView {
+                                        sshHost: parent.sshHost
+                                        sshPort: parent.sshPort
+                                        sshUser: parent.sshUser
+                                        sshPassword: parent.sshPassword
+                                        sshCredentialId: parent.sshCredentialId
+                                        sshKeyPath: parent.sshKeyPath
+                                        sshPassphraseCredentialId: parent.sshPassphraseCredentialId
+                                        sshUsesAgent: parent.sshUsesAgent
                                     }
                                 }
                             }
@@ -614,6 +668,19 @@ ApplicationWindow {
                         window.openLogForConnection(0, "")
                     } else {
                         console.warn("No saved connections to tail.")
+                    }
+                }
+            },
+            {
+                title: qsTr("Docker containers (first saved connection)"),
+                shortcut: "",
+                action: function() {
+                    // M5c smoke-test hook: opens a Docker panel
+                    // tab on the first saved SSH connection.
+                    if (connectionsModel.count > 0) {
+                        window.openDockerForConnection(0)
+                    } else {
+                        console.warn("No saved connections for Docker panel.")
                     }
                 }
             },

@@ -34,4 +34,5 @@
 //! The handle types are always Send + Sync so the UI layer can
 //! stash them inside QObjects that cross thread boundaries.
 
+pub mod docker;
 pub mod redis;

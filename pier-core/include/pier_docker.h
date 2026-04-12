@@ -96,6 +96,11 @@ void pier_docker_free_string(char *s);
  * Release with pier_docker_free_string. */
 char *pier_docker_list_containers(PierDocker *h, int32_t all);
 
+/* Inspect a single container. Returns the raw JSON array
+ * emitted by `docker inspect --type container <id>`, or
+ * NULL on failure. Release with pier_docker_free_string. */
+char *pier_docker_inspect_container(PierDocker *h, const char *id);
+
 /* Start a container by id. Returns 0 on success or one of
  * the PIER_DOCKER_ERR_* codes. */
 int32_t pier_docker_start(PierDocker *h, const char *id);

@@ -19,7 +19,13 @@ Item {
     anchors.fill: parent
 
     function show() {
+        // Reset animation state
+        dialog.scale = 0.96
+        dialog.opacity = 0
         open = true
+        // Trigger entry animation
+        dialog.scale = 1.0
+        dialog.opacity = 1.0
         sectionList.currentIndex = 0
     }
 
@@ -51,6 +57,13 @@ Item {
         width: 720
         height: 520
 
+        // Entry animation — scale-up + fade-in
+        scale: 0.96
+        opacity: 0
+        Behavior on scale   { NumberAnimation { duration: Theme.durNormal; easing.type: Easing.OutCubic } }
+        Behavior on opacity { NumberAnimation { duration: Theme.durNormal; easing.type: Easing.OutCubic } }
+        transformOrigin: Item.Center
+
         color: Theme.bgElevated
         border.color: Theme.borderDefault
         border.width: 1
@@ -66,6 +79,13 @@ Item {
             shadowOpacity: 0.5
             shadowBlur: 1.0
             shadowVerticalOffset: 16
+        }
+
+        // Block clicks on the dialog from reaching the backdrop.
+        MouseArea {
+            anchors.fill: parent
+            onClicked: (mouse) => mouse.accepted = true
+            onPressed: (mouse) => mouse.accepted = true
         }
 
         ColumnLayout {
@@ -96,7 +116,7 @@ Item {
                     }
 
                     IconButton {
-                        glyph: "×"
+                        icon: "x"
                         tooltip: qsTr("Close")
                         onClicked: root.hide()
                     }
@@ -304,6 +324,76 @@ Item {
                                     }
                                 }
                             }
+
+                            Separator { Layout.fillWidth: true; Layout.leftMargin: Theme.sp4; Layout.rightMargin: Theme.sp4 }
+
+                            SectionLabel { text: qsTr("UI font size"); Layout.leftMargin: Theme.sp4 }
+
+                            ColumnLayout {
+                                Layout.fillWidth: true
+                                Layout.leftMargin: Theme.sp4
+                                Layout.rightMargin: Theme.sp4
+                                spacing: Theme.sp2
+
+                                RowLayout {
+                                    Layout.fillWidth: true
+                                    Text {
+                                        text: qsTr("Size")
+                                        font.family: Theme.fontUi
+                                        font.pixelSize: Theme.sizeBody
+                                        color: Theme.textPrimary
+                                    }
+                                    Item { Layout.fillWidth: true }
+                                    Text {
+                                        text: Theme.sizeBody + " px"
+                                        font.family: Theme.fontMono
+                                        font.pixelSize: Theme.sizeBody
+                                        color: Theme.textTertiary
+                                    }
+                                }
+
+                                // Preview
+                                Rectangle {
+                                    Layout.fillWidth: true
+                                    implicitHeight: previewText.implicitHeight + Theme.sp3 * 2
+                                    color: Theme.bgSurface
+                                    border.color: Theme.borderSubtle
+                                    border.width: 1
+                                    radius: Theme.radiusSm
+
+                                    Text {
+                                        id: previewText
+                                        anchors.fill: parent
+                                        anchors.margins: Theme.sp3
+                                        text: "The quick brown fox jumps over the lazy dog."
+                                        font.family: Theme.fontUi
+                                        font.pixelSize: Theme.sizeBody
+                                        color: Theme.textPrimary
+                                        wrapMode: Text.Wrap
+                                    }
+                                }
+
+                                // Mono preview
+                                Rectangle {
+                                    Layout.fillWidth: true
+                                    implicitHeight: monoPreview.implicitHeight + Theme.sp3 * 2
+                                    color: Theme.bgSurface
+                                    border.color: Theme.borderSubtle
+                                    border.width: 1
+                                    radius: Theme.radiusSm
+
+                                    Text {
+                                        id: monoPreview
+                                        anchors.fill: parent
+                                        anchors.margins: Theme.sp3
+                                        text: "$ ssh root@prod-01 'tail -f /var/log/nginx/access.log'"
+                                        font.family: Theme.fontMono
+                                        font.pixelSize: Theme.sizeBody
+                                        color: Theme.textPrimary
+                                        wrapMode: Text.Wrap
+                                    }
+                                }
+                            }
                         }
                     }
 
@@ -316,18 +406,114 @@ Item {
 
                             Item { Layout.preferredHeight: Theme.sp4 }
 
-                            SectionLabel { text: qsTr("Defaults"); Layout.leftMargin: Theme.sp4 }
+                            SectionLabel { text: qsTr("Cursor"); Layout.leftMargin: Theme.sp4 }
 
-                            Text {
+                            ColumnLayout {
                                 Layout.fillWidth: true
                                 Layout.leftMargin: Theme.sp4
                                 Layout.rightMargin: Theme.sp4
-                                wrapMode: Text.Wrap
-                                text: qsTr("Terminal preferences become available once the pier-core PTY backend is wired in.")
-                                font.family: Theme.fontUi
-                                font.pixelSize: Theme.sizeBody
-                                color: Theme.textTertiary
-                                Behavior on color { ColorAnimation { duration: Theme.durNormal } }
+                                spacing: Theme.sp2
+
+                                RowLayout {
+                                    Layout.fillWidth: true
+                                    Text {
+                                        Layout.fillWidth: true
+                                        text: qsTr("Cursor style")
+                                        font.family: Theme.fontUi
+                                        font.pixelSize: Theme.sizeBody
+                                        color: Theme.textPrimary
+                                        Behavior on color { ColorAnimation { duration: Theme.durNormal } }
+                                    }
+                                    PierComboBox {
+                                        Layout.preferredWidth: 120
+                                        options: [qsTr("Block"), qsTr("Beam"), qsTr("Underline")]
+                                        currentIndex: 0
+                                    }
+                                }
+
+                                RowLayout {
+                                    Layout.fillWidth: true
+                                    Text {
+                                        Layout.fillWidth: true
+                                        text: qsTr("Cursor blink")
+                                        font.family: Theme.fontUi
+                                        font.pixelSize: Theme.sizeBody
+                                        color: Theme.textPrimary
+                                        Behavior on color { ColorAnimation { duration: Theme.durNormal } }
+                                    }
+                                    GhostButton {
+                                        text: qsTr("On")
+                                    }
+                                }
+                            }
+
+                            Separator { Layout.fillWidth: true; Layout.leftMargin: Theme.sp4; Layout.rightMargin: Theme.sp4 }
+
+                            SectionLabel { text: qsTr("Scrollback"); Layout.leftMargin: Theme.sp4 }
+
+                            ColumnLayout {
+                                Layout.fillWidth: true
+                                Layout.leftMargin: Theme.sp4
+                                Layout.rightMargin: Theme.sp4
+                                spacing: Theme.sp2
+
+                                RowLayout {
+                                    Layout.fillWidth: true
+                                    Text {
+                                        Layout.fillWidth: true
+                                        text: qsTr("Buffer lines")
+                                        font.family: Theme.fontUi
+                                        font.pixelSize: Theme.sizeBody
+                                        color: Theme.textPrimary
+                                        Behavior on color { ColorAnimation { duration: Theme.durNormal } }
+                                    }
+                                    // Editable field for scrollback buffer size
+                                    PierTextField {
+                                        Layout.preferredWidth: 90
+                                        text: "10000"
+                                    }
+                                }
+                            }
+
+                            Separator { Layout.fillWidth: true; Layout.leftMargin: Theme.sp4; Layout.rightMargin: Theme.sp4 }
+
+                            SectionLabel { text: qsTr("Bell"); Layout.leftMargin: Theme.sp4 }
+
+                            ColumnLayout {
+                                Layout.fillWidth: true
+                                Layout.leftMargin: Theme.sp4
+                                Layout.rightMargin: Theme.sp4
+                                spacing: Theme.sp2
+
+                                RowLayout {
+                                    Layout.fillWidth: true
+                                    Text {
+                                        Layout.fillWidth: true
+                                        text: qsTr("Visual bell")
+                                        font.family: Theme.fontUi
+                                        font.pixelSize: Theme.sizeBody
+                                        color: Theme.textPrimary
+                                        Behavior on color { ColorAnimation { duration: Theme.durNormal } }
+                                    }
+                                    GhostButton {
+                                        text: qsTr("On")
+                                    }
+                                }
+
+                                RowLayout {
+                                    Layout.fillWidth: true
+                                    Text {
+                                        Layout.fillWidth: true
+                                        text: qsTr("Audio bell")
+                                        font.family: Theme.fontUi
+                                        font.pixelSize: Theme.sizeBody
+                                        color: Theme.textPrimary
+                                        Behavior on color { ColorAnimation { duration: Theme.durNormal } }
+                                    }
+                                    GhostButton {
+                                        text: qsTr("Off")
+                                    }
+                                }
                             }
                         }
                     }

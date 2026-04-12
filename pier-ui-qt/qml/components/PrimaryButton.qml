@@ -13,14 +13,21 @@ Rectangle {
     implicitWidth: label.implicitWidth + Theme.sp4 * 2
 
     color: !enabled            ? Theme.accent
-         : mouseArea.pressed   ? Theme.accent
+         : mouseArea.pressed   ? Qt.darker(Theme.accent, 1.15)
          : mouseArea.containsMouse ? Theme.accentHover
          : Theme.accent
     opacity: enabled ? 1.0 : 0.5
     radius: Theme.radiusSm
 
-    Behavior on color   { ColorAnimation  { duration: Theme.durFast } }
-    Behavior on opacity { NumberAnimation { duration: Theme.durFast } }
+    // Keyboard focus ring
+    border.color: activeFocus ? Theme.borderFocus : "transparent"
+    border.width: activeFocus ? 2 : 0
+
+    Behavior on color        { ColorAnimation  { duration: Theme.durFast } }
+    Behavior on opacity      { NumberAnimation { duration: Theme.durFast } }
+    Behavior on border.color { ColorAnimation  { duration: Theme.durFast } }
+
+    focusPolicy: Qt.TabFocus
 
     Text {
         id: label
@@ -40,4 +47,8 @@ Rectangle {
         enabled: root.enabled
         onClicked: root.clicked()
     }
+
+    Keys.onReturnPressed: root.clicked()
+    Keys.onEnterPressed: root.clicked()
+    Keys.onSpacePressed: root.clicked()
 }

@@ -15,7 +15,7 @@ Rectangle {
     color: mouseArea.pressed       ? Theme.bgActive
          : mouseArea.containsMouse ? Theme.bgHover
          : "transparent"
-    border.color: Theme.borderDefault
+    border.color: activeFocus ? Theme.borderFocus : Theme.borderDefault
     border.width: 1
     radius: Theme.radiusSm
     opacity: enabled ? 1.0 : 0.5
@@ -23,6 +23,8 @@ Rectangle {
     Behavior on color        { ColorAnimation  { duration: Theme.durFast } }
     Behavior on border.color { ColorAnimation  { duration: Theme.durNormal } }
     Behavior on opacity      { NumberAnimation { duration: Theme.durFast } }
+
+    focusPolicy: Qt.TabFocus
 
     Text {
         id: label
@@ -44,4 +46,8 @@ Rectangle {
         enabled: root.enabled
         onClicked: root.clicked()
     }
+
+    Keys.onReturnPressed: root.clicked()
+    Keys.onEnterPressed: root.clicked()
+    Keys.onSpacePressed: root.clicked()
 }

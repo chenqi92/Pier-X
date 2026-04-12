@@ -61,10 +61,11 @@ pub use self::connections::{
 pub use self::core::{pier_core_build_info, pier_core_has_feature, pier_core_version};
 pub use self::credentials::{pier_credential_delete, pier_credential_set};
 pub use self::docker::{
-    pier_docker_free, pier_docker_free_string, pier_docker_list_containers, pier_docker_open,
-    pier_docker_open_on_session, pier_docker_remove, pier_docker_restart, pier_docker_start,
-    pier_docker_stop, PierDocker, PIER_DOCKER_ERR_FAILED, PIER_DOCKER_ERR_NULL,
-    PIER_DOCKER_ERR_UNSAFE_ID, PIER_DOCKER_ERR_UTF8, PIER_DOCKER_OK,
+    pier_docker_free, pier_docker_free_string, pier_docker_inspect_container,
+    pier_docker_list_containers, pier_docker_open, pier_docker_open_on_session,
+    pier_docker_remove, pier_docker_restart, pier_docker_start, pier_docker_stop, PierDocker,
+    PIER_DOCKER_ERR_FAILED, PIER_DOCKER_ERR_NULL, PIER_DOCKER_ERR_UNSAFE_ID,
+    PIER_DOCKER_ERR_UTF8, PIER_DOCKER_OK,
 };
 pub use self::log_stream::{
     pier_log_drain, pier_log_exit_code, pier_log_free, pier_log_free_string, pier_log_is_alive,

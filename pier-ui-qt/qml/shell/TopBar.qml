@@ -12,9 +12,14 @@ Rectangle {
 
     Behavior on color { ColorAnimation { duration: Theme.durNormal } }
 
+    // On macOS with frameless chrome, leave space for the
+    // native traffic light buttons. The inset is zero on all
+    // other platforms.
+    readonly property int trafficLightInset: Qt.platform.os === "osx" ? 78 : 0
+
     RowLayout {
         anchors.fill: parent
-        anchors.leftMargin: Theme.sp4
+        anchors.leftMargin: Theme.sp4 + root.trafficLightInset
         anchors.rightMargin: Theme.sp3
         spacing: Theme.sp2
 
@@ -32,12 +37,12 @@ Rectangle {
         Item { Layout.preferredWidth: Theme.sp3 }
 
         IconButton {
-            glyph: "+"
+            icon: "plus"
             tooltip: qsTr("New session")
             onClicked: root.newSessionRequested()
         }
         IconButton {
-            glyph: "⌘"
+            icon: "command"
             tooltip: qsTr("Command palette  (Ctrl+K)")
             onClicked: root.commandPaletteRequested()
         }
@@ -45,7 +50,7 @@ Rectangle {
         Item { Layout.fillWidth: true }
 
         IconButton {
-            glyph: Theme.dark ? "☾" : "☀"
+            icon: Theme.dark ? "moon" : "sun"
             tooltip: Theme.dark ? qsTr("Switch to light theme") : qsTr("Switch to dark theme")
             onClicked: {
                 Theme.followSystem = false
@@ -53,7 +58,7 @@ Rectangle {
             }
         }
         IconButton {
-            glyph: "⚙"
+            icon: "settings"
             tooltip: qsTr("Settings")
             onClicked: root.settingsRequested()
         }
@@ -62,6 +67,24 @@ Rectangle {
     signal newSessionRequested
     signal commandPaletteRequested
     signal settingsRequested
+
+    // Allow window dragging from the TopBar area on macOS
+    // (frameless chrome removes the native title bar drag).
+    TapHandler {
+        onTapped: (eventPoint, button) => {
+            // no-op: TapHandler consumes clicks that should go to
+            // children only when nothing else matches, so toolbar
+            // buttons keep working. This is here to prevent the
+            // DragHandler below from swallowing single-click events.
+        }
+    }
+    DragHandler {
+        target: null
+        grabPermissions: PointerHandler.CanTakeOverFromAnything
+        onActiveChanged: {
+            if (active) window.startSystemMove()
+        }
+    }
 
     // Bottom 1px border
     Rectangle {

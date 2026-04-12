@@ -1,4 +1,5 @@
 import QtQuick
+import QtQuick.Effects
 import QtQuick.Layouts
 import Pier
 
@@ -10,6 +11,8 @@ Rectangle {
     signal addConnectionRequested
     signal connectionActivated(int index)
     signal connectionDeleted(int index)
+    signal connectionSftpRequested(int index)
+    signal connectionDuplicated(int index)
     signal openLocalTerminalRequested
 
     implicitWidth: 240
@@ -30,7 +33,7 @@ Rectangle {
                 Layout.fillWidth: true
             }
             IconButton {
-                glyph: "+"
+                icon: "plus"
                 tooltip: qsTr("Add connection")
                 onClicked: root.addConnectionRequested()
             }
@@ -140,17 +143,17 @@ Rectangle {
                         Behavior on opacity { NumberAnimation { duration: Theme.durFast } }
                         Behavior on color { ColorAnimation { duration: Theme.durFast } }
 
-                        Text {
+                        Image {
                             anchors.centerIn: parent
-                            text: "×"
-                            font.family: Theme.fontUi
-                            font.pixelSize: Theme.sizeBodyLg
-                            font.weight: Theme.weightMedium
-                            color: deleteArea.containsMouse
-                                   ? Theme.statusError
-                                   : Theme.textTertiary
-
-                            Behavior on color { ColorAnimation { duration: Theme.durFast } }
+                            source: "qrc:/qt/qml/Pier/resources/icons/lucide/x.svg"
+                            sourceSize: Qt.size(12, 12)
+                            layer.enabled: true
+                            layer.effect: MultiEffect {
+                                colorization: 1.0
+                                colorizationColor: deleteArea.containsMouse
+                                                   ? Theme.statusError
+                                                   : Theme.textTertiary
+                            }
                         }
 
                         MouseArea {
@@ -272,19 +275,18 @@ Rectangle {
                     id: connArea
                     anchors.fill: parent
                     hoverEnabled: true
+                    acceptedButtons: Qt.LeftButton | Qt.RightButton
                     cursorShape: connRow.confirmingDelete ? Qt.ArrowCursor : Qt.PointingHandCursor
-                    // Higher z stays on the fill of the row but
-                    // does NOT receive clicks targeted at the
-                    // deleteBtn / cancel / confirm rectangles
-                    // above (their MouseAreas have the higher
-                    // visual stacking order via the RowLayout).
                     z: -1
-                    // While confirming, clicks on the row body
-                    // cancel the pending delete rather than
-                    // activating the connection. This gives the
-                    // user a generous "tap anywhere to back out"
-                    // escape hatch.
-                    onClicked: {
+                    onClicked: (mouse) => {
+                        if (mouse.button === Qt.RightButton) {
+                            // Show context menu
+                            contextMenu.targetIndex = connRow.index
+                            contextMenu.x = mouse.x + connRow.x
+                            contextMenu.y = mouse.y + connRow.y + connRow.height
+                            contextMenu.visible = true
+                            return
+                        }
                         if (connRow.confirmingDelete) {
                             connRow.confirmingDelete = false
                         } else {
@@ -292,6 +294,97 @@ Rectangle {
                         }
                     }
                 }
+            }
+        }
+
+        // ─── Context menu ──────────────────────────────
+        // Self-drawn popup for right-click actions on a connection.
+        // Floats over the sidebar content.
+        Rectangle {
+            id: contextMenu
+            property int targetIndex: -1
+
+            visible: false
+            z: 200
+            width: 160
+            height: ctxCol.implicitHeight + Theme.sp1 * 2
+            color: Theme.bgElevated
+            border.color: Theme.borderDefault
+            border.width: 1
+            radius: Theme.radiusMd
+
+            Behavior on color        { ColorAnimation { duration: Theme.durNormal } }
+            Behavior on border.color { ColorAnimation { duration: Theme.durNormal } }
+
+            layer.enabled: true
+            layer.effect: MultiEffect {
+                shadowEnabled: true
+                shadowColor: "#000000"
+                shadowOpacity: 0.32
+                shadowBlur: 0.6
+                shadowVerticalOffset: 4
+            }
+
+            Column {
+                id: ctxCol
+                anchors.fill: parent
+                anchors.margins: Theme.sp1
+
+                Repeater {
+                    model: [
+                        { label: qsTr("Connect"), action: "connect" },
+                        { label: qsTr("SFTP"), action: "sftp" },
+                        { label: qsTr("Duplicate"), action: "duplicate" },
+                        { label: qsTr("Delete"), action: "delete" }
+                    ]
+                    delegate: Rectangle {
+                        width: ctxCol.width
+                        implicitHeight: 28
+                        color: ctxItemArea.containsMouse
+                             ? (modelData.action === "delete" ? Qt.rgba(Theme.statusError.r, Theme.statusError.g, Theme.statusError.b, 0.1) : Theme.bgHover)
+                             : "transparent"
+                        radius: Theme.radiusSm
+
+                        Text {
+                            anchors.fill: parent
+                            anchors.leftMargin: Theme.sp2
+                            verticalAlignment: Text.AlignVCenter
+                            text: modelData.label
+                            font.family: Theme.fontUi
+                            font.pixelSize: Theme.sizeBody
+                            font.weight: Theme.weightRegular
+                            color: modelData.action === "delete" ? Theme.statusError : Theme.textPrimary
+                        }
+
+                        MouseArea {
+                            id: ctxItemArea
+                            anchors.fill: parent
+                            hoverEnabled: true
+                            cursorShape: Qt.PointingHandCursor
+                            onClicked: {
+                                const idx = contextMenu.targetIndex
+                                contextMenu.visible = false
+                                if (modelData.action === "connect")
+                                    root.connectionActivated(idx)
+                                else if (modelData.action === "sftp")
+                                    root.connectionSftpRequested(idx)
+                                else if (modelData.action === "duplicate")
+                                    root.connectionDuplicated(idx)
+                                else if (modelData.action === "delete")
+                                    root.connectionDeleted(idx)
+                            }
+                        }
+                    }
+                }
+            }
+
+            // Dismiss overlay — closes the menu when clicking outside it
+            MouseArea {
+                parent: root
+                anchors.fill: parent
+                visible: contextMenu.visible
+                z: 199
+                onClicked: contextMenu.visible = false
             }
         }
 

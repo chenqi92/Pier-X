@@ -20,7 +20,13 @@ Item {
     anchors.fill: parent
 
     function show() {
+        // Reset animation state
+        popup.scale = 0.96
+        popup.opacity = 0
         open = true
+        // Trigger entry animation
+        popup.scale = 1.0
+        popup.opacity = 1.0
         searchBox.text = ""
         searchBox.forceActiveFocus()
         rebuildFiltered()
@@ -88,6 +94,13 @@ Item {
         width: 560
         height: column.implicitHeight + Theme.sp3 * 2
 
+        // Entry animation — scale-up + fade-in
+        scale: 0.96
+        opacity: 0
+        Behavior on scale   { NumberAnimation { duration: Theme.durFast; easing.type: Easing.OutCubic } }
+        Behavior on opacity { NumberAnimation { duration: Theme.durFast; easing.type: Easing.OutCubic } }
+        transformOrigin: Item.Top
+
         color: Theme.bgElevated
         border.color: Theme.borderDefault
         border.width: 1
@@ -104,6 +117,13 @@ Item {
             shadowOpacity: 0.45
             shadowBlur: 1.0
             shadowVerticalOffset: 12
+        }
+
+        // Block clicks on the palette from reaching the backdrop.
+        MouseArea {
+            anchors.fill: parent
+            onClicked: (mouse) => mouse.accepted = true
+            onPressed: (mouse) => mouse.accepted = true
         }
 
         ColumnLayout {

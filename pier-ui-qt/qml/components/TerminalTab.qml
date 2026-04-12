@@ -1,4 +1,5 @@
 import QtQuick
+import QtQuick.Effects
 import Pier
 
 // A single tab in the TabBar — title + close button + active accent line.
@@ -77,14 +78,15 @@ Rectangle {
 
             Behavior on color { ColorAnimation { duration: Theme.durFast } }
 
-            Text {
+            Image {
                 anchors.centerIn: parent
-                text: "×"
-                font.family: Theme.fontUi
-                font.pixelSize: Theme.sizeBodyLg
-                color: closeArea.containsMouse ? Theme.textPrimary : Theme.textTertiary
-
-                Behavior on color { ColorAnimation { duration: Theme.durFast } }
+                source: "qrc:/qt/qml/Pier/resources/icons/lucide/x.svg"
+                sourceSize: Qt.size(12, 12)
+                layer.enabled: true
+                layer.effect: MultiEffect {
+                    colorization: 1.0
+                    colorizationColor: closeArea.containsMouse ? Theme.textPrimary : Theme.textTertiary
+                }
             }
 
             MouseArea {

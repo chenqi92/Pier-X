@@ -1,5 +1,6 @@
 import QtQuick
 import QtQuick.Effects
+import QtQuick.Window
 import Pier
 
 // Themed combo box — opens an inline popup of options.
@@ -41,23 +42,42 @@ Rectangle {
         Behavior on color { ColorAnimation { duration: Theme.durNormal } }
     }
 
-    Text {
+    Image {
         id: chevron
         anchors.right: parent.right
         anchors.rightMargin: Theme.sp2
         anchors.verticalCenter: parent.verticalCenter
-        text: "▾"
-        font.family: Theme.fontUi
-        font.pixelSize: Theme.sizeBody
-        color: Theme.textTertiary
-
-        Behavior on color { ColorAnimation { duration: Theme.durNormal } }
+        source: "qrc:/qt/qml/Pier/resources/icons/lucide/chevron-down.svg"
+        sourceSize: Qt.size(14, 14)
+        layer.enabled: true
+        layer.effect: MultiEffect {
+            colorization: 1.0
+            colorizationColor: Theme.textTertiary
+        }
     }
 
     MouseArea {
         anchors.fill: parent
         cursorShape: Qt.PointingHandCursor
-        onClicked: popup.visible = !popup.visible
+        onClicked: {
+            popup.visible = !popup.visible
+            if (popup.visible)
+                root.forceActiveFocus()
+        }
+    }
+
+    Keys.onEscapePressed: popup.visible = false
+
+    // Full-screen overlay — closes the popup when the user clicks
+    // anywhere outside it. Sits behind the popup in z-order but
+    // above everything else in the scene.
+    MouseArea {
+        id: dismissOverlay
+        parent: root.Window.contentItem || root
+        anchors.fill: parent
+        visible: popup.visible
+        z: 99
+        onClicked: popup.visible = false
     }
 
     // Inline popup

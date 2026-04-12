@@ -80,6 +80,10 @@ public:
     Q_PROPERTY(bool busy READ busy NOTIFY busyChanged FINAL)
     Q_PROPERTY(bool showStopped READ showStopped WRITE setShowStopped NOTIFY showStoppedChanged FINAL)
     Q_PROPERTY(int containerCount READ containerCount NOTIFY containerCountChanged FINAL)
+    Q_PROPERTY(bool inspectBusy READ inspectBusy NOTIFY inspectStateChanged FINAL)
+    Q_PROPERTY(QString inspectError READ inspectError NOTIFY inspectStateChanged FINAL)
+    Q_PROPERTY(QString inspectTarget READ inspectTarget NOTIFY inspectStateChanged FINAL)
+    Q_PROPERTY(QString inspectJson READ inspectJson NOTIFY inspectStateChanged FINAL)
 
     explicit PierDockerClientModel(QObject *parent = nullptr);
     ~PierDockerClientModel() override;
@@ -97,6 +101,10 @@ public:
     bool busy() const { return m_busy; }
     bool showStopped() const { return m_showStopped; }
     int containerCount() const { return static_cast<int>(m_rows.size()); }
+    bool inspectBusy() const { return m_inspectBusy; }
+    QString inspectError() const { return m_inspectError; }
+    QString inspectTarget() const { return m_inspectTarget; }
+    QString inspectJson() const { return m_inspectJson; }
 
     void setShowStopped(bool v);
 
@@ -118,6 +126,8 @@ public slots:
     void stopContainer(const QString &id);
     void restart(const QString &id);
     void remove(const QString &id, bool force);
+    void inspect(const QString &id);
+    void clearInspect();
 
     /// Shut down. Cancels any in-flight op and closes the
     /// handle. Safe to call more than once.
@@ -128,6 +138,7 @@ signals:
     void busyChanged();
     void showStoppedChanged();
     void containerCountChanged();
+    void inspectStateChanged();
     /// Fired once an action slot completes so the UI can
     /// show a transient toast without binding to the busy
     /// property transitions.
@@ -137,16 +148,19 @@ private slots:
     void onConnectResult(quint64 requestId, void *handle, const QString &error);
     void onListResult(quint64 requestId, const QString &json, const QString &error);
     void onActionResult(quint64 requestId, bool ok, const QString &message);
+    void onInspectResult(quint64 requestId, const QString &id, const QString &json, const QString &error);
 
 private:
     void setStatus(Status s);
     void setBusy(bool b);
+    void setInspectBusy(bool b);
     void ingestListJson(const QString &json);
     void spawnList(quint64 requestId);
     void spawnAction(quint64 requestId,
                      const QString &verb,
                      const QString &id,
                      bool force);
+    static QString formatInspectJson(const QString &json);
 
     struct Row {
         QString id;
@@ -167,8 +181,13 @@ private:
     QString m_target;
     bool m_busy = false;
     bool m_showStopped = true;
+    bool m_inspectBusy = false;
+    QString m_inspectError;
+    QString m_inspectTarget;
+    QString m_inspectJson;
 
     quint64 m_nextRequestId = 0;
+    quint64 m_nextInspectRequestId = 0;
     std::shared_ptr<std::atomic<bool>> m_cancelFlag;
     std::vector<std::unique_ptr<std::thread>> m_workers;
 };

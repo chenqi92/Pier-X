@@ -49,7 +49,7 @@ Rectangle {
             text: root.placeholder
             font: input.font
             color: Theme.textTertiary
-            visible: input.text.length === 0 && !input.activeFocus
+            visible: input.text.length === 0
 
             Behavior on color { ColorAnimation { duration: Theme.durNormal } }
         }

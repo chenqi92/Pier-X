@@ -1,4 +1,5 @@
 import QtQuick
+import QtQuick.Effects
 import QtQuick.Layouts
 import Pier
 
@@ -87,7 +88,7 @@ Rectangle {
             spacing: Theme.sp2
 
             IconButton {
-                glyph: "←"
+                icon: "arrow-left"
                 tooltip: qsTr("Go up")
                 onClicked: browser.navigateUp()
                 enabled: browser.currentPath !== "/" && browser.currentPath.length > 0
@@ -121,7 +122,7 @@ Rectangle {
             }
 
             IconButton {
-                glyph: "↻"
+                icon: "refresh-cw"
                 tooltip: qsTr("Refresh")
                 onClicked: browser.refresh()
                 enabled: browser.status === PierSftpBrowser.Connected
@@ -169,18 +170,20 @@ Rectangle {
                         anchors.rightMargin: Theme.sp2
                         spacing: Theme.sp2
 
-                        // Icon glyph (monochrome Unicode for now;
-                        // real SVG icons land with M6 polish).
-                        Text {
-                            text: entry.isDir
-                                  ? "▸"
-                                  : (entry.isLink ? "↪" : "·")
-                            font.family: Theme.fontUi
-                            font.pixelSize: Theme.sizeBody
-                            font.weight: Theme.weightMedium
-                            color: entry.isDir ? Theme.accent : Theme.textTertiary
-
-                            Behavior on color { ColorAnimation { duration: Theme.durFast } }
+                        // Lucide SVG file-type icon.
+                        Image {
+                            source: entry.isDir
+                                    ? "qrc:/qt/qml/Pier/resources/icons/lucide/folder.svg"
+                                    : (entry.isLink
+                                       ? "qrc:/qt/qml/Pier/resources/icons/lucide/link.svg"
+                                       : "qrc:/qt/qml/Pier/resources/icons/lucide/file-text.svg")
+                            sourceSize: Qt.size(14, 14)
+                            Layout.alignment: Qt.AlignVCenter
+                            layer.enabled: true
+                            layer.effect: MultiEffect {
+                                colorization: 1.0
+                                colorizationColor: entry.isDir ? Theme.accent : Theme.textTertiary
+                            }
                         }
 
                         Text {

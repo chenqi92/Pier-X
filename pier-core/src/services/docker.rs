@@ -151,6 +151,25 @@ pub async fn remove(session: &SshSession, id: &str, force: bool) -> Result<()> {
     run_simple_action(session, "rm", id, force).await
 }
 
+/// Inspect a single container and return the raw JSON array
+/// emitted by `docker inspect`.
+pub async fn inspect_container(session: &SshSession, id: &str) -> Result<String> {
+    if !is_safe_id(id) {
+        return Err(SshError::InvalidConfig(format!(
+            "refusing unsafe docker id {id:?}"
+        )));
+    }
+    let cmd = format!("docker inspect --type container {id}");
+    let (exit, stdout) = session.exec_command(&cmd).await?;
+    if exit != 0 {
+        return Err(SshError::InvalidConfig(format!(
+            "docker inspect exited {exit}: {}",
+            stdout.lines().next().unwrap_or("").trim()
+        )));
+    }
+    Ok(stdout)
+}
+
 /// Blocking wrappers for each action. Explicit instead of a
 /// macro so clippy / docs can see them.
 pub fn start_blocking(session: &SshSession, id: &str) -> Result<()> {
@@ -167,6 +186,10 @@ pub fn restart_blocking(session: &SshSession, id: &str) -> Result<()> {
 /// Blocking wrapper for [`remove`].
 pub fn remove_blocking(session: &SshSession, id: &str, force: bool) -> Result<()> {
     crate::ssh::runtime::shared().block_on(remove(session, id, force))
+}
+/// Blocking wrapper for [`inspect_container`].
+pub fn inspect_container_blocking(session: &SshSession, id: &str) -> Result<String> {
+    crate::ssh::runtime::shared().block_on(inspect_container(session, id))
 }
 
 /// Internal: run `docker <verb> [--force] <id>`, returning an

@@ -243,6 +243,45 @@ pub unsafe extern "C" fn pier_docker_list_containers(
     }
 }
 
+/// Inspect a single container and return the raw JSON array
+/// from `docker inspect`. Returns NULL on failure.
+///
+/// Release with [`pier_docker_free_string`].
+///
+/// # Safety
+///
+/// `h`, if non-null, must be a live handle. `id` must be a
+/// valid NUL-terminated C string.
+#[no_mangle]
+pub unsafe extern "C" fn pier_docker_inspect_container(
+    h: *mut PierDocker,
+    id: *const c_char,
+) -> *mut c_char {
+    if h.is_null() || id.is_null() {
+        return ptr::null_mut();
+    }
+    // SAFETY: live handle + NUL-terminated id.
+    let handle = unsafe { &*h };
+    let id_str = match unsafe { CStr::from_ptr(id) }.to_str() {
+        Ok(s) => s,
+        Err(_) => return ptr::null_mut(),
+    };
+    if !docker::is_safe_id(id_str) {
+        return ptr::null_mut();
+    }
+    let json = match docker::inspect_container_blocking(&handle.session, id_str) {
+        Ok(s) => s,
+        Err(e) => {
+            log::warn!("pier_docker_inspect_container failed: {e}");
+            return ptr::null_mut();
+        }
+    };
+    match CString::new(json) {
+        Ok(c) => c.into_raw(),
+        Err(_) => ptr::null_mut(),
+    }
+}
+
 /// Internal helper: dispatch a simple action by verb.
 /// Returns one of the `PIER_DOCKER_ERR_*` codes.
 unsafe fn run_action(
@@ -341,6 +380,7 @@ mod tests {
             )
             .is_null());
             assert!(pier_docker_list_containers(ptr::null_mut(), 0).is_null());
+            assert!(pier_docker_inspect_container(ptr::null_mut(), ptr::null()).is_null());
             assert_eq!(pier_docker_start(ptr::null_mut(), ptr::null()), PIER_DOCKER_ERR_NULL);
             assert_eq!(pier_docker_stop(ptr::null_mut(), ptr::null()), PIER_DOCKER_ERR_NULL);
             assert_eq!(pier_docker_restart(ptr::null_mut(), ptr::null()), PIER_DOCKER_ERR_NULL);

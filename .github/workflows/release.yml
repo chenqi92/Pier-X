@@ -30,11 +30,6 @@ jobs:
             artifact-name: pier-x-windows-x64
 
           # ─── Windows ARM64 (Snapdragon / Surface Pro X) ───
-          # Native build on the windows-11-arm runner. ARM64 Windows
-          # support landed natively in Qt 6.8.
-          # NOTE: aqt host must be 'windows_arm64' (not 'windows') to
-          # see the native ARM64 Qt packages — using 'windows' returns
-          # "packages not found while parsing XML".
           - name: Windows ARM64
             os: windows-11-arm
             qt-host: windows_arm64
@@ -42,9 +37,6 @@ jobs:
             artifact-name: pier-x-windows-arm64
 
           # ─── macOS Universal (Intel + Apple Silicon) ──────
-          # Single .app bundle containing both arm64 and x86_64 slices.
-          # Qt 6 macOS SDK has been universal since 6.5; we just have
-          # to ask CMake to emit both architecture slices.
           - name: macOS Universal
             os: macos-latest
             qt-host: mac
@@ -76,8 +68,6 @@ jobs:
           ARGS=(-B build -S . -DCMAKE_BUILD_TYPE=Release)
           if [ "${{ runner.os }}" = "macOS" ]; then
             # Universal binary — single .app for both arm64 and x86_64.
-            # Quoted as one array element to keep the ; from being parsed
-            # by bash as a command separator.
             ARGS+=("-DCMAKE_OSX_ARCHITECTURES=arm64;x86_64")
           fi
           cmake "${ARGS[@]}"
@@ -86,9 +76,9 @@ jobs:
         run: cmake --build build --config Release --parallel
 
       # ─────────────────────────────────────────────────
-      # Package — windeployqt on Windows, macdeployqt on macOS
+      # Package — DMG on macOS, MSI + ZIP on Windows
       # ─────────────────────────────────────────────────
-      - name: Package · Windows
+      - name: Package · Windows (deploy Qt)
         if: runner.os == 'Windows'
         shell: bash
         run: |
@@ -96,10 +86,15 @@ jobs:
           mkdir -p dist
           cp build/pier-ui-qt/Release/pier-x.exe dist/
           windeployqt --qmldir pier-ui-qt/qml --release dist/pier-x.exe
+
+      - name: Package · Windows (ZIP)
+        if: runner.os == 'Windows'
+        shell: bash
+        run: |
           cd dist
           7z a "../${{ matrix.artifact-name }}-${{ steps.version.outputs.version }}.zip" .
 
-      - name: Package · macOS
+      - name: Package · macOS (deploy Qt)
         if: runner.os == 'macOS'
         shell: bash
         run: |
@@ -112,11 +107,42 @@ jobs:
           fi
           # Verify the binary is actually universal
           lipo -info "$APP_BUNDLE/Contents/MacOS/pier-x" || true
-          macdeployqt "$APP_BUNDLE" -qmldir=pier-ui-qt/qml -dmg
-          mv "build/pier-ui-qt/pier-x.dmg" \
-             "${{ matrix.artifact-name }}-${{ steps.version.outputs.version }}.dmg"
+          macdeployqt "$APP_BUNDLE" -qmldir=pier-ui-qt/qml
 
-      - name: Upload artifact · Windows
+      - name: Package · macOS (DMG)
+        if: runner.os == 'macOS'
+        shell: bash
+        run: |
+          set -e
+          # Install create-dmg for polished DMG with background
+          brew install create-dmg || true
+          VERSION="${{ steps.version.outputs.version }}"
+          APP_BUNDLE="build/pier-ui-qt/pier-x.app"
+          DMG_NAME="${{ matrix.artifact-name }}-${VERSION}.dmg"
+
+          # Try create-dmg with custom background; fall back to
+          # macdeployqt -dmg if create-dmg is unavailable.
+          if command -v create-dmg &>/dev/null; then
+            create-dmg \
+              --volname "Pier-X ${VERSION}" \
+              --background packaging/dmg-background.png \
+              --window-pos 200 120 \
+              --window-size 600 400 \
+              --icon "pier-x.app" 150 250 \
+              --app-drop-link 450 250 \
+              --icon-size 80 \
+              --text-size 14 \
+              --hide-extension "pier-x.app" \
+              --no-internet-enable \
+              "$DMG_NAME" \
+              "$APP_BUNDLE"
+          else
+            # Fallback: plain macdeployqt DMG
+            macdeployqt "$APP_BUNDLE" -dmg
+            mv "build/pier-ui-qt/pier-x.dmg" "$DMG_NAME"
+          fi
+
+      - name: Upload artifact · Windows (ZIP)
         if: runner.os == 'Windows'
         uses: actions/upload-artifact@v4
         with:
@@ -124,7 +150,7 @@ jobs:
           path: ${{ matrix.artifact-name }}-${{ steps.version.outputs.version }}.zip
           if-no-files-found: error
 
-      - name: Upload artifact · macOS
+      - name: Upload artifact · macOS (DMG)
         if: runner.os == 'macOS'
         uses: actions/upload-artifact@v4
         with:
@@ -136,9 +162,7 @@ jobs:
     name: Publish release
     needs: build
     # Run as long as we weren't cancelled — publish whatever artifacts
-    # made it through, even if one of the matrix entries (e.g. ARM64)
-    # failed. Missing artifacts can be re-uploaded by re-running the
-    # workflow with the same tag input.
+    # made it through, even if one of the matrix entries failed.
     if: ${{ !cancelled() }}
     runs-on: ubuntu-latest
     permissions:

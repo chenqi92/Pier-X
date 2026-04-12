@@ -26,7 +26,13 @@ Item {
         keyPathField.text = ""
         passphraseField.text = ""
         authCombo.currentIndex = 0
+        // Reset animation state before showing
+        dialog.scale = 0.96
+        dialog.opacity = 0
         open = true
+        // Trigger entry animation
+        dialog.scale = 1.0
+        dialog.opacity = 1.0
         nameField.forceActiveFocus()
     }
 
@@ -61,6 +67,13 @@ Item {
         width: 480
         height: form.implicitHeight + Theme.sp4 * 2
 
+        // Entry animation — scale-up + fade-in
+        scale: 0.96
+        opacity: 0
+        Behavior on scale   { NumberAnimation { duration: Theme.durNormal; easing.type: Easing.OutCubic } }
+        Behavior on opacity { NumberAnimation { duration: Theme.durNormal; easing.type: Easing.OutCubic } }
+        transformOrigin: Item.Center
+
         color: Theme.bgElevated
         border.color: Theme.borderDefault
         border.width: 1
@@ -78,6 +91,15 @@ Item {
             shadowVerticalOffset: 16
         }
 
+        // Block clicks on the card from propagating to the backdrop
+        // MouseArea. Without this, clicking any non-interactive area
+        // inside the dialog (labels, spacing) would close the dialog.
+        MouseArea {
+            anchors.fill: parent
+            onClicked: (mouse) => mouse.accepted = true
+            onPressed: (mouse) => mouse.accepted = true
+        }
+
         ColumnLayout {
             id: form
             anchors.fill: parent
@@ -85,20 +107,31 @@ Item {
             spacing: Theme.sp3
 
             // Title
-            ColumnLayout {
+            RowLayout {
                 Layout.fillWidth: true
-                spacing: Theme.sp0_5
+                spacing: Theme.sp2
 
-                SectionLabel { text: qsTr("Connection") }
+                ColumnLayout {
+                    Layout.fillWidth: true
+                    spacing: Theme.sp0_5
 
-                Text {
-                    text: qsTr("New SSH connection")
-                    font.family: Theme.fontUi
-                    font.pixelSize: Theme.sizeH2
-                    font.weight: Theme.weightMedium
-                    color: Theme.textPrimary
+                    SectionLabel { text: qsTr("Connection") }
 
-                    Behavior on color { ColorAnimation { duration: Theme.durNormal } }
+                    Text {
+                        text: qsTr("New SSH connection")
+                        font.family: Theme.fontUi
+                        font.pixelSize: Theme.sizeH2
+                        font.weight: Theme.weightMedium
+                        color: Theme.textPrimary
+
+                        Behavior on color { ColorAnimation { duration: Theme.durNormal } }
+                    }
+                }
+
+                IconButton {
+                    icon: "x"
+                    tooltip: qsTr("Close")
+                    onClicked: { root.cancelled(); root.hide() }
                 }
             }
 

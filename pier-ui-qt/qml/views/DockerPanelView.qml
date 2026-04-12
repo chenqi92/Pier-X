@@ -1,4 +1,5 @@
 import QtQuick
+import QtQuick.Controls
 import QtQuick.Layouts
 import Pier
 
@@ -48,6 +49,12 @@ Rectangle {
     // The delete-confirm row state lives up here so it
     // survives the ListView delegate's reuseItems recycle.
     property string pendingDeleteId: ""
+    property string inspectId: ""
+    property string inspectName: ""
+    property string inspectImage: ""
+    property string inspectStatus: ""
+    property string inspectPorts: ""
+    property string inspectState: ""
 
     Component.onCompleted: _dispatchConnect()
 
@@ -96,6 +103,26 @@ Rectangle {
         // live tail from there.
         var cmd = "docker logs -f --tail 500 " + id
         window.openLogTab(conn, cmd, name || id)
+    }
+
+    function _openInspectFor(id, name, image, statusText, ports, state) {
+        root.inspectId = id
+        root.inspectName = name || ""
+        root.inspectImage = image || ""
+        root.inspectStatus = statusText || ""
+        root.inspectPorts = ports || ""
+        root.inspectState = state || ""
+        client.inspect(id)
+    }
+
+    function _clearInspect() {
+        root.inspectId = ""
+        root.inspectName = ""
+        root.inspectImage = ""
+        root.inspectStatus = ""
+        root.inspectPorts = ""
+        root.inspectState = ""
+        client.clearInspect()
     }
 
     ColumnLayout {
@@ -177,217 +204,426 @@ Rectangle {
         }
 
         // ─── Container list ─────────────────────────────
-        Rectangle {
+        RowLayout {
             Layout.fillWidth: true
             Layout.fillHeight: true
-            color: Theme.bgPanel
-            border.color: Theme.borderSubtle
-            border.width: 1
-            radius: Theme.radiusSm
+            spacing: Theme.sp2
 
-            Behavior on color        { ColorAnimation { duration: Theme.durNormal } }
-            Behavior on border.color { ColorAnimation { duration: Theme.durNormal } }
+            Rectangle {
+                Layout.fillWidth: true
+                Layout.fillHeight: true
+                Layout.minimumWidth: 420
+                color: Theme.bgPanel
+                border.color: Theme.borderSubtle
+                border.width: 1
+                radius: Theme.radiusSm
 
-            ListView {
-                id: listView
-                anchors.fill: parent
-                anchors.margins: Theme.sp1
-                clip: true
-                model: client
-                spacing: 0
-                reuseItems: true
+                Behavior on color        { ColorAnimation { duration: Theme.durNormal } }
+                Behavior on border.color { ColorAnimation { duration: Theme.durNormal } }
 
-                delegate: Rectangle {
-                    id: row
-                    required property int    index
-                    required property string containerId
-                    required property string image
-                    required property string names
-                    required property string statusText
-                    required property string state
-                    required property bool   isRunning
-                    required property string ports
+                ListView {
+                    id: listView
+                    anchors.fill: parent
+                    anchors.margins: Theme.sp1
+                    clip: true
+                    model: client
+                    spacing: 0
+                    reuseItems: true
 
-                    readonly property bool confirming:
-                        root.pendingDeleteId === row.containerId
+                    delegate: Rectangle {
+                        id: row
+                        required property int    index
+                        required property string containerId
+                        required property string image
+                        required property string names
+                        required property string statusText
+                        required property string state
+                        required property bool   isRunning
+                        required property string ports
 
-                    width: ListView.view.width
-                    implicitHeight: 32
-                    color: rowMouse.containsMouse
-                           ? Theme.bgHover
-                           : "transparent"
-                    radius: Theme.radiusSm
+                        readonly property bool confirming:
+                            root.pendingDeleteId === row.containerId
+                        readonly property bool selected:
+                            root.inspectId === row.containerId
 
-                    Behavior on color { ColorAnimation { duration: Theme.durFast } }
+                        width: ListView.view.width
+                        implicitHeight: 32
+                        color: row.confirming
+                               ? Qt.rgba(Theme.statusError.r, Theme.statusError.g, Theme.statusError.b, 0.08)
+                               : (row.selected
+                                  ? Theme.bgSelected
+                                  : (rowMouse.containsMouse ? Theme.bgHover : "transparent"))
+                        radius: Theme.radiusSm
 
-                    MouseArea {
-                        id: rowMouse
-                        anchors.fill: parent
-                        hoverEnabled: true
-                        acceptedButtons: Qt.NoButton
-                    }
+                        Behavior on color { ColorAnimation { duration: Theme.durFast } }
 
-                    // ── Idle layout (name + image + status + actions) ──
-                    RowLayout {
-                        anchors.fill: parent
-                        anchors.leftMargin: Theme.sp2
-                        anchors.rightMargin: Theme.sp2
-                        spacing: Theme.sp2
-                        visible: !row.confirming
+                        MouseArea {
+                            id: rowMouse
+                            anchors.fill: parent
+                            hoverEnabled: true
+                            acceptedButtons: Qt.NoButton
+                        }
 
-                        // State dot.
-                        Rectangle {
-                            width: 8
-                            height: 8
-                            radius: 4
-                            color: row.isRunning
-                                   ? Theme.statusSuccess
-                                   : Theme.textTertiary
+                        // ── Idle layout (name + image + status + actions) ──
+                        RowLayout {
+                            anchors.fill: parent
+                            anchors.leftMargin: Theme.sp2
+                            anchors.rightMargin: Theme.sp2
+                            spacing: Theme.sp2
+                            visible: !row.confirming
 
-                            Behavior on color { ColorAnimation { duration: Theme.durNormal } }
+                            Rectangle {
+                                width: 8
+                                height: 8
+                                radius: 4
+                                color: row.isRunning
+                                       ? Theme.statusSuccess
+                                       : Theme.textTertiary
 
-                            SequentialAnimation on opacity {
-                                running: row.isRunning
-                                loops: Animation.Infinite
-                                NumberAnimation { from: 1.0; to: 0.5; duration: 1200 }
-                                NumberAnimation { from: 0.5; to: 1.0; duration: 1200 }
+                                Behavior on color { ColorAnimation { duration: Theme.durNormal } }
+
+                                SequentialAnimation on opacity {
+                                    running: row.isRunning
+                                    loops: Animation.Infinite
+                                    NumberAnimation { from: 1.0; to: 0.5; duration: 1200 }
+                                    NumberAnimation { from: 0.5; to: 1.0; duration: 1200 }
+                                }
+                            }
+
+                            Text {
+                                Layout.preferredWidth: 160
+                                text: row.names.length > 0
+                                      ? row.names
+                                      : row.containerId.slice(0, 12)
+                                font.family: Theme.fontMono
+                                font.pixelSize: Theme.sizeBody
+                                font.weight: row.isRunning
+                                             ? Theme.weightMedium
+                                             : Theme.weightRegular
+                                color: Theme.textPrimary
+                                elide: Text.ElideRight
+
+                                Behavior on color { ColorAnimation { duration: Theme.durNormal } }
+                            }
+
+                            Text {
+                                Layout.fillWidth: true
+                                text: row.image
+                                font.family: Theme.fontMono
+                                font.pixelSize: Theme.sizeCaption
+                                color: Theme.textSecondary
+                                elide: Text.ElideRight
+
+                                Behavior on color { ColorAnimation { duration: Theme.durNormal } }
+                            }
+
+                            Text {
+                                Layout.preferredWidth: 180
+                                text: row.statusText
+                                font.family: Theme.fontUi
+                                font.pixelSize: Theme.sizeCaption
+                                color: row.isRunning
+                                       ? Theme.statusSuccess
+                                       : Theme.textTertiary
+                                horizontalAlignment: Text.AlignRight
+                                elide: Text.ElideRight
+
+                                Behavior on color { ColorAnimation { duration: Theme.durNormal } }
+                            }
+
+                            DockerRowButton {
+                                glyph: "{}"
+                                tooltip: qsTr("Inspect")
+                                active: row.selected
+                                onClicked: root._openInspectFor(
+                                               row.containerId,
+                                               row.names,
+                                               row.image,
+                                               row.statusText,
+                                               row.ports,
+                                               row.state)
+                            }
+                            DockerRowButton {
+                                glyph: "▶"
+                                tooltip: qsTr("Start")
+                                visible: !row.isRunning
+                                onClicked: client.start(row.containerId)
+                            }
+                            DockerRowButton {
+                                glyph: "⏸"
+                                tooltip: qsTr("Stop")
+                                visible: row.isRunning
+                                onClicked: client.stopContainer(row.containerId)
+                            }
+                            DockerRowButton {
+                                glyph: "↻"
+                                tooltip: qsTr("Restart")
+                                visible: row.isRunning
+                                onClicked: client.restart(row.containerId)
+                            }
+                            DockerRowButton {
+                                glyph: "📜"
+                                tooltip: qsTr("Live logs")
+                                onClicked: root._openLogsFor(row.containerId, row.names)
+                            }
+                            DockerRowButton {
+                                glyph: "✕"
+                                tooltip: qsTr("Remove")
+                                danger: true
+                                onClicked: root.pendingDeleteId = row.containerId
                             }
                         }
 
-                        Text {
-                            Layout.preferredWidth: 160
-                            text: row.names.length > 0
-                                  ? row.names
-                                  : row.containerId.slice(0, 12)
-                            font.family: Theme.fontMono
-                            font.pixelSize: Theme.sizeBody
-                            font.weight: row.isRunning
-                                         ? Theme.weightMedium
-                                         : Theme.weightRegular
-                            color: Theme.textPrimary
-                            elide: Text.ElideRight
+                        RowLayout {
+                            anchors.fill: parent
+                            anchors.leftMargin: Theme.sp2
+                            anchors.rightMargin: Theme.sp2
+                            spacing: Theme.sp2
+                            visible: row.confirming
 
-                            Behavior on color { ColorAnimation { duration: Theme.durNormal } }
-                        }
-
-                        Text {
-                            Layout.fillWidth: true
-                            text: row.image
-                            font.family: Theme.fontMono
-                            font.pixelSize: Theme.sizeCaption
-                            color: Theme.textSecondary
-                            elide: Text.ElideRight
-
-                            Behavior on color { ColorAnimation { duration: Theme.durNormal } }
-                        }
-
-                        Text {
-                            Layout.preferredWidth: 180
-                            text: row.statusText
-                            font.family: Theme.fontUi
-                            font.pixelSize: Theme.sizeCaption
-                            color: row.isRunning
-                                   ? Theme.statusSuccess
-                                   : Theme.textTertiary
-                            horizontalAlignment: Text.AlignRight
-                            elide: Text.ElideRight
-
-                            Behavior on color { ColorAnimation { duration: Theme.durNormal } }
-                        }
-
-                        // ── Row action buttons ──
-                        // Start (only when stopped).
-                        DockerRowButton {
-                            glyph: "▶"
-                            tooltip: qsTr("Start")
-                            visible: !row.isRunning
-                            onClicked: client.start(row.containerId)
-                        }
-                        // Stop (only when running).
-                        DockerRowButton {
-                            glyph: "⏸"
-                            tooltip: qsTr("Stop")
-                            visible: row.isRunning
-                            onClicked: client.stopContainer(row.containerId)
-                        }
-                        DockerRowButton {
-                            glyph: "↻"
-                            tooltip: qsTr("Restart")
-                            visible: row.isRunning
-                            onClicked: client.restart(row.containerId)
-                        }
-                        DockerRowButton {
-                            glyph: "📜"
-                            tooltip: qsTr("Live logs")
-                            onClicked: root._openLogsFor(row.containerId, row.names)
-                        }
-                        DockerRowButton {
-                            glyph: "✕"
-                            tooltip: qsTr("Remove")
-                            danger: true
-                            onClicked: root.pendingDeleteId = row.containerId
+                            Text {
+                                Layout.fillWidth: true
+                                text: qsTr("Remove '%1'?")
+                                          .arg(row.names.length > 0
+                                               ? row.names
+                                               : row.containerId.slice(0, 12))
+                                font.family: Theme.fontUi
+                                font.pixelSize: Theme.sizeBody
+                                font.weight: Theme.weightMedium
+                                color: Theme.statusError
+                                elide: Text.ElideRight
+                            }
+                            GhostButton {
+                                text: qsTr("Cancel")
+                                onClicked: root.pendingDeleteId = ""
+                            }
+                            PrimaryButton {
+                                text: row.isRunning
+                                      ? qsTr("Force remove")
+                                      : qsTr("Remove")
+                                onClicked: {
+                                    client.remove(row.containerId, row.isRunning)
+                                    root.pendingDeleteId = ""
+                                }
+                            }
                         }
                     }
 
-                    // ── Confirm layout ──────────────────
+                    Text {
+                        anchors.centerIn: parent
+                        visible: client.busy && listView.count === 0
+                        text: qsTr("Querying docker…")
+                        font.family: Theme.fontUi
+                        font.pixelSize: Theme.sizeBody
+                        color: Theme.textSecondary
+                    }
+                    Text {
+                        anchors.centerIn: parent
+                        visible: client.status === PierDockerClient.Connected
+                                 && !client.busy
+                                 && listView.count === 0
+                        text: client.showStopped
+                              ? qsTr("(no containers)")
+                              : qsTr("(no running containers)")
+                        font.family: Theme.fontUi
+                        font.pixelSize: Theme.sizeBody
+                        color: Theme.textTertiary
+                    }
+                }
+            }
+
+            Rectangle {
+                Layout.preferredWidth: 420
+                Layout.minimumWidth: 360
+                Layout.fillHeight: true
+                visible: root.inspectId.length > 0
+                color: Theme.bgPanel
+                border.color: Theme.borderSubtle
+                border.width: 1
+                radius: Theme.radiusSm
+
+                Behavior on color        { ColorAnimation { duration: Theme.durNormal } }
+                Behavior on border.color { ColorAnimation { duration: Theme.durNormal } }
+
+                ColumnLayout {
+                    anchors.fill: parent
+                    anchors.margins: Theme.sp3
+                    spacing: Theme.sp2
+
                     RowLayout {
-                        anchors.fill: parent
-                        anchors.leftMargin: Theme.sp2
-                        anchors.rightMargin: Theme.sp2
+                        Layout.fillWidth: true
                         spacing: Theme.sp2
-                        visible: row.confirming
 
                         Text {
-                            Layout.fillWidth: true
-                            text: qsTr("Remove '%1'?")
-                                      .arg(row.names.length > 0
-                                           ? row.names
-                                           : row.containerId.slice(0, 12))
+                            text: qsTr("Container Inspect")
                             font.family: Theme.fontUi
                             font.pixelSize: Theme.sizeBody
                             font.weight: Theme.weightMedium
-                            color: Theme.statusError
-                            elide: Text.ElideRight
+                            color: Theme.textPrimary
                         }
+
+                        Item { Layout.fillWidth: true }
+
                         GhostButton {
-                            text: qsTr("Cancel")
-                            onClicked: root.pendingDeleteId = ""
+                            text: qsTr("Refresh")
+                            enabled: !client.inspectBusy && root.inspectId.length > 0
+                            onClicked: client.inspect(root.inspectId)
                         }
-                        // Force-remove for running containers —
-                        // a plain "rm" would fail otherwise.
-                        PrimaryButton {
-                            text: row.isRunning
-                                  ? qsTr("Force remove")
-                                  : qsTr("Remove")
-                            onClicked: {
-                                client.remove(row.containerId, row.isRunning)
-                                root.pendingDeleteId = ""
+
+                        GhostButton {
+                            text: qsTr("Close")
+                            onClicked: root._clearInspect()
+                        }
+                    }
+
+                    Rectangle {
+                        Layout.fillWidth: true
+                        color: Theme.bgSurface
+                        border.color: Theme.borderSubtle
+                        border.width: 1
+                        radius: Theme.radiusSm
+                        implicitHeight: inspectMeta.implicitHeight + Theme.sp3 * 2
+
+                        Behavior on color        { ColorAnimation { duration: Theme.durNormal } }
+                        Behavior on border.color { ColorAnimation { duration: Theme.durNormal } }
+
+                        GridLayout {
+                            id: inspectMeta
+                            anchors.fill: parent
+                            anchors.margins: Theme.sp3
+                            columns: 2
+                            columnSpacing: Theme.sp2
+                            rowSpacing: Theme.sp1
+
+                            SectionLabel { text: qsTr("Name") }
+                            Text {
+                                Layout.fillWidth: true
+                                text: root.inspectName.length > 0
+                                      ? root.inspectName
+                                      : root.inspectId.slice(0, 12)
+                                font.family: Theme.fontMono
+                                font.pixelSize: Theme.sizeBody
+                                color: Theme.textPrimary
+                                elide: Text.ElideRight
+                            }
+
+                            SectionLabel { text: qsTr("ID") }
+                            Text {
+                                Layout.fillWidth: true
+                                text: root.inspectId
+                                font.family: Theme.fontMono
+                                font.pixelSize: Theme.sizeCaption
+                                color: Theme.textSecondary
+                                elide: Text.ElideMiddle
+                            }
+
+                            SectionLabel { text: qsTr("State") }
+                            Text {
+                                Layout.fillWidth: true
+                                text: root.inspectStatus.length > 0
+                                      ? root.inspectStatus
+                                      : root.inspectState
+                                font.family: Theme.fontUi
+                                font.pixelSize: Theme.sizeCaption
+                                color: root.inspectState === "running"
+                                       ? Theme.statusSuccess
+                                       : Theme.textSecondary
+                                wrapMode: Text.Wrap
+                            }
+
+                            SectionLabel { text: qsTr("Image") }
+                            Text {
+                                Layout.fillWidth: true
+                                text: root.inspectImage.length > 0 ? root.inspectImage : "—"
+                                font.family: Theme.fontMono
+                                font.pixelSize: Theme.sizeCaption
+                                color: Theme.textSecondary
+                                elide: Text.ElideMiddle
+                            }
+
+                            SectionLabel { text: qsTr("Ports") }
+                            Text {
+                                Layout.fillWidth: true
+                                text: root.inspectPorts.length > 0 ? root.inspectPorts : "—"
+                                font.family: Theme.fontMono
+                                font.pixelSize: Theme.sizeCaption
+                                color: Theme.textSecondary
+                                wrapMode: Text.WrapAnywhere
                             }
                         }
                     }
-                }
 
-                // Busy placeholder for the first listing.
-                Text {
-                    anchors.centerIn: parent
-                    visible: client.busy && listView.count === 0
-                    text: qsTr("Querying docker…")
-                    font.family: Theme.fontUi
-                    font.pixelSize: Theme.sizeBody
-                    color: Theme.textSecondary
-                }
-                // Empty state — connected, not busy, no containers.
-                Text {
-                    anchors.centerIn: parent
-                    visible: client.status === PierDockerClient.Connected
-                             && !client.busy
-                             && listView.count === 0
-                    text: client.showStopped
-                          ? qsTr("(no containers)")
-                          : qsTr("(no running containers)")
-                    font.family: Theme.fontUi
-                    font.pixelSize: Theme.sizeBody
-                    color: Theme.textTertiary
+                    Rectangle {
+                        Layout.fillWidth: true
+                        implicitHeight: 24
+                        visible: client.inspectError.length > 0
+                        color: Qt.rgba(Theme.statusError.r, Theme.statusError.g, Theme.statusError.b, 0.10)
+                        border.color: Theme.statusError
+                        border.width: 1
+                        radius: Theme.radiusSm
+
+                        Text {
+                            anchors.fill: parent
+                            anchors.leftMargin: Theme.sp2
+                            anchors.rightMargin: Theme.sp2
+                            verticalAlignment: Text.AlignVCenter
+                            text: client.inspectError
+                            font.family: Theme.fontUi
+                            font.pixelSize: Theme.sizeCaption
+                            color: Theme.statusError
+                            elide: Text.ElideRight
+                        }
+                    }
+
+                    Rectangle {
+                        Layout.fillWidth: true
+                        Layout.fillHeight: true
+                        color: Theme.bgSurface
+                        border.color: Theme.borderSubtle
+                        border.width: 1
+                        radius: Theme.radiusSm
+
+                        Behavior on color        { ColorAnimation { duration: Theme.durNormal } }
+                        Behavior on border.color { ColorAnimation { duration: Theme.durNormal } }
+
+                        Item {
+                            anchors.fill: parent
+                            anchors.margins: Theme.sp2
+
+                            Text {
+                                anchors.centerIn: parent
+                                visible: client.inspectBusy
+                                text: qsTr("Loading inspect output…")
+                                font.family: Theme.fontUi
+                                font.pixelSize: Theme.sizeBody
+                                color: Theme.textSecondary
+                            }
+
+                            ScrollView {
+                                anchors.fill: parent
+                                clip: true
+                                visible: !client.inspectBusy
+
+                                TextArea {
+                                    id: inspectText
+                                    readOnly: true
+                                    wrapMode: TextArea.NoWrap
+                                    text: client.inspectJson.length > 0
+                                          ? client.inspectJson
+                                          : qsTr("// No inspect data yet")
+                                    font.family: Theme.fontMono
+                                    font.pixelSize: Theme.sizeCaption
+                                    color: client.inspectJson.length > 0
+                                           ? Theme.textPrimary
+                                           : Theme.textTertiary
+                                    selectByMouse: true
+                                    background: Rectangle { color: "transparent" }
+
+                                    Behavior on color { ColorAnimation { duration: Theme.durNormal } }
+                                }
+                            }
+                        }
+                    }
                 }
             }
         }
@@ -515,17 +751,22 @@ Rectangle {
         required property string glyph
         required property string tooltip
         property bool danger: false
+        property bool active: false
         signal clicked()
 
         implicitWidth: 22
         implicitHeight: 22
         radius: Theme.radiusSm
-        color: btnMouse.containsMouse
-               ? (rowBtn.danger ? Theme.statusError : Theme.accentSubtle)
-               : "transparent"
-        border.color: btnMouse.containsMouse
-                      ? (rowBtn.danger ? Theme.statusError : Theme.accent)
-                      : Theme.borderSubtle
+        color: rowBtn.active
+               ? Theme.accentSubtle
+               : (btnMouse.containsMouse
+                  ? (rowBtn.danger ? Theme.statusError : Theme.accentSubtle)
+                  : "transparent")
+        border.color: rowBtn.active
+                      ? Theme.accent
+                      : (btnMouse.containsMouse
+                         ? (rowBtn.danger ? Theme.statusError : Theme.accent)
+                         : Theme.borderSubtle)
         border.width: 1
 
         Behavior on color        { ColorAnimation { duration: Theme.durFast } }
@@ -536,9 +777,11 @@ Rectangle {
             text: rowBtn.glyph
             font.family: Theme.fontUi
             font.pixelSize: Theme.sizeCaption
-            color: btnMouse.containsMouse
-                   ? (rowBtn.danger ? Theme.bgCanvas : Theme.accent)
-                   : Theme.textSecondary
+            color: rowBtn.active
+                   ? Theme.accent
+                   : (btnMouse.containsMouse
+                      ? (rowBtn.danger ? Theme.bgCanvas : Theme.accent)
+                      : Theme.textSecondary)
 
             Behavior on color { ColorAnimation { duration: Theme.durFast } }
         }

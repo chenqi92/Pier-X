@@ -315,10 +315,10 @@ ApplicationWindow {
 
     // MySQL client tab row — M5d per-service panel. Connects
     // to a plain TCP endpoint (typically the local side of an
-    // SSH tunnel, e.g. 127.0.0.1:13306). The panel itself
-    // shows a connect form up front; the fields below are
-    // prefill hints only — the user can override them in the
-    // form before clicking Connect.
+    // SSH tunnel, e.g. 127.0.0.1:13306). The panel shows a
+    // connect form up front; the fields below are
+    // prefill hints, not authoritative — the user can edit
+    // them in the form before clicking Connect.
     function _makeMysqlRow(host, port, user, password, database, label) {
         return {
             title: qsTr("MySQL: %1").arg(label || (user + "@" + host + ":" + port)),
@@ -532,6 +532,7 @@ ApplicationWindow {
         if (index < 0 || index >= connectionsModel.count)
             return
         const conn = connectionsModel.get(index)
+        const name = conn ? conn.name : ""
         if (conn) {
             if (conn.credentialId && conn.credentialId.length > 0) {
                 PierCredentials.deleteEntry(conn.credentialId)
@@ -541,6 +542,8 @@ ApplicationWindow {
             }
         }
         connectionsModel.removeAt(index)
+        if (name.length > 0)
+            toastManager.show(qsTr("Connection %1 deleted").arg(name), "info")
     }
 
     // ─────────────────────────────────────────────────────
@@ -568,6 +571,24 @@ ApplicationWindow {
                 onAddConnectionRequested: newConnectionDialog.show()
                 onConnectionActivated: (i) => window.activateConnection(i)
                 onConnectionDeleted: (i) => window.removeConnection(i)
+                onConnectionSftpRequested: (i) => window.openSftpForConnection(i)
+                onConnectionDuplicated: (i) => {
+                    const c = connectionsModel.get(i)
+                    if (!c) return
+                    if (c.usesAgent) {
+                        connectionsModel.addAgent(
+                            c.name + " (copy)", c.host, c.port, c.username)
+                    } else if (c.keyPath && c.keyPath.length > 0) {
+                        connectionsModel.addKeyAuth(
+                            c.name + " (copy)", c.host, c.port,
+                            c.username, c.keyPath, "")
+                    } else {
+                        connectionsModel.addPassword(
+                            c.name + " (copy)", c.host, c.port,
+                            c.username, "")
+                    }
+                    toastManager.show(qsTr("Connection duplicated"), "success")
+                }
                 onOpenLocalTerminalRequested: window.openNewTab()
             }
 
@@ -579,8 +600,13 @@ ApplicationWindow {
                 WelcomeView {
                     anchors.fill: parent
                     visible: tabModel.count === 0
+                    connectionsModel: window.connectionsModel
                     onOpenLocalTerminalRequested: window.openNewTab()
                     onNewSshRequested: newConnectionDialog.show()
+                    onConnectToSaved: (index) => {
+                        const conn = connectionsModel.get(index)
+                        if (conn) window.openSshTab(conn)
+                    }
                 }
 
                 ColumnLayout {
@@ -595,6 +621,15 @@ ApplicationWindow {
                         onTabClicked: (i) => window.currentTabIndex = i
                         onTabClosed: (i) => window.closeTab(i)
                         onNewTabClicked: window.openNewTab()
+                        onTabMoved: (from, to) => {
+                            tabModel.move(from, 1, to)
+                            if (window.currentTabIndex === from)
+                                window.currentTabIndex = to
+                            else if (from < window.currentTabIndex && to >= window.currentTabIndex)
+                                window.currentTabIndex--
+                            else if (from > window.currentTabIndex && to <= window.currentTabIndex)
+                                window.currentTabIndex++
+                        }
                     }
 
                     // One TerminalView per tab, kept alive as the user
@@ -723,10 +758,11 @@ ApplicationWindow {
                                 }
                                 Component {
                                     id: mysqlComp
-                                    MySqlPanelView {
+                                    MySqlBrowserView {
                                         mysqlHost: parent.mysqlHost
                                         mysqlPort: parent.mysqlPort
                                         mysqlUser: parent.mysqlUser
+                                        mysqlPassword: parent.mysqlPassword
                                         mysqlDatabase: parent.mysqlDatabase
                                     }
                                 }
@@ -753,8 +789,12 @@ ApplicationWindow {
             // secrets) to disk, then open a live SSH tab that
             // reconnects via the credential id.
             window.saveAndConnect(conn)
+            toastManager.show(qsTr("Connection %1 saved").arg(conn.name), "success")
         }
     }
+
+    // Global toast notification manager
+    ToastManager { id: toastManager }
 
     SettingsDialog {
         id: settingsDialog
@@ -859,7 +899,7 @@ ApplicationWindow {
                     // panel itself shows a connect form up
                     // front, so the user still fills in the
                     // user / password / database fields.
-                    window.openMysqlTab("127.0.0.1", 13306, "root", "", "", "")
+                    window.openMysqlTab("127.0.0.1", 13306, "root", "", "")
                 }
             },
             {

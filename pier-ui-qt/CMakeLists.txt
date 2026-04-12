@@ -17,6 +17,20 @@ qt_add_executable(pier-x
     src/main.cpp
 )
 
+set(PIER_NATIVE_WINDOW_SOURCES
+    src/PierNativeWindow.h
+)
+
+if(APPLE)
+    list(APPEND PIER_NATIVE_WINDOW_SOURCES
+        src/PierNativeWindow_mac.mm
+    )
+elseif(WIN32)
+    list(APPEND PIER_NATIVE_WINDOW_SOURCES
+        src/PierNativeWindow_win.cpp
+    )
+endif()
+
 # qmltyperegistrar emits `#if __has_include(<PierCoreBridge.h>)` in its
 # generated bootstrap, so the source directory has to be on the include
 # path even though we don't `#include` anything from it ourselves.
@@ -33,6 +47,7 @@ qt_add_qml_module(pier-x
     SOURCES
         src/PierCoreBridge.h
         src/PierCoreBridge.cpp
+        ${PIER_NATIVE_WINDOW_SOURCES}
         src/PierTerminalSession.h
         src/PierTerminalSession.cpp
         src/PierTerminalGrid.h
@@ -71,6 +86,7 @@ qt_add_qml_module(pier-x
         qml/components/SectionLabel.qml
         qml/components/Separator.qml
         qml/components/TerminalTab.qml
+        qml/components/ToastManager.qml
         qml/shell/TopBar.qml
         qml/shell/TabBar.qml
         qml/shell/Sidebar.qml
@@ -82,10 +98,10 @@ qt_add_qml_module(pier-x
         qml/views/TerminalView.qml
         qml/views/SftpBrowserView.qml
         qml/views/RedisBrowserView.qml
+        qml/views/MySqlBrowserView.qml
         qml/views/LogViewerView.qml
         qml/views/DockerPanelView.qml
         qml/views/MarkdownPreviewView.qml
-        qml/views/MySqlPanelView.qml
     RESOURCES
         resources/icons/pier.png
 )

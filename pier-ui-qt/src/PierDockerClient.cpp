@@ -78,6 +78,13 @@ void PierDockerClientModel::setBusy(bool b)
     emit busyChanged();
 }
 
+void PierDockerClientModel::setInspectBusy(bool b)
+{
+    if (m_inspectBusy == b) return;
+    m_inspectBusy = b;
+    emit inspectStateChanged();
+}
+
 void PierDockerClientModel::setShowStopped(bool v)
 {
     if (m_showStopped == v) return;
@@ -273,6 +280,67 @@ void PierDockerClientModel::remove(const QString &id, bool force)
     spawnAction(++m_nextRequestId, QStringLiteral("rm"), id, force);
 }
 
+void PierDockerClientModel::inspect(const QString &id)
+{
+    if (!m_handle || id.isEmpty()) return;
+
+    const quint64 requestId = ++m_nextInspectRequestId;
+    if (!m_cancelFlag) {
+        m_cancelFlag = std::make_shared<std::atomic<bool>>(false);
+    }
+
+    m_inspectTarget = id;
+    m_inspectError.clear();
+    m_inspectJson.clear();
+    emit inspectStateChanged();
+    setInspectBusy(true);
+
+    std::string idStd = id.toStdString();
+    ::PierDocker *h = m_handle;
+    QPointer<PierDockerClientModel> selfWeak(this);
+    auto cancelFlag = m_cancelFlag;
+
+    auto worker = std::make_unique<std::thread>([
+        selfWeak, cancelFlag, requestId, h,
+        idStd = std::move(idStd)
+    ]() mutable {
+        char *json = pier_docker_inspect_container(h, idStd.c_str());
+        QString jsonStr;
+        QString err;
+        if (json) {
+            jsonStr = QString::fromUtf8(json);
+            pier_docker_free_string(json);
+        } else {
+            err = QStringLiteral("docker inspect failed (see log)");
+        }
+        if (!selfWeak || (cancelFlag && cancelFlag->load())) return;
+        QMetaObject::invokeMethod(
+            selfWeak.data(),
+            "onInspectResult",
+            Qt::QueuedConnection,
+            Q_ARG(quint64, requestId),
+            Q_ARG(QString, QString::fromStdString(idStd)),
+            Q_ARG(QString, jsonStr),
+            Q_ARG(QString, err));
+    });
+    m_workers.push_back(std::move(worker));
+}
+
+void PierDockerClientModel::clearInspect()
+{
+    const bool changed = !m_inspectTarget.isEmpty()
+        || !m_inspectJson.isEmpty()
+        || !m_inspectError.isEmpty()
+        || m_inspectBusy;
+    m_inspectTarget.clear();
+    m_inspectJson.clear();
+    m_inspectError.clear();
+    setInspectBusy(false);
+    if (changed) {
+        emit inspectStateChanged();
+    }
+}
+
 void PierDockerClientModel::spawnAction(quint64 requestId,
                                          const QString &verb,
                                          const QString &id,
@@ -349,6 +417,38 @@ void PierDockerClientModel::onActionResult(quint64 requestId, bool ok, const QSt
     }
 }
 
+void PierDockerClientModel::onInspectResult(
+    quint64 requestId,
+    const QString &id,
+    const QString &json,
+    const QString &error)
+{
+    if (requestId != m_nextInspectRequestId) {
+        return;
+    }
+
+    setInspectBusy(false);
+    m_inspectTarget = id;
+    if (!error.isEmpty()) {
+        m_inspectJson.clear();
+        m_inspectError = error;
+    } else {
+        m_inspectError.clear();
+        m_inspectJson = formatInspectJson(json);
+    }
+    emit inspectStateChanged();
+}
+
+QString PierDockerClientModel::formatInspectJson(const QString &json)
+{
+    QJsonParseError parseErr {};
+    const QJsonDocument doc = QJsonDocument::fromJson(json.toUtf8(), &parseErr);
+    if (parseErr.error != QJsonParseError::NoError || doc.isNull()) {
+        return json.trimmed();
+    }
+    return QString::fromUtf8(doc.toJson(QJsonDocument::Indented)).trimmed();
+}
+
 void PierDockerClientModel::stop()
 {
     if (m_cancelFlag) {
@@ -366,6 +466,7 @@ void PierDockerClientModel::stop()
         endResetModel();
         emit containerCountChanged();
     }
+    clearInspect();
     if (m_status != Idle) {
         m_errorMessage.clear();
         m_target.clear();

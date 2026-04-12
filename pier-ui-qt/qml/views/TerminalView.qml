@@ -1,4 +1,5 @@
 import QtQuick
+import QtQuick.Effects
 import QtQuick.Layouts
 import Pier
 
@@ -181,6 +182,8 @@ Rectangle {
                     // its pill is a no-op for M4b.
                     readonly property bool tunnelable: pill.port > 0
                                                        && pill.status === "running"
+                    readonly property bool directOpenable: pill.name === "docker"
+                                                           && pill.status === "running"
                     readonly property bool tunneled: tunnel.state === PierTunnel.Open
                     readonly property bool opening: tunnel.state === PierTunnel.Opening
 
@@ -189,7 +192,10 @@ Rectangle {
 
                     color: {
                         if (pill.tunneled) return Theme.accentSubtle
-                        if (pillMouse.containsMouse && pill.tunnelable) return Theme.bgHover
+                        if (pillMouse.containsMouse
+                            && (pill.tunnelable || pill.directOpenable)) {
+                            return Theme.bgHover
+                        }
                         return Theme.bgSurface
                     }
                     border.color: pill.tunneled
@@ -261,8 +267,10 @@ Rectangle {
                         // over pillMouse for this region.
                         Rectangle {
                             id: launcherChip
-                            visible: pill.tunneled
-                                     && pill.name === "redis"
+                            visible: pill.directOpenable
+                                     || (pill.tunneled
+                                         && (pill.name === "redis"
+                                             || pill.name === "mysql"))
                             anchors.verticalCenter: parent.verticalCenter
                             implicitWidth: launcherText.implicitWidth + Theme.sp2 * 2
                             implicitHeight: 16
@@ -296,35 +304,65 @@ Rectangle {
                                 hoverEnabled: true
                                 cursorShape: Qt.PointingHandCursor
                                 onClicked: {
-                                    // Bubble through Main.qml's
-                                    // openRedisTab rather than
-                                    // calling the model directly
-                                    // — keeps the tab-creation
-                                    // logic in one place.
+                                    // Bubble through Main.qml rather
+                                    // than calling the model directly
+                                    // — keeps tab-creation logic in
+                                    // one place. M5d adds the MySQL
+                                    // dispatch alongside the existing
+                                    // Redis one.
                                     var label = pill.name
                                                 + " @ " + root.sshHost
-                                    window.openRedisTab(
-                                        "127.0.0.1",
-                                        tunnel.localPort,
-                                        0,
-                                        label)
+                                    if (pill.name === "redis") {
+                                        window.openRedisTab(
+                                            "127.0.0.1",
+                                            tunnel.localPort,
+                                            0,
+                                            label)
+                                    } else if (pill.name === "mysql") {
+                                        window.openMysqlTab(
+                                            "127.0.0.1",
+                                            tunnel.localPort,
+                                            "",
+                                            "",
+                                            "",
+                                            label)
+                                    } else if (pill.name === "docker") {
+                                        var conn = {
+                                            name: root.sshUser + "@" + root.sshHost,
+                                            host: root.sshHost,
+                                            port: root.sshPort,
+                                            username: root.sshUser,
+                                            password: root.sshPassword,
+                                            credentialId: root.sshCredentialId,
+                                            keyPath: root.sshKeyPath,
+                                            passphraseCredentialId: root.sshPassphraseCredentialId,
+                                            usesAgent: root.sshUsesAgent
+                                        }
+                                        window.openDockerTab(conn)
+                                    }
                                 }
                             }
                         }
 
-                        // Tiny spinner when the tunnel is
-                        // being opened. Reuse the "…" glyph
-                        // to keep things zero-dependency for
-                        // M4b; a real rotating arc like the
-                        // Connecting overlay lands when we
-                        // ship Lucide SVG icons in M6.
-                        Text {
+                        // Loading indicator while the tunnel is opening.
+                        Image {
+                            id: tunnelLoader
                             visible: pill.opening
                             anchors.verticalCenter: parent.verticalCenter
-                            text: "…"
-                            font.family: Theme.fontUi
-                            font.pixelSize: Theme.sizeCaption
-                            color: Theme.accent
+                            source: "qrc:/qt/qml/Pier/resources/icons/lucide/loader.svg"
+                            sourceSize: Qt.size(12, 12)
+                            layer.enabled: true
+                            layer.effect: MultiEffect {
+                                colorization: 1.0
+                                colorizationColor: Theme.accent
+                            }
+
+                            RotationAnimation on rotation {
+                                from: 0; to: 360
+                                duration: 1500
+                                loops: Animation.Infinite
+                                running: pill.opening
+                            }
                         }
                     }
 
@@ -374,6 +412,10 @@ Rectangle {
                     PierToolTip {
                         visible: pillMouse.containsMouse && pill.tunnelable && !pill.tunneled
                         text: qsTr("Click to open a local tunnel to :%1").arg(pill.port)
+                    }
+                    PierToolTip {
+                        visible: pillMouse.containsMouse && pill.directOpenable
+                        text: qsTr("Open the Docker panel for this host")
                     }
                     PierToolTip {
                         visible: pillMouse.containsMouse && pill.tunneled

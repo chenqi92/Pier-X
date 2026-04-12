@@ -35,6 +35,7 @@
 #include <QAbstractListModel>
 #include <QObject>
 #include <QPointer>
+#include <QRegularExpression>
 #include <QString>
 #include <QTimer>
 #include <qqml.h>
@@ -74,8 +75,19 @@ public:
 
     enum Roles {
         KindRole = Qt::UserRole + 1,
-        TextRole
+        TextRole,
+        LevelRole
     };
+
+    enum Level {
+        UnknownLevel = 0,
+        DebugLevel = 1,
+        InfoLevel = 2,
+        WarnLevel = 3,
+        ErrorLevel = 4,
+        FatalLevel = 5
+    };
+    Q_ENUM(Level)
 
     Q_PROPERTY(Status status READ status NOTIFY statusChanged FINAL)
     Q_PROPERTY(QString errorMessage READ errorMessage NOTIFY statusChanged FINAL)
@@ -83,7 +95,16 @@ public:
     Q_PROPERTY(QString command READ command WRITE setCommand NOTIFY commandChanged FINAL)
     Q_PROPERTY(int exitCode READ exitCode NOTIFY statusChanged FINAL)
     Q_PROPERTY(int lineCount READ lineCount NOTIFY lineCountChanged FINAL)
+    Q_PROPERTY(int totalLineCount READ totalLineCount NOTIFY totalLineCountChanged FINAL)
     Q_PROPERTY(bool alive READ alive NOTIFY statusChanged FINAL)
+    Q_PROPERTY(QString filterText READ filterText WRITE setFilterText NOTIFY filterStateChanged FINAL)
+    Q_PROPERTY(bool regexMode READ regexMode WRITE setRegexMode NOTIFY filterStateChanged FINAL)
+    Q_PROPERTY(QString regexError READ regexError NOTIFY filterStateChanged FINAL)
+    Q_PROPERTY(bool debugEnabled READ debugEnabled WRITE setDebugEnabled NOTIFY levelFiltersChanged FINAL)
+    Q_PROPERTY(bool infoEnabled READ infoEnabled WRITE setInfoEnabled NOTIFY levelFiltersChanged FINAL)
+    Q_PROPERTY(bool warnEnabled READ warnEnabled WRITE setWarnEnabled NOTIFY levelFiltersChanged FINAL)
+    Q_PROPERTY(bool errorEnabled READ errorEnabled WRITE setErrorEnabled NOTIFY levelFiltersChanged FINAL)
+    Q_PROPERTY(bool fatalEnabled READ fatalEnabled WRITE setFatalEnabled NOTIFY levelFiltersChanged FINAL)
 
     /// Maximum number of rows retained before trimming.
     /// 5k is enough for a "what just happened" scroll but
@@ -106,10 +127,26 @@ public:
     QString target() const { return m_target; }
     QString command() const { return m_command; }
     int exitCode() const { return m_exitCode; }
-    int lineCount() const { return static_cast<int>(m_rows.size()); }
+    int lineCount() const { return static_cast<int>(m_visibleRows.size()); }
+    int totalLineCount() const { return static_cast<int>(m_rows.size()); }
     bool alive() const { return m_status == Connected; }
+    QString filterText() const { return m_filterText; }
+    bool regexMode() const { return m_regexMode; }
+    QString regexError() const { return m_regexError; }
+    bool debugEnabled() const { return m_debugEnabled; }
+    bool infoEnabled() const { return m_infoEnabled; }
+    bool warnEnabled() const { return m_warnEnabled; }
+    bool errorEnabled() const { return m_errorEnabled; }
+    bool fatalEnabled() const { return m_fatalEnabled; }
 
     void setCommand(const QString &cmd);
+    void setFilterText(const QString &text);
+    void setRegexMode(bool enabled);
+    void setDebugEnabled(bool enabled);
+    void setInfoEnabled(bool enabled);
+    void setWarnEnabled(bool enabled);
+    void setErrorEnabled(bool enabled);
+    void setFatalEnabled(bool enabled);
 
 public slots:
     /// Dial the remote and start streaming `command`. Same
@@ -130,6 +167,9 @@ signals:
     void statusChanged();
     void commandChanged();
     void lineCountChanged();
+    void totalLineCountChanged();
+    void filterStateChanged();
+    void levelFiltersChanged();
 
 private slots:
     void onConnectResult(quint64 requestId, void *handle, const QString &error);
@@ -138,17 +178,23 @@ private slots:
     void onPollTick();
 
 private:
-    void setStatus(Status s);
-    void ingestEventsJson(const QString &json);
-    void trimIfOverflow();
-
     struct Row {
         Kind kind;
         QString text;
+        Level level = UnknownLevel;
     };
+
+    void setStatus(Status s);
+    void ingestEventsJson(const QString &json);
+    void trimIfOverflow();
+    void rebuildVisibleRows();
+    void refreshFilterRegex();
+    bool rowMatchesFilters(const Row &row) const;
+    static Level detectLevel(Kind kind, const QString &text);
 
     ::PierLogStream *m_handle = nullptr;
     std::deque<Row> m_rows;
+    std::vector<int> m_visibleRows;
 
     Status m_status = Status::Idle;
     QString m_errorMessage;
@@ -157,6 +203,16 @@ private:
     int m_exitCode = -1;
 
     QTimer m_pollTimer;
+
+    QString m_filterText;
+    bool m_regexMode = false;
+    QString m_regexError;
+    QRegularExpression m_filterRegex;
+    bool m_debugEnabled = true;
+    bool m_infoEnabled = true;
+    bool m_warnEnabled = true;
+    bool m_errorEnabled = true;
+    bool m_fatalEnabled = true;
 
     quint64 m_nextRequestId = 0;
     std::shared_ptr<std::atomic<bool>> m_cancelFlag;

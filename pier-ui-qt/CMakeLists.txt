@@ -14,8 +14,17 @@ find_package(Qt6 6.8 REQUIRED COMPONENTS
 
 qt_standard_project_setup(REQUIRES 6.8)
 
+set(PIER_PLATFORM_APP_ICON_SOURCES)
+
+if(WIN32)
+    list(APPEND PIER_PLATFORM_APP_ICON_SOURCES
+        resources/icons/pier-windows.rc
+    )
+endif()
+
 qt_add_executable(pier-x
     src/main.cpp
+    ${PIER_PLATFORM_APP_ICON_SOURCES}
 )
 
 set(PIER_NATIVE_WINDOW_SOURCES
@@ -121,6 +130,7 @@ set(PIER_QML_FILES
 
 set(PIER_QML_RESOURCES
     resources/icons/pier.png
+    resources/icons/pier-windows.png
     resources/icons/lucide/chevron-down.svg
     resources/icons/lucide/terminal.svg
     resources/icons/lucide/file-text.svg

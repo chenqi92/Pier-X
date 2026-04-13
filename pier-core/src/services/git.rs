@@ -136,6 +136,7 @@ pub struct StashEntry {
 }
 
 /// A single blame line.
+#[allow(missing_docs)]
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct BlameLine {
     pub line_number: u32,
@@ -147,6 +148,7 @@ pub struct BlameLine {
 }
 
 /// Tag information.
+#[allow(missing_docs)]
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct TagInfo {
     pub name: String,
@@ -156,6 +158,7 @@ pub struct TagInfo {
 }
 
 /// Remote information.
+#[allow(missing_docs)]
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct RemoteInfo {
     pub name: String,
@@ -164,6 +167,7 @@ pub struct RemoteInfo {
 }
 
 /// Git config entry.
+#[allow(missing_docs)]
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ConfigEntry {
     pub key: String,

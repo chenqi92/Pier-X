@@ -8,6 +8,7 @@ use std::ptr;
 
 use crate::services::sqlite::SqliteClient;
 
+/// Opaque SQLite handle.
 pub struct PierSqlite {
     client: SqliteClient,
 }
@@ -22,6 +23,8 @@ fn err_json(msg: &str) -> *mut c_char {
 }
 
 #[no_mangle]
+/// Open a SQLite database and return an opaque handle, or NULL on
+/// failure.
 pub unsafe extern "C" fn pier_sqlite_open(path: *const c_char) -> *mut PierSqlite {
     if path.is_null() {
         return ptr::null_mut();
@@ -40,6 +43,8 @@ pub unsafe extern "C" fn pier_sqlite_open(path: *const c_char) -> *mut PierSqlit
 }
 
 #[no_mangle]
+/// Release a handle previously returned by [`pier_sqlite_open`].
+/// Safe to call with NULL.
 pub unsafe extern "C" fn pier_sqlite_free(h: *mut PierSqlite) {
     if !h.is_null() {
         drop(unsafe { Box::from_raw(h) });
@@ -47,6 +52,8 @@ pub unsafe extern "C" fn pier_sqlite_free(h: *mut PierSqlite) {
 }
 
 #[no_mangle]
+/// Release a heap string returned by this module. Safe to call with
+/// NULL.
 pub unsafe extern "C" fn pier_sqlite_free_string(s: *mut c_char) {
     if !s.is_null() {
         drop(unsafe { CString::from_raw(s) });
@@ -54,6 +61,7 @@ pub unsafe extern "C" fn pier_sqlite_free_string(s: *mut c_char) {
 }
 
 #[no_mangle]
+/// List database tables as a heap JSON string.
 pub unsafe extern "C" fn pier_sqlite_list_tables(h: *mut PierSqlite) -> *mut c_char {
     if h.is_null() {
         return err_json("null");
@@ -65,6 +73,7 @@ pub unsafe extern "C" fn pier_sqlite_list_tables(h: *mut PierSqlite) -> *mut c_c
 }
 
 #[no_mangle]
+/// Return column metadata for `table` as a heap JSON string.
 pub unsafe extern "C" fn pier_sqlite_table_columns(
     h: *mut PierSqlite,
     table: *const c_char,
@@ -83,6 +92,7 @@ pub unsafe extern "C" fn pier_sqlite_table_columns(
 }
 
 #[no_mangle]
+/// Execute SQL and return a heap JSON string describing the result.
 pub unsafe extern "C" fn pier_sqlite_execute(
     h: *mut PierSqlite,
     sql: *const c_char,

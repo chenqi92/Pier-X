@@ -15,6 +15,7 @@ use std::time::Instant;
 use serde::{Deserialize, Serialize};
 
 /// Errors surfaced by the SQLite client.
+#[allow(missing_docs)]
 #[derive(Debug, thiserror::Error)]
 pub enum SqliteError {
     #[error("sqlite: {0}")]
@@ -24,6 +25,7 @@ pub enum SqliteError {
 }
 
 /// Query result shape — mirrors the MySQL QueryResult for UI reuse.
+#[allow(missing_docs)]
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SqliteQueryResult {
     pub columns: Vec<String>,
@@ -167,6 +169,7 @@ impl SqliteClient {
 }
 
 /// Column metadata from PRAGMA table_info.
+#[allow(missing_docs)]
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ColumnInfo {
     pub name: String,

@@ -243,7 +243,7 @@ pub fn graph_log(
 
 /// Check if a commit touches any of the specified paths.
 #[allow(dead_code)]
-fn commit_touches_paths(repo: &Repository, commit: &git2::Commit, paths: &[String]) -> bool {
+fn commit_touches_paths(repo: &Repository, commit: &git2::Commit<'_>, paths: &[String]) -> bool {
     let tree = match commit.tree() {
         Ok(t) => t,
         Err(_) => return false,

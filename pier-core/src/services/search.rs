@@ -10,6 +10,7 @@ use std::process::Command;
 use serde::{Deserialize, Serialize};
 
 /// A single search result.
+#[allow(missing_docs)]
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SearchResult {
     pub path: String,
@@ -22,6 +23,7 @@ pub struct SearchResult {
 }
 
 /// Search error.
+#[allow(missing_docs)]
 #[derive(Debug, thiserror::Error)]
 pub enum SearchError {
     #[error("search: {0}")]

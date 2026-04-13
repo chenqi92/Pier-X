@@ -15,6 +15,7 @@ pub struct PierControlMaster {
 }
 
 #[no_mangle]
+/// Create a ControlMaster handle bound to `host:user:port`.
 pub unsafe extern "C" fn pier_control_master_new(
     host: *const c_char,
     port: u16,
@@ -81,11 +82,15 @@ pub unsafe extern "C" fn pier_control_master_is_alive(h: *const PierControlMaste
 }
 
 #[no_mangle]
+/// Release a handle previously returned by
+/// [`pier_control_master_new`]. Safe to call with NULL.
 pub unsafe extern "C" fn pier_control_master_free(h: *mut PierControlMaster) {
     if !h.is_null() { drop(unsafe { Box::from_raw(h) }); }
 }
 
 #[no_mangle]
+/// Release a heap string returned by this module. Safe to call with
+/// NULL.
 pub unsafe extern "C" fn pier_control_master_free_string(s: *mut c_char) {
     if !s.is_null() { drop(unsafe { CString::from_raw(s) }); }
 }

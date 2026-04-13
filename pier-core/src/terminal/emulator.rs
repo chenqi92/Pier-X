@@ -131,8 +131,11 @@ pub struct VtEmulator {
     /// presses Enter on a line containing `ssh [user@]host`.
     /// The UI reads these and clears `ssh_command_detected`.
     pub ssh_command_detected: bool,
+    /// Host extracted from the most recent detected `ssh` command.
     pub ssh_detected_host: String,
+    /// User extracted from the most recent detected `ssh` command.
     pub ssh_detected_user: String,
+    /// Port extracted from the most recent detected `ssh` command.
     pub ssh_detected_port: u16,
 }
 

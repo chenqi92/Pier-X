@@ -7,9 +7,9 @@
 //! * [`pty`] — owns the child process. Exposes a byte-oriented
 //!   `Pty` trait with `read`, `write`, `resize`, and a destructor that
 //!   reaps the child. A `UnixPty` implementation wraps `forkpty(3)` on
-//!   Unix targets; Windows gets a `WindowsPty` stub that currently
-//!   returns [`TerminalError::Unsupported`] and will be filled in with
-//!   the Win32 **ConPTY** API (`CreatePseudoConsole`) in M2b.
+//!   Unix targets; Windows currently uses a pipe-backed shell
+//!   transport and will be upgraded to the Win32 **ConPTY** API
+//!   (`CreatePseudoConsole`) in a later milestone.
 //!
 //! * [`emulator`] — pure-Rust VT100 state machine, driven by the `vte`
 //!   crate's SAX-style `Perform` trait. Holds a rectangular grid of

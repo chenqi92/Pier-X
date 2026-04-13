@@ -17,6 +17,17 @@
 
 namespace {
 
+QString appIconPath()
+{
+#ifdef Q_OS_WIN
+    // Windows title bars and taskbar buttons render the padded macOS asset too
+    // small, so use a tighter crop there while keeping the current macOS icon.
+    return QStringLiteral(":/qt/qml/Pier/resources/icons/pier-windows.png");
+#else
+    return QStringLiteral(":/qt/qml/Pier/resources/icons/pier.png");
+#endif
+}
+
 // Push the OS color scheme into the QML Theme singleton.
 // Called once at startup and again on every QStyleHints::colorSchemeChanged.
 void syncSystemThemeToQml(QQmlApplicationEngine &engine)
@@ -46,7 +57,7 @@ int main(int argc, char *argv[])
     QGuiApplication::setApplicationVersion(QStringLiteral(PIER_X_VERSION));
     QGuiApplication::setOrganizationName("kkape");
     QGuiApplication::setOrganizationDomain("kkape.com");
-    QGuiApplication::setWindowIcon(QIcon(QStringLiteral(":/qt/qml/Pier/resources/icons/pier.png")));
+    QGuiApplication::setWindowIcon(QIcon(appIconPath()));
 
     // ── i18n ──────────────────────────────────────────
     // PierI18n is a QML_SINGLETON that manages the translator

@@ -118,5 +118,25 @@ if (-not (Test-Path $exe)) {
     exit 1
 }
 
+# Make sure the app can find Qt DLLs when launched from this shell.
+$env:PATH = (Join-Path $qtDir "bin") + ";" + $env:PATH
+
+# Deploy Qt runtime + QML imports next to the executable so the app
+# also starts correctly outside this shell session.
+$windeployqt = Join-Path $qtDir "bin\windeployqt.exe"
+if (Test-Path $windeployqt) {
+    $deployArgs = @("--dir", (Split-Path $exe -Parent), "--qmldir", (Join-Path $PSScriptRoot "pier-ui-qt\qml"))
+    if ($BuildType -ieq "Debug") {
+        $deployArgs += "--debug"
+    } else {
+        $deployArgs += "--release"
+    }
+    $deployArgs += $exe
+
+    Write-Host "==> Deploying Qt runtime"
+    & $windeployqt @deployArgs
+    if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+}
+
 Write-Host "==> Launching $exe"
 & $exe @Args

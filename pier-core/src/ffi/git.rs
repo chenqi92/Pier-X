@@ -567,6 +567,7 @@ pub unsafe extern "C" fn pier_git_checkout_branch(
 // Blame
 // ─────────────────────────────────────────────────────────
 
+/// Get blame information for a file as a JSON array.
 #[no_mangle]
 pub unsafe extern "C" fn pier_git_blame(h: *mut PierGit, path: *const c_char) -> *mut c_char {
     if h.is_null() || path.is_null() {
@@ -590,6 +591,7 @@ pub unsafe extern "C" fn pier_git_blame(h: *mut PierGit, path: *const c_char) ->
 // Tags
 // ─────────────────────────────────────────────────────────
 
+/// List tags as a JSON array.
 #[no_mangle]
 pub unsafe extern "C" fn pier_git_tag_list(h: *mut PierGit) -> *mut c_char {
     if h.is_null() {
@@ -605,6 +607,7 @@ pub unsafe extern "C" fn pier_git_tag_list(h: *mut PierGit) -> *mut c_char {
     }
 }
 
+/// Create a lightweight or annotated tag and return the git output.
 #[no_mangle]
 pub unsafe extern "C" fn pier_git_tag_create(
     h: *mut PierGit,
@@ -633,6 +636,7 @@ pub unsafe extern "C" fn pier_git_tag_create(
     }
 }
 
+/// Delete a tag and return the git output.
 #[no_mangle]
 pub unsafe extern "C" fn pier_git_tag_delete(h: *mut PierGit, name: *const c_char) -> *mut c_char {
     if h.is_null() || name.is_null() {
@@ -653,6 +657,7 @@ pub unsafe extern "C" fn pier_git_tag_delete(h: *mut PierGit, name: *const c_cha
 // Remotes
 // ─────────────────────────────────────────────────────────
 
+/// List remotes as a JSON array.
 #[no_mangle]
 pub unsafe extern "C" fn pier_git_remote_list(h: *mut PierGit) -> *mut c_char {
     if h.is_null() {
@@ -668,6 +673,7 @@ pub unsafe extern "C" fn pier_git_remote_list(h: *mut PierGit) -> *mut c_char {
     }
 }
 
+/// Add a remote and return the git output.
 #[no_mangle]
 pub unsafe extern "C" fn pier_git_remote_add(
     h: *mut PierGit,
@@ -692,6 +698,7 @@ pub unsafe extern "C" fn pier_git_remote_add(
     }
 }
 
+/// Remove a remote and return the git output.
 #[no_mangle]
 pub unsafe extern "C" fn pier_git_remote_remove(
     h: *mut PierGit,
@@ -715,6 +722,7 @@ pub unsafe extern "C" fn pier_git_remote_remove(
 // Config
 // ─────────────────────────────────────────────────────────
 
+/// List git config entries as a JSON array.
 #[no_mangle]
 pub unsafe extern "C" fn pier_git_config_list(h: *mut PierGit) -> *mut c_char {
     if h.is_null() {
@@ -730,6 +738,7 @@ pub unsafe extern "C" fn pier_git_config_list(h: *mut PierGit) -> *mut c_char {
     }
 }
 
+/// Set a git config entry and return the git output.
 #[no_mangle]
 pub unsafe extern "C" fn pier_git_config_set(
     h: *mut PierGit,
@@ -755,6 +764,7 @@ pub unsafe extern "C" fn pier_git_config_set(
     }
 }
 
+/// Unset a git config entry and return the git output.
 #[no_mangle]
 pub unsafe extern "C" fn pier_git_config_unset(
     h: *mut PierGit,

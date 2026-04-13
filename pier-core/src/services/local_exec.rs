@@ -117,6 +117,7 @@ pub fn docker_inspect(id: &str) -> Result<String, String> {
 }
 
 /// Local system metrics.
+#[allow(missing_docs)]
 #[derive(Serialize, Deserialize)]
 pub struct LocalMetrics {
     pub hostname: String,

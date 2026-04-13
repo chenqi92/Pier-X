@@ -15,15 +15,6 @@ ApplicationWindow {
     minimumHeight: Theme.windowMinHeight
     visible: true
     title: qsTr("Pier-X")
-    // Qt 6.9+ auto-insets ApplicationWindow.contentItem by safe-area
-    // margins. On macOS that pushes our custom TopBar below the native
-    // traffic lights, making the title-bar content look like a second
-    // row. We own the chrome geometry ourselves, so opt out here.
-    topPadding: 0
-    leftPadding: 0
-    rightPadding: 0
-    bottomPadding: 0
-
     color: Theme.bgCanvas
     Behavior on color {
         ColorAnimation { duration: Theme.durNormal; easing.type: Theme.easingType }

@@ -145,9 +145,9 @@ impl PierTerminal {
     /// Spawn a new local shell session.
     ///
     /// On Unix this goes through [`super::pty::UnixPty::spawn_shell`];
-    /// on Windows this currently returns
-    /// [`TerminalError::Unsupported`] and will route through the
-    /// ConPTY stub once that lands.
+    /// on Windows it currently uses the pipe-backed
+    /// [`super::pty::WindowsPty::spawn_shell`] transport until the
+    /// ConPTY backend lands.
     ///
     /// `notify` and `user_data` are stored and invoked from the
     /// reader thread on any subsequent event. See [`NotifyFn`] for
@@ -159,26 +159,22 @@ impl PierTerminal {
         notify: NotifyFn,
         user_data: *mut std::ffi::c_void,
     ) -> Result<Self, TerminalError> {
-        let pty: Box<dyn Pty> = {
-            #[cfg(unix)]
-            {
-                Box::new(super::pty::UnixPty::spawn_shell(cols, rows, shell)?)
-            }
-            #[cfg(windows)]
-            {
-                // M2b will replace this with a real ConPTY-backed
-                // implementation. For now, fail loudly at construction
-                // time so the UI can fall back gracefully.
-                let _ = (cols, rows, shell);
-                return Err(TerminalError::Unsupported);
-            }
-            #[cfg(not(any(unix, windows)))]
-            {
-                let _ = (cols, rows, shell);
-                return Err(TerminalError::Unsupported);
-            }
-        };
-        Self::with_pty(pty, cols, rows, notify, user_data)
+        #[cfg(unix)]
+        {
+            let pty: Box<dyn Pty> = Box::new(super::pty::UnixPty::spawn_shell(cols, rows, shell)?);
+            return Self::with_pty(pty, cols, rows, notify, user_data);
+        }
+        #[cfg(windows)]
+        {
+            let pty: Box<dyn Pty> =
+                Box::new(super::pty::WindowsPty::spawn_shell(cols, rows, shell)?);
+            return Self::with_pty(pty, cols, rows, notify, user_data);
+        }
+        #[cfg(not(any(unix, windows)))]
+        {
+            let _ = (cols, rows, shell, notify, user_data);
+            Err(TerminalError::Unsupported)
+        }
     }
 
     /// Construct a session from an already-spawned `Pty`.

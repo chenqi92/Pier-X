@@ -301,7 +301,7 @@ mod unix {
 }
 
 // ─────────────────────────────────────────────────────────
-// Windows implementation — ConPTY stub for now
+// Windows implementation — pipe-backed shell transport
 // ─────────────────────────────────────────────────────────
 
 #[cfg(windows)]
@@ -310,48 +310,186 @@ pub use windows_impl::WindowsPty;
 #[cfg(windows)]
 mod windows_impl {
     use super::{Pty, TerminalError};
+    use std::io::{self, Read, Write};
+    use std::os::windows::process::CommandExt;
+    use std::process::{Child, ChildStdin, Command, Stdio};
+    use std::sync::mpsc::{self, Receiver, TryRecvError};
+    use std::thread::{self, JoinHandle};
 
-    /// Placeholder Windows PTY. Every method currently returns
-    /// [`TerminalError::Unsupported`]. M2b replaces this body with a
-    /// real `CreatePseudoConsole`-backed implementation.
+    const CREATE_NO_WINDOW: u32 = 0x0800_0000;
+    const READ_CHUNK_SIZE: usize = 8192;
+
+    /// Minimal Windows terminal transport.
     ///
-    /// The struct exists today so that downstream code (the Qt bridge,
-    /// the integration tests) can be written against the trait on all
-    /// platforms and compile cleanly on Windows before the ConPTY body
-    /// lands.
+    /// This is not a real pseudo console yet — it launches the shell
+    /// with redirected stdin/stdout/stderr pipes and forwards bytes
+    /// through the same [`Pty`] trait that Unix uses. That is enough
+    /// for interactive PowerShell/cmd sessions while the ConPTY
+    /// backend is still pending.
     pub struct WindowsPty {
+        child: Child,
+        stdin: ChildStdin,
+        rx: Receiver<Vec<u8>>,
+        reader_threads: Vec<JoinHandle<()>>,
         cols: u16,
         rows: u16,
     }
 
     impl WindowsPty {
+        /// Spawn `program` with redirected stdio and background pipe
+        /// readers that merge stdout + stderr into one byte stream.
         pub fn spawn(
-            _cols: u16,
-            _rows: u16,
-            _program: &str,
-            _args: &[&str],
+            cols: u16,
+            rows: u16,
+            program: &str,
+            args: &[&str],
         ) -> Result<Self, TerminalError> {
-            Err(TerminalError::Unsupported)
+            let mut cmd = Command::new(program);
+            cmd.args(args)
+                .stdin(Stdio::piped())
+                .stdout(Stdio::piped())
+                .stderr(Stdio::piped())
+                .creation_flags(CREATE_NO_WINDOW)
+                .env("TERM", "xterm-256color");
+
+            if let Ok(home) = std::env::var("USERPROFILE") {
+                if !home.is_empty() {
+                    cmd.current_dir(home);
+                }
+            }
+
+            let mut child = cmd.spawn().map_err(TerminalError::Io)?;
+            let stdin = child.stdin.take().ok_or_else(|| {
+                TerminalError::Io(io::Error::new(
+                    io::ErrorKind::BrokenPipe,
+                    "failed to capture child stdin",
+                ))
+            })?;
+            let stdout = child.stdout.take().ok_or_else(|| {
+                TerminalError::Io(io::Error::new(
+                    io::ErrorKind::BrokenPipe,
+                    "failed to capture child stdout",
+                ))
+            })?;
+            let stderr = child.stderr.take().ok_or_else(|| {
+                TerminalError::Io(io::Error::new(
+                    io::ErrorKind::BrokenPipe,
+                    "failed to capture child stderr",
+                ))
+            })?;
+
+            let (tx, rx) = mpsc::channel();
+            let mut reader_threads = Vec::with_capacity(2);
+            reader_threads.push(spawn_pipe_reader("pier-terminal-stdout", stdout, tx.clone()));
+            reader_threads.push(spawn_pipe_reader("pier-terminal-stderr", stderr, tx));
+
+            Ok(Self {
+                child,
+                stdin,
+                rx,
+                reader_threads,
+                cols,
+                rows,
+            })
         }
 
-        pub fn spawn_shell(_cols: u16, _rows: u16, _shell: &str) -> Result<Self, TerminalError> {
-            Err(TerminalError::Unsupported)
+        /// Spawn an interactive shell.
+        ///
+        /// PowerShell gets `-NoLogo` to suppress the startup banner.
+        /// `cmd.exe` gets `/Q /K` so it stays interactive and avoids
+        /// echoing every line back twice.
+        pub fn spawn_shell(cols: u16, rows: u16, shell: &str) -> Result<Self, TerminalError> {
+            let leaf = shell
+                .rsplit(['\\', '/'])
+                .next()
+                .unwrap_or(shell)
+                .to_ascii_lowercase();
+            let args: &[&str] = match leaf.as_str() {
+                "powershell.exe" | "powershell" | "pwsh.exe" | "pwsh" => &["-NoLogo"],
+                "cmd.exe" | "cmd" => &["/Q", "/K"],
+                _ => &[],
+            };
+            Self::spawn(cols, rows, shell, args)
         }
     }
 
     impl Pty for WindowsPty {
         fn read(&mut self) -> Result<Vec<u8>, TerminalError> {
-            Err(TerminalError::Unsupported)
+            let mut out = Vec::new();
+            loop {
+                match self.rx.try_recv() {
+                    Ok(chunk) => out.extend_from_slice(&chunk),
+                    Err(TryRecvError::Empty) => break,
+                    Err(TryRecvError::Disconnected) => {
+                        if out.is_empty() {
+                            return Err(TerminalError::Io(io::Error::new(
+                                io::ErrorKind::BrokenPipe,
+                                "terminal child exited",
+                            )));
+                        }
+                        break;
+                    }
+                }
+            }
+            Ok(out)
         }
-        fn write(&mut self, _data: &[u8]) -> Result<usize, TerminalError> {
-            Err(TerminalError::Unsupported)
+        fn write(&mut self, data: &[u8]) -> Result<usize, TerminalError> {
+            self.stdin.write_all(data).map_err(TerminalError::Io)?;
+            self.stdin.flush().map_err(TerminalError::Io)?;
+            Ok(data.len())
         }
-        fn resize(&mut self, _cols: u16, _rows: u16) -> Result<(), TerminalError> {
-            Err(TerminalError::Unsupported)
+        fn resize(&mut self, cols: u16, rows: u16) -> Result<(), TerminalError> {
+            // Pipe-backed shells do not expose a real console buffer to
+            // resize yet. Keep the logical size in sync so the UI and
+            // emulator still agree on the viewport dimensions.
+            self.cols = cols;
+            self.rows = rows;
+            Ok(())
         }
         fn size(&self) -> (u16, u16) {
             (self.cols, self.rows)
         }
+    }
+
+    impl Drop for WindowsPty {
+        fn drop(&mut self) {
+            let _ = self.stdin.flush();
+            if matches!(self.child.try_wait(), Ok(None)) {
+                let _ = self.child.kill();
+            }
+            let _ = self.child.wait();
+            for handle in self.reader_threads.drain(..) {
+                let _ = handle.join();
+            }
+        }
+    }
+
+    fn spawn_pipe_reader<R>(
+        thread_name: &str,
+        mut pipe: R,
+        tx: mpsc::Sender<Vec<u8>>,
+    ) -> JoinHandle<()>
+    where
+        R: Read + Send + 'static,
+    {
+        thread::Builder::new()
+            .name(thread_name.to_string())
+            .spawn(move || {
+                let mut buf = [0u8; READ_CHUNK_SIZE];
+                loop {
+                    match pipe.read(&mut buf) {
+                        Ok(0) => break,
+                        Ok(n) => {
+                            if tx.send(buf[..n].to_vec()).is_err() {
+                                break;
+                            }
+                        }
+                        Err(e) if e.kind() == io::ErrorKind::Interrupted => continue,
+                        Err(_) => break,
+                    }
+                }
+            })
+            .expect("spawning Windows pipe reader must not fail in practice")
     }
 }
 
@@ -416,6 +554,42 @@ mod tests {
             s.contains("pier-x-roundtrip"),
             "expected roundtrip text, got {:?}",
             s
+        );
+    }
+}
+
+#[cfg(all(test, windows))]
+mod windows_tests {
+    use super::*;
+    use std::thread;
+    use std::time::{Duration, Instant};
+
+    fn drain_until(pty: &mut dyn Pty, deadline: Duration) -> Vec<u8> {
+        let start = Instant::now();
+        let mut out = Vec::new();
+        while start.elapsed() < deadline {
+            match pty.read() {
+                Ok(chunk) if !chunk.is_empty() => out.extend_from_slice(&chunk),
+                Ok(_) => thread::sleep(Duration::from_millis(10)),
+                Err(_) => break,
+            }
+        }
+        out
+    }
+
+    #[test]
+    fn spawn_shell_roundtrips_powershell_commands() {
+        let mut pty =
+            WindowsPty::spawn_shell(80, 24, "powershell.exe").expect("spawn_shell failed");
+        pty.write(b"Write-Output 'hello-pier'\r\nexit\r\n")
+            .expect("write failed");
+
+        let out = drain_until(&mut pty, Duration::from_secs(5));
+        let s = String::from_utf8_lossy(&out);
+        assert!(
+            s.contains("hello-pier"),
+            "expected hello-pier in output, got {:?}",
+            s,
         );
     }
 }

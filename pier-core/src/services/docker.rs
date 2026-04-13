@@ -220,6 +220,7 @@ pub fn inspect_container_blocking(session: &SshSession, id: &str) -> Result<Stri
 // ═══════════════════════════════════════════════════════════
 
 /// One row from `docker images`.
+#[allow(missing_docs)]
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct DockerImage {
     #[serde(rename(serialize = "id", deserialize = "ID"), alias = "id", default)]
@@ -281,6 +282,7 @@ pub fn remove_image_blocking(session: &SshSession, id: &str, force: bool) -> Res
 // ═══════════════════════════════════════════════════════════
 
 /// One row from `docker volume ls`.
+#[allow(missing_docs)]
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct DockerVolume {
     #[serde(rename(serialize = "name", deserialize = "Name"), alias = "name", default)]
@@ -323,6 +325,7 @@ pub fn remove_volume_blocking(session: &SshSession, name: &str) -> Result<()> {
 // ═══════════════════════════════════════════════════════════
 
 /// One row from `docker network ls`.
+#[allow(missing_docs)]
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct DockerNetwork {
     #[serde(rename(serialize = "id", deserialize = "ID"), alias = "id", default)]

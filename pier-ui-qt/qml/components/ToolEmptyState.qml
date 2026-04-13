@@ -9,19 +9,20 @@ Item {
     property string icon: "database"
     property string title: ""
     property string description: ""
+    property bool compact: false
 
-    implicitWidth: 220
-    implicitHeight: 120
+    implicitWidth: root.compact ? 180 : 220
+    implicitHeight: root.compact ? 96 : 120
 
     ColumnLayout {
         anchors.centerIn: parent
-        width: Math.min(root.width, 248)
-        spacing: Theme.sp1_5
+        width: Math.min(root.width, root.compact ? 220 : 248)
+        spacing: root.compact ? Theme.sp1 : Theme.sp1_5
 
         Rectangle {
             Layout.alignment: Qt.AlignHCenter
-            width: 24
-            height: 24
+            width: root.compact ? 20 : 24
+            height: root.compact ? 20 : 24
             radius: Theme.radiusMd
             color: Theme.bgInset
             border.color: Theme.borderSubtle
@@ -30,7 +31,8 @@ Item {
             Image {
                 anchors.centerIn: parent
                 source: "qrc:/qt/qml/Pier/resources/icons/lucide/" + root.icon + ".svg"
-                sourceSize: Qt.size(Theme.iconSm, Theme.iconSm)
+                sourceSize: Qt.size(root.compact ? Theme.iconXs : Theme.iconSm,
+                                    root.compact ? Theme.iconXs : Theme.iconSm)
                 layer.enabled: true
                 layer.effect: MultiEffect {
                     colorization: 1.0
@@ -44,7 +46,7 @@ Item {
             text: root.title
             horizontalAlignment: Text.AlignHCenter
             font.family: Theme.fontUi
-            font.pixelSize: Theme.sizeCaption
+            font.pixelSize: root.compact ? Theme.sizeSmall : Theme.sizeCaption
             font.weight: Theme.weightMedium
             color: Theme.textPrimary
             wrapMode: Text.WordWrap
@@ -55,7 +57,7 @@ Item {
             text: root.description
             horizontalAlignment: Text.AlignHCenter
             font.family: Theme.fontUi
-            font.pixelSize: Theme.sizeCaption
+            font.pixelSize: Theme.sizeSmall
             color: Theme.textTertiary
             wrapMode: Text.WordWrap
         }

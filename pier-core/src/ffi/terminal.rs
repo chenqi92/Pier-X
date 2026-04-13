@@ -1011,21 +1011,31 @@ pub unsafe extern "C" fn pier_terminal_ssh_detected(t: *mut PierTerminal) -> *mu
         return ptr::null_mut();
     }
     let term = unsafe { &*t };
-    match term.take_ssh_detected() {
-        Some((host, user, port)) => {
-            let json = format!(
-                r#"{{"detected":true,"host":"{}","user":"{}","port":{}}}"#,
-                host.replace('"', "\\\""),
-                user.replace('"', "\\\""),
-                port
-            );
-            match CString::new(json) {
-                Ok(cs) => cs.into_raw(),
-                Err(_) => ptr::null_mut(),
-            }
-        }
-        None => ptr::null_mut(),
+
+    // Check SSH command first
+    if let Some((host, user, port)) = term.take_ssh_detected() {
+        let json = format!(
+            r#"{{"detected":true,"host":"{}","user":"{}","port":{}}}"#,
+            host.replace('"', "\\\""),
+            user.replace('"', "\\\""),
+            port
+        );
+        return match CString::new(json) {
+            Ok(cs) => cs.into_raw(),
+            Err(_) => ptr::null_mut(),
+        };
     }
+
+    // Check exit/logout
+    if term.take_ssh_exit_detected() {
+        let json = r#"{"exit":true}"#;
+        return match CString::new(json) {
+            Ok(cs) => cs.into_raw(),
+            Err(_) => ptr::null_mut(),
+        };
+    }
+
+    ptr::null_mut()
 }
 
 /// Free a string returned by `pier_terminal_ssh_detected`.

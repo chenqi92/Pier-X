@@ -46,6 +46,16 @@ bool PierLocalSystem::openPath(const QString &path) const
     return QDesktopServices::openUrl(QUrl::fromLocalFile(localPath));
 }
 
+bool PierLocalSystem::openExternalUrl(const QString &url) const
+{
+    const QUrl parsed = QUrl::fromUserInput(url.trimmed());
+    if (!parsed.isValid() || parsed.scheme().isEmpty()) {
+        qWarning() << "PierLocalSystem::openExternalUrl: invalid url" << url;
+        return false;
+    }
+    return QDesktopServices::openUrl(parsed);
+}
+
 bool PierLocalSystem::revealPath(const QString &path) const
 {
     if (path.isEmpty()) {

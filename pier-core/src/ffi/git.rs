@@ -956,6 +956,27 @@ pub unsafe extern "C" fn pier_git_list_authors(
     }
 }
 
+/// List tracked files in the repository.
+///
+/// Returns a JSON array of path strings.
+#[no_mangle]
+pub unsafe extern "C" fn pier_git_list_tracked_files(repo_path: *const c_char) -> *mut c_char {
+    if repo_path.is_null() {
+        return err_json("null repo_path");
+    }
+    let rp = match unsafe { CStr::from_ptr(repo_path) }.to_str() {
+        Ok(s) => s,
+        Err(_) => return err_json("invalid utf-8"),
+    };
+    match git_graph::list_tracked_files(rp) {
+        Ok(files) => {
+            let json = serde_json::to_string(&files).unwrap_or_else(|_| "[]".into());
+            to_json_cstring(&json)
+        }
+        Err(e) => err_json(&e),
+    }
+}
+
 /// Get the first-parent chain hashes for a given ref.
 ///
 /// Returns a JSON array of hash strings.

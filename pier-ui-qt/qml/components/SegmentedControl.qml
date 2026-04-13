@@ -7,10 +7,11 @@ Rectangle {
 
     property var options: []
     property int currentIndex: 0
+    property bool compact: false
     signal activated(int index)
 
-    implicitHeight: Theme.controlHeight + Theme.sp0_5
-    implicitWidth: segRow.implicitWidth + Theme.sp1
+    implicitHeight: (root.compact ? (Theme.controlHeight - Theme.sp1) : Theme.controlHeight) + Theme.sp0_5
+    implicitWidth: segRow.implicitWidth + (root.compact ? Theme.sp0_5 : Theme.sp1)
     color: Theme.bgInset
     border.color: Theme.borderDefault
     border.width: 1
@@ -22,8 +23,8 @@ Rectangle {
     RowLayout {
         id: segRow
         anchors.fill: parent
-        anchors.margins: Theme.sp0_5
-        spacing: Theme.sp0_5
+        anchors.margins: root.compact ? 1 : Theme.sp0_5
+        spacing: root.compact ? 1 : Theme.sp0_5
 
         Repeater {
             model: root.options
@@ -45,7 +46,7 @@ Rectangle {
                     anchors.centerIn: parent
                     text: modelData
                     font.family: Theme.fontUi
-                    font.pixelSize: Theme.sizeBody
+                    font.pixelSize: root.compact ? Theme.sizeCaption : Theme.sizeBody
                     font.weight: index === root.currentIndex ? Theme.weightMedium : Theme.weightRegular
                     color: index === root.currentIndex ? Theme.textPrimary : Theme.textSecondary
                 }

@@ -11,10 +11,12 @@ Rectangle {
     property string footerText: ""
     property real progress: -1
     property color accentColor: Theme.accent
+    property bool compact: false
 
     readonly property color strokeColor: Qt.rgba(root.accentColor.r, root.accentColor.g, root.accentColor.b, Theme.dark ? 0.20 : 0.14)
 
-    implicitHeight: Math.max(92, tileColumn.implicitHeight + Theme.sp3 * 2)
+    implicitHeight: Math.max(root.compact ? 72 : 92,
+                             tileColumn.implicitHeight + (root.compact ? Theme.sp2 : Theme.sp3) * 2)
     color: Theme.bgSurface
     border.color: root.strokeColor
     border.width: 1
@@ -27,17 +29,17 @@ Rectangle {
     ColumnLayout {
         id: tileColumn
         anchors.fill: parent
-        anchors.margins: Theme.sp3
-        spacing: Theme.sp1_5
+        anchors.margins: root.compact ? Theme.sp2 : Theme.sp3
+        spacing: root.compact ? Theme.sp1 : Theme.sp1_5
 
         RowLayout {
             Layout.fillWidth: true
             spacing: Theme.sp1_5
 
             Rectangle {
-                width: 6
-                height: 6
-                radius: 3
+                width: 5
+                height: 5
+                radius: 2.5
                 color: root.accentColor
             }
 
@@ -53,13 +55,13 @@ Rectangle {
         }
 
         Text {
-            Layout.fillWidth: true
-            text: root.valueText
-            font.family: Theme.fontMono
-            font.pixelSize: 20
-            font.weight: Theme.weightMedium
-            color: Theme.textPrimary
-            elide: Text.ElideRight
+                Layout.fillWidth: true
+                text: root.valueText
+                font.family: Theme.fontMono
+                font.pixelSize: root.compact ? 16 : 20
+                font.weight: Theme.weightMedium
+                color: Theme.textPrimary
+                elide: Text.ElideRight
         }
 
         Text {

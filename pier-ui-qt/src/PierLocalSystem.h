@@ -24,6 +24,7 @@ public:
     Q_INVOKABLE bool copyText(const QString &text) const;
     Q_INVOKABLE QString readText() const;
     Q_INVOKABLE bool openPath(const QString &path) const;
+    Q_INVOKABLE bool openExternalUrl(const QString &url) const;
     Q_INVOKABLE bool revealPath(const QString &path) const;
     Q_INVOKABLE bool initGitRepository(const QString &path) const;
 };

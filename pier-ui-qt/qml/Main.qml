@@ -91,10 +91,12 @@ ApplicationWindow {
     // Per-tab session references, keyed by tab index.
     property var _tabSessions: ({})          // { index: PierTerminalSession }
     property var _tabSharedSessions: ({})    // { index: PierSshSessionHandle }
+    property var _tabControlMasters: ({})    // { index: PierControlMasterHandle }
 
     // Live session from the CURRENT tab.
     readonly property var activeSession: _tabSessions[currentTabIndex] || null
     readonly property var activeSharedSession: _tabSharedSessions[currentTabIndex] || null
+    readonly property var activeControlMaster: _tabControlMasters[currentTabIndex] || null
 
     function toggleFullScreen() {
         if (visibility === Window.FullScreen) {
@@ -134,10 +136,36 @@ ApplicationWindow {
         m[idx] = session
         _tabSharedSessions = m
     }
+    function _registerTabControlMaster(idx, cm) {
+        var m = _tabControlMasters
+        m[idx] = cm
+        _tabControlMasters = m
+    }
     function _unregisterTab(idx) {
         var m1 = _tabSessions; delete m1[idx]; _tabSessions = m1
         var m2 = _tabSharedSessions; delete m2[idx]; _tabSharedSessions = m2
+        var m3 = _tabControlMasters; delete m3[idx]; _tabControlMasters = m3
     }
+
+    // Look up a saved connection by host (and optionally user).
+    // Returns the connection QVariantMap or null.
+    function findSavedConnection(host, user) {
+        if (!connectionsModel || host.length === 0) return null
+        // First pass: exact match on host + user
+        for (var i = 0; i < connectionsModel.count; i++) {
+            var conn = connectionsModel.get(i)
+            if (conn && conn.host === host && conn.username === user)
+                return conn
+        }
+        // Second pass: match on host only
+        for (var j = 0; j < connectionsModel.count; j++) {
+            var c2 = connectionsModel.get(j)
+            if (c2 && c2.host === host)
+                return c2
+        }
+        return null
+    }
+
     property var pendingCloseIndexes: []
     property string pendingCloseTitle: ""
     property string pendingCloseMessage: ""
@@ -842,6 +870,8 @@ ApplicationWindow {
                                             window._registerTabSession(index, item.terminalSession)
                                         if (item && item.sharedSshSession)
                                             window._registerTabSharedSession(index, item.sharedSshSession)
+                                        if (item && item.controlMaster)
+                                            window._registerTabControlMaster(index, item.controlMaster)
                                     }
 
                                     Connections {
@@ -920,9 +950,16 @@ ApplicationWindow {
                 activeBackend: {
                     if (window.currentTabIndex < 0 || window.currentTabIndex >= tabModel.count) return ""
                     if (window.activeSharedSession && window.activeSharedSession.connected) return "ssh"
+                    if (window.activeControlMaster && window.activeControlMaster.connected) return "ssh"
                     return tabModel.get(window.currentTabIndex).backend || ""
                 }
                 sshHost: {
+                    // Check controlMaster first (local terminal manual ssh)
+                    var cm = window.activeControlMaster
+                    if (cm && cm.connected && cm.target.length > 0) {
+                        var ct = cm.target
+                        return ct.indexOf("@") >= 0 ? ct.substring(ct.indexOf("@") + 1).split(":")[0] : ct.split(":")[0]
+                    }
                     var ss = window.activeSharedSession
                     if (ss && ss.connected && ss.target.length > 0) {
                         var t = ss.target

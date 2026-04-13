@@ -434,6 +434,21 @@ impl PierTerminal {
             None
         }
     }
+
+    /// Check if the emulator detected an `exit`/`logout` command.
+    /// Clears the flag after reading.
+    pub fn take_ssh_exit_detected(&self) -> bool {
+        let mut guard = match self.inner.lock() {
+            Ok(g) => g,
+            Err(poisoned) => poisoned.into_inner(),
+        };
+        if guard.emu.ssh_exit_detected {
+            guard.emu.ssh_exit_detected = false;
+            true
+        } else {
+            false
+        }
+    }
 }
 
 impl Drop for PierTerminal {

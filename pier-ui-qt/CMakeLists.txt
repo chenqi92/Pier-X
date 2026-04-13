@@ -150,12 +150,18 @@ set(PIER_QML_RESOURCES
     resources/icons/lucide/folder-sync.svg
     resources/icons/lucide/moon.svg
     resources/icons/lucide/git-branch.svg
+    resources/icons/lucide/git-merge.svg
     resources/icons/lucide/database.svg
     resources/icons/lucide/container.svg
     resources/icons/lucide/file-code.svg
     resources/icons/lucide/server.svg
     resources/icons/lucide/layers.svg
+    resources/icons/lucide/network.svg
     resources/icons/lucide/search.svg
+    resources/icons/lucide/tag.svg
+    resources/icons/lucide/download.svg
+    resources/icons/lucide/upload.svg
+    resources/icons/lucide/settings-2.svg
     resources/icons/lucide/hard-drive.svg
     resources/fonts/Inter-Medium.ttf
     resources/fonts/JetBrainsMono-Regular.ttf

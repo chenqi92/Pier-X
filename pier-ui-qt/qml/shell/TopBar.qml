@@ -1,5 +1,4 @@
 import QtQuick
-import QtQuick.Controls.Basic as Controls
 import QtQuick.Layouts
 import QtQuick.Window
 import Pier
@@ -51,6 +50,24 @@ Rectangle {
         if (!fileMenu.visible && !editMenu.visible && !viewMenu.visible
                 && !windowMenu.visible && !helpMenu.visible)
             _menuBarActive = false
+    }
+
+    function _openMenuFrom(triggerItem, popup) {
+        if (!triggerItem || !popup)
+            return
+        _switchingMenu = true
+        fileMenu.close()
+        editMenu.close()
+        viewMenu.close()
+        windowMenu.close()
+        helpMenu.close()
+        const pos = triggerItem.mapToItem(root, 0, triggerItem.height + Theme.sp1)
+        popup.x = Math.max(Theme.sp2,
+                           Math.min(root.width - popup.width - Theme.sp2, pos.x))
+        popup.y = Math.max(Theme.sp2, pos.y)
+        popup.open()
+        _switchingMenu = false
+        _menuBarActive = true
     }
 
     function _shortcutText(action, macShortcut, defaultShortcut) {
@@ -146,84 +163,15 @@ Rectangle {
             anchors.fill: parent
             hoverEnabled: true
             onClicked: {
-                root._menuBarActive = true
-                trigBtn.targetMenu.popup(trigBtn, 0, trigBtn.height)
+                root._openMenuFrom(trigBtn, trigBtn.targetMenu)
             }
             onContainsMouseChanged: {
                 if (containsMouse && root._menuBarActive
                         && trigBtn.targetMenu && !trigBtn.targetMenu.visible) {
-                    root._closeAllMenus()
-                    trigBtn.targetMenu.popup(trigBtn, 0, trigBtn.height)
+                    root._openMenuFrom(trigBtn, trigBtn.targetMenu)
                 }
             }
         }
-    }
-
-    component ThemedMenuItem: Controls.MenuItem {
-        id: tmi
-        property string shortcutText: ""
-
-        leftPadding: Theme.sp3
-        rightPadding: Theme.sp3
-        topPadding: 0
-        bottomPadding: 0
-
-        indicator: Item {
-            implicitWidth: tmi.checkable ? 20 : 0
-            implicitHeight: 20
-            x: Theme.sp1
-            anchors.verticalCenter: parent.verticalCenter
-            visible: tmi.checkable
-
-            Text {
-                anchors.centerIn: parent
-                text: "✓"
-                font.family: Theme.fontUi
-                font.pixelSize: Theme.sizeBody
-                color: Theme.accent
-                visible: tmi.checked
-            }
-        }
-
-        contentItem: RowLayout {
-            spacing: Theme.sp6
-
-            Text {
-                text: tmi.text
-                font.family: Theme.fontUi
-                font.pixelSize: Theme.sizeBody
-                font.weight: Theme.weightRegular
-                color: tmi.enabled ? Theme.textPrimary : Theme.textDisabled
-                Layout.fillWidth: true
-            }
-
-            Text {
-                text: tmi.shortcutText
-                font.family: Theme.fontUi
-                font.pixelSize: Theme.sizeCaption
-                color: Theme.textTertiary
-                visible: tmi.shortcutText.length > 0
-            }
-        }
-
-        background: Rectangle {
-            implicitWidth: 240
-            implicitHeight: Theme.compactRowHeight
-            color: tmi.highlighted ? Theme.bgSelected : "transparent"
-            radius: Theme.radiusSm
-        }
-    }
-
-    component ThemedSeparator: Controls.MenuSeparator {
-        topPadding: Theme.sp1
-        bottomPadding: Theme.sp1
-        leftPadding: Theme.sp3
-        rightPadding: Theme.sp3
-        contentItem: Rectangle {
-            implicitHeight: 1
-            color: Theme.borderSubtle
-        }
-        background: Item {}
     }
 
     // ── Drag region ──
@@ -355,189 +303,239 @@ Rectangle {
         color: Theme.borderSubtle
     }
 
-    // ── Menu popup background helper ──
-    readonly property color _menuBg: Theme.bgElevated
-    readonly property color _menuBorder: Theme.borderDefault
-
-    // ── File menu ──
-    Controls.Menu {
+    PopoverPanel {
         id: fileMenu
-        topPadding: Theme.sp1
-        bottomPadding: Theme.sp1
+        width: 260
         onClosed: root._onMenuClosed()
 
-        background: Rectangle {
-            implicitWidth: 260
-            color: root._menuBg
-            border.color: root._menuBorder
-            border.width: 1
-            radius: Theme.radiusMd
-        }
+        Column {
+            width: fileMenu.width - fileMenu.padding * 2
+            spacing: Theme.sp0_5
 
-        ThemedMenuItem {
-            text: qsTr("New local terminal")
-            shortcutText: Qt.platform.os === "osx" ? "⌘T" : "Ctrl+T"
-            onTriggered: root.menuAction("newTerminal")
-        }
-        ThemedMenuItem {
-            text: qsTr("New SSH connection…")
-            shortcutText: Qt.platform.os === "osx" ? "⌘N" : "Ctrl+N"
-            onTriggered: root.menuAction("newSsh")
-        }
-        ThemedMenuItem {
-            text: qsTr("Open Markdown preview…")
-            onTriggered: root.menuAction("openMarkdown")
-        }
-        ThemedSeparator {}
-        ThemedMenuItem {
-            text: qsTr("Close current tab")
-            shortcutText: Qt.platform.os === "osx" ? "⌘W" : "Ctrl+W"
-            enabled: root.canCloseTab
-            onTriggered: root.menuAction("closeTab")
-        }
-        ThemedSeparator {}
-        ThemedMenuItem {
-            text: qsTr("Settings…")
-            shortcutText: Qt.platform.os === "osx" ? "⌘," : "Ctrl+,"
-            onTriggered: root.menuAction("settings")
-        }
-        ThemedSeparator {}
-        ThemedMenuItem {
-            text: qsTr("Exit")
-            shortcutText: Qt.platform.os === "osx" ? "⌘Q" : "Ctrl+Q"
-            onTriggered: Qt.quit()
+            PierMenuItem {
+                width: parent.width
+                text: qsTr("New local terminal")
+                trailingText: Qt.platform.os === "osx" ? "⌘T" : "Ctrl+T"
+                onClicked: {
+                    fileMenu.close()
+                    root.menuAction("newTerminal")
+                }
+            }
+            PierMenuItem {
+                width: parent.width
+                text: qsTr("New SSH connection…")
+                trailingText: Qt.platform.os === "osx" ? "⌘N" : "Ctrl+N"
+                onClicked: {
+                    fileMenu.close()
+                    root.menuAction("newSsh")
+                }
+            }
+            PierMenuItem {
+                width: parent.width
+                text: qsTr("Open Markdown preview…")
+                onClicked: {
+                    fileMenu.close()
+                    root.menuAction("openMarkdown")
+                }
+            }
+            Rectangle { width: parent.width; height: 1; color: Theme.borderSubtle }
+            PierMenuItem {
+                width: parent.width
+                text: qsTr("Close current tab")
+                trailingText: Qt.platform.os === "osx" ? "⌘W" : "Ctrl+W"
+                enabled: root.canCloseTab
+                onClicked: {
+                    fileMenu.close()
+                    root.menuAction("closeTab")
+                }
+            }
+            Rectangle { width: parent.width; height: 1; color: Theme.borderSubtle }
+            PierMenuItem {
+                width: parent.width
+                text: qsTr("Settings…")
+                trailingText: Qt.platform.os === "osx" ? "⌘," : "Ctrl+,"
+                onClicked: {
+                    fileMenu.close()
+                    root.menuAction("settings")
+                }
+            }
+            Rectangle { width: parent.width; height: 1; color: Theme.borderSubtle }
+            PierMenuItem {
+                width: parent.width
+                text: qsTr("Exit")
+                trailingText: Qt.platform.os === "osx" ? "⌘Q" : "Ctrl+Q"
+                onClicked: {
+                    fileMenu.close()
+                    Qt.quit()
+                }
+            }
         }
     }
 
-    // ── Edit menu ──
-    Controls.Menu {
+    PopoverPanel {
         id: editMenu
-        topPadding: Theme.sp1
-        bottomPadding: Theme.sp1
+        width: 260
         onClosed: root._onMenuClosed()
 
-        background: Rectangle {
-            implicitWidth: 260
-            color: root._menuBg
-            border.color: root._menuBorder
-            border.width: 1
-            radius: Theme.radiusMd
-        }
+        Column {
+            width: editMenu.width - editMenu.padding * 2
+            spacing: Theme.sp0_5
 
-        ThemedMenuItem {
-            text: qsTr("Undo")
-            shortcutText: Qt.platform.os === "osx" ? "⌘Z" : "Ctrl+Z"
-            onTriggered: root.menuAction("undo")
-        }
-        ThemedMenuItem {
-            text: qsTr("Redo")
-            shortcutText: Qt.platform.os === "osx" ? "⇧⌘Z" : "Ctrl+Shift+Z"
-            onTriggered: root.menuAction("redo")
-        }
-        ThemedSeparator {}
-        ThemedMenuItem {
-            text: qsTr("Cut")
-            shortcutText: Qt.platform.os === "osx" ? "⌘X" : "Ctrl+X"
-            onTriggered: root.menuAction("cut")
-        }
-        ThemedMenuItem {
-            text: qsTr("Copy")
-            shortcutText: root._shortcutText("copy", "⌘C", "Ctrl+C")
-            onTriggered: root.menuAction("copy")
-        }
-        ThemedMenuItem {
-            text: qsTr("Paste")
-            shortcutText: root._shortcutText("paste", "⌘V", "Ctrl+V")
-            onTriggered: root.menuAction("paste")
-        }
-        ThemedMenuItem {
-            text: qsTr("Select All")
-            shortcutText: root._shortcutText("selectAll", "⌘A", "Ctrl+A")
-            onTriggered: root.menuAction("selectAll")
+            PierMenuItem {
+                width: parent.width
+                text: qsTr("Undo")
+                trailingText: Qt.platform.os === "osx" ? "⌘Z" : "Ctrl+Z"
+                onClicked: {
+                    editMenu.close()
+                    root.menuAction("undo")
+                }
+            }
+            PierMenuItem {
+                width: parent.width
+                text: qsTr("Redo")
+                trailingText: Qt.platform.os === "osx" ? "⇧⌘Z" : "Ctrl+Shift+Z"
+                onClicked: {
+                    editMenu.close()
+                    root.menuAction("redo")
+                }
+            }
+            Rectangle { width: parent.width; height: 1; color: Theme.borderSubtle }
+            PierMenuItem {
+                width: parent.width
+                text: qsTr("Cut")
+                trailingText: Qt.platform.os === "osx" ? "⌘X" : "Ctrl+X"
+                onClicked: {
+                    editMenu.close()
+                    root.menuAction("cut")
+                }
+            }
+            PierMenuItem {
+                width: parent.width
+                text: qsTr("Copy")
+                trailingText: root._shortcutText("copy", "⌘C", "Ctrl+C")
+                onClicked: {
+                    editMenu.close()
+                    root.menuAction("copy")
+                }
+            }
+            PierMenuItem {
+                width: parent.width
+                text: qsTr("Paste")
+                trailingText: root._shortcutText("paste", "⌘V", "Ctrl+V")
+                onClicked: {
+                    editMenu.close()
+                    root.menuAction("paste")
+                }
+            }
+            PierMenuItem {
+                width: parent.width
+                text: qsTr("Select All")
+                trailingText: root._shortcutText("selectAll", "⌘A", "Ctrl+A")
+                onClicked: {
+                    editMenu.close()
+                    root.menuAction("selectAll")
+                }
+            }
         }
     }
 
-    // ── View menu ──
-    Controls.Menu {
+    PopoverPanel {
         id: viewMenu
-        topPadding: Theme.sp1
-        bottomPadding: Theme.sp1
+        width: 260
         onClosed: root._onMenuClosed()
 
-        background: Rectangle {
-            implicitWidth: 260
-            color: root._menuBg
-            border.color: root._menuBorder
-            border.width: 1
-            radius: Theme.radiusMd
-        }
+        Column {
+            width: viewMenu.width - viewMenu.padding * 2
+            spacing: Theme.sp0_5
 
-        ThemedMenuItem {
-            text: Theme.dark ? qsTr("Switch to light theme") : qsTr("Switch to dark theme")
-            onTriggered: { Theme.followSystem = false; Theme.dark = !Theme.dark }
-        }
-        ThemedMenuItem {
-            text: qsTr("Follow system theme")
-            checkable: true
-            checked: Theme.followSystem
-            onTriggered: Theme.followSystem = checked
-        }
-        ThemedSeparator {}
-        ThemedMenuItem {
-            text: root.sidebarVisible ? qsTr("Hide right sidebar") : qsTr("Show right sidebar")
-            shortcutText: Qt.platform.os === "osx" ? "⌃⇧G" : "Ctrl+Shift+G"
-            onTriggered: root.menuAction("toggleSidebar")
+            PierMenuItem {
+                width: parent.width
+                text: Theme.dark ? qsTr("Switch to light theme") : qsTr("Switch to dark theme")
+                onClicked: {
+                    viewMenu.close()
+                    Theme.followSystem = false
+                    Theme.dark = !Theme.dark
+                }
+            }
+            PierMenuItem {
+                width: parent.width
+                text: qsTr("Follow system theme")
+                checkable: true
+                checked: Theme.followSystem
+                active: Theme.followSystem
+                onClicked: {
+                    Theme.followSystem = !Theme.followSystem
+                    viewMenu.close()
+                }
+            }
+            Rectangle { width: parent.width; height: 1; color: Theme.borderSubtle }
+            PierMenuItem {
+                width: parent.width
+                text: root.sidebarVisible ? qsTr("Hide right sidebar") : qsTr("Show right sidebar")
+                trailingText: Qt.platform.os === "osx" ? "⌃⇧G" : "Ctrl+Shift+G"
+                onClicked: {
+                    viewMenu.close()
+                    root.menuAction("toggleSidebar")
+                }
+            }
         }
     }
 
-    // ── Window menu ──
-    Controls.Menu {
+    PopoverPanel {
         id: windowMenu
-        topPadding: Theme.sp1
-        bottomPadding: Theme.sp1
+        width: 260
         onClosed: root._onMenuClosed()
 
-        background: Rectangle {
-            implicitWidth: 260
-            color: root._menuBg
-            border.color: root._menuBorder
-            border.width: 1
-            radius: Theme.radiusMd
-        }
+        Column {
+            width: windowMenu.width - windowMenu.padding * 2
+            spacing: Theme.sp0_5
 
-        ThemedMenuItem {
-            text: qsTr("Minimize")
-            onTriggered: { if (root.appWindow) root.appWindow.showMinimized() }
-        }
-        ThemedMenuItem {
-            text: root.isMaximized ? qsTr("Restore") : qsTr("Zoom")
-            onTriggered: root.toggleWindowZoom()
-        }
-        ThemedMenuItem {
-            text: root.isFullScreen ? qsTr("Exit Full Screen") : qsTr("Enter Full Screen")
-            shortcutText: Qt.platform.os === "osx" ? "⌃⌘F" : "F11"
-            onTriggered: root.menuAction("toggleFullScreen")
+            PierMenuItem {
+                width: parent.width
+                text: qsTr("Minimize")
+                onClicked: {
+                    windowMenu.close()
+                    if (root.appWindow)
+                        root.appWindow.showMinimized()
+                }
+            }
+            PierMenuItem {
+                width: parent.width
+                text: root.isMaximized ? qsTr("Restore") : qsTr("Zoom")
+                onClicked: {
+                    windowMenu.close()
+                    root.toggleWindowZoom()
+                }
+            }
+            PierMenuItem {
+                width: parent.width
+                text: root.isFullScreen ? qsTr("Exit Full Screen") : qsTr("Enter Full Screen")
+                trailingText: Qt.platform.os === "osx" ? "⌃⌘F" : "F11"
+                onClicked: {
+                    windowMenu.close()
+                    root.menuAction("toggleFullScreen")
+                }
+            }
         }
     }
 
-    // ── Help menu ──
-    Controls.Menu {
+    PopoverPanel {
         id: helpMenu
-        topPadding: Theme.sp1
-        bottomPadding: Theme.sp1
+        width: 220
         onClosed: root._onMenuClosed()
 
-        background: Rectangle {
-            implicitWidth: 220
-            color: root._menuBg
-            border.color: root._menuBorder
-            border.width: 1
-            radius: Theme.radiusMd
-        }
+        Column {
+            width: helpMenu.width - helpMenu.padding * 2
+            spacing: Theme.sp0_5
 
-        ThemedMenuItem {
-            text: qsTr("About Pier-X")
-            onTriggered: root.menuAction("about")
+            PierMenuItem {
+                width: parent.width
+                text: qsTr("About Pier-X")
+                onClicked: {
+                    helpMenu.close()
+                    root.menuAction("about")
+                }
+            }
         }
     }
 }

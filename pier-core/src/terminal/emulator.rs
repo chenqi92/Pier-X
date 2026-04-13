@@ -137,6 +137,10 @@ pub struct VtEmulator {
     pub ssh_detected_user: String,
     /// Port extracted from the most recent detected `ssh` command.
     pub ssh_detected_port: u16,
+
+    /// Set when `exit` or `logout` is detected — signals that
+    /// the user left the current SSH session.
+    pub ssh_exit_detected: bool,
 }
 
 impl VtEmulator {
@@ -161,6 +165,7 @@ impl VtEmulator {
             ssh_detected_host: String::new(),
             ssh_detected_user: String::new(),
             ssh_detected_port: 22,
+            ssh_exit_detected: false,
         }
     }
 
@@ -188,25 +193,10 @@ impl VtEmulator {
             ssh_detected_host: &mut self.ssh_detected_host,
             ssh_detected_user: &mut self.ssh_detected_user,
             ssh_detected_port: &mut self.ssh_detected_port,
+            ssh_exit_detected: &mut self.ssh_exit_detected,
         };
-        // Remember cursor row before processing to detect line changes
-        let prev_y = *performer.cursor_y;
         parser.advance(&mut performer, bytes);
         self.parser = parser;
-
-        // If cursor moved to a new line (user pressed Enter), check
-        // the previous line for an SSH command.
-        if self.cursor_y != prev_y || bytes.contains(&b'\n') || bytes.contains(&b'\r') {
-            // Check the line the cursor was on before the LF
-            let check_row = if prev_y < self.rows { prev_y } else { 0 };
-            let line = self.line_text(check_row);
-            if let Some((host, user, port)) = parse_ssh_command(&line) {
-                self.ssh_detected_host = host;
-                self.ssh_detected_user = user;
-                self.ssh_detected_port = port;
-                self.ssh_command_detected = true;
-            }
-        }
     }
 
     /// Resize the grid. If the new size is smaller, rows are trimmed
@@ -329,6 +319,18 @@ fn parse_ssh_command(line: &str) -> Option<(String, String, u16)> {
     Some((host, user, port))
 }
 
+/// Check if a terminal line contains an `exit` or `logout` command.
+fn is_exit_command(line: &str) -> bool {
+    let cmd_part = line
+        .rfind("$ ")
+        .or_else(|| line.rfind("# "))
+        .or_else(|| line.rfind("% "))
+        .map(|pos| &line[pos + 2..])
+        .unwrap_or(line)
+        .trim();
+    matches!(cmd_part, "exit" | "logout")
+}
+
 // `Default` so `std::mem::take` works in `process`.
 impl Default for VtEmulator {
     fn default() -> Self {
@@ -356,6 +358,7 @@ struct Performer<'a> {
     ssh_detected_host: &'a mut String,
     ssh_detected_user: &'a mut String,
     ssh_detected_port: &'a mut u16,
+    ssh_exit_detected: &'a mut bool,
 }
 
 impl Performer<'_> {
@@ -415,20 +418,27 @@ impl Perform for Performer<'_> {
     fn execute(&mut self, byte: u8) {
         match byte {
             // LF / VT / FF — all move down one row.
-            b'\n' | 0x0B | 0x0C => {
-                // Before line feed, check if current line has an SSH command.
-                // This detects `ssh user@host` typed by the user.
-                let line: String = self.cells[*self.cursor_y].iter().map(|c| c.ch).collect();
+            b'\n' | 0x0B | 0x0C => self.line_feed(),
+            // CR — back to column 0. Also the moment to detect
+            // SSH/exit commands: CR arrives when the user presses
+            // Enter, while the command text is still on screen.
+            // LF comes later and may arrive after SSH output has
+            // already overwritten the line.
+            b'\r' => {
+                let line: String = self.cells[*self.cursor_y]
+                    .iter()
+                    .map(|c| c.ch)
+                    .collect();
                 if let Some((host, user, port)) = parse_ssh_command(&line) {
                     *self.ssh_detected_host = host;
                     *self.ssh_detected_user = user;
                     *self.ssh_detected_port = port;
                     *self.ssh_command_detected = true;
+                } else if is_exit_command(&line) {
+                    *self.ssh_exit_detected = true;
                 }
-                self.line_feed();
+                *self.cursor_x = 0;
             }
-            // CR — back to column 0.
-            b'\r' => *self.cursor_x = 0,
             // BS — one column left (but not below 0).
             0x08 => {
                 if *self.cursor_x > 0 {

@@ -94,7 +94,7 @@ Rectangle {
 
     PierScrollView {
         anchors.fill: parent
-        anchors.margins: Theme.sp3
+        anchors.margins: Theme.sp2
         clip: true
 
         ColumnLayout {
@@ -103,6 +103,7 @@ Rectangle {
 
             ToolHeroPanel {
                 Layout.fillWidth: true
+                compact: true
                 accentColor: Theme.statusInfo
 
                 ColumnLayout {
@@ -112,10 +113,12 @@ Rectangle {
 
                     ToolSectionHeader {
                         Layout.fillWidth: true
+                        compact: true
                         prominent: true
+                        icon: "server"
                         title: monitor.hostname.length > 0
                                ? monitor.hostname
-                               : (monitor.target.length > 0 ? monitor.target : qsTr("Server Monitor"))
+                               : qsTr("Server Monitor")
                         subtitle: monitor.target.length > 0
                                   ? monitor.target
                                   : (monitor.os.length > 0 ? monitor.os : qsTr("Waiting for system snapshot."))
@@ -235,6 +238,8 @@ Rectangle {
 
                             ToolSectionHeader {
                                 Layout.fillWidth: true
+                                compact: true
+                                icon: "server"
                                 title: qsTr("Overview")
                                 subtitle: monitor.os.length > 0 ? monitor.os : qsTr("Waiting for host details")
                             }
@@ -301,6 +306,8 @@ Rectangle {
 
                             ToolSectionHeader {
                                 Layout.fillWidth: true
+                                compact: true
+                                icon: "hard-drive"
                                 title: qsTr("Capacity")
                                 subtitle: qsTr("Available memory, swap, and storage")
                             }
@@ -391,6 +398,8 @@ Rectangle {
 
                     ToolSectionHeader {
                         Layout.fillWidth: true
+                        compact: true
+                        icon: "activity"
                         title: qsTr("Resources")
                         subtitle: qsTr("Processor, memory, swap, and storage pressure")
                     }
@@ -403,6 +412,7 @@ Rectangle {
 
                         ToolMetricTile {
                             Layout.fillWidth: true
+                            compact: true
                             title: qsTr("CPU")
                             valueText: _pctBar(monitor.cpuPct)
                             subtitle: monitor.busy ? qsTr("Refreshing snapshot") : qsTr("Processor usage")
@@ -412,6 +422,7 @@ Rectangle {
 
                         ToolMetricTile {
                             Layout.fillWidth: true
+                            compact: true
                             title: qsTr("Memory")
                             valueText: monitor.memTotalMb > 0
                                        ? _fmtMb(monitor.memUsedMb)
@@ -434,6 +445,7 @@ Rectangle {
 
                         ToolMetricTile {
                             Layout.fillWidth: true
+                            compact: true
                             title: qsTr("Swap")
                             valueText: monitor.swapTotalMb > 0
                                        ? _fmtMb(monitor.swapUsedMb)
@@ -454,6 +466,7 @@ Rectangle {
 
                         ToolMetricTile {
                             Layout.fillWidth: true
+                            compact: true
                             title: qsTr("Disk")
                             valueText: monitor.diskUsed.length > 0 ? monitor.diskUsed : "—"
                             subtitle: monitor.diskTotal.length > 0
@@ -481,6 +494,8 @@ Rectangle {
 
                     ToolSectionHeader {
                         Layout.fillWidth: true
+                        compact: true
+                        icon: "loader"
                         title: qsTr("Snapshot")
                         subtitle: qsTr("Host details and load averages")
                     }

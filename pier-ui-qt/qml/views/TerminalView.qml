@@ -48,6 +48,7 @@ Rectangle {
     // Shared SSH session handle — right-panel tools reuse this
     // instead of opening their own SSH connections.
     readonly property PierSshSessionHandle sharedSshSession: _sharedSession
+    readonly property PierControlMasterHandle controlMaster: _controlMaster
 
     // Emitted when the shared SSH session connects or disconnects.
     // Main.qml's Loader delegate listens to update the sidebar bindings.
@@ -112,33 +113,99 @@ Rectangle {
             if (_sharedSession.connected && root.backend === "ssh")
                 root._startTerminalOnSharedSession()
             root.sshContextChanged()
+
+            // If SSH session open failed for a local-terminal-detected ssh,
+            // fall back to ControlMaster which piggybacks on the terminal's
+            // own SSH connection (no password needed).
+            if (!_sharedSession.connected && !_sharedSession.busy
+                && root.backend === "local"
+                && session.detectedSshHost.length > 0
+                && !_controlMaster.connected && !_controlMaster.busy) {
+                _controlMaster.connectTo(
+                    session.detectedSshHost,
+                    session.detectedSshPort,
+                    session.detectedSshUser)
+            }
         }
+    }
+
+    PierControlMasterHandle {
+        id: _controlMaster
+
+        onConnectedChanged: root.sshContextChanged()
     }
 
     PierTerminalSession {
         id: session
         scrollbackLimit: Theme.scrollbackLines
 
-        // SSH command detected in terminal output — auto-create a
-        // shared SSH session so right-panel tools can use it.
-        // Uses agent auth (kind=3) to avoid prompting for a password.
+        // SSH command detected in terminal output — auto-create or
+        // replace the shared SSH session for right-panel tools.
+        // Supports multi-hop: ssh gateway → ssh internal → ...
+        // Each new ssh command replaces the previous session.
         onSshCommandDetected: {
-            if (root.backend === "local"
-                && !_sharedSession.connected
-                && !_sharedSession.busy) {
-                _sharedSession.open(
-                    session.detectedSshHost,
-                    session.detectedSshPort,
-                    session.detectedSshUser,
-                    3, "", "")  // agent auth — no password needed
+            if (_sharedSession.busy) return
+
+            var newHost = session.detectedSshHost
+            var newPort = session.detectedSshPort
+            var newUser = session.detectedSshUser
+            var newTarget = newUser + "@" + newHost + ":" + newPort
+
+            // Skip if same target as current session
+            if (_sharedSession.connected && _sharedSession.target === newTarget)
+                return
+
+            // Close previous session before opening new one (multi-hop)
+            if (_sharedSession.connected)
+                _sharedSession.close()
+
+            // Determine credentials — priority:
+            // 1. This tab's own SSH credentials (SSH-backend tab)
+            // 2. Saved connection matching host+user
+            // 3. Agent auth (fallback)
+            var kind = 3
+            var secret = ""
+            var extra = ""
+
+            if (root.sshPassword.length > 0) {
+                kind = 0; secret = root.sshPassword
+            } else if (root.sshKeyPath.length > 0) {
+                kind = 2; secret = root.sshKeyPath; extra = root.sshPassphraseCredentialId
+            } else if (root.sshCredentialId.length > 0) {
+                kind = 1; secret = root.sshCredentialId
+            } else {
+                // Look up saved connections for matching credentials
+                var saved = window.findSavedConnection(newHost, newUser)
+                if (saved) {
+                    if (saved.password && saved.password.length > 0) {
+                        kind = 0; secret = saved.password
+                    } else if (saved.keyPath && saved.keyPath.length > 0) {
+                        kind = 2; secret = saved.keyPath
+                        extra = saved.passphraseCredentialId || ""
+                    } else if (saved.usesAgent) {
+                        kind = 3
+                    }
+                }
+            }
+
+            _sharedSession.open(newHost, newPort, newUser, kind, secret, extra)
+        }
+
+        // SSH exit/logout detected — close the shared session so
+        // right-panel tools revert to local mode (or previous hop).
+        onSshExitDetected: {
+            if (_sharedSession.connected) {
+                _sharedSession.close()
+                root.sshContextChanged()
             }
         }
 
-        // When the shell exits we don't tear down the view — let the
-        // user see the final state. A future iteration can surface
-        // an "exited (code N)" banner and offer a Restart button.
+        // When the shell exits we don't tear down the view.
         onExited: {
-            // no-op for now; grid stays visible frozen.
+            if (_sharedSession.connected) {
+                _sharedSession.close()
+                root.sshContextChanged()
+            }
         }
 
         // M4: once the SSH handshake completes, fire off service

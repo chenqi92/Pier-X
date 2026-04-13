@@ -6,6 +6,7 @@ Rectangle {
 
     property string text: ""
     property bool compact: false
+    property bool destructive: false
     property int minimumWidth: 88
     signal clicked
 
@@ -15,10 +16,13 @@ Rectangle {
     implicitHeight: buttonHeight
     implicitWidth: Math.max(label.implicitWidth + horizontalPadding * 2 + Theme.sp1, minimumWidth)
     radius: Theme.radiusSm
-    color: !enabled ? Theme.accent
-         : mouseArea.pressed ? Qt.darker(Theme.accent, 1.12)
-         : mouseArea.containsMouse ? Theme.accentHover
-         : Theme.accent
+    readonly property color toneColor: destructive ? Theme.statusError : Theme.accent
+    readonly property color hoverColor: destructive ? Qt.lighter(Theme.statusError, 1.08) : Theme.accentHover
+
+    color: !enabled ? toneColor
+         : mouseArea.pressed ? Qt.darker(toneColor, 1.12)
+         : mouseArea.containsMouse ? hoverColor
+         : toneColor
     border.color: activeFocus ? Theme.borderFocus : Qt.rgba(1, 1, 1, Theme.dark ? 0.10 : 0.0)
     border.width: activeFocus ? 2 : 1
     opacity: enabled ? 1.0 : 0.45

@@ -68,6 +68,11 @@ public:
 
     // History
     Q_PROPERTY(QVariantList commits READ commits NOTIFY commitsChanged FINAL)
+    Q_PROPERTY(QVariantList graphRows READ graphRows NOTIFY graphChanged FINAL)
+    Q_PROPERTY(QStringList graphBranches READ graphBranches NOTIFY graphMetadataChanged FINAL)
+    Q_PROPERTY(QStringList graphAuthors READ graphAuthors NOTIFY graphMetadataChanged FINAL)
+    Q_PROPERTY(QStringList graphRepoFiles READ graphRepoFiles NOTIFY graphMetadataChanged FINAL)
+    Q_PROPERTY(QString graphGitUserName READ graphGitUserName NOTIFY graphMetadataChanged FINAL)
 
     // Stash
     Q_PROPERTY(QVariantList stashes READ stashes NOTIFY stashesChanged FINAL)
@@ -77,6 +82,16 @@ public:
 
     // Blame
     Q_PROPERTY(QVariantList blameLines READ blameLines NOTIFY blameChanged FINAL)
+    Q_PROPERTY(QString blameFilePath READ blameFilePath NOTIFY blameChanged FINAL)
+
+    // Compare
+    Q_PROPERTY(QVariantList comparisonFiles READ comparisonFiles NOTIFY comparisonChanged FINAL)
+    Q_PROPERTY(QString comparisonDiff READ comparisonDiff NOTIFY comparisonChanged FINAL)
+    Q_PROPERTY(QString comparisonBaseHash READ comparisonBaseHash NOTIFY comparisonChanged FINAL)
+    Q_PROPERTY(QString comparisonPath READ comparisonPath NOTIFY comparisonChanged FINAL)
+
+    // Commit detail
+    Q_PROPERTY(QVariantMap commitDetail READ commitDetail NOTIFY commitDetailChanged FINAL)
 
     // Tags
     Q_PROPERTY(QVariantList tags READ tags NOTIFY tagsChanged FINAL)
@@ -86,6 +101,12 @@ public:
 
     // Config
     Q_PROPERTY(QVariantList configEntries READ configEntries NOTIFY configChanged FINAL)
+    Q_PROPERTY(QVariantList conflictFiles READ conflictFiles NOTIFY conflictFilesChanged FINAL)
+
+    // Rebase / submodules
+    Q_PROPERTY(QVariantList rebaseTodoItems READ rebaseTodoItems NOTIFY rebaseChanged FINAL)
+    Q_PROPERTY(bool rebaseInProgress READ rebaseInProgress NOTIFY rebaseChanged FINAL)
+    Q_PROPERTY(QVariantList submodules READ submodules NOTIFY submodulesChanged FINAL)
 
     // Busy flag
     Q_PROPERTY(bool busy READ busy NOTIFY busyChanged FINAL)
@@ -110,12 +131,27 @@ public:
     QString diffText() const { return m_diffText; }
     QString diffPath() const { return m_diffPath; }
     QVariantList commits() const { return m_commits; }
+    QVariantList graphRows() const { return m_graphRows; }
+    QStringList graphBranches() const { return m_graphBranches; }
+    QStringList graphAuthors() const { return m_graphAuthors; }
+    QStringList graphRepoFiles() const { return m_graphRepoFiles; }
+    QString graphGitUserName() const { return m_graphGitUserName; }
     QVariantList stashes() const { return m_stashes; }
     QStringList branches() const { return m_branches; }
     QVariantList blameLines() const { return m_blameLines; }
+    QString blameFilePath() const { return m_blameFilePath; }
+    QVariantList comparisonFiles() const { return m_comparisonFiles; }
+    QString comparisonDiff() const { return m_comparisonDiff; }
+    QString comparisonBaseHash() const { return m_comparisonBaseHash; }
+    QString comparisonPath() const { return m_comparisonPath; }
+    QVariantMap commitDetail() const { return m_commitDetail; }
     QVariantList tags() const { return m_tags; }
     QVariantList remotes() const { return m_remotes; }
     QVariantList configEntries() const { return m_configEntries; }
+    QVariantList conflictFiles() const { return m_conflictFiles; }
+    QVariantList rebaseTodoItems() const { return m_rebaseTodoItems; }
+    bool rebaseInProgress() const { return m_rebaseInProgress; }
+    QVariantList submodules() const { return m_submodules; }
     bool busy() const { return m_busy; }
 
 public slots:
@@ -145,6 +181,7 @@ public slots:
 
     /// Create a commit with the given message.
     void commit(const QString &message);
+    void commitAndPush(const QString &message);
 
     /// Push to remote.
     void push();
@@ -154,6 +191,21 @@ public slots:
 
     /// Load commit history.
     void loadHistory(int limit = 100);
+    void loadGraphHistory(int limit = 180,
+                          int skip = 0,
+                          const QString &branch = QString(),
+                          const QString &author = QString(),
+                          const QString &searchText = QString(),
+                          bool firstParent = false,
+                          bool noMerges = false,
+                          qint64 afterTimestamp = 0,
+                          const QString &pathFilter = QString(),
+                          bool topoOrder = true,
+                          bool showLongEdges = true);
+    void loadGraphMetadata();
+    void loadComparisonFiles(const QString &hash);
+    void loadComparisonDiff(const QString &hash, const QString &path);
+    void clearComparison();
 
     /// Load stash list.
     void loadStashes();
@@ -175,23 +227,65 @@ public slots:
 
     /// Switch to a branch.
     void checkoutBranch(const QString &name);
+    void checkoutTarget(const QString &target, const QString &tracking = QString());
+    void createBranch(const QString &name);
+    void createBranchAt(const QString &name, const QString &startPoint);
+    void deleteBranch(const QString &name);
+    void renameBranch(const QString &oldName, const QString &newName);
+    void renameRemoteBranch(const QString &remoteName, const QString &oldBranch, const QString &newName);
+    void deleteRemoteBranch(const QString &remoteName, const QString &branchName);
+    void mergeBranch(const QString &name);
+    void setBranchTracking(const QString &branchName, const QString &upstream);
+    void unsetBranchTracking(const QString &branchName);
 
     /// Load blame for a file.
     void loadBlame(const QString &path);
+    void loadCommitDetail(const QString &hash);
+    void loadCommitFileDiff(const QString &hash, const QString &path);
 
     /// Load tags.
     void loadTags();
     void createTag(const QString &name, const QString &message);
     void deleteTag(const QString &name);
+    void pushTag(const QString &name);
+    void pushAllTags();
 
     /// Load remotes.
     void loadRemotes();
     void addRemote(const QString &name, const QString &url);
+    void setRemoteUrl(const QString &name, const QString &url);
     void removeRemote(const QString &name);
+    void fetchRemote(const QString &name = QString());
 
     /// Load git config.
     void loadConfig();
     void setConfigValue(const QString &key, const QString &value, bool global);
+    void unsetConfigValue(const QString &key, bool global);
+
+    /// Interactive rebase planning.
+    void loadRebasePlan(int count = 10);
+    void executeRebase(const QVariantList &items, const QString &onto = QString());
+    void abortRebase();
+    void continueRebase();
+
+    /// Submodules.
+    void loadSubmodules();
+    void initSubmodules();
+    void updateSubmodules(bool recursive = true);
+    void syncSubmodules();
+
+    /// Commit history actions.
+    void createTagAt(const QString &name, const QString &target, const QString &message = QString());
+    void resetToCommit(const QString &hash, const QString &mode);
+    void amendHeadCommitMessage(const QString &hash, const QString &message);
+    void dropCommit(const QString &hash, const QString &parentHash = QString());
+
+    /// Merge conflict helpers.
+    void detectConflicts();
+    void resolveConflict(const QString &path, int hunkIndex, const QString &resolution);
+    void acceptAllOurs(const QString &path);
+    void acceptAllTheirs(const QString &path);
+    void markConflictResolved(const QString &path);
 
     /// Tear down. Releases the handle.
     void close();
@@ -203,12 +297,19 @@ signals:
     void filesChanged();
     void diffChanged();
     void commitsChanged();
+    void graphChanged();
+    void graphMetadataChanged();
+    void comparisonChanged();
     void stashesChanged();
     void branchesChanged();
     void blameChanged();
+    void commitDetailChanged();
     void tagsChanged();
     void remotesChanged();
     void configChanged();
+    void conflictFilesChanged();
+    void rebaseChanged();
+    void submodulesChanged();
     void busyChanged();
     void operationFinished(const QString &operation, bool success, const QString &message);
 
@@ -218,12 +319,20 @@ private slots:
     void onBranchResult(quint64 requestId, const QString &json);
     void onDiffResult(quint64 requestId, const QString &path, const QString &text);
     void onHistoryResult(quint64 requestId, const QString &json);
+    void onGraphResult(quint64 requestId, const QString &json);
+    void onGraphBranchesResult(quint64 requestId, const QString &json);
+    void onGraphAuthorsResult(quint64 requestId, const QString &json);
+    void onGraphRepoFilesResult(quint64 requestId, const QString &json);
+    void onGraphGitUserResult(quint64 requestId, const QString &value);
     void onStashResult(quint64 requestId, const QString &json);
     void onBranchesResult(quint64 requestId, const QString &json);
-    void onBlameResult(quint64 requestId, const QString &json);
+    void onBlameResult(quint64 requestId, const QString &path, const QString &json);
+    void onCommitDetailResult(quint64 requestId, const QString &json);
     void onTagsResult(quint64 requestId, const QString &json);
     void onRemotesResult(quint64 requestId, const QString &json);
     void onConfigResult(quint64 requestId, const QString &json);
+    void onRebasePlanResult(quint64 requestId, bool inProgress, const QString &json);
+    void onSubmodulesResult(quint64 requestId, const QString &json);
     void onOpResult(quint64 requestId, const QString &operation, bool success, const QString &message);
 
 private:
@@ -231,6 +340,8 @@ private:
     void setBusy(bool b);
     void parseStatusJson(const QString &json);
     void parseBranchJson(const QString &json);
+    int conflictFileIndexForPath(const QString &path) const;
+    bool writeResolvedConflictFile(const QVariantMap &file, const QString &defaultResolution, QString *errorMessage = nullptr) const;
 
     ::PierGit *m_handle = nullptr;
 
@@ -255,6 +366,11 @@ private:
 
     // History
     QVariantList m_commits;
+    QVariantList m_graphRows;
+    QStringList  m_graphBranches;
+    QStringList  m_graphAuthors;
+    QStringList  m_graphRepoFiles;
+    QString      m_graphGitUserName;
 
     // Stash
     QVariantList m_stashes;
@@ -264,11 +380,23 @@ private:
 
     // Blame / Tags / Remotes / Config
     QVariantList m_blameLines;
+    QString m_blameFilePath;
+    QVariantList m_comparisonFiles;
+    QString m_comparisonDiff;
+    QString m_comparisonBaseHash;
+    QString m_comparisonPath;
+    QVariantMap m_commitDetail;
     QVariantList m_tags;
     QVariantList m_remotes;
     QVariantList m_configEntries;
+    QVariantList m_conflictFiles;
+    QVariantList m_rebaseTodoItems;
+    bool m_rebaseInProgress = false;
+    QVariantList m_submodules;
 
     quint64 m_nextRequestId = 0;
+    quint64 m_nextGraphRequestId = 0;
+    quint64 m_nextGraphMetadataRequestId = 0;
     std::shared_ptr<std::atomic<bool>> m_cancelFlag;
     std::vector<std::unique_ptr<std::thread>> m_workers;
 };

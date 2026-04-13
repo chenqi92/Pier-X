@@ -207,6 +207,9 @@ char *pier_git_list_branches(const char *repo_path);
 /* List unique commit authors. Returns JSON array. Caller frees. */
 char *pier_git_list_authors(const char *repo_path, uint32_t limit);
 
+/* List tracked files in the repository. Returns JSON array. Caller frees. */
+char *pier_git_list_tracked_files(const char *repo_path);
+
 /* First-parent chain hashes. Returns JSON array. Caller frees. */
 char *pier_git_first_parent_chain(
     const char *repo_path,

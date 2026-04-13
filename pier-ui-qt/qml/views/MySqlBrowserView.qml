@@ -427,11 +427,12 @@ Rectangle {
 
     ColumnLayout {
         anchors.fill: parent
-        anchors.margins: Theme.sp3
+        anchors.margins: Theme.sp2
         spacing: Theme.sp2
 
         ToolHeroPanel {
             Layout.fillWidth: true
+            compact: true
             accentColor: Theme.statusInfo
 
             ColumnLayout {
@@ -441,11 +442,13 @@ Rectangle {
 
                 ToolSectionHeader {
                     Layout.fillWidth: true
+                    compact: true
                     prominent: true
-                    title: client.target.length > 0
-                           ? client.target
-                           : (root.formHost + ":" + root.formPortText)
-                    subtitle: root.formUser.length > 0 ? root.formUser : qsTr("Connection")
+                    icon: "database"
+                    title: qsTr("MySQL")
+                    subtitle: client.target.length > 0
+                              ? client.target
+                              : (root.formHost + ":" + root.formPortText)
 
                     GhostButton {
                         compact: true
@@ -539,114 +542,121 @@ Rectangle {
                     }
                 }
 
-                GridLayout {
-                    id: connectFields
+                ToolPanelSurface {
                     Layout.fillWidth: true
-                    columns: width >= 820 ? 4 : (width >= 620 ? 3 : 2)
-                    rowSpacing: Theme.sp2
-                    columnSpacing: Theme.sp2
+                    inset: true
+                    padding: Theme.sp2
+                    implicitHeight: connectFields.implicitHeight + Theme.sp2 * 2
 
-                    ColumnLayout {
-                        Layout.fillWidth: true
-                        spacing: Theme.sp1
+                    GridLayout {
+                        id: connectFields
+                        anchors.fill: parent
+                        columns: width >= 760 ? 4 : (width >= 560 ? 3 : 2)
+                        rowSpacing: Theme.sp2
+                        columnSpacing: Theme.sp2
 
-                        Text {
-                            text: qsTr("Host")
-                            font.family: Theme.fontUi
-                            font.pixelSize: Theme.sizeCaption
-                            font.weight: Theme.weightMedium
-                            color: Theme.textSecondary
-                        }
-
-                        PierTextField {
+                        ColumnLayout {
                             Layout.fillWidth: true
-                            placeholder: qsTr("Host")
-                            text: root.formHost
-                            onTextChanged: root.formHost = text
+                            spacing: Theme.sp1
+
+                            Text {
+                                text: qsTr("Host")
+                                font.family: Theme.fontUi
+                                font.pixelSize: Theme.sizeCaption
+                                font.weight: Theme.weightMedium
+                                color: Theme.textSecondary
+                            }
+
+                            PierTextField {
+                                Layout.fillWidth: true
+                                placeholder: qsTr("Host")
+                                text: root.formHost
+                                onTextChanged: root.formHost = text
+                            }
                         }
-                    }
 
-                    ColumnLayout {
-                        Layout.fillWidth: true
-                        spacing: Theme.sp1
-
-                        Text {
-                            text: qsTr("Port")
-                            font.family: Theme.fontUi
-                            font.pixelSize: Theme.sizeCaption
-                            font.weight: Theme.weightMedium
-                            color: Theme.textSecondary
-                        }
-
-                        PierTextField {
+                        ColumnLayout {
                             Layout.fillWidth: true
-                            placeholder: qsTr("Port")
-                            text: root.formPortText
-                            onTextChanged: root.formPortText = text
+                            spacing: Theme.sp1
+
+                            Text {
+                                text: qsTr("Port")
+                                font.family: Theme.fontUi
+                                font.pixelSize: Theme.sizeCaption
+                                font.weight: Theme.weightMedium
+                                color: Theme.textSecondary
+                            }
+
+                            PierTextField {
+                                Layout.fillWidth: true
+                                placeholder: qsTr("Port")
+                                text: root.formPortText
+                                onTextChanged: root.formPortText = text
+                            }
                         }
-                    }
 
-                    ColumnLayout {
-                        Layout.fillWidth: true
-                        spacing: Theme.sp1
-
-                        Text {
-                            text: qsTr("User")
-                            font.family: Theme.fontUi
-                            font.pixelSize: Theme.sizeCaption
-                            font.weight: Theme.weightMedium
-                            color: Theme.textSecondary
-                        }
-
-                        PierTextField {
+                        ColumnLayout {
                             Layout.fillWidth: true
-                            placeholder: qsTr("User")
-                            text: root.formUser
-                            onTextChanged: root.formUser = text
+                            spacing: Theme.sp1
+
+                            Text {
+                                text: qsTr("User")
+                                font.family: Theme.fontUi
+                                font.pixelSize: Theme.sizeCaption
+                                font.weight: Theme.weightMedium
+                                color: Theme.textSecondary
+                            }
+
+                            PierTextField {
+                                Layout.fillWidth: true
+                                placeholder: qsTr("User")
+                                text: root.formUser
+                                onTextChanged: root.formUser = text
+                            }
                         }
-                    }
 
-                    ColumnLayout {
-                        Layout.fillWidth: true
-                        spacing: Theme.sp1
-
-                        Text {
-                            text: qsTr("Password")
-                            font.family: Theme.fontUi
-                            font.pixelSize: Theme.sizeCaption
-                            font.weight: Theme.weightMedium
-                            color: Theme.textSecondary
-                        }
-
-                        PierTextField {
+                        ColumnLayout {
                             Layout.fillWidth: true
-                            placeholder: root.hasSavedCredential
-                                         ? qsTr("Password (saved in keychain)")
-                                         : qsTr("Password")
-                            password: true
-                            text: root.formPassword
-                            onTextChanged: root.formPassword = text
+                            spacing: Theme.sp1
+
+                            Text {
+                                text: qsTr("Password")
+                                font.family: Theme.fontUi
+                                font.pixelSize: Theme.sizeCaption
+                                font.weight: Theme.weightMedium
+                                color: Theme.textSecondary
+                            }
+
+                            PierTextField {
+                                Layout.fillWidth: true
+                                placeholder: root.hasSavedCredential
+                                             ? qsTr("Password (saved in keychain)")
+                                             : qsTr("Password")
+                                password: true
+                                text: root.formPassword
+                                onTextChanged: root.formPassword = text
+                            }
                         }
-                    }
 
-                    ColumnLayout {
-                        Layout.fillWidth: true
-                        Layout.columnSpan: connectFields.columns <= 2 ? 2 : 1
-                        spacing: Theme.sp1
-
-                        Text {
-                            text: qsTr("Default DB")
-                            font.family: Theme.fontUi
-                            font.pixelSize: Theme.sizeCaption
-                            font.weight: Theme.weightMedium
-                            color: Theme.textSecondary
-                        }
-
-                        PierTextField {
+                        ColumnLayout {
                             Layout.fillWidth: true
-                            placeholder: qsTr("Default DB")
-                            text: root.formDatabase
-                            onTextChanged: root.formDatabase = text
+                            Layout.columnSpan: connectFields.columns <= 2 ? 2 : 1
+                            spacing: Theme.sp1
+
+                            Text {
+                                text: qsTr("Default DB")
+                                font.family: Theme.fontUi
+                                font.pixelSize: Theme.sizeCaption
+                                font.weight: Theme.weightMedium
+                                color: Theme.textSecondary
+                            }
+
+                            PierTextField {
+                                Layout.fillWidth: true
+                                placeholder: qsTr("Default DB")
+                                text: root.formDatabase
+                                onTextChanged: root.formDatabase = text
+                            }
                         }
                     }
                 }
@@ -665,6 +675,8 @@ Rectangle {
 
                 ToolSectionHeader {
                     Layout.fillWidth: true
+                    compact: true
+                    icon: "layers"
                     title: qsTr("Workspace")
                     subtitle: qsTr("Profiles and saved queries for repeated operations")
                 }
@@ -688,6 +700,8 @@ Rectangle {
 
                             ToolSectionHeader {
                                 Layout.fillWidth: true
+                                compact: true
+                                icon: "database"
                                 title: qsTr("Profiles")
                                 subtitle: qsTr("Host, auth, and default database presets")
                             }
@@ -748,6 +762,8 @@ Rectangle {
 
                             ToolSectionHeader {
                                 Layout.fillWidth: true
+                                compact: true
+                                icon: "file-text"
                                 title: qsTr("Favorites")
                                 subtitle: qsTr("Reusable query snippets scoped to a database")
                             }
@@ -823,6 +839,7 @@ Rectangle {
 
                     ToolSectionHeader {
                         Layout.fillWidth: true
+                        icon: "database"
                         title: qsTr("Schema")
                         subtitle: root.selectedDatabase.length > 0
                                   ? root.selectedDatabase
@@ -849,9 +866,11 @@ Rectangle {
                             anchors.fill: parent
                             spacing: Theme.sp2
 
-                            ToolSectionHeader {
-                                Layout.fillWidth: true
-                                title: qsTr("Databases")
+                        ToolSectionHeader {
+                            Layout.fillWidth: true
+                            compact: true
+                            icon: "database"
+                            title: qsTr("Databases")
                                 subtitle: root.selectedDatabase.length > 0
                                           ? root.selectedDatabase
                                           : ""
@@ -928,9 +947,11 @@ Rectangle {
                             anchors.fill: parent
                             spacing: Theme.sp2
 
-                            ToolSectionHeader {
-                                Layout.fillWidth: true
-                                title: qsTr("Tables")
+                        ToolSectionHeader {
+                            Layout.fillWidth: true
+                            compact: true
+                            icon: "layers"
+                            title: qsTr("Tables")
                                 subtitle: root.selectedDatabase.length > 0
                                           ? root.selectedDatabase
                                           : ""
@@ -1003,6 +1024,7 @@ Rectangle {
 
                             ToolSectionHeader {
                                 Layout.fillWidth: true
+                                icon: "file-text"
                                 title: root.selectedTable
                                 subtitle: root.selectedDatabase.length > 0
                                           ? root.selectedDatabase
@@ -1056,9 +1078,11 @@ Rectangle {
                             anchors.fill: parent
                             spacing: Theme.sp2
 
-                            ToolSectionHeader {
-                                Layout.fillWidth: true
-                                title: qsTr("Columns")
+                        ToolSectionHeader {
+                            Layout.fillWidth: true
+                            compact: true
+                            icon: "file-code"
+                            title: qsTr("Columns")
                                 subtitle: root.selectedTable.length > 0
                                           ? root.selectedTable
                                           : ""
@@ -1183,6 +1207,7 @@ Rectangle {
 
                             ToolSectionHeader {
                                 Layout.fillWidth: true
+                                icon: "file-code"
                                 title: qsTr("Column %1").arg(root.selectedColumn)
                                 subtitle: root.selectedTable.length > 0
                                           ? root.selectedTable
@@ -1269,6 +1294,8 @@ Rectangle {
 
                         ToolSectionHeader {
                             Layout.fillWidth: true
+                            compact: true
+                            icon: "file-code"
                             title: qsTr("Query")
                             subtitle: root.selectedTable.length > 0
                                       ? root.selectedTable
@@ -1371,9 +1398,11 @@ Rectangle {
 
                         ToolSectionHeader {
                             Layout.fillWidth: true
+                            compact: true
                             Layout.leftMargin: Theme.sp1
                             Layout.rightMargin: Theme.sp1
                             Layout.topMargin: Theme.sp1
+                            icon: "scroll-text"
                             title: qsTr("Results")
                             subtitle: !root.hasResult
                                       ? qsTr("Run a query to inspect rows and execution status.")
@@ -1487,6 +1516,7 @@ Rectangle {
                             ToolEmptyState {
                                 anchors.centerIn: parent
                                 visible: client.resultColumnCount === 0
+                                compact: true
                                 icon: "database"
                                 title: root.selectedTable.length > 0
                                        ? qsTr("Schema ready for %1").arg(root.selectedTable)

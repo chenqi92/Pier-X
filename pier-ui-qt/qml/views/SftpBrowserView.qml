@@ -98,11 +98,12 @@ Rectangle {
 
     ColumnLayout {
         anchors.fill: parent
-        anchors.margins: Theme.sp3
+        anchors.margins: Theme.sp2
         spacing: Theme.sp2
 
         ToolHeroPanel {
             Layout.fillWidth: true
+            compact: true
             accentColor: Theme.accent
 
             ColumnLayout {
@@ -112,9 +113,11 @@ Rectangle {
 
                 ToolSectionHeader {
                     Layout.fillWidth: true
+                    compact: true
                     prominent: true
-                    title: browser.currentPath.length > 0 ? browser.currentPath : qsTr("Remote Files")
-                    subtitle: browser.target.length > 0 ? browser.target : qsTr("SFTP")
+                    icon: "folder-sync"
+                    title: qsTr("SFTP")
+                    subtitle: browser.target.length > 0 ? browser.target : qsTr("Remote Files")
 
                     IconButton {
                         compact: true
@@ -206,8 +209,56 @@ Rectangle {
 
                 ToolSectionHeader {
                     Layout.fillWidth: true
+                    compact: true
+                    icon: "folder"
                     title: qsTr("Directory")
                     subtitle: browser.currentPath.length > 0 ? browser.currentPath : qsTr("Waiting for directory listing.")
+                }
+
+                Rectangle {
+                    Layout.fillWidth: true
+                    implicitHeight: 24
+                    radius: Theme.radiusSm
+                    color: Theme.bgInset
+                    border.color: Theme.borderSubtle
+                    border.width: 1
+
+                    RowLayout {
+                        anchors.fill: parent
+                        anchors.leftMargin: Theme.sp2
+                        anchors.rightMargin: Theme.sp2
+                        spacing: Theme.sp2
+
+                        Text {
+                            Layout.fillWidth: true
+                            text: qsTr("Name")
+                            font.family: Theme.fontUi
+                            font.pixelSize: Theme.sizeSmall
+                            font.weight: Theme.weightMedium
+                            color: Theme.textTertiary
+                            elide: Text.ElideRight
+                        }
+
+                        Text {
+                            Layout.preferredWidth: 84
+                            text: qsTr("Modified")
+                            font.family: Theme.fontUi
+                            font.pixelSize: Theme.sizeSmall
+                            font.weight: Theme.weightMedium
+                            color: Theme.textTertiary
+                            horizontalAlignment: Text.AlignRight
+                        }
+
+                        Text {
+                            Layout.preferredWidth: 82
+                            text: qsTr("Size")
+                            font.family: Theme.fontUi
+                            font.pixelSize: Theme.sizeSmall
+                            font.weight: Theme.weightMedium
+                            color: Theme.textTertiary
+                            horizontalAlignment: Text.AlignRight
+                        }
+                    }
                 }
 
                 ToolPanelSurface {
@@ -231,6 +282,7 @@ Rectangle {
                             required property bool isDir
                             required property bool isLink
                             required property var size
+                            required property var modified
 
                             width: ListView.view.width
                             implicitHeight: 28
@@ -275,12 +327,23 @@ Rectangle {
                                 }
 
                                 Text {
-                                    visible: !entry.isDir && entry.size > 0
-                                    text: formatSize(entry.size)
+                                    Layout.preferredWidth: 84
+                                    text: entry.modified > 0 ? formatModified(entry.modified) : "—"
+                                    font.family: Theme.fontMono
+                                    font.pixelSize: Theme.sizeSmall
+                                    color: Theme.textTertiary
+                                    elide: Text.ElideRight
+                                    horizontalAlignment: Text.AlignRight
+                                }
+
+                                Text {
+                                    Layout.preferredWidth: 82
+                                    text: entry.isDir ? "—" : formatSize(entry.size)
                                     font.family: Theme.fontMono
                                     font.pixelSize: Theme.sizeCaption
                                     color: Theme.textTertiary
                                     Layout.alignment: Qt.AlignRight
+                                    horizontalAlignment: Text.AlignRight
 
                                     Behavior on color { ColorAnimation { duration: Theme.durNormal } }
                                 }
@@ -311,9 +374,10 @@ Rectangle {
                 visible: browser.status === PierSftpBrowser.Connected
                          && !browser.busy
                          && listView.count === 0
+                compact: true
                 icon: "folder"
-                title: qsTr("No files")
-                description: qsTr("This directory is ready for browsing.")
+                title: qsTr("Directory ready")
+                description: qsTr("Entries for this path will appear here.")
             }
 
             // Busy spinner during list_dir requests.
@@ -440,5 +504,15 @@ Rectangle {
         if (bytes < 1024 * 1024) return (bytes / 1024).toFixed(1) + " KB"
         if (bytes < 1024 * 1024 * 1024) return (bytes / (1024 * 1024)).toFixed(1) + " MB"
         return (bytes / (1024 * 1024 * 1024)).toFixed(2) + " GB"
+    }
+
+    function formatModified(seconds) {
+        if (!seconds || seconds <= 0)
+            return "—"
+        var d = new Date(seconds * 1000)
+        var yy = String(d.getFullYear())
+        var mm = String(d.getMonth() + 1).padStart(2, "0")
+        var dd = String(d.getDate()).padStart(2, "0")
+        return yy + "-" + mm + "-" + dd
     }
 }

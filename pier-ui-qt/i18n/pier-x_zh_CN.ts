@@ -968,7 +968,239 @@
         <source>Choose a staged or modified file to inspect its patch.</source>
         <translation>选择一个已暂存或已修改的文件来查看补丁。</translation>
     </message>
-</context>
+    <message>
+        <source>Path</source>
+        <translation>路径</translation>
+    </message>
+    <message>
+        <source>Clear path filter</source>
+        <translation>清除路径过滤</translation>
+    </message>
+    <message>
+        <source>Expand long edges</source>
+        <translation>展开长边</translation>
+    </message>
+    <message>
+        <source>Highlight</source>
+        <translation>高亮</translation>
+    </message>
+    <message>
+        <source>No highlight</source>
+        <translation>不高亮</translation>
+    </message>
+    <message>
+        <source>My commits</source>
+        <translation>我的提交</translation>
+    </message>
+    <message>
+        <source>Merge commits</source>
+        <translation>合并提交</translation>
+    </message>
+    <message>
+        <source>Current branch</source>
+        <translation>当前分支</translation>
+    </message>
+    <message>
+        <source>Display</source>
+        <translation>显示</translation>
+    </message>
+    <message>
+        <source>Zebra stripes</source>
+        <translation>斑马纹</translation>
+    </message>
+    <message>
+        <source>Show hash column</source>
+        <translation>显示哈希列</translation>
+    </message>
+    <message>
+        <source>Show author column</source>
+        <translation>显示作者列</translation>
+    </message>
+    <message>
+        <source>Show date column</source>
+        <translation>显示日期列</translation>
+    </message>
+    <message>
+        <source>Copy hash</source>
+        <translation>复制哈希</translation>
+    </message>
+    <message>
+        <source>Checkout this revision</source>
+        <translation>检出此版本</translation>
+    </message>
+    <message>
+        <source>Open in browser</source>
+        <translation>在浏览器中打开</translation>
+    </message>
+    <message>
+        <source>Open in detail</source>
+        <translation>在详情中打开</translation>
+    </message>
+    <message>
+        <source>Tracked files</source>
+        <translation>已跟踪文件</translation>
+    </message>
+    <message>
+        <source>Filter commit graph to specific repository paths</source>
+        <translation>将提交图谱过滤到指定仓库路径。</translation>
+    </message>
+    <message>
+        <source>Search tracked files</source>
+        <translation>搜索已跟踪文件</translation>
+    </message>
+    <message>
+        <source>No tracked files</source>
+        <translation>没有已跟踪文件</translation>
+    </message>
+    <message>
+        <source>Try a different search or refresh repository metadata.</source>
+        <translation>尝试其他搜索词，或刷新仓库元数据。</translation>
+    </message>
+    <message>
+        <source>Clear</source>
+        <translation>清除</translation>
+    </message>
+    <message>
+        <source>Compare with local</source>
+        <translation>与本地对比</translation>
+    </message>
+    <message>
+        <source>Commit comparison</source>
+        <translation>提交对比</translation>
+    </message>
+    <message>
+        <source>No local diff</source>
+        <translation>没有本地差异</translation>
+    </message>
+    <message>
+        <source>This commit matches local HEAD, or there are no comparable files.</source>
+        <translation>此提交与本地 HEAD 一致，或没有可对比的文件。</translation>
+    </message>
+    <message>
+        <source>Select a changed file to inspect the diff against local HEAD.</source>
+        <translation>选择一个变更文件，查看它与本地 HEAD 的差异。</translation>
+    </message>
+    <message>
+        <source>Checkout branch '%1'</source>
+        <translation>检出分支“%1”</translation>
+    </message>
+    <message>
+        <source>Create branch from commit</source>
+        <translation>从此提交创建分支</translation>
+    </message>
+    <message>
+        <source>Create a branch that starts at this commit</source>
+        <translation>创建一个从此提交开始的新分支。</translation>
+    </message>
+    <message>
+        <source>Create tag from commit</source>
+        <translation>从此提交创建标签</translation>
+    </message>
+    <message>
+        <source>Create a lightweight or annotated tag at this commit</source>
+        <translation>在此提交上创建轻量标签或注释标签。</translation>
+    </message>
+    <message>
+        <source>Reset current branch</source>
+        <translation>重置当前分支</translation>
+    </message>
+    <message>
+        <source>Move the current branch pointer to this commit</source>
+        <translation>将当前分支指针移动到此提交。</translation>
+    </message>
+    <message>
+        <source>Undo commit</source>
+        <translation>撤销提交</translation>
+    </message>
+    <message>
+        <source>Edit commit message</source>
+        <translation>编辑提交信息</translation>
+    </message>
+    <message>
+        <source>Reset mode</source>
+        <translation>重置模式</translation>
+    </message>
+    <message>
+        <source>Soft keeps changes staged, mixed keeps changes unstaged, hard discards working tree changes.</source>
+        <translation>Soft 保留已暂存状态，Mixed 保留工作区变更但取消暂存，Hard 会丢弃工作区变更。</translation>
+    </message>
+    <message>
+        <source>Hard reset will discard working tree changes.</source>
+        <translation>Hard reset 会丢弃当前工作区变更。</translation>
+    </message>
+    <message>
+        <source>Soft reset keeps all changes staged for recommit.</source>
+        <translation>Soft reset 会保留所有变更为已暂存，方便重新提交。</translation>
+    </message>
+    <message>
+        <source>Mixed reset keeps changes in the working tree but unstaged.</source>
+        <translation>Mixed reset 会保留工作区变更，但取消暂存。</translation>
+    </message>
+    <message>
+        <source>Apply reset</source>
+        <translation>应用重置</translation>
+    </message>
+    <message>
+        <source>Amend the HEAD commit message</source>
+        <translation>修改 HEAD 提交信息</translation>
+    </message>
+    <message>
+        <source>The HEAD commit will be amended with the message below.</source>
+        <translation>将使用下面的内容修改 HEAD 提交信息。</translation>
+    </message>
+    <message>
+        <source>Update commit message</source>
+        <translation>更新提交信息</translation>
+    </message>
+    <message>
+        <source>Remove this commit from history</source>
+        <translation>从历史中移除此提交</translation>
+    </message>
+    <message>
+        <source>This will permanently rewrite Git history for the current branch.</source>
+        <translation>这会永久改写当前分支的 Git 历史。</translation>
+    </message>
+    <message>
+        <source>The current HEAD commit will be removed by resetting to its parent.</source>
+        <translation>当前 HEAD 提交会通过重置到父提交的方式被移除。</translation>
+    </message>
+    <message>
+        <source>This non-HEAD commit will be removed using rebase --onto.</source>
+        <translation>这个非 HEAD 提交会通过 rebase --onto 的方式移除。</translation>
+    </message>
+    <message>
+        <source>Hide composer</source>
+        <translation>收起编辑区</translation>
+    </message>
+    <message>
+        <source>New branch</source>
+        <translation>新建分支</translation>
+    </message>
+    <message>
+        <source>New tag</source>
+        <translation>新建标签</translation>
+    </message>
+    <message>
+        <source>Push all</source>
+        <translation>全部推送</translation>
+    </message>
+    <message>
+        <source>Add setting</source>
+        <translation>添加设置</translation>
+    </message>
+    <message>
+        <source>Editing %1</source>
+        <translation>正在编辑 %1</translation>
+    </message>
+    <message>
+        <source>Pushed tag.</source>
+        <translation>已推送标签。</translation>
+    </message>
+    <message>
+        <source>Pushed all tags.</source>
+        <translation>已推送全部标签。</translation>
+    </message>
+    </context>
 <context>
     <name>LocalFilesPane</name>
     <message>
@@ -4380,6 +4612,74 @@ Create one to unlock SSH, SFTP, Docker, logs, and database tools.</source>
         <location filename="../qml/shell/WelcomeView.qml" line="155"/>
         <source>%1 saved</source>
         <translation>已保存 %1 条</translation>
+    </message>
+    <message>
+        <source>Endpoint</source>
+        <translation>端点</translation>
+    </message>
+    <message>
+        <source>Transport</source>
+        <translation>传输</translation>
+    </message>
+    <message>
+        <source>Directory ready</source>
+        <translation>目录已就绪</translation>
+    </message>
+    <message>
+        <source>Entries for this path will appear here.</source>
+        <translation>此路径的内容会显示在这里。</translation>
+    </message>
+    <message>
+        <source>Redis server</source>
+        <translation>Redis 服务</translation>
+    </message>
+    <message>
+        <source>Clients</source>
+        <translation>客户端</translation>
+    </message>
+    <message>
+        <source>Connected sessions</source>
+        <translation>已连接会话</translation>
+    </message>
+    <message>
+        <source>Used memory</source>
+        <translation>已用内存</translation>
+    </message>
+    <message>
+        <source>Server uptime</source>
+        <translation>服务运行时长</translation>
+    </message>
+    <message>
+        <source>Filter branches</source>
+        <translation>筛选分支</translation>
+    </message>
+    <message>
+        <source>Filter tags</source>
+        <translation>筛选标签</translation>
+    </message>
+    <message>
+        <source>Filter remotes</source>
+        <translation>筛选远端</translation>
+    </message>
+    <message>
+        <source>Update fetch/push URL for %1</source>
+        <translation>更新 %1 的 fetch/push 地址</translation>
+    </message>
+    <message>
+        <source>Editing remote %1.</source>
+        <translation>正在编辑远端 %1。</translation>
+    </message>
+    <message>
+        <source>Cancel edit</source>
+        <translation>取消编辑</translation>
+    </message>
+    <message>
+        <source>Update remote</source>
+        <translation>更新远端</translation>
+    </message>
+    <message>
+        <source>Filter submodules</source>
+        <translation>筛选子模块</translation>
     </message>
 </context>
 </TS>

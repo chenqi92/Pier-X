@@ -70,11 +70,12 @@ Rectangle {
 
     ColumnLayout {
         anchors.fill: parent
-        anchors.margins: Theme.sp3
+        anchors.margins: Theme.sp2
         spacing: Theme.sp2
 
         ToolHeroPanel {
             Layout.fillWidth: true
+            compact: true
             accentColor: Theme.accent
 
             ColumnLayout {
@@ -84,11 +85,13 @@ Rectangle {
 
                 ToolSectionHeader {
                     Layout.fillWidth: true
+                    compact: true
                     prominent: true
-                    title: client.target.length > 0
-                           ? client.target
-                           : (root.redisHost + ":" + root.redisPort)
-                    subtitle: qsTr("DB %1").arg(root.redisDb)
+                    icon: "database"
+                    title: qsTr("Redis")
+                    subtitle: client.target.length > 0
+                              ? client.target
+                              : (root.redisHost + ":" + root.redisPort)
 
                     GhostButton {
                         compact: true
@@ -143,7 +146,7 @@ Rectangle {
                     spacing: Theme.sp2
 
                     ToolFactChip {
-                        label: qsTr("DB")
+                        label: qsTr("Database")
                         value: String(root.redisDb)
                         monoValue: true
                     }
@@ -221,6 +224,8 @@ Rectangle {
 
                         ToolSectionHeader {
                             Layout.fillWidth: true
+                            compact: true
+                            icon: "database"
                             title: qsTr("Keys")
                             subtitle: root.scanPattern.length > 0
                                       ? qsTr("%1 matches · %2").arg(client.keys.length).arg(root.scanPattern)
@@ -323,22 +328,94 @@ Rectangle {
 
                         ToolSectionHeader {
                             Layout.fillWidth: true
+                            compact: true
                             title: client.selectedKey.length > 0 ? client.selectedKey : qsTr("Inspector")
                             subtitle: client.selectedKey.length > 0
                                       ? (client.selectedKind.length > 0 ? client.selectedKind : qsTr("Redis key"))
                                       : qsTr("Select a key from the list to inspect its payload.")
                         }
 
-                        ToolEmptyState {
+                        ToolPanelSurface {
                             visible: client.selectedKey.length === 0
-                            Layout.alignment: Qt.AlignHCenter
                             Layout.fillWidth: true
-                            Layout.fillHeight: true
-                            icon: "database"
-                            title: client.status === PierRedisClient.Connected
-                                   ? qsTr("Select a key to inspect")
-                                   : qsTr("Connecting…")
-                            description: qsTr("Preview, type, TTL, encoding, and sampled values will appear here.")
+                            inset: true
+                            padding: Theme.sp3
+                            implicitHeight: serverSummary.implicitHeight + Theme.sp3 * 2
+
+                            ColumnLayout {
+                                id: serverSummary
+                                anchors.fill: parent
+                                spacing: Theme.sp2
+
+                                ToolSectionHeader {
+                                    Layout.fillWidth: true
+                                    compact: true
+                                    icon: "activity"
+                                    title: client.serverInfo.redis_version
+                                           ? qsTr("Redis %1").arg(client.serverInfo.redis_version)
+                                           : qsTr("Redis server")
+                                    subtitle: client.serverInfo.redis_mode
+                                              ? qsTr("%1 mode").arg(client.serverInfo.redis_mode)
+                                              : qsTr("Select a key to inspect values and metadata.")
+                                }
+
+                                GridLayout {
+                                    Layout.fillWidth: true
+                                    columns: width >= 360 ? 2 : 1
+                                    rowSpacing: Theme.sp2
+                                    columnSpacing: Theme.sp2
+
+                                    ToolMetricTile {
+                                        Layout.fillWidth: true
+                                        compact: true
+                                        title: qsTr("Clients")
+                                        valueText: client.serverInfo.connected_clients || "—"
+                                        subtitle: qsTr("Connected sessions")
+                                        accentColor: Theme.statusSuccess
+                                    }
+
+                                    ToolMetricTile {
+                                        Layout.fillWidth: true
+                                        compact: true
+                                        title: qsTr("Memory")
+                                        valueText: client.serverInfo.used_memory_human || "—"
+                                        subtitle: qsTr("Used memory")
+                                        accentColor: Theme.accent
+                                    }
+
+                                    ToolMetricTile {
+                                        Layout.fillWidth: true
+                                        compact: true
+                                        title: qsTr("Uptime")
+                                        valueText: client.serverInfo.uptime_in_days
+                                                   ? qsTr("%1 days").arg(client.serverInfo.uptime_in_days)
+                                                   : "—"
+                                        subtitle: qsTr("Server uptime")
+                                        accentColor: Theme.statusInfo
+                                    }
+
+                                    ToolMetricTile {
+                                        Layout.fillWidth: true
+                                        compact: true
+                                        title: qsTr("Database")
+                                        valueText: qsTr("DB %1").arg(root.redisDb)
+                                        subtitle: root.scanPattern.length > 0
+                                                  ? root.scanPattern
+                                                  : qsTr("Active pattern")
+                                        accentColor: Theme.statusWarning
+                                    }
+                                }
+
+                                ToolEmptyState {
+                                    compact: true
+                                    Layout.fillWidth: true
+                                    icon: "database"
+                                    title: client.status === PierRedisClient.Connected
+                                           ? qsTr("Select a key to inspect")
+                                           : qsTr("Connecting…")
+                                    description: qsTr("Preview, type, TTL, encoding, and sampled values will appear here.")
+                                }
+                            }
                         }
 
                         ToolPanelSurface {
@@ -355,6 +432,8 @@ Rectangle {
 
                                 ToolSectionHeader {
                                     Layout.fillWidth: true
+                                    compact: true
+                                    icon: "activity"
                                     title: qsTr("Overview")
                                     subtitle: client.selectedKey
                                 }
@@ -417,6 +496,8 @@ Rectangle {
 
                                 ToolSectionHeader {
                                     Layout.fillWidth: true
+                                    compact: true
+                                    icon: "file-text"
                                     title: qsTr("Preview")
                                     subtitle: client.selectedPreviewTruncated
                                               ? qsTr("Preview, type, TTL, encoding, and sampled values will appear here.")

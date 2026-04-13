@@ -722,7 +722,7 @@ void PierTerminalSession::refreshSnapshot()
         emit scrollStateChanged();
     }
 
-    // Check if the emulator detected an SSH command
+    // Check if the emulator detected an SSH or exit command
     char *sshJson = pier_terminal_ssh_detected(m_handle);
     if (sshJson) {
         QString json = QString::fromUtf8(sshJson);
@@ -735,6 +735,8 @@ void PierTerminalSession::refreshSnapshot()
                 m_detectedSshPort = obj.value(QStringLiteral("port")).toInt(22);
                 m_detectedSshUser = obj.value(QStringLiteral("user")).toString();
                 emit sshCommandDetected();
+            } else if (obj.value(QStringLiteral("exit")).toBool()) {
+                emit sshExitDetected();
             }
         }
     }

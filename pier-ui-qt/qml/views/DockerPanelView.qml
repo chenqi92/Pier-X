@@ -364,11 +364,12 @@ Rectangle {
 
     ColumnLayout {
         anchors.fill: parent
-        anchors.margins: Theme.sp3
+        anchors.margins: Theme.sp2
         spacing: Theme.sp2
 
         ToolHeroPanel {
             Layout.fillWidth: true
+            compact: true
             accentColor: Theme.accent
 
             ColumnLayout {
@@ -378,13 +379,11 @@ Rectangle {
 
                 ToolSectionHeader {
                     Layout.fillWidth: true
+                    compact: true
                     prominent: true
-                    title: client.target.length > 0 ? client.target : "localhost"
-                    subtitle: root.currentTab === 0 ? qsTr("Containers")
-                              : (root.currentTab === 1 ? qsTr("Images")
-                                 : (root.currentTab === 2 ? qsTr("Volumes")
-                                    : (root.currentTab === 3 ? qsTr("Networks")
-                                       : qsTr("Compose"))))
+                    icon: "container"
+                    title: qsTr("Docker")
+                    subtitle: client.target.length > 0 ? client.target : qsTr("localhost")
 
                     GhostButton {
                         compact: true
@@ -422,13 +421,13 @@ Rectangle {
                     spacing: Theme.sp2
 
                     ToolFactChip {
-                        label: qsTr("Target")
+                        label: qsTr("Endpoint")
                         value: client.target
                         monoValue: true
                     }
 
                     ToolFactChip {
-                        label: qsTr("Mode")
+                        label: qsTr("Transport")
                         value: root.sshHost.length > 0 || (root.sharedSession && root.sharedSession.connected)
                                ? qsTr("SSH")
                                : qsTr("Local")
@@ -442,6 +441,7 @@ Rectangle {
 
                 SegmentedControl {
                     Layout.fillWidth: true
+                    compact: true
                     options: root.tabLabels
                     currentIndex: root.currentTab
                     onActivated: (index) => {
@@ -492,6 +492,8 @@ Rectangle {
 
                     ToolSectionHeader {
                         Layout.fillWidth: true
+                        compact: true
+                        icon: "file-text"
                         title: qsTr("Inspect")
                         subtitle: root.inspectTitle
 
@@ -631,6 +633,8 @@ Rectangle {
 
             ToolSectionHeader {
                 Layout.fillWidth: true
+                compact: true
+                icon: "container"
                 title: qsTr("Containers")
                 subtitle: client.showStopped
                           ? qsTr("%1 total containers").arg(client.containerCount)
@@ -672,7 +676,7 @@ Rectangle {
                     readonly property bool confirming: root.pendingDeleteId === row.containerId
 
                     width: ListView.view.width
-                    implicitHeight: row.confirming ? 72 : 54
+                    implicitHeight: row.confirming ? 60 : 46
                     radius: Theme.radiusSm
                     color: row.confirming
                            ? Qt.rgba(Theme.statusError.r, Theme.statusError.g, Theme.statusError.b, 0.08)
@@ -705,7 +709,7 @@ Rectangle {
                             }
 
                             Text {
-                                Layout.preferredWidth: 170
+                                Layout.preferredWidth: 156
                                 text: row.names.length > 0 ? row.names : row.containerId.slice(0, 12)
                                 font.family: Theme.fontMono
                                 font.pixelSize: Theme.sizeBody
@@ -850,6 +854,7 @@ Rectangle {
                 }
 
                 ToolEmptyState {
+                    compact: true
                     anchors.centerIn: parent
                     visible: client.status === PierDockerClient.Connected
                              && !client.busy
@@ -871,6 +876,8 @@ Rectangle {
 
             ToolSectionHeader {
                 Layout.fillWidth: true
+                compact: true
+                icon: "download"
                 title: qsTr("Images")
                 subtitle: qsTr("%1 images").arg(client.images.length)
             }
@@ -1023,6 +1030,7 @@ Rectangle {
                 }
 
                 ToolEmptyState {
+                    compact: true
                     anchors.centerIn: parent
                     visible: client.status === PierDockerClient.Connected
                              && !client.busy
@@ -1044,6 +1052,8 @@ Rectangle {
 
             ToolSectionHeader {
                 Layout.fillWidth: true
+                compact: true
+                icon: "hard-drive"
                 title: qsTr("Volumes")
                 subtitle: qsTr("%1 volumes").arg(client.volumes.length)
 
@@ -1147,6 +1157,7 @@ Rectangle {
                 }
 
                 ToolEmptyState {
+                    compact: true
                     anchors.centerIn: parent
                     visible: client.status === PierDockerClient.Connected
                              && !client.busy
@@ -1168,6 +1179,8 @@ Rectangle {
 
             ToolSectionHeader {
                 Layout.fillWidth: true
+                compact: true
+                icon: "network"
                 title: qsTr("Networks")
                 subtitle: qsTr("%1 networks").arg(client.networks.length)
             }
@@ -1297,6 +1310,7 @@ Rectangle {
                 }
 
                 ToolEmptyState {
+                    compact: true
                     anchors.centerIn: parent
                     visible: client.status === PierDockerClient.Connected
                              && !client.busy
@@ -1318,6 +1332,8 @@ Rectangle {
 
             ToolSectionHeader {
                 Layout.fillWidth: true
+                compact: true
+                icon: "layers"
                 title: qsTr("Compose")
                 subtitle: root.composeFilePath.trim().length > 0
                           ? root.composeFilePath
@@ -1504,6 +1520,7 @@ Rectangle {
                 }
 
                 ToolEmptyState {
+                    compact: true
                     anchors.centerIn: parent
                     visible: !client.busy
                              && composeList.count === 0
@@ -1514,6 +1531,7 @@ Rectangle {
                 }
 
                 ToolEmptyState {
+                    compact: true
                     anchors.centerIn: parent
                     visible: !client.busy
                              && root.composeFilePath.trim().length === 0

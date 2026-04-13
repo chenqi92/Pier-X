@@ -11,7 +11,7 @@ Rectangle {
     property color valueColor: Theme.textPrimary
 
     visible: root.value.length > 0
-    implicitHeight: 26
+    implicitHeight: 24
     implicitWidth: factRow.implicitWidth + Theme.sp2 * 2
     radius: Theme.radiusSm
     color: Theme.bgInset

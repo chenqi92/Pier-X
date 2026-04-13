@@ -240,9 +240,12 @@ signals:
     // useful moment to re-render one without the others.
     void statusChanged();
 
-    // Fired when the emulator detects an SSH command in terminal output
-    // (user typed `ssh user@host` in a local terminal).
+    // Fired when the emulator detects an SSH command in terminal output.
     void sshCommandDetected();
+
+    // Fired when the emulator detects `exit` or `logout` — user left
+    // the current SSH session. Right sidebar should disconnect.
+    void sshExitDetected();
 
 private slots:
     // Runs on the main thread. Called via queued connection from

@@ -32,7 +32,15 @@ Item {
         property bool visualBell: true
         property bool audioBell: false
     }
+    Settings {
+        id: appearanceSettings
+        category: "appearance"
+        property string uiFontFamily: "Inter"
+        property real uiScale: 1.0
+    }
     Component.onCompleted: {
+        Theme.fontUi = appearanceSettings.uiFontFamily
+        Theme.uiScale = appearanceSettings.uiScale
         Theme.terminalThemeIndex = terminalSettings.themeIndex
         Theme.fontMono = terminalSettings.fontFamily
         Theme.terminalFontSize = terminalSettings.fontSize
@@ -295,24 +303,67 @@ Item {
                                     title: qsTr("UI font")
                                     description: qsTr("Primary interface font used for labels, buttons, and navigation.")
 
-                                    Text {
-                                        text: Theme.fontUi
-                                        font.family: Theme.fontMono
-                                        font.pixelSize: Theme.sizeBody
-                                        color: Theme.textSecondary
+                                    PierComboBox {
+                                        implicitWidth: 200
+                                        options: Theme.uiFontFamilies
+                                        currentIndex: {
+                                            var idx = options.indexOf(Theme.fontUi)
+                                            return idx >= 0 ? idx : 0
+                                        }
+                                        onActivated: (i) => {
+                                            Theme.fontUi = options[i]
+                                            appearanceSettings.uiFontFamily = options[i]
+                                        }
                                     }
                                 }
 
                                 SettingRow {
                                     Layout.fillWidth: true
-                                    title: qsTr("Mono font")
+                                    title: qsTr("Interface text size")
+                                    description: qsTr("Scales typography across the app without changing layout density too aggressively.")
+
+                                    RowLayout {
+                                        spacing: Theme.sp2
+
+                                        PierSlider {
+                                            implicitWidth: 160
+                                            from: 0.9
+                                            to: 1.2
+                                            stepSize: 0.05
+                                            value: Theme.uiScale
+                                            onValueChanged: {
+                                                var scaled = Math.round(value * 100) / 100
+                                                Theme.uiScale = scaled
+                                                appearanceSettings.uiScale = scaled
+                                            }
+                                        }
+
+                                        Text {
+                                            text: Math.round(Theme.uiScale * 100) + "%"
+                                            font.family: Theme.fontMono
+                                            font.pixelSize: Theme.sizeBody
+                                            color: Theme.textSecondary
+                                            Layout.preferredWidth: 44
+                                        }
+                                    }
+                                }
+
+                                SettingRow {
+                                    Layout.fillWidth: true
+                                    title: qsTr("Code / mono font")
                                     description: qsTr("Used for terminal content, paths, ports, and code-like data.")
 
-                                    Text {
-                                        text: Theme.fontMono
-                                        font.family: Theme.fontMono
-                                        font.pixelSize: Theme.sizeBody
-                                        color: Theme.textSecondary
+                                    PierComboBox {
+                                        implicitWidth: 200
+                                        options: Theme.monoFontFamilies
+                                        currentIndex: {
+                                            var idx = options.indexOf(Theme.fontMono)
+                                            return idx >= 0 ? idx : 0
+                                        }
+                                        onActivated: (i) => {
+                                            Theme.fontMono = options[i]
+                                            terminalSettings.fontFamily = options[i]
+                                        }
                                     }
                                 }
                             }
@@ -495,34 +546,34 @@ Item {
                                             Text {
                                                 text: "$ ssh admin@prod-02"
                                                 font.family: Theme.fontMono
-                                                font.pixelSize: Theme.sizeBody
+                                                font.pixelSize: Theme.terminalFontSize
                                                 color: Theme.currentTerminalTheme.fg
                                             }
 
                                             Row {
                                                 spacing: 0
-                                                Text { text: "admin"; font.family: Theme.fontMono; font.pixelSize: Theme.sizeBody; color: Theme.currentTerminalTheme.ansi[2] }
-                                                Text { text: "@"; font.family: Theme.fontMono; font.pixelSize: Theme.sizeBody; color: Theme.currentTerminalTheme.fg }
-                                                Text { text: "prod-02"; font.family: Theme.fontMono; font.pixelSize: Theme.sizeBody; color: Theme.currentTerminalTheme.ansi[4] }
-                                                Text { text: ":"; font.family: Theme.fontMono; font.pixelSize: Theme.sizeBody; color: Theme.currentTerminalTheme.fg }
-                                                Text { text: "~"; font.family: Theme.fontMono; font.pixelSize: Theme.sizeBody; color: Theme.currentTerminalTheme.ansi[5] }
-                                                Text { text: "$ "; font.family: Theme.fontMono; font.pixelSize: Theme.sizeBody; color: Theme.currentTerminalTheme.fg }
-                                                Text { text: "ls"; font.family: Theme.fontMono; font.pixelSize: Theme.sizeBody; color: Theme.currentTerminalTheme.ansi[3] }
+                                                Text { text: "admin"; font.family: Theme.fontMono; font.pixelSize: Theme.terminalFontSize; color: Theme.currentTerminalTheme.ansi[2] }
+                                                Text { text: "@"; font.family: Theme.fontMono; font.pixelSize: Theme.terminalFontSize; color: Theme.currentTerminalTheme.fg }
+                                                Text { text: "prod-02"; font.family: Theme.fontMono; font.pixelSize: Theme.terminalFontSize; color: Theme.currentTerminalTheme.ansi[4] }
+                                                Text { text: ":"; font.family: Theme.fontMono; font.pixelSize: Theme.terminalFontSize; color: Theme.currentTerminalTheme.fg }
+                                                Text { text: "~"; font.family: Theme.fontMono; font.pixelSize: Theme.terminalFontSize; color: Theme.currentTerminalTheme.ansi[5] }
+                                                Text { text: "$ "; font.family: Theme.fontMono; font.pixelSize: Theme.terminalFontSize; color: Theme.currentTerminalTheme.fg }
+                                                Text { text: "ls"; font.family: Theme.fontMono; font.pixelSize: Theme.terminalFontSize; color: Theme.currentTerminalTheme.ansi[3] }
                                             }
 
                                             Row {
                                                 spacing: Theme.sp3
-                                                Text { text: "README.md"; font.family: Theme.fontMono; font.pixelSize: Theme.sizeBody; color: Theme.currentTerminalTheme.fg }
-                                                Text { text: "src/"; font.family: Theme.fontMono; font.pixelSize: Theme.sizeBody; color: Theme.currentTerminalTheme.ansi[4] }
-                                                Text { text: "docs/"; font.family: Theme.fontMono; font.pixelSize: Theme.sizeBody; color: Theme.currentTerminalTheme.ansi[4] }
-                                                Text { text: "Makefile"; font.family: Theme.fontMono; font.pixelSize: Theme.sizeBody; color: Theme.currentTerminalTheme.ansi[2] }
-                                                Text { text: ".env"; font.family: Theme.fontMono; font.pixelSize: Theme.sizeBody; color: Theme.currentTerminalTheme.ansi[8] }
+                                                Text { text: "README.md"; font.family: Theme.fontMono; font.pixelSize: Theme.terminalFontSize; color: Theme.currentTerminalTheme.fg }
+                                                Text { text: "src/"; font.family: Theme.fontMono; font.pixelSize: Theme.terminalFontSize; color: Theme.currentTerminalTheme.ansi[4] }
+                                                Text { text: "docs/"; font.family: Theme.fontMono; font.pixelSize: Theme.terminalFontSize; color: Theme.currentTerminalTheme.ansi[4] }
+                                                Text { text: "Makefile"; font.family: Theme.fontMono; font.pixelSize: Theme.terminalFontSize; color: Theme.currentTerminalTheme.ansi[2] }
+                                                Text { text: ".env"; font.family: Theme.fontMono; font.pixelSize: Theme.terminalFontSize; color: Theme.currentTerminalTheme.ansi[8] }
                                             }
 
                                             Row {
                                                 spacing: 0
-                                                Text { text: "Error: "; font.family: Theme.fontMono; font.pixelSize: Theme.sizeBody; color: Theme.currentTerminalTheme.ansi[1] }
-                                                Text { text: "connection refused"; font.family: Theme.fontMono; font.pixelSize: Theme.sizeBody; color: Theme.currentTerminalTheme.fg }
+                                                Text { text: "Error: "; font.family: Theme.fontMono; font.pixelSize: Theme.terminalFontSize; color: Theme.currentTerminalTheme.ansi[1] }
+                                                Text { text: "connection refused"; font.family: Theme.fontMono; font.pixelSize: Theme.terminalFontSize; color: Theme.currentTerminalTheme.fg }
                                             }
                                         }
                                     }
@@ -543,17 +594,7 @@ Item {
 
                                     PierComboBox {
                                         implicitWidth: 200
-                                        options: [
-                                            "JetBrains Mono",
-                                            "Menlo",
-                                            "Monaco",
-                                            "SF Mono",
-                                            "Fira Code",
-                                            "Source Code Pro",
-                                            "Cascadia Code",
-                                            "Consolas",
-                                            "Courier New"
-                                        ]
+                                        options: Theme.monoFontFamilies
                                         currentIndex: {
                                             var idx = options.indexOf(Theme.fontMono)
                                             return idx >= 0 ? idx : 0
@@ -587,7 +628,7 @@ Item {
                                         }
 
                                         Text {
-                                            text: Theme.terminalFontSize + "pt"
+                                            text: Theme.terminalFontSize + "px"
                                             font.family: Theme.fontMono
                                             font.pixelSize: Theme.sizeBody
                                             color: Theme.textSecondary

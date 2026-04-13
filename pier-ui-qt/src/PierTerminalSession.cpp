@@ -11,6 +11,7 @@
 #include <QMetaObject>
 #include <QPointer>
 
+#include <algorithm>
 #include <utility>
 
 PierTerminalSession::PierTerminalSession(QObject *parent)
@@ -62,7 +63,10 @@ bool PierTerminalSession::start(const QString &shell, int cols, int rows)
 
     m_cols = cols;
     m_rows = rows;
+    m_scrollOffset = 0;
+    m_maxScrollOffset = 0;
     m_running = true;
+    pier_terminal_set_scrollback_limit(m_handle, static_cast<uint32_t>(m_scrollbackLimit));
     emit runningChanged();
     // Local shells transition directly to Connected — there is no
     // handshake phase to display a "Connecting..." overlay for.
@@ -423,6 +427,11 @@ int PierTerminalSession::write(const QString &text)
     if (!m_handle) {
         return -1;
     }
+    if (m_scrollOffset != 0) {
+        m_scrollOffset = 0;
+        refreshSnapshot();
+        emit gridChanged();
+    }
     const QByteArray utf8 = text.toUtf8();
     const int64_t n = pier_terminal_write(
         m_handle,
@@ -451,13 +460,71 @@ bool PierTerminalSession::resize(int cols, int rows)
     return true;
 }
 
+void PierTerminalSession::scrollBy(int lines)
+{
+    if (!m_handle || lines == 0) {
+        return;
+    }
+    const int nextOffset = std::clamp(m_scrollOffset + lines, 0, m_maxScrollOffset);
+    if (nextOffset == m_scrollOffset) {
+        return;
+    }
+    m_scrollOffset = nextOffset;
+    refreshSnapshot();
+    emit gridChanged();
+}
+
+void PierTerminalSession::scrollToBottom()
+{
+    if (m_scrollOffset == 0) {
+        return;
+    }
+    m_scrollOffset = 0;
+    refreshSnapshot();
+    emit gridChanged();
+}
+
+void PierTerminalSession::setScrollbackLimit(int limit)
+{
+    limit = std::max(1, limit);
+    if (m_scrollbackLimit == limit) {
+        return;
+    }
+    m_scrollbackLimit = limit;
+    if (m_handle) {
+        pier_terminal_set_scrollback_limit(m_handle, static_cast<uint32_t>(m_scrollbackLimit));
+        const int newMaxScrollOffset =
+            static_cast<int>(pier_terminal_scrollback_len(m_handle));
+        m_maxScrollOffset = newMaxScrollOffset;
+        if (m_scrollOffset > m_maxScrollOffset) {
+            m_scrollOffset = m_maxScrollOffset;
+        }
+        refreshSnapshot();
+        emit gridChanged();
+    }
+    emit scrollbackLimitChanged();
+}
+
 void PierTerminalSession::stop()
 {
     // First, cancel any in-flight SSH handshake. Safe no-op if
     // none is running.
     cancelSsh();
 
+    const bool hadScrollState = m_scrollOffset != 0 || m_maxScrollOffset != 0;
+    m_scrollOffset = 0;
+    m_maxScrollOffset = 0;
+
     if (!m_handle) {
+        if (m_status != SshStatus::Idle) {
+            m_sshErrorMessage.clear();
+            m_sshTarget.clear();
+            clearSshContext();
+            setStatus(SshStatus::Idle);
+        }
+        if (hadScrollState) {
+            emit scrollStateChanged();
+        }
         return;
     }
     PierTerminal *h = m_handle;
@@ -483,6 +550,9 @@ void PierTerminalSession::stop()
         m_sshTarget.clear();
         clearSshContext();
         setStatus(SshStatus::Idle);
+    }
+    if (hadScrollState) {
+        emit scrollStateChanged();
     }
 }
 
@@ -555,6 +625,9 @@ void PierTerminalSession::onSshConnectResult(quint64 requestId, void *handle, co
     // Success path. Adopt the handle and run the same
     // "session is now live" bookkeeping as the local start().
     m_handle = static_cast<PierTerminal *>(handle);
+    pier_terminal_set_scrollback_limit(m_handle, static_cast<uint32_t>(m_scrollbackLimit));
+    m_scrollOffset = 0;
+    m_maxScrollOffset = 0;
     m_running = true;
     emit runningChanged();
     setStatus(SshStatus::Connected);
@@ -588,6 +661,17 @@ void PierTerminalSession::refreshSnapshot()
         return;
     }
 
+    const int previousScrollOffset = m_scrollOffset;
+    const int previousMaxScrollOffset = m_maxScrollOffset;
+    const int scrollbackLen = static_cast<int>(pier_terminal_scrollback_len(m_handle));
+    if (m_scrollOffset > 0 && scrollbackLen > m_maxScrollOffset) {
+        m_scrollOffset += (scrollbackLen - m_maxScrollOffset);
+    }
+    m_maxScrollOffset = scrollbackLen;
+    if (m_scrollOffset > m_maxScrollOffset) {
+        m_scrollOffset = m_maxScrollOffset;
+    }
+
     // Grow the cell buffer lazily. Typical 120x40 = 4800 cells,
     // about 77 KB; the buffer is reused across snapshots so there
     // is no per-frame allocation once it has settled.
@@ -597,22 +681,24 @@ void PierTerminalSession::refreshSnapshot()
     }
 
     PierGridInfo info {};
-    const int32_t rc = pier_terminal_snapshot(
+    const int32_t rc = pier_terminal_snapshot_view(
         m_handle,
         &info,
         m_cells.data(),
-        m_cells.size());
+        m_cells.size(),
+        static_cast<uint32_t>(m_scrollOffset));
 
     if (rc == -2) {
         // Grid grew between the size() call and the snapshot call —
         // enlarge and retry exactly once.
         const size_t newNeeded = static_cast<size_t>(info.cols) * static_cast<size_t>(info.rows);
         m_cells.resize(newNeeded);
-        const int32_t rc2 = pier_terminal_snapshot(
+        const int32_t rc2 = pier_terminal_snapshot_view(
             m_handle,
             &info,
             m_cells.data(),
-            m_cells.size());
+            m_cells.size(),
+            static_cast<uint32_t>(m_scrollOffset));
         if (rc2 != 0) {
             qWarning() << "pier_terminal_snapshot retry failed rc=" << rc2;
             return;
@@ -630,6 +716,10 @@ void PierTerminalSession::refreshSnapshot()
     if (nowRunning != m_running) {
         m_running = nowRunning;
         emit runningChanged();
+    }
+    if (previousScrollOffset != m_scrollOffset
+        || previousMaxScrollOffset != m_maxScrollOffset) {
+        emit scrollStateChanged();
     }
 
     // Check if the emulator detected an SSH command

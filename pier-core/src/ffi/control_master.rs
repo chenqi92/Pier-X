@@ -44,9 +44,15 @@ pub unsafe extern "C" fn pier_control_master_connect(
     h: *mut PierControlMaster,
     timeout_secs: u32,
 ) -> i32 {
-    if h.is_null() { return 0; }
+    if h.is_null() {
+        return 0;
+    }
     let cm = unsafe { &*h };
-    if cm.session.connect(timeout_secs) { 1 } else { 0 }
+    if cm.session.connect(timeout_secs) {
+        1
+    } else {
+        0
+    }
 }
 
 /// Execute a command through the ControlMaster socket.
@@ -56,7 +62,9 @@ pub unsafe extern "C" fn pier_control_master_exec(
     h: *const PierControlMaster,
     command: *const c_char,
 ) -> *mut c_char {
-    if h.is_null() || command.is_null() { return ptr::null_mut(); }
+    if h.is_null() || command.is_null() {
+        return ptr::null_mut();
+    }
     let cm = unsafe { &*h };
     let cmd = match unsafe { CStr::from_ptr(command) }.to_str() {
         Ok(s) => s,
@@ -76,21 +84,31 @@ pub unsafe extern "C" fn pier_control_master_exec(
 /// Check if the ControlMaster socket is alive.
 #[no_mangle]
 pub unsafe extern "C" fn pier_control_master_is_alive(h: *const PierControlMaster) -> i32 {
-    if h.is_null() { return 0; }
+    if h.is_null() {
+        return 0;
+    }
     let cm = unsafe { &*h };
-    if cm.session.is_alive() { 1 } else { 0 }
+    if cm.session.is_alive() {
+        1
+    } else {
+        0
+    }
 }
 
 #[no_mangle]
 /// Release a handle previously returned by
 /// [`pier_control_master_new`]. Safe to call with NULL.
 pub unsafe extern "C" fn pier_control_master_free(h: *mut PierControlMaster) {
-    if !h.is_null() { drop(unsafe { Box::from_raw(h) }); }
+    if !h.is_null() {
+        drop(unsafe { Box::from_raw(h) });
+    }
 }
 
 #[no_mangle]
 /// Release a heap string returned by this module. Safe to call with
 /// NULL.
 pub unsafe extern "C" fn pier_control_master_free_string(s: *mut c_char) {
-    if !s.is_null() { drop(unsafe { CString::from_raw(s) }); }
+    if !s.is_null() {
+        drop(unsafe { CString::from_raw(s) });
+    }
 }

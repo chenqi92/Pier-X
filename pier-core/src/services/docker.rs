@@ -74,23 +74,47 @@ pub struct Container {
     #[serde(rename(serialize = "id", deserialize = "ID"), alias = "id", default)]
     pub id: String,
     /// Image reference, e.g. `redis:7-alpine`.
-    #[serde(rename(serialize = "image", deserialize = "Image"), alias = "image", default)]
+    #[serde(
+        rename(serialize = "image", deserialize = "Image"),
+        alias = "image",
+        default
+    )]
     pub image: String,
     /// Friendly name assigned by the user or docker.
-    #[serde(rename(serialize = "names", deserialize = "Names"), alias = "names", default)]
+    #[serde(
+        rename(serialize = "names", deserialize = "Names"),
+        alias = "names",
+        default
+    )]
     pub names: String,
     /// Human status, e.g. `"Up 5 minutes"` / `"Exited (0) 3 hours ago"`.
-    #[serde(rename(serialize = "status", deserialize = "Status"), alias = "status", default)]
+    #[serde(
+        rename(serialize = "status", deserialize = "Status"),
+        alias = "status",
+        default
+    )]
     pub status: String,
     /// Low-level state: `"running"`, `"exited"`, `"paused"`,
     /// `"created"`, `"restarting"`, etc.
-    #[serde(rename(serialize = "state", deserialize = "State"), alias = "state", default)]
+    #[serde(
+        rename(serialize = "state", deserialize = "State"),
+        alias = "state",
+        default
+    )]
     pub state: String,
     /// Freeform "X minutes ago" description of creation time.
-    #[serde(rename(serialize = "created", deserialize = "CreatedAt"), alias = "created", default)]
+    #[serde(
+        rename(serialize = "created", deserialize = "CreatedAt"),
+        alias = "created",
+        default
+    )]
     pub created: String,
     /// Port bindings, e.g. `"0.0.0.0:8080->80/tcp"`.
-    #[serde(rename(serialize = "ports", deserialize = "Ports"), alias = "ports", default)]
+    #[serde(
+        rename(serialize = "ports", deserialize = "Ports"),
+        alias = "ports",
+        default
+    )]
     pub ports: String,
 }
 
@@ -225,13 +249,25 @@ pub fn inspect_container_blocking(session: &SshSession, id: &str) -> Result<Stri
 pub struct DockerImage {
     #[serde(rename(serialize = "id", deserialize = "ID"), alias = "id", default)]
     pub id: String,
-    #[serde(rename(serialize = "repository", deserialize = "Repository"), alias = "repository", default)]
+    #[serde(
+        rename(serialize = "repository", deserialize = "Repository"),
+        alias = "repository",
+        default
+    )]
     pub repository: String,
     #[serde(rename(serialize = "tag", deserialize = "Tag"), alias = "tag", default)]
     pub tag: String,
-    #[serde(rename(serialize = "size", deserialize = "Size"), alias = "size", default)]
+    #[serde(
+        rename(serialize = "size", deserialize = "Size"),
+        alias = "size",
+        default
+    )]
     pub size: String,
-    #[serde(rename(serialize = "created", deserialize = "CreatedAt"), alias = "created", default)]
+    #[serde(
+        rename(serialize = "created", deserialize = "CreatedAt"),
+        alias = "created",
+        default
+    )]
     pub created: String,
 }
 
@@ -285,11 +321,23 @@ pub fn remove_image_blocking(session: &SshSession, id: &str, force: bool) -> Res
 #[allow(missing_docs)]
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct DockerVolume {
-    #[serde(rename(serialize = "name", deserialize = "Name"), alias = "name", default)]
+    #[serde(
+        rename(serialize = "name", deserialize = "Name"),
+        alias = "name",
+        default
+    )]
     pub name: String,
-    #[serde(rename(serialize = "driver", deserialize = "Driver"), alias = "driver", default)]
+    #[serde(
+        rename(serialize = "driver", deserialize = "Driver"),
+        alias = "driver",
+        default
+    )]
     pub driver: String,
-    #[serde(rename(serialize = "mountpoint", deserialize = "Mountpoint"), alias = "mountpoint", default)]
+    #[serde(
+        rename(serialize = "mountpoint", deserialize = "Mountpoint"),
+        alias = "mountpoint",
+        default
+    )]
     pub mountpoint: String,
 }
 
@@ -330,11 +378,23 @@ pub fn remove_volume_blocking(session: &SshSession, name: &str) -> Result<()> {
 pub struct DockerNetwork {
     #[serde(rename(serialize = "id", deserialize = "ID"), alias = "id", default)]
     pub id: String,
-    #[serde(rename(serialize = "name", deserialize = "Name"), alias = "name", default)]
+    #[serde(
+        rename(serialize = "name", deserialize = "Name"),
+        alias = "name",
+        default
+    )]
     pub name: String,
-    #[serde(rename(serialize = "driver", deserialize = "Driver"), alias = "driver", default)]
+    #[serde(
+        rename(serialize = "driver", deserialize = "Driver"),
+        alias = "driver",
+        default
+    )]
     pub driver: String,
-    #[serde(rename(serialize = "scope", deserialize = "Scope"), alias = "scope", default)]
+    #[serde(
+        rename(serialize = "scope", deserialize = "Scope"),
+        alias = "scope",
+        default
+    )]
     pub scope: String,
 }
 

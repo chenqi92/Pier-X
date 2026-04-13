@@ -265,6 +265,28 @@ int32_t pier_terminal_snapshot(
     size_t out_cells_capacity
 );
 
+/* Copy a viewport that may be scrolled back into terminal history.
+ *
+ * `scrollback_offset` is measured in lines above the live bottom:
+ *   0 = newest visible grid
+ *   1 = scroll up by one line
+ *   N = clamp to the oldest retained scrollback line
+ *
+ * Memory + error semantics match pier_terminal_snapshot. */
+int32_t pier_terminal_snapshot_view(
+    PierTerminal *t,
+    PierGridInfo *out_info,
+    PierCell *out_cells,
+    size_t out_cells_capacity,
+    uint32_t scrollback_offset
+);
+
+/* Number of lines currently retained in terminal history. */
+uint32_t pier_terminal_scrollback_len(const PierTerminal *t);
+
+/* Update the terminal history cap. `limit` is clamped to at least 1. */
+int32_t pier_terminal_set_scrollback_limit(PierTerminal *t, uint32_t limit);
+
 /* Returns 1 if the child is still running, 0 otherwise. */
 int32_t pier_terminal_is_alive(const PierTerminal *t);
 

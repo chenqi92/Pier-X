@@ -380,7 +380,11 @@ mod windows_impl {
 
             let (tx, rx) = mpsc::channel();
             let mut reader_threads = Vec::with_capacity(2);
-            reader_threads.push(spawn_pipe_reader("pier-terminal-stdout", stdout, tx.clone()));
+            reader_threads.push(spawn_pipe_reader(
+                "pier-terminal-stdout",
+                stdout,
+                tx.clone(),
+            ));
             reader_threads.push(spawn_pipe_reader("pier-terminal-stderr", stderr, tx));
 
             Ok(Self {

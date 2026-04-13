@@ -104,8 +104,25 @@ QtObject {
     readonly property color statusInfo: "#3574f0"
 
     // Typography
-    readonly property string fontUi: "Inter"
+    property string fontUi: "Inter"
     property string fontMono: "JetBrains Mono"
+    property real uiScale: 1.0
+
+    readonly property var uiFontFamilies: {
+        if (Qt.platform.os === "windows")
+            return ["Inter", "Segoe UI", "Microsoft YaHei UI"]
+        if (Qt.platform.os === "osx")
+            return ["Inter", "SF Pro Text", "Helvetica Neue"]
+        return ["Inter", "Noto Sans", "DejaVu Sans", "Liberation Sans"]
+    }
+
+    readonly property var monoFontFamilies: {
+        if (Qt.platform.os === "windows")
+            return ["JetBrains Mono", "Cascadia Code", "Consolas", "Courier New"]
+        if (Qt.platform.os === "osx")
+            return ["JetBrains Mono", "SF Mono", "Menlo", "Monaco"]
+        return ["JetBrains Mono", "Cascadia Mono", "Fira Code", "Source Code Pro", "DejaVu Sans Mono"]
+    }
 
     // Terminal font size — adjustable via Settings slider.
     // Used by TerminalView's PierTerminalGrid binding.
@@ -122,14 +139,14 @@ QtObject {
     property bool visualBell: true
     property bool audioBell: false
 
-    readonly property int sizeDisplay: 32
-    readonly property int sizeH1: 24
-    readonly property int sizeH2: 20
-    readonly property int sizeH3: 16
-    readonly property int sizeBodyLg: 14
-    readonly property int sizeBody: 13
-    readonly property int sizeCaption: 12
-    readonly property int sizeSmall: 11
+    readonly property int sizeDisplay: Math.round(32 * uiScale)
+    readonly property int sizeH1: Math.round(24 * uiScale)
+    readonly property int sizeH2: Math.round(20 * uiScale)
+    readonly property int sizeH3: Math.round(16 * uiScale)
+    readonly property int sizeBodyLg: Math.round(14 * uiScale)
+    readonly property int sizeBody: Math.round(13 * uiScale)
+    readonly property int sizeCaption: Math.round(12 * uiScale)
+    readonly property int sizeSmall: Math.round(11 * uiScale)
 
     readonly property int weightRegular: 400
     readonly property int weightMedium: 510

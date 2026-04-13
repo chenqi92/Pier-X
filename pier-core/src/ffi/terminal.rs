@@ -881,6 +881,92 @@ pub unsafe extern "C" fn pier_terminal_snapshot(
     0
 }
 
+/// Copy a viewport that may be scrolled back into terminal history.
+///
+/// `scrollback_offset` is measured in lines above the live bottom.
+/// `0` returns the newest visible grid, `1` scrolls the viewport up by
+/// one line, and so on until the oldest retained history line is at
+/// the top edge.
+///
+/// The memory and error contracts match [`pier_terminal_snapshot`].
+///
+/// # Safety
+///
+/// `t` must be null or a live handle. `out_info` and `out_cells`
+/// must be writable as described on [`pier_terminal_snapshot`].
+#[no_mangle]
+pub unsafe extern "C" fn pier_terminal_snapshot_view(
+    t: *mut PierTerminal,
+    out_info: *mut PierGridInfo,
+    out_cells: *mut PierCell,
+    out_cells_capacity: usize,
+    scrollback_offset: u32,
+) -> i32 {
+    if t.is_null() || out_info.is_null() {
+        return -1;
+    }
+    let term = unsafe { &*t };
+    let snap = term.snapshot_view(scrollback_offset as usize);
+    let needed = snap.cols as usize * snap.rows as usize;
+
+    let info = PierGridInfo {
+        cols: snap.cols,
+        rows: snap.rows,
+        cursor_x: snap.cursor_x,
+        cursor_y: snap.cursor_y,
+        alive: if term.is_alive() { 1 } else { 0 },
+        _padding: [0; 7],
+    };
+    unsafe { ptr::write(out_info, info) };
+
+    if out_cells.is_null() {
+        return if out_cells_capacity == 0 { 0 } else { -1 };
+    }
+    if out_cells_capacity < needed {
+        return -2;
+    }
+
+    for (i, cell) in snap.cells.iter().enumerate() {
+        let pc = PierCell::from_cell(cell);
+        unsafe { ptr::write(out_cells.add(i), pc) };
+    }
+    0
+}
+
+/// Return the number of lines currently retained in scrollback.
+///
+/// # Safety
+///
+/// `t` must be null or a live handle.
+#[no_mangle]
+pub unsafe extern "C" fn pier_terminal_scrollback_len(t: *const PierTerminal) -> u32 {
+    if t.is_null() {
+        return 0;
+    }
+    let term = unsafe { &*t };
+    term.scrollback_len().min(u32::MAX as usize) as u32
+}
+
+/// Update the terminal scrollback history limit.
+///
+/// `limit` is clamped to at least one line.
+///
+/// # Safety
+///
+/// `t` must be null or a live handle.
+#[no_mangle]
+pub unsafe extern "C" fn pier_terminal_set_scrollback_limit(
+    t: *mut PierTerminal,
+    limit: u32,
+) -> i32 {
+    if t.is_null() {
+        return -1;
+    }
+    let term = unsafe { &*t };
+    term.set_scrollback_limit(limit.max(1) as usize);
+    0
+}
+
 /// Returns `1` if the underlying child process is still running.
 ///
 /// # Safety

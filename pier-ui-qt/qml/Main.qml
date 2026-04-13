@@ -16,6 +16,9 @@ ApplicationWindow {
     visible: true
     title: qsTr("Pier-X")
     color: Theme.bgCanvas
+    font.family: Theme.fontUi
+    font.pixelSize: Theme.sizeBody
+    font.weight: Theme.weightRegular
     Behavior on color {
         ColorAnimation { duration: Theme.durNormal; easing.type: Theme.easingType }
     }

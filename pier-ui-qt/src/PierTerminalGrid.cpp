@@ -124,7 +124,7 @@ PierTerminalGrid::PierTerminalGrid(QQuickItem *parent)
     // Cursor blink timer — 530ms matches typical terminal blink rate.
     m_blinkTimer.setInterval(530);
     connect(&m_blinkTimer, &QTimer::timeout, this, [this]() {
-        m_cursorVisible = !m_cursorVisible;
+        m_cursorBlinkVisible = !m_cursorBlinkVisible;
         update();
     });
     if (m_cursorBlink)
@@ -155,6 +155,7 @@ void PierTerminalGrid::setFont(const QFont &f)
     }
     m_font = f;
     recomputeMetrics();
+    fitToViewport();
     emit fontChanged();
     emit metricsChanged();
     update();
@@ -206,14 +207,22 @@ void PierTerminalGrid::setCursorBlink(bool blink)
     if (m_cursorBlink == blink) return;
     m_cursorBlink = blink;
     if (blink) {
-        m_cursorVisible = true;
+        m_cursorBlinkVisible = true;
         m_blinkTimer.start();
     } else {
         m_blinkTimer.stop();
-        m_cursorVisible = true;
+        m_cursorBlinkVisible = true;
         update();
     }
     emit cursorBlinkChanged();
+}
+
+void PierTerminalGrid::setCursorVisible(bool visible)
+{
+    if (m_cursorVisible == visible) return;
+    m_cursorVisible = visible;
+    emit cursorVisibleChanged();
+    update();
 }
 
 void PierTerminalGrid::geometryChange(const QRectF &newGeometry, const QRectF &oldGeometry)
@@ -368,7 +377,9 @@ void PierTerminalGrid::paint(QPainter *painter)
     // Supports Block, Beam, and Underline styles with optional blink.
     const int cx = m_session->cursorX();
     const int cy = m_session->cursorY();
-    if (cx >= 0 && cy >= 0 && cx < cols && cy < rows && m_cursorVisible) {
+    if (m_cursorVisible
+        && (!m_cursorBlink || m_cursorBlinkVisible)
+        && cx >= 0 && cy >= 0 && cx < cols && cy < rows) {
         const QColor cursorColor(m_defaultFg.red(), m_defaultFg.green(), m_defaultFg.blue(), 140);
         const qreal x0 = cx * m_cellWidth;
         const qreal y0 = cy * m_cellHeight;

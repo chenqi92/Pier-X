@@ -51,6 +51,7 @@ class PierTerminalGrid : public QQuickPaintedItem
     // Cursor appearance: 0 = Block, 1 = Beam, 2 = Underline
     Q_PROPERTY(int cursorStyle READ cursorStyle WRITE setCursorStyle NOTIFY cursorStyleChanged FINAL)
     Q_PROPERTY(bool cursorBlink READ cursorBlink WRITE setCursorBlink NOTIFY cursorBlinkChanged FINAL)
+    Q_PROPERTY(bool cursorVisible READ cursorVisible WRITE setCursorVisible NOTIFY cursorVisibleChanged FINAL)
 
     // Exposed for QML to lay out the containing view. Changes with
     // the font and with the current session cell count.
@@ -84,6 +85,9 @@ public:
     bool cursorBlink() const { return m_cursorBlink; }
     void setCursorBlink(bool blink);
 
+    bool cursorVisible() const { return m_cursorVisible; }
+    void setCursorVisible(bool visible);
+
     qreal cellWidth() const { return m_cellWidth; }
     qreal cellHeight() const { return m_cellHeight; }
 
@@ -105,6 +109,7 @@ signals:
     void paletteColorsChanged();
     void cursorStyleChanged();
     void cursorBlinkChanged();
+    void cursorVisibleChanged();
     void metricsChanged();
 
 protected:
@@ -125,6 +130,7 @@ private:
     int m_cursorStyle = 0;   // 0=Block, 1=Beam, 2=Underline
     bool m_cursorBlink = true;
     bool m_cursorVisible = true;
+    bool m_cursorBlinkVisible = true;
     QTimer m_blinkTimer;
     qreal m_cellWidth = 0;
     qreal m_cellHeight = 0;

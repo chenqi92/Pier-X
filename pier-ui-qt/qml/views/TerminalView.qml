@@ -106,6 +106,7 @@ Rectangle {
 
     PierTerminalSession {
         id: session
+        scrollbackLimit: Theme.scrollbackLines
 
         // SSH command detected in terminal output — auto-create a
         // shared SSH session so right-panel tools can use it.
@@ -525,19 +526,22 @@ Rectangle {
         PierTerminalGrid {
             id: grid
             anchors.fill: parent
-            anchors.leftMargin: Theme.sp2
-            anchors.rightMargin: Theme.sp2
-            anchors.topMargin: Theme.sp2
-            anchors.bottomMargin: Theme.sp2
+            anchors.leftMargin: Theme.sp1
+            anchors.rightMargin: Theme.sp1
+            anchors.topMargin: Theme.sp1
+            anchors.bottomMargin: Theme.sp1
 
             session: session
-            font.family: Theme.fontMono
-            font.pixelSize: Theme.terminalFontSize
+            font: Qt.font({
+                family: Theme.fontMono,
+                pixelSize: Theme.terminalFontSize
+            })
             defaultForeground: Theme.currentTerminalTheme.fg
             defaultBackground: Theme.currentTerminalTheme.bg
             isDarkTheme: Theme.dark
             cursorStyle: Theme.cursorStyle
             cursorBlink: Theme.cursorBlink
+            cursorVisible: session.cursorVisible
 
             // Feed the 16-color ANSI palette from the selected terminal theme.
             paletteColors: {
@@ -629,6 +633,44 @@ Rectangle {
                     } else {
                         root.forceActiveFocus()
                     }
+                }
+
+                onWheel: (wheel) => {
+                    var rawDelta = wheel.angleDelta.y
+                    if (rawDelta === 0 && wheel.pixelDelta.y !== 0)
+                        rawDelta = wheel.pixelDelta.y * 3
+                    if (rawDelta === 0)
+                        return
+                    var steps = Math.max(1, Math.round(Math.abs(rawDelta) / 120))
+                    session.scrollBy((rawDelta > 0 ? 1 : -1) * steps * 3)
+                    wheel.accepted = true
+                }
+            }
+        }
+
+        ToolPanelSurface {
+            anchors.right: parent.right
+            anchors.bottom: parent.bottom
+            anchors.rightMargin: Theme.sp2
+            anchors.bottomMargin: Theme.sp2
+            visible: session.scrollOffset > 0
+            inset: true
+            padding: Theme.sp1
+            z: 2
+
+            RowLayout {
+                spacing: Theme.sp2
+
+                Text {
+                    text: qsTr("History +%1").arg(session.scrollOffset)
+                    font.family: Theme.fontMono
+                    font.pixelSize: Theme.sizeSmall
+                    color: Theme.textSecondary
+                }
+
+                GhostButton {
+                    text: qsTr("Back to Live")
+                    onClicked: session.scrollToBottom()
                 }
             }
         }
@@ -877,10 +919,18 @@ Rectangle {
             session.write("\x1b[F")
             break
         case Qt.Key_PageUp:
-            session.write("\x1b[5~")
+            if (event.modifiers & Qt.ShiftModifier) {
+                session.scrollBy(Math.max(1, session.rows - 1))
+            } else {
+                session.write("\x1b[5~")
+            }
             break
         case Qt.Key_PageDown:
-            session.write("\x1b[6~")
+            if (event.modifiers & Qt.ShiftModifier) {
+                session.scrollBy(-Math.max(1, session.rows - 1))
+            } else {
+                session.write("\x1b[6~")
+            }
             break
         case Qt.Key_Delete:
             session.write("\x1b[3~")

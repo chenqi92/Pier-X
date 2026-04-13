@@ -71,6 +71,10 @@ public:
     Q_PROPERTY(int rows READ rows NOTIFY gridChanged FINAL)
     Q_PROPERTY(int cursorX READ cursorX NOTIFY gridChanged FINAL)
     Q_PROPERTY(int cursorY READ cursorY NOTIFY gridChanged FINAL)
+    Q_PROPERTY(int scrollOffset READ scrollOffset NOTIFY scrollStateChanged FINAL)
+    Q_PROPERTY(int maxScrollOffset READ maxScrollOffset NOTIFY scrollStateChanged FINAL)
+    Q_PROPERTY(bool cursorVisible READ cursorVisible NOTIFY scrollStateChanged FINAL)
+    Q_PROPERTY(int scrollbackLimit READ scrollbackLimit WRITE setScrollbackLimit NOTIFY scrollbackLimitChanged FINAL)
     Q_PROPERTY(bool running READ running NOTIFY runningChanged FINAL)
     Q_PROPERTY(SshStatus status READ status NOTIFY statusChanged FINAL)
     Q_PROPERTY(QString sshErrorMessage READ sshErrorMessage NOTIFY statusChanged FINAL)
@@ -99,6 +103,10 @@ public:
     int rows() const { return m_rows; }
     int cursorX() const { return m_cursorX; }
     int cursorY() const { return m_cursorY; }
+    int scrollOffset() const { return m_scrollOffset; }
+    int maxScrollOffset() const { return m_maxScrollOffset; }
+    bool cursorVisible() const { return m_scrollOffset == 0; }
+    int scrollbackLimit() const { return m_scrollbackLimit; }
     bool running() const { return m_running; }
     SshStatus status() const { return m_status; }
     QString sshErrorMessage() const { return m_sshErrorMessage; }
@@ -191,6 +199,17 @@ public slots:
     // Tell the shell its visible area is now cols x rows cells.
     bool resize(int cols, int rows);
 
+    // Scroll the terminal viewport by a number of history lines.
+    // Positive values move up into older content; negative values move
+    // back down toward the live bottom.
+    void scrollBy(int lines);
+
+    // Jump directly back to live terminal output.
+    void scrollToBottom();
+
+    // Update the bounded scrollback limit retained by pier-core.
+    void setScrollbackLimit(int limit);
+
     // Shut down and reap the child. Safe to call multiple times.
     // Also cancels any in-flight SSH handshake.
     void stop();
@@ -207,6 +226,13 @@ signals:
     // Mirrors the Qt property change; exists so QML bindings on
     // `running` update correctly.
     void runningChanged();
+
+    // Fires when scrollback state changes: current offset, maximum
+    // available offset, or cursor visibility.
+    void scrollStateChanged();
+
+    // Fires when the configured scrollback cap changes.
+    void scrollbackLimitChanged();
 
     // Fires when status / sshErrorMessage / sshTarget change.
     // Combining all three into one signal is deliberate — QML
@@ -276,6 +302,9 @@ private:
     int m_rows = 0;
     int m_cursorX = 0;
     int m_cursorY = 0;
+    int m_scrollOffset = 0;
+    int m_maxScrollOffset = 0;
+    int m_scrollbackLimit = 10'000;
     bool m_running = false;
 
     SshStatus m_status = SshStatus::Idle;

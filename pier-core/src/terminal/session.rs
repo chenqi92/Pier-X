@@ -338,6 +338,73 @@ impl PierTerminal {
         }
     }
 
+    /// Snapshot a viewport that can be scrolled back into history.
+    ///
+    /// `scrollback_offset` is measured in lines from the live bottom:
+    /// `0` means the newest visible grid, `1` moves the viewport up by
+    /// one line, and so on until the oldest retained scrollback line is
+    /// visible at the top edge.
+    pub fn snapshot_view(&self, scrollback_offset: usize) -> GridSnapshot {
+        let guard = match self.inner.lock() {
+            Ok(g) => g,
+            Err(poisoned) => poisoned.into_inner(),
+        };
+        let cols = guard.emu.cols as u16;
+        let rows = guard.emu.rows as u16;
+        let visible_rows = rows as usize;
+        let scrollback_len = guard.emu.scrollback.len();
+        let clamped_offset = scrollback_offset.min(scrollback_len);
+        let total_lines = scrollback_len + visible_rows;
+        let start_line = total_lines.saturating_sub(visible_rows + clamped_offset);
+
+        let mut cells = Vec::with_capacity(cols as usize * visible_rows);
+        let append_line = |target: &mut Vec<Cell>, line: &[Cell], width: usize| {
+            if line.len() >= width {
+                target.extend_from_slice(&line[..width]);
+            } else {
+                target.extend_from_slice(line);
+                target.resize(target.len() + (width - line.len()), Cell::default());
+            }
+        };
+        for line_index in start_line..start_line + visible_rows {
+            if line_index < scrollback_len {
+                append_line(&mut cells, &guard.emu.scrollback[line_index], cols as usize);
+            } else {
+                let visible_index = line_index - scrollback_len;
+                append_line(&mut cells, &guard.emu.cells[visible_index], cols as usize);
+            }
+        }
+
+        GridSnapshot {
+            cols,
+            rows,
+            cursor_x: guard.emu.cursor_x as u16,
+            cursor_y: guard.emu.cursor_y as u16,
+            cells,
+        }
+    }
+
+    /// Number of scrollback lines currently retained above the live grid.
+    pub fn scrollback_len(&self) -> usize {
+        let guard = match self.inner.lock() {
+            Ok(g) => g,
+            Err(poisoned) => poisoned.into_inner(),
+        };
+        guard.emu.scrollback.len()
+    }
+
+    /// Update the scrollback history cap.
+    pub fn set_scrollback_limit(&self, limit: usize) {
+        let mut guard = match self.inner.lock() {
+            Ok(g) => g,
+            Err(poisoned) => poisoned.into_inner(),
+        };
+        guard.emu.scrollback_limit = limit.max(1);
+        while guard.emu.scrollback.len() > guard.emu.scrollback_limit {
+            guard.emu.scrollback.pop_front();
+        }
+    }
+
     /// Current grid size. Cheap (no lock, just atomics-free reads of
     /// the struct fields — the fields are updated under the lock).
     pub fn size(&self) -> (u16, u16) {

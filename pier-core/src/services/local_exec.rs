@@ -5,83 +5,154 @@
 
 use std::process::Command;
 
-use serde::{Deserialize, Serialize};
+#[cfg(target_os = "windows")]
+use std::os::windows::process::CommandExt;
 
-/// Run a local command and return (exit_code, stdout).
-pub fn exec(cmd: &str) -> Result<(i32, String), String> {
-    let shell = if cfg!(target_os = "windows") {
-        "cmd"
-    } else {
-        "sh"
-    };
-    let flag = if cfg!(target_os = "windows") {
-        "/C"
-    } else {
-        "-c"
-    };
+use crate::services::server_monitor::ServerSnapshot;
 
-    let output = Command::new(shell)
-        .arg(flag)
-        .arg(cmd)
+#[cfg(target_os = "windows")]
+const CREATE_NO_WINDOW: u32 = 0x0800_0000;
+
+/// Local system metrics reuse the same schema as the remote
+/// SSH monitor so the Qt layer does not need a second parsing path.
+pub type LocalMetrics = ServerSnapshot;
+
+struct ProcessOutput {
+    code: i32,
+    stdout: String,
+    stderr: String,
+}
+
+fn finish_command(mut command: Command, description: &str) -> Result<ProcessOutput, String> {
+    #[cfg(target_os = "windows")]
+    {
+        // GUI apps on Windows do not own a console. Without this flag,
+        // every background `cmd` / `docker.exe` / `powershell.exe`
+        // invocation can flash a transient terminal window.
+        command.creation_flags(CREATE_NO_WINDOW);
+    }
+
+    let output = command
         .output()
-        .map_err(|e| format!("failed to run '{cmd}': {e}"))?;
+        .map_err(|e| format!("failed to run {description}: {e}"))?;
 
-    let code = output.status.code().unwrap_or(-1);
-    let stdout = String::from_utf8_lossy(&output.stdout).to_string();
-    Ok((code, stdout))
+    Ok(ProcessOutput {
+        code: output.status.code().unwrap_or(-1),
+        stdout: String::from_utf8_lossy(&output.stdout).to_string(),
+        stderr: String::from_utf8_lossy(&output.stderr).to_string(),
+    })
+}
+
+fn run_program(program: &str, args: &[&str]) -> Result<ProcessOutput, String> {
+    let mut command = Command::new(program);
+    command.args(args);
+    finish_command(command, &format!("`{program}`"))
+}
+
+fn shell_output(cmd: &str) -> Result<ProcessOutput, String> {
+    let command = if cfg!(target_os = "windows") {
+        let mut command = Command::new("cmd");
+        command.arg("/C").arg(cmd);
+        command
+    } else {
+        let mut command = Command::new("sh");
+        command.arg("-c").arg(cmd);
+        command
+    };
+    finish_command(command, &format!("shell command `{cmd}`"))
+}
+
+fn first_diagnostic_line(output: &ProcessOutput) -> String {
+    output
+        .stderr
+        .lines()
+        .chain(output.stdout.lines())
+        .map(str::trim)
+        .find(|line| !line.is_empty())
+        .unwrap_or("")
+        .to_string()
+}
+
+fn combine_streams(output: ProcessOutput) -> String {
+    match (output.stdout.trim().is_empty(), output.stderr.trim().is_empty()) {
+        (false, true) => output.stdout,
+        (true, false) => output.stderr,
+        (false, false) => format!("{}\n{}", output.stdout.trim_end(), output.stderr.trim_end()),
+        (true, true) => String::new(),
+    }
+}
+
+fn successful_stdout(output: ProcessOutput, label: &str) -> Result<String, String> {
+    if output.code != 0 {
+        return Err(format!(
+            "{label} exited {}: {}",
+            output.code,
+            first_diagnostic_line(&output)
+        ));
+    }
+    Ok(output.stdout)
+}
+
+fn docker_output(args: &[&str]) -> Result<ProcessOutput, String> {
+    run_program("docker", args)
+}
+
+/// Run a local command and return `(exit_code, stdout_or_stderr)`.
+pub fn exec(cmd: &str) -> Result<(i32, String), String> {
+    let output = shell_output(cmd)?;
+    let primary = if output.stdout.trim().is_empty() {
+        output.stderr.clone()
+    } else {
+        output.stdout.clone()
+    };
+    Ok((output.code, primary))
 }
 
 /// Local Docker: list containers.
 pub fn docker_list_containers(all: bool) -> Result<String, String> {
-    let cmd = if all {
-        "docker ps --all --no-trunc --format '{{json .}}'"
+    if all {
+        successful_stdout(
+            docker_output(&["ps", "--all", "--no-trunc", "--format", "{{json .}}"])?,
+            "docker ps",
+        )
     } else {
-        "docker ps --no-trunc --format '{{json .}}'"
-    };
-    let (code, stdout) = exec(cmd)?;
-    if code != 0 {
-        return Err(format!("docker ps exited {code}"));
+        successful_stdout(
+            docker_output(&["ps", "--no-trunc", "--format", "{{json .}}"])?,
+            "docker ps",
+        )
     }
-    Ok(stdout)
 }
 
 /// Local Docker: list images.
 pub fn docker_list_images() -> Result<String, String> {
-    let (code, stdout) = exec("docker images --format '{{json .}}'")?;
-    if code != 0 {
-        return Err(format!("docker images exited {code}"));
-    }
-    Ok(stdout)
+    successful_stdout(
+        docker_output(&["images", "--format", "{{json .}}"])?,
+        "docker images",
+    )
 }
 
 /// Local Docker: list volumes.
 pub fn docker_list_volumes() -> Result<String, String> {
-    let (code, stdout) = exec("docker volume ls --format '{{json .}}'")?;
-    if code != 0 {
-        return Err(format!("docker volume ls exited {code}"));
-    }
-    Ok(stdout)
+    successful_stdout(
+        docker_output(&["volume", "ls", "--format", "{{json .}}"])?,
+        "docker volume ls",
+    )
 }
 
 /// Local Docker: list networks.
 pub fn docker_list_networks() -> Result<String, String> {
-    let (code, stdout) = exec("docker network ls --format '{{json .}}'")?;
-    if code != 0 {
-        return Err(format!("docker network ls exited {code}"));
-    }
-    Ok(stdout)
+    successful_stdout(
+        docker_output(&["network", "ls", "--format", "{{json .}}"])?,
+        "docker network ls",
+    )
 }
 
 /// Local Docker: run `docker <args...>` and return
-/// `(exit_code, stdout)` without forcing a success path.
+/// `(exit_code, stdout+stderr)` without forcing a success path.
 pub fn docker_exec(args: &[String]) -> Result<(i32, String), String> {
-    let tail = crate::services::docker::join_shell_args(args.iter().map(String::as_str));
-    let cmd = if tail.is_empty() {
-        String::from("docker")
-    } else {
-        format!("docker {tail}")
-    };
-    exec(&cmd)
+    let refs: Vec<&str> = args.iter().map(String::as_str).collect();
+    let output = docker_output(&refs)?;
+    Ok((output.code, combine_streams(output)))
 }
 
 /// Local Docker: simple action (start/stop/restart/rm).
@@ -89,19 +160,14 @@ pub fn docker_action(verb: &str, id: &str, force: bool) -> Result<(), String> {
     if !crate::services::docker::is_safe_id(id) {
         return Err(format!("unsafe id: {id}"));
     }
-    let cmd = if force {
-        format!("docker {verb} --force {id}")
-    } else {
-        format!("docker {verb} {id}")
-    };
-    let (code, stdout) = exec(&cmd)?;
-    if code != 0 {
-        return Err(format!(
-            "docker {verb} exited {code}: {}",
-            stdout.lines().next().unwrap_or("")
-        ));
+
+    let mut args = vec![verb];
+    if force {
+        args.push("--force");
     }
-    Ok(())
+    args.push(id);
+
+    successful_stdout(docker_output(&args)?, &format!("docker {verb}")).map(|_| ())
 }
 
 /// Local Docker: inspect container.
@@ -109,148 +175,349 @@ pub fn docker_inspect(id: &str) -> Result<String, String> {
     if !crate::services::docker::is_safe_id(id) {
         return Err(format!("unsafe id: {id}"));
     }
-    let (code, stdout) = exec(&format!("docker inspect --type container {id}"))?;
-    if code != 0 {
-        return Err(format!("docker inspect exited {code}"));
-    }
-    Ok(stdout)
-}
-
-/// Local system metrics.
-#[allow(missing_docs)]
-#[derive(Serialize, Deserialize)]
-pub struct LocalMetrics {
-    pub hostname: String,
-    pub os: String,
-    pub uptime: String,
-    pub cpu_percent: f64,
-    pub memory_total_mb: u64,
-    pub memory_used_mb: u64,
-    pub load_1: f64,
-    pub load_5: f64,
-    pub load_15: f64,
+    successful_stdout(
+        docker_output(&["inspect", "--type", "container", id])?,
+        "docker inspect",
+    )
 }
 
 /// Get local system metrics.
 pub fn system_metrics() -> Result<LocalMetrics, String> {
-    let hostname = exec("hostname")
-        .map(|(_, s)| s.trim().to_string())
-        .unwrap_or_default();
+    #[cfg(target_os = "windows")]
+    {
+        return system_metrics_windows();
+    }
 
-    let os = if cfg!(target_os = "macos") {
-        exec("sw_vers -productVersion")
-            .map(|(_, s)| format!("macOS {}", s.trim()))
-            .unwrap_or_else(|_| "macOS".into())
-    } else if cfg!(target_os = "linux") {
-        exec("uname -r")
-            .map(|(_, s)| format!("Linux {}", s.trim()))
-            .unwrap_or_else(|_| "Linux".into())
-    } else {
-        "Unknown".into()
-    };
+    #[cfg(not(target_os = "windows"))]
+    {
+        system_metrics_unix()
+    }
+}
 
-    let uptime = exec("uptime")
-        .map(|(_, s)| s.trim().to_string())
-        .unwrap_or_default();
+#[cfg(target_os = "windows")]
+fn system_metrics_windows() -> Result<LocalMetrics, String> {
+    // Probe everything in one hidden PowerShell run so switching to the
+    // monitor panel does not flash a half-dozen transient console windows.
+    const SCRIPT: &str = r#"
+$ErrorActionPreference = 'Stop'
+function Format-Size([double]$bytes) {
+    if ($bytes -ge 1TB) { return ('{0:0.0} TB' -f ($bytes / 1TB)) }
+    if ($bytes -ge 1GB) { return ('{0:0.0} GB' -f ($bytes / 1GB)) }
+    if ($bytes -ge 1MB) { return ('{0:0} MB' -f ($bytes / 1MB)) }
+    return ('{0:0} KB' -f ($bytes / 1KB))
+}
+function Format-Uptime([TimeSpan]$span) {
+    $parts = New-Object System.Collections.Generic.List[string]
+    if ($span.Days -gt 0) {
+        $parts.Add(('{0} day{1}' -f $span.Days, $(if ($span.Days -ne 1) { 's' } else { '' })))
+    }
+    if ($span.Hours -gt 0) {
+        $parts.Add(('{0} hour{1}' -f $span.Hours, $(if ($span.Hours -ne 1) { 's' } else { '' })))
+    }
+    if ($span.Minutes -gt 0 -and $parts.Count -lt 2) {
+        $parts.Add(('{0} min' -f $span.Minutes))
+    }
+    if ($parts.Count -eq 0) {
+        $parts.Add('0 min')
+    }
+    return 'up ' + ($parts -join ', ')
+}
 
-    // Load averages
-    let (load_1, load_5, load_15) = if cfg!(target_os = "macos") {
-        exec("sysctl -n vm.loadavg")
-            .map(|(_, s)| {
-                let parts: Vec<f64> = s
-                    .trim()
-                    .trim_matches(|c| c == '{' || c == '}')
-                    .split_whitespace()
-                    .filter_map(|v| v.parse().ok())
-                    .collect();
-                (
-                    parts.get(0).copied().unwrap_or(0.0),
-                    parts.get(1).copied().unwrap_or(0.0),
-                    parts.get(2).copied().unwrap_or(0.0),
-                )
-            })
-            .unwrap_or((0.0, 0.0, 0.0))
-    } else {
-        exec("cat /proc/loadavg")
-            .map(|(_, s)| {
-                let parts: Vec<f64> = s
-                    .split_whitespace()
-                    .take(3)
-                    .filter_map(|v| v.parse().ok())
-                    .collect();
-                (
-                    parts.get(0).copied().unwrap_or(0.0),
-                    parts.get(1).copied().unwrap_or(0.0),
-                    parts.get(2).copied().unwrap_or(0.0),
-                )
-            })
-            .unwrap_or((0.0, 0.0, 0.0))
-    };
+$os = Get-CimInstance Win32_OperatingSystem
+$disk = Get-CimInstance Win32_LogicalDisk -Filter 'DriveType=3' | Sort-Object Size -Descending | Select-Object -First 1
+$pageFiles = @(Get-CimInstance Win32_PageFileUsage -ErrorAction SilentlyContinue)
 
-    // Memory
-    let (mem_total, mem_used) = if cfg!(target_os = "macos") {
-        let total = exec("sysctl -n hw.memsize")
-            .map(|(_, s)| s.trim().parse::<u64>().unwrap_or(0) / 1024 / 1024)
-            .unwrap_or(0);
-        // vm_stat gives pages; page size is typically 16384 on ARM, 4096 on Intel
-        let page_size = exec("sysctl -n vm.pagesize")
-            .map(|(_, s)| s.trim().parse::<u64>().unwrap_or(16384))
-            .unwrap_or(16384);
-        let pages_active = exec("vm_stat")
-            .map(|(_, s)| {
-                let mut active = 0u64;
-                for line in s.lines() {
-                    if line.contains("Pages active") || line.contains("Pages wired") {
-                        if let Some(v) = line.split(':').nth(1) {
-                            active += v.trim().trim_end_matches('.').parse::<u64>().unwrap_or(0);
-                        }
-                    }
-                }
-                active
-            })
-            .unwrap_or(0);
-        (total, pages_active * page_size / 1024 / 1024)
-    } else {
-        // Linux: /proc/meminfo
-        exec("cat /proc/meminfo")
-            .map(|(_, s)| {
-                let mut total = 0u64;
-                let mut available = 0u64;
-                for line in s.lines() {
-                    if line.starts_with("MemTotal:") {
-                        total = line
-                            .split_whitespace()
-                            .nth(1)
-                            .and_then(|v| v.parse().ok())
-                            .unwrap_or(0)
-                            / 1024;
-                    } else if line.starts_with("MemAvailable:") {
-                        available = line
-                            .split_whitespace()
-                            .nth(1)
-                            .and_then(|v| v.parse().ok())
-                            .unwrap_or(0)
-                            / 1024;
-                    }
-                }
-                (total, total.saturating_sub(available))
-            })
-            .unwrap_or((0, 0))
-    };
+$cpuPct = -1.0
+try {
+    $cpuPct = [double][math]::Round((Get-Counter '\Processor(_Total)\% Processor Time').CounterSamples[0].CookedValue, 1)
+} catch {
+    $cpuPct = -1.0
+}
 
-    Ok(LocalMetrics {
-        hostname,
-        os,
-        uptime,
-        cpu_percent: load_1 * 100.0 / num_cpus().max(1) as f64,
-        memory_total_mb: mem_total,
-        memory_used_mb: mem_used,
-        load_1,
-        load_5,
-        load_15,
+$memTotalMb = [double][math]::Round($os.TotalVisibleMemorySize / 1024, 1)
+$memFreeMb = [double][math]::Round($os.FreePhysicalMemory / 1024, 1)
+$memUsedMb = [double][math]::Round([math]::Max(0, $memTotalMb - $memFreeMb), 1)
+
+$swapTotalMb = -1.0
+$swapUsedMb = -1.0
+if ($pageFiles.Count -gt 0) {
+    $swapTotalMb = [double][math]::Round((($pageFiles | Measure-Object -Property AllocatedBaseSize -Sum).Sum), 1)
+    $swapUsedMb = [double][math]::Round((($pageFiles | Measure-Object -Property CurrentUsage -Sum).Sum), 1)
+}
+
+$diskTotalBytes = if ($disk) { [double]$disk.Size } else { 0.0 }
+$diskFreeBytes = if ($disk) { [double]$disk.FreeSpace } else { 0.0 }
+$diskUsedBytes = [double][math]::Max(0, $diskTotalBytes - $diskFreeBytes)
+$diskUsePct = if ($diskTotalBytes -gt 0) {
+    [double][math]::Round(($diskUsedBytes / $diskTotalBytes) * 100, 1)
+} else {
+    -1.0
+}
+
+$snapshot = @{
+    uptime = (Format-Uptime ((Get-Date) - $os.LastBootUpTime))
+    load_1 = -1.0
+    load_5 = -1.0
+    load_15 = -1.0
+    mem_total_mb = $memTotalMb
+    mem_used_mb = $memUsedMb
+    mem_free_mb = $memFreeMb
+    swap_total_mb = $swapTotalMb
+    swap_used_mb = $swapUsedMb
+    disk_total = if ($diskTotalBytes -gt 0) { Format-Size $diskTotalBytes } else { '' }
+    disk_used = if ($diskTotalBytes -gt 0) { Format-Size $diskUsedBytes } else { '' }
+    disk_avail = if ($diskTotalBytes -gt 0) { Format-Size $diskFreeBytes } else { '' }
+    disk_use_pct = $diskUsePct
+    cpu_pct = $cpuPct
+}
+
+$snapshot | ConvertTo-Json -Compress
+"#;
+
+    let output = run_program(
+        "powershell.exe",
+        &[
+            "-NoLogo",
+            "-NoProfile",
+            "-NonInteractive",
+            "-ExecutionPolicy",
+            "Bypass",
+            "-Command",
+            SCRIPT,
+        ],
+    )?;
+
+    if output.code != 0 {
+        return Err(format!(
+            "local monitor probe exited {}: {}",
+            output.code,
+            first_diagnostic_line(&output)
+        ));
+    }
+
+    serde_json::from_str(output.stdout.trim()).map_err(|e| {
+        format!(
+            "failed to parse local monitor probe JSON: {e}; raw={}",
+            output.stdout.trim()
+        )
     })
 }
 
+#[cfg(not(target_os = "windows"))]
+fn system_metrics_unix() -> Result<LocalMetrics, String> {
+    let uptime_output = shell_output("uptime")?;
+    let uptime_line = uptime_output
+        .stdout
+        .lines()
+        .last()
+        .unwrap_or("")
+        .trim()
+        .to_string();
+    let (uptime, load_1, load_5, load_15) = parse_uptime_line(&uptime_line);
+
+    let (mem_total_mb, mem_used_mb, mem_free_mb, swap_total_mb, swap_used_mb) =
+        if cfg!(target_os = "macos") {
+            let total_mb = shell_output("sysctl -n hw.memsize")
+                .ok()
+                .and_then(|o| o.stdout.trim().parse::<f64>().ok())
+                .map(|bytes| (bytes / 1024.0 / 1024.0).round())
+                .unwrap_or(-1.0);
+            let page_size = shell_output("sysctl -n vm.pagesize")
+                .ok()
+                .and_then(|o| o.stdout.trim().parse::<f64>().ok())
+                .unwrap_or(16384.0);
+            let active_pages = shell_output("vm_stat")
+                .ok()
+                .map(|o| {
+                    let mut active = 0.0;
+                    for line in o.stdout.lines() {
+                        if line.contains("Pages active") || line.contains("Pages wired") {
+                            if let Some(value) = line.split(':').nth(1) {
+                                active += value
+                                    .trim()
+                                    .trim_end_matches('.')
+                                    .parse::<f64>()
+                                    .unwrap_or(0.0);
+                            }
+                        }
+                    }
+                    active
+                })
+                .unwrap_or(0.0);
+            let used_mb = ((active_pages * page_size) / 1024.0 / 1024.0).round();
+            let (swap_total, swap_used) = shell_output("sysctl -n vm.swapusage")
+                .ok()
+                .map(|o| parse_macos_swapusage(&o.stdout))
+                .unwrap_or((-1.0, -1.0));
+            (
+                total_mb,
+                used_mb,
+                if total_mb >= 0.0 && used_mb >= 0.0 {
+                    (total_mb - used_mb).max(0.0)
+                } else {
+                    -1.0
+                },
+                swap_total,
+                swap_used,
+            )
+        } else {
+            shell_output("free -m")
+                .ok()
+                .map(|o| parse_linux_free(&o.stdout))
+                .unwrap_or((-1.0, -1.0, -1.0, -1.0, -1.0))
+        };
+
+    let (disk_total, disk_used, disk_avail, disk_use_pct) = shell_output("df -h /")
+        .ok()
+        .map(|o| parse_df_line(&o.stdout))
+        .unwrap_or_else(|| (String::new(), String::new(), String::new(), -1.0));
+
+    let cpu_pct = if load_1 >= 0.0 {
+        ((load_1 * 100.0) / num_cpus().max(1) as f64 * 10.0).round() / 10.0
+    } else {
+        -1.0
+    };
+
+    Ok(LocalMetrics {
+        uptime,
+        load_1,
+        load_5,
+        load_15,
+        mem_total_mb,
+        mem_used_mb,
+        mem_free_mb,
+        swap_total_mb,
+        swap_used_mb,
+        disk_total,
+        disk_used,
+        disk_avail,
+        disk_use_pct,
+        cpu_pct,
+    })
+}
+
+#[cfg(not(target_os = "windows"))]
+fn parse_uptime_line(line: &str) -> (String, f64, f64, f64) {
+    let mut uptime = line.to_string();
+    let mut load_1 = -1.0;
+    let mut load_5 = -1.0;
+    let mut load_15 = -1.0;
+
+    if let Some(up_idx) = line.find("up ") {
+        let rest = &line[up_idx..];
+        if let Some(user_idx) = rest.find("user") {
+            uptime = rest[..user_idx]
+                .trim_end_matches(|c: char| c.is_ascii_digit() || c == ' ' || c == ',')
+                .trim()
+                .to_string();
+        } else {
+            uptime = rest.trim().to_string();
+        }
+    }
+
+    if let Some(load_idx) = line.find("load average:") {
+        let parts: Vec<f64> = line[load_idx + "load average:".len()..]
+            .split(',')
+            .filter_map(|v| v.trim().parse::<f64>().ok())
+            .collect();
+        load_1 = parts.first().copied().unwrap_or(-1.0);
+        load_5 = parts.get(1).copied().unwrap_or(-1.0);
+        load_15 = parts.get(2).copied().unwrap_or(-1.0);
+    }
+
+    (uptime, load_1, load_5, load_15)
+}
+
+#[cfg(not(target_os = "windows"))]
+fn parse_linux_free(stdout: &str) -> (f64, f64, f64, f64, f64) {
+    let mut mem_total = -1.0;
+    let mut mem_used = -1.0;
+    let mut mem_free = -1.0;
+    let mut swap_total = -1.0;
+    let mut swap_used = -1.0;
+
+    for line in stdout.lines() {
+        let trimmed = line.trim();
+        if trimmed.starts_with("Mem:") {
+            let nums: Vec<f64> = trimmed
+                .split_whitespace()
+                .filter_map(|part| part.parse::<f64>().ok())
+                .collect();
+            if nums.len() >= 3 {
+                mem_total = nums[0];
+                mem_used = nums[1];
+                mem_free = nums[2];
+            }
+        } else if trimmed.starts_with("Swap:") {
+            let nums: Vec<f64> = trimmed
+                .split_whitespace()
+                .filter_map(|part| part.parse::<f64>().ok())
+                .collect();
+            if nums.len() >= 2 {
+                swap_total = nums[0];
+                swap_used = nums[1];
+            }
+        }
+    }
+
+    (mem_total, mem_used, mem_free, swap_total, swap_used)
+}
+
+#[cfg(not(target_os = "windows"))]
+fn parse_macos_swapusage(stdout: &str) -> (f64, f64) {
+    let mut total = -1.0;
+    let mut used = -1.0;
+    for token in stdout.split_whitespace() {
+        if let Some(value) = token.strip_prefix("total") {
+            total = parse_macos_gigabytes(value);
+        } else if let Some(value) = token.strip_prefix("used") {
+            used = parse_macos_gigabytes(value);
+        }
+    }
+    (total, used)
+}
+
+#[cfg(not(target_os = "windows"))]
+fn parse_macos_gigabytes(token: &str) -> f64 {
+    token
+        .trim_start_matches('=')
+        .trim_end_matches('G')
+        .trim_end_matches('M')
+        .parse::<f64>()
+        .map(|value| {
+            if token.ends_with('G') {
+                value * 1024.0
+            } else {
+                value
+            }
+        })
+        .unwrap_or(-1.0)
+}
+
+#[cfg(not(target_os = "windows"))]
+fn parse_df_line(stdout: &str) -> (String, String, String, f64) {
+    for line in stdout.lines() {
+        let trimmed = line.trim();
+        if trimmed.is_empty() || trimmed.starts_with("Filesystem") {
+            continue;
+        }
+        let parts: Vec<&str> = trimmed.split_whitespace().collect();
+        if parts.len() >= 5 {
+            return (
+                parts[1].to_string(),
+                parts[2].to_string(),
+                parts[3].to_string(),
+                parts[4]
+                    .trim_end_matches('%')
+                    .parse::<f64>()
+                    .unwrap_or(-1.0),
+            );
+        }
+    }
+    (String::new(), String::new(), String::new(), -1.0)
+}
+
+#[cfg(not(target_os = "windows"))]
 fn num_cpus() -> usize {
     exec("nproc")
         .or_else(|_| exec("sysctl -n hw.ncpu"))

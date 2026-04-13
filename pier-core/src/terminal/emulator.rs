@@ -279,8 +279,8 @@ fn parse_ssh_command(line: &str) -> Option<(String, String, u16)> {
 
     // Flags that consume the next argument
     let flags_with_arg = [
-        "-p", "-i", "-o", "-l", "-L", "-R", "-D", "-F", "-J", "-w", "-W", "-b", "-c",
-        "-E", "-e", "-I", "-m", "-O", "-Q", "-S",
+        "-p", "-i", "-o", "-l", "-L", "-R", "-D", "-F", "-J", "-w", "-W", "-b", "-c", "-E", "-e",
+        "-I", "-m", "-O", "-Q", "-S",
     ];
 
     let mut i = 1; // skip "ssh"
@@ -418,10 +418,7 @@ impl Perform for Performer<'_> {
             b'\n' | 0x0B | 0x0C => {
                 // Before line feed, check if current line has an SSH command.
                 // This detects `ssh user@host` typed by the user.
-                let line: String = self.cells[*self.cursor_y]
-                    .iter()
-                    .map(|c| c.ch)
-                    .collect();
+                let line: String = self.cells[*self.cursor_y].iter().map(|c| c.ch).collect();
                 if let Some((host, user, port)) = parse_ssh_command(&line) {
                     *self.ssh_detected_host = host;
                     *self.ssh_detected_user = user;

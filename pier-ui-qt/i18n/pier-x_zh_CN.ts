@@ -4131,6 +4131,21 @@ Create one to unlock SSH, SFTP, Docker, logs, and database tools.</source>
         <source>Back to Live</source>
         <translation>回到实时输出</translation>
     </message>
+    <message>
+        <location filename="../qml/views/TerminalView.qml" line="792"/>
+        <source>Open Link</source>
+        <translation>打开链接</translation>
+    </message>
+    <message>
+        <location filename="../qml/views/TerminalView.qml" line="801"/>
+        <source>Copy Link</source>
+        <translation>复制链接</translation>
+    </message>
+    <message>
+        <location filename="../qml/views/TerminalView.qml" line="842"/>
+        <source>Clear Selection</source>
+        <translation>清除选区</translation>
+    </message>
 </context>
 <context>
     <name>Theme</name>
@@ -4176,33 +4191,132 @@ Create one to unlock SSH, SFTP, Docker, logs, and database tools.</source>
         <translation type="vanished">命令面板</translation>
     </message>
     <message>
-        <location filename="../qml/shell/TopBar.qml" line="83"/>
-        <source>New session</source>
-        <translation>新建会话</translation>
-    </message>
-    <message>
         <source>Open command palette</source>
         <translation type="vanished">打开命令面板</translation>
     </message>
     <message>
-        <location filename="../qml/shell/TopBar.qml" line="11"/>
         <source>Workspace</source>
         <translation>工作区</translation>
     </message>
     <message>
-        <location filename="../qml/shell/TopBar.qml" line="90"/>
+        <source>New session</source>
+        <translation>新建会话</translation>
+    </message>
+    <message>
         <source>Switch to light theme</source>
         <translation>切换到浅色主题</translation>
     </message>
     <message>
-        <location filename="../qml/shell/TopBar.qml" line="90"/>
         <source>Switch to dark theme</source>
         <translation>切换到深色主题</translation>
     </message>
     <message>
-        <location filename="../qml/shell/TopBar.qml" line="100"/>
         <source>Settings</source>
         <translation>设置</translation>
+    </message>
+    <message>
+        <source>File</source>
+        <translation>文件</translation>
+    </message>
+    <message>
+        <source>Edit</source>
+        <translation>编辑</translation>
+    </message>
+    <message>
+        <source>View</source>
+        <translation>视图</translation>
+    </message>
+    <message>
+        <source>Window</source>
+        <translation>窗口</translation>
+    </message>
+    <message>
+        <source>Help</source>
+        <translation>帮助</translation>
+    </message>
+    <message>
+        <source>New local terminal</source>
+        <translation>新建本地终端</translation>
+    </message>
+    <message>
+        <source>New SSH connection…</source>
+        <translation>新建 SSH 连接…</translation>
+    </message>
+    <message>
+        <source>Open Markdown preview…</source>
+        <translation>打开 Markdown 预览…</translation>
+    </message>
+    <message>
+        <source>Close current tab</source>
+        <translation>关闭当前标签页</translation>
+    </message>
+    <message>
+        <source>Settings…</source>
+        <translation>设置…</translation>
+    </message>
+    <message>
+        <source>Exit</source>
+        <translation>退出</translation>
+    </message>
+    <message>
+        <source>Undo</source>
+        <translation>撤销</translation>
+    </message>
+    <message>
+        <source>Redo</source>
+        <translation>重做</translation>
+    </message>
+    <message>
+        <source>Cut</source>
+        <translation>剪切</translation>
+    </message>
+    <message>
+        <source>Copy</source>
+        <translation>复制</translation>
+    </message>
+    <message>
+        <source>Paste</source>
+        <translation>粘贴</translation>
+    </message>
+    <message>
+        <source>Select All</source>
+        <translation>全选</translation>
+    </message>
+    <message>
+        <source>Follow system theme</source>
+        <translation>跟随系统主题</translation>
+    </message>
+    <message>
+        <source>Hide right sidebar</source>
+        <translation>隐藏右侧边栏</translation>
+    </message>
+    <message>
+        <source>Show right sidebar</source>
+        <translation>显示右侧边栏</translation>
+    </message>
+    <message>
+        <source>Minimize</source>
+        <translation>最小化</translation>
+    </message>
+    <message>
+        <source>Restore</source>
+        <translation>还原</translation>
+    </message>
+    <message>
+        <source>Zoom</source>
+        <translation>缩放</translation>
+    </message>
+    <message>
+        <source>Enter Full Screen</source>
+        <translation>进入全屏</translation>
+    </message>
+    <message>
+        <source>Exit Full Screen</source>
+        <translation>退出全屏</translation>
+    </message>
+    <message>
+        <source>About Pier-X</source>
+        <translation>关于 Pier-X</translation>
     </message>
 </context>
 <context>

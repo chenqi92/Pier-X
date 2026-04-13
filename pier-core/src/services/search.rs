@@ -9,6 +9,8 @@ use std::process::Command;
 
 use serde::{Deserialize, Serialize};
 
+use crate::process_util::configure_background_command;
+
 /// A single search result.
 #[allow(missing_docs)]
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -45,18 +47,23 @@ pub fn search_files(
     let max = if max_results == 0 { 200 } else { max_results };
 
     // Try git ls-files first (respects .gitignore)
-    let output = Command::new("git")
-        .current_dir(root)
-        .args(["ls-files", "--cached", "--others", "--exclude-standard"])
-        .output();
+    let output = {
+        let mut command = Command::new("git");
+        command.current_dir(root);
+        command.args(["ls-files", "--cached", "--others", "--exclude-standard"]);
+        configure_background_command(&mut command);
+        command.output()
+    };
 
     let file_list = match output {
         Ok(o) if o.status.success() => String::from_utf8_lossy(&o.stdout).to_string(),
         _ => {
             // Fallback: find
-            let out = Command::new("find")
-                .current_dir(root)
-                .args([".", "-maxdepth", "10", "-type", "f"])
+            let mut command = Command::new("find");
+            command.current_dir(root);
+            command.args([".", "-maxdepth", "10", "-type", "f"]);
+            configure_background_command(&mut command);
+            let out = command
                 .output()
                 .map_err(|e| SearchError::Command(e.to_string()))?;
             String::from_utf8_lossy(&out.stdout).to_string()
@@ -103,10 +110,13 @@ pub fn search_content(
     let max = if max_results == 0 { 200 } else { max_results };
 
     // Try git grep first (respects .gitignore, faster)
-    let output = Command::new("git")
-        .current_dir(root)
-        .args(["grep", "-n", "-i", "--max-count", "3", pattern])
-        .output();
+    let output = {
+        let mut command = Command::new("git");
+        command.current_dir(root);
+        command.args(["grep", "-n", "-i", "--max-count", "3", pattern]);
+        configure_background_command(&mut command);
+        command.output()
+    };
 
     let grep_output = match output {
         Ok(o) if o.status.success() || o.status.code() == Some(1) => {
@@ -114,9 +124,11 @@ pub fn search_content(
         }
         _ => {
             // Fallback: grep -rn
-            let out = Command::new("grep")
-                .current_dir(root)
-                .args(["-rn", "-i", "--max-count=3", pattern, "."])
+            let mut command = Command::new("grep");
+            command.current_dir(root);
+            command.args(["-rn", "-i", "--max-count=3", pattern, "."]);
+            configure_background_command(&mut command);
+            let out = command
                 .output()
                 .map_err(|e| SearchError::Command(e.to_string()))?;
             String::from_utf8_lossy(&out.stdout).to_string()

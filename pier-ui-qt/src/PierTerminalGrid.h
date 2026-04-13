@@ -26,8 +26,10 @@
 #include <QColor>
 #include <QFont>
 #include <QList>
+#include <QPoint>
 #include <QQuickPaintedItem>
 #include <QSize>
+#include <QString>
 #include <QTimer>
 #include <qqml.h>
 
@@ -47,6 +49,11 @@ class PierTerminalGrid : public QQuickPaintedItem
     Q_PROPERTY(QColor defaultBackground READ defaultBackground WRITE setDefaultBackground NOTIFY defaultBackgroundChanged FINAL)
     Q_PROPERTY(bool isDarkTheme READ isDarkTheme WRITE setIsDarkTheme NOTIFY isDarkThemeChanged FINAL)
     Q_PROPERTY(QList<QColor> paletteColors READ paletteColors WRITE setPaletteColors NOTIFY paletteColorsChanged FINAL)
+    Q_PROPERTY(QColor selectionBackground READ selectionBackground WRITE setSelectionBackground NOTIFY selectionAppearanceChanged FINAL)
+    Q_PROPERTY(QColor linkForeground READ linkForeground WRITE setLinkForeground NOTIFY linkColorsChanged FINAL)
+    Q_PROPERTY(QColor linkHoverForeground READ linkHoverForeground WRITE setLinkHoverForeground NOTIFY linkColorsChanged FINAL)
+    Q_PROPERTY(bool hasSelection READ hasSelection NOTIFY selectionChanged FINAL)
+    Q_PROPERTY(QString hoveredUrl READ hoveredUrl NOTIFY hoveredUrlChanged FINAL)
 
     // Cursor appearance: 0 = Block, 1 = Beam, 2 = Underline
     Q_PROPERTY(int cursorStyle READ cursorStyle WRITE setCursorStyle NOTIFY cursorStyleChanged FINAL)
@@ -79,6 +86,18 @@ public:
     QList<QColor> paletteColors() const { return m_palette; }
     void setPaletteColors(const QList<QColor> &colors);
 
+    QColor selectionBackground() const { return m_selectionBg; }
+    void setSelectionBackground(const QColor &color);
+
+    QColor linkForeground() const { return m_linkFg; }
+    void setLinkForeground(const QColor &color);
+
+    QColor linkHoverForeground() const { return m_linkHoverFg; }
+    void setLinkHoverForeground(const QColor &color);
+
+    bool hasSelection() const;
+    QString hoveredUrl() const { return m_hoveredUrl; }
+
     int cursorStyle() const { return m_cursorStyle; }
     void setCursorStyle(int style);
 
@@ -92,6 +111,15 @@ public:
     qreal cellHeight() const { return m_cellHeight; }
 
     Q_INVOKABLE QString urlAt(qreal x, qreal y) const;
+    Q_INVOKABLE void updateHoveredLink(qreal x, qreal y);
+    Q_INVOKABLE void clearHoveredUrl();
+    Q_INVOKABLE void beginSelection(qreal x, qreal y);
+    Q_INVOKABLE void updateSelection(qreal x, qreal y);
+    Q_INVOKABLE void endSelection();
+    Q_INVOKABLE void clearSelection();
+    Q_INVOKABLE bool selectWordAt(qreal x, qreal y);
+    Q_INVOKABLE void selectAll();
+    Q_INVOKABLE QString selectedText() const;
 
     void paint(QPainter *painter) override;
 
@@ -107,6 +135,10 @@ signals:
     void defaultBackgroundChanged();
     void isDarkThemeChanged();
     void paletteColorsChanged();
+    void selectionAppearanceChanged();
+    void linkColorsChanged();
+    void selectionChanged();
+    void hoveredUrlChanged();
     void cursorStyleChanged();
     void cursorBlinkChanged();
     void cursorVisibleChanged();
@@ -119,7 +151,30 @@ private slots:
     void onSessionGridChanged();
 
 private:
+    struct UrlMatch {
+        int row = -1;
+        int startCol = -1;
+        int endCol = -1;
+        QString url;
+
+        bool isValid() const { return row >= 0 && startCol >= 0 && endCol > startCol && !url.isEmpty(); }
+        bool contains(int targetRow, int targetCol) const
+        {
+            return targetRow == row && targetCol >= startCol && targetCol < endCol;
+        }
+    };
+
     void recomputeMetrics();
+    QPoint cellAt(qreal x, qreal y, int cols, int rows, bool clampToBounds) const;
+    UrlMatch hoveredMatchAt(qreal x, qreal y) const;
+    UrlMatch urlMatchAt(int row, int col, const PierCell *cells, int cols, int rows) const;
+    QPoint normalizedSelectionStart() const;
+    QPoint normalizedSelectionEnd() const;
+    bool isCellSelected(int row, int col) const;
+    bool isWideLeadingCell(const PierCell *cells, int row, int col, int cols) const;
+    QString lineText(const PierCell *cells, int row, int cols) const;
+    QString selectedRowText(const PierCell *cells, int row, int cols, int startCol, int endCol) const;
+    void setHoveredUrlMatch(const UrlMatch &match);
 
     PierTerminalSession *m_session = nullptr;
     QFont m_font;
@@ -127,6 +182,9 @@ private:
     QColor m_defaultBg = Qt::transparent;
     bool m_isDarkTheme = true;
     QList<QColor> m_palette; // 16 ANSI colors from QML; empty = use built-in
+    QColor m_selectionBg = QColor(53, 116, 240, 46);
+    QColor m_linkFg = QColor(53, 116, 240);
+    QColor m_linkHoverFg = QColor(79, 138, 255);
     int m_cursorStyle = 0;   // 0=Block, 1=Beam, 2=Underline
     bool m_cursorBlink = true;
     bool m_cursorVisible = true;
@@ -135,4 +193,9 @@ private:
     qreal m_cellWidth = 0;
     qreal m_cellHeight = 0;
     qreal m_ascent = 0;
+    QPoint m_selectionAnchor = QPoint(-1, -1);
+    QPoint m_selectionExtent = QPoint(-1, -1);
+    bool m_selectionActive = false;
+    UrlMatch m_hoveredMatch;
+    QString m_hoveredUrl;
 };

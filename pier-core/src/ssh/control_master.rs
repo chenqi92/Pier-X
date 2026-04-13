@@ -14,6 +14,8 @@ use std::process::Command;
 use std::thread;
 use std::time::{Duration, Instant};
 
+use crate::process_util::configure_background_command;
+
 /// A ControlMaster session bound to a specific host.
 pub struct ControlMasterSession {
     socket_path: PathBuf,
@@ -62,18 +64,20 @@ impl ControlMasterSession {
         if self.socket_path.exists() {
             return Ok(());
         }
-        let status = Command::new("ssh")
-            .args([
-                "-o", &format!("ControlMaster=auto"),
-                "-o", &format!("ControlPath={}", self.socket_path.display()),
-                "-o", "ControlPersist=600",
-                "-o", "StrictHostKeyChecking=no",
-                "-o", "BatchMode=yes",
-                "-o", "ConnectTimeout=10",
-                "-p", &self.port.to_string(),
-                "-N", "-f", // No command, fork to background
-                &format!("{}@{}", self.user, self.host),
-            ])
+        let mut command = Command::new("ssh");
+        command.args([
+            "-o", &format!("ControlMaster=auto"),
+            "-o", &format!("ControlPath={}", self.socket_path.display()),
+            "-o", "ControlPersist=600",
+            "-o", "StrictHostKeyChecking=no",
+            "-o", "BatchMode=yes",
+            "-o", "ConnectTimeout=10",
+            "-p", &self.port.to_string(),
+            "-N", "-f", // No command, fork to background
+            &format!("{}@{}", self.user, self.host),
+        ]);
+        configure_background_command(&mut command);
+        let status = command
             .status()
             .map_err(|e| format!("failed to spawn ssh ControlMaster: {}", e))?;
 
@@ -91,31 +95,32 @@ impl ControlMasterSession {
         if !self.socket_path.exists() {
             return false;
         }
-        Command::new("ssh")
-            .args([
-                "-o", &format!("ControlPath={}", self.socket_path.display()),
-                "-O", "check",
-                &format!("{}@{}", self.user, self.host),
-            ])
-            .stdout(std::process::Stdio::null())
-            .stderr(std::process::Stdio::null())
-            .status()
-            .map(|s| s.success())
-            .unwrap_or(false)
+        let mut command = Command::new("ssh");
+        command.args([
+            "-o", &format!("ControlPath={}", self.socket_path.display()),
+            "-O", "check",
+            &format!("{}@{}", self.user, self.host),
+        ]);
+        command.stdout(std::process::Stdio::null());
+        command.stderr(std::process::Stdio::null());
+        configure_background_command(&mut command);
+        command.status().map(|s| s.success()).unwrap_or(false)
     }
 
     /// Execute a command through the ControlMaster socket.
     /// Returns (exit_code, stdout).
     pub fn exec(&self, command: &str) -> Result<(i32, String), String> {
-        let output = Command::new("ssh")
-            .args([
-                "-o", &format!("ControlPath={}", self.socket_path.display()),
-                "-o", "StrictHostKeyChecking=no",
-                "-o", "BatchMode=yes",
-                "-p", &self.port.to_string(),
-                &format!("{}@{}", self.user, self.host),
-                command,
-            ])
+        let mut process = Command::new("ssh");
+        process.args([
+            "-o", &format!("ControlPath={}", self.socket_path.display()),
+            "-o", "StrictHostKeyChecking=no",
+            "-o", "BatchMode=yes",
+            "-p", &self.port.to_string(),
+            &format!("{}@{}", self.user, self.host),
+            command,
+        ]);
+        configure_background_command(&mut process);
+        let output = process
             .output()
             .map_err(|e| format!("ssh exec failed: {}", e))?;
 

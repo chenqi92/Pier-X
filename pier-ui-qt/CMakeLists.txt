@@ -315,3 +315,20 @@ install(TARGETS pier-x
     BUNDLE  DESTINATION .
     RUNTIME DESTINATION bin
 )
+
+if(WIN32)
+    get_target_property(QT_QMAKE_EXECUTABLE Qt6::qmake IMPORTED_LOCATION)
+    get_filename_component(QT_BIN_DIR "${QT_QMAKE_EXECUTABLE}" DIRECTORY)
+    find_program(WINDEPLOYQT_EXECUTABLE windeployqt HINTS "${QT_BIN_DIR}" REQUIRED)
+
+    add_custom_command(TARGET pier-x POST_BUILD
+        COMMAND "${WINDEPLOYQT_EXECUTABLE}"
+            "$<$<CONFIG:Debug>:--debug>"
+            "$<$<NOT:$<CONFIG:Debug>>:--release>"
+            --qmldir "${CMAKE_CURRENT_SOURCE_DIR}/qml"
+            --dir "$<TARGET_FILE_DIR:pier-x>"
+            "$<TARGET_FILE:pier-x>"
+        COMMENT "Deploying Qt runtime for $<CONFIG> build"
+        COMMAND_EXPAND_LISTS
+    )
+endif()

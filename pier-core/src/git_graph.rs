@@ -12,6 +12,8 @@ use serde::{Deserialize, Serialize};
 use std::collections::{HashMap, HashSet};
 use std::path::Path;
 
+use crate::process_util::configure_background_command;
+
 // ═══════════════════════════════════════════════════════════
 // Data types
 // ═══════════════════════════════════════════════════════════
@@ -135,6 +137,7 @@ pub fn graph_log(
     cmd.current_dir(repo_path);
     cmd.args(["log", "--topo-order", "--date-order"]);
     cmd.args([&format!("--format={}", format_str)]);
+    configure_background_command(&mut cmd);
 
     // Limit & skip
     cmd.arg(format!("-n{}", limit + skip)); // fetch enough to skip + limit

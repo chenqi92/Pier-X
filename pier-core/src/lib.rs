@@ -23,6 +23,7 @@ pub mod ffi;
 pub mod git_graph;
 pub mod markdown;
 pub mod paths;
+pub(crate) mod process_util;
 pub mod services;
 pub mod ssh;
 pub mod terminal;

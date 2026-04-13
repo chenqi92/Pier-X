@@ -23,6 +23,8 @@ use std::process::Command;
 
 use serde::{Deserialize, Serialize};
 
+use crate::process_util::configure_background_command;
+
 // ─────────────────────────────────────────────────────────
 // Error
 // ──���──────────────────────────────────────────────────────
@@ -219,9 +221,11 @@ impl GitClient {
             )));
         }
 
-        let output = Command::new("git")
-            .current_dir(p)
-            .args(["rev-parse", "--show-toplevel"])
+        let mut command = Command::new("git");
+        command.current_dir(p);
+        command.args(["rev-parse", "--show-toplevel"]);
+        configure_background_command(&mut command);
+        let output = command
             .output()
             .map_err(|e| GitError::Command(format!("failed to run git: {}", e)))?;
 
@@ -729,13 +733,13 @@ impl GitClient {
 
     /// Run a git command and return stdout as a String.
     fn git(&self, args: &[&str]) -> Result<String, GitError> {
-        let output = Command::new("git")
-            .current_dir(&self.repo_path)
-            .args(args)
-            .output()
-            .map_err(|e| {
-                GitError::Command(format!("failed to run git {}: {}", args.join(" "), e))
-            })?;
+        let mut command = Command::new("git");
+        command.current_dir(&self.repo_path);
+        command.args(args);
+        configure_background_command(&mut command);
+        let output = command.output().map_err(|e| {
+            GitError::Command(format!("failed to run git {}: {}", args.join(" "), e))
+        })?;
 
         if !output.status.success() {
             let stderr = String::from_utf8_lossy(&output.stderr);

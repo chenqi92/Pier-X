@@ -14,6 +14,8 @@ use std::time::Instant;
 
 use serde::{Deserialize, Serialize};
 
+use crate::process_util::configure_background_command;
+
 /// Errors surfaced by the SQLite client.
 #[allow(missing_docs)]
 #[derive(Debug, thiserror::Error)]
@@ -54,9 +56,11 @@ impl SqliteClient {
             )));
         }
         // Verify it's a valid sqlite database
-        let output = Command::new("sqlite3")
-            .arg(path)
-            .arg("SELECT sqlite_version();")
+        let mut command = Command::new("sqlite3");
+        command.arg(path);
+        command.arg("SELECT sqlite_version();");
+        configure_background_command(&mut command);
+        let output = command
             .output()
             .map_err(|e| SqliteError::Command(format!("sqlite3 not found: {}", e)))?;
 
@@ -156,6 +160,7 @@ impl SqliteClient {
         let mut cmd = Command::new("sqlite3");
         cmd.arg(self.db_path.to_str().unwrap_or(""));
         cmd.args(args);
+        configure_background_command(&mut cmd);
         let output = cmd
             .output()
             .map_err(|e| SqliteError::Command(format!("sqlite3: {}", e)))?;

@@ -6,6 +6,8 @@
 #include <QFontMetricsF>
 #include <QPainter>
 #include <QRegularExpression>
+#include <QStringList>
+#include <QVector>
 
 namespace {
 
@@ -16,54 +18,35 @@ QColor ansiIndexToColor(uint8_t idx, const QColor &defaultFg, bool isDark,
                         const QList<QColor> &palette)
 {
     if (idx < 16) {
-        // Custom palette takes priority.
         if (palette.size() >= 16)
             return palette[idx];
         if (isDark) {
             static const QColor darkPalette[16] = {
-                QColor(0x00, 0x00, 0x00), // 0  black
-                QColor(0xCD, 0x00, 0x00), // 1  red
-                QColor(0x00, 0xCD, 0x00), // 2  green
-                QColor(0xCD, 0xCD, 0x00), // 3  yellow
-                QColor(0x3B, 0x78, 0xFF), // 4  blue  (tuned for dark theme)
-                QColor(0xCD, 0x00, 0xCD), // 5  magenta
-                QColor(0x00, 0xCD, 0xCD), // 6  cyan
-                QColor(0xE5, 0xE5, 0xE5), // 7  white
-                QColor(0x7F, 0x7F, 0x7F), // 8  bright black
-                QColor(0xFF, 0x00, 0x00), // 9  bright red
-                QColor(0x00, 0xFF, 0x00), // 10 bright green
-                QColor(0xFF, 0xFF, 0x00), // 11 bright yellow
-                QColor(0x5C, 0x5C, 0xFF), // 12 bright blue
-                QColor(0xFF, 0x00, 0xFF), // 13 bright magenta
-                QColor(0x00, 0xFF, 0xFF), // 14 bright cyan
-                QColor(0xFF, 0xFF, 0xFF), // 15 bright white
+                QColor(0x00, 0x00, 0x00), QColor(0xCD, 0x00, 0x00),
+                QColor(0x00, 0xCD, 0x00), QColor(0xCD, 0xCD, 0x00),
+                QColor(0x3B, 0x78, 0xFF), QColor(0xCD, 0x00, 0xCD),
+                QColor(0x00, 0xCD, 0xCD), QColor(0xE5, 0xE5, 0xE5),
+                QColor(0x7F, 0x7F, 0x7F), QColor(0xFF, 0x00, 0x00),
+                QColor(0x00, 0xFF, 0x00), QColor(0xFF, 0xFF, 0x00),
+                QColor(0x5C, 0x5C, 0xFF), QColor(0xFF, 0x00, 0xFF),
+                QColor(0x00, 0xFF, 0xFF), QColor(0xFF, 0xFF, 0xFF),
             };
             return darkPalette[idx];
-        } else {
-            static const QColor lightPalette[16] = {
-                QColor(0x00, 0x00, 0x00), // 0  black
-                QColor(0xCD, 0x00, 0x00), // 1  red
-                QColor(0x00, 0xA0, 0x00), // 2  green
-                QColor(0xA0, 0x70, 0x00), // 3  yellow
-                QColor(0x00, 0x00, 0xEE), // 4  blue
-                QColor(0xCD, 0x00, 0xCD), // 5  magenta
-                QColor(0x00, 0xA0, 0xA0), // 6  cyan
-                QColor(0x66, 0x66, 0x66), // 7  white (darker for light bg)
-                QColor(0x55, 0x55, 0x55), // 8  bright black
-                QColor(0xFF, 0x00, 0x00), // 9  bright red
-                QColor(0x00, 0xCD, 0x00), // 10 bright green
-                QColor(0xCD, 0xCD, 0x00), // 11 bright yellow
-                QColor(0x5C, 0x5C, 0xFF), // 12 bright blue
-                QColor(0xFF, 0x00, 0xFF), // 13 bright magenta
-                QColor(0x00, 0xCD, 0xCD), // 14 bright cyan
-                QColor(0x44, 0x44, 0x44), // 15 bright white (darker for light bg)
-            };
-            return lightPalette[idx];
         }
+
+        static const QColor lightPalette[16] = {
+            QColor(0x00, 0x00, 0x00), QColor(0xCD, 0x00, 0x00),
+            QColor(0x00, 0xA0, 0x00), QColor(0xA0, 0x70, 0x00),
+            QColor(0x00, 0x00, 0xEE), QColor(0xCD, 0x00, 0xCD),
+            QColor(0x00, 0xA0, 0xA0), QColor(0x66, 0x66, 0x66),
+            QColor(0x55, 0x55, 0x55), QColor(0xFF, 0x00, 0x00),
+            QColor(0x00, 0xCD, 0x00), QColor(0xCD, 0xCD, 0x00),
+            QColor(0x5C, 0x5C, 0xFF), QColor(0xFF, 0x00, 0xFF),
+            QColor(0x00, 0xCD, 0xCD), QColor(0x44, 0x44, 0x44),
+        };
+        return lightPalette[idx];
     }
-    // 256-color cube + grayscale ramp. Good-enough approximations;
-    // the exact xterm palette has subtle variations that no one
-    // will notice during normal shell usage.
+
     if (idx >= 16 && idx <= 231) {
         const int n = idx - 16;
         const int r = (n / 36) % 6;
@@ -101,27 +84,62 @@ QColor cellBackground(const PierCell &c, const QColor &defaultBg, bool isDark,
     }
 }
 
+bool isWideCodepoint(uint32_t cp)
+{
+    return (cp >= 0x1100 && cp <= 0x115F)
+        || cp == 0x2329 || cp == 0x232A
+        || (cp >= 0x2E80 && cp <= 0x303E)
+        || (cp >= 0x3040 && cp <= 0x33BF)
+        || (cp >= 0x3400 && cp <= 0x4DBF)
+        || (cp >= 0x4E00 && cp <= 0x9FFF)
+        || (cp >= 0xA000 && cp <= 0xA4CF)
+        || (cp >= 0xAC00 && cp <= 0xD7AF)
+        || (cp >= 0xF900 && cp <= 0xFAFF)
+        || (cp >= 0xFE10 && cp <= 0xFE6F)
+        || (cp >= 0xFF01 && cp <= 0xFF60)
+        || (cp >= 0xFFE0 && cp <= 0xFFE6)
+        || (cp >= 0x20000 && cp <= 0x2FFFF)
+        || (cp >= 0x30000 && cp <= 0x3FFFF);
+}
+
+QString trimTrailingUrlPunctuation(QString value)
+{
+    static const QString trailing = QStringLiteral(".,;:!?");
+    while (!value.isEmpty() && trailing.contains(value.back())) {
+        value.chop(1);
+    }
+    return value;
+}
+
+bool isWordSelectionChar(QChar ch)
+{
+    if (ch.isLetterOrNumber())
+        return true;
+    static const QString extras = QStringLiteral("_-./\\:@%+=~#$");
+    return extras.contains(ch);
+}
+
+QString cellString(uint32_t codepoint)
+{
+    if (codepoint == 0)
+        return QString();
+    const char32_t cp = static_cast<char32_t>(codepoint);
+    return QString::fromUcs4(&cp, 1);
+}
+
 } // namespace
 
 PierTerminalGrid::PierTerminalGrid(QQuickItem *parent)
     : QQuickPaintedItem(parent)
 {
-    // Start with a reasonable fallback font. QML typically overrides
-    // this via the `font` property before the first frame.
-    m_font = QFont("JetBrains Mono");
+    m_font = QFont(QStringLiteral("JetBrains Mono"));
     m_font.setPointSize(13);
     m_font.setStyleHint(QFont::Monospace);
     recomputeMetrics();
 
-    // QPainter + antialiasing is the default but cell alignment is
-    // critical — we want subpixel positions snapped to integer
-    // pixels so glyph edges don't shimmer on repaint.
     setAntialiasing(true);
-    // Children don't need to paint over us; the item paints the
-    // entire rect every frame.
     setFlag(ItemHasContents, true);
 
-    // Cursor blink timer — 530ms matches typical terminal blink rate.
     m_blinkTimer.setInterval(530);
     connect(&m_blinkTimer, &QTimer::timeout, this, [this]() {
         m_cursorBlinkVisible = !m_cursorBlinkVisible;
@@ -140,6 +158,8 @@ void PierTerminalGrid::setSession(PierTerminalSession *s)
         disconnect(m_session, nullptr, this, nullptr);
     }
     m_session = s;
+    clearSelection();
+    clearHoveredUrl();
     if (m_session) {
         connect(m_session, &PierTerminalSession::gridChanged,
                 this, &PierTerminalGrid::onSessionGridChanged);
@@ -193,6 +213,41 @@ void PierTerminalGrid::setPaletteColors(const QList<QColor> &colors)
     update();
 }
 
+void PierTerminalGrid::setSelectionBackground(const QColor &color)
+{
+    if (m_selectionBg == color)
+        return;
+    m_selectionBg = color;
+    emit selectionAppearanceChanged();
+    update();
+}
+
+void PierTerminalGrid::setLinkForeground(const QColor &color)
+{
+    if (m_linkFg == color)
+        return;
+    m_linkFg = color;
+    emit linkColorsChanged();
+    update();
+}
+
+void PierTerminalGrid::setLinkHoverForeground(const QColor &color)
+{
+    if (m_linkHoverFg == color)
+        return;
+    m_linkHoverFg = color;
+    emit linkColorsChanged();
+    update();
+}
+
+bool PierTerminalGrid::hasSelection() const
+{
+    return m_selectionAnchor.x() >= 0
+        && m_selectionAnchor.y() >= 0
+        && m_selectionExtent.x() >= 0
+        && m_selectionExtent.y() >= 0;
+}
+
 void PierTerminalGrid::setCursorStyle(int style)
 {
     style = qBound(0, style, 2);
@@ -229,19 +284,12 @@ void PierTerminalGrid::geometryChange(const QRectF &newGeometry, const QRectF &o
 {
     QQuickPaintedItem::geometryChange(newGeometry, oldGeometry);
     if (newGeometry.size() != oldGeometry.size()) {
-        // Defer the resize to a slot so we don't re-enter scene graph
-        // from inside a geometry callback. fitToViewport uses current
-        // cell metrics so it's correct as soon as Qt finishes the
-        // geometry event.
         fitToViewport();
     }
 }
 
 void PierTerminalGrid::onSessionGridChanged()
 {
-    // The session updated its snapshot on the main thread already.
-    // All we have to do is ask Qt to repaint; Qt coalesces multiple
-    // update() calls between frames into a single paint() call.
     update();
 }
 
@@ -253,6 +301,8 @@ void PierTerminalGrid::fitToViewport()
     const int cols = qMax(1, int(width() / m_cellWidth));
     const int rows = qMax(1, int(height() / m_cellHeight));
     if (cols != m_session->cols() || rows != m_session->rows()) {
+        clearSelection();
+        clearHoveredUrl();
         m_session->resize(cols, rows);
         emit metricsChanged();
     }
@@ -261,21 +311,363 @@ void PierTerminalGrid::fitToViewport()
 void PierTerminalGrid::recomputeMetrics()
 {
     const QFontMetricsF fm(m_font);
-    // horizontalAdvance("M") gives the width of a typical wide
-    // monospace glyph on every platform. Use the average character
-    // width as a tiebreaker for fonts whose 'M' is narrower than
-    // the nominal monospace width (rare but possible with variable
-    // weight fonts).
     const qreal mWidth = fm.horizontalAdvance(QChar('M'));
     m_cellWidth = mWidth > 0 ? mWidth : fm.averageCharWidth();
     m_cellHeight = fm.height();
     m_ascent = fm.ascent();
 }
 
+QPoint PierTerminalGrid::cellAt(qreal x, qreal y, int cols, int rows, bool clampToBounds) const
+{
+    if (cols <= 0 || rows <= 0 || m_cellWidth <= 0 || m_cellHeight <= 0) {
+        return QPoint(-1, -1);
+    }
+
+    int col = static_cast<int>(x / m_cellWidth);
+    int row = static_cast<int>(y / m_cellHeight);
+    if (clampToBounds) {
+        col = qBound(0, col, cols - 1);
+        row = qBound(0, row, rows - 1);
+        return QPoint(col, row);
+    }
+    if (col < 0 || col >= cols || row < 0 || row >= rows) {
+        return QPoint(-1, -1);
+    }
+    return QPoint(col, row);
+}
+
+QString PierTerminalGrid::lineText(const PierCell *cells, int row, int cols) const
+{
+    QString text;
+    text.reserve(cols);
+    for (int col = 0; col < cols; ++col) {
+        const uint32_t ch = cells[row * cols + col].ch;
+        if (ch == 0) {
+            text.append(QLatin1Char(' '));
+        } else if (ch <= 0xFFFF) {
+            text.append(QChar(static_cast<char16_t>(ch)));
+        } else {
+            text.append(QChar(u'?'));
+        }
+    }
+    return text;
+}
+
+bool PierTerminalGrid::isWideLeadingCell(const PierCell *cells, int row, int col, int cols) const
+{
+    if (!cells || col < 0 || col + 1 >= cols || row < 0) {
+        return false;
+    }
+    const PierCell &current = cells[row * cols + col];
+    const PierCell &next = cells[row * cols + col + 1];
+    return current.ch != 0 && next.ch == 0 && isWideCodepoint(current.ch);
+}
+
+PierTerminalGrid::UrlMatch PierTerminalGrid::urlMatchAt(int row, int col,
+                                                        const PierCell *cells,
+                                                        int cols, int rows) const
+{
+    if (!cells || row < 0 || row >= rows || col < 0 || col >= cols) {
+        return {};
+    }
+
+    static const QRegularExpression urlRegex(
+        QStringLiteral(R"(https?://[^\s"'<>\)\]]+)"));
+
+    const QString rowText = lineText(cells, row, cols);
+    QRegularExpressionMatchIterator it = urlRegex.globalMatch(rowText);
+    while (it.hasNext()) {
+        const QRegularExpressionMatch match = it.next();
+        QString url = trimTrailingUrlPunctuation(match.captured(0));
+        if (url.isEmpty())
+            continue;
+        const int startCol = match.capturedStart();
+        const int endCol = startCol + url.size();
+        if (col >= startCol && col < endCol) {
+            return {row, startCol, endCol, url};
+        }
+    }
+
+    return {};
+}
+
+PierTerminalGrid::UrlMatch PierTerminalGrid::hoveredMatchAt(qreal x, qreal y) const
+{
+    if (!m_session || m_cellWidth <= 0 || m_cellHeight <= 0) {
+        return {};
+    }
+
+    int cols = 0;
+    int rows = 0;
+    const PierCell *cells = m_session->rawCells(&cols, &rows);
+    if (!cells || cols <= 0 || rows <= 0) {
+        return {};
+    }
+
+    const QPoint pos = cellAt(x, y, cols, rows, false);
+    if (pos.x() < 0 || pos.y() < 0) {
+        return {};
+    }
+    return urlMatchAt(pos.y(), pos.x(), cells, cols, rows);
+}
+
+void PierTerminalGrid::setHoveredUrlMatch(const UrlMatch &match)
+{
+    const bool sameMatch = m_hoveredMatch.row == match.row
+        && m_hoveredMatch.startCol == match.startCol
+        && m_hoveredMatch.endCol == match.endCol
+        && m_hoveredMatch.url == match.url;
+    if (sameMatch) {
+        return;
+    }
+
+    m_hoveredMatch = match;
+    m_hoveredUrl = match.url;
+    emit hoveredUrlChanged();
+    update();
+}
+
+void PierTerminalGrid::updateHoveredLink(qreal x, qreal y)
+{
+    setHoveredUrlMatch(hoveredMatchAt(x, y));
+}
+
+void PierTerminalGrid::clearHoveredUrl()
+{
+    setHoveredUrlMatch({});
+}
+
+QString PierTerminalGrid::urlAt(qreal x, qreal y) const
+{
+    return hoveredMatchAt(x, y).url;
+}
+
+QPoint PierTerminalGrid::normalizedSelectionStart() const
+{
+    if (!hasSelection())
+        return QPoint(-1, -1);
+    if (m_selectionAnchor.y() < m_selectionExtent.y())
+        return m_selectionAnchor;
+    if (m_selectionAnchor.y() > m_selectionExtent.y())
+        return m_selectionExtent;
+    return m_selectionAnchor.x() <= m_selectionExtent.x() ? m_selectionAnchor : m_selectionExtent;
+}
+
+QPoint PierTerminalGrid::normalizedSelectionEnd() const
+{
+    if (!hasSelection())
+        return QPoint(-1, -1);
+    if (m_selectionAnchor.y() > m_selectionExtent.y())
+        return m_selectionAnchor;
+    if (m_selectionAnchor.y() < m_selectionExtent.y())
+        return m_selectionExtent;
+    return m_selectionAnchor.x() >= m_selectionExtent.x() ? m_selectionAnchor : m_selectionExtent;
+}
+
+bool PierTerminalGrid::isCellSelected(int row, int col) const
+{
+    if (!hasSelection())
+        return false;
+
+    const QPoint start = normalizedSelectionStart();
+    const QPoint end = normalizedSelectionEnd();
+    if (row < start.y() || row > end.y()) {
+        return false;
+    }
+    if (start.y() == end.y()) {
+        return row == start.y() && col >= start.x() && col <= end.x();
+    }
+    if (row == start.y())
+        return col >= start.x();
+    if (row == end.y())
+        return col <= end.x();
+    return true;
+}
+
+void PierTerminalGrid::beginSelection(qreal x, qreal y)
+{
+    if (!m_session)
+        return;
+
+    int cols = 0;
+    int rows = 0;
+    const PierCell *cells = m_session->rawCells(&cols, &rows);
+    if (!cells || cols <= 0 || rows <= 0)
+        return;
+
+    const QPoint pos = cellAt(x, y, cols, rows, true);
+    if (pos.x() < 0 || pos.y() < 0)
+        return;
+
+    const bool changed = m_selectionAnchor != pos || m_selectionExtent != pos || !m_selectionActive;
+    m_selectionAnchor = pos;
+    m_selectionExtent = pos;
+    m_selectionActive = true;
+    if (changed) {
+        emit selectionChanged();
+        update();
+    }
+}
+
+void PierTerminalGrid::updateSelection(qreal x, qreal y)
+{
+    if (!m_selectionActive || !m_session)
+        return;
+
+    int cols = 0;
+    int rows = 0;
+    const PierCell *cells = m_session->rawCells(&cols, &rows);
+    if (!cells || cols <= 0 || rows <= 0)
+        return;
+
+    const QPoint pos = cellAt(x, y, cols, rows, true);
+    if (pos.x() < 0 || pos.y() < 0 || pos == m_selectionExtent)
+        return;
+
+    m_selectionExtent = pos;
+    emit selectionChanged();
+    update();
+}
+
+void PierTerminalGrid::endSelection()
+{
+    m_selectionActive = false;
+}
+
+void PierTerminalGrid::clearSelection()
+{
+    if (!hasSelection() && !m_selectionActive)
+        return;
+
+    m_selectionActive = false;
+    m_selectionAnchor = QPoint(-1, -1);
+    m_selectionExtent = QPoint(-1, -1);
+    emit selectionChanged();
+    update();
+}
+
+bool PierTerminalGrid::selectWordAt(qreal x, qreal y)
+{
+    if (!m_session)
+        return false;
+
+    int cols = 0;
+    int rows = 0;
+    const PierCell *cells = m_session->rawCells(&cols, &rows);
+    if (!cells || cols <= 0 || rows <= 0)
+        return false;
+
+    const QPoint pos = cellAt(x, y, cols, rows, false);
+    if (pos.x() < 0 || pos.y() < 0)
+        return false;
+
+    const UrlMatch url = urlMatchAt(pos.y(), pos.x(), cells, cols, rows);
+    if (url.isValid()) {
+        m_selectionAnchor = QPoint(url.startCol, url.row);
+        m_selectionExtent = QPoint(url.endCol - 1, url.row);
+        m_selectionActive = false;
+        emit selectionChanged();
+        update();
+        return true;
+    }
+
+    const QString rowText = lineText(cells, pos.y(), cols);
+    if (pos.x() >= rowText.size())
+        return false;
+
+    const QChar clicked = rowText.at(pos.x());
+    if (clicked.isSpace()) {
+        clearSelection();
+        return false;
+    }
+
+    int start = pos.x();
+    int end = pos.x();
+    if (isWordSelectionChar(clicked)) {
+        while (start > 0 && isWordSelectionChar(rowText.at(start - 1)))
+            --start;
+        while (end + 1 < rowText.size() && isWordSelectionChar(rowText.at(end + 1)))
+            ++end;
+    }
+
+    m_selectionAnchor = QPoint(start, pos.y());
+    m_selectionExtent = QPoint(end, pos.y());
+    m_selectionActive = false;
+    emit selectionChanged();
+    update();
+    return true;
+}
+
+void PierTerminalGrid::selectAll()
+{
+    if (!m_session)
+        return;
+
+    int cols = 0;
+    int rows = 0;
+    const PierCell *cells = m_session->rawCells(&cols, &rows);
+    if (!cells || cols <= 0 || rows <= 0)
+        return;
+
+    m_selectionAnchor = QPoint(0, 0);
+    m_selectionExtent = QPoint(cols - 1, rows - 1);
+    m_selectionActive = false;
+    emit selectionChanged();
+    update();
+}
+
+QString PierTerminalGrid::selectedRowText(const PierCell *cells, int row, int cols,
+                                          int startCol, int endCol) const
+{
+    QString text;
+    text.reserve(qMax(0, endCol - startCol + 1));
+
+    for (int col = startCol; col <= endCol; ++col) {
+        const PierCell &cell = cells[row * cols + col];
+        if (cell.ch == 0) {
+            if (col > 0 && isWideLeadingCell(cells, row, col - 1, cols))
+                continue;
+            text.append(QLatin1Char(' '));
+            continue;
+        }
+        text.append(cellString(cell.ch));
+    }
+
+    while (!text.isEmpty() && text.back() == QLatin1Char(' ')) {
+        text.chop(1);
+    }
+    return text;
+}
+
+QString PierTerminalGrid::selectedText() const
+{
+    if (!hasSelection() || !m_session)
+        return {};
+
+    int cols = 0;
+    int rows = 0;
+    const PierCell *cells = m_session->rawCells(&cols, &rows);
+    if (!cells || cols <= 0 || rows <= 0)
+        return {};
+
+    const QPoint start = normalizedSelectionStart();
+    const QPoint end = normalizedSelectionEnd();
+
+    QStringList lines;
+    for (int row = start.y(); row <= end.y(); ++row) {
+        const int firstCol = row == start.y() ? start.x() : 0;
+        const int lastCol = row == end.y() ? end.x() : cols - 1;
+        lines.append(selectedRowText(cells, row, cols, firstCol, lastCol));
+    }
+
+    while (!lines.isEmpty() && lines.back().isEmpty()) {
+        lines.removeLast();
+    }
+    return lines.join(QLatin1Char('\n'));
+}
+
 void PierTerminalGrid::paint(QPainter *painter)
 {
-    // Fill the whole item background so the cell draws below don't
-    // need to clear individual cells themselves.
     painter->fillRect(boundingRect(), m_defaultBg);
 
     if (!m_session) {
@@ -291,90 +683,93 @@ void PierTerminalGrid::paint(QPainter *painter)
 
     painter->setFont(m_font);
 
-    // First pass: draw every non-default background cell. Doing all
-    // backgrounds before any glyphs lets QPainter batch without the
-    // glyph runs fighting for state.
     for (int row = 0; row < rows; ++row) {
         for (int col = 0; col < cols; ++col) {
-            const PierCell &c = cells[row * cols + col];
-            if (c.bg_kind == 0) continue;
-            const QColor bg = cellBackground(c, m_defaultBg, m_isDarkTheme, m_palette);
-            painter->fillRect(
-                QRectF(col * m_cellWidth, row * m_cellHeight, m_cellWidth, m_cellHeight),
-                bg);
+            const PierCell &cell = cells[row * cols + col];
+            if (cell.bg_kind == 0)
+                continue;
+            const QColor bg = cellBackground(cell, m_defaultBg, m_isDarkTheme, m_palette);
+            painter->fillRect(QRectF(col * m_cellWidth, row * m_cellHeight, m_cellWidth, m_cellHeight), bg);
         }
     }
 
-    // Second pass: glyphs.
-    for (int row = 0; row < rows; ++row) {
-        for (int col = 0; col < cols; ++col) {
-            const PierCell &c = cells[row * cols + col];
-            if (c.ch == 0 || c.ch == static_cast<uint32_t>(' ')) continue;
-            const QColor fg = cellForeground(c, m_defaultFg, m_isDarkTheme, m_palette);
-            painter->setPen(fg);
+    if (hasSelection()) {
+        for (int row = 0; row < rows; ++row) {
+            for (int col = 0; col < cols; ++col) {
+                if (!isCellSelected(row, col))
+                    continue;
+                painter->fillRect(QRectF(col * m_cellWidth, row * m_cellHeight, m_cellWidth, m_cellHeight),
+                                  m_selectionBg);
+            }
+        }
+    }
 
-            // Determine if this is a wide (CJK) character that spans 2 cells.
-            // Wide chars are followed by a placeholder cell with ch == 0.
-            bool isWide = false;
-            if (col + 1 < cols) {
-                const PierCell &next = cells[row * cols + col + 1];
-                // A wide char is detected when:
-                // 1. The codepoint is in CJK ranges, AND
-                // 2. The next cell is a zero-char placeholder
-                const uint32_t cp = c.ch;
-                if (next.ch == 0) {
-                    // CJK Unified Ideographs and common fullwidth ranges
-                    if ((cp >= 0x1100 && cp <= 0x115F) ||    // Hangul Jamo
-                        cp == 0x2329 || cp == 0x232A ||      // Angle brackets
-                        (cp >= 0x2E80 && cp <= 0x303E) ||    // CJK Radicals, Kangxi
-                        (cp >= 0x3040 && cp <= 0x33BF) ||    // Hiragana, Katakana, CJK compat
-                        (cp >= 0x3400 && cp <= 0x4DBF) ||    // CJK Extension A
-                        (cp >= 0x4E00 && cp <= 0x9FFF) ||    // CJK Unified Ideographs
-                        (cp >= 0xA000 && cp <= 0xA4CF) ||    // Yi
-                        (cp >= 0xAC00 && cp <= 0xD7AF) ||    // Hangul Syllables
-                        (cp >= 0xF900 && cp <= 0xFAFF) ||    // CJK Compatibility Ideographs
-                        (cp >= 0xFE10 && cp <= 0xFE6F) ||    // CJK Compat Forms, Halfwidth
-                        (cp >= 0xFF01 && cp <= 0xFF60) ||    // Fullwidth Latin
-                        (cp >= 0xFFE0 && cp <= 0xFFE6) ||    // Fullwidth Signs
-                        (cp >= 0x20000 && cp <= 0x2FFFF) ||  // CJK Extension B..
-                        (cp >= 0x30000 && cp <= 0x3FFFF))    // CJK Extension G..
-                    {
-                        isWide = true;
-                    }
+    static const QRegularExpression urlRegex(
+        QStringLiteral(R"(https?://[^\s"'<>\)\]]+)"));
+
+    for (int row = 0; row < rows; ++row) {
+        QVector<UrlMatch> urlMatches;
+        const QString rowText = lineText(cells, row, cols);
+        QRegularExpressionMatchIterator matchIt = urlRegex.globalMatch(rowText);
+        while (matchIt.hasNext()) {
+            const QRegularExpressionMatch match = matchIt.next();
+            const QString url = trimTrailingUrlPunctuation(match.captured(0));
+            if (url.isEmpty())
+                continue;
+            const int startCol = match.capturedStart();
+            const int endCol = startCol + static_cast<int>(url.size());
+            urlMatches.push_back({row, startCol, endCol, url});
+        }
+
+        for (int col = 0; col < cols; ++col) {
+            const PierCell &cell = cells[row * cols + col];
+            if (cell.ch == 0 || cell.ch == static_cast<uint32_t>(' '))
+                continue;
+
+            bool isWide = isWideLeadingCell(cells, row, col, cols);
+            const qreal drawWidth = isWide ? m_cellWidth * 2.0 : m_cellWidth;
+            const qreal x = col * m_cellWidth;
+            const qreal y = row * m_cellHeight + m_ascent;
+            const bool selected = isCellSelected(row, col);
+
+            bool isUrlCell = false;
+            bool isHoveredUrlCell = false;
+            for (const UrlMatch &match : urlMatches) {
+                if (match.contains(row, col)) {
+                    isUrlCell = true;
+                    isHoveredUrlCell = m_hoveredMatch.isValid() && m_hoveredMatch.contains(row, col);
+                    break;
                 }
             }
 
-            const qreal drawWidth = isWide ? m_cellWidth * 2.0 : m_cellWidth;
-
-            // Reverse video swaps fg/bg at paint time.
-            if (c.attrs & 0x04 /* reverse */) {
-                const QColor bg = cellBackground(c, m_defaultBg, m_isDarkTheme, m_palette);
-                painter->fillRect(
-                    QRectF(col * m_cellWidth, row * m_cellHeight, drawWidth, m_cellHeight),
-                    fg);
-                painter->setPen(bg);
+            QColor fg = cellForeground(cell, m_defaultFg, m_isDarkTheme, m_palette);
+            if (isUrlCell) {
+                fg = isHoveredUrlCell ? m_linkHoverFg : m_linkFg;
             }
 
-            const char32_t cp = static_cast<char32_t>(c.ch);
-            const QString glyph = QString::fromUcs4(&cp, 1);
-            const qreal x = col * m_cellWidth;
-            const qreal y = row * m_cellHeight + m_ascent;
+            if ((cell.attrs & 0x04) && !selected) {
+                const QColor bg = cellBackground(cell, m_defaultBg, m_isDarkTheme, m_palette);
+                painter->fillRect(QRectF(x, row * m_cellHeight, drawWidth, m_cellHeight), fg);
+                painter->setPen(bg);
+            } else {
+                painter->setPen(fg);
+            }
+
+            const QString glyph = cellString(cell.ch);
             painter->drawText(QPointF(x, y), glyph);
 
-            if (c.attrs & 0x02 /* underline */) {
-                const qreal uy = row * m_cellHeight + m_cellHeight - 1;
-                painter->drawLine(QPointF(x, uy), QPointF(x + drawWidth, uy));
+            if ((cell.attrs & 0x02) || isUrlCell) {
+                const qreal underlineY = row * m_cellHeight + m_cellHeight - 1;
+                painter->drawLine(QPointF(x, underlineY),
+                                  QPointF(x + drawWidth, underlineY));
             }
 
-            // Skip the trailing placeholder cell for wide characters
             if (isWide) {
                 ++col;
             }
         }
     }
 
-    // Cursor — drawn last so it's on top of any cell content.
-    // Supports Block, Beam, and Underline styles with optional blink.
     const int cx = m_session->cursorX();
     const int cy = m_session->cursorY();
     if (m_cursorVisible
@@ -385,62 +780,15 @@ void PierTerminalGrid::paint(QPainter *painter)
         const qreal y0 = cy * m_cellHeight;
 
         switch (m_cursorStyle) {
-        case 1: // Beam
+        case 1:
             painter->fillRect(QRectF(x0, y0, 2.0, m_cellHeight), cursorColor);
             break;
-        case 2: // Underline
+        case 2:
             painter->fillRect(QRectF(x0, y0 + m_cellHeight - 2.0, m_cellWidth, 2.0), cursorColor);
             break;
-        default: // Block
+        default:
             painter->fillRect(QRectF(x0, y0, m_cellWidth, m_cellHeight), cursorColor);
             break;
         }
     }
-}
-
-QString PierTerminalGrid::urlAt(qreal x, qreal y) const
-{
-    if (!m_session || m_cellWidth <= 0 || m_cellHeight <= 0) {
-        return QString();
-    }
-
-    int cols = 0;
-    int rows = 0;
-    const PierCell *cells = m_session->rawCells(&cols, &rows);
-    if (!cells || cols <= 0 || rows <= 0) {
-        return QString();
-    }
-
-    const int col = static_cast<int>(x / m_cellWidth);
-    const int row = static_cast<int>(y / m_cellHeight);
-
-    if (col < 0 || col >= cols || row < 0 || row >= rows) {
-        return QString();
-    }
-
-    // Extract the full text of the line
-    QString lineText;
-    lineText.reserve(cols);
-    for (int c = 0; c < cols; ++c) {
-        uint32_t ch = cells[row * cols + c].ch;
-        if (ch == 0) {
-            lineText.append(QLatin1Char(' '));
-        } else {
-            lineText.append(QChar(static_cast<char32_t>(ch)));
-        }
-    }
-
-    // Match HTTP/HTTPS URLs flexibly
-    // Simplistic regex matching http:// or https:// followed by non-whitespace/quotes/brackets
-    static const QRegularExpression urlRegex("https?://[^\\s\"'<>]+");
-
-    QRegularExpressionMatchIterator i = urlRegex.globalMatch(lineText);
-    while (i.hasNext()) {
-        QRegularExpressionMatch match = i.next();
-        if (col >= match.capturedStart() && col < match.capturedEnd()) {
-            return match.captured(0);
-        }
-    }
-
-    return QString();
 }

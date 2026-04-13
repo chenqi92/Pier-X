@@ -24,6 +24,15 @@ bool PierLocalSystem::copyText(const QString &text) const
     return false;
 }
 
+QString PierLocalSystem::readText() const
+{
+    if (auto *clipboard = QGuiApplication::clipboard()) {
+        return clipboard->text();
+    }
+    qWarning() << "PierLocalSystem::readText: clipboard unavailable";
+    return {};
+}
+
 bool PierLocalSystem::openPath(const QString &path) const
 {
     if (path.isEmpty()) {

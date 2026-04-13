@@ -33,6 +33,12 @@ Rectangle {
     property string backend: "local"
     property string startupCommand: ""
     property bool startupCommandSent: false
+    property string contextMenuUrl: ""
+    property real contextMenuX: 0
+    property real contextMenuY: 0
+    readonly property string copyShortcut: Qt.platform.os === "osx" ? "Meta+C" : "Ctrl+Shift+C"
+    readonly property string pasteShortcut: Qt.platform.os === "osx" ? "Meta+V" : "Ctrl+Shift+V"
+    readonly property string selectAllShortcut: Qt.platform.os === "osx" ? "Meta+A" : "Ctrl+Shift+A"
 
     // Expose the session so that Main.qml / RightSidebar can read
     // live SSH context (host, port, user, auth method) directly
@@ -229,6 +235,44 @@ Rectangle {
             return text.replace(/^invalid ssh config:\s*/, "")
         }
         return text
+    }
+
+    function copy() {
+        var text = grid.selectedText()
+        if (text.length > 0)
+            PierLocalSystem.copyText(text)
+    }
+
+    function paste() {
+        var text = PierLocalSystem.readText()
+        if (text.length === 0 || !session.running)
+            return
+        if (session.scrollOffset > 0)
+            session.scrollToBottom()
+        session.write(text)
+    }
+
+    function selectAll() {
+        grid.selectAll()
+    }
+
+    function _openExternalUrl(url) {
+        if (url.length > 0)
+            Qt.openUrlExternally(url)
+    }
+
+    function _showTerminalContextMenu(localX, localY, url) {
+        contextMenuUrl = url
+        var pos = pointerArea.mapToItem(root, localX, localY)
+        contextMenuX = Math.max(Theme.sp2,
+                                Math.min(root.width - terminalContextMenu.width - Theme.sp2,
+                                         pos.x + Theme.sp1))
+        contextMenuY = Math.max(Theme.sp2,
+                                Math.min(root.height - terminalContextMenu.implicitHeight - Theme.sp2,
+                                         pos.y + Theme.sp1))
+        terminalContextMenu.x = contextMenuX
+        terminalContextMenu.y = contextMenuY
+        terminalContextMenu.open()
     }
 
     // Service pill strip — shown only when the SSH session is
@@ -533,6 +577,9 @@ Rectangle {
             defaultForeground: Theme.currentTerminalTheme.fg
             defaultBackground: Theme.currentTerminalTheme.bg
             isDarkTheme: Theme.dark
+            selectionBackground: Theme.bgSelected
+            linkForeground: Theme.accent
+            linkHoverForeground: Theme.accentHover
             cursorStyle: Theme.cursorStyle
             cursorBlink: Theme.cursorBlink
             cursorVisible: session.cursorVisible
@@ -605,28 +652,93 @@ Rectangle {
                                     root.sshUser, kind, secret, extra)
             }
 
-            property string hoveredUrl: ""
-
             MouseArea {
+                id: pointerArea
                 anchors.fill: parent
-                acceptedButtons: Qt.LeftButton
+                acceptedButtons: Qt.LeftButton | Qt.RightButton
                 hoverEnabled: true
+                preventStealing: true
 
-                cursorShape: grid.hoveredUrl.length > 0 ? Qt.PointingHandCursor : Qt.IBeamCursor
+                property real pressX: 0
+                property real pressY: 0
+                property bool dragSelecting: false
+                property string pressedUrl: ""
+                readonly property real dragThreshold: 4
 
-                onPositionChanged: (mouse) => {
-                    var url = grid.urlAt(mouse.x, mouse.y)
-                    if (url !== grid.hoveredUrl) {
-                        grid.hoveredUrl = url
+                cursorShape: dragSelecting ? Qt.IBeamCursor
+                                          : (grid.hoveredUrl.length > 0 ? Qt.PointingHandCursor : Qt.IBeamCursor)
+
+                onPressed: (mouse) => {
+                    root.forceActiveFocus()
+                    terminalContextMenu.close()
+                    if (mouse.button === Qt.LeftButton) {
+                        pressX = mouse.x
+                        pressY = mouse.y
+                        pressedUrl = grid.urlAt(mouse.x, mouse.y)
+                        dragSelecting = false
+                    } else if (mouse.button === Qt.RightButton) {
+                        pressedUrl = ""
+                        dragSelecting = false
+                        root._showTerminalContextMenu(mouse.x, mouse.y, grid.urlAt(mouse.x, mouse.y))
                     }
                 }
 
-                onClicked: (mouse) => {
-                    if (grid.hoveredUrl.length > 0) {
-                        Qt.openUrlExternally(grid.hoveredUrl)
-                    } else {
-                        root.forceActiveFocus()
+                onPositionChanged: (mouse) => {
+                    if (mouse.buttons & Qt.LeftButton) {
+                        var dx = mouse.x - pressX
+                        var dy = mouse.y - pressY
+                        if (!dragSelecting && Math.sqrt(dx * dx + dy * dy) >= dragThreshold) {
+                            dragSelecting = true
+                            grid.beginSelection(pressX, pressY)
+                        }
+                        if (dragSelecting) {
+                            grid.updateSelection(mouse.x, mouse.y)
+                            return
+                        }
                     }
+                    grid.updateHoveredLink(mouse.x, mouse.y)
+                }
+
+                onReleased: (mouse) => {
+                    if (mouse.button === Qt.LeftButton) {
+                        if (dragSelecting) {
+                            grid.endSelection()
+                        } else {
+                            var releasedUrl = grid.urlAt(mouse.x, mouse.y)
+                            if (pressedUrl.length > 0 && releasedUrl === pressedUrl) {
+                                root._openExternalUrl(releasedUrl)
+                            } else {
+                                grid.clearSelection()
+                            }
+                            grid.updateHoveredLink(mouse.x, mouse.y)
+                        }
+                        dragSelecting = false
+                        pressedUrl = ""
+                    } else if (mouse.button === Qt.RightButton) {
+                        grid.updateHoveredLink(mouse.x, mouse.y)
+                    }
+                }
+
+                onDoubleClicked: (mouse) => {
+                    if (mouse.button === Qt.LeftButton) {
+                        root.forceActiveFocus()
+                        grid.selectWordAt(mouse.x, mouse.y)
+                        dragSelecting = false
+                        pressedUrl = ""
+                        mouse.accepted = true
+                    }
+                }
+
+                onCanceled: {
+                    if (dragSelecting)
+                        grid.endSelection()
+                    dragSelecting = false
+                    pressedUrl = ""
+                }
+
+                onExited: {
+                    if (!containsMouse)
+                        grid.clearHoveredUrl()
                 }
 
                 onWheel: (wheel) => {
@@ -665,6 +777,79 @@ Rectangle {
                 GhostButton {
                     text: qsTr("Back to Live")
                     onClicked: session.scrollToBottom()
+                }
+            }
+        }
+
+        PopoverPanel {
+            id: terminalContextMenu
+            width: 220
+            cornerRadius: Theme.radiusMd
+
+            PierMenuItem {
+                width: parent.width
+                text: qsTr("Open Link")
+                enabled: root.contextMenuUrl.length > 0
+                onClicked: {
+                    terminalContextMenu.close()
+                    root._openExternalUrl(root.contextMenuUrl)
+                }
+            }
+
+            PierMenuItem {
+                width: parent.width
+                text: qsTr("Copy Link")
+                enabled: root.contextMenuUrl.length > 0
+                onClicked: {
+                    terminalContextMenu.close()
+                    PierLocalSystem.copyText(root.contextMenuUrl)
+                }
+            }
+
+            Rectangle {
+                width: parent.width
+                height: 1
+                color: Theme.borderSubtle
+                visible: root.contextMenuUrl.length > 0
+            }
+
+            PierMenuItem {
+                width: parent.width
+                text: qsTr("Copy")
+                enabled: grid.hasSelection
+                onClicked: {
+                    terminalContextMenu.close()
+                    root.copy()
+                }
+            }
+
+            PierMenuItem {
+                width: parent.width
+                text: qsTr("Paste")
+                enabled: session.running && PierLocalSystem.readText().length > 0
+                onClicked: {
+                    terminalContextMenu.close()
+                    root.paste()
+                }
+            }
+
+            PierMenuItem {
+                width: parent.width
+                text: qsTr("Select All")
+                enabled: session.running
+                onClicked: {
+                    terminalContextMenu.close()
+                    root.selectAll()
+                }
+            }
+
+            PierMenuItem {
+                width: parent.width
+                text: qsTr("Clear Selection")
+                enabled: grid.hasSelection
+                onClicked: {
+                    terminalContextMenu.close()
+                    grid.clearSelection()
                 }
             }
         }
@@ -873,6 +1058,47 @@ Rectangle {
     // Keyboard handling. Forwarded to session.write() as raw UTF-8
     // bytes (or their VT100 escape sequence equivalents).
     Keys.onPressed: function (event) {
+        if (Qt.platform.os === "osx") {
+            if (event.matches(StandardKey.Copy)) {
+                root.copy()
+                event.accepted = true
+                return
+            }
+            if (event.matches(StandardKey.Paste)) {
+                root.paste()
+                event.accepted = true
+                return
+            }
+            if (event.matches(StandardKey.SelectAll)) {
+                root.selectAll()
+                event.accepted = true
+                return
+            }
+        } else {
+            if ((event.modifiers & Qt.ControlModifier) && (event.modifiers & Qt.ShiftModifier)) {
+                if (event.key === Qt.Key_C) {
+                    root.copy()
+                    event.accepted = true
+                    return
+                }
+                if (event.key === Qt.Key_V || event.key === Qt.Key_Insert) {
+                    root.paste()
+                    event.accepted = true
+                    return
+                }
+                if (event.key === Qt.Key_A) {
+                    root.selectAll()
+                    event.accepted = true
+                    return
+                }
+            }
+            if ((event.modifiers & Qt.ShiftModifier) && event.key === Qt.Key_Insert) {
+                root.paste()
+                event.accepted = true
+                return
+            }
+        }
+
         if (!session.running) {
             event.accepted = false
             return

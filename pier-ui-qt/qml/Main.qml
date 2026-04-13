@@ -29,123 +29,8 @@ ApplicationWindow {
     property real windowedWidth: width
     property real windowedHeight: height
 
-    menuBar: MenuBar {
-        Menu {
-            title: qsTr("Pier-X")
-
-            MenuItem { text: qsTr("About Pier-X"); onTriggered: aboutDialog.open() }
-            MenuSeparator {}
-            MenuItem {
-                action: Action {
-                    text: qsTr("Settings…")
-                    shortcut: Qt.platform.os === "osx" ? "Meta+," : "Ctrl+,"
-                    onTriggered: settingsDialog.show()
-                }
-            }
-            MenuSeparator {}
-            MenuItem {
-                action: Action {
-                    text: qsTr("Quit Pier-X")
-                    shortcut: StandardKey.Quit
-                    onTriggered: Qt.quit()
-                }
-            }
-        }
-
-        Menu {
-            title: qsTr("File")
-
-            MenuItem {
-                action: Action {
-                    text: qsTr("New local terminal")
-                    shortcut: Qt.platform.os === "osx" ? "Meta+T" : "Ctrl+T"
-                    onTriggered: window.openNewTab()
-                }
-            }
-            MenuItem {
-                action: Action {
-                    text: qsTr("New SSH connection…")
-                    shortcut: Qt.platform.os === "osx" ? "Meta+N" : "Ctrl+N"
-                    onTriggered: newConnectionDialog.show()
-                }
-            }
-            MenuItem { text: qsTr("Open Markdown preview…"); onTriggered: markdownFileDialog.open() }
-            MenuSeparator {}
-            MenuItem {
-                action: Action {
-                    text: qsTr("Close current tab")
-                    shortcut: StandardKey.Close
-                    enabled: tabModel.count > 0
-                    onTriggered: window.closeTab(window.currentTabIndex)
-                }
-            }
-        }
-
-        Menu {
-            title: qsTr("Edit")
-
-            MenuItem { action: Action { text: qsTr("Undo"); shortcut: StandardKey.Undo; enabled: window._focusMethodAvailable("undo"); onTriggered: window._invokeFocusMethod("undo") } }
-            MenuItem { action: Action { text: qsTr("Redo"); shortcut: StandardKey.Redo; enabled: window._focusMethodAvailable("redo"); onTriggered: window._invokeFocusMethod("redo") } }
-            MenuSeparator {}
-            MenuItem { action: Action { text: qsTr("Cut"); shortcut: StandardKey.Cut; enabled: window._focusMethodAvailable("cut"); onTriggered: window._invokeFocusMethod("cut") } }
-            MenuItem { action: Action { text: qsTr("Copy"); shortcut: StandardKey.Copy; enabled: window._focusMethodAvailable("copy"); onTriggered: window._invokeFocusMethod("copy") } }
-            MenuItem { action: Action { text: qsTr("Paste"); shortcut: StandardKey.Paste; enabled: window._focusMethodAvailable("paste"); onTriggered: window._invokeFocusMethod("paste") } }
-            MenuItem { action: Action { text: qsTr("Select All"); shortcut: StandardKey.SelectAll; enabled: window._focusMethodAvailable("selectAll"); onTriggered: window._invokeFocusMethod("selectAll") } }
-        }
-
-        Menu {
-            title: qsTr("View")
-
-            MenuItem {
-                text: Theme.dark ? qsTr("Switch to light theme") : qsTr("Switch to dark theme")
-                onTriggered: { Theme.followSystem = false; Theme.dark = !Theme.dark }
-            }
-            MenuItem {
-                text: qsTr("Follow system theme")
-                checkable: true; checked: Theme.followSystem
-                onTriggered: Theme.followSystem = checked
-            }
-            MenuSeparator {}
-            MenuItem {
-                action: Action {
-                    text: window.gitPanelVisible ? qsTr("Hide right sidebar") : qsTr("Show right sidebar")
-                    shortcut: Qt.platform.os === "osx" ? "Meta+Shift+G" : "Ctrl+Shift+G"
-                    onTriggered: window.toggleGitPanel()
-                }
-            }
-        }
-
-        Menu {
-            title: qsTr("Window")
-
-            MenuItem {
-                action: Action {
-                    text: qsTr("Minimize")
-                    shortcut: StandardKey.Minimize
-                    onTriggered: window.showMinimized()
-                }
-            }
-            MenuItem {
-                text: window.visibility === Window.Maximized ? qsTr("Restore") : qsTr("Zoom")
-                onTriggered: {
-                    if (window.visibility === Window.Maximized) window.showNormal()
-                    else window.showMaximized()
-                }
-            }
-            MenuItem {
-                action: Action {
-                    text: window.visibility === Window.FullScreen ? qsTr("Exit Full Screen") : qsTr("Enter Full Screen")
-                    shortcut: Qt.platform.os === "osx" ? "Ctrl+Meta+F" : "F11"
-                    onTriggered: window.toggleFullScreen()
-                }
-            }
-        }
-
-        Menu {
-            title: qsTr("Help")
-            MenuItem { text: qsTr("About Pier-X"); onTriggered: aboutDialog.open() }
-        }
-    }
+    // Menu bar is integrated into TopBar for a cleaner look on Windows.
+    // All keyboard shortcuts are defined in the Shortcut section below.
 
     // ─────────────────────────────────────────────────────
     // Global keyboard shortcuts
@@ -782,8 +667,30 @@ ApplicationWindow {
             contextTitle: tabModel.count > 0 && currentTabIndex >= 0 && currentTabIndex < tabModel.count
                           ? (tabModel.get(currentTabIndex).title || qsTr("Workspace"))
                           : qsTr("Workspace")
+            canCloseTab: tabModel.count > 0
+            sidebarVisible: rightSidebar.contentExpanded
+            isFullScreen: window.visibility === Window.FullScreen
+            isMaximized: window.visibility === Window.Maximized
             onNewSessionRequested: window.openNewSessionMenu()
             onSettingsRequested: settingsDialog.show()
+            onMenuAction: (action) => {
+                switch (action) {
+                case "about":         aboutDialog.open(); break
+                case "settings":      settingsDialog.show(); break
+                case "newTerminal":   window.openNewTab(); break
+                case "newSsh":        newConnectionDialog.show(); break
+                case "openMarkdown":  markdownFileDialog.open(); break
+                case "closeTab":      window.closeTab(window.currentTabIndex); break
+                case "toggleSidebar": window.toggleGitPanel(); break
+                case "toggleFullScreen": window.toggleFullScreen(); break
+                case "undo":          window._invokeFocusMethod("undo"); break
+                case "redo":          window._invokeFocusMethod("redo"); break
+                case "cut":           window._invokeFocusMethod("cut"); break
+                case "copy":          window._invokeFocusMethod("copy"); break
+                case "paste":         window._invokeFocusMethod("paste"); break
+                case "selectAll":     window._invokeFocusMethod("selectAll"); break
+                }
+            }
         }
 
         SplitView {

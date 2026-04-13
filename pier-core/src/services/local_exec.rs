@@ -5,13 +5,8 @@
 
 use std::process::Command;
 
-#[cfg(target_os = "windows")]
-use std::os::windows::process::CommandExt;
-
 use crate::services::server_monitor::ServerSnapshot;
-
-#[cfg(target_os = "windows")]
-const CREATE_NO_WINDOW: u32 = 0x0800_0000;
+use crate::process_util::configure_background_command;
 
 /// Local system metrics reuse the same schema as the remote
 /// SSH monitor so the Qt layer does not need a second parsing path.
@@ -24,13 +19,7 @@ struct ProcessOutput {
 }
 
 fn finish_command(mut command: Command, description: &str) -> Result<ProcessOutput, String> {
-    #[cfg(target_os = "windows")]
-    {
-        // GUI apps on Windows do not own a console. Without this flag,
-        // every background `cmd` / `docker.exe` / `powershell.exe`
-        // invocation can flash a transient terminal window.
-        command.creation_flags(CREATE_NO_WINDOW);
-    }
+    configure_background_command(&mut command);
 
     let output = command
         .output()

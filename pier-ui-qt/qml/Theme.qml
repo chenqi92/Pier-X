@@ -19,45 +19,72 @@ QtObject {
     // dialog via PierTerminalTheme singleton.
     property int terminalThemeIndex: 0
 
-    // Each entry: { name, fg, bg, ansi[16] }
+    // Each entry: { key, fg, bg, ansi[16] }
     readonly property var terminalThemes: [
         {
-            name: "Default Dark",
+            key: "defaultDark",
             fg: "#e8eaed", bg: "#0f1115",
             ansi: ["#000000","#CD0000","#00CD00","#CDCD00","#3B78FF","#CD00CD","#00CDCD","#E5E5E5",
                    "#7F7F7F","#FF0000","#00FF00","#FFFF00","#5C5CFF","#FF00FF","#00FFFF","#FFFFFF"]
         },
         {
-            name: "Default Light",
+            key: "defaultLight",
             fg: "#1f2329", bg: "#fbfcfd",
             ansi: ["#000000","#CD0000","#00A000","#A07000","#0000EE","#CD00CD","#00A0A0","#666666",
                    "#555555","#FF0000","#00CD00","#CDCD00","#5C5CFF","#FF00FF","#00CDCD","#444444"]
         },
         {
-            name: "Solarized Dark",
+            key: "solarizedDark",
             fg: "#839496", bg: "#002B36",
             ansi: ["#073642","#DC322F","#859900","#B58900","#268BD2","#D33682","#2AA198","#EEE8D5",
                    "#002B36","#CB4B16","#586E75","#657B83","#839496","#6C71C4","#93A1A1","#FDF6E3"]
         },
         {
-            name: "Dracula",
+            key: "dracula",
             fg: "#F8F8F2", bg: "#282A36",
             ansi: ["#21222C","#FF5555","#50FA7B","#F1FA8C","#BD93F9","#FF79C6","#8BE9FD","#F8F8F2",
                    "#6272A4","#FF6E6E","#69FF94","#FFFFA5","#D6ACFF","#FF92DF","#A4FFFF","#FFFFFF"]
         },
         {
-            name: "Monokai",
+            key: "monokai",
             fg: "#F8F8F2", bg: "#272822",
             ansi: ["#272822","#F92672","#A6E22E","#F4BF75","#66D9EF","#AE81FF","#A1EFE4","#F8F8F2",
                    "#75715E","#F92672","#A6E22E","#F4BF75","#66D9EF","#AE81FF","#A1EFE4","#F9F8F5"]
         },
         {
-            name: "Nord",
+            key: "nord",
             fg: "#D8DEE9", bg: "#2E3440",
             ansi: ["#3B4252","#BF616A","#A3BE8C","#EBCB8B","#81A1C1","#B48EAD","#88C0D0","#E5E9F0",
                    "#4C566A","#BF616A","#A3BE8C","#EBCB8B","#81A1C1","#B48EAD","#8FBCBB","#ECEFF4"]
         }
     ]
+
+    function terminalThemeName(themeRef) {
+        var key = ""
+        if (typeof themeRef === "number") {
+            var theme = terminalThemes[themeRef]
+            key = theme && theme.key ? theme.key : ""
+        } else if (themeRef && themeRef.key) {
+            key = themeRef.key
+        }
+
+        switch (key) {
+        case "defaultDark":
+            return qsTr("Default Dark")
+        case "defaultLight":
+            return qsTr("Default Light")
+        case "solarizedDark":
+            return qsTr("Solarized Dark")
+        case "dracula":
+            return qsTr("Dracula")
+        case "monokai":
+            return qsTr("Monokai")
+        case "nord":
+            return qsTr("Nord")
+        default:
+            return ""
+        }
+    }
 
     // Convenience — current palette resolved from index.
     readonly property var currentTerminalTheme: terminalThemes[terminalThemeIndex] || terminalThemes[0]

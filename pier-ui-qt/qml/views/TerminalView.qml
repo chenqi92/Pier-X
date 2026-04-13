@@ -50,6 +50,11 @@ Rectangle {
     // Default shell is system-dependent. The caller can override this
     // via the `shell` property before the first layout; we only spawn
     // the PTY once `grid.cellWidth` is known (see startWhenSized).
+    //
+    // Windows keeps PowerShell as the default shell so local tabs
+    // match the rest of the product, but the backend runs it without
+    // loading the user's profile so embedded sessions stay on a
+    // deterministic VT input path that matches Pier-X's transport.
     property string shell: Qt.platform.os === "windows"
                            ? "powershell.exe"
                            : (Qt.platform.os === "osx" ? "/bin/zsh" : "/bin/bash")
@@ -88,7 +93,7 @@ Rectangle {
     // cross the FFI at all.
     property bool sshUsesAgent: false
 
-    color: Theme.bgPanel
+    color: Theme.currentTerminalTheme.bg
     focus: true
     activeFocusOnTab: true
 
@@ -506,30 +511,19 @@ Rectangle {
         }
     }
 
-    Rectangle {
+    Item {
         id: terminalSurface
 
         anchors.top: serviceStrip.visible ? serviceStrip.bottom : parent.top
         anchors.left: parent.left
         anchors.right: parent.right
         anchors.bottom: parent.bottom
-        anchors.topMargin: Theme.sp2
-        anchors.leftMargin: Theme.sp2
-        anchors.rightMargin: Theme.sp2
-        anchors.bottomMargin: Theme.sp2
-        radius: Theme.radiusLg
-        color: Theme.bgSurface
-        border.color: Theme.borderSubtle
-        border.width: 1
+        anchors.topMargin: serviceStrip.visible ? Theme.sp2 : 0
         clip: true
 
         PierTerminalGrid {
             id: grid
             anchors.fill: parent
-            anchors.leftMargin: Theme.sp1
-            anchors.rightMargin: Theme.sp1
-            anchors.topMargin: Theme.sp1
-            anchors.bottomMargin: Theme.sp1
 
             session: session
             font: Qt.font({
@@ -891,7 +885,10 @@ Rectangle {
             session.write("\r")
             break
         case Qt.Key_Backspace:
-            // ^? is what most terminals send on backspace
+            // ConPTY-backed Windows shells expect the terminal-style
+            // DEL byte here, same as Unix PTYs. The old pipe-backed
+            // fallback rendered DEL visibly, which is why Windows had
+            // a temporary BS workaround before the ConPTY transport landed.
             session.write("\x7f")
             break
         case Qt.Key_Tab:

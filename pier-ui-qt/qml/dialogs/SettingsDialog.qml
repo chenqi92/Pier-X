@@ -377,12 +377,15 @@ Item {
                                 Card {
                                     Layout.fillWidth: true
                                     padding: Theme.sp4
+                                    implicitHeight: appearancePreviewColumn.implicitHeight + padding * 2
 
                                     ColumnLayout {
-                                        anchors.fill: parent
+                                        id: appearancePreviewColumn
+                                        width: parent.width
                                         spacing: Theme.sp2
 
                                         Text {
+                                            Layout.fillWidth: true
                                             text: qsTr("The quick brown fox jumps over the lazy dog.")
                                             font.family: Theme.fontUi
                                             font.pixelSize: Theme.sizeBody
@@ -402,12 +405,15 @@ Item {
                                 Card {
                                     Layout.fillWidth: true
                                     padding: Theme.sp4
+                                    implicitHeight: monoPreviewColumn.implicitHeight + padding * 2
 
                                     ColumnLayout {
-                                        anchors.fill: parent
+                                        id: monoPreviewColumn
+                                        width: parent.width
                                         spacing: Theme.sp2
 
                                         Text {
+                                            Layout.fillWidth: true
                                             text: "$ ssh root@prod-01 'tail -f /var/log/nginx/access.log'"
                                             font.family: Theme.fontMono
                                             font.pixelSize: Theme.sizeBody
@@ -445,9 +451,11 @@ Item {
                                 Card {
                                     Layout.fillWidth: true
                                     padding: Theme.sp1
+                                    implicitHeight: terminalThemeList.implicitHeight + padding * 2
 
                                     ColumnLayout {
-                                        anchors.fill: parent
+                                        id: terminalThemeList
+                                        width: parent.width
                                         spacing: 0
 
                                         Repeater {
@@ -492,7 +500,7 @@ Item {
                                                     }
 
                                                     Text {
-                                                        text: themeRow.modelData.name
+                                                        text: Theme.terminalThemeName(themeRow.modelData)
                                                         font.family: Theme.fontUi
                                                         font.pixelSize: Theme.sizeBody
                                                         font.weight: themeRow.index === Theme.terminalThemeIndex
@@ -532,15 +540,20 @@ Item {
                                 Card {
                                     Layout.fillWidth: true
                                     padding: 0
+                                    implicitHeight: terminalThemePreviewSurface.implicitHeight
 
                                     Rectangle {
-                                        anchors.fill: parent
+                                        id: terminalThemePreviewSurface
+                                        width: parent.width
+                                        implicitHeight: terminalThemePreviewColumn.implicitHeight + Theme.sp3 * 2
                                         color: Theme.currentTerminalTheme.bg
                                         radius: Theme.radiusMd
 
                                         Column {
-                                            anchors.fill: parent
-                                            anchors.margins: Theme.sp3
+                                            id: terminalThemePreviewColumn
+                                            x: Theme.sp3
+                                            y: Theme.sp3
+                                            width: parent.width - Theme.sp3 * 2
                                             spacing: 2
 
                                             Text {
@@ -804,12 +817,15 @@ Item {
                                 Layout.fillWidth: true
                                 visible: !root.connectionsModel || root.connectionsModel.count === 0
                                 padding: Theme.sp4
+                                implicitHeight: emptyConnectionsColumn.implicitHeight + padding * 2
 
                                 ColumnLayout {
-                                    anchors.fill: parent
+                                    id: emptyConnectionsColumn
+                                    width: parent.width
                                     spacing: Theme.sp1
 
                                     Text {
+                                        Layout.fillWidth: true
                                         text: qsTr("No connections saved yet.")
                                         font.family: Theme.fontUi
                                         font.pixelSize: Theme.sizeBody
@@ -818,6 +834,7 @@ Item {
                                     }
 
                                     Text {
+                                        Layout.fillWidth: true
                                         text: qsTr("Use the New SSH connection dialog to create your first reusable host profile.")
                                         font.family: Theme.fontUi
                                         font.pixelSize: Theme.sizeSmall
@@ -848,6 +865,7 @@ Item {
 
                                         Layout.fillWidth: true
                                         padding: Theme.sp4
+                                        implicitHeight: connectionRow.implicitHeight + padding * 2
                                         border.color: Theme.borderDefault
                                         radius: Theme.radiusLg
 
@@ -868,7 +886,8 @@ Item {
                                                      : qsTr("Password stored directly"))
 
                                         RowLayout {
-                                            anchors.fill: parent
+                                            id: connectionRow
+                                            width: parent.width
                                             spacing: Theme.sp3
 
                                             Rectangle {

@@ -301,7 +301,7 @@ mod unix {
 }
 
 // ─────────────────────────────────────────────────────────
-// Windows implementation — pipe-backed shell transport
+// Windows implementation — ConPTY-backed shell transport
 // ─────────────────────────────────────────────────────────
 
 #[cfg(windows)]
@@ -310,25 +310,41 @@ pub use windows_impl::WindowsPty;
 #[cfg(windows)]
 mod windows_impl {
     use super::{Pty, TerminalError};
+    use std::ffi::{c_void, OsStr};
+    use std::fs::File;
     use std::io::{self, Read, Write};
-    use std::os::windows::process::CommandExt;
-    use std::process::{Child, ChildStdin, Command, Stdio};
+    use std::mem::{size_of, zeroed};
+    use std::os::windows::ffi::OsStrExt;
+    use std::os::windows::io::{AsRawHandle, FromRawHandle, OwnedHandle};
     use std::sync::mpsc::{self, Receiver, TryRecvError};
     use std::thread::{self, JoinHandle};
 
-    const CREATE_NO_WINDOW: u32 = 0x0800_0000;
+    use windows_sys::Win32::Foundation::{CloseHandle, HANDLE, WAIT_TIMEOUT};
+    use windows_sys::Win32::Security::SECURITY_ATTRIBUTES;
+    use windows_sys::Win32::System::Console::{
+        ClosePseudoConsole, CreatePseudoConsole, ResizePseudoConsole, COORD, HPCON,
+    };
+    use windows_sys::Win32::System::Pipes::CreatePipe;
+    use windows_sys::Win32::System::Threading::{
+        CreateProcessW, DeleteProcThreadAttributeList, InitializeProcThreadAttributeList,
+        TerminateProcess, UpdateProcThreadAttribute, WaitForSingleObject,
+        CREATE_UNICODE_ENVIRONMENT, EXTENDED_STARTUPINFO_PRESENT,
+        LPPROC_THREAD_ATTRIBUTE_LIST, PROCESS_INFORMATION, STARTF_USESTDHANDLES,
+        STARTUPINFOEXW,
+    };
+
     const READ_CHUNK_SIZE: usize = 8192;
+    const PROC_THREAD_ATTRIBUTE_PSEUDOCONSOLE: usize = 0x0002_0016;
 
     /// Minimal Windows terminal transport.
     ///
-    /// This is not a real pseudo console yet — it launches the shell
-    /// with redirected stdin/stdout/stderr pipes and forwards bytes
-    /// through the same [`Pty`] trait that Unix uses. That is enough
-    /// for interactive PowerShell/cmd sessions while the ConPTY
-    /// backend is still pending.
+    /// Uses the native Windows pseudoconsole (ConPTY) so interactive
+    /// shells get proper line editing, cursor movement, ANSI output,
+    /// and resize semantics instead of the degraded pipe-only mode.
     pub struct WindowsPty {
-        child: Child,
-        stdin: ChildStdin,
+        process: Option<OwnedHandle>,
+        pseudoconsole: Option<PseudoConsole>,
+        stdin: Option<File>,
         rx: Receiver<Vec<u8>>,
         reader_threads: Vec<JoinHandle<()>>,
         cols: u16,
@@ -336,60 +352,101 @@ mod windows_impl {
     }
 
     impl WindowsPty {
-        /// Spawn `program` with redirected stdio and background pipe
-        /// readers that merge stdout + stderr into one byte stream.
+        /// Spawn `program` inside a Windows pseudoconsole and forward
+        /// its VT stream through the shared [`Pty`] trait.
         pub fn spawn(
             cols: u16,
             rows: u16,
             program: &str,
             args: &[&str],
         ) -> Result<Self, TerminalError> {
-            let mut cmd = Command::new(program);
-            cmd.args(args)
-                .stdin(Stdio::piped())
-                .stdout(Stdio::piped())
-                .stderr(Stdio::piped())
-                .creation_flags(CREATE_NO_WINDOW)
-                .env("TERM", "xterm-256color");
+            let (input_read_side, input_write_side) = create_pipe_pair()?;
+            let (output_read_side, output_write_side) = create_pipe_pair()?;
 
-            if let Ok(home) = std::env::var("USERPROFILE") {
-                if !home.is_empty() {
-                    cmd.current_dir(home);
+            let size = COORD {
+                X: cols as i16,
+                Y: rows as i16,
+            };
+            let mut hpc: HPCON = 0;
+            let hr = unsafe {
+                CreatePseudoConsole(size, input_read_side, output_write_side, 0, &mut hpc)
+            };
+            if hr < 0 {
+                unsafe {
+                    CloseHandle(input_read_side);
+                    CloseHandle(output_write_side);
+                    CloseHandle(input_write_side);
+                    CloseHandle(output_read_side);
                 }
+                return Err(hresult_error("CreatePseudoConsole", hr));
             }
 
-            let mut child = cmd.spawn().map_err(TerminalError::Io)?;
-            let stdin = child.stdin.take().ok_or_else(|| {
-                TerminalError::Io(io::Error::new(
-                    io::ErrorKind::BrokenPipe,
-                    "failed to capture child stdin",
-                ))
-            })?;
-            let stdout = child.stdout.take().ok_or_else(|| {
-                TerminalError::Io(io::Error::new(
-                    io::ErrorKind::BrokenPipe,
-                    "failed to capture child stdout",
-                ))
-            })?;
-            let stderr = child.stderr.take().ok_or_else(|| {
-                TerminalError::Io(io::Error::new(
-                    io::ErrorKind::BrokenPipe,
-                    "failed to capture child stderr",
-                ))
-            })?;
+            let pseudoconsole = PseudoConsole(hpc);
+            let attr_list = ProcThreadAttributeList::new(hpc)?;
+
+            let mut startup_info: STARTUPINFOEXW = unsafe { zeroed() };
+            startup_info.StartupInfo.cb = size_of::<STARTUPINFOEXW>() as u32;
+            startup_info.StartupInfo.dwFlags |= STARTF_USESTDHANDLES;
+            startup_info.StartupInfo.hStdInput = std::ptr::null_mut();
+            startup_info.StartupInfo.hStdOutput = std::ptr::null_mut();
+            startup_info.StartupInfo.hStdError = std::ptr::null_mut();
+            startup_info.lpAttributeList = attr_list.as_ptr();
+
+            let command_line = build_command_line(program, args);
+            let mut command_line_wide = wide_null(&command_line);
+            let current_dir = std::env::var_os("USERPROFILE")
+                .filter(|dir| !dir.is_empty())
+                .map(|dir| wide_null_os(dir.as_os_str()));
+            let env_block = env_block_for_child(program);
+
+            let mut process_info: PROCESS_INFORMATION = unsafe { zeroed() };
+            let create_ok = unsafe {
+                CreateProcessW(
+                    std::ptr::null(),
+                    command_line_wide.as_mut_ptr(),
+                    std::ptr::null_mut(),
+                    std::ptr::null_mut(),
+                    0,
+                    EXTENDED_STARTUPINFO_PRESENT | CREATE_UNICODE_ENVIRONMENT,
+                    env_block
+                        .as_ref()
+                        .map(|block| block.as_ptr() as *mut c_void)
+                        .unwrap_or(std::ptr::null_mut()),
+                    current_dir
+                        .as_ref()
+                        .map(|dir| dir.as_ptr())
+                        .unwrap_or(std::ptr::null()),
+                    &mut startup_info.StartupInfo,
+                    &mut process_info,
+                )
+            };
+            unsafe {
+                CloseHandle(input_read_side);
+                CloseHandle(output_write_side);
+            }
+            if create_ok == 0 {
+                unsafe {
+                    CloseHandle(input_write_side);
+                    CloseHandle(output_read_side);
+                }
+                return Err(TerminalError::Io(io::Error::last_os_error()));
+            }
+
+            unsafe {
+                CloseHandle(process_info.hThread);
+            }
+
+            let stdin = unsafe { File::from_raw_handle(input_write_side as *mut c_void) };
+            let output = unsafe { File::from_raw_handle(output_read_side as *mut c_void) };
+            let process = unsafe { OwnedHandle::from_raw_handle(process_info.hProcess as *mut c_void) };
 
             let (tx, rx) = mpsc::channel();
-            let mut reader_threads = Vec::with_capacity(2);
-            reader_threads.push(spawn_pipe_reader(
-                "pier-terminal-stdout",
-                stdout,
-                tx.clone(),
-            ));
-            reader_threads.push(spawn_pipe_reader("pier-terminal-stderr", stderr, tx));
+            let reader_threads = vec![spawn_pipe_reader("pier-terminal-conpty", output, tx)];
 
             Ok(Self {
-                child,
-                stdin,
+                process: Some(process),
+                pseudoconsole: Some(pseudoconsole),
+                stdin: Some(stdin),
                 rx,
                 reader_threads,
                 cols,
@@ -399,7 +456,9 @@ mod windows_impl {
 
         /// Spawn an interactive shell.
         ///
-        /// PowerShell gets `-NoLogo` to suppress the startup banner.
+        /// PowerShell gets a profile-less interactive launch so local
+        /// Pier-X sessions don't inherit line editor hooks or prompt
+        /// scripts that assume a native Win32 console host.
         /// `cmd.exe` gets `/Q /K` so it stays interactive and avoids
         /// echoing every line back twice.
         pub fn spawn_shell(cols: u16, rows: u16, shell: &str) -> Result<Self, TerminalError> {
@@ -409,8 +468,9 @@ mod windows_impl {
                 .unwrap_or(shell)
                 .to_ascii_lowercase();
             let args: &[&str] = match leaf.as_str() {
-                "powershell.exe" | "powershell" | "pwsh.exe" | "pwsh" => &["-NoLogo"],
-                "cmd.exe" | "cmd" => &["/Q", "/K"],
+                "powershell.exe" | "powershell" | "pwsh.exe" | "pwsh" =>
+                    &["-NoLogo", "-NoExit", "-NoProfile"],
+                "cmd.exe" | "cmd" => &["/D", "/Q", "/K"],
                 _ => &[],
             };
             Self::spawn(cols, rows, shell, args)
@@ -438,14 +498,35 @@ mod windows_impl {
             Ok(out)
         }
         fn write(&mut self, data: &[u8]) -> Result<usize, TerminalError> {
-            self.stdin.write_all(data).map_err(TerminalError::Io)?;
-            self.stdin.flush().map_err(TerminalError::Io)?;
+            let stdin = self.stdin.as_mut().ok_or_else(|| {
+                TerminalError::Io(io::Error::new(
+                    io::ErrorKind::BrokenPipe,
+                    "terminal stdin is closed",
+                ))
+            })?;
+            stdin.write_all(data).map_err(TerminalError::Io)?;
+            stdin.flush().map_err(TerminalError::Io)?;
             Ok(data.len())
         }
         fn resize(&mut self, cols: u16, rows: u16) -> Result<(), TerminalError> {
-            // Pipe-backed shells do not expose a real console buffer to
-            // resize yet. Keep the logical size in sync so the UI and
-            // emulator still agree on the viewport dimensions.
+            let hpc = self
+                .pseudoconsole
+                .as_ref()
+                .map(|console| console.0)
+                .ok_or_else(|| {
+                    TerminalError::Io(io::Error::new(
+                        io::ErrorKind::BrokenPipe,
+                        "pseudoconsole is closed",
+                    ))
+                })?;
+            let size = COORD {
+                X: cols as i16,
+                Y: rows as i16,
+            };
+            let hr = unsafe { ResizePseudoConsole(hpc, size) };
+            if hr < 0 {
+                return Err(hresult_error("ResizePseudoConsole", hr));
+            }
             self.cols = cols;
             self.rows = rows;
             Ok(())
@@ -457,13 +538,100 @@ mod windows_impl {
 
     impl Drop for WindowsPty {
         fn drop(&mut self) {
-            let _ = self.stdin.flush();
-            if matches!(self.child.try_wait(), Ok(None)) {
-                let _ = self.child.kill();
+            if let Some(mut stdin) = self.stdin.take() {
+                let _ = stdin.flush();
+                drop(stdin);
             }
-            let _ = self.child.wait();
+            if let Some(console) = self.pseudoconsole.take() {
+                drop(console);
+            }
+            if let Some(process) = self.process.as_ref() {
+                let handle = process.as_raw_handle() as HANDLE;
+                let wait = unsafe { WaitForSingleObject(handle, 250) };
+                if wait == WAIT_TIMEOUT {
+                    unsafe {
+                        TerminateProcess(handle, 1);
+                    }
+                    let _ = unsafe { WaitForSingleObject(handle, 2000) };
+                }
+            }
+            self.process.take();
             for handle in self.reader_threads.drain(..) {
                 let _ = handle.join();
+            }
+        }
+    }
+
+    struct PseudoConsole(HPCON);
+
+    impl Drop for PseudoConsole {
+        fn drop(&mut self) {
+            unsafe {
+                ClosePseudoConsole(self.0);
+            }
+        }
+    }
+
+    struct ProcThreadAttributeList {
+        _storage: Box<[usize]>,
+        ptr: LPPROC_THREAD_ATTRIBUTE_LIST,
+    }
+
+    impl ProcThreadAttributeList {
+        fn new(hpc: HPCON) -> Result<Self, TerminalError> {
+            let mut bytes_required = 0usize;
+            unsafe {
+                InitializeProcThreadAttributeList(
+                    std::ptr::null_mut(),
+                    1,
+                    0,
+                    &mut bytes_required,
+                );
+            }
+            if bytes_required == 0 {
+                return Err(TerminalError::Io(io::Error::last_os_error()));
+            }
+
+            let words = (bytes_required + size_of::<usize>() - 1) / size_of::<usize>();
+            let mut storage = vec![0usize; words].into_boxed_slice();
+            let ptr = storage.as_mut_ptr() as LPPROC_THREAD_ATTRIBUTE_LIST;
+            let init_ok = unsafe {
+                InitializeProcThreadAttributeList(ptr, 1, 0, &mut bytes_required)
+            };
+            if init_ok == 0 {
+                return Err(TerminalError::Io(io::Error::last_os_error()));
+            }
+
+            let update_ok = unsafe {
+                UpdateProcThreadAttribute(
+                    ptr,
+                    0,
+                    PROC_THREAD_ATTRIBUTE_PSEUDOCONSOLE,
+                    hpc as *mut c_void,
+                    size_of::<HPCON>(),
+                    std::ptr::null_mut(),
+                    std::ptr::null_mut(),
+                )
+            };
+            if update_ok == 0 {
+                unsafe {
+                    DeleteProcThreadAttributeList(ptr);
+                }
+                return Err(TerminalError::Io(io::Error::last_os_error()));
+            }
+
+            Ok(Self { _storage: storage, ptr })
+        }
+
+        fn as_ptr(&self) -> LPPROC_THREAD_ATTRIBUTE_LIST {
+            self.ptr
+        }
+    }
+
+    impl Drop for ProcThreadAttributeList {
+        fn drop(&mut self) {
+            unsafe {
+                DeleteProcThreadAttributeList(self.ptr);
             }
         }
     }
@@ -494,6 +662,116 @@ mod windows_impl {
                 }
             })
             .expect("spawning Windows pipe reader must not fail in practice")
+    }
+
+    fn create_pipe_pair() -> Result<(HANDLE, HANDLE), TerminalError> {
+        let mut read_side: HANDLE = std::ptr::null_mut();
+        let mut write_side: HANDLE = std::ptr::null_mut();
+        let mut attrs = SECURITY_ATTRIBUTES {
+            nLength: size_of::<SECURITY_ATTRIBUTES>() as u32,
+            lpSecurityDescriptor: std::ptr::null_mut(),
+            bInheritHandle: 1,
+        };
+        let ok = unsafe { CreatePipe(&mut read_side, &mut write_side, &mut attrs, 0) };
+        if ok == 0 {
+            Err(TerminalError::Io(io::Error::last_os_error()))
+        } else {
+            Ok((read_side, write_side))
+        }
+    }
+
+    fn build_command_line(program: &str, args: &[&str]) -> String {
+        let mut parts = Vec::with_capacity(args.len() + 1);
+        parts.push(quote_windows_arg(program));
+        for arg in args {
+            parts.push(quote_windows_arg(arg));
+        }
+        parts.join(" ")
+    }
+
+    fn quote_windows_arg(arg: &str) -> String {
+        if !arg.contains([' ', '\t', '"']) {
+            return arg.to_string();
+        }
+
+        let mut out = String::from("\"");
+        let mut backslashes = 0usize;
+        for ch in arg.chars() {
+            match ch {
+                '\\' => backslashes += 1,
+                '"' => {
+                    out.push_str(&"\\".repeat(backslashes * 2 + 1));
+                    out.push('"');
+                    backslashes = 0;
+                }
+                _ => {
+                    out.push_str(&"\\".repeat(backslashes));
+                    backslashes = 0;
+                    out.push(ch);
+                }
+            }
+        }
+        out.push_str(&"\\".repeat(backslashes * 2));
+        out.push('"');
+        out
+    }
+
+    fn wide_null(value: &str) -> Vec<u16> {
+        wide_null_os(OsStr::new(value))
+    }
+
+    fn wide_null_os(value: &OsStr) -> Vec<u16> {
+        value.encode_wide().chain(std::iter::once(0)).collect()
+    }
+
+    fn hresult_error(op: &str, hr: i32) -> TerminalError {
+        TerminalError::Io(io::Error::other(format!("{op} failed: HRESULT 0x{hr:08X}")))
+    }
+
+    fn env_block_for_child(program: &str) -> Option<Vec<u16>> {
+        let leaf = program
+            .rsplit(['\\', '/'])
+            .next()
+            .unwrap_or(program)
+            .to_ascii_lowercase();
+        if leaf != "powershell.exe"
+            && leaf != "powershell"
+            && leaf != "pwsh.exe"
+            && leaf != "pwsh"
+        {
+            return None;
+        }
+
+        let mut vars: Vec<(String, String)> = std::env::vars_os()
+            .map(|(key, value)| {
+                (
+                    key.to_string_lossy().into_owned(),
+                    value.to_string_lossy().into_owned(),
+                )
+            })
+            .collect();
+
+        let mut replaced = false;
+        for (key, value) in vars.iter_mut() {
+            if key.eq_ignore_ascii_case("PSREADLINE_VTINPUT") {
+                *value = "0".to_string();
+                replaced = true;
+                break;
+            }
+        }
+        if !replaced {
+            vars.push(("PSREADLINE_VTINPUT".to_string(), "0".to_string()));
+        }
+
+        vars.sort_by(|a, b| a.0.to_ascii_lowercase().cmp(&b.0.to_ascii_lowercase()));
+
+        let mut block = Vec::new();
+        for (key, value) in vars {
+            block.extend(OsStr::new(&(key + "=" + &value)).encode_wide());
+            block.push(0);
+        }
+        block.push(0);
+        Some(block)
     }
 }
 
@@ -581,10 +859,51 @@ mod windows_tests {
         out
     }
 
+    fn drain_until_contains(
+        pty: &mut dyn Pty,
+        deadline: Duration,
+        needle: &str,
+    ) -> String {
+        let start = Instant::now();
+        let mut out = Vec::new();
+        while start.elapsed() < deadline {
+            match pty.read() {
+                Ok(chunk) if !chunk.is_empty() => {
+                    out.extend_from_slice(&chunk);
+                    if String::from_utf8_lossy(&out).contains(needle) {
+                        break;
+                    }
+                }
+                Ok(_) => thread::sleep(Duration::from_millis(10)),
+                Err(_) => break,
+            }
+        }
+        String::from_utf8_lossy(&out).into_owned()
+    }
+
     #[test]
-    fn spawn_shell_roundtrips_powershell_commands() {
+    fn spawn_captures_cmd_output_through_conpty() {
         let mut pty =
-            WindowsPty::spawn_shell(80, 24, "powershell.exe").expect("spawn_shell failed");
+            WindowsPty::spawn(80, 24, "cmd.exe", &["/D", "/C", "echo hello-pier"])
+                .expect("spawn failed");
+
+        let out = drain_until(&mut pty, Duration::from_secs(5));
+        let s = String::from_utf8_lossy(&out);
+        assert!(
+            s.contains("hello-pier"),
+            "expected hello-pier in output, got {:?}",
+            s,
+        );
+    }
+
+    #[test]
+    fn spawn_interactive_powershell_shell_accepts_commands() {
+        let mut pty =
+            WindowsPty::spawn_shell(80, 24, "powershell.exe").expect("spawn shell failed");
+
+        thread::sleep(Duration::from_millis(250));
+        let _ = drain_until(&mut pty, Duration::from_millis(500));
+
         pty.write(b"Write-Output 'hello-pier'\r\nexit\r\n")
             .expect("write failed");
 
@@ -593,6 +912,35 @@ mod windows_tests {
         assert!(
             s.contains("hello-pier"),
             "expected hello-pier in output, got {:?}",
+            s,
+        );
+    }
+
+    #[test]
+    fn interactive_powershell_backspace_edits_the_pending_line() {
+        let mut pty =
+            WindowsPty::spawn_shell(80, 24, "powershell.exe").expect("spawn shell failed");
+
+        let prompt = drain_until_contains(&mut pty, Duration::from_secs(10), "PS ");
+        assert!(
+            prompt.contains("PS "),
+            "expected an interactive PowerShell prompt before typing, got {:?}",
+            prompt,
+        );
+
+        pty.write(b"echo abcd\x7f\x7fXY\r\nexit\r\n")
+            .expect("write failed");
+
+        let out = drain_until(&mut pty, Duration::from_secs(5));
+        let s = String::from_utf8_lossy(&out);
+        assert!(
+            s.contains("abXY"),
+            "expected edited command/output to contain abXY, got {:?}",
+            s,
+        );
+        assert!(
+            !s.contains("abcdXY"),
+            "expected backspace to delete characters before execution, got {:?}",
             s,
         );
     }

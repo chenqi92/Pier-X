@@ -3329,9 +3329,24 @@ Qt %2
         <translation>用于标签、按钮和导航的主界面字体。</translation>
     </message>
     <message>
+        <location filename="../qml/dialogs/SettingsDialog.qml" line="322"/>
+        <source>Interface text size</source>
+        <translation>界面文字大小</translation>
+    </message>
+    <message>
+        <location filename="../qml/dialogs/SettingsDialog.qml" line="323"/>
+        <source>Scales typography across the app without changing layout density too aggressively.</source>
+        <translation>在不过分改变布局密度的前提下，统一缩放整个应用的字体层级。</translation>
+    </message>
+    <message>
         <location filename="../qml/dialogs/SettingsDialog.qml" line="309"/>
         <source>Mono font</source>
         <translation>等宽字体</translation>
+    </message>
+    <message>
+        <location filename="../qml/dialogs/SettingsDialog.qml" line="353"/>
+        <source>Code / mono font</source>
+        <translation>代码 / 等宽字体</translation>
     </message>
     <message>
         <location filename="../qml/dialogs/SettingsDialog.qml" line="310"/>
@@ -4105,6 +4120,49 @@ Create one to unlock SSH, SFTP, Docker, logs, and database tools.</source>
         <location filename="../qml/views/TerminalView.qml" line="808"/>
         <source>Unknown error</source>
         <translation>未知错误</translation>
+    </message>
+    <message>
+        <location filename="../qml/views/TerminalView.qml" line="666"/>
+        <source>History +%1</source>
+        <translation>历史 +%1</translation>
+    </message>
+    <message>
+        <location filename="../qml/views/TerminalView.qml" line="672"/>
+        <source>Back to Live</source>
+        <translation>回到实时输出</translation>
+    </message>
+</context>
+<context>
+    <name>Theme</name>
+    <message>
+        <location filename="../qml/Theme.qml" line="67"/>
+        <source>Default Dark</source>
+        <translation>默认深色</translation>
+    </message>
+    <message>
+        <location filename="../qml/Theme.qml" line="69"/>
+        <source>Default Light</source>
+        <translation>默认浅色</translation>
+    </message>
+    <message>
+        <location filename="../qml/Theme.qml" line="71"/>
+        <source>Solarized Dark</source>
+        <translation>Solarized 深色</translation>
+    </message>
+    <message>
+        <location filename="../qml/Theme.qml" line="73"/>
+        <source>Dracula</source>
+        <translation>Dracula</translation>
+    </message>
+    <message>
+        <location filename="../qml/Theme.qml" line="75"/>
+        <source>Monokai</source>
+        <translation>Monokai</translation>
+    </message>
+    <message>
+        <location filename="../qml/Theme.qml" line="77"/>
+        <source>Nord</source>
+        <translation>Nord</translation>
     </message>
 </context>
 <context>

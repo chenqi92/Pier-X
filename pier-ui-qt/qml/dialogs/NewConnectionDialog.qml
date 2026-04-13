@@ -5,8 +5,7 @@ import QtQuick.Layouts
 import Pier
 
 // Modal dialog — collect SSH connection details and emit `saved` with the
-// resulting object. Styled closer to the original Pier sheet: clear grouping,
-// padded content, and direct auth-mode switching.
+// resulting object.
 Item {
     id: root
 
@@ -67,8 +66,8 @@ Item {
 
     ModalDialogShell {
         open: root.open
-        dialogWidth: 688
-        dialogHeight: 660
+        dialogWidth: 560
+        dialogHeight: 620
         title: qsTr("New SSH connection")
         subtitle: qsTr("Create a reusable host profile for SSH, SFTP, and service panels.")
         bodyPadding: 0
@@ -85,89 +84,87 @@ Item {
 
             Item {
                 width: formScroll.width
-                implicitHeight: form.implicitHeight + root.pagePadding * 2
+                implicitHeight: form.implicitHeight + Theme.sp5 * 2
 
                 ColumnLayout {
                     id: form
-                    width: Math.min(parent.width - root.pagePadding * 2, 624)
+                    width: parent.width - Theme.sp5 * 2
                     anchors.horizontalCenter: parent.horizontalCenter
                     anchors.top: parent.top
-                    anchors.topMargin: root.pagePadding
-                    spacing: Theme.sp6
+                    anchors.topMargin: Theme.sp5
+                    spacing: Theme.sp5
 
+                    // ── Connection fields ──
                     ColumnLayout {
                         Layout.fillWidth: true
-                        spacing: Theme.sp3
+                        spacing: Theme.sp4
 
-                        SectionLabel { text: qsTr("Connection") }
+                        FieldGroup {
+                            label: qsTr("Name")
+                            description: qsTr("Optional display name shown in the sidebar.")
 
-                        FormSectionCard {
-                            FieldGroup {
-                                label: qsTr("Name")
-                                description: qsTr("Optional display name shown in the sidebar.")
-
-                                PierTextField {
-                                    id: nameField
-                                    Layout.fillWidth: true
-                                    placeholder: qsTr("My production server")
-                                }
-                            }
-
-                            RowLayout {
+                            PierTextField {
+                                id: nameField
                                 Layout.fillWidth: true
-                                spacing: Theme.sp3
+                                placeholder: qsTr("My production server")
+                            }
+                        }
 
-                                FieldGroup {
+                        RowLayout {
+                            Layout.fillWidth: true
+                            spacing: Theme.sp3
+
+                            FieldGroup {
+                                Layout.fillWidth: true
+                                label: qsTr("Host")
+                                description: qsTr("Hostname or IP address.")
+
+                                PierTextField {
+                                    id: hostField
                                     Layout.fillWidth: true
-                                    label: qsTr("Host")
-                                    description: qsTr("Hostname or IP address.")
-
-                                    PierTextField {
-                                        id: hostField
-                                        Layout.fillWidth: true
-                                        placeholder: qsTr("example.com")
-                                    }
-                                }
-
-                                FieldGroup {
-                                    Layout.preferredWidth: 108
-                                    label: qsTr("Port")
-                                    description: qsTr("SSH")
-
-                                    PierTextField {
-                                        id: portField
-                                        Layout.fillWidth: true
-                                        text: "22"
-                                    }
+                                    placeholder: qsTr("example.com")
                                 }
                             }
 
                             FieldGroup {
-                                label: qsTr("Username")
-                                description: qsTr("User account on the remote host.")
+                                Layout.preferredWidth: 100
+                                label: qsTr("Port")
 
                                 PierTextField {
-                                    id: userField
+                                    id: portField
                                     Layout.fillWidth: true
-                                    placeholder: qsTr("root")
+                                    text: "22"
                                 }
+                            }
+                        }
+
+                        FieldGroup {
+                            label: qsTr("Username")
+                            description: qsTr("User account on the remote host.")
+
+                            PierTextField {
+                                id: userField
+                                Layout.fillWidth: true
+                                placeholder: qsTr("root")
                             }
                         }
                     }
 
+                    // ── Divider ──
+                    Rectangle {
+                        Layout.fillWidth: true
+                        height: 1
+                        color: Theme.borderSubtle
+                    }
+
+                    // ── Authentication ──
                     ColumnLayout {
                         Layout.fillWidth: true
-                        spacing: Theme.sp3
+                        spacing: Theme.sp4
 
-                        SectionLabel { text: qsTr("Authentication") }
-
-                        Text {
-                            Layout.fillWidth: true
-                            text: qsTr("Choose how Pier-X should authenticate to this host.")
-                            wrapMode: Text.WordWrap
-                            font.family: Theme.fontUi
-                            font.pixelSize: Theme.sizeSmall
-                            color: Theme.textTertiary
+                        FieldGroup {
+                            label: qsTr("Authentication")
+                            description: qsTr("Choose how Pier-X should authenticate to this host.")
                         }
 
                         SegmentedControl {
@@ -177,95 +174,71 @@ Item {
                             currentIndex: 0
                         }
 
-                        FormSectionCard {
-                            visible: root.passwordAuth || root.keyAuth || root.agentAuth
+                        FieldGroup {
+                            visible: root.passwordAuth
+                            Layout.fillWidth: true
+                            label: qsTr("Password")
+                            description: qsTr("Stored securely in the system keychain.")
+
+                            PierTextField {
+                                id: passwordField
+                                Layout.fillWidth: true
+                                placeholder: qsTr("password")
+                                password: true
+                            }
+                        }
+
+                        ColumnLayout {
+                            visible: root.keyAuth
+                            Layout.fillWidth: true
+                            spacing: Theme.sp4
 
                             FieldGroup {
-                                visible: root.passwordAuth
                                 Layout.fillWidth: true
-                                label: qsTr("Password")
-                                description: qsTr("Stored securely in the system keychain.")
+                                label: qsTr("Private key file")
+                                description: qsTr("Absolute path to an OpenSSH private key.")
+
+                                RowLayout {
+                                    Layout.fillWidth: true
+                                    spacing: Theme.sp2
+
+                                    PierTextField {
+                                        id: keyPathField
+                                        Layout.fillWidth: true
+                                        placeholder: qsTr("~/.ssh/id_ed25519")
+                                    }
+
+                                    GhostButton {
+                                        text: qsTr("Browse…")
+                                        onClicked: keyFileDialog.open()
+                                    }
+                                }
+                            }
+
+                            FieldGroup {
+                                Layout.fillWidth: true
+                                label: qsTr("Passphrase")
+                                description: qsTr("Optional. Leave empty for unencrypted keys.")
 
                                 PierTextField {
-                                    id: passwordField
+                                    id: passphraseField
                                     Layout.fillWidth: true
-                                    placeholder: qsTr("password")
+                                    placeholder: qsTr("leave empty if unencrypted")
                                     password: true
                                 }
                             }
+                        }
 
-                            ColumnLayout {
-                                visible: root.keyAuth
-                                Layout.fillWidth: true
-                                spacing: Theme.sp3
-
-                                FieldGroup {
-                                    Layout.fillWidth: true
-                                    label: qsTr("Private key file")
-                                    description: qsTr("Absolute path to an OpenSSH private key.")
-
-                                    RowLayout {
-                                        Layout.fillWidth: true
-                                        spacing: Theme.sp2
-
-                                        PierTextField {
-                                            id: keyPathField
-                                            Layout.fillWidth: true
-                                            placeholder: qsTr("~/.ssh/id_ed25519")
-                                        }
-
-                                        GhostButton {
-                                            text: qsTr("Browse…")
-                                            onClicked: keyFileDialog.open()
-                                        }
-                                    }
-                                }
-
-                                FieldGroup {
-                                    Layout.fillWidth: true
-                                    label: qsTr("Passphrase")
-                                    description: qsTr("Optional. Leave empty for unencrypted keys.")
-
-                                    PierTextField {
-                                        id: passphraseField
-                                        Layout.fillWidth: true
-                                        placeholder: qsTr("leave empty if unencrypted")
-                                        password: true
-                                    }
-                                }
-                            }
-
-                            Card {
-                                Layout.fillWidth: true
-                                visible: root.agentAuth
-                                padding: Theme.sp3
-                                inset: true
-
-                                ColumnLayout {
-                                    anchors.fill: parent
-                                    spacing: Theme.sp1
-
-                                    Text {
-                                        Layout.fillWidth: true
-                                        text: qsTr("SSH agent")
-                                        font.family: Theme.fontUi
-                                        font.pixelSize: Theme.sizeBody
-                                        font.weight: Theme.weightMedium
-                                        color: Theme.textPrimary
-                                    }
-
-                                    Text {
-                                        Layout.fillWidth: true
-                                        text: Qt.platform.os === "windows"
-                                            ? qsTr("Uses Pageant or the Windows OpenSSH agent. Make sure your key is already loaded before connecting.")
-                                            : qsTr("Uses the agent exposed at $SSH_AUTH_SOCK. Make sure your key is added first, for example with ssh-add.")
-                                        wrapMode: Text.WordWrap
-                                        font.family: Theme.fontUi
-                                        font.pixelSize: Theme.sizeSmall
-                                        color: Theme.textSecondary
-                                    }
-                                }
-                            }
+                        Text {
+                            Layout.fillWidth: true
+                            visible: root.agentAuth
+                            text: Qt.platform.os === "windows"
+                                ? qsTr("Uses Pageant or the Windows OpenSSH agent. Make sure your key is already loaded before connecting.")
+                                : qsTr("Uses the agent exposed at $SSH_AUTH_SOCK. Make sure your key is added first, for example with ssh-add.")
+                            wrapMode: Text.WordWrap
+                            font.family: Theme.fontUi
+                            font.pixelSize: Theme.sizeSmall
+                            color: Theme.textSecondary
                         }
                     }
 
@@ -339,7 +312,7 @@ Item {
         Text {
             text: parent.label
             font.family: Theme.fontUi
-            font.pixelSize: Theme.sizeCaption
+            font.pixelSize: Theme.sizeBody
             font.weight: Theme.weightMedium
             color: Theme.textPrimary
         }
@@ -358,21 +331,6 @@ Item {
             id: fieldSlot
             Layout.fillWidth: true
             spacing: Theme.sp2
-        }
-    }
-
-    component FormSectionCard: Card {
-        Layout.fillWidth: true
-        padding: Theme.sp4
-        inset: true
-        implicitHeight: contentColumn.implicitHeight + padding * 2
-
-        default property alias content: contentColumn.data
-
-        ColumnLayout {
-            id: contentColumn
-            anchors.fill: parent
-            spacing: Theme.sp3
         }
     }
 }

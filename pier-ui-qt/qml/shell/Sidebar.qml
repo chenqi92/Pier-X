@@ -1,6 +1,7 @@
 import QtQuick
 import QtQuick.Effects
 import QtQuick.Layouts
+import QtQuick.Window
 import Pier
 import "../components"
 
@@ -472,13 +473,15 @@ Rectangle {
 
     ModalDialogShell {
         id: groupDialog
+        parent: root.Window.window ? root.Window.window.contentItem : root
+        anchors.fill: parent
         open: false
         title: root.groupDialogMode === "rename" ? qsTr("Rename Group") : qsTr("New Group")
         subtitle: root.groupDialogMode === "rename"
                   ? qsTr("Update the section name for these saved connections.")
                   : qsTr("Create a persistent server group for organizing saved connections.")
         dialogWidth: 420
-        dialogHeight: 246
+        dialogHeight: 280
         bodyPadding: 0
         onRequestClose: open = false
 

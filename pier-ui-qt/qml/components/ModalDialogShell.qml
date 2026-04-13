@@ -48,14 +48,11 @@ Item {
         opacity: root.open ? 1.0 : 0.0
         transformOrigin: Item.Center
         color: Theme.bgElevated
-        border.color: Theme.borderDefault
-        border.width: 1
         radius: Theme.radiusLg
 
         Behavior on scale { NumberAnimation { duration: Theme.durNormal; easing.type: Theme.easingType } }
         Behavior on opacity { NumberAnimation { duration: Theme.durNormal; easing.type: Theme.easingType } }
         Behavior on color { ColorAnimation { duration: Theme.durNormal } }
-        Behavior on border.color { ColorAnimation { duration: Theme.durNormal } }
 
         layer.enabled: true
         layer.effect: MultiEffect {
@@ -76,18 +73,29 @@ Item {
             anchors.fill: parent
             spacing: 0
 
-            Rectangle {
+            // ── Header ──
+            Item {
                 Layout.fillWidth: true
                 Layout.preferredHeight: Theme.dialogHeaderHeight
-                color: Theme.bgChrome
-                radius: Theme.radiusLg
+                clip: true
 
+                // Header background — fills top area with rounded top corners
+                Rectangle {
+                    anchors.fill: parent
+                    color: Theme.bgChrome
+                    Behavior on color { ColorAnimation { duration: Theme.durNormal } }
+
+                    // Only round the top corners by extending below the clip
+                    radius: Theme.radiusLg
+                }
+                // Mask the bottom rounded corners of the header bg
                 Rectangle {
                     anchors.left: parent.left
                     anchors.right: parent.right
                     anchors.bottom: parent.bottom
                     height: Theme.radiusLg
-                    color: Theme.bgElevated
+                    color: Theme.bgChrome
+                    Behavior on color { ColorAnimation { duration: Theme.durNormal } }
                 }
 
                 RowLayout {
@@ -131,6 +139,7 @@ Item {
                     }
                 }
 
+                // Header bottom divider
                 Rectangle {
                     anchors.left: parent.left
                     anchors.right: parent.right
@@ -140,6 +149,7 @@ Item {
                 }
             }
 
+            // ── Body ──
             Item {
                 id: bodyContainer
                 Layout.fillWidth: true
@@ -153,13 +163,32 @@ Item {
                 }
             }
 
-            Rectangle {
+            // ── Footer ──
+            Item {
                 id: footerContainer
                 visible: footerSlot.children.length > 0
                 Layout.fillWidth: true
                 implicitHeight: footerSlot.childrenRect.height + Theme.sp4 * 2
-                color: Theme.bgChrome
+                clip: true
 
+                // Footer background — fills bottom area with rounded bottom corners
+                Rectangle {
+                    anchors.fill: parent
+                    color: Theme.bgChrome
+                    Behavior on color { ColorAnimation { duration: Theme.durNormal } }
+                    radius: Theme.radiusLg
+                }
+                // Mask the top rounded corners of the footer bg
+                Rectangle {
+                    anchors.left: parent.left
+                    anchors.right: parent.right
+                    anchors.top: parent.top
+                    height: Theme.radiusLg
+                    color: Theme.bgChrome
+                    Behavior on color { ColorAnimation { duration: Theme.durNormal } }
+                }
+
+                // Footer top divider
                 Rectangle {
                     anchors.left: parent.left
                     anchors.right: parent.right

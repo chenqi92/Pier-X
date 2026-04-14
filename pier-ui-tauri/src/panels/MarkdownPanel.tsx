@@ -28,7 +28,7 @@ export default function MarkdownPanel() {
             <span className="field-label">{t("Load from file")}</span>
             <div className="branch-row">
               <input className="field-input" onChange={(e) => setFilePath(e.currentTarget.value)} placeholder="/path/to/README.md" value={filePath} />
-              <button className="mini-button" disabled={!filePath.trim()} onClick={() => void renderFile()} type="button">Load</button>
+              <button className="mini-button" disabled={!filePath.trim()} onClick={() => void renderFile()} type="button">{t("Load")}</button>
             </div>
           </label>
           <label className="field-stack">
@@ -44,7 +44,7 @@ export default function MarkdownPanel() {
         {html ? (
           <div className="markdown-preview" dangerouslySetInnerHTML={{ __html: html }} />
         ) : (
-          <div className="empty-note">Type or load Markdown content.</div>
+          <div className="empty-note">{t("Type or load Markdown content.")}</div>
         )}
       </section>
     </div>

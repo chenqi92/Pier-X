@@ -25,7 +25,6 @@ export default function GitPanel({ browserPath }: Props) {
 
   function changeKey(c: GitChangeEntry) { return `${c.path}:${c.staged ? "s" : "w"}`; }
 
-  // Poll git overview
   useEffect(() => {
     if (!browserPath) return;
     let disposed = false;
@@ -38,7 +37,6 @@ export default function GitPanel({ browserPath }: Props) {
     return () => { disposed = true; clearInterval(id); };
   }, [browserPath]);
 
-  // Load branches, commits, stashes
   useEffect(() => {
     if (!browserPath || !overview) { setBranches([]); setCommits([]); setStashes([]); return; }
     Promise.all([
@@ -51,7 +49,6 @@ export default function GitPanel({ browserPath }: Props) {
     }).catch(() => {});
   }, [browserPath, overview?.repoPath, overview?.branchName]);
 
-  // Auto-select first change
   useEffect(() => {
     if (!overview?.changes.length) { setSelectedKey(""); return; }
     if (!selectedKey || !overview.changes.some((c) => changeKey(c) === selectedKey)) {
@@ -59,18 +56,17 @@ export default function GitPanel({ browserPath }: Props) {
     }
   }, [overview]);
 
-  // Load diff for selected change
   const selected = overview?.changes.find((c) => changeKey(c) === selectedKey) ?? null;
   useEffect(() => {
     if (!browserPath || !selected) { setDiffText(""); return; }
     let cancelled = false;
     setDiffLoading(true);
     cmd.gitDiff(browserPath, selected.path, selected.staged)
-      .then((d) => { if (!cancelled) setDiffText(d || "No diff output."); })
+      .then((d) => { if (!cancelled) setDiffText(d || t("No diff output.")); })
       .catch((e) => { if (!cancelled) setDiffText(String(e)); })
       .finally(() => { if (!cancelled) setDiffLoading(false); });
     return () => { cancelled = true; };
-  }, [browserPath, selected?.path, selected?.staged]);
+  }, [browserPath, selected?.path, selected?.staged, t]);
 
   async function gitOp(fn: () => Promise<unknown>, successMsg?: string) {
     setBusy(true); setOpError(""); setNotice("");
@@ -80,23 +76,21 @@ export default function GitPanel({ browserPath }: Props) {
   }
 
   if (!overview) {
-    return <div className="empty-note">{gitError || "Not a Git repository."}</div>;
+    return <div className="empty-note">{gitError || t("Not a Git repository.")}</div>;
   }
 
   return (
     <div className="panel-scroll">
-      {/* Repository info */}
       <section className="panel-section">
         <div className="panel-section__title"><GitBranch size={14} /><span>{t("Repository")}</span></div>
         <ul className="stack-list">
           <li><span>{t("Branch")}</span><strong>{overview.branchName}</strong></li>
-          <li><span>{t("Tracking")}</span><strong>{overview.tracking || "local only"}</strong></li>
+          <li><span>{t("Tracking")}</span><strong>{overview.tracking || t("local only")}</strong></li>
           <li><span>{t("Ahead / Behind")}</span><strong>{overview.ahead} / {overview.behind}</strong></li>
           <li><span>{t("Staged / Unstaged")}</span><strong>{overview.stagedCount} / {overview.unstagedCount}</strong></li>
         </ul>
       </section>
 
-      {/* Working tree */}
       <section className="panel-section">
         <div className="panel-section__title"><GitBranch size={14} /><span>{t("Working Tree")}</span></div>
         {overview.changes.length > 0 ? (
@@ -108,10 +102,9 @@ export default function GitPanel({ browserPath }: Props) {
               </button>
             ))}
           </div>
-        ) : <div className="empty-note">{overview.isClean ? t("Workspace clean.") : "No changes."}</div>}
+        ) : <div className="empty-note">{overview.isClean ? t("Workspace clean.") : t("No changes.")}</div>}
       </section>
 
-      {/* Diff */}
       {selected && (
         <section className="panel-section">
           <div className="panel-section__title"><GitBranch size={14} /><span>{t("Diff Preview")}</span></div>
@@ -120,11 +113,10 @@ export default function GitPanel({ browserPath }: Props) {
             <button className="mini-button" disabled={busy || overview.isClean} onClick={() => void gitOp(() => cmd.gitStageAll(browserPath))} type="button">{t("Stage All")}</button>
             <button className="mini-button" disabled={busy || overview.stagedCount === 0} onClick={() => void gitOp(() => cmd.gitUnstageAll(browserPath))} type="button">{t("Unstage All")}</button>
           </div>
-          {diffLoading ? <div className="empty-note">Loading diff...</div> : <pre className="diff-viewer">{diffText}</pre>}
+          {diffLoading ? <div className="empty-note">{t("Loading diff...")}</div> : <pre className="diff-viewer">{diffText}</pre>}
         </section>
       )}
 
-      {/* Actions */}
       <section className="panel-section">
         <div className="panel-section__title"><GitBranch size={14} /><span>{t("Repository Actions")}</span></div>
         <div className="form-stack">
@@ -134,35 +126,34 @@ export default function GitPanel({ browserPath }: Props) {
               <select className="field-input field-select" disabled={!branches.length || busy} onChange={(e) => setBranchTarget(e.currentTarget.value)} value={branchTarget}>
                 {branches.map((b) => <option key={b} value={b}>{b}</option>)}
               </select>
-              <button className="mini-button" disabled={!branchTarget || branchTarget === overview.branchName || busy} onClick={() => void gitOp(() => cmd.gitCheckoutBranch(browserPath, branchTarget), `Switched to ${branchTarget}`)} type="button">{t("Switch")}</button>
+              <button className="mini-button" disabled={!branchTarget || branchTarget === overview.branchName || busy} onClick={() => void gitOp(() => cmd.gitCheckoutBranch(browserPath, branchTarget), t("Switched to {branch}", { branch: branchTarget }))} type="button">{t("Switch")}</button>
             </div>
           </label>
           <label className="field-stack">
             <span className="field-label">{t("Commit staged changes")}</span>
-            <textarea className="field-textarea" disabled={busy} onChange={(e) => setCommitMsg(e.currentTarget.value)} placeholder={overview.stagedCount > 0 ? "Commit message" : "Stage files first"} rows={3} value={commitMsg} />
+            <textarea className="field-textarea" disabled={busy} onChange={(e) => setCommitMsg(e.currentTarget.value)} placeholder={overview.stagedCount > 0 ? t("Commit message") : t("Stage files first")} rows={3} value={commitMsg} />
           </label>
           <div className="button-row">
-            <button className="mini-button" disabled={overview.stagedCount === 0 || !commitMsg.trim() || busy} onClick={() => void gitOp(async () => { await cmd.gitCommit(browserPath, commitMsg); setCommitMsg(""); }, "Committed")} type="button">{t("Commit Staged")}</button>
-            <button className="mini-button" disabled={busy} onClick={() => void gitOp(() => cmd.gitPull(browserPath), "Pulled")} type="button">{t("Pull")}</button>
-            <button className="mini-button" disabled={busy} onClick={() => void gitOp(() => cmd.gitPush(browserPath), "Pushed")} type="button">{t("Push")}</button>
+            <button className="mini-button" disabled={overview.stagedCount === 0 || !commitMsg.trim() || busy} onClick={() => void gitOp(async () => { await cmd.gitCommit(browserPath, commitMsg); setCommitMsg(""); }, t("Committed"))} type="button">{t("Commit Staged")}</button>
+            <button className="mini-button" disabled={busy} onClick={() => void gitOp(() => cmd.gitPull(browserPath), t("Pulled"))} type="button">{t("Pull")}</button>
+            <button className="mini-button" disabled={busy} onClick={() => void gitOp(() => cmd.gitPush(browserPath), t("Pushed"))} type="button">{t("Push")}</button>
           </div>
           {notice && <div className="status-note">{notice}</div>}
           {opError && <div className="status-note status-note--error">{opError}</div>}
         </div>
       </section>
 
-      {/* Stash */}
       <section className="panel-section">
         <div className="panel-section__title"><GitBranch size={14} /><span>{t("Sync & Stash")}</span></div>
         <div className="form-stack">
           <div className="branch-row">
-            <input className="field-input" disabled={busy} onChange={(e) => setStashMsg(e.currentTarget.value)} placeholder="Optional stash label" value={stashMsg} />
-            <button className="mini-button" disabled={overview.isClean || busy} onClick={() => void gitOp(async () => { await cmd.gitStashPush(browserPath, stashMsg); setStashMsg(""); }, "Stashed")} type="button">{t("Stash")}</button>
+            <input className="field-input" disabled={busy} onChange={(e) => setStashMsg(e.currentTarget.value)} placeholder={t("Optional stash label")} value={stashMsg} />
+            <button className="mini-button" disabled={overview.isClean || busy} onClick={() => void gitOp(async () => { await cmd.gitStashPush(browserPath, stashMsg); setStashMsg(""); }, t("Stashed"))} type="button">{t("Stash")}</button>
           </div>
           {stashes.map((s) => (
             <div className="stash-row" key={s.index}>
               <div className="stash-row__head"><span className="commit-hash">{s.index}</span><span className="inline-note">{s.relativeDate}</span></div>
-              <div className="stash-row__message">{s.message || "WIP"}</div>
+              <div className="stash-row__message">{s.message || t("WIP")}</div>
               <div className="stash-row__actions">
                 <button className="mini-button" disabled={busy} onClick={() => void gitOp(() => cmd.gitStashApply(browserPath, s.index))} type="button">{t("Apply")}</button>
                 <button className="mini-button" disabled={busy} onClick={() => void gitOp(() => cmd.gitStashPop(browserPath, s.index))} type="button">{t("Pop")}</button>
@@ -173,7 +164,6 @@ export default function GitPanel({ browserPath }: Props) {
         </div>
       </section>
 
-      {/* Recent commits */}
       <section className="panel-section">
         <div className="panel-section__title"><History size={14} /><span>{t("Recent Commits")}</span></div>
         {commits.length > 0 ? (
@@ -186,7 +176,7 @@ export default function GitPanel({ browserPath }: Props) {
               </div>
             ))}
           </div>
-        ) : <div className="empty-note">No commit history.</div>}
+        ) : <div className="empty-note">{t("No commit history.")}</div>}
       </section>
     </div>
   );

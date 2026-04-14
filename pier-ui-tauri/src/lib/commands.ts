@@ -5,10 +5,25 @@ import { invoke } from "@tauri-apps/api/core";
 import type {
   CoreInfo,
   DockerOverview,
+  GitBlameLineView,
   FileEntry,
+  GitCommitDetailView,
   GitCommitEntry,
+  GitComparisonFileView,
+  GitConfigEntryView,
+  GitConflictFileView,
+  GitConflictHunkView,
+  GitGraphHistoryParams,
+  GitGraphMetadata,
+  GitGraphRowView,
   GitOverview,
+  GitPanelState,
+  GitRemoteView,
+  GitRebaseItemView,
+  GitRebasePlanView,
   GitStashEntry,
+  GitSubmoduleView,
+  GitTagView,
   MysqlBrowserState,
   PostgresBrowserState,
   QueryExecutionResult,
@@ -34,8 +49,14 @@ export const listDirectory = (path?: string) =>
 export const gitOverview = (path?: string) =>
   invoke<GitOverview>("git_overview", { path: path ?? null });
 
-export const gitDiff = (path: string | null, filePath: string, staged: boolean) =>
-  invoke<string>("git_diff", { path, filePath, staged });
+export const gitPanelState = (path?: string | null) =>
+  invoke<GitPanelState>("git_panel_state", { path: path ?? null });
+
+export const gitInitRepo = (path?: string | null) =>
+  invoke<string>("git_init_repo", { path: path ?? null });
+
+export const gitDiff = (path: string | null, filePath: string, staged: boolean, untracked?: boolean) =>
+  invoke<string>("git_diff", { path, filePath, staged, untracked: !!untracked });
 
 export const gitStagePaths = (path: string | null, paths: string[]) =>
   invoke<void>("git_stage_paths", { path, paths });
@@ -55,14 +76,68 @@ export const gitDiscardPaths = (path: string | null, paths: string[]) =>
 export const gitCommit = (path: string | null, message: string) =>
   invoke<string>("git_commit", { path, message });
 
+export const gitCommitAndPush = (path: string | null, message: string) =>
+  invoke<string>("git_commit_and_push", { path, message });
+
 export const gitBranchList = (path: string | null) =>
   invoke<string[]>("git_branch_list", { path });
 
 export const gitCheckoutBranch = (path: string | null, name: string) =>
   invoke<string>("git_checkout_branch", { path, name });
 
+export const gitCheckoutTarget = (path: string | null, target: string, tracking?: string | null) =>
+  invoke<string>("git_checkout_target", { path, target, tracking: tracking ?? null });
+
+export const gitCreateBranch = (path: string | null, name: string) =>
+  invoke<string>("git_create_branch", { path, name });
+
+export const gitCreateBranchAt = (path: string | null, name: string, startPoint?: string | null) =>
+  invoke<string>("git_create_branch_at", { path, name, startPoint: startPoint ?? null });
+
+export const gitDeleteBranch = (path: string | null, name: string) =>
+  invoke<string>("git_delete_branch", { path, name });
+
+export const gitRenameBranch = (path: string | null, oldName: string, newName: string) =>
+  invoke<string>("git_rename_branch", { path, oldName, newName });
+
+export const gitRenameRemoteBranch = (path: string | null, remoteName: string, oldBranch: string, newName: string) =>
+  invoke<string>("git_rename_remote_branch", { path, remoteName, oldBranch, newName });
+
+export const gitDeleteRemoteBranch = (path: string | null, remoteName: string, branchName: string) =>
+  invoke<string>("git_delete_remote_branch", { path, remoteName, branchName });
+
+export const gitMergeBranch = (path: string | null, name: string) =>
+  invoke<string>("git_merge_branch", { path, name });
+
+export const gitSetBranchTracking = (path: string | null, branchName: string, upstream: string) =>
+  invoke<string>("git_set_branch_tracking", { path, branchName, upstream });
+
+export const gitUnsetBranchTracking = (path: string | null, branchName: string) =>
+  invoke<string>("git_unset_branch_tracking", { path, branchName });
+
 export const gitRecentCommits = (path: string | null, limit?: number) =>
   invoke<GitCommitEntry[]>("git_recent_commits", { path, limit: limit ?? null });
+
+export const gitGraphMetadata = (path: string | null) =>
+  invoke<GitGraphMetadata>("git_graph_metadata", { path });
+
+export const gitGraphHistory = (params: GitGraphHistoryParams) =>
+  invoke<GitGraphRowView[]>("git_graph_history", { params });
+
+export const gitCommitDetail = (path: string | null, hash: string) =>
+  invoke<GitCommitDetailView>("git_commit_detail", { path, hash });
+
+export const gitCommitFileDiff = (path: string | null, hash: string, filePath: string) =>
+  invoke<string>("git_commit_file_diff", { path, hash, filePath });
+
+export const gitComparisonFiles = (path: string | null, hash: string) =>
+  invoke<GitComparisonFileView[]>("git_comparison_files", { path, hash });
+
+export const gitComparisonDiff = (path: string | null, hash: string, filePath: string) =>
+  invoke<string>("git_comparison_diff", { path, hash, filePath });
+
+export const gitBlameFile = (path: string | null, filePath: string) =>
+  invoke<GitBlameLineView[]>("git_blame_file", { path, filePath });
 
 export const gitPush = (path: string | null) =>
   invoke<string>("git_push", { path });
@@ -84,6 +159,90 @@ export const gitStashPop = (path: string | null, index: string) =>
 
 export const gitStashDrop = (path: string | null, index: string) =>
   invoke<string>("git_stash_drop", { path, index });
+
+export const gitTagsList = (path: string | null) =>
+  invoke<GitTagView[]>("git_tags_list", { path });
+
+export const gitCreateTag = (path: string | null, name: string, message: string) =>
+  invoke<string>("git_create_tag", { path, name, message });
+
+export const gitCreateTagAt = (path: string | null, name: string, target: string | null, message: string) =>
+  invoke<string>("git_create_tag_at", { path, name, target, message });
+
+export const gitDeleteTag = (path: string | null, name: string) =>
+  invoke<string>("git_delete_tag", { path, name });
+
+export const gitPushTag = (path: string | null, name: string) =>
+  invoke<string>("git_push_tag", { path, name });
+
+export const gitPushAllTags = (path: string | null) =>
+  invoke<string>("git_push_all_tags", { path });
+
+export const gitRemotesList = (path: string | null) =>
+  invoke<GitRemoteView[]>("git_remotes_list", { path });
+
+export const gitAddRemote = (path: string | null, name: string, url: string) =>
+  invoke<string>("git_add_remote", { path, name, url });
+
+export const gitSetRemoteUrl = (path: string | null, name: string, url: string) =>
+  invoke<string>("git_set_remote_url", { path, name, url });
+
+export const gitRemoveRemote = (path: string | null, name: string) =>
+  invoke<string>("git_remove_remote", { path, name });
+
+export const gitFetchRemote = (path: string | null, name?: string | null) =>
+  invoke<string>("git_fetch_remote", { path, name: name ?? null });
+
+export const gitConfigList = (path: string | null) =>
+  invoke<GitConfigEntryView[]>("git_config_list", { path });
+
+export const gitSetConfigValue = (path: string | null, key: string, value: string, global: boolean) =>
+  invoke<string>("git_set_config_value", { path, key, value, global });
+
+export const gitUnsetConfigValue = (path: string | null, key: string, global: boolean) =>
+  invoke<string>("git_unset_config_value", { path, key, global });
+
+export const gitResetToCommit = (path: string | null, hash: string, mode: string) =>
+  invoke<string>("git_reset_to_commit", { path, hash, mode });
+
+export const gitAmendHeadCommitMessage = (path: string | null, hash: string, message: string) =>
+  invoke<string>("git_amend_head_commit_message", { path, hash, message });
+
+export const gitDropCommit = (path: string | null, hash: string, parentHash?: string | null) =>
+  invoke<string>("git_drop_commit", { path, hash, parentHash: parentHash ?? null });
+
+export const gitRebasePlan = (path: string | null, count?: number | null) =>
+  invoke<GitRebasePlanView>("git_rebase_plan", { path, count: count ?? null });
+
+export const gitExecuteRebase = (path: string | null, items: GitRebaseItemView[], onto?: string | null) =>
+  invoke<string>("git_execute_rebase", { path, items, onto: onto ?? null });
+
+export const gitAbortRebase = (path: string | null) =>
+  invoke<string>("git_abort_rebase", { path });
+
+export const gitContinueRebase = (path: string | null) =>
+  invoke<string>("git_continue_rebase", { path });
+
+export const gitSubmodulesList = (path: string | null) =>
+  invoke<GitSubmoduleView[]>("git_submodules_list", { path });
+
+export const gitInitSubmodules = (path: string | null) =>
+  invoke<string>("git_init_submodules", { path });
+
+export const gitUpdateSubmodules = (path: string | null, recursive = true) =>
+  invoke<string>("git_update_submodules", { path, recursive });
+
+export const gitSyncSubmodules = (path: string | null) =>
+  invoke<string>("git_sync_submodules", { path });
+
+export const gitConflictsList = (path: string | null) =>
+  invoke<GitConflictFileView[]>("git_conflicts_list", { path });
+
+export const gitConflictAcceptAll = (path: string | null, filePath: string, resolution: string) =>
+  invoke<string>("git_conflict_accept_all", { path, filePath, resolution });
+
+export const gitConflictMarkResolved = (path: string | null, filePath: string, hunks: GitConflictHunkView[]) =>
+  invoke<string>("git_conflict_mark_resolved", { params: { path, filePath, hunks } });
 
 // ── SSH Connections ─────────────────────────────────────────────
 

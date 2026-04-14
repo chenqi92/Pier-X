@@ -13,9 +13,10 @@ export default function ServerMonitorPanel({ tab }: Props) {
   const [error, setError] = useState("");
 
   const hasSsh = tab.backend === "ssh" && tab.sshHost.trim() && tab.sshUser.trim();
+  const sshRequired = t("SSH connection required.");
 
   async function probe() {
-    if (!hasSsh) { setError("SSH connection required."); return; }
+    if (!hasSsh) { setError(sshRequired); return; }
     setBusy(true); setError("");
     try {
       const s = await cmd.serverMonitorProbe({ host: tab.sshHost, port: tab.sshPort, user: tab.sshUser, authMode: tab.sshAuthMode, password: tab.sshPassword, keyPath: tab.sshKeyPath });
@@ -29,15 +30,15 @@ export default function ServerMonitorPanel({ tab }: Props) {
       <section className="panel-section">
         <div className="panel-section__title"><ActivitySquare size={14} /><span>{t("Server Monitor")}</span></div>
         <div className="form-stack">
-          <button className="mini-button" disabled={!hasSsh || busy} onClick={() => void probe()} type="button">{busy ? "Probing..." : t("Probe Server")}</button>
-          {!hasSsh && <div className="inline-note">SSH connection required.</div>}
+          <button className="mini-button" disabled={!hasSsh || busy} onClick={() => void probe()} type="button">{busy ? t("Probing...") : t("Probe Server")}</button>
+          {!hasSsh && <div className="inline-note">{sshRequired}</div>}
           {error && <div className="status-note status-note--error">{error}</div>}
         </div>
       </section>
 
       {snap && (
         <section className="panel-section">
-          <div className="panel-section__title"><span>Resources</span></div>
+          <div className="panel-section__title"><span>{t("Resources")}</span></div>
           <ul className="stack-list">
             <li><span>{t("Uptime")}</span><strong>{snap.uptime}</strong></li>
             <li><span>{t("CPU")}</span><strong>{snap.cpuPct.toFixed(1)}%</strong></li>

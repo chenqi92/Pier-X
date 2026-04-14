@@ -80,5 +80,5 @@ FetchContent_MakeAvailable(Corrosion)
 # pier-core: Rust core engine (static lib, C ABI)
 add_subdirectory(pier-core)
 
-# pier-ui-qt: Qt 6 / QML UI shell
-add_subdirectory(pier-ui-qt)
+# pier-ui-tauri: Tauri + React UI shell (built via `npm run tauri build`)
+# No CMake integration needed — Tauri has its own build pipeline.

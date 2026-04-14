@@ -6,8 +6,11 @@ import { SquareTerminal } from "lucide-react";
 import { startTransition, useEffect, useRef, useState } from "react";
 import * as cmd from "../lib/commands";
 import { controlKeyMap } from "../lib/commands";
+import { useI18n } from "../i18n/useI18n";
 import type { TabState, TerminalSessionInfo, TerminalSnapshot, TerminalSize } from "../lib/types";
 import { useTabStore } from "../stores/useTabStore";
+import { useSettingsStore } from "../stores/useSettingsStore";
+import { useThemeStore, TERMINAL_THEMES } from "../stores/useThemeStore";
 
 type Props = {
   tab: TabState;
@@ -15,7 +18,14 @@ type Props = {
 };
 
 export default function TerminalPanel({ tab, isActive }: Props) {
+  const { t } = useI18n();
   const updateTab = useTabStore((s) => s.updateTab);
+  const terminalFontSize = useSettingsStore((s) => s.terminalFontSize);
+  const monoFont = useSettingsStore((s) => s.monoFontFamily);
+  const cursorStyle = useSettingsStore((s) => s.cursorStyle);
+  const cursorBlink = useSettingsStore((s) => s.cursorBlink);
+  const termThemeIdx = useThemeStore((s) => s.terminalThemeIndex);
+  const termTheme = TERMINAL_THEMES[termThemeIdx] ?? TERMINAL_THEMES[0];
   const [session, setSession] = useState<TerminalSessionInfo | null>(null);
   const [snapshot, setSnapshot] = useState<TerminalSnapshot | null>(null);
   const [error, setError] = useState("");
@@ -53,7 +63,7 @@ export default function TerminalPanel({ tab, isActive }: Props) {
     const observer = new ResizeObserver(recalculate);
     observer.observe(viewport);
     return () => observer.disconnect();
-  }, []);
+  }, [terminalFontSize, monoFont]);
 
   // ── Create session ──────────────────────────────────────────
 
@@ -237,7 +247,7 @@ export default function TerminalPanel({ tab, isActive }: Props) {
     setScrollbackOffset(0);
   }
 
-  const surfaceStatus = snapshot?.alive ? "Live" : session ? "Exited" : "Booting";
+  const surfaceStatus = snapshot?.alive ? t("Live") : session ? t("Exited") : t("Booting");
 
   return (
     <section
@@ -250,7 +260,7 @@ export default function TerminalPanel({ tab, isActive }: Props) {
           <span>
             {tab.backend === "ssh"
               ? `${tab.sshUser}@${tab.sshHost}`
-              : session?.shell ?? "Terminal"}
+              : session?.shell ?? t("Terminal")}
           </span>
         </div>
         <div className="terminal-panel__meta">
@@ -268,11 +278,11 @@ export default function TerminalPanel({ tab, isActive }: Props) {
               onClick={() => setScrollbackOffset(0)}
               type="button"
             >
-              Follow Live
+              {t("Follow Live")}
             </button>
           ) : null}
           <button className="mini-button" onClick={() => void restartTerminal()} type="button">
-            Restart
+            {t("Restart")}
           </button>
         </div>
       </div>
@@ -283,37 +293,63 @@ export default function TerminalPanel({ tab, isActive }: Props) {
         onMouseDown={(e) => e.currentTarget.focus()}
         onWheel={handleWheel}
         ref={viewportRef}
+        style={{ background: termTheme.bg }}
         tabIndex={0}
       >
-        <span aria-hidden className="terminal-measure" ref={measureRef}>
+        <span
+          aria-hidden
+          className="terminal-measure"
+          ref={measureRef}
+          style={{ fontFamily: `"${monoFont}", monospace`, fontSize: `${terminalFontSize}px` }}
+        >
           MMMMMMMMMM
         </span>
 
         {error ? (
           <div className="terminal-placeholder terminal-placeholder--error">{error}</div>
         ) : snapshot ? (
-          <div className="terminal-screen">
+          <div
+            className="terminal-screen"
+            style={{
+              fontFamily: `"${monoFont}", monospace`,
+              fontSize: `${terminalFontSize}px`,
+              background: termTheme.bg,
+              color: termTheme.fg,
+            }}
+          >
             {snapshot.lines.map((line, i) => (
-              <div className="terminal-row" key={`line-${i}`}>
-                {line.segments.map((seg, j) => (
-                  <span
-                    className={seg.cursor ? "terminal-segment terminal-segment--cursor" : "terminal-segment"}
-                    key={`seg-${i}-${j}`}
-                    style={{
-                      backgroundColor: seg.cursor ? undefined : seg.bg,
-                      color: seg.cursor ? undefined : seg.fg,
-                      fontWeight: seg.bold ? 510 : 400,
-                      textDecoration: seg.underline ? "underline" : "none",
-                    }}
-                  >
-                    {seg.text}
-                  </span>
-                ))}
+              <div className="terminal-row" key={`line-${i}`} style={{ color: termTheme.fg }}>
+                {line.segments.map((seg, j) => {
+                  const isCursor = seg.cursor;
+                  // Cursor style: 0=block (default), 1=beam, 2=underline
+                  const cursorClass = isCursor
+                    ? cursorStyle === 1
+                      ? "terminal-segment terminal-segment--cursor-beam"
+                      : cursorStyle === 2
+                        ? "terminal-segment terminal-segment--cursor-underline"
+                        : "terminal-segment terminal-segment--cursor"
+                    : "terminal-segment";
+                  return (
+                    <span
+                      className={cursorClass}
+                      key={`seg-${i}-${j}`}
+                      style={{
+                        backgroundColor: isCursor ? undefined : seg.bg,
+                        color: isCursor ? undefined : seg.fg,
+                        fontWeight: seg.bold ? 510 : 400,
+                        textDecoration: seg.underline ? "underline" : "none",
+                        animation: isCursor && cursorBlink ? "cursor-blink 1s step-end infinite" : undefined,
+                      }}
+                    >
+                      {seg.text}
+                    </span>
+                  );
+                })}
               </div>
             ))}
           </div>
         ) : (
-          <div className="terminal-placeholder">Launching shell...</div>
+          <div className="terminal-placeholder">{t("Launching shell...")}</div>
         )}
       </div>
     </section>

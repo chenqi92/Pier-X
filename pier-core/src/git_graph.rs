@@ -135,7 +135,12 @@ pub fn graph_log(
 
     let mut cmd = Command::new("git");
     cmd.current_dir(repo_path);
-    cmd.args(["log", "--topo-order", "--date-order"]);
+    cmd.arg("log");
+    if filter.topo_order {
+        cmd.arg("--topo-order");
+    } else {
+        cmd.arg("--date-order");
+    }
     cmd.args([&format!("--format={}", format_str)]);
     configure_background_command(&mut cmd);
 

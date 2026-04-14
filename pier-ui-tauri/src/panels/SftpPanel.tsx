@@ -14,9 +14,10 @@ export default function SftpPanel({ tab }: Props) {
   const [path, setPath] = useState("/");
 
   const hasSsh = tab.backend === "ssh" && tab.sshHost.trim() && tab.sshUser.trim();
+  const sshRequired = t("SSH connection required.");
 
   async function browse(targetPath = path) {
-    if (!hasSsh) { setError("SSH connection required."); return; }
+    if (!hasSsh) { setError(sshRequired); return; }
     setBusy(true); setError("");
     try {
       const s = await cmd.sftpBrowse({ host: tab.sshHost, port: tab.sshPort, user: tab.sshUser, authMode: tab.sshAuthMode, password: tab.sshPassword, keyPath: tab.sshKeyPath, path: targetPath });
@@ -28,16 +29,16 @@ export default function SftpPanel({ tab }: Props) {
   return (
     <div className="panel-scroll">
       <section className="panel-section">
-        <div className="panel-section__title"><FolderTree size={14} /><span>SFTP</span></div>
+        <div className="panel-section__title"><FolderTree size={14} /><span>{t("SFTP")}</span></div>
         <div className="form-stack">
           <label className="field-stack">
             <span className="field-label">{t("Remote path")}</span>
             <div className="branch-row">
               <input className="field-input" onChange={(e) => setPath(e.currentTarget.value)} value={path} />
-              <button className="mini-button" disabled={!hasSsh || busy} onClick={() => void browse()} type="button">{busy ? "..." : t("Browse")}</button>
+              <button className="mini-button" disabled={!hasSsh || busy} onClick={() => void browse()} type="button">{busy ? t("Browsing...") : t("Browse")}</button>
             </div>
           </label>
-          {!hasSsh && <div className="inline-note">SSH connection required.</div>}
+          {!hasSsh && <div className="inline-note">{sshRequired}</div>}
           {error && <div className="status-note status-note--error">{error}</div>}
         </div>
       </section>
@@ -48,14 +49,14 @@ export default function SftpPanel({ tab }: Props) {
           <div className="git-change-list">
             {state.currentPath !== "/" && (
               <button className="git-change-button" onClick={() => void browse(state.currentPath.replace(/\/[^/]+\/?$/, "") || "/")} type="button">
-                <span className="git-badge git-badge--staged">DIR</span><span className="git-change-row__path">..</span>
+                <span className="git-badge git-badge--staged">{t("DIR")}</span><span className="git-change-row__path">..</span>
               </button>
             )}
             {state.entries.map((entry) => (
               <button key={entry.path} className="git-change-button" onClick={() => { if (entry.isDir) void browse(entry.path); }} type="button">
-                <span className={entry.isDir ? "git-badge git-badge--staged" : "git-badge"}>{entry.isDir ? "DIR" : "FILE"}</span>
+                <span className={entry.isDir ? "git-badge git-badge--staged" : "git-badge"}>{entry.isDir ? t("DIR") : t("FILE")}</span>
                 <span className="git-change-row__path">{entry.name}</span>
-                {!entry.isDir && <span className="inline-note">{entry.size} B</span>}
+                {!entry.isDir && <span className="inline-note">{t("{size} B", { size: entry.size })}</span>}
               </button>
             ))}
           </div>

@@ -120,7 +120,7 @@ export default function NewConnectionDialog({ open, onClose, onConnect }: Props)
               </label>
             )}
             {authMode === "agent" && (
-              <div className="inline-note">Agent auth uses the system SSH agent.</div>
+              <div className="inline-note">{t("Agent auth uses the system SSH agent.")}</div>
             )}
             {error && <div className="status-note status-note--error">{error}</div>}
           </div>

@@ -5,39 +5,43 @@ import { useThemeStore } from "../stores/useThemeStore";
 type Props = {
   onNewTab: () => void;
   onSettings: () => void;
+  onToggleTheme: () => void;
   version?: string;
 };
 
-export default function TopBar({ onNewTab, onSettings, version }: Props) {
-  const { t } = useI18n();
-  const { resolvedDark, setMode, mode } = useThemeStore();
+const IS_MAC = navigator.platform.includes("Mac");
 
-  function toggleTheme() {
-    setMode(resolvedDark ? "light" : "dark");
-  }
+export default function TopBar({ onNewTab, onSettings, onToggleTheme, version }: Props) {
+  const { t } = useI18n();
+  const { resolvedDark, mode } = useThemeStore();
 
   return (
-    <header className="topbar">
-      <div className="topbar__left">
-        <span className="topbar__brand">Pier-X</span>
-        <span className="topbar__divider" />
-        <button className="topbar__menu-btn" type="button">{t("File")}</button>
-        <button className="topbar__menu-btn" type="button">{t("Edit")}</button>
-        <button className="topbar__menu-btn" type="button">{t("View")}</button>
-        <button className="topbar__menu-btn" type="button">{t("Window")}</button>
-        <button className="topbar__menu-btn" type="button">{t("Help")}</button>
-      </div>
+    <header className="topbar" data-tauri-drag-region>
+      {/* macOS traffic light spacer */}
+      {IS_MAC && <span className="topbar__traffic-spacer" />}
+
+      {/* Brand */}
+      <span className="topbar__brand" data-tauri-drag-region>Pier-X</span>
+
+      {/* Drag region fills center */}
       <div className="topbar__drag" data-tauri-drag-region />
+
+      {/* Right controls */}
       <div className="topbar__right">
-        {version ? <span className="topbar__version">v{version}</span> : null}
+        {version && <span className="topbar__version">v{version}</span>}
         <button className="topbar__icon-btn" onClick={onNewTab} title={t("New tab")} type="button">
-          <Plus size={15} />
+          <Plus size={14} />
         </button>
-        <button className="topbar__icon-btn" onClick={toggleTheme} title={mode === "system" ? t("Follow system") : resolvedDark ? t("Light") : t("Dark")} type="button">
-          {resolvedDark ? <Sun size={15} /> : <Moon size={15} />}
+        <button
+          className="topbar__icon-btn"
+          onClick={onToggleTheme}
+          title={mode === "system" ? t("Follow system") : resolvedDark ? t("Light") : t("Dark")}
+          type="button"
+        >
+          {resolvedDark ? <Sun size={14} /> : <Moon size={14} />}
         </button>
         <button className="topbar__icon-btn" onClick={onSettings} title={t("Settings")} type="button">
-          <Settings size={15} />
+          <Settings size={14} />
         </button>
       </div>
     </header>

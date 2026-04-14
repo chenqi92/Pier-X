@@ -46,18 +46,18 @@ export default function RedisPanel({ tab }: Props) {
   return (
     <div className="panel-scroll">
       <section className="panel-section">
-        <div className="panel-section__title"><span>Redis Browser</span></div>
+        <div className="panel-section__title"><span>{t("Redis Browser")}</span></div>
         <div className="form-stack">
           <div className="field-grid">
             <label className="field-stack"><span className="field-label">{t("Host")}</span><input className="field-input" onChange={(e) => setHost(e.currentTarget.value)} value={host} /></label>
             <label className="field-stack"><span className="field-label">{t("Port")}</span><input className="field-input field-input--narrow" onChange={(e) => setPort(e.currentTarget.value)} value={port} /></label>
           </div>
           <div className="field-grid">
-            <label className="field-stack"><span className="field-label">DB</span><input className="field-input" onChange={(e) => setDb(e.currentTarget.value)} value={db} /></label>
-            <label className="field-stack"><span className="field-label">Pattern</span><input className="field-input" onChange={(e) => setPattern(e.currentTarget.value)} value={pattern} /></label>
+            <label className="field-stack"><span className="field-label">{t("DB")}</span><input className="field-input" onChange={(e) => setDb(e.currentTarget.value)} value={db} /></label>
+            <label className="field-stack"><span className="field-label">{t("Pattern")}</span><input className="field-input" onChange={(e) => setPattern(e.currentTarget.value)} value={pattern} /></label>
           </div>
           <div className="button-row">
-            <button className="mini-button" disabled={!canBrowse || busy} onClick={() => void browse()} type="button">{busy ? "Scanning..." : "Scan Keys"}</button>
+            <button className="mini-button" disabled={!canBrowse || busy} onClick={() => void browse()} type="button">{busy ? t("Scanning...") : t("Scan Keys")}</button>
           </div>
           {state && <div className="status-note">{state.pong} · {state.serverVersion || "?"}{state.usedMemory ? ` · ${state.usedMemory}` : ""}</div>}
           {error && <div className="status-note status-note--error">{error}</div>}
@@ -66,10 +66,10 @@ export default function RedisPanel({ tab }: Props) {
 
       {state && (
         <section className="panel-section">
-          <div className="panel-section__title"><span>Keys</span></div>
+          <div className="panel-section__title"><span>{t("Keys")}</span></div>
           <div className="form-stack">
             <div className="token-list">{state.keys.map((k) => <button key={k} className={state.keyName === k ? "token-button token-button--selected" : "token-button"} onClick={() => { setKeyName(k); setCommand(`TYPE ${quoteCommandArg(k)}`); void browse(k); }} type="button">{k}</button>)}</div>
-            {state.truncated && <div className="inline-note">Truncated</div>}
+            {state.truncated && <div className="inline-note">{t("Truncated")}</div>}
           </div>
         </section>
       )}
@@ -79,10 +79,10 @@ export default function RedisPanel({ tab }: Props) {
           <div className="panel-section__title"><span>{t("Key Preview")}</span></div>
           <div className="form-stack">
             <div className="data-meta-grid">
-              <div className="meta-chip"><span>Key</span><strong>{state.details.key}</strong></div>
-              <div className="meta-chip"><span>Type</span><strong>{state.details.kind}</strong></div>
-              <div className="meta-chip"><span>Length</span><strong>{state.details.length}</strong></div>
-              <div className="meta-chip"><span>TTL</span><strong>{state.details.ttlSeconds}</strong></div>
+              <div className="meta-chip"><span>{t("Key")}</span><strong>{state.details.key}</strong></div>
+              <div className="meta-chip"><span>{t("Type")}</span><strong>{state.details.kind}</strong></div>
+              <div className="meta-chip"><span>{t("Length")}</span><strong>{state.details.length}</strong></div>
+              <div className="meta-chip"><span>{t("TTL")}</span><strong>{state.details.ttlSeconds}</strong></div>
             </div>
             <div className="preview-list">{state.details.preview.map((item, i) => <div className="preview-item" key={i}>{item}</div>)}</div>
           </div>
@@ -94,7 +94,7 @@ export default function RedisPanel({ tab }: Props) {
         <div className="form-stack">
           <textarea className="field-textarea field-textarea--editor" onChange={(e) => setCommand(e.currentTarget.value)} rows={4} value={command} />
           <div className="button-row">
-            <button className="mini-button" disabled={!canBrowse || cmdBusy} onClick={() => void runCommand()} type="button">{cmdBusy ? t("Running...") : "Run Command"}</button>
+            <button className="mini-button" disabled={!canBrowse || cmdBusy} onClick={() => void runCommand()} type="button">{cmdBusy ? t("Running...") : t("Run Command")}</button>
           </div>
         </div>
       </section>

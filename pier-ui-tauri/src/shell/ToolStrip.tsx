@@ -1,5 +1,7 @@
 import {
   ActivitySquare,
+  ChevronsLeft,
+  ChevronsRight,
   Container,
   Database,
   FolderTree,
@@ -15,6 +17,8 @@ type Props = {
   activeTool: RightTool;
   onSelectTool: (tool: RightTool) => void;
   hasRemoteContext: boolean;
+  expanded: boolean;
+  onToggleExpand: () => void;
 };
 
 const TOOLS: { tool: RightTool; icon: typeof GitBranch; label: string; remoteOnly?: boolean }[] = [
@@ -29,7 +33,7 @@ const TOOLS: { tool: RightTool; icon: typeof GitBranch; label: string; remoteOnl
   { tool: "sqlite", icon: HardDrive, label: "SQLite" },
 ];
 
-export default function ToolStrip({ activeTool, onSelectTool, hasRemoteContext }: Props) {
+export default function ToolStrip({ activeTool, onSelectTool, hasRemoteContext, expanded, onToggleExpand }: Props) {
   const { t } = useI18n();
 
   return (
@@ -59,6 +63,15 @@ export default function ToolStrip({ activeTool, onSelectTool, hasRemoteContext }
           </div>
         );
       })}
+      <div className="tool-strip__spacer" />
+      <button
+        className="tool-strip__btn"
+        onClick={onToggleExpand}
+        title={expanded ? t("Collapse") : t("Expand")}
+        type="button"
+      >
+        {expanded ? <ChevronsRight size={16} /> : <ChevronsLeft size={16} />}
+      </button>
     </div>
   );
 }

@@ -33,18 +33,48 @@ function App() {
 
   const activeTab = tabs.find((t) => t.id === activeTabId) ?? null;
 
+  const isDev = import.meta.env.DEV;
+
   // Bootstrap
   useEffect(() => {
     cmd.coreInfo().then(setCoreInfo).catch(() => {});
     useConnectionStore.getState().refresh();
   }, []);
 
+  // ── Desktop behaviors ───────────────────────────────────────
+  useEffect(() => {
+    // Disable default browser context menu (we provide our own)
+    const preventCtxMenu = (e: MouseEvent) => {
+      // Allow context menu in terminal viewport (handled there)
+      // and in text inputs/textareas for native copy/paste
+      const target = e.target as HTMLElement;
+      if (target.closest(".terminal-viewport") || target.closest("input") || target.closest("textarea")) return;
+      e.preventDefault();
+    };
+    document.addEventListener("contextmenu", preventCtxMenu);
+
+    // Disable DevTools shortcut in production
+    if (!isDev) {
+      const blockDevTools = (e: KeyboardEvent) => {
+        // Block F12, Ctrl+Shift+I, Cmd+Option+I
+        if (e.key === "F12") { e.preventDefault(); return; }
+        if ((e.ctrlKey || e.metaKey) && e.shiftKey && e.key.toLowerCase() === "i") { e.preventDefault(); return; }
+        if ((e.ctrlKey || e.metaKey) && e.shiftKey && e.key.toLowerCase() === "j") { e.preventDefault(); return; }
+      };
+      document.addEventListener("keydown", blockDevTools);
+      return () => { document.removeEventListener("contextmenu", preventCtxMenu); document.removeEventListener("keydown", blockDevTools); };
+    }
+
+    return () => document.removeEventListener("contextmenu", preventCtxMenu);
+  }, [isDev]);
+
   // ── Tab creation helpers ────────────────────────────────────
 
   function openLocalTerminal(path?: string) {
+    const fallbackTitle = i18n.t("Terminal");
     addTab({
       backend: "local",
-      title: path ? path.split(/[\\/]/).pop() || "Terminal" : "Terminal",
+      title: path ? path.split(/[\\/]/).pop() || fallbackTitle : fallbackTitle,
       startupCommand: path ? `cd ${path}` : "",
     });
   }
@@ -104,25 +134,25 @@ function App() {
 
   const paletteCommands: PaletteCommand[] = useMemo(
     () => [
-      { title: "New Local Terminal", shortcut: `${mod}T`, action: () => openLocalTerminal() },
-      { title: "New SSH Connection", shortcut: `${mod}N`, action: () => setNewConnOpen(true) },
-      { title: "Close Tab", shortcut: `${mod}W`, action: () => { if (activeTabId) closeTab(activeTabId); } },
-      { title: "Settings", shortcut: `${mod},`, action: () => setSettingsOpen(true) },
-      { title: "Toggle Theme", action: () => {
+      { title: i18n.t("New local terminal"), shortcut: `${mod}T`, action: () => openLocalTerminal() },
+      { title: i18n.t("New SSH connection"), shortcut: `${mod}N`, action: () => setNewConnOpen(true) },
+      { title: i18n.t("Close tab"), shortcut: `${mod}W`, action: () => { if (activeTabId) closeTab(activeTabId); } },
+      { title: i18n.t("Settings"), shortcut: `${mod},`, action: () => setSettingsOpen(true) },
+      { title: i18n.t("Toggle theme"), action: () => {
         const s = useThemeStoreRef.getState();
         s.setMode(s.resolvedDark ? "light" : "dark");
       } },
-      { title: "Switch to Git", action: () => handleToolChange("git") },
-      { title: "Switch to Docker", action: () => handleToolChange("docker") },
-      { title: "Switch to MySQL", action: () => handleToolChange("mysql") },
-      { title: "Switch to PostgreSQL", action: () => handleToolChange("postgres") },
-      { title: "Switch to Redis", action: () => handleToolChange("redis") },
-      { title: "Switch to SFTP", action: () => handleToolChange("sftp") },
-      { title: "Switch to Server Monitor", action: () => handleToolChange("monitor") },
-      { title: "Switch to SQLite", action: () => handleToolChange("sqlite") },
-      { title: "Switch to Markdown", action: () => handleToolChange("markdown") },
+      { title: i18n.t("Switch to Git"), action: () => handleToolChange("git") },
+      { title: i18n.t("Switch to Docker"), action: () => handleToolChange("docker") },
+      { title: i18n.t("Switch to MySQL"), action: () => handleToolChange("mysql") },
+      { title: i18n.t("Switch to PostgreSQL"), action: () => handleToolChange("postgres") },
+      { title: i18n.t("Switch to Redis"), action: () => handleToolChange("redis") },
+      { title: i18n.t("Switch to SFTP"), action: () => handleToolChange("sftp") },
+      { title: i18n.t("Switch to Server Monitor"), action: () => handleToolChange("monitor") },
+      { title: i18n.t("Switch to SQLite"), action: () => handleToolChange("sqlite") },
+      { title: i18n.t("Switch to Markdown"), action: () => handleToolChange("markdown") },
     ],
-    [activeTabId],
+    [activeTabId, closeTab, i18n],
   );
 
   // ── Keyboard shortcuts ──────────────────────────────────────
@@ -182,6 +212,10 @@ function App() {
         <TopBar
           onNewTab={openNewTab}
           onSettings={() => setSettingsOpen(true)}
+          onToggleTheme={() => {
+            const s = useThemeStoreRef.getState();
+            s.setMode(s.resolvedDark ? "light" : "dark");
+          }}
           version={coreInfo?.version}
         />
 
@@ -190,6 +224,7 @@ function App() {
             onOpenLocalTerminal={openLocalTerminal}
             onConnectSaved={openSshSaved}
             onNewConnection={() => setNewConnOpen(true)}
+            workspaceRoot={coreInfo?.workspaceRoot}
           />
 
           <div className="workspace__center">
@@ -197,10 +232,13 @@ function App() {
             <div className="workspace__content">
               {tabs.length === 0 ? (
                 <WelcomeView
-                  onOpenLocalTerminal={() => openLocalTerminal()}
+                  onOpenLocalTerminal={openLocalTerminal}
                   onNewSsh={() => setNewConnOpen(true)}
                   onConnectSaved={openSshSaved}
+                  onSettings={() => setSettingsOpen(true)}
+                  onCommandPalette={() => setPaletteOpen(true)}
                   version={coreInfo?.version}
+                  workspaceRoot={coreInfo?.workspaceRoot}
                 />
               ) : (
                 tabs.map((tab) => (

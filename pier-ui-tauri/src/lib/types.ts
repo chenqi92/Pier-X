@@ -52,6 +52,165 @@ export type GitStashEntry = {
   relativeDate: string;
 };
 
+export type GitPanelFile = {
+  path: string;
+  fileName: string;
+  status: string;
+  staged: boolean;
+};
+
+export type GitPanelState = {
+  repoPath: string;
+  currentBranch: string;
+  trackingBranch: string;
+  aheadCount: number;
+  behindCount: number;
+  stagedFiles: GitPanelFile[];
+  unstagedFiles: GitPanelFile[];
+  totalChanges: number;
+  conflictCount: number;
+  workingTreeClean: boolean;
+};
+
+export type GitGraphMetadata = {
+  branches: string[];
+  authors: string[];
+  repoFiles: string[];
+  gitUserName: string;
+};
+
+export type GitGraphSegmentView = {
+  xTop: number;
+  yTop: number;
+  xBottom: number;
+  yBottom: number;
+  colorIndex: number;
+};
+
+export type GitGraphArrowView = {
+  x: number;
+  y: number;
+  colorIndex: number;
+  isDown: boolean;
+};
+
+export type GitGraphRowView = {
+  hash: string;
+  shortHash: string;
+  message: string;
+  author: string;
+  dateTimestamp: number;
+  refs: string;
+  parents: string;
+  nodeColumn: number;
+  colorIndex: number;
+  segments: GitGraphSegmentView[];
+  arrows: GitGraphArrowView[];
+};
+
+export type GitCommitChangedFileView = {
+  additions: number;
+  deletions: number;
+  path: string;
+};
+
+export type GitCommitDetailView = {
+  hash: string;
+  shortHash: string;
+  author: string;
+  date: string;
+  message: string;
+  parentHash: string;
+  parentHashes: string[];
+  stats: string;
+  changedFiles: GitCommitChangedFileView[];
+};
+
+export type GitComparisonFileView = {
+  path: string;
+  name: string;
+  dir: string;
+};
+
+export type GitTagView = {
+  name: string;
+  hash: string;
+  timestamp: number;
+  message: string;
+};
+
+export type GitRemoteView = {
+  name: string;
+  fetchUrl: string;
+  pushUrl: string;
+};
+
+export type GitConfigEntryView = {
+  key: string;
+  value: string;
+  scope: string;
+};
+
+export type GitRebaseItemView = {
+  id: string;
+  action: string;
+  hash: string;
+  shortHash: string;
+  message: string;
+};
+
+export type GitRebasePlanView = {
+  inProgress: boolean;
+  items: GitRebaseItemView[];
+};
+
+export type GitSubmoduleView = {
+  path: string;
+  commitHash: string;
+  shortHash: string;
+  status: string;
+  statusSymbol: string;
+  url: string;
+};
+
+export type GitConflictHunkView = {
+  oursLines: string[];
+  theirsLines: string[];
+  resolution: string;
+};
+
+export type GitConflictFileView = {
+  name: string;
+  path: string;
+  conflictCount: number;
+  conflicts: GitConflictHunkView[];
+};
+
+export type GitBlameLineView = {
+  lineNumber: number;
+  hash: string;
+  shortHash: string;
+  author: string;
+  timestamp: number;
+  date: string;
+  content: string;
+};
+
+export type GitGraphHistoryParams = {
+  path?: string | null;
+  limit?: number | null;
+  skip?: number | null;
+  branch?: string | null;
+  author?: string | null;
+  searchText?: string | null;
+  firstParent?: boolean | null;
+  noMerges?: boolean | null;
+  afterTimestamp?: number | null;
+  paths?: string[] | null;
+  topoOrder?: boolean | null;
+  showLongEdges?: boolean | null;
+};
+
 // ── SSH ─────────────────────────────────────────────────────────
 
 export type SavedSshConnection = {

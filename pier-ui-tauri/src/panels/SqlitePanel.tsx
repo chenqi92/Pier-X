@@ -38,7 +38,7 @@ export default function SqlitePanel() {
     setQueryBusy(true); setQueryError(""); setNotice("");
     try {
       const r = await cmd.sqliteExecute(path.trim(), sql);
-      setQueryResult(r); setNotice(`${r.elapsedMs} ms`);
+      setQueryResult(r); setNotice(t("{elapsed} ms", { elapsed: r.elapsedMs }));
       if (needsWrite) { setReadOnly(true); setWriteConfirm(""); }
       void browse(tableName);
     } catch (e) { setQueryResult(null); setQueryError(String(e)); }
@@ -48,13 +48,13 @@ export default function SqlitePanel() {
   return (
     <div className="panel-scroll">
       <section className="panel-section">
-        <div className="panel-section__title"><span>SQLite Browser</span></div>
+        <div className="panel-section__title"><span>{t("SQLite Browser")}</span></div>
         <div className="form-stack">
           <label className="field-stack">
-            <span className="field-label">Database file</span>
+            <span className="field-label">{t("Database file")}</span>
             <div className="branch-row">
               <input className="field-input" onChange={(e) => setPath(e.currentTarget.value)} placeholder="/path/to/app.db" value={path} />
-              <button className="mini-button" disabled={!canBrowse || busy} onClick={() => void browse()} type="button">{busy ? "..." : t("Browse")}</button>
+              <button className="mini-button" disabled={!canBrowse || busy} onClick={() => void browse()} type="button">{busy ? t("Browsing...") : t("Browse")}</button>
             </div>
           </label>
           {error && <div className="status-note status-note--error">{error}</div>}
@@ -66,12 +66,12 @@ export default function SqlitePanel() {
           <div className="panel-section__title"><span>{t("Tables & Columns")}</span></div>
           <div className="form-stack">
             <div className="token-list">{state.tables.map((tbl) => <button key={tbl} className={state.tableName === tbl ? "token-button token-button--selected" : "token-button"} onClick={() => { setTableName(tbl); setSql(`SELECT * FROM "${tbl.replace(/"/g, '""')}" LIMIT 100;`); void browse(tbl); }} type="button">{tbl}</button>)}</div>
-            {state.columns.length > 0 && <div className="column-list">{state.columns.map((col) => <div className="column-row" key={col.name}><div className="column-row__head"><strong>{col.name}</strong><span className="connection-pill">{col.colType}</span></div><div className="column-row__meta">{col.notNull ? "not null" : "nullable"}{col.primaryKey ? " · pk" : ""}</div></div>)}</div>}
+            {state.columns.length > 0 && <div className="column-list">{state.columns.map((col) => <div className="column-row" key={col.name}><div className="column-row__head"><strong>{col.name}</strong><span className="connection-pill">{col.colType}</span></div><div className="column-row__meta">{col.notNull ? t("Not null") : t("Nullable")}{col.primaryKey ? ` · ${t("PK")}` : ""}</div></div>)}</div>}
           </div>
         </section>
       )}
 
-      {state && <section className="panel-section"><div className="panel-section__title"><span>{t("Sample Rows")}</span></div><PreviewTable preview={state.preview} emptyLabel="Select a table." /></section>}
+      {state && <section className="panel-section"><div className="panel-section__title"><span>{t("Sample Rows")}</span></div><PreviewTable preview={state.preview} emptyLabel={t("Select a table.")} /></section>}
 
       <section className="panel-section">
         <div className="panel-section__title"><span>{t("Query Editor")}</span></div>
@@ -81,16 +81,16 @@ export default function SqlitePanel() {
             <button className="mini-button" onClick={() => { setReadOnly((p) => !p); setWriteConfirm(""); }} type="button">{readOnly ? t("Unlock Writes") : t("Re-lock Writes")}</button>
           </div>
           <textarea className="field-textarea field-textarea--editor" onChange={(e) => setSql(e.currentTarget.value)} rows={4} value={sql} />
-          {needsWrite && !readOnly && <input className="field-input" onChange={(e) => setWriteConfirm(e.currentTarget.value)} placeholder="Type WRITE to confirm" value={writeConfirm} />}
+          {needsWrite && !readOnly && <input className="field-input" onChange={(e) => setWriteConfirm(e.currentTarget.value)} placeholder={t("Type WRITE to confirm")} value={writeConfirm} />}
           <div className="button-row">
             <button className="mini-button" disabled={!canRun} onClick={() => void runQuery()} type="button">{queryBusy ? t("Running...") : t("Run Query")}</button>
-            {queryResult && <button className="mini-button" onClick={() => { navigator.clipboard.writeText(queryResultToTsv(queryResult)).catch(() => {}); setNotice("Copied"); }} type="button">{t("Copy TSV")}</button>}
+            {queryResult && <button className="mini-button" onClick={() => { navigator.clipboard.writeText(queryResultToTsv(queryResult)).catch(() => {}); setNotice(t("Copied")); }} type="button">{t("Copy TSV")}</button>}
           </div>
           {notice && <div className="status-note">{notice}</div>}
         </div>
       </section>
 
-      <section className="panel-section"><div className="panel-section__title"><span>{t("Query Results")}</span></div><QueryResultPanel result={queryResult} error={queryError} emptyLabel="Run a query." /></section>
+      <section className="panel-section"><div className="panel-section__title"><span>{t("Query Results")}</span></div><QueryResultPanel result={queryResult} error={queryError} emptyLabel={t("Run a query.")} /></section>
     </div>
   );
 }

@@ -1,4 +1,5 @@
 import type { QueryExecutionResult } from "../lib/types";
+import { useI18n } from "../i18n/useI18n";
 
 type Props = {
   result: QueryExecutionResult | null;
@@ -7,6 +8,8 @@ type Props = {
 };
 
 export default function QueryResultPanel({ result, error, emptyLabel }: Props) {
+  const { t } = useI18n();
+
   if (error) {
     return <div className="status-note status-note--error">{error}</div>;
   }
@@ -35,8 +38,11 @@ export default function QueryResultPanel({ result, error, emptyLabel }: Props) {
         </tbody>
       </table>
       <div className="inline-note">
-        {result.affectedRows} affected · {result.elapsedMs} ms
-        {result.truncated ? " · truncated" : ""}
+        {t("{rows} affected · {elapsed} ms", {
+          rows: result.affectedRows,
+          elapsed: result.elapsedMs,
+        })}
+        {result.truncated ? t(" · truncated") : ""}
       </div>
     </div>
   );

@@ -16,9 +16,10 @@ export default function DockerPanel({ tab }: Props) {
   const [notice, setNotice] = useState("");
 
   const hasSsh = tab.backend === "ssh" && tab.sshHost.trim() && tab.sshUser.trim();
+  const sshRequired = t("SSH connection required.");
 
   async function refresh() {
-    if (!hasSsh) { setError("SSH connection required."); return; }
+    if (!hasSsh) { setError(sshRequired); return; }
     setBusy(true); setError("");
     try {
       const o = await cmd.dockerOverview({ host: tab.sshHost, port: tab.sshPort, user: tab.sshUser, authMode: tab.sshAuthMode, password: tab.sshPassword, keyPath: tab.sshKeyPath, all: showAll });
@@ -41,15 +42,15 @@ export default function DockerPanel({ tab }: Props) {
   return (
     <div className="panel-scroll">
       <section className="panel-section">
-        <div className="panel-section__title"><span>Docker</span></div>
+        <div className="panel-section__title"><span>{t("Docker")}</span></div>
         <div className="form-stack">
           <div className="button-row">
-            <button className="mini-button" disabled={!hasSsh || busy} onClick={() => void refresh()} type="button">{busy ? "Loading..." : t("Refresh Docker")}</button>
+            <button className="mini-button" disabled={!hasSsh || busy} onClick={() => void refresh()} type="button">{busy ? t("Loading...") : t("Refresh Docker")}</button>
             <label style={{ display: "flex", alignItems: "center", gap: 6, fontSize: 12, color: "var(--text-secondary)" }}>
               <input type="checkbox" checked={showAll} onChange={() => setShowAll((p) => !p)} />{t("Show all containers")}
             </label>
           </div>
-          {!hasSsh && <div className="inline-note">SSH connection required for Docker.</div>}
+          {!hasSsh && <div className="inline-note">{t("SSH connection required for Docker.")}</div>}
           {notice && <div className="status-note">{notice}</div>}
           {error && <div className="status-note status-note--error">{error}</div>}
         </div>

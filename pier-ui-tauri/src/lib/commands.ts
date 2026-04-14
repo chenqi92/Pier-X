@@ -530,6 +530,17 @@ export const logStreamDrain = (streamId: string) =>
 export const logStreamStop = (streamId: string) =>
   invoke<void>("log_stream_stop", { streamId });
 
+// ── Local System ────────────────────────────────────────────────
+
+export const localDockerOverview = (all: boolean) =>
+  invoke<DockerOverview>("local_docker_overview", { all });
+
+export const localDockerAction = (containerId: string, action: string) =>
+  invoke<string>("local_docker_action", { containerId, action });
+
+export const localSystemInfo = () =>
+  invoke<ServerSnapshotView>("local_system_info");
+
 // ── Utility Functions ───────────────────────────────────────────
 
 const readOnlySqlKeywords = new Set([

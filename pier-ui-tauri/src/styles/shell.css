@@ -554,8 +554,18 @@ html, body, #root {
   min-width: 0;
 }
 
+.sidebar__file-modified {
+  width: 72px;
+  text-align: right;
+  font-size: 10px;
+  color: var(--text-disabled);
+  font-family: var(--font-mono);
+  white-space: nowrap;
+  flex-shrink: 0;
+}
+
 .sidebar__file-size {
-  width: 50px;
+  width: 48px;
   text-align: right;
   font-size: 10px;
   color: var(--text-disabled);

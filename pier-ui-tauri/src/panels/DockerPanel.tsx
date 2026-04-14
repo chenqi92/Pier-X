@@ -16,13 +16,17 @@ export default function DockerPanel({ tab }: Props) {
   const [notice, setNotice] = useState("");
 
   const hasSsh = tab.backend === "ssh" && tab.sshHost.trim() && tab.sshUser.trim();
-  const sshRequired = t("SSH connection required.");
+  const isLocal = tab.backend === "local";
 
   async function refresh() {
-    if (!hasSsh) { setError(sshRequired); return; }
     setBusy(true); setError("");
     try {
-      const o = await cmd.dockerOverview({ host: tab.sshHost, port: tab.sshPort, user: tab.sshUser, authMode: tab.sshAuthMode, password: tab.sshPassword, keyPath: tab.sshKeyPath, all: showAll });
+      const o = isLocal
+        ? await cmd.localDockerOverview(showAll)
+        : hasSsh
+          ? await cmd.dockerOverview({ host: tab.sshHost, port: tab.sshPort, user: tab.sshUser, authMode: tab.sshAuthMode, password: tab.sshPassword, keyPath: tab.sshKeyPath, all: showAll })
+          : null;
+      if (!o) { setError(t("No connection available.")); return; }
       setState(o);
     } catch (e) { setState(null); setError(String(e)); }
     finally { setBusy(false); }
@@ -32,12 +36,16 @@ export default function DockerPanel({ tab }: Props) {
     if (actionBusy) return;
     setActionBusy(true); setNotice("");
     try {
-      const r = await cmd.dockerContainerAction({ host: tab.sshHost, port: tab.sshPort, user: tab.sshUser, authMode: tab.sshAuthMode, password: tab.sshPassword, keyPath: tab.sshKeyPath, containerId: id, action });
+      const r = isLocal
+        ? await cmd.localDockerAction(id, action)
+        : await cmd.dockerContainerAction({ host: tab.sshHost, port: tab.sshPort, user: tab.sshUser, authMode: tab.sshAuthMode, password: tab.sshPassword, keyPath: tab.sshKeyPath, containerId: id, action });
       setNotice(`${id.slice(0, 12)}: ${r}`);
       await refresh();
     } catch (e) { setError(String(e)); }
     finally { setActionBusy(false); }
   }
+
+  const canRefresh = isLocal || hasSsh;
 
   return (
     <div className="panel-scroll">
@@ -45,12 +53,12 @@ export default function DockerPanel({ tab }: Props) {
         <div className="panel-section__title"><span>{t("Docker")}</span></div>
         <div className="form-stack">
           <div className="button-row">
-            <button className="mini-button" disabled={!hasSsh || busy} onClick={() => void refresh()} type="button">{busy ? t("Loading...") : t("Refresh Docker")}</button>
+            <button className="mini-button" disabled={!canRefresh || busy} onClick={() => void refresh()} type="button">{busy ? t("Loading...") : t("Refresh Docker")}</button>
             <label style={{ display: "flex", alignItems: "center", gap: 6, fontSize: 12, color: "var(--text-secondary)" }}>
               <input type="checkbox" checked={showAll} onChange={() => setShowAll((p) => !p)} />{t("Show all containers")}
             </label>
           </div>
-          {!hasSsh && <div className="inline-note">{t("SSH connection required for Docker.")}</div>}
+          {!canRefresh && <div className="inline-note">{t("SSH connection required for Docker.")}</div>}
           {notice && <div className="status-note">{notice}</div>}
           {error && <div className="status-note status-note--error">{error}</div>}
         </div>

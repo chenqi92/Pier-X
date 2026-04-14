@@ -2278,6 +2278,147 @@ fn log_stream_stop(
     Ok(())
 }
 
+// ── Local System ────────────────────────────────────────────────
+
+#[tauri::command]
+fn local_docker_overview(all: bool) -> Result<DockerOverview, String> {
+    let fmt = "{{.ID}}\t{{.Image}}\t{{.Names}}\t{{.Status}}\t{{.State}}\t{{.CreatedAt}}\t{{.Ports}}";
+    let mut cmd = std::process::Command::new("docker");
+    cmd.args(["ps", "--format", fmt]);
+    if all { cmd.arg("-a"); }
+    let output = cmd
+        .output()
+        .map_err(|e| format!("docker ps failed: {}", e))?;
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let containers: Vec<DockerContainerView> = stdout.lines().filter(|l| !l.is_empty()).map(|line| {
+        let parts: Vec<&str> = line.split('\t').collect();
+        let state = parts.get(4).unwrap_or(&"").to_string();
+        DockerContainerView {
+            id: parts.first().unwrap_or(&"").to_string(),
+            image: parts.get(1).unwrap_or(&"").to_string(),
+            names: parts.get(2).unwrap_or(&"").to_string(),
+            status: parts.get(3).unwrap_or(&"").to_string(),
+            running: state == "running",
+            state,
+            created: parts.get(5).unwrap_or(&"").to_string(),
+            ports: parts.get(6).unwrap_or(&"").to_string(),
+        }
+    }).collect();
+
+    let img_output = std::process::Command::new("docker")
+        .args(["images", "--format", "{{.ID}}\t{{.Repository}}\t{{.Tag}}\t{{.Size}}\t{{.CreatedAt}}"])
+        .output().ok();
+    let images: Vec<DockerImageView> = img_output.map(|o| {
+        String::from_utf8_lossy(&o.stdout).lines().filter(|l| !l.is_empty()).map(|line| {
+            let p: Vec<&str> = line.split('\t').collect();
+            DockerImageView { id: p.first().unwrap_or(&"").to_string(), repository: p.get(1).unwrap_or(&"").to_string(), tag: p.get(2).unwrap_or(&"").to_string(), size: p.get(3).unwrap_or(&"").to_string(), created: p.get(4).unwrap_or(&"").to_string() }
+        }).collect()
+    }).unwrap_or_default();
+
+    Ok(DockerOverview { containers, images, volumes: Vec::<DockerVolumeView>::new(), networks: Vec::<DockerNetworkView>::new() })
+}
+
+#[tauri::command]
+fn local_docker_action(container_id: String, action: String) -> Result<String, String> {
+    let output = std::process::Command::new("docker")
+        .args([&action, &container_id])
+        .output()
+        .map_err(|e| format!("docker {} failed: {}", action, e))?;
+    if output.status.success() {
+        Ok(action.clone())
+    } else {
+        Err(String::from_utf8_lossy(&output.stderr).to_string())
+    }
+}
+
+#[tauri::command]
+fn local_system_info() -> Result<ServerSnapshotView, String> {
+    #[cfg(target_os = "macos")]
+    {
+        let uptime = std::process::Command::new("uptime").output()
+            .map(|o| String::from_utf8_lossy(&o.stdout).trim().to_string())
+            .unwrap_or_default();
+        let vm_stat = std::process::Command::new("vm_stat").output()
+            .map(|o| String::from_utf8_lossy(&o.stdout).to_string())
+            .unwrap_or_default();
+        let sysctl = std::process::Command::new("sysctl")
+            .args(["-n", "hw.memsize"])
+            .output()
+            .map(|o| String::from_utf8_lossy(&o.stdout).trim().parse::<f64>().unwrap_or(0.0))
+            .unwrap_or(0.0);
+        let mem_total_mb = sysctl / (1024.0 * 1024.0);
+        // Parse free pages from vm_stat
+        let free_pages: f64 = vm_stat.lines()
+            .find(|l| l.starts_with("Pages free"))
+            .and_then(|l| l.split_whitespace().last())
+            .and_then(|v| v.trim_end_matches('.').parse::<f64>().ok())
+            .unwrap_or(0.0);
+        let page_size = 16384.0_f64; // Apple Silicon default
+        let mem_free_mb = free_pages * page_size / (1024.0 * 1024.0);
+        let mem_used_mb = mem_total_mb - mem_free_mb;
+        // Disk
+        let df = std::process::Command::new("df").args(["-h", "/"]).output()
+            .map(|o| String::from_utf8_lossy(&o.stdout).to_string())
+            .unwrap_or_default();
+        let df_parts: Vec<&str> = df.lines().nth(1).unwrap_or("").split_whitespace().collect();
+        let disk_total = df_parts.get(1).unwrap_or(&"").to_string();
+        let disk_used = df_parts.get(2).unwrap_or(&"").to_string();
+        let disk_avail = df_parts.get(3).unwrap_or(&"").to_string();
+        let disk_use_pct = df_parts.get(4).unwrap_or(&"0%").trim_end_matches('%').parse::<f64>().unwrap_or(-1.0);
+        // Load
+        let load_parts: Vec<f64> = uptime.rsplit("load averages:").next()
+            .or_else(|| uptime.rsplit("load average:").next())
+            .unwrap_or("")
+            .split(|c: char| c == ',' || c == ' ')
+            .filter_map(|s| s.trim().parse::<f64>().ok())
+            .collect();
+        Ok(ServerSnapshotView {
+            uptime,
+            load_1: *load_parts.first().unwrap_or(&-1.0),
+            load_5: *load_parts.get(1).unwrap_or(&-1.0),
+            load_15: *load_parts.get(2).unwrap_or(&-1.0),
+            mem_total_mb, mem_used_mb, mem_free_mb,
+            swap_total_mb: 0.0, swap_used_mb: 0.0,
+            disk_total, disk_used, disk_avail, disk_use_pct,
+            cpu_pct: -1.0,
+        })
+    }
+    #[cfg(not(target_os = "macos"))]
+    {
+        // Linux fallback
+        let uptime = fs::read_to_string("/proc/uptime").unwrap_or_default();
+        let loadavg = fs::read_to_string("/proc/loadavg").unwrap_or_default();
+        let meminfo = fs::read_to_string("/proc/meminfo").unwrap_or_default();
+        fn parse_meminfo(info: &str, key: &str) -> f64 {
+            info.lines().find(|l| l.starts_with(key))
+                .and_then(|l| l.split_whitespace().nth(1))
+                .and_then(|v| v.parse::<f64>().ok())
+                .unwrap_or(0.0) / 1024.0
+        }
+        let mem_total_mb = parse_meminfo(&meminfo, "MemTotal");
+        let mem_free_mb = parse_meminfo(&meminfo, "MemAvailable").max(parse_meminfo(&meminfo, "MemFree"));
+        let swap_total_mb = parse_meminfo(&meminfo, "SwapTotal");
+        let swap_free = parse_meminfo(&meminfo, "SwapFree");
+        let loads: Vec<f64> = loadavg.split_whitespace().take(3).filter_map(|s| s.parse().ok()).collect();
+        let df = std::process::Command::new("df").args(["-h", "/"]).output()
+            .map(|o| String::from_utf8_lossy(&o.stdout).to_string()).unwrap_or_default();
+        let df_parts: Vec<&str> = df.lines().nth(1).unwrap_or("").split_whitespace().collect();
+        Ok(ServerSnapshotView {
+            uptime: format!("{:.0}s", uptime.split_whitespace().next().unwrap_or("0").parse::<f64>().unwrap_or(0.0)),
+            load_1: *loads.first().unwrap_or(&-1.0),
+            load_5: *loads.get(1).unwrap_or(&-1.0),
+            load_15: *loads.get(2).unwrap_or(&-1.0),
+            mem_total_mb, mem_used_mb: mem_total_mb - mem_free_mb, mem_free_mb,
+            swap_total_mb, swap_used_mb: swap_total_mb - swap_free,
+            disk_total: df_parts.get(1).unwrap_or(&"").to_string(),
+            disk_used: df_parts.get(2).unwrap_or(&"").to_string(),
+            disk_avail: df_parts.get(3).unwrap_or(&"").to_string(),
+            disk_use_pct: df_parts.get(4).unwrap_or(&"0%").trim_end_matches('%').parse::<f64>().unwrap_or(-1.0),
+            cpu_pct: -1.0,
+        })
+    }
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     tauri::Builder::default()
@@ -2388,7 +2529,10 @@ pub fn run() {
             sftp_upload,
             log_stream_start,
             log_stream_drain,
-            log_stream_stop
+            log_stream_stop,
+            local_docker_overview,
+            local_docker_action,
+            local_system_info
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

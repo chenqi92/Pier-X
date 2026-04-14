@@ -13,25 +13,31 @@ export default function ServerMonitorPanel({ tab }: Props) {
   const [error, setError] = useState("");
 
   const hasSsh = tab.backend === "ssh" && tab.sshHost.trim() && tab.sshUser.trim();
-  const sshRequired = t("SSH connection required.");
+  const isLocal = tab.backend === "local";
 
   async function probe() {
-    if (!hasSsh) { setError(sshRequired); return; }
     setBusy(true); setError("");
     try {
-      const s = await cmd.serverMonitorProbe({ host: tab.sshHost, port: tab.sshPort, user: tab.sshUser, authMode: tab.sshAuthMode, password: tab.sshPassword, keyPath: tab.sshKeyPath });
+      const s = isLocal
+        ? await cmd.localSystemInfo()
+        : hasSsh
+          ? await cmd.serverMonitorProbe({ host: tab.sshHost, port: tab.sshPort, user: tab.sshUser, authMode: tab.sshAuthMode, password: tab.sshPassword, keyPath: tab.sshKeyPath })
+          : null;
+      if (!s) { setError(t("No connection available.")); return; }
       setSnap(s);
     } catch (e) { setSnap(null); setError(String(e)); }
     finally { setBusy(false); }
   }
+
+  const canProbe = isLocal || hasSsh;
 
   return (
     <div className="panel-scroll">
       <section className="panel-section">
         <div className="panel-section__title"><ActivitySquare size={14} /><span>{t("Server Monitor")}</span></div>
         <div className="form-stack">
-          <button className="mini-button" disabled={!hasSsh || busy} onClick={() => void probe()} type="button">{busy ? t("Probing...") : t("Probe Server")}</button>
-          {!hasSsh && <div className="inline-note">{sshRequired}</div>}
+          <button className="mini-button" disabled={!canProbe || busy} onClick={() => void probe()} type="button">{busy ? t("Probing...") : t("Probe Server")}</button>
+          {!canProbe && <div className="inline-note">{t("No connection available.")}</div>}
           {error && <div className="status-note status-note--error">{error}</div>}
         </div>
       </section>

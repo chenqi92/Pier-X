@@ -25,6 +25,7 @@ import "./styles/shell.css";
 
 function App() {
   const [coreInfo, setCoreInfo] = useState<CoreInfo | null>(null);
+  const [browserPath, setBrowserPath] = useState("");
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [paletteOpen, setPaletteOpen] = useState(false);
   const [newConnOpen, setNewConnOpen] = useState(false);
@@ -40,7 +41,12 @@ function App() {
 
   // Bootstrap
   useEffect(() => {
-    cmd.coreInfo().then(setCoreInfo).catch(() => {});
+    cmd.coreInfo()
+      .then((info) => {
+        setCoreInfo(info);
+        setBrowserPath(info.homeDir || info.workspaceRoot || "");
+      })
+      .catch(() => {});
     useConnectionStore.getState().refresh();
   }, []);
 
@@ -227,6 +233,7 @@ function App() {
             onOpenLocalTerminal={openLocalTerminal}
             onConnectSaved={openSshSaved}
             onNewConnection={() => setNewConnOpen(true)}
+            onPathChange={setBrowserPath}
             workspaceRoot={coreInfo?.workspaceRoot}
             width={sidebarWidth}
           />
@@ -260,7 +267,7 @@ function App() {
           <ResizeHandle direction="right" size={rightWidth} min={44} max={600} onResize={setRightWidth} />
           <RightSidebar
             activeTab={activeTab}
-            browserPath={coreInfo?.workspaceRoot ?? ""}
+            browserPath={browserPath}
             onToolChange={handleToolChange}
             width={rightWidth}
           />

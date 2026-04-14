@@ -26,6 +26,7 @@ type Props = {
   onOpenLocalTerminal: (path?: string) => void;
   onConnectSaved: (index: number) => void;
   onNewConnection: () => void;
+  onPathChange?: (path: string) => void;
   workspaceRoot?: string;
   width?: number;
 };
@@ -56,7 +57,7 @@ function goUp(currentPath: string): string {
   return trimmed.slice(0, slash);
 }
 
-export default function Sidebar({ onOpenLocalTerminal, onConnectSaved, onNewConnection, workspaceRoot, width }: Props) {
+export default function Sidebar({ onOpenLocalTerminal, onConnectSaved, onNewConnection, onPathChange, workspaceRoot, width }: Props) {
   const { t } = useI18n();
   const [section, setSection] = useState<0 | 1>(0);
   const [entries, setEntries] = useState<FileEntry[]>([]);
@@ -78,6 +79,10 @@ export default function Sidebar({ onOpenLocalTerminal, onConnectSaved, onNewConn
   }, []);
 
   useEffect(() => { if (!currentPath) return; cmd.listDirectory(currentPath).then(setEntries).catch(() => setEntries([])); setSearchText(""); }, [currentPath]);
+  useEffect(() => {
+    if (!currentPath) return;
+    onPathChange?.(currentPath);
+  }, [currentPath, onPathChange]);
   useEffect(() => { refreshConnections(); }, []);
   useEffect(() => {
     if (!placesOpen) return;

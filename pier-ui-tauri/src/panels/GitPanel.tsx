@@ -12,6 +12,7 @@ import {
   HardDrive,
   History,
   Layers,
+  Minus,
   Network,
   Plus,
   RefreshCw,
@@ -1413,15 +1414,16 @@ export default function GitPanel({ browserPath }: Props) {
                                 <span className="git-file-row__name">{file.fileName}</span>
                                 {file.path.includes("/") ? <span className="git-file-row__path">{file.path.replace(/\/[^/]+$/, "")}</span> : null}
                               </div>
-                              <span
-                                className="git-file-row__action"
+                              <button
+                                className="git-file-row__action git-file-row__action--unstage"
                                 onClick={(event) => {
                                   event.stopPropagation();
                                   void runGitAction(() => cmd.gitUnstagePaths(currentRepoPath, [file.path]));
                                 }}
+                                type="button"
                               >
-                                -
-                              </span>
+                                <Minus size={11} />
+                              </button>
                             </button>
                           );
                         })}
@@ -1471,25 +1473,27 @@ export default function GitPanel({ browserPath }: Props) {
                                 <span className="git-file-row__name">{file.fileName}</span>
                                 {file.path.includes("/") ? <span className="git-file-row__path">{file.path.replace(/\/[^/]+$/, "")}</span> : null}
                               </div>
-                              <span
-                                className="git-file-row__action"
+                              <button
+                                className="git-file-row__action git-file-row__action--stage"
                                 onClick={(event) => {
                                   event.stopPropagation();
                                   void runGitAction(() => cmd.gitStagePaths(currentRepoPath, [file.path]));
                                 }}
+                                type="button"
                               >
-                                +
-                              </span>
+                                <Plus size={11} />
+                              </button>
                               {file.status !== "?" ? (
-                                <span
+                                <button
                                   className="git-file-row__discard"
                                   onClick={(event) => {
                                     event.stopPropagation();
                                     void runGitAction(() => cmd.gitDiscardPaths(currentRepoPath, [file.path]));
                                   }}
+                                  type="button"
                                 >
                                   <X size={11} />
-                                </span>
+                                </button>
                               ) : null}
                             </button>
                           );
@@ -1552,6 +1556,7 @@ export default function GitPanel({ browserPath }: Props) {
                         <GitIconButton
                           active={popover?.kind === "commitActions"}
                           aria-label={t("More commit actions")}
+                          className="git-commit-actions__more"
                           disabled={!commitMessage.trim() || !panelState?.stagedFiles.length || busy}
                           icon={ChevronDown}
                           onClick={(event) => openPopoverFromElement("commitActions", event.currentTarget, 188)}

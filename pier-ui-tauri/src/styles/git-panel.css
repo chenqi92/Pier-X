@@ -302,23 +302,23 @@
 .git-tabs {
   display: flex;
   align-items: center;
-  gap: var(--sp-1);
+  gap: 2px;
   padding: 4px 8px;
   border-bottom: 1px solid var(--border-subtle);
-  background: rgba(255, 255, 255, 0.02);
+  background: rgba(255, 255, 255, 0.018);
 }
 
 .git-tab {
   display: inline-flex;
   align-items: center;
   gap: 4px;
-  height: 26px;
+  height: 28px;
   padding: 0 8px;
   border-radius: var(--radius-sm);
   background: transparent;
   color: var(--text-secondary);
   cursor: pointer;
-  font-size: 10px;
+  font-size: 11px;
   font-weight: var(--weight-medium);
 }
 
@@ -329,16 +329,21 @@
 }
 
 .git-tab__badge {
-  min-width: 16px;
-  height: 16px;
-  padding: 0 var(--sp-1);
+  min-width: 15px;
+  height: 15px;
+  padding: 0 4px;
   border-radius: var(--radius-pill);
-  background: color-mix(in srgb, var(--accent) 18%, var(--bg-elevated));
-  color: var(--accent-hover);
-  font-size: 10px;
-  line-height: 16px;
+  background: rgba(255, 255, 255, 0.06);
+  color: var(--text-tertiary);
+  font-size: 9px;
+  line-height: 15px;
   text-align: center;
   font-family: var(--font-mono);
+}
+
+.git-tab--active .git-tab__badge {
+  background: color-mix(in srgb, var(--accent) 20%, var(--bg-elevated));
+  color: var(--accent-hover);
 }
 
 .git-surface,
@@ -441,6 +446,43 @@
 
 .git-commit-actions__spacer {
   flex: 1;
+}
+
+.git-commit-actions__pair {
+  display: inline-flex;
+  align-items: stretch;
+  border-radius: 5px;
+  overflow: hidden;
+  border: 1px solid color-mix(in srgb, var(--accent) 72%, transparent);
+}
+
+.git-commit-actions__pair .git-button--primary {
+  min-height: 30px;
+  border: none;
+  border-radius: 0;
+}
+
+.git-commit-actions__pair .git-icon-button {
+  width: 28px;
+  height: 30px;
+  border: none;
+  border-left: 1px solid rgba(255, 255, 255, 0.18);
+  border-radius: 0;
+  background: var(--accent);
+  color: var(--text-inverse);
+}
+
+.git-commit-actions__pair .git-icon-button:hover:not(:disabled) {
+  background: var(--accent-hover);
+  color: var(--text-inverse);
+}
+
+.git-commit-actions .git-button--compact:not(.git-button--primary) {
+  min-height: 22px;
+  padding: 0 6px;
+  border-color: var(--border-subtle);
+  background: rgba(255, 255, 255, 0.02);
+  color: var(--text-secondary);
 }
 
 .git-button {
@@ -1017,6 +1059,18 @@
   background: transparent;
 }
 
+.git-file-row__action--stage {
+  color: var(--status-success);
+}
+
+.git-file-row__action--unstage {
+  color: var(--status-warning);
+}
+
+.git-file-row__discard {
+  color: var(--text-tertiary);
+}
+
 .git-changed-file-row__button {
   display: inline-flex;
   align-items: center;
@@ -1105,13 +1159,14 @@
 }
 
 .git-history__filters {
-  display: grid;
-  grid-template-columns: minmax(0, 1.5fr) repeat(3, minmax(0, 1fr)) auto auto auto;
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
   gap: 4px;
 }
 
 .git-history__path-summary {
-  max-width: 190px;
+  max-width: 180px;
 }
 
 .git-history-list-surface,
@@ -1178,7 +1233,7 @@
 .git-history-row__meta {
   display: flex;
   align-items: center;
-  gap: var(--sp-2);
+  gap: 6px;
   min-width: 0;
 }
 
@@ -1270,19 +1325,20 @@
   align-items: center;
   gap: 4px;
   min-width: 0;
-  flex-wrap: wrap;
+  flex-wrap: nowrap;
+  overflow: hidden;
 }
 
 .git-ref-badge {
   display: inline-flex;
   align-items: center;
-  min-height: 16px;
-  padding: 0 6px;
+  min-height: 14px;
+  padding: 0 4px;
   border-radius: var(--radius-pill);
   background: rgba(255, 255, 255, 0.05);
   border: 1px solid var(--border-subtle);
   color: var(--text-secondary);
-  font-size: 10px;
+  font-size: 9px;
   font-family: var(--font-mono);
 }
 

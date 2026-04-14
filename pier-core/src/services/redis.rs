@@ -40,6 +40,7 @@
 
 use std::collections::BTreeMap;
 use std::sync::Arc;
+use std::time::Instant;
 
 use redis::aio::ConnectionManager;
 use redis::{AsyncCommands, Client, RedisError as NativeRedisError};
@@ -174,6 +175,17 @@ pub struct KeyDetails {
     pub preview: Vec<String>,
     /// True when `preview` was truncated vs the real value.
     pub preview_truncated: bool,
+}
+
+/// Result of an arbitrary Redis command execution.
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct CommandResult {
+    /// Short single-line summary used by the UI header.
+    pub summary: String,
+    /// Response body rendered into display lines.
+    pub lines: Vec<String>,
+    /// Wall-clock execution time on the shared runtime.
+    pub elapsed_ms: u64,
 }
 
 /// How many preview entries / bytes to return per inspect.
@@ -486,6 +498,62 @@ impl RedisClient {
     pub fn info_blocking(&self, section: &str) -> Result<BTreeMap<String, String>> {
         runtime::shared().block_on(self.info(section))
     }
+
+    /// Execute an arbitrary Redis command supplied as argv
+    /// tokens. The first element is the command name, the rest
+    /// are passed through as bulk-string arguments.
+    pub async fn execute_command(&self, args: &[String]) -> Result<CommandResult> {
+        if args.is_empty() {
+            return Err(RedisError::InvalidConfig("empty command".into()));
+        }
+
+        let start = Instant::now();
+        let mut conn = self.manager.lock().await;
+        let mut command = redis::cmd(&args[0]);
+        for arg in &args[1..] {
+            command.arg(arg);
+        }
+        let value: redis::Value = command.query_async(&mut *conn).await?;
+        Ok(CommandResult {
+            summary: summarize_value(&value),
+            lines: render_value_lines(&value),
+            elapsed_ms: start.elapsed().as_millis() as u64,
+        })
+    }
+
+    /// Blocking wrapper for [`Self::execute_command`].
+    pub fn execute_command_blocking(&self, args: &[String]) -> Result<CommandResult> {
+        runtime::shared().block_on(self.execute_command(args))
+    }
+}
+
+fn summarize_value(value: &redis::Value) -> String {
+    truncate_display(format!("{value:?}"), 120)
+}
+
+fn render_value_lines(value: &redis::Value) -> Vec<String> {
+    let text = format!("{value:#?}");
+    let mut lines: Vec<String> = text.lines().map(|line| line.to_string()).collect();
+    if lines.is_empty() {
+        lines.push(String::from("(empty reply)"));
+    }
+    lines
+}
+
+fn truncate_display(text: String, max_chars: usize) -> String {
+    if text.chars().count() <= max_chars {
+        return text;
+    }
+    let mut end = 0usize;
+    for (count, (index, _)) in text.char_indices().enumerate() {
+        if count == max_chars {
+            break;
+        }
+        end = index;
+    }
+    let mut truncated = text[..=end].to_string();
+    truncated.push('…');
+    truncated
 }
 
 /// Result of a [`RedisClient::scan_keys`] call.

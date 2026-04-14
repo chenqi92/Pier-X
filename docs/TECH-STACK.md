@@ -4,6 +4,9 @@
 > 约束：**非 Web 技术**、IDE 级美观（IntelliJ 风格）、启动快、内存低
 > 复用：现有 `pier-core`（Rust）几乎可以全量保留
 
+> Note
+> This document reflects the earlier non-Web evaluation. On branch `codex/tauri-ui-reset` the active shell direction is now `Tauri 2 + React`, documented in [TAURI-RESET.md](./TAURI-RESET.md).
+
 ---
 
 ## 1. 现状评估：什么能复用，什么必须重做

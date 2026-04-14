@@ -1,0 +1,1485 @@
+use pier_core::connections::ConnectionStore;
+use pier_core::credentials;
+use pier_core::services::git::{CommitInfo, GitClient, StashEntry};
+use pier_core::services::mysql::{self as mysql_service, MysqlClient, MysqlConfig};
+use pier_core::services::redis::{RedisClient, RedisConfig};
+use pier_core::services::sqlite::SqliteClient;
+use pier_core::ssh::{AuthMethod, HostKeyVerifier, SshConfig, SshSession};
+use pier_core::terminal::{Cell, Color, NotifyFn, PierTerminal};
+use serde::Serialize;
+use std::collections::HashMap;
+use std::ffi::c_void;
+use std::fs;
+use std::path::PathBuf;
+use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::Mutex;
+use std::time::{SystemTime, UNIX_EPOCH};
+
+#[derive(Default)]
+struct AppState {
+    next_terminal_id: AtomicU64,
+    terminals: Mutex<HashMap<String, ManagedTerminal>>,
+}
+
+struct ManagedTerminal {
+    terminal: PierTerminal,
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct CoreInfo {
+    version: String,
+    profile: &'static str,
+    ui_target: &'static str,
+    workspace_root: String,
+    default_shell: String,
+    services: Vec<&'static str>,
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct FileEntry {
+    name: String,
+    path: String,
+    kind: &'static str,
+    size_label: String,
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct GitChangeEntry {
+    path: String,
+    status: String,
+    staged: bool,
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct GitOverview {
+    repo_path: String,
+    branch_name: String,
+    tracking: String,
+    ahead: i32,
+    behind: i32,
+    is_clean: bool,
+    staged_count: usize,
+    unstaged_count: usize,
+    changes: Vec<GitChangeEntry>,
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct GitCommitEntry {
+    hash: String,
+    short_hash: String,
+    message: String,
+    author: String,
+    relative_date: String,
+    refs: String,
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct GitStashEntry {
+    index: String,
+    message: String,
+    relative_date: String,
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct DataPreview {
+    columns: Vec<String>,
+    rows: Vec<Vec<String>>,
+    truncated: bool,
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct QueryExecutionResult {
+    columns: Vec<String>,
+    rows: Vec<Vec<String>>,
+    truncated: bool,
+    affected_rows: u64,
+    last_insert_id: Option<u64>,
+    elapsed_ms: u64,
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct MysqlColumnView {
+    name: String,
+    column_type: String,
+    nullable: bool,
+    key: String,
+    default_value: String,
+    extra: String,
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct MysqlBrowserState {
+    database_name: String,
+    databases: Vec<String>,
+    table_name: String,
+    tables: Vec<String>,
+    columns: Vec<MysqlColumnView>,
+    preview: Option<DataPreview>,
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct SqliteColumnView {
+    name: String,
+    col_type: String,
+    not_null: bool,
+    primary_key: bool,
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct SqliteBrowserState {
+    path: String,
+    table_name: String,
+    tables: Vec<String>,
+    columns: Vec<SqliteColumnView>,
+    preview: Option<DataPreview>,
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct RedisKeyView {
+    key: String,
+    kind: String,
+    length: u64,
+    ttl_seconds: i64,
+    encoding: String,
+    preview: Vec<String>,
+    preview_truncated: bool,
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct RedisBrowserState {
+    pong: String,
+    pattern: String,
+    limit: usize,
+    truncated: bool,
+    key_name: String,
+    keys: Vec<String>,
+    server_version: String,
+    used_memory: String,
+    details: Option<RedisKeyView>,
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct RedisCommandResultView {
+    summary: String,
+    lines: Vec<String>,
+    elapsed_ms: u64,
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct SavedSshConnection {
+    index: usize,
+    name: String,
+    host: String,
+    port: u16,
+    user: String,
+    auth_kind: &'static str,
+    key_path: String,
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct TerminalSessionInfo {
+    session_id: String,
+    shell: String,
+    cols: u16,
+    rows: u16,
+}
+
+#[derive(Clone, PartialEq)]
+struct SegmentStyle {
+    fg: String,
+    bg: String,
+    bold: bool,
+    underline: bool,
+    cursor: bool,
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct TerminalSegment {
+    text: String,
+    fg: String,
+    bg: String,
+    bold: bool,
+    underline: bool,
+    cursor: bool,
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct TerminalLine {
+    segments: Vec<TerminalSegment>,
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct TerminalSnapshot {
+    cols: u16,
+    rows: u16,
+    alive: bool,
+    scrollback_len: usize,
+    lines: Vec<TerminalLine>,
+}
+
+extern "C" fn tauri_terminal_notify(_user_data: *mut c_void, _event: u32) {}
+
+fn home_dir() -> PathBuf {
+    std::env::var_os(if cfg!(windows) { "USERPROFILE" } else { "HOME" })
+        .map(PathBuf::from)
+        .unwrap_or_else(|| PathBuf::from("."))
+}
+
+fn workspace_root() -> PathBuf {
+    std::env::current_dir().unwrap_or_else(|_| home_dir())
+}
+
+fn resolve_existing_path(path: Option<String>) -> PathBuf {
+    path.map(PathBuf::from)
+        .filter(|candidate| candidate.exists())
+        .unwrap_or_else(workspace_root)
+}
+
+fn open_git_client(path: Option<String>) -> Result<GitClient, String> {
+    let target = resolve_existing_path(path);
+    let target_str = target.display().to_string();
+    GitClient::open(&target_str).map_err(|error| error.to_string())
+}
+
+fn default_shell() -> String {
+    #[cfg(windows)]
+    {
+        return String::from("powershell.exe");
+    }
+
+    #[cfg(not(windows))]
+    {
+        std::env::var("SHELL").unwrap_or_else(|_| String::from("/bin/zsh"))
+    }
+}
+
+fn format_size(size: u64) -> String {
+    const KB: f64 = 1024.0;
+    const MB: f64 = KB * 1024.0;
+    const GB: f64 = MB * 1024.0;
+    let size_f = size as f64;
+    if size_f >= GB {
+        format!("{:.1} GB", size_f / GB)
+    } else if size_f >= MB {
+        format!("{:.1} MB", size_f / MB)
+    } else if size_f >= KB {
+        format!("{:.1} KB", size_f / KB)
+    } else {
+        format!("{} B", size)
+    }
+}
+
+fn normalize_ssh_port(port: u16) -> u16 {
+    if port == 0 { 22 } else { port }
+}
+
+fn normalize_mysql_port(port: u16) -> u16 {
+    if port == 0 { 3306 } else { port }
+}
+
+fn normalize_redis_port(port: u16) -> u16 {
+    if port == 0 { 6379 } else { port }
+}
+
+fn choose_active_item(preferred: Option<String>, items: &[String]) -> String {
+    let resolved = preferred
+        .unwrap_or_default()
+        .trim()
+        .to_string();
+    if !resolved.is_empty() && items.iter().any(|item| item == &resolved) {
+        resolved
+    } else {
+        items.first().cloned().unwrap_or_default()
+    }
+}
+
+fn tokenize_command_line(command: &str) -> Result<Vec<String>, String> {
+    let mut tokens = Vec::new();
+    let mut current = String::new();
+    let mut quote: Option<char> = None;
+    let mut escaped = false;
+
+    for character in command.chars() {
+        if escaped {
+            current.push(character);
+            escaped = false;
+            continue;
+        }
+
+        match character {
+            '\\' => escaped = true,
+            '"' | '\'' => {
+                if let Some(active) = quote {
+                    if active == character {
+                        quote = None;
+                    } else {
+                        current.push(character);
+                    }
+                } else {
+                    quote = Some(character);
+                }
+            }
+            value if value.is_whitespace() && quote.is_none() => {
+                if !current.is_empty() {
+                    tokens.push(std::mem::take(&mut current));
+                }
+            }
+            _ => current.push(character),
+        }
+    }
+
+    if escaped {
+        current.push('\\');
+    }
+    if quote.is_some() {
+        return Err(String::from("unterminated quoted string in command input"));
+    }
+    if !current.is_empty() {
+        tokens.push(current);
+    }
+    if tokens.is_empty() {
+        return Err(String::from("command must not be empty"));
+    }
+
+    Ok(tokens)
+}
+
+fn map_mysql_preview(result: mysql_service::QueryResult) -> DataPreview {
+    DataPreview {
+        columns: result.columns,
+        rows: result
+            .rows
+            .into_iter()
+            .map(|row| {
+                row.into_iter()
+                    .map(|cell| cell.unwrap_or_else(|| String::from("NULL")))
+                    .collect()
+            })
+            .collect(),
+        truncated: result.truncated,
+    }
+}
+
+fn map_mysql_query_result(result: mysql_service::QueryResult) -> QueryExecutionResult {
+    QueryExecutionResult {
+        columns: result.columns,
+        rows: result
+            .rows
+            .into_iter()
+            .map(|row| {
+                row.into_iter()
+                    .map(|cell| cell.unwrap_or_else(|| String::from("NULL")))
+                    .collect()
+            })
+            .collect(),
+        truncated: result.truncated,
+        affected_rows: result.affected_rows,
+        last_insert_id: result.last_insert_id,
+        elapsed_ms: result.elapsed_ms,
+    }
+}
+
+fn map_sqlite_preview(result: pier_core::services::sqlite::SqliteQueryResult) -> Option<DataPreview> {
+    if result.error.is_some() {
+        None
+    } else {
+        Some(DataPreview {
+            columns: result.columns,
+            rows: result.rows,
+            truncated: false,
+        })
+    }
+}
+
+fn map_sqlite_query_result(
+    result: pier_core::services::sqlite::SqliteQueryResult,
+) -> Result<QueryExecutionResult, String> {
+    if let Some(error) = result.error {
+        Err(error)
+    } else {
+        Ok(QueryExecutionResult {
+            columns: result.columns,
+            rows: result.rows,
+            truncated: false,
+            affected_rows: result.affected_rows.max(0) as u64,
+            last_insert_id: None,
+            elapsed_ms: result.elapsed_ms,
+        })
+    }
+}
+
+fn map_redis_details(details: pier_core::services::redis::KeyDetails) -> RedisKeyView {
+    RedisKeyView {
+        key: details.key,
+        kind: details.kind,
+        length: details.length,
+        ttl_seconds: details.ttl_seconds,
+        encoding: details.encoding,
+        preview: details.preview,
+        preview_truncated: details.preview_truncated,
+    }
+}
+
+fn slugify_for_credential(value: &str) -> String {
+    let mut slug = String::new();
+    let mut last_dash = false;
+    for character in value.chars() {
+        if character.is_ascii_alphanumeric() {
+            slug.push(character.to_ascii_lowercase());
+            last_dash = false;
+        } else if !last_dash {
+            slug.push('-');
+            last_dash = true;
+        }
+    }
+    slug.trim_matches('-').to_string()
+}
+
+fn make_credential_id(host: &str, user: &str) -> String {
+    let millis = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|duration| duration.as_millis())
+        .unwrap_or(0);
+    let host_slug = slugify_for_credential(host);
+    let user_slug = slugify_for_credential(user);
+    format!("pier-x.ssh.{host_slug}.{user_slug}.{millis}")
+}
+
+fn auth_kind(auth: &AuthMethod) -> &'static str {
+    match auth {
+        AuthMethod::Agent => "agent",
+        AuthMethod::PublicKeyFile { .. } => "key",
+        AuthMethod::KeychainPassword { .. } | AuthMethod::DirectPassword { .. } => "password",
+    }
+}
+
+fn map_saved_connection(index: usize, config: &SshConfig) -> SavedSshConnection {
+    SavedSshConnection {
+        index,
+        name: config.name.clone(),
+        host: config.host.clone(),
+        port: config.port,
+        user: config.user.clone(),
+        auth_kind: auth_kind(&config.auth),
+        key_path: match &config.auth {
+            AuthMethod::PublicKeyFile {
+                private_key_path, ..
+            } => private_key_path.clone(),
+            _ => String::new(),
+        },
+    }
+}
+
+fn build_manual_ssh_config(
+    host: String,
+    port: u16,
+    user: String,
+    auth_mode: String,
+    password: Option<String>,
+    key_path: Option<String>,
+) -> Result<SshConfig, String> {
+    let resolved_host = host.trim();
+    let resolved_user = user.trim();
+
+    if resolved_host.is_empty() || resolved_user.is_empty() {
+        return Err(String::from("SSH host and user must not be empty."));
+    }
+
+    let mut config = SshConfig::new(
+        format!("{resolved_user}@{resolved_host}"),
+        resolved_host,
+        resolved_user,
+    );
+    config.port = normalize_ssh_port(port);
+    config.auth = match auth_mode.trim() {
+        "agent" => AuthMethod::Agent,
+        "key" => {
+            let resolved_key_path = key_path
+                .map(|value| value.trim().to_string())
+                .filter(|value| !value.is_empty())
+                .ok_or_else(|| String::from("SSH key path must not be empty."))?;
+            AuthMethod::PublicKeyFile {
+                private_key_path: resolved_key_path,
+                passphrase_credential_id: None,
+            }
+        }
+        _ => {
+            let resolved_password = password
+                .filter(|value| !value.is_empty())
+                .ok_or_else(|| String::from("SSH password must not be empty."))?;
+            AuthMethod::DirectPassword {
+                password: resolved_password,
+            }
+        }
+    };
+
+    Ok(config)
+}
+
+fn open_saved_ssh_config(index: usize) -> Result<SshConfig, String> {
+    let store = ConnectionStore::load_default().map_err(|error| error.to_string())?;
+    store
+        .connections
+        .get(index)
+        .cloned()
+        .ok_or_else(|| format!("unknown saved SSH connection: {}", index))
+}
+
+fn store_terminal_session(
+    state: tauri::State<'_, AppState>,
+    terminal: PierTerminal,
+    shell: String,
+    cols: u16,
+    rows: u16,
+) -> Result<TerminalSessionInfo, String> {
+    let session_id = format!(
+        "term-{}",
+        state.next_terminal_id.fetch_add(1, Ordering::Relaxed) + 1
+    );
+    let mut sessions = state
+        .terminals
+        .lock()
+        .map_err(|_| String::from("terminal state poisoned"))?;
+    sessions.insert(session_id.clone(), ManagedTerminal { terminal });
+
+    Ok(TerminalSessionInfo {
+        session_id,
+        shell,
+        cols,
+        rows,
+    })
+}
+
+fn create_ssh_terminal_from_config(
+    state: tauri::State<'_, AppState>,
+    config: SshConfig,
+    cols: u16,
+    rows: u16,
+) -> Result<TerminalSessionInfo, String> {
+    let resolved_cols = cols.max(40);
+    let resolved_rows = rows.max(12);
+    let shell = format!("ssh:{}@{}:{}", config.user, config.host, config.port);
+    let session = SshSession::connect_blocking(&config, HostKeyVerifier::default())
+        .map_err(|error| error.to_string())?;
+    let pty = session
+        .open_shell_channel_blocking(resolved_cols, resolved_rows)
+        .map_err(|error| error.to_string())?;
+    let terminal = PierTerminal::with_pty(
+        Box::new(pty),
+        resolved_cols,
+        resolved_rows,
+        tauri_terminal_notify as NotifyFn,
+        std::ptr::null_mut(),
+    )
+    .map_err(|error| error.to_string())?;
+
+    store_terminal_session(state, terminal, shell, resolved_cols, resolved_rows)
+}
+
+fn render_terminal_color(color: Color, foreground: bool) -> String {
+    match color {
+        Color::Default => {
+            if foreground {
+                String::from("#e8eaed")
+            } else {
+                String::from("#0e0f11")
+            }
+        }
+        Color::Indexed(index) => {
+            let (r, g, b) = ansi_index_to_rgb(index);
+            format!("#{r:02x}{g:02x}{b:02x}")
+        }
+        Color::Rgb(r, g, b) => format!("#{r:02x}{g:02x}{b:02x}"),
+    }
+}
+
+fn ansi_index_to_rgb(index: u8) -> (u8, u8, u8) {
+    match index {
+        0 => (0x1c, 0x1e, 0x22),
+        1 => (0xfa, 0x66, 0x75),
+        2 => (0x5f, 0xb8, 0x65),
+        3 => (0xf0, 0xa8, 0x3a),
+        4 => (0x35, 0x74, 0xf0),
+        5 => (0xc6, 0x78, 0xdd),
+        6 => (0x56, 0xb6, 0xc2),
+        7 => (0xb4, 0xb8, 0xbf),
+        8 => (0x5a, 0x5e, 0x66),
+        9 => (0xff, 0x85, 0x93),
+        10 => (0x7f, 0xcf, 0x85),
+        11 => (0xff, 0xc1, 0x5c),
+        12 => (0x5e, 0x92, 0xff),
+        13 => (0xd8, 0x94, 0xed),
+        14 => (0x7f, 0xc8, 0xd1),
+        15 => (0xe8, 0xea, 0xed),
+        16..=231 => {
+            let value = index - 16;
+            let r = value / 36;
+            let g = (value % 36) / 6;
+            let b = value % 6;
+            let channel = |step: u8| -> u8 {
+                match step {
+                    0 => 0,
+                    1 => 95,
+                    2 => 135,
+                    3 => 175,
+                    4 => 215,
+                    _ => 255,
+                }
+            };
+            (channel(r), channel(g), channel(b))
+        }
+        232..=255 => {
+            let shade = 8 + (index - 232) * 10;
+            (shade, shade, shade)
+        }
+    }
+}
+
+fn resolve_segment_style(cell: &Cell, is_cursor: bool) -> SegmentStyle {
+    let mut fg = render_terminal_color(cell.fg, true);
+    let mut bg = render_terminal_color(cell.bg, false);
+    if cell.reverse {
+        std::mem::swap(&mut fg, &mut bg);
+    }
+    SegmentStyle {
+        fg,
+        bg,
+        bold: cell.bold,
+        underline: cell.underline,
+        cursor: is_cursor,
+    }
+}
+
+fn build_terminal_lines(snapshot: &pier_core::terminal::GridSnapshot, alive: bool) -> Vec<TerminalLine> {
+    let width = snapshot.cols as usize;
+    snapshot
+        .cells
+        .chunks(width)
+        .enumerate()
+        .map(|(row_index, row)| {
+            let mut segments = Vec::new();
+            let mut current_style: Option<SegmentStyle> = None;
+            let mut current_text = String::new();
+
+            for (col_index, cell) in row.iter().enumerate() {
+                let is_cursor = alive
+                    && row_index == snapshot.cursor_y as usize
+                    && col_index == snapshot.cursor_x as usize;
+                let next_style = resolve_segment_style(cell, is_cursor);
+                let next_char = if cell.ch == '\0' { ' ' } else { cell.ch };
+
+                if current_style.as_ref() == Some(&next_style) {
+                    current_text.push(next_char);
+                    continue;
+                }
+
+                if let Some(style) = current_style.take() {
+                    segments.push(TerminalSegment {
+                        text: std::mem::take(&mut current_text),
+                        fg: style.fg,
+                        bg: style.bg,
+                        bold: style.bold,
+                        underline: style.underline,
+                        cursor: style.cursor,
+                    });
+                }
+
+                current_text.push(next_char);
+                current_style = Some(next_style);
+            }
+
+            if let Some(style) = current_style.take() {
+                segments.push(TerminalSegment {
+                    text: current_text,
+                    fg: style.fg,
+                    bg: style.bg,
+                    bold: style.bold,
+                    underline: style.underline,
+                    cursor: style.cursor,
+                });
+            }
+
+            TerminalLine { segments }
+        })
+        .collect()
+}
+
+#[tauri::command]
+fn core_info() -> CoreInfo {
+    CoreInfo {
+        version: pier_core::VERSION.to_string(),
+        profile: if cfg!(debug_assertions) { "debug" } else { "release" },
+        ui_target: "tauri",
+        workspace_root: workspace_root().display().to_string(),
+        default_shell: default_shell(),
+        services: vec!["terminal", "ssh", "git", "mysql", "sqlite", "redis"],
+    }
+}
+
+#[tauri::command]
+fn list_directory(path: Option<String>) -> Result<Vec<FileEntry>, String> {
+    let target = resolve_existing_path(path);
+
+    let mut entries: Vec<FileEntry> = fs::read_dir(&target)
+        .map_err(|error| format!("Failed to read {}: {}", target.display(), error))?
+        .filter_map(|entry| entry.ok())
+        .filter_map(|entry| {
+            let path = entry.path();
+            let metadata = entry.metadata().ok()?;
+            let kind = if metadata.is_dir() { "directory" } else { "file" };
+            Some(FileEntry {
+                name: entry.file_name().to_string_lossy().to_string(),
+                path: path.display().to_string(),
+                kind,
+                size_label: if metadata.is_dir() {
+                    String::from("--")
+                } else {
+                    format_size(metadata.len())
+                },
+            })
+        })
+        .collect();
+
+    entries.sort_by(|left, right| {
+        let left_dir = left.kind == "directory";
+        let right_dir = right.kind == "directory";
+        right_dir
+            .cmp(&left_dir)
+            .then_with(|| left.name.to_lowercase().cmp(&right.name.to_lowercase()))
+    });
+
+    Ok(entries)
+}
+
+#[tauri::command]
+fn git_overview(path: Option<String>) -> Result<GitOverview, String> {
+    let client = open_git_client(path)?;
+    let branch = client.branch_info().map_err(|error| error.to_string())?;
+    let changes = client.status().map_err(|error| error.to_string())?;
+
+    let staged_count = changes.iter().filter(|change| change.staged).count();
+    let unstaged_count = changes.len().saturating_sub(staged_count);
+    let change_entries = changes
+        .iter()
+        .take(18)
+        .map(|change| GitChangeEntry {
+            path: change.path.clone(),
+            status: change.status.code().to_string(),
+            staged: change.staged,
+        })
+        .collect();
+
+    Ok(GitOverview {
+        repo_path: client.repo_path().display().to_string(),
+        branch_name: branch.name,
+        tracking: branch.tracking,
+        ahead: branch.ahead,
+        behind: branch.behind,
+        is_clean: changes.is_empty(),
+        staged_count,
+        unstaged_count,
+        changes: change_entries,
+    })
+}
+
+#[tauri::command]
+fn git_diff(
+    path: Option<String>,
+    file_path: String,
+    staged: bool,
+    untracked: bool,
+) -> Result<String, String> {
+    let client = open_git_client(path)?;
+    if untracked {
+        client.diff_untracked(&file_path).map_err(|error| error.to_string())
+    } else {
+        client
+            .diff(&file_path, staged)
+            .map_err(|error| error.to_string())
+    }
+}
+
+#[tauri::command]
+fn git_stage_paths(path: Option<String>, paths: Vec<String>) -> Result<(), String> {
+    let client = open_git_client(path)?;
+    client.stage(&paths).map_err(|error| error.to_string())
+}
+
+#[tauri::command]
+fn git_unstage_paths(path: Option<String>, paths: Vec<String>) -> Result<(), String> {
+    let client = open_git_client(path)?;
+    client.unstage(&paths).map_err(|error| error.to_string())
+}
+
+#[tauri::command]
+fn git_stage_all(path: Option<String>) -> Result<(), String> {
+    let client = open_git_client(path)?;
+    client.stage_all().map_err(|error| error.to_string())
+}
+
+#[tauri::command]
+fn git_unstage_all(path: Option<String>) -> Result<(), String> {
+    let client = open_git_client(path)?;
+    client.unstage_all().map_err(|error| error.to_string())
+}
+
+#[tauri::command]
+fn git_discard_paths(path: Option<String>, paths: Vec<String>) -> Result<(), String> {
+    let client = open_git_client(path)?;
+    client.discard(&paths).map_err(|error| error.to_string())
+}
+
+#[tauri::command]
+fn git_commit(path: Option<String>, message: String) -> Result<String, String> {
+    let client = open_git_client(path)?;
+    client
+        .commit(message.trim())
+        .map_err(|error| error.to_string())
+}
+
+#[tauri::command]
+fn git_branch_list(path: Option<String>) -> Result<Vec<String>, String> {
+    let client = open_git_client(path)?;
+    client.branch_list().map_err(|error| error.to_string())
+}
+
+#[tauri::command]
+fn git_checkout_branch(path: Option<String>, name: String) -> Result<String, String> {
+    let client = open_git_client(path)?;
+    client
+        .checkout_branch(name.trim())
+        .map_err(|error| error.to_string())
+}
+
+#[tauri::command]
+fn git_recent_commits(path: Option<String>, limit: Option<usize>) -> Result<Vec<GitCommitEntry>, String> {
+    let client = open_git_client(path)?;
+    let resolved_limit = limit.unwrap_or(8).clamp(1, 16);
+    let commits = match client.log(resolved_limit) {
+        Ok(entries) => entries,
+        Err(error) => {
+            let message = error.to_string();
+            if message.contains("does not have any commits yet") {
+                Vec::new()
+            } else {
+                return Err(message);
+            }
+        }
+    };
+
+    Ok(commits.into_iter().map(map_commit_entry).collect())
+}
+
+fn map_commit_entry(entry: CommitInfo) -> GitCommitEntry {
+    GitCommitEntry {
+        hash: entry.hash,
+        short_hash: entry.short_hash,
+        message: entry.message,
+        author: entry.author,
+        relative_date: entry.relative_date,
+        refs: entry.refs,
+    }
+}
+
+#[tauri::command]
+fn git_push(path: Option<String>) -> Result<String, String> {
+    let client = open_git_client(path)?;
+    client.push().map_err(|error| error.to_string())
+}
+
+#[tauri::command]
+fn git_pull(path: Option<String>) -> Result<String, String> {
+    let client = open_git_client(path)?;
+    client.pull().map_err(|error| error.to_string())
+}
+
+#[tauri::command]
+fn git_stash_list(path: Option<String>) -> Result<Vec<GitStashEntry>, String> {
+    let client = open_git_client(path)?;
+    client
+        .stash_list()
+        .map(|entries| entries.into_iter().map(map_stash_entry).collect())
+        .map_err(|error| error.to_string())
+}
+
+#[tauri::command]
+fn git_stash_push(path: Option<String>, message: String) -> Result<String, String> {
+    let client = open_git_client(path)?;
+    client
+        .stash_push(message.trim())
+        .map_err(|error| error.to_string())
+}
+
+#[tauri::command]
+fn git_stash_apply(path: Option<String>, index: String) -> Result<String, String> {
+    let client = open_git_client(path)?;
+    client
+        .stash_apply(index.trim())
+        .map_err(|error| error.to_string())
+}
+
+#[tauri::command]
+fn git_stash_pop(path: Option<String>, index: String) -> Result<String, String> {
+    let client = open_git_client(path)?;
+    client
+        .stash_pop(index.trim())
+        .map_err(|error| error.to_string())
+}
+
+#[tauri::command]
+fn git_stash_drop(path: Option<String>, index: String) -> Result<String, String> {
+    let client = open_git_client(path)?;
+    client
+        .stash_drop(index.trim())
+        .map_err(|error| error.to_string())
+}
+
+#[tauri::command]
+fn ssh_connections_list() -> Result<Vec<SavedSshConnection>, String> {
+    let store = ConnectionStore::load_default().map_err(|error| error.to_string())?;
+    Ok(store
+        .connections
+        .iter()
+        .enumerate()
+        .map(|(index, config)| map_saved_connection(index, config))
+        .collect())
+}
+
+#[tauri::command]
+fn ssh_connection_save(
+    name: String,
+    host: String,
+    port: u16,
+    user: String,
+    auth_mode: String,
+    password: Option<String>,
+    key_path: Option<String>,
+) -> Result<(), String> {
+    let resolved_host = host.trim();
+    let resolved_user = user.trim();
+    let resolved_name = name.trim();
+
+    if resolved_host.is_empty() || resolved_user.is_empty() {
+        return Err(String::from("SSH host and user must not be empty."));
+    }
+
+    let mut config = SshConfig::new(
+        if resolved_name.is_empty() {
+            format!("{resolved_user}@{resolved_host}")
+        } else {
+            resolved_name.to_string()
+        },
+        resolved_host,
+        resolved_user,
+    );
+    config.port = normalize_ssh_port(port);
+    config.auth = match auth_mode.trim() {
+        "agent" => AuthMethod::Agent,
+        "key" => {
+            let resolved_key_path = key_path
+                .map(|value| value.trim().to_string())
+                .filter(|value| !value.is_empty())
+                .ok_or_else(|| String::from("SSH key path must not be empty."))?;
+            AuthMethod::PublicKeyFile {
+                private_key_path: resolved_key_path,
+                passphrase_credential_id: None,
+            }
+        }
+        _ => {
+            let resolved_password = password
+                .filter(|value| !value.is_empty())
+                .ok_or_else(|| String::from("SSH password must not be empty."))?;
+            let credential_id = make_credential_id(resolved_host, resolved_user);
+            credentials::set(&credential_id, &resolved_password).map_err(|error| error.to_string())?;
+            AuthMethod::KeychainPassword { credential_id }
+        }
+    };
+
+    let mut store = ConnectionStore::load_default().map_err(|error| error.to_string())?;
+    store.add(config);
+    store.save_default().map_err(|error| error.to_string())
+}
+
+#[tauri::command]
+fn ssh_connection_delete(index: usize) -> Result<(), String> {
+    let mut store = ConnectionStore::load_default().map_err(|error| error.to_string())?;
+    let removed = store
+        .remove(index)
+        .ok_or_else(|| format!("unknown saved SSH connection: {}", index))?;
+    store.save_default().map_err(|error| error.to_string())?;
+
+    match removed.auth {
+        AuthMethod::KeychainPassword { credential_id } => {
+            credentials::delete(&credential_id).map_err(|error| error.to_string())
+        }
+        AuthMethod::PublicKeyFile {
+            passphrase_credential_id: Some(credential_id),
+            ..
+        } => credentials::delete(&credential_id).map_err(|error| error.to_string()),
+        _ => Ok(()),
+    }
+}
+
+fn map_stash_entry(entry: StashEntry) -> GitStashEntry {
+    GitStashEntry {
+        index: entry.index,
+        message: entry.message,
+        relative_date: entry.relative_date,
+    }
+}
+
+#[tauri::command]
+fn mysql_browse(
+    host: String,
+    port: u16,
+    user: String,
+    password: String,
+    database: Option<String>,
+    table: Option<String>,
+) -> Result<MysqlBrowserState, String> {
+    let resolved_host = host.trim();
+    let resolved_user = user.trim();
+    if resolved_host.is_empty() || resolved_user.is_empty() {
+        return Err(String::from("MySQL host and user must not be empty."));
+    }
+
+    let client = MysqlClient::connect_blocking(MysqlConfig {
+        host: resolved_host.to_string(),
+        port: normalize_mysql_port(port),
+        user: resolved_user.to_string(),
+        password,
+        database: database.clone().filter(|value| !value.trim().is_empty()),
+    })
+    .map_err(|error| error.to_string())?;
+
+    let databases = client
+        .list_databases_blocking()
+        .map_err(|error| error.to_string())?;
+    let database_name = choose_active_item(database, &databases);
+    let tables = if database_name.is_empty() {
+        Vec::new()
+    } else {
+        client
+            .list_tables_blocking(&database_name)
+            .map_err(|error| error.to_string())?
+    };
+    let table_name = choose_active_item(table, &tables);
+    let columns = if database_name.is_empty() || table_name.is_empty() {
+        Vec::new()
+    } else {
+        client
+            .list_columns_blocking(&database_name, &table_name)
+            .map_err(|error| error.to_string())?
+            .into_iter()
+            .map(|column| MysqlColumnView {
+                name: column.name,
+                column_type: column.column_type,
+                nullable: column.nullable,
+                key: column.key,
+                default_value: column.default_value.unwrap_or_default(),
+                extra: column.extra,
+            })
+            .collect()
+    };
+    let preview = if database_name.is_empty()
+        || table_name.is_empty()
+        || !mysql_service::is_safe_ident(&database_name)
+        || !mysql_service::is_safe_ident(&table_name)
+    {
+        None
+    } else {
+        client
+            .execute_blocking(&format!(
+                "SELECT * FROM `{database_name}`.`{table_name}` LIMIT 24"
+            ))
+            .ok()
+            .map(map_mysql_preview)
+    };
+
+    Ok(MysqlBrowserState {
+        database_name,
+        databases,
+        table_name,
+        tables,
+        columns,
+        preview,
+    })
+}
+
+#[tauri::command]
+fn sqlite_browse(path: String, table: Option<String>) -> Result<SqliteBrowserState, String> {
+    let resolved_path = path.trim();
+    if resolved_path.is_empty() {
+        return Err(String::from("SQLite database path must not be empty."));
+    }
+
+    let client = SqliteClient::open(resolved_path).map_err(|error| error.to_string())?;
+    let tables = client.list_tables().map_err(|error| error.to_string())?;
+    let table_name = choose_active_item(table, &tables);
+    let columns = if table_name.is_empty() {
+        Vec::new()
+    } else {
+        client
+            .table_columns(&table_name)
+            .map_err(|error| error.to_string())?
+            .into_iter()
+            .map(|column| SqliteColumnView {
+                name: column.name,
+                col_type: column.col_type,
+                not_null: column.not_null,
+                primary_key: column.primary_key,
+            })
+            .collect()
+    };
+    let preview = if table_name.is_empty() {
+        None
+    } else {
+        let escaped = table_name.replace('"', "\"\"");
+        map_sqlite_preview(client.execute(&format!("SELECT * FROM \"{escaped}\" LIMIT 24;")))
+    };
+
+    Ok(SqliteBrowserState {
+        path: resolved_path.to_string(),
+        table_name,
+        tables,
+        columns,
+        preview,
+    })
+}
+
+#[tauri::command]
+fn redis_browse(
+    host: String,
+    port: u16,
+    db: i64,
+    pattern: Option<String>,
+    key: Option<String>,
+) -> Result<RedisBrowserState, String> {
+    let resolved_host = host.trim();
+    if resolved_host.is_empty() {
+        return Err(String::from("Redis host must not be empty."));
+    }
+
+    let client = RedisClient::connect_blocking(RedisConfig {
+        host: resolved_host.to_string(),
+        port: normalize_redis_port(port),
+        db,
+    })
+    .map_err(|error| error.to_string())?;
+    let pong = client.ping_blocking().map_err(|error| error.to_string())?;
+    let pattern = pattern
+        .unwrap_or_else(|| String::from("*"))
+        .trim()
+        .to_string();
+    let effective_pattern = if pattern.is_empty() {
+        String::from("*")
+    } else {
+        pattern
+    };
+    let scan = client
+        .scan_keys_blocking(&effective_pattern, 120)
+        .map_err(|error| error.to_string())?;
+    let key_name = choose_active_item(key, &scan.keys);
+    let details = if key_name.is_empty() {
+        None
+    } else {
+        client.inspect_blocking(&key_name).ok().map(map_redis_details)
+    };
+    let server_info = client.info_blocking("server").unwrap_or_default();
+    let memory_info = client.info_blocking("memory").unwrap_or_default();
+
+    Ok(RedisBrowserState {
+        pong,
+        pattern: effective_pattern,
+        limit: scan.limit,
+        truncated: scan.truncated,
+        key_name,
+        keys: scan.keys,
+        server_version: server_info
+            .get("redis_version")
+            .or_else(|| server_info.get("valkey_version"))
+            .cloned()
+            .unwrap_or_default(),
+        used_memory: memory_info
+            .get("used_memory_human")
+            .cloned()
+            .unwrap_or_default(),
+        details,
+    })
+}
+
+#[tauri::command]
+fn redis_execute(
+    host: String,
+    port: u16,
+    db: i64,
+    command: String,
+) -> Result<RedisCommandResultView, String> {
+    let resolved_host = host.trim();
+    if resolved_host.is_empty() {
+        return Err(String::from("Redis host must not be empty."));
+    }
+
+    let args = tokenize_command_line(command.trim())?;
+    let client = RedisClient::connect_blocking(RedisConfig {
+        host: resolved_host.to_string(),
+        port: normalize_redis_port(port),
+        db,
+    })
+    .map_err(|error| error.to_string())?;
+    let result = client
+        .execute_command_blocking(&args)
+        .map_err(|error| error.to_string())?;
+
+    Ok(RedisCommandResultView {
+        summary: result.summary,
+        lines: result.lines,
+        elapsed_ms: result.elapsed_ms,
+    })
+}
+
+#[tauri::command]
+fn mysql_execute(
+    host: String,
+    port: u16,
+    user: String,
+    password: String,
+    database: Option<String>,
+    sql: String,
+) -> Result<QueryExecutionResult, String> {
+    let resolved_host = host.trim();
+    let resolved_user = user.trim();
+    let resolved_sql = sql.trim();
+    if resolved_host.is_empty() || resolved_user.is_empty() {
+        return Err(String::from("MySQL host and user must not be empty."));
+    }
+    if resolved_sql.is_empty() {
+        return Err(String::from("SQL must not be empty."));
+    }
+
+    let client = MysqlClient::connect_blocking(MysqlConfig {
+        host: resolved_host.to_string(),
+        port: normalize_mysql_port(port),
+        user: resolved_user.to_string(),
+        password,
+        database: database.filter(|value| !value.trim().is_empty()),
+    })
+    .map_err(|error| error.to_string())?;
+
+    client
+        .execute_blocking(resolved_sql)
+        .map(map_mysql_query_result)
+        .map_err(|error| error.to_string())
+}
+
+#[tauri::command]
+fn sqlite_execute(path: String, sql: String) -> Result<QueryExecutionResult, String> {
+    let resolved_path = path.trim();
+    let resolved_sql = sql.trim();
+    if resolved_path.is_empty() {
+        return Err(String::from("SQLite database path must not be empty."));
+    }
+    if resolved_sql.is_empty() {
+        return Err(String::from("SQL must not be empty."));
+    }
+
+    let client = SqliteClient::open(resolved_path).map_err(|error| error.to_string())?;
+    map_sqlite_query_result(client.execute(resolved_sql))
+}
+
+#[tauri::command]
+fn terminal_create(
+    state: tauri::State<'_, AppState>,
+    cols: u16,
+    rows: u16,
+    shell: Option<String>,
+) -> Result<TerminalSessionInfo, String> {
+    let resolved_cols = cols.max(40);
+    let resolved_rows = rows.max(12);
+    let resolved_shell = shell
+        .filter(|candidate| !candidate.trim().is_empty())
+        .unwrap_or_else(default_shell);
+    let terminal = PierTerminal::new(
+        resolved_cols,
+        resolved_rows,
+        &resolved_shell,
+        tauri_terminal_notify as NotifyFn,
+        std::ptr::null_mut(),
+    )
+    .map_err(|error| error.to_string())?;
+
+    store_terminal_session(state, terminal, resolved_shell, resolved_cols, resolved_rows)
+}
+
+#[tauri::command]
+fn terminal_create_ssh(
+    state: tauri::State<'_, AppState>,
+    cols: u16,
+    rows: u16,
+    host: String,
+    port: u16,
+    user: String,
+    auth_mode: String,
+    password: Option<String>,
+    key_path: Option<String>,
+) -> Result<TerminalSessionInfo, String> {
+    let config = build_manual_ssh_config(host, port, user, auth_mode, password, key_path)?;
+    create_ssh_terminal_from_config(state, config, cols, rows)
+}
+
+#[tauri::command]
+fn terminal_create_ssh_saved(
+    state: tauri::State<'_, AppState>,
+    cols: u16,
+    rows: u16,
+    index: usize,
+) -> Result<TerminalSessionInfo, String> {
+    let config = open_saved_ssh_config(index)?;
+    create_ssh_terminal_from_config(state, config, cols, rows)
+}
+
+#[tauri::command]
+fn terminal_write(
+    state: tauri::State<'_, AppState>,
+    session_id: String,
+    data: String,
+) -> Result<usize, String> {
+    let sessions = state
+        .terminals
+        .lock()
+        .map_err(|_| String::from("terminal state poisoned"))?;
+    let managed = sessions
+        .get(&session_id)
+        .ok_or_else(|| format!("unknown terminal session: {}", session_id))?;
+    managed
+        .terminal
+        .write(data.as_bytes())
+        .map_err(|error| error.to_string())
+}
+
+#[tauri::command]
+fn terminal_resize(
+    state: tauri::State<'_, AppState>,
+    session_id: String,
+    cols: u16,
+    rows: u16,
+) -> Result<(), String> {
+    let mut sessions = state
+        .terminals
+        .lock()
+        .map_err(|_| String::from("terminal state poisoned"))?;
+    let managed = sessions
+        .get_mut(&session_id)
+        .ok_or_else(|| format!("unknown terminal session: {}", session_id))?;
+    managed
+        .terminal
+        .resize(cols.max(40), rows.max(12))
+        .map_err(|error| error.to_string())
+}
+
+#[tauri::command]
+fn terminal_snapshot(
+    state: tauri::State<'_, AppState>,
+    session_id: String,
+    scrollback_offset: Option<usize>,
+) -> Result<TerminalSnapshot, String> {
+    let sessions = state
+        .terminals
+        .lock()
+        .map_err(|_| String::from("terminal state poisoned"))?;
+    let managed = sessions
+        .get(&session_id)
+        .ok_or_else(|| format!("unknown terminal session: {}", session_id))?;
+
+    let alive = managed.terminal.is_alive();
+    let snapshot = managed
+        .terminal
+        .snapshot_view(scrollback_offset.unwrap_or(0));
+
+    Ok(TerminalSnapshot {
+        cols: snapshot.cols,
+        rows: snapshot.rows,
+        alive,
+        scrollback_len: managed.terminal.scrollback_len(),
+        lines: build_terminal_lines(&snapshot, alive),
+    })
+}
+
+#[tauri::command]
+fn terminal_close(state: tauri::State<'_, AppState>, session_id: String) -> Result<(), String> {
+    let mut sessions = state
+        .terminals
+        .lock()
+        .map_err(|_| String::from("terminal state poisoned"))?;
+    sessions
+        .remove(&session_id)
+        .map(|_| ())
+        .ok_or_else(|| format!("unknown terminal session: {}", session_id))
+}
+
+#[cfg_attr(mobile, tauri::mobile_entry_point)]
+pub fn run() {
+    tauri::Builder::default()
+        .manage(AppState::default())
+        .plugin(tauri_plugin_opener::init())
+        .invoke_handler(tauri::generate_handler![
+            core_info,
+            list_directory,
+            git_overview,
+            git_diff,
+            git_stage_paths,
+            git_unstage_paths,
+            git_stage_all,
+            git_unstage_all,
+            git_discard_paths,
+            git_commit,
+            git_branch_list,
+            git_checkout_branch,
+            git_recent_commits,
+            git_push,
+            git_pull,
+            git_stash_list,
+            git_stash_push,
+            git_stash_apply,
+            git_stash_pop,
+            git_stash_drop,
+            mysql_browse,
+            mysql_execute,
+            sqlite_browse,
+            sqlite_execute,
+            redis_browse,
+            redis_execute,
+            ssh_connections_list,
+            ssh_connection_save,
+            ssh_connection_delete,
+            terminal_create,
+            terminal_create_ssh,
+            terminal_create_ssh_saved,
+            terminal_write,
+            terminal_resize,
+            terminal_snapshot,
+            terminal_close
+        ])
+        .run(tauri::generate_context!())
+        .expect("error while running tauri application");
+}

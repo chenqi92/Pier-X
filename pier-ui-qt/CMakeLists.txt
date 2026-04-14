@@ -234,6 +234,16 @@ qt_add_qml_module(pier-x
         ${PIER_QML_RESOURCES}
 )
 
+if(WIN32)
+    # Qt 6.8's Windows qmlcache AOT path can crash during startup when it
+    # eagerly initializes lookup code for custom QObject-backed QML types.
+    # Keep qmlcache enabled, but emit bytecode instead of generated C++.
+    set_property(TARGET pier-x APPEND PROPERTY
+        QT_QMLCACHEGEN_ARGUMENTS
+        --only-bytecode
+    )
+endif()
+
 # ─── i18n ─────────────────────────────────────────────
 # lupdate extracts qsTr() strings → .ts files;
 # lrelease compiles them → .qm files embedded in the binary.

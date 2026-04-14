@@ -322,7 +322,6 @@ Rectangle {
 
                     PierSearchField {
                         Layout.fillWidth: true
-                        Layout.preferredHeight: 24
                         text: root.serverSearch
                         placeholder: qsTr("Search servers")
                         clearable: true

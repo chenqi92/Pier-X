@@ -237,6 +237,7 @@ Item {
             implicitHeight: 32
             color: "transparent"
             border.width: 0
+            clip: true
 
             RowLayout {
                 anchors.fill: parent
@@ -373,6 +374,7 @@ Item {
             implicitHeight: 24
             color: "transparent"
             border.width: 0
+            clip: true
 
             Flickable {
                 anchors.fill: parent
@@ -442,7 +444,6 @@ Item {
         PierSearchField {
             id: searchInput
             Layout.fillWidth: true
-            Layout.preferredHeight: 24
             text: root.searchQuery
             placeholder: qsTr("Search files…")
             clearable: true
@@ -452,8 +453,9 @@ Item {
 
         Rectangle {
             Layout.fillWidth: true
-            implicitHeight: 22
+            implicitHeight: 26
             color: Theme.bgPanel
+            clip: true
 
             RowLayout {
                 anchors.fill: parent

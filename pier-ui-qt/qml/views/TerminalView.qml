@@ -40,15 +40,38 @@ Rectangle {
     readonly property string pasteShortcut: Qt.platform.os === "osx" ? "Meta+V" : "Ctrl+Shift+V"
     readonly property string selectAllShortcut: Qt.platform.os === "osx" ? "Meta+A" : "Ctrl+Shift+A"
 
-    // Expose the session so that Main.qml / RightSidebar can read
-    // live SSH context (host, port, user, auth method) directly
-    // from the session's cached Q_PROPERTYs.
-    readonly property PierTerminalSession terminalSession: session
+    // Expose the live C++ handles to parent views. Keep these as `var`
+    // rather than strongly-typed QML properties: Qt 6.8 on Windows can
+    // assert in qqml.cpp while building property caches for these custom
+    // QObject-backed types during startup, which aborts the app before
+    // the first window is shown.
+    readonly property var terminalSession: session
 
     // Shared SSH session handle — right-panel tools reuse this
     // instead of opening their own SSH connections.
-    readonly property PierSshSessionHandle sharedSshSession: _sharedSession
-    readonly property PierControlMasterHandle controlMaster: _controlMaster
+    readonly property var sharedSshSession: _sharedSession
+    readonly property var controlMaster: _controlMaster
+    readonly property int sshStatusIdle: 0
+    readonly property int sshStatusConnecting: 1
+    readonly property int sshStatusConnected: 2
+    readonly property int sshStatusFailed: 3
+    readonly property int serviceDetectorStateIdle: 0
+    readonly property int tunnelStateIdle: 0
+    readonly property int tunnelStateOpening: 1
+    readonly property int tunnelStateOpen: 2
+
+    // Guard startup bindings until custom QObject ids are fully available.
+    // Qt 6.8 release qmlcache on Windows can eagerly initialize lookups
+    // against these ids during construction and crash if the target is
+    // still null for the first evaluation pass.
+    readonly property int sessionStatus: session ? session.status : root.sshStatusIdle
+    readonly property bool sessionRunning: session ? session.running : false
+    readonly property bool sessionCursorVisible: session ? session.cursorVisible : false
+    readonly property int sessionScrollOffset: session ? session.scrollOffset : 0
+    readonly property string sessionSshTarget: session ? session.sshTarget : ""
+    readonly property string sessionSshErrorMessage: session ? session.sshErrorMessage : ""
+    readonly property int detectorState: detector ? detector.state : root.serviceDetectorStateIdle
+    readonly property int detectorCount: detector ? detector.count : 0
 
     // Emitted when the shared SSH session connects or disconnects.
     // Main.qml's Loader delegate listens to update the sidebar bindings.
@@ -215,12 +238,12 @@ Rectangle {
         // so the QML flows naturally from there.
         onStatusChanged: {
             if (root.backend === "ssh"
-                && session.status === PierTerminalSession.Connected
-                && detector.state === PierServiceDetector.Idle) {
+                && root.sessionStatus === root.sshStatusConnected
+                && root.detectorState === root.serviceDetectorStateIdle) {
                 root._kickServiceDetection()
             }
             if (root.backend === "local"
-                && session.status === PierTerminalSession.Connected
+                && root.sessionStatus === root.sshStatusConnected
                 && !root.startupCommandSent
                 && root.startupCommand.length > 0) {
                 root.startupCommandSent = true
@@ -239,7 +262,7 @@ Rectangle {
     Connections {
         target: window
         function onWriteToActiveTerminal(text) {
-            if (root.visible && session.running) {
+            if (root.visible && root.sessionRunning) {
                 session.write(text)
             }
         }
@@ -270,7 +293,7 @@ Rectangle {
     function _startTerminalOnSharedSession() {
         if (!_sharedSession.connected
                 || root.backend !== "ssh"
-                || session.running
+                || root.sessionRunning
                 || grid.cellWidth <= 0
                 || grid.cellHeight <= 0
                 || grid.width <= 24
@@ -280,7 +303,7 @@ Rectangle {
 
         Qt.callLater(function() {
             if (!_sharedSession.connected
-                    || session.running
+                    || root.sessionRunning
                     || grid.cellWidth <= 0
                     || grid.cellHeight <= 0
                     || grid.width <= 24
@@ -312,9 +335,9 @@ Rectangle {
 
     function paste() {
         var text = PierLocalSystem.readText()
-        if (text.length === 0 || !session.running)
+        if (text.length === 0 || !root.sessionRunning)
             return
-        if (session.scrollOffset > 0)
+        if (root.sessionScrollOffset > 0)
             session.scrollToBottom()
         session.write(text)
     }
@@ -356,10 +379,10 @@ Rectangle {
         anchors.leftMargin: Theme.sp2
         anchors.rightMargin: Theme.sp2
 
-        implicitHeight: detector.count > 0 ? 34 : 0
-        visible: detector.count > 0
+        implicitHeight: root.detectorCount > 0 ? 34 : 0
+        visible: root.detectorCount > 0
                  && root.backend === "ssh"
-                 && session.status === PierTerminalSession.Connected
+                 && root.sessionStatus === root.sshStatusConnected
         clip: true
 
         Behavior on implicitHeight { NumberAnimation { duration: Theme.durNormal } }
@@ -425,8 +448,9 @@ Rectangle {
                                                                    && pill.status === "running"
                                 readonly property bool directOpenable: pill.name === "docker"
                                                                        && pill.status === "running"
-                                readonly property bool tunneled: tunnel.state === PierTunnel.Open
-                                readonly property bool opening: tunnel.state === PierTunnel.Opening
+                                readonly property int tunnelStatus: tunnel ? tunnel.state : root.tunnelStateIdle
+                                readonly property bool tunneled: pill.tunnelStatus === root.tunnelStateOpen
+                                readonly property bool opening: pill.tunnelStatus === root.tunnelStateOpening
 
                                 implicitHeight: 22
                                 implicitWidth: pillRow.implicitWidth + Theme.sp2 * 2
@@ -649,7 +673,7 @@ Rectangle {
             linkHoverForeground: Theme.accentHover
             cursorStyle: Theme.cursorStyle
             cursorBlink: Theme.cursorBlink
-            cursorVisible: session.cursorVisible
+            cursorVisible: root.sessionCursorVisible
 
             // Feed the 16-color ANSI palette from the selected terminal theme.
             paletteColors: {
@@ -666,7 +690,7 @@ Rectangle {
             onHeightChanged: startWhenSized()
 
             function startWhenSized() {
-                if (session.running) return
+                if (root.sessionRunning) return
                 if (grid.cellWidth <= 0 || grid.cellHeight <= 0) return
                 if (width <= 0 || height <= 0) return
                 var cols = Math.max(40, Math.floor(width / grid.cellWidth))
@@ -685,7 +709,7 @@ Rectangle {
 
             function retryIfSsh() {
                 if (root.backend !== "ssh") return
-                if (session.status === PierTerminalSession.Connecting) return
+                if (root.sessionStatus === root.sshStatusConnecting) return
                 var cols = Math.max(40, Math.floor(width / grid.cellWidth))
                 var rows = Math.max(12, Math.floor(height / grid.cellHeight))
                 if (cols <= 0 || rows <= 0) return
@@ -826,7 +850,7 @@ Rectangle {
             anchors.bottom: parent.bottom
             anchors.rightMargin: Theme.sp2
             anchors.bottomMargin: Theme.sp2
-            visible: session.scrollOffset > 0
+            visible: root.sessionScrollOffset > 0
             inset: true
             padding: Theme.sp1
             z: 2
@@ -835,7 +859,7 @@ Rectangle {
                 spacing: Theme.sp2
 
                 Text {
-                    text: qsTr("History +%1").arg(session.scrollOffset)
+                    text: qsTr("History +%1").arg(root.sessionScrollOffset)
                     font.family: Theme.fontMono
                     font.pixelSize: Theme.sizeSmall
                     color: Theme.textSecondary
@@ -893,7 +917,7 @@ Rectangle {
             PierMenuItem {
                 width: parent.width
                 text: qsTr("Paste")
-                enabled: session.running && PierLocalSystem.readText().length > 0
+                enabled: root.sessionRunning && PierLocalSystem.readText().length > 0
                 onClicked: {
                     terminalContextMenu.close()
                     root.paste()
@@ -903,7 +927,7 @@ Rectangle {
             PierMenuItem {
                 width: parent.width
                 text: qsTr("Select All")
-                enabled: session.running
+                enabled: root.sessionRunning
                 onClicked: {
                     terminalContextMenu.close()
                     root.selectAll()
@@ -938,8 +962,8 @@ Rectangle {
         id: overlay
 
         anchors.fill: terminalSurface
-        visible: session.status === PierTerminalSession.Connecting
-              || session.status === PierTerminalSession.Failed
+        visible: root.sessionStatus === root.sshStatusConnecting
+              || root.sessionStatus === root.sshStatusFailed
 
         // Scrim that darkens the underlying grid slightly. Using
         // bgCanvas at ~85% opacity gives us the "modal over a
@@ -984,7 +1008,7 @@ Rectangle {
 
                 // Tiny section label — "CONNECTING" or "FAILED".
                 SectionLabel {
-                    text: session.status === PierTerminalSession.Connecting
+                    text: root.sessionStatus === root.sshStatusConnecting
                           ? qsTr("Connecting")
                           : qsTr("Failed")
                     Layout.alignment: Qt.AlignHCenter
@@ -992,8 +1016,8 @@ Rectangle {
 
                 // Primary status line — the host we're dialing.
                 Text {
-                    text: session.sshTarget.length > 0
-                          ? session.sshTarget
+                    text: root.sessionSshTarget.length > 0
+                          ? root.sessionSshTarget
                           : qsTr("SSH session")
                     Layout.alignment: Qt.AlignHCenter
                     font.family: Theme.fontMono
@@ -1012,7 +1036,7 @@ Rectangle {
                     Layout.alignment: Qt.AlignHCenter
                     Layout.topMargin: Theme.sp2
 
-                    sourceComponent: session.status === PierTerminalSession.Connecting
+                    sourceComponent: root.sessionStatus === root.sshStatusConnecting
                                      ? spinnerComponent
                                      : errorComponent
                 }
@@ -1035,7 +1059,7 @@ Rectangle {
 
                     PrimaryButton {
                         text: qsTr("Retry")
-                        visible: session.status === PierTerminalSession.Failed
+                        visible: root.sessionStatus === root.sshStatusFailed
                         onClicked: grid.retryIfSsh()
                     }
                 }
@@ -1090,7 +1114,7 @@ Rectangle {
 
                     NumberAnimation on arcAngle {
                         running: overlay.visible
-                                 && session.status === PierTerminalSession.Connecting
+                                 && root.sessionStatus === root.sshStatusConnecting
                         from: 0
                         to: Math.PI * 2
                         duration: 900
@@ -1108,8 +1132,8 @@ Rectangle {
             id: errorComponent
             Text {
                 width: card.width - Theme.sp5 * 2
-                text: session.sshErrorMessage.length > 0
-                      ? root._friendlySshError(session.sshErrorMessage)
+                text: root.sessionSshErrorMessage.length > 0
+                      ? root._friendlySshError(root.sessionSshErrorMessage)
                       : qsTr("Unknown error")
                 wrapMode: Text.Wrap
                 horizontalAlignment: Text.AlignHCenter

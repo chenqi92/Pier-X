@@ -1,8 +1,12 @@
 use pier_core::connections::ConnectionStore;
 use pier_core::credentials;
+use pier_core::markdown;
+use pier_core::services::docker;
 use pier_core::services::git::{CommitInfo, GitClient, StashEntry};
 use pier_core::services::mysql::{self as mysql_service, MysqlClient, MysqlConfig};
+use pier_core::services::postgres::{PostgresClient, PostgresConfig};
 use pier_core::services::redis::{RedisClient, RedisConfig};
+use pier_core::services::server_monitor;
 use pier_core::services::sqlite::SqliteClient;
 use pier_core::ssh::{AuthMethod, HostKeyVerifier, SshConfig, SshSession};
 use pier_core::terminal::{Cell, Color, NotifyFn, PierTerminal};
@@ -182,6 +186,114 @@ struct RedisCommandResultView {
 
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
+struct PostgresColumnView {
+    name: String,
+    column_type: String,
+    nullable: bool,
+    key: String,
+    default_value: String,
+    extra: String,
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct PostgresBrowserState {
+    database_name: String,
+    databases: Vec<String>,
+    schema_name: String,
+    table_name: String,
+    tables: Vec<String>,
+    columns: Vec<PostgresColumnView>,
+    preview: Option<DataPreview>,
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct DockerContainerView {
+    id: String,
+    image: String,
+    names: String,
+    status: String,
+    state: String,
+    created: String,
+    ports: String,
+    running: bool,
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct DockerImageView {
+    id: String,
+    repository: String,
+    tag: String,
+    size: String,
+    created: String,
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct DockerVolumeView {
+    name: String,
+    driver: String,
+    mountpoint: String,
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct DockerNetworkView {
+    id: String,
+    name: String,
+    driver: String,
+    scope: String,
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct DockerOverview {
+    containers: Vec<DockerContainerView>,
+    images: Vec<DockerImageView>,
+    volumes: Vec<DockerVolumeView>,
+    networks: Vec<DockerNetworkView>,
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct SftpEntryView {
+    name: String,
+    path: String,
+    is_dir: bool,
+    size: u64,
+    permissions: String,
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct SftpBrowseState {
+    current_path: String,
+    entries: Vec<SftpEntryView>,
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct ServerSnapshotView {
+    uptime: String,
+    load_1: f64,
+    load_5: f64,
+    load_15: f64,
+    mem_total_mb: f64,
+    mem_used_mb: f64,
+    mem_free_mb: f64,
+    swap_total_mb: f64,
+    swap_used_mb: f64,
+    disk_total: String,
+    disk_used: String,
+    disk_avail: String,
+    disk_use_pct: f64,
+    cpu_pct: f64,
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
 struct SavedSshConnection {
     index: usize,
     name: String,
@@ -299,6 +411,75 @@ fn normalize_mysql_port(port: u16) -> u16 {
 
 fn normalize_redis_port(port: u16) -> u16 {
     if port == 0 { 6379 } else { port }
+}
+
+fn normalize_postgres_port(port: u16) -> u16 {
+    if port == 0 { 5432 } else { port }
+}
+
+fn map_postgres_preview(
+    result: pier_core::services::postgres::QueryResult,
+) -> DataPreview {
+    DataPreview {
+        columns: result.columns.clone(),
+        rows: result
+            .rows
+            .into_iter()
+            .map(|row| row.into_iter().map(|cell| cell.unwrap_or_default()).collect())
+            .collect(),
+        truncated: result.truncated,
+    }
+}
+
+fn map_postgres_query_result(
+    result: pier_core::services::postgres::QueryResult,
+) -> QueryExecutionResult {
+    QueryExecutionResult {
+        columns: result.columns.clone(),
+        rows: result
+            .rows
+            .into_iter()
+            .map(|row| row.into_iter().map(|cell| cell.unwrap_or_default()).collect())
+            .collect(),
+        truncated: result.truncated,
+        affected_rows: result.affected_rows,
+        last_insert_id: result.last_insert_id,
+        elapsed_ms: result.elapsed_ms,
+    }
+}
+
+fn build_ssh_session_from_params(
+    host: &str,
+    port: u16,
+    user: &str,
+    auth_mode: &str,
+    password: &str,
+    key_path: &str,
+) -> Result<SshSession, String> {
+    let resolved_host = host.trim();
+    let resolved_user = user.trim();
+    if resolved_host.is_empty() || resolved_user.is_empty() {
+        return Err(String::from("SSH host and user must not be empty."));
+    }
+    let auth = match auth_mode {
+        "key" => AuthMethod::PublicKeyFile {
+            private_key_path: key_path.to_string(),
+            passphrase_credential_id: None,
+        },
+        "agent" => AuthMethod::Agent,
+        _ => AuthMethod::DirectPassword {
+            password: password.to_string(),
+        },
+    };
+    let mut config = SshConfig::new(
+        String::new(),
+        resolved_host.to_string(),
+        resolved_user.to_string(),
+    );
+    config.port = normalize_ssh_port(port);
+    config.auth = auth;
+    SshSession::connect_blocking(&config, HostKeyVerifier::default())
+        .map_err(|e| e.to_string())
 }
 
 fn choose_active_item(preferred: Option<String>, items: &[String]) -> String {
@@ -1437,6 +1618,316 @@ fn terminal_close(state: tauri::State<'_, AppState>, session_id: String) -> Resu
         .ok_or_else(|| format!("unknown terminal session: {}", session_id))
 }
 
+// ── PostgreSQL ──────────────────────────────────────────────────────
+
+#[tauri::command]
+fn postgres_browse(
+    host: String,
+    port: u16,
+    user: String,
+    password: String,
+    database: Option<String>,
+    schema: Option<String>,
+    table: Option<String>,
+) -> Result<PostgresBrowserState, String> {
+    let resolved_host = host.trim();
+    let resolved_user = user.trim();
+    if resolved_host.is_empty() || resolved_user.is_empty() {
+        return Err(String::from("PostgreSQL host and user must not be empty."));
+    }
+
+    let client = PostgresClient::connect_blocking(PostgresConfig {
+        host: resolved_host.to_string(),
+        port: normalize_postgres_port(port),
+        user: resolved_user.to_string(),
+        password,
+        database: database.clone().filter(|v| !v.trim().is_empty()),
+    })
+    .map_err(|e| e.to_string())?;
+
+    let databases = client
+        .list_databases_blocking()
+        .map_err(|e| e.to_string())?;
+    let database_name = choose_active_item(database, &databases);
+    let schema_name = schema
+        .filter(|s| !s.trim().is_empty())
+        .unwrap_or_else(|| String::from("public"));
+    let tables = if database_name.is_empty() {
+        Vec::new()
+    } else {
+        client
+            .list_tables_blocking(&schema_name)
+            .map_err(|e| e.to_string())?
+    };
+    let table_name = choose_active_item(table, &tables);
+    let columns = if database_name.is_empty() || table_name.is_empty() {
+        Vec::new()
+    } else {
+        client
+            .list_columns_blocking(&schema_name, &table_name)
+            .map_err(|e| e.to_string())?
+            .into_iter()
+            .map(|col| PostgresColumnView {
+                name: col.name,
+                column_type: col.column_type,
+                nullable: col.nullable,
+                key: col.key,
+                default_value: col.default_value.unwrap_or_default(),
+                extra: col.extra,
+            })
+            .collect()
+    };
+    let preview = if database_name.is_empty() || table_name.is_empty() {
+        None
+    } else {
+        let escaped_schema = schema_name.replace('"', "\"\"");
+        let escaped_table = table_name.replace('"', "\"\"");
+        client
+            .execute_blocking(&format!(
+                "SELECT * FROM \"{escaped_schema}\".\"{escaped_table}\" LIMIT 24"
+            ))
+            .ok()
+            .map(map_postgres_preview)
+    };
+
+    Ok(PostgresBrowserState {
+        database_name,
+        databases,
+        schema_name,
+        table_name,
+        tables,
+        columns,
+        preview,
+    })
+}
+
+#[tauri::command]
+fn postgres_execute(
+    host: String,
+    port: u16,
+    user: String,
+    password: String,
+    database: Option<String>,
+    sql: String,
+) -> Result<QueryExecutionResult, String> {
+    let client = PostgresClient::connect_blocking(PostgresConfig {
+        host: host.trim().to_string(),
+        port: normalize_postgres_port(port),
+        user: user.trim().to_string(),
+        password,
+        database: database.filter(|v| !v.trim().is_empty()),
+    })
+    .map_err(|e| e.to_string())?;
+
+    let result = client
+        .execute_blocking(&sql)
+        .map_err(|e| e.to_string())?;
+    Ok(map_postgres_query_result(result))
+}
+
+// ── Docker ──────────────────────────────────────────────────────────
+
+#[tauri::command]
+fn docker_overview(
+    host: String,
+    port: u16,
+    user: String,
+    auth_mode: String,
+    password: String,
+    key_path: String,
+    all: bool,
+) -> Result<DockerOverview, String> {
+    let session = build_ssh_session_from_params(
+        &host, port, &user, &auth_mode, &password, &key_path,
+    )?;
+
+    let containers = docker::list_containers_blocking(&session, all)
+        .map_err(|e| e.to_string())?
+        .into_iter()
+        .map(|c| DockerContainerView {
+            running: c.is_running(),
+            id: c.id,
+            image: c.image,
+            names: c.names,
+            status: c.status,
+            state: c.state,
+            created: c.created,
+            ports: c.ports,
+        })
+        .collect();
+
+    let images = docker::list_images_blocking(&session)
+        .map_err(|e| e.to_string())?
+        .into_iter()
+        .map(|i| DockerImageView {
+            id: i.id,
+            repository: i.repository,
+            tag: i.tag,
+            size: i.size,
+            created: i.created,
+        })
+        .collect();
+
+    let volumes = docker::list_volumes_blocking(&session)
+        .map_err(|e| e.to_string())?
+        .into_iter()
+        .map(|v| DockerVolumeView {
+            name: v.name,
+            driver: v.driver,
+            mountpoint: v.mountpoint,
+        })
+        .collect();
+
+    let networks = docker::list_networks_blocking(&session)
+        .map_err(|e| e.to_string())?
+        .into_iter()
+        .map(|n| DockerNetworkView {
+            id: n.id,
+            name: n.name,
+            driver: n.driver,
+            scope: n.scope,
+        })
+        .collect();
+
+    Ok(DockerOverview {
+        containers,
+        images,
+        volumes,
+        networks,
+    })
+}
+
+#[tauri::command]
+fn docker_container_action(
+    host: String,
+    port: u16,
+    user: String,
+    auth_mode: String,
+    password: String,
+    key_path: String,
+    container_id: String,
+    action: String,
+) -> Result<String, String> {
+    let session = build_ssh_session_from_params(
+        &host, port, &user, &auth_mode, &password, &key_path,
+    )?;
+
+    match action.as_str() {
+        "start" => docker::start_blocking(&session, &container_id)
+            .map_err(|e| e.to_string())
+            .map(|_| String::from("started")),
+        "stop" => docker::stop_blocking(&session, &container_id)
+            .map_err(|e| e.to_string())
+            .map(|_| String::from("stopped")),
+        "restart" => docker::restart_blocking(&session, &container_id)
+            .map_err(|e| e.to_string())
+            .map(|_| String::from("restarted")),
+        "remove" => docker::remove_blocking(&session, &container_id, false)
+            .map_err(|e| e.to_string())
+            .map(|_| String::from("removed")),
+        _ => Err(format!("unknown docker action: {}", action)),
+    }
+}
+
+// ── SFTP ────────────────────────────────────────────────────────────
+
+#[tauri::command]
+fn sftp_browse(
+    host: String,
+    port: u16,
+    user: String,
+    auth_mode: String,
+    password: String,
+    key_path: String,
+    path: Option<String>,
+) -> Result<SftpBrowseState, String> {
+    let session = build_ssh_session_from_params(
+        &host, port, &user, &auth_mode, &password, &key_path,
+    )?;
+
+    let sftp = session.open_sftp_blocking().map_err(|e| e.to_string())?;
+    let target_path = path
+        .filter(|p| !p.trim().is_empty())
+        .unwrap_or_else(|| String::from("/"));
+    let canonical = sftp
+        .canonicalize_blocking(&target_path)
+        .unwrap_or_else(|_| target_path.clone());
+
+    let raw_entries = sftp
+        .list_dir_blocking(&canonical)
+        .map_err(|e| e.to_string())?;
+
+    let entries = raw_entries
+        .into_iter()
+        .filter(|entry| entry.name != "." && entry.name != "..")
+        .map(|entry| SftpEntryView {
+            name: entry.name,
+            path: entry.path,
+            is_dir: entry.is_dir,
+            size: entry.size,
+            permissions: entry
+                .permissions
+                .map(|p| format!("{:o}", p))
+                .unwrap_or_default(),
+        })
+        .collect();
+
+    Ok(SftpBrowseState {
+        current_path: canonical,
+        entries,
+    })
+}
+
+// ── Markdown ────────────────────────────────────────────────────────
+
+#[tauri::command]
+fn markdown_render(source: String) -> String {
+    markdown::render_html(&source)
+}
+
+#[tauri::command]
+fn markdown_render_file(path: String) -> Result<String, String> {
+    let source = markdown::load_file(std::path::Path::new(&path))
+        .map_err(|e| e.to_string())?;
+    Ok(markdown::render_html(&source))
+}
+
+// ── Server Monitor ──────────────────────────────────────────────────
+
+#[tauri::command]
+fn server_monitor_probe(
+    host: String,
+    port: u16,
+    user: String,
+    auth_mode: String,
+    password: String,
+    key_path: String,
+) -> Result<ServerSnapshotView, String> {
+    let session = build_ssh_session_from_params(
+        &host, port, &user, &auth_mode, &password, &key_path,
+    )?;
+
+    let snap = server_monitor::probe_blocking(&session)
+        .map_err(|e| e.to_string())?;
+
+    Ok(ServerSnapshotView {
+        uptime: snap.uptime,
+        load_1: snap.load_1,
+        load_5: snap.load_5,
+        load_15: snap.load_15,
+        mem_total_mb: snap.mem_total_mb,
+        mem_used_mb: snap.mem_used_mb,
+        mem_free_mb: snap.mem_free_mb,
+        swap_total_mb: snap.swap_total_mb,
+        swap_used_mb: snap.swap_used_mb,
+        disk_total: snap.disk_total,
+        disk_used: snap.disk_used,
+        disk_avail: snap.disk_avail,
+        disk_use_pct: snap.disk_use_pct,
+        cpu_pct: snap.cpu_pct,
+    })
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     tauri::Builder::default()
@@ -1478,7 +1969,15 @@ pub fn run() {
             terminal_write,
             terminal_resize,
             terminal_snapshot,
-            terminal_close
+            terminal_close,
+            postgres_browse,
+            postgres_execute,
+            docker_overview,
+            docker_container_action,
+            sftp_browse,
+            markdown_render,
+            markdown_render_file,
+            server_monitor_probe
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

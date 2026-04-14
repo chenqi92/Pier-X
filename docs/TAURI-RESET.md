@@ -101,12 +101,12 @@ terminal / ssh / git / mysql / sqlite / redis / more
 ```bash
 cd pier-ui-tauri
 npm install
-npm run tauri dev
+npm run tauri -- dev
 ```
 
 ```bash
 cd pier-ui-tauri
-npm run tauri build -- --debug
+npm run tauri -- build --debug
 ```
 
 ## Next Slices
@@ -115,7 +115,7 @@ npm run tauri build -- --debug
 2. Expose more Git actions and views: remote management, richer revert flows, and history graph.
 3. Deepen the data panels with richer result grids, safer Redis workflows, and saved data connections.
 4. Design a plugin host boundary for future third-party extensions.
-5. Delete `pier-ui-qt/` only after the Tauri shell can carry the daily workflow.
+5. Prune the remaining Qt-era docs and comments as the Tauri shell fully absorbs the daily workflow.
 
 ## Migration Rule
 
@@ -123,4 +123,4 @@ Until parity is reached:
 
 - `pier-core` is the source of truth for backend capability
 - `pier-ui-tauri` is the only active desktop shell
-- `pier-ui-qt` is legacy reference code, not the target direction
+- Qt-era plans and comments are historical context only, not the target direction

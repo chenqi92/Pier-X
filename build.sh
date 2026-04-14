@@ -1,81 +1,76 @@
 #!/usr/bin/env bash
-# build.sh — Configure and build Pier-X without launching it.
+# build.sh — Build the active Tauri shell from the repo root.
 #
 # Usage:
-#   ./build.sh                                # Release build
-#   BUILD_TYPE=Debug ./build.sh               # Debug build
-#   QT_DIR=~/Qt/6.8.1/macos ./build.sh        # Use a specific Qt install
-#   BUILD_DIR=build-debug ./build.sh          # Custom build directory
+#   ./build.sh                        # Release bundle build
+#   BUILD_TYPE=Debug ./build.sh       # Debug build
+#   BUILD_DIR=target-root ./build.sh  # Override Cargo target dir
+#   NO_BUNDLE=1 ./build.sh            # Compile without generating installers
 
 set -euo pipefail
 
-cd "$(dirname "$0")"
-
-find_qt6() {
-    if [ -n "${QT_DIR:-}" ] && [ -f "$QT_DIR/lib/cmake/Qt6/Qt6Config.cmake" ]; then
-        echo "$QT_DIR"
-        return 0
-    fi
-    for name in qmake6 qmake; do
-        if command -v "$name" >/dev/null 2>&1; then
-            local prefix
-            prefix="$("$name" -query QT_INSTALL_PREFIX 2>/dev/null || true)"
-            if [ -n "$prefix" ] && [ -f "$prefix/lib/cmake/Qt6/Qt6Config.cmake" ]; then
-                echo "$prefix"
-                return 0
-            fi
-        fi
-    done
-    local arch
-    case "$(uname -s)" in
-        Darwin*)
-            for direct in "/opt/homebrew/opt/qt" "/usr/local/opt/qt" "/opt/homebrew/opt/qt6" "/usr/local/opt/qt6"; do
-                if [ -f "$direct/lib/cmake/Qt6/Qt6Config.cmake" ]; then
-                    echo "$direct"
-                    return 0
-                fi
-            done
-            arch="macos"
-            ;;
-        *)
-            arch="gcc_64"
-            ;;
-    esac
-    for root in "$HOME/Qt" "/opt/Qt"; do
-        [ -d "$root" ] || continue
-        local vd
-        for vd in $(ls -1 "$root" 2>/dev/null | grep -E '^6\.[0-9]+(\.[0-9]+)?$' | sort -rV); do
-            local cand="$root/$vd/$arch"
-            if [ -f "$cand/lib/cmake/Qt6/Qt6Config.cmake" ]; then
-                echo "$cand"
-                return 0
-            fi
-        done
-    done
-    return 1
-}
-
+ROOT_DIR="$(cd "$(dirname "$0")" && pwd)"
+UI_DIR="${PIER_UI_DIR:-$ROOT_DIR/pier-ui-tauri}"
 BUILD_TYPE="${BUILD_TYPE:-Release}"
-BUILD_DIR="${BUILD_DIR:-build}"
+BUILD_DIR="${BUILD_DIR:-}"
+NO_BUNDLE="${NO_BUNDLE:-0}"
 
-QT_PREFIX="$(find_qt6)" || {
-    echo "" >&2
-    echo "ERROR: Qt 6.8 not found." >&2
-    echo "Install Qt 6.8 LTS, then re-run this script." >&2
-    echo "Easiest path: pip install aqtinstall && aqt install-qt ..." >&2
-    echo "Or set QT_DIR explicitly if Qt is installed elsewhere." >&2
-    echo "" >&2
-    exit 1
+need_cmd() {
+    if ! command -v "$1" >/dev/null 2>&1; then
+        echo "ERROR: required command not found: $1" >&2
+        exit 1
+    fi
 }
 
-echo "==> Found Qt at: $QT_PREFIX"
+ensure_ui_dir() {
+    if [ ! -d "$UI_DIR" ]; then
+        echo "ERROR: active Tauri shell not found at $UI_DIR" >&2
+        exit 1
+    fi
+}
 
-CMAKE_ARGS=(-B "$BUILD_DIR" -S . -DCMAKE_BUILD_TYPE="$BUILD_TYPE" -DCMAKE_PREFIX_PATH="$QT_PREFIX")
+ensure_node_modules() {
+    local lock_marker="node_modules/.package-lock.json"
+    if [ ! -d node_modules ] || [ package-lock.json -nt "$lock_marker" ]; then
+        echo "==> Installing frontend dependencies"
+        npm ci
+    fi
+}
 
-echo "==> Configuring Pier-X ($BUILD_TYPE) in $BUILD_DIR"
-cmake "${CMAKE_ARGS[@]}"
+case "$BUILD_TYPE" in
+    Debug|Release) ;;
+    *)
+        echo "ERROR: BUILD_TYPE must be Debug or Release (got: $BUILD_TYPE)" >&2
+        exit 1
+        ;;
+esac
 
-echo "==> Building"
-cmake --build "$BUILD_DIR" --config "$BUILD_TYPE" --parallel
+need_cmd node
+need_cmd npm
+need_cmd cargo
+ensure_ui_dir
 
-echo "[OK] Build complete: $BUILD_DIR"
+if [ -n "$BUILD_DIR" ]; then
+    export CARGO_TARGET_DIR="$ROOT_DIR/$BUILD_DIR"
+    echo "==> Using Cargo target dir: $CARGO_TARGET_DIR"
+fi
+
+cd "$UI_DIR"
+ensure_node_modules
+
+TAURI_CMD=(npm run tauri -- build --ci)
+if [ "$BUILD_TYPE" = "Debug" ]; then
+    TAURI_CMD+=(--debug)
+fi
+if [ "$NO_BUNDLE" = "1" ]; then
+    TAURI_CMD+=(--no-bundle)
+fi
+
+echo "==> Building Pier-X Tauri shell ($BUILD_TYPE)"
+"${TAURI_CMD[@]}"
+
+if [ -n "${CARGO_TARGET_DIR:-}" ]; then
+    echo "[OK] Build complete: $CARGO_TARGET_DIR"
+else
+    echo "[OK] Build complete: $UI_DIR/src-tauri/target"
+fi

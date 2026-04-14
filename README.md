@@ -9,7 +9,7 @@ The cross-platform successor to [Pier](https://github.com/chenqi92/Pier) (macOS-
 
 ## Status
 
-The repository is in an active UI reset. The Rust backend stays in `pier-core/`; the desktop shell is being rebuilt in `pier-ui-tauri/`, while the older Qt shell is treated as legacy migration context.
+The Rust backend lives in `pier-core/`; the desktop shell now lives in `pier-ui-tauri/`. The old Qt shell has been retired from the active build path.
 
 See [docs/ROADMAP.md](./docs/ROADMAP.md) for the tag-by-tag release plan, and [docs/PARITY.md](./docs/PARITY.md) for the ground-level porting plan that tracks every feature in the macOS-only upstream Pier and maps it to work in Pier-X.
 
@@ -32,13 +32,13 @@ See [docs/ROADMAP.md](./docs/ROADMAP.md) for the tag-by-tag release plan, and [d
 - ✅ Terminal copy-selection + clipboard paste wired in the new shell
 - ✅ Tauri commands wired to `pier-core` runtime, directory listing, terminal, and Git
 - ✅ Windows debug bundle built successfully from the new shell
+- ✅ Tauri shell is the only supported desktop shell in repo entrypoints
 - ⬜ Deepen data panels and add plugin host into the new shell
-- ⬜ Remove the legacy Qt shell once feature parity is sufficient
-- ✅ CI on macOS + Windows (Qt) and macOS + Windows + Linux (Rust)
-- ✅ Tag-triggered release workflow producing draft GH releases
+- ✅ CI on macOS + Windows (Tauri shell) and macOS + Windows + Linux (Rust core)
+- ✅ Tag-triggered release workflow publishing Tauri bundles to GitHub Releases
 - ⬜ Terminal / SSH / SFTP / RDP / VNC — incremental work, see ROADMAP
 
-See [docs/TAURI-RESET.md](./docs/TAURI-RESET.md) for the new migration baseline.
+See [docs/TAURI-RESET.md](./docs/TAURI-RESET.md) for the migration baseline. Some deeper planning docs still mention Qt for historical context, but the repo scripts and automation now target Tauri.
 
 ---
 
@@ -64,60 +64,30 @@ See [docs/TAURI-RESET.md](./docs/TAURI-RESET.md) for the new migration baseline.
 
 ### Requirements
 
-#### Active shell: `pier-ui-tauri`
-
 - **Node.js 24+**
 - **npm 11+**
 - **Rust 1.88+**
 - **WebView2 runtime** (Windows)
 
-Run the new shell:
+Run the active shell directly:
 
 ```bash
 cd pier-ui-tauri
-npm install
-npm run tauri dev
+npm ci
+npm run tauri -- dev
 ```
 
-Build the new shell:
+Build the active shell directly:
 
 ```bash
 cd pier-ui-tauri
-npm run tauri build -- --debug
+npm ci
+npm run tauri -- build --debug
 ```
-
-#### Legacy shell: `pier-ui-qt`
-
-- **Qt 6.8 LTS** (or newer)
-- **CMake 3.21+**
-- **C++17 compiler** (MSVC 2022 / Apple Clang 15+)
-- **Rust 1.75+** (once `pier-core` is wired in)
-
-### Install Qt 6.8 LTS
-
-Pier-X needs Qt 6.8 LTS (or newer). Easiest path is `aqtinstall` — same tool CI uses, no GUI installer needed:
-
-```bash
-pip install aqtinstall
-
-# Windows
-aqt install-qt windows desktop 6.8.1 win64_msvc2022_64 --outputdir C:\Qt
-
-# macOS
-aqt install-qt mac desktop 6.8.1 clang_64 --outputdir ~/Qt
-
-# Linux
-aqt install-qt linux desktop 6.8.1 linux_gcc_64 --outputdir ~/Qt
-```
-
-Alternatives:
-- **Windows / macOS**: official [Qt Online Installer](https://www.qt.io/download-qt-installer)
-- **macOS**: `brew install qt`
-- **Debian / Ubuntu**: `sudo apt install qt6-base-dev qt6-declarative-dev qt6-shadertools-dev`
 
 ### Quickstart
 
-The repo ships with one-shot scripts that auto-detect Qt, configure, build, and launch the app.
+The repo ships with one-shot scripts that enter `pier-ui-tauri/` for you.
 
 ```bash
 # macOS / Linux
@@ -134,22 +104,16 @@ Build only (no launch):
 .\build.ps1       # Windows
 ```
 
-Auto-detection looks at, in order: an explicit `QT_DIR` env var, `qmake` in `PATH`, `C:\Qt\<version>\msvc2022_64\` on Windows, `~/Qt/<version>/macos\` on macOS, `~/Qt/<version>/gcc_64\` on Linux, and Homebrew's `/opt/homebrew/opt/qt`. If Qt isn't found, the script prints exact install commands and exits.
+The scripts will install frontend dependencies on demand and then run the matching Tauri command. `run.*` launches `tauri dev`; `build.*` runs `tauri build`.
 
-All four scripts honour these environment variables:
+The scripts honour these environment variables:
 
 | Variable | Default | Purpose |
 |---|---|---|
-| `BUILD_TYPE` | `Release` | CMake build type (`Release`, `Debug`, `RelWithDebInfo`) |
-| `BUILD_DIR` | `build` | Build directory |
-| `QT_DIR` | _(auto-detect)_ | Override the auto-detected Qt prefix (e.g. `C:\Qt\6.8.1\msvc2022_64`) |
-
-### Manual build
-
-```bash
-cmake -B build -S .
-cmake --build build --config Release
-```
+| `BUILD_TYPE` | `Debug` for `run.*`, `Release` for `build.*` | Maps to `tauri dev` / `tauri build` debug vs release mode |
+| `BUILD_DIR` | Tauri default target dir | When set, exported as `CARGO_TARGET_DIR` |
+| `PIER_UI_DIR` | `pier-ui-tauri` | Override the active shell directory |
+| `NO_BUNDLE` | `0` | When set to `1`, `build.*` adds `--no-bundle` |
 
 ---
 
@@ -162,7 +126,6 @@ Pier-X/
 ├── pier-ui-tauri/           # Active desktop shell rewrite
 │   ├── src/                 # React UI
 │   └── src-tauri/           # Tauri runtime + Rust commands
-├── pier-ui-qt/              # Legacy Qt shell retained during migration
 ├── docs/
 │   ├── TAURI-RESET.md
 │   └── TECH-STACK.md

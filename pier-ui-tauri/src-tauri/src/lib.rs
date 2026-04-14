@@ -8,7 +8,8 @@ use pier_core::services::postgres::{PostgresClient, PostgresConfig};
 use pier_core::services::redis::{RedisClient, RedisConfig};
 use pier_core::services::server_monitor;
 use pier_core::services::sqlite::SqliteClient;
-use pier_core::ssh::{AuthMethod, HostKeyVerifier, SshConfig, SshSession};
+use pier_core::ssh::service_detector;
+use pier_core::ssh::{AuthMethod, ExecStream, HostKeyVerifier, SshConfig, SshSession};
 use pier_core::terminal::{Cell, Color, NotifyFn, PierTerminal};
 use serde::Serialize;
 use std::collections::HashMap;
@@ -22,10 +23,20 @@ use std::time::{SystemTime, UNIX_EPOCH};
 mod git_panel;
 use git_panel::*;
 
-#[derive(Default)]
 struct AppState {
     next_terminal_id: AtomicU64,
     terminals: Mutex<HashMap<String, ManagedTerminal>>,
+    log_streams: Mutex<HashMap<String, ExecStream>>,
+}
+
+impl Default for AppState {
+    fn default() -> Self {
+        Self {
+            next_terminal_id: AtomicU64::new(1),
+            terminals: Mutex::new(HashMap::new()),
+            log_streams: Mutex::new(HashMap::new()),
+        }
+    }
 }
 
 struct ManagedTerminal {
@@ -38,8 +49,10 @@ struct CoreInfo {
     version: String,
     profile: &'static str,
     ui_target: &'static str,
+    home_dir: String,
     workspace_root: String,
     default_shell: String,
+    platform: &'static str,
     services: Vec<&'static str>,
 }
 
@@ -49,7 +62,10 @@ struct FileEntry {
     name: String,
     path: String,
     kind: &'static str,
+    size: u64,
     size_label: String,
+    modified: String,
+    modified_ts: u64,
 }
 
 #[derive(Serialize)]
@@ -293,6 +309,22 @@ struct ServerSnapshotView {
     disk_avail: String,
     disk_use_pct: f64,
     cpu_pct: f64,
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct DetectedServiceView {
+    name: String,
+    version: String,
+    status: String,
+    port: u16,
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct LogEventView {
+    kind: String, // "stdout", "stderr", "exit"
+    text: String,
 }
 
 #[derive(Serialize)]
@@ -914,7 +946,9 @@ fn core_info() -> CoreInfo {
         version: pier_core::VERSION.to_string(),
         profile: if cfg!(debug_assertions) { "debug" } else { "release" },
         ui_target: "tauri",
+        home_dir: home_dir().display().to_string(),
         workspace_root: workspace_root().display().to_string(),
+        platform: if cfg!(target_os = "macos") { "macos" } else if cfg!(target_os = "windows") { "windows" } else { "linux" },
         default_shell: default_shell(),
         services: vec!["terminal", "ssh", "git", "mysql", "sqlite", "redis"],
     }
@@ -931,15 +965,45 @@ fn list_directory(path: Option<String>) -> Result<Vec<FileEntry>, String> {
             let path = entry.path();
             let metadata = entry.metadata().ok()?;
             let kind = if metadata.is_dir() { "directory" } else { "file" };
+            let file_size = metadata.len();
+            let modified_ts = metadata
+                .modified()
+                .ok()
+                .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
+                .map(|d| d.as_secs())
+                .unwrap_or(0);
+            let modified = if modified_ts > 0 {
+                // Format as MM-dd HH:mm
+                let secs = modified_ts as i64;
+                let days = secs / 86400;
+                let time_of_day = secs % 86400;
+                let hours = time_of_day / 3600;
+                let minutes = (time_of_day % 3600) / 60;
+                // Approximate month-day (good enough for display)
+                let epoch_days = days + 719468; // days from year 0
+                let era = epoch_days / 146097;
+                let doe = epoch_days - era * 146097;
+                let yoe = (doe - doe/1461 + doe/36524 - doe/146097) / 365;
+                let doy = doe - (365*yoe + yoe/4 - yoe/100);
+                let mp = (5*doy + 2) / 153;
+                let d = doy - (153*mp + 2)/5 + 1;
+                let m = if mp < 10 { mp + 3 } else { mp - 9 };
+                format!("{:02}-{:02} {:02}:{:02}", m, d, hours, minutes)
+            } else {
+                String::new()
+            };
             Some(FileEntry {
                 name: entry.file_name().to_string_lossy().to_string(),
                 path: path.display().to_string(),
                 kind,
+                size: file_size,
                 size_label: if metadata.is_dir() {
                     String::from("--")
                 } else {
-                    format_size(metadata.len())
+                    format_size(file_size)
                 },
+                modified,
+                modified_ts,
             })
         })
         .collect();
@@ -1931,6 +1995,289 @@ fn server_monitor_probe(
     })
 }
 
+// ── Service Detection ────────────────────────────────────────────
+
+#[tauri::command]
+fn detect_services(
+    host: String,
+    port: u16,
+    user: String,
+    auth_mode: String,
+    password: String,
+    key_path: String,
+) -> Result<Vec<DetectedServiceView>, String> {
+    let session = build_ssh_session_from_params(
+        &host, port, &user, &auth_mode, &password, &key_path,
+    )?;
+
+    let services = service_detector::detect_all_blocking(&session);
+    Ok(services
+        .into_iter()
+        .map(|s| DetectedServiceView {
+            name: s.name,
+            version: s.version,
+            status: format!("{:?}", s.status),
+            port: s.port,
+        })
+        .collect())
+}
+
+// ── Docker Extended ─────────────────────────────────────────────
+
+#[tauri::command]
+fn docker_inspect(
+    host: String,
+    port: u16,
+    user: String,
+    auth_mode: String,
+    password: String,
+    key_path: String,
+    container_id: String,
+) -> Result<String, String> {
+    let session = build_ssh_session_from_params(
+        &host, port, &user, &auth_mode, &password, &key_path,
+    )?;
+    docker::inspect_container_blocking(&session, &container_id)
+        .map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+fn docker_remove_image(
+    host: String,
+    port: u16,
+    user: String,
+    auth_mode: String,
+    password: String,
+    key_path: String,
+    image_id: String,
+    force: bool,
+) -> Result<(), String> {
+    let session = build_ssh_session_from_params(
+        &host, port, &user, &auth_mode, &password, &key_path,
+    )?;
+    docker::remove_image_blocking(&session, &image_id, force)
+        .map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+fn docker_remove_volume(
+    host: String,
+    port: u16,
+    user: String,
+    auth_mode: String,
+    password: String,
+    key_path: String,
+    volume_name: String,
+) -> Result<(), String> {
+    let session = build_ssh_session_from_params(
+        &host, port, &user, &auth_mode, &password, &key_path,
+    )?;
+    docker::remove_volume_blocking(&session, &volume_name)
+        .map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+fn docker_remove_network(
+    host: String,
+    port: u16,
+    user: String,
+    auth_mode: String,
+    password: String,
+    key_path: String,
+    network_name: String,
+) -> Result<(), String> {
+    let session = build_ssh_session_from_params(
+        &host, port, &user, &auth_mode, &password, &key_path,
+    )?;
+    docker::remove_network_blocking(&session, &network_name)
+        .map_err(|e| e.to_string())
+}
+
+// ── SFTP Extended ───────────────────────────────────────────────
+
+#[tauri::command]
+fn sftp_mkdir(
+    host: String,
+    port: u16,
+    user: String,
+    auth_mode: String,
+    password: String,
+    key_path: String,
+    path: String,
+) -> Result<(), String> {
+    let session = build_ssh_session_from_params(
+        &host, port, &user, &auth_mode, &password, &key_path,
+    )?;
+    let sftp = session.open_sftp_blocking().map_err(|e| e.to_string())?;
+    sftp.create_dir_blocking(&path).map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+fn sftp_remove(
+    host: String,
+    port: u16,
+    user: String,
+    auth_mode: String,
+    password: String,
+    key_path: String,
+    path: String,
+    is_dir: bool,
+) -> Result<(), String> {
+    let session = build_ssh_session_from_params(
+        &host, port, &user, &auth_mode, &password, &key_path,
+    )?;
+    let sftp = session.open_sftp_blocking().map_err(|e| e.to_string())?;
+    if is_dir {
+        sftp.remove_dir_blocking(&path).map_err(|e| e.to_string())
+    } else {
+        sftp.remove_file_blocking(&path).map_err(|e| e.to_string())
+    }
+}
+
+#[tauri::command]
+fn sftp_rename(
+    host: String,
+    port: u16,
+    user: String,
+    auth_mode: String,
+    password: String,
+    key_path: String,
+    from: String,
+    to: String,
+) -> Result<(), String> {
+    let session = build_ssh_session_from_params(
+        &host, port, &user, &auth_mode, &password, &key_path,
+    )?;
+    let sftp = session.open_sftp_blocking().map_err(|e| e.to_string())?;
+    sftp.rename_blocking(&from, &to).map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+fn sftp_download(
+    host: String,
+    port: u16,
+    user: String,
+    auth_mode: String,
+    password: String,
+    key_path: String,
+    remote_path: String,
+    local_path: String,
+) -> Result<(), String> {
+    let session = build_ssh_session_from_params(
+        &host, port, &user, &auth_mode, &password, &key_path,
+    )?;
+    let sftp = session.open_sftp_blocking().map_err(|e| e.to_string())?;
+    sftp.download_to_blocking(&remote_path, std::path::Path::new(&local_path))
+        .map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+fn sftp_upload(
+    host: String,
+    port: u16,
+    user: String,
+    auth_mode: String,
+    password: String,
+    key_path: String,
+    local_path: String,
+    remote_path: String,
+) -> Result<(), String> {
+    let session = build_ssh_session_from_params(
+        &host, port, &user, &auth_mode, &password, &key_path,
+    )?;
+    let sftp = session.open_sftp_blocking().map_err(|e| e.to_string())?;
+    sftp.upload_from_blocking(std::path::Path::new(&local_path), &remote_path)
+        .map_err(|e| e.to_string())
+}
+
+// ── Log Stream ──────────────────────────────────────────────────
+
+#[tauri::command]
+fn log_stream_start(
+    state: tauri::State<'_, AppState>,
+    host: String,
+    port: u16,
+    user: String,
+    auth_mode: String,
+    password: String,
+    key_path: String,
+    command: String,
+) -> Result<String, String> {
+    let session = build_ssh_session_from_params(
+        &host, port, &user, &auth_mode, &password, &key_path,
+    )?;
+    let stream = session
+        .spawn_exec_stream_blocking(&command)
+        .map_err(|e| e.to_string())?;
+
+    let id = format!(
+        "log-{}",
+        SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_millis()
+    );
+
+    state
+        .log_streams
+        .lock()
+        .map_err(|_| "log state poisoned".to_string())?
+        .insert(id.clone(), stream);
+
+    Ok(id)
+}
+
+#[tauri::command]
+fn log_stream_drain(
+    state: tauri::State<'_, AppState>,
+    stream_id: String,
+) -> Result<Vec<LogEventView>, String> {
+    let streams = state
+        .log_streams
+        .lock()
+        .map_err(|_| "log state poisoned".to_string())?;
+
+    let stream = streams
+        .get(&stream_id)
+        .ok_or_else(|| format!("unknown log stream: {}", stream_id))?;
+
+    let events = stream.drain();
+    Ok(events
+        .into_iter()
+        .map(|e| match e {
+            pier_core::ssh::ExecEvent::Stdout(text) => LogEventView {
+                kind: "stdout".into(),
+                text,
+            },
+            pier_core::ssh::ExecEvent::Stderr(text) => LogEventView {
+                kind: "stderr".into(),
+                text,
+            },
+            pier_core::ssh::ExecEvent::Exit(code) => LogEventView {
+                kind: "exit".into(),
+                text: format!("{}", code),
+            },
+            pier_core::ssh::ExecEvent::Error(msg) => LogEventView {
+                kind: "error".into(),
+                text: msg,
+            },
+        })
+        .collect())
+}
+
+#[tauri::command]
+fn log_stream_stop(
+    state: tauri::State<'_, AppState>,
+    stream_id: String,
+) -> Result<(), String> {
+    let mut streams = state
+        .log_streams
+        .lock()
+        .map_err(|_| "log state poisoned".to_string())?;
+    streams.remove(&stream_id);
+    Ok(())
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     tauri::Builder::default()
@@ -2028,7 +2375,20 @@ pub fn run() {
             sftp_browse,
             markdown_render,
             markdown_render_file,
-            server_monitor_probe
+            server_monitor_probe,
+            detect_services,
+            docker_inspect,
+            docker_remove_image,
+            docker_remove_volume,
+            docker_remove_network,
+            sftp_mkdir,
+            sftp_remove,
+            sftp_rename,
+            sftp_download,
+            sftp_upload,
+            log_stream_start,
+            log_stream_drain,
+            log_stream_stop
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

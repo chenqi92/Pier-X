@@ -420,6 +420,116 @@ export const serverMonitorProbe = (params: {
   keyPath: string;
 }) => invoke<ServerSnapshotView>("server_monitor_probe", params);
 
+// ── Service Detection ───────────────────────────────────────────
+
+export type DetectedServiceView = {
+  name: string;
+  version: string;
+  status: string;
+  port: number;
+};
+
+export const detectServices = (params: {
+  host: string;
+  port: number;
+  user: string;
+  authMode: string;
+  password: string;
+  keyPath: string;
+}) => invoke<DetectedServiceView[]>("detect_services", params);
+
+// ── Docker Extended ─────────────────────────────────────────────
+
+export const dockerInspect = (params: {
+  host: string;
+  port: number;
+  user: string;
+  authMode: string;
+  password: string;
+  keyPath: string;
+  containerId: string;
+}) => invoke<string>("docker_inspect", params);
+
+export const dockerRemoveImage = (params: {
+  host: string;
+  port: number;
+  user: string;
+  authMode: string;
+  password: string;
+  keyPath: string;
+  imageId: string;
+  force: boolean;
+}) => invoke<void>("docker_remove_image", params);
+
+export const dockerRemoveVolume = (params: {
+  host: string;
+  port: number;
+  user: string;
+  authMode: string;
+  password: string;
+  keyPath: string;
+  volumeName: string;
+}) => invoke<void>("docker_remove_volume", params);
+
+export const dockerRemoveNetwork = (params: {
+  host: string;
+  port: number;
+  user: string;
+  authMode: string;
+  password: string;
+  keyPath: string;
+  networkName: string;
+}) => invoke<void>("docker_remove_network", params);
+
+// ── SFTP Extended ───────────────────────────────────────────────
+
+export const sftpMkdir = (params: {
+  host: string; port: number; user: string; authMode: string; password: string; keyPath: string;
+  path: string;
+}) => invoke<void>("sftp_mkdir", params);
+
+export const sftpRemove = (params: {
+  host: string; port: number; user: string; authMode: string; password: string; keyPath: string;
+  path: string;
+  isDir: boolean;
+}) => invoke<void>("sftp_remove", params);
+
+export const sftpRename = (params: {
+  host: string; port: number; user: string; authMode: string; password: string; keyPath: string;
+  from: string;
+  to: string;
+}) => invoke<void>("sftp_rename", params);
+
+export const sftpDownload = (params: {
+  host: string; port: number; user: string; authMode: string; password: string; keyPath: string;
+  remotePath: string;
+  localPath: string;
+}) => invoke<void>("sftp_download", params);
+
+export const sftpUpload = (params: {
+  host: string; port: number; user: string; authMode: string; password: string; keyPath: string;
+  localPath: string;
+  remotePath: string;
+}) => invoke<void>("sftp_upload", params);
+
+// ── Log Stream ──────────────────────────────────────────────────
+
+export type LogEventView = {
+  kind: "stdout" | "stderr" | "exit" | "error";
+  text: string;
+};
+
+export const logStreamStart = (params: {
+  host: string; port: number; user: string; authMode: string; password: string; keyPath: string;
+  command: string;
+}) => invoke<string>("log_stream_start", params);
+
+export const logStreamDrain = (streamId: string) =>
+  invoke<LogEventView[]>("log_stream_drain", { streamId });
+
+export const logStreamStop = (streamId: string) =>
+  invoke<void>("log_stream_stop", { streamId });
+
 // ── Utility Functions ───────────────────────────────────────────
 
 const readOnlySqlKeywords = new Set([

@@ -126,7 +126,6 @@ export default function TabBar({ onNewTab }: Props) {
       </button>
 
       {ctxMenu && (() => {
-        const tabIdx = tabs.findIndex((t) => t.id === ctxMenu.tabId);
         const isMac = navigator.platform.includes("Mac");
         const mod = isMac ? "\u2318" : "Ctrl+";
         const items: ContextMenuItem[] = [

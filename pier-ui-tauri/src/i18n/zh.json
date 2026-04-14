@@ -276,5 +276,7 @@
   "No diff output.": "没有差异输出。",
   "WIP": "进行中",
   "Log viewer will tail remote log files via SSH.": "日志查看器将通过 SSH 跟踪远程日志文件。",
-  "Command: {command}": "命令：{command}"
+  "Command: {command}": "命令：{command}",
+  "Copied TSV": "已复制 TSV",
+  "Clear color": "清除颜色"
 }

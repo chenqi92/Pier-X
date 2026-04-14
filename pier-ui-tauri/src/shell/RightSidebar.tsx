@@ -18,6 +18,7 @@ type Props = {
   activeTab: TabState | null;
   browserPath: string;
   onToolChange: (tool: RightTool) => void;
+  width?: number;
 };
 
 const TOOL_TITLES: Record<string, string> = {
@@ -33,23 +34,35 @@ const TOOL_TITLES: Record<string, string> = {
   markdown: "Markdown",
 };
 
-function ToolContent({ tool, tab, browserPath }: { tool: RightTool; tab: TabState | null; browserPath: string }) {
+function ToolContent({
+  tool,
+  tab,
+  browserPath,
+  openTabFirstLabel,
+  unknownToolLabel,
+}: {
+  tool: RightTool;
+  tab: TabState | null;
+  browserPath: string;
+  openTabFirstLabel: string;
+  unknownToolLabel: string;
+}) {
   switch (tool) {
     case "git": return <GitPanel browserPath={browserPath} />;
-    case "monitor": return tab ? <ServerMonitorPanel tab={tab} /> : <div className="empty-note">__OPEN_A_TAB_FIRST__</div>;
-    case "docker": return tab ? <DockerPanel tab={tab} /> : <div className="empty-note">__OPEN_A_TAB_FIRST__</div>;
-    case "mysql": return tab ? <MySqlPanel tab={tab} /> : <div className="empty-note">__OPEN_A_TAB_FIRST__</div>;
-    case "postgres": return tab ? <PostgresPanel tab={tab} /> : <div className="empty-note">__OPEN_A_TAB_FIRST__</div>;
-    case "redis": return tab ? <RedisPanel tab={tab} /> : <div className="empty-note">__OPEN_A_TAB_FIRST__</div>;
-    case "log": return tab ? <LogViewerPanel tab={tab} /> : <div className="empty-note">__OPEN_A_TAB_FIRST__</div>;
-    case "sftp": return tab ? <SftpPanel tab={tab} /> : <div className="empty-note">__OPEN_A_TAB_FIRST__</div>;
+    case "monitor": return tab ? <ServerMonitorPanel tab={tab} /> : <div className="empty-note">{openTabFirstLabel}</div>;
+    case "docker": return tab ? <DockerPanel tab={tab} /> : <div className="empty-note">{openTabFirstLabel}</div>;
+    case "mysql": return tab ? <MySqlPanel tab={tab} /> : <div className="empty-note">{openTabFirstLabel}</div>;
+    case "postgres": return tab ? <PostgresPanel tab={tab} /> : <div className="empty-note">{openTabFirstLabel}</div>;
+    case "redis": return tab ? <RedisPanel tab={tab} /> : <div className="empty-note">{openTabFirstLabel}</div>;
+    case "log": return tab ? <LogViewerPanel tab={tab} /> : <div className="empty-note">{openTabFirstLabel}</div>;
+    case "sftp": return tab ? <SftpPanel tab={tab} /> : <div className="empty-note">{openTabFirstLabel}</div>;
     case "sqlite": return <SqlitePanel />;
     case "markdown": return <MarkdownPanel />;
-    default: return <div className="empty-note">__UNKNOWN_TOOL__</div>;
+    default: return <div className="empty-note">{unknownToolLabel}</div>;
   }
 }
 
-export default function RightSidebar({ activeTab, browserPath, onToolChange }: Props) {
+export default function RightSidebar({ activeTab, browserPath, onToolChange, width }: Props) {
   const { t } = useI18n();
   const [expanded, setExpanded] = useState(true);
 
@@ -59,21 +72,18 @@ export default function RightSidebar({ activeTab, browserPath, onToolChange }: P
   const isGitTool = activeTool === "git";
   const openTabFirst = t("Open a tab first.");
   const unknownTool = t("Unknown tool.");
-
-  function renderToolContent() {
-    const content = ToolContent({ tool: activeTool, tab: activeTab, browserPath });
-    if (typeof content === "string") return content;
-    return content;
-  }
-
-  const toolContent = ToolContent({ tool: activeTool, tab: activeTab, browserPath });
-  const resolvedToolContent =
-    typeof toolContent === "object" && toolContent !== null
-      ? toolContent
-      : toolContent;
+  const toolContent = (
+    <ToolContent
+      tool={activeTool}
+      tab={activeTab}
+      browserPath={browserPath}
+      openTabFirstLabel={openTabFirst}
+      unknownToolLabel={unknownTool}
+    />
+  );
 
   return (
-    <div className="right-sidebar">
+    <div className="right-sidebar" style={width ? { width: `${width}px` } : undefined}>
       {expanded && (
         isGitTool ? (
           <div className="right-sidebar__content right-sidebar__content--git">

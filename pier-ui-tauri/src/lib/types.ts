@@ -5,8 +5,10 @@ export type CoreInfo = {
   version: string;
   profile: string;
   uiTarget: string;
+  homeDir: string;
   workspaceRoot: string;
   defaultShell: string;
+  platform: "macos" | "windows" | "linux";
   services: string[];
 };
 
@@ -14,7 +16,10 @@ export type FileEntry = {
   name: string;
   path: string;
   kind: "directory" | "file";
+  size: number;
   sizeLabel: string;
+  modified: string;
+  modifiedTs: number;
 };
 
 // ── Git ─────────────────────────────────────────────────────────

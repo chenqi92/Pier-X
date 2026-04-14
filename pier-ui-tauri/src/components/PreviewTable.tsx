@@ -1,3 +1,4 @@
+import { useI18n } from "../i18n/useI18n";
 import type { DataPreview } from "../lib/types";
 
 type Props = {
@@ -6,6 +7,8 @@ type Props = {
 };
 
 export default function PreviewTable({ preview, emptyLabel }: Props) {
+  const { t } = useI18n();
+
   if (!preview) {
     return <div className="empty-note">{emptyLabel}</div>;
   }
@@ -31,7 +34,7 @@ export default function PreviewTable({ preview, emptyLabel }: Props) {
         </tbody>
       </table>
       {preview.truncated ? (
-        <div className="inline-note">Results truncated.</div>
+        <div className="inline-note">{t("Results truncated.")}</div>
       ) : null}
     </div>
   );

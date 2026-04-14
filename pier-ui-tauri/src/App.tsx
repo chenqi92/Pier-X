@@ -5,6 +5,7 @@ import { useCallback, useEffect, useMemo, useState } from "react";
 import { I18nContext, makeI18n } from "./i18n/useI18n";
 import * as cmd from "./lib/commands";
 import type { CoreInfo, RightTool } from "./lib/types";
+import ResizeHandle from "./components/ResizeHandle";
 import SettingsDialog from "./components/SettingsDialog";
 import TerminalPanel from "./panels/TerminalPanel";
 import CommandPalette, { type PaletteCommand } from "./shell/CommandPalette";
@@ -27,6 +28,8 @@ function App() {
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [paletteOpen, setPaletteOpen] = useState(false);
   const [newConnOpen, setNewConnOpen] = useState(false);
+  const [sidebarWidth, setSidebarWidth] = useState(272);
+  const [rightWidth, setRightWidth] = useState(400);
   const { tabs, activeTabId, addTab, closeTab } = useTabStore();
   const locale = useSettingsStore((s) => s.locale);
   const i18n = useMemo(() => makeI18n(locale), [locale]);
@@ -225,7 +228,9 @@ function App() {
             onConnectSaved={openSshSaved}
             onNewConnection={() => setNewConnOpen(true)}
             workspaceRoot={coreInfo?.workspaceRoot}
+            width={sidebarWidth}
           />
+          <ResizeHandle direction="left" size={sidebarWidth} min={180} max={420} onResize={setSidebarWidth} />
 
           <div className="workspace__center">
             <TabBar onNewTab={openNewTab} />
@@ -252,10 +257,12 @@ function App() {
             </div>
           </div>
 
+          <ResizeHandle direction="right" size={rightWidth} min={44} max={600} onResize={setRightWidth} />
           <RightSidebar
             activeTab={activeTab}
             browserPath={coreInfo?.workspaceRoot ?? ""}
             onToolChange={handleToolChange}
+            width={rightWidth}
           />
         </div>
 

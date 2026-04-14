@@ -11,8 +11,8 @@ export default function LogViewerPanel({ tab }: Props) {
       <section className="panel-section">
         <div className="panel-section__title"><span>{t("Logs")}</span></div>
         <div className="empty-note">
-          Log viewer will tail remote log files via SSH.
-          {tab.logCommand ? <div className="inline-note">Command: {tab.logCommand}</div> : null}
+          {t("Log viewer will tail remote log files via SSH.")}
+          {tab.logCommand ? <div className="inline-note">{t("Command: {command}", { command: tab.logCommand })}</div> : null}
         </div>
       </section>
     </div>

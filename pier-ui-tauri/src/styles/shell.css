@@ -9,6 +9,17 @@
   padding: 0;
 }
 
+/* ── Slim scrollbars globally ────────────────────────────────── */
+::-webkit-scrollbar { width: 6px; height: 6px; }
+::-webkit-scrollbar-track { background: transparent; }
+::-webkit-scrollbar-thumb { background: rgba(255,255,255,0.08); border-radius: 3px; }
+::-webkit-scrollbar-thumb:hover { background: rgba(255,255,255,0.14); }
+[data-theme="light"] ::-webkit-scrollbar-thumb { background: rgba(0,0,0,0.10); }
+[data-theme="light"] ::-webkit-scrollbar-thumb:hover { background: rgba(0,0,0,0.18); }
+/* Firefox */
+* { scrollbar-width: thin; scrollbar-color: rgba(255,255,255,0.08) transparent; }
+[data-theme="light"] * { scrollbar-color: rgba(0,0,0,0.10) transparent; }
+
 html, body, #root {
   height: 100%;
   overflow: hidden;
@@ -207,6 +218,30 @@ html, body, #root {
   overflow: hidden;
 }
 
+/* Resize handle between panels */
+.resize-handle {
+  width: 5px;
+  cursor: col-resize;
+  background: transparent;
+  position: relative;
+  flex-shrink: 0;
+  z-index: 5;
+  transition: background var(--dur-fast) var(--easing);
+}
+.resize-handle::before {
+  content: "";
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  left: 2px;
+  width: 1px;
+  background: var(--border-subtle);
+}
+.resize-handle:hover { background: var(--split-handle-hover); }
+.resize-handle:hover::before { background: var(--split-handle-line-active); }
+.resize-handle:active { background: var(--split-handle-active); }
+.resize-handle:active::before { background: var(--accent); }
+
 .workspace__content {
   flex: 1;
   min-height: 0;
@@ -221,10 +256,9 @@ html, body, #root {
 
 .sidebar {
   width: var(--sidebar-width);
-  min-width: var(--sidebar-width);
-  max-width: var(--sidebar-width);
+  min-width: 180px;
+  max-width: 420px;
   background: var(--bg-panel);
-  border-right: 1px solid var(--border-subtle);
   display: flex;
   flex-direction: column;
   overflow: hidden;
@@ -233,8 +267,8 @@ html, body, #root {
 
 .sidebar__tabs {
   display: flex;
-  padding: var(--sp-2) var(--sp-2) 0;
-  gap: var(--sp-1);
+  padding: var(--sp-1) var(--sp-1-5) 0;
+  gap: var(--sp-0-5);
 }
 
 .sidebar__tab {
@@ -242,19 +276,19 @@ html, body, #root {
   display: flex;
   align-items: center;
   justify-content: center;
-  gap: var(--sp-1);
-  height: var(--compact-row-height);
+  gap: 4px;
+  height: 24px;
   border: none;
   background: transparent;
-  color: var(--text-secondary);
+  color: var(--text-tertiary);
   font-family: var(--font-ui);
-  font-size: var(--size-caption);
+  font-size: var(--size-small);
   font-weight: var(--weight-medium);
   border-radius: var(--radius-sm);
   cursor: pointer;
   transition: background var(--dur-fast) var(--easing), color var(--dur-fast) var(--easing);
 }
-.sidebar__tab:hover { background: var(--bg-hover); }
+.sidebar__tab:hover { background: var(--bg-hover); color: var(--text-secondary); }
 .sidebar__tab--active {
   background: var(--accent-muted);
   color: var(--accent);
@@ -305,9 +339,10 @@ html, body, #root {
 .sidebar__search {
   display: flex;
   align-items: center;
-  gap: var(--sp-1-5);
-  padding: var(--sp-1) var(--sp-3);
-  color: var(--text-tertiary);
+  gap: 4px;
+  padding: 2px var(--sp-2);
+  height: 24px;
+  color: var(--text-disabled);
   flex-shrink: 0;
 }
 
@@ -318,7 +353,7 @@ html, body, #root {
   outline: none;
   color: var(--text-primary);
   font-family: var(--font-ui);
-  font-size: var(--size-caption);
+  font-size: var(--size-small);
 }
 .sidebar__search-input::placeholder { color: var(--text-disabled); }
 
@@ -327,13 +362,13 @@ html, body, #root {
   overflow-y: auto;
 }
 
-/* File header bar (Up + folder + places + refresh) */
+/* File header bar */
 .sidebar__file-header {
   display: flex;
   align-items: center;
-  gap: var(--sp-1);
-  padding: var(--sp-1) var(--sp-2);
-  height: 32px;
+  gap: 2px;
+  padding: 2px var(--sp-1);
+  height: 28px;
   flex-shrink: 0;
 }
 
@@ -341,12 +376,12 @@ html, body, #root {
   display: flex;
   align-items: center;
   justify-content: center;
-  width: 24px;
-  height: 24px;
+  width: 22px;
+  height: 22px;
   border: none;
   background: none;
-  color: var(--text-secondary);
-  border-radius: var(--radius-sm);
+  color: var(--text-tertiary);
+  border-radius: var(--radius-xs);
   cursor: pointer;
   flex-shrink: 0;
   transition: background var(--dur-fast) var(--easing), color var(--dur-fast) var(--easing);
@@ -359,7 +394,7 @@ html, body, #root {
 
 .sidebar__folder-name {
   flex: 1;
-  font-size: var(--size-body);
+  font-size: var(--size-caption);
   font-weight: var(--weight-medium);
   color: var(--text-primary);
   overflow: hidden;
@@ -414,8 +449,8 @@ html, body, #root {
 .sidebar__breadcrumb {
   display: flex;
   align-items: center;
-  padding: 0 var(--sp-2);
-  height: 22px;
+  padding: 0 var(--sp-1-5);
+  height: 18px;
   overflow-x: auto;
   flex-shrink: 0;
   scrollbar-width: none;
@@ -437,22 +472,23 @@ html, body, #root {
 .sidebar__crumb {
   background: none;
   border: none;
-  color: var(--text-tertiary);
-  font-size: var(--size-small);
+  color: var(--text-disabled);
+  font-size: 10px;
   font-family: var(--font-mono);
-  padding: 1px 3px;
+  padding: 0 2px;
   border-radius: var(--radius-xs);
   cursor: pointer;
   white-space: nowrap;
+  line-height: 1;
 }
-.sidebar__crumb:hover { background: var(--bg-hover); color: var(--text-primary); }
+.sidebar__crumb:hover { background: var(--bg-hover); color: var(--text-secondary); }
 
 /* Column headers */
 .sidebar__col-headers {
   display: flex;
   align-items: center;
-  padding: 0 var(--sp-3);
-  height: 22px;
+  padding: 0 var(--sp-2);
+  height: 18px;
   border-bottom: 1px solid var(--border-subtle);
   flex-shrink: 0;
 }
@@ -462,33 +498,40 @@ html, body, #root {
   font-size: 10px;
   font-weight: var(--weight-medium);
   color: var(--text-disabled);
-  text-transform: uppercase;
-  letter-spacing: 0.04em;
+  letter-spacing: 0.03em;
 }
 
-.sidebar__col-size {
-  width: 58px;
+.sidebar__col-modified {
+  width: 72px;
   text-align: right;
   font-size: 10px;
   font-weight: var(--weight-medium);
   color: var(--text-disabled);
-  text-transform: uppercase;
-  letter-spacing: 0.04em;
+  letter-spacing: 0.03em;
 }
 
-/* File rows */
+.sidebar__col-size {
+  width: 48px;
+  text-align: right;
+  font-size: 10px;
+  font-weight: var(--weight-medium);
+  color: var(--text-disabled);
+  letter-spacing: 0.03em;
+}
+
+/* File rows — compact Pier-style */
 .sidebar__file-row {
   display: flex;
   align-items: center;
-  gap: var(--sp-1-5);
+  gap: 4px;
   width: 100%;
-  padding: var(--sp-0-5) var(--sp-3);
-  height: var(--list-row-height);
+  padding: 0 var(--sp-2);
+  height: 24px;
   border: none;
   background: none;
   color: var(--text-primary);
   font-family: var(--font-ui);
-  font-size: var(--size-caption);
+  font-size: var(--size-small);
   cursor: pointer;
   text-align: left;
   transition: background var(--dur-fast) var(--easing);
@@ -497,7 +540,9 @@ html, body, #root {
 
 .sidebar__entry-icon {
   flex-shrink: 0;
-  color: var(--text-tertiary);
+  color: var(--text-disabled);
+  width: 13px;
+  height: 13px;
 }
 .sidebar__entry-icon--dir { color: var(--accent); }
 
@@ -510,10 +555,10 @@ html, body, #root {
 }
 
 .sidebar__file-size {
-  width: 58px;
+  width: 50px;
   text-align: right;
-  font-size: var(--size-small);
-  color: var(--text-tertiary);
+  font-size: 10px;
+  color: var(--text-disabled);
   font-family: var(--font-mono);
   white-space: nowrap;
   flex-shrink: 0;
@@ -522,14 +567,14 @@ html, body, #root {
 .sidebar__server-row {
   display: flex;
   align-items: center;
-  gap: var(--sp-2);
+  gap: var(--sp-1-5);
   width: 100%;
-  padding: var(--sp-2) var(--sp-3);
+  padding: var(--sp-1) var(--sp-2);
   border: none;
   background: none;
   color: var(--text-primary);
   font-family: var(--font-ui);
-  font-size: var(--size-caption);
+  font-size: var(--size-small);
   cursor: pointer;
   text-align: left;
   transition: background var(--dur-fast) var(--easing);
@@ -678,12 +723,11 @@ html, body, #root {
 }
 
 .right-sidebar__content {
-  width: var(--right-sidebar-width);
+  flex: 1;
+  min-width: 0;
   display: flex;
   flex-direction: column;
   overflow: hidden;
-  border-left: 1px solid var(--border-subtle);
-  border-right: 1px solid var(--border-subtle);
 }
 
 .right-sidebar__header {

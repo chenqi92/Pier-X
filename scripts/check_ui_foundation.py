@@ -41,6 +41,10 @@ def should_check(path: Path) -> bool:
 
 
 def main() -> int:
+    if not QML_ROOT.exists():
+        print("Pier-X legacy QML foundation check skipped: pier-ui-qt/ is not present.")
+        return 0
+
     failures: list[str] = []
     for path in sorted(QML_ROOT.rglob("*.qml")):
         if not should_check(path):

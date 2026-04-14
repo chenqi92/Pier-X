@@ -1,7 +1,22 @@
-# Tauri + React + Typescript
+# pier-ui-tauri
 
-This template should help get you started developing with Tauri, React and Typescript in Vite.
+Active desktop shell for Pier-X, built with Tauri 2 + React + TypeScript.
 
-## Recommended IDE Setup
+## Commands
 
-- [VS Code](https://code.visualstudio.com/) + [Tauri](https://marketplace.visualstudio.com/items?itemName=tauri-apps.tauri-vscode) + [rust-analyzer](https://marketplace.visualstudio.com/items?itemName=rust-lang.rust-analyzer)
+```bash
+npm ci
+npm run tauri -- dev
+```
+
+```bash
+npm ci
+npm run tauri -- build --debug
+```
+
+From the repo root you can also use:
+
+```bash
+./run.sh
+./build.sh
+```

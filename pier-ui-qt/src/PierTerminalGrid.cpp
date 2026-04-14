@@ -9,8 +9,6 @@
 #include <QStringList>
 #include <QVector>
 
-#include <cmath>
-
 namespace {
 
 // Minimal 16-color ANSI palette. When a custom palette is supplied
@@ -315,26 +313,7 @@ void PierTerminalGrid::recomputeMetrics()
     const QFontMetricsF fm(m_font);
     const qreal mWidth = fm.horizontalAdvance(QChar('M'));
     m_cellWidth = mWidth > 0 ? mWidth : fm.averageCharWidth();
-
-    // Use lineSpacing() instead of height() — lineSpacing includes the
-    // inter-line leading which prevents row overlap. On Windows with CJK
-    // fallback fonts (e.g. Microsoft YaHei), the fallback font's metrics
-    // can exceed the primary monospace font's height, causing rows to
-    // overlap if we only use height(). We also measure a representative
-    // CJK character and take the maximum to be safe.
-    qreal baseHeight = qMax(fm.height(), fm.lineSpacing());
-
-#ifdef Q_OS_WIN
-    // CJK fallback fonts on Windows often have larger bounding boxes.
-    // Measure a representative character so the cell height accommodates them.
-    const QRectF cjkBounds = fm.boundingRect(QChar(0x4E2D)); // U+4E2D '中'
-    if (cjkBounds.height() > baseHeight)
-        baseHeight = cjkBounds.height();
-#endif
-
-    // Ceil to avoid fractional-pixel accumulation that shifts rows by
-    // sub-pixel amounts over many lines, eventually causing visible overlap.
-    m_cellHeight = std::ceil(baseHeight);
+    m_cellHeight = fm.height();
     m_ascent = fm.ascent();
 }
 

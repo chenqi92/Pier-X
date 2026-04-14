@@ -380,6 +380,7 @@ Rectangle {
         anchors.rightMargin: Theme.sp2
 
         implicitHeight: root.detectorCount > 0 ? 34 : 0
+        height: implicitHeight
         visible: root.detectorCount > 0
                  && root.backend === "ssh"
                  && root.sessionStatus === root.sshStatusConnected

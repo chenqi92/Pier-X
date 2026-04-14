@@ -444,6 +444,7 @@ Item {
         PierSearchField {
             id: searchInput
             Layout.fillWidth: true
+            Layout.preferredHeight: 24
             text: root.searchQuery
             placeholder: qsTr("Search files…")
             clearable: true
@@ -453,56 +454,92 @@ Item {
 
         Rectangle {
             Layout.fillWidth: true
-            implicitHeight: 26
+            implicitHeight: Theme.compactRowHeight
             color: Theme.bgPanel
             clip: true
 
-            RowLayout {
+            Item {
                 anchors.fill: parent
                 anchors.leftMargin: Theme.sp2
                 anchors.rightMargin: Theme.sp2
-                spacing: Theme.sp2
+                clip: true
+
+                readonly property int trailingGap: Theme.sp2
 
                 Text {
-                    Layout.fillWidth: true
-                    text: qsTr("Name")
-                    font.family: Theme.fontUi
-                    font.pixelSize: 10
-                    font.weight: Theme.weightMedium
-                    color: Theme.textTertiary
-                }
-
-                Text {
-                    Layout.preferredWidth: root.modifiedColumnWidth
-                    visible: root.showModifiedColumn
-                    horizontalAlignment: Text.AlignRight
-                    text: qsTr("Modified")
-                    font.family: Theme.fontUi
-                    font.pixelSize: 10
-                    font.weight: Theme.weightMedium
-                    color: Theme.textTertiary
-                }
-
-                Text {
-                    Layout.preferredWidth: root.sizeColumnWidth
-                    visible: root.showSizeColumn
-                    horizontalAlignment: Text.AlignRight
-                    text: qsTr("Size")
-                    font.family: Theme.fontUi
-                    font.pixelSize: 10
-                    font.weight: Theme.weightMedium
-                    color: Theme.textTertiary
-                }
-
-                Text {
-                    Layout.preferredWidth: root.kindColumnWidth
+                    id: kindHeader
                     visible: root.showKindColumn
+                    width: root.kindColumnWidth
+                    anchors.right: parent.right
+                    anchors.verticalCenter: parent.verticalCenter
                     horizontalAlignment: Text.AlignRight
+                    verticalAlignment: Text.AlignVCenter
                     text: qsTr("Kind")
                     font.family: Theme.fontUi
                     font.pixelSize: 10
                     font.weight: Theme.weightMedium
                     color: Theme.textTertiary
+                    wrapMode: Text.NoWrap
+                    elide: Text.ElideRight
+                    clip: true
+                }
+
+                Text {
+                    id: sizeHeader
+                    visible: root.showSizeColumn
+                    width: root.sizeColumnWidth
+                    anchors.right: kindHeader.visible ? kindHeader.left : parent.right
+                    anchors.rightMargin: kindHeader.visible ? parent.trailingGap : 0
+                    anchors.verticalCenter: parent.verticalCenter
+                    horizontalAlignment: Text.AlignRight
+                    verticalAlignment: Text.AlignVCenter
+                    text: qsTr("Size")
+                    font.family: Theme.fontUi
+                    font.pixelSize: 10
+                    font.weight: Theme.weightMedium
+                    color: Theme.textTertiary
+                    wrapMode: Text.NoWrap
+                    elide: Text.ElideRight
+                    clip: true
+                }
+
+                Text {
+                    id: modifiedHeader
+                    visible: root.showModifiedColumn
+                    width: root.modifiedColumnWidth
+                    anchors.right: sizeHeader.visible ? sizeHeader.left
+                                                  : (kindHeader.visible ? kindHeader.left : parent.right)
+                    anchors.rightMargin: (sizeHeader.visible || kindHeader.visible) ? parent.trailingGap : 0
+                    anchors.verticalCenter: parent.verticalCenter
+                    horizontalAlignment: Text.AlignRight
+                    verticalAlignment: Text.AlignVCenter
+                    text: qsTr("Modified")
+                    font.family: Theme.fontUi
+                    font.pixelSize: 10
+                    font.weight: Theme.weightMedium
+                    color: Theme.textTertiary
+                    wrapMode: Text.NoWrap
+                    elide: Text.ElideRight
+                    clip: true
+                }
+
+                Text {
+                    anchors.left: parent.left
+                    anchors.right: modifiedHeader.visible ? modifiedHeader.left
+                                                          : (sizeHeader.visible ? sizeHeader.left
+                                                                                : (kindHeader.visible ? kindHeader.left : parent.right))
+                    anchors.rightMargin: (modifiedHeader.visible || sizeHeader.visible || kindHeader.visible)
+                                         ? parent.trailingGap : 0
+                    anchors.verticalCenter: parent.verticalCenter
+                    verticalAlignment: Text.AlignVCenter
+                    text: qsTr("Name")
+                    font.family: Theme.fontUi
+                    font.pixelSize: 10
+                    font.weight: Theme.weightMedium
+                    color: Theme.textTertiary
+                    wrapMode: Text.NoWrap
+                    elide: Text.ElideRight
+                    clip: true
                 }
             }
 

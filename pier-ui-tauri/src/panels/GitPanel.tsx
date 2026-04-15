@@ -25,6 +25,7 @@ import {
 import type { ComponentType, CSSProperties, MouseEvent as ReactMouseEvent, ReactNode } from "react";
 import { Group as PanelGroup, Panel, Separator as PanelResizeHandle } from "react-resizable-panels";
 import { startTransition, useDeferredValue, useEffect, useMemo, useRef, useState } from "react";
+import { openUrl } from "@tauri-apps/plugin-opener";
 import * as cmd from "../lib/commands";
 import "../styles/git-panel.css";
 import type {
@@ -1040,6 +1041,18 @@ export default function GitPanel({ browserPath }: Props) {
     }
   }
 
+  function openHistoryComparison(hash: string) {
+    if (!hash) return;
+    setComparisonBaseHash(hash);
+    void cmd
+      .gitComparisonFiles(currentRepoPath, hash)
+      .then((files) => {
+        setComparisonFiles(files);
+        setHistoryCompareDialogOpen(true);
+      })
+      .catch((error) => showBanner(false, extractErrorMessage(error)));
+  }
+
   function renderHistoryInlineDetail(detail: GitCommitDetailView, row: GitGraphRowView) {
     const refs = refTokens(row.refs);
     return (
@@ -1048,14 +1061,10 @@ export default function GitPanel({ browserPath }: Props) {
           <span className="git-history-detail-inline__hash">{detail.shortHash}</span>
           <span>{detail.author}</span>
           <span>{detail.date || formatGraphDate(row.dateTimestamp)}</span>
-          {detail.stats ? <span>{detail.stats}</span> : null}
-          <div className="git-history-detail-inline__meta-spacer" />
-          <GitButton compact onClick={() => void copyText(detail.hash)}>
-            {t("Copy hash")}
-          </GitButton>
         </div>
 
         <div className="git-history-detail-inline__message">{detail.message}</div>
+        {detail.stats ? <div className="git-history-detail-inline__stats">{detail.stats}</div> : null}
 
         {refs.length ? (
           <div className="git-history-detail-inline__refs">
@@ -1066,6 +1075,46 @@ export default function GitPanel({ browserPath }: Props) {
             ))}
           </div>
         ) : null}
+
+        <div className="git-history-detail-inline__hash-card">
+          <div className="git-history-detail-inline__hash-copy">
+            <div className="git-history-detail-inline__hash-label">{t("Commit hash")}</div>
+            <div className="git-history-detail-inline__hash-value">{detail.hash}</div>
+          </div>
+          <GitButton compact onClick={() => void copyText(detail.hash)}>
+            {t("Copy hash")}
+          </GitButton>
+        </div>
+
+        <div className="git-history-detail-inline__actions">
+          <GitButton compact onClick={() => openHistoryComparison(detail.hash)}>
+            {t("Compare with local")}
+          </GitButton>
+          <GitButton compact disabled={!browserUrlForCommit(detail.hash)} onClick={() => void openCommitInBrowser(detail.hash)}>
+            {t("Open in browser")}
+          </GitButton>
+          <GitButton
+            compact
+            onClick={() => {
+              setHistoryContextCommit(row);
+              setHistoryBranchDraftName("");
+              setHistoryBranchDialogOpen(true);
+            }}
+          >
+            {t("Branch")}
+          </GitButton>
+          <GitButton
+            compact
+            onClick={() => {
+              setHistoryContextCommit(row);
+              setHistoryTagDraftName("");
+              setHistoryTagDraftMessage("");
+              setHistoryTagDialogOpen(true);
+            }}
+          >
+            {t("Tag")}
+          </GitButton>
+        </div>
 
         {detail.parentHashes.length ? (
           <div className="git-history-detail-inline__parents">
@@ -1164,9 +1213,14 @@ export default function GitPanel({ browserPath }: Props) {
     return "";
   }
 
-  function openCommitInBrowser(hash: string) {
+  async function openCommitInBrowser(hash: string) {
     const url = browserUrlForCommit(hash);
-    if (url) window.open(url, "_blank", "noopener,noreferrer");
+    if (!url) return;
+    try {
+      await openUrl(url);
+    } catch (error) {
+      showBanner(false, extractErrorMessage(error));
+    }
   }
 
   async function copyText(value: string) {
@@ -1679,7 +1733,9 @@ export default function GitPanel({ browserPath }: Props) {
                       setHistoryPathDialogOpen(true);
                     }}
                   >
+                    <Folder size={11} />
                     {historyPathSummary()}
+                    <ChevronDown size={10} />
                   </GitButton>
 
                   {historyPaths.length ? (
@@ -1857,9 +1913,12 @@ export default function GitPanel({ browserPath }: Props) {
               <section className="git-hero git-hero--warning">
                 <GitSectionHeader
                   actions={
-                    <GitPill tone={conflicts.length ? "warning" : "success"}>
-                      {conflicts.length ? `${conflicts.length} ${t("open")}` : t("Clean")}
-                    </GitPill>
+                    <>
+                      <GitPill tone={conflicts.length ? "warning" : "success"}>
+                        {conflicts.length ? `${conflicts.length} ${t("open")}` : t("Clean")}
+                      </GitPill>
+                      <GitIconButton aria-label={t("Reload conflicts")} icon={RefreshCw} onClick={() => void loadConflicts()} />
+                    </>
                   }
                   subtitle={
                     conflicts.length
@@ -2195,7 +2254,7 @@ export default function GitPanel({ browserPath }: Props) {
               disabled={!browserUrlForCommit(historyContextCommit.hash)}
               onClick={() => {
                 setPopover(null);
-                openCommitInBrowser(historyContextCommit.hash);
+                void openCommitInBrowser(historyContextCommit.hash);
               }}
             >
               {t("Open in browser")}
@@ -2204,6 +2263,7 @@ export default function GitPanel({ browserPath }: Props) {
             <GitMenuItem
               onClick={() => {
                 setPopover(null);
+                setHistoryBranchDraftName("");
                 setHistoryBranchDialogOpen(true);
               }}
             >
@@ -2212,6 +2272,8 @@ export default function GitPanel({ browserPath }: Props) {
             <GitMenuItem
               onClick={() => {
                 setPopover(null);
+                setHistoryTagDraftName("");
+                setHistoryTagDraftMessage("");
                 setHistoryTagDialogOpen(true);
               }}
             >

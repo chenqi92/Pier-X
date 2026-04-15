@@ -15,7 +15,7 @@ export type I18nValue = {
 
 export const I18nContext = createContext<I18nValue>({
   t: (key) => key,
-  locale: "en",
+  locale: "zh",
 });
 
 function interpolate(template: string, vars?: TranslationVars) {

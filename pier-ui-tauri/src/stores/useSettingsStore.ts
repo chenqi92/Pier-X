@@ -49,7 +49,7 @@ export const MONO_FONT_OPTIONS = [
 ];
 
 export const useSettingsStore = create<SettingsState>((set) => ({
-  locale: "en",
+  locale: "zh",
   performanceOverlay: false,
   uiFontFamily: "Inter",
   uiScale: 1.0,

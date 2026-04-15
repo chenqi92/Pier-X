@@ -1244,7 +1244,7 @@
   display: flex;
   align-items: stretch;
   width: 100%;
-  min-height: 24px;
+  min-height: 22px;
   padding: 0 8px 0 4px;
   border: none;
   border-radius: 0;
@@ -1263,8 +1263,8 @@
 }
 
 .git-graph-lane {
-  width: 78px;
-  height: 24px;
+  width: 74px;
+  height: 22px;
   flex-shrink: 0;
 }
 
@@ -1272,16 +1272,14 @@
   display: flex;
   flex: 1;
   min-width: 0;
-  flex-direction: column;
-  justify-content: center;
-  gap: 2px;
+  align-items: center;
 }
 
-.git-history-row__headline,
-.git-history-row__meta {
+.git-history-row__line {
   display: flex;
   align-items: center;
-  gap: 6px;
+  width: 100%;
+  gap: 5px;
   min-width: 0;
 }
 
@@ -1292,31 +1290,38 @@
   text-overflow: ellipsis;
   white-space: nowrap;
   color: var(--text-primary);
-  font-size: 11px;
+  font-size: 10px;
 }
 
 .git-history-row__hash {
   color: var(--accent-hover);
   font-size: 10px;
+  flex-shrink: 0;
+  min-width: 58px;
+  font-family: var(--font-mono);
 }
 
+.git-history-row__author,
 .git-history-row__date,
 .git-history-row__more {
   color: var(--text-tertiary);
-  font-size: 10px;
+  font-size: 9px;
   flex-shrink: 0;
 }
 
-.git-history-row__meta {
-  color: var(--text-tertiary);
-  font-size: 10px;
+.git-history-row__author {
+  max-width: 104px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  text-align: right;
 }
 
 .git-history-detail-inline {
   display: flex;
   flex-direction: column;
   gap: 6px;
-  padding: 6px 12px 10px 82px;
+  padding: 6px 12px 10px 78px;
   background: color-mix(in srgb, var(--accent) 4%, transparent);
   border-top: 1px solid color-mix(in srgb, var(--accent) 18%, var(--border-subtle));
 }
@@ -1423,10 +1428,11 @@
 .git-history-row__refs {
   display: flex;
   align-items: center;
-  gap: 4px;
+  gap: 3px;
   min-width: 0;
   flex-wrap: nowrap;
   overflow: hidden;
+  flex-shrink: 1;
 }
 
 .git-ref-badge {
@@ -1438,7 +1444,7 @@
   background: rgba(255, 255, 255, 0.05);
   border: 1px solid var(--border-subtle);
   color: var(--text-secondary);
-  font-size: 9px;
+  font-size: 8px;
   font-family: var(--font-mono);
 }
 

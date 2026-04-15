@@ -2040,13 +2040,8 @@ export default function GitPanel({ browserPath }: Props) {
                           >
                             <GitGraphLane row={row} />
                             <div className="git-history-row__content">
-                              <div className="git-history-row__headline">
+                              <div className="git-history-row__line">
                                 {historyShowHash ? <span className="git-history-row__hash">{row.shortHash}</span> : null}
-                                <span className="git-history-row__message">{row.message}</span>
-                                {historyShowDate ? <span className="git-history-row__date">{formatGraphDate(row.dateTimestamp)}</span> : null}
-                              </div>
-                              <div className="git-history-row__meta">
-                                {historyShowAuthor ? <span>{row.author}</span> : null}
                                 <div className="git-history-row__refs">
                                   {refTokens(row.refs)
                                     .slice(0, 3)
@@ -2059,6 +2054,9 @@ export default function GitPanel({ browserPath }: Props) {
                                 {refTokens(row.refs).length > 3 ? (
                                   <span className="git-history-row__more">{`+${refTokens(row.refs).length - 3}`}</span>
                                 ) : null}
+                                <span className="git-history-row__message">{row.message}</span>
+                                {historyShowAuthor ? <span className="git-history-row__author">{row.author}</span> : null}
+                                {historyShowDate ? <span className="git-history-row__date">{formatGraphDate(row.dateTimestamp)}</span> : null}
                               </div>
                             </div>
                           </button>

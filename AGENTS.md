@@ -1,41 +1,25 @@
 # Pier-X Agent Rules
 
-This repository uses a strict UI design system.
+Pier-X now ships on a single active desktop stack:
 
-## Mandatory skill
+- shell: `pier-ui-tauri/` (`Tauri 2 + React + TypeScript`)
+- runtime glue: `pier-ui-tauri/src-tauri/`
+- backend: `pier-core/`
 
-- For any QML or UI-related work, always apply:
-  `/Users/chenqi/Projects/workspace-freq/Pier-X/.agents/skills/pier-design-system/SKILL.md`
+## Build rules
 
-## Foundation controls
+- Do not reintroduce `Qt`, `QML`, `CMake`, `Corrosion`, or C-ABI bridge files into the active build path.
+- Keep the repo-root entrypoints aligned with the active shell:
+  - `run.ps1` / `run.sh`
+  - `build.ps1` / `build.sh`
+- Prefer direct Rust crate integration from `pier-ui-tauri/src-tauri` to `pier-core`.
 
-- Do not introduce raw `Popup` in feature pages. Use:
-  - `ModalDialogShell`
-  - `PopoverPanel`
-- Do not introduce raw `TextField` in feature pages. Use:
-  - `PierTextField`
-  - `PierTextArea`
-  - `PierSearchField`
-- Do not introduce raw `TextArea` in feature pages. Use `PierTextArea`.
-- Do not introduce raw `TextInput` in feature pages. Use `PierTextField`, `PierTextArea`, or `PierSearchField`.
-- Do not introduce raw `ScrollView` in feature pages. Use `PierScrollView`.
-- Do not introduce raw `ScrollBar` in feature pages. Use `PierScrollBar`.
-- Prefer `PierScrollView` over raw `ScrollView` in feature pages.
-- Do not duplicate page-local menu row visuals. Use `PierMenuItem`.
-- Do not duplicate slider visuals. Use `PierSlider`.
+## Frontend rules
 
-## Exceptions
-
-- Native application menu bar entries in `Main.qml` may use `MenuBar` and `MenuItem`.
-- `Popup` is allowed only inside foundation wrappers such as:
-  - `PopoverPanel.qml`
-  - `PierComboBox.qml`
-  - `PierTextArea.qml`
-  - `PierTextField.qml`
-  - `PierSearchField.qml`
-  - `PierScrollView.qml`
-  - `PierScrollBar.qml`
+- Keep shared design tokens in `pier-ui-tauri/src/styles/tokens.css`.
+- Put reusable shell primitives in `pier-ui-tauri/src/components/` or `pier-ui-tauri/src/shell/` before adding panel-local one-off styling.
+- Shared shell layout and chrome changes belong in `pier-ui-tauri/src/styles/shell.css` or another shared stylesheet, not scattered inline across panels.
 
 ## Review rule
 
-- Any UI PR should be rejected if it adds local control styling that belongs in `qml/components/`.
+- Any UI PR should be rejected if it duplicates shared shell styling or revives archived Qt-era build/assets/docs without a clear migration reason.

@@ -193,8 +193,8 @@ impl ConnectionStore {
     }
 
     /// Remove the connection at `index`. Out-of-range indices
-    /// are silently ignored so the C ABI doesn't have to deal
-    /// with errors for a benign no-op.
+    /// are silently ignored so callers can treat removal as an
+    /// idempotent no-op.
     pub fn remove(&mut self, index: usize) -> Option<SshConfig> {
         if index < self.connections.len() {
             Some(self.connections.remove(index))

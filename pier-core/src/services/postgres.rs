@@ -6,7 +6,7 @@
 //! client handle holding a single live connection, sync/async
 //! method pairs through the shared runtime, and a typed
 //! [`QueryResult`] matching the MySQL module's shape byte-for-
-//! byte so the QML result grid can reuse the same model.
+//! byte so the desktop result grid can reuse the same model.
 //!
 //! ## Connection model
 //!
@@ -21,8 +21,8 @@
 //! ## Result shape
 //!
 //! Same [`QueryResult`] / [`ResultRow`] / [`ColumnInfo`] types
-//! as MySQL — the FFI and QML layers don't need to know which
-//! backend produced the grid.
+//! as MySQL so higher app layers don't need backend-specific
+//! result models.
 //!
 //! ## Not yet
 //!
@@ -77,8 +77,8 @@ pub struct PostgresConfig {
 }
 
 /// Column metadata from `information_schema.columns`.
-/// Same field names as [`super::mysql::ColumnInfo`] so the
-/// QML side can bind the same roles.
+/// Same field names as [`super::mysql::ColumnInfo`] so shared
+/// UI/runtime code can bind the same roles.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ColumnInfo {
     /// Column name.

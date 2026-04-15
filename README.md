@@ -1,7 +1,7 @@
 # Pier-X
 
-> **Cross-platform terminal management. Rebuilding the desktop shell on Tauri + Rust core.**
-> 跨平台终端管理工具，当前分支正在把桌面壳重建为 Tauri + Rust core。
+> **Cross-platform terminal management on Tauri + Rust core.**
+> 跨平台终端管理工具，当前桌面壳基于 Tauri，后端核心基于 Rust。
 
 The cross-platform successor to [Pier](https://github.com/chenqi92/Pier) (macOS-only). Same name, same purpose, different foundation — designed to run on **macOS** and **Windows** with the same engineered IDE feel.
 
@@ -11,7 +11,7 @@ The cross-platform successor to [Pier](https://github.com/chenqi92/Pier) (macOS-
 
 The Rust backend lives in `pier-core/`; the desktop shell now lives in `pier-ui-tauri/`. The old Qt shell has been retired from the active build path.
 
-See [docs/ROADMAP.md](./docs/ROADMAP.md) for the tag-by-tag release plan, and [docs/PARITY.md](./docs/PARITY.md) for the ground-level porting plan that tracks every feature in the macOS-only upstream Pier and maps it to work in Pier-X.
+See [docs/ROADMAP.md](./docs/ROADMAP.md) for the active delivery plan, and [docs/TAURI-RESET.md](./docs/TAURI-RESET.md) for the shell reset baseline.
 
 - ✅ Rust backend foundation in `pier-core/`
 - ✅ New Tauri desktop shell scaffold in `pier-ui-tauri/`
@@ -33,12 +33,13 @@ See [docs/ROADMAP.md](./docs/ROADMAP.md) for the tag-by-tag release plan, and [d
 - ✅ Tauri commands wired to `pier-core` runtime, directory listing, terminal, and Git
 - ✅ Windows debug bundle built successfully from the new shell
 - ✅ Tauri shell is the only supported desktop shell in repo entrypoints
+- ✅ Qt/CMake/Corrosion legacy build chain removed from the active repo
 - ⬜ Deepen data panels and add plugin host into the new shell
 - ✅ CI on macOS + Windows (Tauri shell) and macOS + Windows + Linux (Rust core)
 - ✅ Tag-triggered release workflow publishing Tauri bundles to GitHub Releases
 - ⬜ Terminal / SSH / SFTP / RDP / VNC — incremental work, see ROADMAP
 
-See [docs/TAURI-RESET.md](./docs/TAURI-RESET.md) for the migration baseline. Some deeper planning docs still mention Qt for historical context, but the repo scripts and automation now target Tauri.
+See [docs/TAURI-RESET.md](./docs/TAURI-RESET.md) for the migration baseline. The repo now keeps only the active Tauri build path in tracked build and packaging files.
 
 ---
 
@@ -121,33 +122,15 @@ The scripts honour these environment variables:
 
 ```
 Pier-X/
-├── VERSION                  # Single source of version truth
 ├── pier-core/               # Rust core engine
 ├── pier-ui-tauri/           # Active desktop shell rewrite
 │   ├── src/                 # React UI
 │   └── src-tauri/           # Tauri runtime + Rust commands
 ├── docs/
-│   ├── TAURI-RESET.md
-│   └── TECH-STACK.md
-└── .agents/skills/
-    └── pier-design-system/  # Design standard
-        ├── SKILL.md
-        └── extracted/       # Reference DESIGN.md files
+│   ├── ROADMAP.md
+│   └── TAURI-RESET.md
+└── .agents/skills/          # Archived design references and repo automation skills
 ```
-
----
-
-## Design system
-
-Pier-X follows a strict design standard documented as an agent skill. **Five non-negotiable principles**:
-
-1. Darkness is the medium, not a theme
-2. Single chromatic accent (`#3574F0` IntelliJ blue)
-3. Borders are always semi-transparent, never solid
-4. Inter for UI, JetBrains Mono for code
-5. Density over spectacle
-
-See [`.agents/skills/pier-design-system/SKILL.md`](./.agents/skills/pier-design-system/SKILL.md) for the full token reference and component recipes.
 
 ---
 

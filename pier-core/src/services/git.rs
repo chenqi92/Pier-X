@@ -15,8 +15,9 @@
 //!
 //! ## Thread safety
 //!
-//! `GitClient` is `Send + Sync` — the Qt bridge dispatches
-//! every FFI call on a worker thread, same as MySQL/Redis.
+//! `GitClient` is `Send + Sync`, so app runtimes can dispatch
+//! operations on background workers the same way they do for
+//! MySQL / Redis / Docker.
 
 use std::path::{Path, PathBuf};
 use std::process::Command;
@@ -216,8 +217,7 @@ impl GitClient {
         let p = Path::new(path);
         if !p.exists() {
             return Err(GitError::InvalidPath(format!(
-                "path does not exist: {}",
-                path
+                "path does not exist: {path}"
             )));
         }
 
@@ -227,7 +227,7 @@ impl GitClient {
         configure_background_command(&mut command);
         let output = command
             .output()
-            .map_err(|e| GitError::Command(format!("failed to run git: {}", e)))?;
+            .map_err(|e| GitError::Command(format!("failed to run git: {e}")))?;
 
         if !output.status.success() {
             return Err(GitError::NotARepo(path.to_string()));
@@ -332,9 +332,9 @@ impl GitClient {
                 std::fs::read_to_string(&full_path)
                     .map(|content| {
                         // Format as a pseudo-diff
-                        let mut out = format!("new file: {}\n\n", path);
+                        let mut out = format!("new file: {path}\n\n");
                         for (i, line) in content.lines().enumerate() {
-                            out.push_str(&format!("+{}\n", line));
+                            out.push_str(&format!("+{line}\n"));
                             if i > 2000 {
                                 out.push_str("\n... (truncated)\n");
                                 break;
@@ -342,7 +342,7 @@ impl GitClient {
                         }
                         out
                     })
-                    .map_err(|e| GitError::Command(format!("cannot read {}: {}", path, e)))
+                    .map_err(|e| GitError::Command(format!("cannot read {path}: {e}")))
             })
     }
 
@@ -358,11 +358,7 @@ impl GitClient {
 
         // Tracking branch
         let tracking = self
-            .git(&[
-                "rev-parse",
-                "--abbrev-ref",
-                &format!("{}@{{upstream}}", name),
-            ])
+            .git(&["rev-parse", "--abbrev-ref", &format!("{name}@{{upstream}}")])
             .map(|s| s.trim().to_string())
             .unwrap_or_default();
 
@@ -372,7 +368,7 @@ impl GitClient {
                 "rev-list",
                 "--left-right",
                 "--count",
-                &format!("{}...{}", name, tracking),
+                &format!("{name}...{tracking}"),
             ])
             .map(|s| {
                 let parts: Vec<&str> = s.trim().split('\t').collect();
@@ -475,8 +471,8 @@ impl GitClient {
         let sep = "\x1f";
         let output = self.git(&[
             "log",
-            &format!("-{}", limit),
-            &format!("--format=%H{0}%h{0}%s{0}%an{0}%ct{0}%cr{0}%D", sep),
+            &format!("-{limit}"),
+            &format!("--format=%H{sep}%h{sep}%s{sep}%an{sep}%ct{sep}%cr{sep}%D"),
             "--topo-order",
         ])?;
 
@@ -578,7 +574,7 @@ impl GitClient {
         let mut line_no = 0u32;
 
         for raw in output.lines() {
-            if raw.starts_with('\t') {
+            if let Some(content) = raw.strip_prefix('\t') {
                 // Content line
                 lines.push(BlameLine {
                     line_number: line_no,
@@ -590,7 +586,7 @@ impl GitClient {
                     },
                     author: current_author.clone(),
                     timestamp: current_time,
-                    content: raw[1..].to_string(),
+                    content: content.to_string(),
                 });
             } else if raw.len() >= 40 && raw.as_bytes()[40] == b' ' {
                 // Hash header: <40-char hash> <orig-line> <final-line> [count]

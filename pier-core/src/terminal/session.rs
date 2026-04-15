@@ -8,10 +8,10 @@
 //! other exists, and neither does its own I/O loop — they are leaves
 //! that can be unit-tested without any threading.
 //!
-//! The UI, however, needs something much friendlier: a single handle
-//! it can `write` to, `snapshot` from, `resize`, and be told when
-//! something changed. It absolutely must not block the UI thread on
-//! a `read` call that's waiting for shell output.
+//! The shell, however, needs something much friendlier: a single
+//! handle it can `write` to, `snapshot` from, `resize`, and be told
+//! when something changed. It absolutely must not block the main
+//! thread on a `read` call that's waiting for shell output.
 //!
 //! [`PierTerminal`] fills that gap. Internally it:
 //!
@@ -24,14 +24,14 @@
 //!  * invokes a caller-provided `notify` callback whenever something
 //!    interesting happened (new bytes, child exit). The callback is
 //!    called WITHOUT holding the internal mutex — its only job is to
-//!    wake the UI thread, which then calls [`PierTerminal::snapshot`]
+//!    wake the shell, which then calls [`PierTerminal::snapshot`]
 //!    on its own terms.
 //!
 //! ## Thread model
 //!
 //! ```text
-//!   UI thread                       reader thread
-//!   ─────────                       ─────────────
+//!   shell/main thread               reader thread
+//!   ─────────────────               ─────────────
 //!   write(bytes) ──┐                 loop {
 //!                  ├─► lock Inner       lock Inner
 //!                  │                    read from pty
@@ -46,7 +46,7 @@
 //! ```
 //!
 //! The notify callback is called *outside* the lock so that, if the
-//! callback takes its own lock on the C++ side and then calls back
+//! callback takes its own lock in the shell layer and then calls back
 //! into [`PierTerminal::snapshot`] — a common pattern for a
 //! "data ready" wakeup — there is no deadlock.
 //!
@@ -89,18 +89,17 @@ pub enum NotifyEvent {
 /// Function-pointer signature for the notify callback.
 ///
 /// Called from the reader thread, *without* the internal mutex held.
-/// Implementations must be quick and thread-safe — the canonical body
-/// on the C++ side is a `QMetaObject::invokeMethod(Qt::QueuedConnection)`
-/// that wakes a slot on the main thread. Do NOT call back into
-/// [`PierTerminal::snapshot`] synchronously from inside this callback;
-/// bounce to another thread first.
+/// Implementations must be quick and thread-safe. A typical body
+/// schedules a wakeup onto the app's main thread or event loop. Do
+/// NOT call back into [`PierTerminal::snapshot`] synchronously from
+/// inside this callback; bounce to another thread first.
 ///
 /// `user_data` is whatever the caller passed to [`PierTerminal::new`]
 /// and is opaque to this crate.
 pub type NotifyFn = extern "C" fn(user_data: *mut std::ffi::c_void, event: u32);
 
 /// Inner state protected by a single mutex. Held briefly by both
-/// the reader thread and the UI thread.
+/// the reader thread and the shell/main thread.
 struct Inner {
     pty: Box<dyn Pty>,
     emu: VtEmulator,
@@ -168,7 +167,7 @@ impl PierTerminal {
         {
             let pty: Box<dyn Pty> =
                 Box::new(super::pty::WindowsPty::spawn_shell(cols, rows, shell)?);
-            return Self::with_pty(pty, cols, rows, notify, user_data);
+            Self::with_pty(pty, cols, rows, notify, user_data)
         }
         #[cfg(not(any(unix, windows)))]
         {

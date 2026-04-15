@@ -50,10 +50,7 @@ impl SqliteClient {
         }
         let p = PathBuf::from(path);
         if !p.exists() {
-            return Err(SqliteError::InvalidPath(format!(
-                "file not found: {}",
-                path
-            )));
+            return Err(SqliteError::InvalidPath(format!("file not found: {path}")));
         }
         // Verify it's a valid sqlite database
         let mut command = Command::new("sqlite3");
@@ -62,14 +59,11 @@ impl SqliteClient {
         configure_background_command(&mut command);
         let output = command
             .output()
-            .map_err(|e| SqliteError::Command(format!("sqlite3 not found: {}", e)))?;
+            .map_err(|e| SqliteError::Command(format!("sqlite3 not found: {e}")))?;
 
         if !output.status.success() {
             let err = String::from_utf8_lossy(&output.stderr);
-            return Err(SqliteError::Command(format!(
-                "not a valid database: {}",
-                err
-            )));
+            return Err(SqliteError::Command(format!("not a valid database: {err}")));
         }
         Ok(Self { db_path: p })
     }
@@ -163,7 +157,7 @@ impl SqliteClient {
         configure_background_command(&mut cmd);
         let output = cmd
             .output()
-            .map_err(|e| SqliteError::Command(format!("sqlite3: {}", e)))?;
+            .map_err(|e| SqliteError::Command(format!("sqlite3: {e}")))?;
 
         if !output.status.success() {
             let stderr = String::from_utf8_lossy(&output.stderr);

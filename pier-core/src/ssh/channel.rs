@@ -15,10 +15,10 @@
 //! backend has to own its own task and expose sync-looking
 //! methods that communicate with the task via queues. That is
 //! exactly what this file does. The result is that *every line
-//! of code above the `Pty` trait* (session layer, C ABI, C++
-//! bridge, QML grid, keyboard routing) is agnostic to whether
-//! bytes are coming from a local `forkpty` child or from an
-//! remote shell over a russh channel.
+//! of code above the `Pty` trait* (session layer, terminal
+//! runtime, shell surface, keyboard routing) is agnostic to
+//! whether bytes are coming from a local `forkpty` child or
+//! from a remote shell over a russh channel.
 //!
 //! ## Layout
 //!

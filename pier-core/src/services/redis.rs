@@ -7,15 +7,15 @@
 //!    port (typically `10000 + 6379 = 16379`).
 //! 2. User clicks again → Pier-X opens a new `redis` tab
 //!    pointing at `localhost:<tunnel_port>`.
-//! 3. The QML view calls [`RedisClient::connect`] via the FFI
-//!    surface in [`crate::ffi::redis`].
+//! 3. The Tauri runtime calls [`RedisClient::connect`] and
+//!    surfaces the result back to the shell.
 //!
 //! ## Connection management
 //!
 //! Every [`RedisClient`] wraps a single
 //! [`redis::aio::ConnectionManager`]. The manager transparently
 //! reconnects when the underlying TCP socket dies (e.g. the
-//! tunnel flaps), so the UI doesn't need to track connection
+//! tunnel flaps), so the shell doesn't need to track connection
 //! state — it either gets a result or an error.
 //!
 //! ## Scanning, not KEYS
@@ -36,7 +36,7 @@
 //! * TLS. Same rationale — the SSH tunnel already encrypts.
 //! * Pub/sub and streams. These need a long-lived read side
 //!   and a dedicated tokio task, which doesn't fit the current
-//!   request-reply FFI shape.
+//!   request-reply command shape.
 
 use std::collections::BTreeMap;
 use std::sync::Arc;
@@ -71,9 +71,9 @@ pub enum RedisError {
 pub type Result<T, E = RedisError> = std::result::Result<T, E>;
 
 /// Connection config for a Redis endpoint. Kept as a struct
-/// (rather than a bare `host`/`port` pair) so M5b can add
-/// `username` / `password` / `db_index` without breaking the
-/// FFI shape.
+/// (rather than a bare `host`/`port` pair) so future work can
+/// add `username` / `password` / `db_index` without reshaping
+/// every caller.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct RedisConfig {
     /// Hostname or IP. Usually `"127.0.0.1"` when reached via
@@ -100,8 +100,8 @@ impl RedisConfig {
     }
 }
 
-/// High-level key-type tag. Stored as a string so the JSON FFI
-/// surface doesn't have to version a discriminant.
+/// High-level key-type tag. Stored as a string so serialized
+/// command payloads don't need a versioned discriminant.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum KeyKind {
     /// Unknown or missing key — the server returned "none".

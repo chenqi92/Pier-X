@@ -23,17 +23,17 @@
 //! This module is the one place that shape lives. `session.rs`
 //! exposes [`super::SshSession::spawn_exec_stream`] which
 //! opens a channel, sends `exec`, and hands ownership off to
-//! [`ExecStream`]. From there the UI side polls
+//! [`ExecStream`]. From there the shell polls
 //! [`ExecStream::drain`] whenever it's ready to show new
-//! events — typically from a Qt `QTimer` tick.
+//! events.
 //!
 //! ## Why std mpsc, not tokio mpsc
 //!
-//! The consumer lives on the **C++ main thread**, which never
-//! enters the tokio runtime. `std::sync::mpsc::Receiver::try_recv`
-//! is exactly what we want: non-blocking, thread-safe, zero
-//! glue code on the UI side. The producer runs inside a
-//! `tokio::task` on the shared runtime and just calls `.send`.
+//! The consumer lives outside the tokio runtime, so
+//! `std::sync::mpsc::Receiver::try_recv` is exactly what we
+//! want: non-blocking, thread-safe, zero async glue in the
+//! shell command layer. The producer runs inside a `tokio::task`
+//! on the shared runtime and just calls `.send`.
 //!
 //! ## Line framing
 //!
@@ -46,7 +46,7 @@
 //!
 //! ## Backpressure
 //!
-//! The UI pulls lazily via `drain`, so a pathological remote
+//! The shell pulls lazily via `drain`, so a pathological remote
 //! can buffer unbounded bytes. Log viewer caps what it
 //! actually retains in the model (see `PierLogStream`), but
 //! the channel itself is unbounded here because

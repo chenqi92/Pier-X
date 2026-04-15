@@ -28,11 +28,11 @@
 //!      that clones cheaply.
 //!   2. Both `async` and `_blocking` method pairs. The blocking
 //!      variants `runtime::shared().block_on(...)` the async
-//!      one so the UI can call directly from the Qt main thread
-//!      without a threadpool of its own.
+//!      one so desktop runtimes can call directly from their
+//!      command layer without owning a second async runtime.
 //!
-//! The handle types are always Send + Sync so the UI layer can
-//! stash them inside QObjects that cross thread boundaries.
+//! The handle types are always `Send + Sync` so the shell can
+//! move them across worker boundaries safely.
 
 pub mod docker;
 pub mod git;

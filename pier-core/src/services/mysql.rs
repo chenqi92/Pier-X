@@ -405,7 +405,7 @@ fn value_to_display(v: &Value) -> String {
         }
         Value::Time(neg, d, h, mi, s, us) => {
             let sign = if *neg { "-" } else { "" };
-            format!("{sign}{}:{h:02}:{mi:02}:{s:02}.{us:06}", d)
+            format!("{sign}{d}:{h:02}:{mi:02}:{s:02}.{us:06}")
         }
     };
     truncate_utf8(text, MAX_CELL_BYTES)

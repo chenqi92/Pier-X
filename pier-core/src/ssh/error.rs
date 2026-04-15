@@ -2,8 +2,8 @@
 //!
 //! Wraps `russh::Error`, `std::io::Error`, and a handful of
 //! pier-core-specific conditions (auth rejected, host key
-//! mismatch, channel closed) into one enum that the C ABI
-//! layer can flatten into integer error codes later.
+//! mismatch, channel closed) into one enum the app runtime can
+//! map into user-facing errors.
 
 use std::io;
 

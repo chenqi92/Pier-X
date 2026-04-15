@@ -153,10 +153,9 @@ mod tests {
 
     #[test]
     fn agent_variant_serializes_as_kind_agent() {
-        // The C++ connection store writes the on-disk JSON by
-        // hand, so we need to pin Rust's serde output for the
-        // Agent variant. Any refactor that breaks this string
-        // will silently break the C++ round-trip.
+        // Keep serde output pinned for the Agent variant so any
+        // persisted configs or fixtures that rely on this exact
+        // shape continue to round-trip cleanly.
         let mut c = SshConfig::new("test", "example.com", "root");
         c.auth = AuthMethod::Agent;
         let json = serde_json::to_value(&c).unwrap();

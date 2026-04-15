@@ -25,11 +25,10 @@
 //! M2 designed [`crate::terminal::Pty`] as a send-safe, sync,
 //! non-blocking trait. M2a shipped a `UnixPty` backend. M3a ships
 //! an `SshChannelPty` backend. Everything above the trait —
-//! [`crate::terminal::PierTerminal`], the C ABI in
-//! [`crate::ffi::terminal`], `PierTerminalSession` C++ QObject,
-//! `PierTerminalGrid`, `TerminalView.qml` — was written to target
-//! the trait, NOT any specific backend. Swapping from a local
-//! shell to a remote shell is a one-line change:
+//! [`crate::terminal::PierTerminal`] and the Tauri command
+//! layer that drives it — targets the trait, NOT any specific
+//! backend. Swapping from a local shell to a remote shell is a
+//! one-line change:
 //!
 //! ```ignore
 //! // Local (what M2 ships):
@@ -50,7 +49,6 @@
 
 pub mod channel;
 pub mod config;
-pub mod control_master;
 pub mod error;
 pub mod exec_stream;
 pub mod known_hosts;

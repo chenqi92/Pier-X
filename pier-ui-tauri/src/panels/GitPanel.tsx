@@ -1920,7 +1920,7 @@ export default function GitPanel({ browserPath }: Props) {
             <div className="git-history">
               <section className="git-history-toolbar">
                 <div className="git-history__filters">
-                  <label className="git-search">
+                  <label className="git-search git-history__search">
                     <Search size={12} />
                     <input
                       onChange={(event) => setHistorySearchText(event.currentTarget.value)}
@@ -1931,7 +1931,7 @@ export default function GitPanel({ browserPath }: Props) {
                   </label>
 
                   <select
-                    className="git-select"
+                    className="git-select git-history__select git-history__select--branch"
                     onChange={(event) => setHistoryBranchFilter(event.currentTarget.value)}
                     value={historyBranchFilter}
                   >
@@ -1944,7 +1944,7 @@ export default function GitPanel({ browserPath }: Props) {
                   </select>
 
                   <select
-                    className="git-select"
+                    className="git-select git-history__select git-history__select--author"
                     onChange={(event) => setHistoryAuthorFilter(event.currentTarget.value)}
                     value={historyAuthorFilter}
                   >
@@ -1957,7 +1957,7 @@ export default function GitPanel({ browserPath }: Props) {
                   </select>
 
                   <select
-                    className="git-select"
+                    className="git-select git-history__select git-history__select--date"
                     onChange={(event) => setHistoryDateFilter(event.currentTarget.value)}
                     value={historyDateFilter}
                   >
@@ -1968,9 +1968,9 @@ export default function GitPanel({ browserPath }: Props) {
                     <option value="365d">{t("Last year")}</option>
                   </select>
 
-                  <GitButton
-                    compact
-                    className="git-history__path-summary"
+                    <GitButton
+                      compact
+                    className="git-history__path-summary git-history__toolbar-button"
                     onClick={() => {
                       setHistoryPathSelection(historyPaths);
                       setHistoryPathSearchText("");
@@ -1984,15 +1984,16 @@ export default function GitPanel({ browserPath }: Props) {
                   </GitButton>
 
                   {historyPaths.length ? (
-                    <GitIconButton aria-label={t("Clear path filter")} icon={X} onClick={() => setHistoryPaths([])} />
+                    <GitIconButton className="git-history__toolbar-icon" aria-label={t("Clear path filter")} icon={X} onClick={() => setHistoryPaths([])} />
                   ) : null}
                   <GitIconButton
+                    className="git-history__toolbar-icon"
                     active={popover?.kind === "historyOptions"}
                     aria-label={t("History options")}
                     icon={Settings2}
                     onClick={(event) => openPopoverFromElement("historyOptions", event.currentTarget, 228)}
                   />
-                  <GitIconButton aria-label={t("Reload graph")} icon={RefreshCw} onClick={() => void loadGraphRows()} />
+                  <GitIconButton className="git-history__toolbar-icon" aria-label={t("Reload graph")} icon={RefreshCw} onClick={() => void loadGraphRows()} />
                 </div>
               </section>
 

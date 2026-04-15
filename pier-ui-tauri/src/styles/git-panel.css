@@ -51,7 +51,7 @@
   gap: 0;
   padding: 0;
   border-bottom: 1px solid var(--border-subtle);
-  background: rgba(255, 255, 255, 0.015);
+  background: rgba(255, 255, 255, 0.012);
 }
 
 .git-panel__repo-row,
@@ -64,15 +64,16 @@
 }
 
 .git-panel__repo-row {
-  min-height: 30px;
+  min-height: 28px;
   border-bottom: 1px solid var(--border-subtle);
 }
 
 .git-panel__branch-row {
-  min-height: 28px;
+  min-height: 26px;
   overflow-x: auto;
   overflow-y: hidden;
   white-space: nowrap;
+  background: rgba(255, 255, 255, 0.015);
 }
 
 .git-panel__branch-row::-webkit-scrollbar {
@@ -182,7 +183,7 @@
 
 .git-panel__repo-label {
   color: var(--text-primary);
-  font-size: 12px;
+  font-size: 11px;
   font-weight: var(--weight-medium);
 }
 
@@ -197,7 +198,7 @@
   text-overflow: ellipsis;
   white-space: nowrap;
   color: var(--text-tertiary);
-  font-size: 11px;
+  font-size: 10px;
   font-family: var(--font-mono);
 }
 
@@ -208,7 +209,7 @@
   gap: 3px;
   flex-shrink: 0;
   color: var(--text-secondary);
-  font-size: 10px;
+  font-size: 9px;
   font-family: var(--font-mono);
 }
 
@@ -254,13 +255,13 @@
 .git-panel__toolbar-actions {
   display: flex;
   align-items: center;
-  gap: var(--sp-1);
+  gap: 0;
   flex-shrink: 0;
 }
 
 .git-panel__toolbar-actions .git-icon-button {
-  width: 18px;
-  height: 18px;
+  width: 20px;
+  height: 20px;
   padding: 0;
   border: none;
   border-radius: 0;
@@ -278,8 +279,8 @@
 }
 
 .git-panel__repo-row .git-icon-button {
-  width: 18px;
-  height: 18px;
+  width: 20px;
+  height: 20px;
   padding: 0;
   border: none;
   border-radius: 0;
@@ -303,22 +304,22 @@
   display: flex;
   align-items: center;
   gap: 2px;
-  padding: 4px 8px;
+  padding: 3px 8px;
   border-bottom: 1px solid var(--border-subtle);
-  background: rgba(255, 255, 255, 0.018);
+  background: rgba(255, 255, 255, 0.016);
 }
 
 .git-tab {
   display: inline-flex;
   align-items: center;
   gap: 4px;
-  height: 28px;
-  padding: 0 8px;
+  height: 26px;
+  padding: 0 9px;
   border-radius: var(--radius-sm);
   background: transparent;
   color: var(--text-secondary);
   cursor: pointer;
-  font-size: 11px;
+  font-size: 10px;
   font-weight: var(--weight-medium);
 }
 
@@ -329,14 +330,14 @@
 }
 
 .git-tab__badge {
-  min-width: 15px;
-  height: 15px;
+  min-width: 14px;
+  height: 14px;
   padding: 0 4px;
   border-radius: var(--radius-pill);
   background: rgba(255, 255, 255, 0.06);
   color: var(--text-tertiary);
   font-size: 9px;
-  line-height: 15px;
+  line-height: 14px;
   text-align: center;
   font-family: var(--font-mono);
 }
@@ -651,11 +652,11 @@
 .git-input,
 .git-select {
   min-width: 0;
-  height: 26px;
-  padding: 0 8px;
+  height: 24px;
+  padding: 0 7px;
   outline: none;
   font: inherit;
-  font-size: 11px;
+  font-size: 10px;
 }
 
 .git-select {
@@ -694,8 +695,8 @@
   display: flex;
   align-items: center;
   gap: var(--sp-2);
-  min-height: 26px;
-  padding: 0 8px;
+  min-height: 24px;
+  padding: 0 7px;
 }
 
 .git-search svg {
@@ -706,14 +707,14 @@
 .git-search input {
   flex: 1;
   min-width: 0;
-  height: 24px;
+  height: 22px;
   padding: 0;
   border: none;
   outline: none;
   background: transparent;
   color: var(--text-primary);
   font: inherit;
-  font-size: 11px;
+  font-size: 10px;
 }
 
 .git-search button {
@@ -818,9 +819,9 @@
 }
 
 .git-history-toolbar {
-  padding: 4px 8px;
+  padding: 3px 8px;
   border-bottom: 1px solid var(--border-subtle);
-  background: rgba(255, 255, 255, 0.018);
+  background: rgba(255, 255, 255, 0.014);
 }
 
 .git-hero {
@@ -1177,11 +1178,43 @@
   gap: 4px;
 }
 
+.git-history__search {
+  flex: 1 1 176px;
+  min-width: 0;
+}
+
+.git-history__select {
+  flex: 0 0 auto;
+}
+
+.git-history__select--branch {
+  width: 118px;
+}
+
+.git-history__select--author {
+  width: 108px;
+}
+
+.git-history__select--date {
+  width: 96px;
+}
+
 .git-history__path-summary {
   display: inline-flex;
   align-items: center;
   gap: 4px;
   max-width: 180px;
+}
+
+.git-history__toolbar-button {
+  min-height: 24px;
+  padding: 0 8px;
+  font-size: 10px;
+}
+
+.git-history__toolbar-icon {
+  width: 24px;
+  height: 24px;
 }
 
 .git-history-list-surface,

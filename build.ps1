@@ -1,10 +1,10 @@
-# build.ps1 — Configure and build Pier-X without launching it.
+# build.ps1 — Build the active Tauri shell from the repo root.
 #
 # Usage:
 #   .\build.ps1
 #   $env:BUILD_TYPE = "Debug"; .\build.ps1
-#   $env:QT_DIR = "C:\Qt\6.8.1\msvc2022_64"; .\build.ps1
-#   $env:BUILD_DIR = "build-debug"; .\build.ps1
+#   $env:BUILD_DIR = "target-root"; .\build.ps1
+#   $env:NO_BUNDLE = "1"; .\build.ps1
 
 [CmdletBinding()]
 param()
@@ -12,75 +12,74 @@ param()
 $ErrorActionPreference = "Stop"
 Set-Location $PSScriptRoot
 
-function Find-Qt6 {
-    if ($env:QT_DIR -and (Test-Path (Join-Path $env:QT_DIR "lib\cmake\Qt6\Qt6Config.cmake"))) {
-        return $env:QT_DIR
+function Require-Command {
+    param([string]$Name)
+    if (-not (Get-Command $Name -ErrorAction SilentlyContinue)) {
+        Write-Host "ERROR: required command not found: $Name" -ForegroundColor Red
+        exit 1
     }
-    foreach ($name in @("qmake6", "qmake")) {
-        $cmd = Get-Command $name -ErrorAction SilentlyContinue
-        if ($cmd) {
-            try {
-                $prefix = (& $cmd -query QT_INSTALL_PREFIX 2>$null) -join ""
-                if ($prefix -and (Test-Path (Join-Path $prefix "lib\cmake\Qt6\Qt6Config.cmake"))) {
-                    return $prefix
-                }
-            } catch {}
-        }
-    }
-    $found = @()
-    $roots = @(
-        "C:\Qt", "C:\Qt\Tools\Qt",
-        "D:\Qt", "D:\Qt\Tools\Qt",
-        "E:\Qt", "E:\Qt\Tools\Qt",
-        (Join-Path $env:USERPROFILE "Qt")
-    )
-    foreach ($root in $roots) {
-        if (-not (Test-Path $root)) { continue }
-        $versionDirs = Get-ChildItem $root -Directory -ErrorAction SilentlyContinue |
-            Where-Object { $_.Name -match '^6\.\d+(\.\d+)?$' } |
-            Sort-Object { [version]$_.Name } -Descending
-        foreach ($vd in $versionDirs) {
-            foreach ($arch in @("msvc2022_64", "msvc2019_64", "mingw_64")) {
-                $cand = Join-Path $vd.FullName $arch
-                if (Test-Path (Join-Path $cand "lib\cmake\Qt6\Qt6Config.cmake")) {
-                    $found += $cand
-                }
-            }
-        }
-    }
-    if ($found.Count -gt 0) { return $found[0] }
-    return $null
 }
 
-$BuildType = if ($env:BUILD_TYPE) { $env:BUILD_TYPE } else { "Release" }
-$BuildDir  = if ($env:BUILD_DIR)  { $env:BUILD_DIR }  else { "build" }
+function Ensure-NodeModules {
+    $lockFile = Join-Path (Get-Location) "package-lock.json"
+    $lockMarker = Join-Path (Get-Location) "node_modules\.package-lock.json"
+    if (-not (Test-Path "node_modules") -or -not (Test-Path $lockMarker) -or ((Get-Item $lockFile).LastWriteTimeUtc -gt (Get-Item $lockMarker).LastWriteTimeUtc)) {
+        Write-Host "==> Installing frontend dependencies"
+        & npm ci
+        if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+    }
+}
 
-$qtDir = Find-Qt6
-if (-not $qtDir) {
-    Write-Host ""
-    Write-Host "ERROR: Qt 6.8 not found." -ForegroundColor Red
-    Write-Host ""
-    Write-Host "Install Qt 6.8 LTS first. Easiest path:"
-    Write-Host "    pip install aqtinstall"
-    Write-Host "    aqt install-qt windows desktop 6.8.1 win64_msvc2022_64 --outputdir C:\Qt"
-    Write-Host "    `$env:QT_DIR = `"C:\Qt\6.8.1\msvc2022_64`""
-    Write-Host "    .\build.ps1"
-    Write-Host ""
-    Write-Host "Or set `$env:QT_DIR explicitly if Qt is installed elsewhere."
-    Write-Host ""
+$UiDir = if ($env:PIER_UI_DIR) { $env:PIER_UI_DIR } else { Join-Path $PSScriptRoot "pier-ui-tauri" }
+$BuildType = if ($env:BUILD_TYPE) { $env:BUILD_TYPE } else { "Release" }
+$BuildDir = if ($env:BUILD_DIR) { $env:BUILD_DIR } else { $null }
+$NoBundle = $env:NO_BUNDLE -eq "1"
+
+if (-not (Test-Path $UiDir)) {
+    Write-Host "ERROR: active Tauri shell not found at $UiDir" -ForegroundColor Red
     exit 1
 }
 
-Write-Host "==> Found Qt at: $qtDir"
+if ($BuildType -notin @("Debug", "Release")) {
+    Write-Host "ERROR: BUILD_TYPE must be Debug or Release (got: $BuildType)" -ForegroundColor Red
+    exit 1
+}
 
-$cmakeArgs = @("-B", $BuildDir, "-S", ".", "-DCMAKE_BUILD_TYPE=$BuildType", "-DCMAKE_PREFIX_PATH=$qtDir")
+Require-Command node
+Require-Command npm
+Require-Command cargo
 
-Write-Host "==> Configuring Pier-X ($BuildType) in $BuildDir"
-& cmake @cmakeArgs
-if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+if ($BuildDir) {
+    $resolvedBuildDir = if ([System.IO.Path]::IsPathRooted($BuildDir)) {
+        $BuildDir
+    } else {
+        Join-Path $PSScriptRoot $BuildDir
+    }
+    $env:CARGO_TARGET_DIR = $resolvedBuildDir
+    Write-Host "==> Using Cargo target dir: $resolvedBuildDir"
+}
 
-Write-Host "==> Building"
-& cmake --build $BuildDir --config $BuildType --parallel
-if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+Push-Location $UiDir
+try {
+    Ensure-NodeModules
 
-Write-Host "[OK] Build complete: $BuildDir"
+    $tauriArgs = @("run", "tauri", "--", "build", "--ci")
+    if ($BuildType -eq "Debug") {
+        $tauriArgs += "--debug"
+    }
+    if ($NoBundle) {
+        $tauriArgs += "--no-bundle"
+    }
+
+    Write-Host "==> Building Pier-X Tauri shell ($BuildType)"
+    & npm @tauriArgs
+    if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+} finally {
+    Pop-Location
+}
+
+if ($env:CARGO_TARGET_DIR) {
+    Write-Host "[OK] Build complete: $env:CARGO_TARGET_DIR"
+} else {
+    Write-Host "[OK] Build complete: $(Join-Path $UiDir 'src-tauri\target')"
+}

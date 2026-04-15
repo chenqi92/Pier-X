@@ -12,71 +12,49 @@ concurrency:
   cancel-in-progress: true
 
 env:
-  # Opt into Node.js 24 for JavaScript-based actions, ahead of the
-  # 2026-09-16 deprecation deadline.
   FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: 'true'
 
 jobs:
-  qt-build:
-    name: Qt build · ${{ matrix.name }}
+  tauri-shell:
+    name: Tauri shell · ${{ matrix.name }}
     runs-on: ${{ matrix.os }}
     strategy:
       fail-fast: false
       matrix:
         include:
-          - name: Windows x64
+          - name: Windows
             os: windows-latest
-            qt-host: windows
-            qt-arch: win64_msvc2022_64
-          - name: macOS Universal
+          - name: macOS
             os: macos-latest
-            qt-host: mac
-            qt-arch: clang_64
 
     steps:
       - name: Checkout
         uses: actions/checkout@v4
 
-      - name: Read version
-        id: version
-        shell: bash
-        run: echo "version=$(cat VERSION | tr -d '[:space:]')" >> "$GITHUB_OUTPUT"
-
-      - name: Install Qt 6.8 LTS
-        uses: jurplel/install-qt-action@v4
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
         with:
-          version: '6.8.1'
-          host: ${{ matrix.qt-host }}
-          target: 'desktop'
-          arch: ${{ matrix.qt-arch }}
-          modules: 'qtshadertools'
-          cache: true
+          node-version: '24'
+          cache: npm
+          cache-dependency-path: pier-ui-tauri/package-lock.json
 
-      - name: Configure (CMake)
-        shell: bash
-        run: |
-          ARGS=(-B build -S . -DCMAKE_BUILD_TYPE=Release)
-          if [ "${{ runner.os }}" = "macOS" ]; then
-            # Universal binary — single .app for both arm64 and x86_64.
-            # Quoted as one array element to keep the ; from being parsed
-            # by bash as a command separator.
-            ARGS+=("-DCMAKE_OSX_ARCHITECTURES=arm64;x86_64")
-          fi
-          cmake "${ARGS[@]}"
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
 
-      - name: Build
-        run: cmake --build build --config Release --parallel
+      - name: Install frontend dependencies
+        working-directory: pier-ui-tauri
+        run: npm ci
+
+      - name: Build Tauri shell (no bundle)
+        working-directory: pier-ui-tauri
+        run: npm run tauri -- build --ci --no-bundle
 
       - name: Show build artifacts
         shell: bash
         run: |
-          echo "Pier-X version: ${{ steps.version.outputs.version }}"
-          find build -maxdepth 4 -type f \( -name 'pier-x' -o -name 'pier-x.exe' \) -print || true
-          find build -maxdepth 4 -type d -name 'pier-x.app' -print || true
-          # On macOS, verify the binary is actually universal
-          if [ "${{ runner.os }}" = "macOS" ]; then
-            lipo -info build/pier-ui-qt/pier-x.app/Contents/MacOS/pier-x || true
-          fi
+          find pier-ui-tauri/src-tauri/target -maxdepth 4 -type f \
+            \( -name 'pier-ui-tauri' -o -name 'pier-ui-tauri.exe' -o -name 'Pier-X' -o -name 'Pier-X.exe' \) \
+            -print || true
 
   rust-core:
     name: Rust core · ${{ matrix.os }}

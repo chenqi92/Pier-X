@@ -5,7 +5,7 @@
 //!
 //! [`SftpClient`] wraps a `russh_sftp::client::SftpSession`
 //! opened on a new SSH channel, and exposes the operations
-//! pier-x's UI cares about:
+//! pier-x's shell cares about:
 //!
 //!   * `list_dir(path)` → `Vec<RemoteFileEntry>` sorted with
 //!     directories first, then case-insensitive by name.
@@ -21,20 +21,20 @@
 //! All async methods have a `_blocking` counterpart that
 //! enters the shared runtime and `block_on`s, matching the
 //! pattern `SshSession` uses. The blocking variants are what
-//! the UI layer calls; async tasks should stay on the direct
-//! form.
+//! the command layer calls; async tasks should stay on the
+//! direct form.
 //!
 //! ## Not yet
 //!
 //! * Chunked upload/download with progress callbacks. M3d+
 //!   adds a streaming `open_read` / `open_write` pair plus a
 //!   progress channel the UI binds to.
-//! * Recursive operations (`rm -rf`, `mkdir -p`). The UI
+//! * Recursive operations (`rm -rf`, `mkdir -p`). The shell
 //!   composes these from the single-step primitives today;
-//!   we'll move them into this module when the recursion
-//!   makes the C++ side complicated.
+//!   we'll move them into this module when recursion becomes
+//!   annoying to orchestrate above this layer.
 //! * Permission editing. `set_metadata` exists in russh-sftp
-//!   but pier-x's M3d UI doesn't expose a chmod affordance
+//!   but pier-x's M3d shell doesn't expose a chmod affordance
 //!   yet.
 
 use std::path::Path;
@@ -46,9 +46,9 @@ use serde::{Deserialize, Serialize};
 use super::error::{Result, SshError};
 use super::runtime;
 
-/// One remote filesystem entry. Serializable so the Qt side
-/// can later consume this via a JSON FFI surface without
-/// re-inventing the schema.
+/// One remote filesystem entry. Serializable so the shell can
+/// move it through command payloads without re-inventing the
+/// schema.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct RemoteFileEntry {
     /// Leaf name (no directory component).

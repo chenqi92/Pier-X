@@ -177,7 +177,7 @@ mod unix {
             // ── Parent ─────────────────────────────────────────────
             //
             // Flip the master fd to non-blocking so our `read` can
-            // return `WouldBlock` instead of hanging the UI thread.
+            // return `WouldBlock` instead of hanging the caller.
             // SAFETY: master_fd is a live fd we just got from forkpty.
             unsafe {
                 let flags = libc::fcntl(master_fd, libc::F_GETFL);
@@ -328,9 +328,8 @@ mod windows_impl {
     use windows_sys::Win32::System::Threading::{
         CreateProcessW, DeleteProcThreadAttributeList, InitializeProcThreadAttributeList,
         TerminateProcess, UpdateProcThreadAttribute, WaitForSingleObject,
-        CREATE_UNICODE_ENVIRONMENT, EXTENDED_STARTUPINFO_PRESENT,
-        LPPROC_THREAD_ATTRIBUTE_LIST, PROCESS_INFORMATION, STARTF_USESTDHANDLES,
-        STARTUPINFOEXW,
+        CREATE_UNICODE_ENVIRONMENT, EXTENDED_STARTUPINFO_PRESENT, LPPROC_THREAD_ATTRIBUTE_LIST,
+        PROCESS_INFORMATION, STARTF_USESTDHANDLES, STARTUPINFOEXW,
     };
 
     const READ_CHUNK_SIZE: usize = 8192;
@@ -416,7 +415,7 @@ mod windows_impl {
                         .as_ref()
                         .map(|dir| dir.as_ptr())
                         .unwrap_or(std::ptr::null()),
-                    &mut startup_info.StartupInfo,
+                    &startup_info.StartupInfo,
                     &mut process_info,
                 )
             };
@@ -436,9 +435,9 @@ mod windows_impl {
                 CloseHandle(process_info.hThread);
             }
 
-            let stdin = unsafe { File::from_raw_handle(input_write_side as *mut c_void) };
-            let output = unsafe { File::from_raw_handle(output_read_side as *mut c_void) };
-            let process = unsafe { OwnedHandle::from_raw_handle(process_info.hProcess as *mut c_void) };
+            let stdin = unsafe { File::from_raw_handle(input_write_side) };
+            let output = unsafe { File::from_raw_handle(output_read_side) };
+            let process = unsafe { OwnedHandle::from_raw_handle(process_info.hProcess) };
 
             let (tx, rx) = mpsc::channel();
             let reader_threads = vec![spawn_pipe_reader("pier-terminal-conpty", output, tx)];
@@ -468,8 +467,9 @@ mod windows_impl {
                 .unwrap_or(shell)
                 .to_ascii_lowercase();
             let args: &[&str] = match leaf.as_str() {
-                "powershell.exe" | "powershell" | "pwsh.exe" | "pwsh" =>
-                    &["-NoLogo", "-NoExit", "-NoProfile"],
+                "powershell.exe" | "powershell" | "pwsh.exe" | "pwsh" => {
+                    &["-NoLogo", "-NoExit", "-NoProfile"]
+                }
                 "cmd.exe" | "cmd" => &["/D", "/Q", "/K"],
                 _ => &[],
             };
@@ -581,23 +581,17 @@ mod windows_impl {
         fn new(hpc: HPCON) -> Result<Self, TerminalError> {
             let mut bytes_required = 0usize;
             unsafe {
-                InitializeProcThreadAttributeList(
-                    std::ptr::null_mut(),
-                    1,
-                    0,
-                    &mut bytes_required,
-                );
+                InitializeProcThreadAttributeList(std::ptr::null_mut(), 1, 0, &mut bytes_required);
             }
             if bytes_required == 0 {
                 return Err(TerminalError::Io(io::Error::last_os_error()));
             }
 
-            let words = (bytes_required + size_of::<usize>() - 1) / size_of::<usize>();
+            let words = bytes_required.div_ceil(size_of::<usize>());
             let mut storage = vec![0usize; words].into_boxed_slice();
             let ptr = storage.as_mut_ptr() as LPPROC_THREAD_ATTRIBUTE_LIST;
-            let init_ok = unsafe {
-                InitializeProcThreadAttributeList(ptr, 1, 0, &mut bytes_required)
-            };
+            let init_ok =
+                unsafe { InitializeProcThreadAttributeList(ptr, 1, 0, &mut bytes_required) };
             if init_ok == 0 {
                 return Err(TerminalError::Io(io::Error::last_os_error()));
             }
@@ -620,7 +614,10 @@ mod windows_impl {
                 return Err(TerminalError::Io(io::Error::last_os_error()));
             }
 
-            Ok(Self { _storage: storage, ptr })
+            Ok(Self {
+                _storage: storage,
+                ptr,
+            })
         }
 
         fn as_ptr(&self) -> LPPROC_THREAD_ATTRIBUTE_LIST {
@@ -667,12 +664,12 @@ mod windows_impl {
     fn create_pipe_pair() -> Result<(HANDLE, HANDLE), TerminalError> {
         let mut read_side: HANDLE = std::ptr::null_mut();
         let mut write_side: HANDLE = std::ptr::null_mut();
-        let mut attrs = SECURITY_ATTRIBUTES {
+        let attrs = SECURITY_ATTRIBUTES {
             nLength: size_of::<SECURITY_ATTRIBUTES>() as u32,
             lpSecurityDescriptor: std::ptr::null_mut(),
             bInheritHandle: 1,
         };
-        let ok = unsafe { CreatePipe(&mut read_side, &mut write_side, &mut attrs, 0) };
+        let ok = unsafe { CreatePipe(&mut read_side, &mut write_side, &attrs, 0) };
         if ok == 0 {
             Err(TerminalError::Io(io::Error::last_os_error()))
         } else {
@@ -734,10 +731,7 @@ mod windows_impl {
             .next()
             .unwrap_or(program)
             .to_ascii_lowercase();
-        if leaf != "powershell.exe"
-            && leaf != "powershell"
-            && leaf != "pwsh.exe"
-            && leaf != "pwsh"
+        if leaf != "powershell.exe" && leaf != "powershell" && leaf != "pwsh.exe" && leaf != "pwsh"
         {
             return None;
         }
@@ -859,11 +853,7 @@ mod windows_tests {
         out
     }
 
-    fn drain_until_contains(
-        pty: &mut dyn Pty,
-        deadline: Duration,
-        needle: &str,
-    ) -> String {
+    fn drain_until_contains(pty: &mut dyn Pty, deadline: Duration, needle: &str) -> String {
         let start = Instant::now();
         let mut out = Vec::new();
         while start.elapsed() < deadline {
@@ -883,16 +873,14 @@ mod windows_tests {
 
     #[test]
     fn spawn_captures_cmd_output_through_conpty() {
-        let mut pty =
-            WindowsPty::spawn(80, 24, "cmd.exe", &["/D", "/C", "echo hello-pier"])
-                .expect("spawn failed");
+        let mut pty = WindowsPty::spawn(80, 24, "cmd.exe", &["/D", "/C", "echo hello-pier"])
+            .expect("spawn failed");
 
         let out = drain_until(&mut pty, Duration::from_secs(5));
         let s = String::from_utf8_lossy(&out);
         assert!(
             s.contains("hello-pier"),
-            "expected hello-pier in output, got {:?}",
-            s,
+            "expected hello-pier in output, got {s:?}",
         );
     }
 
@@ -911,8 +899,7 @@ mod windows_tests {
         let s = String::from_utf8_lossy(&out);
         assert!(
             s.contains("hello-pier"),
-            "expected hello-pier in output, got {:?}",
-            s,
+            "expected hello-pier in output, got {s:?}",
         );
     }
 
@@ -924,8 +911,7 @@ mod windows_tests {
         let prompt = drain_until_contains(&mut pty, Duration::from_secs(10), "PS ");
         assert!(
             prompt.contains("PS "),
-            "expected an interactive PowerShell prompt before typing, got {:?}",
-            prompt,
+            "expected an interactive PowerShell prompt before typing, got {prompt:?}",
         );
 
         pty.write(b"echo abcd\x7f\x7fXY\r\nexit\r\n")
@@ -935,13 +921,11 @@ mod windows_tests {
         let s = String::from_utf8_lossy(&out);
         assert!(
             s.contains("abXY"),
-            "expected edited command/output to contain abXY, got {:?}",
-            s,
+            "expected edited command/output to contain abXY, got {s:?}",
         );
         assert!(
             !s.contains("abcdXY"),
-            "expected backspace to delete characters before execution, got {:?}",
-            s,
+            "expected backspace to delete characters before execution, got {s:?}",
         );
     }
 }

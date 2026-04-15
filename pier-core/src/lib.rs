@@ -7,19 +7,15 @@
 //!
 //! ## Architectural rule
 //!
-//! `pier-core` MUST NOT depend on any UI types (Qt, QML, Slint, etc.).
-//! All public APIs are exposed via:
-//!   1. A stable C ABI (the `ffi` module) — for foreign-language consumers
-//!   2. Pure Rust traits — for in-process consumers
-//!
-//! See `docs/TECH-STACK.md §12` for the design rationale.
+//! `pier-core` MUST NOT depend on any UI types or shell frameworks.
+//! The active repository consumes this crate directly from
+//! `pier-ui-tauri/src-tauri`.
 
 #![warn(missing_docs)]
 #![warn(rust_2018_idioms)]
 
 pub mod connections;
 pub mod credentials;
-pub mod ffi;
 pub mod git_graph;
 pub mod markdown;
 pub mod paths;
@@ -37,7 +33,6 @@ mod tests {
 
     #[test]
     fn version_is_populated() {
-        assert!(!VERSION.is_empty());
         // Should match semver-ish pattern
         assert!(VERSION.split('.').count() >= 2);
     }

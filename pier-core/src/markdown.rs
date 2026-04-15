@@ -10,28 +10,25 @@
 //! `<iframe>` in a markdown file is escaped to its source
 //! form. The file we're rendering comes from the user's
 //! filesystem, but we make no assumptions about who wrote it,
-//! and Qt's rich-text engine will happily execute some things
-//! we'd rather not.
+//! and a desktop preview surface should not get raw embedded
+//! markup from arbitrary files.
 //!
-//! ## Why not use Qt's `Text.MarkdownText`?
+//! ## Why render in Rust?
 //!
-//! Qt gained native markdown rendering in 5.14, but its
-//! CommonMark-md4c fork has different extension defaults and
-//! stricter HTML handling on different platforms. Rendering
-//! in Rust gives us one source of truth across every OS we
-//! ship on, and the same `render_html` is unit-tested in CI
-//! before it ever reaches a Qt widget.
+//! Rendering in Rust gives us one source of truth across every
+//! OS we ship on, and the same `render_html` is unit-tested in
+//! CI before it ever reaches the desktop shell.
 //!
 //! ## Not yet
 //!
 //! * Syntax highlighting inside fenced code blocks. M5e+
 //!   would plug in `syntect` or a classless prism-style CSS
-//!   class set for the Qt side to style.
+//!   class set for the shell to style.
 //! * Live reload on file change. The UI owns a manual
 //!   "Reload" button today; a `notify`-backed watcher lives
 //!   with M6 polish if it lands.
-//! * Mermaid / math. Neither render in Qt's rich-text anyway,
-//!   so not a regression.
+//! * Mermaid / math. Neither render in the current preview
+//!   surface anyway, so not a regression.
 
 use std::fs;
 use std::io;
@@ -69,8 +66,7 @@ fn gfm_options() -> Options {
 /// through: `<script>...</script>` in a .md file becomes
 /// literal `&lt;script&gt;...&lt;/script&gt;` in the output.
 /// pulldown-cmark's default passthrough would let a hostile
-/// markdown file inject arbitrary markup into the preview,
-/// which Qt's rich-text engine would happily render.
+/// markdown file inject arbitrary markup into the preview.
 pub fn render_html(source: &str) -> String {
     let parser = Parser::new_ext(source, gfm_options()).map(sanitize_html_events);
     let mut out = String::with_capacity(source.len() + source.len() / 4);
@@ -90,8 +86,7 @@ fn sanitize_html_events(event: Event<'_>) -> Event<'_> {
 }
 
 /// Load a file from disk as UTF-8, returning `Err` on missing,
-/// too-large, or non-UTF-8 files. Used by the preview FFI so
-/// the UI never has to touch std::fs directly.
+/// too-large, or non-UTF-8 files.
 ///
 /// Files larger than [`MAX_SOURCE_BYTES`] are rejected before
 /// being read into memory.

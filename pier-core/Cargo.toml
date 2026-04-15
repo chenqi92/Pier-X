@@ -6,10 +6,6 @@ description = "Cross-platform core engine for Pier-X — terminal, SSH, RDP, VNC
 license = "MIT"
 repository = "https://github.com/chenqi92/Pier-X"
 
-[lib]
-name = "pier_core"
-crate-type = ["staticlib", "rlib"]
-
 [dependencies]
 # Error handling
 thiserror = "2"

@@ -4,32 +4,28 @@ Cross-platform Rust core engine for Pier-X.
 
 ## Status
 
-Skeleton crate. Three modules in place; the protocol modules
-(terminal/SSH/RDP/VNC/databases) will land incrementally.
+`pier-core` is the in-process backend crate consumed by
+`pier-ui-tauri/src-tauri/`.
 
 | Module | Status | Notes |
 |---|---|---|
+| `connections` | ✅ | Saved connection persistence |
 | `paths` | ✅ | Cross-platform app data dirs via `directories` |
 | `credentials` | ✅ | OS keyring via `keyring` (Keychain / DPAPI / Secret Service) |
-| `ffi` | ✅ (skeleton) | Stable C ABI surface — `pier_core_version`, etc. |
-| `terminal` | ⬜ | PTY (`forkpty` Unix + `ConPTY` Windows) + VTE |
-| `ssh` | ⬜ | `russh` + `russh-sftp` |
-| `rdp` | ⬜ | `ironrdp` |
-| `vnc` | ⬜ | `vnc-rs` or `libvncclient` wrapper |
-| `db` | ⬜ | MySQL / PostgreSQL / Redis clients |
-| `git` | ⬜ | `git2` |
-| `search` | ⬜ | `ignore` |
-| `crypto` | ⬜ | `ring` (AES-256-GCM) |
+| `terminal` | ✅ | Local + SSH-backed terminal sessions |
+| `ssh` | ✅ | Sessions, tunnels, SFTP plumbing, service detection |
+| `services` | ✅ | Docker / MySQL / PostgreSQL / Redis / SQLite / search |
+| `git_graph` | ✅ | Git history and graph helpers |
+| `markdown` | ✅ | Markdown rendering helpers |
 
 ## Design rules
 
-`pier-core` is **the asset**. The Qt UI layer is **the consumable**.
+`pier-core` is **the durable backend**. App runtimes consume it directly as a
+Rust crate.
 
-1. `pier-core` MUST NOT depend on any UI types (Qt, QML, Slint, etc.)
-2. Public APIs go through either the C ABI (`ffi` module) or pure Rust traits
+1. `pier-core` MUST NOT depend on any UI types or UI frameworks
+2. Public APIs should stay durable and runtime-agnostic
 3. The crate must compile and test cleanly on macOS + Windows + Linux
-
-See `docs/TECH-STACK.md §12` for the full architectural rationale.
 
 ## Build
 

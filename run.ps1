@@ -1,10 +1,9 @@
-# run.ps1 — Configure, build, and launch Pier-X on Windows.
+# run.ps1 — Launch the active Tauri shell from the repo root.
 #
 # Usage:
 #   .\run.ps1
-#   $env:BUILD_TYPE = "Debug"; .\run.ps1
-#   $env:QT_DIR = "C:\Qt\6.8.1\msvc2022_64"; .\run.ps1
-#   $env:BUILD_DIR = "build-debug"; .\run.ps1
+#   $env:BUILD_TYPE = "Release"; .\run.ps1
+#   $env:BUILD_DIR = "target-root"; .\run.ps1
 
 [CmdletBinding()]
 param([Parameter(ValueFromRemainingArguments)] $Args)
@@ -12,131 +11,68 @@ param([Parameter(ValueFromRemainingArguments)] $Args)
 $ErrorActionPreference = "Stop"
 Set-Location $PSScriptRoot
 
-# Use ASCII output throughout — avoids garbled glyphs on consoles still
-# defaulting to a non-UTF-8 code page (e.g. cp936 on Chinese Windows).
-
-function Find-Qt6 {
-    # 1. Explicit QT_DIR wins
-    if ($env:QT_DIR -and (Test-Path (Join-Path $env:QT_DIR "lib\cmake\Qt6\Qt6Config.cmake"))) {
-        return $env:QT_DIR
+function Require-Command {
+    param([string]$Name)
+    if (-not (Get-Command $Name -ErrorAction SilentlyContinue)) {
+        Write-Host "ERROR: required command not found: $Name" -ForegroundColor Red
+        exit 1
     }
-
-    # 2. qmake / qmake6 already in PATH
-    foreach ($name in @("qmake6", "qmake")) {
-        $cmd = Get-Command $name -ErrorAction SilentlyContinue
-        if ($cmd) {
-            try {
-                $prefix = (& $cmd -query QT_INSTALL_PREFIX 2>$null) -join ""
-                if ($prefix -and (Test-Path (Join-Path $prefix "lib\cmake\Qt6\Qt6Config.cmake"))) {
-                    return $prefix
-                }
-            } catch {}
-        }
-    }
-
-    # 3. Scan common install roots — pick the highest 6.x version.
-    # Includes D: / E: drives because users frequently install Qt to
-    # a non-system drive (it's ~2 GB per arch).
-    $found = @()
-    $roots = @(
-        "C:\Qt", "C:\Qt\Tools\Qt",
-        "D:\Qt", "D:\Qt\Tools\Qt",
-        "E:\Qt", "E:\Qt\Tools\Qt",
-        (Join-Path $env:USERPROFILE "Qt")
-    )
-    foreach ($root in $roots) {
-        if (-not (Test-Path $root)) { continue }
-        $versionDirs = Get-ChildItem $root -Directory -ErrorAction SilentlyContinue |
-            Where-Object { $_.Name -match '^6\.\d+(\.\d+)?$' } |
-            Sort-Object { [version]$_.Name } -Descending
-        foreach ($vd in $versionDirs) {
-            foreach ($arch in @("msvc2022_64", "msvc2019_64", "mingw_64")) {
-                $cand = Join-Path $vd.FullName $arch
-                if (Test-Path (Join-Path $cand "lib\cmake\Qt6\Qt6Config.cmake")) {
-                    $found += $cand
-                }
-            }
-        }
-    }
-    if ($found.Count -gt 0) {
-        return $found[0]
-    }
-
-    return $null
 }
 
-$BuildType = if ($env:BUILD_TYPE) { $env:BUILD_TYPE } else { "Release" }
-$BuildDir  = if ($env:BUILD_DIR)  { $env:BUILD_DIR }  else { "build" }
+function Ensure-NodeModules {
+    $lockFile = Join-Path (Get-Location) "package-lock.json"
+    $lockMarker = Join-Path (Get-Location) "node_modules\.package-lock.json"
+    if (-not (Test-Path "node_modules") -or -not (Test-Path $lockMarker) -or ((Get-Item $lockFile).LastWriteTimeUtc -gt (Get-Item $lockMarker).LastWriteTimeUtc)) {
+        Write-Host "==> Installing frontend dependencies"
+        & npm ci
+        if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+    }
+}
 
-$qtDir = Find-Qt6
-if (-not $qtDir) {
-    Write-Host ""
-    Write-Host "ERROR: Qt 6.8 not found." -ForegroundColor Red
-    Write-Host ""
-    Write-Host "Pier-X needs Qt 6.8 LTS (or newer) installed. Pick one:"
-    Write-Host ""
-    Write-Host "  Option A - aqtinstall (recommended, matches CI):"
-    Write-Host "    pip install aqtinstall"
-    Write-Host "    aqt install-qt windows desktop 6.8.1 win64_msvc2022_64 --outputdir C:\Qt"
-    Write-Host "    `$env:QT_DIR = `"C:\Qt\6.8.1\msvc2022_64`""
-    Write-Host "    .\run.ps1"
-    Write-Host ""
-    Write-Host "  Option B - Official Qt Online Installer:"
-    Write-Host "    https://www.qt.io/download-qt-installer"
-    Write-Host "    Install Qt 6.8.x -> MSVC 2022 64-bit"
-    Write-Host "    `$env:QT_DIR = `"C:\Qt\6.8.1\msvc2022_64`""
-    Write-Host "    .\run.ps1"
-    Write-Host ""
-    Write-Host "  Option C - if Qt is already installed somewhere unusual:"
-    Write-Host "    `$env:QT_DIR = `"<path containing lib\cmake\Qt6>`""
-    Write-Host "    .\run.ps1"
-    Write-Host ""
+$UiDir = if ($env:PIER_UI_DIR) { $env:PIER_UI_DIR } else { Join-Path $PSScriptRoot "pier-ui-tauri" }
+$BuildType = if ($env:BUILD_TYPE) { $env:BUILD_TYPE } else { "Debug" }
+$BuildDir = if ($env:BUILD_DIR) { $env:BUILD_DIR } else { $null }
+
+if (-not (Test-Path $UiDir)) {
+    Write-Host "ERROR: active Tauri shell not found at $UiDir" -ForegroundColor Red
     exit 1
 }
 
-Write-Host "==> Found Qt at: $qtDir"
-
-$cmakeArgs = @("-B", $BuildDir, "-S", ".", "-DCMAKE_BUILD_TYPE=$BuildType", "-DCMAKE_PREFIX_PATH=$qtDir")
-
-Write-Host "==> Configuring Pier-X ($BuildType) in $BuildDir"
-& cmake @cmakeArgs
-if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
-
-Write-Host "==> Building"
-& cmake --build $BuildDir --config $BuildType --parallel
-if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
-
-# Locate the binary
-$exe = Join-Path $BuildDir "pier-ui-qt\$BuildType\pier-x.exe"
-if (-not (Test-Path $exe)) {
-    # Single-config generator fallback
-    $exe = Join-Path $BuildDir "pier-ui-qt\pier-x.exe"
-}
-
-if (-not (Test-Path $exe)) {
-    Write-Host "ERROR: Binary not found at $exe" -ForegroundColor Red
+if ($BuildType -notin @("Debug", "Release")) {
+    Write-Host "ERROR: BUILD_TYPE must be Debug or Release (got: $BuildType)" -ForegroundColor Red
     exit 1
 }
 
-# Make sure the app can find Qt DLLs when launched from this shell.
-$env:PATH = (Join-Path $qtDir "bin") + ";" + $env:PATH
+Require-Command node
+Require-Command npm
+Require-Command cargo
 
-# Deploy Qt runtime + QML imports next to the executable so the app
-# also starts correctly outside this shell session.
-$windeployqt = Join-Path $qtDir "bin\windeployqt.exe"
-if (Test-Path $windeployqt) {
-    $deployArgs = @("--dir", (Split-Path $exe -Parent), "--qmldir", (Join-Path $PSScriptRoot "pier-ui-qt\qml"))
-    if ($BuildType -ieq "Debug") {
-        $deployArgs += "--debug"
+if ($BuildDir) {
+    $resolvedBuildDir = if ([System.IO.Path]::IsPathRooted($BuildDir)) {
+        $BuildDir
     } else {
-        $deployArgs += "--release"
+        Join-Path $PSScriptRoot $BuildDir
     }
-    $deployArgs += $exe
-
-    Write-Host "==> Deploying Qt runtime"
-    & $windeployqt @deployArgs
-    if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+    $env:CARGO_TARGET_DIR = $resolvedBuildDir
+    Write-Host "==> Using Cargo target dir: $resolvedBuildDir"
 }
 
-Write-Host "==> Launching $exe"
-& $exe @Args
+Push-Location $UiDir
+try {
+    Ensure-NodeModules
+
+    $tauriArgs = @("run", "tauri", "--", "dev")
+    if ($BuildType -eq "Release") {
+        $tauriArgs += "--release"
+    }
+    if ($Args.Count -gt 0) {
+        $tauriArgs += "--"
+        $tauriArgs += $Args
+    }
+
+    Write-Host "==> Launching Pier-X Tauri shell ($BuildType)"
+    & npm @tauriArgs
+    if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+} finally {
+    Pop-Location
+}

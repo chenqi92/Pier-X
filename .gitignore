@@ -16,27 +16,7 @@ target/
 *.app/
 *.dSYM/
 
-# CMake
-CMakeCache.txt
-CMakeFiles/
-CMakeUserPresets.json
-cmake_install.cmake
-cmake-build-*/
-Makefile
-!pier-ui-qt/Makefile
-
-# Qt
-*.user
-*.user.*
-moc_*.cpp
-moc_*.h
-qrc_*.cpp
-ui_*.h
-*.qm
-.qmake.stash
-qmltypes/
-
-# Rust (when pier-core lands)
+# Rust
 **/*.rs.bk
 **/target/
 

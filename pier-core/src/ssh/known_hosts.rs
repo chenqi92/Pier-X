@@ -26,13 +26,13 @@
 //!
 //! ## What does NOT live here
 //!
-//! Any UI. A "trust this new host?" prompt would be the
-//! safest-by-default UX, but it requires a round-trip through
-//! the Qt event loop from inside an async russh handler, which
-//! is non-trivial. M3c5 or later can add a "paranoid mode"
-//! verifier that holds up the handshake on a channel and waits
-//! for a user answer; M3c4 ships accept-on-first-use which is
-//! the widely-accepted compromise.
+//! Any shell prompt. A "trust this new host?" interaction would
+//! be the safest-by-default UX, but it requires a round-trip
+//! through the desktop command/event layer from inside an async
+//! russh handler, which is non-trivial. M3c5 or later can add a
+//! "paranoid mode" verifier that holds up the handshake on a
+//! channel and waits for a user answer; M3c4 ships
+//! accept-on-first-use which is the widely-accepted compromise.
 
 use std::path::PathBuf;
 

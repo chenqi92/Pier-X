@@ -54,7 +54,7 @@ fn build_ref_decoration(repo: &Repository, commit_id: git2::Oid) -> String {
             if target == commit_id {
                 if head.is_branch() {
                     if let Some(name) = head.shorthand() {
-                        decorations.push(format!("HEAD -> {}", name));
+                        decorations.push(format!("HEAD -> {name}"));
                     } else {
                         decorations.push("HEAD".to_string());
                     }
@@ -67,15 +67,13 @@ fn build_ref_decoration(repo: &Repository, commit_id: git2::Oid) -> String {
 
     // Check branches
     if let Ok(branches) = repo.branches(None) {
-        for branch_result in branches {
-            if let Ok((branch, _btype)) = branch_result {
-                if let Ok(Some(reference)) = branch.get().resolve().map(|r| r.target()) {
-                    if reference == commit_id {
-                        if let Ok(Some(name)) = branch.name() {
-                            // Skip if already added as HEAD ->
-                            if !decorations.iter().any(|d| d.contains(name)) {
-                                decorations.push(name.to_string());
-                            }
+        for (branch, _btype) in branches.flatten() {
+            if let Ok(Some(reference)) = branch.get().resolve().map(|r| r.target()) {
+                if reference == commit_id {
+                    if let Ok(Some(name)) = branch.name() {
+                        // Skip if already added as HEAD ->
+                        if !decorations.iter().any(|d| d.contains(name)) {
+                            decorations.push(name.to_string());
                         }
                     }
                 }
@@ -86,7 +84,7 @@ fn build_ref_decoration(repo: &Repository, commit_id: git2::Oid) -> String {
     // Check tags
     if let Ok(tags) = repo.tag_names(None) {
         for tag_name in tags.iter().flatten() {
-            if let Ok(reference) = repo.find_reference(&format!("refs/tags/{}", tag_name)) {
+            if let Ok(reference) = repo.find_reference(&format!("refs/tags/{tag_name}")) {
                 let target = if let Ok(tag) = reference.peel_to_commit() {
                     tag.id()
                 } else if let Some(t) = reference.target() {
@@ -95,7 +93,7 @@ fn build_ref_decoration(repo: &Repository, commit_id: git2::Oid) -> String {
                     continue;
                 };
                 if target == commit_id {
-                    decorations.push(format!("tag: {}", tag_name));
+                    decorations.push(format!("tag: {tag_name}"));
                 }
             }
         }
@@ -126,17 +124,22 @@ pub fn graph_log(
     use std::process::Command;
 
     // Open repo with libgit2 only for ref decoration
-    let repo = Repository::open(repo_path).map_err(|e| format!("Failed to open repo: {}", e))?;
+    let repo = Repository::open(repo_path).map_err(|e| format!("Failed to open repo: {e}"))?;
 
     // Build git log command
     // Format: hash<SEP>parents<SEP>message<SEP>author<SEP>timestamp
     let separator = "\x1f"; // ASCII Unit Separator
-    let format_str = format!("%H{0}%P{0}%s{0}%an{0}%ct", separator);
+    let format_str = format!("%H{separator}%P{separator}%s{separator}%an{separator}%ct");
 
     let mut cmd = Command::new("git");
     cmd.current_dir(repo_path);
-    cmd.args(["log", "--topo-order", "--date-order"]);
-    cmd.args([&format!("--format={}", format_str)]);
+    cmd.arg("log");
+    if filter.topo_order {
+        cmd.arg("--topo-order");
+    } else {
+        cmd.arg("--date-order");
+    }
+    cmd.args([&format!("--format={format_str}")]);
     configure_background_command(&mut cmd);
 
     // Limit & skip
@@ -155,12 +158,12 @@ pub fn graph_log(
 
     // Author filter
     if let Some(ref author) = filter.author {
-        cmd.arg(format!("--author={}", author));
+        cmd.arg(format!("--author={author}"));
     }
 
     // Search text (grep commit message)
     if let Some(ref search) = filter.search_text {
-        cmd.arg(format!("--grep={}", search));
+        cmd.arg(format!("--grep={search}"));
         cmd.arg("-i"); // case insensitive
     }
 
@@ -186,11 +189,11 @@ pub fn graph_log(
 
     let output = cmd
         .output()
-        .map_err(|e| format!("Failed to run git log: {}", e))?;
+        .map_err(|e| format!("Failed to run git log: {e}"))?;
 
     if !output.status.success() {
         let stderr = String::from_utf8_lossy(&output.stderr);
-        return Err(format!("git log failed: {}", stderr));
+        return Err(format!("git log failed: {stderr}"));
     }
 
     let stdout = String::from_utf8_lossy(&output.stdout);
@@ -301,18 +304,18 @@ pub fn first_parent_chain(
     ref_name: &str,
     limit: usize,
 ) -> Result<Vec<String>, String> {
-    let repo = Repository::open(repo_path).map_err(|e| format!("Failed to open repo: {}", e))?;
+    let repo = Repository::open(repo_path).map_err(|e| format!("Failed to open repo: {e}"))?;
 
     let mut revwalk = repo
         .revwalk()
-        .map_err(|e| format!("Failed to create revwalk: {}", e))?;
+        .map_err(|e| format!("Failed to create revwalk: {e}"))?;
     revwalk.set_sorting(Sort::TOPOLOGICAL | Sort::TIME).ok();
     revwalk.simplify_first_parent().ok();
 
     // Push the ref
     if let Ok(reference) = repo
-        .find_reference(&format!("refs/heads/{}", ref_name))
-        .or_else(|_| repo.find_reference(&format!("refs/remotes/{}", ref_name)))
+        .find_reference(&format!("refs/heads/{ref_name}"))
+        .or_else(|_| repo.find_reference(&format!("refs/remotes/{ref_name}")))
         .or_else(|_| repo.find_reference(ref_name))
     {
         if let Some(target) = reference.target() {
@@ -329,12 +332,10 @@ pub fn first_parent_chain(
     }
 
     let mut hashes = Vec::with_capacity(limit);
-    for oid_result in revwalk {
-        if let Ok(oid) = oid_result {
-            hashes.push(oid.to_string());
-            if hashes.len() >= limit {
-                break;
-            }
+    for oid in revwalk.flatten() {
+        hashes.push(oid.to_string());
+        if hashes.len() >= limit {
+            break;
         }
     }
     Ok(hashes)
@@ -342,7 +343,7 @@ pub fn first_parent_chain(
 
 /// List all branch names (local + remote).
 pub fn list_branches(repo_path: &str) -> Result<Vec<String>, String> {
-    let repo = Repository::open(repo_path).map_err(|e| format!("Failed to open repo: {}", e))?;
+    let repo = Repository::open(repo_path).map_err(|e| format!("Failed to open repo: {e}"))?;
 
     let mut names = Vec::new();
     if let Ok(branches) = repo.branches(Some(BranchType::Local)) {
@@ -365,11 +366,9 @@ pub fn list_branches(repo_path: &str) -> Result<Vec<String>, String> {
 
 /// List unique commit authors.
 pub fn list_authors(repo_path: &str, limit: usize) -> Result<Vec<String>, String> {
-    let repo = Repository::open(repo_path).map_err(|e| format!("Failed to open repo: {}", e))?;
+    let repo = Repository::open(repo_path).map_err(|e| format!("Failed to open repo: {e}"))?;
 
-    let mut revwalk = repo
-        .revwalk()
-        .map_err(|e| format!("Revwalk error: {}", e))?;
+    let mut revwalk = repo.revwalk().map_err(|e| format!("Revwalk error: {e}"))?;
     revwalk.set_sorting(Sort::TIME).ok();
     revwalk.push_glob("refs/heads/*").ok();
     revwalk.push_glob("refs/remotes/*").ok();
@@ -396,11 +395,11 @@ pub fn list_authors(repo_path: &str, limit: usize) -> Result<Vec<String>, String
 
 /// List all tracked files (equivalent to `git ls-files`).
 pub fn list_tracked_files(repo_path: &str) -> Result<Vec<String>, String> {
-    let repo = Repository::open(repo_path).map_err(|e| format!("Failed to open repo: {}", e))?;
+    let repo = Repository::open(repo_path).map_err(|e| format!("Failed to open repo: {e}"))?;
 
     // Read the HEAD tree recursively
-    let head = repo.head().map_err(|e| format!("No HEAD: {}", e))?;
-    let tree = head.peel_to_tree().map_err(|e| format!("No tree: {}", e))?;
+    let head = repo.head().map_err(|e| format!("No HEAD: {e}"))?;
+    let tree = head.peel_to_tree().map_err(|e| format!("No tree: {e}"))?;
 
     let mut files = Vec::new();
     tree.walk(git2::TreeWalkMode::PreOrder, |dir, entry| {
@@ -421,7 +420,7 @@ pub fn list_tracked_files(repo_path: &str) -> Result<Vec<String>, String> {
 
 /// Detect the default branch (main/master).
 pub fn detect_default_branch(repo_path: &str) -> Result<String, String> {
-    let repo = Repository::open(repo_path).map_err(|e| format!("Failed to open repo: {}", e))?;
+    let repo = Repository::open(repo_path).map_err(|e| format!("Failed to open repo: {e}"))?;
 
     // Strategy 1: Check origin/HEAD symbolic ref
     if let Ok(reference) = repo.find_reference("refs/remotes/origin/HEAD") {
@@ -441,10 +440,7 @@ pub fn detect_default_branch(repo_path: &str) -> Result<String, String> {
 
     // Strategy 2: Try common remote tracking branches
     for name in &["origin/master", "origin/main"] {
-        if repo
-            .find_reference(&format!("refs/remotes/{}", name))
-            .is_ok()
-        {
+        if repo.find_reference(&format!("refs/remotes/{name}")).is_ok() {
             return Ok(name.to_string());
         }
     }
@@ -814,10 +810,12 @@ pub fn compute_graph_layout(
         let mut anchors: Vec<(usize, f32)> = Vec::new();
         anchors.push((edge.child_row, x_pos(node_columns[edge.child_row])));
 
-        for r in (edge.child_row + 1)..clamped_parent {
-            if r >= n {
-                break;
-            }
+        for (r, row_edge_columns) in edge_column_at_row
+            .iter()
+            .enumerate()
+            .take(clamped_parent)
+            .skip(edge.child_row + 1)
+        {
             if !is_edge_visible_in_row(
                 edge.child_row as i32,
                 clamped_parent as i32,
@@ -828,7 +826,7 @@ pub fn compute_graph_layout(
             ) {
                 continue;
             }
-            let col = edge_column_at_row[r]
+            let col = row_edge_columns
                 .get(&ei)
                 .copied()
                 .unwrap_or(node_columns[edge.child_row]);

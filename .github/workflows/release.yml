@@ -15,190 +15,66 @@ env:
   FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: 'true'
 
 jobs:
-  build:
-    name: Build · ${{ matrix.name }}
-    runs-on: ${{ matrix.os }}
+  publish-tauri:
+    name: Publish · ${{ matrix.name }}
+    permissions:
+      contents: write
     strategy:
       fail-fast: false
       matrix:
         include:
-          # ─── Windows x64 (primary Windows target) ─────────
           - name: Windows x64
             os: windows-latest
-            qt-host: windows
-            qt-arch: win64_msvc2022_64
-            artifact-name: pier-x-windows-x64
-
-          # ─── Windows ARM64 (Snapdragon / Surface Pro X) ───
+            args: --ci
           - name: Windows ARM64
             os: windows-11-arm
-            qt-host: windows_arm64
-            qt-arch: win64_msvc2022_arm64
-            artifact-name: pier-x-windows-arm64
-
-          # ─── macOS Universal (Intel + Apple Silicon) ──────
+            args: --ci
           - name: macOS Universal
             os: macos-latest
-            qt-host: mac
-            qt-arch: clang_64
-            artifact-name: pier-x-macos-universal
+            args: --ci --target universal-apple-darwin
+    runs-on: ${{ matrix.os }}
 
-    steps:
-      - name: Checkout
-        uses: actions/checkout@v4
-
-      - name: Read version
-        id: version
-        shell: bash
-        run: echo "version=$(cat VERSION | tr -d '[:space:]')" >> "$GITHUB_OUTPUT"
-
-      - name: Install Qt 6.8 LTS
-        uses: jurplel/install-qt-action@v4
-        with:
-          version: '6.8.1'
-          host: ${{ matrix.qt-host }}
-          target: 'desktop'
-          arch: ${{ matrix.qt-arch }}
-          modules: 'qtshadertools'
-          cache: true
-
-      - name: Configure (CMake)
-        shell: bash
-        run: |
-          ARGS=(-B build -S . -DCMAKE_BUILD_TYPE=Release)
-          if [ "${{ runner.os }}" = "macOS" ]; then
-            # Universal binary — single .app for both arm64 and x86_64.
-            ARGS+=("-DCMAKE_OSX_ARCHITECTURES=arm64;x86_64")
-          fi
-          cmake "${ARGS[@]}"
-
-      - name: Build
-        run: cmake --build build --config Release --parallel
-
-      # ─────────────────────────────────────────────────
-      # Package — DMG on macOS, MSI + ZIP on Windows
-      # ─────────────────────────────────────────────────
-      - name: Package · Windows (deploy Qt)
-        if: runner.os == 'Windows'
-        shell: bash
-        run: |
-          set -e
-          mkdir -p dist
-          cp build/pier-ui-qt/Release/pier-x.exe dist/
-          windeployqt --qmldir pier-ui-qt/qml --release dist/pier-x.exe
-
-      - name: Package · Windows (ZIP)
-        if: runner.os == 'Windows'
-        shell: bash
-        run: |
-          cd dist
-          7z a "../${{ matrix.artifact-name }}-${{ steps.version.outputs.version }}.zip" .
-
-      - name: Package · macOS (deploy Qt)
-        if: runner.os == 'macOS'
-        shell: bash
-        run: |
-          set -e
-          APP_BUNDLE="build/pier-ui-qt/pier-x.app"
-          if [ ! -d "$APP_BUNDLE" ]; then
-            echo "App bundle not found at $APP_BUNDLE"
-            find build -name 'pier-x.app' -type d -print
-            exit 1
-          fi
-          # Verify the binary is actually universal
-          lipo -info "$APP_BUNDLE/Contents/MacOS/pier-x" || true
-          macdeployqt "$APP_BUNDLE" -qmldir=pier-ui-qt/qml
-
-      - name: Package · macOS (DMG)
-        if: runner.os == 'macOS'
-        shell: bash
-        run: |
-          set -e
-          # Install create-dmg for polished DMG with background
-          brew install create-dmg || true
-          VERSION="${{ steps.version.outputs.version }}"
-          APP_BUNDLE="build/pier-ui-qt/pier-x.app"
-          DMG_NAME="${{ matrix.artifact-name }}-${VERSION}.dmg"
-
-          # Try create-dmg with custom background; fall back to
-          # macdeployqt -dmg if create-dmg is unavailable.
-          if command -v create-dmg &>/dev/null; then
-            create-dmg \
-              --volname "Pier-X ${VERSION}" \
-              --background packaging/dmg-background.png \
-              --window-pos 200 120 \
-              --window-size 600 400 \
-              --icon "pier-x.app" 150 250 \
-              --app-drop-link 450 250 \
-              --icon-size 80 \
-              --text-size 14 \
-              --hide-extension "pier-x.app" \
-              --no-internet-enable \
-              "$DMG_NAME" \
-              "$APP_BUNDLE"
-          else
-            # Fallback: plain macdeployqt DMG
-            macdeployqt "$APP_BUNDLE" -dmg
-            mv "build/pier-ui-qt/pier-x.dmg" "$DMG_NAME"
-          fi
-
-      - name: Upload artifact · Windows (ZIP)
-        if: runner.os == 'Windows'
-        uses: actions/upload-artifact@v4
-        with:
-          name: ${{ matrix.artifact-name }}
-          path: ${{ matrix.artifact-name }}-${{ steps.version.outputs.version }}.zip
-          if-no-files-found: error
-
-      - name: Upload artifact · macOS (DMG)
-        if: runner.os == 'macOS'
-        uses: actions/upload-artifact@v4
-        with:
-          name: ${{ matrix.artifact-name }}
-          path: ${{ matrix.artifact-name }}-${{ steps.version.outputs.version }}.dmg
-          if-no-files-found: error
-
-  publish:
-    name: Publish release
-    needs: build
-    # Run as long as we weren't cancelled — publish whatever artifacts
-    # made it through, even if one of the matrix entries failed.
-    if: ${{ !cancelled() }}
-    runs-on: ubuntu-latest
-    permissions:
-      contents: write
     steps:
       - name: Checkout
         uses: actions/checkout@v4
 
       - name: Determine tag
         id: tag
+        shell: bash
         run: |
           if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
-            echo "tag=${{ inputs.tag }}" >> "$GITHUB_OUTPUT"
+            echo "value=${{ inputs.tag }}" >> "$GITHUB_OUTPUT"
           else
-            echo "tag=${GITHUB_REF#refs/tags/}" >> "$GITHUB_OUTPUT"
+            echo "value=${GITHUB_REF#refs/tags/}" >> "$GITHUB_OUTPUT"
           fi
 
-      - name: Download all artifacts
-        uses: actions/download-artifact@v4
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
         with:
-          path: artifacts
+          node-version: '24'
+          cache: npm
+          cache-dependency-path: pier-ui-tauri/package-lock.json
 
-      - name: List artifacts
-        run: find artifacts -type f -print
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
 
-      # Auto-publish — no draft. Versions starting with `v0.` are marked
-      # as prerelease so they don't become the "Latest release" until 1.0.
-      - name: Create GitHub release
-        uses: softprops/action-gh-release@v2
+      - name: Install macOS universal targets
+        if: runner.os == 'macOS'
+        run: rustup target add aarch64-apple-darwin x86_64-apple-darwin
+
+      - name: Install frontend dependencies
+        working-directory: pier-ui-tauri
+        run: npm ci
+
+      - name: Build and publish Tauri bundles
+        uses: tauri-apps/tauri-action@v1
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         with:
-          tag_name: ${{ steps.tag.outputs.tag }}
-          name: Pier-X ${{ steps.tag.outputs.tag }}
-          draft: false
-          prerelease: ${{ startsWith(steps.tag.outputs.tag, 'v0.') }}
-          generate_release_notes: true
-          fail_on_unmatched_files: false
-          files: |
-            artifacts/**/*.zip
-            artifacts/**/*.dmg
+          projectPath: pier-ui-tauri
+          tagName: ${{ steps.tag.outputs.value }}
+          releaseName: Pier-X ${{ steps.tag.outputs.value }}
+          releaseBody: See the assets to download this version and install.
+          releaseDraft: false
+          prerelease: ${{ startsWith(steps.tag.outputs.value, 'v0.') }}
+          args: ${{ matrix.args }}

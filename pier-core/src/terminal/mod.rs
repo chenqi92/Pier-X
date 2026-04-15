@@ -13,7 +13,7 @@
 //!
 //! * [`emulator`] — pure-Rust VT100 state machine, driven by the `vte`
 //!   crate's SAX-style `Perform` trait. Holds a rectangular grid of
-//!   [`emulator::Cell`]s that the UI paints, a cursor position, and
+//!   [`emulator::Cell`]s that the shell paints, a cursor position, and
 //!   honours a minimum-viable set of CSI sequences (cursor movement,
 //!   erase in display / in line). Colors and SGR attributes are parsed
 //!   but not yet applied — the plumbing is there for M2b to enable
@@ -21,9 +21,8 @@
 //!
 //! These two layers intentionally do NOT know about each other.
 //! `pty::Pty` produces raw bytes, `emulator::VtEmulator` consumes raw
-//! bytes — the code that wires them together lives one layer up, in
-//! the UI-facing `TerminalSession` that M2b will introduce alongside
-//! the Qt bridge. Keeping them separate means:
+//! bytes — the code that wires them together lives one layer up in
+//! the shell-facing terminal session. Keeping them separate means:
 //!
 //! 1. The emulator tests don't need a real shell. They feed canned
 //!    byte sequences and assert grid contents.

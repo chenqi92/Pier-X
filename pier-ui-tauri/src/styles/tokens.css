@@ -1,0 +1,154 @@
+/* ── Pier-X Design Tokens ─────────────────────────────────────────
+ * Ported from Qt Theme.qml — single source of truth for all
+ * colors, typography, spacing, radius, and motion.
+ * Dark mode is default; light mode via [data-theme="light"].
+ */
+
+:root,
+[data-theme="dark"] {
+  color-scheme: dark;
+
+  /* ── Backgrounds ─────────────────────────────────────────── */
+  --bg-canvas: #0f1115;
+  --bg-chrome: #14171c;
+  --bg-panel: #171a1f;
+  --bg-surface: #1d2127;
+  --bg-elevated: #242931;
+  --bg-inset: #11141a;
+  --bg-hover: rgba(255, 255, 255, 0.05);
+  --bg-active: rgba(255, 255, 255, 0.08);
+  --bg-selected: rgba(53, 116, 240, 0.18);
+
+  /* ── Text ────────────────────────────────────────────────── */
+  --text-primary: #e8eaed;
+  --text-secondary: #b5b9c1;
+  --text-tertiary: #878c95;
+  --text-disabled: #5c6068;
+  --text-inverse: #16181b;
+
+  /* ── Borders ─────────────────────────────────────────────── */
+  --border-subtle: rgba(255, 255, 255, 0.05);
+  --border-default: rgba(255, 255, 255, 0.09);
+  --border-strong: rgba(255, 255, 255, 0.14);
+  --border-focus: #3574f0;
+  --split-handle-idle: transparent;
+  --split-handle-hover: rgba(255, 255, 255, 0.028);
+  --split-handle-active: rgba(53, 116, 240, 0.12);
+  --split-handle-line: rgba(255, 255, 255, 0.08);
+  --split-handle-line-active: rgba(53, 116, 240, 0.52);
+
+  /* ── Accent ──────────────────────────────────────────────── */
+  --accent: #3574f0;
+  --accent-hover: #4f8aff;
+  --accent-muted: rgba(53, 116, 240, 0.18);
+  --accent-subtle: rgba(53, 116, 240, 0.08);
+
+  /* ── Status ──────────────────────────────────────────────── */
+  --status-success: #5fb865;
+  --status-warning: #f0a83a;
+  --status-error: #fa6675;
+  --status-info: #3574f0;
+}
+
+[data-theme="light"] {
+  color-scheme: light;
+
+  /* ── Backgrounds ─────────────────────────────────────────── */
+  --bg-canvas: #fbfcfd;
+  --bg-chrome: #f5f6f8;
+  --bg-panel: #f4f6f9;
+  --bg-surface: #ffffff;
+  --bg-elevated: #ffffff;
+  --bg-inset: #eef1f5;
+  --bg-hover: rgba(0, 0, 0, 0.05);
+  --bg-active: rgba(0, 0, 0, 0.08);
+  --bg-selected: rgba(53, 116, 240, 0.12);
+
+  /* ── Text ────────────────────────────────────────────────── */
+  --text-primary: #1f2329;
+  --text-secondary: #454b55;
+  --text-tertiary: #727887;
+  --text-disabled: #a6aab4;
+  --text-inverse: #ffffff;
+
+  /* ── Borders ─────────────────────────────────────────────── */
+  --border-subtle: rgba(0, 0, 0, 0.06);
+  --border-default: rgba(0, 0, 0, 0.10);
+  --border-strong: rgba(0, 0, 0, 0.18);
+  --split-handle-hover: rgba(0, 0, 0, 0.024);
+  --split-handle-active: rgba(53, 116, 240, 0.08);
+  --split-handle-line: rgba(0, 0, 0, 0.09);
+  --split-handle-line-active: rgba(53, 116, 240, 0.40);
+
+  /* ── Accent (light-specific overrides) ───────────────────── */
+  --accent-muted: rgba(53, 116, 240, 0.12);
+}
+
+/* ── Shell Dimensions (from Qt Theme.qml) ──────────────────────── */
+
+:root {
+  --topbar-height: 38px;
+  --tabbar-height: 36px;
+  --tab-height: 30px;
+  --statusbar-height: 24px;
+  --sidebar-width: 272px;
+  --right-sidebar-width: 400px;
+  --tool-rail-width: 44px;
+  --control-height: 30px;
+  --field-height: 34px;
+  --compact-row-height: 28px;
+  --list-row-height: 32px;
+  --dialog-header-height: 56px;
+  --dialog-footer-height: 60px;
+
+  /* ── Typography ──────────────────────────────────────────── */
+  --font-ui: "Inter", "SF Pro Text", "Segoe UI", system-ui, sans-serif;
+  --font-mono: "JetBrains Mono", "SF Mono", "Cascadia Code", "Fira Code", monospace;
+
+  --size-display: 32px;
+  --size-h1: 24px;
+  --size-h2: 20px;
+  --size-h3: 16px;
+  --size-body-lg: 14px;
+  --size-body: 13px;
+  --size-caption: 12px;
+  --size-small: 11px;
+
+  --weight-regular: 400;
+  --weight-medium: 510;
+  --weight-semibold: 590;
+
+  /* ── Spacing (4px grid) ──────────────────────────────────── */
+  --sp-0: 0px;
+  --sp-0-5: 2px;
+  --sp-1: 4px;
+  --sp-1-5: 6px;
+  --sp-2: 8px;
+  --sp-3: 12px;
+  --sp-4: 16px;
+  --sp-5: 20px;
+  --sp-6: 24px;
+  --sp-8: 32px;
+  --sp-10: 40px;
+  --sp-12: 48px;
+
+  /* ── Radius ──────────────────────────────────────────────── */
+  --radius-xs: 2px;
+  --radius-sm: 4px;
+  --radius-md: 6px;
+  --radius-lg: 8px;
+  --radius-xl: 12px;
+  --radius-pill: 9999px;
+
+  /* ── Icon Sizes ──────────────────────────────────────────── */
+  --icon-xs: 12px;
+  --icon-sm: 14px;
+  --icon-md: 16px;
+  --icon-lg: 18px;
+
+  /* ── Motion ──────────────────────────────────────────────── */
+  --dur-fast: 120ms;
+  --dur-normal: 200ms;
+  --dur-slow: 320ms;
+  --easing: cubic-bezier(0.33, 1, 0.68, 1); /* OutCubic */
+}

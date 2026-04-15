@@ -5,11 +5,11 @@
 
 use std::process::Command;
 
-use crate::services::server_monitor::ServerSnapshot;
 use crate::process_util::configure_background_command;
+use crate::services::server_monitor::ServerSnapshot;
 
 /// Local system metrics reuse the same schema as the remote
-/// SSH monitor so the Qt layer does not need a second parsing path.
+/// SSH monitor so the shell does not need a second parsing path.
 pub type LocalMetrics = ServerSnapshot;
 
 struct ProcessOutput {
@@ -63,7 +63,10 @@ fn first_diagnostic_line(output: &ProcessOutput) -> String {
 }
 
 fn combine_streams(output: ProcessOutput) -> String {
-    match (output.stdout.trim().is_empty(), output.stderr.trim().is_empty()) {
+    match (
+        output.stdout.trim().is_empty(),
+        output.stderr.trim().is_empty(),
+    ) {
         (false, true) => output.stdout,
         (true, false) => output.stderr,
         (false, false) => format!("{}\n{}", output.stdout.trim_end(), output.stderr.trim_end()),
@@ -174,7 +177,7 @@ pub fn docker_inspect(id: &str) -> Result<String, String> {
 pub fn system_metrics() -> Result<LocalMetrics, String> {
     #[cfg(target_os = "windows")]
     {
-        return system_metrics_windows();
+        system_metrics_windows()
     }
 
     #[cfg(not(target_os = "windows"))]

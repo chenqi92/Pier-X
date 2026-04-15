@@ -4,7 +4,7 @@
 //! (rows × cols of [`Cell`]), a cursor position, the current SGR
 //! attributes (foreground / background color, bold, underline,
 //! reverse), and a bounded scrollback buffer. Bytes produced by a
-//! [`super::Pty`] are fed in via [`VtEmulator::process`]; the UI layer
+//! [`super::Pty`] are fed in via [`VtEmulator::process`]; the shell
 //! reads cells out of [`VtEmulator::cells`] at render time.
 //!
 //! ## Scope today
@@ -64,8 +64,8 @@ impl Default for Cell {
     }
 }
 
-/// Terminal color. The parser distinguishes three variants so the UI
-/// can implement its theme's palette lookup the way it prefers.
+/// Terminal color. The parser distinguishes three variants so the
+/// shell can implement palette lookup the way it prefers.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Color {
     /// Whatever the theme considers "default fg" / "default bg".
@@ -117,13 +117,13 @@ pub struct VtEmulator {
     pen: Cell,
 
     /// Set to true when a BEL character (0x07) is received.
-    /// The UI layer reads and resets this flag per snapshot.
+    /// The shell reads and resets this flag per snapshot.
     pub bell_pending: bool,
 
     /// Window title set via OSC 0/1/2.
     pub window_title: String,
 
-    /// Clipboard content set via OSC 52. The UI layer decides
+    /// Clipboard content set via OSC 52. The shell decides
     /// whether to honor clipboard writes from the terminal.
     pub osc52_clipboard: String,
 
@@ -408,10 +408,12 @@ impl Perform for Performer<'_> {
             *self.cursor_x += 1;
 
             // For wide characters, insert a zero-width placeholder in
-            // the next cell so the C++ renderer knows to skip it.
+            // the next cell so the renderer knows to skip it.
             if char_width == 2 && *self.cursor_x < self.cols {
-                let mut placeholder = Cell::default();
-                placeholder.ch = '\0';
+                let placeholder = Cell {
+                    ch: '\0',
+                    ..Cell::default()
+                };
                 self.cells[*self.cursor_y][*self.cursor_x] = placeholder;
                 *self.cursor_x += 1;
             }
@@ -446,7 +448,7 @@ impl Perform for Performer<'_> {
                 let next = (*self.cursor_x / 8 + 1) * 8;
                 *self.cursor_x = next.min(self.cols - 1);
             }
-            // BEL — visual bell. Set the bell flag so the UI can
+            // BEL — visual bell. Set the bell flag so the shell can
             // flash the terminal border or play a sound.
             0x07 => {
                 *self.bell_pending = true;
@@ -808,7 +810,7 @@ mod tests {
         // Pump 10 lines through a 2-row grid. 8 of them evict; only
         // the most recent 3 should remain in the ring.
         for i in 0..10 {
-            emu.process(format!("L{}\r\n", i).as_bytes());
+            emu.process(format!("L{i}\r\n").as_bytes());
         }
         assert_eq!(emu.scrollback.len(), 3);
     }

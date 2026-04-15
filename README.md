@@ -1,7 +1,7 @@
 # Pier-X
 
-> **Cross-platform terminal management. Built on Qt 6 + Rust core.**
-> 跨平台终端管理工具，基于 Qt 6 + Rust 核心。
+> **Cross-platform terminal management on Tauri + Rust core.**
+> 跨平台终端管理工具，当前桌面壳基于 Tauri，后端核心基于 Rust。
 
 The cross-platform successor to [Pier](https://github.com/chenqi92/Pier) (macOS-only). Same name, same purpose, different foundation — designed to run on **macOS** and **Windows** with the same engineered IDE feel.
 
@@ -9,20 +9,37 @@ The cross-platform successor to [Pier](https://github.com/chenqi92/Pier) (macOS-
 
 ## Status
 
-Foundation complete. The full UI shell, design system, build infrastructure, and Rust core skeleton are in place. Protocol modules (terminal, SSH, RDP, VNC) are next.
+The Rust backend lives in `pier-core/`; the desktop shell now lives in `pier-ui-tauri/`. The old Qt shell has been retired from the active build path.
 
-See [docs/ROADMAP.md](./docs/ROADMAP.md) for the tag-by-tag release plan, and [docs/PARITY.md](./docs/PARITY.md) for the ground-level porting plan that tracks every feature in the macOS-only upstream Pier and maps it to work in Pier-X.
+See [docs/ROADMAP.md](./docs/ROADMAP.md) for the active delivery plan, and [docs/TAURI-RESET.md](./docs/TAURI-RESET.md) for the shell reset baseline.
 
-- ✅ Technology stack decided — [docs/TECH-STACK.md](./docs/TECH-STACK.md)
-- ✅ Design system codified as a Claude Code skill — [`.claude/skills/pier-design-system/SKILL.md`](./.claude/skills/pier-design-system/SKILL.md)
-- ✅ Qt 6 / QML UI shell with theme follow + dark/light + smooth transitions
-- ✅ Full component library (buttons, inputs, combo, tooltip, card, pill, etc.)
-- ✅ Tab bar + content stack + welcome state
-- ✅ Command palette (Ctrl/Cmd+K) + connection dialog + settings dialog
-- ✅ pier-core Rust skeleton (paths, credentials, FFI surface)
-- ✅ CI on macOS + Windows (Qt) and macOS + Windows + Linux (Rust)
-- ✅ Tag-triggered release workflow producing draft GH releases
+- ✅ Rust backend foundation in `pier-core/`
+- ✅ New Tauri desktop shell scaffold in `pier-ui-tauri/`
+- ✅ IDE-style three-pane workbench + integrated terminal surface
+- ✅ Real shell session wired through `pier-core::terminal::PierTerminal`
+- ✅ Git overview panel wired through `pier-core::services::git::GitClient`
+- ✅ Git diff preview + stage / unstage actions wired in the new shell
+- ✅ Commit, local branch switch, and recent history wired in the new shell
+- ✅ Push / pull and stash flows wired in the new shell
+- ✅ Tracked change discard and stash drop wired in the new shell
+- ✅ SSH password-based terminal target wired in the new shell
+- ✅ SSH agent and key-file terminal auth wired in the new shell
+- ✅ Persisted SSH connections wired through `pier-core::connections::ConnectionStore`
+- ✅ MySQL / SQLite / Redis browse surfaces wired through `pier-core` service clients
+- ✅ MySQL / SQLite query editors and result tables wired in the new shell
+- ✅ Redis command editor and raw reply panel wired in the new shell
+- ✅ MySQL / SQLite write-safe execution and TSV result copy wired in the new shell
+- ✅ Terminal copy-selection + clipboard paste wired in the new shell
+- ✅ Tauri commands wired to `pier-core` runtime, directory listing, terminal, and Git
+- ✅ Windows debug bundle built successfully from the new shell
+- ✅ Tauri shell is the only supported desktop shell in repo entrypoints
+- ✅ Qt/CMake/Corrosion legacy build chain removed from the active repo
+- ⬜ Deepen data panels and add plugin host into the new shell
+- ✅ CI on macOS + Windows (Tauri shell) and macOS + Windows + Linux (Rust core)
+- ✅ Tag-triggered release workflow publishing Tauri bundles to GitHub Releases
 - ⬜ Terminal / SSH / SFTP / RDP / VNC — incremental work, see ROADMAP
+
+See [docs/TAURI-RESET.md](./docs/TAURI-RESET.md) for the migration baseline. The repo now keeps only the active Tauri build path in tracked build and packaging files.
 
 ---
 
@@ -30,9 +47,9 @@ See [docs/ROADMAP.md](./docs/ROADMAP.md) for the tag-by-tag release plan, and [d
 
 ```
 ┌────────────────────────────────────────────────────┐
-│                Qt 6 / QML (UI shell)               │  pier-ui-qt/
+│           Tauri 2 + React (desktop shell)          │  pier-ui-tauri/
 ├────────────────────────────────────────────────────┤
-│              cxx-qt bridge (Rust ↔ Qt)             │
+│        Tauri commands / desktop runtime glue       │
 ├────────────────────────────────────────────────────┤
 │            pier-core (Rust core engine)            │  pier-core/
 ├────────────────────────────────────────────────────┤
@@ -40,7 +57,7 @@ See [docs/ROADMAP.md](./docs/ROADMAP.md) for the tag-by-tag release plan, and [d
 └────────────────────────────────────────────────────┘
 ```
 
-**Design rule**: `pier-core` knows nothing about the UI. The UI layer is deliberately replaceable. See [docs/TECH-STACK.md §12](./docs/TECH-STACK.md) for the rationale.
+**Design rule**: `pier-core` knows nothing about the UI. The shell is deliberately replaceable.
 
 ---
 
@@ -48,36 +65,30 @@ See [docs/ROADMAP.md](./docs/ROADMAP.md) for the tag-by-tag release plan, and [d
 
 ### Requirements
 
-- **Qt 6.8 LTS** (or newer)
-- **CMake 3.21+**
-- **C++17 compiler** (MSVC 2022 / Apple Clang 15+)
-- **Rust 1.75+** (once `pier-core` is wired in)
+- **Node.js 24+**
+- **npm 11+**
+- **Rust 1.88+**
+- **WebView2 runtime** (Windows)
 
-### Install Qt 6.8 LTS
-
-Pier-X needs Qt 6.8 LTS (or newer). Easiest path is `aqtinstall` — same tool CI uses, no GUI installer needed:
+Run the active shell directly:
 
 ```bash
-pip install aqtinstall
-
-# Windows
-aqt install-qt windows desktop 6.8.1 win64_msvc2022_64 --outputdir C:\Qt
-
-# macOS
-aqt install-qt mac desktop 6.8.1 clang_64 --outputdir ~/Qt
-
-# Linux
-aqt install-qt linux desktop 6.8.1 linux_gcc_64 --outputdir ~/Qt
+cd pier-ui-tauri
+npm ci
+npm run tauri -- dev
 ```
 
-Alternatives:
-- **Windows / macOS**: official [Qt Online Installer](https://www.qt.io/download-qt-installer)
-- **macOS**: `brew install qt`
-- **Debian / Ubuntu**: `sudo apt install qt6-base-dev qt6-declarative-dev qt6-shadertools-dev`
+Build the active shell directly:
+
+```bash
+cd pier-ui-tauri
+npm ci
+npm run tauri -- build --debug
+```
 
 ### Quickstart
 
-The repo ships with one-shot scripts that auto-detect Qt, configure, build, and launch the app.
+The repo ships with one-shot scripts that enter `pier-ui-tauri/` for you.
 
 ```bash
 # macOS / Linux
@@ -94,22 +105,16 @@ Build only (no launch):
 .\build.ps1       # Windows
 ```
 
-Auto-detection looks at, in order: an explicit `QT_DIR` env var, `qmake` in `PATH`, `C:\Qt\<version>\msvc2022_64\` on Windows, `~/Qt/<version>/macos\` on macOS, `~/Qt/<version>/gcc_64\` on Linux, and Homebrew's `/opt/homebrew/opt/qt`. If Qt isn't found, the script prints exact install commands and exits.
+The scripts will install frontend dependencies on demand and then run the matching Tauri command. `run.*` launches `tauri dev`; `build.*` runs `tauri build`.
 
-All four scripts honour these environment variables:
+The scripts honour these environment variables:
 
 | Variable | Default | Purpose |
 |---|---|---|
-| `BUILD_TYPE` | `Release` | CMake build type (`Release`, `Debug`, `RelWithDebInfo`) |
-| `BUILD_DIR` | `build` | Build directory |
-| `QT_DIR` | _(auto-detect)_ | Override the auto-detected Qt prefix (e.g. `C:\Qt\6.8.1\msvc2022_64`) |
-
-### Manual build
-
-```bash
-cmake -B build -S .
-cmake --build build --config Release
-```
+| `BUILD_TYPE` | `Debug` for `run.*`, `Release` for `build.*` | Maps to `tauri dev` / `tauri build` debug vs release mode |
+| `BUILD_DIR` | Tauri default target dir | When set, exported as `CARGO_TARGET_DIR` |
+| `PIER_UI_DIR` | `pier-ui-tauri` | Override the active shell directory |
+| `NO_BUNDLE` | `0` | When set to `1`, `build.*` adds `--no-bundle` |
 
 ---
 
@@ -117,37 +122,15 @@ cmake --build build --config Release
 
 ```
 Pier-X/
-├── CMakeLists.txt           # Top-level CMake
-├── VERSION                  # Single source of version truth
-├── pier-ui-qt/              # Qt 6 / QML UI shell
-│   ├── CMakeLists.txt
-│   ├── src/main.cpp
-│   ├── qml/
-│   │   ├── Main.qml
-│   │   └── Theme.qml        # Design system singleton
-│   └── resources/icons/
-├── pier-core/               # Rust core engine (placeholder)
+├── pier-core/               # Rust core engine
+├── pier-ui-tauri/           # Active desktop shell rewrite
+│   ├── src/                 # React UI
+│   └── src-tauri/           # Tauri runtime + Rust commands
 ├── docs/
-│   └── TECH-STACK.md        # Technology decision record
-└── .claude/skills/
-    └── pier-design-system/  # Design standard (Claude Code skill)
-        ├── SKILL.md
-        └── extracted/       # Reference DESIGN.md files
+│   ├── ROADMAP.md
+│   └── TAURI-RESET.md
+└── .agents/skills/          # Archived design references and repo automation skills
 ```
-
----
-
-## Design system
-
-Pier-X follows a strict design standard documented as a Claude Code skill. **Five non-negotiable principles**:
-
-1. Darkness is the medium, not a theme
-2. Single chromatic accent (`#3574F0` IntelliJ blue)
-3. Borders are always semi-transparent, never solid
-4. Inter for UI, JetBrains Mono for code
-5. Density over spectacle
-
-See [`.claude/skills/pier-design-system/SKILL.md`](./.claude/skills/pier-design-system/SKILL.md) for the full token reference and component recipes.
 
 ---
 

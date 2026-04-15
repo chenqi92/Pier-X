@@ -1055,6 +1055,9 @@ export default function GitPanel({ browserPath }: Props) {
 
   function renderHistoryInlineDetail(detail: GitCommitDetailView, row: GitGraphRowView) {
     const refs = refTokens(row.refs);
+    const isHead = historyContextIsHead(row);
+    const parentHash = historyContextParentHash(row);
+    const canUndo = !!(isHead && parentHash);
     return (
       <div className="git-history-detail-inline">
         <div className="git-history-detail-inline__meta">
@@ -1087,12 +1090,22 @@ export default function GitPanel({ browserPath }: Props) {
         </div>
 
         <div className="git-history-detail-inline__actions">
+          <GitButton
+            compact
+            disabled={busy}
+            onClick={() => void runGitAction(() => cmd.gitCheckoutTarget(currentRepoPath, detail.hash))}
+          >
+            {t("Checkout")}
+          </GitButton>
           <GitButton compact onClick={() => openHistoryComparison(detail.hash)}>
             {t("Compare with local")}
           </GitButton>
           <GitButton compact disabled={!browserUrlForCommit(detail.hash)} onClick={() => void openCommitInBrowser(detail.hash)}>
             {t("Open in browser")}
           </GitButton>
+        </div>
+
+        <div className="git-history-detail-inline__actions git-history-detail-inline__actions--secondary">
           <GitButton
             compact
             onClick={() => {
@@ -1113,6 +1126,48 @@ export default function GitPanel({ browserPath }: Props) {
             }}
           >
             {t("Tag")}
+          </GitButton>
+          <GitButton
+            compact
+            onClick={() => {
+              setHistoryContextCommit(row);
+              setHistoryResetMode("mixed");
+              setHistoryResetDialogOpen(true);
+            }}
+          >
+            {t("Reset")}
+          </GitButton>
+        </div>
+
+        <div className="git-history-detail-inline__actions git-history-detail-inline__actions--secondary">
+          <GitButton
+            compact
+            disabled={!canUndo || busy}
+            onClick={() => void runGitAction(() => cmd.gitResetToCommit(currentRepoPath, parentHash, "soft"))}
+          >
+            {t("Undo commit")}
+          </GitButton>
+          <GitButton
+            compact
+            disabled={!isHead || busy}
+            onClick={() => {
+              setHistoryContextCommit(row);
+              setHistoryAmendMessage(detail.message || row.message || "");
+              setHistoryEditDialogOpen(true);
+            }}
+          >
+            {t("Edit message")}
+          </GitButton>
+          <GitButton
+            tone="destructive"
+            compact
+            disabled={busy}
+            onClick={() => {
+              setHistoryContextCommit(row);
+              setHistoryDropDialogOpen(true);
+            }}
+          >
+            {t("Drop")}
           </GitButton>
         </div>
 

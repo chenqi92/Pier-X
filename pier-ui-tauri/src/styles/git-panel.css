@@ -896,10 +896,18 @@
 }
 
 .git-file-section__empty {
-  padding: 10px 12px;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  min-height: 28px;
+  padding: 8px 12px;
   color: var(--text-tertiary);
   font-size: 10px;
   font-family: var(--font-mono);
+}
+
+.git-file-section__empty--clean {
+  color: color-mix(in srgb, var(--status-success) 78%, white 22%);
 }
 
 .git-status-badge {
@@ -1459,8 +1467,43 @@
   display: flex;
   flex-direction: column;
   min-height: 0;
-  gap: var(--sp-3);
+  gap: 0;
   height: 100%;
+}
+
+.git-conflict-files {
+  border-right: 1px solid var(--border-subtle);
+}
+
+.git-conflict-detail__actions {
+  padding: 6px 12px;
+  border-bottom: 1px solid var(--border-subtle);
+  background: rgba(255, 255, 255, 0.02);
+}
+
+.git-conflict-detail__actions .git-button--compact {
+  min-height: 20px;
+  padding: 0 7px;
+}
+
+.git-conflict-hunks {
+  gap: 8px;
+  padding: 8px;
+}
+
+.git-conflict-hunk {
+  gap: 8px;
+  padding: 8px;
+  border-radius: var(--radius-sm);
+  background: rgba(255, 255, 255, 0.025);
+}
+
+.git-conflict-hunk .git-section-header__title {
+  font-size: 11px;
+}
+
+.git-conflict-hunk .git-section-header__subtitle {
+  font-size: 9px;
 }
 
 .git-conflict-file__dot,
@@ -1530,12 +1573,24 @@
 }
 
 .git-conflict-hunk__line {
-  padding: 0 var(--sp-2);
+  padding: 1px var(--sp-2);
   color: var(--text-secondary);
   font-size: var(--size-small);
   line-height: 1.45;
   white-space: pre-wrap;
   word-break: break-word;
+}
+
+.git-conflict-hunk__actions {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex-wrap: wrap;
+}
+
+.git-conflict-hunk__actions .git-button--compact {
+  min-height: 20px;
+  padding: 0 7px;
 }
 
 .git-manager,

@@ -1795,7 +1795,10 @@ export default function GitPanel({ browserPath }: Props) {
                         })}
                       </div>
                     ) : (
-                      <div className="git-file-section__empty">{t("Working tree clean")}</div>
+                      <div className="git-file-section__empty git-file-section__empty--clean">
+                        <Check size={11} />
+                        <span>{t("Working tree clean")}</span>
+                      </div>
                     )}
                   </section>
 
@@ -2276,7 +2279,7 @@ export default function GitPanel({ browserPath }: Props) {
 
                             <div className="git-conflict-hunks">
                               {selectedConflictHunks.map((hunk, index) => (
-                                <div key={`${selectedConflictFile.path}-hunk-${index}`} className="git-card git-card--inset">
+                                <div key={`${selectedConflictFile.path}-hunk-${index}`} className="git-card git-card--inset git-conflict-hunk">
                                   <GitSectionHeader
                                     actions={
                                       hunk.resolution ? (
@@ -2371,9 +2374,9 @@ export default function GitPanel({ browserPath }: Props) {
                   </PanelGroup>
                 ) : (
                   <GitEmptyState
-                    accent="var(--status-warning)"
+                    accent="var(--status-success)"
                     description={t("Conflicted files will appear here when Git requires manual resolution.")}
-                    icon={GitMerge}
+                    icon={Check}
                     title={t("No merge conflicts")}
                   />
                 )}

@@ -993,6 +993,10 @@
   border-color: transparent;
 }
 
+.git-file-row--active {
+  box-shadow: inset 1px 0 0 color-mix(in srgb, var(--accent) 56%, transparent);
+}
+
 .git-file-row__copy,
 .git-conflict-file__copy,
 .git-stash-row__copy,
@@ -1005,9 +1009,8 @@
 }
 
 .git-file-row__copy {
-  align-items: center;
-  flex-direction: row;
-  gap: 6px;
+  justify-content: center;
+  gap: 1px;
 }
 
 .git-file-row__name,
@@ -1029,11 +1032,11 @@
   text-overflow: ellipsis;
   white-space: nowrap;
   color: var(--text-tertiary);
-  font-size: 10px;
+  font-size: 9px;
 }
 
 .git-file-row__path {
-  flex: 1;
+  flex: none;
   min-width: 0;
 }
 

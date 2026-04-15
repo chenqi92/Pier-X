@@ -54,6 +54,7 @@ type PopoverKind =
   | "branchMenu"
   | "historyOptions"
   | "commitActions"
+  | "changeFileMenu"
   | "historyCommit"
   | "branchManager"
   | "tagManager"
@@ -85,6 +86,10 @@ type RepoPathTreeNode = {
   name: string;
   path: string;
   children: RepoPathTreeNode[];
+};
+type ChangeFileMenuState = {
+  file: GitPanelState["stagedFiles"][number];
+  staged: boolean;
 };
 
 const GRAPH_PALETTE = [
@@ -121,6 +126,12 @@ function compactPath(path: string) {
   const windowsHome = normalized.match(/^[A-Za-z]:\\Users\\[^\\]+/);
   if (windowsHome) return `~${normalized.slice(windowsHome[0].length) || "\\"}`;
   return normalized;
+}
+
+function parentPathLabel(path: string) {
+  const value = String(path || "");
+  const index = value.lastIndexOf("/");
+  return index > 0 ? value.slice(0, index) : "";
 }
 
 function pathAncestors(path: string) {
@@ -720,6 +731,14 @@ export default function GitPanel({ browserPath }: Props) {
     const left = Math.max(8, Math.min(panelRect.width - width - 8, clientX - panelRect.left));
     const top = Math.max(8, Math.min(panelRect.height - 16, clientY - panelRect.top));
     setPopover({ kind, left, top, width, data });
+  }
+
+  function openChangeFileMenu(event: ReactMouseEvent<HTMLButtonElement>, file: GitPanelState["stagedFiles"][number], staged: boolean) {
+    event.preventDefault();
+    openPopoverAt("changeFileMenu", event.clientX, event.clientY, 196, {
+      file,
+      staged,
+    } satisfies ChangeFileMenuState);
   }
 
   async function loadPanelState() {
@@ -1681,12 +1700,13 @@ export default function GitPanel({ browserPath }: Props) {
                               key={`staged-${file.path}`}
                               className={active ? "git-file-row git-file-row--active" : "git-file-row"}
                               onClick={() => setDiffTarget({ kind: "working", path: file.path, staged: true, untracked: false })}
+                              onContextMenu={(event) => openChangeFileMenu(event, file, true)}
                               type="button"
                             >
                               <span className={`git-status-badge git-status-badge--${statusToneFromCode(file.status)}`}>{file.status}</span>
                               <div className="git-file-row__copy">
-                                <span className="git-file-row__name">{file.fileName}</span>
-                                {file.path.includes("/") ? <span className="git-file-row__path">{file.path.replace(/\/[^/]+$/, "")}</span> : null}
+                                <span className="git-file-row__name" title={file.fileName}>{file.fileName}</span>
+                                {parentPathLabel(file.path) ? <span className="git-file-row__path" title={file.path}>{parentPathLabel(file.path)}</span> : null}
                               </div>
                               <button
                                 className="git-file-row__action git-file-row__action--unstage"
@@ -1740,12 +1760,13 @@ export default function GitPanel({ browserPath }: Props) {
                                   untracked: file.status === "?",
                                 })
                               }
+                              onContextMenu={(event) => openChangeFileMenu(event, file, false)}
                               type="button"
                             >
                               <span className={`git-status-badge git-status-badge--${statusToneFromCode(file.status)}`}>{file.status}</span>
                               <div className="git-file-row__copy">
-                                <span className="git-file-row__name">{file.fileName}</span>
-                                {file.path.includes("/") ? <span className="git-file-row__path">{file.path.replace(/\/[^/]+$/, "")}</span> : null}
+                                <span className="git-file-row__name" title={file.fileName}>{file.fileName}</span>
+                                {parentPathLabel(file.path) ? <span className="git-file-row__path" title={file.path}>{parentPathLabel(file.path)}</span> : null}
                               </div>
                               <button
                                 className="git-file-row__action git-file-row__action--stage"
@@ -2170,8 +2191,8 @@ export default function GitPanel({ browserPath }: Props) {
                             >
                               <span className="git-conflict-file__dot" />
                               <div className="git-conflict-file__copy">
-                                <span className="git-conflict-file__name">{file.name}</span>
-                                <span className="git-conflict-file__path">{file.path}</span>
+                                <span className="git-conflict-file__name" title={file.name}>{file.name}</span>
+                                <span className="git-conflict-file__path" title={file.path}>{parentPathLabel(file.path) || file.path}</span>
                               </div>
                               <GitPill tone="warning">{file.conflictCount}</GitPill>
                               <GitButton
@@ -2431,6 +2452,72 @@ export default function GitPanel({ browserPath }: Props) {
             {t("Commit & Push")}
           </GitMenuItem>
         </div>
+      </GitPopover>
+
+      <GitPopover kind="changeFileMenu" onClose={() => setPopover(null)} popover={popover}>
+        {popover?.kind === "changeFileMenu" ? (
+          <div className="git-popover-list">
+            <GitMenuItem
+              onClick={() => {
+                const { file, staged } = popover.data as ChangeFileMenuState;
+                setPopover(null);
+                setDiffTarget({ kind: "working", path: file.path, staged, untracked: !staged && file.status === "?" });
+              }}
+            >
+              {t("Show diff")}
+            </GitMenuItem>
+            <GitMenuItem
+              onClick={() => {
+                const { file } = popover.data as ChangeFileMenuState;
+                setPopover(null);
+                setBlameDialogOpen(true);
+                setBlameFilePath(file.path);
+                void cmd
+                  .gitBlameFile(currentRepoPath, file.path)
+                  .then((next) => setBlameLines(next))
+                  .catch(() => setBlameLines([]));
+              }}
+            >
+              {t("Blame")}
+            </GitMenuItem>
+            <div className="git-popover-divider" />
+            {(popover.data as ChangeFileMenuState).staged ? (
+              <GitMenuItem
+                onClick={() => {
+                  const { file } = popover.data as ChangeFileMenuState;
+                  setPopover(null);
+                  void runGitAction(() => cmd.gitUnstagePaths(currentRepoPath, [file.path]));
+                }}
+              >
+                {t("Unstage")}
+              </GitMenuItem>
+            ) : (
+              <>
+                <GitMenuItem
+                  onClick={() => {
+                    const { file } = popover.data as ChangeFileMenuState;
+                    setPopover(null);
+                    void runGitAction(() => cmd.gitStagePaths(currentRepoPath, [file.path]));
+                  }}
+                >
+                  {t("Stage")}
+                </GitMenuItem>
+                {(popover.data as ChangeFileMenuState).file.status !== "?" ? (
+                  <GitMenuItem
+                    destructive
+                    onClick={() => {
+                      const { file } = popover.data as ChangeFileMenuState;
+                      setPopover(null);
+                      void runGitAction(() => cmd.gitDiscardPaths(currentRepoPath, [file.path]));
+                    }}
+                  >
+                    {t("Discard changes")}
+                  </GitMenuItem>
+                ) : null}
+              </>
+            )}
+          </div>
+        ) : null}
       </GitPopover>
 
       <GitPopover kind="historyCommit" onClose={() => setPopover(null)} popover={popover}>

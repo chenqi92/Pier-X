@@ -405,6 +405,21 @@ impl PierTerminal {
         }
     }
 
+    /// Check whether a bell character was received since the last read.
+    /// Clears the pending flag after reading.
+    pub fn take_bell_pending(&self) -> bool {
+        let mut guard = match self.inner.lock() {
+            Ok(g) => g,
+            Err(poisoned) => poisoned.into_inner(),
+        };
+        if guard.emu.bell_pending {
+            guard.emu.bell_pending = false;
+            true
+        } else {
+            false
+        }
+    }
+
     /// Current grid size. Cheap (no lock, just atomics-free reads of
     /// the struct fields — the fields are updated under the lock).
     pub fn size(&self) -> (u16, u16) {

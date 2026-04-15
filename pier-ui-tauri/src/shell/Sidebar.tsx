@@ -9,12 +9,14 @@ import {
   Home,
   Monitor,
   MoreHorizontal,
+  Pencil,
   Plus,
   RefreshCw,
   Search,
   Server,
   SquareTerminal,
   Terminal,
+  Trash2,
 } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
 import type { CoreInfo, FileEntry } from "../lib/types";
@@ -26,6 +28,7 @@ type Props = {
   onOpenLocalTerminal: (path?: string) => void;
   onConnectSaved: (index: number) => void;
   onNewConnection: () => void;
+  onEditConnection: (index: number) => void;
   onPathChange?: (path: string) => void;
   workspaceRoot?: string;
   width?: number;
@@ -57,7 +60,7 @@ function goUp(currentPath: string): string {
   return trimmed.slice(0, slash);
 }
 
-export default function Sidebar({ onOpenLocalTerminal, onConnectSaved, onNewConnection, onPathChange, workspaceRoot, width }: Props) {
+export default function Sidebar({ onOpenLocalTerminal, onConnectSaved, onNewConnection, onEditConnection, onPathChange, workspaceRoot, width }: Props) {
   const { t } = useI18n();
   const [section, setSection] = useState<0 | 1>(0);
   const [entries, setEntries] = useState<FileEntry[]>([]);
@@ -65,7 +68,7 @@ export default function Sidebar({ onOpenLocalTerminal, onConnectSaved, onNewConn
   const [homeDir, setHomeDir] = useState("");
   const [searchText, setSearchText] = useState("");
   const [placesOpen, setPlacesOpen] = useState(false);
-  const { connections, refresh: refreshConnections } = useConnectionStore();
+  const { connections, refresh: refreshConnections, remove } = useConnectionStore();
   const [serverSearch, setServerSearch] = useState("");
   const placesRef = useRef<HTMLDivElement>(null);
 
@@ -200,14 +203,36 @@ export default function Sidebar({ onOpenLocalTerminal, onConnectSaved, onNewConn
           </div>
           <div className="sidebar__list">
             {filteredConnections.map((conn) => (
-              <button key={`${conn.index}-${conn.name}`} className="sidebar__server-row" onClick={() => onConnectSaved(conn.index)} type="button">
-                <SquareTerminal size={13} />
-                <div className="sidebar__server-info">
-                  <strong>{conn.name}</strong>
-                  <span>{conn.user}@{conn.host}:{conn.port}</span>
+              <div key={`${conn.index}-${conn.name}`} className="sidebar__server-row">
+                <button className="sidebar__server-main" onClick={() => onConnectSaved(conn.index)} type="button">
+                  <SquareTerminal size={13} />
+                  <div className="sidebar__server-info">
+                    <strong>{conn.name}</strong>
+                    <span>{conn.user}@{conn.host}:{conn.port}</span>
+                  </div>
+                  <span className="sidebar__auth-pill">{conn.authKind}</span>
+                </button>
+                <div className="sidebar__server-actions">
+                  <button
+                    className="sidebar__icon-btn"
+                    onClick={() => onEditConnection(conn.index)}
+                    title={t("Edit")}
+                    type="button"
+                  >
+                    <Pencil size={12} />
+                  </button>
+                  <button
+                    className="sidebar__icon-btn"
+                    onClick={() => {
+                      void remove(conn.index).catch(() => {});
+                    }}
+                    title={t("Delete")}
+                    type="button"
+                  >
+                    <Trash2 size={12} />
+                  </button>
                 </div>
-                <span className="sidebar__auth-pill">{conn.authKind}</span>
-              </button>
+              </div>
             ))}
             {filteredConnections.length === 0 && (
               <div className="empty-note" style={{ padding: 12 }}>{connections.length === 0 ? t("No saved connections") : t("No matching connections")}</div>

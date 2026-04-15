@@ -4,7 +4,7 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { I18nContext, makeI18n } from "./i18n/useI18n";
 import * as cmd from "./lib/commands";
-import type { CoreInfo, RightTool } from "./lib/types";
+import type { CoreInfo, RightTool, SavedSshConnection } from "./lib/types";
 import ResizeHandle from "./components/ResizeHandle";
 import SettingsDialog from "./components/SettingsDialog";
 import TerminalPanel from "./panels/TerminalPanel";
@@ -29,6 +29,7 @@ function App() {
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [paletteOpen, setPaletteOpen] = useState(false);
   const [newConnOpen, setNewConnOpen] = useState(false);
+  const [editingConnection, setEditingConnection] = useState<SavedSshConnection | null>(null);
   const [sidebarWidth, setSidebarWidth] = useState(272);
   const [rightWidth, setRightWidth] = useState(400);
   const { tabs, activeTabId, addTab, closeTab } = useTabStore();
@@ -84,7 +85,7 @@ function App() {
     addTab({
       backend: "local",
       title: path ? path.split(/[\\/]/).pop() || fallbackTitle : fallbackTitle,
-      startupCommand: path ? `cd ${path}` : "",
+      startupCommand: path ? `cd ${JSON.stringify(path)}` : "",
     });
   }
 
@@ -130,6 +131,17 @@ function App() {
     openLocalTerminal();
   }
 
+  function openNewConnectionDialog() {
+    setEditingConnection(null);
+    setNewConnOpen(true);
+  }
+
+  function openEditConnectionDialog(index: number) {
+    const connection = useConnectionStore.getState().connections.find((entry) => entry.index === index) ?? null;
+    setEditingConnection(connection);
+    setNewConnOpen(true);
+  }
+
   function handleToolChange(tool: RightTool) {
     if (activeTab) {
       useTabStore.getState().setTabRightTool(activeTab.id, tool);
@@ -144,7 +156,7 @@ function App() {
   const paletteCommands: PaletteCommand[] = useMemo(
     () => [
       { title: i18n.t("New local terminal"), shortcut: `${mod}T`, action: () => openLocalTerminal() },
-      { title: i18n.t("New SSH connection"), shortcut: `${mod}N`, action: () => setNewConnOpen(true) },
+      { title: i18n.t("New SSH connection"), shortcut: `${mod}N`, action: openNewConnectionDialog },
       { title: i18n.t("Close tab"), shortcut: `${mod}W`, action: () => { if (activeTabId) closeTab(activeTabId); } },
       { title: i18n.t("Settings"), shortcut: `${mod},`, action: () => setSettingsOpen(true) },
       { title: i18n.t("Toggle theme"), action: () => {
@@ -191,7 +203,7 @@ function App() {
       // Cmd+N — New SSH
       if (mod && !e.shiftKey && e.key.toLowerCase() === "n") {
         e.preventDefault();
-        setNewConnOpen(true);
+        openNewConnectionDialog();
         return;
       }
       // Cmd+, — Settings
@@ -232,7 +244,8 @@ function App() {
           <Sidebar
             onOpenLocalTerminal={openLocalTerminal}
             onConnectSaved={openSshSaved}
-            onNewConnection={() => setNewConnOpen(true)}
+            onNewConnection={openNewConnectionDialog}
+            onEditConnection={openEditConnectionDialog}
             onPathChange={setBrowserPath}
             workspaceRoot={coreInfo?.workspaceRoot}
             width={sidebarWidth}
@@ -245,7 +258,7 @@ function App() {
               {tabs.length === 0 ? (
                 <WelcomeView
                   onOpenLocalTerminal={openLocalTerminal}
-                  onNewSsh={() => setNewConnOpen(true)}
+                  onNewSsh={openNewConnectionDialog}
                   onConnectSaved={openSshSaved}
                   onSettings={() => setSettingsOpen(true)}
                   onCommandPalette={() => setPaletteOpen(true)}
@@ -286,7 +299,11 @@ function App() {
         />
         <NewConnectionDialog
           open={newConnOpen}
-          onClose={() => setNewConnOpen(false)}
+          initialConnection={editingConnection}
+          onClose={() => {
+            setNewConnOpen(false);
+            setEditingConnection(null);
+          }}
           onConnect={openSshTab}
         />
         <SettingsDialog

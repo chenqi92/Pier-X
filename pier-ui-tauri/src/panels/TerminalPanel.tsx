@@ -24,6 +24,9 @@ export default function TerminalPanel({ tab, isActive }: Props) {
   const monoFont = useSettingsStore((s) => s.monoFontFamily);
   const cursorStyle = useSettingsStore((s) => s.cursorStyle);
   const cursorBlink = useSettingsStore((s) => s.cursorBlink);
+  const scrollbackLines = useSettingsStore((s) => s.scrollbackLines);
+  const visualBell = useSettingsStore((s) => s.visualBell);
+  const audioBell = useSettingsStore((s) => s.audioBell);
   const termThemeIdx = useThemeStore((s) => s.terminalThemeIndex);
   const termTheme = TERMINAL_THEMES[termThemeIdx] ?? TERMINAL_THEMES[0];
   const [session, setSession] = useState<TerminalSessionInfo | null>(null);
@@ -31,8 +34,12 @@ export default function TerminalPanel({ tab, isActive }: Props) {
   const [error, setError] = useState("");
   const [terminalSize, setTerminalSize] = useState<TerminalSize>({ cols: 120, rows: 26 });
   const [scrollbackOffset, setScrollbackOffset] = useState(0);
+  const [visualBellActive, setVisualBellActive] = useState(false);
   const viewportRef = useRef<HTMLDivElement | null>(null);
   const measureRef = useRef<HTMLSpanElement | null>(null);
+  const startupAppliedRef = useRef<string | null>(null);
+  const audioContextRef = useRef<AudioContext | null>(null);
+  const bellTimerRef = useRef<number | null>(null);
 
   // Sync session ID to tab store
   useEffect(() => {
@@ -108,6 +115,39 @@ export default function TerminalPanel({ tab, isActive }: Props) {
     );
   }, [session, terminalSize.cols, terminalSize.rows]);
 
+  // ── Apply scrollback settings ───────────────────────────────
+
+  useEffect(() => {
+    if (!session) {
+      return;
+    }
+    cmd.terminalSetScrollbackLimit(session.sessionId, scrollbackLines).catch((e) =>
+      setError(String(e)),
+    );
+  }, [session?.sessionId, scrollbackLines]);
+
+  // ── Run startup command once per created session ─────────────
+
+  useEffect(() => {
+    if (!session || !tab.startupCommand.trim()) {
+      return;
+    }
+
+    const startupKey = `${tab.id}:${session.sessionId}:${tab.startupCommand}`;
+    if (startupAppliedRef.current === startupKey) {
+      return;
+    }
+    startupAppliedRef.current = startupKey;
+
+    cmd.terminalWrite(session.sessionId, `${tab.startupCommand}\r`)
+      .then(() => {
+        updateTab(tab.id, { startupCommand: "" });
+      })
+      .catch((e) => {
+        setError(String(e));
+      });
+  }, [session?.sessionId, tab.id, tab.startupCommand]);
+
   // ── Snapshot polling (80ms active, paused when hidden) ──────
 
   useEffect(() => {
@@ -122,6 +162,9 @@ export default function TerminalPanel({ tab, isActive }: Props) {
         .terminalSnapshot(session.sessionId, scrollbackOffset)
         .then((next) => {
           if (disposed) return;
+          if (scrollbackOffset > next.scrollbackLen) {
+            setScrollbackOffset(next.scrollbackLen);
+          }
           startTransition(() => setSnapshot(next));
           setError("");
         })
@@ -141,11 +184,64 @@ export default function TerminalPanel({ tab, isActive }: Props) {
 
   useEffect(() => {
     return () => {
+      if (bellTimerRef.current !== null) {
+        window.clearTimeout(bellTimerRef.current);
+      }
+      if (audioContextRef.current) {
+        void audioContextRef.current.close().catch(() => {});
+        audioContextRef.current = null;
+      }
       if (session) {
         cmd.terminalClose(session.sessionId).catch(() => {});
       }
     };
   }, [session]);
+
+  // ── Bell handling ───────────────────────────────────────────
+
+  useEffect(() => {
+    if (!snapshot?.bellPending) {
+      return;
+    }
+
+    if (visualBell) {
+      setVisualBellActive(true);
+      if (bellTimerRef.current !== null) {
+        window.clearTimeout(bellTimerRef.current);
+      }
+      bellTimerRef.current = window.setTimeout(() => {
+        setVisualBellActive(false);
+        bellTimerRef.current = null;
+      }, 140);
+    }
+
+    if (audioBell) {
+      try {
+        const AudioCtx = window.AudioContext || (window as typeof window & { webkitAudioContext?: typeof AudioContext }).webkitAudioContext;
+        if (AudioCtx) {
+          if (!audioContextRef.current) {
+            audioContextRef.current = new AudioCtx();
+          }
+          const context = audioContextRef.current;
+          if (context.state === "suspended") {
+            void context.resume().catch(() => {});
+          }
+          const oscillator = context.createOscillator();
+          const gain = context.createGain();
+          oscillator.type = "sine";
+          oscillator.frequency.value = 880;
+          gain.gain.value = 0.035;
+          oscillator.connect(gain);
+          gain.connect(context.destination);
+          const now = context.currentTime;
+          oscillator.start(now);
+          oscillator.stop(now + 0.08);
+        }
+      } catch {
+        // Ignore audio failures; visual bell still covers the event.
+      }
+    }
+  }, [snapshot?.bellPending, visualBell, audioBell]);
 
   // ── Input handlers ──────────────────────────────────────────
 
@@ -288,11 +384,11 @@ export default function TerminalPanel({ tab, isActive }: Props) {
       </div>
 
       <div
-        className="terminal-viewport"
         onKeyDown={handleKeyDown}
         onMouseDown={(e) => e.currentTarget.focus()}
         onWheel={handleWheel}
         ref={viewportRef}
+        className={visualBellActive ? "terminal-viewport terminal-viewport--bell" : "terminal-viewport"}
         style={{ background: termTheme.bg }}
         tabIndex={0}
       >

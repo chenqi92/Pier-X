@@ -9,7 +9,7 @@ use pier_core::services::redis::{RedisClient, RedisConfig};
 use pier_core::services::server_monitor;
 use pier_core::services::sqlite::SqliteClient;
 use pier_core::ssh::service_detector;
-use pier_core::ssh::{AuthMethod, ExecStream, HostKeyVerifier, SshConfig, SshSession};
+use pier_core::ssh::{AuthMethod, ExecStream, HostKeyVerifier, SshConfig, SshSession, Tunnel};
 use pier_core::terminal::{Cell, Color, NotifyFn, PierTerminal};
 use serde::Serialize;
 use std::collections::HashMap;
@@ -25,7 +25,9 @@ use git_panel::*;
 
 struct AppState {
     next_terminal_id: AtomicU64,
+    next_tunnel_id: AtomicU64,
     terminals: Mutex<HashMap<String, ManagedTerminal>>,
+    tunnels: Mutex<HashMap<String, ManagedTunnel>>,
     log_streams: Mutex<HashMap<String, ExecStream>>,
 }
 
@@ -33,7 +35,9 @@ impl Default for AppState {
     fn default() -> Self {
         Self {
             next_terminal_id: AtomicU64::new(1),
+            next_tunnel_id: AtomicU64::new(1),
             terminals: Mutex::new(HashMap::new()),
+            tunnels: Mutex::new(HashMap::new()),
             log_streams: Mutex::new(HashMap::new()),
         }
     }
@@ -41,6 +45,13 @@ impl Default for AppState {
 
 struct ManagedTerminal {
     terminal: PierTerminal,
+}
+
+struct ManagedTunnel {
+    tunnel: Tunnel,
+    remote_host: String,
+    remote_port: u16,
+    local_port: u16,
 }
 
 #[derive(Serialize)]
@@ -329,6 +340,17 @@ struct LogEventView {
 
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
+struct TunnelInfoView {
+    tunnel_id: String,
+    local_host: String,
+    local_port: u16,
+    remote_host: String,
+    remote_port: u16,
+    alive: bool,
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
 struct SavedSshConnection {
     index: usize,
     name: String,
@@ -381,6 +403,7 @@ struct TerminalSnapshot {
     rows: u16,
     alive: bool,
     scrollback_len: usize,
+    bell_pending: bool,
     lines: Vec<TerminalLine>,
 }
 
@@ -515,6 +538,17 @@ fn build_ssh_session_from_params(
     config.auth = auth;
     SshSession::connect_blocking(&config, HostKeyVerifier::default())
         .map_err(|e| e.to_string())
+}
+
+fn build_tunnel_view(tunnel_id: String, tunnel: &ManagedTunnel) -> TunnelInfoView {
+    TunnelInfoView {
+        tunnel_id,
+        local_host: String::from("127.0.0.1"),
+        local_port: tunnel.local_port,
+        remote_host: tunnel.remote_host.clone(),
+        remote_port: tunnel.remote_port,
+        alive: tunnel.tunnel.is_alive(),
+    }
 }
 
 fn choose_active_item(preferred: Option<String>, items: &[String]) -> String {
@@ -686,6 +720,30 @@ fn auth_kind(auth: &AuthMethod) -> &'static str {
         AuthMethod::Agent => "agent",
         AuthMethod::PublicKeyFile { .. } => "key",
         AuthMethod::KeychainPassword { .. } | AuthMethod::DirectPassword { .. } => "password",
+    }
+}
+
+fn delete_auth_credentials(auth: &AuthMethod) -> Result<(), String> {
+    match auth {
+        AuthMethod::KeychainPassword { credential_id } => {
+            credentials::delete(credential_id).map_err(|error| error.to_string())
+        }
+        AuthMethod::PublicKeyFile {
+            passphrase_credential_id: Some(credential_id),
+            ..
+        } => credentials::delete(credential_id).map_err(|error| error.to_string()),
+        _ => Ok(()),
+    }
+}
+
+fn auth_credential_id(auth: &AuthMethod) -> Option<&str> {
+    match auth {
+        AuthMethod::KeychainPassword { credential_id } => Some(credential_id.as_str()),
+        AuthMethod::PublicKeyFile {
+            passphrase_credential_id: Some(credential_id),
+            ..
+        } => Some(credential_id.as_str()),
+        _ => None,
     }
 }
 
@@ -1275,17 +1333,178 @@ fn ssh_connection_delete(index: usize) -> Result<(), String> {
         .remove(index)
         .ok_or_else(|| format!("unknown saved SSH connection: {}", index))?;
     store.save_default().map_err(|error| error.to_string())?;
+    delete_auth_credentials(&removed.auth)
+}
 
-    match removed.auth {
-        AuthMethod::KeychainPassword { credential_id } => {
-            credentials::delete(&credential_id).map_err(|error| error.to_string())
-        }
-        AuthMethod::PublicKeyFile {
-            passphrase_credential_id: Some(credential_id),
-            ..
-        } => credentials::delete(&credential_id).map_err(|error| error.to_string()),
-        _ => Ok(()),
+#[tauri::command]
+fn ssh_connection_update(
+    index: usize,
+    name: String,
+    host: String,
+    port: u16,
+    user: String,
+    auth_mode: String,
+    password: Option<String>,
+    key_path: Option<String>,
+) -> Result<(), String> {
+    let resolved_host = host.trim();
+    let resolved_user = user.trim();
+    let resolved_name = name.trim();
+
+    if resolved_host.is_empty() || resolved_user.is_empty() {
+        return Err(String::from("SSH host and user must not be empty."));
     }
+
+    let mut store = ConnectionStore::load_default().map_err(|error| error.to_string())?;
+    let existing = store
+        .connections
+        .get(index)
+        .cloned()
+        .ok_or_else(|| format!("unknown saved SSH connection: {}", index))?;
+    let old_auth = existing.auth.clone();
+
+    let mut config = SshConfig::new(
+        if resolved_name.is_empty() {
+            format!("{resolved_user}@{resolved_host}")
+        } else {
+            resolved_name.to_string()
+        },
+        resolved_host,
+        resolved_user,
+    );
+    config.port = normalize_ssh_port(port);
+    config.auth = match auth_mode.trim() {
+        "agent" => AuthMethod::Agent,
+        "key" => {
+            let resolved_key_path = key_path
+                .map(|value| value.trim().to_string())
+                .filter(|value| !value.is_empty())
+                .ok_or_else(|| String::from("SSH key path must not be empty."))?;
+            let passphrase_credential_id = match &old_auth {
+                AuthMethod::PublicKeyFile {
+                    passphrase_credential_id,
+                    ..
+                } => passphrase_credential_id.clone(),
+                _ => None,
+            };
+            AuthMethod::PublicKeyFile {
+                private_key_path: resolved_key_path,
+                passphrase_credential_id,
+            }
+        }
+        _ => {
+            let existing_credential_id = match &old_auth {
+                AuthMethod::KeychainPassword { credential_id } => Some(credential_id.clone()),
+                _ => None,
+            };
+            match password.map(|value| value.trim().to_string()).filter(|value| !value.is_empty()) {
+                Some(resolved_password) => {
+                    let credential_id = existing_credential_id
+                        .unwrap_or_else(|| make_credential_id(resolved_host, resolved_user));
+                    credentials::set(&credential_id, &resolved_password)
+                        .map_err(|error| error.to_string())?;
+                    AuthMethod::KeychainPassword { credential_id }
+                }
+                None => match existing_credential_id {
+                    Some(credential_id) => AuthMethod::KeychainPassword { credential_id },
+                    None => return Err(String::from("SSH password must not be empty.")),
+                },
+            }
+        }
+    };
+
+    let new_auth = config.auth.clone();
+    store.connections[index] = config;
+    store.save_default().map_err(|error| error.to_string())?;
+
+    let reused_credential = auth_credential_id(&old_auth)
+        .zip(auth_credential_id(&new_auth))
+        .is_some_and(|(old_id, new_id)| old_id == new_id);
+
+    if !reused_credential {
+        delete_auth_credentials(&old_auth)?;
+    }
+
+    Ok(())
+}
+
+#[tauri::command]
+fn ssh_tunnel_open(
+    state: tauri::State<'_, AppState>,
+    host: String,
+    port: u16,
+    user: String,
+    auth_mode: String,
+    password: String,
+    key_path: String,
+    remote_host: String,
+    remote_port: u16,
+    local_port: Option<u16>,
+) -> Result<TunnelInfoView, String> {
+    let resolved_remote_host = if remote_host.trim().is_empty() {
+        String::from("127.0.0.1")
+    } else {
+        remote_host.trim().to_string()
+    };
+    if remote_port == 0 {
+        return Err(String::from("Tunnel remote port must not be empty."));
+    }
+
+    let session = build_ssh_session_from_params(
+        &host, port, &user, &auth_mode, &password, &key_path,
+    )?;
+    let tunnel = session
+        .open_local_forward_blocking(local_port.unwrap_or(0), &resolved_remote_host, remote_port)
+        .map_err(|error| error.to_string())?;
+    let managed_tunnel = ManagedTunnel {
+        local_port: tunnel.local_port(),
+        remote_host: resolved_remote_host,
+        remote_port,
+        tunnel,
+    };
+    let tunnel_id = format!(
+        "tunnel-{}",
+        state.next_tunnel_id.fetch_add(1, Ordering::Relaxed) + 1
+    );
+    let view = build_tunnel_view(tunnel_id.clone(), &managed_tunnel);
+
+    state
+        .tunnels
+        .lock()
+        .map_err(|_| String::from("tunnel state poisoned"))?
+        .insert(tunnel_id, managed_tunnel);
+
+    Ok(view)
+}
+
+#[tauri::command]
+fn ssh_tunnel_info(
+    state: tauri::State<'_, AppState>,
+    tunnel_id: String,
+) -> Result<TunnelInfoView, String> {
+    let tunnels = state
+        .tunnels
+        .lock()
+        .map_err(|_| String::from("tunnel state poisoned"))?;
+    let tunnel = tunnels
+        .get(&tunnel_id)
+        .ok_or_else(|| format!("unknown tunnel: {}", tunnel_id))?;
+    Ok(build_tunnel_view(tunnel_id, tunnel))
+}
+
+#[tauri::command]
+fn ssh_tunnel_close(
+    state: tauri::State<'_, AppState>,
+    tunnel_id: String,
+) -> Result<(), String> {
+    let mut tunnels = state
+        .tunnels
+        .lock()
+        .map_err(|_| String::from("tunnel state poisoned"))?;
+    tunnels
+        .remove(&tunnel_id)
+        .map(|_| ())
+        .ok_or_else(|| format!("unknown tunnel: {}", tunnel_id))
 }
 
 fn map_stash_entry(entry: StashEntry) -> GitStashEntry {
@@ -1669,8 +1888,26 @@ fn terminal_snapshot(
         rows: snapshot.rows,
         alive,
         scrollback_len: managed.terminal.scrollback_len(),
+        bell_pending: managed.terminal.take_bell_pending(),
         lines: build_terminal_lines(&snapshot, alive),
     })
+}
+
+#[tauri::command]
+fn terminal_set_scrollback_limit(
+    state: tauri::State<'_, AppState>,
+    session_id: String,
+    limit: usize,
+) -> Result<(), String> {
+    let sessions = state
+        .terminals
+        .lock()
+        .map_err(|_| String::from("terminal state poisoned"))?;
+    let managed = sessions
+        .get(&session_id)
+        .ok_or_else(|| format!("unknown terminal session: {}", session_id))?;
+    managed.terminal.set_scrollback_limit(limit);
+    Ok(())
 }
 
 #[tauri::command]
@@ -2502,12 +2739,17 @@ pub fn run() {
             ssh_connections_list,
             ssh_connection_save,
             ssh_connection_delete,
+            ssh_connection_update,
+            ssh_tunnel_open,
+            ssh_tunnel_info,
+            ssh_tunnel_close,
             terminal_create,
             terminal_create_ssh,
             terminal_create_ssh_saved,
             terminal_write,
             terminal_resize,
             terminal_snapshot,
+            terminal_set_scrollback_limit,
             terminal_close,
             postgres_browse,
             postgres_execute,

@@ -408,6 +408,27 @@ export type ServerSnapshotView = {
   cpuPct: number;
 };
 
+export type DetectedServiceView = {
+  name: string;
+  version: string;
+  status: string;
+  port: number;
+};
+
+export type LogEventView = {
+  kind: "stdout" | "stderr" | "exit" | "error";
+  text: string;
+};
+
+export type TunnelInfoView = {
+  tunnelId: string;
+  localHost: string;
+  localPort: number;
+  remoteHost: string;
+  remotePort: number;
+  alive: boolean;
+};
+
 // ── Terminal ────────────────────────────────────────────────────
 
 export type TerminalSessionInfo = {
@@ -435,6 +456,7 @@ export type TerminalSnapshot = {
   rows: number;
   alive: boolean;
   scrollbackLen: number;
+  bellPending: boolean;
   lines: TerminalLine[];
 };
 
@@ -494,16 +516,22 @@ export type TabState = {
   redisHost: string;
   redisPort: number;
   redisDb: number;
+  redisTunnelId: string | null;
+  redisTunnelPort: number | null;
   mysqlHost: string;
   mysqlPort: number;
   mysqlUser: string;
   mysqlPassword: string;
   mysqlDatabase: string;
+  mysqlTunnelId: string | null;
+  mysqlTunnelPort: number | null;
   pgHost: string;
   pgPort: number;
   pgUser: string;
   pgPassword: string;
   pgDatabase: string;
+  pgTunnelId: string | null;
+  pgTunnelPort: number | null;
   logCommand: string;
   markdownPath: string;
   startupCommand: string;

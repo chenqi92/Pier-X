@@ -11,11 +11,13 @@ type Props = {
 
 export default function TabBar({ onNewTab }: Props) {
   const { t } = useI18n();
-  const { tabs, activeTabId, setActiveTab, closeTab, closeOtherTabs, setTabColor } = useTabStore();
+  const { tabs, activeTabId, setActiveTab, closeTab, closeOtherTabs, setTabColor, moveTab } = useTabStore();
   const scrollRef = useRef<HTMLDivElement>(null);
   const [canScrollLeft, setCanScrollLeft] = useState(false);
   const [canScrollRight, setCanScrollRight] = useState(false);
   const [ctxMenu, setCtxMenu] = useState<{ x: number; y: number; tabId: string } | null>(null);
+  const [draggedTabId, setDraggedTabId] = useState<string | null>(null);
+  const [dropTarget, setDropTarget] = useState<{ tabId: string; edge: "before" | "after" } | null>(null);
 
   const updateScrollState = useCallback(() => {
     const el = scrollRef.current;
@@ -48,6 +50,26 @@ export default function TabBar({ onNewTab }: Props) {
     scrollRef.current?.scrollBy({ left: delta, behavior: "smooth" });
   }
 
+  function moveDraggedTab(targetTabId: string, edge: "before" | "after") {
+    if (!draggedTabId || draggedTabId === targetTabId) {
+      return;
+    }
+    const fromIndex = tabs.findIndex((tab) => tab.id === draggedTabId);
+    const targetIndex = tabs.findIndex((tab) => tab.id === targetTabId);
+    if (fromIndex < 0 || targetIndex < 0) {
+      return;
+    }
+
+    let nextIndex = edge === "after" ? targetIndex + 1 : targetIndex;
+    if (fromIndex < nextIndex) {
+      nextIndex -= 1;
+    }
+    if (nextIndex === fromIndex) {
+      return;
+    }
+    moveTab(fromIndex, nextIndex);
+  }
+
   if (tabs.length === 0) return null;
 
   const hasOverflow = canScrollLeft || canScrollRight;
@@ -76,10 +98,47 @@ export default function TabBar({ onNewTab }: Props) {
           return (
             <button
               key={tab.id}
-              className={isActive ? "tab tab--active" : "tab"}
+              className={[
+                isActive ? "tab tab--active" : "tab",
+                draggedTabId === tab.id ? "tab--dragging" : "",
+                dropTarget?.tabId === tab.id && dropTarget.edge === "before" ? "tab--drop-before" : "",
+                dropTarget?.tabId === tab.id && dropTarget.edge === "after" ? "tab--drop-after" : "",
+              ].filter(Boolean).join(" ")}
               data-tab-id={tab.id}
+              draggable
               onClick={() => setActiveTab(tab.id)}
               onContextMenu={(e) => { e.preventDefault(); e.stopPropagation(); setCtxMenu({ x: e.clientX, y: e.clientY, tabId: tab.id }); }}
+              onDragStart={(event) => {
+                setDraggedTabId(tab.id);
+                event.dataTransfer.effectAllowed = "move";
+                event.dataTransfer.setData("text/plain", tab.id);
+              }}
+              onDragOver={(event) => {
+                if (!draggedTabId || draggedTabId === tab.id) {
+                  return;
+                }
+                event.preventDefault();
+                const bounds = event.currentTarget.getBoundingClientRect();
+                const edge = event.clientX - bounds.left < bounds.width / 2 ? "before" : "after";
+                setDropTarget({ tabId: tab.id, edge });
+              }}
+              onDragLeave={(event) => {
+                if (!event.currentTarget.contains(event.relatedTarget as Node | null)) {
+                  setDropTarget((current) => current?.tabId === tab.id ? null : current);
+                }
+              }}
+              onDrop={(event) => {
+                event.preventDefault();
+                const bounds = event.currentTarget.getBoundingClientRect();
+                const edge = event.clientX - bounds.left < bounds.width / 2 ? "before" : "after";
+                moveDraggedTab(tab.id, edge);
+                setDraggedTabId(null);
+                setDropTarget(null);
+              }}
+              onDragEnd={() => {
+                setDraggedTabId(null);
+                setDropTarget(null);
+              }}
               type="button"
             >
               {colorDot ? (

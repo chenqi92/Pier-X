@@ -1,4 +1,5 @@
 import { create } from "zustand";
+import * as cmd from "../lib/commands";
 import type { RightTool, TabState } from "../lib/types";
 
 type TabStore = {
@@ -17,6 +18,22 @@ type TabStore = {
 let nextId = 1;
 function genId() {
   return `tab-${nextId++}`;
+}
+
+function closeTunnel(tunnelId: string | null | undefined) {
+  if (!tunnelId) {
+    return;
+  }
+  void cmd.sshTunnelClose(tunnelId).catch(() => {});
+}
+
+function closeTabTunnels(tab: TabState | undefined) {
+  if (!tab) {
+    return;
+  }
+  closeTunnel(tab.redisTunnelId);
+  closeTunnel(tab.mysqlTunnelId);
+  closeTunnel(tab.pgTunnelId);
 }
 
 function makeDefaultTab(
@@ -38,16 +55,22 @@ function makeDefaultTab(
     redisHost: partial.redisHost ?? "127.0.0.1",
     redisPort: partial.redisPort ?? 6379,
     redisDb: partial.redisDb ?? 0,
+    redisTunnelId: partial.redisTunnelId ?? null,
+    redisTunnelPort: partial.redisTunnelPort ?? null,
     mysqlHost: partial.mysqlHost ?? "127.0.0.1",
     mysqlPort: partial.mysqlPort ?? 3306,
     mysqlUser: partial.mysqlUser ?? "root",
     mysqlPassword: partial.mysqlPassword ?? "",
     mysqlDatabase: partial.mysqlDatabase ?? "",
+    mysqlTunnelId: partial.mysqlTunnelId ?? null,
+    mysqlTunnelPort: partial.mysqlTunnelPort ?? null,
     pgHost: partial.pgHost ?? "127.0.0.1",
     pgPort: partial.pgPort ?? 5432,
     pgUser: partial.pgUser ?? "postgres",
     pgPassword: partial.pgPassword ?? "",
     pgDatabase: partial.pgDatabase ?? "",
+    pgTunnelId: partial.pgTunnelId ?? null,
+    pgTunnelPort: partial.pgTunnelPort ?? null,
     logCommand: partial.logCommand ?? "",
     markdownPath: partial.markdownPath ?? "",
     startupCommand: partial.startupCommand ?? "",
@@ -65,6 +88,7 @@ export const useTabStore = create<TabStore>((set, get) => ({
   },
 
   closeTab: (id) => {
+    closeTabTunnels(get().tabs.find((t) => t.id === id));
     set((s) => {
       const idx = s.tabs.findIndex((t) => t.id === id);
       if (idx < 0) return s;
@@ -84,6 +108,7 @@ export const useTabStore = create<TabStore>((set, get) => ({
   },
 
   closeOtherTabs: (id) => {
+    get().tabs.filter((t) => t.id !== id).forEach(closeTabTunnels);
     set((s) => ({
       tabs: s.tabs.filter((t) => t.id === id),
       activeTabId: id,

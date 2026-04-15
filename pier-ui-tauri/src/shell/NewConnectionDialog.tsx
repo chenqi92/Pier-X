@@ -1,6 +1,17 @@
-import { useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { useI18n } from "../i18n/useI18n";
+import type { SavedSshConnection } from "../lib/types";
 import { useConnectionStore } from "../stores/useConnectionStore";
+
+type ConnectionDraft = {
+  index?: number;
+  name: string;
+  host: string;
+  port: number;
+  user: string;
+  authKind: string;
+  keyPath: string;
+};
 
 type Props = {
   open: boolean;
@@ -14,32 +25,106 @@ type Props = {
     password: string;
     keyPath: string;
   }) => void;
+  initialConnection?: SavedSshConnection | null;
 };
 
-export default function NewConnectionDialog({ open, onClose, onConnect }: Props) {
+function toDraft(connection?: SavedSshConnection | null): ConnectionDraft {
+  return {
+    index: connection?.index,
+    name: connection?.name ?? "",
+    host: connection?.host ?? "",
+    port: connection?.port ?? 22,
+    user: connection?.user ?? "",
+    authKind: connection?.authKind ?? "password",
+    keyPath: connection?.keyPath ?? "",
+  };
+}
+
+export default function NewConnectionDialog({ open, onClose, onConnect, initialConnection }: Props) {
   const { t } = useI18n();
-  const { save } = useConnectionStore();
-  const [name, setName] = useState("");
-  const [host, setHost] = useState("");
-  const [port, setPort] = useState("22");
-  const [user, setUser] = useState("");
-  const [authMode, setAuthMode] = useState<"password" | "agent" | "key">("password");
+  const { save, update } = useConnectionStore();
+  const isEditing = !!initialConnection;
+  const initialDraft = useMemo(() => toDraft(initialConnection), [initialConnection]);
+  const [name, setName] = useState(initialDraft.name);
+  const [host, setHost] = useState(initialDraft.host);
+  const [port, setPort] = useState(String(initialDraft.port));
+  const [user, setUser] = useState(initialDraft.user);
+  const [authMode, setAuthMode] = useState<"password" | "agent" | "key">(initialDraft.authKind as "password" | "agent" | "key");
   const [password, setPassword] = useState("");
-  const [keyPath, setKeyPath] = useState("");
+  const [keyPath, setKeyPath] = useState(initialDraft.keyPath);
   const [error, setError] = useState("");
+
+  useEffect(() => {
+    const next = toDraft(initialConnection);
+    setName(next.name);
+    setHost(next.host);
+    setPort(String(next.port));
+    setUser(next.user);
+    setAuthMode(next.authKind as "password" | "agent" | "key");
+    setPassword("");
+    setKeyPath(next.keyPath);
+    setError("");
+  }, [initialConnection, open]);
 
   if (!open) return null;
 
   const p = Number.parseInt(port, 10);
-  const canConnect =
-    host.trim() && user.trim() && Number.isFinite(p) && p > 0 &&
+  const canSave =
+    host.trim() &&
+    user.trim() &&
+    Number.isFinite(p) &&
+    p > 0 &&
+    (authMode === "agent"
+      || (authMode === "password"
+        ? (password.length > 0 || (isEditing && initialConnection?.authKind === "password"))
+        : keyPath.trim().length > 0));
+  const canDirectConnect =
+    host.trim() &&
+    user.trim() &&
+    Number.isFinite(p) &&
+    p > 0 &&
     (authMode === "agent" || (authMode === "password" ? password.length > 0 : keyPath.trim().length > 0));
+  const canSaveAndConnect = canSave && canDirectConnect;
+
+  const connectionName = name.trim() || `${user.trim()}@${host.trim()}`;
+
+  async function persistConnection() {
+    const params = {
+      name: connectionName,
+      host: host.trim(),
+      port: p,
+      user: user.trim(),
+      authKind: authMode,
+      password: authMode === "password" ? password : "",
+      keyPath: authMode === "key" ? keyPath.trim() : "",
+    };
+
+    if (isEditing && typeof initialDraft.index === "number") {
+      await update({
+        index: initialDraft.index,
+        ...params,
+      });
+    } else {
+      await save(params);
+    }
+  }
+
+  async function handleSave() {
+    if (!canSave) return;
+    setError("");
+    try {
+      await persistConnection();
+      onClose();
+    } catch (e) {
+      setError(String(e));
+    }
+  }
 
   async function handleSaveAndConnect() {
-    if (!canConnect) return;
+    if (!canSaveAndConnect) return;
     setError("");
     const params = {
-      name: name.trim() || `${user.trim()}@${host.trim()}`,
+      name: connectionName,
       host: host.trim(),
       port: p,
       user: user.trim(),
@@ -48,21 +133,18 @@ export default function NewConnectionDialog({ open, onClose, onConnect }: Props)
       keyPath: authMode === "key" ? keyPath.trim() : "",
     };
     try {
-      await save(params);
+      await persistConnection();
       onConnect(params);
       onClose();
-      // Reset form
-      setName(""); setHost(""); setPort("22"); setUser("");
-      setAuthMode("password"); setPassword(""); setKeyPath("");
     } catch (e) {
       setError(String(e));
     }
   }
 
   function handleConnect() {
-    if (!canConnect) return;
+    if (!canDirectConnect) return;
     onConnect({
-      name: name.trim() || `${user.trim()}@${host.trim()}`,
+      name: connectionName,
       host: host.trim(),
       port: p,
       user: user.trim(),
@@ -77,7 +159,7 @@ export default function NewConnectionDialog({ open, onClose, onConnect }: Props)
     <div className="palette-backdrop" onClick={onClose}>
       <div className="dialog" onClick={(e) => e.stopPropagation()}>
         <div className="dialog__header">
-          <h2 className="dialog__title">{t("New SSH connection")}</h2>
+          <h2 className="dialog__title">{t(isEditing ? "Edit SSH connection" : "New SSH connection")}</h2>
         </div>
         <div className="dialog__body">
           <div className="form-stack">
@@ -110,7 +192,7 @@ export default function NewConnectionDialog({ open, onClose, onConnect }: Props)
             {authMode === "password" && (
               <label className="field-stack">
                 <span className="field-label">{t("Password")}</span>
-                <input className="field-input" type="password" onChange={(e) => setPassword(e.currentTarget.value)} value={password} />
+                <input className="field-input" type="password" onChange={(e) => setPassword(e.currentTarget.value)} placeholder={isEditing ? t("Leave blank to keep current password") : ""} value={password} />
               </label>
             )}
             {authMode === "key" && (
@@ -127,8 +209,13 @@ export default function NewConnectionDialog({ open, onClose, onConnect }: Props)
         </div>
         <div className="dialog__footer">
           <button className="mini-button" onClick={onClose} type="button">{t("Cancel")}</button>
-          <button className="mini-button" disabled={!canConnect} onClick={handleConnect} type="button">{t("Connect")}</button>
-          <button className="welcome__btn welcome__btn--primary" disabled={!canConnect} onClick={() => void handleSaveAndConnect()} type="button">{t("Save")} &amp; {t("Connect")}</button>
+          <button className="mini-button" disabled={!canDirectConnect} onClick={handleConnect} type="button">{t("Connect")}</button>
+          <button className="mini-button" disabled={!canSave} onClick={() => void handleSave()} type="button">
+            {t(isEditing ? "Save changes" : "Save")}
+          </button>
+          <button className="welcome__btn welcome__btn--primary" disabled={!canSaveAndConnect} onClick={() => void handleSaveAndConnect()} type="button">
+            {isEditing ? t("Save changes & Connect") : `${t("Save")} & ${t("Connect")}`}
+          </button>
         </div>
       </div>
     </div>

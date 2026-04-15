@@ -4,6 +4,7 @@
 import { invoke } from "@tauri-apps/api/core";
 import type {
   CoreInfo,
+  DetectedServiceView,
   DockerOverview,
   GitBlameLineView,
   FileEntry,
@@ -29,12 +30,14 @@ import type {
   QueryExecutionResult,
   RedisBrowserState,
   RedisCommandResult,
+  LogEventView,
   SavedSshConnection,
   ServerSnapshotView,
   SftpBrowseState,
   SqliteBrowserState,
   TerminalSessionInfo,
   TerminalSnapshot,
+  TunnelInfoView,
 } from "./types";
 
 // ── Core ────────────────────────────────────────────────────────
@@ -257,10 +260,56 @@ export const sshConnectionSave = (params: {
   authKind: string;
   password: string;
   keyPath: string;
-}) => invoke<void>("ssh_connection_save", params);
+}) => invoke<void>("ssh_connection_save", {
+  name: params.name,
+  host: params.host,
+  port: params.port,
+  user: params.user,
+  authMode: params.authKind,
+  password: params.password || null,
+  keyPath: params.keyPath || null,
+});
+
+export const sshConnectionUpdate = (params: {
+  index: number;
+  name: string;
+  host: string;
+  port: number;
+  user: string;
+  authKind: string;
+  password: string;
+  keyPath: string;
+}) => invoke<void>("ssh_connection_update", {
+  index: params.index,
+  name: params.name,
+  host: params.host,
+  port: params.port,
+  user: params.user,
+  authMode: params.authKind,
+  password: params.password || null,
+  keyPath: params.keyPath || null,
+});
 
 export const sshConnectionDelete = (index: number) =>
   invoke<void>("ssh_connection_delete", { index });
+
+export const sshTunnelOpen = (params: {
+  host: string;
+  port: number;
+  user: string;
+  authMode: string;
+  password: string;
+  keyPath: string;
+  remoteHost: string;
+  remotePort: number;
+  localPort?: number | null;
+}) => invoke<TunnelInfoView>("ssh_tunnel_open", { ...params, localPort: params.localPort ?? null });
+
+export const sshTunnelInfo = (tunnelId: string) =>
+  invoke<TunnelInfoView>("ssh_tunnel_info", { tunnelId });
+
+export const sshTunnelClose = (tunnelId: string) =>
+  invoke<void>("ssh_tunnel_close", { tunnelId });
 
 // ── Terminal ────────────────────────────────────────────────────
 
@@ -296,6 +345,9 @@ export const terminalResize = (sessionId: string, cols: number, rows: number) =>
 
 export const terminalSnapshot = (sessionId: string, scrollbackOffset: number) =>
   invoke<TerminalSnapshot>("terminal_snapshot", { sessionId, scrollbackOffset });
+
+export const terminalSetScrollbackLimit = (sessionId: string, limit: number) =>
+  invoke<void>("terminal_set_scrollback_limit", { sessionId, limit });
 
 export const terminalClose = (sessionId: string) =>
   invoke<void>("terminal_close", { sessionId });
@@ -422,13 +474,6 @@ export const serverMonitorProbe = (params: {
 
 // ── Service Detection ───────────────────────────────────────────
 
-export type DetectedServiceView = {
-  name: string;
-  version: string;
-  status: string;
-  port: number;
-};
-
 export const detectServices = (params: {
   host: string;
   port: number;
@@ -513,11 +558,6 @@ export const sftpUpload = (params: {
 }) => invoke<void>("sftp_upload", params);
 
 // ── Log Stream ──────────────────────────────────────────────────
-
-export type LogEventView = {
-  kind: "stdout" | "stderr" | "exit" | "error";
-  text: string;
-};
 
 export const logStreamStart = (params: {
   host: string; port: number; user: string; authMode: string; password: string; keyPath: string;

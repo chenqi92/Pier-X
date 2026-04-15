@@ -79,6 +79,13 @@ type PopoverState = {
 type BannerState = { success: boolean; message: string } | null;
 type ButtonTone = "ghost" | "primary" | "destructive";
 type PillTone = "success" | "warning" | "error" | "info" | "neutral";
+type RepoPathTreeNode = {
+  id: string;
+  kind: "directory" | "file";
+  name: string;
+  path: string;
+  children: RepoPathTreeNode[];
+};
 
 const GRAPH_PALETTE = [
   "var(--status-success)",
@@ -114,6 +121,91 @@ function compactPath(path: string) {
   const windowsHome = normalized.match(/^[A-Za-z]:\\Users\\[^\\]+/);
   if (windowsHome) return `~${normalized.slice(windowsHome[0].length) || "\\"}`;
   return normalized;
+}
+
+function pathAncestors(path: string) {
+  const parts = String(path || "")
+    .split("/")
+    .filter(Boolean);
+  const ancestors: string[] = [];
+  let current = "";
+  for (let index = 0; index < parts.length - 1; index += 1) {
+    current = current ? `${current}/${parts[index]}` : parts[index];
+    ancestors.push(current);
+  }
+  return ancestors;
+}
+
+function buildRepoPathTree(paths: string[]) {
+  const root: RepoPathTreeNode[] = [];
+
+  for (const rawPath of paths) {
+    const parts = String(rawPath || "")
+      .split("/")
+      .filter(Boolean);
+    if (!parts.length) continue;
+
+    let currentChildren = root;
+    let currentPath = "";
+
+    parts.forEach((part, index) => {
+      currentPath = currentPath ? `${currentPath}/${part}` : part;
+      const isLeaf = index === parts.length - 1;
+      let node = currentChildren.find((candidate) => candidate.name === part);
+
+      if (!node) {
+        node = {
+          id: `${isLeaf ? "file" : "dir"}:${currentPath}`,
+          kind: isLeaf ? "file" : "directory",
+          name: part,
+          path: currentPath,
+          children: [],
+        };
+        currentChildren.push(node);
+      } else if (!isLeaf) {
+        node.kind = "directory";
+      }
+
+      currentChildren = node.children;
+    });
+  }
+
+  const sortNodes = (nodes: RepoPathTreeNode[]) => {
+    nodes.sort((left, right) => {
+      if (left.kind !== right.kind) return left.kind === "directory" ? -1 : 1;
+      return left.name.localeCompare(right.name);
+    });
+    nodes.forEach((node) => sortNodes(node.children));
+    return nodes;
+  };
+
+  return sortNodes(root);
+}
+
+function filterRepoPathTree(nodes: RepoPathTreeNode[], needle: string): RepoPathTreeNode[] {
+  const query = needle.trim().toLowerCase();
+  if (!query) return nodes;
+
+  const visit = (node: RepoPathTreeNode): RepoPathTreeNode | null => {
+    const children = node.children.map(visit).filter(Boolean) as RepoPathTreeNode[];
+    const matched = node.name.toLowerCase().includes(query) || node.path.toLowerCase().includes(query);
+    if (!matched && !children.length) return null;
+    return { ...node, children };
+  };
+
+  return nodes.map(visit).filter(Boolean) as RepoPathTreeNode[];
+}
+
+function defaultExpandedHistoryPaths(paths: string[], selection: string[]) {
+  const expanded = new Set<string>();
+  for (const path of paths) {
+    const firstSlash = path.indexOf("/");
+    if (firstSlash > 0) expanded.add(path.slice(0, firstSlash));
+  }
+  for (const selectedPath of selection) {
+    for (const ancestor of pathAncestors(selectedPath)) expanded.add(ancestor);
+  }
+  return Array.from(expanded);
 }
 
 function refTokens(rawRefs: string) {
@@ -462,6 +554,7 @@ export default function GitPanel({ browserPath }: Props) {
   const [historyPathDialogOpen, setHistoryPathDialogOpen] = useState(false);
   const [historyPathSearchText, setHistoryPathSearchText] = useState("");
   const [historyPathSelection, setHistoryPathSelection] = useState<string[]>([]);
+  const [historyPathExpanded, setHistoryPathExpanded] = useState<string[]>([]);
   const [historyBranchDialogOpen, setHistoryBranchDialogOpen] = useState(false);
   const [historyTagDialogOpen, setHistoryTagDialogOpen] = useState(false);
   const [historyResetDialogOpen, setHistoryResetDialogOpen] = useState(false);
@@ -586,11 +679,12 @@ export default function GitPanel({ browserPath }: Props) {
     return remoteBranches.filter((name) => !needle || name.toLowerCase().includes(needle));
   }, [branchManagerSearchText, remoteBranches]);
 
-  const historyFilteredRepoFiles = useMemo(() => {
-    const needle = deferredHistoryPathSearch.trim().toLowerCase();
-    const source = graphMetadata?.repoFiles || [];
-    return source.filter((path) => !needle || path.toLowerCase().includes(needle));
-  }, [deferredHistoryPathSearch, graphMetadata?.repoFiles]);
+  const historyPathTree = useMemo(() => buildRepoPathTree(graphMetadata?.repoFiles || []), [graphMetadata?.repoFiles]);
+  const filteredHistoryPathTree = useMemo(
+    () => filterRepoPathTree(historyPathTree, deferredHistoryPathSearch),
+    [deferredHistoryPathSearch, historyPathTree],
+  );
+  const historyPathExpandedSet = useMemo(() => new Set(historyPathExpanded), [historyPathExpanded]);
 
   const selectedConflictFile = useMemo(
     () => conflicts.find((file) => file.path === selectedConflictPath) || conflicts[0] || null,
@@ -1026,6 +1120,77 @@ export default function GitPanel({ browserPath }: Props) {
     if (historyPaths.length === 0) return t("Path");
     if (historyPaths.length === 1) return historyPaths[0];
     return `${historyPaths.length} ${t("paths")}`;
+  }
+
+  function historyPathSelectionState(node: RepoPathTreeNode) {
+    if (historyPathSelection.includes(node.path)) return "selected";
+    if (node.kind === "directory" && historyPathSelection.some((path) => path.startsWith(`${node.path}/`))) {
+      return "partial";
+    }
+    return "none";
+  }
+
+  function toggleHistoryPathSelection(path: string) {
+    setHistoryPathSelection((current) =>
+      current.includes(path) ? current.filter((item) => item !== path) : [...current, path],
+    );
+  }
+
+  function toggleHistoryPathExpanded(path: string) {
+    setHistoryPathExpanded((current) =>
+      current.includes(path) ? current.filter((item) => item !== path) : [...current, path],
+    );
+  }
+
+  function renderHistoryPathTree(nodes: RepoPathTreeNode[], depth = 0): ReactNode {
+    return nodes.map((node) => {
+      const state = historyPathSelectionState(node);
+      const expanded = deferredHistoryPathSearch.trim() ? true : historyPathExpandedSet.has(node.path);
+      return (
+        <div key={node.id} className="git-path-tree__node">
+          <button
+            className={["git-path-row", state === "selected" ? "git-path-row--active" : "", state === "partial" ? "git-path-row--partial" : ""]
+              .filter(Boolean)
+              .join(" ")}
+            onClick={() => toggleHistoryPathSelection(node.path)}
+            style={{ "--git-path-depth": depth } as CSSProperties}
+            type="button"
+          >
+            <span className="git-path-row__indent" />
+            {node.kind === "directory" ? (
+              <span
+                className="git-path-row__toggle"
+                onClick={(event) => {
+                  event.stopPropagation();
+                  toggleHistoryPathExpanded(node.path);
+                }}
+              >
+                {expanded ? <ChevronDown size={10} /> : <ArrowRight size={10} />}
+              </span>
+            ) : (
+              <span className="git-path-row__toggle git-path-row__toggle--placeholder" />
+            )}
+            <span
+              className={[
+                "git-path-row__check",
+                state === "selected" ? "git-path-row__check--active" : "",
+                state === "partial" ? "git-path-row__check--partial" : "",
+              ]
+                .filter(Boolean)
+                .join(" ")}
+            >
+              {state === "selected" ? <Check size={10} /> : state === "partial" ? <Minus size={10} /> : null}
+            </span>
+            <span className="git-path-row__icon">{node.kind === "directory" ? <Folder size={12} /> : <FileText size={12} />}</span>
+            <span className="git-path-row__text">{node.name}</span>
+            {node.kind === "directory" && node.children.length ? (
+              <span className="git-path-row__meta">{node.children.length}</span>
+            ) : null}
+          </button>
+          {node.kind === "directory" && expanded && node.children.length ? renderHistoryPathTree(node.children, depth + 1) : null}
+        </div>
+      );
+    });
   }
 
   function historyRowShouldDim(row: GitGraphRowView) {
@@ -1785,6 +1950,7 @@ export default function GitPanel({ browserPath }: Props) {
                     onClick={() => {
                       setHistoryPathSelection(historyPaths);
                       setHistoryPathSearchText("");
+                      setHistoryPathExpanded(defaultExpandedHistoryPaths(graphMetadata?.repoFiles || [], historyPaths));
                       setHistoryPathDialogOpen(true);
                     }}
                   >
@@ -3059,28 +3225,9 @@ export default function GitPanel({ browserPath }: Props) {
           {historyPathSearchText ? <button onClick={() => setHistoryPathSearchText("")} type="button"><X size={11} /></button> : null}
         </label>
         <div className="git-card git-card--inset git-card--fill">
-          {historyFilteredRepoFiles.length ? (
-            <div className="git-path-list">
-              {historyFilteredRepoFiles.map((path) => {
-                const selected = historyPathSelection.includes(path);
-                return (
-                  <button
-                    key={path}
-                    className={selected ? "git-path-row git-path-row--active" : "git-path-row"}
-                    onClick={() =>
-                      setHistoryPathSelection((current) =>
-                        current.includes(path) ? current.filter((item) => item !== path) : [...current, path],
-                      )
-                    }
-                    type="button"
-                  >
-                    <span className={selected ? "git-path-row__check git-path-row__check--active" : "git-path-row__check"}>
-                      {selected ? <Check size={10} /> : null}
-                    </span>
-                    <span className="git-path-row__text">{path}</span>
-                  </button>
-                );
-              })}
+          {filteredHistoryPathTree.length ? (
+            <div className="git-path-list git-path-tree">
+              {renderHistoryPathTree(filteredHistoryPathTree)}
             </div>
           ) : (
             <GitEmptyState accent="var(--accent)" description={t("Try a different search or refresh repository metadata.")} icon={Folder} title={t("No tracked files")} />

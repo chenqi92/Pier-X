@@ -219,6 +219,11 @@ function defaultExpandedHistoryPaths(paths: string[], selection: string[]) {
   return Array.from(expanded);
 }
 
+function countRepoPathLeaves(node: RepoPathTreeNode): number {
+  if (node.kind === "file" || !node.children.length) return 1;
+  return node.children.reduce((sum, child) => sum + countRepoPathLeaves(child), 0);
+}
+
 function refTokens(rawRefs: string) {
   return String(rawRefs || "")
     .replace(/^\s*\(/, "")
@@ -258,6 +263,13 @@ function statusToneFromCode(code: string): PillTone {
 
 function graphColor(index: number) {
   return GRAPH_PALETTE[Math.abs(index || 0) % GRAPH_PALETTE.length] || "var(--accent)";
+}
+
+function refBadgeToneClass(token: string) {
+  if (token.startsWith("HEAD")) return "git-ref-badge--head";
+  if (token.startsWith("tag:")) return "git-ref-badge--tag";
+  if (token.includes("/")) return "git-ref-badge--remote";
+  return "git-ref-badge--local";
 }
 
 function historyRowIsMerge(row: GitGraphRowView | null | undefined) {
@@ -582,6 +594,7 @@ export default function GitPanel({ browserPath }: Props) {
   const [comparisonFiles, setComparisonFiles] = useState<GitComparisonFileView[]>([]);
   const [comparisonSelectedPath, setComparisonSelectedPath] = useState("");
   const [comparisonDiff, setComparisonDiff] = useState("");
+  const [comparisonExpandedPaths, setComparisonExpandedPaths] = useState<string[]>([]);
   const [branchManagerMode, setBranchManagerMode] = useState<"local" | "remote">("local");
   const [branchManagerSearchText, setBranchManagerSearchText] = useState("");
   const [branchCreateExpanded, setBranchCreateExpanded] = useState(false);
@@ -696,6 +709,11 @@ export default function GitPanel({ browserPath }: Props) {
     [deferredHistoryPathSearch, historyPathTree],
   );
   const historyPathExpandedSet = useMemo(() => new Set(historyPathExpanded), [historyPathExpanded]);
+  const comparisonPathTree = useMemo(
+    () => buildRepoPathTree(comparisonFiles.map((file) => file.path)),
+    [comparisonFiles],
+  );
+  const comparisonExpandedSet = useMemo(() => new Set(comparisonExpandedPaths), [comparisonExpandedPaths]);
 
   const selectedConflictFile = useMemo(
     () => conflicts.find((file) => file.path === selectedConflictPath) || conflicts[0] || null,
@@ -1094,12 +1112,38 @@ export default function GitPanel({ browserPath }: Props) {
     if (!comparisonFiles.length) {
       setComparisonSelectedPath("");
       setComparisonDiff("");
+      setComparisonExpandedPaths([]);
       return;
     }
     setComparisonSelectedPath((current) =>
       comparisonFiles.some((file) => file.path === current) ? current : comparisonFiles[0].path,
     );
   }, [comparisonFiles]);
+
+  useEffect(() => {
+    if (!comparisonFiles.length) return;
+    setComparisonExpandedPaths(
+      defaultExpandedHistoryPaths(
+        comparisonFiles.map((file) => file.path),
+        comparisonSelectedPath ? [comparisonSelectedPath] : [],
+      ),
+    );
+  }, [comparisonFiles]);
+
+  useEffect(() => {
+    if (!comparisonSelectedPath) return;
+    setComparisonExpandedPaths((current) => {
+      const next = new Set(current);
+      let changed = false;
+      for (const ancestor of pathAncestors(comparisonSelectedPath)) {
+        if (!next.has(ancestor)) {
+          next.add(ancestor);
+          changed = true;
+        }
+      }
+      return changed ? Array.from(next) : current;
+    });
+  }, [comparisonSelectedPath]);
 
   useEffect(() => {
     if (!historyCompareDialogOpen || !comparisonBaseHash || !comparisonSelectedPath) return;
@@ -1161,6 +1205,12 @@ export default function GitPanel({ browserPath }: Props) {
     );
   }
 
+  function toggleComparisonExpanded(path: string) {
+    setComparisonExpandedPaths((current) =>
+      current.includes(path) ? current.filter((item) => item !== path) : [...current, path],
+    );
+  }
+
   function renderHistoryPathTree(nodes: RepoPathTreeNode[], depth = 0): ReactNode {
     return nodes.map((node) => {
       const state = historyPathSelectionState(node);
@@ -1212,6 +1262,61 @@ export default function GitPanel({ browserPath }: Props) {
     });
   }
 
+  function renderComparisonTree(nodes: RepoPathTreeNode[], depth = 0): ReactNode {
+    return nodes.map((node) => {
+      const expanded = comparisonExpandedSet.has(node.path);
+      if (node.kind === "directory") {
+        return (
+          <div key={node.id} className="git-path-tree__node">
+            <button
+              className="git-compare-tree__row git-compare-tree__row--directory"
+              onClick={() => toggleComparisonExpanded(node.path)}
+              style={{ "--git-path-depth": depth } as CSSProperties}
+              type="button"
+            >
+              <span className="git-path-row__indent" />
+              <span className="git-path-row__toggle">
+                {expanded ? <ChevronDown size={10} /> : <ArrowRight size={10} />}
+              </span>
+              <span className="git-path-row__icon">
+                <Folder size={12} />
+              </span>
+              <span className="git-path-row__text">{node.name}</span>
+              <span className="git-path-row__meta">{countRepoPathLeaves(node)}</span>
+            </button>
+            {expanded && node.children.length ? renderComparisonTree(node.children, depth + 1) : null}
+          </div>
+        );
+      }
+
+      return (
+        <button
+          key={node.id}
+          className={[
+            "git-compare-file",
+            "git-compare-tree__row",
+            "git-compare-tree__row--file",
+            comparisonSelectedPath === node.path ? "git-compare-file--active" : "",
+          ]
+            .filter(Boolean)
+            .join(" ")}
+          onClick={() => setComparisonSelectedPath(node.path)}
+          style={{ "--git-path-depth": depth } as CSSProperties}
+          type="button"
+        >
+          <span className="git-path-row__indent" />
+          <span className="git-path-row__toggle git-path-row__toggle--placeholder" />
+          <span className="git-path-row__icon">
+            <FileText size={12} />
+          </span>
+          <span className="git-compare-file__copy">
+            <span className="git-compare-file__name">{node.name}</span>
+          </span>
+        </button>
+      );
+    });
+  }
+
   function historyRowShouldDim(row: GitGraphRowView) {
     switch (historyHighlightMode) {
       case "mine":
@@ -1254,12 +1359,15 @@ export default function GitPanel({ browserPath }: Props) {
         {detail.stats ? <div className="git-history-detail-inline__stats">{detail.stats}</div> : null}
 
         {refs.length ? (
-          <div className="git-history-detail-inline__refs">
-            {refs.map((token) => (
-              <span key={`${row.hash}-${token}`} className="git-ref-badge">
-                {token}
-              </span>
-            ))}
+          <div className="git-history-detail-inline__fact-line">
+            <div className="git-history-detail-inline__fact-label">{t("Refs")}</div>
+            <div className="git-history-detail-inline__refs">
+              {refs.map((token) => (
+                <span key={`${row.hash}-${token}`} className={["git-ref-badge", refBadgeToneClass(token)].join(" ")}>
+                  {token}
+                </span>
+              ))}
+            </div>
           </div>
         ) : null}
 
@@ -1354,15 +1462,22 @@ export default function GitPanel({ browserPath }: Props) {
         </div>
 
         {detail.parentHashes.length ? (
-          <div className="git-history-detail-inline__parents">
-            {detail.parentHashes.map((hash) => (
-              <div key={hash} className="git-parent-row">
-                <span>{hash}</span>
-                <GitButton compact onClick={() => void copyText(hash)}>
-                  {t("Copy")}
-                </GitButton>
-              </div>
-            ))}
+          <div className="git-history-detail-inline__fact-line git-history-detail-inline__fact-line--stacked">
+            <div className="git-history-detail-inline__fact-label">
+              {detail.parentHashes.length > 1 ? t("Parents") : t("Parent")}
+            </div>
+            <div className="git-history-detail-inline__parents">
+              {detail.parentHashes.map((hash, index) => (
+                <div key={hash} className="git-parent-row">
+                  <span className="git-parent-row__index">{index + 1}</span>
+                  <span className="git-parent-row__hash" title={hash}>{hash}</span>
+                  <span className="git-parent-row__spacer" />
+                  <GitButton compact onClick={() => void copyText(hash)}>
+                    {t("Copy")}
+                  </GitButton>
+                </div>
+              ))}
+            </div>
           </div>
         ) : null}
 
@@ -2044,7 +2159,7 @@ export default function GitPanel({ browserPath }: Props) {
                                   {refTokens(row.refs)
                                     .slice(0, 3)
                                     .map((token) => (
-                                      <span key={`${row.hash}-${token}`} className="git-ref-badge">
+                                      <span key={`${row.hash}-${token}`} className={["git-ref-badge", refBadgeToneClass(token)].join(" ")}>
                                         {token}
                                       </span>
                                     ))}
@@ -3329,6 +3444,7 @@ export default function GitPanel({ browserPath }: Props) {
             setComparisonFiles([]);
             setComparisonDiff("");
             setComparisonSelectedPath("");
+            setComparisonExpandedPaths([]);
           }}>{t("Close")}</GitButton>
         }
         onClose={() => {
@@ -3336,6 +3452,7 @@ export default function GitPanel({ browserPath }: Props) {
           setComparisonFiles([]);
           setComparisonDiff("");
           setComparisonSelectedPath("");
+          setComparisonExpandedPaths([]);
         }}
         open={historyCompareDialogOpen}
         subtitle={comparisonBaseHash || t("Commit comparison")}
@@ -3345,20 +3462,16 @@ export default function GitPanel({ browserPath }: Props) {
       >
         <PanelGroup className="git-panel-group" orientation="horizontal">
           <Panel defaultSize={32} minSize={22}>
-            <div className="git-card git-card--inset git-card--fill">
+            <div className="git-card git-card--inset git-card--fill git-compare-pane">
+              <div className="git-diff__header git-compare-pane__header">
+                <div className="git-compare-pane__title-wrap">
+                  <div className="git-diff__title">{t("Changed files")}</div>
+                  <span className="git-file-section__count">{comparisonFiles.length}</span>
+                </div>
+              </div>
               {comparisonFiles.length ? (
-                <div className="git-compare-file-list">
-                  {comparisonFiles.map((file) => (
-                    <button
-                      key={file.path}
-                      className={comparisonSelectedPath === file.path ? "git-compare-file git-compare-file--active" : "git-compare-file"}
-                      onClick={() => setComparisonSelectedPath(file.path)}
-                      type="button"
-                    >
-                      <span className="git-compare-file__name">{file.name}</span>
-                      <span className="git-compare-file__path">{file.path}</span>
-                    </button>
-                  ))}
+                <div className="git-compare-file-list git-compare-file-list--tree">
+                  {renderComparisonTree(comparisonPathTree)}
                 </div>
               ) : (
                 <GitEmptyState accent="var(--accent)" description={t("This commit matches local HEAD, or there are no comparable files.")} icon={GitBranch} title={t("No local diff")} />
@@ -3367,7 +3480,15 @@ export default function GitPanel({ browserPath }: Props) {
           </Panel>
           <PanelResizeHandle className="git-split-handle git-split-handle--horizontal" />
           <Panel defaultSize={68} minSize={40}>
-            <div className="git-card git-card--inset git-card--fill">
+            <div className="git-card git-card--inset git-card--fill git-compare-pane">
+              <div className="git-diff__header git-compare-pane__header">
+                <div className="git-compare-pane__title-wrap git-compare-pane__title-wrap--diff">
+                  <div className="git-diff__title">{`${comparisonBaseHash.slice(0, 8)} ↔ ${t("Working tree")}`}</div>
+                  {comparisonSelectedPath ? (
+                    <div className="git-compare-pane__path" title={comparisonSelectedPath}>{comparisonSelectedPath}</div>
+                  ) : null}
+                </div>
+              </div>
               {comparisonDiff ? (
                 <GitDiffCode text={comparisonDiff} />
               ) : (

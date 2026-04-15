@@ -1246,8 +1246,8 @@ export default function GitPanel({ browserPath }: Props) {
       <div className="git-history-detail-inline">
         <div className="git-history-detail-inline__meta">
           <span className="git-history-detail-inline__hash">{detail.shortHash}</span>
-          <span>{detail.author}</span>
-          <span>{detail.date || formatGraphDate(row.dateTimestamp)}</span>
+          <span className="git-history-detail-inline__author">{detail.author}</span>
+          <span className="git-history-detail-inline__date">{detail.date || formatGraphDate(row.dateTimestamp)}</span>
         </div>
 
         <div className="git-history-detail-inline__message">{detail.message}</div>
@@ -1263,11 +1263,9 @@ export default function GitPanel({ browserPath }: Props) {
           </div>
         ) : null}
 
-        <div className="git-history-detail-inline__hash-card">
-          <div className="git-history-detail-inline__hash-copy">
-            <div className="git-history-detail-inline__hash-label">{t("Commit hash")}</div>
-            <div className="git-history-detail-inline__hash-value">{detail.hash}</div>
-          </div>
+        <div className="git-history-detail-inline__hash-row">
+          <div className="git-history-detail-inline__hash-label">{t("Commit hash")}</div>
+          <div className="git-history-detail-inline__hash-value" title={detail.hash}>{detail.hash}</div>
           <GitButton compact onClick={() => void copyText(detail.hash)}>
             {t("Copy hash")}
           </GitButton>
@@ -1388,9 +1386,9 @@ export default function GitPanel({ browserPath }: Props) {
                   }}
                   type="button"
                 >
-                  <span className="git-changed-file-row__path">{file.path}</span>
-                  {file.additions ? <span className="git-changed-file-row__add">{`+${file.additions}`}</span> : null}
-                  {file.deletions ? <span className="git-changed-file-row__remove">{`-${file.deletions}`}</span> : null}
+                  <span className="git-changed-file-row__change git-changed-file-row__change--add">{`+${file.additions}`}</span>
+                  <span className="git-changed-file-row__change git-changed-file-row__change--remove">{`-${file.deletions}`}</span>
+                  <span className="git-changed-file-row__path" title={file.path}>{file.path}</span>
                   <span className="git-changed-file-row__button">{t("Diff")}</span>
                 </button>
               ))}

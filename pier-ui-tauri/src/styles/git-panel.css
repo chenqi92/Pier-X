@@ -1320,8 +1320,8 @@
 .git-history-detail-inline {
   display: flex;
   flex-direction: column;
-  gap: 6px;
-  padding: 6px 12px 10px 78px;
+  gap: 5px;
+  padding: 5px 12px 9px 78px;
   background: color-mix(in srgb, var(--accent) 4%, transparent);
   border-top: 1px solid color-mix(in srgb, var(--accent) 18%, var(--border-subtle));
 }
@@ -1329,10 +1329,10 @@
 .git-history-detail-inline__meta {
   display: flex;
   align-items: center;
-  gap: 8px;
+  gap: 6px;
   min-width: 0;
   color: var(--text-tertiary);
-  font-size: 10px;
+  font-size: 9px;
   font-family: var(--font-mono);
   flex-wrap: wrap;
 }
@@ -1341,9 +1341,14 @@
   color: var(--accent-hover);
 }
 
+.git-history-detail-inline__author,
+.git-history-detail-inline__date {
+  color: var(--text-tertiary);
+}
+
 .git-history-detail-inline__message {
   color: var(--text-primary);
-  font-size: 11px;
+  font-size: 10px;
   line-height: 1.45;
   white-space: pre-wrap;
   word-break: break-word;
@@ -1351,7 +1356,7 @@
 
 .git-history-detail-inline__stats {
   color: var(--text-secondary);
-  font-size: 10px;
+  font-size: 9px;
   font-family: var(--font-mono);
 }
 
@@ -1368,22 +1373,11 @@
   flex-wrap: wrap;
 }
 
-.git-history-detail-inline__hash-card {
+.git-history-detail-inline__hash-row {
   display: flex;
   align-items: center;
   gap: 8px;
-  padding: 8px 10px;
-  border: 1px solid var(--border-subtle);
-  border-radius: var(--radius-sm);
-  background: rgba(255, 255, 255, 0.02);
-}
-
-.git-history-detail-inline__hash-copy {
-  display: flex;
-  flex: 1;
   min-width: 0;
-  flex-direction: column;
-  gap: 2px;
 }
 
 .git-history-detail-inline__hash-label {
@@ -1391,14 +1385,17 @@
   font-size: 9px;
   text-transform: uppercase;
   letter-spacing: 0.04em;
+  flex-shrink: 0;
 }
 
 .git-history-detail-inline__hash-value {
+  flex: 1;
+  min-width: 0;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
   color: var(--text-primary);
-  font-size: 11px;
+  font-size: 10px;
   font-family: var(--font-mono);
 }
 
@@ -1421,7 +1418,7 @@
 
 .git-history-detail-inline__files-title {
   color: var(--text-secondary);
-  font-size: 10px;
+  font-size: 9px;
   font-weight: var(--weight-medium);
 }
 
@@ -1474,19 +1471,23 @@
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
-  font-size: var(--size-small);
+  color: var(--accent-hover);
+  font-size: 9px;
 }
 
-.git-changed-file-row__add {
+.git-changed-file-row__change {
+  min-width: 22px;
+  font-size: 8px;
+  font-family: var(--font-mono);
+  flex-shrink: 0;
+}
+
+.git-changed-file-row__change--add {
   color: var(--status-success);
-  font-size: var(--size-small);
-  font-family: var(--font-mono);
 }
 
-.git-changed-file-row__remove {
+.git-changed-file-row__change--remove {
   color: var(--status-error);
-  font-size: var(--size-small);
-  font-family: var(--font-mono);
 }
 
 .git-stash-row {

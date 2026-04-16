@@ -796,9 +796,10 @@ Button { Primary | Ghost | Icon }     ← 替代 PrimaryButton.qml / GhostButton
 Card                                   ← 替代 Card.qml
 StatusPill { Success | Warning | Error | Info }   ← 替代 StatusPill.qml
 SectionLabel                           ← 替代 SectionLabel.qml
-IconBadge                              ← 替代 Welcome 品牌徽章
+IconBadge                              ← Welcome / dock 的品牌徽章
+NavItem                                ← Workbench Sidebar 的导航条目（28px、active/hover 态）
 Separator                              ← 替代 Separator.qml
-text::display(s) / h1(s) / h2(s) / h3(s) / body(s) / mono(s)   ← 文本 helpers
+text::display(s) / h1(s) / h2(s) / h3(s) / body(s) / caption(s) / mono(s)   ← 文本 helpers
 ```
 
 待补充（PR5+）：`PopoverPanel`、`ModalDialogShell`、`PierTextField`、`SegmentedControl`、`ToggleSwitch`、`PierToolTip`。需要时按 [docs/legacy-qml-reference/](../../../docs/legacy-qml-reference/) 的 QML 对照实现。

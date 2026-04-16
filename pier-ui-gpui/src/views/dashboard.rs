@@ -3,31 +3,30 @@ use gpui::{div, prelude::*, IntoElement, SharedString, Window};
 use crate::components::{text, Card, SectionLabel};
 use crate::data::ShellSnapshot;
 use crate::theme::{
-    spacing::{SP_2, SP_4, SP_6},
+    spacing::{SP_2, SP_4},
     theme,
 };
 
 #[derive(IntoElement)]
-pub struct WorkbenchView {
+pub struct DashboardView {
     snapshot: ShellSnapshot,
 }
 
-impl WorkbenchView {
+impl DashboardView {
     pub fn new(snapshot: ShellSnapshot) -> Self {
         Self { snapshot }
     }
 }
 
-impl RenderOnce for WorkbenchView {
+impl RenderOnce for DashboardView {
     fn render(self, _: &mut Window, cx: &mut gpui::App) -> impl IntoElement {
         let t = theme(cx);
         let s = self.snapshot;
         div()
             .size_full()
-            .bg(t.color.bg_canvas)
             .text_color(t.color.text_primary)
             .font_family(t.font_ui.clone())
-            .p(SP_6)
+            .p(SP_4)
             .gap(SP_4)
             .flex()
             .flex_col()
@@ -60,13 +59,6 @@ impl RenderOnce for WorkbenchView {
                 s.path_value.clone(),
                 s.path_detail.clone(),
             ))
-            .child(
-                Card::new()
-                    .child(SectionLabel::new("Next slices"))
-                    .child(text::body("1. Replace this dashboard with a dock/workbench layout."))
-                    .child(text::body("2. Wire terminal sessions directly from pier-core without IPC."))
-                    .child(text::body("3. Migrate Git, SSH, and data panels as native GPUI views.")),
-            )
     }
 }
 

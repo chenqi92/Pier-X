@@ -1,7 +1,6 @@
-use gpui::{div, prelude::*, px, IntoElement, SharedString, Window};
+use gpui::{div, prelude::*, px, App, ClickEvent, IntoElement, SharedString, Window};
 use pier_core::ssh::SshConfig;
 
-use crate::app::{NewSshRequested, OpenLocalTerminalRequested};
 use crate::components::{
     text, Button, Card, IconBadge, SectionLabel, StatusKind, StatusPill,
 };
@@ -13,20 +12,28 @@ use crate::theme::{
     ThemeMode,
 };
 
+pub type OnClick = Box<dyn Fn(&ClickEvent, &mut Window, &mut App) + 'static>;
+
 /// Welcome / cover view — 对照 docs/legacy-qml-reference/shell/WelcomeView.qml 像素移植。
 #[derive(IntoElement)]
 pub struct WelcomeView {
     connections: Vec<SshConfig>,
+    on_new_ssh: OnClick,
+    on_open_terminal: OnClick,
 }
 
 impl WelcomeView {
-    pub fn new(connections: Vec<SshConfig>) -> Self {
-        Self { connections }
+    pub fn new(connections: Vec<SshConfig>, on_new_ssh: OnClick, on_open_terminal: OnClick) -> Self {
+        Self {
+            connections,
+            on_new_ssh,
+            on_open_terminal,
+        }
     }
 }
 
 impl RenderOnce for WelcomeView {
-    fn render(self, _: &mut Window, cx: &mut gpui::App) -> impl IntoElement {
+    fn render(self, _: &mut Window, cx: &mut App) -> impl IntoElement {
         let t = theme(cx);
         let count = self.connections.len();
         let mode_label: SharedString = if t.mode == ThemeMode::Dark {
@@ -34,6 +41,11 @@ impl RenderOnce for WelcomeView {
         } else {
             "Light mode".into()
         };
+        let WelcomeView {
+            connections,
+            on_new_ssh,
+            on_open_terminal,
+        } = self;
 
         let column = div()
             .w(px(480.0))
@@ -41,21 +53,20 @@ impl RenderOnce for WelcomeView {
             .flex_col()
             .items_center()
             .gap(SP_4)
-            // 1. 品牌徽章
             .child(IconBadge::accent())
-            // 2. SectionLabel
             .child(SectionLabel::new("Welcome").centered())
-            // 3. Display 标题（28px Inter 510，居中，对照 QML 行 62-70）
             .child(text::h1("Pier-X workspace").centered())
-            // 4. Body 描述（13px secondary，居中，宽 420px）
             .child(
                 div()
                     .w(px(420.0))
-                    .child(text::body(
-                        "Open a local terminal or connect to a server to start working.",
-                    ).secondary().centered()),
+                    .child(
+                        text::body(
+                            "Open a local terminal or connect to a server to start working.",
+                        )
+                        .secondary()
+                        .centered(),
+                    ),
             )
-            // 5. 主操作按钮行（PrimaryButton + GhostButton 各 148px 宽）
             .child(
                 div()
                     .flex()
@@ -65,15 +76,14 @@ impl RenderOnce for WelcomeView {
                     .child(
                         Button::primary("welcome-new-ssh", "New SSH connection")
                             .width(px(148.0))
-                            .on_click(|_, _, cx| cx.dispatch_action(&NewSshRequested)),
+                            .on_click(move |ev, win, app| on_new_ssh(ev, win, app)),
                     )
                     .child(
                         Button::ghost("welcome-local-term", "Open local terminal")
                             .width(px(148.0))
-                            .on_click(|_, _, cx| cx.dispatch_action(&OpenLocalTerminalRequested)),
+                            .on_click(move |ev, win, app| on_open_terminal(ev, win, app)),
                     ),
             )
-            // 6. 状态药丸行
             .child(
                 div()
                     .flex()
@@ -92,7 +102,7 @@ impl RenderOnce for WelcomeView {
             );
 
         let column = if count > 0 {
-            column.child(render_recent_card(t, &self.connections))
+            column.child(render_recent_card(t, &connections))
         } else {
             column
         };
@@ -135,10 +145,7 @@ fn render_recent_card(t: &crate::theme::Theme, connections: &[SshConfig]) -> Car
         grid = grid.child(connection_tile(t, conn));
     }
 
-    Card::new()
-        .padding(SP_3)
-        .child(header)
-        .child(grid)
+    Card::new().padding(SP_3).child(header).child(grid)
 }
 
 fn connection_tile(t: &crate::theme::Theme, conn: &SshConfig) -> impl IntoElement {

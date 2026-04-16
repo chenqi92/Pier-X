@@ -1,3 +1,3 @@
 use gpui::actions;
 
-actions!(pier, [ToggleTheme, NewSshRequested, OpenLocalTerminalRequested]);
+actions!(pier, [ToggleTheme]);

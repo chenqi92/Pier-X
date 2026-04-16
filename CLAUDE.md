@@ -62,7 +62,7 @@ div().bg(t.color.bg_surface).border_1().border_color(t.color.border_subtle).roun
 Card::new().padding(SP_4).child(...)
 ```
 
-If the existing component set (`Button`, `Card`, `StatusPill`, `SectionLabel`, `IconBadge`, `Separator`, `text::{display,h1,h2,body,mono}`) cannot express what you need, **add a new component in `src/components/` first** — with a proper name, variant enum, and builder methods — then use it from the view. Do not "just this once" inline a new atom.
+If the existing component set (`Button`, `Card`, `StatusPill`, `SectionLabel`, `IconBadge`, `NavItem`, `Separator`, `text::{display,h1,h2,h3,body,caption,mono}`) cannot express what you need, **add a new component in `src/components/` first** — with a proper name, variant enum, and builder methods — then use it from the view. Do not "just this once" inline a new atom.
 
 ### Rule 3 — Variants as enums, not new types
 

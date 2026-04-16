@@ -246,7 +246,9 @@ shadow.modal (L5)
 
 ---
 
-## Implementation Protocol
+## QML Implementation Protocol
+
+> **Status (2026-04)**: The Qt/QML shell has been retired. The active runtime is `pier-ui-gpui` (Rust + GPUI). This section is preserved as historical reference and pairs with the new **GPUI Implementation Protocol** at the end of this file. New UI work targets GPUI; consult that section first.
 
 Pier-X must not style pages by composing raw Qt controls ad hoc. All new UI work must follow this order:
 
@@ -745,3 +747,104 @@ Rectangle {
 ---
 
 **这套规范是 Pier-X 的视觉宪法。任何违反需要在 PR 描述中明确解释原因。**
+
+---
+
+## GPUI Implementation Protocol
+
+> 适用于 `pier-ui-gpui/`（Rust + GPUI），与上方 QML Implementation Protocol 平行。所有 GPUI UI 代码必须遵守本节。
+
+### A. Token 取值规则
+
+GPUI 没有 QML 的 Theme Singleton，token 通过 `cx.global::<Theme>()` 全局注入。视图与组件统一调用 `crate::theme::theme(cx)` 拿到 `&Theme`。
+
+| 视觉值 | QML 形式 | GPUI 形式 |
+|---|---|---|
+| 主背景 | `Theme.bgCanvas` | `theme(cx).color.bg_canvas` |
+| 卡片背景 | `Theme.bgSurface` | `theme(cx).color.bg_surface` |
+| 主文字 | `Theme.textPrimary` | `theme(cx).color.text_primary` |
+| 强调蓝 | `Theme.accent` | `theme(cx).color.accent` |
+| Subtle 边框 | `Theme.borderSubtle` | `theme(cx).color.border_subtle` |
+| 间距 12px | `Theme.sp3` | `crate::theme::spacing::SP_3` |
+| 圆角 4px | `Theme.radiusSm` | `crate::theme::radius::RADIUS_SM` |
+| 字号 13px | `Theme.sizeBody` | `crate::theme::typography::SIZE_BODY` |
+| 字重 510 | `Theme.weightMedium` | `crate::theme::typography::WEIGHT_MEDIUM` |
+| UI 字体 | `Theme.fontUi` | `theme(cx).font_ui.clone()` |
+| Mono 字体 | `Theme.fontMono` | `theme(cx).font_mono.clone()` |
+
+颜色完整映射 SKILL.md §2.1（深色）/ §2.2（浅色）。深浅切换通过 `theme::toggle(cx)` + `cx.refresh_windows()`。
+
+### B. 字体捆绑（强制）
+
+`main.rs` 启动时必须捆绑 Inter Variable + JetBrains Mono：
+
+```rust
+cx.text_system().add_fonts(vec![
+    Cow::Borrowed(include_bytes!("../assets/fonts/Inter-Variable.ttf").as_slice().into()),
+    Cow::Borrowed(include_bytes!("../assets/fonts/JetBrainsMono-Regular.ttf").as_slice().into()),
+]).unwrap();
+```
+
+不允许依赖系统字体 fallback（与 §3.1「捆绑这两个字体作为资源」一致）。
+
+### C. 组件白名单
+
+视图层（`src/views/`、`src/app/`）只允许使用以下组件 + GPUI 原生 layout 元素（`div`/`flex`/`gap`）。任何其他视觉组合必须先在 `src/components/` 封装。
+
+```text
+Button { Primary | Ghost | Icon }     ← 替代 PrimaryButton.qml / GhostButton.qml / IconButton.qml
+Card                                   ← 替代 Card.qml
+StatusPill { Success | Warning | Error | Info }   ← 替代 StatusPill.qml
+SectionLabel                           ← 替代 SectionLabel.qml
+IconBadge                              ← 替代 Welcome 品牌徽章
+Separator                              ← 替代 Separator.qml
+text::display(s) / h1(s) / h2(s) / h3(s) / body(s) / mono(s)   ← 文本 helpers
+```
+
+待补充（PR5+）：`PopoverPanel`、`ModalDialogShell`、`PierTextField`、`SegmentedControl`、`ToggleSwitch`、`PierToolTip`。需要时按 [docs/legacy-qml-reference/](../../../docs/legacy-qml-reference/) 的 QML 对照实现。
+
+### D. Forbidden 模式（PR review 拒绝标准）
+
+下列模式在 `src/views/` 与 `src/app/` 下出现时**必须打回**：
+
+```rust
+// ❌ 直接颜色字面量
+div().bg(rgb(0x10192c))
+div().border_color(rgba(0xffffff_0d))
+
+// ❌ 数字像素字面量（绕过 spacing token）
+div().p(px(16.))
+div().gap(px(8.))
+div().h(px(28.))   // 例外：组件内部尺寸（Button 28px、StatusPill 18px、IconBadge 28px）允许，必须用 SKILL.md 章节注释来源
+
+// ❌ 硬编码字体字符串
+div().font_family("Inter")
+
+// ❌ 视图内创建新视觉原子（应该新建组件）
+div().bg(t.color.bg_surface).border_1().border_color(t.color.border_subtle).rounded(RADIUS_MD).p(SP_4)
+```
+
+### E. 组件实现约定
+
+- **Struct + `#[derive(IntoElement)]` + `RenderOnce` 实现**，统一形态。
+- 第一个参数永远是 `id: ElementId`（用稳定字符串字面量），交互组件必须）。
+- 变体用 `enum`（`ButtonVariant::{Primary, Ghost, Icon}`），不为变体新建独立 struct。
+- 链式 builder：`Button::primary("welcome-new-ssh", "New SSH").width(px(148.)).on_click(cb)`。
+- hover/active 用 `InteractiveElement::hover(...)` / `.active(...)`，颜色取自 `t.color.bg_hover` / `t.color.bg_active`。
+- focus 取 `t.color.border_focus`（`#3574F0` IntelliJ 蓝）。
+
+### F. 与 CLAUDE.md 的关系
+
+[`/CLAUDE.md`](../../../CLAUDE.md) 写的是 Rust 代码层规则（模块组织、命名、禁用 API），本节写的是视觉 token 与组件 contract。两者互补，不重复。
+
+### G. 应用清单（每次写 GPUI 代码时检查）
+
+- [ ] 视图层零 `rgb(`、`rgba(`、`px(<裸数字>)`、字体字符串
+- [ ] 所有视觉值通过 `theme(cx).color.*` / `spacing::SP_*` / `radius::RADIUS_*` / `typography::SIZE_*`
+- [ ] 新视觉原子已封装为 `src/components/<name>.rs` 的 struct
+- [ ] 变体是 enum 而不是新 struct
+- [ ] 交互组件有稳定 `ElementId`
+- [ ] hover / active / focus 三态都用了对应 token 颜色
+- [ ] dark + light 双主题都验证过（Cmd+Shift+L 切换）
+- [ ] Inter / JetBrains Mono 通过 `add_fonts` 捆绑，未依赖系统字体
+- [ ] 字重最高 590（WEIGHT_EMPHASIS），未出现 700/Bold

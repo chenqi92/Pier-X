@@ -19,10 +19,17 @@ This file tracks the active GPUI + Rust delivery path only.
 - [x] Direct `pier-core` integration without IPC
 - [x] Repo-root entrypoints moved to the GPUI shell
 - [x] Tauri shell demoted to archived reference status
+- [x] Tauri shell removed from disk; 10 core QML files preserved as design reference in `docs/legacy-qml-reference/`
+- [x] `CLAUDE.md` project rules + `SKILL.md` §GPUI Implementation Protocol
+- [x] Theme system (dark + light, Cmd+Shift+L toggle) with bundled Inter + JetBrains Mono fonts
+- [x] Component library (`Button`, `Card`, `StatusPill`, `SectionLabel`, `IconBadge`, `Separator`, `text` helpers)
+- [x] Welcome / cover view ported from `WelcomeView.qml`
+- [x] Workbench fallback view using new component library
+- [x] Route-based view switching (`PierApp::Route::{Welcome, Workbench}`)
 
 ## Next up
 
-- [ ] Replace the placeholder dashboard with a docked workbench layout
+- [ ] Replace the placeholder workbench with a docked layout (TabBar / Sidebar / Canvas / StatusBar)
 - [ ] Terminal shell: event-driven session rendering, input routing, and scrollback UX
 - [ ] Git depth: status, diff, commit, branch, and history views
 - [ ] SSH and connection management: saved targets, auth flows, and tunnel orchestration

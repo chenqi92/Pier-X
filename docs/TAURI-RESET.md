@@ -1,5 +1,7 @@
 # Tauri Reset
 
+> Historical note: this document is kept only as migration history. The active shell baseline now lives in `docs/GPUI-RESET.md`.
+
 > Date: 2026-04-14  
 > Branch: `codex/tauri-ui-reset`
 

@@ -8,7 +8,7 @@
     "build": "tsc && vite build",
     "build:icon:macos": "python3 scripts/build_macos_icon.py",
     "preview": "vite preview",
-    "tauri": "tauri"
+    "tauri": "node scripts/tauri-runner.mjs"
   },
   "dependencies": {
     "@tauri-apps/api": "^2",

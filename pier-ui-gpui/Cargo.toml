@@ -1,0 +1,11 @@
+[package]
+name = "pier-ui-gpui"
+version = "0.1.0"
+edition = "2021"
+description = "Native GPUI desktop shell for Pier-X"
+license = "MIT"
+publish = false
+
+[dependencies]
+gpui = "0.2.2"
+pier-core = { path = "../pier-core" }

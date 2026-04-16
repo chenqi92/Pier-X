@@ -2,8 +2,8 @@
 
 Pier-X now ships on a single active desktop stack:
 
-- shell: `pier-ui-tauri/` (`Tauri 2 + React + TypeScript`)
-- runtime glue: `pier-ui-tauri/src-tauri/`
+- shell: `pier-ui-gpui/` (`GPUI + Rust`)
+- runtime glue: direct Rust integration inside `pier-ui-gpui/`
 - backend: `pier-core/`
 
 ## Build rules
@@ -12,14 +12,14 @@ Pier-X now ships on a single active desktop stack:
 - Keep the repo-root entrypoints aligned with the active shell:
   - `run.ps1` / `run.sh`
   - `build.ps1` / `build.sh`
-- Prefer direct Rust crate integration from `pier-ui-tauri/src-tauri` to `pier-core`.
+- Prefer direct Rust crate integration from `pier-ui-gpui` to `pier-core`.
 
 ## Frontend rules
 
-- Keep shared design tokens in `pier-ui-tauri/src/styles/tokens.css`.
-- Put reusable shell primitives in `pier-ui-tauri/src/components/` or `pier-ui-tauri/src/shell/` before adding panel-local one-off styling.
-- Shared shell layout and chrome changes belong in `pier-ui-tauri/src/styles/shell.css` or another shared stylesheet, not scattered inline across panels.
+- Keep reusable view primitives in `pier-ui-gpui/src/` instead of duplicating ad hoc panel structures.
+- Keep application state and service orchestration out of render code where possible.
+- Do not rebuild a TypeScript/IPC wrapper layer on top of `pier-core`; the active shell should call Rust services directly.
 
 ## Review rule
 
-- Any UI PR should be rejected if it duplicates shared shell styling or revives archived Qt-era build/assets/docs without a clear migration reason.
+- Any UI PR should be rejected if it revives archived Qt-era or Tauri-era build paths without a clear migration reason.

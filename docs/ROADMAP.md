@@ -1,41 +1,37 @@
 # Pier-X Roadmap
 
-This file tracks the active Tauri + Rust delivery path only.
+This file tracks the active GPUI + Rust delivery path only.
 
 ---
 
 ## Current baseline
 
-- Desktop shell: `pier-ui-tauri/` (`Tauri 2 + React + TypeScript`)
-- Runtime glue: `pier-ui-tauri/src-tauri/`
+- Desktop shell: `pier-ui-gpui/` (`GPUI + Rust`)
+- Runtime glue: direct Rust integration in `pier-ui-gpui/`
 - Backend: `pier-core/`
 - Repo entrypoints: `run.ps1`, `run.sh`, `build.ps1`, `build.sh`
-- CI: Tauri shell on macOS + Windows, Rust core on macOS + Windows + Linux
+- CI: Rust shell + Rust core
 
 ## Shipped
 
-- [x] Tauri shell scaffold and shared workbench layout
-- [x] Direct `pier-core` integration from `src-tauri`
-- [x] Local terminal session creation and snapshot polling
-- [x] SSH terminal sessions with saved connections and keyring-backed secrets
-- [x] Git overview, diff, stage / unstage, commit, branch switch, push / pull, stash
-- [x] MySQL / SQLite / Redis browse and query flows
-- [x] Markdown rendering and local directory listing
-- [x] Windows and macOS Tauri CI builds
-- [x] Tag-triggered Tauri release workflow
-- [x] Qt / CMake / Corrosion / C-ABI legacy build path removed from tracked repo files
+- [x] Root Cargo workspace for `pier-core` + `pier-ui-gpui`
+- [x] Minimal GPUI shell scaffold
+- [x] Direct `pier-core` integration without IPC
+- [x] Repo-root entrypoints moved to the GPUI shell
+- [x] Tauri shell demoted to archived reference status
 
 ## Next up
 
-- [ ] Terminal polish: richer selection, scrollback UX, and stability hardening
-- [ ] Git depth: graph/history views, richer revert flows, and remote management
-- [ ] Data panels: more complete table tooling, safer write flows, and saved connections
-- [ ] Service surfaces: PostgreSQL, Docker, SFTP, and server monitoring refinements
+- [ ] Replace the placeholder dashboard with a docked workbench layout
+- [ ] Terminal shell: event-driven session rendering, input routing, and scrollback UX
+- [ ] Git depth: status, diff, commit, branch, and history views
+- [ ] SSH and connection management: saved targets, auth flows, and tunnel orchestration
+- [ ] Data panels: SQLite, MySQL, Redis, PostgreSQL, and local service surfaces
 - [ ] Workspace polish: keyboard flow, panel density, and settings cleanup
 - [ ] Plugin host boundary for future third-party extensions
 
 ## Guardrails
 
 - `pier-core` must remain UI-framework-agnostic.
-- `pier-ui-tauri` is the only active desktop shell in the repository.
-- New build or packaging work must extend the Tauri path, not revive archived Qt-era tooling.
+- `pier-ui-gpui` is the only active desktop shell in the repository.
+- New build or packaging work must extend the GPUI path, not revive archived Qt-era or Tauri-era tooling.

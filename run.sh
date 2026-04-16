@@ -1,15 +1,15 @@
 #!/usr/bin/env bash
-# run.sh — Launch the active Tauri shell from the repo root.
+# run.sh — Launch the active GPUI shell from the repo root.
 #
 # Usage:
 #   ./run.sh                        # Debug/dev shell
-#   BUILD_TYPE=Release ./run.sh     # Run the Tauri dev shell in release mode
+#   BUILD_TYPE=Release ./run.sh     # Run the GPUI shell in release mode
 #   BUILD_DIR=target-root ./run.sh  # Override Cargo target dir
 
 set -euo pipefail
 
 ROOT_DIR="$(cd "$(dirname "$0")" && pwd)"
-UI_DIR="${PIER_UI_DIR:-$ROOT_DIR/pier-ui-tauri}"
+UI_CRATE="${PIER_UI_CRATE:-pier-ui-gpui}"
 BUILD_TYPE="${BUILD_TYPE:-Debug}"
 BUILD_DIR="${BUILD_DIR:-}"
 
@@ -21,17 +21,9 @@ need_cmd() {
 }
 
 ensure_ui_dir() {
-    if [ ! -d "$UI_DIR" ]; then
-        echo "ERROR: active Tauri shell not found at $UI_DIR" >&2
+    if [ ! -d "$ROOT_DIR/$UI_CRATE" ]; then
+        echo "ERROR: active GPUI shell crate not found at $ROOT_DIR/$UI_CRATE" >&2
         exit 1
-    fi
-}
-
-ensure_node_modules() {
-    local lock_marker="node_modules/.package-lock.json"
-    if [ ! -d node_modules ] || [ package-lock.json -nt "$lock_marker" ]; then
-        echo "==> Installing frontend dependencies"
-        npm ci
     fi
 }
 
@@ -43,27 +35,23 @@ case "$BUILD_TYPE" in
         ;;
 esac
 
-need_cmd node
-need_cmd npm
 need_cmd cargo
 ensure_ui_dir
 
 if [ -n "$BUILD_DIR" ]; then
     export CARGO_TARGET_DIR="$ROOT_DIR/$BUILD_DIR"
     echo "==> Using Cargo target dir: $CARGO_TARGET_DIR"
+    echo "==> Using Cargo target dir: $CARGO_TARGET_DIR"
 fi
 
-cd "$UI_DIR"
-ensure_node_modules
-
-TAURI_CMD=(npm run tauri -- dev)
+CARGO_CMD=(cargo run -p "$UI_CRATE")
 if [ "$BUILD_TYPE" = "Release" ]; then
-    TAURI_CMD+=(--release)
+    CARGO_CMD+=(--release)
 fi
 if [ "$#" -gt 0 ]; then
-    TAURI_CMD+=(--)
-    TAURI_CMD+=("$@")
+    CARGO_CMD+=(--)
+    CARGO_CMD+=("$@")
 fi
 
-echo "==> Launching Pier-X Tauri shell ($BUILD_TYPE)"
-exec "${TAURI_CMD[@]}"
+echo "==> Launching Pier-X GPUI shell ($BUILD_TYPE)"
+exec "${CARGO_CMD[@]}"

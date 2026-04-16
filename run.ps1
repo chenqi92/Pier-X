@@ -1,4 +1,4 @@
-# run.ps1 — Launch the active Tauri shell from the repo root.
+# run.ps1 — Launch the active GPUI shell from the repo root.
 #
 # Usage:
 #   .\run.ps1
@@ -19,37 +19,12 @@ function Require-Command {
     }
 }
 
-function Resolve-NpmCommand {
-    $npmCmd = Get-Command "npm.cmd" -ErrorAction SilentlyContinue
-    if ($npmCmd) {
-        return $npmCmd.Source
-    }
-
-    $npm = Get-Command "npm" -ErrorAction SilentlyContinue
-    if ($npm) {
-        return $npm.Source
-    }
-
-    Write-Host "ERROR: required command not found: npm" -ForegroundColor Red
-    exit 1
-}
-
-function Ensure-NodeModules {
-    $lockFile = Join-Path (Get-Location) "package-lock.json"
-    $lockMarker = Join-Path (Get-Location) "node_modules\.package-lock.json"
-    if (-not (Test-Path "node_modules") -or -not (Test-Path $lockMarker) -or ((Get-Item $lockFile).LastWriteTimeUtc -gt (Get-Item $lockMarker).LastWriteTimeUtc)) {
-        Write-Host "==> Installing frontend dependencies"
-        & $NpmCommand ci
-        if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
-    }
-}
-
-$UiDir = if ($env:PIER_UI_DIR) { $env:PIER_UI_DIR } else { Join-Path $PSScriptRoot "pier-ui-tauri" }
+$UiCrate = if ($env:PIER_UI_CRATE) { $env:PIER_UI_CRATE } else { "pier-ui-gpui" }
 $BuildType = if ($env:BUILD_TYPE) { $env:BUILD_TYPE } else { "Debug" }
 $BuildDir = if ($env:BUILD_DIR) { $env:BUILD_DIR } else { $null }
 
-if (-not (Test-Path $UiDir)) {
-    Write-Host "ERROR: active Tauri shell not found at $UiDir" -ForegroundColor Red
+if (-not (Test-Path (Join-Path $PSScriptRoot $UiCrate))) {
+    Write-Host "ERROR: active GPUI shell crate not found at $(Join-Path $PSScriptRoot $UiCrate)" -ForegroundColor Red
     exit 1
 }
 
@@ -58,9 +33,7 @@ if ($BuildType -notin @("Debug", "Release")) {
     exit 1
 }
 
-Require-Command node
 Require-Command cargo
-$NpmCommand = Resolve-NpmCommand
 
 if ($BuildDir) {
     $resolvedBuildDir = if ([System.IO.Path]::IsPathRooted($BuildDir)) {
@@ -72,22 +45,15 @@ if ($BuildDir) {
     Write-Host "==> Using Cargo target dir: $resolvedBuildDir"
 }
 
-Push-Location $UiDir
-try {
-    Ensure-NodeModules
-
-    $tauriArgs = @("run", "tauri", "--", "dev")
-    if ($BuildType -eq "Release") {
-        $tauriArgs += "--release"
-    }
-    if ($Args.Count -gt 0) {
-        $tauriArgs += "--"
-        $tauriArgs += $Args
-    }
-
-    Write-Host "==> Launching Pier-X Tauri shell ($BuildType)"
-    & $NpmCommand @tauriArgs
-    if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
-} finally {
-    Pop-Location
+$cargoArgs = @("run", "-p", $UiCrate)
+if ($BuildType -eq "Release") {
+    $cargoArgs += "--release"
 }
+if ($Args.Count -gt 0) {
+    $cargoArgs += "--"
+    $cargoArgs += $Args
+}
+
+Write-Host "==> Launching Pier-X GPUI shell ($BuildType)"
+& cargo @cargoArgs
+if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }

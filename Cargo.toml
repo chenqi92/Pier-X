@@ -1,0 +1,7 @@
+[workspace]
+members = [
+    "pier-core",
+    "pier-ui-gpui",
+]
+default-members = ["pier-ui-gpui"]
+resolver = "2"

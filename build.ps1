@@ -20,12 +20,27 @@ function Require-Command {
     }
 }
 
+function Resolve-NpmCommand {
+    $npmCmd = Get-Command "npm.cmd" -ErrorAction SilentlyContinue
+    if ($npmCmd) {
+        return $npmCmd.Source
+    }
+
+    $npm = Get-Command "npm" -ErrorAction SilentlyContinue
+    if ($npm) {
+        return $npm.Source
+    }
+
+    Write-Host "ERROR: required command not found: npm" -ForegroundColor Red
+    exit 1
+}
+
 function Ensure-NodeModules {
     $lockFile = Join-Path (Get-Location) "package-lock.json"
     $lockMarker = Join-Path (Get-Location) "node_modules\.package-lock.json"
     if (-not (Test-Path "node_modules") -or -not (Test-Path $lockMarker) -or ((Get-Item $lockFile).LastWriteTimeUtc -gt (Get-Item $lockMarker).LastWriteTimeUtc)) {
         Write-Host "==> Installing frontend dependencies"
-        & npm ci
+        & $NpmCommand ci
         if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
     }
 }
@@ -46,8 +61,8 @@ if ($BuildType -notin @("Debug", "Release")) {
 }
 
 Require-Command node
-Require-Command npm
 Require-Command cargo
+$NpmCommand = Resolve-NpmCommand
 
 if ($BuildDir) {
     $resolvedBuildDir = if ([System.IO.Path]::IsPathRooted($BuildDir)) {
@@ -72,7 +87,7 @@ try {
     }
 
     Write-Host "==> Building Pier-X Tauri shell ($BuildType)"
-    & npm @tauriArgs
+    & $NpmCommand @tauriArgs
     if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 } finally {
     Pop-Location

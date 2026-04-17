@@ -24,8 +24,11 @@ use crate::theme::{
     theme,
     typography::{SIZE_CAPTION, SIZE_MONO_SMALL, WEIGHT_MEDIUM},
 };
+use std::path::PathBuf;
+
 use crate::views::database::DatabaseView;
 use crate::views::git::GitView;
+use crate::views::markdown::MarkdownView;
 
 pub type ModeSelector = Rc<dyn Fn(&RightMode, &mut Window, &mut App) + 'static>;
 
@@ -33,6 +36,9 @@ pub type ModeSelector = Rc<dyn Fn(&RightMode, &mut Window, &mut App) + 'static>;
 pub struct RightPanel {
     active_mode: RightMode,
     snapshot: ShellSnapshot,
+    /// Most recently opened `.md` file (set by the file tree, consumed by
+    /// the Markdown mode). `None` shows the empty-state card.
+    current_markdown: Option<PathBuf>,
     on_select_mode: ModeSelector,
 }
 
@@ -40,11 +46,13 @@ impl RightPanel {
     pub fn new(
         active_mode: RightMode,
         snapshot: ShellSnapshot,
+        current_markdown: Option<PathBuf>,
         on_select_mode: ModeSelector,
     ) -> Self {
         Self {
             active_mode,
             snapshot,
+            current_markdown,
             on_select_mode,
         }
     }
@@ -56,10 +64,11 @@ impl RenderOnce for RightPanel {
         let RightPanel {
             active_mode,
             snapshot,
+            current_markdown,
             on_select_mode,
         } = self;
 
-        let body = render_mode_body(t, active_mode, snapshot);
+        let body = render_mode_body(t, active_mode, snapshot, current_markdown);
 
         div()
             .h_full()
@@ -81,18 +90,14 @@ fn render_mode_body(
     t: &crate::theme::Theme,
     mode: RightMode,
     snapshot: ShellSnapshot,
+    current_markdown: Option<PathBuf>,
 ) -> gpui::AnyElement {
     // Status bar (above content) — placeholder for the SSH connection
     // status / detected services strips that Pier renders here.
     let status = mode_status_bar(t, mode);
 
     let content: gpui::AnyElement = match mode {
-        RightMode::Markdown => placeholder(
-            "Markdown",
-            "Local .md preview with live file watching.",
-            "Renders the document at the path most recently posted from the file tree (Phase 2). Until then this card stands in for the renderer.",
-        )
-        .into_any_element(),
+        RightMode::Markdown => MarkdownView::new(current_markdown).into_any_element(),
         RightMode::Monitor => monitor_view(t, &snapshot).into_any_element(),
         RightMode::Sftp => placeholder(
             "SFTP",

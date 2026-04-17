@@ -153,6 +153,14 @@ pub struct TerminalPanel {
 }
 
 impl TerminalPanel {
+    /// Public escape hatch for callers (e.g. the Servers list) that want to
+    /// shove a command into the PTY right after creating a tab. Bytes go
+    /// through the same `write_input` path as keystrokes, so PTY back-pressure
+    /// + error reporting behave identically.
+    pub fn send_input(&mut self, s: &str, cx: &mut Context<Self>) {
+        self.write_input(s.as_bytes(), cx);
+    }
+
     pub fn new(on_activated: ActivationHandler, cx: &mut Context<Self>) -> Self {
         let shell_path: SharedString = preferred_shell().into();
         let notify_state = Box::<NotifyState>::default();

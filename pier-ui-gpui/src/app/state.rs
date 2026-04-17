@@ -103,6 +103,34 @@ impl PierApp {
         cx.notify();
     }
 
+    /// Open a terminal tab and immediately type `ssh user@host -p port` into
+    /// the new PTY. Mirrors Pier's "click a saved server → terminal opens
+    /// connecting" flow; the OS-level `ssh` binary handles auth (key + agent
+    /// + Keychain pop-ups), so Pier-X doesn't have to ship a parallel SSH
+    /// auth UI for the common case.
+    ///
+    /// Real `russh`-backed sessions land in a later phase — the placeholder
+    /// covers 90 % of the UX with 10 lines of code.
+    fn open_ssh_terminal(&mut self, idx: usize, cx: &mut Context<Self>) {
+        let Some(conn) = self.connections.get(idx).cloned() else {
+            eprintln!("[pier] ssh-open: stale index {idx}");
+            return;
+        };
+        self.open_terminal_tab(cx);
+        let Some(active) = self.active_terminal else {
+            return;
+        };
+        let entity = self.terminals[active].clone();
+        // Quote-conservative command — fine for the common shape we expose
+        // in the connection editor (no spaces in user / host).
+        let command = if conn.port == 22 {
+            format!("ssh {}@{}\n", conn.user, conn.host)
+        } else {
+            format!("ssh {}@{} -p {}\n", conn.user, conn.host, conn.port)
+        };
+        entity.update(cx, |panel, cx| panel.send_input(&command, cx));
+    }
+
     fn activate_terminal_tab(&mut self, idx: usize, cx: &mut Context<Self>) {
         if idx < self.terminals.len() {
             self.active_terminal = Some(idx);
@@ -342,10 +370,9 @@ impl PierApp {
                 cx.notify();
             },
         ));
-        let on_select_server: ServerSelector =
-            Rc::new(cx.listener(|_, idx: &usize, _, _| {
-                eprintln!("[pier] server clicked idx={idx} (open-tab dialog lands in Phase 3)");
-            }));
+        let on_select_server: ServerSelector = Rc::new(cx.listener(
+            |this, idx: &usize, _, cx| this.open_ssh_terminal(*idx, cx),
+        ));
 
         let on_toggle_dir: ToggleDirHandler = Rc::new(cx.listener(
             |this, path: &PathBuf, _, cx| this.toggle_dir(path.clone(), cx),
@@ -380,7 +407,20 @@ impl PierApp {
                 cx.notify();
             },
         ));
-        RightPanel::new(self.right_mode, self.snapshot.clone(), on_select_mode)
+        // Only forward the path to the Markdown mode if it actually points
+        // at a .md file — keeps the empty-state messaging clean.
+        let current_markdown = self.last_opened_file.clone().filter(|p| {
+            p.extension()
+                .and_then(|s| s.to_str())
+                .map(|ext| ext.eq_ignore_ascii_case("md"))
+                .unwrap_or(false)
+        });
+        RightPanel::new(
+            self.right_mode,
+            self.snapshot.clone(),
+            current_markdown,
+            on_select_mode,
+        )
     }
 
     fn render_center(

@@ -1,9 +1,8 @@
 name: Release
 
 on:
-  push:
-    tags:
-      - 'v*.*.*'
+  release:
+    types: [published]
   workflow_dispatch:
     inputs:
       tag:
@@ -11,11 +10,12 @@ on:
         required: true
         type: string
 
-env:
-  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: 'true'
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.release.tag_name || inputs.tag || github.ref }}
+  cancel-in-progress: true
 
 jobs:
-  publish-tauri:
+  publish-gpui:
     name: Publish · ${{ matrix.name }}
     permissions:
       contents: write
@@ -23,15 +23,14 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          - name: Windows x64
+          - name: Windows
             os: windows-latest
-            args: --ci
-          - name: Windows ARM64
-            os: windows-11-arm
-            args: --ci
-          - name: macOS Universal
+            archive_name: pier-x-windows-x64.zip
+            binary_path: target/release/pier-ui-gpui.exe
+          - name: macOS
             os: macos-latest
-            args: --ci --target universal-apple-darwin
+            archive_name: pier-x-macos.zip
+            binary_path: target/release/pier-ui-gpui
     runs-on: ${{ matrix.os }}
 
     steps:
@@ -45,36 +44,31 @@ jobs:
           if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
             echo "value=${{ inputs.tag }}" >> "$GITHUB_OUTPUT"
           else
-            echo "value=${GITHUB_REF#refs/tags/}" >> "$GITHUB_OUTPUT"
+            echo "value=${{ github.event.release.tag_name }}" >> "$GITHUB_OUTPUT"
           fi
-
-      - name: Setup Node.js
-        uses: actions/setup-node@v4
-        with:
-          node-version: '24'
-          cache: npm
-          cache-dependency-path: pier-ui-tauri/package-lock.json
 
       - name: Install Rust toolchain
         uses: dtolnay/rust-toolchain@stable
 
-      - name: Install macOS universal targets
+      - name: Build GPUI shell
+        run: cargo build -p pier-ui-gpui --release
+
+      - name: Package Windows binary
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Force -Path dist | Out-Null
+          Compress-Archive -LiteralPath "${{ matrix.binary_path }}" -DestinationPath "dist\\${{ matrix.archive_name }}" -Force
+
+      - name: Package macOS binary
         if: runner.os == 'macOS'
-        run: rustup target add aarch64-apple-darwin x86_64-apple-darwin
+        shell: bash
+        run: |
+          mkdir -p dist
+          ditto -c -k "${{ matrix.binary_path }}" "dist/${{ matrix.archive_name }}"
 
-      - name: Install frontend dependencies
-        working-directory: pier-ui-tauri
-        run: npm ci
-
-      - name: Build and publish Tauri bundles
-        uses: tauri-apps/tauri-action@v1
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      - name: Upload release assets
+        uses: softprops/action-gh-release@v2
         with:
-          projectPath: pier-ui-tauri
-          tagName: ${{ steps.tag.outputs.value }}
-          releaseName: Pier-X ${{ steps.tag.outputs.value }}
-          releaseBody: See the assets to download this version and install.
-          releaseDraft: false
-          prerelease: ${{ startsWith(steps.tag.outputs.value, 'v0.') }}
-          args: ${{ matrix.args }}
+          tag_name: ${{ steps.tag.outputs.value }}
+          files: dist/${{ matrix.archive_name }}

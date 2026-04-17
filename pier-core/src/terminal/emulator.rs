@@ -125,7 +125,10 @@ pub struct VtEmulator {
 
     /// Clipboard content set via OSC 52. The shell decides
     /// whether to honor clipboard writes from the terminal.
-    pub osc52_clipboard: String,
+    pub osc52_clipboard: Option<String>,
+
+    /// DECSET/DECRST 2004 — request bracketed paste wrapping.
+    pub bracketed_paste_mode: bool,
 
     /// SSH command detected in terminal output. Set when the user
     /// presses Enter on a line containing `ssh [user@]host`.
@@ -160,7 +163,8 @@ impl VtEmulator {
             pen: Cell::default(),
             bell_pending: false,
             window_title: String::new(),
-            osc52_clipboard: String::new(),
+            osc52_clipboard: None,
+            bracketed_paste_mode: false,
             ssh_command_detected: false,
             ssh_detected_host: String::new(),
             ssh_detected_user: String::new(),
@@ -189,6 +193,7 @@ impl VtEmulator {
             bell_pending: &mut self.bell_pending,
             window_title: &mut self.window_title,
             osc52_clipboard: &mut self.osc52_clipboard,
+            bracketed_paste_mode: &mut self.bracketed_paste_mode,
             ssh_command_detected: &mut self.ssh_command_detected,
             ssh_detected_host: &mut self.ssh_detected_host,
             ssh_detected_user: &mut self.ssh_detected_user,
@@ -357,7 +362,8 @@ struct Performer<'a> {
     pen: &'a mut Cell,
     bell_pending: &'a mut bool,
     window_title: &'a mut String,
-    osc52_clipboard: &'a mut String,
+    osc52_clipboard: &'a mut Option<String>,
+    bracketed_paste_mode: &'a mut bool,
     ssh_command_detected: &'a mut bool,
     ssh_detected_host: &'a mut String,
     ssh_detected_user: &'a mut String,
@@ -482,7 +488,7 @@ impl Perform for Performer<'_> {
             b"52" => {
                 if params.len() >= 3 {
                     if let Ok(data) = std::str::from_utf8(params[2]) {
-                        *self.osc52_clipboard = data.to_string();
+                        *self.osc52_clipboard = Some(data.to_string());
                     }
                 }
             }
@@ -497,7 +503,7 @@ impl Perform for Performer<'_> {
     fn csi_dispatch(
         &mut self,
         params: &vte::Params,
-        _intermediates: &[u8],
+        intermediates: &[u8],
         _ignore: bool,
         action: char,
     ) {
@@ -512,6 +518,12 @@ impl Perform for Performer<'_> {
         let second = flat.get(1).copied().unwrap_or(0);
 
         match action {
+            // DECSET / DECRST — private modes such as bracketed paste.
+            'h' | 'l' if intermediates == [b'?'] => {
+                if first == 2004 {
+                    *self.bracketed_paste_mode = action == 'h';
+                }
+            }
             // CUU — cursor up n (default 1).
             'A' => {
                 let n = first.max(1) as usize;
@@ -773,6 +785,26 @@ mod tests {
         emu.process(b"\x1b[38;2;53;116;240mQ");
         assert_eq!(emu.cells[0][0].fg, Color::Rgb(53, 116, 240));
         assert_eq!(emu.cells[0][0].ch, 'Q');
+    }
+
+    #[test]
+    fn decset_2004_toggles_bracketed_paste_mode() {
+        let mut emu = VtEmulator::new(10, 3);
+
+        emu.process(b"\x1b[?2004h");
+        assert!(emu.bracketed_paste_mode);
+
+        emu.process(b"\x1b[?2004l");
+        assert!(!emu.bracketed_paste_mode);
+    }
+
+    #[test]
+    fn osc52_keeps_empty_payload_as_pending_clipboard_clear() {
+        let mut emu = VtEmulator::new(10, 3);
+
+        emu.process(b"\x1b]52;c;\x07");
+
+        assert_eq!(emu.osc52_clipboard.as_deref(), Some(""));
     }
 
     #[test]

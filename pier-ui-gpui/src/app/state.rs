@@ -1,27 +1,31 @@
 use gpui::{div, prelude::*, px, ClickEvent, Context, IntoElement, SharedString, Window};
+use gpui_component::button::{Button as UiButton, ButtonVariants};
+use gpui_component::sidebar::{
+    Sidebar, SidebarFooter, SidebarGroup, SidebarHeader, SidebarMenu, SidebarMenuItem,
+};
 use pier_core::connections::ConnectionStore;
 use pier_core::ssh::SshConfig;
 
 use crate::app::route::{DbKind, Route};
-use crate::components::{Button, NavItem, StatusKind, StatusPill};
+use crate::app::workbench::{route_icon, Workbench};
+use crate::components::{StatusKind, StatusPill};
 use crate::data::ShellSnapshot;
 use crate::theme::{
-    spacing::{SP_2, SP_3, SP_4},
+    spacing::{SP_3, SP_4},
     theme,
     typography::{SIZE_CAPTION, SIZE_SMALL, WEIGHT_MEDIUM},
     ThemeMode,
 };
-use crate::views::dashboard::DashboardView;
-use crate::views::database::DatabaseView;
-use crate::views::git::GitView;
-use crate::views::ssh::SshView;
-use crate::views::terminal::TerminalView;
 use crate::views::welcome::WelcomeView;
+
+type ClickHandler = Box<dyn Fn(&ClickEvent, &mut Window, &mut gpui::App) + 'static>;
 
 pub struct PierApp {
     route: Route,
+    main_route: Route,
     snapshot: ShellSnapshot,
     connections: Vec<SshConfig>,
+    workbench: Option<Workbench>,
 }
 
 impl PierApp {
@@ -33,22 +37,41 @@ impl PierApp {
         // connections; the dock is reachable via its buttons.
         Self {
             route: Route::Welcome,
+            main_route: Route::Dashboard,
             snapshot: ShellSnapshot::load(),
             connections,
+            workbench: None,
         }
     }
 
-    fn navigate(this: &mut Self, route: Route, cx: &mut Context<Self>) {
+    pub fn sync_route_from_panel(&mut self, route: Route) {
+        self.route = route;
+        if route.is_primary() {
+            self.main_route = route;
+        }
+    }
+
+    fn navigate(this: &mut Self, route: Route, window: &mut Window, cx: &mut Context<Self>) {
+        if route.is_primary() {
+            this.main_route = route;
+        }
+
         if route != this.route {
             this.route = route;
             // Re-probe data on tab change so SSH list, git status, etc.
             // pick up filesystem changes without an explicit watcher.
             this.refresh(route);
+            if route != Route::Welcome {
+                this.ensure_workbench(window, cx);
+                if let Some(workbench) = this.workbench.as_ref() {
+                    workbench.sync(this.main_route, this.route, window, cx);
+                }
+            }
             cx.notify();
         }
     }
 
-    fn refresh(&mut self, route: Route) {
+    pub(crate) fn refresh(&mut self, route: Route) {
         match route {
             Route::Welcome | Route::Dashboard => {
                 self.snapshot = ShellSnapshot::load();
@@ -64,6 +87,14 @@ impl PierApp {
             _ => {}
         }
     }
+
+    fn ensure_workbench(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        if self.workbench.is_none() {
+            let workbench = Workbench::new(cx.entity().downgrade(), window, cx);
+            workbench.sync(self.main_route, self.route, window, cx);
+            self.workbench = Some(workbench);
+        }
+    }
 }
 
 impl Default for PierApp {
@@ -73,10 +104,10 @@ impl Default for PierApp {
 }
 
 impl Render for PierApp {
-    fn render(&mut self, _win: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+    fn render(&mut self, win: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         match self.route {
             Route::Welcome => self.render_welcome(cx).into_any_element(),
-            _ => self.render_dock(cx).into_any_element(),
+            _ => self.render_dock(win, cx).into_any_element(),
         }
     }
 }
@@ -84,27 +115,27 @@ impl Render for PierApp {
 impl PierApp {
     fn render_welcome(&self, cx: &mut Context<Self>) -> impl IntoElement {
         let connections = self.connections.clone();
-        let on_new_ssh = Box::new(cx.listener(
-            |this, _ev: &ClickEvent, _w, cx| Self::navigate(this, Route::Ssh, cx),
-        )) as Box<dyn Fn(&ClickEvent, &mut Window, &mut gpui::App) + 'static>;
-        let on_open_terminal = Box::new(cx.listener(
-            |this, _ev: &ClickEvent, _w, cx| Self::navigate(this, Route::Terminal, cx),
-        )) as Box<dyn Fn(&ClickEvent, &mut Window, &mut gpui::App) + 'static>;
+        let on_new_ssh = Box::new(
+            cx.listener(|this, _ev: &ClickEvent, w, cx| Self::navigate(this, Route::Ssh, w, cx)),
+        )
+            as Box<dyn Fn(&ClickEvent, &mut Window, &mut gpui::App) + 'static>;
+        let on_open_terminal = Box::new(cx.listener(|this, _ev: &ClickEvent, _w, cx| {
+            Self::navigate(this, Route::Terminal, _w, cx)
+        }))
+            as Box<dyn Fn(&ClickEvent, &mut Window, &mut gpui::App) + 'static>;
 
         WelcomeView::new(connections, on_new_ssh, on_open_terminal)
     }
 
-    fn render_dock(&self, cx: &mut Context<Self>) -> impl IntoElement {
+    fn render_dock(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        self.ensure_workbench(window, cx);
         let t = theme(cx).clone();
         let route = self.route;
-        let canvas = match route {
-            Route::Welcome => unreachable!(),
-            Route::Dashboard => DashboardView::new(self.snapshot.clone()).into_any_element(),
-            Route::Terminal => TerminalView::new().into_any_element(),
-            Route::Git => GitView::new().into_any_element(),
-            Route::Ssh => SshView::new().into_any_element(),
-            Route::Database(kind) => DatabaseView::new(kind).into_any_element(),
-        };
+        let dock = self
+            .workbench
+            .as_ref()
+            .expect("workbench must exist after ensure_workbench")
+            .dock();
 
         div()
             .size_full()
@@ -121,16 +152,12 @@ impl PierApp {
                     .flex_1()
                     .min_h(px(0.0))
                     .child(self.render_sidebar(&t, route, cx))
-                    .child(div().flex_1().min_w(px(0.0)).child(canvas)),
+                    .child(div().flex_1().min_w(px(0.0)).child(dock)),
             )
             .child(self.render_statusbar(&t, route))
     }
 
-    fn render_topbar(
-        &self,
-        t: &crate::theme::Theme,
-        cx: &mut Context<Self>,
-    ) -> impl IntoElement {
+    fn render_topbar(&self, t: &crate::theme::Theme, cx: &mut Context<Self>) -> impl IntoElement {
         let theme_label: SharedString = if t.mode == ThemeMode::Dark {
             "Switch to light".into()
         } else {
@@ -157,17 +184,26 @@ impl PierApp {
                 div()
                     .text_size(SIZE_CAPTION)
                     .text_color(t.color.text_tertiary)
-                    .child(SharedString::from(self.snapshot.workspace_path.clone())),
+                    .child(self.snapshot.workspace_path.clone()),
             )
             .child(div().flex_1())
             .child(
-                Button::ghost("topbar-back-welcome", "Welcome").on_click(cx.listener(
-                    |this, _: &ClickEvent, _, cx| Self::navigate(this, Route::Welcome, cx),
-                )),
+                UiButton::new("topbar-back-welcome")
+                    .ghost()
+                    .label("Welcome")
+                    .on_click(cx.listener(|this, _: &ClickEvent, window, cx| {
+                        Self::navigate(this, Route::Welcome, window, cx)
+                    })),
             )
-            .child(Button::ghost("topbar-toggle-theme", theme_label).on_click(|_, _, cx| {
-                crate::theme::toggle(cx)
-            }))
+            .child(
+                UiButton::new("topbar-toggle-theme")
+                    .ghost()
+                    .label(theme_label)
+                    .on_click(|_, _, cx| {
+                        crate::theme::toggle(cx);
+                        crate::ui_kit::sync_theme(cx);
+                    }),
+            )
     }
 
     fn render_sidebar(
@@ -176,58 +212,98 @@ impl PierApp {
         active: Route,
         cx: &mut Context<Self>,
     ) -> impl IntoElement {
-        let nav = |route: Route| -> Box<dyn Fn(&ClickEvent, &mut Window, &mut gpui::App) + 'static> {
-            Box::new(cx.listener(move |this, _: &ClickEvent, _, cx| {
-                Self::navigate(this, route, cx)
+        let nav = |route: Route| -> ClickHandler {
+            Box::new(cx.listener(move |this, _: &ClickEvent, window, cx| {
+                Self::navigate(this, route, window, cx)
             }))
         };
 
-        let primary = [
-            Route::Dashboard,
-            Route::Terminal,
-            Route::Git,
-            Route::Ssh,
-        ];
-
-        let mut col = div()
-            .w(px(208.0))
-            .h_full()
-            .flex()
-            .flex_col()
-            .gap(SP_2)
-            .p(SP_3)
-            .bg(t.color.bg_panel)
-            .border_r_1()
-            .border_color(t.color.border_subtle);
-
-        col = col.child(sidebar_section_label(t, "Workspace"));
-        for route in primary {
-            col = col.child(
-                NavItem::new(route.id(), route.label())
-                    .active(active == route)
-                    .on_click(nav(route)),
+        let workspace_menu = SidebarMenu::new()
+            .child(
+                SidebarMenuItem::new(Route::Dashboard.label())
+                    .icon(route_icon(Route::Dashboard))
+                    .active(active == Route::Dashboard)
+                    .on_click(nav(Route::Dashboard)),
+            )
+            .child(
+                SidebarMenuItem::new(Route::Terminal.label())
+                    .icon(route_icon(Route::Terminal))
+                    .active(active == Route::Terminal)
+                    .on_click(nav(Route::Terminal)),
+            )
+            .child(
+                SidebarMenuItem::new(Route::Git.label())
+                    .icon(route_icon(Route::Git))
+                    .active(active == Route::Git)
+                    .on_click(nav(Route::Git)),
+            )
+            .child(
+                SidebarMenuItem::new(Route::Ssh.label())
+                    .icon(route_icon(Route::Ssh))
+                    .active(active == Route::Ssh)
+                    .on_click(nav(Route::Ssh)),
             );
-        }
 
-        col = col.child(div().h(px(8.0))); // spacer
-        col = col.child(sidebar_section_label(t, "Databases"));
+        let mut database_menu = SidebarMenu::new();
         for kind in DbKind::ALL {
             let route = Route::Database(kind);
-            col = col.child(
-                NavItem::new(route.id(), kind.label())
+            database_menu = database_menu.child(
+                SidebarMenuItem::new(kind.label())
+                    .icon(route_icon(route))
                     .active(active == route)
                     .on_click(nav(route)),
             );
         }
 
-        col
+        Sidebar::<SidebarGroup<SidebarMenu>>::left()
+            .collapsible(false)
+            .header(
+                SidebarHeader::new().child(
+                    div()
+                        .flex()
+                        .flex_col()
+                        .gap(px(2.0))
+                        .child(
+                            div()
+                                .text_size(SIZE_SMALL)
+                                .font_weight(WEIGHT_MEDIUM)
+                                .text_color(t.color.text_primary)
+                                .child("Workbench"),
+                        )
+                        .child(
+                            div()
+                                .text_size(SIZE_CAPTION)
+                                .text_color(t.color.text_tertiary)
+                                .child("Pier-X"),
+                        ),
+                ),
+            )
+            .child(SidebarGroup::new("Workspace").child(workspace_menu))
+            .child(SidebarGroup::new("Databases").child(database_menu))
+            .footer(
+                SidebarFooter::new().child(
+                    div()
+                        .flex()
+                        .flex_col()
+                        .gap(px(2.0))
+                        .child(
+                            div()
+                                .text_size(SIZE_CAPTION)
+                                .text_color(t.color.text_tertiary)
+                                .child(format!("{} connections", self.connections.len())),
+                        )
+                        .child(
+                            div()
+                                .text_size(SIZE_CAPTION)
+                                .text_color(t.color.text_tertiary)
+                                .child(format!("route: {}", active.id())),
+                        ),
+                ),
+            )
+            .w(px(224.0))
     }
 
-    fn render_statusbar(
-        &self,
-        t: &crate::theme::Theme,
-        active: Route,
-    ) -> impl IntoElement {
+    fn render_statusbar(&self, t: &crate::theme::Theme, active: Route) -> impl IntoElement {
         let route_label: SharedString = format!("route: {}", active.id()).into();
         let theme_label: SharedString = if t.mode == ThemeMode::Dark {
             "theme: dark".into()
@@ -249,7 +325,7 @@ impl PierApp {
                 div()
                     .text_size(SIZE_CAPTION)
                     .text_color(t.color.text_tertiary)
-                    .child(SharedString::from(self.snapshot.core_version.clone())),
+                    .child(self.snapshot.core_version.clone()),
             )
             .child(StatusPill::new(route_label, StatusKind::Info))
             .child(StatusPill::new(theme_label, StatusKind::Success))
@@ -262,13 +338,3 @@ impl PierApp {
             )
     }
 }
-
-fn sidebar_section_label(t: &crate::theme::Theme, label: &'static str) -> impl IntoElement {
-    div()
-        .px(SP_3)
-        .text_size(SIZE_CAPTION)
-        .font_weight(WEIGHT_MEDIUM)
-        .text_color(t.color.text_tertiary)
-        .child(label)
-}
-

@@ -136,6 +136,8 @@ pub struct GridSnapshot {
     pub cursor_x: u16,
     /// Cursor row, zero-based, `< rows`.
     pub cursor_y: u16,
+    /// Whether the foreground app requested DECSET 2004 bracketed paste.
+    pub bracketed_paste_mode: bool,
     /// Cell grid, row-major: `cells[row * cols + col]`.
     pub cells: Vec<Cell>,
 }
@@ -333,6 +335,7 @@ impl PierTerminal {
             rows,
             cursor_x: guard.emu.cursor_x as u16,
             cursor_y: guard.emu.cursor_y as u16,
+            bracketed_paste_mode: guard.emu.bracketed_paste_mode,
             cells,
         }
     }
@@ -379,6 +382,7 @@ impl PierTerminal {
             rows,
             cursor_x: guard.emu.cursor_x as u16,
             cursor_y: guard.emu.cursor_y as u16,
+            bracketed_paste_mode: guard.emu.bracketed_paste_mode,
             cells,
         }
     }
@@ -390,6 +394,15 @@ impl PierTerminal {
             Err(poisoned) => poisoned.into_inner(),
         };
         guard.emu.scrollback.len()
+    }
+
+    /// Whether DECSET 2004 bracketed paste mode is currently enabled.
+    pub fn bracketed_paste_mode(&self) -> bool {
+        let guard = match self.inner.lock() {
+            Ok(g) => g,
+            Err(poisoned) => poisoned.into_inner(),
+        };
+        guard.emu.bracketed_paste_mode
     }
 
     /// Update the scrollback history cap.
@@ -417,6 +430,25 @@ impl PierTerminal {
         } else {
             false
         }
+    }
+
+    /// Consume the most recent OSC 52 clipboard payload, if any.
+    pub fn take_osc52_clipboard(&self) -> Option<String> {
+        let mut guard = match self.inner.lock() {
+            Ok(g) => g,
+            Err(poisoned) => poisoned.into_inner(),
+        };
+        guard.emu.osc52_clipboard.take()
+    }
+
+    /// Current OSC 0/1/2 window title, if the foreground app set one.
+    pub fn window_title(&self) -> Option<String> {
+        let guard = match self.inner.lock() {
+            Ok(g) => g,
+            Err(poisoned) => poisoned.into_inner(),
+        };
+        let title = guard.emu.window_title.trim();
+        (!title.is_empty()).then(|| title.to_string())
     }
 
     /// Current grid size. Cheap (no lock, just atomics-free reads of

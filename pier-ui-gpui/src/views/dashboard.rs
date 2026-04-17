@@ -36,9 +36,16 @@ impl RenderOnce for DashboardView {
                     .flex_col()
                     .gap(SP_2)
                     .child(text::h2("Pier-X workspace"))
-                    .child(text::body("Native Rust shell with direct pier-core integration.").secondary()),
+                    .child(
+                        text::body("Native Rust shell with direct pier-core integration.")
+                            .secondary(),
+                    ),
             )
-            .child(metric_card("Core", s.core_version.clone(), s.workspace_path.clone()))
+            .child(metric_card(
+                "Core",
+                s.core_version.clone(),
+                s.workspace_path.clone(),
+            ))
             .child(metric_card(
                 "Git Workspace",
                 s.git_branch.clone(),

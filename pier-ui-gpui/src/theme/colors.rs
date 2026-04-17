@@ -1,3 +1,5 @@
+#![allow(dead_code)]
+
 use gpui::{rgb, rgba, Rgba};
 
 #[derive(Clone, Copy)]
@@ -39,9 +41,9 @@ impl ColorSet {
             bg_panel: rgb(0x16181b),
             bg_surface: rgb(0x1c1e22),
             bg_elevated: rgb(0x22252a),
-            bg_hover: rgba(0xffffff_0a),
-            bg_active: rgba(0xffffff_0f),
-            bg_selected: rgba(0x3574f0_29),
+            bg_hover: rgba(0xffff_ff0a),
+            bg_active: rgba(0xffff_ff0f),
+            bg_selected: rgba(0x3574_f029),
 
             text_primary: rgb(0xe8eaed),
             text_secondary: rgb(0xb4b8bf),
@@ -49,15 +51,15 @@ impl ColorSet {
             text_disabled: rgb(0x5a5e66),
             text_inverse: rgb(0x16181b),
 
-            border_subtle: rgba(0xffffff_0d),
-            border_default: rgba(0xffffff_17),
-            border_strong: rgba(0xffffff_24),
+            border_subtle: rgba(0xffff_ff0d),
+            border_default: rgba(0xffff_ff17),
+            border_strong: rgba(0xffff_ff24),
             border_focus: rgb(0x3574f0),
 
             accent: rgb(0x3574f0),
             accent_hover: rgb(0x4f8aff),
-            accent_muted: rgba(0x3574f0_29),
-            accent_subtle: rgba(0x3574f0_14),
+            accent_muted: rgba(0x3574_f029),
+            accent_subtle: rgba(0x3574_f014),
 
             status_success: rgb(0x5fb865),
             status_warning: rgb(0xf0a83a),
@@ -72,9 +74,9 @@ impl ColorSet {
             bg_panel: rgb(0xf6f7f9),
             bg_surface: rgb(0xffffff),
             bg_elevated: rgb(0xffffff),
-            bg_hover: rgba(0x000000_0a),
-            bg_active: rgba(0x000000_0f),
-            bg_selected: rgba(0x3574f0_1a),
+            bg_hover: rgba(0x0000_000a),
+            bg_active: rgba(0x0000_000f),
+            bg_selected: rgba(0x3574_f01a),
 
             text_primary: rgb(0x1e1f22),
             text_secondary: rgb(0x454850),
@@ -82,15 +84,15 @@ impl ColorSet {
             text_disabled: rgb(0xa7a9b0),
             text_inverse: rgb(0xffffff),
 
-            border_subtle: rgba(0x000000_0f),
-            border_default: rgba(0x000000_1a),
-            border_strong: rgba(0x000000_2e),
+            border_subtle: rgba(0x0000_000f),
+            border_default: rgba(0x0000_001a),
+            border_strong: rgba(0x0000_002e),
             border_focus: rgb(0x3574f0),
 
             accent: rgb(0x3574f0),
             accent_hover: rgb(0x4f8aff),
-            accent_muted: rgba(0x3574f0_29),
-            accent_subtle: rgba(0x3574f0_14),
+            accent_muted: rgba(0x3574_f029),
+            accent_subtle: rgba(0x3574_f014),
 
             status_success: rgb(0x5fb865),
             status_warning: rgb(0xf0a83a),

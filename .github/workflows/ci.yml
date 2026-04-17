@@ -1,60 +1,36 @@
-name: CI
+name: Release Checks
 
 on:
-  push:
-    branches: [main]
-  pull_request:
-    branches: [main]
+  release:
+    types: [published]
   workflow_dispatch:
 
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: true
 
-env:
-  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: 'true'
-
 jobs:
-  tauri-shell:
-    name: Tauri shell · ${{ matrix.name }}
-    runs-on: ${{ matrix.os }}
-    strategy:
-      fail-fast: false
-      matrix:
-        include:
-          - name: Windows
-            os: windows-latest
-          - name: macOS
-            os: macos-latest
+  lint:
+    name: Lint
+    runs-on: ubuntu-latest
 
     steps:
       - name: Checkout
         uses: actions/checkout@v4
 
-      - name: Setup Node.js
-        uses: actions/setup-node@v4
-        with:
-          node-version: '24'
-          cache: npm
-          cache-dependency-path: pier-ui-tauri/package-lock.json
-
       - name: Install Rust toolchain
         uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
 
-      - name: Install frontend dependencies
-        working-directory: pier-ui-tauri
-        run: npm ci
+      - name: cargo fmt --check
+        run: cargo fmt --all --check
 
-      - name: Build Tauri shell (no bundle)
-        working-directory: pier-ui-tauri
-        run: npm run tauri -- build --ci --no-bundle
+      - name: cargo clippy (core)
+        run: cargo clippy -p pier-core --all-targets -- -D warnings
 
-      - name: Show build artifacts
-        shell: bash
-        run: |
-          find pier-ui-tauri/src-tauri/target -maxdepth 4 -type f \
-            \( -name 'pier-ui-tauri' -o -name 'pier-ui-tauri.exe' -o -name 'Pier-X' -o -name 'Pier-X.exe' \) \
-            -print || true
+      - name: cargo clippy (shell)
+        run: cargo clippy -p pier-ui-gpui --all-targets -- -D warnings
 
   rust-core:
     name: Rust core · ${{ matrix.os }}
@@ -70,32 +46,27 @@ jobs:
 
       - name: Install Rust toolchain
         uses: dtolnay/rust-toolchain@stable
-        with:
-          components: rustfmt, clippy
-
-      - name: Cache cargo
-        uses: actions/cache@v4
-        with:
-          path: |
-            ~/.cargo/registry
-            ~/.cargo/git
-            pier-core/target
-          key: ${{ runner.os }}-cargo-${{ hashFiles('pier-core/Cargo.toml') }}
-          restore-keys: |
-            ${{ runner.os }}-cargo-
-
-      - name: cargo fmt --check
-        working-directory: pier-core
-        run: cargo fmt --all --check
-
-      - name: cargo clippy
-        working-directory: pier-core
-        run: cargo clippy --all-targets -- -D warnings
 
       - name: cargo build
-        working-directory: pier-core
-        run: cargo build --release
+        run: cargo build -p pier-core --release
 
       - name: cargo test
-        working-directory: pier-core
-        run: cargo test --release
+        run: cargo test -p pier-core --release
+
+  gpui-shell:
+    name: GPUI shell · ${{ matrix.os }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [windows-latest, macos-latest]
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: cargo build
+        run: cargo build -p pier-ui-gpui --release

@@ -16,6 +16,7 @@ See [docs/ROADMAP.md](./docs/ROADMAP.md) for the active delivery plan, [docs/GPU
 - ✅ Rust backend foundation in `pier-core/`
 - ✅ Root Cargo workspace for `pier-core/` + `pier-ui-gpui/`
 - ✅ New GPUI desktop shell scaffold in `pier-ui-gpui/`
+- ✅ `gpui-component` root/window kit integrated into the active shell
 - ✅ First native Rust dashboard rendering `pier-core` data without IPC
 - ✅ Repo-root entrypoints now target the GPUI shell
 - ✅ Archived Tauri shell kept as migration reference only

@@ -1,3 +1,5 @@
+#![allow(dead_code)]
+
 use gpui::{px, Pixels};
 
 pub const SP_0: Pixels = px(0.0);

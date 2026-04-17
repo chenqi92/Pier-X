@@ -2,6 +2,7 @@ pub mod colors;
 pub mod radius;
 pub mod shadow;
 pub mod spacing;
+pub mod terminal;
 pub mod typography;
 
 pub use colors::ColorSet;

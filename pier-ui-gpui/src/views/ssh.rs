@@ -1,11 +1,12 @@
 use std::time::SystemTime;
 
 use gpui::{div, prelude::*, IntoElement, SharedString, Window};
+use gpui_component::button::{Button as UiButton, ButtonVariants};
 use pier_core::connections::ConnectionStore;
 use pier_core::paths;
 use pier_core::ssh::{AuthMethod, SshConfig};
 
-use crate::components::{text, Button, Card, SectionLabel, StatusKind, StatusPill};
+use crate::components::{text, Card, SectionLabel, StatusKind, StatusPill};
 use crate::theme::{
     radius::RADIUS_SM,
     spacing::{SP_1, SP_2, SP_3, SP_4},
@@ -54,9 +55,12 @@ impl RenderOnce for SshView {
             ))
             .child(div().flex_1())
             .child(
-                Button::primary("ssh-new", "New connection").on_click(|_, _, _| {
-                    eprintln!("[pier] action: New SSH connection (dialog wiring pending)");
-                }),
+                UiButton::new("ssh-new")
+                    .primary()
+                    .label("New connection")
+                    .on_click(|_, _, _| {
+                        eprintln!("[pier] action: New SSH connection (dialog wiring pending)");
+                    }),
             );
 
         let store_card = Card::new()
@@ -107,9 +111,9 @@ fn connection_row(t: &crate::theme::Theme, idx: usize, conn: &SshConfig) -> impl
     let address: SharedString = format!("{}@{}:{}", conn.user, conn.host, conn.port).into();
     let auth_label: SharedString = match &conn.auth {
         AuthMethod::Agent => "ssh-agent".into(),
-        AuthMethod::PublicKeyFile { private_key_path, .. } => {
-            format!("key: {private_key_path}").into()
-        }
+        AuthMethod::PublicKeyFile {
+            private_key_path, ..
+        } => format!("key: {private_key_path}").into(),
         AuthMethod::KeychainPassword { credential_id } => {
             format!("keychain: {credential_id}").into()
         }
@@ -218,4 +222,3 @@ fn format_mtime(mt: SystemTime) -> String {
         Err(_) => "modified <pre-epoch>".into(),
     }
 }
-

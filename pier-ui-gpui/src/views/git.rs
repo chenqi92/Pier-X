@@ -6,7 +6,7 @@ use pier_core::services::git::{BranchInfo, CommitInfo, FileStatus, GitClient, Gi
 use crate::components::{text, Card, SectionLabel, StatusKind, StatusPill};
 use crate::theme::{
     radius::RADIUS_SM,
-    spacing::{SP_1, SP_1_5, SP_2, SP_3, SP_4},
+    spacing::{SP_1_5, SP_2, SP_3, SP_4},
     theme,
     typography::{SIZE_BODY, SIZE_MONO_SMALL, SIZE_SMALL, WEIGHT_MEDIUM},
 };
@@ -73,9 +73,10 @@ impl RenderOnce for GitView {
                 .child(
                     Card::new()
                         .child(SectionLabel::new("Repository"))
-                        .child(text::body(
-                            "Current working directory is not inside a Git repository.",
-                        ).secondary())
+                        .child(
+                            text::body("Current working directory is not inside a Git repository.")
+                                .secondary(),
+                        )
                         .child(text::mono(snap.cwd)),
                 ),
             RepoState::Error => div()
@@ -143,34 +144,28 @@ fn changes_card(t: &crate::theme::Theme, changes: &[GitFileChange]) -> Card {
     let staged = changes.iter().filter(|c| c.staged).count();
     let unstaged = changes.len().saturating_sub(staged);
 
-    let mut card = Card::new()
-        .child(SectionLabel::new("Working tree"))
-        .child(
-            div()
-                .flex()
-                .flex_row()
-                .gap(SP_3)
-                .child(
-                    StatusPill::new(
-                        format!("{staged} staged"),
-                        if staged > 0 {
-                            StatusKind::Info
-                        } else {
-                            StatusKind::Success
-                        },
-                    ),
-                )
-                .child(
-                    StatusPill::new(
-                        format!("{unstaged} unstaged"),
-                        if unstaged > 0 {
-                            StatusKind::Warning
-                        } else {
-                            StatusKind::Success
-                        },
-                    ),
-                ),
-        );
+    let mut card = Card::new().child(SectionLabel::new("Working tree")).child(
+        div()
+            .flex()
+            .flex_row()
+            .gap(SP_3)
+            .child(StatusPill::new(
+                format!("{staged} staged"),
+                if staged > 0 {
+                    StatusKind::Info
+                } else {
+                    StatusKind::Success
+                },
+            ))
+            .child(StatusPill::new(
+                format!("{unstaged} unstaged"),
+                if unstaged > 0 {
+                    StatusKind::Warning
+                } else {
+                    StatusKind::Success
+                },
+            )),
+    );
 
     if changes.is_empty() {
         card = card.child(text::body("Working tree clean.").secondary());
@@ -191,7 +186,7 @@ fn changes_card(t: &crate::theme::Theme, changes: &[GitFileChange]) -> Card {
 }
 
 fn file_change_row(t: &crate::theme::Theme, change: &GitFileChange) -> impl IntoElement {
-    let (badge, badge_color) = file_status_badge(change.status);
+    let (badge, badge_color) = file_status_badge(change.status.clone());
     div()
         .flex()
         .flex_row()
@@ -245,22 +240,20 @@ fn file_status_badge(status: FileStatus) -> (&'static str, gpui::Rgba) {
 }
 
 fn log_card(t: &crate::theme::Theme, log: &[CommitInfo]) -> Card {
-    let mut card = Card::new()
-        .padding(SP_3)
-        .child(
-            div()
-                .flex()
-                .flex_row()
-                .items_center()
-                .gap(SP_2)
-                .child(SectionLabel::new("Recent commits"))
-                .child(
-                    div()
-                        .text_size(SIZE_SMALL)
-                        .text_color(t.color.text_tertiary)
-                        .child(format!("{} entries", log.len())),
-                ),
-        );
+    let mut card = Card::new().padding(SP_3).child(
+        div()
+            .flex()
+            .flex_row()
+            .items_center()
+            .gap(SP_2)
+            .child(SectionLabel::new("Recent commits"))
+            .child(
+                div()
+                    .text_size(SIZE_SMALL)
+                    .text_color(t.color.text_tertiary)
+                    .child(format!("{} entries", log.len())),
+            ),
+    );
     if log.is_empty() {
         card = card.child(text::body("No commits to show.").secondary());
         return card;

@@ -1,3 +1,5 @@
+#![allow(dead_code)]
+
 use gpui::{hsla, point, px, BoxShadow};
 
 fn shadow(x: f32, y: f32, blur: f32, _spread: f32, alpha: f32) -> BoxShadow {
@@ -10,7 +12,10 @@ fn shadow(x: f32, y: f32, blur: f32, _spread: f32, alpha: f32) -> BoxShadow {
 }
 
 pub fn soft() -> Vec<BoxShadow> {
-    vec![shadow(0.0, 1.0, 2.0, 0.0, 0.20), shadow(0.0, 2.0, 6.0, 0.0, 0.16)]
+    vec![
+        shadow(0.0, 1.0, 2.0, 0.0, 0.20),
+        shadow(0.0, 2.0, 6.0, 0.0, 0.16),
+    ]
 }
 
 pub fn popover() -> Vec<BoxShadow> {

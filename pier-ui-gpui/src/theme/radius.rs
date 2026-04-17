@@ -1,3 +1,5 @@
+#![allow(dead_code)]
+
 use gpui::{px, Pixels};
 
 pub const RADIUS_NONE: Pixels = px(0.0);

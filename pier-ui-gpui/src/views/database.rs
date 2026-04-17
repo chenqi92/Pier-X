@@ -3,7 +3,7 @@ use gpui::{div, prelude::*, IntoElement, SharedString, Window};
 use crate::app::route::DbKind;
 use crate::components::{text, Card, SectionLabel, StatusKind, StatusPill};
 use crate::theme::{
-    spacing::{SP_2, SP_3, SP_4},
+    spacing::{SP_3, SP_4},
     theme,
     typography::{SIZE_MONO_SMALL, SIZE_SMALL},
 };
@@ -110,7 +110,8 @@ impl DbProfile {
     fn for_kind(kind: DbKind) -> Self {
         match kind {
             DbKind::Mysql => Self {
-                description: "Relational store accessed over TCP (typically through an SSH tunnel).".into(),
+                description:
+                    "Relational store accessed over TCP (typically through an SSH tunnel).".into(),
                 backend_module: "pier_core::services::mysql::MysqlConfig",
                 fields: vec![
                     ("host", "127.0.0.1".into()),

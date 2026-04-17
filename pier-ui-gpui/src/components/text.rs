@@ -1,3 +1,5 @@
+#![allow(dead_code)]
+
 use gpui::{div, prelude::*, IntoElement, SharedString};
 
 use crate::theme::{

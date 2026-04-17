@@ -1,3 +1,5 @@
+#![allow(dead_code)]
+
 use gpui::{px, FontWeight, Pixels};
 
 pub const SIZE_DISPLAY: Pixels = px(32.0);

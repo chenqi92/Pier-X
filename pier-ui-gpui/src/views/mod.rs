@@ -2,7 +2,7 @@ pub mod database;
 pub mod edit_connection;
 pub mod file_tree;
 pub mod git;
-pub mod left_panel;
+pub mod left_panel_view;
 pub mod markdown;
 pub mod new_tab_chooser;
 pub mod right_panel;

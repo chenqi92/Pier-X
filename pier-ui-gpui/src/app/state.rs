@@ -11,8 +11,6 @@
 //! └──────────┴───────────────────────┴──────────────┘
 //! ```
 
-use std::collections::{HashMap, HashSet};
-use std::env;
 use std::path::PathBuf;
 use std::rc::Rc;
 
@@ -20,15 +18,12 @@ use gpui::{
     div, prelude::*, px, AnyElement, ClickEvent, Context, Entity, IntoElement, SharedString,
     Window,
 };
-use gpui_component::{
-    input::{InputEvent, InputState},
-    Icon as UiIcon, IconName, WindowExt as _,
-};
+use gpui_component::{Icon as UiIcon, IconName, WindowExt as _};
 use pier_core::connections::ConnectionStore;
 use pier_core::ssh::SshConfig;
 
 use crate::app::layout::{
-    LeftTab, RightMode, LEFT_PANEL_DEFAULT_W, RIGHT_PANEL_DEFAULT_W, TOOLBAR_HEIGHT,
+    RightMode, LEFT_PANEL_DEFAULT_W, RIGHT_PANEL_DEFAULT_W, TOOLBAR_HEIGHT,
 };
 use crate::app::ssh_session::SshSessionState;
 use crate::app::{
@@ -43,12 +38,7 @@ use crate::theme::{
     typography::{SIZE_CAPTION, SIZE_SMALL, WEIGHT_MEDIUM},
     ThemeMode,
 };
-use crate::views::file_tree::{
-    self, FileTree, FsEntry, GoUpHandler, OpenFileHandler, ToggleDirHandler,
-};
-use crate::views::left_panel::{
-    icons as toolbar_icons, AddConnectionHandler, LeftPanel, ServerSelector, TabSelector,
-};
+use crate::views::left_panel_view::{icons as toolbar_icons, LeftPanelView};
 use crate::views::right_panel::{ModeSelector, RightPanel};
 use crate::views::terminal::TerminalPanel;
 use crate::views::welcome::WelcomeView;
@@ -59,10 +49,9 @@ pub struct PierApp {
     // ─── Layout state ───
     left_visible: bool,
     right_visible: bool,
-    left_tab: LeftTab,
     right_mode: RightMode,
 
-    // ─── Backend snapshots (re-loaded on relevant events) ───
+    // ─── Backend snapshots ───
     snapshot: ShellSnapshot,
     connections: Vec<SshConfig>,
 
@@ -70,37 +59,20 @@ pub struct PierApp {
     terminals: Vec<Entity<TerminalPanel>>,
     active_terminal: Option<usize>,
 
-    // ─── Local file tree (Files tab) ───
-    //
-    // ⚠️ Perf invariant: ALL filesystem reads happen here on user actions
-    // (toggle_dir / cd_up / refresh), never from inside a render body.
-    // The cache is paint-only-source-of-truth for FileTree. See CLAUDE.md
-    // "Render is paint-only".
-    file_tree_root: PathBuf,
-    file_tree_expanded: HashSet<PathBuf>,
-    /// Cached entries for `file_tree_root`. Reloaded on `cd_up` / explicit
-    /// refresh.
-    file_tree_root_entries: Vec<FsEntry>,
-    /// Cached children for every previously-expanded directory under the
-    /// current root. Populated lazily on `toggle_dir`; entries persist
-    /// across collapse so re-expand is instant.
-    file_tree_children: HashMap<PathBuf, Vec<FsEntry>>,
-    /// Most recent root-load error (perm denied / not found). Rendered as
-    /// a status pill in the file tree header.
-    file_tree_root_error: Option<String>,
-    /// Last file the user clicked in the tree. Wired into the Markdown
-    /// mode for `.md` files; otherwise just an info log for now.
+    /// Last file the user opened from the left panel that should drive the
+    /// right-panel Markdown mode. Set by [`Self::open_markdown_file`].
     last_opened_file: Option<PathBuf>,
 
-    // ─── Filter inputs (live in PierApp so values survive panel toggles) ───
-    files_filter: Entity<InputState>,
-    servers_filter: Entity<InputState>,
-
     // ─── Active SSH session (right-panel SFTP / future remote modes) ───
-    /// `None` until the user clicks an SSH connection in the Servers list.
-    /// Then PierApp owns one [`SshSessionState`] entity per "context" —
-    /// for now we only ever keep the most recent one.
     active_session: Option<Entity<SshSessionState>>,
+
+    // ─── Subviews owning their own state (Phase 9 perf split) ───
+    /// Filter input + file-browser cwd cache + tab state live inside this
+    /// entity so its `cx.notify()` only repaints the left column rather
+    /// than the whole shell on every keystroke. PierApp talks to it only
+    /// via `cx.observe` (LeftPanelView pulls fresh `connections` on PierApp
+    /// notify) and read-only accessors like [`Self::connections_snapshot`].
+    left_panel: Entity<LeftPanelView>,
 }
 
 impl PierApp {
@@ -108,50 +80,30 @@ impl PierApp {
         let connections = ConnectionStore::load_default()
             .map(|s| s.connections)
             .unwrap_or_default();
-        let file_tree_root = env::current_dir().unwrap_or_else(|_| PathBuf::from("/"));
-        let (file_tree_root_entries, file_tree_root_error) =
-            load_root(&file_tree_root);
-
-        let files_filter =
-            cx.new(|c| InputState::new(window, c).placeholder("Filter files…"));
-        let servers_filter =
-            cx.new(|c| InputState::new(window, c).placeholder("Filter servers…"));
-
-        // PierApp re-renders whenever either filter Input emits a Change
-        // event; the filter strings themselves are read lazily during
-        // render via `Entity::read(cx).value()`.
-        cx.subscribe(&files_filter, |_, _, ev: &InputEvent, cx| {
-            if matches!(ev, InputEvent::Change) {
-                cx.notify();
-            }
-        })
-        .detach();
-        cx.subscribe(&servers_filter, |_, _, ev: &InputEvent, cx| {
-            if matches!(ev, InputEvent::Change) {
-                cx.notify();
-            }
-        })
-        .detach();
+        let weak_app = cx.entity().downgrade();
+        let connections_for_panel = connections.clone();
+        let left_panel = cx.new(|lp_cx| {
+            LeftPanelView::new(weak_app, connections_for_panel, window, lp_cx)
+        });
 
         Self {
             left_visible: true,
             right_visible: true,
-            left_tab: LeftTab::Files,
             right_mode: RightMode::Markdown,
             snapshot: ShellSnapshot::load(),
             connections,
             terminals: Vec::new(),
             active_terminal: None,
-            file_tree_root,
-            file_tree_expanded: HashSet::new(),
-            file_tree_root_entries,
-            file_tree_children: HashMap::new(),
-            file_tree_root_error,
             last_opened_file: None,
-            files_filter,
-            servers_filter,
             active_session: None,
+            left_panel,
         }
+    }
+
+    /// Read-only snapshot of the saved connections, used by
+    /// [`LeftPanelView`] to keep its local cache in sync via `cx.observe`.
+    pub fn connections_snapshot(&self) -> Vec<SshConfig> {
+        self.connections.clone()
     }
 
     // ─── Terminal session management ───
@@ -264,67 +216,14 @@ impl PierApp {
         cx.notify();
     }
 
-    // ─── File tree ───
-
-    fn toggle_dir(&mut self, path: PathBuf, cx: &mut Context<Self>) {
-        if self.file_tree_expanded.contains(&path) {
-            self.file_tree_expanded.remove(&path);
-        } else {
-            // Lazy-populate the cache on first expand. Subsequent expand /
-            // collapse cycles hit the cache (instant — no IO).
-            if !self.file_tree_children.contains_key(&path) {
-                match file_tree::list_dir(&path) {
-                    Ok(entries) => {
-                        self.file_tree_children.insert(path.clone(), entries);
-                    }
-                    Err(err) => {
-                        eprintln!("[pier] file-tree: list {} failed: {err}", path.display());
-                        // Insert an empty list so we don't retry on every
-                        // re-expand; the user can collapse + invalidate
-                        // cache via cd_up.
-                        self.file_tree_children.insert(path.clone(), Vec::new());
-                    }
-                }
-            }
-            self.file_tree_expanded.insert(path);
-        }
-        cx.notify();
-    }
-
-    fn open_file(&mut self, path: PathBuf, cx: &mut Context<Self>) {
-        // Phase 3 hooks: if .md → switch right mode to Markdown + load.
-        // For now we just remember the path and emit an info log so the
-        // wiring is testable end-to-end.
-        eprintln!("[pier] file opened: {}", path.display());
-        if path
-            .extension()
-            .and_then(|s| s.to_str())
-            .map(|ext| ext.eq_ignore_ascii_case("md"))
-            .unwrap_or(false)
-        {
-            self.right_mode = RightMode::Markdown;
-            self.right_visible = true;
-        }
+    /// Called by [`LeftPanelView`] when the user clicks a `.md` file in
+    /// the file browser. Routes into the right-panel Markdown mode.
+    pub fn open_markdown_file(&mut self, path: PathBuf, cx: &mut Context<Self>) {
+        eprintln!("[pier] markdown opened: {}", path.display());
         self.last_opened_file = Some(path);
+        self.right_mode = RightMode::Markdown;
+        self.right_visible = true;
         cx.notify();
-    }
-
-    fn cd_up(&mut self, cx: &mut Context<Self>) {
-        if let Some(parent) = self.file_tree_root.parent() {
-            let parent = parent.to_path_buf();
-            // Drop expanded entries / children cache that are no longer
-            // reachable — bounds memory and prevents stale state on long
-            // navigation sessions.
-            self.file_tree_expanded
-                .retain(|p| p.starts_with(&parent));
-            self.file_tree_children
-                .retain(|p, _| p.starts_with(&parent));
-            self.file_tree_root = parent.clone();
-            let (entries, err) = load_root(&parent);
-            self.file_tree_root_entries = entries;
-            self.file_tree_root_error = err;
-            cx.notify();
-        }
     }
 
     pub fn refresh_connections(&mut self) {
@@ -437,10 +336,10 @@ impl Render for PierApp {
         let t = theme(cx).clone();
 
         let toolbar = self.render_toolbar(&t, cx);
-        let left = self
-            .left_visible
-            .then(|| self.render_left(cx))
-            .map(IntoElement::into_any_element);
+        // LeftPanelView is its own Entity — embedding the entity instead of
+        // re-building a RenderOnce here means PierApp re-renders DON'T
+        // rebuild the file tree cache or filter inputs (Phase 9 perf win).
+        let left_entity = self.left_panel.clone();
         let center = self.render_center(&t, cx);
         let right = self
             .right_visible
@@ -449,8 +348,8 @@ impl Render for PierApp {
         let statusbar = self.render_statusbar(&t);
 
         let mut row = div().flex().flex_row().flex_1().min_h(px(0.0));
-        if let Some(panel) = left {
-            row = row.child(div().w(LEFT_PANEL_DEFAULT_W).h_full().child(panel));
+        if self.left_visible {
+            row = row.child(div().w(LEFT_PANEL_DEFAULT_W).h_full().child(left_entity));
         }
         row = row.child(div().flex_1().min_w(px(0.0)).h_full().child(center));
         if let Some(panel) = right {
@@ -582,15 +481,6 @@ impl PierApp {
     }
 }
 
-/// One-shot directory load for the file tree root. Called outside any
-/// `render` body so the IO never blocks the paint thread.
-fn load_root(path: &std::path::Path) -> (Vec<FsEntry>, Option<String>) {
-    match file_tree::list_dir(path) {
-        Ok(entries) => (entries, None),
-        Err(err) => (Vec::new(), Some(format!("{err}"))),
-    }
-}
-
 fn toolbar_icon_button(
     t: &crate::theme::Theme,
     id: &'static str,
@@ -613,76 +503,12 @@ fn toolbar_icon_button(
 }
 
 // ─────────────────────────────────────────────────────────
-// Left / Center / Right
+// Right / Center
+// (Left is now a separate `Entity<LeftPanelView>` — embedded directly
+// in the `Render::render` flex row.)
 // ─────────────────────────────────────────────────────────
 
 impl PierApp {
-    fn render_left(&self, cx: &mut Context<Self>) -> impl IntoElement {
-        let on_select_tab: TabSelector = Rc::new(cx.listener(
-            |this, tab: &LeftTab, _, cx| {
-                this.left_tab = *tab;
-                if *tab == LeftTab::Servers {
-                    this.refresh_connections();
-                }
-                cx.notify();
-            },
-        ));
-        let on_select_server: ServerSelector = Rc::new(cx.listener(
-            |this, idx: &usize, _, cx| this.open_ssh_terminal(*idx, cx),
-        ));
-        let on_edit_server: ServerSelector = Rc::new(cx.listener(
-            |this, idx: &usize, window, cx| this.open_edit_connection(*idx, window, cx),
-        ));
-        let on_delete_server: ServerSelector = Rc::new(cx.listener(
-            |this, idx: &usize, window, cx| this.confirm_delete_connection(*idx, window, cx),
-        ));
-
-        let on_toggle_dir: ToggleDirHandler = Rc::new(cx.listener(
-            |this, path: &PathBuf, _, cx| this.toggle_dir(path.clone(), cx),
-        ));
-        let on_open_file: OpenFileHandler = Rc::new(cx.listener(
-            |this, path: &PathBuf, _, cx| this.open_file(path.clone(), cx),
-        ));
-        let on_go_up: GoUpHandler =
-            Rc::new(cx.listener(|this, _: &(), _, cx| this.cd_up(cx)));
-
-        // Read filter values once per render (lazy — Entity::read returns
-        // a borrow into the input state's current text).
-        let files_query = self.files_filter.read(cx).value().to_string();
-        let servers_query = self.servers_filter.read(cx).value().to_string();
-
-        // Cache-only — no IO touches the render thread.
-        let file_tree = FileTree::new(
-            self.file_tree_root.clone(),
-            self.file_tree_root_entries.clone(),
-            self.file_tree_children.clone(),
-            self.file_tree_expanded.clone(),
-            files_query,
-            self.file_tree_root_error.clone(),
-            on_toggle_dir,
-            on_open_file,
-            on_go_up,
-        );
-
-        let on_add_connection: AddConnectionHandler = Box::new(cx.listener(
-            |this, _: &ClickEvent, window, cx| this.open_add_connection(window, cx),
-        ));
-
-        LeftPanel::new(
-            self.left_tab,
-            self.connections.clone(),
-            file_tree,
-            self.files_filter.clone(),
-            self.servers_filter.clone(),
-            servers_query,
-            on_select_tab,
-            on_select_server,
-            on_edit_server,
-            on_delete_server,
-            on_add_connection,
-        )
-    }
-
     fn render_right(&self, cx: &mut Context<Self>) -> impl IntoElement {
         let on_select_mode: ModeSelector = Rc::new(cx.listener(
             |this, mode: &RightMode, _, cx| this.set_right_mode(*mode, cx),
@@ -779,11 +605,14 @@ impl PierApp {
         // Welcome cover state — uses the existing WelcomeView, but its
         // buttons map to 3-pane semantics (open Servers tab / open terminal).
         let connections = self.connections.clone();
+        let left_panel = self.left_panel.clone();
         let on_new_ssh: ClickHandler = Box::new(cx.listener(
-            |this, _ev: &ClickEvent, _, cx| {
-                this.left_tab = LeftTab::Servers;
+            move |this, _ev: &ClickEvent, _, cx| {
                 this.left_visible = true;
                 this.refresh_connections();
+                left_panel.update(cx, |lp, cx| {
+                    lp.select_tab(crate::app::layout::LeftTab::Servers, cx);
+                });
                 cx.notify();
             },
         ));

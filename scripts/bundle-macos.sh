@@ -20,8 +20,8 @@ for arg in "$@"; do
 done
 
 case "$BUILD_TYPE" in
-    Debug)   PROFILE_DIR="debug";   CARGO_FLAGS=() ;;
-    Release) PROFILE_DIR="release"; CARGO_FLAGS=(--release) ;;
+    Debug)   PROFILE_DIR="debug";   CARGO_PROFILE_FLAG="" ;;
+    Release) PROFILE_DIR="release"; CARGO_PROFILE_FLAG="--release" ;;
     *)
         echo "ERROR: BUILD_TYPE must be Debug or Release (got: $BUILD_TYPE)" >&2
         exit 1
@@ -38,7 +38,8 @@ ICON_SRC="$ROOT_DIR/pier-ui-gpui/assets/app-icons/icon.icns"
 
 # ── Build ──────────────────────────────────────────────────────────────
 echo "==> Building ($BUILD_TYPE)…"
-( cd "$ROOT_DIR" && cargo build -p "$BIN_NAME" "${CARGO_FLAGS[@]}" )
+# String var (not array) so `set -u` doesn't trip on empty Debug case.
+( cd "$ROOT_DIR" && cargo build -p "$BIN_NAME" $CARGO_PROFILE_FLAG )
 
 if [ ! -f "$TARGET_BIN" ]; then
     echo "ERROR: binary not found at $TARGET_BIN" >&2

@@ -1,3 +1,5 @@
+#![allow(dead_code)]
+
 use gpui::SharedString;
 
 #[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]

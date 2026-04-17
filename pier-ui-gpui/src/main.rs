@@ -9,7 +9,8 @@ mod views;
 use std::borrow::Cow;
 
 use gpui::{
-    px, size, App, AppContext, Application, Bounds, KeyBinding, WindowBounds, WindowOptions,
+    px, size, App, AppContext, Application, Bounds, KeyBinding, TitlebarOptions, WindowBounds,
+    WindowOptions,
 };
 use gpui_component::Root;
 
@@ -43,6 +44,15 @@ fn main() {
         cx.open_window(
             WindowOptions {
                 window_bounds: Some(WindowBounds::Windowed(bounds)),
+                titlebar: Some(TitlebarOptions {
+                    title: Some("Pier-X".into()),
+                    ..Default::default()
+                }),
+                // Linux desktop environments use `app_id` to group windows and
+                // map them to a desktop entry's icon. macOS / Windows ignore it
+                // — there the dock/taskbar icon comes from the `.app` / `.exe`
+                // bundle (see `pier-ui-gpui/assets/app-icons/` and run.sh).
+                app_id: Some("com.pier-x.desktop".into()),
                 ..Default::default()
             },
             |window, cx| {

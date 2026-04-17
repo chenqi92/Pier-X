@@ -1,4 +1,9 @@
-use gpui::{div, prelude::*, px, ClickEvent, Context, IntoElement, SharedString, Window};
+use std::rc::Rc;
+
+use gpui::{
+    div, prelude::*, px, AnyElement, ClickEvent, Context, Entity, IntoElement, SharedString,
+    Window,
+};
 use gpui_component::button::{Button as UiButton, ButtonVariants};
 use gpui_component::sidebar::{
     Sidebar, SidebarFooter, SidebarGroup, SidebarHeader, SidebarMenu, SidebarMenuItem,
@@ -7,7 +12,7 @@ use pier_core::connections::ConnectionStore;
 use pier_core::ssh::SshConfig;
 
 use crate::app::route::{DbKind, Route};
-use crate::app::workbench::{route_icon, Workbench};
+use crate::app::{route_icon, ActivationHandler};
 use crate::components::{StatusKind, StatusPill};
 use crate::data::ShellSnapshot;
 use crate::theme::{
@@ -16,16 +21,22 @@ use crate::theme::{
     typography::{SIZE_CAPTION, SIZE_SMALL, WEIGHT_MEDIUM},
     ThemeMode,
 };
+use crate::views::dashboard::DashboardView;
+use crate::views::database::DatabaseView;
+use crate::views::git::GitView;
+use crate::views::ssh::SshView;
+use crate::views::terminal::TerminalPanel;
 use crate::views::welcome::WelcomeView;
 
 type ClickHandler = Box<dyn Fn(&ClickEvent, &mut Window, &mut gpui::App) + 'static>;
 
 pub struct PierApp {
     route: Route,
-    main_route: Route,
     snapshot: ShellSnapshot,
     connections: Vec<SshConfig>,
-    workbench: Option<Workbench>,
+    /// Cached so the PTY survives across renders / route changes.
+    /// Lazy-created on the first navigation to [`Route::Terminal`].
+    terminal: Option<Entity<TerminalPanel>>,
 }
 
 impl PierApp {
@@ -33,44 +44,25 @@ impl PierApp {
         let connections = ConnectionStore::load_default()
             .map(|store| store.connections)
             .unwrap_or_default();
-        // Always default to Welcome — it's the cover regardless of saved
-        // connections; the dock is reachable via its buttons.
         Self {
             route: Route::Welcome,
-            main_route: Route::Dashboard,
             snapshot: ShellSnapshot::load(),
             connections,
-            workbench: None,
+            terminal: None,
         }
     }
 
-    pub fn sync_route_from_panel(&mut self, route: Route) {
-        self.route = route;
-        if route.is_primary() {
-            self.main_route = route;
+    fn navigate(this: &mut Self, route: Route, _window: &mut Window, cx: &mut Context<Self>) {
+        if route == this.route {
+            return;
         }
+        this.route = route;
+        this.refresh(route);
+        cx.notify();
     }
 
-    fn navigate(this: &mut Self, route: Route, window: &mut Window, cx: &mut Context<Self>) {
-        if route.is_primary() {
-            this.main_route = route;
-        }
-
-        if route != this.route {
-            this.route = route;
-            // Re-probe data on tab change so SSH list, git status, etc.
-            // pick up filesystem changes without an explicit watcher.
-            this.refresh(route);
-            if route != Route::Welcome {
-                this.ensure_workbench(window, cx);
-                if let Some(workbench) = this.workbench.as_ref() {
-                    workbench.sync(this.main_route, this.route, window, cx);
-                }
-            }
-            cx.notify();
-        }
-    }
-
+    /// Re-probe filesystem-backed data so the chosen tab is always fresh.
+    /// Acts as a zero-dependency replacement for a `notify`-based watcher.
     pub(crate) fn refresh(&mut self, route: Route) {
         match route {
             Route::Welcome | Route::Dashboard => {
@@ -88,12 +80,17 @@ impl PierApp {
         }
     }
 
-    fn ensure_workbench(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        if self.workbench.is_none() {
-            let workbench = Workbench::new(cx.entity().downgrade(), window, cx);
-            workbench.sync(self.main_route, self.route, window, cx);
-            self.workbench = Some(workbench);
+    fn terminal_entity(&mut self, cx: &mut Context<Self>) -> Entity<TerminalPanel> {
+        if let Some(t) = self.terminal.as_ref() {
+            return t.clone();
         }
+        // The dock-based draft used `on_activated` to re-sync the route from
+        // the panel; in the canvas-only shell the panel is only mounted when
+        // its route is already active, so a no-op is correct.
+        let on_activated: ActivationHandler = Rc::new(|_, _, _| {});
+        let terminal = cx.new(|cx| TerminalPanel::new(on_activated, cx));
+        self.terminal = Some(terminal.clone());
+        terminal
     }
 }
 
@@ -107,7 +104,7 @@ impl Render for PierApp {
     fn render(&mut self, win: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         match self.route {
             Route::Welcome => self.render_welcome(cx).into_any_element(),
-            _ => self.render_dock(win, cx).into_any_element(),
+            _ => self.render_workbench(win, cx).into_any_element(),
         }
     }
 }
@@ -115,27 +112,26 @@ impl Render for PierApp {
 impl PierApp {
     fn render_welcome(&self, cx: &mut Context<Self>) -> impl IntoElement {
         let connections = self.connections.clone();
-        let on_new_ssh = Box::new(
-            cx.listener(|this, _ev: &ClickEvent, w, cx| Self::navigate(this, Route::Ssh, w, cx)),
-        )
-            as Box<dyn Fn(&ClickEvent, &mut Window, &mut gpui::App) + 'static>;
-        let on_open_terminal = Box::new(cx.listener(|this, _ev: &ClickEvent, _w, cx| {
-            Self::navigate(this, Route::Terminal, _w, cx)
-        }))
-            as Box<dyn Fn(&ClickEvent, &mut Window, &mut gpui::App) + 'static>;
+        let on_new_ssh = Box::new(cx.listener(
+            |this, _ev: &ClickEvent, w, cx| Self::navigate(this, Route::Ssh, w, cx),
+        )) as ClickHandler;
+        let on_open_terminal = Box::new(cx.listener(
+            |this, _ev: &ClickEvent, w, cx| Self::navigate(this, Route::Terminal, w, cx),
+        )) as ClickHandler;
 
         WelcomeView::new(connections, on_new_ssh, on_open_terminal)
     }
 
-    fn render_dock(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
-        self.ensure_workbench(window, cx);
+    fn render_workbench(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let t = theme(cx).clone();
         let route = self.route;
-        let dock = self
-            .workbench
-            .as_ref()
-            .expect("workbench must exist after ensure_workbench")
-            .dock();
+
+        // Build canvas first (mutable borrow of self for terminal cache)
+        // then chrome — each call returns owned elements, releasing the borrow.
+        let canvas = self.render_canvas(route, cx);
+        let topbar = self.render_topbar(&t, cx);
+        let sidebar = self.render_sidebar(&t, route, cx);
+        let statusbar = self.render_statusbar(&t, route);
 
         div()
             .size_full()
@@ -144,17 +140,30 @@ impl PierApp {
             .font_family(t.font_ui.clone())
             .flex()
             .flex_col()
-            .child(self.render_topbar(&t, cx))
+            .child(topbar)
             .child(
                 div()
                     .flex()
                     .flex_row()
                     .flex_1()
                     .min_h(px(0.0))
-                    .child(self.render_sidebar(&t, route, cx))
-                    .child(div().flex_1().min_w(px(0.0)).child(dock)),
+                    .child(sidebar)
+                    .child(div().flex_1().min_w(px(0.0)).child(canvas)),
             )
-            .child(self.render_statusbar(&t, route))
+            .child(statusbar)
+    }
+
+    fn render_canvas(&mut self, route: Route, cx: &mut Context<Self>) -> AnyElement {
+        match route {
+            // Welcome is rendered as the root by `render`; if we land here
+            // (defensive) just show an empty canvas instead of panicking.
+            Route::Welcome => div().size_full().into_any_element(),
+            Route::Dashboard => DashboardView::new(self.snapshot.clone()).into_any_element(),
+            Route::Terminal => self.terminal_entity(cx).into_any_element(),
+            Route::Git => GitView::new().into_any_element(),
+            Route::Ssh => SshView::new().into_any_element(),
+            Route::Database(kind) => DatabaseView::new(kind).into_any_element(),
+        }
     }
 
     fn render_topbar(&self, t: &crate::theme::Theme, cx: &mut Context<Self>) -> impl IntoElement {

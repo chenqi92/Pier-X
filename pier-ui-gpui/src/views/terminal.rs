@@ -22,7 +22,7 @@ use gpui_component::{
 use pier_core::terminal::{Cell, Color as TerminalColor, GridSnapshot, NotifyEvent, PierTerminal};
 
 use crate::{
-    app::{route::Route, workbench::ActivationHandler},
+    app::{route::Route, ActivationHandler},
     components::{text, Card, SectionLabel, StatusKind, StatusPill},
     theme::{
         radius::RADIUS_MD,

@@ -6,5 +6,6 @@ pub mod left_panel;
 pub mod markdown;
 pub mod new_tab_chooser;
 pub mod right_panel;
+pub mod sftp_browser;
 pub mod terminal;
 pub mod welcome;

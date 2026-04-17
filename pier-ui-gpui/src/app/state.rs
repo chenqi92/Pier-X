@@ -22,7 +22,7 @@ use gpui::{
 };
 use gpui_component::{
     input::{InputEvent, InputState},
-    Icon as UiIcon, IconName,
+    Icon as UiIcon, IconName, WindowExt as _,
 };
 use pier_core::connections::ConnectionStore;
 use pier_core::ssh::SshConfig;
@@ -30,6 +30,7 @@ use pier_core::ssh::SshConfig;
 use crate::app::layout::{
     LeftTab, RightMode, LEFT_PANEL_DEFAULT_W, RIGHT_PANEL_DEFAULT_W, TOOLBAR_HEIGHT,
 };
+use crate::app::ssh_session::SshSessionState;
 use crate::app::{
     ActivationHandler, CloseActiveTab, NewTab, ToggleLeftPanel, ToggleRightPanel,
 };
@@ -79,6 +80,12 @@ pub struct PierApp {
     // ─── Filter inputs (live in PierApp so values survive panel toggles) ───
     files_filter: Entity<InputState>,
     servers_filter: Entity<InputState>,
+
+    // ─── Active SSH session (right-panel SFTP / future remote modes) ───
+    /// `None` until the user clicks an SSH connection in the Servers list.
+    /// Then PierApp owns one [`SshSessionState`] entity per "context" —
+    /// for now we only ever keep the most recent one.
+    active_session: Option<Entity<SshSessionState>>,
 }
 
 impl PierApp {
@@ -123,6 +130,7 @@ impl PierApp {
             last_opened_file: None,
             files_filter,
             servers_filter,
+            active_session: None,
         }
     }
 
@@ -154,14 +162,33 @@ impl PierApp {
             return;
         };
         let entity = self.terminals[active].clone();
-        // Quote-conservative command — fine for the common shape we expose
-        // in the connection editor (no spaces in user / host).
         let command = if conn.port == 22 {
             format!("ssh {}@{}\n", conn.user, conn.host)
         } else {
             format!("ssh {}@{} -p {}\n", conn.user, conn.host, conn.port)
         };
         entity.update(cx, |panel, cx| panel.send_input(&command, cx));
+
+        // Attach a parallel native SSH session for the right-panel SFTP
+        // browser. Lazy-connects on first list_dir; replacing whatever
+        // previous session was active.
+        let session_state = cx.new(|_| SshSessionState::new(conn));
+        self.active_session = Some(session_state);
+        cx.notify();
+    }
+
+    pub fn navigate_sftp(&mut self, path: PathBuf, cx: &mut Context<Self>) {
+        if let Some(session) = self.active_session.as_ref() {
+            session.update(cx, |s, _| s.navigate_to(path));
+            cx.notify();
+        }
+    }
+
+    pub fn sftp_cd_up(&mut self, cx: &mut Context<Self>) {
+        if let Some(session) = self.active_session.as_ref() {
+            session.update(cx, |s, _| s.cd_up());
+            cx.notify();
+        }
     }
 
     fn activate_terminal_tab(&mut self, idx: usize, cx: &mut Context<Self>) {
@@ -273,6 +300,23 @@ impl PierApp {
             eprintln!("[pier] delete: stale index {idx}");
             return;
         }
+        // KeychainPassword and PublicKeyFile entries point at OS-keychain
+        // secrets — clean those up so the keyring doesn't accumulate
+        // dangling credentials when the user deletes a connection.
+        if let Some(conn) = store.connections.get(idx) {
+            match &conn.auth {
+                pier_core::ssh::AuthMethod::KeychainPassword { credential_id } => {
+                    let _ = pier_core::credentials::delete(credential_id);
+                }
+                pier_core::ssh::AuthMethod::PublicKeyFile {
+                    passphrase_credential_id: Some(id),
+                    ..
+                } => {
+                    let _ = pier_core::credentials::delete(id);
+                }
+                _ => {}
+            }
+        }
         store.connections.remove(idx);
         if let Err(err) = store.save_default() {
             eprintln!("[pier] delete connection failed: {err}");
@@ -280,6 +324,42 @@ impl PierApp {
         }
         self.refresh_connections();
         cx.notify();
+    }
+
+    /// Open a confirm dialog before actually calling [`Self::delete_connection`].
+    /// Wired to the trash icon on each row in the Servers list.
+    pub fn confirm_delete_connection(
+        &mut self,
+        idx: usize,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let Some(conn) = self.connections.get(idx).cloned() else {
+            return;
+        };
+        let weak = cx.entity().downgrade();
+        let title: SharedString = format!("Delete \"{}\"?", conn.name).into();
+        let detail: SharedString =
+            format!("{}@{}:{} will be removed from connections.json.", conn.user, conn.host, conn.port).into();
+        window.open_dialog(cx, move |dialog, _w, _app_cx| {
+            let weak = weak.clone();
+            let body = crate::components::text::body(detail.clone()).secondary();
+            dialog
+                .title(title.clone())
+                .w(px(380.0))
+                .confirm()
+                .button_props(
+                    gpui_component::dialog::DialogButtonProps::default()
+                        .ok_text("Delete")
+                        .ok_variant(gpui_component::button::ButtonVariant::Danger)
+                        .cancel_text("Cancel"),
+                )
+                .on_ok(move |_, _w, app_cx| {
+                    let _ = weak.update(app_cx, |this, cx| this.delete_connection(idx, cx));
+                    true
+                })
+                .child(body)
+        });
     }
 }
 
@@ -477,7 +557,7 @@ impl PierApp {
             |this, idx: &usize, window, cx| this.open_edit_connection(*idx, window, cx),
         ));
         let on_delete_server: ServerSelector = Rc::new(cx.listener(
-            |this, idx: &usize, _, cx| this.delete_connection(*idx, cx),
+            |this, idx: &usize, window, cx| this.confirm_delete_connection(*idx, window, cx),
         ));
 
         let on_toggle_dir: ToggleDirHandler = Rc::new(cx.listener(
@@ -529,6 +609,13 @@ impl PierApp {
                 cx.notify();
             },
         ));
+        let on_sftp_navigate: crate::views::sftp_browser::NavigateHandler =
+            Rc::new(cx.listener(|this, path: &PathBuf, _, cx| {
+                this.navigate_sftp(path.clone(), cx);
+            }));
+        let on_sftp_go_up: crate::views::sftp_browser::GoUpHandler =
+            Rc::new(cx.listener(|this, _: &(), _, cx| this.sftp_cd_up(cx)));
+
         // Only forward the path to the Markdown mode if it actually points
         // at a .md file — keeps the empty-state messaging clean.
         let current_markdown = self.last_opened_file.clone().filter(|p| {
@@ -541,6 +628,9 @@ impl PierApp {
             self.right_mode,
             self.snapshot.clone(),
             current_markdown,
+            self.active_session.clone(),
+            on_sftp_navigate,
+            on_sftp_go_up,
             on_select_mode,
         )
     }

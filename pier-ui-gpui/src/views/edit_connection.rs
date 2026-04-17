@@ -44,19 +44,25 @@ pub enum EditTarget {
 enum AuthMode {
     Agent,
     Password,
+    KeyFile,
+    Keychain,
 }
 
 impl AuthMode {
     fn from_index(i: usize) -> Self {
         match i {
             0 => AuthMode::Agent,
-            _ => AuthMode::Password,
+            1 => AuthMode::Password,
+            2 => AuthMode::KeyFile,
+            _ => AuthMode::Keychain,
         }
     }
     fn index(self) -> usize {
         match self {
             AuthMode::Agent => 0,
             AuthMode::Password => 1,
+            AuthMode::KeyFile => 2,
+            AuthMode::Keychain => 3,
         }
     }
 }
@@ -77,6 +83,19 @@ pub fn open(
     let group = cx.new(|c| InputState::new(window, c).placeholder("optional — groups in sidebar"));
     let password =
         cx.new(|c| InputState::new(window, c).masked(true).placeholder("password"));
+    let key_path = cx.new(|c| {
+        InputState::new(window, c).placeholder("e.g. ~/.ssh/id_ed25519")
+    });
+    let key_passphrase = cx.new(|c| {
+        InputState::new(window, c)
+            .masked(true)
+            .placeholder("optional passphrase")
+    });
+    let keychain_password = cx.new(|c| {
+        InputState::new(window, c)
+            .masked(true)
+            .placeholder("password (stored in OS keychain)")
+    });
 
     let initial_mode = match &target {
         EditTarget::Edit {
@@ -87,9 +106,42 @@ pub fn open(
                 },
             ..
         } => {
-            // Pre-fill password field from existing config.
             password.update(cx, |s, c| s.set_value(pw.clone(), window, c));
             AuthMode::Password
+        }
+        EditTarget::Edit {
+            original:
+                SshConfig {
+                    auth:
+                        AuthMethod::PublicKeyFile {
+                            private_key_path,
+                            passphrase_credential_id,
+                        },
+                    ..
+                },
+            ..
+        } => {
+            key_path.update(cx, |s, c| s.set_value(private_key_path.clone(), window, c));
+            // Look up passphrase from keyring if previously stored.
+            if let Some(id) = passphrase_credential_id {
+                if let Ok(Some(pp)) = pier_core::credentials::get(id) {
+                    key_passphrase.update(cx, |s, c| s.set_value(pp, window, c));
+                }
+            }
+            AuthMode::KeyFile
+        }
+        EditTarget::Edit {
+            original:
+                SshConfig {
+                    auth: AuthMethod::KeychainPassword { credential_id },
+                    ..
+                },
+            ..
+        } => {
+            if let Ok(Some(pw)) = pier_core::credentials::get(credential_id) {
+                keychain_password.update(cx, |s, c| s.set_value(pw, window, c));
+            }
+            AuthMode::Keychain
         }
         _ => AuthMode::Agent,
     };
@@ -117,6 +169,9 @@ pub fn open(
         user,
         group,
         password,
+        key_path,
+        key_passphrase,
+        keychain_password,
     };
     let auth_mode = Rc::new(RefCell::new(initial_mode));
     let title: SharedString = match &target {
@@ -161,6 +216,9 @@ struct Inputs {
     user: Entity<InputState>,
     group: Entity<InputState>,
     password: Entity<InputState>,
+    key_path: Entity<InputState>,
+    key_passphrase: Entity<InputState>,
+    keychain_password: Entity<InputState>,
 }
 
 fn build_body(
@@ -176,12 +234,14 @@ fn build_body(
         .selected_index(Some(current_mode.index()))
         .child(Radio::new("auth-agent").label("ssh-agent"))
         .child(Radio::new("auth-password").label("password"))
+        .child(Radio::new("auth-key").label("key file"))
+        .child(Radio::new("auth-keychain").label("keychain"))
         .on_click(move |idx, _w, app| {
             *mode_for_click.borrow_mut() = AuthMode::from_index(*idx);
-            // Force the dialog body closure to rerun so the password
-            // field's visibility flips. `refresh_windows` is the simplest
-            // hook — the dialog stack lives in Root which re-renders on
-            // any window refresh.
+            // Force the dialog body closure to rerun so per-mode fields
+            // appear/disappear. `refresh_windows` is the simplest hook —
+            // the dialog stack lives in Root which re-renders on any
+            // window refresh.
             app.refresh_windows();
         });
 
@@ -210,18 +270,43 @@ fn build_body(
                 .child(radio_group),
         );
 
-    if current_mode == AuthMode::Password {
-        col = col.child(field(&t, "Password", &inputs.password));
-    } else {
-        col = col.child(
+    col = match current_mode {
+        AuthMode::Agent => col.child(
             text::body(
                 "Uses ssh-agent (~/.ssh/config + agent forwarding apply). \
-                 Switch to \"password\" if you need to bake a plaintext \
-                 password into the config file.",
+                 No secret is stored by Pier-X.",
             )
             .secondary(),
-        );
-    }
+        ),
+        AuthMode::Password => col
+            .child(field(&t, "Password", &inputs.password))
+            .child(
+                text::body(
+                    "Stored in plaintext inside connections.json. Use \
+                     \"keychain\" if you want OS-level secret storage.",
+                )
+                .secondary(),
+            ),
+        AuthMode::KeyFile => col
+            .child(field(&t, "Private key path", &inputs.key_path))
+            .child(field(&t, "Passphrase (optional)", &inputs.key_passphrase))
+            .child(
+                text::body(
+                    "OpenSSH private key on disk. Passphrase is stored in \
+                     the OS keychain when present, never in connections.json.",
+                )
+                .secondary(),
+            ),
+        AuthMode::Keychain => col
+            .child(field(&t, "Password", &inputs.keychain_password))
+            .child(
+                text::body(
+                    "Password is written to the OS keychain on save. \
+                     connections.json only holds an opaque credential id.",
+                )
+                .secondary(),
+            ),
+    };
     col
 }
 
@@ -259,6 +344,9 @@ fn save(
     let port_str = inputs.port.read(cx).value().to_string();
     let group = inputs.group.read(cx).value().to_string();
     let password = inputs.password.read(cx).value().to_string();
+    let key_path = inputs.key_path.read(cx).value().to_string();
+    let key_passphrase = inputs.key_passphrase.read(cx).value().to_string();
+    let keychain_password = inputs.keychain_password.read(cx).value().to_string();
 
     if name.trim().is_empty() || host.trim().is_empty() || user.trim().is_empty() {
         eprintln!("[pier] save: name / host / user are required");
@@ -266,12 +354,71 @@ fn save(
     }
     let port: u16 = port_str.trim().parse().unwrap_or(22);
 
-    let mut conf = SshConfig::new(name.trim(), host.trim(), user.trim());
-    conf.port = port;
-    conf.auth = match mode {
+    // Compose AuthMethod, writing to OS keychain where appropriate.
+    // Reuse existing credential_id when editing so Keychain entries stay
+    // stable across saves (avoids accumulating dangling secrets).
+    let existing = match target {
+        EditTarget::Edit { original, .. } => Some(original),
+        _ => None,
+    };
+    let auth = match mode {
         AuthMode::Agent => AuthMethod::Agent,
         AuthMode::Password => AuthMethod::DirectPassword { password },
+        AuthMode::KeyFile => {
+            if key_path.trim().is_empty() {
+                eprintln!("[pier] save: key file path is required");
+                return;
+            }
+            // Passphrase optional. When present, store in keychain under a
+            // stable id derived from the connection name so re-edits hit
+            // the same entry.
+            let passphrase_credential_id = if key_passphrase.is_empty() {
+                None
+            } else {
+                let id = existing
+                    .and_then(|c| match &c.auth {
+                        AuthMethod::PublicKeyFile {
+                            passphrase_credential_id: Some(id),
+                            ..
+                        } => Some(id.clone()),
+                        _ => None,
+                    })
+                    .unwrap_or_else(|| format!("pier-x.passphrase.{}", name.trim()));
+                if let Err(err) = pier_core::credentials::set(&id, &key_passphrase) {
+                    eprintln!("[pier] keychain write failed: {err}");
+                    return;
+                }
+                Some(id)
+            };
+            AuthMethod::PublicKeyFile {
+                private_key_path: key_path.trim().to_string(),
+                passphrase_credential_id,
+            }
+        }
+        AuthMode::Keychain => {
+            if keychain_password.is_empty() {
+                eprintln!("[pier] save: keychain password is required");
+                return;
+            }
+            let credential_id = existing
+                .and_then(|c| match &c.auth {
+                    AuthMethod::KeychainPassword { credential_id } => {
+                        Some(credential_id.clone())
+                    }
+                    _ => None,
+                })
+                .unwrap_or_else(|| format!("pier-x.password.{}", name.trim()));
+            if let Err(err) = pier_core::credentials::set(&credential_id, &keychain_password) {
+                eprintln!("[pier] keychain write failed: {err}");
+                return;
+            }
+            AuthMethod::KeychainPassword { credential_id }
+        }
     };
+
+    let mut conf = SshConfig::new(name.trim(), host.trim(), user.trim());
+    conf.port = port;
+    conf.auth = auth;
     if !group.trim().is_empty() {
         conf.tags = vec![group.trim().to_string()];
     }

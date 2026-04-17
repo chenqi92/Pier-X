@@ -26,9 +26,13 @@ use crate::theme::{
 };
 use std::path::PathBuf;
 
+use gpui::Entity;
+
+use crate::app::ssh_session::SshSessionState;
 use crate::views::database::DatabaseView;
 use crate::views::git::GitView;
 use crate::views::markdown::MarkdownView;
+use crate::views::sftp_browser::{GoUpHandler as SftpGoUp, NavigateHandler as SftpNavigate, SftpBrowser};
 
 pub type ModeSelector = Rc<dyn Fn(&RightMode, &mut Window, &mut App) + 'static>;
 
@@ -39,20 +43,30 @@ pub struct RightPanel {
     /// Most recently opened `.md` file (set by the file tree, consumed by
     /// the Markdown mode). `None` shows the empty-state card.
     current_markdown: Option<PathBuf>,
+    active_session: Option<Entity<SshSessionState>>,
+    sftp_navigate: SftpNavigate,
+    sftp_go_up: SftpGoUp,
     on_select_mode: ModeSelector,
 }
 
 impl RightPanel {
+    #[allow(clippy::too_many_arguments)]
     pub fn new(
         active_mode: RightMode,
         snapshot: ShellSnapshot,
         current_markdown: Option<PathBuf>,
+        active_session: Option<Entity<SshSessionState>>,
+        sftp_navigate: SftpNavigate,
+        sftp_go_up: SftpGoUp,
         on_select_mode: ModeSelector,
     ) -> Self {
         Self {
             active_mode,
             snapshot,
             current_markdown,
+            active_session,
+            sftp_navigate,
+            sftp_go_up,
             on_select_mode,
         }
     }
@@ -65,10 +79,21 @@ impl RenderOnce for RightPanel {
             active_mode,
             snapshot,
             current_markdown,
+            active_session,
+            sftp_navigate,
+            sftp_go_up,
             on_select_mode,
         } = self;
 
-        let body = render_mode_body(t, active_mode, snapshot, current_markdown);
+        let body = render_mode_body(
+            t,
+            active_mode,
+            snapshot,
+            current_markdown,
+            active_session,
+            sftp_navigate,
+            sftp_go_up,
+        );
 
         div()
             .h_full()
@@ -86,11 +111,15 @@ impl RenderOnce for RightPanel {
     }
 }
 
+#[allow(clippy::too_many_arguments)]
 fn render_mode_body(
     t: &crate::theme::Theme,
     mode: RightMode,
     snapshot: ShellSnapshot,
     current_markdown: Option<PathBuf>,
+    active_session: Option<Entity<SshSessionState>>,
+    sftp_navigate: SftpNavigate,
+    sftp_go_up: SftpGoUp,
 ) -> gpui::AnyElement {
     // Status bar (above content) — placeholder for the SSH connection
     // status / detected services strips that Pier renders here.
@@ -99,12 +128,8 @@ fn render_mode_body(
     let content: gpui::AnyElement = match mode {
         RightMode::Markdown => MarkdownView::new(current_markdown).into_any_element(),
         RightMode::Monitor => monitor_view(t, &snapshot).into_any_element(),
-        RightMode::Sftp => placeholder(
-            "SFTP",
-            "Remote file browser over the active SSH session.",
-            "Wired through pier_core::ssh::sftp once the multi-tab terminal session ships (Phase 3).",
-        )
-        .into_any_element(),
+        RightMode::Sftp => SftpBrowser::new(active_session, sftp_navigate, sftp_go_up)
+            .into_any_element(),
         RightMode::Docker => placeholder(
             "Docker",
             "Containers / images / volumes via SSH exec.",

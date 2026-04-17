@@ -1,22 +1,24 @@
 //! New / edit SSH connection dialog.
 //!
 //! Mirrors `Pier/PierApp/Sources/Views/Connection/*` editor sheet at MVP
-//! fidelity:
-//!   - inputs: name, host, port, user, optional first tag (for grouping)
-//!   - auth: `AuthMethod::Agent` only (covers ssh-agent + ~/.ssh/config users
-//!     without needing a Keychain dance — covers ~80% of dev workflows)
-//!   - saves through [`ConnectionStore::save_default`] so the JSON file is
-//!     written atomically + read back on the next render
+//! fidelity. Phase 6 adds:
+//!   - edit-existing-entry mode (`EditTarget::Edit(idx, …)`)
+//!   - auth radio: Agent (default) vs DirectPassword (masked input)
+//!   - `Phase 5`'s save-to-disk via [`ConnectionStore::save_default`]
 //!
 //! Deferred (later phases):
-//!   - DirectPassword + masked input
 //!   - PublicKeyFile picker
-//!   - Edit existing entry (currently always appends a new one)
-//!   - Delete entry
+//!   - KeychainPassword wiring (uses `pier_core::credentials`)
+//!   - Field-level validation messaging (currently silent reject on blank
+//!     name/host/user; see [`save`])
+
+use std::cell::RefCell;
+use std::rc::Rc;
 
 use gpui::{div, prelude::*, px, App, Entity, IntoElement, SharedString, WeakEntity, Window};
 use gpui_component::{
     input::{Input, InputState},
+    radio::{Radio, RadioGroup},
     WindowExt as _,
 };
 use pier_core::connections::ConnectionStore;
@@ -30,19 +32,83 @@ use crate::theme::{
     typography::{SIZE_CAPTION, WEIGHT_MEDIUM},
 };
 
+/// What this open() invocation is for — append a brand new entry, or
+/// replace an existing one at the given index.
+#[derive(Clone)]
+pub enum EditTarget {
+    Add,
+    Edit { idx: usize, original: SshConfig },
+}
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum AuthMode {
+    Agent,
+    Password,
+}
+
+impl AuthMode {
+    fn from_index(i: usize) -> Self {
+        match i {
+            0 => AuthMode::Agent,
+            _ => AuthMode::Password,
+        }
+    }
+    fn index(self) -> usize {
+        match self {
+            AuthMode::Agent => 0,
+            AuthMode::Password => 1,
+        }
+    }
+}
+
 /// Open the connection editor as a modal dialog.
-pub fn open(window: &mut Window, cx: &mut App, app: WeakEntity<PierApp>) {
-    // Create inputs once, capture into the dialog builder so user input
-    // survives across re-renders.
+pub fn open(
+    window: &mut Window,
+    cx: &mut App,
+    app: WeakEntity<PierApp>,
+    target: EditTarget,
+) {
+    // Inputs created once outside the builder closure → persist across
+    // dialog re-renders.
     let name = cx.new(|c| InputState::new(window, c).placeholder("e.g. prod-db"));
     let host = cx.new(|c| InputState::new(window, c).placeholder("e.g. db.example.com"));
     let port = cx.new(|c| InputState::new(window, c).placeholder("22"));
     let user = cx.new(|c| InputState::new(window, c).placeholder("e.g. deploy"));
     let group = cx.new(|c| InputState::new(window, c).placeholder("optional — groups in sidebar"));
+    let password =
+        cx.new(|c| InputState::new(window, c).masked(true).placeholder("password"));
 
-    // Pre-fill port with `22` so a one-tag-per-host workflow is one less
-    // keystroke. set_value needs window+cx to refresh blink state.
-    port.update(cx, |state, c| state.set_value("22", window, c));
+    let initial_mode = match &target {
+        EditTarget::Edit {
+            original:
+                SshConfig {
+                    auth: AuthMethod::DirectPassword { password: pw },
+                    ..
+                },
+            ..
+        } => {
+            // Pre-fill password field from existing config.
+            password.update(cx, |s, c| s.set_value(pw.clone(), window, c));
+            AuthMode::Password
+        }
+        _ => AuthMode::Agent,
+    };
+
+    // Pre-fill the rest if editing.
+    if let EditTarget::Edit { original, .. } = &target {
+        name.update(cx, |s, c| s.set_value(original.name.clone(), window, c));
+        host.update(cx, |s, c| s.set_value(original.host.clone(), window, c));
+        user.update(cx, |s, c| s.set_value(original.user.clone(), window, c));
+        port.update(cx, |s, c| {
+            s.set_value(original.port.to_string(), window, c)
+        });
+        if let Some(tag) = original.tags.first() {
+            group.update(cx, |s, c| s.set_value(tag.clone(), window, c));
+        }
+    } else {
+        // Default port for fresh entries — saves a keystroke.
+        port.update(cx, |s, c| s.set_value("22", window, c));
+    }
 
     let inputs = Inputs {
         name,
@@ -50,14 +116,22 @@ pub fn open(window: &mut Window, cx: &mut App, app: WeakEntity<PierApp>) {
         port,
         user,
         group,
+        password,
+    };
+    let auth_mode = Rc::new(RefCell::new(initial_mode));
+    let title: SharedString = match &target {
+        EditTarget::Add => "New SSH connection".into(),
+        EditTarget::Edit { original, .. } => format!("Edit · {}", original.name).into(),
     };
 
     window.open_dialog(cx, move |dialog, _w, app_cx| {
-        let body = build_body(app_cx, &inputs);
+        let body = build_body(app_cx, &inputs, auth_mode.clone());
         let on_ok_inputs = inputs.clone();
+        let on_ok_mode = auth_mode.clone();
+        let on_ok_target = target.clone();
         let weak = app.clone();
         dialog
-            .title("New SSH connection")
+            .title(title.clone())
             .w(px(440.0))
             .confirm()
             .button_props(
@@ -66,7 +140,13 @@ pub fn open(window: &mut Window, cx: &mut App, app: WeakEntity<PierApp>) {
                     .cancel_text("Cancel"),
             )
             .on_ok(move |_, _w, app_cx| {
-                save(&on_ok_inputs, &weak, app_cx);
+                save(
+                    &on_ok_inputs,
+                    *on_ok_mode.borrow(),
+                    &on_ok_target,
+                    &weak,
+                    app_cx,
+                );
                 true
             })
             .child(body)
@@ -80,11 +160,32 @@ struct Inputs {
     port: Entity<InputState>,
     user: Entity<InputState>,
     group: Entity<InputState>,
+    password: Entity<InputState>,
 }
 
-fn build_body(cx: &App, inputs: &Inputs) -> impl IntoElement {
+fn build_body(
+    cx: &App,
+    inputs: &Inputs,
+    auth_mode: Rc<RefCell<AuthMode>>,
+) -> impl IntoElement {
     let t = theme(cx).clone();
-    div()
+    let current_mode = *auth_mode.borrow();
+
+    let mode_for_click = auth_mode.clone();
+    let radio_group = RadioGroup::horizontal("auth-mode")
+        .selected_index(Some(current_mode.index()))
+        .child(Radio::new("auth-agent").label("ssh-agent"))
+        .child(Radio::new("auth-password").label("password"))
+        .on_click(move |idx, _w, app| {
+            *mode_for_click.borrow_mut() = AuthMode::from_index(*idx);
+            // Force the dialog body closure to rerun so the password
+            // field's visibility flips. `refresh_windows` is the simplest
+            // hook — the dialog stack lives in Root which re-renders on
+            // any window refresh.
+            app.refresh_windows();
+        });
+
+    let mut col = div()
         .flex()
         .flex_col()
         .gap(SP_3)
@@ -101,12 +202,27 @@ fn build_body(cx: &App, inputs: &Inputs) -> impl IntoElement {
         )
         .child(field(&t, "Group (tag)", &inputs.group))
         .child(
+            div()
+                .flex()
+                .flex_col()
+                .gap(SP_1)
+                .child(label_text(&t, "Authentication"))
+                .child(radio_group),
+        );
+
+    if current_mode == AuthMode::Password {
+        col = col.child(field(&t, "Password", &inputs.password));
+    } else {
+        col = col.child(
             text::body(
-                "Authentication uses ssh-agent (~/.ssh/config + agent forwarding apply). \
-                 Password / key-file editors land in a follow-on PR.",
+                "Uses ssh-agent (~/.ssh/config + agent forwarding apply). \
+                 Switch to \"password\" if you need to bake a plaintext \
+                 password into the config file.",
             )
             .secondary(),
-        )
+        );
+    }
+    col
 }
 
 fn field(
@@ -118,22 +234,31 @@ fn field(
         .flex()
         .flex_col()
         .gap(SP_1)
-        .child(
-            div()
-                .text_size(SIZE_CAPTION)
-                .font_weight(WEIGHT_MEDIUM)
-                .text_color(t.color.text_secondary)
-                .child(SharedString::from(label)),
-        )
+        .child(label_text(t, label))
         .child(Input::new(state))
 }
 
-fn save(inputs: &Inputs, app: &WeakEntity<PierApp>, cx: &mut App) {
+fn label_text(t: &crate::theme::Theme, label: &'static str) -> impl IntoElement {
+    div()
+        .text_size(SIZE_CAPTION)
+        .font_weight(WEIGHT_MEDIUM)
+        .text_color(t.color.text_secondary)
+        .child(SharedString::from(label))
+}
+
+fn save(
+    inputs: &Inputs,
+    mode: AuthMode,
+    target: &EditTarget,
+    app: &WeakEntity<PierApp>,
+    cx: &mut App,
+) {
     let name = inputs.name.read(cx).value().to_string();
     let host = inputs.host.read(cx).value().to_string();
     let user = inputs.user.read(cx).value().to_string();
     let port_str = inputs.port.read(cx).value().to_string();
     let group = inputs.group.read(cx).value().to_string();
+    let password = inputs.password.read(cx).value().to_string();
 
     if name.trim().is_empty() || host.trim().is_empty() || user.trim().is_empty() {
         eprintln!("[pier] save: name / host / user are required");
@@ -143,13 +268,29 @@ fn save(inputs: &Inputs, app: &WeakEntity<PierApp>, cx: &mut App) {
 
     let mut conf = SshConfig::new(name.trim(), host.trim(), user.trim());
     conf.port = port;
-    conf.auth = AuthMethod::Agent;
+    conf.auth = match mode {
+        AuthMode::Agent => AuthMethod::Agent,
+        AuthMode::Password => AuthMethod::DirectPassword { password },
+    };
     if !group.trim().is_empty() {
         conf.tags = vec![group.trim().to_string()];
     }
 
     let mut store = ConnectionStore::load_default().unwrap_or_default();
-    store.connections.push(conf);
+    match target {
+        EditTarget::Add => {
+            store.connections.push(conf);
+        }
+        EditTarget::Edit { idx, .. } => {
+            if *idx < store.connections.len() {
+                store.connections[*idx] = conf;
+            } else {
+                // Stale index — fall back to append rather than dropping
+                // the user's edits.
+                store.connections.push(conf);
+            }
+        }
+    }
     if let Err(err) = store.save_default() {
         eprintln!("[pier] save connection failed: {err}");
         return;

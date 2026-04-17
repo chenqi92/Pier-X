@@ -47,6 +47,8 @@ pub struct LeftPanel {
     servers_query: String,
     on_select_tab: TabSelector,
     on_select_server: ServerSelector,
+    on_edit_server: ServerSelector,
+    on_delete_server: ServerSelector,
     on_add_connection: AddConnectionHandler,
 }
 
@@ -61,6 +63,8 @@ impl LeftPanel {
         servers_query: String,
         on_select_tab: TabSelector,
         on_select_server: ServerSelector,
+        on_edit_server: ServerSelector,
+        on_delete_server: ServerSelector,
         on_add_connection: AddConnectionHandler,
     ) -> Self {
         Self {
@@ -72,6 +76,8 @@ impl LeftPanel {
             servers_query,
             on_select_tab,
             on_select_server,
+            on_edit_server,
+            on_delete_server,
             on_add_connection,
         }
     }
@@ -89,6 +95,8 @@ impl RenderOnce for LeftPanel {
             servers_query,
             on_select_tab,
             on_select_server,
+            on_edit_server,
+            on_delete_server,
             on_add_connection,
         } = self;
 
@@ -121,6 +129,8 @@ impl RenderOnce for LeftPanel {
                         &connections,
                         &servers_query,
                         on_select_server,
+                        on_edit_server,
+                        on_delete_server,
                         on_add_connection,
                     )),
                 )
@@ -198,11 +208,14 @@ fn render_tab_bar(
     row.bg(t.color.bg_panel)
 }
 
+#[allow(clippy::too_many_arguments)]
 fn render_servers_list(
     t: &crate::theme::Theme,
     connections: &[SshConfig],
     query: &str,
     on_select: ServerSelector,
+    on_edit: ServerSelector,
+    on_delete: ServerSelector,
     on_add: AddConnectionHandler,
 ) -> impl IntoElement {
     let mut col = div().p(SP_2).flex().flex_col().gap(SP_1);
@@ -242,7 +255,14 @@ fn render_servers_list(
     for (group, items) in groups {
         col = col.child(group_header(t, group, items.len()));
         for (orig_idx, conn) in items {
-            col = col.child(server_row(t, orig_idx, conn, on_select.clone()));
+            col = col.child(server_row(
+                t,
+                orig_idx,
+                conn,
+                on_select.clone(),
+                on_edit.clone(),
+                on_delete.clone(),
+            ));
         }
     }
     col
@@ -364,6 +384,8 @@ fn server_row(
     idx: usize,
     conn: &SshConfig,
     on_select: ServerSelector,
+    on_edit: ServerSelector,
+    on_delete: ServerSelector,
 ) -> impl IntoElement {
     let address: SharedString = format!("{}@{}:{}", conn.user, conn.host, conn.port).into();
     let auth: SharedString = match &conn.auth {
@@ -373,10 +395,12 @@ fn server_row(
         AuthMethod::DirectPassword { .. } => "password".into(),
     };
     let name: SharedString = conn.name.clone().into();
-    let id_str: SharedString = format!("left-server-{idx}").into();
+    let row_id: SharedString = format!("left-server-{idx}").into();
+    let edit_id: SharedString = format!("left-server-edit-{idx}").into();
+    let delete_id: SharedString = format!("left-server-delete-{idx}").into();
 
     div()
-        .id(gpui::ElementId::Name(id_str))
+        .id(gpui::ElementId::Name(row_id))
         .flex()
         .flex_col()
         .gap(SP_1)
@@ -404,7 +428,22 @@ fn server_row(
                         .text_size(SIZE_SMALL)
                         .text_color(t.color.text_tertiary)
                         .child(auth),
-                ),
+                )
+                .child(div().flex_1())
+                .child(row_action_button(
+                    t,
+                    edit_id,
+                    IconName::Settings,
+                    on_edit,
+                    idx,
+                ))
+                .child(row_action_button(
+                    t,
+                    delete_id,
+                    IconName::Delete,
+                    on_delete,
+                    idx,
+                )),
         )
         .child(
             div()
@@ -413,6 +452,33 @@ fn server_row(
                 .text_color(t.color.text_secondary)
                 .child(address),
         )
+}
+
+/// Trailing icon button on a server row. Calls `cx.stop_propagation()` so
+/// the outer row's connect-on-click doesn't fire when the user really
+/// meant "edit / delete this entry".
+fn row_action_button(
+    t: &crate::theme::Theme,
+    id: SharedString,
+    icon: IconName,
+    handler: ServerSelector,
+    idx: usize,
+) -> impl IntoElement {
+    div()
+        .id(gpui::ElementId::Name(id))
+        .w(px(20.0))
+        .h(px(20.0))
+        .flex()
+        .items_center()
+        .justify_center()
+        .rounded(RADIUS_SM)
+        .text_color(t.color.text_tertiary)
+        .hover(|s| s.bg(t.color.bg_active).text_color(t.color.text_primary))
+        .on_click(move |_, w, app| {
+            handler(&idx, w, app);
+            app.stop_propagation();
+        })
+        .child(UiIcon::new(icon).size(px(12.0)))
 }
 
 /// Re-exported icon helpers used by both the left-panel tab bar and the

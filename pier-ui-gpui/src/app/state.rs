@@ -237,6 +237,50 @@ impl PierApp {
             .map(|s| s.connections)
             .unwrap_or_default();
     }
+
+    pub fn open_add_connection(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let weak = cx.entity().downgrade();
+        crate::views::edit_connection::open(
+            window,
+            cx,
+            weak,
+            crate::views::edit_connection::EditTarget::Add,
+        );
+    }
+
+    pub fn open_edit_connection(
+        &mut self,
+        idx: usize,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let Some(original) = self.connections.get(idx).cloned() else {
+            eprintln!("[pier] edit: stale index {idx}");
+            return;
+        };
+        let weak = cx.entity().downgrade();
+        crate::views::edit_connection::open(
+            window,
+            cx,
+            weak,
+            crate::views::edit_connection::EditTarget::Edit { idx, original },
+        );
+    }
+
+    pub fn delete_connection(&mut self, idx: usize, cx: &mut Context<Self>) {
+        let mut store = ConnectionStore::load_default().unwrap_or_default();
+        if idx >= store.connections.len() {
+            eprintln!("[pier] delete: stale index {idx}");
+            return;
+        }
+        store.connections.remove(idx);
+        if let Err(err) = store.save_default() {
+            eprintln!("[pier] delete connection failed: {err}");
+            return;
+        }
+        self.refresh_connections();
+        cx.notify();
+    }
 }
 
 
@@ -429,6 +473,12 @@ impl PierApp {
         let on_select_server: ServerSelector = Rc::new(cx.listener(
             |this, idx: &usize, _, cx| this.open_ssh_terminal(*idx, cx),
         ));
+        let on_edit_server: ServerSelector = Rc::new(cx.listener(
+            |this, idx: &usize, window, cx| this.open_edit_connection(*idx, window, cx),
+        ));
+        let on_delete_server: ServerSelector = Rc::new(cx.listener(
+            |this, idx: &usize, _, cx| this.delete_connection(*idx, cx),
+        ));
 
         let on_toggle_dir: ToggleDirHandler = Rc::new(cx.listener(
             |this, path: &PathBuf, _, cx| this.toggle_dir(path.clone(), cx),
@@ -454,10 +504,7 @@ impl PierApp {
         );
 
         let on_add_connection: AddConnectionHandler = Box::new(cx.listener(
-            |_, _: &ClickEvent, window, cx| {
-                let weak = cx.entity().downgrade();
-                crate::views::edit_connection::open(window, cx, weak);
-            },
+            |this, _: &ClickEvent, window, cx| this.open_add_connection(window, cx),
         ));
 
         LeftPanel::new(
@@ -469,6 +516,8 @@ impl PierApp {
             servers_query,
             on_select_tab,
             on_select_server,
+            on_edit_server,
+            on_delete_server,
             on_add_connection,
         )
     }

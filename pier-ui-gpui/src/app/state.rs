@@ -27,7 +27,10 @@ use pier_core::ssh::SshConfig;
 use crate::app::layout::{
     LeftTab, RightMode, LEFT_PANEL_DEFAULT_W, RIGHT_PANEL_DEFAULT_W, TOOLBAR_HEIGHT,
 };
-use crate::app::ActivationHandler;
+use crate::app::{
+    ActivationHandler, CloseActiveTab, NewTab, ToggleLeftPanel, ToggleRightPanel,
+};
+use crate::components::{StatusKind, StatusPill};
 use crate::data::ShellSnapshot;
 use crate::theme::{
     radius::RADIUS_SM,
@@ -95,7 +98,7 @@ impl PierApp {
 
     // ─── Terminal session management ───
 
-    fn open_terminal_tab(&mut self, cx: &mut Context<Self>) {
+    pub fn open_terminal_tab(&mut self, cx: &mut Context<Self>) {
         let on_activated: ActivationHandler = Rc::new(|_, _, _| {});
         let entity = cx.new(|cx| TerminalPanel::new(on_activated, cx));
         self.terminals.push(entity);
@@ -111,7 +114,7 @@ impl PierApp {
     ///
     /// Real `russh`-backed sessions land in a later phase — the placeholder
     /// covers 90 % of the UX with 10 lines of code.
-    fn open_ssh_terminal(&mut self, idx: usize, cx: &mut Context<Self>) {
+    pub fn open_ssh_terminal(&mut self, idx: usize, cx: &mut Context<Self>) {
         let Some(conn) = self.connections.get(idx).cloned() else {
             eprintln!("[pier] ssh-open: stale index {idx}");
             return;
@@ -226,6 +229,7 @@ impl Render for PierApp {
             .right_visible
             .then(|| self.render_right(cx))
             .map(IntoElement::into_any_element);
+        let statusbar = self.render_statusbar(&t);
 
         let mut row = div().flex().flex_row().flex_1().min_h(px(0.0));
         if let Some(panel) = left {
@@ -243,8 +247,31 @@ impl Render for PierApp {
             .font_family(t.font_ui.clone())
             .flex()
             .flex_col()
+            // Key-binding context — matches `Some("PierApp")` bindings in
+            // `main.rs`. Keeps shell shortcuts from leaking out / colliding
+            // with terminal-internal key handling when terminal not focused.
+            .key_context("PierApp")
+            .on_action(cx.listener(|this, _: &ToggleLeftPanel, _, cx| {
+                this.left_visible = !this.left_visible;
+                cx.notify();
+            }))
+            .on_action(cx.listener(|this, _: &ToggleRightPanel, _, cx| {
+                this.right_visible = !this.right_visible;
+                cx.notify();
+            }))
+            .on_action(cx.listener(|this, _: &NewTab, window, cx| {
+                let weak = cx.entity().downgrade();
+                let connections = this.connections.clone();
+                crate::views::new_tab_chooser::open(window, cx, weak, connections);
+            }))
+            .on_action(cx.listener(|this, _: &CloseActiveTab, _, cx| {
+                if let Some(idx) = this.active_terminal {
+                    this.close_terminal_tab(idx, cx);
+                }
+            }))
             .child(toolbar)
             .child(row)
+            .child(statusbar)
     }
 }
 
@@ -311,7 +338,11 @@ impl PierApp {
                 t,
                 "tb-new-tab",
                 toolbar_icons::NEW_TAB,
-                cx.listener(|this, _: &ClickEvent, _, cx| this.open_terminal_tab(cx)),
+                cx.listener(|this, _: &ClickEvent, window, cx| {
+                    let weak = cx.entity().downgrade();
+                    let connections = this.connections.clone();
+                    crate::views::new_tab_chooser::open(window, cx, weak, connections);
+                }),
             ))
             .child(toolbar_icon_button(
                 t,
@@ -421,6 +452,49 @@ impl PierApp {
             current_markdown,
             on_select_mode,
         )
+    }
+
+    fn render_statusbar(&self, t: &crate::theme::Theme) -> impl IntoElement {
+        let term_count = self.terminals.len();
+        let active_label: SharedString = match self.active_terminal {
+            Some(i) if i < term_count => format!("Terminal {} of {}", i + 1, term_count).into(),
+            _ if term_count == 0 => "no terminal".into(),
+            _ => "no active tab".into(),
+        };
+        let mode_label: SharedString = format!("right: {}", self.right_mode.label()).into();
+        let theme_label: SharedString = if t.mode == ThemeMode::Dark {
+            "theme: dark".into()
+        } else {
+            "theme: light".into()
+        };
+
+        div()
+            .h(px(22.0))
+            .px(SP_3)
+            .flex()
+            .flex_row()
+            .items_center()
+            .gap(SP_2)
+            .bg(t.color.bg_panel)
+            .border_t_1()
+            .border_color(t.color.border_subtle)
+            .child(StatusPill::new(
+                active_label,
+                if term_count == 0 {
+                    StatusKind::Warning
+                } else {
+                    StatusKind::Success
+                },
+            ))
+            .child(StatusPill::new(mode_label, StatusKind::Info))
+            .child(StatusPill::new(theme_label, StatusKind::Success))
+            .child(div().flex_1())
+            .child(
+                div()
+                    .text_size(SIZE_CAPTION)
+                    .text_color(t.color.text_tertiary)
+                    .child(format!("{} saved connections", self.connections.len())),
+            )
     }
 
     fn render_center(
@@ -545,8 +619,12 @@ fn render_terminal_tab_bar(
         row = row.child(tab);
     }
 
-    // Inline "+" at end-of-row for quick new tab without going to toolbar.
-    let on_new = cx.listener(|this, _: &ClickEvent, _, cx| this.open_terminal_tab(cx));
+    // Inline "+" at end-of-row — same chooser as the toolbar [+].
+    let on_new = cx.listener(|this, _: &ClickEvent, window, cx| {
+        let weak = cx.entity().downgrade();
+        let connections = this.connections.clone();
+        crate::views::new_tab_chooser::open(window, cx, weak, connections);
+    });
     row.child(
         div()
             .id("term-tab-plus")

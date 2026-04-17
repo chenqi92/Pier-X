@@ -1,3 +1,12 @@
 use gpui::actions;
 
-actions!(pier, [ToggleTheme]);
+actions!(
+    pier,
+    [
+        ToggleTheme,
+        ToggleLeftPanel,
+        ToggleRightPanel,
+        NewTab,
+        CloseActiveTab,
+    ]
+);

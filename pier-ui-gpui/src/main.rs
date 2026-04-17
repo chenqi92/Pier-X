@@ -14,7 +14,9 @@ use gpui::{
 };
 use gpui_component::Root;
 
-use crate::app::{PierApp, ToggleTheme};
+use crate::app::{
+    CloseActiveTab, NewTab, PierApp, ToggleLeftPanel, ToggleRightPanel, ToggleTheme,
+};
 
 const INTER_VARIABLE: &[u8] = include_bytes!("../assets/fonts/InterVariable.ttf");
 const JETBRAINS_MONO: &[u8] = include_bytes!("../assets/fonts/JetBrainsMono-Regular.ttf");
@@ -34,11 +36,21 @@ fn main() {
         theme::init(cx);
         ui_kit::sync_theme(cx);
 
+        // Global theme toggle (no key context — fires from anywhere).
         cx.bind_keys([KeyBinding::new("cmd-shift-l", ToggleTheme, None)]);
         cx.on_action::<ToggleTheme>(|_, cx| {
             theme::toggle(cx);
             ui_kit::sync_theme(cx);
         });
+
+        // Shell-scoped shortcuts. The matching `on_action` handlers live on
+        // `PierApp::render` so they have entity-state access via cx.listener.
+        cx.bind_keys([
+            KeyBinding::new("cmd-\\", ToggleLeftPanel, Some("PierApp")),
+            KeyBinding::new("cmd-shift-\\", ToggleRightPanel, Some("PierApp")),
+            KeyBinding::new("cmd-t", NewTab, Some("PierApp")),
+            KeyBinding::new("cmd-shift-w", CloseActiveTab, Some("PierApp")),
+        ]);
 
         let bounds = Bounds::centered(None, size(px(1100.0), px(760.0)), cx);
         cx.open_window(

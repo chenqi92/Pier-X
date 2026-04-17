@@ -1,4 +1,5 @@
 pub mod database;
+pub mod edit_connection;
 pub mod file_tree;
 pub mod git;
 pub mod left_panel;

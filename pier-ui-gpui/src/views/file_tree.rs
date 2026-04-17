@@ -45,6 +45,11 @@ pub type GoUpHandler = Rc<dyn Fn(&(), &mut Window, &mut App) + 'static>;
 pub struct FileTree {
     root: PathBuf,
     expanded: HashSet<PathBuf>,
+    /// Case-insensitive substring filter. Empty = show everything.
+    /// When non-empty, entries whose name doesn't contain the query are
+    /// hidden — but expanded dirs still recurse so a match deep in the
+    /// tree is reachable through its (matching) ancestor.
+    filter: String,
     on_toggle_dir: ToggleDirHandler,
     on_open_file: OpenFileHandler,
     on_go_up: GoUpHandler,
@@ -54,6 +59,7 @@ impl FileTree {
     pub fn new(
         root: PathBuf,
         expanded: HashSet<PathBuf>,
+        filter: String,
         on_toggle_dir: ToggleDirHandler,
         on_open_file: OpenFileHandler,
         on_go_up: GoUpHandler,
@@ -61,6 +67,7 @@ impl FileTree {
         Self {
             root,
             expanded,
+            filter,
             on_toggle_dir,
             on_open_file,
             on_go_up,
@@ -74,10 +81,12 @@ impl RenderOnce for FileTree {
         let FileTree {
             root,
             expanded,
+            filter,
             on_toggle_dir,
             on_open_file,
             on_go_up,
         } = self;
+        let filter_lower = filter.to_lowercase();
 
         let root_label: SharedString = root.display().to_string().into();
 
@@ -140,6 +149,7 @@ impl RenderOnce for FileTree {
                             &entry,
                             0,
                             &expanded,
+                            &filter_lower,
                             on_toggle_dir.clone(),
                             on_open_file.clone(),
                         );
@@ -190,6 +200,7 @@ fn render_entry(
     entry: &FsEntry,
     depth: u32,
     expanded: &HashSet<PathBuf>,
+    filter: &str,
     on_toggle_dir: ToggleDirHandler,
     on_open_file: OpenFileHandler,
 ) -> gpui::Div {
@@ -197,7 +208,17 @@ fn render_entry(
         return col;
     }
 
-    col = col.child(row(t, entry, depth, expanded.contains(&entry.path), {
+    let is_expanded = expanded.contains(&entry.path);
+
+    // Filter: entries whose name doesn't contain the query are hidden
+    // unless they're expanded directories (the user explicitly wants to
+    // see inside, even if the dir name is irrelevant to the query).
+    let name_matches = filter.is_empty() || entry.name.to_lowercase().contains(filter);
+    if !name_matches && !(entry.is_dir && is_expanded) {
+        return col;
+    }
+
+    col = col.child(row(t, entry, depth, is_expanded, {
         let path = entry.path.clone();
         let toggle = on_toggle_dir.clone();
         let open = on_open_file.clone();
@@ -211,7 +232,7 @@ fn render_entry(
         }
     }));
 
-    if entry.is_dir && expanded.contains(&entry.path) {
+    if entry.is_dir && is_expanded {
         match list_dir(&entry.path) {
             Ok(children) => {
                 for child in children {
@@ -221,6 +242,7 @@ fn render_entry(
                         &child,
                         depth + 1,
                         expanded,
+                        filter,
                         on_toggle_dir.clone(),
                         on_open_file.clone(),
                     );

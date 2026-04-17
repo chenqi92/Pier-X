@@ -68,7 +68,7 @@ fn main() {
                 ..Default::default()
             },
             |window, cx| {
-                let view = cx.new(|_| PierApp::new());
+                let view = cx.new(|app_cx| PierApp::new(window, app_cx));
                 cx.new(|cx| Root::new(view, window, cx))
             },
         )

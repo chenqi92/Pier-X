@@ -20,7 +20,10 @@ use gpui::{
     div, prelude::*, px, AnyElement, ClickEvent, Context, Entity, IntoElement, SharedString,
     Window,
 };
-use gpui_component::{Icon as UiIcon, IconName};
+use gpui_component::{
+    input::{InputEvent, InputState},
+    Icon as UiIcon, IconName,
+};
 use pier_core::connections::ConnectionStore;
 use pier_core::ssh::SshConfig;
 
@@ -43,7 +46,7 @@ use crate::views::file_tree::{
     FileTree, GoUpHandler, OpenFileHandler, ToggleDirHandler,
 };
 use crate::views::left_panel::{
-    icons as toolbar_icons, LeftPanel, ServerSelector, TabSelector,
+    icons as toolbar_icons, AddConnectionHandler, LeftPanel, ServerSelector, TabSelector,
 };
 use crate::views::right_panel::{ModeSelector, RightPanel};
 use crate::views::terminal::TerminalPanel;
@@ -70,17 +73,42 @@ pub struct PierApp {
     file_tree_root: PathBuf,
     file_tree_expanded: HashSet<PathBuf>,
     /// Last file the user clicked in the tree. Wired into the Markdown
-    /// mode in Phase 3; for now just kept so the open-file handler has
-    /// somewhere to land.
+    /// mode for `.md` files; otherwise just an info log for now.
     last_opened_file: Option<PathBuf>,
+
+    // ─── Filter inputs (live in PierApp so values survive panel toggles) ───
+    files_filter: Entity<InputState>,
+    servers_filter: Entity<InputState>,
 }
 
 impl PierApp {
-    pub fn new() -> Self {
+    pub fn new(window: &mut Window, cx: &mut Context<Self>) -> Self {
         let connections = ConnectionStore::load_default()
             .map(|s| s.connections)
             .unwrap_or_default();
         let file_tree_root = env::current_dir().unwrap_or_else(|_| PathBuf::from("/"));
+
+        let files_filter =
+            cx.new(|c| InputState::new(window, c).placeholder("Filter files…"));
+        let servers_filter =
+            cx.new(|c| InputState::new(window, c).placeholder("Filter servers…"));
+
+        // PierApp re-renders whenever either filter Input emits a Change
+        // event; the filter strings themselves are read lazily during
+        // render via `Entity::read(cx).value()`.
+        cx.subscribe(&files_filter, |_, _, ev: &InputEvent, cx| {
+            if matches!(ev, InputEvent::Change) {
+                cx.notify();
+            }
+        })
+        .detach();
+        cx.subscribe(&servers_filter, |_, _, ev: &InputEvent, cx| {
+            if matches!(ev, InputEvent::Change) {
+                cx.notify();
+            }
+        })
+        .detach();
+
         Self {
             left_visible: true,
             right_visible: true,
@@ -93,6 +121,8 @@ impl PierApp {
             file_tree_root,
             file_tree_expanded: HashSet::new(),
             last_opened_file: None,
+            files_filter,
+            servers_filter,
         }
     }
 
@@ -202,18 +232,13 @@ impl PierApp {
         }
     }
 
-    fn refresh_connections(&mut self) {
+    pub fn refresh_connections(&mut self) {
         self.connections = ConnectionStore::load_default()
             .map(|s| s.connections)
             .unwrap_or_default();
     }
 }
 
-impl Default for PierApp {
-    fn default() -> Self {
-        Self::new()
-    }
-}
 
 impl Render for PierApp {
     fn render(&mut self, _win: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
@@ -414,20 +439,37 @@ impl PierApp {
         let on_go_up: GoUpHandler =
             Rc::new(cx.listener(|this, _: &(), _, cx| this.cd_up(cx)));
 
+        // Read filter values once per render (lazy — Entity::read returns
+        // a borrow into the input state's current text).
+        let files_query = self.files_filter.read(cx).value().to_string();
+        let servers_query = self.servers_filter.read(cx).value().to_string();
+
         let file_tree = FileTree::new(
             self.file_tree_root.clone(),
             self.file_tree_expanded.clone(),
+            files_query,
             on_toggle_dir,
             on_open_file,
             on_go_up,
         );
 
+        let on_add_connection: AddConnectionHandler = Box::new(cx.listener(
+            |_, _: &ClickEvent, window, cx| {
+                let weak = cx.entity().downgrade();
+                crate::views::edit_connection::open(window, cx, weak);
+            },
+        ));
+
         LeftPanel::new(
             self.left_tab,
             self.connections.clone(),
             file_tree,
+            self.files_filter.clone(),
+            self.servers_filter.clone(),
+            servers_query,
             on_select_tab,
             on_select_server,
+            on_add_connection,
         )
     }
 

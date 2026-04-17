@@ -23,10 +23,9 @@ use pier_core::terminal::{Cell, Color as TerminalColor, GridSnapshot, NotifyEven
 
 use crate::{
     app::{route::Route, ActivationHandler},
-    components::{text, Card, SectionLabel, StatusKind, StatusPill},
+    components::StatusKind,
     theme::{
-        radius::RADIUS_MD,
-        spacing::{SP_1, SP_3, SP_4},
+        spacing::SP_3,
         terminal::{
             terminal_cursor_bg_hex, terminal_cursor_fg_hex, terminal_default_bg_hex,
             terminal_default_fg_hex, terminal_hex_color, terminal_indexed_hex,
@@ -34,7 +33,7 @@ use crate::{
         },
         theme,
         typography::{
-            SIZE_CAPTION, SIZE_MONO_CODE, WEIGHT_EMPHASIS, WEIGHT_MEDIUM, WEIGHT_REGULAR,
+            SIZE_CAPTION, SIZE_MONO_CODE, WEIGHT_EMPHASIS, WEIGHT_REGULAR,
         },
         ThemeMode,
     },
@@ -232,12 +231,16 @@ impl TerminalPanel {
                         .await;
 
                     let still_alive = this
-                        .update_in(cx, |this, _, cx| {
+                        .update_in(cx, |this, window, cx| {
                             let current = this.notify_state.generation.load(Ordering::Relaxed);
                             let mut should_notify = false;
                             if current != seen_generation {
                                 seen_generation = current;
                                 this.handle_terminal_side_effects(cx);
+                                // Window title needs the PTY title / ssh
+                                // target picked up by handle_terminal_side_effects;
+                                // do it here (not in render — Phase 10 perf).
+                                this.sync_window_title(window);
                                 should_notify = true;
                             }
                             if this.update_transient_state() {
@@ -698,6 +701,11 @@ impl TerminalPanel {
         }
     }
 
+    /// Kept for future feature surfaces (e.g. command palette / metrics
+    /// overlay). The slim status line in `render_status_line` uses inline
+    /// labels instead of `StatusPill` to keep the per-render element
+    /// budget low.
+    #[allow(dead_code)]
     fn terminal_status(&self) -> (SharedString, StatusKind) {
         if let Some(error) = self.last_error.as_ref() {
             return (format!("Error: {error}").into(), StatusKind::Error);
@@ -715,6 +723,7 @@ impl TerminalPanel {
             .is_some_and(|deadline| deadline > Instant::now())
     }
 
+    #[allow(dead_code)]
     fn scrollback_label(&self) -> SharedString {
         let retained = self
             .terminal
@@ -739,6 +748,7 @@ impl TerminalPanel {
             .unwrap_or_else(|| "local PTY".into())
     }
 
+    #[allow(dead_code)]
     fn terminal_title_label(&self) -> SharedString {
         self.terminal_title
             .clone()
@@ -893,21 +903,14 @@ impl Focusable for TerminalPanel {
 
 impl Render for TerminalPanel {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        // ⚠️ Render is paint-only (CLAUDE.md Rule 6). `sync_window_title` and
+        // `update_transient_state` used to run here on every PTY echo — they
+        // now live in the refresh loop only (see `ensure_refresh_loop`).
+        // `resize_for_window` is kept because it's the only place where a
+        // window-bounds change can re-size the PTY between paints.
         self.resize_for_window(window);
-        self.update_transient_state();
-        self.sync_window_title(window);
         let t = theme(cx).clone();
         let lines = self.render_lines(t.mode, &t.font_mono);
-        let (status_label, status_kind) = self.terminal_status();
-        let shell_path = self.shell_path.clone();
-        let size_label = self.terminal_size_label();
-        let scroll_label = self.scrollback_label();
-        let session_label = self.session_label();
-        let title_label = self.terminal_title_label();
-        let ssh_badge = self
-            .ssh_target
-            .clone()
-            .map(|target| SharedString::from(format!("ssh: {target}")));
         let bell_active = self.bell_flashing();
         let border_color = if bell_active {
             t.color.status_warning
@@ -917,90 +920,23 @@ impl Render for TerminalPanel {
             t.color.border_default
         };
         let surface_bounds = Rc::clone(&self.surface_bounds);
+        let status_line = self.render_status_line(&t, bell_active);
 
+        // Slim shell: status row + grid surface. The 30-element Shell /
+        // Input / Session / Title chrome that used to live here was
+        // rebuilding on every PTY echo and dominated render cost; the
+        // status row carries the same information in 6 inline labels.
         div()
             .size_full()
             .flex()
             .flex_col()
-            .gap(SP_4)
-            .p(SP_4)
-            .child(
-                div()
-                    .flex()
-                    .flex_row()
-                    .items_center()
-                    .gap(SP_3)
-                    .child(text::h2("Terminal"))
-                    .child(StatusPill::new(status_label, status_kind))
-                    .child(StatusPill::new(scroll_label, StatusKind::Info))
-                    .children(
-                        ssh_badge
-                            .into_iter()
-                            .map(|label| StatusPill::new(label, StatusKind::Info)),
-                    )
-                    .children(bell_active.then_some(StatusPill::new("bell", StatusKind::Warning)))
-                    .child(div().flex_1())
-                    .child(
-                        div()
-                            .text_size(SIZE_CAPTION)
-                            .font_weight(WEIGHT_MEDIUM)
-                            .font_family(t.font_ui.clone())
-                            .text_color(t.color.text_tertiary)
-                            .child(size_label),
-                    ),
-            )
-            .child(
-                Card::new().padding(SP_3).child(
-                    div()
-                        .flex()
-                        .flex_row()
-                        .flex_wrap()
-                        .items_center()
-                        .gap(SP_4)
-                        .child(
-                            div()
-                                .flex()
-                                .flex_col()
-                                .gap(SP_1)
-                                .child(SectionLabel::new("Shell"))
-                                .child(text::mono(shell_path)),
-                        )
-                        .child(
-                            div()
-                                .flex()
-                                .flex_col()
-                                .gap(SP_1)
-                                .child(SectionLabel::new("Input"))
-                                .child(text::body(
-                                    "Enter, Tab, Ctrl+C, arrows, Home/End, PgUp/PgDn",
-                                )),
-                        )
-                        .child(
-                            div()
-                                .flex()
-                                .flex_col()
-                                .gap(SP_1)
-                                .child(SectionLabel::new("Session"))
-                                .child(text::mono(session_label)),
-                        )
-                        .child(
-                            div()
-                                .flex()
-                                .flex_col()
-                                .gap(SP_1)
-                                .child(SectionLabel::new("Title"))
-                                .child(text::body(title_label)),
-                        ),
-                ),
-            )
+            .child(status_line)
             .child(
                 div()
                     .flex_1()
                     .min_h(px(TERMINAL_MIN_HEIGHT))
-                    .p(SP_3)
-                    .rounded(RADIUS_MD)
                     .bg(t.color.bg_canvas)
-                    .border_1()
+                    .border_t_1()
                     .border_color(border_color)
                     .overflow_hidden()
                     .cursor(CursorStyle::IBeam)
@@ -1051,6 +987,67 @@ impl Render for TerminalPanel {
                             ),
                     ),
             )
+    }
+}
+
+impl TerminalPanel {
+    /// Single-row terminal status strip. Mirrors what Pier shows in the
+    /// terminal tab toolbar: shell + size + scrollback + ssh badge + bell.
+    /// All values are produced as plain `SharedString`s (no Card / Pill /
+    /// SectionLabel rebuild) so the per-render element budget stays low —
+    /// see Phase 10 perf notes in CLAUDE.md / commit log.
+    fn render_status_line(
+        &self,
+        t: &crate::theme::Theme,
+        bell_active: bool,
+    ) -> impl IntoElement {
+        let shell_label = self.shell_path.clone();
+        let size_label = self.terminal_size_label();
+        let session_label = self.session_label();
+        let scrollback = self.scrollback_offset;
+        let scrollback_label: Option<SharedString> = (scrollback > 0)
+            .then(|| format!("scrollback {scrollback}").into());
+        let pty_status = match self.terminal.as_ref() {
+            Some(term) if term.is_alive() => None,
+            Some(_) => Some(("PTY exited", t.color.status_warning)),
+            None => Some(("PTY unavailable", t.color.status_error)),
+        };
+
+        let mut row = div()
+            .h(px(22.0))
+            .px(SP_3)
+            .flex()
+            .flex_row()
+            .items_center()
+            .gap(SP_3)
+            .bg(t.color.bg_panel)
+            .text_size(SIZE_CAPTION)
+            .font_family(t.font_ui.clone())
+            .text_color(t.color.text_tertiary)
+            // shell · size — most common columns, always shown.
+            .child(
+                div()
+                    .text_color(t.color.text_secondary)
+                    .child(shell_label),
+            )
+            .child(div().child(size_label));
+
+        if let Some(label) = scrollback_label {
+            row = row.child(div().child(label));
+        }
+        row = row.child(
+            div()
+                .text_color(t.color.accent)
+                .child(SharedString::from(format!("· {session_label}"))),
+        );
+        if let Some((label, color)) = pty_status {
+            row = row.child(div().text_color(color).child(label));
+        }
+        if bell_active {
+            row = row.child(div().text_color(t.color.status_warning).child("bell"));
+        }
+        // Spacer pushes nothing further right; keep it for visual symmetry.
+        row.child(div().flex_1())
     }
 }
 

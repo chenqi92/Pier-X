@@ -86,6 +86,35 @@ pier-ui-gpui/src/
 
 When adding a module, follow this split. Do not put view logic in `main.rs` or component logic in views.
 
+### Rule 6 — Render is paint-only
+
+`Render::render` and `RenderOnce::render` bodies **must not perform IO**.
+This includes:
+
+- Filesystem reads (`std::fs::*`, `read_dir`, `metadata`, anything that
+  hits a syscall)
+- Network calls (HTTP, SSH connect, DB connect)
+- OS keychain reads (`pier_core::credentials::get`)
+- Process spawns
+- Any `*_blocking()` API from pier-core
+
+GPUI re-renders entities on every state change. A 5 ms `read_dir` repeated
+30 times during a render call costs 150 ms — felt as obvious lag. A
+1 second `connect_blocking` freezes the UI for 1 second.
+
+**Pattern**: cache the data in `PierApp` (or an entity it owns), populate it
+from a click / event / startup handler, and have `render` read the cache
+only. Examples in tree:
+
+- `PierApp::file_tree_root_entries` + `file_tree_children` cache, populated
+  by `toggle_dir` / `cd_up` (file_tree.rs renders from cache)
+- `SshSessionState::entries` cache, populated by `set_right_mode(Sftp)`
+  (sftp_browser.rs renders from cache)
+
+If the data genuinely needs fresh-on-display, push the IO behind a
+background task (`cx.background_executor().spawn(...)` + `weak.update`)
+and render a placeholder while it's in flight.
+
 ## Review gate
 
 Reject a change if any of these are true:
@@ -95,12 +124,16 @@ Reject a change if any of these are true:
 3. It reintroduces Tauri / Qt / npm / cmake in any form.
 4. It adds a `pier-core` dependency on `gpui` or any UI crate.
 5. It violates one of the five SKILL.md non-negotiables (see SKILL.md §1).
+6. It calls a `_blocking` / `read_dir` / `credentials::get` / network /
+   process-spawn API from inside a `render` body (Rule 6).
 
 ## Build & run
 
 ```sh
-./run.sh              # debug run
-./build.sh            # release build
+./run.sh                            # debug run, terminal-icon dock entry
+./build.sh                          # release build
+./scripts/bundle-macos.sh           # build → wrap in Pier-X.app for proper dock icon
+./scripts/run-bundled-macos.sh      # bundle + open the .app
 cargo build -p pier-ui-gpui
 cargo build -p pier-core
 ```

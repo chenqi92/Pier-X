@@ -69,9 +69,13 @@ impl RenderOnce for SftpBrowser {
             return empty_state(t).into_any_element();
         };
 
-        // Pull everything we need into owned values first so subsequent
-        // mutable borrows of cx (the auto-refresh below) aren't blocked.
-        let (cwd_label, host_label, entries, status_pill, last_error, needs_first_refresh) = {
+        // Pull everything from the cached state. NEVER call refresh here —
+        // refresh runs `connect_blocking` + `list_dir_blocking` which would
+        // freeze the UI thread on first SFTP tab open. PierApp triggers
+        // refresh from the click handlers (open_ssh_terminal /
+        // navigate_sftp / sftp_cd_up) so by the time we render, the cached
+        // entries are already populated.
+        let (cwd_label, host_label, entries, status_pill, last_error) = {
             let s = state_entity.read(cx);
             let cwd_label: SharedString = s.cwd.display().to_string().into();
             let host_label: SharedString =
@@ -83,17 +87,7 @@ impl RenderOnce for SftpBrowser {
                 ConnectStatus::Failed(_) => StatusPill::new("error", StatusKind::Error),
             };
             let last_error = s.last_error.clone();
-            let needs_first_refresh = s.entries.is_empty()
-                && s.last_error.is_none()
-                && matches!(s.status, ConnectStatus::Idle);
-            (
-                cwd_label,
-                host_label,
-                entries,
-                status_pill,
-                last_error,
-                needs_first_refresh,
-            )
+            (cwd_label, host_label, entries, status_pill, last_error)
         };
 
         let header = div()
@@ -167,13 +161,6 @@ impl RenderOnce for SftpBrowser {
             for entry in entries {
                 body = body.child(remote_row(t, &entry, on_navigate.clone()));
             }
-        }
-
-        // Trigger first refresh if the session has never been listed.
-        // (The flag was computed above inside the read scope so cx is
-        // free to be mutably re-borrowed here.)
-        if needs_first_refresh {
-            state_entity.update(cx, |s, _| s.refresh());
         }
 
         div()

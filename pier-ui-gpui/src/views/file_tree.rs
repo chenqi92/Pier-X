@@ -1,19 +1,32 @@
-//! Local file tree — Phase 2 replacement for the Files-tab placeholder.
+//! Local file tree — render-only view backed by a cache owned by [`PierApp`].
 //!
-//! Mirrors `Pier/PierApp/Sources/Views/FilePanel/LocalFileView.swift`
-//! at minimum-viable level. Phase 2 ships:
+//! Mirrors `Pier/PierApp/Sources/Views/FilePanel/LocalFileView.swift`.
+//!
+//! ## Perf invariant
+//!
+//! **No filesystem IO is performed during `render`.** All directory listings
+//! are pre-cached in `PierApp::file_tree_root_entries` and
+//! `PierApp::file_tree_children`, populated lazily on user actions
+//! (expand a directory / cd_up). Earlier versions of this file did
+//! `std::fs::read_dir` on every render which froze the UI for hundreds of
+//! milliseconds on every keystroke / tab switch — see CLAUDE.md
+//! "Render is paint-only" rule.
+//!
+//! ## Scope
+//!
+//! Ships:
 //!   - lazy expand/collapse of directories on click
 //!   - depth-indented rows with chevron / folder / file glyphs
 //!   - header with current root + "go up" button
-//!   - file click → callback (used to feed the right-panel Markdown mode)
+//!   - file click → callback (feeds right-panel Markdown mode)
 //!
-//! Deferred to Phase 3+:
-//!   - search / filter input
+//! Deferred:
 //!   - drag-and-drop into terminal
 //!   - right-click context menu
-//!   - file system change watcher (DispatchSourceFileSystemObject equivalent)
+//!   - file system change watcher (notify crate or DispatchSource)
+//!   - explicit "refresh" button (kbd shortcut?)
 
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
 use std::rc::Rc;
 
@@ -44,30 +57,45 @@ pub type GoUpHandler = Rc<dyn Fn(&(), &mut Window, &mut App) + 'static>;
 #[derive(IntoElement)]
 pub struct FileTree {
     root: PathBuf,
+    /// Pre-loaded entries for `root`. Owned by [`PierApp`].
+    root_entries: Vec<FsEntry>,
+    /// Pre-loaded children indexed by directory path. Empty for collapsed
+    /// or never-expanded dirs.
+    children: HashMap<PathBuf, Vec<FsEntry>>,
     expanded: HashSet<PathBuf>,
     /// Case-insensitive substring filter. Empty = show everything.
     /// When non-empty, entries whose name doesn't contain the query are
     /// hidden — but expanded dirs still recurse so a match deep in the
     /// tree is reachable through its (matching) ancestor.
     filter: String,
+    /// `Some(err)` when the root directory itself failed to list (perm
+    /// denied, etc.). Rendered as a status pill instead of an empty list.
+    root_error: Option<String>,
     on_toggle_dir: ToggleDirHandler,
     on_open_file: OpenFileHandler,
     on_go_up: GoUpHandler,
 }
 
 impl FileTree {
+    #[allow(clippy::too_many_arguments)]
     pub fn new(
         root: PathBuf,
+        root_entries: Vec<FsEntry>,
+        children: HashMap<PathBuf, Vec<FsEntry>>,
         expanded: HashSet<PathBuf>,
         filter: String,
+        root_error: Option<String>,
         on_toggle_dir: ToggleDirHandler,
         on_open_file: OpenFileHandler,
         on_go_up: GoUpHandler,
     ) -> Self {
         Self {
             root,
+            root_entries,
+            children,
             expanded,
             filter,
+            root_error,
             on_toggle_dir,
             on_open_file,
             on_go_up,
@@ -80,8 +108,11 @@ impl RenderOnce for FileTree {
         let t = theme(cx);
         let FileTree {
             root,
+            root_entries,
+            children,
             expanded,
             filter,
+            root_error,
             on_toggle_dir,
             on_open_file,
             on_go_up,
@@ -128,55 +159,48 @@ impl RenderOnce for FileTree {
                     .child(root_label),
             );
 
-        // Body rows.
+        // Body rows — read entirely from the cache, never from disk.
         let mut body = div().flex().flex_col().py(SP_1);
-        match list_dir(&root) {
-            Ok(entries) => {
-                if entries.is_empty() {
-                    body = body.child(
+        if let Some(err) = root_error {
+            body = body.child(
+                div()
+                    .px(SP_3)
+                    .py(SP_2)
+                    .flex()
+                    .flex_col()
+                    .gap(SP_1)
+                    .child(
                         div()
-                            .px(SP_3)
-                            .py(SP_2)
-                            .text_size(SIZE_SMALL)
-                            .text_color(t.color.text_tertiary)
-                            .child("(empty directory)"),
-                    );
-                } else {
-                    for entry in entries {
-                        body = render_entry(
-                            body,
-                            t,
-                            &entry,
-                            0,
-                            &expanded,
-                            &filter_lower,
-                            on_toggle_dir.clone(),
-                            on_open_file.clone(),
-                        );
-                    }
-                }
-            }
-            Err(err) => {
-                body = body.child(
-                    div()
-                        .px(SP_3)
-                        .py(SP_2)
-                        .flex()
-                        .flex_col()
-                        .gap(SP_1)
-                        .child(
-                            div()
-                                .flex()
-                                .flex_row()
-                                .items_center()
-                                .gap(SP_2)
-                                .child(SectionLabel::new("Cannot read directory"))
-                                .child(StatusPill::new("io error", StatusKind::Error)),
-                        )
-                        .child(
-                            text::body(SharedString::from(format!("{err}")))
-                                .secondary(),
-                        ),
+                            .flex()
+                            .flex_row()
+                            .items_center()
+                            .gap(SP_2)
+                            .child(SectionLabel::new("Cannot read directory"))
+                            .child(StatusPill::new("io error", StatusKind::Error)),
+                    )
+                    .child(text::body(SharedString::from(err)).secondary()),
+            );
+        } else if root_entries.is_empty() {
+            body = body.child(
+                div()
+                    .px(SP_3)
+                    .py(SP_2)
+                    .text_size(SIZE_SMALL)
+                    .text_color(t.color.text_tertiary)
+                    .child("(empty directory)"),
+            );
+        } else {
+            for entry in &root_entries {
+                body = render_entry(
+                    body,
+                    t,
+                    entry,
+                    0,
+                    &expanded,
+                    &children,
+                    &filter_lower,
+                    on_toggle_dir.clone(),
+                    on_open_file.clone(),
                 );
             }
         }
@@ -194,12 +218,14 @@ impl RenderOnce for FileTree {
 // Recursive row renderer
 // ─────────────────────────────────────────────────────────
 
+#[allow(clippy::too_many_arguments)]
 fn render_entry(
     mut col: gpui::Div,
     t: &crate::theme::Theme,
     entry: &FsEntry,
     depth: u32,
     expanded: &HashSet<PathBuf>,
+    children: &HashMap<PathBuf, Vec<FsEntry>>,
     filter: &str,
     on_toggle_dir: ToggleDirHandler,
     on_open_file: OpenFileHandler,
@@ -233,33 +259,34 @@ fn render_entry(
     }));
 
     if entry.is_dir && is_expanded {
-        match list_dir(&entry.path) {
-            Ok(children) => {
-                for child in children {
-                    col = render_entry(
-                        col,
-                        t,
-                        &child,
-                        depth + 1,
-                        expanded,
-                        filter,
-                        on_toggle_dir.clone(),
-                        on_open_file.clone(),
-                    );
-                }
-            }
-            Err(err) => {
-                let indent: f32 =
-                    f32::from(SP_3) + (depth as f32 + 1.0) * INDENT_PER_DEPTH;
-                col = col.child(
-                    div()
-                        .px(px(indent))
-                        .py(SP_1)
-                        .text_size(SIZE_SMALL)
-                        .text_color(t.color.text_tertiary)
-                        .child(SharedString::from(format!("(error: {err})"))),
+        if let Some(child_entries) = children.get(&entry.path) {
+            for child in child_entries {
+                col = render_entry(
+                    col,
+                    t,
+                    child,
+                    depth + 1,
+                    expanded,
+                    children,
+                    filter,
+                    on_toggle_dir.clone(),
+                    on_open_file.clone(),
                 );
             }
+        } else {
+            // Cache miss — should be rare (only if the user expanded a
+            // dir while we were reloading). Show a hint instead of doing
+            // sync IO here.
+            let indent: f32 =
+                f32::from(SP_3) + (depth as f32 + 1.0) * INDENT_PER_DEPTH;
+            col = col.child(
+                div()
+                    .px(px(indent))
+                    .py(SP_1)
+                    .text_size(SIZE_SMALL)
+                    .text_color(t.color.text_tertiary)
+                    .child("(loading…)"),
+            );
         }
     }
     col
@@ -358,13 +385,19 @@ fn row(
 // Filesystem listing
 // ─────────────────────────────────────────────────────────
 
-struct FsEntry {
-    path: PathBuf,
-    name: String,
-    is_dir: bool,
+/// Single directory entry as seen by [`list_dir`]. Held in
+/// [`crate::app::state::PierApp`]'s cache; rendered by [`FileTree`] without
+/// further IO.
+#[derive(Clone, Debug)]
+pub struct FsEntry {
+    pub path: PathBuf,
+    pub name: String,
+    pub is_dir: bool,
 }
 
-fn list_dir(root: &Path) -> std::io::Result<Vec<FsEntry>> {
+/// Read a single directory level from disk. Called from PierApp's expand /
+/// cd_up handlers — never from a `Render::render` body.
+pub fn list_dir(root: &Path) -> std::io::Result<Vec<FsEntry>> {
     let mut entries: Vec<FsEntry> = std::fs::read_dir(root)?
         .filter_map(|res| res.ok())
         .filter(|entry| {

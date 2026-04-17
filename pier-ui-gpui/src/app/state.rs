@@ -11,7 +11,7 @@
 //! └──────────┴───────────────────────┴──────────────┘
 //! ```
 
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 use std::env;
 use std::path::PathBuf;
 use std::rc::Rc;
@@ -44,7 +44,7 @@ use crate::theme::{
     ThemeMode,
 };
 use crate::views::file_tree::{
-    FileTree, GoUpHandler, OpenFileHandler, ToggleDirHandler,
+    self, FileTree, FsEntry, GoUpHandler, OpenFileHandler, ToggleDirHandler,
 };
 use crate::views::left_panel::{
     icons as toolbar_icons, AddConnectionHandler, LeftPanel, ServerSelector, TabSelector,
@@ -71,8 +71,23 @@ pub struct PierApp {
     active_terminal: Option<usize>,
 
     // ─── Local file tree (Files tab) ───
+    //
+    // ⚠️ Perf invariant: ALL filesystem reads happen here on user actions
+    // (toggle_dir / cd_up / refresh), never from inside a render body.
+    // The cache is paint-only-source-of-truth for FileTree. See CLAUDE.md
+    // "Render is paint-only".
     file_tree_root: PathBuf,
     file_tree_expanded: HashSet<PathBuf>,
+    /// Cached entries for `file_tree_root`. Reloaded on `cd_up` / explicit
+    /// refresh.
+    file_tree_root_entries: Vec<FsEntry>,
+    /// Cached children for every previously-expanded directory under the
+    /// current root. Populated lazily on `toggle_dir`; entries persist
+    /// across collapse so re-expand is instant.
+    file_tree_children: HashMap<PathBuf, Vec<FsEntry>>,
+    /// Most recent root-load error (perm denied / not found). Rendered as
+    /// a status pill in the file tree header.
+    file_tree_root_error: Option<String>,
     /// Last file the user clicked in the tree. Wired into the Markdown
     /// mode for `.md` files; otherwise just an info log for now.
     last_opened_file: Option<PathBuf>,
@@ -94,6 +109,8 @@ impl PierApp {
             .map(|s| s.connections)
             .unwrap_or_default();
         let file_tree_root = env::current_dir().unwrap_or_else(|_| PathBuf::from("/"));
+        let (file_tree_root_entries, file_tree_root_error) =
+            load_root(&file_tree_root);
 
         let files_filter =
             cx.new(|c| InputState::new(window, c).placeholder("Filter files…"));
@@ -127,6 +144,9 @@ impl PierApp {
             active_terminal: None,
             file_tree_root,
             file_tree_expanded: HashSet::new(),
+            file_tree_root_entries,
+            file_tree_children: HashMap::new(),
+            file_tree_root_error,
             last_opened_file: None,
             files_filter,
             servers_filter,
@@ -191,6 +211,32 @@ impl PierApp {
         }
     }
 
+    /// Switch the right panel mode. Lazily triggers any one-shot work the
+    /// new mode needs (e.g. SFTP first-connect) here on the click rather
+    /// than from inside the render path.
+    pub fn set_right_mode(&mut self, mode: RightMode, cx: &mut Context<Self>) {
+        self.right_mode = mode;
+        if mode == RightMode::Sftp {
+            if let Some(session) = self.active_session.as_ref() {
+                // Only refresh on the very first SFTP-tab click for this
+                // session — subsequent clicks reuse the cached SFTP channel.
+                let needs_first = {
+                    let s = session.read(cx);
+                    s.entries.is_empty() && s.last_error.is_none()
+                };
+                if needs_first {
+                    // ⚠️ Synchronous block: connect_blocking + list_dir_blocking
+                    // freezes the UI for the duration of the SSH handshake
+                    // (~1-2s on LAN). Acceptable here because it fires at
+                    // most once per session — moving to a background task
+                    // with a Connecting… placeholder is Phase 9.
+                    session.update(cx, |s, _| s.refresh());
+                }
+            }
+        }
+        cx.notify();
+    }
+
     fn activate_terminal_tab(&mut self, idx: usize, cx: &mut Context<Self>) {
         if idx < self.terminals.len() {
             self.active_terminal = Some(idx);
@@ -224,6 +270,22 @@ impl PierApp {
         if self.file_tree_expanded.contains(&path) {
             self.file_tree_expanded.remove(&path);
         } else {
+            // Lazy-populate the cache on first expand. Subsequent expand /
+            // collapse cycles hit the cache (instant — no IO).
+            if !self.file_tree_children.contains_key(&path) {
+                match file_tree::list_dir(&path) {
+                    Ok(entries) => {
+                        self.file_tree_children.insert(path.clone(), entries);
+                    }
+                    Err(err) => {
+                        eprintln!("[pier] file-tree: list {} failed: {err}", path.display());
+                        // Insert an empty list so we don't retry on every
+                        // re-expand; the user can collapse + invalidate
+                        // cache via cd_up.
+                        self.file_tree_children.insert(path.clone(), Vec::new());
+                    }
+                }
+            }
             self.file_tree_expanded.insert(path);
         }
         cx.notify();
@@ -250,11 +312,17 @@ impl PierApp {
     fn cd_up(&mut self, cx: &mut Context<Self>) {
         if let Some(parent) = self.file_tree_root.parent() {
             let parent = parent.to_path_buf();
-            // Drop expanded entries that are no longer reachable from the
-            // new root — keeps the set small and prevents stale state.
+            // Drop expanded entries / children cache that are no longer
+            // reachable — bounds memory and prevents stale state on long
+            // navigation sessions.
             self.file_tree_expanded
                 .retain(|p| p.starts_with(&parent));
-            self.file_tree_root = parent;
+            self.file_tree_children
+                .retain(|p, _| p.starts_with(&parent));
+            self.file_tree_root = parent.clone();
+            let (entries, err) = load_root(&parent);
+            self.file_tree_root_entries = entries;
+            self.file_tree_root_error = err;
             cx.notify();
         }
     }
@@ -514,6 +582,15 @@ impl PierApp {
     }
 }
 
+/// One-shot directory load for the file tree root. Called outside any
+/// `render` body so the IO never blocks the paint thread.
+fn load_root(path: &std::path::Path) -> (Vec<FsEntry>, Option<String>) {
+    match file_tree::list_dir(path) {
+        Ok(entries) => (entries, None),
+        Err(err) => (Vec::new(), Some(format!("{err}"))),
+    }
+}
+
 fn toolbar_icon_button(
     t: &crate::theme::Theme,
     id: &'static str,
@@ -574,10 +651,14 @@ impl PierApp {
         let files_query = self.files_filter.read(cx).value().to_string();
         let servers_query = self.servers_filter.read(cx).value().to_string();
 
+        // Cache-only — no IO touches the render thread.
         let file_tree = FileTree::new(
             self.file_tree_root.clone(),
+            self.file_tree_root_entries.clone(),
+            self.file_tree_children.clone(),
             self.file_tree_expanded.clone(),
             files_query,
+            self.file_tree_root_error.clone(),
             on_toggle_dir,
             on_open_file,
             on_go_up,
@@ -604,10 +685,7 @@ impl PierApp {
 
     fn render_right(&self, cx: &mut Context<Self>) -> impl IntoElement {
         let on_select_mode: ModeSelector = Rc::new(cx.listener(
-            |this, mode: &RightMode, _, cx| {
-                this.right_mode = *mode;
-                cx.notify();
-            },
+            |this, mode: &RightMode, _, cx| this.set_right_mode(*mode, cx),
         ));
         let on_sftp_navigate: crate::views::sftp_browser::NavigateHandler =
             Rc::new(cx.listener(|this, path: &PathBuf, _, cx| {

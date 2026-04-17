@@ -1,9 +1,9 @@
 //! Left panel — Files / Servers tab switcher.
 //!
 //! Mirrors `Pier/PierApp/Sources/Views/LeftPanel/LeftPanelView.swift`.
-//! Phase 1 ships the tab switcher + Servers list (ported from the previous
-//! full-page SshView). The Files tab is a placeholder until Phase 2 lands
-//! the lazy-load file tree.
+//! Files tab now hosts the real lazy-load tree from
+//! [`crate::views::file_tree::FileTree`]; Servers tab is a compact list of
+//! saved [`SshConfig`] entries.
 
 use std::rc::Rc;
 
@@ -15,10 +15,11 @@ use crate::app::layout::LeftTab;
 use crate::components::{text, Card, SectionLabel, StatusKind, StatusPill};
 use crate::theme::{
     radius::RADIUS_SM,
-    spacing::{SP_1, SP_1_5, SP_2, SP_3},
+    spacing::{SP_1, SP_1_5, SP_2},
     theme,
     typography::{SIZE_BODY, SIZE_CAPTION, SIZE_MONO_SMALL, SIZE_SMALL, WEIGHT_MEDIUM},
 };
+use crate::views::file_tree::FileTree;
 
 pub type TabSelector = Rc<dyn Fn(&LeftTab, &mut Window, &mut App) + 'static>;
 pub type ServerSelector = Rc<dyn Fn(&usize, &mut Window, &mut App) + 'static>;
@@ -27,6 +28,7 @@ pub type ServerSelector = Rc<dyn Fn(&usize, &mut Window, &mut App) + 'static>;
 pub struct LeftPanel {
     active_tab: LeftTab,
     connections: Vec<SshConfig>,
+    file_tree: FileTree,
     on_select_tab: TabSelector,
     on_select_server: ServerSelector,
 }
@@ -35,12 +37,14 @@ impl LeftPanel {
     pub fn new(
         active_tab: LeftTab,
         connections: Vec<SshConfig>,
+        file_tree: FileTree,
         on_select_tab: TabSelector,
         on_select_server: ServerSelector,
     ) -> Self {
         Self {
             active_tab,
             connections,
+            file_tree,
             on_select_tab,
             on_select_server,
         }
@@ -53,12 +57,13 @@ impl RenderOnce for LeftPanel {
         let LeftPanel {
             active_tab,
             connections,
+            file_tree,
             on_select_tab,
             on_select_server,
         } = self;
 
         let body = match active_tab {
-            LeftTab::Files => render_files_placeholder(t).into_any_element(),
+            LeftTab::Files => file_tree.into_any_element(),
             LeftTab::Servers => render_servers_list(t, &connections, on_select_server)
                 .into_any_element(),
         };
@@ -132,38 +137,6 @@ fn render_tab_bar(
         row = row.child(btn);
     }
     row.bg(t.color.bg_panel)
-}
-
-fn render_files_placeholder(t: &crate::theme::Theme) -> impl IntoElement {
-    div()
-        .p(SP_3)
-        .flex()
-        .flex_col()
-        .gap(SP_2)
-        .child(
-            div()
-                .flex()
-                .flex_row()
-                .items_center()
-                .gap(SP_2)
-                .child(SectionLabel::new("Local files"))
-                .child(StatusPill::new("placeholder", StatusKind::Warning)),
-        )
-        .child(
-            text::body(
-                "Local file tree (lazy load + search + drag-drop) lands in Phase 2. \
-                 Mirrors `Pier/PierApp/Sources/Views/FilePanel/LocalFileView.swift`.",
-            )
-            .secondary(),
-        )
-        .child(text::body("Tip: drop a file onto the terminal to insert its path.").secondary())
-        .child(div().h(px(1.0)).w_full().bg(t.color.border_subtle))
-        .child(
-            div()
-                .text_size(SIZE_SMALL)
-                .text_color(t.color.text_tertiary)
-                .child("Coming soon: search, filter, right-click, drag-and-drop"),
-        )
 }
 
 fn render_servers_list(

@@ -130,10 +130,9 @@ Reject a change if any of these are true:
 ## Build & run
 
 ```sh
-./run.sh                            # debug run, terminal-icon dock entry
+./run.sh                            # debug run (macOS opens bundled .app for the real dock icon)
 ./build.sh                          # release build
 ./scripts/bundle-macos.sh           # build → wrap in Pier-X.app for proper dock icon
-./scripts/run-bundled-macos.sh      # bundle + open the .app
 cargo build -p pier-ui-gpui
 cargo build -p pier-core
 ```

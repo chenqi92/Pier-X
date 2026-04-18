@@ -7,6 +7,7 @@
 #   ./scripts/bundle-macos.sh                  # debug build → target/debug/Pier-X.app
 #   BUILD_TYPE=Release ./scripts/bundle-macos.sh
 #   ./scripts/bundle-macos.sh --open           # build + bundle + open the .app
+#   ./scripts/bundle-macos.sh --open -- --flag # pass args through to the app
 #   BUILD_TYPE=Release MACOS_SIGN=1 MACOS_SIGN_IDENTITY="Developer ID Application: ..." ./scripts/bundle-macos.sh
 #   BUILD_TYPE=Release MACOS_NOTARIZE=1 MACOS_NOTARYTOOL_PROFILE=pier-x ./scripts/bundle-macos.sh
 
@@ -16,15 +17,26 @@ ROOT_DIR="$(cd "$(dirname "$0")/.." && pwd)"
 BUILD_TYPE="${BUILD_TYPE:-Debug}"
 DO_OPEN=0
 SKIP_BUILD=0
-for arg in "$@"; do
-    case "$arg" in
-        --open) DO_OPEN=1 ;;
-        --skip-build) SKIP_BUILD=1 ;;
+APP_ARGS=()
+while [ "$#" -gt 0 ]; do
+    case "$1" in
+        --open)
+            DO_OPEN=1
+            ;;
+        --skip-build)
+            SKIP_BUILD=1
+            ;;
+        --)
+            shift
+            APP_ARGS=("$@")
+            break
+            ;;
         *)
-            echo "ERROR: unknown argument: $arg" >&2
+            echo "ERROR: unknown argument: $1" >&2
             exit 1
             ;;
     esac
+    shift
 done
 
 need_cmd() {
@@ -262,5 +274,9 @@ fi
 
 if [ "$DO_OPEN" -eq 1 ]; then
     echo "==> Opening…"
-    open "$APP_DIR"
+    if [ "${#APP_ARGS[@]}" -gt 0 ]; then
+        open "$APP_DIR" --args "${APP_ARGS[@]}"
+    else
+        open "$APP_DIR"
+    fi
 fi

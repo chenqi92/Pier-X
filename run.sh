@@ -5,6 +5,10 @@
 #   ./run.sh                        # Debug/dev shell
 #   BUILD_TYPE=Release ./run.sh     # Run the GPUI shell in release mode
 #   BUILD_DIR=target-root ./run.sh  # Override Cargo target dir
+#
+# On macOS this launches the bundled `.app` so Dock / Cmd-Tab use the real
+# Pier-X icon. On Linux and Windows shell environments it runs `cargo run`
+# directly.
 
 set -euo pipefail
 
@@ -12,6 +16,7 @@ ROOT_DIR="$(cd "$(dirname "$0")" && pwd)"
 UI_CRATE="${PIER_UI_CRATE:-pier-ui-gpui}"
 BUILD_TYPE="${BUILD_TYPE:-Debug}"
 BUILD_DIR="${BUILD_DIR:-}"
+HOST_OS="$(uname -s)"
 
 need_cmd() {
     if ! command -v "$1" >/dev/null 2>&1; then
@@ -48,6 +53,11 @@ if [ -n "$BUILD_DIR" ]; then
             ;;
     esac
     echo "==> Using Cargo target dir: $CARGO_TARGET_DIR"
+fi
+
+if [ "$HOST_OS" = "Darwin" ]; then
+    echo "==> Launching Pier-X bundled app ($BUILD_TYPE)"
+    exec "$ROOT_DIR/scripts/bundle-macos.sh" --open -- "$@"
 fi
 
 CARGO_CMD=(cargo run -p "$UI_CRATE")

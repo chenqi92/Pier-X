@@ -75,6 +75,8 @@ The repo ships with one-shot scripts that launch the active shell for you.
 .\run.ps1
 ```
 
+On macOS, `./run.sh` now builds and opens the bundled `Pier-X.app` so Dock and Cmd-Tab use the real app icon. Linux and Windows shell launches still run the binary directly.
+
 Build only (no launch):
 
 ```bash
@@ -82,7 +84,12 @@ Build only (no launch):
 .\build.ps1       # Windows
 ```
 
-The scripts run the matching Cargo command. `run.*` launches `cargo run -p pier-ui-gpui`; `build.*` runs `cargo build -p pier-ui-gpui`.
+The build scripts still run the matching Cargo build command. Launch behavior is now host-aware:
+
+- `./run.sh` on macOS builds and opens the bundled `Pier-X.app`
+- `./run.sh` on Linux and Windows shell environments launches `cargo run -p pier-ui-gpui`
+- `.\run.ps1` on Windows launches `cargo run -p pier-ui-gpui`
+- `build.*` runs `cargo build -p pier-ui-gpui`
 
 The scripts honour these environment variables:
 

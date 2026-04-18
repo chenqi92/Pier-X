@@ -245,34 +245,84 @@ App:
       en: Click a .md file in the left file tree to preview it here.
       zh-CN: 在左侧文件树中点击一个 `.md` 文件，即可在这里预览。
   Database:
+    # Status pill states. Used by DatabaseView::status_pill_for().
     not_connected:
       en: not connected
       zh-CN: 未连接
-    service:
-      en: Service
-      zh-CN: 服务
-    connection_template:
-      en: Connection template
-      zh-CN: 连接模板
-    backend:
-      en: Backend
-      zh-CN: 后端
-    follow_up:
-      en: Wired to pier-core; UI for connect/query/browse will land in a follow-up slice.
-      zh-CN: 已接入 pier-core；连接、查询和浏览的 UI 会在后续切片里补上。
-    Profiles:
-      mysql:
-        en: Relational store accessed over TCP (typically through an SSH tunnel).
-        zh-CN: 通过 TCP 访问的关系型存储，通常会配合 SSH 隧道使用。
-      postgres:
-        en: Relational store, default port 5432.
-        zh-CN: 关系型存储，默认端口为 5432。
-      redis:
-        en: Key-value store with logical DB indices (default 0).
-        zh-CN: 带逻辑 DB 索引的键值存储，默认索引为 0。
-      sqlite:
-        en: Embedded SQLite — no daemon, just a file path.
-        zh-CN: 内嵌式 SQLite，无需守护进程，只需要一个文件路径。
+    connecting:
+      en: connecting
+      zh-CN: 连接中
+    connected:
+      en: connected
+      zh-CN: 已连接
+    error:
+      en: error
+      zh-CN: 错误
+    # Action buttons in the header / sidebar / main pane.
+    connect:
+      en: Connect
+      zh-CN: 连接
+    disconnect:
+      en: Disconnect
+      zh-CN: 断开
+    run:
+      en: Run
+      zh-CN: 执行
+    running:
+      en: Running…
+      zh-CN: 执行中…
+    add:
+      en: Add
+      zh-CN: 新建
+    edit:
+      en: Edit
+      zh-CN: 编辑
+    delete:
+      en: Delete
+      zh-CN: 删除
+    refresh:
+      en: Refresh
+      zh-CN: 刷新
+    # Section labels.
+    databases_section:
+      en: Databases
+      zh-CN: 数据库
+    tables_section:
+      en: Tables
+      zh-CN: 表
+    sql_section:
+      en: SQL
+      zh-CN: SQL
+    # Empty-state hints.
+    no_saved_connections:
+      en: no saved connections
+      zh-CN: 无已保存连接
+    no_databases_listed:
+      en: (no databases listed yet — click Refresh)
+      zh-CN: （暂无数据库列表 — 点击刷新）
+    connect_first_hint:
+      en: (connect first to see databases)
+      zh-CN: （请先连接以查看数据库）
+    no_session_hint:
+      en: (no session — pick a connection)
+      zh-CN: （未创建会话 — 请选择一个连接）
+    running_query:
+      en: Running query…
+      zh-CN: 正在执行查询…
+    no_results_yet:
+      en: (no results yet — run a query)
+      zh-CN: （暂无结果 — 请先执行查询）
+    error_title:
+      en: Error
+      zh-CN: 错误
+    # Phase-B / Phase-C placeholders for tabs that haven't shipped
+    # their own UI yet.
+    phase_b_redis:
+      en: Redis browser ships in Phase B — this tab is a placeholder.
+      zh-CN: Redis 浏览器将在 Phase B 上线 — 此页面为占位符。
+    phase_c_sqlite:
+      en: SQLite browser ships in Phase C — this tab is a placeholder.
+      zh-CN: SQLite 浏览器将在 Phase C 上线 — 此页面为占位符。
   FileTree:
     filter:
       en: Filter files…

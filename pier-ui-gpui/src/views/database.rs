@@ -194,9 +194,11 @@ fn body(
 fn status_pill_for(status: DbStatus) -> StatusPill {
     match status {
         DbStatus::Idle => StatusPill::new(t!("App.Database.not_connected"), StatusKind::Warning),
-        DbStatus::Connecting => StatusPill::new("connecting", StatusKind::Info),
-        DbStatus::Connected => StatusPill::new("connected", StatusKind::Success),
-        DbStatus::Failed => StatusPill::new("error", StatusKind::Error),
+        DbStatus::Connecting => {
+            StatusPill::new(t!("App.Database.connecting"), StatusKind::Info)
+        }
+        DbStatus::Connected => StatusPill::new(t!("App.Database.connected"), StatusKind::Success),
+        DbStatus::Failed => StatusPill::new(t!("App.Database.error"), StatusKind::Error),
     }
 }
 
@@ -243,10 +245,15 @@ fn header_bar(
     // Connect / Disconnect button.
     let connect_app = app.clone();
     let can_connect = !connections.is_empty() && !matches!(status, DbStatus::Connecting);
+    let connect_label: SharedString = if client_alive {
+        t!("App.Database.disconnect").into()
+    } else {
+        t!("App.Database.connect").into()
+    };
     row = row.child(
         Button::primary(
             ElementId::Name(format!("db-connect-{}", engine.as_str()).into()),
-            if client_alive { "Disconnect" } else { "Connect" },
+            connect_label,
         )
         .on_click(move |_, _w, cx| {
             if !can_connect {
@@ -286,7 +293,7 @@ fn header_bar(
     // Add / Edit / Delete.
     let add_app = app.clone();
     row = row.child(
-        Button::ghost("db-add", "Add")
+        Button::ghost("db-add", SharedString::from(t!("App.Database.add").to_string()))
             .on_click(move |_, window, cx| {
                 if let Some(app) = add_app.upgrade() {
                     let weak = app.downgrade();
@@ -300,7 +307,8 @@ fn header_bar(
         let original = connections.iter().find(|(i, _)| *i == idx).map(|(_, c)| c.clone());
         if let Some(original) = original {
             row = row.child(
-                Button::ghost("db-edit", "Edit").on_click(move |_, window, cx| {
+                Button::ghost("db-edit", SharedString::from(t!("App.Database.edit").to_string()))
+                    .on_click(move |_, window, cx| {
                     if let Some(app) = edit_app.upgrade() {
                         let weak = app.downgrade();
                         database_form::open(
@@ -320,7 +328,8 @@ fn header_bar(
 
         let del_app = app.clone();
         row = row.child(
-            Button::ghost("db-del", "Delete").on_click(move |_, _w, cx| {
+            Button::ghost("db-del", SharedString::from(t!("App.Database.delete").to_string()))
+                .on_click(move |_, _w, cx| {
                 if let Some(app) = del_app.upgrade() {
                     app.update(cx, |app, cx| {
                         app.delete_db_connection(idx);
@@ -439,7 +448,11 @@ fn sidebar(
     let refresh_app = app.clone();
     let refresh_button = if client_alive {
         Some(
-            Button::ghost("db-refresh-dbs", "Refresh").on_click(move |_, _w, cx| {
+            Button::ghost(
+                "db-refresh-dbs",
+                SharedString::from(t!("App.Database.refresh").to_string()),
+            )
+            .on_click(move |_, _w, cx| {
                 if let Some(app) = refresh_app.upgrade() {
                     app.update(cx, |app, cx| {
                         app.schedule_db_list_databases(kind, cx);
@@ -613,7 +626,12 @@ fn main_pane(
     let run_app = app.clone();
     let run_input = query_input.clone();
     let can_run = client_alive && !in_flight;
-    let run_button = Button::primary("db-run", if in_flight { "Running…" } else { "Run" })
+    let run_label: SharedString = if in_flight {
+        t!("App.Database.running").into()
+    } else {
+        t!("App.Database.run").into()
+    };
+    let run_button = Button::primary("db-run", run_label)
         .on_click(move |_, _w, cx| {
             if !can_run {
                 return;

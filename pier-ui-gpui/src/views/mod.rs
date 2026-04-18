@@ -9,5 +9,6 @@ pub mod new_tab_chooser;
 pub mod right_panel;
 pub mod settings_dialog;
 pub mod sftp_browser;
+pub mod sftp_dialogs;
 pub mod terminal;
 pub mod welcome;

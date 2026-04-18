@@ -4,6 +4,7 @@
 //! `AppStorage` preferences. The active GPUI shell loads these values at
 //! startup and writes them back whenever the user changes settings.
 
+use std::collections::BTreeMap;
 use std::fs;
 use std::io;
 use std::path::{Path, PathBuf};
@@ -13,14 +14,16 @@ use serde::{Deserialize, Serialize};
 use crate::paths;
 
 /// Current on-disk schema version for the settings file.
-pub const CURRENT_SETTINGS_SCHEMA_VERSION: u32 = 1;
+pub const CURRENT_SETTINGS_SCHEMA_VERSION: u32 = 2;
 
 /// UI appearance preference.
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, Default)]
 #[serde(rename_all = "snake_case")]
 pub enum AppearanceMode {
-    /// Use Pier-X's dark theme.
+    /// Follow the operating system appearance.
     #[default]
+    System,
+    /// Use Pier-X's dark theme.
     Dark,
     /// Use Pier-X's light theme.
     Light,
@@ -64,6 +67,9 @@ pub struct AppSettings {
     /// Theme preference for the shell chrome.
     #[serde(default)]
     pub appearance_mode: AppearanceMode,
+    /// UI locale preference. `"system"` follows the OS locale.
+    #[serde(default = "default_ui_locale")]
+    pub ui_locale: String,
     /// Terminal font family name.
     #[serde(default = "default_terminal_font_family")]
     pub terminal_font_family: String,
@@ -85,12 +91,24 @@ pub struct AppSettings {
     /// Whether terminal ligatures should stay enabled.
     #[serde(default = "default_terminal_font_ligatures")]
     pub terminal_font_ligatures: bool,
+    /// User-assigned keystrokes, keyed by a UI-layer action ID (e.g.
+    /// `"new_tab"`, `"toggle_left_panel"`). An empty map falls back to
+    /// the UI layer's built-in defaults. The value format is whatever
+    /// the UI layer's `KeyBinding` parser accepts (GPUI 0.2 uses
+    /// `"cmd-shift-l"` style).
+    ///
+    /// We deliberately keep the action ID as a plain `String` here so
+    /// pier-core stays UI-agnostic — it doesn't know what a
+    /// `ToggleTheme` action is.
+    #[serde(default)]
+    pub keybindings: BTreeMap<String, String>,
 }
 
 impl Default for AppSettings {
     fn default() -> Self {
         Self {
-            appearance_mode: AppearanceMode::Dark,
+            appearance_mode: AppearanceMode::System,
+            ui_locale: default_ui_locale(),
             terminal_font_family: default_terminal_font_family(),
             terminal_font_size: default_terminal_font_size(),
             terminal_cursor_style: TerminalCursorStyle::Block,
@@ -98,6 +116,7 @@ impl Default for AppSettings {
             terminal_theme_preset: TerminalThemePreset::DefaultDark,
             terminal_opacity_pct: default_terminal_opacity_pct(),
             terminal_font_ligatures: default_terminal_font_ligatures(),
+            keybindings: BTreeMap::new(),
         }
     }
 }
@@ -201,6 +220,10 @@ fn default_terminal_font_family() -> String {
     "JetBrains Mono".to_string()
 }
 
+fn default_ui_locale() -> String {
+    "zh-CN".to_string()
+}
+
 fn default_terminal_font_size() -> u16 {
     13
 }
@@ -247,7 +270,8 @@ mod tests {
     fn defaults_match_current_gpui_shell() {
         let settings = AppSettings::default();
 
-        assert_eq!(settings.appearance_mode, AppearanceMode::Dark);
+        assert_eq!(settings.appearance_mode, AppearanceMode::System);
+        assert_eq!(settings.ui_locale, "zh-CN");
         assert_eq!(settings.terminal_font_family, "JetBrains Mono");
         assert_eq!(settings.terminal_font_size, 13);
         assert_eq!(settings.terminal_cursor_style, TerminalCursorStyle::Block);
@@ -267,6 +291,7 @@ mod tests {
             version: CURRENT_SETTINGS_SCHEMA_VERSION,
             settings: AppSettings {
                 appearance_mode: AppearanceMode::Light,
+                ui_locale: "zh-CN".into(),
                 terminal_font_family: "Cascadia Code".into(),
                 terminal_font_size: 15,
                 terminal_cursor_style: TerminalCursorStyle::Underline,
@@ -274,6 +299,10 @@ mod tests {
                 terminal_theme_preset: TerminalThemePreset::Dracula,
                 terminal_opacity_pct: 85,
                 terminal_font_ligatures: true,
+                keybindings: BTreeMap::from([
+                    ("new_tab".to_string(), "cmd-n".to_string()),
+                    ("toggle_theme".to_string(), "cmd-shift-l".to_string()),
+                ]),
             },
         };
 

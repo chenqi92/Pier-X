@@ -10,14 +10,10 @@ mod views;
 
 rust_i18n::i18n!("locales", fallback = "en");
 
-use gpui::{
-    px, size, App, AppContext, Application, Bounds, KeyBinding, WindowBounds, WindowOptions,
-};
+use gpui::{px, size, App, AppContext, Application, Bounds, WindowBounds, WindowOptions};
 use gpui_component::Root;
 
-use crate::app::{
-    CloseActiveTab, NewTab, OpenSettings, PierApp, ToggleLeftPanel, ToggleRightPanel, ToggleTheme,
-};
+use crate::app::{keybindings, PierApp, ToggleTheme};
 
 const INTER_VARIABLE: &[u8] = include_bytes!("../assets/fonts/InterVariable.ttf");
 const JETBRAINS_MONO: &[u8] = include_bytes!("../assets/fonts/JetBrainsMono-Regular.ttf");
@@ -47,22 +43,20 @@ fn main() {
         theme::init(cx);
         ui_kit::sync_theme(cx);
 
-        // Global theme toggle (no key context — fires from anywhere).
-        cx.bind_keys([KeyBinding::new("cmd-shift-l", ToggleTheme, None)]);
+        // Bind shortcuts from persisted settings — the Shortcuts tab
+        // in the settings dialog calls `keybindings::apply_all` again
+        // after saving a new assignment, so rebinds land immediately.
+        let initial_settings = theme::current_settings(cx);
+        keybindings::apply_all(cx, &initial_settings);
+
+        // `on_action` registration is separate from the key binding
+        // itself — the binding dispatches the action, these handlers
+        // react to it. Shell-scoped actions (NewTab etc.) are wired
+        // on `PierApp::render` via `cx.listener`.
         cx.on_action::<ToggleTheme>(|_, cx| {
             theme::toggle(cx);
             ui_kit::sync_theme(cx);
         });
-
-        // Shell-scoped shortcuts. The matching `on_action` handlers live on
-        // `PierApp::render` so they have entity-state access via cx.listener.
-        cx.bind_keys([
-            KeyBinding::new("cmd-\\", ToggleLeftPanel, Some("PierApp")),
-            KeyBinding::new("cmd-shift-\\", ToggleRightPanel, Some("PierApp")),
-            KeyBinding::new("cmd-,", OpenSettings, Some("PierApp")),
-            KeyBinding::new("cmd-t", NewTab, Some("PierApp")),
-            KeyBinding::new("cmd-shift-w", CloseActiveTab, Some("PierApp")),
-        ]);
 
         let bounds = Bounds::centered(None, size(px(1100.0), px(760.0)), cx);
         cx.open_window(

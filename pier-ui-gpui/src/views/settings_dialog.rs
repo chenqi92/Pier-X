@@ -1,16 +1,20 @@
 use gpui::{
-    div, prelude::*, px, App, ClickEvent, Context, InteractiveElement, IntoElement, SharedString,
-    StatefulInteractiveElement, WeakEntity, Window,
+    div, prelude::*, px, App, ClickEvent, Context, FocusHandle, InteractiveElement, IntoElement,
+    KeyDownEvent, SharedString, StatefulInteractiveElement, WeakEntity, Window,
 };
 use pier_core::settings::{AppSettings, AppearanceMode, TerminalCursorStyle, TerminalThemePreset};
 use rust_i18n::t;
 
 use gpui_component::{scroll::ScrollableElement, WindowExt as _};
 
+use crate::app::keybindings::{
+    format_keystroke, is_modifier_only, resolved_keystroke, ActionId,
+};
+use crate::i18n::{self, LOCALE_ENGLISH, LOCALE_PREFERENCE_SYSTEM, LOCALE_ZH_CN};
 use crate::theme::{
     available_terminal_font_families,
-    radius::RADIUS_SM,
-    spacing::{SP_1, SP_1_5, SP_2, SP_3, SP_4},
+    radius::{RADIUS_MD, RADIUS_SM},
+    spacing::{SP_1, SP_1_5, SP_2, SP_3, SP_4, SP_5},
     terminal::{available_terminal_palettes, terminal_bg_color, terminal_hex_color},
     terminal_cursor_blink, terminal_cursor_style, terminal_font_for_family,
     terminal_font_ligatures, terminal_font_size, terminal_opacity, theme,
@@ -24,6 +28,11 @@ enum SettingsSection {
     Terminal,
     Shortcuts,
 }
+
+const SETTINGS_DIALOG_W: f32 = 920.0;
+const SETTINGS_DIALOG_H: f32 = 620.0;
+const SETTINGS_DIALOG_OUTER_H: f32 = 708.0;
+const SETTINGS_DIALOG_MIN_TOP: f32 = 24.0;
 
 impl SettingsSection {
     const ALL: [Self; 3] = [Self::General, Self::Terminal, Self::Shortcuts];
@@ -56,6 +65,14 @@ impl SettingsSection {
 pub struct SettingsDialog {
     selected_section: SettingsSection,
     entity: WeakEntity<SettingsDialog>,
+    /// Which shortcut is waiting for a captured keystroke, if any.
+    capturing: Option<ActionId>,
+    /// Focus target for the capture div. Focused when `capturing`
+    /// goes `Some` so `on_key_down` fires.
+    capture_focus: FocusHandle,
+    /// Last capture error message (e.g. "no modifier"). Cleared
+    /// when capture exits or a new capture starts.
+    capture_error: Option<SharedString>,
 }
 
 impl SettingsDialog {
@@ -63,14 +80,96 @@ impl SettingsDialog {
         Self {
             selected_section: SettingsSection::General,
             entity: cx.entity().downgrade(),
+            capturing: None,
+            capture_focus: cx.focus_handle(),
+            capture_error: None,
         }
     }
 
     fn select_section(&mut self, section: SettingsSection, cx: &mut Context<Self>) {
         if self.selected_section != section {
             self.selected_section = section;
+            self.capturing = None;
+            self.capture_error = None;
             cx.notify();
         }
+    }
+
+    fn start_capture(&mut self, action: ActionId, window: &mut Window, cx: &mut Context<Self>) {
+        self.capturing = Some(action);
+        self.capture_error = None;
+        self.capture_focus.focus(window);
+        cx.notify();
+    }
+
+    fn cancel_capture(&mut self, cx: &mut Context<Self>) {
+        if self.capturing.is_none() {
+            return;
+        }
+        self.capturing = None;
+        self.capture_error = None;
+        cx.notify();
+    }
+
+    fn reset_to_default(&mut self, action: ActionId, cx: &mut Context<Self>) {
+        crate::theme::update_settings(cx, |settings| {
+            settings.keybindings.remove(action.storage_id());
+        });
+        self.capturing = None;
+        self.capture_error = None;
+        cx.notify();
+    }
+
+    fn handle_capture_keydown(
+        &mut self,
+        event: &KeyDownEvent,
+        _window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let Some(action) = self.capturing else {
+            return;
+        };
+
+        let keystroke = &event.keystroke;
+
+        // Still in the middle of pressing the combo.
+        if is_modifier_only(keystroke) {
+            return;
+        }
+
+        // Escape with no modifiers cancels capture.
+        if keystroke.key == "escape"
+            && !keystroke.modifiers.control
+            && !keystroke.modifiers.alt
+            && !keystroke.modifiers.shift
+            && !keystroke.modifiers.platform
+            && !keystroke.modifiers.function
+        {
+            self.cancel_capture(cx);
+            return;
+        }
+
+        // Require at least one modifier so a bare letter press can't
+        // steal basic typing.
+        if !keystroke.modifiers.control
+            && !keystroke.modifiers.alt
+            && !keystroke.modifiers.platform
+            && !keystroke.modifiers.function
+        {
+            self.capture_error =
+                Some(t!("App.Settings.Shortcuts.capture_need_modifier").into());
+            cx.notify();
+            return;
+        }
+
+        let formatted = format_keystroke(keystroke);
+        let storage_id = action.storage_id().to_string();
+        self.capturing = None;
+        self.capture_error = None;
+        crate::theme::update_settings(cx, |settings| {
+            settings.keybindings.insert(storage_id, formatted);
+        });
+        cx.notify();
     }
 }
 
@@ -79,8 +178,8 @@ impl Render for SettingsDialog {
         let t = theme(cx).clone();
 
         div()
-            .w(px(760.0))
-            .h(px(500.0))
+            .w(px(SETTINGS_DIALOG_W))
+            .h(px(SETTINGS_DIALOG_H))
             .flex()
             .flex_row()
             .bg(t.color.bg_surface)
@@ -98,25 +197,41 @@ impl Render for SettingsDialog {
 
 impl SettingsDialog {
     fn render_sidebar(&self, t: &crate::theme::Theme, cx: &mut Context<Self>) -> impl IntoElement {
+        let locale_label =
+            localized_locale_label(&i18n::resolve_locale_preference(&t.settings.ui_locale));
+        let theme_label = match t.settings.appearance_mode {
+            AppearanceMode::System => t!("App.Settings.General.appearance_system").to_string(),
+            AppearanceMode::Dark => t!("App.Settings.General.dark").to_string(),
+            AppearanceMode::Light => t!("App.Settings.General.light").to_string(),
+        };
+
         let mut col = div()
-            .w(px(208.0))
+            .w(px(236.0))
             .h_full()
-            .px(SP_2)
-            .py(SP_3)
+            .px(SP_3)
+            .py(SP_4)
             .flex()
             .flex_col()
-            .gap(SP_1)
+            .gap(SP_2)
             .bg(t.color.bg_panel)
             .border_r_1()
             .border_color(t.color.border_subtle)
             .child(
                 div()
                     .px(SP_2)
-                    .pb(SP_2)
+                    .pb(SP_3)
                     .border_b_1()
                     .border_color(t.color.border_subtle)
                     .child(
                         div()
+                            .text_size(SIZE_CAPTION)
+                            .font_weight(WEIGHT_MEDIUM)
+                            .text_color(t.color.text_tertiary)
+                            .child(SharedString::from("Pier-X")),
+                    )
+                    .child(
+                        div()
+                            .pt(SP_1)
                             .text_size(SIZE_H2)
                             .font_weight(WEIGHT_EMPHASIS)
                             .text_color(t.color.text_primary)
@@ -129,6 +244,16 @@ impl SettingsDialog {
                             .text_color(t.color.text_tertiary)
                             .child(SharedString::from(t!("App.Settings.sidebar_note").to_string())),
                     ),
+            )
+            .child(
+                div()
+                    .px(SP_2)
+                    .flex()
+                    .flex_row()
+                    .flex_wrap()
+                    .gap(SP_1_5)
+                    .child(summary_badge(t, SharedString::from(theme_label)))
+                    .child(summary_badge(t, SharedString::from(locale_label))),
             );
 
         for section in SettingsSection::ALL {
@@ -140,21 +265,27 @@ impl SettingsDialog {
             col = col.child(
                 div()
                     .id(section.id())
-                    .px(SP_2)
+                    .px(SP_3)
                     .py(SP_2)
-                    .rounded(RADIUS_SM)
+                    .rounded(RADIUS_MD)
+                    .border_1()
+                    .border_color(if is_active {
+                        t.color.accent
+                    } else {
+                        t.color.border_subtle
+                    })
                     .cursor_pointer()
                     .bg(if is_active {
                         t.color.accent_subtle
                     } else {
-                        t.color.bg_panel
+                        t.color.bg_surface
                     })
                     .text_color(if is_active {
                         t.color.accent
-                    } else {
+                        } else {
                         t.color.text_secondary
                     })
-                    .hover(|style| style.bg(t.color.bg_hover))
+                    .hover(|style| style.bg(t.color.bg_hover).border_color(t.color.border_default))
                     .on_click(on_click)
                     .child(
                         div()
@@ -190,6 +321,8 @@ impl SettingsDialog {
     fn render_general(&self, cx: &mut Context<Self>) -> impl IntoElement {
         let t = theme(cx).clone();
         let appearance = t.settings.appearance_mode;
+        let locale_pref = i18n::normalize_locale_preference(&t.settings.ui_locale);
+        let active_locale = localized_locale_label(&i18n::resolve_locale_preference(&locale_pref));
         let mono_font = t.settings.terminal_font_family.clone();
         let dialog = self.entity.clone();
 
@@ -200,10 +333,91 @@ impl SettingsDialog {
         )
         .child(setting_group(
             &t,
-            t!("App.Settings.General.appearance"),
+            t!("App.Settings.General.language"),
             vec![
+                settings_note(
+                    &t,
+                    SharedString::from(
+                        t!(
+                            "App.Settings.General.language_description",
+                            language = active_locale.as_str()
+                        )
+                        .to_string(),
+                    ),
+                )
+                .into_any_element(),
+                choice_wrap(vec![
+                    choice_chip(
+                        &t,
+                        "locale-system",
+                        t!("App.Settings.General.language_system"),
+                        locale_pref == LOCALE_PREFERENCE_SYSTEM,
+                        Box::new({
+                            let dialog = dialog.clone();
+                            move |_, _, app| {
+                                apply_dialog_settings(&dialog, app, |settings| {
+                                    settings.ui_locale = LOCALE_PREFERENCE_SYSTEM.to_string();
+                                });
+                            }
+                        }),
+                    )
+                    .into_any_element(),
+                    choice_chip(
+                        &t,
+                        "locale-en",
+                        t!("App.Settings.General.language_english"),
+                        locale_pref == LOCALE_ENGLISH,
+                        Box::new({
+                            let dialog = dialog.clone();
+                            move |_, _, app| {
+                                apply_dialog_settings(&dialog, app, |settings| {
+                                    settings.ui_locale = LOCALE_ENGLISH.to_string();
+                                });
+                            }
+                        }),
+                    )
+                    .into_any_element(),
+                    choice_chip(
+                        &t,
+                        "locale-zh-cn",
+                        t!("App.Settings.General.language_simplified_chinese"),
+                        locale_pref == LOCALE_ZH_CN,
+                        Box::new({
+                            let dialog = dialog.clone();
+                            move |_, _, app| {
+                                apply_dialog_settings(&dialog, app, |settings| {
+                                    settings.ui_locale = LOCALE_ZH_CN.to_string();
+                                });
+                            }
+                        }),
+                    )
+                    .into_any_element(),
+                ])
+                .into_any_element(),
+            ],
+        ))
+        .child(setting_group(
+            &t,
+            t!("App.Settings.General.appearance"),
+            vec![choice_wrap(vec![
                 choice_chip(
                     &t,
+                    "appearance-system",
+                    t!("App.Settings.General.appearance_system"),
+                    appearance == AppearanceMode::System,
+                    Box::new({
+                        let dialog = dialog.clone();
+                        move |_, _, app| {
+                            apply_dialog_settings(&dialog, app, |settings| {
+                                settings.appearance_mode = AppearanceMode::System;
+                            });
+                        }
+                    }),
+                )
+                .into_any_element(),
+                choice_chip(
+                    &t,
+                    "appearance-dark",
                     t!("App.Settings.General.dark"),
                     appearance == AppearanceMode::Dark,
                     Box::new({
@@ -218,6 +432,7 @@ impl SettingsDialog {
                 .into_any_element(),
                 choice_chip(
                     &t,
+                    "appearance-light",
                     t!("App.Settings.General.light"),
                     appearance == AppearanceMode::Light,
                     Box::new({
@@ -230,32 +445,45 @@ impl SettingsDialog {
                     }),
                 )
                 .into_any_element(),
-            ],
+            ])
+            .into_any_element()],
         ))
         .child(setting_group(
             &t,
             t!("App.Settings.General.terminal_font_family"),
-            available_terminal_font_families()
-                .iter()
-                .map(|family| {
-                    let family_name = (*family).to_string();
-                    choice_chip(
-                        &t,
-                        *family,
-                        mono_font == family_name,
-                        Box::new({
-                            let dialog = dialog.clone();
-                            move |_, _, app| {
-                                let family_name = family_name.clone();
-                                apply_dialog_settings(&dialog, app, move |settings| {
-                                    settings.terminal_font_family = family_name.clone();
-                                });
-                            }
-                        }),
-                    )
-                    .into_any_element()
-                })
-                .collect(),
+            vec![
+                settings_note(&t, t!("App.Settings.General.terminal_font_family_description"))
+                    .into_any_element(),
+                choice_wrap(
+                    available_terminal_font_families()
+                        .iter()
+                        .map(|family| {
+                            let family_name = (*family).to_string();
+                            let id = format!(
+                                "font-family-{}",
+                                family_name.to_ascii_lowercase().replace(' ', "-")
+                            );
+                            choice_chip(
+                                &t,
+                                id,
+                                *family,
+                                mono_font == family_name,
+                                Box::new({
+                                    let dialog = dialog.clone();
+                                    move |_, _, app| {
+                                        let family_name = family_name.clone();
+                                        apply_dialog_settings(&dialog, app, move |settings| {
+                                            settings.terminal_font_family = family_name.clone();
+                                        });
+                                    }
+                                }),
+                            )
+                            .into_any_element()
+                        })
+                        .collect(),
+                )
+                .into_any_element(),
+            ],
         ))
     }
 
@@ -307,7 +535,7 @@ impl SettingsDialog {
         ))
         .child(setting_group(
             &t,
-            t!("App.Settings.Terminal.font_size"),
+            t!("App.Settings.Terminal.typography"),
             vec![
                 stepper_row(
                     &t,
@@ -335,13 +563,19 @@ impl SettingsDialog {
                 )
                 .into_any_element(),
                 div()
-                    .mt(SP_2)
-                    .px(SP_2)
-                    .py(SP_2)
+                    .p(SP_2)
                     .rounded(RADIUS_SM)
                     .bg(preview_bg)
                     .border_1()
                     .border_color(t.color.border_subtle)
+                    .child(
+                        div()
+                            .pb(SP_2)
+                            .text_size(SIZE_CAPTION)
+                            .font_weight(WEIGHT_MEDIUM)
+                            .text_color(t.color.text_secondary)
+                            .child(SharedString::from(t!("App.Settings.Terminal.preview").to_string())),
+                    )
                     .child(
                         div()
                             .font(preview_font)
@@ -355,7 +589,7 @@ impl SettingsDialog {
         ))
         .child(setting_group(
             &t,
-            t!("App.Settings.General.appearance"),
+            t!("App.Settings.Terminal.rendering"),
             vec![
                 stepper_row(
                     &t,
@@ -403,47 +637,53 @@ impl SettingsDialog {
             &t,
             t!("App.Settings.Terminal.cursor"),
             vec![
-                choice_chip(
-                    &t,
-                    t!("App.Settings.Terminal.cursor_block"),
-                    cursor_style == TerminalCursorStyle::Block,
-                    Box::new({
-                        let dialog = dialog.clone();
-                        move |_, _, app| {
-                            apply_dialog_settings(&dialog, app, |settings| {
-                                settings.terminal_cursor_style = TerminalCursorStyle::Block;
-                            });
-                        }
-                    }),
-                )
-                .into_any_element(),
-                choice_chip(
-                    &t,
-                    t!("App.Settings.Terminal.cursor_underline"),
-                    cursor_style == TerminalCursorStyle::Underline,
-                    Box::new({
-                        let dialog = dialog.clone();
-                        move |_, _, app| {
-                            apply_dialog_settings(&dialog, app, |settings| {
-                                settings.terminal_cursor_style = TerminalCursorStyle::Underline;
-                            });
-                        }
-                    }),
-                )
-                .into_any_element(),
-                choice_chip(
-                    &t,
-                    t!("App.Settings.Terminal.cursor_bar"),
-                    cursor_style == TerminalCursorStyle::Bar,
-                    Box::new({
-                        let dialog = dialog.clone();
-                        move |_, _, app| {
-                            apply_dialog_settings(&dialog, app, |settings| {
-                                settings.terminal_cursor_style = TerminalCursorStyle::Bar;
-                            });
-                        }
-                    }),
-                )
+                choice_wrap(vec![
+                    choice_chip(
+                        &t,
+                        "cursor-block",
+                        t!("App.Settings.Terminal.cursor_block"),
+                        cursor_style == TerminalCursorStyle::Block,
+                        Box::new({
+                            let dialog = dialog.clone();
+                            move |_, _, app| {
+                                apply_dialog_settings(&dialog, app, |settings| {
+                                    settings.terminal_cursor_style = TerminalCursorStyle::Block;
+                                });
+                            }
+                        }),
+                    )
+                    .into_any_element(),
+                    choice_chip(
+                        &t,
+                        "cursor-underline",
+                        t!("App.Settings.Terminal.cursor_underline"),
+                        cursor_style == TerminalCursorStyle::Underline,
+                        Box::new({
+                            let dialog = dialog.clone();
+                            move |_, _, app| {
+                                apply_dialog_settings(&dialog, app, |settings| {
+                                    settings.terminal_cursor_style = TerminalCursorStyle::Underline;
+                                });
+                            }
+                        }),
+                    )
+                    .into_any_element(),
+                    choice_chip(
+                        &t,
+                        "cursor-bar",
+                        t!("App.Settings.Terminal.cursor_bar"),
+                        cursor_style == TerminalCursorStyle::Bar,
+                        Box::new({
+                            let dialog = dialog.clone();
+                            move |_, _, app| {
+                                apply_dialog_settings(&dialog, app, |settings| {
+                                    settings.terminal_cursor_style = TerminalCursorStyle::Bar;
+                                });
+                            }
+                        }),
+                    )
+                    .into_any_element(),
+                ])
                 .into_any_element(),
                 toggle_row(
                     &t,
@@ -466,21 +706,36 @@ impl SettingsDialog {
 
     fn render_shortcuts(&self, cx: &mut Context<Self>) -> impl IntoElement {
         let t = theme(cx).clone();
+        let settings = t.settings.clone();
+        let capturing = self.capturing;
+        let capture_error = self.capture_error.clone();
+        let focus = self.capture_focus.clone();
 
-        let shortcuts = [
-            (t!("App.Settings.Shortcuts.new_tab"), "Cmd/Ctrl+T"),
-            (t!("App.Settings.Shortcuts.close_active_tab"), "Cmd/Ctrl+Shift+W"),
-            (t!("App.Settings.Shortcuts.open_settings"), "Cmd/Ctrl+,"),
-            (t!("App.Settings.Shortcuts.toggle_left_panel"), "Cmd/Ctrl+\\"),
-            (t!("App.Settings.Shortcuts.toggle_right_panel"), "Cmd/Ctrl+Shift+\\"),
-            (t!("App.Settings.Shortcuts.toggle_theme"), "Cmd/Ctrl+Shift+L"),
-            (t!("App.Settings.Shortcuts.copy_selection"), "Cmd/Ctrl+C"),
-            (t!("App.Settings.Shortcuts.paste"), "Cmd/Ctrl+V"),
-        ];
-
-        let mut rows = Vec::with_capacity(shortcuts.len());
-        for (label, shortcut) in shortcuts {
-            rows.push(shortcut_row(&t, label, shortcut).into_any_element());
+        let mut rows: Vec<gpui::AnyElement> = Vec::with_capacity(ActionId::ALL.len());
+        for action in ActionId::ALL {
+            let stroke = resolved_keystroke(&settings, action);
+            let is_capturing = capturing == Some(action);
+            let is_overridden = settings
+                .keybindings
+                .contains_key(action.storage_id());
+            let row_error = if is_capturing {
+                capture_error.clone()
+            } else {
+                None
+            };
+            rows.push(
+                shortcut_row_interactive(
+                    &t,
+                    action,
+                    stroke.into(),
+                    is_capturing,
+                    is_overridden,
+                    row_error,
+                    focus.clone(),
+                    cx,
+                )
+                .into_any_element(),
+            );
         }
 
         section_shell(
@@ -495,15 +750,21 @@ impl SettingsDialog {
 pub fn open(window: &mut Window, cx: &mut App) {
     log::info!("dialog: opening settings dialog");
     let view = cx.new(SettingsDialog::new);
-    window.open_dialog(cx, move |dialog, _w, _app| {
+    window.open_dialog(cx, move |dialog, window, _app| {
         dialog
             .title(SharedString::from(t!("App.Settings.title").to_string()))
-            .w(px(760.0))
+            .w(px(SETTINGS_DIALOG_W))
+            .margin_top(settings_dialog_margin_top(window))
             .close_button(true)
             .overlay_closable(true)
             .keyboard(true)
             .child(view.clone())
     });
+}
+
+fn settings_dialog_margin_top(window: &Window) -> gpui::Pixels {
+    let viewport_height = f32::from(window.viewport_size().height);
+    px(((viewport_height - SETTINGS_DIALOG_OUTER_H) / 2.0).max(SETTINGS_DIALOG_MIN_TOP))
 }
 
 fn apply_dialog_settings(
@@ -525,13 +786,16 @@ fn section_shell(
     div()
         .h_full()
         .overflow_y_scrollbar()
-        .px(SP_4)
-        .py(SP_4)
+        .px(SP_5)
+        .py(SP_5)
         .flex()
         .flex_col()
         .gap(SP_4)
         .child(
             div()
+                .pb(SP_2)
+                .border_b_1()
+                .border_color(t.color.border_subtle)
                 .child(
                     div()
                         .text_size(SIZE_H2)
@@ -556,14 +820,14 @@ fn setting_group(
 ) -> impl IntoElement {
     let title: SharedString = title.into();
     div()
-        .p(SP_3)
+        .p(SP_4)
         .flex()
         .flex_col()
-        .gap(SP_2)
-        .rounded(px(6.0))
+        .gap(SP_3)
+        .rounded(RADIUS_MD)
         .bg(t.color.bg_panel)
         .border_1()
-        .border_color(t.color.border_subtle)
+        .border_color(t.color.border_default)
         .child(
             div()
                 .text_size(SIZE_BODY)
@@ -574,18 +838,38 @@ fn setting_group(
         .children(children)
 }
 
+fn choice_wrap(children: Vec<gpui::AnyElement>) -> impl IntoElement {
+    div().flex().flex_row().flex_wrap().gap(SP_2).children(children)
+}
+
+fn settings_note(
+    t: &crate::theme::Theme,
+    label: impl Into<SharedString>,
+) -> impl IntoElement {
+    div()
+        .text_size(SIZE_SMALL)
+        .text_color(t.color.text_tertiary)
+        .child(label.into())
+}
+
 fn choice_chip(
     t: &crate::theme::Theme,
+    id_suffix: impl Into<SharedString>,
     label: impl Into<SharedString>,
     selected: bool,
     on_click: Box<dyn Fn(&ClickEvent, &mut Window, &mut App) + 'static>,
 ) -> impl IntoElement {
     let label: SharedString = label.into();
-    let id: SharedString = format!("settings-chip-{}", label.as_ref()).into();
+    let id_suffix: SharedString = id_suffix.into();
+    let id: SharedString = format!("settings-chip-{}", id_suffix.as_ref()).into();
     div()
         .id(gpui::ElementId::Name(id))
-        .px(SP_2)
-        .py(SP_1_5)
+        .min_w(px(116.0))
+        .h(px(32.0))
+        .px(SP_3)
+        .flex()
+        .items_center()
+        .justify_center()
         .rounded(RADIUS_SM)
         .border_1()
         .border_color(if selected {
@@ -604,7 +888,7 @@ fn choice_chip(
             t.color.text_secondary
         })
         .cursor_pointer()
-        .hover(|style| style.bg(t.color.bg_hover))
+        .hover(|style| style.bg(t.color.bg_hover).border_color(t.color.border_default))
         .on_click(on_click)
         .child(
             div()
@@ -624,10 +908,15 @@ fn stepper_row(
 ) -> impl IntoElement {
     let label: SharedString = label.into();
     div()
+        .p(SP_2)
         .flex()
         .flex_row()
         .items_center()
         .gap(SP_2)
+        .rounded(RADIUS_SM)
+        .bg(t.color.bg_surface)
+        .border_1()
+        .border_color(t.color.border_subtle)
         .child(
             div().flex_1().min_w(px(0.0)).child(
                 div()
@@ -689,11 +978,15 @@ fn toggle_row(
     let description: SharedString = description.into();
     let switch_label = title.clone();
     div()
-        .mt(SP_2)
+        .p(SP_2)
         .flex()
         .flex_row()
         .items_center()
         .gap(SP_2)
+        .rounded(RADIUS_SM)
+        .bg(t.color.bg_surface)
+        .border_1()
+        .border_color(t.color.border_subtle)
         .child(
             div()
                 .flex_1()
@@ -720,43 +1013,148 @@ fn toggle_row(
         )
 }
 
-fn shortcut_row(
+fn shortcut_row_interactive(
     t: &crate::theme::Theme,
-    label: impl Into<SharedString>,
-    shortcut: &'static str,
+    action: ActionId,
+    keystroke: SharedString,
+    is_capturing: bool,
+    is_overridden: bool,
+    capture_error: Option<SharedString>,
+    capture_focus: FocusHandle,
+    cx: &mut Context<SettingsDialog>,
 ) -> impl IntoElement {
-    let label: SharedString = label.into();
-    div()
-        .px(SP_2)
+    let label = action.label();
+
+    let mut row = div()
+        .px(SP_3)
         .py(SP_2)
         .flex()
         .flex_row()
         .items_center()
         .gap(SP_2)
-        .rounded(RADIUS_SM)
+        .rounded(RADIUS_MD)
         .bg(t.color.bg_panel)
         .border_1()
-        .border_color(t.color.border_subtle)
+        .border_color(if is_capturing {
+            t.color.accent
+        } else {
+            t.color.border_default
+        })
         .child(
             div()
                 .flex_1()
+                .min_w(px(0.0))
+                .truncate()
                 .text_size(SIZE_BODY)
                 .text_color(t.color.text_secondary)
                 .child(label),
-        )
-        .child(
+        );
+
+    if is_capturing {
+        row = row.child(shortcut_capture_pad(
+            t,
+            capture_error,
+            capture_focus,
+            cx,
+        ));
+    } else {
+        row = row.child(
             div()
                 .px(SP_2)
                 .py(SP_1)
                 .rounded(RADIUS_SM)
                 .bg(t.color.bg_canvas)
                 .border_1()
-                .border_color(t.color.border_subtle)
+                .border_color(if is_overridden {
+                    t.color.accent_subtle
+                } else {
+                    t.color.border_subtle
+                })
                 .font_family(t.font_mono.clone())
                 .text_size(SIZE_CAPTION)
                 .text_color(t.color.text_primary)
-                .child(shortcut),
-        )
+                .child(keystroke),
+        );
+    }
+
+    let change_label: SharedString = if is_capturing {
+        t!("App.Common.cancel").into()
+    } else {
+        t!("App.Settings.Shortcuts.change").into()
+    };
+    let change_id = format!("shortcut-change-{}", action.storage_id());
+    row = row.child(
+        div()
+            .id(gpui::ElementId::Name(SharedString::from(change_id)))
+            .px(SP_2)
+            .py(SP_1)
+            .rounded(RADIUS_SM)
+            .border_1()
+            .border_color(t.color.border_default)
+            .cursor_pointer()
+            .hover(|style| style.bg(t.color.bg_hover))
+            .text_size(SIZE_CAPTION)
+            .text_color(t.color.text_primary)
+            .child(change_label)
+            .on_click(cx.listener(move |this, _: &ClickEvent, window, cx| {
+                if this.capturing == Some(action) {
+                    this.cancel_capture(cx);
+                } else {
+                    this.start_capture(action, window, cx);
+                }
+            })),
+    );
+
+    if is_overridden {
+        let reset_id = format!("shortcut-reset-{}", action.storage_id());
+        row = row.child(
+            div()
+                .id(gpui::ElementId::Name(SharedString::from(reset_id)))
+                .px(SP_2)
+                .py(SP_1)
+                .rounded(RADIUS_SM)
+                .border_1()
+                .border_color(t.color.border_subtle)
+                .cursor_pointer()
+                .hover(|style| style.bg(t.color.bg_hover))
+                .text_size(SIZE_CAPTION)
+                .text_color(t.color.text_tertiary)
+                .child(SharedString::from(
+                    t!("App.Settings.Shortcuts.reset").to_string(),
+                ))
+                .on_click(cx.listener(move |this, _: &ClickEvent, _window, cx| {
+                    this.reset_to_default(action, cx);
+                })),
+        );
+    }
+
+    row
+}
+
+fn shortcut_capture_pad(
+    t: &crate::theme::Theme,
+    capture_error: Option<SharedString>,
+    focus: FocusHandle,
+    cx: &mut Context<SettingsDialog>,
+) -> impl IntoElement {
+    let prompt: SharedString = capture_error.unwrap_or_else(|| {
+        SharedString::from(t!("App.Settings.Shortcuts.capture_prompt").to_string())
+    });
+    div()
+        .px(SP_2)
+        .py(SP_1)
+        .rounded(RADIUS_SM)
+        .bg(t.color.bg_canvas)
+        .border_1()
+        .border_color(t.color.accent)
+        .font_family(t.font_mono.clone())
+        .text_size(SIZE_CAPTION)
+        .text_color(t.color.accent)
+        .child(prompt)
+        .track_focus(&focus)
+        .on_key_down(cx.listener(|this, event: &KeyDownEvent, window, cx| {
+            this.handle_capture_keydown(event, window, cx);
+        }))
 }
 
 fn terminal_theme_option(
@@ -851,4 +1249,26 @@ fn color_dot(hex: u32) -> impl IntoElement {
         .h(px(12.0))
         .rounded(px(999.0))
         .bg(terminal_hex_color(hex))
+}
+
+fn summary_badge(t: &crate::theme::Theme, label: SharedString) -> impl IntoElement {
+    div()
+        .px(SP_2)
+        .py(SP_1)
+        .rounded(RADIUS_SM)
+        .bg(t.color.bg_surface)
+        .border_1()
+        .border_color(t.color.border_subtle)
+        .text_size(SIZE_SMALL)
+        .font_weight(WEIGHT_MEDIUM)
+        .text_color(t.color.text_secondary)
+        .child(label)
+}
+
+fn localized_locale_label(locale: &str) -> String {
+    match locale {
+        LOCALE_ENGLISH => t!("App.Settings.General.language_english").to_string(),
+        LOCALE_ZH_CN => t!("App.Settings.General.language_simplified_chinese").to_string(),
+        _ => t!("App.Settings.General.language_system").to_string(),
+    }
 }

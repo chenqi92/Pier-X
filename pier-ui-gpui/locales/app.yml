@@ -262,8 +262,20 @@ App:
           zh-CN: 偏冷静、对比更柔和的调色板
     Shortcuts:
       subtitle:
-        en: These are the current bindings wired into the GPUI shell today.
-        zh-CN: 这些是当前 GPUI shell 已接入的快捷键绑定。
+        en: Click Change, press any key combination to rebind. New bindings apply immediately.
+        zh-CN: 点击“更改”后按下任意组合键即可重绑。保存后立即生效。
+      change:
+        en: Change
+        zh-CN: 更改
+      reset:
+        en: Reset
+        zh-CN: 还原
+      capture_prompt:
+        en: Press any key combination… (Esc to cancel)
+        zh-CN: 请按下任意组合键…（Esc 取消）
+      capture_need_modifier:
+        en: Add a modifier (Cmd / Ctrl / Alt / Shift) and try again.
+        zh-CN: 请加上修饰键（Cmd / Ctrl / Alt / Shift）后再试。
       new_tab:
         en: New Tab
         zh-CN: 新建标签页

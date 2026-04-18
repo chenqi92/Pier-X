@@ -17,7 +17,7 @@ use pier_core::services::git::{
 };
 use rust_i18n::t;
 
-use crate::app::git_session::{GitPendingAction, GitState, GitStatus};
+use crate::app::git_session::{DiffSelection, GitPendingAction, GitState, GitStatus};
 use crate::app::PierApp;
 use crate::components::{text, Button, Card, SectionLabel, StatusKind, StatusPill};
 use crate::theme::{
@@ -162,7 +162,15 @@ fn repo_layout(
     if let Some(branch) = snap.branch.clone() {
         col = col.child(branch_card(t, &branch, &snap.repo_path, &snap.branches, weak.clone()));
     }
-    col = col.child(changes_card(t, &snap.changes, weak.clone()));
+    col = col.child(changes_card(
+        t,
+        &snap.changes,
+        snap.diff_selection.as_ref(),
+        weak.clone(),
+    ));
+    if snap.diff_selection.is_some() {
+        col = col.child(diff_card(t, &snap, weak.clone()));
+    }
     col = col.child(commit_card(t, &snap.changes, commit_input, weak.clone()));
     col = col.child(stash_card(t, &snap.stashes, stash_input, weak.clone()));
     col = col.child(log_card(t, &snap.log));
@@ -379,6 +387,7 @@ fn branch_row(t: &crate::theme::Theme, name: String, weak: WeakEntity<PierApp>) 
 fn changes_card(
     t: &crate::theme::Theme,
     changes: &[GitFileChange],
+    diff_selection: Option<&crate::app::git_session::DiffSelection>,
     weak: WeakEntity<PierApp>,
 ) -> Card {
     let staged = changes.iter().filter(|c| c.staged).count();
@@ -440,7 +449,10 @@ fn changes_card(
     }
 
     for change in changes.iter().take(MAX_CHANGE_ROWS) {
-        card = card.child(file_change_row(t, change, weak.clone()));
+        let is_selected = diff_selection
+            .map(|sel| sel.path == change.path && sel.staged == change.staged)
+            .unwrap_or(false);
+        card = card.child(file_change_row(t, change, is_selected, weak.clone()));
     }
     if changes.len() > MAX_CHANGE_ROWS {
         card = card.child(
@@ -462,15 +474,18 @@ fn changes_card(
 fn file_change_row(
     t: &crate::theme::Theme,
     change: &GitFileChange,
+    is_selected: bool,
     weak: WeakEntity<PierApp>,
 ) -> impl IntoElement {
     let (badge, badge_color) = file_status_badge(t, change.status.clone());
     let path_str = change.path.clone();
     let staged = change.staged;
+    let untracked = matches!(change.status, FileStatus::Untracked);
 
     let stage_weak = weak.clone();
     let unstage_weak = weak.clone();
     let discard_weak = weak.clone();
+    let diff_weak = weak.clone();
 
     let stage_id = ElementId::Name(SharedString::from(format!(
         "git-stage-{}",
@@ -484,10 +499,16 @@ fn file_change_row(
         "git-discard-{}",
         short_id(&path_str)
     )));
+    let diff_id = ElementId::Name(SharedString::from(format!(
+        "git-diff-{}-{}",
+        if staged { "s" } else { "w" },
+        short_id(&path_str)
+    )));
 
     let path_for_stage = path_str.clone();
     let path_for_unstage = path_str.clone();
     let path_for_discard = path_str.clone();
+    let path_for_diff = path_str.clone();
 
     let mut row = div()
         .flex()
@@ -495,7 +516,10 @@ fn file_change_row(
         .items_center()
         .gap(SP_2)
         .py(SP_1)
+        .px(SP_1)
+        .rounded(RADIUS_SM)
         .overflow_hidden()
+        .when(is_selected, |el| el.bg(t.color.bg_panel))
         .child(
             div()
                 .flex_none()
@@ -524,6 +548,36 @@ fn file_change_row(
                     t.color.text_secondary
                 })
                 .child(SharedString::from(path_str.clone())),
+        )
+        .child(
+            div().flex_none().child(
+                Button::ghost(
+                    diff_id,
+                    if is_selected {
+                        t!("App.Git.close_diff")
+                    } else {
+                        t!("App.Git.view_diff")
+                    },
+                )
+                .on_click(move |_, _, cx| {
+                    let p = path_for_diff.clone();
+                    let currently_open = is_selected;
+                    let _ = diff_weak.update(cx, |app, cx| {
+                        if currently_open {
+                            app.clear_git_diff_selection(cx);
+                        } else {
+                            app.schedule_git_diff(
+                                DiffSelection {
+                                    path: p,
+                                    staged,
+                                    untracked,
+                                },
+                                cx,
+                            );
+                        }
+                    });
+                }),
+            ),
         );
 
     // Per-file actions.
@@ -769,6 +823,152 @@ fn stash_row(t: &crate::theme::Theme, stash: &StashEntry, weak: WeakEntity<PierA
         ))
 }
 
+// ─── Card: unified diff for the selected file ──────────────────────
+
+fn diff_card(
+    t: &crate::theme::Theme,
+    snap: &GitSnapshot,
+    weak: WeakEntity<PierApp>,
+) -> Card {
+    // Safe: caller only invokes `diff_card` when `diff_selection` is
+    // `Some` (see `repo_layout`).
+    let selection = snap
+        .diff_selection
+        .as_ref()
+        .expect("diff_card called without a selection");
+
+    let close_weak = weak.clone();
+    let side_label: SharedString = if selection.untracked {
+        t!("App.Git.diff_side_untracked").into()
+    } else if selection.staged {
+        t!("App.Git.diff_side_staged").into()
+    } else {
+        t!("App.Git.diff_side_worktree").into()
+    };
+
+    let mut card = Card::new()
+        .padding(SP_3)
+        .child(
+            div()
+                .flex()
+                .flex_row()
+                .items_center()
+                .gap(SP_2)
+                .overflow_hidden()
+                .child(
+                    SectionLabel::new(t!("App.Git.diff_section"))
+                        .with_icon(IconName::Inspector),
+                )
+                .child(StatusPill::new(side_label, StatusKind::Info))
+                .child(
+                    div()
+                        .flex_1()
+                        .min_w(px(0.0))
+                        .truncate()
+                        .text_size(SIZE_MONO_SMALL)
+                        .font_family(t.font_mono.clone())
+                        .text_color(t.color.text_secondary)
+                        .child(SharedString::from(selection.path.clone())),
+                )
+                .child(
+                    div().flex_none().child(
+                        Button::ghost("git-diff-close", t!("App.Git.close_diff")).on_click(
+                            move |_, _, cx| {
+                                let _ = close_weak.update(cx, |app, cx| {
+                                    app.clear_git_diff_selection(cx);
+                                });
+                            },
+                        ),
+                    ),
+                ),
+        );
+
+    if snap.diff_loading {
+        return card.child(text::body(t!("App.Git.diff_loading")).secondary());
+    }
+
+    if let Some(err) = snap.diff_error.clone() {
+        return card.child(
+            div()
+                .overflow_hidden()
+                .text_size(SIZE_SMALL)
+                .text_color(t.color.status_error)
+                .child(err),
+        );
+    }
+
+    let Some(text) = snap.diff_output.clone() else {
+        return card.child(text::body(t!("App.Git.diff_empty")).secondary());
+    };
+
+    if text.is_empty() {
+        return card.child(text::body(t!("App.Git.diff_empty")).secondary());
+    }
+
+    // Render the diff one line per row with color coding. Cap the
+    // number of lines so a huge diff can't blow the element tree.
+    let lines: Vec<&str> = text.lines().take(MAX_DIFF_LINES).collect();
+    let total_lines = text.lines().count();
+
+    for (idx, line) in lines.iter().enumerate() {
+        card = card.child(diff_line_row(t, idx, line));
+    }
+
+    if total_lines > MAX_DIFF_LINES {
+        card = card.child(
+            div()
+                .text_size(SIZE_SMALL)
+                .text_color(t.color.text_tertiary)
+                .child(SharedString::from(
+                    t!(
+                        "App.Git.diff_truncated",
+                        shown = MAX_DIFF_LINES,
+                        total = total_lines
+                    )
+                    .to_string(),
+                )),
+        );
+    }
+
+    card
+}
+
+/// Maximum number of diff lines rendered before collapsing into a
+/// "+N more" label. The worst-case line length is bounded by
+/// `MAX_DIFF_LINE_LEN` elsewhere, so 1000 rows keeps the element
+/// count predictable.
+const MAX_DIFF_LINES: usize = 1000;
+
+fn diff_line_row(t: &crate::theme::Theme, index: usize, line: &str) -> impl IntoElement {
+    let color = if line.starts_with("@@") {
+        t.color.status_info
+    } else if line.starts_with('+') && !line.starts_with("+++") {
+        t.color.status_success
+    } else if line.starts_with('-') && !line.starts_with("---") {
+        t.color.status_error
+    } else if line.starts_with("diff --git") || line.starts_with("index ") {
+        t.color.text_tertiary
+    } else {
+        t.color.text_secondary
+    };
+
+    div()
+        .id(("git-diff-line", index))
+        .flex()
+        .flex_row()
+        .overflow_hidden()
+        .text_size(SIZE_MONO_SMALL)
+        .font_family(t.font_mono.clone())
+        .text_color(color)
+        .child(
+            div()
+                .flex_1()
+                .min_w(px(0.0))
+                .truncate()
+                .child(SharedString::from(line.to_string())),
+        )
+}
+
 // ─── Card: recent commits (read-only, retained from old view) ───────
 
 fn log_card(t: &crate::theme::Theme, log: &[CommitInfo]) -> Card {
@@ -895,6 +1095,10 @@ struct GitSnapshot {
     last_error: Option<SharedString>,
     action_error: Option<SharedString>,
     last_confirmation: Option<SharedString>,
+    diff_selection: Option<DiffSelection>,
+    diff_output: Option<SharedString>,
+    diff_loading: bool,
+    diff_error: Option<SharedString>,
 }
 
 impl From<&GitState> for GitSnapshot {
@@ -915,6 +1119,10 @@ impl From<&GitState> for GitSnapshot {
             last_error: state.last_error.clone(),
             action_error: state.action_error.clone(),
             last_confirmation: state.last_confirmation.clone(),
+            diff_selection: state.diff_selection.clone(),
+            diff_output: state.diff_output.clone(),
+            diff_loading: state.diff_loading,
+            diff_error: state.diff_error.clone(),
         }
     }
 }

@@ -1080,6 +1080,33 @@ App:
     last_result:
       en: Last result
       zh-CN: 最近结果
+    view_diff:
+      en: Diff
+      zh-CN: 差异
+    close_diff:
+      en: Close diff
+      zh-CN: 关闭差异
+    diff_section:
+      en: Diff
+      zh-CN: 差异
+    diff_side_staged:
+      en: staged
+      zh-CN: 暂存
+    diff_side_worktree:
+      en: worktree
+      zh-CN: 工作区
+    diff_side_untracked:
+      en: untracked
+      zh-CN: 未跟踪
+    diff_loading:
+      en: Loading diff…
+      zh-CN: 加载差异中…
+    diff_empty:
+      en: No differences to show.
+      zh-CN: 没有可显示的差异。
+    diff_truncated:
+      en: "… %{shown} of %{total} lines shown."
+      zh-CN: "… 已显示 %{total} 行中的前 %{shown} 行。"
   Shell:
     terminal_position:
       en: Terminal %{current} of %{total}

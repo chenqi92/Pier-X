@@ -36,8 +36,8 @@ use crate::app::db_session::{
     DbSessionState,
 };
 use crate::app::git_session::{
-    default_cwd as git_default_cwd, run_action as git_run_action, run_refresh as git_run_refresh,
-    GitPendingAction, GitState,
+    default_cwd as git_default_cwd, run_action as git_run_action, run_diff as git_run_diff,
+    run_refresh as git_run_refresh, DiffSelection, GitPendingAction, GitState,
 };
 use crate::app::route::DbKind;
 use crate::app::ssh_session::{
@@ -1512,6 +1512,29 @@ impl PierApp {
             }
         })
         .detach();
+    }
+
+    pub fn schedule_git_diff(&mut self, selection: DiffSelection, cx: &mut Context<Self>) {
+        let state = self.git_state.clone();
+        let request = state.update(cx, |s, _| s.begin_diff(selection));
+        cx.notify();
+        cx.spawn(move |_this: gpui::WeakEntity<Self>, cx: &mut gpui::AsyncApp| {
+            let background = cx.background_executor().clone();
+            let mut async_cx = cx.clone();
+            async move {
+                let result = background.spawn(async move { git_run_diff(request) }).await;
+                let _ = state.update(&mut async_cx, |s, cx| {
+                    s.apply_diff_result(result);
+                    cx.notify();
+                });
+            }
+        })
+        .detach();
+    }
+
+    pub fn clear_git_diff_selection(&mut self, cx: &mut Context<Self>) {
+        self.git_state.update(cx, |s, _| s.clear_diff_selection());
+        cx.notify();
     }
 
     pub fn schedule_git_action(&mut self, action: GitPendingAction, cx: &mut Context<Self>) {

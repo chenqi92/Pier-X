@@ -119,11 +119,32 @@ pub struct GitState {
     /// Short confirmation for the last successful action (e.g.
     /// the commit hash, stash ref). Cleared on the next action.
     pub last_confirmation: Option<SharedString>,
-    /// Per-file selection state for `stage` / `unstage` — keyed by
-    /// `GitFileChange.path`. Currently unused; reserved for the
-    /// follow-up diff slice.
-    #[allow(dead_code)]
-    pub selected_path: Option<String>,
+    /// Currently selected file for the diff panel. `None` collapses
+    /// the diff card; `Some((path, staged))` shows the diff for that
+    /// entry. `staged` drives `diff(path, true|false)` vs
+    /// `diff_untracked(path)`.
+    pub diff_selection: Option<DiffSelection>,
+    /// Cached diff output for `diff_selection`. `None` until the
+    /// background task resolves, or if the selection was cleared.
+    pub diff_output: Option<SharedString>,
+    /// `true` while `run_diff` is in flight.
+    pub diff_loading: bool,
+    /// Most recent diff error (separate from the probe-level error).
+    pub diff_error: Option<SharedString>,
+    /// Stale-result guard for the diff fetch — bumped on every
+    /// `begin_diff` / `clear_diff_selection`.
+    pub diff_nonce: u64,
+}
+
+/// One selected file change, drives the diff card.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct DiffSelection {
+    pub path: String,
+    /// `true` = staged (index) side, `false` = worktree side.
+    pub staged: bool,
+    /// `true` = this file is untracked, so `diff_untracked` is used
+    /// instead of the normal `diff`.
+    pub untracked: bool,
 }
 
 impl GitState {
@@ -144,8 +165,56 @@ impl GitState {
             last_error: None,
             action_error: None,
             last_confirmation: None,
-            selected_path: None,
+            diff_selection: None,
+            diff_output: None,
+            diff_loading: false,
+            diff_error: None,
+            diff_nonce: 0,
         }
+    }
+
+    /// Mint a diff fetch request for the given selection. Bumps the
+    /// nonce so any in-flight diff for a previous selection drops.
+    pub fn begin_diff(&mut self, selection: DiffSelection) -> DiffRequest {
+        self.diff_nonce = self.diff_nonce.wrapping_add(1);
+        self.diff_loading = true;
+        self.diff_output = None;
+        self.diff_error = None;
+        self.diff_selection = Some(selection.clone());
+        DiffRequest {
+            nonce: self.diff_nonce,
+            // Safe: caller only reaches `begin_diff` after checking
+            // `client.is_some()` (the view reads from the cached
+            // snapshot). If the client was just cleared, the diff
+            // will fail with a plain "no client" error.
+            client: self.client.clone(),
+            selection,
+        }
+    }
+
+    pub fn apply_diff_result(&mut self, result: DiffResult) {
+        if result.nonce != self.diff_nonce {
+            return;
+        }
+        self.diff_loading = false;
+        match result.outcome {
+            Ok(text) => {
+                self.diff_output = Some(text.into());
+                self.diff_error = None;
+            }
+            Err(err) => {
+                self.diff_output = None;
+                self.diff_error = Some(err.into());
+            }
+        }
+    }
+
+    pub fn clear_diff_selection(&mut self) {
+        self.diff_nonce = self.diff_nonce.wrapping_add(1);
+        self.diff_loading = false;
+        self.diff_output = None;
+        self.diff_error = None;
+        self.diff_selection = None;
     }
 
     /// Open a fresh handle to the repo on disk. Does not probe;
@@ -267,6 +336,17 @@ pub struct ActionRequest {
     pub action: GitPendingAction,
 }
 
+pub struct DiffRequest {
+    pub nonce: u64,
+    pub client: Option<Arc<GitClient>>,
+    pub selection: DiffSelection,
+}
+
+pub struct DiffResult {
+    pub nonce: u64,
+    pub outcome: Result<String, String>,
+}
+
 pub struct ActionResult {
     /// Most actions don't have a meaningful confirmation string;
     /// the ones that do (commit → hash, stash_push → ref) surface
@@ -369,6 +449,27 @@ pub fn run_action(request: ActionRequest) -> ActionResult {
             .map_err(|e| e.to_string()),
     };
     ActionResult { outcome }
+}
+
+pub fn run_diff(request: DiffRequest) -> DiffResult {
+    let outcome = match request.client.as_ref() {
+        None => Err("git client unavailable".to_string()),
+        Some(client) => {
+            if request.selection.untracked {
+                client
+                    .diff_untracked(&request.selection.path)
+                    .map_err(|e| e.to_string())
+            } else {
+                client
+                    .diff(&request.selection.path, request.selection.staged)
+                    .map_err(|e| e.to_string())
+            }
+        }
+    };
+    DiffResult {
+        nonce: request.nonce,
+        outcome,
+    }
 }
 
 /// Resolve the starting cwd for the view — used by `PierApp::new`.

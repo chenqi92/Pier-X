@@ -51,8 +51,6 @@ const BASE_TERMINAL_FONT_SIZE_PX: f32 = 13.0;
 const BASE_CELL_WIDTH_PX: f32 = 8.2;
 const BASE_CELL_HEIGHT_PX: f32 = 18.0;
 const TERMINAL_MIN_HEIGHT: f32 = 220.0;
-const WINDOW_CHROME_WIDTH: f32 = 356.0;
-const WINDOW_CHROME_HEIGHT: f32 = 212.0;
 const MAX_OSC52_CLIPBOARD_BYTES: usize = 1_000_000;
 const BELL_FLASH_MS: u64 = 180;
 const TERMINAL_REFRESH_MS: u64 = 33;
@@ -409,6 +407,8 @@ impl TerminalPanel {
 
     fn sync_terminal_preferences(
         &mut self,
+        cx: &App,
+        font_family: &SharedString,
         font_size_px: f32,
         cursor_style: TerminalCursorStyle,
         cursor_blink: bool,
@@ -417,7 +417,8 @@ impl TerminalPanel {
         font_ligatures: bool,
     ) -> bool {
         let normalized_font_size = font_size_px.clamp(10.0, 24.0);
-        let cell_width = terminal_cell_width_px(normalized_font_size);
+        let cell_width =
+            terminal_cell_width_px(cx, font_family, normalized_font_size, font_ligatures);
         let cell_height = terminal_cell_height_px(normalized_font_size);
         let changed = (self.terminal_font_size_px - normalized_font_size).abs() > f32::EPSILON
             || (self.cell_width_px - cell_width).abs() > f32::EPSILON
@@ -563,8 +564,11 @@ impl TerminalPanel {
         .detach();
     }
 
-    fn resize_for_window(&mut self, window: &Window, cx: &App) -> bool {
+    fn resize_for_window(&mut self, _window: &Window, cx: &App) -> bool {
+        let mono_font = theme(cx).font_mono.clone();
         self.sync_terminal_preferences(
+            cx,
+            &mono_font,
             terminal_font_size(cx),
             theme(cx).settings.terminal_cursor_style,
             terminal_cursor_blink(cx),
@@ -577,19 +581,18 @@ impl TerminalPanel {
             return false;
         };
 
-        let measured_bounds = *self.surface_bounds.borrow();
-        let (width, height) = if let Some(bounds) = measured_bounds {
-            (f32::from(bounds.size.width), f32::from(bounds.size.height))
-        } else {
-            // Before the terminal surface is painted, fall back to the window viewport.
-            let viewport = window.viewport_size();
-            (
-                (f32::from(viewport.width) - WINDOW_CHROME_WIDTH)
-                    .max(self.cell_width_px * MIN_COLS as f32),
-                (f32::from(viewport.height) - WINDOW_CHROME_HEIGHT)
-                    .max(self.cell_height_px * MIN_ROWS as f32),
-            )
+        let Some(bounds) = *self.surface_bounds.borrow() else {
+            // Wait for the actual canvas measurement instead of guessing from
+            // window chrome constants, which can leave the PTY stuck at the
+            // wrong cols/rows for the visible panel size.
+            return false;
         };
+        let width = f32::from(bounds.size.width);
+        let height = f32::from(bounds.size.height);
+
+        if width <= 0.0 || height <= 0.0 {
+            return false;
+        }
 
         let cols = (width / self.cell_width_px)
             .floor()
@@ -1212,7 +1215,10 @@ impl TerminalPanel {
     fn paint_input(&mut self, t: &crate::theme::Theme) -> PaintInput {
         let palette = terminal_palette(self.terminal_theme_preset);
         let lines = self.render_lines(t);
-        let snapshot = self.render_cache.as_ref().map(|cache| cache.snapshot.clone());
+        let snapshot = self
+            .render_cache
+            .as_ref()
+            .map(|cache| cache.snapshot.clone());
         let cursor_paint = self
             .current_render_key(t)
             .as_ref()
@@ -1254,7 +1260,9 @@ fn cursor_paint_for_render_key(
     }
     let style = match key.cursor_style {
         TerminalCursorStyle::Block => return None,
-        TerminalCursorStyle::Underline => crate::components::terminal_grid::CursorPaintStyle::Underline,
+        TerminalCursorStyle::Underline => {
+            crate::components::terminal_grid::CursorPaintStyle::Underline
+        }
         TerminalCursorStyle::Bar => crate::components::terminal_grid::CursorPaintStyle::Bar,
     };
     Some((style, terminal_hex_color(palette.cursor_bg_hex)))
@@ -1347,6 +1355,8 @@ impl Render for TerminalPanel {
         // measured terminal surface size instead of render-time mutation.
         let t = theme(cx).clone();
         let preferences_changed = self.sync_terminal_preferences(
+            cx,
+            &t.font_mono,
             t.settings.terminal_font_size as f32,
             t.settings.terminal_cursor_style,
             t.settings.terminal_cursor_blink,
@@ -1357,6 +1367,7 @@ impl Render for TerminalPanel {
         if preferences_changed {
             self.render_cache = None;
             self.reset_cursor_blink();
+            self.last_surface_size_key = None;
         }
         let bell_active = self.bell_flashing();
         let palette = terminal_palette(self.terminal_theme_preset);
@@ -1520,7 +1531,6 @@ impl TerminalPanel {
         // Spacer pushes nothing further right; keep it for visual symmetry.
         row.child(div().flex_1())
     }
-
 }
 
 fn preferred_shell() -> String {
@@ -1904,10 +1914,10 @@ fn render_terminal_line(
         let style = if selection_span
             .is_some_and(|span| selection_intersects_visible_cell(span, col, cell_span))
         {
-                selected_terminal_style(style, palette)
-            } else {
-                style
-            };
+            selected_terminal_style(style, palette)
+        } else {
+            style
+        };
         if current_style != Some(style) {
             push_terminal_run(
                 &mut run_specs,
@@ -2087,7 +2097,31 @@ fn resolve_terminal_color(
     }
 }
 
-fn terminal_cell_width_px(font_size_px: f32) -> f32 {
+fn terminal_cell_width_px(
+    cx: &App,
+    font_family: &SharedString,
+    font_size_px: f32,
+    font_ligatures: bool,
+) -> f32 {
+    let text_system = cx.text_system();
+    let font = terminal_font_for_family(font_family, font_ligatures);
+    let font_id = text_system.resolve_font(&font);
+
+    match text_system.ch_advance(font_id, px(font_size_px)) {
+        Ok(width) if f32::from(width) > 0.0 => f32::from(width),
+        Ok(_) => terminal_cell_width_px_fallback(font_size_px),
+        Err(err) => {
+            log::warn!(
+                "terminal: failed to measure mono cell width family={} size={}px: {err}",
+                font_family,
+                font_size_px
+            );
+            terminal_cell_width_px_fallback(font_size_px)
+        }
+    }
+}
+
+fn terminal_cell_width_px_fallback(font_size_px: f32) -> f32 {
     BASE_CELL_WIDTH_PX * (font_size_px / BASE_TERMINAL_FONT_SIZE_PX)
 }
 

@@ -3,6 +3,7 @@ use std::rc::Rc;
 use gpui::{div, prelude::*, px, App, ClickEvent, IntoElement, SharedString, Window};
 use gpui_component::label::Label as UiLabel;
 use pier_core::ssh::SshConfig;
+use rust_i18n::t;
 
 use crate::components::{text, Button, Card, IconBadge, SectionLabel, StatusKind, StatusPill};
 use crate::theme::{
@@ -46,9 +47,9 @@ impl RenderOnce for WelcomeView {
         let t = theme(cx);
         let count = self.connections.len();
         let mode_label: SharedString = if t.mode == ThemeMode::Dark {
-            "Dark mode".into()
+            t!("App.Welcome.mode_dark").into()
         } else {
-            "Light mode".into()
+            t!("App.Welcome.mode_light").into()
         };
         let WelcomeView {
             connections,
@@ -66,11 +67,11 @@ impl RenderOnce for WelcomeView {
             .items_center()
             .gap(SP_4)
             .child(IconBadge::accent())
-            .child(SectionLabel::new("Welcome").centered())
-            .child(text::h1("Pier-X workspace").centered())
+            .child(SectionLabel::new(t!("App.Welcome.section")).centered())
+            .child(text::h1(t!("App.Welcome.title")).centered())
             .child(
                 div().w_full().max_w(px(420.0)).child(
-                    text::body("Open a local terminal or connect to a server to start working.")
+                    text::body(t!("App.Welcome.subtitle"))
                         .secondary()
                         .centered(),
                 ),
@@ -84,12 +85,12 @@ impl RenderOnce for WelcomeView {
                     .justify_center()
                     .gap(SP_1_5)
                     .child(
-                        Button::primary("welcome-new-ssh", "New SSH connection")
+                        Button::primary("welcome-new-ssh", t!("App.Welcome.Actions.new_ssh"))
                             .width(px(148.0))
                             .on_click(move |ev, win, app| on_new_ssh(ev, win, app)),
                     )
                     .child(
-                        Button::ghost("welcome-local-term", "Open local terminal")
+                        Button::ghost("welcome-local-term", t!("App.Welcome.Actions.open_local_terminal"))
                             .width(px(148.0))
                             .on_click(move |ev, win, app| on_open_terminal(ev, win, app)),
                     ),
@@ -138,8 +139,8 @@ fn render_recent_card(
 ) -> Card {
     let count = connections.len();
     let header = div().flex().flex_row().items_center().gap(SP_2).child(
-        UiLabel::new("Recent connections")
-            .secondary(format!("{count} saved"))
+        UiLabel::new(t!("App.Welcome.Recent.title"))
+            .secondary(t!("App.Welcome.Recent.saved_count", count = count))
             .text_size(SIZE_BODY)
             .font_weight(WEIGHT_MEDIUM),
     );

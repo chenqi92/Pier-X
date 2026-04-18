@@ -20,6 +20,7 @@ use gpui_component::{
     Icon as UiIcon, IconName,
 };
 use pier_core::services::server_monitor::ServerSnapshot;
+use rust_i18n::t;
 
 use crate::app::layout::{RightContext, RightMode, RIGHT_ICON_BAR_W};
 use crate::components::{text, Button, Card, SectionLabel, StatusKind, StatusPill};
@@ -311,7 +312,7 @@ fn render_services_strip(
         .gap(SP_2)
         .border_b_1()
         .border_color(t.color.border_subtle)
-        .child(remote_strip_label(t, "Services"));
+        .child(remote_strip_label(t, t!("App.RightPanel.services")));
 
     let services = if matches!(overview.service_probe_status, ServiceProbeStatus::Probing)
         && overview.services.is_empty()
@@ -322,12 +323,14 @@ fn render_services_strip(
             .flex_row()
             .items_center()
             .gap(SP_2)
-            .child(StatusPill::new("detecting", StatusKind::Info))
+            .child(StatusPill::new(t!("App.LeftPanel.Services.detecting"), StatusKind::Info))
             .child(
                 div()
                     .text_size(SIZE_SMALL)
                     .text_color(t.color.text_tertiary)
-                    .child("probing mysql, postgres, redis and docker"),
+                    .child(SharedString::from(
+                        t!("App.RightPanel.services_detecting_detail").to_string(),
+                    )),
             )
             .into_any_element()
     } else if overview.services.is_empty() {
@@ -335,7 +338,9 @@ fn render_services_strip(
             .flex_1()
             .text_size(SIZE_SMALL)
             .text_color(t.color.text_tertiary)
-            .child("no supported remote services detected")
+            .child(SharedString::from(
+                t!("App.RightPanel.services_empty").to_string(),
+            ))
             .into_any_element()
     } else {
         let mut pills = div().flex_1().flex().flex_row().flex_wrap().gap(SP_2);
@@ -391,7 +396,7 @@ fn render_ssh_strip(t: &crate::theme::Theme, overview: &RemoteOverview) -> impl 
         );
 
     if overview.tunnels.is_empty() {
-        row = row.child(StatusPill::new("no tunnels", StatusKind::Warning));
+        row = row.child(StatusPill::new(t!("App.RightPanel.no_tunnels"), StatusKind::Warning));
     } else {
         let mut tunnel_row = div().flex().flex_row().flex_wrap().gap(SP_2);
         for tunnel in &overview.tunnels {
@@ -411,14 +416,18 @@ fn render_ssh_strip(t: &crate::theme::Theme, overview: &RemoteOverview) -> impl 
     row
 }
 
-fn remote_strip_label(t: &crate::theme::Theme, label: &'static str) -> impl IntoElement {
+fn remote_strip_label(
+    t: &crate::theme::Theme,
+    label: impl Into<SharedString>,
+) -> impl IntoElement {
+    let label: SharedString = label.into();
     div()
         .w(px(52.0))
         .pt(px(2.0))
-        .text_size(SIZE_CAPTION)
-        .font_weight(WEIGHT_MEDIUM)
-        .text_color(t.color.text_tertiary)
-        .child(label)
+                .text_size(SIZE_CAPTION)
+                .font_weight(WEIGHT_MEDIUM)
+                .text_color(t.color.text_tertiary)
+                .child(label)
 }
 
 fn service_button(
@@ -497,7 +506,9 @@ fn service_button(
                     tunnel
                         .last_error
                         .clone()
-                        .unwrap_or_else(|| "tunnel failed".into()),
+                        .unwrap_or_else(|| {
+                            SharedString::from(t!("App.RightPanel.tunnel_failed").to_string())
+                        }),
                 ),
         );
     }
@@ -513,10 +524,20 @@ fn tunnel_chip(tunnel: &TunnelOverview) -> impl IntoElement {
         )
         .into(),
         (TunnelStatus::Opening, _) => {
-            format!("{service_label} opening -> {}", tunnel.remote_port).into()
+            t!(
+                "App.RightPanel.tunnel_opening",
+                service = service_label.as_ref(),
+                port = tunnel.remote_port
+            )
+            .into()
         }
         (TunnelStatus::Failed, _) => {
-            format!("{service_label} error -> {}", tunnel.remote_port).into()
+            t!(
+                "App.RightPanel.tunnel_error",
+                service = service_label.as_ref(),
+                port = tunnel.remote_port
+            )
+            .into()
         }
         (TunnelStatus::Active, None) => format!("{service_label} -> {}", tunnel.remote_port).into(),
     };
@@ -530,14 +551,14 @@ fn mode_status_bar(
     cx: &App,
 ) -> impl IntoElement {
     let (context_label, kind, endpoint) = match mode.context() {
-        RightContext::Local => ("local".into(), StatusKind::Success, None),
+        RightContext::Local => (t!("App.Common.local").into(), StatusKind::Success, None),
         RightContext::Remote => active_session
             .map(|session_entity| {
                 let session = session_entity.read(cx);
                 let (label, kind) = remote_status_pill(&session.status);
                 (label, kind, Some(remote_endpoint_label(&session.config)))
             })
-            .unwrap_or_else(|| ("no session".into(), StatusKind::Warning, None)),
+            .unwrap_or_else(|| (t!("App.RightPanel.no_session").into(), StatusKind::Warning, None)),
     };
 
     let mut row = div()
@@ -573,11 +594,11 @@ fn mode_status_bar(
 
 fn remote_status_pill(status: &ConnectStatus) -> (SharedString, StatusKind) {
     match status {
-        ConnectStatus::Idle => ("idle".into(), StatusKind::Warning),
-        ConnectStatus::Connecting => ("connecting".into(), StatusKind::Info),
-        ConnectStatus::Refreshing => ("loading".into(), StatusKind::Info),
-        ConnectStatus::Connected => ("connected".into(), StatusKind::Success),
-        ConnectStatus::Failed => ("error".into(), StatusKind::Error),
+        ConnectStatus::Idle => (t!("App.Common.Status.idle").into(), StatusKind::Warning),
+        ConnectStatus::Connecting => (t!("App.Common.Status.connecting").into(), StatusKind::Info),
+        ConnectStatus::Refreshing => (t!("App.Common.Status.loading").into(), StatusKind::Info),
+        ConnectStatus::Connected => (t!("App.Common.Status.connected").into(), StatusKind::Success),
+        ConnectStatus::Failed => (t!("App.Common.Status.error").into(), StatusKind::Error),
     }
 }
 
@@ -629,9 +650,9 @@ fn monitor_view(
 ) -> impl IntoElement {
     let Some(session_entity) = active_session else {
         return placeholder(
-            "Monitor",
-            "No active SSH session.",
-            "Open a saved connection from the left panel to start remote monitoring.",
+            t!("App.RightPanel.Modes.monitor"),
+            t!("App.RightPanel.no_active_ssh_session"),
+            t!("App.RightPanel.Monitor.placeholder"),
         )
         .into_any_element();
     };
@@ -658,43 +679,38 @@ fn monitor_view(
                 .flex_row()
                 .items_center()
                 .gap(SP_3)
-                .child(text::h2("Remote Monitor"))
+                .child(text::h2(t!("App.RightPanel.Monitor.title")))
                 .child(StatusPill::new(monitor_status_label(&status), monitor_status_kind(&status))),
         )
         .child(
             Card::new()
                 .padding(SP_3)
-                .child(SectionLabel::new("Target"))
+                .child(SectionLabel::new(t!("App.RightPanel.target")))
                 .child(text::mono(endpoint.clone()))
-                .child(
-                    text::body(
-                        "5 second polling over the active SSH session. CPU / memory / disk are live; network / GPU / process charts land in a follow-up slice.",
-                    )
-                    .secondary(),
-                ),
+                .child(text::body(t!("App.RightPanel.Monitor.target_body")).secondary()),
         );
 
     if let Some(err) = error {
         col = col.child(
             Card::new()
                 .padding(SP_3)
-                .child(SectionLabel::new("Probe Error"))
+                .child(SectionLabel::new(t!("App.RightPanel.Monitor.probe_error")))
                 .child(text::body(err).secondary()),
         );
     }
 
     let Some(snapshot) = snapshot else {
         let empty_label = match status {
-            MonitorStatus::Loading => "collecting remote metrics...",
-            MonitorStatus::Failed => "last probe failed before any sample was stored",
-            MonitorStatus::Idle => "monitor starts when this panel is active",
-            MonitorStatus::Ready => "waiting for first sample",
+            MonitorStatus::Loading => t!("App.RightPanel.Monitor.collecting"),
+            MonitorStatus::Failed => t!("App.RightPanel.Monitor.failed_before_sample"),
+            MonitorStatus::Idle => t!("App.RightPanel.Monitor.idle_hint"),
+            MonitorStatus::Ready => t!("App.RightPanel.Monitor.waiting_first_sample"),
         };
         return col
             .child(
                 Card::new()
                     .padding(SP_3)
-                    .child(SectionLabel::new("Status"))
+                    .child(SectionLabel::new(t!("App.Common.status")))
                     .child(text::body(empty_label).secondary()),
             )
             .into_any_element();
@@ -711,7 +727,7 @@ fn monitor_view(
     ));
     grid = grid.child(monitor_meter_card(
         t,
-        "Memory",
+        t!("App.RightPanel.Monitor.memory"),
         memory_primary(&snapshot),
         memory_secondary(&snapshot),
         memory_ratio(&snapshot),
@@ -719,7 +735,7 @@ fn monitor_view(
     ));
     grid = grid.child(monitor_meter_card(
         t,
-        "Disk /",
+        t!("App.RightPanel.Monitor.disk"),
         disk_primary(&snapshot),
         disk_secondary(&snapshot),
         percent_ratio(snapshot.disk_use_pct),
@@ -727,33 +743,33 @@ fn monitor_view(
     ));
     grid = grid.child(monitor_meter_card(
         t,
-        "Swap",
+        t!("App.RightPanel.Monitor.swap"),
         swap_primary(&snapshot),
         swap_secondary(&snapshot),
         swap_ratio(&snapshot),
         t.color.status_warning,
     ));
     grid = grid.child(monitor_detail_card(
-        "Load",
+        t!("App.RightPanel.Monitor.load"),
         compact_label(snapshot.load_1),
-        format!(
-            "5m {} · 15m {}",
-            compact_label(snapshot.load_5),
-            compact_label(snapshot.load_15)
+        t!(
+            "App.RightPanel.Monitor.load_tail",
+            load_5 = compact_label(snapshot.load_5).as_ref(),
+            load_15 = compact_label(snapshot.load_15).as_ref()
         )
         .into(),
     ));
     grid = grid.child(monitor_detail_card(
-        "Uptime",
+        t!("App.RightPanel.Monitor.uptime"),
         if snapshot.uptime.is_empty() {
             "—".into()
         } else {
             snapshot.uptime.clone().into()
         },
-        format!(
-            "root free {} of {}",
-            empty_dash(&snapshot.disk_avail),
-            empty_dash(&snapshot.disk_total)
+        t!(
+            "App.RightPanel.Monitor.root_free",
+            avail = empty_dash(&snapshot.disk_avail),
+            total = empty_dash(&snapshot.disk_total)
         )
         .into(),
     ));
@@ -770,9 +786,9 @@ fn docker_view(
 ) -> gpui::AnyElement {
     let Some(session_entity) = active_session else {
         return placeholder(
-            "Docker",
-            "No active SSH session.",
-            "Open a saved connection from the left panel to inspect remote containers.",
+            t!("App.RightPanel.Modes.docker"),
+            t!("App.RightPanel.no_active_ssh_session"),
+            t!("App.RightPanel.Docker.placeholder"),
         )
         .into_any_element();
     };
@@ -796,7 +812,7 @@ fn docker_view(
         .flex_row()
         .items_center()
         .gap(SP_3)
-        .child(text::h2("Docker"))
+        .child(text::h2(t!("App.RightPanel.Modes.docker")))
         .child(StatusPill::new(
             docker_status_label(&status, has_snapshot),
             docker_status_kind(&status),
@@ -809,9 +825,9 @@ fn docker_view(
     }
 
     let refresh_control = if pending.is_some() {
-        StatusPill::new("busy", StatusKind::Warning).into_any_element()
+        StatusPill::new(t!("App.RightPanel.Docker.busy"), StatusKind::Warning).into_any_element()
     } else {
-        Button::ghost("docker-refresh", "Refresh")
+        Button::ghost("docker-refresh", t!("App.Common.refresh"))
             .on_click(move |_, window, app| on_refresh(&(), window, app))
             .into_any_element()
     };
@@ -836,14 +852,9 @@ fn docker_view(
                             .flex()
                             .flex_col()
                             .gap(SP_1)
-                            .child(SectionLabel::new("Target"))
+                            .child(SectionLabel::new(t!("App.RightPanel.target")))
                             .child(text::mono(endpoint.clone()))
-                            .child(
-                                text::body(
-                                    "Inventory and container actions run over the active SSH session using the remote docker CLI.",
-                                )
-                                .secondary(),
-                            ),
+                            .child(text::body(t!("App.RightPanel.Docker.target_body")).secondary()),
                     )
                     .child(refresh_control),
             ),
@@ -853,7 +864,7 @@ fn docker_view(
         col = col.child(
             Card::new()
                 .padding(SP_3)
-                .child(SectionLabel::new("Refresh Error"))
+                .child(SectionLabel::new(t!("App.RightPanel.Docker.refresh_error")))
                 .child(text::body(err).secondary()),
         );
     }
@@ -861,23 +872,23 @@ fn docker_view(
         col = col.child(
             Card::new()
                 .padding(SP_3)
-                .child(SectionLabel::new("Action Error"))
+                .child(SectionLabel::new(t!("App.RightPanel.Docker.action_error")))
                 .child(text::body(err).secondary()),
         );
     }
 
     let Some(snapshot) = snapshot else {
         let empty_label = match status {
-            DockerStatus::Loading => "collecting container, image, volume and network inventory...",
-            DockerStatus::Failed => "docker probe failed before any inventory was stored",
-            DockerStatus::Idle => "docker inventory starts when this panel is active",
-            DockerStatus::Ready => "waiting for first docker inventory sample",
+            DockerStatus::Loading => t!("App.RightPanel.Docker.collecting"),
+            DockerStatus::Failed => t!("App.RightPanel.Docker.failed_before_sample"),
+            DockerStatus::Idle => t!("App.RightPanel.Docker.idle_hint"),
+            DockerStatus::Ready => t!("App.RightPanel.Docker.waiting_first_sample"),
         };
         return col
             .child(
                 Card::new()
                     .padding(SP_3)
-                    .child(SectionLabel::new("Status"))
+                    .child(SectionLabel::new(t!("App.Common.status")))
                     .child(text::body(empty_label).secondary()),
             )
             .into_any_element();
@@ -910,9 +921,9 @@ fn logs_view(
 ) -> gpui::AnyElement {
     let Some(session_entity) = active_session else {
         return placeholder(
-            "Logs",
-            "No active SSH session.",
-            "Open a saved connection from the left panel to start a remote log stream.",
+            t!("App.RightPanel.Modes.logs"),
+            t!("App.RightPanel.no_active_ssh_session"),
+            t!("App.RightPanel.Logs.placeholder"),
         )
         .into_any_element();
     };
@@ -941,7 +952,7 @@ fn logs_view(
         .flex_row()
         .items_center()
         .gap(SP_3)
-        .child(text::h2("Logs"))
+        .child(text::h2(t!("App.RightPanel.Modes.logs")))
         .child(StatusPill::new(
             logs_status_label(&status),
             logs_status_kind(&status),
@@ -967,19 +978,14 @@ fn logs_view(
         .child(
             Card::new()
                 .padding(SP_3)
-                .child(SectionLabel::new("Target"))
+                .child(SectionLabel::new(t!("App.RightPanel.target")))
                 .child(text::mono(endpoint.clone()))
-                .child(
-                    text::body(
-                        "Run a long-lived remote command over SSH exec. Presets below cover the common system log locations; edit the command directly for app-specific files.",
-                    )
-                    .secondary(),
-                ),
+                .child(text::body(t!("App.RightPanel.Logs.target_body")).secondary()),
         )
         .child(
             Card::new()
                 .padding(SP_3)
-                .child(SectionLabel::new("Command"))
+                .child(SectionLabel::new(t!("App.RightPanel.Logs.command")))
                 .child(Input::new(&logs_command_input))
                 .child(
                     div()
@@ -989,15 +995,15 @@ fn logs_view(
                         .flex_wrap()
                         .gap(SP_2)
                         .child(
-                            Button::primary("logs-run", "Run")
+                            Button::primary("logs-run", t!("App.Common.run"))
                                 .on_click(move |_, window, app| on_run(&run_action, window, app)),
                         )
                         .child(
-                            Button::ghost("logs-stop", "Stop")
+                            Button::ghost("logs-stop", t!("App.Common.stop"))
                                 .on_click(move |_, window, app| on_stop(&stop_action, window, app)),
                         )
                         .child(
-                            Button::ghost("logs-clear", "Clear")
+                            Button::ghost("logs-clear", t!("App.Common.clear"))
                                 .on_click(move |_, window, app| on_clear(&clear_action, window, app)),
                         ),
                 )
@@ -1039,7 +1045,7 @@ fn logs_view(
         col = col.child(
             Card::new()
                 .padding(SP_3)
-                .child(SectionLabel::new("Active Command"))
+                .child(SectionLabel::new(t!("App.RightPanel.Logs.active_command")))
                 .child(text::mono(command)),
         );
     }
@@ -1047,26 +1053,24 @@ fn logs_view(
         col = col.child(
             Card::new()
                 .padding(SP_3)
-                .child(SectionLabel::new("Stream Error"))
+                .child(SectionLabel::new(t!("App.RightPanel.Logs.stream_error")))
                 .child(text::body(err).secondary()),
         );
     }
 
     if lines.is_empty() {
         let empty_label = match status {
-            LogsStatus::Idle => {
-                "log stream starts when this panel first opens or when you run a command"
-            }
-            LogsStatus::Starting => "starting remote log stream...",
-            LogsStatus::Live => "waiting for first log line...",
-            LogsStatus::Stopped => "stream stopped",
-            LogsStatus::Failed => "stream failed before any line was captured",
+            LogsStatus::Idle => t!("App.RightPanel.Logs.idle_hint"),
+            LogsStatus::Starting => t!("App.RightPanel.Logs.starting_stream"),
+            LogsStatus::Live => t!("App.RightPanel.Logs.waiting_first_line"),
+            LogsStatus::Stopped => t!("App.RightPanel.Logs.stream_stopped"),
+            LogsStatus::Failed => t!("App.RightPanel.Logs.failed_before_line"),
         };
         return col
             .child(
                 Card::new()
                     .padding(SP_3)
-                    .child(SectionLabel::new("Output"))
+                    .child(SectionLabel::new(t!("App.RightPanel.Logs.output")))
                     .child(text::body(empty_label).secondary()),
             )
             .into_any_element();
@@ -1074,8 +1078,8 @@ fn logs_view(
 
     let mut stream_card = Card::new()
         .padding(SP_3)
-        .child(SectionLabel::new("Output"))
-        .child(text::body(format!("{} retained lines, newest first", lines.len())).secondary());
+        .child(SectionLabel::new(t!("App.RightPanel.Logs.output")))
+        .child(text::body(t!("App.RightPanel.Logs.retained_lines", count = lines.len())).secondary());
 
     let visible = lines.iter().rev().take(200).cloned().collect::<Vec<_>>();
     for (index, line) in visible.into_iter().enumerate() {
@@ -1083,9 +1087,9 @@ fn logs_view(
     }
     if lines.len() > 200 {
         stream_card = stream_card.child(
-            text::body(format!(
-                "… older {} lines retained but hidden",
-                lines.len() - 200
+            text::body(t!(
+                "App.RightPanel.Logs.hidden_older_lines",
+                count = lines.len() - 200
             ))
             .secondary(),
         );
@@ -1096,12 +1100,13 @@ fn logs_view(
 
 fn monitor_meter_card(
     t: &crate::theme::Theme,
-    title: &'static str,
+    title: impl Into<SharedString>,
     primary: SharedString,
     secondary: SharedString,
     ratio: Option<f32>,
     fill: gpui::Rgba,
 ) -> impl IntoElement {
+    let title: SharedString = title.into();
     let bar_w = 148.0;
     div().w(px(176.0)).child(
         Card::new()
@@ -1114,10 +1119,11 @@ fn monitor_meter_card(
 }
 
 fn monitor_detail_card(
-    title: &'static str,
+    title: impl Into<SharedString>,
     primary: SharedString,
     secondary: SharedString,
 ) -> impl IntoElement {
+    let title: SharedString = title.into();
     div().w(px(176.0)).child(
         Card::new()
             .padding(SP_3)
@@ -1149,10 +1155,10 @@ fn monitor_bar(
 
 fn monitor_status_label(status: &MonitorStatus) -> SharedString {
     match status {
-        MonitorStatus::Idle => "idle".into(),
-        MonitorStatus::Loading => "polling".into(),
-        MonitorStatus::Ready => "live 5s".into(),
-        MonitorStatus::Failed => "stale".into(),
+        MonitorStatus::Idle => t!("App.Common.Status.idle").into(),
+        MonitorStatus::Loading => t!("App.RightPanel.Monitor.polling").into(),
+        MonitorStatus::Ready => t!("App.RightPanel.Monitor.live_5s").into(),
+        MonitorStatus::Failed => t!("App.Common.Status.stale").into(),
     }
 }
 
@@ -1211,12 +1217,12 @@ fn memory_primary(snapshot: &ServerSnapshot) -> SharedString {
 
 fn memory_secondary(snapshot: &ServerSnapshot) -> SharedString {
     if snapshot.mem_total_mb <= 0.0 {
-        "memory counters unavailable".into()
+        t!("App.RightPanel.Monitor.memory_unavailable").into()
     } else {
-        format!(
-            "{:.0} MB free of {:.0} MB",
-            snapshot.mem_free_mb.max(0.0),
-            snapshot.mem_total_mb
+        t!(
+            "App.RightPanel.Monitor.memory_free_of_total",
+            free = format!("{:.0}", snapshot.mem_free_mb.max(0.0)),
+            total = format!("{:.0}", snapshot.mem_total_mb)
         )
         .into()
     }
@@ -1232,12 +1238,12 @@ fn disk_primary(snapshot: &ServerSnapshot) -> SharedString {
 
 fn disk_secondary(snapshot: &ServerSnapshot) -> SharedString {
     if snapshot.disk_use_pct < 0.0 {
-        "disk counters unavailable".into()
+        t!("App.RightPanel.Monitor.disk_unavailable").into()
     } else {
-        format!(
-            "{} free · {}",
-            empty_dash(&snapshot.disk_avail),
-            percentage_label(snapshot.disk_use_pct)
+        t!(
+            "App.RightPanel.Monitor.disk_free",
+            avail = empty_dash(&snapshot.disk_avail),
+            pct = percentage_label(snapshot.disk_use_pct).as_ref()
         )
         .into()
     }
@@ -1245,7 +1251,7 @@ fn disk_secondary(snapshot: &ServerSnapshot) -> SharedString {
 
 fn swap_primary(snapshot: &ServerSnapshot) -> SharedString {
     if snapshot.swap_total_mb <= 0.0 {
-        "not available".into()
+        t!("App.RightPanel.Monitor.not_available").into()
     } else {
         format!("{:.0} MB used", snapshot.swap_used_mb.max(0.0)).into()
     }
@@ -1253,18 +1259,18 @@ fn swap_primary(snapshot: &ServerSnapshot) -> SharedString {
 
 fn swap_secondary(snapshot: &ServerSnapshot) -> SharedString {
     if snapshot.swap_total_mb <= 0.0 {
-        "host has no swap or probe unsupported".into()
+        t!("App.RightPanel.Monitor.swap_unavailable").into()
     } else {
         format!("{:.0} MB total", snapshot.swap_total_mb).into()
     }
 }
 
 fn load_label(load_1: f64, load_5: f64, load_15: f64) -> SharedString {
-    format!(
-        "1m {} · 5m {} · 15m {}",
-        compact_label(load_1),
-        compact_label(load_5),
-        compact_label(load_15)
+    t!(
+        "App.RightPanel.Monitor.load_breakdown",
+        load_1 = compact_label(load_1).as_ref(),
+        load_5 = compact_label(load_5).as_ref(),
+        load_15 = compact_label(load_15).as_ref()
     )
     .into()
 }
@@ -1296,7 +1302,7 @@ fn docker_summary_card(snapshot: &DockerPanelSnapshot) -> Card {
 
     Card::new()
         .padding(SP_3)
-        .child(SectionLabel::new("Inventory"))
+        .child(SectionLabel::new(t!("App.RightPanel.Docker.inventory")))
         .child(
             div()
                 .flex()
@@ -1304,7 +1310,11 @@ fn docker_summary_card(snapshot: &DockerPanelSnapshot) -> Card {
                 .flex_wrap()
                 .gap(SP_2)
                 .child(StatusPill::new(
-                    format!("{running}/{} running", snapshot.containers.len()),
+                    t!(
+                        "App.RightPanel.Docker.Inventory.running",
+                        running = running,
+                        total = snapshot.containers.len()
+                    ),
                     if running > 0 {
                         StatusKind::Success
                     } else {
@@ -1312,15 +1322,15 @@ fn docker_summary_card(snapshot: &DockerPanelSnapshot) -> Card {
                     },
                 ))
                 .child(StatusPill::new(
-                    format!("{} images", snapshot.images.len()),
+                    t!("App.RightPanel.Docker.Inventory.images", count = snapshot.images.len()),
                     StatusKind::Info,
                 ))
                 .child(StatusPill::new(
-                    format!("{} volumes", snapshot.volumes.len()),
+                    t!("App.RightPanel.Docker.Inventory.volumes", count = snapshot.volumes.len()),
                     StatusKind::Info,
                 ))
                 .child(StatusPill::new(
-                    format!("{} networks", snapshot.networks.len()),
+                    t!("App.RightPanel.Docker.Inventory.networks", count = snapshot.networks.len()),
                     StatusKind::Info,
                 )),
         )
@@ -1334,11 +1344,11 @@ fn docker_containers_card(
 ) -> Card {
     let mut card = Card::new()
         .padding(SP_3)
-        .child(SectionLabel::new("Containers"))
-        .child(text::body("Running and stopped containers from `docker ps --all`.").secondary());
+        .child(SectionLabel::new(t!("App.RightPanel.Docker.containers")))
+        .child(text::body(t!("App.RightPanel.Docker.containers_body")).secondary());
 
     if snapshot.containers.is_empty() {
-        return card.child(text::body("No containers detected.").secondary());
+        return card.child(text::body(t!("App.RightPanel.Docker.no_containers")).secondary());
     }
 
     for container in &snapshot.containers {
@@ -1450,7 +1460,13 @@ fn docker_container_row(
                     div()
                         .text_size(SIZE_SMALL)
                         .text_color(t.color.text_secondary)
-                        .child(format!("image: {}", empty_dash(&container.image))),
+                        .child(SharedString::from(
+                            t!(
+                                "App.RightPanel.Docker.image_label",
+                                image = empty_dash(&container.image)
+                            )
+                            .to_string(),
+                        )),
                 )
                 .child(
                     div()
@@ -1488,10 +1504,12 @@ fn docker_action_button(
 }
 
 fn docker_images_card(t: &crate::theme::Theme, snapshot: &DockerPanelSnapshot) -> Card {
-    let mut card = Card::new().padding(SP_3).child(SectionLabel::new("Images"));
+    let mut card = Card::new()
+        .padding(SP_3)
+        .child(SectionLabel::new(t!("App.RightPanel.Docker.images")));
 
     if snapshot.images.is_empty() {
-        return card.child(text::body("No images detected.").secondary());
+        return card.child(text::body(t!("App.RightPanel.Docker.no_images")).secondary());
     }
 
     for image in snapshot.images.iter().take(6) {
@@ -1529,8 +1547,13 @@ fn docker_images_card(t: &crate::theme::Theme, snapshot: &DockerPanelSnapshot) -
     }
 
     if snapshot.images.len() > 6 {
-        card = card
-            .child(text::body(format!("… +{} more images", snapshot.images.len() - 6)).secondary());
+        card = card.child(
+            text::body(t!(
+                "App.RightPanel.Docker.more_images",
+                count = snapshot.images.len() - 6
+            ))
+            .secondary(),
+        );
     }
     card
 }
@@ -1538,11 +1561,11 @@ fn docker_images_card(t: &crate::theme::Theme, snapshot: &DockerPanelSnapshot) -
 fn docker_storage_card(t: &crate::theme::Theme, snapshot: &DockerPanelSnapshot) -> Card {
     let mut card = Card::new()
         .padding(SP_3)
-        .child(SectionLabel::new("Volumes & Networks"));
+        .child(SectionLabel::new(t!("App.RightPanel.Docker.volumes_networks")));
 
-    card = card.child(text::body("Volumes").secondary());
+    card = card.child(text::body(t!("App.RightPanel.Docker.volumes")).secondary());
     if snapshot.volumes.is_empty() {
-        card = card.child(text::body("No volumes detected.").secondary());
+        card = card.child(text::body(t!("App.RightPanel.Docker.no_volumes")).secondary());
     } else {
         for volume in snapshot.volumes.iter().take(4) {
             card = card.child(
@@ -1573,9 +1596,9 @@ fn docker_storage_card(t: &crate::theme::Theme, snapshot: &DockerPanelSnapshot) 
 
     card = card
         .child(div().pt(SP_2))
-        .child(text::body("Networks").secondary());
+        .child(text::body(t!("App.RightPanel.Docker.networks")).secondary());
     if snapshot.networks.is_empty() {
-        card = card.child(text::body("No networks detected.").secondary());
+        card = card.child(text::body(t!("App.RightPanel.Docker.no_networks")).secondary());
     } else {
         for network in snapshot.networks.iter().take(4) {
             card = card.child(
@@ -1610,7 +1633,7 @@ fn docker_storage_card(t: &crate::theme::Theme, snapshot: &DockerPanelSnapshot) 
 fn docker_inspect_card(t: &crate::theme::Theme, inspect: &DockerInspectState) -> Card {
     Card::new()
         .padding(SP_3)
-        .child(SectionLabel::new("Inspect"))
+        .child(SectionLabel::new(t!("App.RightPanel.Docker.inspect")))
         .child(
             div()
                 .text_size(SIZE_SMALL)
@@ -1632,11 +1655,11 @@ fn docker_inspect_card(t: &crate::theme::Theme, inspect: &DockerInspectState) ->
 
 fn docker_status_label(status: &DockerStatus, has_snapshot: bool) -> SharedString {
     match status {
-        DockerStatus::Idle => "idle".into(),
-        DockerStatus::Loading => "loading".into(),
-        DockerStatus::Ready => "live".into(),
-        DockerStatus::Failed if has_snapshot => "stale".into(),
-        DockerStatus::Failed => "error".into(),
+        DockerStatus::Idle => t!("App.Common.Status.idle").into(),
+        DockerStatus::Loading => t!("App.Common.Status.loading").into(),
+        DockerStatus::Ready => t!("App.Common.Status.live").into(),
+        DockerStatus::Failed if has_snapshot => t!("App.Common.Status.stale").into(),
+        DockerStatus::Failed => t!("App.Common.Status.error").into(),
     }
 }
 
@@ -1650,15 +1673,20 @@ fn docker_status_kind(status: &DockerStatus) -> StatusKind {
 }
 
 fn docker_pending_label(action: &PendingDockerAction) -> SharedString {
-    format!("{} {}", action.kind.label(), action.target_label).into()
+    t!(
+        "App.RightPanel.Docker.pending",
+        action = docker_action_button_label(action.kind).as_ref(),
+        target = action.target_label.as_str()
+    )
+    .into()
 }
 
-fn docker_action_button_label(kind: DockerActionKind) -> &'static str {
+fn docker_action_button_label(kind: DockerActionKind) -> SharedString {
     match kind {
-        DockerActionKind::Start => "Start",
-        DockerActionKind::Stop => "Stop",
-        DockerActionKind::Restart => "Restart",
-        DockerActionKind::Inspect => "Inspect",
+        DockerActionKind::Start => t!("App.Common.start").into(),
+        DockerActionKind::Stop => t!("App.Common.stop").into(),
+        DockerActionKind::Restart => t!("App.RightPanel.Docker.restart").into(),
+        DockerActionKind::Inspect => t!("App.RightPanel.Docker.inspect").into(),
     }
 }
 
@@ -1693,7 +1721,7 @@ fn trim_panel_text(value: &str, max_chars: usize) -> SharedString {
     }
 
     let trimmed: String = value.chars().take(max_chars).collect();
-    format!("{trimmed}\n… truncated from {total} chars").into()
+    t!("App.RightPanel.truncated_chars", text = trimmed, total = total).into()
 }
 
 fn logs_preset_button(
@@ -1711,11 +1739,11 @@ fn logs_preset_button(
 
 fn logs_status_label(status: &LogsStatus) -> SharedString {
     match status {
-        LogsStatus::Idle => "idle".into(),
-        LogsStatus::Starting => "starting".into(),
-        LogsStatus::Live => "live".into(),
-        LogsStatus::Stopped => "stopped".into(),
-        LogsStatus::Failed => "error".into(),
+        LogsStatus::Idle => t!("App.Common.Status.idle").into(),
+        LogsStatus::Starting => t!("App.Common.Status.starting").into(),
+        LogsStatus::Live => t!("App.Common.Status.live").into(),
+        LogsStatus::Stopped => t!("App.Common.Status.stopped").into(),
+        LogsStatus::Failed => t!("App.Common.Status.error").into(),
     }
 }
 
@@ -1766,10 +1794,13 @@ fn log_line_row(t: &crate::theme::Theme, index: usize, line: LogLine) -> impl In
 }
 
 fn placeholder(
-    title: &'static str,
-    headline: &'static str,
-    body: &'static str,
+    title: impl Into<SharedString>,
+    headline: impl Into<SharedString>,
+    body: impl Into<SharedString>,
 ) -> impl IntoElement {
+    let title: SharedString = title.into();
+    let headline: SharedString = headline.into();
+    let body: SharedString = body.into();
     div()
         .p(SP_4)
         .flex()

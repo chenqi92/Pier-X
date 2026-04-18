@@ -1,0 +1,643 @@
+_version: 2
+App:
+  Common:
+    files:
+      en: Files
+      zh-CN: 文件
+    servers:
+      en: Servers
+      zh-CN: 服务器
+    refresh:
+      en: Refresh
+      zh-CN: 刷新
+    run:
+      en: Run
+      zh-CN: 运行
+    stop:
+      en: Stop
+      zh-CN: 停止
+    clear:
+      en: Clear
+      zh-CN: 清空
+    start:
+      en: Start
+      zh-CN: 启动
+    local:
+      en: local
+      zh-CN: 本地
+    status:
+      en: Status
+      zh-CN: 状态
+    no_matches:
+      en: '(no matches for "%{query}")'
+      zh-CN: '（没有匹配“%{query}”的结果）'
+    Status:
+      idle:
+        en: idle
+        zh-CN: 空闲
+      connecting:
+        en: connecting
+        zh-CN: 连接中
+      loading:
+        en: loading
+        zh-CN: 加载中
+      connected:
+        en: connected
+        zh-CN: 已连接
+      error:
+        en: error
+        zh-CN: 错误
+      stale:
+        en: stale
+        zh-CN: 过期
+      live:
+        en: live
+        zh-CN: 实时
+      starting:
+        en: starting
+        zh-CN: 启动中
+      stopped:
+        en: stopped
+        zh-CN: 已停止
+  Route:
+    dashboard:
+      en: Dashboard
+      zh-CN: 仪表盘
+    inspector:
+      en: Inspector
+      zh-CN: 检查器
+    terminal:
+      en: Terminal
+      zh-CN: 终端
+  Welcome:
+    section:
+      en: Welcome
+      zh-CN: 欢迎
+    title:
+      en: Pier-X workspace
+      zh-CN: Pier-X 工作区
+    subtitle:
+      en: Open a local terminal or connect to a server to start working.
+      zh-CN: 打开本地终端，或连接一台服务器开始工作。
+    mode_dark:
+      en: Dark mode
+      zh-CN: 深色模式
+    mode_light:
+      en: Light mode
+      zh-CN: 浅色模式
+    Actions:
+      new_ssh:
+        en: New SSH connection
+        zh-CN: 新建 SSH 连接
+      open_local_terminal:
+        en: Open local terminal
+        zh-CN: 打开本地终端
+    Recent:
+      title:
+        en: Recent connections
+        zh-CN: 最近连接
+      saved_count:
+        en: "%{count} saved"
+        zh-CN: "已保存 %{count} 个"
+  Settings:
+    title:
+      en: Settings
+      zh-CN: 设置
+    sidebar_note:
+      en: Ported from the sibling Pier app where it already exists.
+      zh-CN: 这里沿用了姊妹应用里已经验证过的一套设置体验。
+    Sections:
+      general_title:
+        en: General
+        zh-CN: 通用
+      general_caption:
+        en: Appearance and shell defaults
+        zh-CN: 外观与默认壳层设置
+      terminal_title:
+        en: Terminal
+        zh-CN: 终端
+      terminal_caption:
+        en: Terminal rendering and cursor behavior
+        zh-CN: 终端渲染与光标行为
+      shortcuts_title:
+        en: Shortcuts
+        zh-CN: 快捷键
+      shortcuts_caption:
+        en: Current built-in key bindings
+        zh-CN: 当前内置快捷键
+    General:
+      subtitle:
+        en: Shell-level preferences that already map cleanly to GPUI.
+        zh-CN: 已经可以直接映射到 GPUI shell 的基础偏好。
+      appearance:
+        en: Appearance
+        zh-CN: 外观
+      dark:
+        en: Dark
+        zh-CN: 深色
+      light:
+        en: Light
+        zh-CN: 浅色
+      terminal_font_family:
+        en: Terminal Font Family
+        zh-CN: 终端字体
+    Terminal:
+      subtitle:
+        en: Settings below are applied immediately to the active GPUI terminal surface.
+        zh-CN: 下面的设置会立即应用到当前 GPUI 终端表面。
+      theme:
+        en: Theme
+        zh-CN: 主题
+      font_size:
+        en: Font Size
+        zh-CN: 字号
+      font_size_label:
+        en: Terminal text size
+        zh-CN: 终端文字大小
+      background_opacity:
+        en: Background opacity
+        zh-CN: 背景不透明度
+      font_ligatures:
+        en: Font Ligatures
+        zh-CN: 字体连字
+      font_ligatures_description:
+        en: Disable contextual alternates if you want raw terminal glyph rendering.
+        zh-CN: 如果你希望终端字形保持原始渲染效果，可以关闭上下文连字。
+      cursor:
+        en: Cursor
+        zh-CN: 光标
+      cursor_block:
+        en: Block
+        zh-CN: 块状
+      cursor_underline:
+        en: Underline
+        zh-CN: 下划线
+      cursor_bar:
+        en: Bar
+        zh-CN: 竖条
+      cursor_blink:
+        en: Cursor Blink
+        zh-CN: 光标闪烁
+      cursor_blink_description:
+        en: Turn off if you prefer a stable insertion point.
+        zh-CN: 如果你更喜欢稳定不闪烁的插入点，可以关闭它。
+      Palettes:
+        default:
+          en: Pier default shell palette
+          zh-CN: Pier 默认 shell 调色板
+        solarized_dark:
+          en: Low-contrast palette for long sessions
+          zh-CN: 适合长时间会话的低对比度调色板
+        dracula:
+          en: High-contrast violet-heavy palette
+          zh-CN: 高对比度、偏紫色的调色板
+        monokai:
+          en: Warm palette with vivid syntax colors
+          zh-CN: 偏暖色、语法色彩更鲜明的调色板
+        nord:
+          en: Cool muted palette with softer contrast
+          zh-CN: 偏冷静、对比更柔和的调色板
+    Shortcuts:
+      subtitle:
+        en: These are the current bindings wired into the GPUI shell today.
+        zh-CN: 这些是当前 GPUI shell 已接入的快捷键绑定。
+      new_tab:
+        en: New Tab
+        zh-CN: 新建标签页
+      close_active_tab:
+        en: Close Active Tab
+        zh-CN: 关闭当前标签页
+      open_settings:
+        en: Open Settings
+        zh-CN: 打开设置
+      toggle_left_panel:
+        en: Toggle Left Panel
+        zh-CN: 切换左侧面板
+      toggle_right_panel:
+        en: Toggle Right Panel
+        zh-CN: 切换右侧面板
+      toggle_theme:
+        en: Toggle Theme
+        zh-CN: 切换主题
+      copy_selection:
+        en: Copy Selection
+        zh-CN: 复制选区
+      paste:
+        en: Paste
+        zh-CN: 粘贴
+  Markdown:
+    truncated:
+      en: Truncated
+      zh-CN: 已截断
+    truncated_message:
+      en: Showing the first %{shown_kb} KB of a %{total_kb} KB file.
+      zh-CN: 当前仅显示 %{total_kb} KB 文件中的前 %{shown_kb} KB。
+    empty_document:
+      en: (empty document)
+      zh-CN: （空文档）
+    cannot_read_file:
+      en: Cannot read file
+      zh-CN: 无法读取文件
+    no_file_selected:
+      en: No file selected
+      zh-CN: 未选择文件
+    empty_hint:
+      en: Click a .md file in the left file tree to preview it here.
+      zh-CN: 在左侧文件树中点击一个 `.md` 文件，即可在这里预览。
+  Database:
+    not_connected:
+      en: not connected
+      zh-CN: 未连接
+    service:
+      en: Service
+      zh-CN: 服务
+    connection_template:
+      en: Connection template
+      zh-CN: 连接模板
+    backend:
+      en: Backend
+      zh-CN: 后端
+    follow_up:
+      en: Wired to pier-core; UI for connect/query/browse will land in a follow-up slice.
+      zh-CN: 已接入 pier-core；连接、查询和浏览的 UI 会在后续切片里补上。
+    Profiles:
+      mysql:
+        en: Relational store accessed over TCP (typically through an SSH tunnel).
+        zh-CN: 通过 TCP 访问的关系型存储，通常会配合 SSH 隧道使用。
+      postgres:
+        en: Relational store, default port 5432.
+        zh-CN: 关系型存储，默认端口为 5432。
+      redis:
+        en: Key-value store with logical DB indices (default 0).
+        zh-CN: 带逻辑 DB 索引的键值存储，默认索引为 0。
+      sqlite:
+        en: Embedded SQLite — no daemon, just a file path.
+        zh-CN: 内嵌式 SQLite，无需守护进程，只需要一个文件路径。
+  FileTree:
+    filter:
+      en: Filter files…
+      zh-CN: 过滤文件…
+    empty_directory:
+      en: (empty directory)
+      zh-CN: （空目录）
+    more_entries:
+      en: … +%{count} more
+      zh-CN: … 另有 %{count} 项
+    Errors:
+      cannot_read_directory:
+        en: Cannot read directory
+        zh-CN: 无法读取目录
+      io_error:
+        en: io error
+        zh-CN: I/O 错误
+    Quick:
+      home:
+        en: Home
+        zh-CN: 主目录
+      desktop:
+        en: Desktop
+        zh-CN: 桌面
+      projects:
+        en: Projects
+        zh-CN: Projects
+      choose_folder:
+        en: Choose Folder…   (native picker — Phase 10)
+        zh-CN: 选择文件夹…   （原生选择器，Phase 10）
+  LeftPanel:
+    filter:
+      en: Filter servers…
+      zh-CN: 过滤服务器…
+    connection_store_fallback:
+      en: the Pier-X connection store
+      zh-CN: Pier-X 连接存储
+    Headers:
+      saved_connections:
+        en: Saved connections
+        zh-CN: 已保存连接
+      active_connection:
+        en: Active connection
+        zh-CN: 当前连接
+      detected_services:
+        en: Detected services
+        zh-CN: 已检测服务
+      active_tunnels:
+        en: Active tunnels
+        zh-CN: 活跃隧道
+      connection_store:
+        en: Connection store
+        zh-CN: 连接存储
+    Groups:
+      ungrouped:
+        en: Ungrouped
+        zh-CN: 未分组
+      live_count:
+        en: "%{count} live"
+        zh-CN: "%{count} 个在线"
+    Auth:
+      agent:
+        en: agent
+        zh-CN: agent
+      key:
+        en: key
+        zh-CN: 密钥
+      keychain:
+        en: keychain
+        zh-CN: 钥匙串
+      password:
+        en: password
+        zh-CN: 密码
+    Services:
+      discovery_idle:
+        en: Service discovery starts after the SSH session boots.
+        zh-CN: SSH 会话启动后才会开始服务探测。
+      discovery_loading:
+        en: Detecting MySQL, PostgreSQL, Redis and Docker.
+        zh-CN: 正在检测 MySQL、PostgreSQL、Redis 和 Docker。
+      discovery_empty:
+        en: No supported remote services detected yet.
+        zh-CN: 暂未检测到受支持的远程服务。
+      discovery_failed:
+        en: Service discovery failed for this connection.
+        zh-CN: 该连接的服务探测失败。
+      detecting:
+        en: detecting
+        zh-CN: 检测中
+      ready:
+        en: services ready
+        zh-CN: 服务就绪
+      none:
+        en: no services
+        zh-CN: 无服务
+      error:
+        en: services error
+        zh-CN: 服务错误
+    Tunnels:
+      empty:
+        en: No forwarded services yet.
+        zh-CN: 还没有转发任何服务。
+      opening:
+        en: "%{service} opening -> %{port}"
+        zh-CN: "%{service} 正在建立 -> %{port}"
+      error:
+        en: "%{service} error -> %{port}"
+        zh-CN: "%{service} 错误 -> %{port}"
+    Empty:
+      title:
+        en: No saved SSH connections
+        zh-CN: 暂无已保存的 SSH 连接
+      body:
+        en: Add a server to open remote terminals, browse files, and unlock the right-side service panels.
+        zh-CN: 添加一台服务器后，就可以打开远程终端、浏览文件，并启用右侧的服务面板。
+    Actions:
+      add_ssh:
+        en: Add SSH Connection
+        zh-CN: 添加 SSH 连接
+  RightPanel:
+    services:
+      en: Services
+      zh-CN: 服务
+    services_detecting_detail:
+      en: probing mysql, postgres, redis and docker
+      zh-CN: 正在探测 mysql、postgres、redis 和 docker
+    services_empty:
+      en: no supported remote services detected
+      zh-CN: 未检测到受支持的远程服务
+    no_tunnels:
+      en: no tunnels
+      zh-CN: 无隧道
+    tunnel_failed:
+      en: tunnel failed
+      zh-CN: 隧道失败
+    tunnel_opening:
+      en: "%{service} opening -> %{port}"
+      zh-CN: "%{service} 正在建立 -> %{port}"
+    tunnel_error:
+      en: "%{service} error -> %{port}"
+      zh-CN: "%{service} 错误 -> %{port}"
+    no_session:
+      en: no session
+      zh-CN: 无会话
+    no_active_ssh_session:
+      en: No active SSH session.
+      zh-CN: 当前没有活动中的 SSH 会话。
+    target:
+      en: Target
+      zh-CN: 目标
+    truncated_chars:
+      en: "%{text}\n… truncated from %{total} chars"
+      zh-CN: "%{text}\n… 已从 %{total} 个字符中截断"
+    Modes:
+      markdown:
+        en: Markdown
+        zh-CN: Markdown
+      monitor:
+        en: Monitor
+        zh-CN: 监控
+      docker:
+        en: Docker
+        zh-CN: Docker
+      logs:
+        en: Logs
+        zh-CN: 日志
+    Monitor:
+      placeholder:
+        en: Open a saved connection from the left panel to start remote monitoring.
+        zh-CN: 从左侧面板打开一个已保存连接，即可开始远程监控。
+      title:
+        en: Remote Monitor
+        zh-CN: 远程监控
+      target_body:
+        en: 5 second polling over the active SSH session. CPU / memory / disk are live; network / GPU / process charts land in a follow-up slice.
+        zh-CN: 基于当前 SSH 会话每 5 秒轮询一次。CPU / 内存 / 磁盘是实时数据；网络 / GPU / 进程图表会在后续切片中补上。
+      probe_error:
+        en: Probe Error
+        zh-CN: 探测错误
+      collecting:
+        en: collecting remote metrics...
+        zh-CN: 正在收集远程指标…
+      failed_before_sample:
+        en: last probe failed before any sample was stored
+        zh-CN: 上次探测在写入任何采样前就失败了
+      idle_hint:
+        en: monitor starts when this panel is active
+        zh-CN: 打开这个面板后才会启动监控
+      waiting_first_sample:
+        en: waiting for first sample
+        zh-CN: 等待第一条采样
+      memory:
+        en: Memory
+        zh-CN: 内存
+      disk:
+        en: Disk /
+        zh-CN: 磁盘 /
+      swap:
+        en: Swap
+        zh-CN: 交换分区
+      load:
+        en: Load
+        zh-CN: 负载
+      load_tail:
+        en: "5m %{load_5} · 15m %{load_15}"
+        zh-CN: "5 分钟 %{load_5} · 15 分钟 %{load_15}"
+      uptime:
+        en: Uptime
+        zh-CN: 运行时长
+      root_free:
+        en: "root free %{avail} of %{total}"
+        zh-CN: "根分区剩余 %{avail} / %{total}"
+      polling:
+        en: polling
+        zh-CN: 轮询中
+      live_5s:
+        en: live 5s
+        zh-CN: 实时 5 秒
+      memory_unavailable:
+        en: memory counters unavailable
+        zh-CN: 内存计数器不可用
+      memory_free_of_total:
+        en: "%{free} MB free of %{total} MB"
+        zh-CN: "剩余 %{free} MB / 共 %{total} MB"
+      disk_unavailable:
+        en: disk counters unavailable
+        zh-CN: 磁盘计数器不可用
+      disk_free:
+        en: "%{avail} free · %{pct}"
+        zh-CN: "剩余 %{avail} · %{pct}"
+      not_available:
+        en: not available
+        zh-CN: 不可用
+      swap_unavailable:
+        en: host has no swap or probe unsupported
+        zh-CN: 主机没有 swap，或当前探测不支持
+      load_breakdown:
+        en: "1m %{load_1} · 5m %{load_5} · 15m %{load_15}"
+        zh-CN: "1 分钟 %{load_1} · 5 分钟 %{load_5} · 15 分钟 %{load_15}"
+    Docker:
+      placeholder:
+        en: Open a saved connection from the left panel to inspect remote containers.
+        zh-CN: 从左侧面板打开一个已保存连接，即可查看远程容器。
+      busy:
+        en: busy
+        zh-CN: 忙碌
+      target_body:
+        en: Inventory and container actions run over the active SSH session using the remote docker CLI.
+        zh-CN: 清单采集与容器操作会通过当前 SSH 会话调用远端 docker CLI 完成。
+      refresh_error:
+        en: Refresh Error
+        zh-CN: 刷新错误
+      action_error:
+        en: Action Error
+        zh-CN: 操作错误
+      collecting:
+        en: collecting container, image, volume and network inventory...
+        zh-CN: 正在收集容器、镜像、卷和网络清单…
+      failed_before_sample:
+        en: docker probe failed before any inventory was stored
+        zh-CN: docker 探测在保存任何清单前就失败了
+      idle_hint:
+        en: docker inventory starts when this panel is active
+        zh-CN: 打开这个面板后才会开始 docker 清单采集
+      waiting_first_sample:
+        en: waiting for first docker inventory sample
+        zh-CN: 等待第一份 docker 清单
+      inventory:
+        en: Inventory
+        zh-CN: 清单
+      containers:
+        en: Containers
+        zh-CN: 容器
+      containers_body:
+        en: Running and stopped containers from `docker ps --all`.
+        zh-CN: 运行中和已停止的容器，来自 `docker ps --all`。
+      no_containers:
+        en: No containers detected.
+        zh-CN: 未检测到容器。
+      image_label:
+        en: "image: %{image}"
+        zh-CN: "镜像：%{image}"
+      images:
+        en: Images
+        zh-CN: 镜像
+      no_images:
+        en: No images detected.
+        zh-CN: 未检测到镜像。
+      more_images:
+        en: "… +%{count} more images"
+        zh-CN: "… 另外还有 %{count} 个镜像"
+      volumes_networks:
+        en: Volumes & Networks
+        zh-CN: 卷与网络
+      volumes:
+        en: Volumes
+        zh-CN: 卷
+      no_volumes:
+        en: No volumes detected.
+        zh-CN: 未检测到卷。
+      networks:
+        en: Networks
+        zh-CN: 网络
+      no_networks:
+        en: No networks detected.
+        zh-CN: 未检测到网络。
+      inspect:
+        en: Inspect
+        zh-CN: Inspect
+      pending:
+        en: "%{action} %{target}"
+        zh-CN: "%{action} %{target}"
+      restart:
+        en: Restart
+        zh-CN: 重启
+      Inventory:
+        running:
+          en: "%{running}/%{total} running"
+          zh-CN: "运行中 %{running}/%{total}"
+        images:
+          en: "%{count} images"
+          zh-CN: "%{count} 个镜像"
+        volumes:
+          en: "%{count} volumes"
+          zh-CN: "%{count} 个卷"
+        networks:
+          en: "%{count} networks"
+          zh-CN: "%{count} 个网络"
+    Logs:
+      placeholder:
+        en: Open a saved connection from the left panel to start a remote log stream.
+        zh-CN: 从左侧面板打开一个已保存连接，即可开始远程日志流。
+      target_body:
+        en: Run a long-lived remote command over SSH exec. Presets below cover the common system log locations; edit the command directly for app-specific files.
+        zh-CN: 通过 SSH exec 运行一个长连接远程命令。下面的预设覆盖了常见系统日志位置；你也可以直接编辑命令去查看应用自身的日志文件。
+      command:
+        en: Command
+        zh-CN: 命令
+      active_command:
+        en: Active Command
+        zh-CN: 当前命令
+      stream_error:
+        en: Stream Error
+        zh-CN: 流错误
+      idle_hint:
+        en: log stream starts when this panel first opens or when you run a command
+        zh-CN: 首次打开该面板，或运行命令之后，日志流才会启动
+      starting_stream:
+        en: starting remote log stream...
+        zh-CN: 正在启动远程日志流…
+      waiting_first_line:
+        en: waiting for first log line...
+        zh-CN: 等待第一行日志…
+      stream_stopped:
+        en: stream stopped
+        zh-CN: 日志流已停止
+      failed_before_line:
+        en: stream failed before any line was captured
+        zh-CN: 在捕获到任何日志之前，日志流就失败了
+      output:
+        en: Output
+        zh-CN: 输出
+      retained_lines:
+        en: "%{count} retained lines, newest first"
+        zh-CN: "共保留 %{count} 行，最新的在前"
+      hidden_older_lines:
+        en: "… older %{count} lines retained but hidden"
+        zh-CN: "… 更早的 %{count} 行仍然保留，但当前已隐藏"

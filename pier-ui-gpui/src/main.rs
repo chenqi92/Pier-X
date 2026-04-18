@@ -3,11 +3,12 @@ mod assets;
 mod components;
 mod data;
 mod diagnostics;
+mod i18n;
 mod theme;
 mod ui_kit;
 mod views;
 
-use std::borrow::Cow;
+rust_i18n::i18n!("locales", fallback = "en");
 
 use gpui::{
     px, size, App, AppContext, Application, Bounds, KeyBinding, WindowBounds, WindowOptions,
@@ -33,10 +34,12 @@ fn main() {
             log::info!("app bootstrap starting; diagnostics log={}", path.display());
         }
 
+        i18n::init();
+
         cx.text_system()
             .add_fonts(vec![
-                Cow::Borrowed(INTER_VARIABLE),
-                Cow::Borrowed(JETBRAINS_MONO),
+                std::borrow::Cow::Borrowed(INTER_VARIABLE),
+                std::borrow::Cow::Borrowed(JETBRAINS_MONO),
             ])
             .expect("failed to load bundled fonts");
 

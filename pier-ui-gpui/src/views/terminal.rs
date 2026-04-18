@@ -2,11 +2,13 @@ use std::{
     cell::RefCell,
     env,
     ffi::c_void,
-    path::{Path, PathBuf},
     rc::Rc,
     sync::atomic::{AtomicBool, AtomicUsize, Ordering},
     time::{Duration, Instant},
 };
+
+#[cfg(windows)]
+use std::path::{Path, PathBuf};
 
 use base64::{engine::general_purpose::STANDARD as BASE64_STANDARD, Engine as _};
 use gpui::{
@@ -62,6 +64,7 @@ static NEXT_TERMINAL_ID: AtomicUsize = AtomicUsize::new(1);
 pub(crate) struct TerminalLine {
     pub(crate) text: SharedString,
     pub(crate) runs: Vec<TextRun>,
+    pub(crate) cell_spans: Vec<usize>,
 }
 
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -77,6 +80,7 @@ struct TerminalRunStyle {
 struct TerminalRun {
     style: TerminalRunStyle,
     len: usize,
+    cell_span: usize,
 }
 
 #[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
@@ -1526,6 +1530,7 @@ fn preferred_shell() -> String {
     }
 }
 
+#[cfg(windows)]
 fn command_exists(command: &str) -> bool {
     let command_path = Path::new(command);
     if command_path.is_absolute() {
@@ -1857,6 +1862,7 @@ fn render_terminal_line(
     let mut run_specs = Vec::<TerminalRun>::new();
     let mut current_style = None;
     let mut current_len = 0usize;
+    let mut current_cell_span = 0usize;
 
     for col in 0..cols {
         let cell = &snapshot.cells[row * cols + col];
@@ -1864,19 +1870,31 @@ fn render_terminal_line(
             continue;
         }
 
-        let style = resolve_terminal_style(cell, palette, cursor_col == Some(col));
-        let style =
-            if selection_span.is_some_and(|span| col >= span.start_col && col <= span.end_col) {
+        let cell_span = visible_cell_span(snapshot, row, col);
+        let style = resolve_terminal_style(
+            cell,
+            palette,
+            cursor_col.is_some_and(|cursor| cursor >= col && cursor < col + cell_span),
+        );
+        let style = if selection_span
+            .is_some_and(|span| selection_intersects_visible_cell(span, col, cell_span))
+        {
                 selected_terminal_style(style, palette)
             } else {
                 style
             };
         if current_style != Some(style) {
-            push_terminal_run(&mut run_specs, &mut current_style, &mut current_len);
+            push_terminal_run(
+                &mut run_specs,
+                &mut current_style,
+                &mut current_len,
+                &mut current_cell_span,
+            );
             current_style = Some(style);
         }
         line.push(cell.ch);
         current_len += cell.ch.len_utf8();
+        current_cell_span += cell_span;
     }
 
     if line.is_empty() {
@@ -1884,12 +1902,20 @@ fn render_terminal_line(
         line.push(' ');
         current_style = Some(default_style);
         current_len = 1;
+        current_cell_span = 1;
     }
 
-    push_terminal_run(&mut run_specs, &mut current_style, &mut current_len);
+    push_terminal_run(
+        &mut run_specs,
+        &mut current_style,
+        &mut current_len,
+        &mut current_cell_span,
+    );
+    let cell_spans = terminal_run_cell_spans(&run_specs);
     TerminalLine {
         text: line.into(),
         runs: terminal_runs(run_specs, font_family, font_ligatures, background_opacity),
+        cell_spans,
     }
 }
 
@@ -1958,12 +1984,34 @@ fn fallback_terminal_line(
             vec![TerminalRun {
                 style,
                 len: message.chars().map(char::len_utf8).sum(),
+                cell_span: message.chars().count(),
             }],
             font_family,
             font_ligatures,
             background_opacity,
         ),
+        cell_spans: vec![message.chars().count()],
     }
+}
+
+fn visible_cell_span(snapshot: &GridSnapshot, row: usize, col: usize) -> usize {
+    let cols = snapshot.cols as usize;
+    let mut span = 1usize;
+    let mut next = col + 1;
+    while next < cols && snapshot.cells[row * cols + next].ch == '\0' {
+        span += 1;
+        next += 1;
+    }
+    span
+}
+
+fn selection_intersects_visible_cell(
+    selection: TerminalSelectionSpan,
+    col: usize,
+    cell_span: usize,
+) -> bool {
+    let end_col = col + cell_span.saturating_sub(1);
+    selection.start_col <= end_col && selection.end_col >= col
 }
 
 fn default_terminal_style(palette: &TerminalPalette) -> TerminalRunStyle {
@@ -2225,6 +2273,7 @@ fn push_terminal_run(
     runs: &mut Vec<TerminalRun>,
     current_style: &mut Option<TerminalRunStyle>,
     current_len: &mut usize,
+    current_cell_span: &mut usize,
 ) {
     if *current_len == 0 {
         return;
@@ -2234,10 +2283,12 @@ fn push_terminal_run(
         runs.push(TerminalRun {
             style,
             len: *current_len,
+            cell_span: *current_cell_span,
         });
     }
 
     *current_len = 0;
+    *current_cell_span = 0;
 }
 
 fn terminal_runs(
@@ -2274,6 +2325,10 @@ fn terminal_runs(
         });
     }
     runs
+}
+
+fn terminal_run_cell_spans(run_specs: &[TerminalRun]) -> Vec<usize> {
+    run_specs.iter().map(|run| run.cell_span).collect()
 }
 
 #[cfg(test)]

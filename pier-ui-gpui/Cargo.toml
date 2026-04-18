@@ -14,6 +14,7 @@ gpui-component = { path = "../forks/gpui-component-pier" }
 log = "0.4"
 pier-core = { path = "../pier-core" }
 pulldown-cmark = { version = "0.13", default-features = false }
+rust-i18n = "3"
 
 [build-dependencies]
 embed-resource = "3.0.8"

@@ -49,6 +49,13 @@ pub fn connections_file() -> Option<PathBuf> {
     data_dir().map(|d| d.join("connections.json"))
 }
 
+/// Path to the persisted database connections JSON file. Sibling
+/// of [`connections_file`] but stored separately so the SSH and DB
+/// sidebar lists can evolve their schemas independently.
+pub fn db_connections_file() -> Option<PathBuf> {
+    data_dir().map(|d| d.join("db-connections.json"))
+}
+
 /// Path to the persisted UI settings JSON file.
 ///
 /// Settings live under the config directory because they are user

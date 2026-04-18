@@ -5149,6 +5149,7 @@ dependencies = [
  "log",
  "pier-core",
  "pulldown-cmark",
+ "rust-i18n",
 ]
 
 [[package]]

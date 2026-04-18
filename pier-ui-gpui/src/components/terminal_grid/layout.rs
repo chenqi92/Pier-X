@@ -20,7 +20,6 @@ pub(crate) struct LayoutState {
     pub bg_rects: Vec<BgRect>,
     pub rows: Vec<BatchedRow>,
     pub cursor: Option<CursorRect>,
-    pub cell_size: Size<Pixels>,
 }
 
 /// One visible terminal row, ready to feed `text_system().shape_line(..)`.
@@ -64,14 +63,6 @@ const CURSOR_UNDERLINE_HEIGHT_PX: f32 = 2.0;
 /// `cursor_paint` is `None` when no overlay rect should be drawn — that
 /// covers (a) cursor hidden / blinking off, (b) Block cursor (already
 /// encoded into runs by `render_terminal_line`), and (c) scrollback view.
-///
-/// Cell-span math counts UTF-8 chars per run, which is correct for the ASCII
-/// + Latin output that dominates terminal sessions. Wide CJK characters take
-/// 2 cells in the source `GridSnapshot` but only 1 char in the rendered
-/// `TerminalLine.text` (the second cell holds `\0` and is skipped upstream).
-/// They will under-position later cells in the same row by 1 column each.
-/// Phase 11 ships with this known limitation; Phase 12 may extend
-/// `TerminalLine` with a per-run cell span if it matters in practice.
 pub(crate) fn build(
     lines: &[TerminalLine],
     snapshot: Option<&GridSnapshot>,
@@ -84,15 +75,11 @@ pub(crate) fn build(
 
     for (row_idx, line) in lines.iter().enumerate() {
         let row_y = origin.y + cell_size.height * row_idx as f32;
-        let text_str: &str = line.text.as_ref();
-        let mut byte_offset = 0usize;
         let mut col_offset = 0usize;
         let mut stripped_runs: Vec<TextRun> = Vec::with_capacity(line.runs.len());
 
-        for run in &line.runs {
-            let run_end = (byte_offset + run.len).min(text_str.len());
-            let run_substr = &text_str[byte_offset..run_end];
-            let cell_span = run_substr.chars().count();
+        for (run_idx, run) in line.runs.iter().enumerate() {
+            let cell_span = line.cell_spans.get(run_idx).copied().unwrap_or(0);
 
             if let Some(bg) = run.background_color {
                 bg_rects.push(BgRect {
@@ -113,8 +100,6 @@ pub(crate) fn build(
             let mut stripped = run.clone();
             stripped.background_color = None;
             stripped_runs.push(stripped);
-
-            byte_offset = run_end;
             col_offset += cell_span;
         }
 
@@ -162,7 +147,6 @@ pub(crate) fn build(
         bg_rects,
         rows,
         cursor,
-        cell_size,
     }
 }
 
@@ -197,6 +181,7 @@ mod tests {
     fn line(text: &str, runs: Vec<TextRun>) -> TerminalLine {
         TerminalLine {
             text: SharedString::from(text.to_string()),
+            cell_spans: runs.iter().map(|run| run.len).collect(),
             runs,
         }
     }

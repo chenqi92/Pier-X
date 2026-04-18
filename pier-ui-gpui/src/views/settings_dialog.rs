@@ -3,6 +3,7 @@ use gpui::{
     StatefulInteractiveElement, WeakEntity, Window,
 };
 use pier_core::settings::{AppSettings, AppearanceMode, TerminalCursorStyle, TerminalThemePreset};
+use rust_i18n::t;
 
 use gpui_component::{scroll::ScrollableElement, WindowExt as _};
 
@@ -27,19 +28,27 @@ enum SettingsSection {
 impl SettingsSection {
     const ALL: [Self; 3] = [Self::General, Self::Terminal, Self::Shortcuts];
 
-    fn title(self) -> &'static str {
+    fn id(self) -> &'static str {
         match self {
-            Self::General => "General",
-            Self::Terminal => "Terminal",
-            Self::Shortcuts => "Shortcuts",
+            Self::General => "general",
+            Self::Terminal => "terminal",
+            Self::Shortcuts => "shortcuts",
         }
     }
 
-    fn caption(self) -> &'static str {
+    fn title(self) -> SharedString {
         match self {
-            Self::General => "Appearance and shell defaults",
-            Self::Terminal => "Terminal rendering and cursor behavior",
-            Self::Shortcuts => "Current built-in key bindings",
+            Self::General => t!("App.Settings.Sections.general_title").into(),
+            Self::Terminal => t!("App.Settings.Sections.terminal_title").into(),
+            Self::Shortcuts => t!("App.Settings.Sections.shortcuts_title").into(),
+        }
+    }
+
+    fn caption(self) -> SharedString {
+        match self {
+            Self::General => t!("App.Settings.Sections.general_caption").into(),
+            Self::Terminal => t!("App.Settings.Sections.terminal_caption").into(),
+            Self::Shortcuts => t!("App.Settings.Sections.shortcuts_caption").into(),
         }
     }
 }
@@ -111,14 +120,14 @@ impl SettingsDialog {
                             .text_size(SIZE_H2)
                             .font_weight(WEIGHT_EMPHASIS)
                             .text_color(t.color.text_primary)
-                            .child("Settings"),
+                            .child(SharedString::from(t!("App.Settings.title").to_string())),
                     )
                     .child(
                         div()
                             .pt(px(4.0))
                             .text_size(SIZE_SMALL)
                             .text_color(t.color.text_tertiary)
-                            .child("Ported from the sibling Pier app where it already exists."),
+                            .child(SharedString::from(t!("App.Settings.sidebar_note").to_string())),
                     ),
             );
 
@@ -130,7 +139,7 @@ impl SettingsDialog {
 
             col = col.child(
                 div()
-                    .id(section.title())
+                    .id(section.id())
                     .px(SP_2)
                     .py(SP_2)
                     .rounded(RADIUS_SM)
@@ -186,16 +195,16 @@ impl SettingsDialog {
 
         section_shell(
             &t,
-            "General",
-            "Shell-level preferences that already map cleanly to GPUI.",
+            t!("App.Settings.Sections.general_title"),
+            t!("App.Settings.General.subtitle"),
         )
         .child(setting_group(
             &t,
-            "Appearance",
+            t!("App.Settings.General.appearance"),
             vec![
                 choice_chip(
                     &t,
-                    "Dark",
+                    t!("App.Settings.General.dark"),
                     appearance == AppearanceMode::Dark,
                     Box::new({
                         let dialog = dialog.clone();
@@ -209,7 +218,7 @@ impl SettingsDialog {
                 .into_any_element(),
                 choice_chip(
                     &t,
-                    "Light",
+                    t!("App.Settings.General.light"),
                     appearance == AppearanceMode::Light,
                     Box::new({
                         let dialog = dialog.clone();
@@ -225,14 +234,14 @@ impl SettingsDialog {
         ))
         .child(setting_group(
             &t,
-            "Terminal Font Family",
+            t!("App.Settings.General.terminal_font_family"),
             available_terminal_font_families()
                 .iter()
                 .map(|family| {
                     let family_name = (*family).to_string();
                     choice_chip(
                         &t,
-                        family,
+                        *family,
                         mono_font == family_name,
                         Box::new({
                             let dialog = dialog.clone();
@@ -268,12 +277,12 @@ impl SettingsDialog {
 
         section_shell(
             &t,
-            "Terminal",
-            "Settings below are applied immediately to the active GPUI terminal surface.",
+            t!("App.Settings.Sections.terminal_title"),
+            t!("App.Settings.Terminal.subtitle"),
         )
         .child(setting_group(
             &t,
-            "Theme",
+            t!("App.Settings.Terminal.theme"),
             available_terminal_palettes()
                 .iter()
                 .map(|palette| {
@@ -298,12 +307,12 @@ impl SettingsDialog {
         ))
         .child(setting_group(
             &t,
-            "Font Size",
+            t!("App.Settings.Terminal.font_size"),
             vec![
                 stepper_row(
                     &t,
                     "terminal-font-size",
-                    "Terminal text size",
+                    t!("App.Settings.Terminal.font_size_label"),
                     format!("{} px", font_size as u16).into(),
                     Box::new({
                         let dialog = dialog.clone();
@@ -346,12 +355,12 @@ impl SettingsDialog {
         ))
         .child(setting_group(
             &t,
-            "Appearance",
+            t!("App.Settings.General.appearance"),
             vec![
                 stepper_row(
                     &t,
                     "terminal-opacity",
-                    "Background opacity",
+                    t!("App.Settings.Terminal.background_opacity"),
                     format!("{opacity_pct}%").into(),
                     Box::new({
                         let dialog = dialog.clone();
@@ -375,8 +384,8 @@ impl SettingsDialog {
                 .into_any_element(),
                 toggle_row(
                     &t,
-                    "Font Ligatures",
-                    "Disable contextual alternates if you want raw terminal glyph rendering.",
+                    t!("App.Settings.Terminal.font_ligatures"),
+                    t!("App.Settings.Terminal.font_ligatures_description"),
                     font_ligatures,
                     Box::new({
                         let dialog = dialog.clone();
@@ -392,11 +401,11 @@ impl SettingsDialog {
         ))
         .child(setting_group(
             &t,
-            "Cursor",
+            t!("App.Settings.Terminal.cursor"),
             vec![
                 choice_chip(
                     &t,
-                    "Block",
+                    t!("App.Settings.Terminal.cursor_block"),
                     cursor_style == TerminalCursorStyle::Block,
                     Box::new({
                         let dialog = dialog.clone();
@@ -410,7 +419,7 @@ impl SettingsDialog {
                 .into_any_element(),
                 choice_chip(
                     &t,
-                    "Underline",
+                    t!("App.Settings.Terminal.cursor_underline"),
                     cursor_style == TerminalCursorStyle::Underline,
                     Box::new({
                         let dialog = dialog.clone();
@@ -424,7 +433,7 @@ impl SettingsDialog {
                 .into_any_element(),
                 choice_chip(
                     &t,
-                    "Bar",
+                    t!("App.Settings.Terminal.cursor_bar"),
                     cursor_style == TerminalCursorStyle::Bar,
                     Box::new({
                         let dialog = dialog.clone();
@@ -438,8 +447,8 @@ impl SettingsDialog {
                 .into_any_element(),
                 toggle_row(
                     &t,
-                    "Cursor Blink",
-                    "Turn off if you prefer a stable insertion point.",
+                    t!("App.Settings.Terminal.cursor_blink"),
+                    t!("App.Settings.Terminal.cursor_blink_description"),
                     cursor_blink,
                     Box::new({
                         let dialog = dialog.clone();
@@ -459,14 +468,14 @@ impl SettingsDialog {
         let t = theme(cx).clone();
 
         let shortcuts = [
-            ("New Tab", "Cmd/Ctrl+T"),
-            ("Close Active Tab", "Cmd/Ctrl+Shift+W"),
-            ("Open Settings", "Cmd/Ctrl+,"),
-            ("Toggle Left Panel", "Cmd/Ctrl+\\"),
-            ("Toggle Right Panel", "Cmd/Ctrl+Shift+\\"),
-            ("Toggle Theme", "Cmd/Ctrl+Shift+L"),
-            ("Copy Selection", "Cmd/Ctrl+C"),
-            ("Paste", "Cmd/Ctrl+V"),
+            (t!("App.Settings.Shortcuts.new_tab"), "Cmd/Ctrl+T"),
+            (t!("App.Settings.Shortcuts.close_active_tab"), "Cmd/Ctrl+Shift+W"),
+            (t!("App.Settings.Shortcuts.open_settings"), "Cmd/Ctrl+,"),
+            (t!("App.Settings.Shortcuts.toggle_left_panel"), "Cmd/Ctrl+\\"),
+            (t!("App.Settings.Shortcuts.toggle_right_panel"), "Cmd/Ctrl+Shift+\\"),
+            (t!("App.Settings.Shortcuts.toggle_theme"), "Cmd/Ctrl+Shift+L"),
+            (t!("App.Settings.Shortcuts.copy_selection"), "Cmd/Ctrl+C"),
+            (t!("App.Settings.Shortcuts.paste"), "Cmd/Ctrl+V"),
         ];
 
         let mut rows = Vec::with_capacity(shortcuts.len());
@@ -476,8 +485,8 @@ impl SettingsDialog {
 
         section_shell(
             &t,
-            "Shortcuts",
-            "These are the current bindings wired into the GPUI shell today.",
+            t!("App.Settings.Sections.shortcuts_title"),
+            t!("App.Settings.Shortcuts.subtitle"),
         )
         .children(rows)
     }
@@ -488,7 +497,7 @@ pub fn open(window: &mut Window, cx: &mut App) {
     let view = cx.new(SettingsDialog::new);
     window.open_dialog(cx, move |dialog, _w, _app| {
         dialog
-            .title("Settings")
+            .title(SharedString::from(t!("App.Settings.title").to_string()))
             .w(px(760.0))
             .close_button(true)
             .overlay_closable(true)
@@ -508,9 +517,11 @@ fn apply_dialog_settings(
 
 fn section_shell(
     t: &crate::theme::Theme,
-    title: &'static str,
-    subtitle: &'static str,
+    title: impl Into<SharedString>,
+    subtitle: impl Into<SharedString>,
 ) -> gpui_component::scroll::Scrollable<gpui::Div> {
+    let title: SharedString = title.into();
+    let subtitle: SharedString = subtitle.into();
     div()
         .h_full()
         .overflow_y_scrollbar()
@@ -540,9 +551,10 @@ fn section_shell(
 
 fn setting_group(
     t: &crate::theme::Theme,
-    title: &'static str,
+    title: impl Into<SharedString>,
     children: Vec<gpui::AnyElement>,
 ) -> impl IntoElement {
+    let title: SharedString = title.into();
     div()
         .p(SP_3)
         .flex()
@@ -564,11 +576,12 @@ fn setting_group(
 
 fn choice_chip(
     t: &crate::theme::Theme,
-    label: &str,
+    label: impl Into<SharedString>,
     selected: bool,
     on_click: Box<dyn Fn(&ClickEvent, &mut Window, &mut App) + 'static>,
 ) -> impl IntoElement {
-    let id: SharedString = format!("settings-chip-{label}").into();
+    let label: SharedString = label.into();
+    let id: SharedString = format!("settings-chip-{}", label.as_ref()).into();
     div()
         .id(gpui::ElementId::Name(id))
         .px(SP_2)
@@ -597,18 +610,19 @@ fn choice_chip(
             div()
                 .text_size(SIZE_CAPTION)
                 .font_weight(WEIGHT_MEDIUM)
-                .child(SharedString::from(label.to_string())),
+                .child(label),
         )
 }
 
 fn stepper_row(
     t: &crate::theme::Theme,
     id_prefix: &'static str,
-    label: &'static str,
+    label: impl Into<SharedString>,
     value: SharedString,
     on_minus: Box<dyn Fn(&ClickEvent, &mut Window, &mut App) + 'static>,
     on_plus: Box<dyn Fn(&ClickEvent, &mut Window, &mut App) + 'static>,
 ) -> impl IntoElement {
+    let label: SharedString = label.into();
     div()
         .flex()
         .flex_row()
@@ -666,11 +680,14 @@ fn icon_step_button(
 
 fn toggle_row(
     t: &crate::theme::Theme,
-    title: &'static str,
-    description: &'static str,
+    title: impl Into<SharedString>,
+    description: impl Into<SharedString>,
     checked: bool,
     on_click: Box<dyn Fn(&bool, &mut Window, &mut App) + 'static>,
 ) -> impl IntoElement {
+    let title: SharedString = title.into();
+    let description: SharedString = description.into();
+    let switch_label = title.clone();
     div()
         .mt(SP_2)
         .flex()
@@ -697,7 +714,7 @@ fn toggle_row(
                 ),
         )
         .child(
-            gpui_component::switch::Switch::new(title)
+            gpui_component::switch::Switch::new(switch_label)
                 .checked(checked)
                 .on_click(on_click),
         )
@@ -705,9 +722,10 @@ fn toggle_row(
 
 fn shortcut_row(
     t: &crate::theme::Theme,
-    label: &'static str,
+    label: impl Into<SharedString>,
     shortcut: &'static str,
 ) -> impl IntoElement {
+    let label: SharedString = label.into();
     div()
         .px(SP_2)
         .py(SP_2)
@@ -805,16 +823,24 @@ fn terminal_theme_option(
                         .pt(px(2.0))
                         .text_size(SIZE_SMALL)
                         .text_color(t.color.text_tertiary)
-                        .child(match palette.preset {
+                        .child(SharedString::from(match palette.preset {
                             TerminalThemePreset::DefaultDark
-                            | TerminalThemePreset::DefaultLight => "Pier default shell palette",
-                            TerminalThemePreset::SolarizedDark => {
-                                "Low-contrast palette for long sessions"
+                            | TerminalThemePreset::DefaultLight => {
+                                t!("App.Settings.Terminal.Palettes.default").to_string()
                             }
-                            TerminalThemePreset::Dracula => "High-contrast violet-heavy palette",
-                            TerminalThemePreset::Monokai => "Warm palette with vivid syntax colors",
-                            TerminalThemePreset::Nord => "Cool muted palette with softer contrast",
-                        }),
+                            TerminalThemePreset::SolarizedDark => {
+                                t!("App.Settings.Terminal.Palettes.solarized_dark").to_string()
+                            }
+                            TerminalThemePreset::Dracula => {
+                                t!("App.Settings.Terminal.Palettes.dracula").to_string()
+                            }
+                            TerminalThemePreset::Monokai => {
+                                t!("App.Settings.Terminal.Palettes.monokai").to_string()
+                            }
+                            TerminalThemePreset::Nord => {
+                                t!("App.Settings.Terminal.Palettes.nord").to_string()
+                            }
+                        })),
                 ),
         )
 }

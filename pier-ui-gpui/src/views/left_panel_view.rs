@@ -41,6 +41,7 @@ use gpui_component::{
 };
 use pier_core::paths;
 use pier_core::ssh::{AuthMethod, DetectedService, ServiceStatus, SshConfig};
+use rust_i18n::t;
 
 use crate::app::layout::LeftTab;
 use crate::app::ssh_session::{ConnectStatus, ServiceProbeStatus, TunnelStatus};
@@ -115,8 +116,10 @@ impl LeftPanelView {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> Self {
-        let files_filter = cx.new(|c| InputState::new(window, c).placeholder("Filter files…"));
-        let servers_filter = cx.new(|c| InputState::new(window, c).placeholder("Filter servers…"));
+        let files_filter =
+            cx.new(|c| InputState::new(window, c).placeholder(t!("App.FileTree.filter")));
+        let servers_filter =
+            cx.new(|c| InputState::new(window, c).placeholder(t!("App.LeftPanel.filter")));
 
         // Filter Change → repaint just LeftPanelView. PierApp is NOT touched
         // — that's the whole point of extracting this into its own entity.
@@ -471,17 +474,19 @@ fn render_servers_list(
     }
 
     let groups = group_servers(snapshot, query);
-    if groups.is_empty() {
-        col = col.child(
-            div()
-                .px(SP_3)
-                .py(SP_2)
-                .text_size(SIZE_SMALL)
-                .text_color(t.color.text_tertiary)
-                .child(format!("(no matches for \"{query}\")")),
-        );
-        return col;
-    }
+        if groups.is_empty() {
+            col = col.child(
+                div()
+                    .px(SP_3)
+                    .py(SP_2)
+                    .text_size(SIZE_SMALL)
+                    .text_color(t.color.text_tertiary)
+                    .child(SharedString::from(
+                        t!("App.Common.no_matches", query = query).to_string(),
+                    )),
+            );
+            return col;
+        }
     for group in groups {
         let is_collapsed = collapsed_groups.contains(&group.key);
         col = col.child(server_group_card(
@@ -516,7 +521,7 @@ fn servers_header(
         .bg(t.color.bg_surface)
         .border_1()
         .border_color(t.color.border_subtle)
-        .child(SectionLabel::new("Saved connections"))
+        .child(SectionLabel::new(t!("App.LeftPanel.Headers.saved_connections")))
         .child(StatusPill::new(
             format!("{count}"),
             if count == 0 {
@@ -585,7 +590,7 @@ fn group_servers<'a>(snapshot: &'a ServersSidebarSnapshot, query: &str) -> Vec<S
         .map(|(key, items)| {
             let active_count = items.iter().filter(|item| item.is_active).count();
             ServerGroup {
-                label: key.clone().into(),
+                label: group_display_label(&key),
                 key,
                 active_count,
                 items,
@@ -635,7 +640,15 @@ fn prune_collapsed_groups(collapsed_groups: &mut BTreeSet<String>, connections: 
 fn connections_store_label() -> String {
     paths::connections_file()
         .map(|path| path.display().to_string())
-        .unwrap_or_else(|| "the Pier-X connection store".to_string())
+        .unwrap_or_else(|| t!("App.LeftPanel.connection_store_fallback").to_string())
+}
+
+fn group_display_label(key: &str) -> SharedString {
+    if key == UNGROUPED {
+        t!("App.LeftPanel.Groups.ungrouped").into()
+    } else {
+        key.to_string().into()
+    }
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -684,8 +697,11 @@ fn server_group_card(
                 StatusKind::Info,
             ))
             .child(if group.active_count > 0 {
-                StatusPill::new(format!("{} live", group.active_count), StatusKind::Success)
-                    .into_any_element()
+                StatusPill::new(
+                    t!("App.LeftPanel.Groups.live_count", count = group.active_count),
+                    StatusKind::Success,
+                )
+                .into_any_element()
             } else {
                 div().into_any_element()
             }),
@@ -728,7 +744,7 @@ fn active_connection_card(session: &ActiveServerSessionSnapshot) -> impl IntoEle
                 .flex_wrap()
                 .items_center()
                 .gap(SP_2)
-                .child(SectionLabel::new("Active connection"))
+                .child(SectionLabel::new(t!("App.LeftPanel.Headers.active_connection")))
                 .child(StatusPill::new(connect_label, connect_kind))
                 .child(StatusPill::new(probe_label, probe_kind)),
         )
@@ -744,14 +760,14 @@ fn active_connection_card(session: &ActiveServerSessionSnapshot) -> impl IntoEle
             ));
         }
         card = card
-            .child(text::caption("Detected services").secondary())
+            .child(text::caption(t!("App.LeftPanel.Headers.detected_services")).secondary())
             .child(services);
     } else {
         let services_empty = match session.service_probe_status {
-            ServiceProbeStatus::Idle => "Service discovery starts after the SSH session boots.",
-            ServiceProbeStatus::Probing => "Detecting MySQL, PostgreSQL, Redis and Docker.",
-            ServiceProbeStatus::Ready => "No supported remote services detected yet.",
-            ServiceProbeStatus::Failed => "Service discovery failed for this connection.",
+            ServiceProbeStatus::Idle => t!("App.LeftPanel.Services.discovery_idle"),
+            ServiceProbeStatus::Probing => t!("App.LeftPanel.Services.discovery_loading"),
+            ServiceProbeStatus::Ready => t!("App.LeftPanel.Services.discovery_empty"),
+            ServiceProbeStatus::Failed => t!("App.LeftPanel.Services.discovery_failed"),
         };
         card = card.child(text::body(services_empty).secondary());
     }
@@ -765,10 +781,10 @@ fn active_connection_card(session: &ActiveServerSessionSnapshot) -> impl IntoEle
             ));
         }
         card = card
-            .child(text::caption("Active tunnels").secondary())
+            .child(text::caption(t!("App.LeftPanel.Headers.active_tunnels")).secondary())
             .child(tunnels);
     } else {
-        card = card.child(text::body("No forwarded services yet.").secondary());
+        card = card.child(text::body(t!("App.LeftPanel.Tunnels.empty")).secondary());
     }
 
     if let Some(err) = session
@@ -788,18 +804,15 @@ fn servers_empty_state(on_add: AddConnectionHandler) -> impl IntoElement {
 
     Card::new()
         .padding(SP_3)
-        .child(SectionLabel::new("No saved SSH connections"))
+        .child(SectionLabel::new(t!("App.LeftPanel.Empty.title")))
         .child(
-            text::body(
-                "Add a server to open remote terminals, browse files, and unlock the right-side service panels.",
-            )
-            .secondary(),
+            text::body(t!("App.LeftPanel.Empty.body")).secondary(),
         )
         .child(
             div()
                 .pt(SP_2)
                 .child(
-                    Button::primary("servers-empty-add", "Add SSH Connection")
+                    Button::primary("servers-empty-add", t!("App.LeftPanel.Actions.add_ssh"))
                         .on_click(move |ev, window, app| on_add_click(ev, window, app)),
                 ),
         )
@@ -809,7 +822,7 @@ fn servers_empty_state(on_add: AddConnectionHandler) -> impl IntoElement {
                 .flex()
                 .flex_col()
                 .gap(SP_1)
-                .child(text::caption("Connection store").secondary())
+                .child(text::caption(t!("App.LeftPanel.Headers.connection_store")).secondary())
                 .child(text::mono(store_path).secondary()),
         )
 }
@@ -826,10 +839,10 @@ fn server_row(
 ) -> impl IntoElement {
     let address: SharedString = format!("{}@{}:{}", conn.user, conn.host, conn.port).into();
     let auth: SharedString = match &conn.auth {
-        AuthMethod::Agent => "agent".into(),
-        AuthMethod::PublicKeyFile { .. } => "key".into(),
-        AuthMethod::KeychainPassword { .. } => "keychain".into(),
-        AuthMethod::DirectPassword { .. } => "password".into(),
+        AuthMethod::Agent => t!("App.LeftPanel.Auth.agent").into(),
+        AuthMethod::PublicKeyFile { .. } => t!("App.LeftPanel.Auth.key").into(),
+        AuthMethod::KeychainPassword { .. } => t!("App.LeftPanel.Auth.keychain").into(),
+        AuthMethod::DirectPassword { .. } => t!("App.LeftPanel.Auth.password").into(),
     };
     let name: SharedString = conn.name.clone().into();
     let row_id: SharedString = format!("left-server-{idx}").into();
@@ -935,11 +948,11 @@ fn connection_endpoint(config: &SshConfig) -> SharedString {
 
 fn connection_status_pill(status: ConnectStatus) -> (SharedString, StatusKind) {
     match status {
-        ConnectStatus::Idle => ("idle".into(), StatusKind::Warning),
-        ConnectStatus::Connecting => ("connecting".into(), StatusKind::Info),
-        ConnectStatus::Refreshing => ("loading".into(), StatusKind::Info),
-        ConnectStatus::Connected => ("connected".into(), StatusKind::Success),
-        ConnectStatus::Failed => ("error".into(), StatusKind::Error),
+        ConnectStatus::Idle => (t!("App.Common.Status.idle").into(), StatusKind::Warning),
+        ConnectStatus::Connecting => (t!("App.Common.Status.connecting").into(), StatusKind::Info),
+        ConnectStatus::Refreshing => (t!("App.Common.Status.loading").into(), StatusKind::Info),
+        ConnectStatus::Connected => (t!("App.Common.Status.connected").into(), StatusKind::Success),
+        ConnectStatus::Failed => (t!("App.Common.Status.error").into(), StatusKind::Error),
     }
 }
 
@@ -948,11 +961,19 @@ fn service_probe_pill(
     has_services: bool,
 ) -> (SharedString, StatusKind) {
     match status {
-        ServiceProbeStatus::Idle => ("idle".into(), StatusKind::Warning),
-        ServiceProbeStatus::Probing => ("detecting".into(), StatusKind::Info),
-        ServiceProbeStatus::Ready if has_services => ("services ready".into(), StatusKind::Success),
-        ServiceProbeStatus::Ready => ("no services".into(), StatusKind::Warning),
-        ServiceProbeStatus::Failed => ("services error".into(), StatusKind::Error),
+        ServiceProbeStatus::Idle => (t!("App.Common.Status.idle").into(), StatusKind::Warning),
+        ServiceProbeStatus::Probing => {
+            (t!("App.LeftPanel.Services.detecting").into(), StatusKind::Info)
+        }
+        ServiceProbeStatus::Ready if has_services => {
+            (t!("App.LeftPanel.Services.ready").into(), StatusKind::Success)
+        }
+        ServiceProbeStatus::Ready => {
+            (t!("App.LeftPanel.Services.none").into(), StatusKind::Warning)
+        }
+        ServiceProbeStatus::Failed => {
+            (t!("App.LeftPanel.Services.error").into(), StatusKind::Error)
+        }
     }
 }
 
@@ -996,8 +1017,22 @@ fn tunnel_label(tunnel: &ServerTunnelSnapshot) -> SharedString {
         (TunnelStatus::Active, Some(local_port)) => {
             format!("{service} localhost:{local_port} -> {}", tunnel.remote_port).into()
         }
-        (TunnelStatus::Opening, _) => format!("{service} opening -> {}", tunnel.remote_port).into(),
-        (TunnelStatus::Failed, _) => format!("{service} error -> {}", tunnel.remote_port).into(),
+        (TunnelStatus::Opening, _) => {
+            t!(
+                "App.LeftPanel.Tunnels.opening",
+                service = service,
+                port = tunnel.remote_port
+            )
+            .into()
+        }
+        (TunnelStatus::Failed, _) => {
+            t!(
+                "App.LeftPanel.Tunnels.error",
+                service = service,
+                port = tunnel.remote_port
+            )
+            .into()
+        }
         (TunnelStatus::Active, None) => format!("{service} -> {}", tunnel.remote_port).into(),
     }
 }

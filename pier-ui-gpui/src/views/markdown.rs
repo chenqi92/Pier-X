@@ -19,6 +19,7 @@ use std::path::PathBuf;
 
 use gpui::{div, prelude::*, px, IntoElement, SharedString, Window};
 use pulldown_cmark::{CodeBlockKind, Event, HeadingLevel, Options, Parser, Tag, TagEnd};
+use rust_i18n::t;
 
 use crate::components::{text, Card, SectionLabel, StatusKind, StatusPill};
 use crate::theme::{
@@ -70,19 +71,19 @@ impl RenderOnce for MarkdownView {
                     body = body.child(
                         Card::new()
                             .padding(SP_2)
-                            .child(SectionLabel::new("Truncated"))
+                            .child(SectionLabel::new(t!("App.Markdown.truncated")))
                             .child(
-                                text::body(format!(
-                                    "Showing the first {} KB of a {} KB file.",
-                                    MAX_RENDER_BYTES / 1024,
-                                    bytes.len() / 1024
+                                text::body(t!(
+                                    "App.Markdown.truncated_message",
+                                    shown_kb = MAX_RENDER_BYTES / 1024,
+                                    total_kb = bytes.len() / 1024
                                 ))
                                 .secondary(),
                             ),
                     );
                 }
                 if blocks.is_empty() {
-                    body = body.child(text::body("(empty document)").secondary());
+                    body = body.child(text::body(t!("App.Markdown.empty_document")).secondary());
                 } else {
                     for block in blocks {
                         body = body.child(render_block(t, &block));
@@ -98,7 +99,7 @@ impl RenderOnce for MarkdownView {
                     div().p(SP_4).child(
                         Card::new()
                             .padding(SP_3)
-                            .child(SectionLabel::new("Cannot read file"))
+                            .child(SectionLabel::new(t!("App.Markdown.cannot_read_file")))
                             .child(text::body(SharedString::from(format!("{err}"))).secondary()),
                     ),
                 )
@@ -128,7 +129,7 @@ fn file_header(
     };
 
     let status = if truncated {
-        StatusPill::new("truncated", StatusKind::Warning)
+        StatusPill::new(t!("App.Markdown.truncated"), StatusKind::Warning)
     } else {
         StatusPill::new(size_label.clone(), StatusKind::Info)
     };
@@ -169,12 +170,14 @@ fn empty_state(t: &crate::theme::Theme) -> impl IntoElement {
                 .text_size(SIZE_BODY)
                 .font_weight(WEIGHT_MEDIUM)
                 .text_color(t.color.text_secondary)
-                .child("No file selected"),
+                .child(SharedString::from(
+                    t!("App.Markdown.no_file_selected").to_string(),
+                )),
         )
         .child(
             div()
                 .text_size(SIZE_SMALL)
-                .child("Click a .md file in the left file tree to preview it here."),
+                .child(SharedString::from(t!("App.Markdown.empty_hint").to_string())),
         )
 }
 

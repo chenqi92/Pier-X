@@ -13,6 +13,7 @@
 #![allow(dead_code)]
 
 use gpui::{px, Pixels, SharedString};
+use rust_i18n::t;
 
 use crate::app::route::DbKind;
 
@@ -43,8 +44,8 @@ pub enum LeftTab {
 impl LeftTab {
     pub fn label(self) -> SharedString {
         match self {
-            LeftTab::Files => "Files".into(),
-            LeftTab::Servers => "Servers".into(),
+            LeftTab::Files => t!("App.Common.files").into(),
+            LeftTab::Servers => t!("App.Common.servers").into(),
         }
     }
 
@@ -85,16 +86,16 @@ pub enum RightContext {
 impl RightMode {
     pub fn label(self) -> SharedString {
         match self {
-            RightMode::Markdown => "Markdown".into(),
-            RightMode::Monitor => "Monitor".into(),
+            RightMode::Markdown => t!("App.RightPanel.Modes.markdown").into(),
+            RightMode::Monitor => t!("App.RightPanel.Modes.monitor").into(),
             RightMode::Sftp => "SFTP".into(),
-            RightMode::Docker => "Docker".into(),
+            RightMode::Docker => t!("App.RightPanel.Modes.docker").into(),
             RightMode::Git => "Git".into(),
             RightMode::Mysql => "MySQL".into(),
             RightMode::Postgres => "PostgreSQL".into(),
             RightMode::Redis => "Redis".into(),
             RightMode::Sqlite => "SQLite".into(),
-            RightMode::Logs => "Logs".into(),
+            RightMode::Logs => t!("App.RightPanel.Modes.logs").into(),
         }
     }
 

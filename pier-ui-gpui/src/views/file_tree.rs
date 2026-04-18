@@ -26,6 +26,7 @@ use std::rc::Rc;
 
 use gpui::{div, prelude::*, px, App, Corner, IntoElement, SharedString, Window};
 use gpui_component::{popover::Popover, scroll::ScrollableElement, Icon as UiIcon, IconName};
+use rust_i18n::t;
 
 use crate::components::{text, SectionLabel, StatusKind, StatusPill};
 use crate::theme::{
@@ -146,8 +147,8 @@ impl RenderOnce for FileTree {
                             .flex_row()
                             .items_center()
                             .gap(SP_2)
-                            .child(SectionLabel::new("Cannot read directory"))
-                            .child(StatusPill::new("io error", StatusKind::Error)),
+                            .child(SectionLabel::new(t!("App.FileTree.Errors.cannot_read_directory")))
+                            .child(StatusPill::new(t!("App.FileTree.Errors.io_error"), StatusKind::Error)),
                     )
                     .child(text::body(SharedString::from(err)).secondary()),
             );
@@ -158,7 +159,9 @@ impl RenderOnce for FileTree {
                     .py(SP_2)
                     .text_size(SIZE_SMALL)
                     .text_color(t.color.text_tertiary)
-                    .child("(empty directory)"),
+                    .child(SharedString::from(
+                        t!("App.FileTree.empty_directory").to_string(),
+                    )),
             );
         } else {
             let mut visible = 0usize;
@@ -176,7 +179,9 @@ impl RenderOnce for FileTree {
                         .py(SP_2)
                         .text_size(SIZE_SMALL)
                         .text_color(t.color.text_tertiary)
-                        .child(format!("(no matches for \"{filter}\")")),
+                        .child(SharedString::from(
+                            t!("App.Common.no_matches", query = filter).to_string(),
+                        )),
                 );
             }
             if entries.len() > MAX_CHILDREN_PER_DIR {
@@ -186,7 +191,13 @@ impl RenderOnce for FileTree {
                         .py(SP_1)
                         .text_size(SIZE_SMALL)
                         .text_color(t.color.text_tertiary)
-                        .child(format!("… +{} more", entries.len() - MAX_CHILDREN_PER_DIR)),
+                        .child(SharedString::from(
+                            t!(
+                                "App.FileTree.more_entries",
+                                count = entries.len() - MAX_CHILDREN_PER_DIR
+                            )
+                            .to_string(),
+                        )),
                 );
             }
         }
@@ -397,7 +408,7 @@ fn quick_menu_body(
     let projects = home.join("Projects");
 
     let make_item = |id: &'static str,
-                     label: &'static str,
+                     label: SharedString,
                      path: PathBuf,
                      handler: NavigateToHandler|
      -> gpui::AnyElement {
@@ -421,19 +432,19 @@ fn quick_menu_body(
         .py(SP_1)
         .child(make_item(
             "ft-qm-home",
-            "Home",
+            t!("App.FileTree.Quick.home").into(),
             home,
             on_navigate_to.clone(),
         ))
         .child(make_item(
             "ft-qm-desktop",
-            "Desktop",
+            t!("App.FileTree.Quick.desktop").into(),
             desktop,
             on_navigate_to.clone(),
         ))
         .child(make_item(
             "ft-qm-projects",
-            "Projects",
+            t!("App.FileTree.Quick.projects").into(),
             projects,
             on_navigate_to.clone(),
         ))
@@ -453,7 +464,9 @@ fn quick_menu_body(
                 .text_size(SIZE_CAPTION)
                 .text_color(colors.text_tertiary)
                 .cursor_default()
-                .child("Choose Folder…   (native picker — Phase 10)"),
+                .child(SharedString::from(
+                    t!("App.FileTree.Quick.choose_folder").to_string(),
+                )),
         )
 }
 
@@ -579,8 +592,10 @@ fn path_segments(p: &Path) -> Vec<(String, PathBuf)> {
 
 #[cfg(test)]
 mod tests {
+    #[cfg(windows)]
     use std::path::{Path, PathBuf};
 
+    #[cfg(windows)]
     use super::path_segments;
 
     #[cfg(windows)]

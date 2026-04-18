@@ -1,6 +1,7 @@
 #![allow(dead_code)]
 
 use gpui::SharedString;
+use rust_i18n::t;
 
 #[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
 pub enum Route {
@@ -40,10 +41,10 @@ impl Route {
 
     pub fn label(self) -> SharedString {
         match self {
-            Route::Welcome => "Welcome".into(),
-            Route::Dashboard => "Dashboard".into(),
-            Route::Inspector => "Inspector".into(),
-            Route::Terminal => "Terminal".into(),
+            Route::Welcome => t!("App.Welcome.section").into(),
+            Route::Dashboard => t!("App.Route.dashboard").into(),
+            Route::Inspector => t!("App.Route.inspector").into(),
+            Route::Terminal => t!("App.Route.terminal").into(),
             Route::Git => "Git".into(),
             Route::Ssh => "SSH".into(),
             Route::Database(k) => k.label(),

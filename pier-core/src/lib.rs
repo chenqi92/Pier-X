@@ -16,6 +16,7 @@
 
 pub mod connections;
 pub mod credentials;
+pub mod db_connections;
 pub mod git_graph;
 pub mod markdown;
 pub mod paths;

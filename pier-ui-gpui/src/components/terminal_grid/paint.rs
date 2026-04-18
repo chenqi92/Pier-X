@@ -34,7 +34,7 @@ pub(crate) fn run(
             row.text.clone(),
             font_size,
             &row.runs,
-            Some(layout.cell_size.width),
+            None,
         );
         // ShapedLine::paint only fails on missing fonts; in that case the
         // glyphs are already absent and there's nothing useful to fall back

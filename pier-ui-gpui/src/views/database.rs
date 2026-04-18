@@ -1,4 +1,5 @@
 use gpui::{div, prelude::*, IntoElement, SharedString, Window};
+use rust_i18n::t;
 
 use crate::app::route::DbKind;
 use crate::components::{text, Card, SectionLabel, StatusKind, StatusPill};
@@ -37,16 +38,16 @@ impl RenderOnce for DatabaseView {
                     .items_center()
                     .gap(SP_3)
                     .child(text::h2(self.kind.label()))
-                    .child(StatusPill::new("not connected", StatusKind::Warning)),
+                    .child(StatusPill::new(t!("App.Database.not_connected"), StatusKind::Warning)),
             )
             .child(
                 Card::new()
-                    .child(SectionLabel::new("Service"))
+                    .child(SectionLabel::new(t!("App.Database.service")))
                     .child(text::body(info.description.clone())),
             )
             .child(
                 Card::new()
-                    .child(SectionLabel::new("Connection template"))
+                    .child(SectionLabel::new(t!("App.Database.connection_template")))
                     .children(info.fields.iter().map(|(label, value)| {
                         config_row(
                             t,
@@ -57,7 +58,7 @@ impl RenderOnce for DatabaseView {
             )
             .child(
                 Card::new()
-                    .child(SectionLabel::new("Backend"))
+                    .child(SectionLabel::new(t!("App.Database.backend")))
                     .child(
                         div()
                             .text_size(SIZE_MONO_SMALL)
@@ -66,10 +67,7 @@ impl RenderOnce for DatabaseView {
                             .child(SharedString::from(info.backend_module.to_string())),
                     )
                     .child(
-                        text::body(
-                            "Wired to pier-core; UI for connect/query/browse will land in a follow-up slice.",
-                        )
-                        .secondary(),
+                        text::body(t!("App.Database.follow_up")).secondary(),
                     ),
             )
     }
@@ -110,8 +108,7 @@ impl DbProfile {
     fn for_kind(kind: DbKind) -> Self {
         match kind {
             DbKind::Mysql => Self {
-                description:
-                    "Relational store accessed over TCP (typically through an SSH tunnel).".into(),
+                description: t!("App.Database.Profiles.mysql").into(),
                 backend_module: "pier_core::services::mysql::MysqlConfig",
                 fields: vec![
                     ("host", "127.0.0.1".into()),
@@ -122,7 +119,7 @@ impl DbProfile {
                 ],
             },
             DbKind::Postgres => Self {
-                description: "Relational store, default port 5432.".into(),
+                description: t!("App.Database.Profiles.postgres").into(),
                 backend_module: "pier_core::services::postgres::PostgresConfig",
                 fields: vec![
                     ("host", "127.0.0.1".into()),
@@ -133,7 +130,7 @@ impl DbProfile {
                 ],
             },
             DbKind::Redis => Self {
-                description: "Key-value store with logical DB indices (default 0).".into(),
+                description: t!("App.Database.Profiles.redis").into(),
                 backend_module: "pier_core::services::redis::RedisConfig",
                 fields: vec![
                     ("host", "127.0.0.1".into()),
@@ -142,7 +139,7 @@ impl DbProfile {
                 ],
             },
             DbKind::Sqlite => Self {
-                description: "Embedded SQLite — no daemon, just a file path.".into(),
+                description: t!("App.Database.Profiles.sqlite").into(),
                 backend_module: "pier_core::services::sqlite::SqliteClient::open",
                 fields: vec![("path", "/path/to/db.sqlite".into())],
             },

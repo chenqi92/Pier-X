@@ -91,6 +91,34 @@ The scripts honour these environment variables:
 | `BUILD_TYPE` | `Debug` for `run.*`, `Release` for `build.*` | Maps to Cargo debug vs release mode |
 | `BUILD_DIR` | Cargo default target dir | When set, exported as `CARGO_TARGET_DIR` |
 | `PIER_UI_CRATE` | `pier-ui-gpui` | Override the active shell crate name |
+| `PACKAGE_FORMATS` | unset | Comma-separated release formats for the host platform |
+
+### Packaging
+
+Release artifacts now hang off the repo-root build entrypoints:
+
+```bash
+# Linux
+PACKAGE_FORMATS=deb,appimage ./build.sh
+
+# macOS app bundle (+ optional signing / notarization)
+PACKAGE_FORMATS=app ./build.sh
+PACKAGE_FORMATS=app MACOS_SIGN=1 MACOS_SIGN_IDENTITY="Developer ID Application: Example Corp (TEAMID)" ./build.sh
+PACKAGE_FORMATS=app MACOS_NOTARIZE=1 MACOS_SIGN_IDENTITY="Developer ID Application: Example Corp (TEAMID)" MACOS_NOTARYTOOL_PROFILE=pier-x ./build.sh
+```
+
+```powershell
+# Windows
+$env:PACKAGE_FORMATS = "portable,installer,msix"; .\build.ps1
+```
+
+Platform-specific notes:
+
+- Windows `installer` requires Inno Setup 6 (`iscc` or `ISCC.exe`).
+- Windows `msix` requires Windows SDK packaging tools (`makeappx.exe`), and signing becomes installable when `WINDOWS_MSIX_CERT_PATH` plus matching `WINDOWS_MSIX_PUBLISHER` are set.
+- Linux `deb` requires `dpkg-deb`.
+- Linux `appimage` requires `appimagetool`; `linuxdeploy` is optional but recommended so shared-library dependencies are bundled into the AppImage.
+- macOS signing uses `MACOS_SIGN=1` + `MACOS_SIGN_IDENTITY`; notarization additionally accepts either `MACOS_NOTARYTOOL_PROFILE` or the `MACOS_NOTARY_APPLE_ID` / `MACOS_NOTARY_PASSWORD` / `MACOS_NOTARY_TEAM_ID` trio.
 
 ### Startup Test Path
 

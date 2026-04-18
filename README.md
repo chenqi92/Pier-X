@@ -11,7 +11,7 @@ The cross-platform successor to [Pier](https://github.com/chenqi92/Pier) (macOS-
 
 The Rust backend lives in `pier-core/`; the active desktop shell now lives in `pier-ui-gpui/`. The old Tauri shell has been removed from the working tree and survives only in git history plus the archive notes.
 
-See [docs/ROADMAP.md](./docs/ROADMAP.md) for the active delivery plan, [docs/GPUI-RESET.md](./docs/GPUI-RESET.md) for the shell reset baseline, [docs/ARCHIVE-TAURI-SHELL.md](./docs/ARCHIVE-TAURI-SHELL.md) for the retirement note, and [docs/legacy-index.md](./docs/legacy-index.md) for history recovery pointers.
+See [docs/ROADMAP.md](./docs/ROADMAP.md) for the active delivery plan and [docs/GPUI-RESET.md](./docs/GPUI-RESET.md) for the shell reset baseline.
 
 - ✅ Rust backend foundation in `pier-core/`
 - ✅ Root Cargo workspace for `pier-core/` + `pier-ui-gpui/`
@@ -166,10 +166,8 @@ Pier-X/
 ├── pier-ui-gpui/            # Active native GPUI shell
 ├── docs/
 │   ├── ROADMAP.md
-│   ├── GPUI-RESET.md
-│   ├── ARCHIVE-TAURI-SHELL.md
-│   └── legacy-index.md
-└── .agents/skills/          # Archived design references and repo automation skills
+│   └── GPUI-RESET.md
+└── .agents/skills/          # Repo automation skills + design system spec
 ```
 
 ---

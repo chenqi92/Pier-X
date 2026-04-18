@@ -17,7 +17,7 @@ use crate::theme::{
 pub type OnClick = Rc<dyn Fn(&ClickEvent, &mut Window, &mut App) + 'static>;
 pub type OnSelectRecent = Rc<dyn Fn(&usize, &mut Window, &mut App) + 'static>;
 
-/// Welcome / cover view — 对照 docs/legacy-qml-reference/shell/WelcomeView.qml 像素移植。
+/// Welcome / cover view — 三栏 GPUI 实现，token 全走 SKILL.md。
 #[derive(IntoElement)]
 pub struct WelcomeView {
     connections: Vec<SshConfig>,

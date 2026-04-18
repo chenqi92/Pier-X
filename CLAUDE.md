@@ -9,8 +9,6 @@ Pier-X is a cross-platform terminal / Git / SSH / database management tool, aimi
 | Overall delivery plan | [docs/ROADMAP.md](docs/ROADMAP.md) |
 | Architecture reset decision | [docs/GPUI-RESET.md](docs/GPUI-RESET.md) |
 | **Visual design tokens & rules** | [.agents/skills/pier-design-system/SKILL.md](.agents/skills/pier-design-system/SKILL.md) — only source of truth for colors, typography, spacing, radius, shadow |
-| What was deleted and how to recover it | [docs/legacy-index.md](docs/legacy-index.md) |
-| Legacy pixel reference (QML) | [docs/legacy-qml-reference/](docs/legacy-qml-reference/) |
 
 When SKILL.md and this file overlap, SKILL.md wins for visual values; this file wins for Rust code structure.
 

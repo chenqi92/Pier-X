@@ -802,7 +802,7 @@ Separator                              ← 替代 Separator.qml
 text::display(s) / h1(s) / h2(s) / h3(s) / body(s) / caption(s) / mono(s)   ← 文本 helpers
 ```
 
-待补充（PR5+）：`PopoverPanel`、`ModalDialogShell`、`PierTextField`、`SegmentedControl`、`ToggleSwitch`、`PierToolTip`。需要时按 [docs/legacy-qml-reference/](../../../docs/legacy-qml-reference/) 的 QML 对照实现。
+待补充（PR5+）：`PopoverPanel`、`ModalDialogShell`、`PierTextField`、`SegmentedControl`、`ToggleSwitch`、`PierToolTip`。需要时按本文 §1-§4 的 token 表 + `forks/gpui-component-pier/` 内的同名实现作为参考。
 
 ### D. Forbidden 模式（PR review 拒绝标准）
 

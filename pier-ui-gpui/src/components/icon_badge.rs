@@ -3,7 +3,6 @@ use gpui::{div, prelude::*, px, IntoElement, Window};
 use crate::theme::{radius::RADIUS_MD, theme};
 
 /// 28×28 圆角矩形 + 中央 8×8 蓝点。Welcome 视图的品牌徽章。
-/// 对照 docs/legacy-qml-reference/shell/WelcomeView.qml line 40-54。
 #[derive(IntoElement)]
 pub struct IconBadge;
 

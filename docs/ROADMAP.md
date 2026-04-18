@@ -18,8 +18,7 @@ This file tracks the active GPUI + Rust delivery path only.
 - [x] Minimal GPUI shell scaffold
 - [x] Direct `pier-core` integration without IPC
 - [x] Repo-root entrypoints moved to the GPUI shell
-- [x] Tauri shell demoted to archived reference status
-- [x] Tauri shell removed from disk; 10 core QML files preserved as design reference in `docs/legacy-qml-reference/`
+- [x] Tauri shell removed from disk along with its archive notes; design system rules now live solely in [`SKILL.md`](../.agents/skills/pier-design-system/SKILL.md)
 - [x] `CLAUDE.md` project rules + `SKILL.md` §GPUI Implementation Protocol
 - [x] Theme system (dark + light, Cmd+Shift+L toggle) with bundled Inter + JetBrains Mono fonts
 - [x] Component library (`Button`, `Card`, `StatusPill`, `SectionLabel`, `IconBadge`, `Separator`, `text` helpers)

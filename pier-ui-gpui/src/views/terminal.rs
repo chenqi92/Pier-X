@@ -59,9 +59,9 @@ const CURSOR_BLINK_MS: u64 = 530;
 static NEXT_TERMINAL_ID: AtomicUsize = AtomicUsize::new(1);
 
 #[derive(Clone)]
-struct TerminalLine {
-    text: SharedString,
-    runs: Vec<TextRun>,
+pub(crate) struct TerminalLine {
+    pub(crate) text: SharedString,
+    pub(crate) runs: Vec<TextRun>,
 }
 
 impl TerminalLine {
@@ -86,15 +86,15 @@ struct TerminalRun {
 }
 
 #[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
-struct TerminalCellPosition {
-    row: usize,
-    col: usize,
+pub(crate) struct TerminalCellPosition {
+    pub(crate) row: usize,
+    pub(crate) col: usize,
 }
 
 #[derive(Clone, Copy, PartialEq, Eq)]
-struct TerminalSelection {
-    anchor: TerminalCellPosition,
-    head: TerminalCellPosition,
+pub(crate) struct TerminalSelection {
+    pub(crate) anchor: TerminalCellPosition,
+    pub(crate) head: TerminalCellPosition,
 }
 
 impl TerminalSelection {
@@ -109,7 +109,7 @@ impl TerminalSelection {
         self.anchor == self.head
     }
 
-    fn normalized(self) -> (TerminalCellPosition, TerminalCellPosition) {
+    pub(crate) fn normalized(self) -> (TerminalCellPosition, TerminalCellPosition) {
         if self.anchor <= self.head {
             (self.anchor, self.head)
         } else {

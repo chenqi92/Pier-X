@@ -3,6 +3,7 @@ pub mod card;
 pub mod icon_badge;
 pub mod section_label;
 pub mod status_pill;
+pub(crate) mod terminal_grid;
 pub mod text;
 
 pub use button::Button;

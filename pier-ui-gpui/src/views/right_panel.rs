@@ -1937,7 +1937,6 @@ fn render_icon_sidebar(
         .filter(|mode| matches!(mode.context(), RightContext::Remote))
         .collect();
 
-    col = col.child(mode_group_marker(t, "L"));
     for mode in local_modes {
         col = col.child(mode_icon_button(
             t,
@@ -1947,15 +1946,13 @@ fn render_icon_sidebar(
         ));
     }
     if !remote_modes.is_empty() {
-        col = col
-            .child(
-                div()
-                    .w(px(18.0))
-                    .h(px(1.0))
-                    .my(SP_1)
-                    .bg(t.color.border_subtle),
-            )
-            .child(mode_group_marker(t, "R"));
+        col = col.child(
+            div()
+                .w(px(18.0))
+                .h(px(1.0))
+                .my(SP_1)
+                .bg(t.color.border_subtle),
+        );
         for mode in remote_modes {
             col = col.child(mode_icon_button(
                 t,
@@ -1966,19 +1963,6 @@ fn render_icon_sidebar(
         }
     }
     col
-}
-
-fn mode_group_marker(t: &crate::theme::Theme, label: &'static str) -> impl IntoElement {
-    div()
-        .w(px(18.0))
-        .h(px(16.0))
-        .flex()
-        .items_center()
-        .justify_center()
-        .text_size(SIZE_CAPTION)
-        .font_weight(WEIGHT_MEDIUM)
-        .text_color(t.color.text_tertiary)
-        .child(label)
 }
 
 #[cfg(test)]
@@ -2069,9 +2053,12 @@ fn mode_icon(mode: RightMode) -> UiIcon {
     let name = match mode {
         RightMode::Markdown => IconName::File,
         RightMode::Monitor => IconName::LayoutDashboard,
-        // The remaining modes provide an asset_icon; this is just the
-        // exhaustive arm so the match compiles.
-        _ => IconName::Frame,
+        RightMode::Sftp => IconName::FolderOpen,
+        RightMode::Docker => IconName::GalleryVerticalEnd,
+        RightMode::Logs => IconName::SquareTerminal,
+        RightMode::Git | RightMode::Mysql | RightMode::Postgres | RightMode::Redis | RightMode::Sqlite => {
+            IconName::Frame
+        }
     };
     UiIcon::new(name)
 }

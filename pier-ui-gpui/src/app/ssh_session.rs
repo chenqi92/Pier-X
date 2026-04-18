@@ -194,6 +194,10 @@ pub struct SshSessionState {
     docker_refresh_nonce: usize,
     docker_action_nonce: usize,
     logs_start_nonce: usize,
+    /// Bumped per [`Self::begin_sftp_mutation`] so an in-flight
+    /// rename / delete / upload / download / mkdir result that
+    /// arrives after a newer mutation gets dropped on the floor.
+    sftp_mutation_nonce: usize,
     logs_stream: Option<ExecStream>,
 }
 
@@ -231,6 +235,7 @@ impl SshSessionState {
             docker_refresh_nonce: 0,
             docker_action_nonce: 0,
             logs_start_nonce: 0,
+            sftp_mutation_nonce: 0,
             logs_stream: None,
         }
     }
@@ -379,6 +384,49 @@ impl SshSessionState {
         }
 
         true
+    }
+
+    /// Mint a request to apply one of the SFTP mutations
+    /// (mkdir / rename / delete / upload / download). Returns
+    /// `None` when no SFTP channel is open — callers should
+    /// schedule a refresh first.
+    #[allow(dead_code)] // Wired by `PierApp::schedule_sftp_mutation` in commit 2.
+    pub fn begin_sftp_mutation(&mut self, kind: SftpMutationKind) -> Option<SftpMutationRequest> {
+        let sftp = self.sftp.clone()?;
+        self.sftp_mutation_nonce = self.sftp_mutation_nonce.wrapping_add(1);
+        Some(SftpMutationRequest {
+            nonce: self.sftp_mutation_nonce,
+            sftp,
+            kind,
+        })
+    }
+
+    /// Apply a [`SftpMutationResult`]. Stale nonces are dropped
+    /// (return `false`); on failure the verb-prefixed error is
+    /// stored in `last_error` so the existing error card surfaces
+    /// it. Returns `true` when the result was applied AND the
+    /// underlying mutation succeeded — callers use that signal to
+    /// schedule a follow-up refresh.
+    #[allow(dead_code)] // Wired by `PierApp::schedule_sftp_mutation` in commit 2.
+    pub fn apply_sftp_mutation_result(&mut self, result: SftpMutationResult) -> bool {
+        if result.nonce != self.sftp_mutation_nonce {
+            log::debug!(
+                "ssh_session: dropping stale sftp mutation result (got {}, want {})",
+                result.nonce,
+                self.sftp_mutation_nonce
+            );
+            return false;
+        }
+        match result.outcome {
+            Ok(()) => {
+                self.last_error = None;
+                true
+            }
+            Err(err) => {
+                self.last_error = Some(format!("{}: {err}", result.verb));
+                false
+            }
+        }
     }
 
     pub fn next_parent_target(&self) -> Option<PathBuf> {
@@ -831,6 +879,108 @@ struct DockerCommand {
 enum DockerCommandOutput {
     Snapshot(DockerPanelSnapshot),
     Inspect(DockerInspectState),
+}
+
+// ─── SFTP file-operation mutations (P1-5) ────────────────────────────
+//
+// One enum + one run_*  fn  + one Request/Result pair instead of 5×
+// (one per action). Keeps the schedule_/begin_/apply_ machinery to a
+// single shape and makes it cheap to add future actions (e.g. chmod).
+
+/// Which SFTP mutation to apply. Each variant carries the full set of
+/// owned strings / paths the worker thread needs — must be `Send`.
+///
+/// Variants are referenced through dispatcher methods on PierApp in
+/// commit 2 of the series; until then the enum is unused outside its
+/// own `match` arms inside `run_sftp_mutation`.
+#[allow(dead_code)]
+#[derive(Clone, Debug)]
+pub enum SftpMutationKind {
+    /// `mkdir(path)`. Wraps [`SftpClient::create_dir_blocking`].
+    Mkdir { path: String },
+    /// `mv from -> to`. Wraps [`SftpClient::rename_blocking`].
+    Rename { from: String, to: String },
+    /// `rm path`. Wraps [`SftpClient::remove_file_blocking`].
+    DeleteFile { path: String },
+    /// `rmdir path` — server-enforced empty-only.
+    /// Wraps [`SftpClient::remove_dir_blocking`].
+    DeleteDir { path: String },
+    /// Push local → remote. Wraps [`SftpClient::upload_from_blocking`].
+    Upload { local: PathBuf, remote: String },
+    /// Pull remote → local. Wraps [`SftpClient::download_to_blocking`].
+    Download { remote: String, local: PathBuf },
+}
+
+impl SftpMutationKind {
+    /// Short verb the UI prefixes onto the error message
+    /// (`"rename: permission denied"`). Stable English string —
+    /// commit 5 of this series swaps it for an i18n lookup.
+    pub fn verb(&self) -> &'static str {
+        match self {
+            Self::Mkdir { .. } => "mkdir",
+            Self::Rename { .. } => "rename",
+            Self::DeleteFile { .. } | Self::DeleteDir { .. } => "delete",
+            Self::Upload { .. } => "upload",
+            Self::Download { .. } => "download",
+        }
+    }
+}
+
+/// Request payload for [`run_sftp_mutation`]. `sftp` is cloned out
+/// of the live `SshSessionState` so the worker has its own handle.
+pub struct SftpMutationRequest {
+    pub(crate) nonce: usize,
+    pub(crate) sftp: SftpClient,
+    pub(crate) kind: SftpMutationKind,
+}
+
+/// Result of [`run_sftp_mutation`]. `verb` is echoed back so
+/// `apply_sftp_mutation_result` can format the error consistently
+/// without re-matching on `kind`.
+pub struct SftpMutationResult {
+    pub(crate) nonce: usize,
+    pub(crate) verb: &'static str,
+    pub(crate) outcome: Result<(), String>,
+}
+
+/// Background worker — runs the matching `_blocking` SFTP call and
+/// stringifies any error. Designed to be invoked from
+/// `cx.background_executor().spawn(async move { run_sftp_mutation(req) })`
+/// so the UI thread never blocks on the SSH round-trip.
+#[allow(dead_code)] // Wired by `PierApp::schedule_sftp_mutation` in commit 2.
+pub fn run_sftp_mutation(request: SftpMutationRequest) -> SftpMutationResult {
+    let verb = request.kind.verb();
+    let outcome = match &request.kind {
+        SftpMutationKind::Mkdir { path } => request
+            .sftp
+            .create_dir_blocking(path)
+            .map_err(|e| e.to_string()),
+        SftpMutationKind::Rename { from, to } => request
+            .sftp
+            .rename_blocking(from, to)
+            .map_err(|e| e.to_string()),
+        SftpMutationKind::DeleteFile { path } => request
+            .sftp
+            .remove_file_blocking(path)
+            .map_err(|e| e.to_string()),
+        SftpMutationKind::DeleteDir { path } => request
+            .sftp
+            .remove_dir_blocking(path)
+            .map_err(|e| e.to_string()),
+        SftpMutationKind::Upload { local, remote } => request
+            .sftp
+            .upload_from_blocking(local, remote)
+            .map_err(|e| e.to_string()),
+        SftpMutationKind::Download { remote, local } => request
+            .sftp
+            .download_to_blocking(remote, local)
+            .map_err(|e| e.to_string()),
+    };
+    SftpMutationResult {
+        nonce: request.nonce,
+        verb,
+        outcome,
+    }
 }
 
 pub fn run_refresh(request: RefreshRequest) -> RefreshResult {

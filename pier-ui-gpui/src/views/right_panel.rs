@@ -239,14 +239,18 @@ fn render_mode_body(
             div()
                 .flex_1()
                 .min_h(px(0.0))
+                .min_w(px(0.0))
+                .overflow_hidden()
                 .child(content)
                 .into_any_element()
         } else {
             div()
                 .flex_1()
                 .min_h(px(0.0))
+                .min_w(px(0.0))
                 .overflow_y_scrollbar()
-                .child(div().w_full().child(content))
+                .overflow_x_hidden()
+                .child(div().w_full().min_w(px(0.0)).child(content))
                 .into_any_element()
         })
         .into_any_element()
@@ -400,9 +404,12 @@ fn render_ssh_strip(t: &crate::theme::Theme, overview: &RemoteOverview) -> impl 
         .child(remote_strip_label(t, "SSH"))
         .child(
             div()
+                .flex_1()
+                .min_w(px(0.0))
                 .text_size(SIZE_MONO_SMALL)
                 .font_family(t.font_mono.clone())
                 .text_color(t.color.text_secondary)
+                .truncate()
                 .child(overview.ssh_command.clone()),
         );
 
@@ -858,16 +865,20 @@ fn docker_view(
                     .justify_between()
                     .items_start()
                     .gap(SP_3)
+                    .overflow_hidden()
                     .child(
                         div()
+                            .flex_1()
+                            .min_w(px(0.0))
                             .flex()
                             .flex_col()
                             .gap(SP_1)
+                            .overflow_hidden()
                             .child(SectionLabel::new(t!("App.RightPanel.target")))
                             .child(text::mono(endpoint.clone()))
                             .child(text::body(t!("App.RightPanel.Docker.target_body")).secondary()),
                     )
-                    .child(refresh_control),
+                    .child(div().flex_none().child(refresh_control)),
             ),
         );
 
@@ -1313,7 +1324,10 @@ fn docker_summary_card(snapshot: &DockerPanelSnapshot) -> Card {
 
     Card::new()
         .padding(SP_3)
-        .child(SectionLabel::new(t!("App.RightPanel.Docker.inventory")))
+        .child(
+            SectionLabel::new(t!("App.RightPanel.Docker.inventory"))
+                .with_icon(IconName::LayoutDashboard),
+        )
         .child(
             div()
                 .flex()
@@ -1355,7 +1369,10 @@ fn docker_containers_card(
 ) -> Card {
     let mut card = Card::new()
         .padding(SP_3)
-        .child(SectionLabel::new(t!("App.RightPanel.Docker.containers")))
+        .child(
+            SectionLabel::new(t!("App.RightPanel.Docker.containers"))
+                .with_icon(IconName::Inbox),
+        )
         .child(text::body(t!("App.RightPanel.Docker.containers_body")).secondary());
 
     if snapshot.containers.is_empty() {
@@ -1435,6 +1452,7 @@ fn docker_container_row(
         .border_1()
         .border_color(t.color.border_subtle)
         .bg(t.color.bg_panel)
+        .overflow_hidden()
         .child(
             div()
                 .flex_1()
@@ -1442,14 +1460,17 @@ fn docker_container_row(
                 .flex()
                 .flex_col()
                 .gap(SP_1)
+                .overflow_hidden()
                 .child(
                     div()
                         .flex()
                         .flex_row()
                         .items_center()
                         .gap(SP_2)
+                        .min_w(px(0.0))
                         .child(
                             div()
+                                .flex_none()
                                 .w(px(6.0))
                                 .h(px(6.0))
                                 .rounded(px(3.0))
@@ -1457,20 +1478,26 @@ fn docker_container_row(
                         )
                         .child(
                             div()
+                                .flex_1()
+                                .min_w(px(0.0))
                                 .text_size(SIZE_SMALL)
                                 .font_weight(WEIGHT_MEDIUM)
                                 .text_color(t.color.text_primary)
+                                .truncate()
                                 .child(target_label.clone()),
                         )
-                        .child(StatusPill::new(
-                            state_label.clone(),
-                            docker_container_state_kind(&container.state),
-                        )),
+                        .child(
+                            div().flex_none().child(StatusPill::new(
+                                state_label.clone(),
+                                docker_container_state_kind(&container.state),
+                            )),
+                        ),
                 )
                 .child(
                     div()
                         .text_size(SIZE_SMALL)
                         .text_color(t.color.text_secondary)
+                        .truncate()
                         .child(SharedString::from(
                             t!(
                                 "App.RightPanel.Docker.image_label",
@@ -1484,6 +1511,7 @@ fn docker_container_row(
                         .text_size(SIZE_SMALL)
                         .font_family(t.font_mono.clone())
                         .text_color(t.color.text_tertiary)
+                        .truncate()
                         .child(format!(
                             "{} · ports {} · created {}",
                             short_docker_id(&container.id),
@@ -1492,7 +1520,7 @@ fn docker_container_row(
                         )),
                 ),
         )
-        .child(actions)
+        .child(div().flex_none().child(actions))
 }
 
 fn docker_action_button(
@@ -1517,7 +1545,10 @@ fn docker_action_button(
 fn docker_images_card(t: &crate::theme::Theme, snapshot: &DockerPanelSnapshot) -> Card {
     let mut card = Card::new()
         .padding(SP_3)
-        .child(SectionLabel::new(t!("App.RightPanel.Docker.images")));
+        .child(
+            SectionLabel::new(t!("App.RightPanel.Docker.images"))
+                .with_icon(IconName::GalleryVerticalEnd),
+        );
 
     if snapshot.images.is_empty() {
         return card.child(text::body(t!("App.RightPanel.Docker.no_images")).secondary());
@@ -1535,6 +1566,7 @@ fn docker_images_card(t: &crate::theme::Theme, snapshot: &DockerPanelSnapshot) -
                 .flex_row()
                 .justify_between()
                 .gap(SP_3)
+                .overflow_hidden()
                 .child(
                     div()
                         .flex_1()
@@ -1542,12 +1574,15 @@ fn docker_images_card(t: &crate::theme::Theme, snapshot: &DockerPanelSnapshot) -
                         .text_size(SIZE_MONO_SMALL)
                         .font_family(t.font_mono.clone())
                         .text_color(t.color.text_primary)
+                        .truncate()
                         .child(format!("{}:{tag}", empty_dash(&image.repository))),
                 )
                 .child(
                     div()
+                        .flex_none()
                         .text_size(SIZE_SMALL)
                         .text_color(t.color.text_tertiary)
+                        .truncate()
                         .child(format!(
                             "{} · {}",
                             empty_dash(&image.size),
@@ -1572,7 +1607,10 @@ fn docker_images_card(t: &crate::theme::Theme, snapshot: &DockerPanelSnapshot) -
 fn docker_storage_card(t: &crate::theme::Theme, snapshot: &DockerPanelSnapshot) -> Card {
     let mut card = Card::new()
         .padding(SP_3)
-        .child(SectionLabel::new(t!("App.RightPanel.Docker.volumes_networks")));
+        .child(
+            SectionLabel::new(t!("App.RightPanel.Docker.volumes_networks"))
+                .with_icon(IconName::ChartPie),
+        );
 
     card = card.child(text::body(t!("App.RightPanel.Docker.volumes")).secondary());
     if snapshot.volumes.is_empty() {
@@ -1585,16 +1623,22 @@ fn docker_storage_card(t: &crate::theme::Theme, snapshot: &DockerPanelSnapshot) 
                     .flex_row()
                     .justify_between()
                     .gap(SP_3)
+                    .overflow_hidden()
                     .child(
                         div()
+                            .flex_1()
+                            .min_w(px(0.0))
                             .text_size(SIZE_SMALL)
                             .font_weight(WEIGHT_MEDIUM)
+                            .truncate()
                             .child(empty_dash(&volume.name).to_string()),
                     )
                     .child(
                         div()
+                            .flex_none()
                             .text_size(SIZE_SMALL)
                             .text_color(t.color.text_tertiary)
+                            .truncate()
                             .child(format!(
                                 "{} · {}",
                                 empty_dash(&volume.driver),
@@ -1618,16 +1662,22 @@ fn docker_storage_card(t: &crate::theme::Theme, snapshot: &DockerPanelSnapshot) 
                     .flex_row()
                     .justify_between()
                     .gap(SP_3)
+                    .overflow_hidden()
                     .child(
                         div()
+                            .flex_1()
+                            .min_w(px(0.0))
                             .text_size(SIZE_SMALL)
                             .font_weight(WEIGHT_MEDIUM)
+                            .truncate()
                             .child(empty_dash(&network.name).to_string()),
                     )
                     .child(
                         div()
+                            .flex_none()
                             .text_size(SIZE_SMALL)
                             .text_color(t.color.text_tertiary)
+                            .truncate()
                             .child(format!(
                                 "{} · {}",
                                 empty_dash(&network.driver),
@@ -1644,11 +1694,15 @@ fn docker_storage_card(t: &crate::theme::Theme, snapshot: &DockerPanelSnapshot) 
 fn docker_inspect_card(t: &crate::theme::Theme, inspect: &DockerInspectState) -> Card {
     Card::new()
         .padding(SP_3)
-        .child(SectionLabel::new(t!("App.RightPanel.Docker.inspect")))
+        .child(
+            SectionLabel::new(t!("App.RightPanel.Docker.inspect"))
+                .with_icon(IconName::Inspector),
+        )
         .child(
             div()
                 .text_size(SIZE_SMALL)
                 .text_color(t.color.text_secondary)
+                .truncate()
                 .child(format!(
                     "{} ({})",
                     inspect.target_label,
@@ -1657,6 +1711,7 @@ fn docker_inspect_card(t: &crate::theme::Theme, inspect: &DockerInspectState) ->
         )
         .child(
             div()
+                .overflow_hidden()
                 .text_size(SIZE_MONO_SMALL)
                 .font_family(t.font_mono.clone())
                 .text_color(t.color.text_secondary)

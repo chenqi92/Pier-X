@@ -552,8 +552,13 @@ impl TerminalPanel {
             this.diagnostics.note_window_bounds_event();
             if this.resize_for_window(window, cx) {
                 this.diagnostics.note_resize();
-                cx.notify();
             }
+            // Always notify. The resize attempt above uses whatever
+            // surface_bounds the canvas last reported — which may be
+            // stale until the next paint. Forcing a render guarantees
+            // the canvas re-measures, and its prepaint will then
+            // schedule the real resize via on_next_frame.
+            cx.notify();
         })
         .detach();
     }
@@ -1374,6 +1379,14 @@ impl Render for TerminalPanel {
         let cell_h = paint_input.cell_height_px;
         let font_family = paint_input.font_family.clone();
         let font_size_px = paint_input.font_size_px;
+        // Weak handle for the canvas prepaint to schedule a PTY resize the
+        // moment surface bounds change, instead of waiting for the 33 ms
+        // refresh loop to poll. Without this, resizing the window / panes
+        // could leave the terminal stuck at an old (cols, rows) for a
+        // visible fraction of a second — and in edge cases where the
+        // refresh loop's rounded-int key didn't move, the resize could
+        // miss entirely.
+        let weak_self = cx.entity().downgrade();
 
         // Slim shell: status row + grid surface. The 30-element Shell /
         // Input / Session / Title chrome that used to live here was
@@ -1409,10 +1422,22 @@ impl Render for TerminalPanel {
                         // build (pure CPU); paint walks the LayoutState with
                         // shape_line + paint_quad. See components/terminal_grid/.
                         canvas(
-                            move |bounds, _window, _cx| {
+                            move |bounds, window, _cx| {
                                 let mut sb = surface_bounds.borrow_mut();
-                                if sb.as_ref() != Some(&bounds) {
+                                let bounds_changed = sb.as_ref() != Some(&bounds);
+                                if bounds_changed {
                                     *sb = Some(bounds);
+                                }
+                                drop(sb);
+                                if bounds_changed {
+                                    let weak = weak_self.clone();
+                                    window.on_next_frame(move |window, cx| {
+                                        let _ = weak.update(cx, |this, cx| {
+                                            if this.sync_surface_resize(window, cx) {
+                                                cx.notify();
+                                            }
+                                        });
+                                    });
                                 }
                                 let cell_size = Size {
                                     width: px(cell_w),

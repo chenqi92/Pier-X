@@ -19,14 +19,23 @@ use gpui::{
     div, prelude::*, px, AnyElement, App, ClickEvent, Context, Entity, IntoElement, SharedString,
     Window,
 };
-use gpui_component::{Icon as UiIcon, IconName, WindowExt as _};
+use gpui_component::{
+    input::InputState,
+    resizable::{h_resizable, resizable_panel, ResizableState},
+    Icon as UiIcon,
+    IconName,
+    WindowExt as _,
+};
 use pier_core::connections::ConnectionStore;
 use pier_core::ssh::SshConfig;
 
-use crate::app::layout::{RightMode, LEFT_PANEL_DEFAULT_W, RIGHT_PANEL_DEFAULT_W};
+use crate::app::layout::{
+    RightMode, LEFT_PANEL_DEFAULT_W, LEFT_PANEL_MAX_W, LEFT_PANEL_MIN_W, RIGHT_PANEL_DEFAULT_W,
+    RIGHT_PANEL_MAX_W, RIGHT_PANEL_MIN_W,
+};
 use crate::app::ssh_session::{
-    run_bootstrap, run_docker_command, run_docker_refresh, run_monitor_refresh, run_refresh,
-    run_tunnel, ServiceProbeStatus, SshSessionState,
+    run_bootstrap, run_docker_command, run_docker_refresh, run_logs_start, run_monitor_refresh,
+    run_refresh, run_tunnel, ServiceProbeStatus, SshSessionState,
 };
 use crate::app::{
     ActivationHandler, CloseActiveTab, NewTab, OpenSettings, ToggleLeftPanel, ToggleRightPanel,
@@ -42,7 +51,8 @@ use crate::theme::{
 };
 use crate::views::left_panel_view::{icons as toolbar_icons, LeftPanelView};
 use crate::views::right_panel::{
-    DockerActionHandler, DockerActionRequest, DockerRefreshHandler, ModeSelector, RightPanel,
+    DockerActionHandler, DockerActionRequest, DockerRefreshHandler, LogsAction, LogsActionHandler,
+    ModeSelector, RightPanel,
 };
 use crate::views::terminal::TerminalPanel;
 use crate::views::welcome::WelcomeView;
@@ -50,12 +60,17 @@ use crate::views::welcome::WelcomeView;
 type ClickHandler = Rc<dyn Fn(&ClickEvent, &mut Window, &mut gpui::App) + 'static>;
 
 const REMOTE_PANEL_REFRESH_MS: u64 = 5_000;
+const LOG_STREAM_POLL_MS: u64 = 250;
+const DEFAULT_LOG_COMMAND: &str = "journalctl -f -n 200 --no-pager";
 
 pub struct PierApp {
     // ─── Layout state ───
     left_visible: bool,
     right_visible: bool,
+    left_panel_width: gpui::Pixels,
+    right_panel_width: gpui::Pixels,
     right_mode: RightMode,
+    pane_group: Entity<ResizableState>,
 
     // ─── Backend snapshots ───
     snapshot: ShellSnapshot,
@@ -71,6 +86,7 @@ pub struct PierApp {
 
     // ─── Active SSH session (right-panel SFTP / future remote modes) ───
     active_session: Option<Entity<SshSessionState>>,
+    logs_command_input: Entity<InputState>,
 
     // ─── Subviews owning their own state (Phase 9 perf split) ───
     /// Filter input + file-browser cwd cache + tab state live inside this
@@ -81,6 +97,7 @@ pub struct PierApp {
     left_panel: Entity<LeftPanelView>,
     window_bounds_observer_started: bool,
     remote_panel_poll_loop_started: bool,
+    logs_poll_loop_started: bool,
 }
 
 impl PierApp {
@@ -92,22 +109,33 @@ impl PierApp {
         let connections_for_panel = connections.clone();
         let left_panel =
             cx.new(|lp_cx| LeftPanelView::new(weak_app, connections_for_panel, window, lp_cx));
+        let pane_group = cx.new(|_| ResizableState::default());
+        let logs_command_input =
+            cx.new(|c| InputState::new(window, c).placeholder("journalctl -f -n 200 --no-pager"));
+        logs_command_input.update(cx, |state, c| {
+            state.set_value(DEFAULT_LOG_COMMAND, window, c);
+        });
         let snapshot = ShellSnapshot::load();
         window.set_window_title(&format!("Pier-X · {}", snapshot.workspace_path));
 
         Self {
             left_visible: true,
             right_visible: true,
+            left_panel_width: LEFT_PANEL_DEFAULT_W,
+            right_panel_width: RIGHT_PANEL_DEFAULT_W,
             right_mode: RightMode::Markdown,
+            pane_group,
             snapshot,
             connections,
             terminals: Vec::new(),
             active_terminal: None,
             last_opened_file: None,
             active_session: None,
+            logs_command_input,
             left_panel,
             window_bounds_observer_started: false,
             remote_panel_poll_loop_started: false,
+            logs_poll_loop_started: false,
         }
     }
 
@@ -115,6 +143,11 @@ impl PierApp {
     /// [`LeftPanelView`] to keep its local cache in sync via `cx.observe`.
     pub fn connections_snapshot(&self) -> Vec<SshConfig> {
         self.connections.clone()
+    }
+
+    fn capture_current_panel_widths(&mut self, cx: &App) {
+        let sizes = self.pane_group.read(cx).sizes().clone();
+        self.capture_panel_widths(&sizes);
     }
 
     // ─── Terminal session management ───
@@ -336,6 +369,7 @@ impl Render for PierApp {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         self.ensure_window_bounds_observer(window, cx);
         self.ensure_remote_panel_poll_loop(cx);
+        self.ensure_logs_poll_loop(cx);
         let t = theme(cx).clone();
 
         let toolbar = self.render_toolbar(&t, cx);
@@ -349,15 +383,41 @@ impl Render for PierApp {
             .then(|| self.render_right(cx))
             .map(IntoElement::into_any_element);
         let statusbar = self.render_statusbar(&t);
+        let pane_state = self.pane_group.clone();
+        let weak = cx.entity().downgrade();
+        let mut row = h_resizable("pier-main-panes")
+            .with_state(&pane_state)
+            .on_resize(move |state, _, app| {
+                let sizes = state.read(app).sizes().clone();
+                let _ = weak.update(app, |this, _| {
+                    this.capture_panel_widths(&sizes);
+                });
+            });
 
-        let mut row = div().flex().flex_row().flex_1().min_h(px(0.0));
         if self.left_visible {
-            row = row.child(div().w(LEFT_PANEL_DEFAULT_W).h_full().child(left_entity));
+            row = row.child(
+                resizable_panel()
+                    .size(self.left_panel_width)
+                    .size_range(LEFT_PANEL_MIN_W..LEFT_PANEL_MAX_W)
+                    .child(div().h_full().child(left_entity)),
+            );
         }
-        row = row.child(div().flex_1().min_w(px(0.0)).h_full().child(center));
+        row = row.child(
+            resizable_panel()
+                .child(div().flex_1().min_w(px(0.0)).h_full().child(center)),
+        );
         if let Some(panel) = right {
-            row = row.child(div().w(RIGHT_PANEL_DEFAULT_W).h_full().child(panel));
+            row = row.child(
+                resizable_panel()
+                    .size(self.right_panel_width)
+                    .size_range(RIGHT_PANEL_MIN_W..RIGHT_PANEL_MAX_W)
+                    .child(div().h_full().child(panel)),
+            );
         }
+        let row = div()
+            .flex_1()
+            .min_h(px(0.0))
+            .child(row);
 
         div()
             .size_full()
@@ -371,10 +431,12 @@ impl Render for PierApp {
             // with terminal-internal key handling when terminal not focused.
             .key_context("PierApp")
             .on_action(cx.listener(|this, _: &ToggleLeftPanel, _, cx| {
+                this.capture_current_panel_widths(cx);
                 this.left_visible = !this.left_visible;
                 cx.notify();
             }))
             .on_action(cx.listener(|this, _: &ToggleRightPanel, _, cx| {
+                this.capture_current_panel_widths(cx);
                 this.right_visible = !this.right_visible;
                 cx.notify();
             }))
@@ -394,6 +456,32 @@ impl Render for PierApp {
             .child(toolbar)
             .child(row)
             .child(statusbar)
+    }
+}
+
+impl PierApp {
+    fn capture_panel_widths(&mut self, sizes: &[gpui::Pixels]) {
+        match (self.left_visible, self.right_visible) {
+            (true, true) => {
+                if let Some(width) = sizes.first().copied() {
+                    self.left_panel_width = width;
+                }
+                if let Some(width) = sizes.get(2).copied() {
+                    self.right_panel_width = width;
+                }
+            }
+            (true, false) => {
+                if let Some(width) = sizes.first().copied() {
+                    self.left_panel_width = width;
+                }
+            }
+            (false, true) => {
+                if let Some(width) = sizes.get(1).copied() {
+                    self.right_panel_width = width;
+                }
+            }
+            (false, false) => {}
+        }
     }
 }
 
@@ -439,6 +527,38 @@ impl PierApp {
                                         _ => {}
                                     }
                                 }
+                            })
+                            .is_ok();
+
+                        if !still_alive {
+                            break;
+                        }
+                    }
+                }
+            },
+        )
+        .detach();
+    }
+
+    fn ensure_logs_poll_loop(&mut self, cx: &mut Context<Self>) {
+        if self.logs_poll_loop_started {
+            return;
+        }
+        self.logs_poll_loop_started = true;
+
+        cx.spawn(
+            move |this: gpui::WeakEntity<Self>, cx: &mut gpui::AsyncApp| {
+                let background = cx.background_executor().clone();
+                let mut async_cx = cx.clone();
+                async move {
+                    loop {
+                        background
+                            .timer(Duration::from_millis(LOG_STREAM_POLL_MS))
+                            .await;
+
+                        let still_alive = this
+                            .update(&mut async_cx, |this, cx| {
+                                this.poll_logs_stream(cx);
                             })
                             .is_ok();
 
@@ -575,6 +695,7 @@ impl PierApp {
         match self.right_mode {
             RightMode::Monitor => self.schedule_monitor_refresh(cx),
             RightMode::Docker => self.schedule_docker_refresh(cx),
+            RightMode::Logs => self.start_logs_stream(false, cx),
             RightMode::Sftp => {
                 if session.read(cx).should_bootstrap() {
                     self.schedule_sftp_refresh(None, cx);
@@ -704,6 +825,91 @@ impl PierApp {
         .detach();
     }
 
+    fn start_logs_stream(&mut self, force: bool, cx: &mut Context<Self>) {
+        let Some(session) = self.active_session.clone() else {
+            return;
+        };
+        let should_start = session.read(cx).should_autostart_logs() || force;
+        if !should_start {
+            return;
+        }
+
+        let command = self.logs_command_input.read(cx).value().to_string();
+        let Some(request) = session.update(cx, |state, _| state.begin_logs_start(command)) else {
+            return;
+        };
+
+        cx.notify();
+        cx.spawn(
+            move |this: gpui::WeakEntity<Self>, cx: &mut gpui::AsyncApp| {
+                let background = cx.background_executor().clone();
+                let mut async_cx = cx.clone();
+                async move {
+                    let result = background
+                        .spawn(async move { run_logs_start(request) })
+                        .await;
+                    let _ = session.update(&mut async_cx, |state, _| {
+                        state.apply_logs_start_result(result);
+                    });
+                    let _ = this.update(&mut async_cx, |_, cx| {
+                        cx.notify();
+                    });
+                }
+            },
+        )
+        .detach();
+    }
+
+    fn stop_logs_stream(&mut self, cx: &mut Context<Self>) {
+        let Some(session) = self.active_session.clone() else {
+            return;
+        };
+        let changed = session.update(cx, |state, _| state.stop_logs());
+        if changed {
+            cx.notify();
+        }
+    }
+
+    fn clear_logs_stream(&mut self, cx: &mut Context<Self>) {
+        let Some(session) = self.active_session.clone() else {
+            return;
+        };
+        let changed = session.update(cx, |state, _| state.clear_logs());
+        if changed {
+            cx.notify();
+        }
+    }
+
+    fn poll_logs_stream(&mut self, cx: &mut Context<Self>) {
+        let Some(session) = self.active_session.clone() else {
+            return;
+        };
+        let changed = session.update(cx, |state, _| state.drain_logs_stream());
+        if changed {
+            cx.notify();
+        }
+    }
+
+    fn apply_logs_preset(&mut self, command: String, window: &mut Window, cx: &mut Context<Self>) {
+        self.logs_command_input
+            .update(cx, |state, c| state.set_value(command, window, c));
+        self.start_logs_stream(true, cx);
+    }
+
+    fn handle_logs_action(
+        &mut self,
+        action: LogsAction,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        match action {
+            LogsAction::RunCurrent => self.start_logs_stream(true, cx),
+            LogsAction::Stop => self.stop_logs_stream(cx),
+            LogsAction::Clear => self.clear_logs_stream(cx),
+            LogsAction::Preset { command } => self.apply_logs_preset(command, window, cx),
+        }
+    }
+
     fn schedule_sftp_refresh(&mut self, target: Option<PathBuf>, cx: &mut Context<Self>) {
         let Some(session) = self.active_session.clone() else {
             return;
@@ -814,6 +1020,10 @@ impl PierApp {
             Rc::new(cx.listener(|this, action: &DockerActionRequest, _, cx| {
                 this.run_docker_action(action.clone(), cx);
             }));
+        let on_logs_action: LogsActionHandler =
+            Rc::new(cx.listener(|this, action: &LogsAction, window, cx| {
+                this.handle_logs_action(action.clone(), window, cx);
+            }));
 
         // Only forward the path to the Markdown mode if it actually points
         // at a .md file — keeps the empty-state messaging clean.
@@ -827,10 +1037,12 @@ impl PierApp {
             self.right_mode,
             current_markdown,
             self.active_session.clone(),
+            self.logs_command_input.clone(),
             on_sftp_navigate,
             on_sftp_go_up,
             on_docker_refresh,
             on_docker_action,
+            on_logs_action,
             on_select_mode,
         )
     }

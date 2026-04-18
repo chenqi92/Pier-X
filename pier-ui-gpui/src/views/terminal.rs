@@ -53,7 +53,7 @@ const WINDOW_CHROME_WIDTH: f32 = 356.0;
 const WINDOW_CHROME_HEIGHT: f32 = 212.0;
 const MAX_OSC52_CLIPBOARD_BYTES: usize = 1_000_000;
 const BELL_FLASH_MS: u64 = 180;
-const TERMINAL_REFRESH_MS: u64 = 16;
+const TERMINAL_REFRESH_MS: u64 = 33;
 const CURSOR_BLINK_MS: u64 = 530;
 
 #[derive(Clone)]
@@ -174,7 +174,9 @@ pub struct TerminalPanel {
     scrollback_offset: usize,
     refresh_loop_started: bool,
     resize_observer_started: bool,
+    panel_active: bool,
     surface_bounds: Rc<RefCell<Option<Bounds<Pixels>>>>,
+    last_surface_size_key: Option<(i32, i32)>,
     selection: Option<TerminalSelection>,
     selection_dragging: bool,
     render_cache: Option<TerminalRenderCache>,
@@ -197,7 +199,9 @@ impl TerminalPanel {
     /// through the same `write_input` path as keystrokes, so PTY back-pressure
     /// + error reporting behave identically.
     pub fn send_input(&mut self, s: &str, cx: &mut Context<Self>) {
-        self.write_input(s.as_bytes(), cx);
+        if self.write_input(s.as_bytes()) {
+            cx.notify();
+        }
     }
 
     pub fn new(on_activated: ActivationHandler, cx: &mut Context<Self>) -> Self {
@@ -217,7 +221,9 @@ impl TerminalPanel {
             scrollback_offset: 0,
             refresh_loop_started: false,
             resize_observer_started: false,
+            panel_active: false,
             surface_bounds: Rc::new(RefCell::new(None)),
+            last_surface_size_key: None,
             selection: None,
             selection_dragging: false,
             render_cache: None,
@@ -311,6 +317,13 @@ impl TerminalPanel {
         self.last_cursor_visible = true;
     }
 
+    fn clear_selection(&mut self) -> bool {
+        let had_selection = self.selection.is_some();
+        self.selection = None;
+        self.selection_dragging = false;
+        had_selection
+    }
+
     fn cursor_visible(&self) -> bool {
         let Some(term) = self.terminal.as_ref() else {
             return false;
@@ -352,6 +365,9 @@ impl TerminalPanel {
                         .update_in(cx, |this, window, cx| {
                             let current = this.notify_state.generation.load(Ordering::Relaxed);
                             let mut should_notify = false;
+                            if this.sync_surface_resize(window, cx) {
+                                should_notify = true;
+                            }
                             if current != seen_generation {
                                 seen_generation = current;
                                 this.handle_terminal_side_effects(cx);
@@ -443,6 +459,28 @@ impl TerminalPanel {
                 true
             }
         }
+    }
+
+    fn current_surface_size_key(&self) -> Option<(i32, i32)> {
+        let bounds = (*self.surface_bounds.borrow())?;
+        Some((
+            f32::from(bounds.size.width).round() as i32,
+            f32::from(bounds.size.height).round() as i32,
+        ))
+    }
+
+    fn sync_surface_resize(&mut self, window: &Window, cx: &App) -> bool {
+        let surface_size_key = self.current_surface_size_key();
+        if surface_size_key == self.last_surface_size_key {
+            return false;
+        }
+
+        self.last_surface_size_key = surface_size_key;
+        if surface_size_key.is_none() {
+            return false;
+        }
+
+        self.resize_for_window(window, cx)
     }
 
     fn clamp_scrollback(&mut self) {
@@ -632,16 +670,19 @@ impl TerminalPanel {
         }
 
         if wants_clipboard_paste(&event.keystroke) {
-            self.selection = None;
-            self.paste_from_clipboard(cx);
+            let selection_cleared = self.clear_selection();
+            if selection_cleared || self.paste_from_clipboard(cx) {
+                cx.notify();
+            }
             cx.stop_propagation();
             return;
         }
 
         if let Some(bytes) = translate_keystroke(&event.keystroke) {
-            self.selection = None;
-            self.write_input(&bytes, cx);
-            cx.notify();
+            let selection_cleared = self.clear_selection();
+            if selection_cleared || self.write_input(&bytes) {
+                cx.notify();
+            }
         }
 
         cx.stop_propagation();
@@ -792,9 +833,9 @@ impl TerminalPanel {
         (!text.is_empty()).then_some(text)
     }
 
-    fn paste_from_clipboard(&mut self, cx: &mut Context<Self>) {
+    fn paste_from_clipboard(&mut self, cx: &mut Context<Self>) -> bool {
         let Some(text) = cx.read_from_clipboard().and_then(|item| item.text()) else {
-            return;
+            return false;
         };
 
         let bracketed_mode = self
@@ -804,10 +845,10 @@ impl TerminalPanel {
             .unwrap_or(false);
         let bytes = encode_terminal_paste(&text, bracketed_mode);
         if bytes.is_empty() {
-            return;
+            return false;
         }
 
-        self.write_input(&bytes, cx);
+        self.write_input(&bytes)
     }
 
     fn visible_snapshot(&self) -> Option<GridSnapshot> {
@@ -857,16 +898,18 @@ impl TerminalPanel {
         select_line_at(&snapshot, position)
     }
 
-    fn write_input(&mut self, bytes: &[u8], cx: &mut Context<Self>) {
+    fn write_input(&mut self, bytes: &[u8]) -> bool {
         let Some(term) = self.terminal.as_ref() else {
-            return;
+            return false;
         };
 
+        let cursor_was_hidden = !self.last_cursor_visible;
         if let Err(err) = term.write(bytes) {
             self.last_error = Some(format!("Failed to write to PTY: {err}").into());
-            cx.notify();
+            true
         } else {
             self.reset_cursor_blink();
+            cursor_was_hidden
         }
     }
 
@@ -1027,13 +1070,19 @@ impl Panel for TerminalPanel {
     }
 
     fn set_active(&mut self, active: bool, window: &mut Window, cx: &mut Context<Self>) {
+        if self.panel_active == active {
+            return;
+        }
+        self.panel_active = active;
+
         if active {
             self.ensure_refresh_loop(window, cx);
             self.ensure_resize_observer(window, cx);
             self.resize_for_window(window, cx);
-            self.focus_handle.focus(window);
+            if !self.focus_handle.is_focused(window) {
+                self.focus_handle.focus(window);
+            }
             (self.on_activated)(Route::Terminal, window, cx);
-            cx.notify();
         }
     }
 
@@ -1059,11 +1108,14 @@ impl Focusable for TerminalPanel {
 
 impl Render for TerminalPanel {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        self.ensure_refresh_loop(window, cx);
+        self.ensure_resize_observer(window, cx);
+
         // ⚠️ Render is paint-only (CLAUDE.md Rule 6). `sync_window_title` and
         // `update_transient_state` used to run here on every PTY echo — they
         // now live in the refresh loop only (see `ensure_refresh_loop`).
-        // `resize_for_window` is kept because it's the only place where a
-        // window-bounds change can re-size the PTY between paints.
+        // PTY resize also lives in the refresh loop now, driven by the
+        // measured terminal surface size instead of render-time mutation.
         let t = theme(cx).clone();
         let preferences_changed = self.sync_terminal_preferences(
             t.settings.terminal_font_size as f32,
@@ -1077,7 +1129,6 @@ impl Render for TerminalPanel {
             self.render_cache = None;
             self.reset_cursor_blink();
         }
-        self.resize_for_window(window, cx);
         let lines = self.render_lines(&t);
         let cursor_overlay = self.render_cursor_overlay(&t);
         let bell_active = self.bell_flashing();
@@ -1129,17 +1180,10 @@ impl Render for TerminalPanel {
                             .relative()
                             .child(
                                 canvas(
-                                    move |bounds, window, _| {
+                                    move |bounds, _, _| {
                                         let mut surface_bounds = surface_bounds.borrow_mut();
-                                        let size_changed = surface_bounds
-                                            .as_ref()
-                                            .map(|previous| previous.size != bounds.size)
-                                            .unwrap_or(true);
                                         if surface_bounds.as_ref() != Some(&bounds) {
                                             *surface_bounds = Some(bounds);
-                                        }
-                                        if size_changed {
-                                            window.refresh();
                                         }
                                     },
                                     |_, _, _, _| {},

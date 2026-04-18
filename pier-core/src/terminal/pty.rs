@@ -25,9 +25,8 @@ pub enum TerminalError {
     #[error("terminal I/O: {0}")]
     Io(#[from] io::Error),
 
-    /// This target does not yet have a PTY backend. Currently: Windows.
-    /// M2b lands the ConPTY implementation.
-    #[error("terminal backend not implemented on this platform yet")]
+    /// This target does not yet have a PTY backend.
+    #[error("terminal backend not implemented on this platform")]
     Unsupported,
 }
 
@@ -35,6 +34,11 @@ pub enum TerminalError {
 ///
 /// The trait is object-safe so callers can hold `Box<dyn Pty>` without
 /// caring which platform implementation is underneath.
+///
+/// Implementations are expected to keep `write` bounded: either accept
+/// some bytes quickly, report `WouldBlock`, or fail. The session layer
+/// already moves writes onto a background thread, but shutdown and
+/// resize still rely on the backend eventually returning.
 pub trait Pty: Send {
     /// Non-blocking read of whatever the child has emitted since the
     /// last call. Returns `Ok(Vec::new())` if nothing is available.
@@ -316,7 +320,7 @@ mod windows_impl {
     use std::mem::{size_of, zeroed};
     use std::os::windows::ffi::OsStrExt;
     use std::os::windows::io::{AsRawHandle, FromRawHandle, OwnedHandle};
-    use std::sync::mpsc::{self, Receiver, TryRecvError};
+    use std::sync::mpsc::{self, Receiver, Sender, TryRecvError};
     use std::thread::{self, JoinHandle};
 
     use windows_sys::Win32::Foundation::{CloseHandle, HANDLE, WAIT_TIMEOUT};
@@ -343,9 +347,9 @@ mod windows_impl {
     pub struct WindowsPty {
         process: Option<OwnedHandle>,
         pseudoconsole: Option<PseudoConsole>,
-        stdin: Option<File>,
+        write_tx: Option<Sender<Vec<u8>>>,
         rx: Receiver<Vec<u8>>,
-        reader_threads: Vec<JoinHandle<()>>,
+        io_threads: Vec<JoinHandle<()>>,
         cols: u16,
         rows: u16,
     }
@@ -439,15 +443,19 @@ mod windows_impl {
             let output = unsafe { File::from_raw_handle(output_read_side) };
             let process = unsafe { OwnedHandle::from_raw_handle(process_info.hProcess) };
 
-            let (tx, rx) = mpsc::channel();
-            let reader_threads = vec![spawn_pipe_reader("pier-terminal-conpty", output, tx)];
+            let (read_tx, rx) = mpsc::channel();
+            let (write_tx, write_rx) = mpsc::channel();
+            let io_threads = vec![
+                spawn_pipe_reader("pier-terminal-conpty-read", output, read_tx),
+                spawn_pipe_writer("pier-terminal-conpty-write", stdin, write_rx),
+            ];
 
             Ok(Self {
                 process: Some(process),
                 pseudoconsole: Some(pseudoconsole),
-                stdin: Some(stdin),
+                write_tx: Some(write_tx),
                 rx,
-                reader_threads,
+                io_threads,
                 cols,
                 rows,
             })
@@ -498,13 +506,18 @@ mod windows_impl {
             Ok(out)
         }
         fn write(&mut self, data: &[u8]) -> Result<usize, TerminalError> {
-            let stdin = self.stdin.as_mut().ok_or_else(|| {
+            let tx = self.write_tx.as_ref().ok_or_else(|| {
                 TerminalError::Io(io::Error::new(
                     io::ErrorKind::BrokenPipe,
                     "terminal stdin is closed",
                 ))
             })?;
-            stdin.write_all(data).map_err(TerminalError::Io)?;
+            tx.send(data.to_vec()).map_err(|_| {
+                TerminalError::Io(io::Error::new(
+                    io::ErrorKind::BrokenPipe,
+                    "terminal writer thread exited",
+                ))
+            })?;
             Ok(data.len())
         }
         fn resize(&mut self, cols: u16, rows: u16) -> Result<(), TerminalError> {
@@ -537,10 +550,7 @@ mod windows_impl {
 
     impl Drop for WindowsPty {
         fn drop(&mut self) {
-            if let Some(mut stdin) = self.stdin.take() {
-                let _ = stdin.flush();
-                drop(stdin);
-            }
+            self.write_tx.take();
             if let Some(console) = self.pseudoconsole.take() {
                 drop(console);
             }
@@ -555,7 +565,7 @@ mod windows_impl {
                 }
             }
             self.process.take();
-            for handle in self.reader_threads.drain(..) {
+            for handle in self.io_threads.drain(..) {
                 let _ = handle.join();
             }
         }
@@ -658,6 +668,26 @@ mod windows_impl {
                 }
             })
             .expect("spawning Windows pipe reader must not fail in practice")
+    }
+
+    fn spawn_pipe_writer(
+        thread_name: &str,
+        mut pipe: File,
+        rx: mpsc::Receiver<Vec<u8>>,
+    ) -> JoinHandle<()> {
+        thread::Builder::new()
+            .name(thread_name.to_string())
+            .spawn(move || {
+                while let Ok(chunk) = rx.recv() {
+                    if chunk.is_empty() {
+                        continue;
+                    }
+                    if pipe.write_all(&chunk).is_err() {
+                        break;
+                    }
+                }
+            })
+            .expect("spawning Windows pipe writer must not fail in practice")
     }
 
     fn create_pipe_pair() -> Result<(HANDLE, HANDLE), TerminalError> {

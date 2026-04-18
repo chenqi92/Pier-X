@@ -21,7 +21,10 @@ use pier_core::services::docker::{
     Container as DockerContainer, DockerImage, DockerNetwork, DockerVolume,
 };
 use pier_core::services::server_monitor::ServerSnapshot;
-use pier_core::ssh::{DetectedService, HostKeyVerifier, SftpClient, SshConfig, SshSession, Tunnel};
+use pier_core::ssh::{
+    DetectedService, ExecEvent, ExecStream, HostKeyVerifier, SftpClient, SshConfig, SshSession,
+    Tunnel, EXIT_UNKNOWN,
+};
 
 use crate::app::layout::{RightContext, RightMode};
 
@@ -72,6 +75,16 @@ pub enum DockerStatus {
     Idle,
     Loading,
     Ready,
+    Failed,
+}
+
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub enum LogsStatus {
+    #[default]
+    Idle,
+    Starting,
+    Live,
+    Stopped,
     Failed,
 }
 
@@ -133,6 +146,19 @@ pub struct DockerInspectState {
     pub output: String,
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum LogLineKind {
+    Stdout,
+    Stderr,
+    Meta,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct LogLine {
+    pub kind: LogLineKind,
+    pub text: String,
+}
+
 pub struct SshSessionState {
     pub config: SshConfig,
     /// Held to keep the underlying russh handle alive across SFTP ops.
@@ -157,11 +183,18 @@ pub struct SshSessionState {
     pub docker_inspect: Option<DockerInspectState>,
     pub docker_pending_action: Option<PendingDockerAction>,
     pub docker_action_error: Option<String>,
+    pub logs_lines: Vec<LogLine>,
+    pub logs_status: LogsStatus,
+    pub logs_error: Option<String>,
+    pub logs_command: Option<String>,
+    pub logs_exit_code: Option<i32>,
     refresh_nonce: usize,
     bootstrap_nonce: usize,
     monitor_refresh_nonce: usize,
     docker_refresh_nonce: usize,
     docker_action_nonce: usize,
+    logs_start_nonce: usize,
+    logs_stream: Option<ExecStream>,
 }
 
 impl SshSessionState {
@@ -187,11 +220,18 @@ impl SshSessionState {
             docker_inspect: None,
             docker_pending_action: None,
             docker_action_error: None,
+            logs_lines: Vec::new(),
+            logs_status: LogsStatus::Idle,
+            logs_error: None,
+            logs_command: None,
+            logs_exit_code: None,
             refresh_nonce: 0,
             bootstrap_nonce: 0,
             monitor_refresh_nonce: 0,
             docker_refresh_nonce: 0,
             docker_action_nonce: 0,
+            logs_start_nonce: 0,
+            logs_stream: None,
         }
     }
 
@@ -291,6 +331,28 @@ impl SshSessionState {
                 target_id: target_id.to_string(),
                 target_label: target_label.to_string(),
             },
+        })
+    }
+
+    pub fn begin_logs_start(&mut self, command: String) -> Option<LogsStartRequest> {
+        let trimmed = command.trim();
+        if trimmed.is_empty() {
+            return None;
+        }
+        let session = self.session.clone()?;
+
+        self.logs_start_nonce = self.logs_start_nonce.wrapping_add(1);
+        self.logs_status = LogsStatus::Starting;
+        self.logs_error = None;
+        self.logs_exit_code = None;
+        self.logs_command = Some(trimmed.to_string());
+        self.logs_lines.clear();
+        self.logs_stream = None;
+
+        Some(LogsStartRequest {
+            nonce: self.logs_start_nonce,
+            session,
+            command: trimmed.to_string(),
         })
     }
 
@@ -445,6 +507,114 @@ impl SshSessionState {
         }
 
         true
+    }
+
+    pub fn apply_logs_start_result(&mut self, result: LogsStartResult) -> bool {
+        if result.nonce != self.logs_start_nonce {
+            return false;
+        }
+
+        self.logs_command = Some(result.command.clone());
+        match result.outcome {
+            Ok(stream) => {
+                self.logs_stream = Some(stream);
+                self.logs_status = LogsStatus::Live;
+                self.logs_error = None;
+                self.logs_exit_code = None;
+                self.push_log_line(
+                    LogLineKind::Meta,
+                    format!("stream started: {}", result.command),
+                );
+            }
+            Err(err) => {
+                self.logs_stream = None;
+                self.logs_status = LogsStatus::Failed;
+                self.logs_error = Some(err.clone());
+                self.push_log_line(LogLineKind::Meta, format!("stream failed to start: {err}"));
+            }
+        }
+
+        true
+    }
+
+    pub fn drain_logs_stream(&mut self) -> bool {
+        let Some(stream) = self.logs_stream.as_ref() else {
+            return false;
+        };
+        let events = stream.drain();
+        let alive_after = stream.is_alive();
+
+        if events.is_empty() && alive_after {
+            return false;
+        }
+
+        let mut changed = false;
+        let mut should_drop_stream = false;
+        for event in events {
+            changed = true;
+            match event {
+                ExecEvent::Stdout(line) => self.push_log_line(LogLineKind::Stdout, line),
+                ExecEvent::Stderr(line) => self.push_log_line(LogLineKind::Stderr, line),
+                ExecEvent::Exit(code) => {
+                    self.logs_exit_code = Some(code);
+                    self.logs_status = LogsStatus::Stopped;
+                    should_drop_stream = true;
+                    self.push_log_line(LogLineKind::Meta, logs_exit_summary(code));
+                }
+                ExecEvent::Error(err) => {
+                    self.logs_error = Some(err.clone());
+                    self.logs_status = LogsStatus::Failed;
+                    should_drop_stream = true;
+                    self.push_log_line(LogLineKind::Meta, format!("stream error: {err}"));
+                }
+            }
+        }
+
+        if !alive_after {
+            should_drop_stream = true;
+            if matches!(self.logs_status, LogsStatus::Live | LogsStatus::Starting) {
+                self.logs_status = LogsStatus::Stopped;
+                if self.logs_exit_code.is_none() {
+                    self.logs_exit_code = Some(EXIT_UNKNOWN);
+                }
+            }
+        }
+
+        if should_drop_stream {
+            self.logs_stream = None;
+            changed = true;
+        }
+
+        changed
+    }
+
+    pub fn stop_logs(&mut self) -> bool {
+        let Some(stream) = self.logs_stream.take() else {
+            return false;
+        };
+
+        stream.stop();
+        self.logs_status = LogsStatus::Stopped;
+        self.logs_exit_code = None;
+        self.logs_error = None;
+        self.push_log_line(LogLineKind::Meta, "stream stopped".to_string());
+        true
+    }
+
+    pub fn clear_logs(&mut self) -> bool {
+        let had_any = !self.logs_lines.is_empty()
+            || self.logs_error.is_some()
+            || self.logs_exit_code.is_some();
+        self.logs_lines.clear();
+        self.logs_error = None;
+        self.logs_exit_code = None;
+        had_any
+    }
+
+    pub fn should_autostart_logs(&self) -> bool {
+        matches!(self.logs_status, LogsStatus::Idle)
+            && self.logs_lines.is_empty()
+            && self.logs_stream.is_none()
     }
 
     pub fn available_modes(&self) -> Vec<RightMode> {
@@ -624,6 +794,18 @@ pub struct DockerCommandResult {
     outcome: Result<DockerCommandOutput, String>,
 }
 
+pub struct LogsStartRequest {
+    nonce: usize,
+    session: SshSession,
+    command: String,
+}
+
+pub struct LogsStartResult {
+    nonce: usize,
+    command: String,
+    outcome: Result<ExecStream, String>,
+}
+
 pub struct TunnelRequest {
     nonce: usize,
     session: SshSession,
@@ -786,6 +968,19 @@ pub fn run_docker_command(request: DockerCommandRequest) -> DockerCommandResult 
     }
 }
 
+pub fn run_logs_start(request: LogsStartRequest) -> LogsStartResult {
+    let outcome = request
+        .session
+        .spawn_exec_stream_blocking(&request.command)
+        .map_err(|err| err.to_string());
+
+    LogsStartResult {
+        nonce: request.nonce,
+        command: request.command,
+        outcome,
+    }
+}
+
 pub fn run_tunnel(request: TunnelRequest) -> TunnelResult {
     let outcome = request
         .session
@@ -823,6 +1018,26 @@ fn collect_docker_snapshot(
     })
 }
 
+fn logs_exit_summary(code: i32) -> String {
+    if code == EXIT_UNKNOWN {
+        "stream closed without exit status".to_string()
+    } else {
+        format!("stream exited with code {code}")
+    }
+}
+
+impl SshSessionState {
+    fn push_log_line(&mut self, kind: LogLineKind, text: String) {
+        const MAX_LOG_LINES: usize = 800;
+
+        self.logs_lines.push(LogLine { kind, text });
+        if self.logs_lines.len() > MAX_LOG_LINES {
+            let overflow = self.logs_lines.len() - MAX_LOG_LINES;
+            self.logs_lines.drain(..overflow);
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use std::path::PathBuf;
@@ -831,8 +1046,9 @@ mod tests {
 
     use super::{
         ConnectStatus, DockerActionKind, DockerCommand, DockerCommandOutput, DockerCommandResult,
-        DockerPanelSnapshot, DockerRefreshResult, DockerStatus, MonitorResult, MonitorStatus,
-        PendingDockerAction, RefreshResult, ServiceProbeStatus, SshSessionState,
+        DockerPanelSnapshot, DockerRefreshResult, DockerStatus, LogsStartResult, LogsStatus,
+        MonitorResult, MonitorStatus, PendingDockerAction, RefreshResult, ServiceProbeStatus,
+        SshSessionState,
     };
     use crate::app::layout::RightMode;
 
@@ -940,5 +1156,38 @@ mod tests {
         assert!(state.docker_pending_action.is_none());
         assert!(matches!(state.docker_status, DockerStatus::Ready));
         assert!(state.docker_snapshot.is_some());
+    }
+
+    #[test]
+    fn stale_logs_start_results_are_ignored() {
+        let mut state = SshSessionState::new(sample_config());
+        state.logs_status = LogsStatus::Starting;
+        state.logs_start_nonce = 2;
+
+        let applied = state.apply_logs_start_result(LogsStartResult {
+            nonce: 1,
+            command: "journalctl -f -n 200 --no-pager".into(),
+            outcome: Err("boom".into()),
+        });
+
+        assert!(!applied);
+        assert_eq!(state.logs_status, LogsStatus::Starting);
+    }
+
+    #[test]
+    fn clear_logs_resets_errors_and_exit_code() {
+        let mut state = SshSessionState::new(sample_config());
+        state.logs_status = LogsStatus::Stopped;
+        state.logs_lines.push(super::LogLine {
+            kind: super::LogLineKind::Meta,
+            text: "stream stopped".into(),
+        });
+        state.logs_error = Some("boom".into());
+        state.logs_exit_code = Some(1);
+
+        assert!(state.clear_logs());
+        assert!(state.logs_lines.is_empty());
+        assert!(state.logs_error.is_none());
+        assert!(state.logs_exit_code.is_none());
     }
 }

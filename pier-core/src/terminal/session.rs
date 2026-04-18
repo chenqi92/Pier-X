@@ -20,6 +20,8 @@
 //!  * spawns a dedicated reader thread at construction time that
 //!    loops on `pty.read()` + `emu.process()` until a shutdown flag
 //!    is set;
+//!  * spawns a dedicated writer thread so UI callers enqueue bytes and
+//!    return immediately instead of blocking on PTY back-pressure;
 //!  * invokes a caller-provided `notify` callback whenever something
 //!    interesting happened (new bytes, child exit). The callback is
 //!    called WITHOUT holding the internal mutex — its only job is to
@@ -29,21 +31,19 @@
 //! ## Thread model
 //!
 //! ```text
-//!   shell/main thread               reader thread
-//!   ─────────────────               ─────────────
-//!   write(bytes) ──┐                 loop {
-//!                  ├─► lock Pty         lock Pty
-//!                  │                    read from pty
-//!                  └─► unlock           unlock
-//!                                       lock Emu
-//!                                       feed emu
-//!                                       unlock
-//!                                       call notify(user_data, event)
-//!   snapshot() ────┐                    if shutdown { break }
-//!                  ├─► lock Emu         sleep 5ms
-//!                  │                 }
-//!                  │   copy grid
-//!                  └─► unlock
+//!   shell/main thread               writer thread                reader thread
+//!   ─────────────────               ─────────────                ─────────────
+//!   write(bytes) ──┐                 loop {                      loop {
+//!                  ├─► queue bytes      recv queued bytes          lock Pty
+//!                  └─► return           lock Pty                   read from pty
+//!   snapshot() ────┐                    write to pty              unlock
+//!                  ├─► lock Emu         unlock                    lock Emu
+//!                  │   copy grid        if shutdown { break }     feed emu
+//!                  └─► unlock         }                           unlock
+//!                                                                  call notify(user_data, event)
+//!                                                                  if shutdown { break }
+//!                                                                  sleep 5ms
+//!                                                               }
 //! ```
 //!
 //! The notify callback is called *outside* the lock so that, if the
@@ -68,6 +68,7 @@
 //! file or anything above it needs to change.
 
 use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::mpsc::{self, RecvTimeoutError, Sender};
 use std::sync::{Arc, Mutex, MutexGuard};
 use std::thread::{self, JoinHandle};
 use std::time::Duration;
@@ -102,16 +103,18 @@ pub type NotifyFn = extern "C" fn(user_data: *mut std::ffi::c_void, event: u32);
 /// A live terminal session — PTY + emulator + reader thread, all
 /// behind one handle.
 ///
-/// Construct via [`PierTerminal::new`] (default Unix PTY) or
+/// Construct via [`PierTerminal::new`] (default local PTY) or
 /// [`PierTerminal::with_pty`] (inject your own `Box<dyn Pty>` for
 /// tests or future SSH sessions). Dropping the handle shuts down the
-/// reader thread and reaps the child process.
+/// background threads and reaps the child process.
 pub struct PierTerminal {
     pty: Arc<Mutex<Box<dyn Pty>>>,
     emu: Arc<Mutex<VtEmulator>>,
     shutdown: Arc<AtomicBool>,
     alive: Arc<AtomicBool>,
+    write_tx: Option<Sender<Vec<u8>>>,
     reader: Option<JoinHandle<()>>,
+    writer: Option<JoinHandle<()>>,
     // We keep cols/rows at the struct level for lock-free accessors;
     // the authoritative size is still stored inside the backend + emulator,
     // but reading those would require taking locks.
@@ -189,6 +192,7 @@ impl PierTerminal {
         let emu = Arc::new(Mutex::new(VtEmulator::new(cols as usize, rows as usize)));
         let shutdown = Arc::new(AtomicBool::new(false));
         let alive = Arc::new(AtomicBool::new(true));
+        let (write_tx, write_rx) = mpsc::channel::<Vec<u8>>();
 
         let reader = Some(Self::spawn_reader(
             Arc::clone(&pty),
@@ -198,13 +202,20 @@ impl PierTerminal {
             notify,
             user_data as usize,
         ));
+        let writer = Some(Self::spawn_writer(
+            Arc::clone(&pty),
+            Arc::clone(&shutdown),
+            write_rx,
+        ));
 
         Ok(Self {
             pty,
             emu,
             shutdown,
             alive,
+            write_tx: Some(write_tx),
             reader,
+            writer,
             cols,
             rows,
         })
@@ -283,10 +294,74 @@ impl PierTerminal {
             .expect("spawning reader thread must not fail in practice")
     }
 
+    fn spawn_writer(
+        pty: Arc<Mutex<Box<dyn Pty>>>,
+        shutdown: Arc<AtomicBool>,
+        rx: mpsc::Receiver<Vec<u8>>,
+    ) -> JoinHandle<()> {
+        thread::Builder::new()
+            .name("pier-terminal-writer".to_string())
+            .spawn(move || {
+                let idle = Duration::from_millis(5);
+
+                loop {
+                    if shutdown.load(Ordering::Relaxed) {
+                        break;
+                    }
+
+                    let chunk = match rx.recv_timeout(idle) {
+                        Ok(chunk) => chunk,
+                        Err(RecvTimeoutError::Timeout) => continue,
+                        Err(RecvTimeoutError::Disconnected) => break,
+                    };
+                    if chunk.is_empty() {
+                        continue;
+                    }
+
+                    let mut written = 0usize;
+                    while written < chunk.len() {
+                        if shutdown.load(Ordering::Relaxed) {
+                            return;
+                        }
+
+                        let outcome = {
+                            let mut guard = lock_or_recover(&pty);
+                            guard.write(&chunk[written..])
+                        };
+
+                        match outcome {
+                            Ok(0) => thread::sleep(idle),
+                            Ok(n) => {
+                                written = written.saturating_add(n).min(chunk.len());
+                            }
+                            Err(TerminalError::Io(err))
+                                if err.kind() == std::io::ErrorKind::WouldBlock =>
+                            {
+                                thread::sleep(idle);
+                            }
+                            Err(_) => return,
+                        }
+                    }
+                }
+            })
+            .expect("spawning writer thread must not fail in practice")
+    }
+
     /// Send bytes to the shell (user keystrokes, paste, etc.).
     pub fn write(&self, data: &[u8]) -> Result<usize, TerminalError> {
-        let mut guard = self.pty.lock().map_err(mutex_poison_error)?;
-        guard.write(data)
+        let tx = self.write_tx.as_ref().ok_or_else(|| {
+            TerminalError::Io(std::io::Error::new(
+                std::io::ErrorKind::BrokenPipe,
+                "terminal writer is closed",
+            ))
+        })?;
+        tx.send(data.to_vec()).map_err(|_| {
+            TerminalError::Io(std::io::Error::new(
+                std::io::ErrorKind::BrokenPipe,
+                "terminal writer thread exited",
+            ))
+        })?;
+        Ok(data.len())
     }
 
     /// Resize the terminal. Forwards to the underlying pty and to
@@ -466,11 +541,15 @@ impl Drop for PierTerminal {
     fn drop(&mut self) {
         // 1. Ask the reader thread to stop.
         self.shutdown.store(true, Ordering::Relaxed);
+        self.write_tx.take();
         // 2. Wait for it to notice — bounded by the `idle` sleep in
         //    the loop (5ms) plus whatever a pending `pty.read` takes
         //    to return (pty.read is non-blocking, so this is nearly
         //    instant).
         if let Some(handle) = self.reader.take() {
+            let _ = handle.join();
+        }
+        if let Some(handle) = self.writer.take() {
             let _ = handle.join();
         }
         // 3. Dropping the PTY + emulator happens after the reader
@@ -500,6 +579,169 @@ enum ReadOutcome {
 // ─────────────────────────────────────────────────────────
 // Tests
 // ─────────────────────────────────────────────────────────
+
+#[cfg(test)]
+mod async_write_tests {
+    use super::*;
+    use std::sync::{mpsc, Arc, Condvar, Mutex};
+    use std::thread;
+    use std::time::{Duration, Instant};
+
+    extern "C" fn noop_notify(_: *mut std::ffi::c_void, _: u32) {}
+
+    struct MockPty {
+        writes: Arc<Mutex<Vec<Vec<u8>>>>,
+        blocker: Option<WriteBlocker>,
+        cols: u16,
+        rows: u16,
+    }
+
+    struct WriteBlocker {
+        started_tx: Option<mpsc::Sender<()>>,
+        release: Arc<(Mutex<bool>, Condvar)>,
+    }
+
+    impl MockPty {
+        fn recording(writes: Arc<Mutex<Vec<Vec<u8>>>>, cols: u16, rows: u16) -> Self {
+            Self {
+                writes,
+                blocker: None,
+                cols,
+                rows,
+            }
+        }
+
+        fn blocking_first_write(
+            writes: Arc<Mutex<Vec<Vec<u8>>>>,
+            cols: u16,
+            rows: u16,
+            started_tx: mpsc::Sender<()>,
+            release: Arc<(Mutex<bool>, Condvar)>,
+        ) -> Self {
+            Self {
+                writes,
+                blocker: Some(WriteBlocker {
+                    started_tx: Some(started_tx),
+                    release,
+                }),
+                cols,
+                rows,
+            }
+        }
+    }
+
+    impl Pty for MockPty {
+        fn read(&mut self) -> Result<Vec<u8>, TerminalError> {
+            Ok(Vec::new())
+        }
+
+        fn write(&mut self, data: &[u8]) -> Result<usize, TerminalError> {
+            if let Some(blocker) = self.blocker.as_mut() {
+                if let Some(started_tx) = blocker.started_tx.take() {
+                    let _ = started_tx.send(());
+                    let (released, wake) = &*blocker.release;
+                    let mut released = released.lock().expect("release mutex poisoned");
+                    while !*released {
+                        released = wake.wait(released).expect("release wait poisoned");
+                    }
+                }
+            }
+
+            self.writes
+                .lock()
+                .expect("writes mutex poisoned")
+                .push(data.to_vec());
+            Ok(data.len())
+        }
+
+        fn resize(&mut self, cols: u16, rows: u16) -> Result<(), TerminalError> {
+            self.cols = cols;
+            self.rows = rows;
+            Ok(())
+        }
+
+        fn size(&self) -> (u16, u16) {
+            (self.cols, self.rows)
+        }
+    }
+
+    fn wait_for<F: Fn() -> bool>(cond: F, deadline: Duration) -> bool {
+        let start = Instant::now();
+        while start.elapsed() < deadline {
+            if cond() {
+                return true;
+            }
+            thread::sleep(Duration::from_millis(10));
+        }
+        cond()
+    }
+
+    #[test]
+    fn write_returns_before_backend_write_unblocks() {
+        let writes = Arc::new(Mutex::new(Vec::new()));
+        let release = Arc::new((Mutex::new(false), Condvar::new()));
+        let (started_tx, started_rx) = mpsc::channel();
+        let pty =
+            MockPty::blocking_first_write(Arc::clone(&writes), 80, 24, started_tx, release.clone());
+
+        let term = PierTerminal::with_pty(Box::new(pty), 80, 24, noop_notify, std::ptr::null_mut())
+            .expect("construct terminal with mock pty");
+
+        let start = Instant::now();
+        term.write(b"pier").expect("queue terminal write");
+        let elapsed = start.elapsed();
+
+        assert!(
+            elapsed < Duration::from_millis(100),
+            "terminal write should return quickly even when backend write is blocked; elapsed={elapsed:?}",
+        );
+        started_rx
+            .recv_timeout(Duration::from_secs(1))
+            .expect("writer thread never attempted backend write");
+        assert!(
+            writes.lock().expect("writes mutex poisoned").is_empty(),
+            "backend write should still be blocked before release",
+        );
+
+        let (released, wake) = &*release;
+        *released.lock().expect("release mutex poisoned") = true;
+        wake.notify_all();
+
+        assert!(
+            wait_for(
+                || writes.lock().expect("writes mutex poisoned").len() == 1,
+                Duration::from_secs(1),
+            ),
+            "queued write never completed after backend was released",
+        );
+
+        drop(term);
+    }
+
+    #[test]
+    fn queued_writes_preserve_submission_order() {
+        let writes = Arc::new(Mutex::new(Vec::new()));
+        let pty = MockPty::recording(Arc::clone(&writes), 80, 24);
+        let term = PierTerminal::with_pty(Box::new(pty), 80, 24, noop_notify, std::ptr::null_mut())
+            .expect("construct terminal with mock pty");
+
+        term.write(b"alpha").expect("queue alpha");
+        term.write(b"beta").expect("queue beta");
+
+        assert!(
+            wait_for(
+                || writes.lock().expect("writes mutex poisoned").len() == 2,
+                Duration::from_secs(1),
+            ),
+            "queued writes were not drained by the writer thread",
+        );
+
+        let writes = writes.lock().expect("writes mutex poisoned").clone();
+        assert_eq!(writes, vec![b"alpha".to_vec(), b"beta".to_vec()]);
+
+        drop(term);
+    }
+}
 
 #[cfg(all(test, unix))]
 mod tests {

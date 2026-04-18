@@ -13,7 +13,11 @@
 use std::rc::Rc;
 
 use gpui::{div, prelude::*, px, App, IntoElement, SharedString, Window};
-use gpui_component::{scroll::ScrollableElement, Icon as UiIcon, IconName};
+use gpui_component::{
+    input::{Input, InputState},
+    scroll::ScrollableElement,
+    Icon as UiIcon, IconName,
+};
 use pier_core::services::server_monitor::ServerSnapshot;
 
 use crate::app::layout::{RightContext, RightMode, RIGHT_ICON_BAR_W};
@@ -30,8 +34,8 @@ use gpui::Entity;
 
 use crate::app::ssh_session::{
     ConnectStatus, DockerActionKind, DockerInspectState, DockerPanelSnapshot, DockerStatus,
-    MonitorStatus, PendingDockerAction, ServiceProbeStatus, ServiceTunnelState, SshSessionState,
-    TunnelStatus,
+    LogLine, LogLineKind, LogsStatus, MonitorStatus, PendingDockerAction, ServiceProbeStatus,
+    ServiceTunnelState, SshSessionState, TunnelStatus,
 };
 use crate::views::database::DatabaseView;
 use crate::views::git::GitView;
@@ -43,12 +47,21 @@ use crate::views::sftp_browser::{
 pub type ModeSelector = Rc<dyn Fn(&RightMode, &mut Window, &mut App) + 'static>;
 pub type DockerRefreshHandler = Rc<dyn Fn(&(), &mut Window, &mut App) + 'static>;
 pub type DockerActionHandler = Rc<dyn Fn(&DockerActionRequest, &mut Window, &mut App) + 'static>;
+pub type LogsActionHandler = Rc<dyn Fn(&LogsAction, &mut Window, &mut App) + 'static>;
 
 #[derive(Clone, Debug)]
 pub struct DockerActionRequest {
     pub kind: DockerActionKind,
     pub target_id: String,
     pub target_label: String,
+}
+
+#[derive(Clone, Debug)]
+pub enum LogsAction {
+    RunCurrent,
+    Stop,
+    Clear,
+    Preset { command: String },
 }
 
 #[derive(IntoElement)]
@@ -58,10 +71,12 @@ pub struct RightPanel {
     /// the Markdown mode). `None` shows the empty-state card.
     current_markdown: Option<PathBuf>,
     active_session: Option<Entity<SshSessionState>>,
+    logs_command_input: Entity<InputState>,
     sftp_navigate: SftpNavigate,
     sftp_go_up: SftpGoUp,
     docker_refresh: DockerRefreshHandler,
     docker_action: DockerActionHandler,
+    logs_action: LogsActionHandler,
     on_select_mode: ModeSelector,
 }
 
@@ -71,20 +86,24 @@ impl RightPanel {
         active_mode: RightMode,
         current_markdown: Option<PathBuf>,
         active_session: Option<Entity<SshSessionState>>,
+        logs_command_input: Entity<InputState>,
         sftp_navigate: SftpNavigate,
         sftp_go_up: SftpGoUp,
         docker_refresh: DockerRefreshHandler,
         docker_action: DockerActionHandler,
+        logs_action: LogsActionHandler,
         on_select_mode: ModeSelector,
     ) -> Self {
         Self {
             active_mode,
             current_markdown,
             active_session,
+            logs_command_input,
             sftp_navigate,
             sftp_go_up,
             docker_refresh,
             docker_action,
+            logs_action,
             on_select_mode,
         }
     }
@@ -97,10 +116,12 @@ impl RenderOnce for RightPanel {
             active_mode,
             current_markdown,
             active_session,
+            logs_command_input,
             sftp_navigate,
             sftp_go_up,
             docker_refresh,
             docker_action,
+            logs_action,
             on_select_mode,
         } = self;
         let available_modes = available_right_modes(active_session.as_ref(), cx);
@@ -110,10 +131,12 @@ impl RenderOnce for RightPanel {
             active_mode,
             current_markdown,
             active_session.clone(),
+            logs_command_input,
             sftp_navigate,
             sftp_go_up,
             docker_refresh,
             docker_action,
+            logs_action,
             on_select_mode.clone(),
             cx,
         );
@@ -145,10 +168,12 @@ fn render_mode_body(
     mode: RightMode,
     current_markdown: Option<PathBuf>,
     active_session: Option<Entity<SshSessionState>>,
+    logs_command_input: Entity<InputState>,
     sftp_navigate: SftpNavigate,
     sftp_go_up: SftpGoUp,
     docker_refresh: DockerRefreshHandler,
     docker_action: DockerActionHandler,
+    logs_action: LogsActionHandler,
     on_select_mode: ModeSelector,
     cx: &mut App,
 ) -> gpui::AnyElement {
@@ -173,10 +198,12 @@ fn render_mode_body(
         RightMode::Mysql | RightMode::Postgres | RightMode::Redis | RightMode::Sqlite => {
             DatabaseView::new(mode.db_kind().expect("db mode")).into_any_element()
         }
-        RightMode::Logs => placeholder(
-            "Logs",
-            "Tail remote log files via SSH exec.",
-            "Multi-file watcher + level filtering + JSON formatting land in Phase 4.",
+        RightMode::Logs => logs_view(
+            t,
+            active_session.as_ref(),
+            logs_command_input,
+            logs_action,
+            cx,
         )
         .into_any_element(),
     };
@@ -872,6 +899,199 @@ fn docker_view(
     col.into_any_element()
 }
 
+fn logs_view(
+    t: &crate::theme::Theme,
+    active_session: Option<&Entity<SshSessionState>>,
+    logs_command_input: Entity<InputState>,
+    on_action: LogsActionHandler,
+    cx: &App,
+) -> gpui::AnyElement {
+    let Some(session_entity) = active_session else {
+        return placeholder(
+            "Logs",
+            "No active SSH session.",
+            "Open a saved connection from the left panel to start a remote log stream.",
+        )
+        .into_any_element();
+    };
+
+    let (endpoint, status, lines, error, command, exit_code) = {
+        let session = session_entity.read(cx);
+        (
+            remote_endpoint_label(&session.config),
+            session.logs_status.clone(),
+            session.logs_lines.clone(),
+            session.logs_error.clone().map(SharedString::from),
+            session.logs_command.clone().map(SharedString::from),
+            session.logs_exit_code,
+        )
+    };
+
+    let run_action = LogsAction::RunCurrent;
+    let stop_action = LogsAction::Stop;
+    let clear_action = LogsAction::Clear;
+    let on_run = on_action.clone();
+    let on_stop = on_action.clone();
+    let on_clear = on_action.clone();
+
+    let mut header = div()
+        .flex()
+        .flex_row()
+        .items_center()
+        .gap(SP_3)
+        .child(text::h2("Logs"))
+        .child(StatusPill::new(
+            logs_status_label(&status),
+            logs_status_kind(&status),
+        ));
+    if let Some(exit_code) = exit_code {
+        header = header.child(StatusPill::new(
+            logs_exit_label(exit_code),
+            if exit_code == 0 {
+                StatusKind::Success
+            } else {
+                StatusKind::Warning
+            },
+        ));
+    }
+
+    let mut col = div()
+        .w_full()
+        .flex()
+        .flex_col()
+        .gap(SP_3)
+        .p(SP_4)
+        .child(header)
+        .child(
+            Card::new()
+                .padding(SP_3)
+                .child(SectionLabel::new("Target"))
+                .child(text::mono(endpoint.clone()))
+                .child(
+                    text::body(
+                        "Run a long-lived remote command over SSH exec. Presets below cover the common system log locations; edit the command directly for app-specific files.",
+                    )
+                    .secondary(),
+                ),
+        )
+        .child(
+            Card::new()
+                .padding(SP_3)
+                .child(SectionLabel::new("Command"))
+                .child(Input::new(&logs_command_input))
+                .child(
+                    div()
+                        .pt(SP_2)
+                        .flex()
+                        .flex_row()
+                        .flex_wrap()
+                        .gap(SP_2)
+                        .child(
+                            Button::primary("logs-run", "Run")
+                                .on_click(move |_, window, app| on_run(&run_action, window, app)),
+                        )
+                        .child(
+                            Button::ghost("logs-stop", "Stop")
+                                .on_click(move |_, window, app| on_stop(&stop_action, window, app)),
+                        )
+                        .child(
+                            Button::ghost("logs-clear", "Clear")
+                                .on_click(move |_, window, app| on_clear(&clear_action, window, app)),
+                        ),
+                )
+                .child(
+                    div()
+                        .pt(SP_2)
+                        .flex()
+                        .flex_row()
+                        .flex_wrap()
+                        .gap(SP_2)
+                        .child(logs_preset_button(
+                            "logs-preset-journal",
+                            "Journal",
+                            "journalctl -f -n 200 --no-pager",
+                            on_action.clone(),
+                        ))
+                        .child(logs_preset_button(
+                            "logs-preset-syslog",
+                            "Syslog",
+                            "tail -n 200 -F /var/log/syslog",
+                            on_action.clone(),
+                        ))
+                        .child(logs_preset_button(
+                            "logs-preset-messages",
+                            "Messages",
+                            "tail -n 200 -F /var/log/messages",
+                            on_action.clone(),
+                        ))
+                        .child(logs_preset_button(
+                            "logs-preset-app",
+                            "App.log",
+                            "tail -n 200 -F ~/app.log",
+                            on_action,
+                        )),
+                ),
+        );
+
+    if let Some(command) = command {
+        col = col.child(
+            Card::new()
+                .padding(SP_3)
+                .child(SectionLabel::new("Active Command"))
+                .child(text::mono(command)),
+        );
+    }
+    if let Some(err) = error {
+        col = col.child(
+            Card::new()
+                .padding(SP_3)
+                .child(SectionLabel::new("Stream Error"))
+                .child(text::body(err).secondary()),
+        );
+    }
+
+    if lines.is_empty() {
+        let empty_label = match status {
+            LogsStatus::Idle => {
+                "log stream starts when this panel first opens or when you run a command"
+            }
+            LogsStatus::Starting => "starting remote log stream...",
+            LogsStatus::Live => "waiting for first log line...",
+            LogsStatus::Stopped => "stream stopped",
+            LogsStatus::Failed => "stream failed before any line was captured",
+        };
+        return col
+            .child(
+                Card::new()
+                    .padding(SP_3)
+                    .child(SectionLabel::new("Output"))
+                    .child(text::body(empty_label).secondary()),
+            )
+            .into_any_element();
+    }
+
+    let mut stream_card = Card::new()
+        .padding(SP_3)
+        .child(SectionLabel::new("Output"))
+        .child(text::body(format!("{} retained lines, newest first", lines.len())).secondary());
+
+    let visible = lines.iter().rev().take(200).cloned().collect::<Vec<_>>();
+    for (index, line) in visible.into_iter().enumerate() {
+        stream_card = stream_card.child(log_line_row(t, index, line));
+    }
+    if lines.len() > 200 {
+        stream_card = stream_card.child(
+            text::body(format!(
+                "… older {} lines retained but hidden",
+                lines.len() - 200
+            ))
+            .secondary(),
+        );
+    }
+
+    col.child(stream_card).into_any_element()
+}
+
 fn monitor_meter_card(
     t: &crate::theme::Theme,
     title: &'static str,
@@ -1472,6 +1692,75 @@ fn trim_panel_text(value: &str, max_chars: usize) -> SharedString {
 
     let trimmed: String = value.chars().take(max_chars).collect();
     format!("{trimmed}\n… truncated from {total} chars").into()
+}
+
+fn logs_preset_button(
+    id: &'static str,
+    label: &'static str,
+    command: &'static str,
+    on_action: LogsActionHandler,
+) -> Button {
+    let action = LogsAction::Preset {
+        command: command.to_string(),
+    };
+
+    Button::ghost(id, label).on_click(move |_, window, app| on_action(&action, window, app))
+}
+
+fn logs_status_label(status: &LogsStatus) -> SharedString {
+    match status {
+        LogsStatus::Idle => "idle".into(),
+        LogsStatus::Starting => "starting".into(),
+        LogsStatus::Live => "live".into(),
+        LogsStatus::Stopped => "stopped".into(),
+        LogsStatus::Failed => "error".into(),
+    }
+}
+
+fn logs_status_kind(status: &LogsStatus) -> StatusKind {
+    match status {
+        LogsStatus::Idle => StatusKind::Warning,
+        LogsStatus::Starting => StatusKind::Info,
+        LogsStatus::Live => StatusKind::Success,
+        LogsStatus::Stopped => StatusKind::Warning,
+        LogsStatus::Failed => StatusKind::Error,
+    }
+}
+
+fn logs_exit_label(exit_code: i32) -> SharedString {
+    if exit_code < 0 {
+        "exit unknown".into()
+    } else {
+        format!("exit {exit_code}").into()
+    }
+}
+
+fn log_line_row(t: &crate::theme::Theme, index: usize, line: LogLine) -> impl IntoElement {
+    let (label, kind, color) = match line.kind {
+        LogLineKind::Stdout => ("OUT", StatusKind::Info, t.color.text_secondary),
+        LogLineKind::Stderr => ("ERR", StatusKind::Error, t.color.status_error),
+        LogLineKind::Meta => ("META", StatusKind::Warning, t.color.text_tertiary),
+    };
+
+    div()
+        .id(("logs-line", index))
+        .flex()
+        .flex_row()
+        .items_start()
+        .gap(SP_2)
+        .py(SP_1)
+        .border_t_1()
+        .border_color(t.color.border_subtle)
+        .child(StatusPill::new(label, kind))
+        .child(
+            div()
+                .flex_1()
+                .min_w(px(0.0))
+                .text_size(SIZE_MONO_SMALL)
+                .font_family(t.font_mono.clone())
+                .text_color(color)
+                .child(trim_panel_text(&line.text, 2_000)),
+        )
 }
 
 fn placeholder(

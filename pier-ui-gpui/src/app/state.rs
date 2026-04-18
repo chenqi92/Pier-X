@@ -13,21 +13,23 @@
 
 use std::path::PathBuf;
 use std::rc::Rc;
+use std::time::Duration;
 
 use gpui::{
-    div, prelude::*, px, AnyElement, ClickEvent, Context, Entity, IntoElement, SharedString,
+    div, prelude::*, px, AnyElement, App, ClickEvent, Context, Entity, IntoElement, SharedString,
     Window,
 };
 use gpui_component::{Icon as UiIcon, IconName, WindowExt as _};
 use pier_core::connections::ConnectionStore;
 use pier_core::ssh::SshConfig;
 
-use crate::app::layout::{
-    RightMode, LEFT_PANEL_DEFAULT_W, RIGHT_PANEL_DEFAULT_W, TOOLBAR_HEIGHT,
+use crate::app::layout::{RightMode, LEFT_PANEL_DEFAULT_W, RIGHT_PANEL_DEFAULT_W};
+use crate::app::ssh_session::{
+    run_bootstrap, run_docker_command, run_docker_refresh, run_monitor_refresh, run_refresh,
+    run_tunnel, ServiceProbeStatus, SshSessionState,
 };
-use crate::app::ssh_session::SshSessionState;
 use crate::app::{
-    ActivationHandler, CloseActiveTab, NewTab, ToggleLeftPanel, ToggleRightPanel,
+    ActivationHandler, CloseActiveTab, NewTab, OpenSettings, ToggleLeftPanel, ToggleRightPanel,
 };
 use crate::components::{StatusKind, StatusPill};
 use crate::data::ShellSnapshot;
@@ -35,15 +37,19 @@ use crate::theme::{
     radius::RADIUS_SM,
     spacing::{SP_1, SP_1_5, SP_2, SP_3},
     theme,
-    typography::{SIZE_CAPTION, SIZE_SMALL, WEIGHT_MEDIUM},
+    typography::{SIZE_CAPTION, WEIGHT_MEDIUM},
     ThemeMode,
 };
 use crate::views::left_panel_view::{icons as toolbar_icons, LeftPanelView};
-use crate::views::right_panel::{ModeSelector, RightPanel};
+use crate::views::right_panel::{
+    DockerActionHandler, DockerActionRequest, DockerRefreshHandler, ModeSelector, RightPanel,
+};
 use crate::views::terminal::TerminalPanel;
 use crate::views::welcome::WelcomeView;
 
-type ClickHandler = Box<dyn Fn(&ClickEvent, &mut Window, &mut gpui::App) + 'static>;
+type ClickHandler = Rc<dyn Fn(&ClickEvent, &mut Window, &mut gpui::App) + 'static>;
+
+const REMOTE_PANEL_REFRESH_MS: u64 = 5_000;
 
 pub struct PierApp {
     // ─── Layout state ───
@@ -73,6 +79,8 @@ pub struct PierApp {
     /// via `cx.observe` (LeftPanelView pulls fresh `connections` on PierApp
     /// notify) and read-only accessors like [`Self::connections_snapshot`].
     left_panel: Entity<LeftPanelView>,
+    window_bounds_observer_started: bool,
+    remote_panel_poll_loop_started: bool,
 }
 
 impl PierApp {
@@ -82,21 +90,24 @@ impl PierApp {
             .unwrap_or_default();
         let weak_app = cx.entity().downgrade();
         let connections_for_panel = connections.clone();
-        let left_panel = cx.new(|lp_cx| {
-            LeftPanelView::new(weak_app, connections_for_panel, window, lp_cx)
-        });
+        let left_panel =
+            cx.new(|lp_cx| LeftPanelView::new(weak_app, connections_for_panel, window, lp_cx));
+        let snapshot = ShellSnapshot::load();
+        window.set_window_title(&format!("Pier-X · {}", snapshot.workspace_path));
 
         Self {
             left_visible: true,
             right_visible: true,
             right_mode: RightMode::Markdown,
-            snapshot: ShellSnapshot::load(),
+            snapshot,
             connections,
             terminals: Vec::new(),
             active_terminal: None,
             last_opened_file: None,
             active_session: None,
             left_panel,
+            window_bounds_observer_started: false,
+            remote_panel_poll_loop_started: false,
         }
     }
 
@@ -146,20 +157,23 @@ impl PierApp {
         // previous session was active.
         let session_state = cx.new(|_| SshSessionState::new(conn));
         self.active_session = Some(session_state);
+        self.right_visible = true;
+        self.normalize_right_mode(cx);
+        self.schedule_remote_bootstrap(cx);
         cx.notify();
     }
 
     pub fn navigate_sftp(&mut self, path: PathBuf, cx: &mut Context<Self>) {
-        if let Some(session) = self.active_session.as_ref() {
-            session.update(cx, |s, _| s.navigate_to(path));
-            cx.notify();
-        }
+        self.schedule_sftp_refresh(Some(path), cx);
     }
 
     pub fn sftp_cd_up(&mut self, cx: &mut Context<Self>) {
-        if let Some(session) = self.active_session.as_ref() {
-            session.update(cx, |s, _| s.cd_up());
-            cx.notify();
+        let Some(session) = self.active_session.as_ref() else {
+            return;
+        };
+        let next_target = session.read(cx).next_parent_target();
+        if let Some(path) = next_target {
+            self.schedule_sftp_refresh(Some(path), cx);
         }
     }
 
@@ -168,24 +182,7 @@ impl PierApp {
     /// than from inside the render path.
     pub fn set_right_mode(&mut self, mode: RightMode, cx: &mut Context<Self>) {
         self.right_mode = mode;
-        if mode == RightMode::Sftp {
-            if let Some(session) = self.active_session.as_ref() {
-                // Only refresh on the very first SFTP-tab click for this
-                // session — subsequent clicks reuse the cached SFTP channel.
-                let needs_first = {
-                    let s = session.read(cx);
-                    s.entries.is_empty() && s.last_error.is_none()
-                };
-                if needs_first {
-                    // ⚠️ Synchronous block: connect_blocking + list_dir_blocking
-                    // freezes the UI for the duration of the SSH handshake
-                    // (~1-2s on LAN). Acceptable here because it fires at
-                    // most once per session — moving to a background task
-                    // with a Connecting… placeholder is Phase 9.
-                    session.update(cx, |s, _| s.refresh());
-                }
-            }
-        }
+        self.ensure_right_mode_ready(cx, true);
         cx.notify();
     }
 
@@ -206,7 +203,9 @@ impl PierApp {
         } else {
             // Snap active to a valid index, preferring the previous neighbour.
             let new_active = match self.active_terminal {
-                Some(active) if active == idx => idx.saturating_sub(1).min(self.terminals.len() - 1),
+                Some(active) if active == idx => {
+                    idx.saturating_sub(1).min(self.terminals.len() - 1)
+                }
                 Some(active) if active > idx => active - 1,
                 Some(active) => active,
                 None => 0,
@@ -306,8 +305,11 @@ impl PierApp {
         };
         let weak = cx.entity().downgrade();
         let title: SharedString = format!("Delete \"{}\"?", conn.name).into();
-        let detail: SharedString =
-            format!("{}@{}:{} will be removed from connections.json.", conn.user, conn.host, conn.port).into();
+        let detail: SharedString = format!(
+            "{}@{}:{} will be removed from connections.json.",
+            conn.user, conn.host, conn.port
+        )
+        .into();
         window.open_dialog(cx, move |dialog, _w, _app_cx| {
             let weak = weak.clone();
             let body = crate::components::text::body(detail.clone()).secondary();
@@ -330,9 +332,10 @@ impl PierApp {
     }
 }
 
-
 impl Render for PierApp {
-    fn render(&mut self, _win: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+    fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        self.ensure_window_bounds_observer(window, cx);
+        self.ensure_remote_panel_poll_loop(cx);
         let t = theme(cx).clone();
 
         let toolbar = self.render_toolbar(&t, cx);
@@ -380,6 +383,9 @@ impl Render for PierApp {
                 let connections = this.connections.clone();
                 crate::views::new_tab_chooser::open(window, cx, weak, connections);
             }))
+            .on_action(cx.listener(|_, _: &OpenSettings, window, cx| {
+                crate::views::settings_dialog::open(window, cx);
+            }))
             .on_action(cx.listener(|this, _: &CloseActiveTab, _, cx| {
                 if let Some(idx) = this.active_terminal {
                     this.close_terminal_tab(idx, cx);
@@ -392,15 +398,61 @@ impl Render for PierApp {
 }
 
 // ─────────────────────────────────────────────────────────
-// Toolbar
+// Title Bar
 // ─────────────────────────────────────────────────────────
 
 impl PierApp {
-    fn render_toolbar(
-        &self,
-        t: &crate::theme::Theme,
-        cx: &mut Context<Self>,
-    ) -> impl IntoElement {
+    fn ensure_window_bounds_observer(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        if self.window_bounds_observer_started {
+            return;
+        }
+        self.window_bounds_observer_started = true;
+
+        cx.observe_window_bounds(window, |_, _, cx| {
+            cx.notify();
+        })
+        .detach();
+    }
+
+    fn ensure_remote_panel_poll_loop(&mut self, cx: &mut Context<Self>) {
+        if self.remote_panel_poll_loop_started {
+            return;
+        }
+        self.remote_panel_poll_loop_started = true;
+
+        cx.spawn(
+            move |this: gpui::WeakEntity<Self>, cx: &mut gpui::AsyncApp| {
+                let background = cx.background_executor().clone();
+                let mut async_cx = cx.clone();
+                async move {
+                    loop {
+                        background
+                            .timer(Duration::from_millis(REMOTE_PANEL_REFRESH_MS))
+                            .await;
+
+                        let still_alive = this
+                            .update(&mut async_cx, |this, cx| {
+                                if this.right_visible {
+                                    match this.right_mode {
+                                        RightMode::Monitor => this.schedule_monitor_refresh(cx),
+                                        RightMode::Docker => this.schedule_docker_refresh(cx),
+                                        _ => {}
+                                    }
+                                }
+                            })
+                            .is_ok();
+
+                        if !still_alive {
+                            break;
+                        }
+                    }
+                }
+            },
+        )
+        .detach();
+    }
+
+    fn render_toolbar(&self, t: &crate::theme::Theme, cx: &mut Context<Self>) -> impl IntoElement {
         let toggle_left_icon = if self.left_visible {
             toolbar_icons::TOGGLE_LEFT_OPEN
         } else {
@@ -418,7 +470,7 @@ impl PierApp {
         };
 
         div()
-            .h(TOOLBAR_HEIGHT)
+            .h(px(32.0))
             .px(SP_3)
             .flex()
             .flex_row()
@@ -438,15 +490,10 @@ impl PierApp {
             ))
             .child(
                 div()
-                    .text_size(SIZE_SMALL)
-                    .font_weight(WEIGHT_MEDIUM)
-                    .text_color(t.color.text_primary)
-                    .child("Pier-X"),
-            )
-            .child(
-                div()
+                    .min_w(px(0.0))
                     .text_size(SIZE_CAPTION)
-                    .text_color(t.color.text_tertiary)
+                    .font_family(t.font_mono.clone())
+                    .text_color(t.color.text_secondary)
                     .child(self.snapshot.workspace_path.clone()),
             )
             .child(div().flex_1())
@@ -459,6 +506,14 @@ impl PierApp {
                     let connections = this.connections.clone();
                     crate::views::new_tab_chooser::open(window, cx, weak, connections);
                 }),
+            ))
+            .child(toolbar_icon_button(
+                t,
+                "tb-open-settings",
+                IconName::Settings,
+                |_: &ClickEvent, window, app| {
+                    crate::views::settings_dialog::open(window, app);
+                },
             ))
             .child(toolbar_icon_button(
                 t,
@@ -479,6 +534,234 @@ impl PierApp {
                 },
             ))
     }
+
+    fn available_right_modes(&self, cx: &App) -> Vec<RightMode> {
+        self.active_session
+            .as_ref()
+            .map(|session| session.read(cx).available_modes())
+            .unwrap_or_else(|| RightMode::LOCAL_ONLY.into_iter().collect())
+    }
+
+    fn normalize_right_mode(&mut self, cx: &App) {
+        let available = self.available_right_modes(cx);
+        if available.contains(&self.right_mode) {
+            return;
+        }
+        self.right_mode = if self.active_session.is_some() {
+            RightMode::Monitor
+        } else {
+            RightMode::Markdown
+        };
+    }
+
+    fn ensure_right_mode_ready(&mut self, cx: &mut Context<Self>, allow_bootstrap: bool) {
+        self.normalize_right_mode(cx);
+
+        let Some(session) = self.active_session.clone() else {
+            return;
+        };
+        let should_bootstrap = {
+            let state = session.read(cx);
+            matches!(
+                state.service_probe_status,
+                ServiceProbeStatus::Idle | ServiceProbeStatus::Failed
+            ) && !state.is_loading()
+        };
+        if should_bootstrap && allow_bootstrap {
+            self.schedule_remote_bootstrap(cx);
+            return;
+        }
+
+        match self.right_mode {
+            RightMode::Monitor => self.schedule_monitor_refresh(cx),
+            RightMode::Docker => self.schedule_docker_refresh(cx),
+            RightMode::Sftp => {
+                if session.read(cx).should_bootstrap() {
+                    self.schedule_sftp_refresh(None, cx);
+                }
+            }
+            RightMode::Mysql | RightMode::Postgres | RightMode::Redis => {
+                self.schedule_service_tunnel(self.right_mode, cx);
+            }
+            _ => {}
+        }
+    }
+
+    fn schedule_remote_bootstrap(&mut self, cx: &mut Context<Self>) {
+        let Some(session) = self.active_session.clone() else {
+            return;
+        };
+        let request = session.update(cx, |state, _| state.begin_bootstrap());
+
+        cx.notify();
+        cx.spawn(
+            move |this: gpui::WeakEntity<Self>, cx: &mut gpui::AsyncApp| {
+                let background = cx.background_executor().clone();
+                let mut async_cx = cx.clone();
+                async move {
+                    let result = background
+                        .spawn(async move { run_bootstrap(request) })
+                        .await;
+                    let _ = session.update(&mut async_cx, |state, _| {
+                        state.apply_bootstrap_result(result);
+                    });
+                    let _ = this.update(&mut async_cx, |this, cx| {
+                        this.ensure_right_mode_ready(cx, false);
+                        cx.notify();
+                    });
+                }
+            },
+        )
+        .detach();
+    }
+
+    fn schedule_monitor_refresh(&mut self, cx: &mut Context<Self>) {
+        let Some(session) = self.active_session.clone() else {
+            return;
+        };
+        let Some(request) = session.update(cx, |state, _| state.begin_monitor_refresh()) else {
+            return;
+        };
+
+        cx.notify();
+        cx.spawn(
+            move |this: gpui::WeakEntity<Self>, cx: &mut gpui::AsyncApp| {
+                let background = cx.background_executor().clone();
+                let mut async_cx = cx.clone();
+                async move {
+                    let result = background
+                        .spawn(async move { run_monitor_refresh(request) })
+                        .await;
+                    let _ = session.update(&mut async_cx, |state, _| {
+                        state.apply_monitor_result(result);
+                    });
+                    let _ = this.update(&mut async_cx, |_, cx| {
+                        cx.notify();
+                    });
+                }
+            },
+        )
+        .detach();
+    }
+
+    fn schedule_docker_refresh(&mut self, cx: &mut Context<Self>) {
+        let Some(session) = self.active_session.clone() else {
+            return;
+        };
+        let Some(request) = session.update(cx, |state, _| state.begin_docker_refresh()) else {
+            return;
+        };
+
+        cx.notify();
+        cx.spawn(
+            move |this: gpui::WeakEntity<Self>, cx: &mut gpui::AsyncApp| {
+                let background = cx.background_executor().clone();
+                let mut async_cx = cx.clone();
+                async move {
+                    let result = background
+                        .spawn(async move { run_docker_refresh(request) })
+                        .await;
+                    let _ = session.update(&mut async_cx, |state, _| {
+                        state.apply_docker_refresh_result(result);
+                    });
+                    let _ = this.update(&mut async_cx, |_, cx| {
+                        cx.notify();
+                    });
+                }
+            },
+        )
+        .detach();
+    }
+
+    fn run_docker_action(&mut self, action: DockerActionRequest, cx: &mut Context<Self>) {
+        let Some(session) = self.active_session.clone() else {
+            return;
+        };
+        let Some(request) = session.update(cx, |state, _| {
+            state.begin_docker_action(action.kind, &action.target_id, &action.target_label)
+        }) else {
+            return;
+        };
+
+        cx.notify();
+        cx.spawn(
+            move |this: gpui::WeakEntity<Self>, cx: &mut gpui::AsyncApp| {
+                let background = cx.background_executor().clone();
+                let mut async_cx = cx.clone();
+                async move {
+                    let result = background
+                        .spawn(async move { run_docker_command(request) })
+                        .await;
+                    let _ = session.update(&mut async_cx, |state, _| {
+                        state.apply_docker_command_result(result);
+                    });
+                    let _ = this.update(&mut async_cx, |_, cx| {
+                        cx.notify();
+                    });
+                }
+            },
+        )
+        .detach();
+    }
+
+    fn schedule_sftp_refresh(&mut self, target: Option<PathBuf>, cx: &mut Context<Self>) {
+        let Some(session) = self.active_session.clone() else {
+            return;
+        };
+        let request = session.update(cx, |state, _| {
+            let next_cwd = target.clone().unwrap_or_else(|| state.cwd.clone());
+            state.begin_refresh(next_cwd)
+        });
+
+        cx.notify();
+        cx.spawn(
+            move |this: gpui::WeakEntity<Self>, cx: &mut gpui::AsyncApp| {
+                let background = cx.background_executor().clone();
+                let mut async_cx = cx.clone();
+                async move {
+                    let result = background.spawn(async move { run_refresh(request) }).await;
+                    let _ = session.update(&mut async_cx, |state, _| {
+                        state.apply_refresh_result(result);
+                    });
+                    let _ = this.update(&mut async_cx, |_, cx| {
+                        cx.notify();
+                    });
+                }
+            },
+        )
+        .detach();
+    }
+
+    fn schedule_service_tunnel(&mut self, mode: RightMode, cx: &mut Context<Self>) {
+        let Some(service_name) = mode.required_service_name() else {
+            return;
+        };
+        let Some(session) = self.active_session.clone() else {
+            return;
+        };
+        let Some(request) = session.update(cx, |state, _| state.begin_tunnel(service_name)) else {
+            return;
+        };
+
+        cx.notify();
+        cx.spawn(
+            move |this: gpui::WeakEntity<Self>, cx: &mut gpui::AsyncApp| {
+                let background = cx.background_executor().clone();
+                let mut async_cx = cx.clone();
+                async move {
+                    let result = background.spawn(async move { run_tunnel(request) }).await;
+                    let _ = session.update(&mut async_cx, |state, _| {
+                        state.apply_tunnel_result(result);
+                    });
+                    let _ = this.update(&mut async_cx, |this, cx| {
+                        this.normalize_right_mode(cx);
+                        cx.notify();
+                    });
+                }
+            },
+        )
+        .detach();
+    }
 }
 
 fn toolbar_icon_button(
@@ -495,11 +778,18 @@ fn toolbar_icon_button(
         .items_center()
         .justify_center()
         .rounded(RADIUS_SM)
+        .bg(t.color.bg_surface)
+        .border_1()
+        .border_color(t.color.border_default)
         .text_color(t.color.text_secondary)
         .cursor_pointer()
-        .hover(|s| s.bg(t.color.bg_hover))
+        .hover(|s| s.bg(t.color.bg_hover).text_color(t.color.text_primary))
         .on_click(on_click)
-        .child(UiIcon::new(icon).size(px(14.0)))
+        .child(
+            UiIcon::new(icon)
+                .size(px(14.0))
+                .text_color(t.color.text_primary),
+        )
 }
 
 // ─────────────────────────────────────────────────────────
@@ -510,15 +800,20 @@ fn toolbar_icon_button(
 
 impl PierApp {
     fn render_right(&self, cx: &mut Context<Self>) -> impl IntoElement {
-        let on_select_mode: ModeSelector = Rc::new(cx.listener(
-            |this, mode: &RightMode, _, cx| this.set_right_mode(*mode, cx),
-        ));
+        let on_select_mode: ModeSelector =
+            Rc::new(cx.listener(|this, mode: &RightMode, _, cx| this.set_right_mode(*mode, cx)));
         let on_sftp_navigate: crate::views::sftp_browser::NavigateHandler =
             Rc::new(cx.listener(|this, path: &PathBuf, _, cx| {
                 this.navigate_sftp(path.clone(), cx);
             }));
         let on_sftp_go_up: crate::views::sftp_browser::GoUpHandler =
             Rc::new(cx.listener(|this, _: &(), _, cx| this.sftp_cd_up(cx)));
+        let on_docker_refresh: DockerRefreshHandler =
+            Rc::new(cx.listener(|this, _: &(), _, cx| this.schedule_docker_refresh(cx)));
+        let on_docker_action: DockerActionHandler =
+            Rc::new(cx.listener(|this, action: &DockerActionRequest, _, cx| {
+                this.run_docker_action(action.clone(), cx);
+            }));
 
         // Only forward the path to the Markdown mode if it actually points
         // at a .md file — keeps the empty-state messaging clean.
@@ -530,11 +825,12 @@ impl PierApp {
         });
         RightPanel::new(
             self.right_mode,
-            self.snapshot.clone(),
             current_markdown,
             self.active_session.clone(),
             on_sftp_navigate,
             on_sftp_go_up,
+            on_docker_refresh,
+            on_docker_action,
             on_select_mode,
         )
     }
@@ -582,11 +878,7 @@ impl PierApp {
             )
     }
 
-    fn render_center(
-        &mut self,
-        t: &crate::theme::Theme,
-        cx: &mut Context<Self>,
-    ) -> AnyElement {
+    fn render_center(&mut self, t: &crate::theme::Theme, cx: &mut Context<Self>) -> AnyElement {
         if let Some(active) = self.active_terminal {
             let tab_count = self.terminals.len();
             let active_term = self.terminals[active].clone();
@@ -602,23 +894,25 @@ impl PierApp {
                 .into_any_element();
         }
 
-        // Welcome cover state — uses the existing WelcomeView, but its
-        // buttons map to 3-pane semantics (open Servers tab / open terminal).
+        // Welcome cover state — buttons stay truthful to their labels:
+        // "new SSH" opens the add-connection flow, saved cards open SSH.
         let connections = self.connections.clone();
         let left_panel = self.left_panel.clone();
-        let on_new_ssh: ClickHandler = Box::new(cx.listener(
-            move |this, _ev: &ClickEvent, _, cx| {
+        let on_new_ssh: ClickHandler =
+            Rc::new(cx.listener(move |this, _ev: &ClickEvent, window, cx| {
                 this.left_visible = true;
                 this.refresh_connections();
                 left_panel.update(cx, |lp, cx| {
                     lp.select_tab(crate::app::layout::LeftTab::Servers, cx);
                 });
+                this.open_add_connection(window, cx);
                 cx.notify();
-            },
-        ));
-        let on_open_terminal: ClickHandler = Box::new(cx.listener(
-            |this, _ev: &ClickEvent, _, cx| this.open_terminal_tab(cx),
-        ));
+            }));
+        let on_open_terminal: ClickHandler =
+            Rc::new(cx.listener(|this, _ev: &ClickEvent, _, cx| this.open_terminal_tab(cx)));
+        let on_open_recent = Rc::new(cx.listener(|this, idx: &usize, _, cx| {
+            this.open_ssh_terminal(*idx, cx);
+        }));
 
         div()
             .size_full()
@@ -626,7 +920,12 @@ impl PierApp {
             .flex()
             .items_center()
             .justify_center()
-            .child(WelcomeView::new(connections, on_new_ssh, on_open_terminal))
+            .child(WelcomeView::new(
+                connections,
+                on_new_ssh,
+                on_open_terminal,
+                on_open_recent,
+            ))
             .into_any_element()
     }
 }
@@ -684,7 +983,15 @@ fn render_terminal_tab_bar(
             .cursor_pointer()
             .hover(|s| s.bg(t.color.bg_hover))
             .on_click(on_select)
-            .child(UiIcon::new(IconName::SquareTerminal).size(px(12.0)))
+            .child(
+                UiIcon::new(IconName::SquareTerminal)
+                    .size(px(12.0))
+                    .text_color(if is_active {
+                        t.color.text_primary
+                    } else {
+                        t.color.text_secondary
+                    }),
+            )
             .child(label)
             .child(
                 div()
@@ -698,7 +1005,11 @@ fn render_terminal_tab_bar(
                     .text_color(t.color.text_tertiary)
                     .hover(|s| s.bg(t.color.bg_active).text_color(t.color.text_primary))
                     .on_click(on_close)
-                    .child(UiIcon::new(IconName::Close).size(px(10.0))),
+                    .child(
+                        UiIcon::new(IconName::Close)
+                            .size(px(10.0))
+                            .text_color(t.color.text_tertiary),
+                    ),
             );
 
         if is_active {
@@ -726,6 +1037,10 @@ fn render_terminal_tab_bar(
             .cursor_pointer()
             .hover(|s| s.bg(t.color.bg_hover))
             .on_click(on_new)
-            .child(UiIcon::new(IconName::Plus).size(px(12.0))),
+            .child(
+                UiIcon::new(IconName::Plus)
+                    .size(px(12.0))
+                    .text_color(t.color.text_secondary),
+            ),
     )
 }

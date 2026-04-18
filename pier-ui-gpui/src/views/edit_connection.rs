@@ -68,12 +68,7 @@ impl AuthMode {
 }
 
 /// Open the connection editor as a modal dialog.
-pub fn open(
-    window: &mut Window,
-    cx: &mut App,
-    app: WeakEntity<PierApp>,
-    target: EditTarget,
-) {
+pub fn open(window: &mut Window, cx: &mut App, app: WeakEntity<PierApp>, target: EditTarget) {
     // Inputs created once outside the builder closure → persist across
     // dialog re-renders.
     let name = cx.new(|c| InputState::new(window, c).placeholder("e.g. prod-db"));
@@ -81,11 +76,12 @@ pub fn open(
     let port = cx.new(|c| InputState::new(window, c).placeholder("22"));
     let user = cx.new(|c| InputState::new(window, c).placeholder("e.g. deploy"));
     let group = cx.new(|c| InputState::new(window, c).placeholder("optional — groups in sidebar"));
-    let password =
-        cx.new(|c| InputState::new(window, c).masked(true).placeholder("password"));
-    let key_path = cx.new(|c| {
-        InputState::new(window, c).placeholder("e.g. ~/.ssh/id_ed25519")
+    let password = cx.new(|c| {
+        InputState::new(window, c)
+            .masked(true)
+            .placeholder("password")
     });
+    let key_path = cx.new(|c| InputState::new(window, c).placeholder("e.g. ~/.ssh/id_ed25519"));
     let key_passphrase = cx.new(|c| {
         InputState::new(window, c)
             .masked(true)
@@ -151,9 +147,7 @@ pub fn open(
         name.update(cx, |s, c| s.set_value(original.name.clone(), window, c));
         host.update(cx, |s, c| s.set_value(original.host.clone(), window, c));
         user.update(cx, |s, c| s.set_value(original.user.clone(), window, c));
-        port.update(cx, |s, c| {
-            s.set_value(original.port.to_string(), window, c)
-        });
+        port.update(cx, |s, c| s.set_value(original.port.to_string(), window, c));
         if let Some(tag) = original.tags.first() {
             group.update(cx, |s, c| s.set_value(tag.clone(), window, c));
         }
@@ -221,11 +215,7 @@ struct Inputs {
     keychain_password: Entity<InputState>,
 }
 
-fn build_body(
-    cx: &App,
-    inputs: &Inputs,
-    auth_mode: Rc<RefCell<AuthMode>>,
-) -> impl IntoElement {
+fn build_body(cx: &App, inputs: &Inputs, auth_mode: Rc<RefCell<AuthMode>>) -> impl IntoElement {
     let t = theme(cx).clone();
     let current_mode = *auth_mode.borrow();
 
@@ -278,15 +268,13 @@ fn build_body(
             )
             .secondary(),
         ),
-        AuthMode::Password => col
-            .child(field(&t, "Password", &inputs.password))
-            .child(
-                text::body(
-                    "Stored in plaintext inside connections.json. Use \
+        AuthMode::Password => col.child(field(&t, "Password", &inputs.password)).child(
+            text::body(
+                "Stored in plaintext inside connections.json. Use \
                      \"keychain\" if you want OS-level secret storage.",
-                )
-                .secondary(),
-            ),
+            )
+            .secondary(),
+        ),
         AuthMode::KeyFile => col
             .child(field(&t, "Private key path", &inputs.key_path))
             .child(field(&t, "Passphrase (optional)", &inputs.key_passphrase))
@@ -402,9 +390,7 @@ fn save(
             }
             let credential_id = existing
                 .and_then(|c| match &c.auth {
-                    AuthMethod::KeychainPassword { credential_id } => {
-                        Some(credential_id.clone())
-                    }
+                    AuthMethod::KeychainPassword { credential_id } => Some(credential_id.clone()),
                     _ => None,
                 })
                 .unwrap_or_else(|| format!("pier-x.password.{}", name.trim()));

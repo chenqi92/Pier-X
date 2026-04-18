@@ -15,9 +15,8 @@
 //!
 //! [`PierTerminal`] fills that gap. Internally it:
 //!
-//!  * owns a `Box<dyn Pty>` + a `VtEmulator`, both wrapped in a single
-//!    `Arc<Mutex<Inner>>` so writes, snapshots, and the reader thread
-//!    share the same consistent view of state;
+//!  * owns the `Box<dyn Pty>` and `VtEmulator` behind separate mutexes so
+//!    PTY writes don't have to wait behind emulator snapshot copies;
 //!  * spawns a dedicated reader thread at construction time that
 //!    loops on `pty.read()` + `emu.process()` until a shutdown flag
 //!    is set;
@@ -33,13 +32,15 @@
 //!   shell/main thread               reader thread
 //!   ─────────────────               ─────────────
 //!   write(bytes) ──┐                 loop {
-//!                  ├─► lock Inner       lock Inner
+//!                  ├─► lock Pty         lock Pty
 //!                  │                    read from pty
-//!                  │                    feed emu
-//!                  │                    unlock
-//!                  └─► unlock           call notify(user_data, event)
+//!                  └─► unlock           unlock
+//!                                       lock Emu
+//!                                       feed emu
+//!                                       unlock
+//!                                       call notify(user_data, event)
 //!   snapshot() ────┐                    if shutdown { break }
-//!                  ├─► lock Inner       sleep 5ms
+//!                  ├─► lock Emu         sleep 5ms
 //!                  │                 }
 //!                  │   copy grid
 //!                  └─► unlock
@@ -67,7 +68,7 @@
 //! file or anything above it needs to change.
 
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, Mutex, MutexGuard};
 use std::thread::{self, JoinHandle};
 use std::time::Duration;
 
@@ -98,13 +99,6 @@ pub enum NotifyEvent {
 /// and is opaque to this crate.
 pub type NotifyFn = extern "C" fn(user_data: *mut std::ffi::c_void, event: u32);
 
-/// Inner state protected by a single mutex. Held briefly by both
-/// the reader thread and the shell/main thread.
-struct Inner {
-    pty: Box<dyn Pty>,
-    emu: VtEmulator,
-}
-
 /// A live terminal session — PTY + emulator + reader thread, all
 /// behind one handle.
 ///
@@ -113,13 +107,14 @@ struct Inner {
 /// tests or future SSH sessions). Dropping the handle shuts down the
 /// reader thread and reaps the child process.
 pub struct PierTerminal {
-    inner: Arc<Mutex<Inner>>,
+    pty: Arc<Mutex<Box<dyn Pty>>>,
+    emu: Arc<Mutex<VtEmulator>>,
     shutdown: Arc<AtomicBool>,
     alive: Arc<AtomicBool>,
     reader: Option<JoinHandle<()>>,
     // We keep cols/rows at the struct level for lock-free accessors;
-    // the authoritative size is always Inner::pty.size() / emu.cols,
-    // but reading those requires taking the lock.
+    // the authoritative size is still stored inside the backend + emulator,
+    // but reading those would require taking locks.
     cols: u16,
     rows: u16,
 }
@@ -190,13 +185,14 @@ impl PierTerminal {
         notify: NotifyFn,
         user_data: *mut std::ffi::c_void,
     ) -> Result<Self, TerminalError> {
-        let emu = VtEmulator::new(cols as usize, rows as usize);
-        let inner = Arc::new(Mutex::new(Inner { pty, emu }));
+        let pty = Arc::new(Mutex::new(pty));
+        let emu = Arc::new(Mutex::new(VtEmulator::new(cols as usize, rows as usize)));
         let shutdown = Arc::new(AtomicBool::new(false));
         let alive = Arc::new(AtomicBool::new(true));
 
         let reader = Some(Self::spawn_reader(
-            Arc::clone(&inner),
+            Arc::clone(&pty),
+            Arc::clone(&emu),
             Arc::clone(&shutdown),
             Arc::clone(&alive),
             notify,
@@ -204,7 +200,8 @@ impl PierTerminal {
         ));
 
         Ok(Self {
-            inner,
+            pty,
+            emu,
             shutdown,
             alive,
             reader,
@@ -227,7 +224,8 @@ impl PierTerminal {
     /// isn't `Send`. We cast back to `*mut c_void` at the moment of
     /// calling `notify`.
     fn spawn_reader(
-        inner: Arc<Mutex<Inner>>,
+        pty: Arc<Mutex<Box<dyn Pty>>>,
+        emu: Arc<Mutex<VtEmulator>>,
         shutdown: Arc<AtomicBool>,
         alive: Arc<AtomicBool>,
         notify: NotifyFn,
@@ -248,16 +246,15 @@ impl PierTerminal {
                         break;
                     }
 
-                    // Lock briefly for the read + feed. This is the
-                    // only critical section the reader thread holds.
                     let outcome = {
-                        let mut guard = match inner.lock() {
-                            Ok(g) => g,
-                            Err(poisoned) => poisoned.into_inner(),
+                        let read_result = {
+                            let mut guard = lock_or_recover(&pty);
+                            guard.read()
                         };
-                        match guard.pty.read() {
+                        match read_result {
                             Ok(chunk) if !chunk.is_empty() => {
-                                guard.emu.process(&chunk);
+                                let mut guard = lock_or_recover(&emu);
+                                guard.process(&chunk);
                                 ReadOutcome::Data
                             }
                             Ok(_) => ReadOutcome::Idle,
@@ -288,27 +285,21 @@ impl PierTerminal {
 
     /// Send bytes to the shell (user keystrokes, paste, etc.).
     pub fn write(&self, data: &[u8]) -> Result<usize, TerminalError> {
-        let mut guard = self.inner.lock().map_err(|p| {
-            // A poisoned mutex means a different thread panicked
-            // while holding state. Surface it to the caller as an
-            // I/O error rather than propagating the panic.
-            TerminalError::Io(std::io::Error::other(format!(
-                "terminal mutex poisoned: {p}"
-            )))
-        })?;
-        guard.pty.write(data)
+        let mut guard = self.pty.lock().map_err(mutex_poison_error)?;
+        guard.write(data)
     }
 
     /// Resize the terminal. Forwards to the underlying pty and to
     /// the emulator. The new size is reflected in [`Self::size`].
     pub fn resize(&mut self, cols: u16, rows: u16) -> Result<(), TerminalError> {
-        let mut guard = self.inner.lock().map_err(|p| {
-            TerminalError::Io(std::io::Error::other(format!(
-                "terminal mutex poisoned: {p}"
-            )))
-        })?;
-        guard.pty.resize(cols, rows)?;
-        guard.emu.resize(cols as usize, rows as usize);
+        {
+            let mut pty = self.pty.lock().map_err(mutex_poison_error)?;
+            pty.resize(cols, rows)?;
+        }
+        {
+            let mut emu = self.emu.lock().map_err(mutex_poison_error)?;
+            emu.resize(cols as usize, rows as usize);
+        }
         self.cols = cols;
         self.rows = rows;
         Ok(())
@@ -316,26 +307,23 @@ impl PierTerminal {
 
     /// Snapshot the current grid + cursor state.
     ///
-    /// Locks Inner briefly, copies the cells into a fresh `Vec`, and
+    /// Locks the emulator briefly, copies the cells into a fresh `Vec`, and
     /// returns. Safe to call at any cadence from any thread — the
     /// copy is cheap (typical 120×40 grid = under 100 KB).
     pub fn snapshot(&self) -> GridSnapshot {
-        let guard = match self.inner.lock() {
-            Ok(g) => g,
-            Err(poisoned) => poisoned.into_inner(),
-        };
-        let cols = guard.emu.cols as u16;
-        let rows = guard.emu.rows as u16;
+        let guard = lock_or_recover(&self.emu);
+        let cols = guard.cols as u16;
+        let rows = guard.rows as u16;
         let mut cells = Vec::with_capacity(cols as usize * rows as usize);
-        for row in &guard.emu.cells {
+        for row in &guard.cells {
             cells.extend_from_slice(row);
         }
         GridSnapshot {
             cols,
             rows,
-            cursor_x: guard.emu.cursor_x as u16,
-            cursor_y: guard.emu.cursor_y as u16,
-            bracketed_paste_mode: guard.emu.bracketed_paste_mode,
+            cursor_x: guard.cursor_x as u16,
+            cursor_y: guard.cursor_y as u16,
+            bracketed_paste_mode: guard.bracketed_paste_mode,
             cells,
         }
     }
@@ -347,14 +335,11 @@ impl PierTerminal {
     /// one line, and so on until the oldest retained scrollback line is
     /// visible at the top edge.
     pub fn snapshot_view(&self, scrollback_offset: usize) -> GridSnapshot {
-        let guard = match self.inner.lock() {
-            Ok(g) => g,
-            Err(poisoned) => poisoned.into_inner(),
-        };
-        let cols = guard.emu.cols as u16;
-        let rows = guard.emu.rows as u16;
+        let guard = lock_or_recover(&self.emu);
+        let cols = guard.cols as u16;
+        let rows = guard.rows as u16;
         let visible_rows = rows as usize;
-        let scrollback_len = guard.emu.scrollback.len();
+        let scrollback_len = guard.scrollback.len();
         let clamped_offset = scrollback_offset.min(scrollback_len);
         let total_lines = scrollback_len + visible_rows;
         let start_line = total_lines.saturating_sub(visible_rows + clamped_offset);
@@ -370,62 +355,48 @@ impl PierTerminal {
         };
         for line_index in start_line..start_line + visible_rows {
             if line_index < scrollback_len {
-                append_line(&mut cells, &guard.emu.scrollback[line_index], cols as usize);
+                append_line(&mut cells, &guard.scrollback[line_index], cols as usize);
             } else {
                 let visible_index = line_index - scrollback_len;
-                append_line(&mut cells, &guard.emu.cells[visible_index], cols as usize);
+                append_line(&mut cells, &guard.cells[visible_index], cols as usize);
             }
         }
 
         GridSnapshot {
             cols,
             rows,
-            cursor_x: guard.emu.cursor_x as u16,
-            cursor_y: guard.emu.cursor_y as u16,
-            bracketed_paste_mode: guard.emu.bracketed_paste_mode,
+            cursor_x: guard.cursor_x as u16,
+            cursor_y: guard.cursor_y as u16,
+            bracketed_paste_mode: guard.bracketed_paste_mode,
             cells,
         }
     }
 
     /// Number of scrollback lines currently retained above the live grid.
     pub fn scrollback_len(&self) -> usize {
-        let guard = match self.inner.lock() {
-            Ok(g) => g,
-            Err(poisoned) => poisoned.into_inner(),
-        };
-        guard.emu.scrollback.len()
+        lock_or_recover(&self.emu).scrollback.len()
     }
 
     /// Whether DECSET 2004 bracketed paste mode is currently enabled.
     pub fn bracketed_paste_mode(&self) -> bool {
-        let guard = match self.inner.lock() {
-            Ok(g) => g,
-            Err(poisoned) => poisoned.into_inner(),
-        };
-        guard.emu.bracketed_paste_mode
+        lock_or_recover(&self.emu).bracketed_paste_mode
     }
 
     /// Update the scrollback history cap.
     pub fn set_scrollback_limit(&self, limit: usize) {
-        let mut guard = match self.inner.lock() {
-            Ok(g) => g,
-            Err(poisoned) => poisoned.into_inner(),
-        };
-        guard.emu.scrollback_limit = limit.max(1);
-        while guard.emu.scrollback.len() > guard.emu.scrollback_limit {
-            guard.emu.scrollback.pop_front();
+        let mut guard = lock_or_recover(&self.emu);
+        guard.scrollback_limit = limit.max(1);
+        while guard.scrollback.len() > guard.scrollback_limit {
+            guard.scrollback.pop_front();
         }
     }
 
     /// Check whether a bell character was received since the last read.
     /// Clears the pending flag after reading.
     pub fn take_bell_pending(&self) -> bool {
-        let mut guard = match self.inner.lock() {
-            Ok(g) => g,
-            Err(poisoned) => poisoned.into_inner(),
-        };
-        if guard.emu.bell_pending {
-            guard.emu.bell_pending = false;
+        let mut guard = lock_or_recover(&self.emu);
+        if guard.bell_pending {
+            guard.bell_pending = false;
             true
         } else {
             false
@@ -434,30 +405,20 @@ impl PierTerminal {
 
     /// Consume the most recent OSC 52 clipboard payload, if any.
     pub fn take_osc52_clipboard(&self) -> Option<String> {
-        let mut guard = match self.inner.lock() {
-            Ok(g) => g,
-            Err(poisoned) => poisoned.into_inner(),
-        };
-        guard.emu.osc52_clipboard.take()
+        lock_or_recover(&self.emu).osc52_clipboard.take()
     }
 
     /// Current OSC 0/1/2 window title, if the foreground app set one.
     pub fn window_title(&self) -> Option<String> {
-        let guard = match self.inner.lock() {
-            Ok(g) => g,
-            Err(poisoned) => poisoned.into_inner(),
-        };
-        let title = guard.emu.window_title.trim();
+        let guard = lock_or_recover(&self.emu);
+        let title = guard.window_title.trim();
         (!title.is_empty()).then(|| title.to_string())
     }
 
     /// Current working directory advertised through OSC 7, if any.
     pub fn current_dir(&self) -> Option<String> {
-        let guard = match self.inner.lock() {
-            Ok(g) => g,
-            Err(poisoned) => poisoned.into_inner(),
-        };
-        let cwd = guard.emu.current_dir.trim();
+        let guard = lock_or_recover(&self.emu);
+        let cwd = guard.current_dir.trim();
         (!cwd.is_empty()).then(|| cwd.to_string())
     }
 
@@ -475,16 +436,13 @@ impl PierTerminal {
     /// Check if the emulator detected an SSH command and return
     /// the details. Clears the detection flag after reading.
     pub fn take_ssh_detected(&self) -> Option<(String, String, u16)> {
-        let mut guard = match self.inner.lock() {
-            Ok(g) => g,
-            Err(poisoned) => poisoned.into_inner(),
-        };
-        if guard.emu.ssh_command_detected {
-            guard.emu.ssh_command_detected = false;
+        let mut guard = lock_or_recover(&self.emu);
+        if guard.ssh_command_detected {
+            guard.ssh_command_detected = false;
             Some((
-                guard.emu.ssh_detected_host.clone(),
-                guard.emu.ssh_detected_user.clone(),
-                guard.emu.ssh_detected_port,
+                guard.ssh_detected_host.clone(),
+                guard.ssh_detected_user.clone(),
+                guard.ssh_detected_port,
             ))
         } else {
             None
@@ -494,12 +452,9 @@ impl PierTerminal {
     /// Check if the emulator detected an `exit`/`logout` command.
     /// Clears the flag after reading.
     pub fn take_ssh_exit_detected(&self) -> bool {
-        let mut guard = match self.inner.lock() {
-            Ok(g) => g,
-            Err(poisoned) => poisoned.into_inner(),
-        };
-        if guard.emu.ssh_exit_detected {
-            guard.emu.ssh_exit_detected = false;
+        let mut guard = lock_or_recover(&self.emu);
+        if guard.ssh_exit_detected {
+            guard.ssh_exit_detected = false;
             true
         } else {
             false
@@ -518,10 +473,22 @@ impl Drop for PierTerminal {
         if let Some(handle) = self.reader.take() {
             let _ = handle.join();
         }
-        // 3. Dropping `inner` happens after the reader joined, so the
-        //    Pty (and its Drop, which reaps the child) runs only on
-        //    this thread — no races with the reader half-reading.
+        // 3. Dropping the PTY + emulator happens after the reader
+        //    joined, so backend cleanup still runs on this thread only.
     }
+}
+
+fn lock_or_recover<T>(mutex: &Mutex<T>) -> MutexGuard<'_, T> {
+    match mutex.lock() {
+        Ok(guard) => guard,
+        Err(poisoned) => poisoned.into_inner(),
+    }
+}
+
+fn mutex_poison_error<T>(poisoned: std::sync::PoisonError<MutexGuard<'_, T>>) -> TerminalError {
+    TerminalError::Io(std::io::Error::other(format!(
+        "terminal mutex poisoned: {poisoned}"
+    )))
 }
 
 enum ReadOutcome {

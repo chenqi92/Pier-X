@@ -25,12 +25,12 @@ use std::path::{Path, PathBuf};
 use std::rc::Rc;
 
 use gpui::{div, prelude::*, px, App, Corner, IntoElement, SharedString, Window};
-use gpui_component::{popover::Popover, Icon as UiIcon, IconName};
+use gpui_component::{popover::Popover, scroll::ScrollableElement, Icon as UiIcon, IconName};
 
 use crate::components::{text, SectionLabel, StatusKind, StatusPill};
 use crate::theme::{
     radius::RADIUS_SM,
-    spacing::{SP_1, SP_1_5, SP_2, SP_3},
+    spacing::{SP_0_5, SP_1, SP_1_5, SP_2, SP_3},
     theme,
     typography::{SIZE_CAPTION, SIZE_MONO_SMALL, SIZE_SMALL, WEIGHT_MEDIUM},
 };
@@ -127,15 +127,19 @@ impl RenderOnce for FileTree {
         let crumbs = render_breadcrumbs(t, &cwd, on_navigate_to.clone());
 
         // ── List body ──
-        let mut body = div().flex().flex_col().py(SP_1);
+        let mut body = div().flex().flex_col().px(SP_2).py(SP_2).gap(SP_0_5);
         if let Some(err) = error {
             body = body.child(
                 div()
-                    .px(SP_3)
+                    .px(SP_2)
                     .py(SP_2)
                     .flex()
                     .flex_col()
                     .gap(SP_1)
+                    .rounded(RADIUS_SM)
+                    .bg(t.color.bg_surface)
+                    .border_1()
+                    .border_color(t.color.border_subtle)
                     .child(
                         div()
                             .flex()
@@ -150,7 +154,7 @@ impl RenderOnce for FileTree {
         } else if entries.is_empty() {
             body = body.child(
                 div()
-                    .px(SP_3)
+                    .px(SP_2)
                     .py(SP_2)
                     .text_size(SIZE_SMALL)
                     .text_color(t.color.text_tertiary)
@@ -159,23 +163,16 @@ impl RenderOnce for FileTree {
         } else {
             let mut visible = 0usize;
             for entry in entries.iter().take(MAX_CHILDREN_PER_DIR) {
-                if !filter_lower.is_empty()
-                    && !entry.name.to_lowercase().contains(&filter_lower)
-                {
+                if !filter_lower.is_empty() && !entry.name.to_lowercase().contains(&filter_lower) {
                     continue;
                 }
-                body = body.child(row(
-                    t,
-                    entry,
-                    on_enter_dir.clone(),
-                    on_open_file.clone(),
-                ));
+                body = body.child(row(t, entry, on_enter_dir.clone(), on_open_file.clone()));
                 visible += 1;
             }
             if visible == 0 {
                 body = body.child(
                     div()
-                        .px(SP_3)
+                        .px(SP_2)
                         .py(SP_2)
                         .text_size(SIZE_SMALL)
                         .text_color(t.color.text_tertiary)
@@ -185,7 +182,7 @@ impl RenderOnce for FileTree {
             if entries.len() > MAX_CHILDREN_PER_DIR {
                 body = body.child(
                     div()
-                        .px(SP_3)
+                        .px(SP_2)
                         .py(SP_1)
                         .text_size(SIZE_SMALL)
                         .text_color(t.color.text_tertiary)
@@ -198,9 +195,21 @@ impl RenderOnce for FileTree {
             .h_full()
             .flex()
             .flex_col()
-            .child(header)
-            .child(crumbs)
-            .child(div().flex_1().min_h(px(0.0)).child(body))
+            .child(
+                div()
+                    .bg(t.color.bg_surface)
+                    .border_b_1()
+                    .border_color(t.color.border_subtle)
+                    .child(header)
+                    .child(crumbs),
+            )
+            .child(
+                div()
+                    .flex_1()
+                    .min_h(px(0.0))
+                    .overflow_y_scrollbar()
+                    .child(body),
+            )
     }
 }
 
@@ -222,49 +231,63 @@ fn render_header(
         t.color.text_secondary
     };
     div()
-        .h(px(28.0))
+        .h(px(32.0))
         .px(SP_2)
         .flex()
         .flex_row()
         .items_center()
-        .gap(SP_1)
+        .gap(SP_1_5)
         .border_b_1()
         .border_color(t.color.border_subtle)
         // 1. ⤴ Up
         .child(
             div()
                 .id("ft-up")
-                .w(px(20.0))
-                .h(px(20.0))
+                .w(px(22.0))
+                .h(px(22.0))
                 .flex()
                 .items_center()
                 .justify_center()
                 .rounded(RADIUS_SM)
+                .bg(t.color.bg_panel)
+                .border_1()
+                .border_color(t.color.border_subtle)
                 .text_color(up_color)
                 .when(!at_root, |s| {
-                    s.cursor_pointer().hover(|s| s.bg(t.color.bg_hover))
+                    s.cursor_pointer()
+                        .hover(|s| s.bg(t.color.bg_hover).border_color(t.color.border_default))
                 })
                 .when(!at_root, move |s| {
                     s.on_click(move |_, w, app| on_go_up(&(), w, app))
                 })
-                .child(UiIcon::new(IconName::ChevronLeft).size(px(12.0))),
+                .child(
+                    UiIcon::new(IconName::ChevronLeft)
+                        .size(px(12.0))
+                        .text_color(up_color),
+                ),
         )
         // 2. Folder icon + cwd basename
         .child(
             div()
-                .w(px(14.0))
-                .h(px(14.0))
+                .w(px(18.0))
+                .h(px(18.0))
                 .flex()
                 .items_center()
                 .justify_center()
-                .text_color(t.color.accent)
-                .child(UiIcon::new(IconName::Folder).size(px(12.0))),
+                .rounded(RADIUS_SM)
+                .bg(t.color.accent_subtle)
+                .child(
+                    UiIcon::new(IconName::Folder)
+                        .size(px(12.0))
+                        .text_color(t.color.accent),
+                ),
         )
         .child(
             div()
                 .flex_1()
                 .min_w(px(0.0))
-                .text_size(SIZE_CAPTION)
+                .text_size(SIZE_MONO_SMALL)
+                .font_family(t.font_mono.clone())
                 .font_weight(WEIGHT_MEDIUM)
                 .text_color(t.color.text_primary)
                 .child(cwd_name.clone()),
@@ -275,23 +298,33 @@ fn render_header(
         .child(
             div()
                 .id("ft-refresh")
-                .w(px(20.0))
-                .h(px(20.0))
+                .w(px(22.0))
+                .h(px(22.0))
                 .flex()
                 .items_center()
                 .justify_center()
                 .rounded(RADIUS_SM)
+                .bg(t.color.bg_panel)
+                .border_1()
+                .border_color(t.color.border_subtle)
                 .text_color(t.color.text_secondary)
                 .cursor_pointer()
-                .hover(|s| s.bg(t.color.bg_hover))
+                .hover(|s| s.bg(t.color.bg_hover).border_color(t.color.border_default))
                 .on_click(move |_, w, app| on_refresh(&(), w, app))
-                .child(UiIcon::new(IconName::Loader).size(px(12.0))),
+                .child(
+                    UiIcon::new(IconName::Loader)
+                        .size(px(12.0))
+                        .text_color(t.color.text_secondary),
+                ),
         )
 }
 
 fn quick_menu(t: &crate::theme::Theme, on_navigate_to: NavigateToHandler) -> impl IntoElement {
     let trigger_color = t.color.text_secondary;
     let trigger_hover = t.color.bg_hover;
+    let trigger_bg = t.color.bg_panel;
+    let trigger_border = t.color.border_subtle;
+    let menu_colors = t.color;
     Popover::new("ft-quick-menu")
         .anchor(Corner::TopRight)
         .trigger(
@@ -301,11 +334,13 @@ fn quick_menu(t: &crate::theme::Theme, on_navigate_to: NavigateToHandler) -> imp
             QuickMenuTrigger {
                 color: trigger_color,
                 hover: trigger_hover,
+                bg: trigger_bg,
+                border: trigger_border,
             },
         )
         .content(move |_state, _w, _cx| {
             let nav = on_navigate_to.clone();
-            quick_menu_body(nav)
+            quick_menu_body(menu_colors, nav)
         })
 }
 
@@ -315,6 +350,8 @@ fn quick_menu(t: &crate::theme::Theme, on_navigate_to: NavigateToHandler) -> imp
 struct QuickMenuTrigger {
     color: gpui::Rgba,
     hover: gpui::Rgba,
+    bg: gpui::Rgba,
+    border: gpui::Rgba,
 }
 
 impl gpui_component::Selectable for QuickMenuTrigger {
@@ -331,24 +368,31 @@ impl RenderOnce for QuickMenuTrigger {
         let hover = self.hover;
         div()
             .id("ft-quick-trigger")
-            .w(px(20.0))
-            .h(px(20.0))
+            .w(px(22.0))
+            .h(px(22.0))
             .flex()
             .items_center()
             .justify_center()
             .rounded(RADIUS_SM)
+            .bg(self.bg)
+            .border_1()
+            .border_color(self.border)
             .text_color(self.color)
             .cursor_pointer()
             .hover(move |s| s.bg(hover))
-            .child(UiIcon::new(IconName::Ellipsis).size(px(12.0)))
+            .child(
+                UiIcon::new(IconName::Ellipsis)
+                    .size(px(12.0))
+                    .text_color(self.color),
+            )
     }
 }
 
-fn quick_menu_body(on_navigate_to: NavigateToHandler) -> impl IntoElement {
-    let home = std::env::var("HOME")
-        .ok()
-        .map(PathBuf::from)
-        .unwrap_or_else(|| PathBuf::from("/"));
+fn quick_menu_body(
+    colors: crate::theme::ColorSet,
+    on_navigate_to: NavigateToHandler,
+) -> impl IntoElement {
+    let home = user_home_dir();
     let desktop = home.join("Desktop");
     let projects = home.join("Projects");
 
@@ -363,8 +407,9 @@ fn quick_menu_body(on_navigate_to: NavigateToHandler) -> impl IntoElement {
             .px(SP_3)
             .py(SP_1_5)
             .text_size(SIZE_CAPTION)
+            .text_color(colors.text_primary)
             .cursor_pointer()
-            .hover(|s| s.bg(gpui::rgba(0xffff_ff0a)))
+            .hover(move |s| s.bg(colors.bg_hover))
             .on_click(move |_, w, app| handler(&path, w, app))
             .child(label)
             .into_any_element()
@@ -374,7 +419,12 @@ fn quick_menu_body(on_navigate_to: NavigateToHandler) -> impl IntoElement {
         .flex()
         .flex_col()
         .py(SP_1)
-        .child(make_item("ft-qm-home", "Home", home, on_navigate_to.clone()))
+        .child(make_item(
+            "ft-qm-home",
+            "Home",
+            home,
+            on_navigate_to.clone(),
+        ))
         .child(make_item(
             "ft-qm-desktop",
             "Desktop",
@@ -392,7 +442,7 @@ fn quick_menu_body(on_navigate_to: NavigateToHandler) -> impl IntoElement {
                 .h(px(1.0))
                 .w_full()
                 .my(px(2.0))
-                .bg(gpui::rgba(0xffff_ff14)),
+                .bg(colors.border_subtle),
         )
         .child(
             div()
@@ -401,10 +451,25 @@ fn quick_menu_body(on_navigate_to: NavigateToHandler) -> impl IntoElement {
                 .px(SP_3)
                 .py(SP_1_5)
                 .text_size(SIZE_CAPTION)
-                .text_color(gpui::rgba(0xffff_ff80))
+                .text_color(colors.text_tertiary)
                 .cursor_default()
                 .child("Choose Folder…   (native picker — Phase 10)"),
         )
+}
+
+fn user_home_dir() -> PathBuf {
+    std::env::var_os("HOME")
+        .or_else(|| std::env::var_os("USERPROFILE"))
+        .map(PathBuf::from)
+        .or_else(|| {
+            let drive = std::env::var_os("HOMEDRIVE")?;
+            let path = std::env::var_os("HOMEPATH")?;
+            let mut home = PathBuf::from(drive);
+            home.push(path);
+            Some(home)
+        })
+        .or_else(|| std::env::current_dir().ok())
+        .unwrap_or_else(|| PathBuf::from(std::path::MAIN_SEPARATOR_STR))
 }
 
 // ─────────────────────────────────────────────────────────
@@ -419,20 +484,23 @@ fn render_breadcrumbs(
     let segments = path_segments(cwd);
     let total = segments.len();
     let mut row = div()
-        .h(px(22.0))
+        .h(px(24.0))
         .px(SP_2)
         .flex()
         .flex_row()
         .items_center()
         .gap(px(2.0))
-        .border_b_1()
-        .border_color(t.color.border_subtle);
+        .bg(t.color.bg_surface);
 
     for (idx, (label, path)) in segments.into_iter().enumerate() {
         let is_last = idx == total - 1;
         let id_str: SharedString = format!("ft-crumb-{idx}").into();
         let nav = on_navigate_to.clone();
-        let label: SharedString = if label.is_empty() { "/".into() } else { label.into() };
+        let label: SharedString = if label.is_empty() {
+            "/".into()
+        } else {
+            label.into()
+        };
         if idx > 0 {
             row = row.child(
                 div()
@@ -450,7 +518,8 @@ fn render_breadcrumbs(
                 .flex()
                 .items_center()
                 .rounded(px(2.0))
-                .text_size(SIZE_CAPTION)
+                .text_size(SIZE_MONO_SMALL)
+                .font_family(t.font_mono.clone())
                 .text_color(if is_last {
                     t.color.text_primary
                 } else {
@@ -471,7 +540,9 @@ fn render_breadcrumbs(
 fn path_segments(p: &Path) -> Vec<(String, PathBuf)> {
     let mut out: Vec<(String, PathBuf)> = Vec::new();
     let mut acc = PathBuf::new();
-    for comp in p.components() {
+    let mut components = p.components().peekable();
+
+    while let Some(comp) = components.next() {
         match comp {
             std::path::Component::RootDir => {
                 acc.push("/");
@@ -484,8 +555,19 @@ fn path_segments(p: &Path) -> Vec<(String, PathBuf)> {
             std::path::Component::CurDir | std::path::Component::ParentDir => {}
             std::path::Component::Prefix(prefix) => {
                 let label = prefix.as_os_str().to_string_lossy().to_string();
-                acc.push(prefix.as_os_str());
-                out.push((label, acc.clone()));
+                if matches!(components.peek(), Some(std::path::Component::RootDir)) {
+                    let rooted = PathBuf::from(format!(
+                        "{}{}",
+                        prefix.as_os_str().to_string_lossy(),
+                        std::path::MAIN_SEPARATOR
+                    ));
+                    acc = rooted.clone();
+                    out.push((label, rooted));
+                    components.next();
+                } else {
+                    acc.push(prefix.as_os_str());
+                    out.push((label, acc.clone()));
+                }
             }
         }
     }
@@ -493,6 +575,23 @@ fn path_segments(p: &Path) -> Vec<(String, PathBuf)> {
         out.push((p.display().to_string(), p.to_path_buf()));
     }
     out
+}
+
+#[cfg(test)]
+mod tests {
+    use std::path::{Path, PathBuf};
+
+    use super::path_segments;
+
+    #[cfg(windows)]
+    #[test]
+    fn keeps_windows_drive_as_single_root_segment() {
+        let segments = path_segments(Path::new(r"E:\workspace-freq\Pier-X"));
+        let labels: Vec<_> = segments.iter().map(|(label, _)| label.clone()).collect();
+
+        assert_eq!(labels, vec!["E:", "workspace-freq", "Pier-X"]);
+        assert_eq!(segments[0].1, PathBuf::from(r"E:\"));
+    }
 }
 
 // ─────────────────────────────────────────────────────────
@@ -517,12 +616,13 @@ fn row(
 
     div()
         .id(gpui::ElementId::Name(id_str))
-        .h(px(22.0))
-        .px(SP_3)
+        .h(px(24.0))
+        .px(SP_2)
         .flex()
         .flex_row()
         .items_center()
         .gap(SP_1_5)
+        .rounded(RADIUS_SM)
         .text_size(SIZE_CAPTION)
         .text_color(if entry.is_dir {
             t.color.text_primary
@@ -550,7 +650,15 @@ fn row(
                 } else {
                     t.color.text_tertiary
                 })
-                .child(UiIcon::new(glyph).size(px(12.0))),
+                .child(
+                    UiIcon::new(glyph)
+                        .size(px(12.0))
+                        .text_color(if entry.is_dir {
+                            t.color.accent
+                        } else {
+                            t.color.text_tertiary
+                        }),
+                ),
         )
         .child(
             div()

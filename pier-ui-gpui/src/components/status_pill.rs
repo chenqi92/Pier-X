@@ -7,7 +7,7 @@ use crate::theme::{
     typography::{SIZE_CAPTION, WEIGHT_MEDIUM},
 };
 
-#[derive(Clone, Copy, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum StatusKind {
     Success,
     Warning,

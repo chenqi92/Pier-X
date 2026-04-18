@@ -10,7 +10,6 @@ use pier_core::services::local_exec;
 pub struct ShellSnapshot {
     pub core_version: SharedString,
     pub workspace_path: SharedString,
-    pub repo_root: SharedString,
     pub git_branch: SharedString,
     pub git_detail: SharedString,
     pub connections_value: SharedString,
@@ -29,7 +28,7 @@ impl ShellSnapshot {
             .map(path_string)
             .unwrap_or_else(|| "Unavailable".into());
 
-        let (repo_root, git_branch, git_detail) = match current_dir.as_ref() {
+        let (git_branch, git_detail) = match current_dir.as_ref() {
             Some(dir) => match GitClient::open(&dir.to_string_lossy()) {
                 Ok(client) => {
                     let branch = client
@@ -50,16 +49,11 @@ impl ShellSnapshot {
                             format!("{staged} staged, {unstaged} unstaged")
                         })
                         .unwrap_or_else(|error| format!("Status unavailable: {error}"));
-                    (path_string(client.repo_path()), branch, detail)
+                    (branch, detail)
                 }
-                Err(error) => (
-                    "Not inside a Git repository".into(),
-                    "Git unavailable".into(),
-                    error.to_string(),
-                ),
+                Err(error) => ("Git unavailable".into(), error.to_string()),
             },
             None => (
-                "Working directory unavailable".into(),
                 "Git unavailable".into(),
                 "Current directory could not be resolved".into(),
             ),
@@ -119,7 +113,6 @@ impl ShellSnapshot {
         Self {
             core_version: format!("pier-core {}", pier_core::VERSION).into(),
             workspace_path: workspace_path.into(),
-            repo_root: repo_root.into(),
             git_branch: git_branch.into(),
             git_detail: git_detail.into(),
             connections_value: connections_value.into(),

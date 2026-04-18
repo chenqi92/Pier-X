@@ -31,13 +31,15 @@ use std::path::PathBuf;
 use std::rc::Rc;
 
 use gpui::{
-    div, prelude::*, px, App, ClickEvent, Context, Entity, IntoElement, SharedString,
-    WeakEntity, Window,
+    div, prelude::*, px, App, ClickEvent, Context, Entity, IntoElement, SharedString, WeakEntity,
+    Window,
 };
 use gpui_component::{
     input::{Input, InputEvent, InputState},
+    scroll::ScrollableElement,
     Icon as UiIcon, IconName,
 };
+use pier_core::paths;
 use pier_core::ssh::{AuthMethod, SshConfig};
 
 use crate::app::layout::LeftTab;
@@ -76,10 +78,8 @@ impl LeftPanelView {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> Self {
-        let files_filter =
-            cx.new(|c| InputState::new(window, c).placeholder("Filter files…"));
-        let servers_filter =
-            cx.new(|c| InputState::new(window, c).placeholder("Filter servers…"));
+        let files_filter = cx.new(|c| InputState::new(window, c).placeholder("Filter files…"));
+        let servers_filter = cx.new(|c| InputState::new(window, c).placeholder("Filter servers…"));
 
         // Filter Change → repaint just LeftPanelView. PierApp is NOT touched
         // — that's the whole point of extracting this into its own entity.
@@ -183,7 +183,6 @@ impl Render for LeftPanelView {
             .border_r_1()
             .border_color(t.color.border_subtle)
             .child(self.render_tab_bar(&t, active_tab, cx))
-            .child(div().h(px(1.0)).w_full().bg(t.color.border_subtle))
             .child(div().flex_1().min_h(px(0.0)).child(body))
     }
 }
@@ -196,12 +195,16 @@ impl LeftPanelView {
         cx: &mut Context<Self>,
     ) -> impl IntoElement {
         let mut row = div()
-            .h(px(32.0))
+            .h(px(36.0))
             .px(SP_2)
+            .py(SP_1)
             .flex()
             .flex_row()
             .items_center()
-            .gap(SP_1);
+            .gap(SP_1)
+            .bg(t.color.bg_surface)
+            .border_b_1()
+            .border_color(t.color.border_subtle);
 
         for tab in LeftTab::ALL {
             let is_active = tab == active;
@@ -216,14 +219,14 @@ impl LeftPanelView {
 
             let mut btn = div()
                 .id(gpui::ElementId::Name(id_str))
-                .h(px(22.0))
-                .px(SP_2)
+                .h(px(24.0))
+                .px(SP_3)
                 .flex()
                 .flex_row()
                 .items_center()
                 .gap(SP_1_5)
                 .rounded(RADIUS_SM)
-                .text_size(SIZE_CAPTION)
+                .text_size(SIZE_BODY)
                 .font_weight(WEIGHT_MEDIUM)
                 .cursor_pointer()
                 .text_color(if is_active {
@@ -231,29 +234,31 @@ impl LeftPanelView {
                 } else {
                     t.color.text_secondary
                 })
-                .hover(|s| s.bg(t.color.bg_hover))
+                .hover(|s| s.bg(t.color.bg_hover).text_color(t.color.text_primary))
                 .on_click(on_click)
-                .child(UiIcon::new(icon).size(px(12.0)))
+                .child(UiIcon::new(icon).size(px(12.0)).text_color(if is_active {
+                    t.color.accent
+                } else {
+                    t.color.text_secondary
+                }))
                 .child(tab.label());
 
             if is_active {
-                btn = btn.bg(t.color.accent_subtle);
+                btn = btn
+                    .bg(t.color.accent_subtle)
+                    .border_1()
+                    .border_color(t.color.accent_muted);
             }
             row = row.child(btn);
         }
-        row.bg(t.color.bg_panel)
+        row
     }
 
-    fn render_files(
-        &self,
-        _t: &crate::theme::Theme,
-        cx: &mut Context<Self>,
-    ) -> impl IntoElement {
+    fn render_files(&self, t: &crate::theme::Theme, cx: &mut Context<Self>) -> impl IntoElement {
         // Capture handlers for FileTree — all bridge back to LeftPanelView
         // methods (file ops never touch PierApp directly, except .md → markdown).
-        let on_enter_dir: file_tree::EnterDirHandler = Rc::new(cx.listener(
-            |this, path: &PathBuf, _w, cx| this.enter_dir(path.clone(), cx),
-        ));
+        let on_enter_dir: file_tree::EnterDirHandler =
+            Rc::new(cx.listener(|this, path: &PathBuf, _w, cx| this.enter_dir(path.clone(), cx)));
         let weak_app = self.weak_app.clone();
         let on_open_file: file_tree::OpenFileHandler =
             Rc::new(move |path: &PathBuf, _w, app_cx| {
@@ -276,9 +281,8 @@ impl LeftPanelView {
             Rc::new(cx.listener(|this, _: &(), _w, cx| this.cd_up(cx)));
         let on_refresh: file_tree::RefreshHandler =
             Rc::new(cx.listener(|this, _: &(), _w, cx| this.refresh_cwd(cx)));
-        let on_navigate_to: file_tree::NavigateToHandler = Rc::new(cx.listener(
-            |this, path: &PathBuf, _w, cx| this.enter_dir(path.clone(), cx),
-        ));
+        let on_navigate_to: file_tree::NavigateToHandler =
+            Rc::new(cx.listener(|this, path: &PathBuf, _w, cx| this.enter_dir(path.clone(), cx)));
 
         let filter_value = self.files_filter.read(cx).value().to_string();
         let file_tree = FileTree::new(
@@ -300,17 +304,16 @@ impl LeftPanelView {
             .child(
                 div()
                     .px(SP_2)
-                    .py(SP_1)
+                    .py(SP_2)
+                    .bg(t.color.bg_surface)
+                    .border_b_1()
+                    .border_color(t.color.border_subtle)
                     .child(Input::new(&self.files_filter)),
             )
             .child(div().flex_1().min_h(px(0.0)).child(file_tree))
     }
 
-    fn render_servers(
-        &self,
-        t: &crate::theme::Theme,
-        cx: &mut Context<Self>,
-    ) -> impl IntoElement {
+    fn render_servers(&self, t: &crate::theme::Theme, cx: &mut Context<Self>) -> impl IntoElement {
         let query = self.servers_filter.read(cx).value().to_string();
 
         let on_select = cx.listener(|this, idx: &usize, w, cx| {
@@ -345,19 +348,26 @@ impl LeftPanelView {
             .child(
                 div()
                     .px(SP_2)
-                    .py(SP_1)
+                    .py(SP_2)
+                    .bg(t.color.bg_surface)
+                    .border_b_1()
+                    .border_color(t.color.border_subtle)
                     .child(Input::new(&self.servers_filter)),
             )
             .child(
-                div().flex_1().min_h(px(0.0)).child(render_servers_list(
-                    t,
-                    &self.connections,
-                    &query,
-                    Rc::new(on_select),
-                    Rc::new(on_edit),
-                    Rc::new(on_delete),
-                    Box::new(on_add),
-                )),
+                div()
+                    .flex_1()
+                    .min_h(px(0.0))
+                    .overflow_y_scrollbar()
+                    .child(render_servers_list(
+                        t,
+                        &self.connections,
+                        &query,
+                        Rc::new(on_select),
+                        Rc::new(on_edit),
+                        Rc::new(on_delete),
+                        Box::new(on_add),
+                    )),
             )
     }
 }
@@ -379,7 +389,7 @@ fn render_servers_list(
     on_delete: ServerSelector,
     on_add: AddConnectionHandler,
 ) -> impl IntoElement {
-    let mut col = div().p(SP_2).flex().flex_col().gap(SP_1);
+    let mut col = div().p(SP_2).flex().flex_col().gap(SP_2);
 
     col = col.child(servers_header(t, connections.len(), on_add));
 
@@ -389,9 +399,10 @@ fn render_servers_list(
                 .padding(SP_2)
                 .child(SectionLabel::new("No saved SSH connections"))
                 .child(
-                    text::body(
-                        "Use the + button above (or edit ~/.config/pier-x/connections.json by hand).",
-                    )
+                    text::body(format!(
+                        "Use the + button above or edit {}.",
+                        connections_store_label()
+                    ))
                     .secondary(),
                 ),
         );
@@ -432,12 +443,17 @@ fn servers_header(
     on_add: AddConnectionHandler,
 ) -> impl IntoElement {
     div()
+        .h(px(28.0))
         .flex()
         .flex_row()
         .items_center()
         .gap(SP_2)
         .px(SP_2)
         .py(SP_1)
+        .rounded(RADIUS_SM)
+        .bg(t.color.bg_surface)
+        .border_1()
+        .border_color(t.color.border_subtle)
         .child(SectionLabel::new("Saved connections"))
         .child(StatusPill::new(
             format!("{count}"),
@@ -457,19 +473,22 @@ fn servers_header(
                 .items_center()
                 .justify_center()
                 .rounded(RADIUS_SM)
+                .bg(t.color.bg_panel)
+                .border_1()
+                .border_color(t.color.border_subtle)
                 .text_color(t.color.text_secondary)
                 .cursor_pointer()
-                .hover(|s| s.bg(t.color.bg_hover))
+                .hover(|s| s.bg(t.color.bg_hover).border_color(t.color.border_default))
                 .on_click(on_add)
-                .child(UiIcon::new(IconName::Plus).size(px(12.0))),
+                .child(
+                    UiIcon::new(IconName::Plus)
+                        .size(px(12.0))
+                        .text_color(t.color.text_secondary),
+                ),
         )
 }
 
-fn group_header(
-    t: &crate::theme::Theme,
-    label: &str,
-    count: usize,
-) -> impl IntoElement {
+fn group_header(t: &crate::theme::Theme, label: &str, count: usize) -> impl IntoElement {
     div()
         .flex()
         .flex_row()
@@ -506,7 +525,12 @@ fn group_servers<'a>(
         {
             continue;
         }
-        match conn.tags.first().map(|s| s.trim()).filter(|s| !s.is_empty()) {
+        match conn
+            .tags
+            .first()
+            .map(|s| s.trim())
+            .filter(|s| !s.is_empty())
+        {
             Some(tag) => named.entry(tag.to_string()).or_default().push((idx, conn)),
             None => ungrouped.push((idx, conn)),
         }
@@ -525,6 +549,12 @@ fn group_servers<'a>(
 /// equals number of distinct user tags.
 fn string_to_static(s: String) -> &'static str {
     Box::leak(s.into_boxed_str())
+}
+
+fn connections_store_label() -> String {
+    paths::connections_file()
+        .map(|path| path.display().to_string())
+        .unwrap_or_else(|| "the Pier-X connection store".to_string())
 }
 
 fn server_row(
@@ -553,10 +583,13 @@ fn server_row(
         .flex_col()
         .gap(SP_1)
         .px(SP_2)
-        .py(SP_1_5)
+        .py(SP_2)
         .rounded(RADIUS_SM)
+        .bg(t.color.bg_surface)
+        .border_1()
+        .border_color(t.color.border_subtle)
         .cursor_pointer()
-        .hover(|s| s.bg(t.color.bg_hover))
+        .hover(|s| s.bg(t.color.bg_hover).border_color(t.color.border_default))
         .on_click(move |_, w, app| on_select(&idx, w, app))
         .child(
             div()
@@ -617,13 +650,25 @@ fn row_action_button(
         .items_center()
         .justify_center()
         .rounded(RADIUS_SM)
+        .bg(t.color.bg_panel)
+        .border_1()
+        .border_color(t.color.border_subtle)
         .text_color(t.color.text_tertiary)
-        .hover(|s| s.bg(t.color.bg_active).text_color(t.color.text_primary))
+        .cursor_pointer()
+        .hover(|s| {
+            s.bg(t.color.bg_active)
+                .border_color(t.color.border_default)
+                .text_color(t.color.text_primary)
+        })
         .on_click(move |_, w, app| {
             handler(&idx, w, app);
             app.stop_propagation();
         })
-        .child(UiIcon::new(icon).size(px(12.0)))
+        .child(
+            UiIcon::new(icon)
+                .size(px(12.0))
+                .text_color(t.color.text_tertiary),
+        )
 }
 
 // ─────────────────────────────────────────────────────────

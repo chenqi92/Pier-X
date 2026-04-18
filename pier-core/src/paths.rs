@@ -44,6 +44,14 @@ pub fn connections_file() -> Option<PathBuf> {
     data_dir().map(|d| d.join("connections.json"))
 }
 
+/// Path to the persisted UI settings JSON file.
+///
+/// Settings live under the config directory because they are user
+/// preferences rather than machine-state caches.
+pub fn settings_file() -> Option<PathBuf> {
+    config_dir().map(|d| d.join("settings.json"))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

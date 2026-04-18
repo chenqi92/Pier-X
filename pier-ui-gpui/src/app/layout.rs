@@ -127,6 +127,26 @@ impl RightMode {
         }
     }
 
+    pub fn required_service_name(self) -> Option<&'static str> {
+        match self {
+            RightMode::Docker => Some("docker"),
+            RightMode::Mysql => Some("mysql"),
+            RightMode::Postgres => Some("postgresql"),
+            RightMode::Redis => Some("redis"),
+            _ => None,
+        }
+    }
+
+    pub fn from_service_name(name: &str) -> Option<Self> {
+        match name {
+            "docker" => Some(RightMode::Docker),
+            "mysql" => Some(RightMode::Mysql),
+            "postgresql" => Some(RightMode::Postgres),
+            "redis" => Some(RightMode::Redis),
+            _ => None,
+        }
+    }
+
     /// Asset path for the SVG icon. Loaded via `gpui::Application::with_assets`
     /// → `assets::AppAssets`. None means the mode renders a built-in
     /// `gpui_component::IconName` instead (resolved in `mode_icon`).
@@ -135,9 +155,7 @@ impl RightMode {
             RightMode::Sftp | RightMode::Sqlite => Some("icons/server.svg"),
             RightMode::Docker => Some("icons/database.svg"),
             RightMode::Git => Some("icons/git-branch.svg"),
-            RightMode::Mysql | RightMode::Postgres | RightMode::Redis => {
-                Some("icons/database.svg")
-            }
+            RightMode::Mysql | RightMode::Postgres | RightMode::Redis => Some("icons/database.svg"),
             RightMode::Logs => Some("icons/ellipsis.svg"),
             // Markdown + Monitor use built-in lucide icons via `mode_icon()`.
             RightMode::Markdown | RightMode::Monitor => None,
@@ -172,4 +190,6 @@ impl RightMode {
         RightMode::Sqlite,
         RightMode::Logs,
     ];
+
+    pub const LOCAL_ONLY: [RightMode; 3] = [RightMode::Markdown, RightMode::Git, RightMode::Sqlite];
 }

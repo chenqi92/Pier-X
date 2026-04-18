@@ -10,16 +10,19 @@ use std::{
 
 use base64::{engine::general_purpose::STANDARD as BASE64_STANDARD, Engine as _};
 use gpui::{
-    canvas, div, font, prelude::*, px, App, Bounds, ClipboardItem, Context, CursorStyle,
-    EventEmitter, FocusHandle, Focusable, IntoElement, KeyDownEvent, Keystroke, MouseButton,
-    MouseDownEvent, MouseMoveEvent, MouseUpEvent, Pixels, Render, ScrollDelta, ScrollWheelEvent,
-    SharedString, StyledText, TextRun, UnderlineStyle, WeakEntity, Window,
+    canvas, div, prelude::*, px, App, Bounds, ClipboardItem, Context, CursorStyle, EventEmitter,
+    FocusHandle, Focusable, IntoElement, KeyDownEvent, Keystroke, MouseButton, MouseDownEvent,
+    MouseMoveEvent, MouseUpEvent, Pixels, Render, ScrollDelta, ScrollWheelEvent, SharedString,
+    StyledText, TextRun, UnderlineStyle, WeakEntity, Window,
 };
 use gpui_component::{
     dock::{Panel, PanelControl, PanelEvent, TabPanel},
     Icon as UiIcon, IconName,
 };
-use pier_core::terminal::{Cell, Color as TerminalColor, GridSnapshot, NotifyEvent, PierTerminal};
+use pier_core::{
+    settings::{TerminalCursorStyle, TerminalThemePreset},
+    terminal::{Cell, Color as TerminalColor, GridSnapshot, NotifyEvent, PierTerminal},
+};
 
 use crate::{
     app::{route::Route, ActivationHandler},
@@ -27,15 +30,11 @@ use crate::{
     theme::{
         spacing::SP_3,
         terminal::{
-            terminal_cursor_bg_hex, terminal_cursor_fg_hex, terminal_default_bg_hex,
-            terminal_default_fg_hex, terminal_hex_color, terminal_indexed_hex,
-            terminal_selection_bg_hex, terminal_selection_fg_hex,
+            terminal_bg_color, terminal_hex_color, terminal_indexed_hex, terminal_palette,
+            TerminalPalette,
         },
-        theme,
-        typography::{
-            SIZE_CAPTION, SIZE_MONO_CODE, WEIGHT_EMPHASIS, WEIGHT_REGULAR,
-        },
-        ThemeMode,
+        terminal_cursor_blink, terminal_font_for_family, terminal_font_size, theme,
+        typography::{SIZE_CAPTION, WEIGHT_EMPHASIS, WEIGHT_REGULAR},
     },
 };
 
@@ -46,13 +45,16 @@ const MAX_COLS: u16 = 220;
 const MIN_ROWS: u16 = 18;
 const MAX_ROWS: u16 = 72;
 const SCROLLBACK_LIMIT: usize = 20_000;
-const CELL_WIDTH_PX: f32 = 8.2;
-const CELL_HEIGHT_PX: f32 = 18.0;
+const BASE_TERMINAL_FONT_SIZE_PX: f32 = 13.0;
+const BASE_CELL_WIDTH_PX: f32 = 8.2;
+const BASE_CELL_HEIGHT_PX: f32 = 18.0;
 const TERMINAL_MIN_HEIGHT: f32 = 220.0;
 const WINDOW_CHROME_WIDTH: f32 = 356.0;
 const WINDOW_CHROME_HEIGHT: f32 = 212.0;
 const MAX_OSC52_CLIPBOARD_BYTES: usize = 1_000_000;
 const BELL_FLASH_MS: u64 = 180;
+const TERMINAL_REFRESH_MS: u64 = 16;
+const CURSOR_BLINK_MS: u64 = 530;
 
 #[derive(Clone)]
 struct TerminalLine {
@@ -72,6 +74,7 @@ struct TerminalRunStyle {
     bg_hex: u32,
     bold: bool,
     underline: bool,
+    apply_background_opacity: bool,
 }
 
 #[derive(Clone, Copy)]
@@ -86,7 +89,7 @@ struct TerminalCellPosition {
     col: usize,
 }
 
-#[derive(Clone, Copy)]
+#[derive(Clone, Copy, PartialEq, Eq)]
 struct TerminalSelection {
     anchor: TerminalCellPosition,
     head: TerminalCellPosition,
@@ -111,6 +114,32 @@ impl TerminalSelection {
             (self.head, self.anchor)
         }
     }
+}
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+struct TerminalSnapshotKey {
+    generation: usize,
+    scrollback_offset: usize,
+    cols: u16,
+    rows: u16,
+}
+
+#[derive(Clone, PartialEq, Eq)]
+struct TerminalRenderKey {
+    snapshot: TerminalSnapshotKey,
+    selection: Option<TerminalSelection>,
+    terminal_theme_preset: TerminalThemePreset,
+    terminal_opacity_pct: u8,
+    font_family: String,
+    font_ligatures: bool,
+    cursor_style: TerminalCursorStyle,
+    cursor_visible: bool,
+}
+
+struct TerminalRenderCache {
+    key: TerminalRenderKey,
+    snapshot: GridSnapshot,
+    lines: Vec<TerminalLine>,
 }
 
 #[derive(Default)]
@@ -148,6 +177,17 @@ pub struct TerminalPanel {
     surface_bounds: Rc<RefCell<Option<Bounds<Pixels>>>>,
     selection: Option<TerminalSelection>,
     selection_dragging: bool,
+    render_cache: Option<TerminalRenderCache>,
+    terminal_font_size_px: f32,
+    cell_width_px: f32,
+    cell_height_px: f32,
+    terminal_cursor_style: TerminalCursorStyle,
+    terminal_cursor_blink: bool,
+    terminal_theme_preset: TerminalThemePreset,
+    terminal_opacity_pct: u8,
+    terminal_font_ligatures: bool,
+    cursor_blink_anchor: Instant,
+    last_cursor_visible: bool,
     notify_state: Box<NotifyState>,
 }
 
@@ -180,6 +220,17 @@ impl TerminalPanel {
             surface_bounds: Rc::new(RefCell::new(None)),
             selection: None,
             selection_dragging: false,
+            render_cache: None,
+            terminal_font_size_px: BASE_TERMINAL_FONT_SIZE_PX,
+            cell_width_px: BASE_CELL_WIDTH_PX,
+            cell_height_px: BASE_CELL_HEIGHT_PX,
+            terminal_cursor_style: TerminalCursorStyle::Block,
+            terminal_cursor_blink: true,
+            terminal_theme_preset: TerminalThemePreset::DefaultDark,
+            terminal_opacity_pct: 100,
+            terminal_font_ligatures: false,
+            cursor_blink_anchor: Instant::now(),
+            last_cursor_visible: true,
             notify_state,
         };
         panel.start_terminal((DEFAULT_COLS, DEFAULT_ROWS));
@@ -199,6 +250,8 @@ impl TerminalPanel {
                 self.applied_window_title = None;
                 self.ssh_target = None;
                 self.bell_flash_until = None;
+                self.render_cache = None;
+                self.reset_cursor_blink();
                 self.terminal = Some(term);
                 self.clamp_selection_to_terminal();
             }
@@ -209,9 +262,74 @@ impl TerminalPanel {
                 self.terminal_title = None;
                 self.ssh_target = None;
                 self.bell_flash_until = None;
+                self.render_cache = None;
+                self.last_cursor_visible = false;
                 self.terminal = None;
             }
         }
+    }
+
+    fn sync_terminal_preferences(
+        &mut self,
+        font_size_px: f32,
+        cursor_style: TerminalCursorStyle,
+        cursor_blink: bool,
+        theme_preset: TerminalThemePreset,
+        opacity_pct: u8,
+        font_ligatures: bool,
+    ) -> bool {
+        let normalized_font_size = font_size_px.clamp(10.0, 24.0);
+        let cell_width = terminal_cell_width_px(normalized_font_size);
+        let cell_height = terminal_cell_height_px(normalized_font_size);
+        let changed = (self.terminal_font_size_px - normalized_font_size).abs() > f32::EPSILON
+            || (self.cell_width_px - cell_width).abs() > f32::EPSILON
+            || (self.cell_height_px - cell_height).abs() > f32::EPSILON
+            || self.terminal_cursor_style != cursor_style
+            || self.terminal_cursor_blink != cursor_blink
+            || self.terminal_theme_preset != theme_preset
+            || self.terminal_opacity_pct != opacity_pct
+            || self.terminal_font_ligatures != font_ligatures;
+
+        self.terminal_font_size_px = normalized_font_size;
+        self.cell_width_px = cell_width;
+        self.cell_height_px = cell_height;
+        self.terminal_theme_preset = theme_preset;
+        self.terminal_opacity_pct = opacity_pct;
+        self.terminal_font_ligatures = font_ligatures;
+        if self.terminal_cursor_style != cursor_style || self.terminal_cursor_blink != cursor_blink
+        {
+            self.terminal_cursor_style = cursor_style;
+            self.terminal_cursor_blink = cursor_blink;
+            self.reset_cursor_blink();
+        }
+
+        changed
+    }
+
+    fn reset_cursor_blink(&mut self) {
+        self.cursor_blink_anchor = Instant::now();
+        self.last_cursor_visible = true;
+    }
+
+    fn cursor_visible(&self) -> bool {
+        let Some(term) = self.terminal.as_ref() else {
+            return false;
+        };
+        if !term.is_alive() || self.scrollback_offset != 0 {
+            return false;
+        }
+        if !self.terminal_cursor_blink {
+            return true;
+        }
+
+        let elapsed_ms = Instant::now()
+            .saturating_duration_since(self.cursor_blink_anchor)
+            .as_millis() as u64;
+        ((elapsed_ms / CURSOR_BLINK_MS) % 2) == 0
+    }
+
+    fn terminal_opacity(&self) -> f32 {
+        f32::from(self.terminal_opacity_pct) / 100.0
     }
 
     fn ensure_refresh_loop(&mut self, window: &Window, cx: &mut Context<Self>) {
@@ -227,7 +345,7 @@ impl TerminalPanel {
 
                 loop {
                     cx.background_executor()
-                        .timer(Duration::from_millis(33))
+                        .timer(Duration::from_millis(TERMINAL_REFRESH_MS))
                         .await;
 
                     let still_alive = this
@@ -267,14 +385,23 @@ impl TerminalPanel {
         self.resize_observer_started = true;
 
         cx.observe_window_bounds(window, |this, window, cx| {
-            if this.resize_for_window(window) {
+            if this.resize_for_window(window, cx) {
                 cx.notify();
             }
         })
         .detach();
     }
 
-    fn resize_for_window(&mut self, window: &Window) -> bool {
+    fn resize_for_window(&mut self, window: &Window, cx: &App) -> bool {
+        self.sync_terminal_preferences(
+            terminal_font_size(cx),
+            theme(cx).settings.terminal_cursor_style,
+            terminal_cursor_blink(cx),
+            theme(cx).settings.terminal_theme_preset,
+            theme(cx).settings.terminal_opacity_pct,
+            theme(cx).settings.terminal_font_ligatures,
+        );
+
         let Some(term) = self.terminal.as_mut() else {
             return false;
         };
@@ -287,16 +414,16 @@ impl TerminalPanel {
             let viewport = window.viewport_size();
             (
                 (f32::from(viewport.width) - WINDOW_CHROME_WIDTH)
-                    .max(CELL_WIDTH_PX * MIN_COLS as f32),
+                    .max(self.cell_width_px * MIN_COLS as f32),
                 (f32::from(viewport.height) - WINDOW_CHROME_HEIGHT)
-                    .max(CELL_HEIGHT_PX * MIN_ROWS as f32),
+                    .max(self.cell_height_px * MIN_ROWS as f32),
             )
         };
 
-        let cols = (width / CELL_WIDTH_PX)
+        let cols = (width / self.cell_width_px)
             .floor()
             .clamp(MIN_COLS as f32, MAX_COLS as f32) as u16;
-        let rows = (height / CELL_HEIGHT_PX)
+        let rows = (height / self.cell_height_px)
             .floor()
             .clamp(MIN_ROWS as f32, MAX_ROWS as f32) as u16;
 
@@ -332,18 +459,27 @@ impl TerminalPanel {
         self.sync_ssh_target();
         self.sync_bell_flash();
         self.apply_osc52_clipboard(cx);
+        self.reset_cursor_blink();
     }
 
     fn update_transient_state(&mut self) -> bool {
+        let mut changed = false;
+
         if self
             .bell_flash_until
             .is_some_and(|deadline| deadline <= Instant::now())
         {
             self.bell_flash_until = None;
-            return true;
+            changed = true;
         }
 
-        false
+        let cursor_visible = self.cursor_visible();
+        if self.last_cursor_visible != cursor_visible {
+            self.last_cursor_visible = cursor_visible;
+            changed = true;
+        }
+
+        changed
     }
 
     fn clamp_selection_to_terminal(&mut self) {
@@ -466,7 +602,7 @@ impl TerminalPanel {
 
         let delta = match event.delta {
             ScrollDelta::Lines(lines) => lines.y,
-            ScrollDelta::Pixels(pixels) => f32::from(pixels.y) / CELL_HEIGHT_PX,
+            ScrollDelta::Pixels(pixels) => f32::from(pixels.y) / self.cell_height_px,
         };
         let step = if delta.abs() < 1.0 {
             delta.signum() as isize
@@ -544,10 +680,10 @@ impl TerminalPanel {
 
         let clamped_x = local_x.clamp(0.0, (width - 1.0).max(0.0));
         let clamped_y = local_y.clamp(0.0, (height - 1.0).max(0.0));
-        let col = (clamped_x / CELL_WIDTH_PX)
+        let col = (clamped_x / self.cell_width_px)
             .floor()
             .clamp(0.0, f32::from(cols.saturating_sub(1))) as usize;
-        let row = (clamped_y / CELL_HEIGHT_PX)
+        let row = (clamped_y / self.cell_height_px)
             .floor()
             .clamp(0.0, f32::from(rows.saturating_sub(1))) as usize;
 
@@ -675,9 +811,40 @@ impl TerminalPanel {
     }
 
     fn visible_snapshot(&self) -> Option<GridSnapshot> {
+        let snapshot_key = self.current_snapshot_key()?;
+        if let Some(cache) = self.render_cache.as_ref() {
+            if cache.key.snapshot == snapshot_key {
+                return Some(cache.snapshot.clone());
+            }
+        }
+
         self.terminal
             .as_ref()
             .map(|term| term.snapshot_view(self.scrollback_offset))
+    }
+
+    fn current_snapshot_key(&self) -> Option<TerminalSnapshotKey> {
+        let term = self.terminal.as_ref()?;
+        let (cols, rows) = term.size();
+        Some(TerminalSnapshotKey {
+            generation: self.notify_state.generation.load(Ordering::Relaxed),
+            scrollback_offset: self.scrollback_offset,
+            cols,
+            rows,
+        })
+    }
+
+    fn current_render_key(&self, t: &crate::theme::Theme) -> Option<TerminalRenderKey> {
+        Some(TerminalRenderKey {
+            snapshot: self.current_snapshot_key()?,
+            selection: self.selection.filter(|selection| !selection.is_empty()),
+            terminal_theme_preset: self.terminal_theme_preset,
+            terminal_opacity_pct: self.terminal_opacity_pct,
+            font_family: t.font_mono.to_string(),
+            font_ligatures: self.terminal_font_ligatures,
+            cursor_style: self.terminal_cursor_style,
+            cursor_visible: self.cursor_visible(),
+        })
     }
 
     fn word_selection_at(&self, position: TerminalCellPosition) -> Option<TerminalSelection> {
@@ -698,6 +865,8 @@ impl TerminalPanel {
         if let Err(err) = term.write(bytes) {
             self.last_error = Some(format!("Failed to write to PTY: {err}").into());
             cx.notify();
+        } else {
+            self.reset_cursor_blink();
         }
     }
 
@@ -768,68 +937,55 @@ impl TerminalPanel {
         self.applied_window_title = Some(desired);
     }
 
-    fn render_lines(&self, mode: ThemeMode, font_family: &SharedString) -> Vec<TerminalLine> {
+    fn render_lines(&mut self, t: &crate::theme::Theme) -> Vec<TerminalLine> {
+        let palette = terminal_palette(self.terminal_theme_preset);
         let Some(term) = self.terminal.as_ref() else {
+            self.render_cache = None;
             return vec![fallback_terminal_line(
                 "Terminal unavailable",
-                font_family,
-                mode,
+                &t.font_mono,
+                self.terminal_font_ligatures,
+                palette,
+                self.terminal_opacity(),
             )];
         };
 
-        let snapshot = term.snapshot_view(self.scrollback_offset);
-        let cols = snapshot.cols as usize;
-        let rows = snapshot.rows as usize;
-        let show_cursor = self.scrollback_offset == 0 && term.is_alive();
-        let cursor_row = snapshot.cursor_y as usize;
-        let cursor_col = snapshot.cursor_x as usize;
-        let selection = self.selection.filter(|selection| !selection.is_empty());
+        let Some(key) = self.current_render_key(t) else {
+            return vec![fallback_terminal_line(
+                "Terminal unavailable",
+                &t.font_mono,
+                self.terminal_font_ligatures,
+                palette,
+                self.terminal_opacity(),
+            )];
+        };
 
-        let mut rendered = Vec::with_capacity(rows);
-        for row in 0..rows {
-            let mut line = String::with_capacity(cols);
-            let mut run_specs = Vec::<TerminalRun>::new();
-            let mut current_style = None;
-            let mut current_len = 0usize;
-            for col in 0..cols {
-                let cell = &snapshot.cells[row * cols + col];
-                if cell.ch == '\0' {
-                    continue;
-                }
-
-                let style = resolve_terminal_style(
-                    cell,
-                    mode,
-                    show_cursor && row == cursor_row && col == cursor_col,
-                );
-                let style = if is_selection_cell(selection, row, col) {
-                    selected_terminal_style(style, mode)
-                } else {
-                    style
-                };
-                if current_style != Some(style) {
-                    push_terminal_run(&mut run_specs, &mut current_style, &mut current_len);
-                    current_style = Some(style);
-                }
-                line.push(cell.ch);
-                current_len += cell.ch.len_utf8();
+        if let Some(cache) = self.render_cache.as_ref() {
+            if cache.key == key {
+                return cache.lines.clone();
             }
-
-            if line.is_empty() {
-                let default_style = default_terminal_style(mode);
-                line.push(' ');
-                current_style = Some(default_style);
-                current_len = 1;
-            }
-
-            push_terminal_run(&mut run_specs, &mut current_style, &mut current_len);
-            rendered.push(TerminalLine {
-                text: line.into(),
-                runs: terminal_runs(run_specs, font_family),
-            });
         }
 
-        rendered
+        let snapshot = term.snapshot_view(self.scrollback_offset);
+        let lines = render_terminal_lines(
+            &snapshot,
+            palette,
+            &t.font_mono,
+            self.terminal_font_ligatures,
+            self.terminal_opacity(),
+            key.cursor_visible && key.cursor_style == TerminalCursorStyle::Block,
+            key.selection,
+            self.render_cache.as_ref(),
+            &key,
+        );
+
+        self.render_cache = Some(TerminalRenderCache {
+            key,
+            snapshot,
+            lines: lines.clone(),
+        });
+
+        lines
     }
 }
 
@@ -874,7 +1030,7 @@ impl Panel for TerminalPanel {
         if active {
             self.ensure_refresh_loop(window, cx);
             self.ensure_resize_observer(window, cx);
-            self.resize_for_window(window);
+            self.resize_for_window(window, cx);
             self.focus_handle.focus(window);
             (self.on_activated)(Route::Terminal, window, cx);
             cx.notify();
@@ -889,7 +1045,7 @@ impl Panel for TerminalPanel {
     ) {
         self.ensure_refresh_loop(window, cx);
         self.ensure_resize_observer(window, cx);
-        self.resize_for_window(window);
+        self.resize_for_window(window, cx);
     }
 }
 
@@ -908,10 +1064,25 @@ impl Render for TerminalPanel {
         // now live in the refresh loop only (see `ensure_refresh_loop`).
         // `resize_for_window` is kept because it's the only place where a
         // window-bounds change can re-size the PTY between paints.
-        self.resize_for_window(window);
         let t = theme(cx).clone();
-        let lines = self.render_lines(t.mode, &t.font_mono);
+        let preferences_changed = self.sync_terminal_preferences(
+            t.settings.terminal_font_size as f32,
+            t.settings.terminal_cursor_style,
+            t.settings.terminal_cursor_blink,
+            t.settings.terminal_theme_preset,
+            t.settings.terminal_opacity_pct,
+            t.settings.terminal_font_ligatures,
+        );
+        if preferences_changed {
+            self.render_cache = None;
+            self.reset_cursor_blink();
+        }
+        self.resize_for_window(window, cx);
+        let lines = self.render_lines(&t);
+        let cursor_overlay = self.render_cursor_overlay(&t);
         let bell_active = self.bell_flashing();
+        let palette = terminal_palette(self.terminal_theme_preset);
+        let surface_bg = terminal_bg_color(palette.background_hex, self.terminal_opacity());
         let border_color = if bell_active {
             t.color.status_warning
         } else if self.focus_handle.is_focused(window) {
@@ -934,8 +1105,10 @@ impl Render for TerminalPanel {
             .child(
                 div()
                     .flex_1()
-                    .min_h(px(TERMINAL_MIN_HEIGHT))
-                    .bg(t.color.bg_canvas)
+                    .min_h(px(
+                        (self.cell_height_px * MIN_ROWS as f32).max(TERMINAL_MIN_HEIGHT)
+                    ))
+                    .bg(surface_bg)
                     .border_t_1()
                     .border_color(border_color)
                     .overflow_hidden()
@@ -958,9 +1131,14 @@ impl Render for TerminalPanel {
                                 canvas(
                                     move |bounds, window, _| {
                                         let mut surface_bounds = surface_bounds.borrow_mut();
-                                        let changed = surface_bounds.as_ref() != Some(&bounds);
-                                        if changed {
+                                        let size_changed = surface_bounds
+                                            .as_ref()
+                                            .map(|previous| previous.size != bounds.size)
+                                            .unwrap_or(true);
+                                        if surface_bounds.as_ref() != Some(&bounds) {
                                             *surface_bounds = Some(bounds);
+                                        }
+                                        if size_changed {
                                             window.refresh();
                                         }
                                     },
@@ -975,16 +1153,17 @@ impl Render for TerminalPanel {
                                     .flex()
                                     .flex_col()
                                     .gap(px(0.0))
-                                    .text_size(SIZE_MONO_CODE)
-                                    .line_height(px(CELL_HEIGHT_PX))
-                                    .bg(t.color.bg_canvas)
+                                    .text_size(px(self.terminal_font_size_px))
+                                    .line_height(px(self.cell_height_px))
+                                    .bg(surface_bg)
                                     .children(lines.into_iter().map(|line| {
                                         div()
-                                            .min_h(px(CELL_HEIGHT_PX))
+                                            .min_h(px(self.cell_height_px))
                                             .whitespace_nowrap()
                                             .child(line.into_element())
                                     })),
-                            ),
+                            )
+                            .when_some(cursor_overlay, |this, overlay| this.child(overlay)),
                     ),
             )
     }
@@ -996,17 +1175,13 @@ impl TerminalPanel {
     /// All values are produced as plain `SharedString`s (no Card / Pill /
     /// SectionLabel rebuild) so the per-render element budget stays low —
     /// see Phase 10 perf notes in CLAUDE.md / commit log.
-    fn render_status_line(
-        &self,
-        t: &crate::theme::Theme,
-        bell_active: bool,
-    ) -> impl IntoElement {
+    fn render_status_line(&self, t: &crate::theme::Theme, bell_active: bool) -> impl IntoElement {
         let shell_label = self.shell_path.clone();
         let size_label = self.terminal_size_label();
         let session_label = self.session_label();
         let scrollback = self.scrollback_offset;
-        let scrollback_label: Option<SharedString> = (scrollback > 0)
-            .then(|| format!("scrollback {scrollback}").into());
+        let scrollback_label: Option<SharedString> =
+            (scrollback > 0).then(|| format!("scrollback {scrollback}").into());
         let pty_status = match self.terminal.as_ref() {
             Some(term) if term.is_alive() => None,
             Some(_) => Some(("PTY exited", t.color.status_warning)),
@@ -1025,11 +1200,7 @@ impl TerminalPanel {
             .font_family(t.font_ui.clone())
             .text_color(t.color.text_tertiary)
             // shell · size — most common columns, always shown.
-            .child(
-                div()
-                    .text_color(t.color.text_secondary)
-                    .child(shell_label),
-            )
+            .child(div().text_color(t.color.text_secondary).child(shell_label))
             .child(div().child(size_label));
 
         if let Some(label) = scrollback_label {
@@ -1048,6 +1219,46 @@ impl TerminalPanel {
         }
         // Spacer pushes nothing further right; keep it for visual symmetry.
         row.child(div().flex_1())
+    }
+
+    fn render_cursor_overlay(&self, t: &crate::theme::Theme) -> Option<gpui::AnyElement> {
+        if !self.cursor_visible() || self.terminal_cursor_style == TerminalCursorStyle::Block {
+            return None;
+        }
+
+        let snapshot = &self.render_cache.as_ref()?.snapshot;
+        if snapshot.cols == 0 || snapshot.rows == 0 {
+            return None;
+        }
+
+        let col = (snapshot.cursor_x as usize).min(snapshot.cols.saturating_sub(1) as usize);
+        let row = (snapshot.cursor_y as usize).min(snapshot.rows.saturating_sub(1) as usize);
+        let left = px(self.cell_width_px * col as f32);
+        let top = px(self.cell_height_px * row as f32);
+        let palette = terminal_palette(t.settings.terminal_theme_preset);
+        let cursor_color = terminal_hex_color(palette.cursor_bg_hex);
+
+        let overlay = match self.terminal_cursor_style {
+            TerminalCursorStyle::Underline => div()
+                .absolute()
+                .left(left)
+                .top(top + px((self.cell_height_px - 2.0).max(0.0)))
+                .w(px(self.cell_width_px.max(1.0)))
+                .h(px(2.0))
+                .bg(cursor_color)
+                .into_any_element(),
+            TerminalCursorStyle::Bar => div()
+                .absolute()
+                .left(left)
+                .top(top)
+                .w(px(2.0))
+                .h(px(self.cell_height_px.max(1.0)))
+                .bg(cursor_color)
+                .into_any_element(),
+            TerminalCursorStyle::Block => return None,
+        };
+
+        Some(overlay)
     }
 }
 
@@ -1105,6 +1316,7 @@ fn translate_keystroke(keystroke: &Keystroke) -> Option<Vec<u8>> {
     if modifiers.control {
         match keystroke.key.as_str() {
             "@" => return Some(vec![0]),
+            "space" => return Some(vec![0]),
             "[" => return Some(vec![27]),
             "\\" => return Some(vec![28]),
             "]" => return Some(vec![29]),
@@ -1124,6 +1336,15 @@ fn translate_keystroke(keystroke: &Keystroke) -> Option<Vec<u8>> {
         "enter" => Some(vec![b'\r']),
         "backspace" => Some(vec![0x7f]),
         "tab" => Some(vec![b'\t']),
+        "space" => {
+            if modifiers.platform || modifiers.function {
+                None
+            } else if modifiers.alt && !modifiers.control {
+                Some(vec![0x1b, b' '])
+            } else {
+                Some(vec![b' '])
+            }
+        }
         "escape" => Some(vec![0x1b]),
         "left" => Some(b"\x1b[D".to_vec()),
         "right" => Some(b"\x1b[C".to_vec()),
@@ -1271,15 +1492,213 @@ fn decode_osc52_clipboard_payload(raw: &str) -> Option<String> {
     String::from_utf8(bytes).ok()
 }
 
-fn selected_terminal_style(style: TerminalRunStyle, mode: ThemeMode) -> TerminalRunStyle {
+fn selected_terminal_style(style: TerminalRunStyle, palette: &TerminalPalette) -> TerminalRunStyle {
     TerminalRunStyle {
-        fg_hex: terminal_selection_fg_hex(mode),
-        bg_hex: terminal_selection_bg_hex(mode),
+        fg_hex: palette.selection_fg_hex,
+        bg_hex: palette.selection_bg_hex,
         bold: style.bold,
         underline: style.underline,
+        apply_background_opacity: true,
     }
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+struct TerminalSelectionSpan {
+    start_col: usize,
+    end_col: usize,
+}
+
+fn selection_span_for_row(
+    selection: Option<TerminalSelection>,
+    row: usize,
+    cols: usize,
+) -> Option<TerminalSelectionSpan> {
+    if cols == 0 {
+        return None;
+    }
+
+    let selection = selection?;
+    if selection.is_empty() {
+        return None;
+    }
+
+    let (start, end) = selection.normalized();
+    if row < start.row || row > end.row {
+        return None;
+    }
+
+    Some(TerminalSelectionSpan {
+        start_col: if row == start.row {
+            start.col.min(cols - 1)
+        } else {
+            0
+        },
+        end_col: if row == end.row {
+            end.col.min(cols - 1)
+        } else {
+            cols - 1
+        },
+    })
+}
+
+fn block_cursor_column_for_row(
+    snapshot: &GridSnapshot,
+    cursor_visible: bool,
+    cursor_style: TerminalCursorStyle,
+    row: usize,
+) -> Option<usize> {
+    if !cursor_visible
+        || cursor_style != TerminalCursorStyle::Block
+        || row != snapshot.cursor_y as usize
+        || row >= snapshot.rows as usize
+    {
+        return None;
+    }
+
+    Some((snapshot.cursor_x as usize).min(snapshot.cols.saturating_sub(1) as usize))
+}
+
+fn can_reuse_terminal_line(
+    previous: &TerminalRenderCache,
+    next_snapshot: &GridSnapshot,
+    next_key: &TerminalRenderKey,
+    row: usize,
+) -> bool {
+    if previous.key.terminal_theme_preset != next_key.terminal_theme_preset
+        || previous.key.terminal_opacity_pct != next_key.terminal_opacity_pct
+        || previous.key.font_family != next_key.font_family
+        || previous.key.font_ligatures != next_key.font_ligatures
+    {
+        return false;
+    }
+    if previous.snapshot.cols != next_snapshot.cols || previous.snapshot.rows != next_snapshot.rows
+    {
+        return false;
+    }
+    if row >= previous.lines.len() {
+        return false;
+    }
+
+    let cols = next_snapshot.cols as usize;
+    let start = row * cols;
+    let end = start + cols;
+    if previous.snapshot.cells[start..end] != next_snapshot.cells[start..end] {
+        return false;
+    }
+    if block_cursor_column_for_row(
+        &previous.snapshot,
+        previous.key.cursor_visible,
+        previous.key.cursor_style,
+        row,
+    ) != block_cursor_column_for_row(
+        next_snapshot,
+        next_key.cursor_visible,
+        next_key.cursor_style,
+        row,
+    ) {
+        return false;
+    }
+    if selection_span_for_row(previous.key.selection, row, cols)
+        != selection_span_for_row(next_key.selection, row, cols)
+    {
+        return false;
+    }
+
+    true
+}
+
+fn render_terminal_line(
+    snapshot: &GridSnapshot,
+    row: usize,
+    palette: &TerminalPalette,
+    font_family: &SharedString,
+    font_ligatures: bool,
+    background_opacity: f32,
+    show_cursor: bool,
+    selection: Option<TerminalSelection>,
+) -> TerminalLine {
+    let cols = snapshot.cols as usize;
+    let cursor_col =
+        block_cursor_column_for_row(snapshot, show_cursor, TerminalCursorStyle::Block, row);
+    let selection_span = selection_span_for_row(selection, row, cols);
+    let mut line = String::with_capacity(cols);
+    let mut run_specs = Vec::<TerminalRun>::new();
+    let mut current_style = None;
+    let mut current_len = 0usize;
+
+    for col in 0..cols {
+        let cell = &snapshot.cells[row * cols + col];
+        if cell.ch == '\0' {
+            continue;
+        }
+
+        let style = resolve_terminal_style(cell, palette, cursor_col == Some(col));
+        let style =
+            if selection_span.is_some_and(|span| col >= span.start_col && col <= span.end_col) {
+                selected_terminal_style(style, palette)
+            } else {
+                style
+            };
+        if current_style != Some(style) {
+            push_terminal_run(&mut run_specs, &mut current_style, &mut current_len);
+            current_style = Some(style);
+        }
+        line.push(cell.ch);
+        current_len += cell.ch.len_utf8();
+    }
+
+    if line.is_empty() {
+        let default_style = default_terminal_style(palette);
+        line.push(' ');
+        current_style = Some(default_style);
+        current_len = 1;
+    }
+
+    push_terminal_run(&mut run_specs, &mut current_style, &mut current_len);
+    TerminalLine {
+        text: line.into(),
+        runs: terminal_runs(run_specs, font_family, font_ligatures, background_opacity),
+    }
+}
+
+fn render_terminal_lines(
+    snapshot: &GridSnapshot,
+    palette: &TerminalPalette,
+    font_family: &SharedString,
+    font_ligatures: bool,
+    background_opacity: f32,
+    show_cursor: bool,
+    selection: Option<TerminalSelection>,
+    previous_cache: Option<&TerminalRenderCache>,
+    key: &TerminalRenderKey,
+) -> Vec<TerminalLine> {
+    let rows = snapshot.rows as usize;
+    let mut rendered = Vec::with_capacity(rows);
+
+    for row in 0..rows {
+        if let Some(previous) = previous_cache {
+            if can_reuse_terminal_line(previous, snapshot, key, row) {
+                rendered.push(previous.lines[row].clone());
+                continue;
+            }
+        }
+
+        rendered.push(render_terminal_line(
+            snapshot,
+            row,
+            palette,
+            font_family,
+            font_ligatures,
+            background_opacity,
+            show_cursor,
+            selection,
+        ));
+    }
+
+    rendered
+}
+
+#[cfg(test)]
 fn is_selection_cell(selection: Option<TerminalSelection>, row: usize, col: usize) -> bool {
     let Some(selection) = selection else {
         return false;
@@ -1296,9 +1715,11 @@ fn is_selection_cell(selection: Option<TerminalSelection>, row: usize, col: usiz
 fn fallback_terminal_line(
     message: &str,
     font_family: &SharedString,
-    mode: ThemeMode,
+    font_ligatures: bool,
+    palette: &TerminalPalette,
+    background_opacity: f32,
 ) -> TerminalLine {
-    let style = default_terminal_style(mode);
+    let style = default_terminal_style(palette);
     TerminalLine {
         text: SharedString::from(message.to_string()),
         runs: terminal_runs(
@@ -1307,34 +1728,37 @@ fn fallback_terminal_line(
                 len: message.chars().map(char::len_utf8).sum(),
             }],
             font_family,
+            font_ligatures,
+            background_opacity,
         ),
     }
 }
 
-fn default_terminal_style(mode: ThemeMode) -> TerminalRunStyle {
+fn default_terminal_style(palette: &TerminalPalette) -> TerminalRunStyle {
     TerminalRunStyle {
-        fg_hex: terminal_default_fg_hex(mode),
-        bg_hex: terminal_default_bg_hex(mode),
+        fg_hex: palette.foreground_hex,
+        bg_hex: palette.background_hex,
         bold: false,
         underline: false,
+        apply_background_opacity: true,
     }
 }
 
 fn resolve_terminal_style(
     cell: &pier_core::terminal::Cell,
-    mode: ThemeMode,
+    palette: &TerminalPalette,
     is_cursor: bool,
 ) -> TerminalRunStyle {
-    let mut fg_hex = resolve_terminal_color(cell.fg, terminal_default_fg_hex(mode));
-    let mut bg_hex = resolve_terminal_color(cell.bg, terminal_default_bg_hex(mode));
+    let mut fg_hex = resolve_terminal_color(cell.fg, palette.foreground_hex, palette);
+    let mut bg_hex = resolve_terminal_color(cell.bg, palette.background_hex, palette);
 
     if cell.reverse {
         std::mem::swap(&mut fg_hex, &mut bg_hex);
     }
 
     if is_cursor {
-        fg_hex = terminal_cursor_fg_hex(mode);
-        bg_hex = terminal_cursor_bg_hex(mode);
+        fg_hex = palette.cursor_fg_hex;
+        bg_hex = palette.cursor_bg_hex;
     }
 
     TerminalRunStyle {
@@ -1342,15 +1766,28 @@ fn resolve_terminal_style(
         bg_hex,
         bold: cell.bold,
         underline: cell.underline,
+        apply_background_opacity: !is_cursor,
     }
 }
 
-fn resolve_terminal_color(color: TerminalColor, default_hex: u32) -> u32 {
+fn resolve_terminal_color(
+    color: TerminalColor,
+    default_hex: u32,
+    palette: &TerminalPalette,
+) -> u32 {
     match color {
         TerminalColor::Default => default_hex,
-        TerminalColor::Indexed(index) => terminal_indexed_hex(index),
+        TerminalColor::Indexed(index) => terminal_indexed_hex(palette, index),
         TerminalColor::Rgb(r, g, b) => ((r as u32) << 16) | ((g as u32) << 8) | b as u32,
     }
+}
+
+fn terminal_cell_width_px(font_size_px: f32) -> f32 {
+    BASE_CELL_WIDTH_PX * (font_size_px / BASE_TERMINAL_FONT_SIZE_PX)
+}
+
+fn terminal_cell_height_px(font_size_px: f32) -> f32 {
+    BASE_CELL_HEIGHT_PX * (font_size_px / BASE_TERMINAL_FONT_SIZE_PX)
 }
 
 fn extract_selection_text(snapshot: &GridSnapshot, selection: TerminalSelection) -> String {
@@ -1571,10 +2008,15 @@ fn push_terminal_run(
     *current_len = 0;
 }
 
-fn terminal_runs(run_specs: Vec<TerminalRun>, font_family: &SharedString) -> Vec<TextRun> {
+fn terminal_runs(
+    run_specs: Vec<TerminalRun>,
+    font_family: &SharedString,
+    font_ligatures: bool,
+    background_opacity: f32,
+) -> Vec<TextRun> {
     let mut runs = Vec::with_capacity(run_specs.len());
     for run in run_specs {
-        let mut mono = font(font_family.clone());
+        let mut mono = terminal_font_for_family(font_family, font_ligatures);
         mono.weight = if run.style.bold {
             WEIGHT_EMPHASIS
         } else {
@@ -1586,7 +2028,11 @@ fn terminal_runs(run_specs: Vec<TerminalRun>, font_family: &SharedString) -> Vec
             len: run.len,
             font: mono,
             color,
-            background_color: Some(terminal_hex_color(run.style.bg_hex)),
+            background_color: Some(if run.style.apply_background_opacity {
+                terminal_bg_color(run.style.bg_hex, background_opacity)
+            } else {
+                terminal_hex_color(run.style.bg_hex)
+            }),
             underline: run.style.underline.then_some(UnderlineStyle {
                 color: Some(color),
                 thickness: px(1.0),
@@ -1604,10 +2050,11 @@ mod tests {
     use pier_core::terminal::Cell;
 
     use super::{
-        build_window_title, decode_osc52_clipboard_payload, encode_terminal_paste,
-        extract_selection_text, format_ssh_target, is_selection_cell, normalize_pasted_text,
-        select_line_at, select_word_at, translate_keystroke, wants_clipboard_paste,
-        wants_copy_selection, GridSnapshot, TerminalCellPosition, TerminalColor, TerminalSelection,
+        block_cursor_column_for_row, build_window_title, decode_osc52_clipboard_payload,
+        encode_terminal_paste, extract_selection_text, format_ssh_target, is_selection_cell,
+        normalize_pasted_text, select_line_at, select_word_at, selection_span_for_row,
+        translate_keystroke, wants_clipboard_paste, wants_copy_selection, GridSnapshot,
+        TerminalCellPosition, TerminalColor, TerminalCursorStyle, TerminalSelection,
     };
 
     #[test]
@@ -1632,6 +2079,18 @@ mod tests {
         .expect("alt+f should map");
 
         assert_eq!(bytes, b"\x1bf".to_vec());
+    }
+
+    #[test]
+    fn maps_spacebar_without_key_char() {
+        let bytes = translate_keystroke(&Keystroke {
+            modifiers: Modifiers::none(),
+            key: "space".into(),
+            key_char: None,
+        })
+        .expect("space should map");
+
+        assert_eq!(bytes, vec![b' ']);
     }
 
     #[test]
@@ -1721,6 +2180,65 @@ mod tests {
     }
 
     #[test]
+    fn selection_span_expands_across_interior_rows() {
+        let selection = TerminalSelection {
+            anchor: TerminalCellPosition { row: 0, col: 2 },
+            head: TerminalCellPosition { row: 2, col: 1 },
+        };
+
+        assert_eq!(
+            selection_span_for_row(Some(selection), 0, 6),
+            Some(super::TerminalSelectionSpan {
+                start_col: 2,
+                end_col: 5,
+            })
+        );
+        assert_eq!(
+            selection_span_for_row(Some(selection), 1, 6),
+            Some(super::TerminalSelectionSpan {
+                start_col: 0,
+                end_col: 5,
+            })
+        );
+        assert_eq!(
+            selection_span_for_row(Some(selection), 2, 6),
+            Some(super::TerminalSelectionSpan {
+                start_col: 0,
+                end_col: 1,
+            })
+        );
+    }
+
+    #[test]
+    fn cursor_column_is_only_reported_for_active_row() {
+        let snapshot = GridSnapshot {
+            cols: 4,
+            rows: 2,
+            cursor_x: 3,
+            cursor_y: 1,
+            bracketed_paste_mode: false,
+            cells: vec![Cell::default(); 8],
+        };
+
+        assert_eq!(
+            block_cursor_column_for_row(&snapshot, true, TerminalCursorStyle::Block, 1),
+            Some(3)
+        );
+        assert_eq!(
+            block_cursor_column_for_row(&snapshot, true, TerminalCursorStyle::Block, 0),
+            None
+        );
+        assert_eq!(
+            block_cursor_column_for_row(&snapshot, false, TerminalCursorStyle::Block, 1),
+            None
+        );
+        assert_eq!(
+            block_cursor_column_for_row(&snapshot, true, TerminalCursorStyle::Bar, 1),
+            None
+        );
+    }
+
+    #[test]
     fn extracts_multi_line_selection_without_placeholder_cells() {
         let mut cells = vec![Cell::default(); 8];
         for (index, ch) in ['a', 'b', 'c', ' ', 'd', '\0', 'e', ' ']
@@ -1734,6 +2252,7 @@ mod tests {
                 bold: false,
                 underline: false,
                 reverse: false,
+                hyperlink: None,
             };
         }
 
@@ -1770,6 +2289,7 @@ mod tests {
                     bold: false,
                     underline: false,
                     reverse: false,
+                    hyperlink: None,
                 })
                 .collect(),
         };
@@ -1797,6 +2317,7 @@ mod tests {
                     bold: false,
                     underline: false,
                     reverse: false,
+                    hyperlink: None,
                 })
                 .collect(),
         };

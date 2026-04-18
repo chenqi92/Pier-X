@@ -13,7 +13,6 @@ use crate::theme::{
 pub enum ButtonVariant {
     Primary,
     Ghost,
-    Icon,
 }
 
 #[derive(IntoElement)]
@@ -48,19 +47,12 @@ impl Button {
         Self::new(id, ButtonVariant::Ghost, label)
     }
 
-    pub fn icon(id: impl Into<ElementId>, label: impl Into<SharedString>) -> Self {
-        Self::new(id, ButtonVariant::Icon, label)
-    }
-
     pub fn width(mut self, w: Pixels) -> Self {
         self.width = Some(w);
         self
     }
 
-    pub fn on_click(
-        mut self,
-        f: impl Fn(&ClickEvent, &mut Window, &mut App) + 'static,
-    ) -> Self {
+    pub fn on_click(mut self, f: impl Fn(&ClickEvent, &mut Window, &mut App) + 'static) -> Self {
         self.on_click = Some(Box::new(f));
         self
     }
@@ -70,18 +62,17 @@ impl RenderOnce for Button {
     fn render(self, _: &mut Window, cx: &mut App) -> impl IntoElement {
         let t = theme(cx);
         let (bg, hover_bg, fg, border) = match self.variant {
-            ButtonVariant::Primary => (t.color.accent, t.color.accent_hover, t.color.text_inverse, None),
+            ButtonVariant::Primary => (
+                t.color.accent,
+                t.color.accent_hover,
+                t.color.text_inverse,
+                None,
+            ),
             ButtonVariant::Ghost => (
                 t.color.bg_surface,
                 t.color.bg_hover,
                 t.color.text_primary,
                 Some(t.color.border_default),
-            ),
-            ButtonVariant::Icon => (
-                t.color.bg_surface,
-                t.color.bg_hover,
-                t.color.text_secondary,
-                None,
             ),
         };
 

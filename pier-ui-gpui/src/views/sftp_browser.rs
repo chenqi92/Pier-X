@@ -20,7 +20,7 @@ use std::path::PathBuf;
 use std::rc::Rc;
 
 use gpui::{div, prelude::*, px, App, Entity, IntoElement, SharedString, Window};
-use gpui_component::{Icon as UiIcon, IconName};
+use gpui_component::{scroll::ScrollableElement, Icon as UiIcon, IconName};
 
 use crate::app::ssh_session::{ConnectStatus, RemoteEntry, SshSessionState};
 use crate::components::{text, Card, SectionLabel, StatusKind, StatusPill};
@@ -75,47 +75,63 @@ impl RenderOnce for SftpBrowser {
         // refresh from the click handlers (open_ssh_terminal /
         // navigate_sftp / sftp_cd_up) so by the time we render, the cached
         // entries are already populated.
-        let (cwd_label, host_label, entries, status_pill, last_error) = {
+        let (cwd_label, host_label, entries, status_pill, last_error, is_loading) = {
             let s = state_entity.read(cx);
             let cwd_label: SharedString = s.cwd.display().to_string().into();
-            let host_label: SharedString =
-                format!("{}@{}", s.config.user, s.config.host).into();
+            let host_label: SharedString = format!("{}@{}", s.config.user, s.config.host).into();
             let entries: Vec<RemoteEntry> = s.entries.clone();
             let status_pill = match &s.status {
                 ConnectStatus::Idle => StatusPill::new("idle", StatusKind::Warning),
+                ConnectStatus::Connecting => StatusPill::new("connecting", StatusKind::Info),
+                ConnectStatus::Refreshing => StatusPill::new("loading", StatusKind::Info),
                 ConnectStatus::Connected => StatusPill::new("connected", StatusKind::Success),
-                ConnectStatus::Failed(_) => StatusPill::new("error", StatusKind::Error),
+                ConnectStatus::Failed => StatusPill::new("error", StatusKind::Error),
             };
             let last_error = s.last_error.clone();
-            (cwd_label, host_label, entries, status_pill, last_error)
+            let is_loading = s.is_loading();
+            (
+                cwd_label,
+                host_label,
+                entries,
+                status_pill,
+                last_error,
+                is_loading,
+            )
         };
 
         let header = div()
-            .h(px(28.0))
-            .px(SP_3)
+            .h(px(32.0))
+            .px(SP_2)
             .flex()
             .flex_row()
             .items_center()
-            .gap(SP_2)
+            .gap(SP_1_5)
             .border_b_1()
             .border_color(t.color.border_subtle)
             .child(
                 div()
                     .id("sftp-up")
-                    .w(px(20.0))
-                    .h(px(20.0))
+                    .w(px(22.0))
+                    .h(px(22.0))
                     .flex()
                     .items_center()
                     .justify_center()
                     .rounded(RADIUS_SM)
+                    .bg(t.color.bg_panel)
+                    .border_1()
+                    .border_color(t.color.border_subtle)
                     .text_color(t.color.text_secondary)
                     .cursor_pointer()
-                    .hover(|s| s.bg(t.color.bg_hover))
+                    .hover(|s| s.bg(t.color.bg_hover).border_color(t.color.border_default))
                     .on_click({
                         let go_up = on_go_up.clone();
                         move |_, w, app| go_up(&(), w, app)
                     })
-                    .child(UiIcon::new(IconName::ArrowUp).size(px(12.0))),
+                    .child(
+                        UiIcon::new(IconName::ArrowUp)
+                            .size(px(12.0))
+                            .text_color(t.color.text_secondary),
+                    ),
             )
             .child(
                 div()
@@ -135,7 +151,7 @@ impl RenderOnce for SftpBrowser {
             )
             .child(status_pill);
 
-        let mut body = div().flex().flex_col().py(SP_1);
+        let mut body = div().flex().flex_col().px(SP_2).py(SP_2).gap(SP_1);
 
         if let Some(err) = last_error {
             body = body.child(
@@ -149,13 +165,18 @@ impl RenderOnce for SftpBrowser {
         }
 
         if entries.is_empty() {
+            let empty_label = if is_loading {
+                "(loading remote directory...)"
+            } else {
+                "(empty directory or not yet listed)"
+            };
             body = body.child(
                 div()
                     .px(SP_3)
                     .py(SP_2)
                     .text_size(SIZE_SMALL)
                     .text_color(t.color.text_tertiary)
-                    .child("(empty directory or not yet listed — first listing happens on tab open)"),
+                    .child(empty_label),
             );
         } else {
             for entry in entries {
@@ -167,8 +188,14 @@ impl RenderOnce for SftpBrowser {
             .h_full()
             .flex()
             .flex_col()
-            .child(header)
-            .child(div().flex_1().min_h(px(0.0)).child(body))
+            .child(div().bg(t.color.bg_surface).child(header))
+            .child(
+                div()
+                    .flex_1()
+                    .min_h(px(0.0))
+                    .overflow_y_scrollbar()
+                    .child(body),
+            )
             .into_any_element()
     }
 }
@@ -224,12 +251,13 @@ fn remote_row(
 
     div()
         .id(gpui::ElementId::Name(id_str))
-        .h(px(22.0))
-        .px(SP_3)
+        .h(px(24.0))
+        .px(SP_2)
         .flex()
         .flex_row()
         .items_center()
         .gap(SP_1_5)
+        .rounded(RADIUS_SM)
         .text_size(SIZE_CAPTION)
         .text_color(if entry.is_dir {
             t.color.text_primary
@@ -255,15 +283,39 @@ fn remote_row(
                 } else {
                     t.color.text_tertiary
                 })
-                .child(UiIcon::new(glyph).size(px(12.0))),
+                .child(
+                    UiIcon::new(glyph)
+                        .size(px(12.0))
+                        .text_color(if entry.is_dir {
+                            t.color.accent
+                        } else {
+                            t.color.text_tertiary
+                        }),
+                ),
         )
         .child(
             div()
                 .flex_1()
                 .min_w(px(0.0))
-                .text_size(SIZE_CAPTION)
-                .font_weight(WEIGHT_MEDIUM)
-                .child(name),
+                .flex()
+                .flex_row()
+                .items_center()
+                .gap(SP_1)
+                .child(
+                    div()
+                        .min_w(px(0.0))
+                        .text_size(SIZE_CAPTION)
+                        .font_weight(WEIGHT_MEDIUM)
+                        .child(name),
+                )
+                .when(entry.is_link, |el| {
+                    el.child(
+                        div()
+                            .text_size(SIZE_SMALL)
+                            .text_color(t.color.text_tertiary)
+                            .child("link"),
+                    )
+                }),
         )
         .child(
             div()

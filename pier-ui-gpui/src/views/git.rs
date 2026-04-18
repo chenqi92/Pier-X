@@ -54,7 +54,7 @@ impl RenderOnce for GitView {
                 log,
                 repo_path,
             } => div()
-                .size_full()
+                .w_full()
                 .flex()
                 .flex_col()
                 .gap(SP_4)
@@ -64,7 +64,7 @@ impl RenderOnce for GitView {
                 .child(changes_card(t, &changes))
                 .child(log_card(t, &log)),
             RepoState::NotARepo => div()
-                .size_full()
+                .w_full()
                 .flex()
                 .flex_col()
                 .gap(SP_4)
@@ -80,7 +80,7 @@ impl RenderOnce for GitView {
                         .child(text::mono(snap.cwd)),
                 ),
             RepoState::Error => div()
-                .size_full()
+                .w_full()
                 .flex()
                 .flex_col()
                 .gap(SP_4)

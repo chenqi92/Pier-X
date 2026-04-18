@@ -9,13 +9,12 @@ mod views;
 use std::borrow::Cow;
 
 use gpui::{
-    px, size, App, AppContext, Application, Bounds, KeyBinding, TitlebarOptions, WindowBounds,
-    WindowOptions,
+    px, size, App, AppContext, Application, Bounds, KeyBinding, WindowBounds, WindowOptions,
 };
 use gpui_component::Root;
 
 use crate::app::{
-    CloseActiveTab, NewTab, PierApp, ToggleLeftPanel, ToggleRightPanel, ToggleTheme,
+    CloseActiveTab, NewTab, OpenSettings, PierApp, ToggleLeftPanel, ToggleRightPanel, ToggleTheme,
 };
 
 const INTER_VARIABLE: &[u8] = include_bytes!("../assets/fonts/InterVariable.ttf");
@@ -48,6 +47,7 @@ fn main() {
         cx.bind_keys([
             KeyBinding::new("cmd-\\", ToggleLeftPanel, Some("PierApp")),
             KeyBinding::new("cmd-shift-\\", ToggleRightPanel, Some("PierApp")),
+            KeyBinding::new("cmd-,", OpenSettings, Some("PierApp")),
             KeyBinding::new("cmd-t", NewTab, Some("PierApp")),
             KeyBinding::new("cmd-shift-w", CloseActiveTab, Some("PierApp")),
         ]);
@@ -56,10 +56,6 @@ fn main() {
         cx.open_window(
             WindowOptions {
                 window_bounds: Some(WindowBounds::Windowed(bounds)),
-                titlebar: Some(TitlebarOptions {
-                    title: Some("Pier-X".into()),
-                    ..Default::default()
-                }),
                 // Linux desktop environments use `app_id` to group windows and
                 // map them to a desktop entry's icon. macOS / Windows ignore it:
                 // macOS gets the dock icon from the `.app` bundle, while Windows

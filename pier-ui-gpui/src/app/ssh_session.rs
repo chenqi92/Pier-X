@@ -1,14 +1,11 @@
-#![allow(dead_code)]
 //! SSH session backing the right-panel SFTP browser (and, eventually, the
 //! Docker / Logs / DB modes that need an `exec` channel into the same host).
 //!
 //! Each connection the user clicks in the Servers list spawns one of these.
-//! The session is **lazy-connected**: nothing happens until the SFTP view
-//! actually asks for a directory listing — then we run
-//! [`SshSession::connect_blocking`] + [`SshSession::open_sftp_blocking`] on
-//! the calling thread. First-connect freezes the UI for the duration of the
-//! handshake (typically <2s on LAN); a follow-on PR will move this to a
-//! background task with a `Connecting…` placeholder.
+//! The session is **lazy-connected**: nothing happens until the right panel
+//! asks for a directory listing. The actual SSH handshake + SFTP listing runs
+//! on a GPUI background executor; this state object only tracks the latest
+//! request and applies results back on the UI thread.
 //!
 //! Auth coverage:
 //!   - `AuthMethod::Agent`            — handled by russh
@@ -18,7 +15,15 @@
 
 use std::path::PathBuf;
 
-use pier_core::ssh::{HostKeyVerifier, SftpClient, SshConfig, SshSession};
+use pier_core::services::docker::{
+    inspect_container_blocking, list_containers_blocking, list_images_blocking,
+    list_networks_blocking, list_volumes_blocking, restart_blocking, start_blocking, stop_blocking,
+    Container as DockerContainer, DockerImage, DockerNetwork, DockerVolume,
+};
+use pier_core::services::server_monitor::ServerSnapshot;
+use pier_core::ssh::{DetectedService, HostKeyVerifier, SftpClient, SshConfig, SshSession, Tunnel};
+
+use crate::app::layout::{RightContext, RightMode};
 
 /// Where the SFTP root lands on first connect — `~` is the SSH spec's
 /// shorthand for "user's home directory" and SFTP servers honour it.
@@ -37,8 +42,95 @@ pub struct RemoteEntry {
 pub enum ConnectStatus {
     #[default]
     Idle,
+    Connecting,
+    Refreshing,
     Connected,
-    Failed(String),
+    Failed,
+}
+
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub enum ServiceProbeStatus {
+    #[default]
+    Idle,
+    Probing,
+    Ready,
+    Failed,
+}
+
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub enum MonitorStatus {
+    #[default]
+    Idle,
+    Loading,
+    Ready,
+    Failed,
+}
+
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub enum DockerStatus {
+    #[default]
+    Idle,
+    Loading,
+    Ready,
+    Failed,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum DockerActionKind {
+    Start,
+    Stop,
+    Restart,
+    Inspect,
+}
+
+impl DockerActionKind {
+    pub fn label(self) -> &'static str {
+        match self {
+            DockerActionKind::Start => "start",
+            DockerActionKind::Stop => "stop",
+            DockerActionKind::Restart => "restart",
+            DockerActionKind::Inspect => "inspect",
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum TunnelStatus {
+    Opening,
+    Active,
+    Failed,
+}
+
+pub struct ServiceTunnelState {
+    pub service_name: String,
+    pub remote_port: u16,
+    pub local_port: Option<u16>,
+    pub status: TunnelStatus,
+    pub last_error: Option<String>,
+    handle: Option<Tunnel>,
+    nonce: usize,
+}
+
+#[derive(Clone, Debug, Default)]
+pub struct DockerPanelSnapshot {
+    pub containers: Vec<DockerContainer>,
+    pub images: Vec<DockerImage>,
+    pub volumes: Vec<DockerVolume>,
+    pub networks: Vec<DockerNetwork>,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct PendingDockerAction {
+    pub kind: DockerActionKind,
+    pub target_id: String,
+    pub target_label: String,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct DockerInspectState {
+    pub target_id: String,
+    pub target_label: String,
+    pub output: String,
 }
 
 pub struct SshSessionState {
@@ -52,6 +144,24 @@ pub struct SshSessionState {
     pub entries: Vec<RemoteEntry>,
     pub status: ConnectStatus,
     pub last_error: Option<String>,
+    pub services: Vec<DetectedService>,
+    pub service_probe_status: ServiceProbeStatus,
+    pub service_probe_error: Option<String>,
+    pub tunnels: Vec<ServiceTunnelState>,
+    pub monitor_snapshot: Option<ServerSnapshot>,
+    pub monitor_status: MonitorStatus,
+    pub monitor_error: Option<String>,
+    pub docker_snapshot: Option<DockerPanelSnapshot>,
+    pub docker_status: DockerStatus,
+    pub docker_error: Option<String>,
+    pub docker_inspect: Option<DockerInspectState>,
+    pub docker_pending_action: Option<PendingDockerAction>,
+    pub docker_action_error: Option<String>,
+    refresh_nonce: usize,
+    bootstrap_nonce: usize,
+    monitor_refresh_nonce: usize,
+    docker_refresh_nonce: usize,
+    docker_action_nonce: usize,
 }
 
 impl SshSessionState {
@@ -64,87 +174,771 @@ impl SshSessionState {
             entries: Vec::new(),
             status: ConnectStatus::Idle,
             last_error: None,
+            services: Vec::new(),
+            service_probe_status: ServiceProbeStatus::Idle,
+            service_probe_error: None,
+            tunnels: Vec::new(),
+            monitor_snapshot: None,
+            monitor_status: MonitorStatus::Idle,
+            monitor_error: None,
+            docker_snapshot: None,
+            docker_status: DockerStatus::Idle,
+            docker_error: None,
+            docker_inspect: None,
+            docker_pending_action: None,
+            docker_action_error: None,
+            refresh_nonce: 0,
+            bootstrap_nonce: 0,
+            monitor_refresh_nonce: 0,
+            docker_refresh_nonce: 0,
+            docker_action_nonce: 0,
         }
     }
 
-    /// Lazy-connect + open SFTP if not yet open. Returns the cached
-    /// SftpClient on success.
-    fn ensure_sftp(&mut self) -> Result<&SftpClient, String> {
-        if self.sftp.is_some() {
-            return Ok(self.sftp.as_ref().unwrap());
-        }
+    pub fn begin_refresh(&mut self, next_cwd: PathBuf) -> RefreshRequest {
+        self.cwd = next_cwd;
+        self.refresh_nonce = self.refresh_nonce.wrapping_add(1);
+        self.status = if self.session.is_some() {
+            ConnectStatus::Refreshing
+        } else {
+            ConnectStatus::Connecting
+        };
+        self.last_error = None;
 
-        let verifier = HostKeyVerifier::default();
-        let session = SshSession::connect_blocking(&self.config, verifier)
-            .map_err(|e| e.to_string())?;
-        let sftp = session.open_sftp_blocking().map_err(|e| e.to_string())?;
-        self.session = Some(session);
-        self.sftp = Some(sftp);
-        self.status = ConnectStatus::Connected;
-        Ok(self.sftp.as_ref().unwrap())
+        RefreshRequest {
+            nonce: self.refresh_nonce,
+            config: self.config.clone(),
+            cwd: self.cwd.clone(),
+            session: self.session.clone(),
+            sftp: self.sftp.clone(),
+        }
     }
 
-    /// Fetch listings for the current `cwd` and refresh `entries`.
-    pub fn refresh(&mut self) {
-        let path_str = self
-            .cwd
-            .to_str()
-            .map(str::to_string)
-            .unwrap_or_else(|| DEFAULT_REMOTE_ROOT.to_string());
+    pub fn begin_bootstrap(&mut self) -> BootstrapRequest {
+        self.bootstrap_nonce = self.bootstrap_nonce.wrapping_add(1);
+        if self.session.is_none() {
+            self.status = ConnectStatus::Connecting;
+        }
+        self.last_error = None;
+        self.service_probe_status = ServiceProbeStatus::Probing;
+        self.service_probe_error = None;
 
-        match self.ensure_sftp() {
-            Ok(sftp) => match sftp.list_dir_blocking(&path_str) {
-                Ok(remote_entries) => {
-                    self.entries = remote_entries
-                        .into_iter()
-                        .map(|e| RemoteEntry {
-                            name: e.name,
-                            path: e.path,
-                            is_dir: e.is_dir,
-                            is_link: e.is_link,
-                            size: e.size,
-                        })
-                        // Hide dotfiles by default — matches LocalFileView.
-                        .filter(|e| !e.name.starts_with('.'))
-                        .collect();
-                    self.entries.sort_by(|a, b| match (a.is_dir, b.is_dir) {
-                        (true, false) => std::cmp::Ordering::Less,
-                        (false, true) => std::cmp::Ordering::Greater,
-                        _ => a.name.to_lowercase().cmp(&b.name.to_lowercase()),
-                    });
-                    self.last_error = None;
-                }
-                Err(err) => {
-                    self.last_error = Some(format!("list_dir({path_str}): {err}"));
-                    self.entries.clear();
-                }
+        BootstrapRequest {
+            nonce: self.bootstrap_nonce,
+            config: self.config.clone(),
+            session: self.session.clone(),
+        }
+    }
+
+    pub fn begin_monitor_refresh(&mut self) -> Option<MonitorRequest> {
+        if matches!(self.monitor_status, MonitorStatus::Loading) {
+            return None;
+        }
+        let session = self.session.clone()?;
+
+        self.monitor_refresh_nonce = self.monitor_refresh_nonce.wrapping_add(1);
+        self.monitor_status = MonitorStatus::Loading;
+        self.monitor_error = None;
+
+        Some(MonitorRequest {
+            nonce: self.monitor_refresh_nonce,
+            session,
+        })
+    }
+
+    pub fn begin_docker_refresh(&mut self) -> Option<DockerRefreshRequest> {
+        if matches!(self.docker_status, DockerStatus::Loading)
+            || self.docker_pending_action.is_some()
+        {
+            return None;
+        }
+        let session = self.session.clone()?;
+
+        self.docker_refresh_nonce = self.docker_refresh_nonce.wrapping_add(1);
+        self.docker_status = DockerStatus::Loading;
+        self.docker_error = None;
+
+        Some(DockerRefreshRequest {
+            nonce: self.docker_refresh_nonce,
+            session,
+        })
+    }
+
+    pub fn begin_docker_action(
+        &mut self,
+        kind: DockerActionKind,
+        target_id: &str,
+        target_label: &str,
+    ) -> Option<DockerCommandRequest> {
+        if self.docker_pending_action.is_some() {
+            return None;
+        }
+        let session = self.session.clone()?;
+
+        self.docker_action_nonce = self.docker_action_nonce.wrapping_add(1);
+        self.docker_action_error = None;
+        self.docker_pending_action = Some(PendingDockerAction {
+            kind,
+            target_id: target_id.to_string(),
+            target_label: target_label.to_string(),
+        });
+
+        Some(DockerCommandRequest {
+            nonce: self.docker_action_nonce,
+            session,
+            action: DockerCommand {
+                kind,
+                target_id: target_id.to_string(),
+                target_label: target_label.to_string(),
             },
+        })
+    }
+
+    pub fn apply_refresh_result(&mut self, result: RefreshResult) -> bool {
+        if result.nonce != self.refresh_nonce {
+            return false;
+        }
+
+        self.cwd = result.cwd;
+        self.session = result.session;
+        self.sftp = result.sftp;
+
+        match result.outcome {
+            Ok(entries) => {
+                self.entries = entries;
+                self.status = ConnectStatus::Connected;
+                self.last_error = None;
+            }
             Err(err) => {
-                self.status = ConnectStatus::Failed(err.clone());
+                self.status = ConnectStatus::Failed;
                 self.last_error = Some(err);
                 self.entries.clear();
             }
         }
+
+        true
     }
 
-    pub fn navigate_to(&mut self, path: PathBuf) {
-        self.cwd = path;
-        self.refresh();
-    }
-
-    pub fn cd_up(&mut self) {
+    pub fn next_parent_target(&self) -> Option<PathBuf> {
         if let Some(parent) = self.cwd.parent() {
             let parent_buf = parent.to_path_buf();
             if !parent_buf.as_os_str().is_empty() {
-                self.cwd = parent_buf;
+                Some(parent_buf)
             } else {
-                self.cwd = PathBuf::from("/");
+                Some(PathBuf::from("/"))
             }
-            self.refresh();
+        } else {
+            None
         }
     }
 
-    pub fn is_connected(&self) -> bool {
-        matches!(self.status, ConnectStatus::Connected)
+    pub fn is_loading(&self) -> bool {
+        matches!(
+            self.status,
+            ConnectStatus::Connecting | ConnectStatus::Refreshing
+        )
+    }
+
+    pub fn should_bootstrap(&self) -> bool {
+        self.entries.is_empty() && self.last_error.is_none() && !self.is_loading()
+    }
+
+    pub fn apply_bootstrap_result(&mut self, result: BootstrapResult) -> bool {
+        if result.nonce != self.bootstrap_nonce {
+            return false;
+        }
+
+        self.session = result.session;
+        match result.outcome {
+            Ok(services) => {
+                self.status = ConnectStatus::Connected;
+                self.last_error = None;
+                self.services = services;
+                self.service_probe_status = ServiceProbeStatus::Ready;
+                self.service_probe_error = None;
+                self.tunnels.retain(|tunnel| {
+                    self.services
+                        .iter()
+                        .any(|service| service.name == tunnel.service_name)
+                });
+            }
+            Err(err) => {
+                self.status = ConnectStatus::Failed;
+                self.last_error = Some(err.clone());
+                self.services.clear();
+                self.service_probe_status = ServiceProbeStatus::Failed;
+                self.service_probe_error = Some(err);
+                self.tunnels.clear();
+            }
+        }
+
+        true
+    }
+
+    pub fn apply_monitor_result(&mut self, result: MonitorResult) -> bool {
+        if result.nonce != self.monitor_refresh_nonce {
+            return false;
+        }
+
+        match result.outcome {
+            Ok(snapshot) => {
+                self.monitor_snapshot = Some(snapshot);
+                self.monitor_status = MonitorStatus::Ready;
+                self.monitor_error = None;
+            }
+            Err(err) => {
+                self.monitor_status = MonitorStatus::Failed;
+                self.monitor_error = Some(err);
+            }
+        }
+
+        true
+    }
+
+    pub fn apply_docker_refresh_result(&mut self, result: DockerRefreshResult) -> bool {
+        if result.nonce != self.docker_refresh_nonce {
+            return false;
+        }
+
+        match result.outcome {
+            Ok(snapshot) => {
+                self.docker_snapshot = Some(snapshot);
+                self.docker_status = DockerStatus::Ready;
+                self.docker_error = None;
+            }
+            Err(err) => {
+                self.docker_status = DockerStatus::Failed;
+                self.docker_error = Some(err);
+            }
+        }
+
+        true
+    }
+
+    pub fn apply_docker_command_result(&mut self, result: DockerCommandResult) -> bool {
+        if result.nonce != self.docker_action_nonce {
+            return false;
+        }
+
+        self.docker_pending_action = None;
+        match result.outcome {
+            Ok(output) => {
+                self.docker_action_error = None;
+                match output {
+                    DockerCommandOutput::Snapshot(snapshot) => {
+                        self.docker_snapshot = Some(snapshot);
+                        self.docker_status = DockerStatus::Ready;
+                        self.docker_error = None;
+                    }
+                    DockerCommandOutput::Inspect(inspect) => {
+                        self.docker_inspect = Some(inspect);
+                    }
+                }
+            }
+            Err(err) => {
+                self.docker_action_error = Some(format!(
+                    "{} {} failed: {err}",
+                    result.action.kind.label(),
+                    result.action.target_label
+                ));
+            }
+        }
+
+        true
+    }
+
+    pub fn available_modes(&self) -> Vec<RightMode> {
+        RightMode::ALL
+            .into_iter()
+            .filter(|mode| self.supports_mode(*mode))
+            .collect()
+    }
+
+    pub fn supports_mode(&self, mode: RightMode) -> bool {
+        match mode.context() {
+            RightContext::Local => true,
+            RightContext::Remote => mode
+                .required_service_name()
+                .map(|service_name| self.has_detected_service(service_name))
+                .unwrap_or(true),
+        }
+    }
+
+    pub fn has_detected_service(&self, service_name: &str) -> bool {
+        self.services
+            .iter()
+            .any(|service| service.name == service_name)
+    }
+
+    pub fn detected_service(&self, service_name: &str) -> Option<&DetectedService> {
+        self.services
+            .iter()
+            .find(|service| service.name == service_name)
+    }
+
+    pub fn begin_tunnel(&mut self, service_name: &str) -> Option<TunnelRequest> {
+        let session = self.session.clone()?;
+        let (service_name_owned, remote_port) = {
+            let service = self.detected_service(service_name)?;
+            (service.name.clone(), service.port)
+        };
+        if remote_port == 0 {
+            return None;
+        }
+
+        let tunnel_idx = if let Some(idx) = self
+            .tunnels
+            .iter()
+            .position(|tunnel| tunnel.service_name == service_name_owned)
+        {
+            idx
+        } else {
+            self.tunnels.push(ServiceTunnelState {
+                service_name: service_name_owned,
+                remote_port,
+                local_port: None,
+                status: TunnelStatus::Opening,
+                last_error: None,
+                handle: None,
+                nonce: 0,
+            });
+            self.tunnels.len() - 1
+        };
+
+        let tunnel = self.tunnels.get_mut(tunnel_idx)?;
+        if tunnel.handle.as_ref().is_some_and(Tunnel::is_alive)
+            && matches!(tunnel.status, TunnelStatus::Active)
+        {
+            return None;
+        }
+        if matches!(tunnel.status, TunnelStatus::Opening) {
+            return None;
+        }
+
+        tunnel.handle = None;
+        tunnel.local_port = None;
+        tunnel.last_error = None;
+        tunnel.remote_port = remote_port;
+        tunnel.nonce = tunnel.nonce.wrapping_add(1);
+        tunnel.status = TunnelStatus::Opening;
+
+        Some(TunnelRequest {
+            nonce: tunnel.nonce,
+            session,
+            service_name: tunnel.service_name.clone(),
+            remote_port: tunnel.remote_port,
+            preferred_local_port: preferred_local_port(tunnel.remote_port),
+        })
+    }
+
+    pub fn apply_tunnel_result(&mut self, result: TunnelResult) -> bool {
+        let Some(tunnel) = self
+            .tunnels
+            .iter_mut()
+            .find(|tunnel| tunnel.service_name == result.service_name)
+        else {
+            return false;
+        };
+        if tunnel.nonce != result.nonce {
+            return false;
+        }
+
+        match result.outcome {
+            Ok(handle) => {
+                tunnel.local_port = Some(handle.local_port());
+                tunnel.status = TunnelStatus::Active;
+                tunnel.last_error = None;
+                tunnel.handle = Some(handle);
+            }
+            Err(err) => {
+                tunnel.local_port = None;
+                tunnel.status = TunnelStatus::Failed;
+                tunnel.last_error = Some(err);
+                tunnel.handle = None;
+            }
+        }
+
+        true
+    }
+}
+
+#[derive(Clone)]
+pub struct RefreshRequest {
+    nonce: usize,
+    config: SshConfig,
+    cwd: PathBuf,
+    session: Option<SshSession>,
+    sftp: Option<SftpClient>,
+}
+
+#[derive(Clone)]
+pub struct BootstrapRequest {
+    nonce: usize,
+    config: SshConfig,
+    session: Option<SshSession>,
+}
+
+pub struct RefreshResult {
+    nonce: usize,
+    cwd: PathBuf,
+    session: Option<SshSession>,
+    sftp: Option<SftpClient>,
+    outcome: Result<Vec<RemoteEntry>, String>,
+}
+
+pub struct BootstrapResult {
+    nonce: usize,
+    session: Option<SshSession>,
+    outcome: Result<Vec<DetectedService>, String>,
+}
+
+pub struct MonitorRequest {
+    nonce: usize,
+    session: SshSession,
+}
+
+pub struct MonitorResult {
+    nonce: usize,
+    outcome: Result<ServerSnapshot, String>,
+}
+
+pub struct DockerRefreshRequest {
+    nonce: usize,
+    session: SshSession,
+}
+
+pub struct DockerRefreshResult {
+    nonce: usize,
+    outcome: Result<DockerPanelSnapshot, String>,
+}
+
+pub struct DockerCommandRequest {
+    nonce: usize,
+    session: SshSession,
+    action: DockerCommand,
+}
+
+pub struct DockerCommandResult {
+    nonce: usize,
+    action: DockerCommand,
+    outcome: Result<DockerCommandOutput, String>,
+}
+
+pub struct TunnelRequest {
+    nonce: usize,
+    session: SshSession,
+    service_name: String,
+    remote_port: u16,
+    preferred_local_port: u16,
+}
+
+pub struct TunnelResult {
+    nonce: usize,
+    service_name: String,
+    outcome: Result<Tunnel, String>,
+}
+
+#[derive(Clone, Debug)]
+struct DockerCommand {
+    kind: DockerActionKind,
+    target_id: String,
+    target_label: String,
+}
+
+#[derive(Clone, Debug)]
+enum DockerCommandOutput {
+    Snapshot(DockerPanelSnapshot),
+    Inspect(DockerInspectState),
+}
+
+pub fn run_refresh(request: RefreshRequest) -> RefreshResult {
+    let mut session = request.session;
+    let mut sftp = request.sftp;
+    let path_str = request
+        .cwd
+        .to_str()
+        .map(str::to_string)
+        .unwrap_or_else(|| DEFAULT_REMOTE_ROOT.to_string());
+
+    let outcome = (|| -> Result<Vec<RemoteEntry>, String> {
+        if session.is_none() {
+            let verifier = HostKeyVerifier::default();
+            session = Some(
+                SshSession::connect_blocking(&request.config, verifier)
+                    .map_err(|e| e.to_string())?,
+            );
+        }
+        if sftp.is_none() {
+            let live_session = session
+                .as_ref()
+                .ok_or_else(|| "SSH session unavailable after connect".to_string())?;
+            sftp = Some(
+                live_session
+                    .open_sftp_blocking()
+                    .map_err(|e| e.to_string())?,
+            );
+        }
+
+        let remote_entries = sftp
+            .as_ref()
+            .ok_or_else(|| "SFTP session unavailable after connect".to_string())?
+            .list_dir_blocking(&path_str)
+            .map_err(|err| format!("list_dir({path_str}): {err}"))?;
+
+        let mut entries = remote_entries
+            .into_iter()
+            .map(|e| RemoteEntry {
+                name: e.name,
+                path: e.path,
+                is_dir: e.is_dir,
+                is_link: e.is_link,
+                size: e.size,
+            })
+            .filter(|e| !e.name.starts_with('.'))
+            .collect::<Vec<_>>();
+        entries.sort_by(|a, b| match (a.is_dir, b.is_dir) {
+            (true, false) => std::cmp::Ordering::Less,
+            (false, true) => std::cmp::Ordering::Greater,
+            _ => a.name.to_lowercase().cmp(&b.name.to_lowercase()),
+        });
+        Ok(entries)
+    })();
+
+    RefreshResult {
+        nonce: request.nonce,
+        cwd: request.cwd,
+        session,
+        sftp,
+        outcome,
+    }
+}
+
+pub fn run_bootstrap(request: BootstrapRequest) -> BootstrapResult {
+    let mut session = request.session;
+    let outcome = (|| -> Result<Vec<DetectedService>, String> {
+        if session.is_none() {
+            let verifier = HostKeyVerifier::default();
+            session = Some(
+                SshSession::connect_blocking(&request.config, verifier)
+                    .map_err(|e| e.to_string())?,
+            );
+        }
+
+        let live_session = session
+            .as_ref()
+            .ok_or_else(|| "SSH session unavailable after connect".to_string())?;
+        Ok(pier_core::ssh::detect_all_blocking(live_session))
+    })();
+
+    BootstrapResult {
+        nonce: request.nonce,
+        session,
+        outcome,
+    }
+}
+
+pub fn run_monitor_refresh(request: MonitorRequest) -> MonitorResult {
+    let outcome = pier_core::services::server_monitor::probe_blocking(&request.session)
+        .map_err(|err| err.to_string());
+
+    MonitorResult {
+        nonce: request.nonce,
+        outcome,
+    }
+}
+
+pub fn run_docker_refresh(request: DockerRefreshRequest) -> DockerRefreshResult {
+    let outcome = collect_docker_snapshot(&request.session).map_err(|err| err.to_string());
+
+    DockerRefreshResult {
+        nonce: request.nonce,
+        outcome,
+    }
+}
+
+pub fn run_docker_command(request: DockerCommandRequest) -> DockerCommandResult {
+    let outcome = match request.action.kind {
+        DockerActionKind::Start => start_blocking(&request.session, &request.action.target_id)
+            .and_then(|_| collect_docker_snapshot(&request.session))
+            .map(DockerCommandOutput::Snapshot),
+        DockerActionKind::Stop => stop_blocking(&request.session, &request.action.target_id)
+            .and_then(|_| collect_docker_snapshot(&request.session))
+            .map(DockerCommandOutput::Snapshot),
+        DockerActionKind::Restart => restart_blocking(&request.session, &request.action.target_id)
+            .and_then(|_| collect_docker_snapshot(&request.session))
+            .map(DockerCommandOutput::Snapshot),
+        DockerActionKind::Inspect => {
+            inspect_container_blocking(&request.session, &request.action.target_id).map(|output| {
+                DockerCommandOutput::Inspect(DockerInspectState {
+                    target_id: request.action.target_id.clone(),
+                    target_label: request.action.target_label.clone(),
+                    output,
+                })
+            })
+        }
+    }
+    .map_err(|err| err.to_string());
+
+    DockerCommandResult {
+        nonce: request.nonce,
+        action: request.action,
+        outcome,
+    }
+}
+
+pub fn run_tunnel(request: TunnelRequest) -> TunnelResult {
+    let outcome = request
+        .session
+        .open_local_forward_blocking(
+            request.preferred_local_port,
+            "127.0.0.1",
+            request.remote_port,
+        )
+        .or_else(|_| {
+            request
+                .session
+                .open_local_forward_blocking(0, "127.0.0.1", request.remote_port)
+        })
+        .map_err(|err| err.to_string());
+
+    TunnelResult {
+        nonce: request.nonce,
+        service_name: request.service_name,
+        outcome,
+    }
+}
+
+fn preferred_local_port(remote_port: u16) -> u16 {
+    remote_port.saturating_add(10_000)
+}
+
+fn collect_docker_snapshot(
+    session: &SshSession,
+) -> pier_core::ssh::error::Result<DockerPanelSnapshot> {
+    Ok(DockerPanelSnapshot {
+        containers: list_containers_blocking(session, true)?,
+        images: list_images_blocking(session)?,
+        volumes: list_volumes_blocking(session)?,
+        networks: list_networks_blocking(session)?,
+    })
+}
+
+#[cfg(test)]
+mod tests {
+    use std::path::PathBuf;
+
+    use pier_core::ssh::{AuthMethod, DetectedService, ServiceStatus, SshConfig};
+
+    use super::{
+        ConnectStatus, DockerActionKind, DockerCommand, DockerCommandOutput, DockerCommandResult,
+        DockerPanelSnapshot, DockerRefreshResult, DockerStatus, MonitorResult, MonitorStatus,
+        PendingDockerAction, RefreshResult, ServiceProbeStatus, SshSessionState,
+    };
+    use crate::app::layout::RightMode;
+
+    fn sample_config() -> SshConfig {
+        SshConfig {
+            name: "demo".into(),
+            host: "example.com".into(),
+            port: 22,
+            user: "pier".into(),
+            auth: AuthMethod::Agent,
+            tags: Vec::new(),
+            connect_timeout_secs: 5,
+        }
+    }
+
+    #[test]
+    fn stale_refresh_results_are_ignored() {
+        let mut state = SshSessionState::new(sample_config());
+        let _old = state.begin_refresh(PathBuf::from("/first"));
+        let _new = state.begin_refresh(PathBuf::from("/second"));
+
+        let applied = state.apply_refresh_result(RefreshResult {
+            nonce: 1,
+            cwd: PathBuf::from("/first"),
+            session: None,
+            sftp: None,
+            outcome: Ok(Vec::new()),
+        });
+
+        assert!(!applied);
+        assert!(matches!(state.status, ConnectStatus::Connecting));
+        assert_eq!(state.cwd, PathBuf::from("/second"));
+    }
+
+    #[test]
+    fn available_modes_hide_service_panels_until_detected() {
+        let mut state = SshSessionState::new(sample_config());
+        state.service_probe_status = ServiceProbeStatus::Ready;
+        state.services = vec![DetectedService {
+            name: "redis".into(),
+            version: "7.2".into(),
+            status: ServiceStatus::Running,
+            port: 6379,
+        }];
+
+        let available = state.available_modes();
+        assert!(available.contains(&RightMode::Markdown));
+        assert!(available.contains(&RightMode::Monitor));
+        assert!(available.contains(&RightMode::Redis));
+        assert!(!available.contains(&RightMode::Mysql));
+        assert!(!available.contains(&RightMode::Docker));
+    }
+
+    #[test]
+    fn stale_monitor_results_are_ignored() {
+        let mut state = SshSessionState::new(sample_config());
+        state.monitor_status = MonitorStatus::Ready;
+        state.monitor_refresh_nonce = 2;
+
+        let applied = state.apply_monitor_result(MonitorResult {
+            nonce: 1,
+            outcome: Ok(Default::default()),
+        });
+
+        assert!(!applied);
+        assert_eq!(state.monitor_status, MonitorStatus::Ready);
+    }
+
+    #[test]
+    fn stale_docker_refresh_results_are_ignored() {
+        let mut state = SshSessionState::new(sample_config());
+        state.docker_status = DockerStatus::Ready;
+        state.docker_refresh_nonce = 2;
+
+        let applied = state.apply_docker_refresh_result(DockerRefreshResult {
+            nonce: 1,
+            outcome: Ok(DockerPanelSnapshot::default()),
+        });
+
+        assert!(!applied);
+        assert_eq!(state.docker_status, DockerStatus::Ready);
+    }
+
+    #[test]
+    fn docker_command_result_clears_pending_action() {
+        let mut state = SshSessionState::new(sample_config());
+        state.docker_action_nonce = 1;
+        state.docker_pending_action = Some(PendingDockerAction {
+            kind: DockerActionKind::Start,
+            target_id: "abc123".into(),
+            target_label: "web".into(),
+        });
+
+        let applied = state.apply_docker_command_result(DockerCommandResult {
+            nonce: 1,
+            action: DockerCommand {
+                kind: DockerActionKind::Start,
+                target_id: "abc123".into(),
+                target_label: "web".into(),
+            },
+            outcome: Ok(DockerCommandOutput::Snapshot(DockerPanelSnapshot::default())),
+        });
+
+        assert!(applied);
+        assert!(state.docker_pending_action.is_none());
+        assert!(matches!(state.docker_status, DockerStatus::Ready));
+        assert!(state.docker_snapshot.is_some());
     }
 }

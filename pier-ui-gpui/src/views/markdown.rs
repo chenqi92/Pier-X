@@ -58,20 +58,14 @@ impl RenderOnce for MarkdownView {
         match std::fs::read(&path) {
             Ok(bytes) => {
                 let truncated = bytes.len() > MAX_RENDER_BYTES;
-                let read_slice =
-                    &bytes[..bytes.len().min(MAX_RENDER_BYTES)];
+                let read_slice = &bytes[..bytes.len().min(MAX_RENDER_BYTES)];
                 let source = String::from_utf8_lossy(read_slice).into_owned();
                 let blocks = parse_blocks(&source);
 
                 let mut col = div().flex().flex_col();
                 col = col.child(file_header(t, &path_label, bytes.len(), truncated));
 
-                let mut body = div()
-                    .px(SP_4)
-                    .py(SP_3)
-                    .flex()
-                    .flex_col()
-                    .gap(SP_3);
+                let mut body = div().px(SP_4).py(SP_3).flex().flex_col().gap(SP_3);
                 if truncated {
                     body = body.child(
                         Card::new()
@@ -105,10 +99,7 @@ impl RenderOnce for MarkdownView {
                         Card::new()
                             .padding(SP_3)
                             .child(SectionLabel::new("Cannot read file"))
-                            .child(
-                                text::body(SharedString::from(format!("{err}")))
-                                    .secondary(),
-                            ),
+                            .child(text::body(SharedString::from(format!("{err}"))).secondary()),
                     ),
                 )
                 .into_any_element(),
@@ -194,12 +185,21 @@ fn empty_state(t: &crate::theme::Theme) -> impl IntoElement {
 /// Internal IR for the renderer. CommonMark events are flattened into this
 /// shape so each variant maps cleanly to a styled GPUI block.
 enum Block {
-    Heading { level: u8, text: String },
+    Heading {
+        level: u8,
+        text: String,
+    },
     Paragraph(String),
     /// Lang hint comes from ```rust fences etc. Empty when absent.
-    Code { lang: String, content: String },
+    Code {
+        lang: String,
+        content: String,
+    },
     /// `ordered` toggles `1. 2. 3.` vs `•` markers.
-    List { ordered: bool, items: Vec<String> },
+    List {
+        ordered: bool,
+        items: Vec<String>,
+    },
     Quote(String),
     Rule,
 }
@@ -409,8 +409,7 @@ fn render_block(t: &crate::theme::Theme, block: &Block) -> gpui::AnyElement {
             1 => text::h1(SharedString::from(s.clone())).into_any_element(),
             2 => text::h2(SharedString::from(s.clone())).into_any_element(),
             3 => text::h3(SharedString::from(s.clone())).into_any_element(),
-            _ => text::body(SharedString::from(s.clone()))
-                .into_any_element(),
+            _ => text::body(SharedString::from(s.clone())).into_any_element(),
         },
         Block::Paragraph(s) => text::body(SharedString::from(s.clone())).into_any_element(),
         Block::Code { lang, content } => render_code_block(t, lang, content).into_any_element(),
@@ -425,11 +424,7 @@ fn render_block(t: &crate::theme::Theme, block: &Block) -> gpui::AnyElement {
     }
 }
 
-fn render_code_block(
-    t: &crate::theme::Theme,
-    lang: &str,
-    content: &str,
-) -> impl IntoElement {
+fn render_code_block(t: &crate::theme::Theme, lang: &str, content: &str) -> impl IntoElement {
     let mut col = div()
         .p(SP_3)
         .rounded(RADIUS_SM)
@@ -498,12 +493,7 @@ fn render_quote(t: &crate::theme::Theme, s: &str) -> impl IntoElement {
         .flex()
         .flex_row()
         .gap(SP_2)
-        .child(
-            div()
-                .w(px(2.0))
-                .h_full()
-                .bg(t.color.accent_muted),
-        )
+        .child(div().w(px(2.0)).h_full().bg(t.color.accent_muted))
         .child(
             div()
                 .flex_1()

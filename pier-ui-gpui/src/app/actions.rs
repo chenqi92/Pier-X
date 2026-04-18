@@ -6,6 +6,7 @@ actions!(
         ToggleTheme,
         ToggleLeftPanel,
         ToggleRightPanel,
+        OpenSettings,
         NewTab,
         CloseActiveTab,
     ]

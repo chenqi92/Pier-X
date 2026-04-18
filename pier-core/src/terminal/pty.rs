@@ -505,7 +505,6 @@ mod windows_impl {
                 ))
             })?;
             stdin.write_all(data).map_err(TerminalError::Io)?;
-            stdin.flush().map_err(TerminalError::Io)?;
             Ok(data.len())
         }
         fn resize(&mut self, cols: u16, rows: u16) -> Result<(), TerminalError> {

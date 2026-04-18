@@ -9,7 +9,7 @@ use std::rc::Rc;
 use gpui::{App, Window};
 
 pub use actions::{
-    CloseActiveTab, NewTab, ToggleLeftPanel, ToggleRightPanel, ToggleTheme,
+    CloseActiveTab, NewTab, OpenSettings, ToggleLeftPanel, ToggleRightPanel, ToggleTheme,
 };
 pub use route::Route;
 pub use state::PierApp;

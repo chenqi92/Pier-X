@@ -14,7 +14,8 @@
 //!   - Group-aware rendering (when ServerGroup support lands)
 
 use gpui::{div, prelude::*, px, App, ClickEvent, IntoElement, SharedString, WeakEntity, Window};
-use gpui_component::{Icon as UiIcon, IconName, WindowExt as _};
+use gpui_component::{scroll::ScrollableElement, Icon as UiIcon, IconName, WindowExt as _};
+use pier_core::paths;
 use pier_core::ssh::SshConfig;
 
 use crate::app::PierApp;
@@ -47,11 +48,7 @@ pub fn open(
     });
 }
 
-fn build_body(
-    cx: &App,
-    app: WeakEntity<PierApp>,
-    connections: &[SshConfig],
-) -> impl IntoElement {
+fn build_body(cx: &App, app: WeakEntity<PierApp>, connections: &[SshConfig]) -> impl IntoElement {
     let t = theme(cx).clone();
 
     let mut col = div().flex().flex_col().gap(SP_1);
@@ -79,12 +76,13 @@ fn build_body(
                 .py(SP_2)
                 .text_size(SIZE_SMALL)
                 .text_color(t.color.text_tertiary)
-                .child(
-                    "No saved SSH connections yet — add one to ~/.config/pier-x/connections.json.",
-                ),
+                .child(format!(
+                    "No saved SSH connections yet — add one in Settings or edit {}.",
+                    connections_store_label()
+                )),
         );
     }
-    col
+    div().max_h(px(520.0)).overflow_y_scrollbar().child(col)
 }
 
 fn local_row(t: &crate::theme::Theme, app: WeakEntity<PierApp>) -> impl IntoElement {
@@ -165,7 +163,7 @@ fn icon_cell(t: &crate::theme::Theme, name: IconName) -> impl IntoElement {
         .rounded(RADIUS_SM)
         .bg(t.color.accent_subtle)
         .text_color(t.color.accent)
-        .child(UiIcon::new(name).size(px(14.0)))
+        .child(UiIcon::new(name).size(px(14.0)).text_color(t.color.accent))
 }
 
 fn label_cell(
@@ -194,6 +192,7 @@ fn label_cell(
 
 fn default_shell_hint() -> SharedString {
     std::env::var("SHELL")
+        .or_else(|_| std::env::var("COMSPEC"))
         .map(|s| {
             std::path::Path::new(&s)
                 .file_name()
@@ -203,4 +202,10 @@ fn default_shell_hint() -> SharedString {
                 .into()
         })
         .unwrap_or_else(|_| "system shell".into())
+}
+
+fn connections_store_label() -> String {
+    paths::connections_file()
+        .map(|path| path.display().to_string())
+        .unwrap_or_else(|| "the Pier-X connection store".to_string())
 }

@@ -25,7 +25,7 @@ impl RenderOnce for DatabaseView {
         let info = DbProfile::for_kind(self.kind);
 
         div()
-            .size_full()
+            .w_full()
             .flex()
             .flex_col()
             .gap(SP_4)

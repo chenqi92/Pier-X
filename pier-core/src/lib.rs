@@ -21,6 +21,7 @@ pub mod markdown;
 pub mod paths;
 pub(crate) mod process_util;
 pub mod services;
+pub mod settings;
 pub mod ssh;
 pub mod terminal;
 

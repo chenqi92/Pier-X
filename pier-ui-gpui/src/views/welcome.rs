@@ -1,11 +1,10 @@
+use std::rc::Rc;
+
 use gpui::{div, prelude::*, px, App, ClickEvent, IntoElement, SharedString, Window};
-use gpui_component::{
-    button::{Button as UiButton, ButtonVariants},
-    label::Label as UiLabel,
-};
+use gpui_component::label::Label as UiLabel;
 use pier_core::ssh::SshConfig;
 
-use crate::components::{text, Card, IconBadge, SectionLabel, StatusKind, StatusPill};
+use crate::components::{text, Button, Card, IconBadge, SectionLabel, StatusKind, StatusPill};
 use crate::theme::{
     radius::RADIUS_SM,
     spacing::{SP_1, SP_1_5, SP_2, SP_3, SP_4},
@@ -14,7 +13,8 @@ use crate::theme::{
     ThemeMode,
 };
 
-pub type OnClick = Box<dyn Fn(&ClickEvent, &mut Window, &mut App) + 'static>;
+pub type OnClick = Rc<dyn Fn(&ClickEvent, &mut Window, &mut App) + 'static>;
+pub type OnSelectRecent = Rc<dyn Fn(&usize, &mut Window, &mut App) + 'static>;
 
 /// Welcome / cover view — 对照 docs/legacy-qml-reference/shell/WelcomeView.qml 像素移植。
 #[derive(IntoElement)]
@@ -22,6 +22,7 @@ pub struct WelcomeView {
     connections: Vec<SshConfig>,
     on_new_ssh: OnClick,
     on_open_terminal: OnClick,
+    on_open_recent: OnSelectRecent,
 }
 
 impl WelcomeView {
@@ -29,11 +30,13 @@ impl WelcomeView {
         connections: Vec<SshConfig>,
         on_new_ssh: OnClick,
         on_open_terminal: OnClick,
+        on_open_recent: OnSelectRecent,
     ) -> Self {
         Self {
             connections,
             on_new_ssh,
             on_open_terminal,
+            on_open_recent,
         }
     }
 }
@@ -51,6 +54,7 @@ impl RenderOnce for WelcomeView {
             connections,
             on_new_ssh,
             on_open_terminal,
+            on_open_recent,
         } = self;
 
         let column = div()
@@ -76,17 +80,13 @@ impl RenderOnce for WelcomeView {
                     .justify_center()
                     .gap(SP_1_5)
                     .child(
-                        UiButton::new("welcome-new-ssh")
-                            .primary()
-                            .label("New SSH connection")
-                            .w(px(148.0))
+                        Button::primary("welcome-new-ssh", "New SSH connection")
+                            .width(px(148.0))
                             .on_click(move |ev, win, app| on_new_ssh(ev, win, app)),
                     )
                     .child(
-                        UiButton::new("welcome-local-term")
-                            .ghost()
-                            .label("Open local terminal")
-                            .w(px(148.0))
+                        Button::ghost("welcome-local-term", "Open local terminal")
+                            .width(px(148.0))
                             .on_click(move |ev, win, app| on_open_terminal(ev, win, app)),
                     ),
             )
@@ -108,7 +108,7 @@ impl RenderOnce for WelcomeView {
             );
 
         let column = if count > 0 {
-            column.child(render_recent_card(t, &connections))
+            column.child(render_recent_card(t, &connections, on_open_recent))
         } else {
             column
         };
@@ -125,7 +125,11 @@ impl RenderOnce for WelcomeView {
     }
 }
 
-fn render_recent_card(t: &crate::theme::Theme, connections: &[SshConfig]) -> Card {
+fn render_recent_card(
+    t: &crate::theme::Theme,
+    connections: &[SshConfig],
+    on_open_recent: OnSelectRecent,
+) -> Card {
     let count = connections.len();
     let header = div().flex().flex_row().items_center().gap(SP_2).child(
         UiLabel::new("Recent connections")
@@ -135,17 +139,24 @@ fn render_recent_card(t: &crate::theme::Theme, connections: &[SshConfig]) -> Car
     );
 
     let mut grid = div().flex().flex_row().flex_wrap().gap(SP_2);
-    for conn in connections.iter().take(6) {
-        grid = grid.child(connection_tile(t, conn));
+    for (idx, conn) in connections.iter().take(6).enumerate() {
+        grid = grid.child(connection_tile(t, idx, conn, on_open_recent.clone()));
     }
 
     Card::new().padding(SP_3).child(header).child(grid)
 }
 
-fn connection_tile(t: &crate::theme::Theme, conn: &SshConfig) -> impl IntoElement {
+fn connection_tile(
+    t: &crate::theme::Theme,
+    idx: usize,
+    conn: &SshConfig,
+    on_open_recent: OnSelectRecent,
+) -> impl IntoElement {
     let host_line: SharedString = format!("{}@{}:{}", conn.user, conn.host, conn.port).into();
     let name: SharedString = conn.name.clone().into();
+    let id: SharedString = format!("welcome-conn-{idx}").into();
     div()
+        .id(gpui::ElementId::Name(id))
         .w(px(208.0))
         .h(px(54.0))
         .px(SP_3)
@@ -155,6 +166,11 @@ fn connection_tile(t: &crate::theme::Theme, conn: &SshConfig) -> impl IntoElemen
         .gap(SP_2)
         .rounded(RADIUS_SM)
         .bg(t.color.bg_panel)
+        .border_1()
+        .border_color(t.color.border_subtle)
+        .cursor_pointer()
+        .hover(|s| s.bg(t.color.bg_hover).border_color(t.color.border_default))
+        .on_click(move |_, w, app| on_open_recent(&idx, w, app))
         .child(
             div()
                 .w(px(20.0))

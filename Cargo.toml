@@ -3,6 +3,9 @@ members = [
     "pier-core",
     "pier-ui-gpui",
 ]
-exclude = ["vendor/gpui-component-0.5.1"]
+exclude = [
+    "vendor/gpui-component-0.5.1",
+    "forks/gpui-component-pier",
+]
 default-members = ["pier-ui-gpui"]
 resolver = "2"

@@ -276,17 +276,14 @@ impl Root {
     }
 
     // Render Notification layer.
-    pub fn render_notification_layer(
-        window: &mut Window,
-        cx: &mut App,
-    ) -> Option<impl IntoElement + use<>> {
-        let root = window.root::<Root>()??;
-
-        let active_sheet_placement = root.read(cx).active_sheet.clone().map(|d| d.placement);
+    pub fn render_notification_layer(&self) -> Option<impl IntoElement + use<>> {
+        let active_sheet_placement = self.active_sheet.clone().map(|d| d.placement);
+        let sheet_size = self.sheet_size.clone();
+        let notification = self.notification.clone();
 
         let (mt, mr) = match active_sheet_placement {
-            Some(Placement::Right) => (None, root.read(cx).sheet_size),
-            Some(Placement::Top) => (root.read(cx).sheet_size, None),
+            Some(Placement::Right) => (None, sheet_size),
+            Some(Placement::Top) => (sheet_size, None),
             _ => (None, None),
         };
 
@@ -297,18 +294,18 @@ impl Root {
                 .right_0()
                 .when_some(mt, |this, offset| this.mt(offset))
                 .when_some(mr, |this, offset| this.mr(offset))
-                .child(root.read(cx).notification.clone()),
+                .child(notification),
         )
     }
 
     /// Render the Sheet layer.
     pub fn render_sheet_layer(
+        &self,
+        root: Entity<Self>,
         window: &mut Window,
-        cx: &mut App,
+        cx: &mut Context<Self>,
     ) -> Option<impl IntoElement + use<>> {
-        let root = window.root::<Root>()??;
-
-        if let Some(active_sheet) = root.read(cx).active_sheet.clone() {
+        if let Some(active_sheet) = self.active_sheet.clone() {
             let mut sheet = Sheet::new(window, cx);
             sheet = (active_sheet.builder)(sheet, window, cx);
             sheet.focus_handle = active_sheet.focus_handle.clone();
@@ -333,12 +330,11 @@ impl Root {
 
     /// Render the Dialog layer.
     pub fn render_dialog_layer(
+        &self,
         window: &mut Window,
-        cx: &mut App,
+        cx: &mut Context<Self>,
     ) -> Option<impl IntoElement + use<>> {
-        let root = window.root::<Root>()??;
-
-        let active_dialogs = root.read(cx).active_dialogs.clone();
+        let active_dialogs = self.active_dialogs.clone();
 
         if active_dialogs.is_empty() {
             return None;
@@ -396,6 +392,7 @@ impl Root {
 impl Render for Root {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         window.set_rem_size(cx.theme().font_size);
+        let root = cx.entity().clone();
 
         window_border().child(
             div()
@@ -409,16 +406,13 @@ impl Render for Root {
                 .bg(cx.theme().background)
                 .text_color(cx.theme().foreground)
                 .child(self.view.clone())
-                .when_some(Self::render_sheet_layer(window, cx), |this, layer| {
+                .when_some(self.render_sheet_layer(root, window, cx), |this, layer| {
                     this.child(layer)
                 })
-                .when_some(Self::render_dialog_layer(window, cx), |this, layer| {
+                .when_some(self.render_dialog_layer(window, cx), |this, layer| {
                     this.child(layer)
                 })
-                .when_some(
-                    Self::render_notification_layer(window, cx),
-                    |this, layer| this.child(layer),
-                ),
+                .when_some(self.render_notification_layer(), |this, layer| this.child(layer)),
         )
     }
 }

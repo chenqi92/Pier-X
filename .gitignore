@@ -40,6 +40,9 @@ $RECYCLE.BIN/
 # Logs
 *.log
 
+# Vendored upstream crates kept locally only; work happens in tracked forks/
+vendor/gpui-component-0.5.1/
+
 # ─────────────────────────────────────────
 # Claude Code — keep skills, drop personal config
 # ─────────────────────────────────────────

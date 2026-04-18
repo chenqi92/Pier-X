@@ -9,9 +9,9 @@ The cross-platform successor to [Pier](https://github.com/chenqi92/Pier) (macOS-
 
 ## Status
 
-The Rust backend lives in `pier-core/`; the active desktop shell now lives in `pier-ui-gpui/`. The old `pier-ui-tauri/` shell remains in the repository as an archived migration reference only.
+The Rust backend lives in `pier-core/`; the active desktop shell now lives in `pier-ui-gpui/`. The old Tauri shell has been removed from the working tree and survives only in git history plus the archive notes.
 
-See [docs/ROADMAP.md](./docs/ROADMAP.md) for the active delivery plan, [docs/GPUI-RESET.md](./docs/GPUI-RESET.md) for the shell reset baseline, and [docs/ARCHIVE-TAURI-SHELL.md](./docs/ARCHIVE-TAURI-SHELL.md) for the archived Tauri note.
+See [docs/ROADMAP.md](./docs/ROADMAP.md) for the active delivery plan, [docs/GPUI-RESET.md](./docs/GPUI-RESET.md) for the shell reset baseline, [docs/ARCHIVE-TAURI-SHELL.md](./docs/ARCHIVE-TAURI-SHELL.md) for the retirement note, and [docs/legacy-index.md](./docs/legacy-index.md) for history recovery pointers.
 
 - ✅ Rust backend foundation in `pier-core/`
 - ✅ Root Cargo workspace for `pier-core/` + `pier-ui-gpui/`
@@ -19,10 +19,10 @@ See [docs/ROADMAP.md](./docs/ROADMAP.md) for the active delivery plan, [docs/GPU
 - ✅ `gpui-component` root/window kit integrated into the active shell
 - ✅ First native Rust dashboard rendering `pier-core` data without IPC
 - ✅ Repo-root entrypoints now target the GPUI shell
-- ✅ Archived Tauri shell kept as migration reference only
+- ✅ Archived Tauri shell removed from the working tree
 - ⬜ Replace the placeholder dashboard with a real workbench and dock layout
 - ⬜ Rebuild terminal, Git, SSH, and data panels as native GPUI views
-- ⬜ Retire the archived Tauri shell after GPUI parity
+- ⬜ Continue replacing remaining historical Tauri references with GPUI-native implementations
 
 ---
 
@@ -129,11 +129,11 @@ Expected behavior by target type:
 Pier-X/
 ├── pier-core/               # Rust core engine
 ├── pier-ui-gpui/            # Active native GPUI shell
-├── pier-ui-tauri/           # Archived Tauri shell reference
 ├── docs/
 │   ├── ROADMAP.md
 │   ├── GPUI-RESET.md
-│   └── ARCHIVE-TAURI-SHELL.md
+│   ├── ARCHIVE-TAURI-SHELL.md
+│   └── legacy-index.md
 └── .agents/skills/          # Archived design references and repo automation skills
 ```
 

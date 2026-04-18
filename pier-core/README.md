@@ -5,7 +5,7 @@ Cross-platform Rust core engine for Pier-X.
 ## Status
 
 `pier-core` is the in-process backend crate consumed by
-`pier-ui-tauri/src-tauri/`.
+`pier-ui-gpui/`.
 
 | Module | Status | Notes |
 |---|---|---|

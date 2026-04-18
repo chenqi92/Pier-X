@@ -1,18 +1,15 @@
 # Archived Tauri Shell
 
-`pier-ui-tauri/` is now an archived reference shell.
+`pier-ui-tauri/` has been removed from the working tree.
 
 ## Status
 
-- It is kept in the repository only as migration history and implementation reference.
-- It is no longer the active desktop target for `run.ps1`, `run.sh`, `build.ps1`, or `build.sh`.
+- It is no longer present as a live directory in the repository checkout.
+- It is no longer the desktop target for `run.ps1`, `run.sh`, `build.ps1`, or `build.sh`.
+- Historical source can still be recovered from git history when migration context is needed.
 - New shell work should land in `pier-ui-gpui/`.
 
-## Why It Stays For Now
+## Historical Lookup
 
-- The archived shell still contains feature coverage that has not yet been migrated to GPUI.
-- It provides concrete reference behavior for terminal, Git, SSH, and database panels during the rewrite.
-
-## Removal Rule
-
-Delete `pier-ui-tauri/` only after the GPUI shell reaches functional parity for the daily workflow.
+- Use [legacy-index.md](./legacy-index.md) for the recovery workflow and anchor commits.
+- Use `git log -- pier-ui-tauri/<path>` and `git show <hash>:pier-ui-tauri/<path>` to inspect old implementation details on demand.

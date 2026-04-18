@@ -24,7 +24,7 @@ This reset is a shell replacement, not a backend rewrite:
   - persisted SSH connection store summary
   - local machine metrics
 - root `run.*` / `build.*` scripts now target the GPUI shell
-- old `pier-ui-tauri/` remains in the repository as an archived baseline, not the active shell
+- old `pier-ui-tauri/` has been removed from the working tree; use git history when archived behavior needs to be checked
 
 ## Current Architecture
 
@@ -44,4 +44,4 @@ terminal / ssh / git / mysql / sqlite / redis / more
 2. Move terminal sessions to direct event-driven rendering instead of snapshot polling.
 3. Rebuild Git, SSH, and connection management views as GPUI panels.
 4. Rebuild database and service panels as native Rust views.
-5. Delete the archived Tauri shell only after GPUI reaches daily-driver parity.
+5. Keep deleting historical assumptions that still mention the old Tauri shell as if it were runnable.

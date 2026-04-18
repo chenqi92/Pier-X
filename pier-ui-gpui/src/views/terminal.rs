@@ -1197,6 +1197,48 @@ impl TerminalPanel {
 
         lines
     }
+
+    /// Bundle the inputs the upcoming direct-GPU paint pipeline needs in a
+    /// single accessor so render() doesn't have to hand-thread them through
+    /// the canvas closure. Returns `None` only when the terminal has no live
+    /// PTY (same condition under which `current_render_key` returns `None`).
+    ///
+    /// Phase 11 introduces this for the cell-grid paint pass; the legacy
+    /// StyledText render path keeps calling `render_lines` directly until
+    /// commit 5 of the series flips the switch.
+    #[allow(dead_code)]
+    fn paint_input(&mut self, t: &crate::theme::Theme) -> Option<PaintInput> {
+        let key = self.current_render_key(t)?;
+        let lines = self.render_lines(t);
+        let snapshot = self.render_cache.as_ref()?.snapshot.clone();
+        let palette = terminal_palette(self.terminal_theme_preset);
+        Some(PaintInput {
+            lines,
+            snapshot,
+            key,
+            palette,
+            opacity: self.terminal_opacity(),
+            cell_width_px: self.cell_width_px,
+            cell_height_px: self.cell_height_px,
+            font_family: t.font_mono.clone(),
+            font_size_px: self.terminal_font_size_px,
+        })
+    }
+}
+
+/// Everything the direct-GPU cell-grid paint pass consumes for one frame.
+/// Built once per render and read inside the canvas paint closure.
+#[allow(dead_code)]
+struct PaintInput {
+    lines: Vec<TerminalLine>,
+    snapshot: GridSnapshot,
+    key: TerminalRenderKey,
+    palette: &'static crate::theme::terminal::TerminalPalette,
+    opacity: f32,
+    cell_width_px: f32,
+    cell_height_px: f32,
+    font_family: SharedString,
+    font_size_px: f32,
 }
 
 impl Drop for TerminalPanel {

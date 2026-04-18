@@ -1,5 +1,6 @@
 pub mod actions;
 pub mod db_session;
+pub mod git_session;
 pub mod layout;
 pub mod route;
 pub mod ssh_session;

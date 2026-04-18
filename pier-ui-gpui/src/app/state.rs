@@ -20,6 +20,7 @@ use gpui::{
     Empty, Entity, EntityId, IntoElement, MouseButton, Pixels, Render, SharedString, Window,
 };
 use gpui_component::{input::InputState, Icon as UiIcon, IconName, PixelsExt as _, WindowExt as _};
+use rust_i18n::t;
 use std::collections::HashMap;
 
 use pier_core::connections::ConnectionStore;
@@ -33,6 +34,10 @@ use crate::app::layout::{
 use crate::app::db_session::{
     run_connect as db_run_connect, run_execute as db_run_execute, run_list as db_run_list,
     DbSessionState,
+};
+use crate::app::git_session::{
+    default_cwd as git_default_cwd, run_action as git_run_action, run_refresh as git_run_refresh,
+    GitPendingAction, GitState,
 };
 use crate::app::route::DbKind;
 use crate::app::ssh_session::{
@@ -128,6 +133,19 @@ pub struct PierApp {
     active_session: Option<Entity<SshSessionState>>,
     logs_command_input: Entity<InputState>,
 
+    // ─── Local Git session (right-panel Git mode) ───
+    /// Cached repo state for the Git mode — probes happen on the
+    /// background executor; the view reads from this entity only.
+    git_state: Entity<GitState>,
+    /// Multi-line commit message input. Pre-created at `new` so
+    /// focus / drafts survive `RenderOnce` rebuilds of `GitView`.
+    git_commit_input: Entity<InputState>,
+    /// Single-line stash-message input.
+    git_stash_message_input: Entity<InputState>,
+    /// One-shot flag — the first render of a `Git` mode right panel
+    /// schedules the initial refresh. Keeps `Render::render` paint-only.
+    git_initial_refresh_done: bool,
+
     // ─── Subviews owning their own state (Phase 9 perf split) ───
     /// Filter input + file-browser cwd cache + tab state live inside this
     /// entity so its `cx.notify()` only repaints the left column rather
@@ -136,6 +154,7 @@ pub struct PierApp {
     /// notify) and read-only accessors like [`Self::servers_sidebar_snapshot`].
     left_panel: Entity<LeftPanelView>,
     window_bounds_observer_started: bool,
+    window_appearance_observer_started: bool,
     remote_panel_poll_loop_started: bool,
     logs_poll_loop_started: bool,
 }
@@ -178,6 +197,25 @@ impl PierApp {
         let snapshot = ShellSnapshot::load();
         window.set_window_title(&format!("Pier-X · {}", snapshot.workspace_path));
 
+        // Local Git: probe the working directory up-front so the view
+        // can render the "is this a repo?" pill immediately. The
+        // actual `git status` / `log` / `branch_list` roundtrip is
+        // scheduled on the first render of the Git mode (see
+        // `schedule_git_initial_refresh`).
+        let git_state = cx.new(|_| {
+            let mut state = GitState::new(git_default_cwd());
+            state.ensure_client();
+            state
+        });
+        let git_commit_input = cx.new(|c| {
+            InputState::new(window, c)
+                .multi_line(true)
+                .placeholder(t!("App.Git.commit_placeholder"))
+        });
+        let git_stash_message_input = cx.new(|c| {
+            InputState::new(window, c).placeholder(t!("App.Git.stash_placeholder"))
+        });
+
         Self {
             left_visible: true,
             right_visible: true,
@@ -195,8 +233,13 @@ impl PierApp {
             last_opened_file: None,
             active_session: None,
             logs_command_input,
+            git_state,
+            git_commit_input,
+            git_stash_message_input,
+            git_initial_refresh_done: false,
             left_panel,
             window_bounds_observer_started: false,
+            window_appearance_observer_started: false,
             remote_panel_poll_loop_started: false,
             logs_poll_loop_started: false,
         }
@@ -484,10 +527,13 @@ impl PierApp {
             return;
         };
         let weak = cx.entity().downgrade();
-        let title: SharedString = format!("Delete \"{}\"?", conn.name).into();
-        let detail: SharedString = format!(
-            "{}@{}:{} will be removed from connections.json.",
-            conn.user, conn.host, conn.port
+        let title: SharedString =
+            t!("App.Shell.DeleteConnection.title", name = conn.name.as_str()).into();
+        let detail: SharedString = t!(
+            "App.Shell.DeleteConnection.detail",
+            user = conn.user.as_str(),
+            host = conn.host.as_str(),
+            port = conn.port
         )
         .into();
         window.open_dialog(cx, move |dialog, _w, _app_cx| {
@@ -499,9 +545,9 @@ impl PierApp {
                 .confirm()
                 .button_props(
                     gpui_component::dialog::DialogButtonProps::default()
-                        .ok_text("Delete")
+                        .ok_text(t!("App.Common.delete"))
                         .ok_variant(gpui_component::button::ButtonVariant::Danger)
-                        .cancel_text("Cancel"),
+                        .cancel_text(t!("App.Common.cancel")),
                 )
                 .on_ok(move |_, _w, app_cx| {
                     let _ = weak.update(app_cx, |this, cx| this.delete_connection(idx, cx));
@@ -515,6 +561,7 @@ impl PierApp {
 impl Render for PierApp {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         self.ensure_window_bounds_observer(window, cx);
+        self.ensure_window_appearance_observer(window, cx);
         self.ensure_remote_panel_poll_loop(cx);
         self.ensure_logs_poll_loop(cx);
         let t = theme(cx).clone();
@@ -815,6 +862,19 @@ impl PierApp {
         self.window_bounds_observer_started = true;
 
         cx.observe_window_bounds(window, |_, _, cx| {
+            cx.notify();
+        })
+        .detach();
+    }
+
+    fn ensure_window_appearance_observer(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        if self.window_appearance_observer_started {
+            return;
+        }
+        self.window_appearance_observer_started = true;
+
+        cx.observe_window_appearance(window, |_, window, cx| {
+            crate::theme::sync_system_appearance(Some(window), cx);
             cx.notify();
         })
         .detach();
@@ -1401,6 +1461,86 @@ impl PierApp {
         .detach();
     }
 
+    // ─── Git session accessors + scheduling ───
+
+    pub fn git_state(&self) -> Entity<GitState> {
+        self.git_state.clone()
+    }
+
+    pub fn git_commit_input(&self) -> Entity<InputState> {
+        self.git_commit_input.clone()
+    }
+
+    pub fn git_stash_message_input(&self) -> Entity<InputState> {
+        self.git_stash_message_input.clone()
+    }
+
+    /// Called on each render of the Git mode so the user sees real
+    /// data without clicking anything. The flag guard keeps this
+    /// render-safe: only the first render of the Git mode actually
+    /// schedules IO.
+    pub fn schedule_git_initial_refresh(&mut self, cx: &mut Context<Self>) {
+        if self.git_initial_refresh_done {
+            return;
+        }
+        self.git_initial_refresh_done = true;
+        self.schedule_git_refresh(cx);
+    }
+
+    pub fn schedule_git_refresh(&mut self, cx: &mut Context<Self>) {
+        // Re-open the client if it never booted (e.g. a repo was
+        // just `git init`ed under the cwd).
+        self.git_state.update(cx, |state, _| {
+            state.ensure_client();
+        });
+        let state = self.git_state.clone();
+        let Some(request) = state.update(cx, |s, _| s.begin_refresh()) else {
+            cx.notify();
+            return;
+        };
+
+        cx.notify();
+        cx.spawn(move |_this: gpui::WeakEntity<Self>, cx: &mut gpui::AsyncApp| {
+            let background = cx.background_executor().clone();
+            let mut async_cx = cx.clone();
+            async move {
+                let result = background.spawn(async move { git_run_refresh(request) }).await;
+                let _ = state.update(&mut async_cx, |s, cx| {
+                    s.apply_refresh_result(result);
+                    cx.notify();
+                });
+            }
+        })
+        .detach();
+    }
+
+    pub fn schedule_git_action(&mut self, action: GitPendingAction, cx: &mut Context<Self>) {
+        let state = self.git_state.clone();
+        let Some(request) = state.update(cx, |s, _| s.begin_action(action)) else {
+            return;
+        };
+        cx.notify();
+        let this = cx.entity().downgrade();
+        cx.spawn(move |_this: gpui::WeakEntity<Self>, cx: &mut gpui::AsyncApp| {
+            let background = cx.background_executor().clone();
+            let mut async_cx = cx.clone();
+            async move {
+                let result = background.spawn(async move { git_run_action(request) }).await;
+                let _ = state.update(&mut async_cx, |s, cx| {
+                    s.apply_action_result(result);
+                    cx.notify();
+                });
+                // A successful mutation invalidates the cached
+                // snapshot — always schedule a refresh so the view
+                // shows fresh branches / status / log / stashes.
+                let _ = this.update(&mut async_cx, |this, cx| {
+                    this.schedule_git_refresh(cx);
+                });
+            }
+        })
+        .detach();
+    }
+
     fn schedule_service_tunnel(&mut self, mode: RightMode, cx: &mut Context<Self>) {
         let Some(service_name) = mode.required_service_name() else {
             return;
@@ -1517,15 +1657,18 @@ impl PierApp {
     fn render_statusbar(&self, t: &crate::theme::Theme) -> impl IntoElement {
         let term_count = self.terminals.len();
         let active_label: SharedString = match self.active_terminal {
-            Some(i) if i < term_count => format!("Terminal {} of {}", i + 1, term_count).into(),
-            _ if term_count == 0 => "no terminal".into(),
-            _ => "no active tab".into(),
+            Some(i) if i < term_count => {
+                t!("App.Shell.terminal_position", current = i + 1, total = term_count).into()
+            }
+            _ if term_count == 0 => t!("App.Shell.no_terminal").into(),
+            _ => t!("App.Shell.no_active_tab").into(),
         };
-        let mode_label: SharedString = format!("right: {}", self.right_mode.label()).into();
+        let mode_label: SharedString =
+            t!("App.Shell.right_mode", mode = self.right_mode.label().as_ref()).into();
         let theme_label: SharedString = if t.mode == ThemeMode::Dark {
-            "theme: dark".into()
+            t!("App.Shell.theme_dark").into()
         } else {
-            "theme: light".into()
+            t!("App.Shell.theme_light").into()
         };
 
         div()
@@ -1553,7 +1696,10 @@ impl PierApp {
                 div()
                     .text_size(SIZE_CAPTION)
                     .text_color(t.color.text_tertiary)
-                    .child(format!("{} saved connections", self.connections.len())),
+                    .child(SharedString::from(
+                        t!("App.Shell.saved_connections_count", count = self.connections.len())
+                            .to_string(),
+                    )),
             )
     }
 
@@ -1632,7 +1778,7 @@ fn render_terminal_tab_bar(
 
     for idx in 0..count {
         let is_active = idx == active;
-        let label: SharedString = format!("Terminal {}", idx + 1).into();
+        let label: SharedString = t!("App.Shell.terminal_tab", index = idx + 1).into();
         let tab_id: SharedString = format!("term-tab-{idx}").into();
         let close_id: SharedString = format!("term-close-{idx}").into();
 

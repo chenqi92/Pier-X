@@ -207,7 +207,7 @@ fn render_mode_body(
             cx,
         )
         .into_any_element(),
-        RightMode::Git => GitView::new().into_any_element(),
+        RightMode::Git => GitView::new(pier_app.clone()).into_any_element(),
         RightMode::Mysql | RightMode::Postgres | RightMode::Redis | RightMode::Sqlite => {
             DatabaseView::new(pier_app.clone(), mode.db_kind().expect("db mode"))
                 .into_any_element()

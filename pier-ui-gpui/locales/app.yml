@@ -22,15 +22,42 @@ App:
     start:
       en: Start
       zh-CN: 启动
+    save:
+      en: Save
+      zh-CN: 保存
+    cancel:
+      en: Cancel
+      zh-CN: 取消
+    delete:
+      en: Delete
+      zh-CN: 删除
     local:
       en: local
       zh-CN: 本地
     status:
       en: Status
       zh-CN: 状态
+    error:
+      en: Error
+      zh-CN: 错误
+    repository:
+      en: Repository
+      zh-CN: 仓库
+    metadata:
+      en: Metadata
+      zh-CN: 元数据
+    target:
+      en: Target
+      zh-CN: 目标
+    preview:
+      en: Preview
+      zh-CN: 预览
     no_matches:
       en: '(no matches for "%{query}")'
       zh-CN: '（没有匹配“%{query}”的结果）'
+    panel_lost:
+      en: Panel disconnected.
+      zh-CN: 面板已断开。
     Status:
       idle:
         en: idle
@@ -69,6 +96,12 @@ App:
     terminal:
       en: Terminal
       zh-CN: 终端
+    git:
+      en: Git
+      zh-CN: Git
+    ssh:
+      en: SSH
+      zh-CN: SSH
   Welcome:
     section:
       en: Welcome
@@ -129,9 +162,27 @@ App:
       subtitle:
         en: Shell-level preferences that already map cleanly to GPUI.
         zh-CN: 已经可以直接映射到 GPUI shell 的基础偏好。
+      language:
+        en: Language
+        zh-CN: 语言
+      language_description:
+        en: Change the interface language instantly. System is currently %{language}.
+        zh-CN: 立即切换界面语言。当前系统语言为 %{language}。
+      language_system:
+        en: System
+        zh-CN: 跟随系统
+      language_english:
+        en: English
+        zh-CN: English
+      language_simplified_chinese:
+        en: Simplified Chinese
+        zh-CN: 简体中文
       appearance:
         en: Appearance
         zh-CN: 外观
+      appearance_system:
+        en: System
+        zh-CN: 跟随系统
       dark:
         en: Dark
         zh-CN: 深色
@@ -141,6 +192,9 @@ App:
       terminal_font_family:
         en: Terminal Font Family
         zh-CN: 终端字体
+      terminal_font_family_description:
+        en: Choose the mono font used by every terminal tab in the shell.
+        zh-CN: 选择 shell 中所有终端标签页使用的等宽字体。
     Terminal:
       subtitle:
         en: Settings below are applied immediately to the active GPUI terminal surface.
@@ -148,6 +202,15 @@ App:
       theme:
         en: Theme
         zh-CN: 主题
+      typography:
+        en: Typography
+        zh-CN: 字体与预览
+      rendering:
+        en: Rendering
+        zh-CN: 渲染
+      preview:
+        en: Preview
+        zh-CN: 预览
       font_size:
         en: Font Size
         zh-CN: 字号
@@ -297,6 +360,9 @@ App:
     no_saved_connections:
       en: no saved connections
       zh-CN: 无已保存连接
+    select_connection:
+      en: select connection…
+      zh-CN: 选择连接…
     no_databases_listed:
       en: (no databases listed yet — click Refresh)
       zh-CN: （暂无数据库列表 — 点击刷新）
@@ -315,6 +381,21 @@ App:
     error_title:
       en: Error
       zh-CN: 错误
+    sql_editor_unavailable:
+      en: (SQL editor unavailable)
+      zh-CN: （SQL 编辑器不可用）
+    results_meta:
+      en: "%{count} row%{suffix} · %{elapsed} ms%{truncated}"
+      zh-CN: "%{count} 行 · %{elapsed} ms%{truncated}"
+    results_meta_with_affected:
+      en: "%{count} row%{suffix} · %{elapsed} ms%{truncated} · %{affected} affected"
+      zh-CN: "%{count} 行 · %{elapsed} ms%{truncated} · 已影响 %{affected} 行"
+    server_truncated:
+      en: server-truncated
+      zh-CN: 服务端已截断
+    showing_first_rows:
+      en: "(showing first %{shown} of %{total} rows; fetch more with LIMIT/OFFSET)"
+      zh-CN: "（当前显示前 %{shown} / %{total} 行；可通过 LIMIT/OFFSET 获取更多）"
     # Phase-B / Phase-C placeholders for tabs that haven't shipped
     # their own UI yet.
     phase_b_redis:
@@ -323,6 +404,51 @@ App:
     phase_c_sqlite:
       en: SQLite browser ships in Phase C — this tab is a placeholder.
       zh-CN: SQLite 浏览器将在 Phase C 上线 — 此页面为占位符。
+    unsupported_engine:
+      en: Unsupported engine
+      zh-CN: 暂不支持的引擎
+    app_handle_dropped:
+      en: (app handle dropped — reopen tab)
+      zh-CN: （应用句柄已失效，请重新打开该标签页）
+    Form:
+      title_new:
+        en: New %{engine} connection
+        zh-CN: 新建 %{engine} 连接
+      title_edit:
+        en: Edit · %{name}
+        zh-CN: 编辑 · %{name}
+      help:
+        en: Connection metadata is saved locally. Password is written to the OS keychain for %{engine}.
+        zh-CN: 连接元数据会保存在本地，%{engine} 的密码会写入系统钥匙串。
+      Fields:
+        name:
+          en: Name
+          zh-CN: 名称
+        host:
+          en: Host
+          zh-CN: 主机
+        port:
+          en: Port
+          zh-CN: 端口
+        user:
+          en: User
+          zh-CN: 用户
+        password:
+          en: Password
+          zh-CN: 密码
+        database_optional:
+          en: Database (optional)
+          zh-CN: 数据库（可选）
+      Placeholders:
+        name:
+          en: e.g. prod
+          zh-CN: 例如 prod
+        password:
+          en: password (stored in OS keychain)
+          zh-CN: 密码（保存在系统钥匙串中）
+        database:
+          en: optional — default database to USE
+          zh-CN: 可选：默认连接后切换到的数据库
   FileTree:
     filter:
       en: Filter files…
@@ -483,9 +609,15 @@ App:
       monitor:
         en: Monitor
         zh-CN: 监控
+      sftp:
+        en: SFTP
+        zh-CN: SFTP
       docker:
         en: Docker
         zh-CN: Docker
+      git:
+        en: Git
+        zh-CN: Git
       logs:
         en: Logs
         zh-CN: 日志
@@ -691,3 +823,451 @@ App:
       hidden_older_lines:
         en: "… older %{count} lines retained but hidden"
         zh-CN: "… 更早的 %{count} 行仍然保留，但当前已隐藏"
+  NewTabChooser:
+    title:
+      en: New tab
+      zh-CN: 新建标签页
+    saved_connections:
+      en: Saved SSH connections
+      zh-CN: 已保存的 SSH 连接
+    empty_state:
+      en: No saved SSH connections yet — add one in Settings or edit %{store}.
+      zh-CN: 还没有已保存的 SSH 连接，可在设置里添加，或直接编辑 %{store}。
+    local_terminal:
+      en: Local terminal
+      zh-CN: 本地终端
+    system_shell:
+      en: system shell
+      zh-CN: 系统 shell
+  EditConnection:
+    title_new:
+      en: New SSH connection
+      zh-CN: 新建 SSH 连接
+    title_edit:
+      en: Edit · %{name}
+      zh-CN: 编辑 · %{name}
+    Fields:
+      name:
+        en: Name
+        zh-CN: 名称
+      host:
+        en: Host
+        zh-CN: 主机
+      port:
+        en: Port
+        zh-CN: 端口
+      user:
+        en: User
+        zh-CN: 用户
+      group:
+        en: Group (tag)
+        zh-CN: 分组（标签）
+      authentication:
+        en: Authentication
+        zh-CN: 认证方式
+      password:
+        en: Password
+        zh-CN: 密码
+      private_key_path:
+        en: Private key path
+        zh-CN: 私钥路径
+      passphrase_optional:
+        en: Passphrase (optional)
+        zh-CN: 口令（可选）
+    Auth:
+      agent:
+        en: ssh-agent
+        zh-CN: ssh-agent
+      password:
+        en: password
+        zh-CN: 密码
+      key_file:
+        en: key file
+        zh-CN: 密钥文件
+      keychain:
+        en: keychain
+        zh-CN: 钥匙串
+    Help:
+      agent:
+        en: Uses ssh-agent (~/.ssh/config + agent forwarding apply). No secret is stored by Pier-X.
+        zh-CN: 使用 ssh-agent（会遵循 `~/.ssh/config` 和 agent 转发设置）。Pier-X 不会保存任何密钥信息。
+      password:
+        en: Stored in plaintext inside connections.json. Use "keychain" if you want OS-level secret storage.
+        zh-CN: 会以明文写入 `connections.json`。如果希望由系统级安全存储管理，请使用“钥匙串”。
+      key_file:
+        en: OpenSSH private key on disk. Passphrase is stored in the OS keychain when present, never in connections.json.
+        zh-CN: 使用磁盘上的 OpenSSH 私钥。若设置了口令，会写入系统钥匙串，绝不会存入 `connections.json`。
+      keychain:
+        en: Password is written to the OS keychain on save. connections.json only holds an opaque credential id.
+        zh-CN: 保存时会把密码写入系统钥匙串，`connections.json` 中只保留一个不可读的凭据 ID。
+    Placeholders:
+      name:
+        en: e.g. prod-db
+        zh-CN: 例如 prod-db
+      host:
+        en: e.g. db.example.com
+        zh-CN: 例如 db.example.com
+      user:
+        en: e.g. deploy
+        zh-CN: 例如 deploy
+      group:
+        en: optional — groups in sidebar
+        zh-CN: 可选：用于在侧边栏中分组
+      password:
+        en: password
+        zh-CN: 密码
+      key_path:
+        en: e.g. ~/.ssh/id_ed25519
+        zh-CN: 例如 ~/.ssh/id_ed25519
+      passphrase:
+        en: optional passphrase
+        zh-CN: 可选口令
+      keychain_password:
+        en: password (stored in OS keychain)
+        zh-CN: 密码（保存在系统钥匙串中）
+  Sftp:
+    loading_directory:
+      en: (loading remote directory...)
+      zh-CN: （正在加载远程目录…）
+    empty_directory:
+      en: (empty directory or not yet listed)
+      zh-CN: （目录为空，或尚未列出内容）
+    no_active_session_title:
+      en: No active SSH session
+      zh-CN: 当前没有活动中的 SSH 会话
+    no_active_session_body:
+      en: Click a saved connection in the left panel to attach a session here.
+      zh-CN: 在左侧面板点击一个已保存连接，即可在这里附加会话。
+    link:
+      en: link
+      zh-CN: 链接
+  Git:
+    title:
+      en: Git
+      zh-CN: Git
+    repo_open:
+      en: "repo: open"
+      zh-CN: 仓库已打开
+    no_repo:
+      en: no repo
+      zh-CN: 不是仓库
+    not_a_repo_body:
+      en: Current working directory is not inside a Git repository.
+      zh-CN: 当前工作目录不在 Git 仓库中。
+    current_branch:
+      en: Current branch
+      zh-CN: 当前分支
+    no_upstream:
+      en: no upstream
+      zh-CN: 无上游分支
+    branch_pace:
+      en: "%{ahead} ahead · %{behind} behind"
+      zh-CN: "领先 %{ahead} · 落后 %{behind}"
+    branch_tracking:
+      en: "→ %{tracking}"
+      zh-CN: "→ %{tracking}"
+    repo_path:
+      en: "repo: %{path}"
+      zh-CN: "仓库：%{path}"
+    working_tree:
+      en: Working tree
+      zh-CN: 工作区
+    staged_count:
+      en: "%{count} staged"
+      zh-CN: "已暂存 %{count} 个"
+    unstaged_count:
+      en: "%{count} unstaged"
+      zh-CN: "未暂存 %{count} 个"
+    working_tree_clean:
+      en: Working tree clean.
+      zh-CN: 工作区干净。
+    more_changes:
+      en: "… +%{count} more"
+      zh-CN: "… 另外还有 %{count} 项"
+    staged_tag:
+      en: "[staged]"
+      zh-CN: "[已暂存]"
+    work_tag:
+      en: "[work]"
+      zh-CN: "[工作区]"
+    recent_commits:
+      en: Recent commits
+      zh-CN: 最近提交
+    entries_count:
+      en: "%{count} entries"
+      zh-CN: "%{count} 条记录"
+    no_commits:
+      en: No commits to show.
+      zh-CN: 没有可显示的提交。
+    unavailable:
+      en: Unavailable
+      zh-CN: 不可用
+    working_directory_unavailable:
+      en: Working directory unavailable
+      zh-CN: 当前工作目录不可用
+    pending:
+      en: "pending %{action}"
+      zh-CN: "正在 %{action}"
+    busy:
+      en: busy
+      zh-CN: 繁忙
+    switch_branch:
+      en: Switch branch
+      zh-CN: 切换分支
+    checkout:
+      en: Checkout
+      zh-CN: 切换
+    push:
+      en: Push
+      zh-CN: 推送
+    pull:
+      en: Pull
+      zh-CN: 拉取
+    stage:
+      en: Stage
+      zh-CN: 暂存
+    unstage:
+      en: Unstage
+      zh-CN: 取消暂存
+    discard:
+      en: Discard
+      zh-CN: 丢弃
+    stage_all:
+      en: Stage all
+      zh-CN: 全部暂存
+    unstage_all:
+      en: Unstage all
+      zh-CN: 全部取消
+    commit_section:
+      en: Commit
+      zh-CN: 提交
+    commit_staged:
+      en: Commit staged
+      zh-CN: 提交暂存
+    commit_hint:
+      en: Writes staged changes to the current branch.
+      zh-CN: 将暂存的变更写入当前分支。
+    commit_placeholder:
+      en: Commit message
+      zh-CN: 提交信息
+    no_staged:
+      en: no staged changes
+      zh-CN: 没有暂存变更
+    stash_section:
+      en: Stashes
+      zh-CN: 贮藏
+    stash_placeholder:
+      en: Stash message (optional)
+      zh-CN: 贮藏信息（可选）
+    stash_push:
+      en: Stash push
+      zh-CN: 新贮藏
+    no_stashes:
+      en: No stashes.
+      zh-CN: 暂无贮藏。
+    more_stashes:
+      en: "… +%{count} more"
+      zh-CN: "… 另外还有 %{count} 项"
+    apply:
+      en: Apply
+      zh-CN: 应用
+    pop:
+      en: Pop
+      zh-CN: 弹出
+    drop:
+      en: Drop
+      zh-CN: 丢弃
+    last_result:
+      en: Last result
+      zh-CN: 最近结果
+  Shell:
+    terminal_position:
+      en: Terminal %{current} of %{total}
+      zh-CN: 终端 %{current} / %{total}
+    no_terminal:
+      en: no terminal
+      zh-CN: 无终端
+    no_active_tab:
+      en: no active tab
+      zh-CN: 没有活动标签页
+    right_mode:
+      en: "right: %{mode}"
+      zh-CN: "右侧：%{mode}"
+    theme_dark:
+      en: "theme: dark"
+      zh-CN: "主题：深色"
+    theme_light:
+      en: "theme: light"
+      zh-CN: "主题：浅色"
+    saved_connections_count:
+      en: "%{count} saved connections"
+      zh-CN: "已保存 %{count} 个连接"
+    terminal_tab:
+      en: "Terminal %{index}"
+      zh-CN: "终端 %{index}"
+    DeleteConnection:
+      title:
+        en: Delete "%{name}"?
+        zh-CN: 删除“%{name}”？
+      detail:
+        en: "%{user}@%{host}:%{port} will be removed from saved connections."
+        zh-CN: "%{user}@%{host}:%{port} 将从已保存连接中移除。"
+  PathInspector:
+    title:
+      en: Path Inspector
+      zh-CN: 路径检查器
+    no_parent:
+      en: no parent
+      zh-CN: 无上级目录
+    no_local_target:
+      en: no local target
+      zh-CN: 没有本地目标
+    empty_resolved_path:
+      en: open a path from Terminal to inspect it here
+      zh-CN: 从终端中打开一个路径，即可在这里查看
+    empty_detail:
+      en: local file and directory targets stay inside Pier-X
+      zh-CN: 本地文件和目录会在 Pier-X 内部继续联动浏览
+    empty_meta:
+      en: Cmd/Ctrl+Click or Alt+Enter on a local path opens it here
+      zh-CN: 在本地路径上使用 Cmd/Ctrl+Click 或 Alt+Enter，就会在这里打开
+    empty_body:
+      en: directory entries stay drill-downable inside Inspector
+      zh-CN: 目录内容可以继续在检查器里逐层钻取
+    status_local_path:
+      en: local path
+      zh-CN: 本地路径
+    status_missing:
+      en: missing
+      zh-CN: 缺失
+    kind_waiting:
+      en: waiting
+      zh-CN: 等待中
+    kind_unavailable:
+      en: unavailable
+      zh-CN: 不可用
+    kind_directory:
+      en: directory
+      zh-CN: 目录
+    kind_file:
+      en: file
+      zh-CN: 文件
+    kind_dir_short:
+      en: dir
+      zh-CN: 目录
+    kind_file_short:
+      en: file
+      zh-CN: 文件
+    kind_text:
+      en: text
+      zh-CN: 文本
+    entries_title:
+      en: Entries
+      zh-CN: 条目
+    metadata_error:
+      en: "metadata: %{error}"
+      zh-CN: "元数据：%{error}"
+    inspect_parent_hint:
+      en: inspect the parent directory to continue browsing
+      zh-CN: 先查看上级目录，再继续浏览
+    path_missing_body:
+      en: path does not exist or is not readable
+      zh-CN: 路径不存在，或当前不可读取
+    parent_label:
+      en: "parent: %{parent}"
+      zh-CN: "上级：%{parent}"
+    size_label:
+      en: "size: %{size}"
+      zh-CN: "大小：%{size}"
+    directory_empty:
+      en: directory is empty
+      zh-CN: 目录为空
+    directory_preview_unavailable:
+      en: directory preview unavailable
+      zh-CN: 无法预览目录
+    failed_to_enumerate:
+      en: failed to enumerate this directory
+      zh-CN: 无法枚举该目录
+    metadata_unavailable:
+      en: metadata unavailable
+      zh-CN: 元数据不可用
+    showing_entries:
+      en: showing %{shown} of %{total} entries
+      zh-CN: 当前显示 %{shown} / %{total} 项
+    entries_count:
+      en: "%{count} entries"
+      zh-CN: "%{count} 项"
+    directory_detail_truncated:
+      en: "directory · %{shown}/%{total} entries"
+      zh-CN: "目录 · %{shown}/%{total} 项"
+    directory_detail:
+      en: "directory · %{count} entries"
+      zh-CN: "目录 · %{count} 项"
+    file_preview_unavailable:
+      en: file preview unavailable
+      zh-CN: 无法预览文件
+    read_error:
+      en: "read error: %{error}"
+      zh-CN: "读取错误：%{error}"
+    file_empty:
+      en: file is empty
+      zh-CN: 文件为空
+    encoding_label:
+      en: "encoding: %{encoding}"
+      zh-CN: "编码：%{encoding}"
+    line_endings_label:
+      en: "line endings: %{endings}"
+      zh-CN: "换行：%{endings}"
+    preview_budget:
+      en: "preview budget: %{budget} / %{lines} lines"
+      zh-CN: "预览预算：%{budget} / %{lines} 行"
+    preview_truncated:
+      en: "truncated: showing first %{shown} line(s) from first %{budget} of %{total}"
+      zh-CN: "已截断：当前展示前 %{shown} 行，来自 %{total} 中前 %{budget}"
+    binary_file:
+      en: binary file
+      zh-CN: 二进制文件
+    binary_detection:
+      en: "binary detection: %{reason}"
+      zh-CN: "二进制检测：%{reason}"
+    binary_preview_unavailable:
+      en: Binary preview unavailable in Inspector.
+      zh-CN: 检查器暂不支持二进制预览。
+    unsupported_encoding:
+      en: unsupported encoding
+      zh-CN: 不支持的编码
+    text_preview_unavailable:
+      en: Text preview unavailable for this encoding.
+      zh-CN: 当前编码下无法预览文本。
+    open_parent:
+      en: Open Parent
+      zh-CN: 打开上级目录
+    expand_preview:
+      en: Expanded Preview
+      zh-CN: 展开预览
+    compact_preview:
+      en: Compact Preview
+      zh-CN: 紧凑预览
+    Preview:
+      compact:
+        en: compact
+        zh-CN: 紧凑
+      expanded:
+        en: expanded
+        zh-CN: 展开
+    LineEndings:
+      none:
+        en: none
+        zh-CN: 无
+      crlf:
+        en: CRLF
+        zh-CN: CRLF
+      lf:
+        en: LF
+        zh-CN: LF
+      cr:
+        en: CR
+        zh-CN: CR
+      mixed:
+        en: mixed
+        zh-CN: 混合

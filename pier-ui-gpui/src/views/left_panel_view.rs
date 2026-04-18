@@ -184,13 +184,20 @@ impl LeftPanelView {
         self.active_tab
     }
 
+    pub fn file_tree_cwd(&self) -> PathBuf {
+        self.file_tree_cwd.clone()
+    }
+
     // ─── File browser navigation ───
     pub fn enter_dir(&mut self, path: PathBuf, cx: &mut Context<Self>) {
         match file_tree::list_dir(&path) {
             Ok(entries) => {
-                self.file_tree_cwd = path;
+                self.file_tree_cwd = path.clone();
                 self.file_tree_entries = entries;
                 self.file_tree_error = None;
+                let _ = self.weak_app.update(cx, |app, cx| {
+                    app.sync_git_cwd(path, cx);
+                });
             }
             Err(err) => {
                 self.file_tree_error = Some(format!("{err}"));

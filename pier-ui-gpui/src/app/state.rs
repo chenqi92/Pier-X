@@ -354,8 +354,27 @@ impl PierApp {
     /// than from inside the render path.
     pub fn set_right_mode(&mut self, mode: RightMode, cx: &mut Context<Self>) {
         self.right_mode = mode;
+        if matches!(mode, RightMode::Git) {
+            let cwd = self.left_panel.read(cx).file_tree_cwd();
+            self.sync_git_cwd(cwd, cx);
+        }
         self.ensure_right_mode_ready(cx, true);
         cx.notify();
+    }
+
+    pub(crate) fn sync_git_cwd(&mut self, cwd: PathBuf, cx: &mut Context<Self>) {
+        let changed = self.git_state.update(cx, |state, _| state.set_cwd(cwd));
+        if !changed {
+            return;
+        }
+
+        if matches!(self.right_mode, RightMode::Git) {
+            self.git_initial_refresh_done = true;
+            self.schedule_git_refresh(cx);
+        } else {
+            self.git_initial_refresh_done = false;
+            cx.notify();
+        }
     }
 
     fn activate_terminal_tab(&mut self, idx: usize, cx: &mut Context<Self>) {

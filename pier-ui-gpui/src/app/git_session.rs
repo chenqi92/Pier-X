@@ -84,7 +84,7 @@ impl GitPendingAction {
 /// Cached live state for the current working directory's repo.
 /// Everything the UI reads lives here.
 pub struct GitState {
-    /// Directory the view was opened against (cwd at startup).
+    /// Directory currently mirrored from the left file tree.
     pub cwd: PathBuf,
     /// Top-level status, updated by `apply_refresh_result`.
     pub status: GitStatus,
@@ -171,6 +171,35 @@ impl GitState {
             diff_error: None,
             diff_nonce: 0,
         }
+    }
+
+    /// Retarget the cached Git state to a new left-panel directory.
+    /// Returns `true` when the cwd actually changed.
+    pub fn set_cwd(&mut self, cwd: PathBuf) -> bool {
+        if self.cwd == cwd {
+            return false;
+        }
+
+        self.cwd = cwd;
+        self.client = None;
+        self.repo_path = None;
+        self.branch = None;
+        self.branches.clear();
+        self.changes.clear();
+        self.log.clear();
+        self.stashes.clear();
+        self.status = GitStatus::Idle;
+        self.pending = None;
+        self.last_error = None;
+        self.action_error = None;
+        self.last_confirmation = None;
+        self.diff_selection = None;
+        self.diff_output = None;
+        self.diff_loading = false;
+        self.diff_error = None;
+        self.refresh_nonce = self.refresh_nonce.wrapping_add(1);
+        self.diff_nonce = self.diff_nonce.wrapping_add(1);
+        true
     }
 
     /// Mint a diff fetch request for the given selection. Bumps the
@@ -475,4 +504,91 @@ pub fn run_diff(request: DiffRequest) -> DiffResult {
 /// Resolve the starting cwd for the view — used by `PierApp::new`.
 pub fn default_cwd() -> PathBuf {
     std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{DiffSelection, GitPendingAction, GitState, GitStatus};
+    use gpui::SharedString;
+    use pier_core::services::git::{BranchInfo, CommitInfo, FileStatus, GitFileChange, StashEntry};
+    use std::path::PathBuf;
+
+    #[test]
+    fn set_cwd_resets_cached_snapshot_and_invalidates_requests() {
+        let mut state = GitState::new(PathBuf::from("/tmp/one"));
+        state.status = GitStatus::Ready;
+        state.repo_path = Some(PathBuf::from("/tmp/one/.git"));
+        state.branch = Some(BranchInfo {
+            name: "main".into(),
+            tracking: "origin/main".into(),
+            ahead: 1,
+            behind: 0,
+        });
+        state.branches = vec!["main".into()];
+        state.changes = vec![GitFileChange {
+            path: "src/main.rs".into(),
+            status: FileStatus::Modified,
+            staged: false,
+        }];
+        state.log = vec![CommitInfo {
+            hash: "0123456789abcdef0123456789abcdef01234567".into(),
+            short_hash: "0123456".into(),
+            message: "Initial commit".into(),
+            author: "Pier".into(),
+            timestamp: 1_713_481_600,
+            relative_date: "just now".into(),
+            refs: "HEAD -> main".into(),
+        }];
+        state.stashes = vec![StashEntry {
+            index: "stash@{0}".into(),
+            message: "WIP".into(),
+            relative_date: "just now".into(),
+        }];
+        state.pending = Some(GitPendingAction::Refresh);
+        state.last_error = Some(SharedString::from("boom"));
+        state.action_error = Some(SharedString::from("nope"));
+        state.last_confirmation = Some(SharedString::from("done"));
+        state.diff_selection = Some(DiffSelection {
+            path: "src/main.rs".into(),
+            staged: false,
+            untracked: false,
+        });
+        state.diff_output = Some(SharedString::from("diff"));
+        state.diff_loading = true;
+        state.diff_error = Some(SharedString::from("diff boom"));
+        state.refresh_nonce = 4;
+        state.diff_nonce = 9;
+
+        assert!(state.set_cwd(PathBuf::from("/tmp/two")));
+        assert_eq!(state.cwd, PathBuf::from("/tmp/two"));
+        assert!(state.client.is_none());
+        assert!(state.repo_path.is_none());
+        assert!(state.branch.is_none());
+        assert!(state.branches.is_empty());
+        assert!(state.changes.is_empty());
+        assert!(state.log.is_empty());
+        assert!(state.stashes.is_empty());
+        assert!(matches!(state.status, GitStatus::Idle));
+        assert!(state.pending.is_none());
+        assert!(state.last_error.is_none());
+        assert!(state.action_error.is_none());
+        assert!(state.last_confirmation.is_none());
+        assert!(state.diff_selection.is_none());
+        assert!(state.diff_output.is_none());
+        assert!(!state.diff_loading);
+        assert!(state.diff_error.is_none());
+        assert_eq!(state.refresh_nonce, 5);
+        assert_eq!(state.diff_nonce, 10);
+    }
+
+    #[test]
+    fn set_cwd_is_noop_when_path_is_unchanged() {
+        let mut state = GitState::new(PathBuf::from("/tmp/one"));
+        state.status = GitStatus::Ready;
+        state.refresh_nonce = 2;
+
+        assert!(!state.set_cwd(PathBuf::from("/tmp/one")));
+        assert!(matches!(state.status, GitStatus::Ready));
+        assert_eq!(state.refresh_nonce, 2);
+    }
 }

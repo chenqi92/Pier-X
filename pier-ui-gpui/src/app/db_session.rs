@@ -25,8 +25,8 @@ use std::sync::Arc;
 
 use gpui::SharedString;
 use pier_core::db_connections::{DbConnection, DbEngine};
-use pier_core::services::mysql::{MysqlClient, QueryResult as MysqlQueryResult};
-use pier_core::services::postgres::{PostgresClient, QueryResult as PgQueryResult};
+use pier_core::services::mysql::{MysqlClient, MysqlConfig, QueryResult as MysqlQueryResult};
+use pier_core::services::postgres::{PostgresClient, PostgresConfig, QueryResult as PgQueryResult};
 
 /// High-level connection state, drives the status pill in the UI.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
@@ -400,30 +400,92 @@ pub struct ExecuteResult {
     pub outcome: Result<DbQueryResult, String>,
 }
 
-// ─── Stub workers (filled in by step 3) ───────────────────────────────
+// ─── Background-task workers ──────────────────────────────────────────
+//
+// These are called from `cx.background_executor().spawn(async move { … })`
+// inside `PierApp::schedule_*` so the blocking `pier-core` calls never
+// run on the UI thread.
 
-/// Open a fresh client + verify authentication. Step 2 stub; step 3
-/// wires `MysqlClient::connect_blocking` / `PostgresClient::connect_blocking`.
+/// Open a fresh MySQL / PostgreSQL client and verify authentication.
 pub fn run_connect(request: ConnectRequest) -> ConnectResult {
+    let outcome = connect_inner(&request.connection, request.password.as_deref());
     ConnectResult {
         nonce: request.nonce,
-        outcome: Err("run_connect: not implemented yet (Phase A step 3)".into()),
+        outcome,
     }
 }
 
-/// Fetch the requested list. Step 2 stub.
+fn connect_inner(connection: &DbConnection, password: Option<&str>) -> Result<DbClient, String> {
+    let password = password.unwrap_or("").to_string();
+    match connection.engine {
+        DbEngine::Mysql => {
+            let config = MysqlConfig {
+                host: connection.host.clone(),
+                port: connection.port,
+                user: connection.user.clone(),
+                password,
+                database: connection.database.clone(),
+            };
+            MysqlClient::connect_blocking(config)
+                .map(|c| DbClient::Mysql(Arc::new(c)))
+                .map_err(|e| e.to_string())
+        }
+        DbEngine::Postgres => {
+            let config = PostgresConfig {
+                host: connection.host.clone(),
+                port: connection.port,
+                user: connection.user.clone(),
+                password,
+                database: connection.database.clone(),
+            };
+            PostgresClient::connect_blocking(config)
+                .map(|c| DbClient::Postgres(Arc::new(c)))
+                .map_err(|e| e.to_string())
+        }
+    }
+}
+
+/// Fetch the requested list (databases or tables for a given database).
 pub fn run_list(request: ListRequest) -> ListResult {
+    let outcome = match (&request.client, &request.kind) {
+        (DbClient::Mysql(client), ListKind::Databases) => client
+            .list_databases_blocking()
+            .map(ListPayload::Databases)
+            .map_err(|e| e.to_string()),
+        (DbClient::Mysql(client), ListKind::Tables { database }) => client
+            .list_tables_blocking(database)
+            .map(ListPayload::Tables)
+            .map_err(|e| e.to_string()),
+        (DbClient::Postgres(client), ListKind::Databases) => client
+            .list_databases_blocking()
+            .map(ListPayload::Databases)
+            .map_err(|e| e.to_string()),
+        (DbClient::Postgres(client), ListKind::Tables { database }) => client
+            .list_tables_blocking(database)
+            .map(ListPayload::Tables)
+            .map_err(|e| e.to_string()),
+    };
     ListResult {
         nonce: request.nonce,
-        outcome: Err("run_list: not implemented yet (Phase A step 3)".into()),
+        outcome,
     }
 }
 
-/// Execute a single SQL statement. Step 2 stub.
+/// Execute a single SQL statement and return the materialised result.
 pub fn run_execute(request: ExecuteRequest) -> ExecuteResult {
+    let outcome = match &request.client {
+        DbClient::Mysql(client) => client
+            .execute_blocking(&request.sql)
+            .map(DbQueryResult::Mysql)
+            .map_err(|e| e.to_string()),
+        DbClient::Postgres(client) => client
+            .execute_blocking(&request.sql)
+            .map(DbQueryResult::Postgres)
+            .map_err(|e| e.to_string()),
+    };
     ExecuteResult {
         nonce: request.nonce,
-        outcome: Err("run_execute: not implemented yet (Phase A step 3)".into()),
+        outcome,
     }
 }
 

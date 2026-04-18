@@ -20,6 +20,8 @@ use gpui::{
     Empty, Entity, EntityId, IntoElement, MouseButton, Pixels, Render, SharedString, Window,
 };
 use gpui_component::{input::InputState, Icon as UiIcon, IconName, PixelsExt as _, WindowExt as _};
+use std::collections::HashMap;
+
 use pier_core::connections::ConnectionStore;
 use pier_core::db_connections::{DbConnection, DbConnectionStore};
 use pier_core::ssh::SshConfig;
@@ -28,6 +30,11 @@ use crate::app::layout::{
     RightMode, CENTER_PANEL_MIN_W, LEFT_PANEL_DEFAULT_W, LEFT_PANEL_MAX_W, LEFT_PANEL_MIN_W,
     RIGHT_PANEL_DEFAULT_W, RIGHT_PANEL_MAX_W, RIGHT_PANEL_MIN_W,
 };
+use crate::app::db_session::{
+    run_connect as db_run_connect, run_execute as db_run_execute, run_list as db_run_list,
+    DbSessionState,
+};
+use crate::app::route::DbKind;
 use crate::app::ssh_session::{
     run_bootstrap, run_docker_command, run_docker_refresh, run_logs_start, run_monitor_refresh,
     run_refresh, run_tunnel, ServiceProbeStatus, SshSessionState,
@@ -100,6 +107,11 @@ pub struct PierApp {
     /// just the dropdown source.
     #[allow(dead_code)] // Step 5 wires it into the database view.
     db_connections: Vec<DbConnection>,
+    /// Per-tab database session state, lazy-allocated on first
+    /// schedule. One entity per `DbKind` tab so each tab has its own
+    /// connect/query history.
+    #[allow(dead_code)] // Step 5 wires it into the database view.
+    db_sessions: HashMap<DbKind, Entity<DbSessionState>>,
 
     // ─── Terminal sessions (Pier mirror: multi-tab) ───
     terminals: Vec<Entity<TerminalPanel>>,
@@ -155,6 +167,7 @@ impl PierApp {
             snapshot,
             connections,
             db_connections,
+            db_sessions: HashMap::new(),
             terminals: Vec::new(),
             active_terminal: None,
             last_opened_file: None,
@@ -1172,6 +1185,151 @@ impl PierApp {
                 }
             },
         )
+        .detach();
+    }
+
+    // ─── Database (MySQL / PostgreSQL) schedulers ────────────────
+    //
+    // Same pattern as schedule_sftp_refresh / schedule_remote_bootstrap:
+    //   1. bump a nonce + flip status via begin_*
+    //   2. cx.notify() so the UI sees the "Connecting" pill
+    //   3. cx.spawn → background.spawn(async { run_*(request) }).await
+    //   4. session.update(apply_*_result) — nonce guard drops stale ones
+    //
+    // Phase A only plumbs MySQL + PostgreSQL; Redis / SQLite variants
+    // get their own schedulers when those phases ship.
+
+    /// Ensure a `DbSessionState` entity exists for the given tab and
+    /// return a strong handle. Called by every `schedule_db_*` entry
+    /// so the UI never has to pre-allocate sessions.
+    #[allow(dead_code)] // Step 5 wires it into the database view.
+    pub(crate) fn db_session_for(
+        &mut self,
+        kind: DbKind,
+        cx: &mut Context<Self>,
+    ) -> Entity<DbSessionState> {
+        if let Some(existing) = self.db_sessions.get(&kind) {
+            return existing.clone();
+        }
+        let entity = cx.new(|_| DbSessionState::new());
+        self.db_sessions.insert(kind, entity.clone());
+        entity
+    }
+
+    /// Kick off a connect on the given tab's session. `connection` is
+    /// cloned into the background task; `password` is looked up via
+    /// the keychain by the caller so pier-core never sees the raw
+    /// credential through this entry point.
+    #[allow(dead_code)] // Step 5 wires it into the database view.
+    pub(crate) fn schedule_db_connect(
+        &mut self,
+        kind: DbKind,
+        connection: DbConnection,
+        password: Option<String>,
+        cx: &mut Context<Self>,
+    ) {
+        let session = self.db_session_for(kind, cx);
+        let Some(request) = session.update(cx, |state, _| {
+            state.select_connection(connection);
+            state.begin_connect(password)
+        }) else {
+            return;
+        };
+
+        cx.notify();
+        cx.spawn(move |_this: gpui::WeakEntity<Self>, cx: &mut gpui::AsyncApp| {
+            let background = cx.background_executor().clone();
+            let mut async_cx = cx.clone();
+            async move {
+                let result = background.spawn(async move { db_run_connect(request) }).await;
+                let _ = session.update(&mut async_cx, |state, _| {
+                    state.apply_connect_result(result);
+                });
+            }
+        })
+        .detach();
+    }
+
+    /// Fetch the database list for the session's active client.
+    #[allow(dead_code)] // Step 5 wires it into the database view.
+    pub(crate) fn schedule_db_list_databases(
+        &mut self,
+        kind: DbKind,
+        cx: &mut Context<Self>,
+    ) {
+        let session = self.db_session_for(kind, cx);
+        let Some(request) = session.update(cx, |state, _| state.begin_list_databases()) else {
+            return;
+        };
+
+        cx.spawn(move |_this: gpui::WeakEntity<Self>, cx: &mut gpui::AsyncApp| {
+            let background = cx.background_executor().clone();
+            let mut async_cx = cx.clone();
+            async move {
+                let result = background.spawn(async move { db_run_list(request) }).await;
+                let _ = session.update(&mut async_cx, |state, _| {
+                    state.apply_list_result(result);
+                });
+            }
+        })
+        .detach();
+    }
+
+    /// Fetch the table list for a specific database. Also updates
+    /// `selected_database` on the session (moved into `begin_list_tables`).
+    #[allow(dead_code)] // Step 5 wires it into the database view.
+    pub(crate) fn schedule_db_list_tables(
+        &mut self,
+        kind: DbKind,
+        database: String,
+        cx: &mut Context<Self>,
+    ) {
+        let session = self.db_session_for(kind, cx);
+        let Some(request) = session.update(cx, |state, _| state.begin_list_tables(database))
+        else {
+            return;
+        };
+
+        cx.notify();
+        cx.spawn(move |_this: gpui::WeakEntity<Self>, cx: &mut gpui::AsyncApp| {
+            let background = cx.background_executor().clone();
+            let mut async_cx = cx.clone();
+            async move {
+                let result = background.spawn(async move { db_run_list(request) }).await;
+                let _ = session.update(&mut async_cx, |state, _| {
+                    state.apply_list_result(result);
+                });
+            }
+        })
+        .detach();
+    }
+
+    /// Run a user-supplied SQL statement on the session's active
+    /// client. Returns without scheduling if a query is already in
+    /// flight (the UI gates the button, this is defense in depth).
+    #[allow(dead_code)] // Step 5 wires it into the database view.
+    pub(crate) fn schedule_db_execute(
+        &mut self,
+        kind: DbKind,
+        sql: String,
+        cx: &mut Context<Self>,
+    ) {
+        let session = self.db_session_for(kind, cx);
+        let Some(request) = session.update(cx, |state, _| state.begin_execute(sql)) else {
+            return;
+        };
+
+        cx.notify();
+        cx.spawn(move |_this: gpui::WeakEntity<Self>, cx: &mut gpui::AsyncApp| {
+            let background = cx.background_executor().clone();
+            let mut async_cx = cx.clone();
+            async move {
+                let result = background.spawn(async move { db_run_execute(request) }).await;
+                let _ = session.update(&mut async_cx, |state, _| {
+                    state.apply_execute_result(result);
+                });
+            }
+        })
         .detach();
     }
 

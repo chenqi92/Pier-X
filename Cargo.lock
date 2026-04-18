@@ -5145,6 +5145,7 @@ name = "pier-ui-gpui"
 version = "0.1.0"
 dependencies = [
  "base64",
+ "embed-resource",
  "gpui",
  "gpui-component",
  "pier-core",

@@ -61,9 +61,10 @@ fn main() {
                     ..Default::default()
                 }),
                 // Linux desktop environments use `app_id` to group windows and
-                // map them to a desktop entry's icon. macOS / Windows ignore it
-                // — there the dock/taskbar icon comes from the `.app` / `.exe`
-                // bundle (see `pier-ui-gpui/assets/app-icons/` and run.sh).
+                // map them to a desktop entry's icon. macOS / Windows ignore it:
+                // macOS gets the dock icon from the `.app` bundle, while Windows
+                // loads Win32 resource id 1 from the executable (compiled from
+                // `pier-ui-gpui/app.rc` by `build.rs`).
                 app_id: Some("com.pier-x.desktop".into()),
                 ..Default::default()
             },

@@ -10,10 +10,6 @@
 //! — a MySQL tab only ever edits MySQL connections. Redis / SQLite
 //! tabs use different editors in Phase B / C.
 
-// Step 5 wires `open(..)` into the `Add / Edit` buttons on the
-// database view. Until then this module compiles but is unreferenced.
-#![allow(dead_code)]
-
 use std::rc::Rc;
 
 use gpui::{div, prelude::*, px, App, Entity, IntoElement, SharedString, WeakEntity, Window};

@@ -13,7 +13,7 @@
 
 use std::rc::Rc;
 
-use gpui::{div, prelude::*, px, App, IntoElement, SharedString, Window};
+use gpui::{div, prelude::*, px, App, IntoElement, SharedString, WeakEntity, Window};
 use gpui_component::{
     input::{Input, InputState},
     scroll::ScrollableElement,
@@ -23,6 +23,7 @@ use pier_core::services::server_monitor::ServerSnapshot;
 use rust_i18n::t;
 
 use crate::app::layout::{RightContext, RightMode, RIGHT_ICON_BAR_W};
+use crate::app::PierApp;
 use crate::components::{text, Button, Card, SectionLabel, StatusKind, StatusPill};
 use crate::theme::{
     radius::RADIUS_SM,
@@ -74,6 +75,10 @@ pub struct RightPanel {
     current_markdown: Option<PathBuf>,
     active_session: Option<Entity<SshSessionState>>,
     logs_command_input: Entity<InputState>,
+    /// Weak back-reference to `PierApp`, used by `DatabaseView` (and
+    /// any future mode) to read saved DB connections / session state
+    /// and to call `schedule_db_*` / `refresh_db_connections`.
+    pier_app: WeakEntity<PierApp>,
     sftp_navigate: SftpNavigate,
     sftp_go_up: SftpGoUp,
     docker_refresh: DockerRefreshHandler,
@@ -89,6 +94,7 @@ impl RightPanel {
         current_markdown: Option<PathBuf>,
         active_session: Option<Entity<SshSessionState>>,
         logs_command_input: Entity<InputState>,
+        pier_app: WeakEntity<PierApp>,
         sftp_navigate: SftpNavigate,
         sftp_go_up: SftpGoUp,
         docker_refresh: DockerRefreshHandler,
@@ -101,6 +107,7 @@ impl RightPanel {
             current_markdown,
             active_session,
             logs_command_input,
+            pier_app,
             sftp_navigate,
             sftp_go_up,
             docker_refresh,
@@ -119,6 +126,7 @@ impl RenderOnce for RightPanel {
             current_markdown,
             active_session,
             logs_command_input,
+            pier_app,
             sftp_navigate,
             sftp_go_up,
             docker_refresh,
@@ -134,6 +142,7 @@ impl RenderOnce for RightPanel {
             current_markdown,
             active_session.clone(),
             logs_command_input,
+            pier_app,
             sftp_navigate,
             sftp_go_up,
             docker_refresh,
@@ -172,6 +181,7 @@ fn render_mode_body(
     current_markdown: Option<PathBuf>,
     active_session: Option<Entity<SshSessionState>>,
     logs_command_input: Entity<InputState>,
+    pier_app: WeakEntity<PierApp>,
     sftp_navigate: SftpNavigate,
     sftp_go_up: SftpGoUp,
     docker_refresh: DockerRefreshHandler,
@@ -199,7 +209,8 @@ fn render_mode_body(
         .into_any_element(),
         RightMode::Git => GitView::new().into_any_element(),
         RightMode::Mysql | RightMode::Postgres | RightMode::Redis | RightMode::Sqlite => {
-            DatabaseView::new(mode.db_kind().expect("db mode")).into_any_element()
+            DatabaseView::new(pier_app.clone(), mode.db_kind().expect("db mode"))
+                .into_any_element()
         }
         RightMode::Logs => logs_view(
             t,

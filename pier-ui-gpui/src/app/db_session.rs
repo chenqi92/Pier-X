@@ -18,9 +18,6 @@
 //! Step 2 of 6: types + entity skeleton + stub `run_*` returning
 //! "not implemented yet" errors. Step 3 fills in the bodies.
 
-#![allow(dead_code)] // Step 5 wires it into the view; until then the
-// fields are populated but only consumed by tests.
-
 use std::sync::Arc;
 
 use gpui::SharedString;
@@ -60,6 +57,7 @@ impl DbClient {
     /// Engine variant carried by this client. Useful when surfaces
     /// (e.g. result table headers) need to know what backend produced
     /// the rows without unpacking the inner client.
+    #[allow(dead_code)] // Retained for future result-metadata UI.
     pub fn engine(&self) -> DbEngine {
         match self {
             Self::Mysql(_) => DbEngine::Mysql,
@@ -173,6 +171,7 @@ impl DbSessionState {
 
     /// True while any background task this state issued is in flight.
     /// Used by the UI to gate buttons.
+    #[allow(dead_code)] // UI currently gates on status + query_in_flight directly.
     pub fn is_busy(&self) -> bool {
         matches!(self.status, DbStatus::Connecting) || self.query_in_flight
     }

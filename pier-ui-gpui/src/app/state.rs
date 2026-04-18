@@ -105,13 +105,16 @@ pub struct PierApp {
     /// connection-form Save / Delete buttons in later commits. The
     /// actual `DbSessionState` entities live elsewhere — this Vec is
     /// just the dropdown source.
-    #[allow(dead_code)] // Step 5 wires it into the database view.
     db_connections: Vec<DbConnection>,
     /// Per-tab database session state, lazy-allocated on first
     /// schedule. One entity per `DbKind` tab so each tab has its own
     /// connect/query history.
-    #[allow(dead_code)] // Step 5 wires it into the database view.
     db_sessions: HashMap<DbKind, Entity<DbSessionState>>,
+    /// Per-tab SQL editor `InputState` entities. Created eagerly at
+    /// `PierApp::new` for `Mysql` / `Postgres` (the engines wired in
+    /// Phase A) so the multi-line `Input` widget keeps focus and
+    /// content across `RenderOnce` rebuilds of `DatabaseView`.
+    db_query_inputs: HashMap<DbKind, Entity<InputState>>,
 
     // ─── Terminal sessions (Pier mirror: multi-tab) ───
     terminals: Vec<Entity<TerminalPanel>>,
@@ -154,6 +157,24 @@ impl PierApp {
         logs_command_input.update(cx, |state, c| {
             state.set_value(DEFAULT_LOG_COMMAND, window, c);
         });
+
+        // Pre-create the SQL editor for each engine wired in Phase A.
+        // Multi-line so users can write long queries; placeholder gives
+        // a hint about the dialect.
+        let mut db_query_inputs: HashMap<DbKind, Entity<InputState>> = HashMap::new();
+        for kind in [DbKind::Mysql, DbKind::Postgres] {
+            let placeholder = match kind {
+                DbKind::Mysql => "SELECT * FROM information_schema.tables LIMIT 10;",
+                DbKind::Postgres => "SELECT schemaname, tablename FROM pg_tables LIMIT 10;",
+                _ => "",
+            };
+            let input = cx.new(|c| {
+                InputState::new(window, c)
+                    .multi_line(true)
+                    .placeholder(placeholder)
+            });
+            db_query_inputs.insert(kind, input);
+        }
         let snapshot = ShellSnapshot::load();
         window.set_window_title(&format!("Pier-X · {}", snapshot.workspace_path));
 
@@ -168,6 +189,7 @@ impl PierApp {
             connections,
             db_connections,
             db_sessions: HashMap::new(),
+            db_query_inputs,
             terminals: Vec::new(),
             active_terminal: None,
             last_opened_file: None,
@@ -346,10 +368,30 @@ impl PierApp {
             .unwrap_or_default();
     }
 
+    /// Read-only access to the saved DB connections list. Used by the
+    /// database view's dropdown.
+    pub fn db_connections(&self) -> &[DbConnection] {
+        &self.db_connections
+    }
+
+    /// Session entity for the given DB tab, or `None` if the user has
+    /// never interacted with that tab this launch. The entity is
+    /// lazy-allocated by the `schedule_db_*` methods — don't call
+    /// this to force creation, use `schedule_db_connect` for that.
+    pub fn db_session(&self, kind: DbKind) -> Option<Entity<DbSessionState>> {
+        self.db_sessions.get(&kind).cloned()
+    }
+
+    /// The persistent SQL editor `InputState` for the given tab.
+    /// Pre-created at startup for each supported engine, so the
+    /// caller can assume `Some` for `Mysql` / `Postgres`.
+    pub fn db_query_input(&self, kind: DbKind) -> Option<Entity<InputState>> {
+        self.db_query_inputs.get(&kind).cloned()
+    }
+
     /// Remove the DB connection at `idx`, delete its keychain entry
     /// (if any), and persist the shorter list. No-op on stale index.
     /// Called from the database view's Delete button.
-    #[allow(dead_code)] // Step 5 wires it into the database view.
     pub fn delete_db_connection(&mut self, idx: usize) {
         let mut store = DbConnectionStore::load_default().unwrap_or_default();
         let Some(removed) = store.remove(idx) else {
@@ -1233,7 +1275,6 @@ impl PierApp {
     /// Ensure a `DbSessionState` entity exists for the given tab and
     /// return a strong handle. Called by every `schedule_db_*` entry
     /// so the UI never has to pre-allocate sessions.
-    #[allow(dead_code)] // Step 5 wires it into the database view.
     pub(crate) fn db_session_for(
         &mut self,
         kind: DbKind,
@@ -1251,7 +1292,6 @@ impl PierApp {
     /// cloned into the background task; `password` is looked up via
     /// the keychain by the caller so pier-core never sees the raw
     /// credential through this entry point.
-    #[allow(dead_code)] // Step 5 wires it into the database view.
     pub(crate) fn schedule_db_connect(
         &mut self,
         kind: DbKind,
@@ -1282,7 +1322,6 @@ impl PierApp {
     }
 
     /// Fetch the database list for the session's active client.
-    #[allow(dead_code)] // Step 5 wires it into the database view.
     pub(crate) fn schedule_db_list_databases(
         &mut self,
         kind: DbKind,
@@ -1308,7 +1347,6 @@ impl PierApp {
 
     /// Fetch the table list for a specific database. Also updates
     /// `selected_database` on the session (moved into `begin_list_tables`).
-    #[allow(dead_code)] // Step 5 wires it into the database view.
     pub(crate) fn schedule_db_list_tables(
         &mut self,
         kind: DbKind,
@@ -1338,7 +1376,6 @@ impl PierApp {
     /// Run a user-supplied SQL statement on the session's active
     /// client. Returns without scheduling if a query is already in
     /// flight (the UI gates the button, this is defense in depth).
-    #[allow(dead_code)] // Step 5 wires it into the database view.
     pub(crate) fn schedule_db_execute(
         &mut self,
         kind: DbKind,
@@ -1467,6 +1504,7 @@ impl PierApp {
             current_markdown,
             self.active_session.clone(),
             self.logs_command_input.clone(),
+            cx.entity().downgrade(),
             on_sftp_navigate,
             on_sftp_go_up,
             on_docker_refresh,

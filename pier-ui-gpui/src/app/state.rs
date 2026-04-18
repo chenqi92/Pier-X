@@ -338,6 +338,37 @@ impl PierApp {
             .unwrap_or_default();
     }
 
+    /// Reload the database connections list from disk after the
+    /// editor saves. Mirrors [`Self::refresh_connections`].
+    pub fn refresh_db_connections(&mut self) {
+        self.db_connections = DbConnectionStore::load_default()
+            .map(|s| s.connections)
+            .unwrap_or_default();
+    }
+
+    /// Remove the DB connection at `idx`, delete its keychain entry
+    /// (if any), and persist the shorter list. No-op on stale index.
+    /// Called from the database view's Delete button.
+    #[allow(dead_code)] // Step 5 wires it into the database view.
+    pub fn delete_db_connection(&mut self, idx: usize) {
+        let mut store = DbConnectionStore::load_default().unwrap_or_default();
+        let Some(removed) = store.remove(idx) else {
+            return;
+        };
+        if let Some(id) = removed.credential_id.as_deref() {
+            // Delete is idempotent in pier-core::credentials; we log
+            // failures but don't unwind the on-disk removal.
+            if let Err(err) = pier_core::credentials::delete(id) {
+                log::warn!("delete_db_connection: keychain delete failed for {id}: {err}");
+            }
+        }
+        if let Err(err) = store.save_default() {
+            log::warn!("delete_db_connection: save failed: {err}");
+            return;
+        }
+        self.db_connections = store.connections;
+    }
+
     pub fn open_add_connection(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         let weak = cx.entity().downgrade();
         crate::views::edit_connection::open(

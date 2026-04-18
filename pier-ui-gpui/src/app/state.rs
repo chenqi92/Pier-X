@@ -21,6 +21,7 @@ use gpui::{
 };
 use gpui_component::{input::InputState, Icon as UiIcon, IconName, PixelsExt as _, WindowExt as _};
 use pier_core::connections::ConnectionStore;
+use pier_core::db_connections::{DbConnection, DbConnectionStore};
 use pier_core::ssh::SshConfig;
 
 use crate::app::layout::{
@@ -92,6 +93,13 @@ pub struct PierApp {
     // ─── Backend snapshots ───
     snapshot: ShellSnapshot,
     connections: Vec<SshConfig>,
+    /// Saved database connections (MySQL / PostgreSQL for Phase A).
+    /// Loaded from `db-connections.json` at startup; mutated by the
+    /// connection-form Save / Delete buttons in later commits. The
+    /// actual `DbSessionState` entities live elsewhere — this Vec is
+    /// just the dropdown source.
+    #[allow(dead_code)] // Step 5 wires it into the database view.
+    db_connections: Vec<DbConnection>,
 
     // ─── Terminal sessions (Pier mirror: multi-tab) ───
     terminals: Vec<Entity<TerminalPanel>>,
@@ -122,6 +130,9 @@ impl PierApp {
         let connections = ConnectionStore::load_default()
             .map(|s| s.connections)
             .unwrap_or_default();
+        let db_connections = DbConnectionStore::load_default()
+            .map(|s| s.connections)
+            .unwrap_or_default();
         let weak_app = cx.entity().downgrade();
         let connections_for_panel = connections.clone();
         let left_panel =
@@ -143,6 +154,7 @@ impl PierApp {
             pane_bounds: Bounds::default(),
             snapshot,
             connections,
+            db_connections,
             terminals: Vec::new(),
             active_terminal: None,
             last_opened_file: None,

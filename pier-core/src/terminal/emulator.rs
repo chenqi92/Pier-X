@@ -31,6 +31,7 @@
 //! later milestones as users hit them.
 
 use std::collections::VecDeque;
+use std::sync::Arc;
 use vte::{Parser, Perform};
 
 /// A single cell in the terminal grid.
@@ -49,6 +50,8 @@ pub struct Cell {
     /// Reverse-video attribute (SGR 7). Most UIs render this by
     /// swapping fg/bg at paint time.
     pub reverse: bool,
+    /// Explicit hyperlink target from OSC 8, if present.
+    pub hyperlink: Option<Arc<str>>,
 }
 
 impl Default for Cell {
@@ -60,6 +63,7 @@ impl Default for Cell {
             bold: false,
             underline: false,
             reverse: false,
+            hyperlink: None,
         }
     }
 }
@@ -123,6 +127,12 @@ pub struct VtEmulator {
     /// Window title set via OSC 0/1/2.
     pub window_title: String,
 
+    /// Current working directory advertised via OSC 7.
+    pub current_dir: String,
+
+    /// Current explicit hyperlink target from OSC 8.
+    pub current_hyperlink: Option<Arc<str>>,
+
     /// Clipboard content set via OSC 52. The shell decides
     /// whether to honor clipboard writes from the terminal.
     pub osc52_clipboard: Option<String>,
@@ -163,6 +173,8 @@ impl VtEmulator {
             pen: Cell::default(),
             bell_pending: false,
             window_title: String::new(),
+            current_dir: String::new(),
+            current_hyperlink: None,
             osc52_clipboard: None,
             bracketed_paste_mode: false,
             ssh_command_detected: false,
@@ -192,6 +204,8 @@ impl VtEmulator {
             pen: &mut self.pen,
             bell_pending: &mut self.bell_pending,
             window_title: &mut self.window_title,
+            current_dir: &mut self.current_dir,
+            current_hyperlink: &mut self.current_hyperlink,
             osc52_clipboard: &mut self.osc52_clipboard,
             bracketed_paste_mode: &mut self.bracketed_paste_mode,
             ssh_command_detected: &mut self.ssh_command_detected,
@@ -340,6 +354,88 @@ fn parse_ssh_command(line: &str) -> Option<(String, String, u16)> {
     Some((host, user, port))
 }
 
+fn parse_osc7_current_dir(uri: &str) -> Option<String> {
+    let remainder = uri.trim().strip_prefix("file://")?;
+    let slash_index = remainder.find('/')?;
+    let host = &remainder[..slash_index];
+    let path = &remainder[slash_index..];
+    let decoded_path = percent_decode(path)?;
+    let is_local_host = host.is_empty()
+        || host.eq_ignore_ascii_case("localhost")
+        || host.eq_ignore_ascii_case("127.0.0.1");
+
+    if cfg!(windows) {
+        let normalized = decoded_path.replace('/', "\\");
+        if is_local_host {
+            return Some(strip_windows_drive_prefix(&normalized).to_string());
+        }
+
+        return Some(format!(
+            "\\\\{}{}",
+            host,
+            strip_windows_drive_prefix(&normalized)
+        ));
+    }
+
+    if is_local_host {
+        Some(decoded_path)
+    } else {
+        Some(format!("//{host}{decoded_path}"))
+    }
+}
+
+fn percent_decode(raw: &str) -> Option<String> {
+    let mut bytes = Vec::with_capacity(raw.len());
+    let raw_bytes = raw.as_bytes();
+    let mut index = 0;
+
+    while index < raw_bytes.len() {
+        if raw_bytes[index] == b'%' {
+            if index + 2 >= raw_bytes.len() {
+                return None;
+            }
+            let hi = decode_hex_nibble(raw_bytes[index + 1])?;
+            let lo = decode_hex_nibble(raw_bytes[index + 2])?;
+            bytes.push((hi << 4) | lo);
+            index += 3;
+        } else {
+            bytes.push(raw_bytes[index]);
+            index += 1;
+        }
+    }
+
+    String::from_utf8(bytes).ok()
+}
+
+fn decode_hex_nibble(byte: u8) -> Option<u8> {
+    match byte {
+        b'0'..=b'9' => Some(byte - b'0'),
+        b'a'..=b'f' => Some(byte - b'a' + 10),
+        b'A'..=b'F' => Some(byte - b'A' + 10),
+        _ => None,
+    }
+}
+
+#[cfg(windows)]
+fn strip_windows_drive_prefix(path: &str) -> &str {
+    let bytes = path.as_bytes();
+    if bytes.len() >= 4
+        && bytes[0] == b'\\'
+        && bytes[1].is_ascii_alphabetic()
+        && bytes[2] == b':'
+        && bytes[3] == b'\\'
+    {
+        &path[1..]
+    } else {
+        path
+    }
+}
+
+#[cfg(not(windows))]
+fn strip_windows_drive_prefix(path: &str) -> &str {
+    path
+}
+
 // `Default` so `std::mem::take` works in `process`.
 impl Default for VtEmulator {
     fn default() -> Self {
@@ -362,6 +458,8 @@ struct Performer<'a> {
     pen: &'a mut Cell,
     bell_pending: &'a mut bool,
     window_title: &'a mut String,
+    current_dir: &'a mut String,
+    current_hyperlink: &'a mut Option<Arc<str>>,
     osc52_clipboard: &'a mut Option<String>,
     bracketed_paste_mode: &'a mut bool,
     ssh_command_detected: &'a mut bool,
@@ -409,6 +507,7 @@ impl Perform for Performer<'_> {
         }
         if *self.cursor_y < self.cells.len() && *self.cursor_x < self.cols {
             let mut cell = self.pen.clone();
+            cell.hyperlink = self.current_hyperlink.clone();
             cell.ch = ch;
             self.cells[*self.cursor_y][*self.cursor_x] = cell;
             *self.cursor_x += 1;
@@ -418,6 +517,7 @@ impl Perform for Performer<'_> {
             if char_width == 2 && *self.cursor_x < self.cols {
                 let placeholder = Cell {
                     ch: '\0',
+                    hyperlink: self.current_hyperlink.clone(),
                     ..Cell::default()
                 };
                 self.cells[*self.cursor_y][*self.cursor_x] = placeholder;
@@ -479,6 +579,28 @@ impl Perform for Performer<'_> {
                 if params.len() >= 2 {
                     if let Ok(title) = std::str::from_utf8(params[1]) {
                         *self.window_title = title.to_string();
+                    }
+                }
+            }
+            // OSC 7 — current working directory as file:// URI.
+            b"7" => {
+                if params.len() >= 2 {
+                    if let Ok(uri) = std::str::from_utf8(params[1]) {
+                        if let Some(path) = parse_osc7_current_dir(uri) {
+                            *self.current_dir = path;
+                        }
+                    }
+                }
+            }
+            // OSC 8 — explicit hyperlinks. Empty URI closes the active link.
+            b"8" => {
+                if params.len() >= 3 {
+                    if let Ok(uri) = std::str::from_utf8(params[2]) {
+                        *self.current_hyperlink = if uri.is_empty() {
+                            None
+                        } else {
+                            Some(Arc::<str>::from(uri))
+                        };
                     }
                 }
             }
@@ -805,6 +927,49 @@ mod tests {
         emu.process(b"\x1b]52;c;\x07");
 
         assert_eq!(emu.osc52_clipboard.as_deref(), Some(""));
+    }
+
+    #[test]
+    fn osc7_tracks_current_working_directory() {
+        let mut emu = VtEmulator::new(10, 3);
+
+        emu.process(b"\x1b]7;file:///home/pier/My%20Project\x07");
+
+        #[cfg(windows)]
+        assert_eq!(emu.current_dir, "\\home\\pier\\My Project");
+
+        #[cfg(not(windows))]
+        assert_eq!(emu.current_dir, "/home/pier/My Project");
+    }
+
+    #[test]
+    fn osc7_keeps_remote_host_in_directory_label() {
+        let mut emu = VtEmulator::new(10, 3);
+
+        emu.process(b"\x1b]7;file://remote.example/home/pier/repo\x07");
+
+        #[cfg(windows)]
+        assert_eq!(emu.current_dir, "\\\\remote.example\\home\\pier\\repo");
+
+        #[cfg(not(windows))]
+        assert_eq!(emu.current_dir, "//remote.example/home/pier/repo");
+    }
+
+    #[test]
+    fn osc8_applies_hyperlink_to_printed_cells_until_closed() {
+        let mut emu = VtEmulator::new(10, 3);
+
+        emu.process(b"\x1b]8;;https://example.com\x07xy\x1b]8;;\x07z");
+
+        assert_eq!(
+            emu.cells[0][0].hyperlink.as_deref(),
+            Some("https://example.com")
+        );
+        assert_eq!(
+            emu.cells[0][1].hyperlink.as_deref(),
+            Some("https://example.com")
+        );
+        assert_eq!(emu.cells[0][2].hyperlink.as_deref(), None);
     }
 
     #[test]

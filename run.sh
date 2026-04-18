@@ -39,8 +39,14 @@ need_cmd cargo
 ensure_ui_dir
 
 if [ -n "$BUILD_DIR" ]; then
-    export CARGO_TARGET_DIR="$ROOT_DIR/$BUILD_DIR"
-    echo "==> Using Cargo target dir: $CARGO_TARGET_DIR"
+    case "$BUILD_DIR" in
+        /*|[A-Za-z]:/*|[A-Za-z]:\\*)
+            export CARGO_TARGET_DIR="$BUILD_DIR"
+            ;;
+        *)
+            export CARGO_TARGET_DIR="$ROOT_DIR/$BUILD_DIR"
+            ;;
+    esac
     echo "==> Using Cargo target dir: $CARGO_TARGET_DIR"
 fi
 

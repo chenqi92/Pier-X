@@ -451,6 +451,16 @@ impl PierTerminal {
         (!title.is_empty()).then(|| title.to_string())
     }
 
+    /// Current working directory advertised through OSC 7, if any.
+    pub fn current_dir(&self) -> Option<String> {
+        let guard = match self.inner.lock() {
+            Ok(g) => g,
+            Err(poisoned) => poisoned.into_inner(),
+        };
+        let cwd = guard.emu.current_dir.trim();
+        (!cwd.is_empty()).then(|| cwd.to_string())
+    }
+
     /// Current grid size. Cheap (no lock, just atomics-free reads of
     /// the struct fields — the fields are updated under the lock).
     pub fn size(&self) -> (u16, u16) {

@@ -6,6 +6,7 @@ use gpui::SharedString;
 pub enum Route {
     Welcome,
     Dashboard,
+    Inspector,
     Terminal,
     Git,
     Ssh,
@@ -41,6 +42,7 @@ impl Route {
         match self {
             Route::Welcome => "Welcome".into(),
             Route::Dashboard => "Dashboard".into(),
+            Route::Inspector => "Inspector".into(),
             Route::Terminal => "Terminal".into(),
             Route::Git => "Git".into(),
             Route::Ssh => "SSH".into(),
@@ -52,6 +54,7 @@ impl Route {
         match self {
             Route::Welcome => "welcome",
             Route::Dashboard => "dashboard",
+            Route::Inspector => "inspector",
             Route::Terminal => "terminal",
             Route::Git => "git",
             Route::Ssh => "ssh",
@@ -66,6 +69,7 @@ impl Route {
         match self {
             Route::Welcome => "welcome-panel",
             Route::Dashboard => "dashboard-panel",
+            Route::Inspector => "inspector-panel",
             Route::Terminal => "terminal-panel",
             Route::Git => "git-panel",
             Route::Ssh => "ssh-panel",

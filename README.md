@@ -92,6 +92,35 @@ The scripts honour these environment variables:
 | `BUILD_DIR` | Cargo default target dir | When set, exported as `CARGO_TARGET_DIR` |
 | `PIER_UI_CRATE` | `pier-ui-gpui` | Override the active shell crate name |
 
+### Startup Test Path
+
+Use this quick path when you want to sanity-check a fresh build before handing it to someone else:
+
+1. Start the app with `./run.sh` on macOS/Linux or `.\run.ps1` on Windows.
+2. Open the `Terminal` panel.
+3. Print or paste three target classes into the terminal output:
+   - a local path such as `README.md` or `pier-ui-gpui/src/views/terminal.rs`
+   - a `file://` URI pointing at a local file
+   - a web URL such as `https://example.com`
+4. Verify the `Inspector` side pane can keep browsing after opening a local file or directory:
+   - directory entries should drill down in place
+   - file previews should offer `Open Parent` plus `Expanded Preview` when the compact preview truncates
+
+### Terminal Open-Target Shortcuts
+
+The terminal recognizes hovered or clicked local paths, `file://` URIs, and web URLs.
+
+- `Cmd+Click` on macOS or `Ctrl+Click` on Windows/Linux: open the target under the pointer
+- `Alt+Enter`: open the currently hovered target
+- `Alt+C`: copy the currently hovered target
+- `Alt+O`: open the parent folder for the currently hovered local path or `file://` target
+
+Expected behavior by target type:
+
+- Local path: opens inside Pier-X `Inspector`
+- `file://` URI: resolves to the local file and opens inside `Inspector`
+- URL: opens with the platform's external handler
+
 ---
 
 ## Project layout

@@ -43,6 +43,20 @@ pub fn terminal_selection_bg_hex(mode: ThemeMode) -> u32 {
     }
 }
 
+pub fn terminal_open_target_hover_fg_hex(mode: ThemeMode) -> u32 {
+    match mode {
+        ThemeMode::Dark => 0xf4f7fb,
+        ThemeMode::Light => 0x16233a,
+    }
+}
+
+pub fn terminal_open_target_hover_bg_hex(mode: ThemeMode) -> u32 {
+    match mode {
+        ThemeMode::Dark => 0x183764,
+        ThemeMode::Light => 0xe2ecff,
+    }
+}
+
 pub fn terminal_indexed_hex(index: u8) -> u32 {
     match index {
         0..=15 => ANSI_16[index as usize],
@@ -99,5 +113,15 @@ mod tests {
     fn selection_palette_stays_legible() {
         assert_eq!(terminal_selection_bg_hex(ThemeMode::Dark), 0x214283);
         assert_eq!(terminal_selection_fg_hex(ThemeMode::Light), 0x16233a);
+    }
+
+    #[test]
+    fn open_target_hover_palette_stays_distinct_from_selection() {
+        assert_eq!(terminal_open_target_hover_fg_hex(ThemeMode::Dark), 0xf4f7fb);
+        assert_eq!(terminal_open_target_hover_bg_hex(ThemeMode::Dark), 0x183764);
+        assert_eq!(
+            terminal_open_target_hover_bg_hex(ThemeMode::Light),
+            0xe2ecff
+        );
     }
 }

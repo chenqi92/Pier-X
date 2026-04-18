@@ -703,8 +703,10 @@ fn monitor_view(
         .child(
             Card::new()
                 .padding(SP_3)
-                .child(SectionLabel::new(t!("App.RightPanel.target")))
-                .child(text::mono(endpoint.clone()))
+                .child(
+                    SectionLabel::new(t!("App.RightPanel.target")).with_icon(IconName::Globe),
+                )
+                .child(div().overflow_hidden().child(text::mono(endpoint.clone())))
                 .child(text::body(t!("App.RightPanel.Monitor.target_body")).secondary()),
         );
 
@@ -712,7 +714,10 @@ fn monitor_view(
         col = col.child(
             Card::new()
                 .padding(SP_3)
-                .child(SectionLabel::new(t!("App.RightPanel.Monitor.probe_error")))
+                .child(
+                    SectionLabel::new(t!("App.RightPanel.Monitor.probe_error"))
+                        .with_icon(IconName::TriangleAlert),
+                )
                 .child(text::body(err).secondary()),
         );
     }
@@ -874,7 +879,10 @@ fn docker_view(
                             .flex_col()
                             .gap(SP_1)
                             .overflow_hidden()
-                            .child(SectionLabel::new(t!("App.RightPanel.target")))
+                            .child(
+                                SectionLabel::new(t!("App.RightPanel.target"))
+                                    .with_icon(IconName::Globe),
+                            )
                             .child(text::mono(endpoint.clone()))
                             .child(text::body(t!("App.RightPanel.Docker.target_body")).secondary()),
                     )
@@ -886,7 +894,10 @@ fn docker_view(
         col = col.child(
             Card::new()
                 .padding(SP_3)
-                .child(SectionLabel::new(t!("App.RightPanel.Docker.refresh_error")))
+                .child(
+                    SectionLabel::new(t!("App.RightPanel.Docker.refresh_error"))
+                        .with_icon(IconName::TriangleAlert),
+                )
                 .child(text::body(err).secondary()),
         );
     }
@@ -894,7 +905,10 @@ fn docker_view(
         col = col.child(
             Card::new()
                 .padding(SP_3)
-                .child(SectionLabel::new(t!("App.RightPanel.Docker.action_error")))
+                .child(
+                    SectionLabel::new(t!("App.RightPanel.Docker.action_error"))
+                        .with_icon(IconName::TriangleAlert),
+                )
                 .child(text::body(err).secondary()),
         );
     }
@@ -1000,14 +1014,19 @@ fn logs_view(
         .child(
             Card::new()
                 .padding(SP_3)
-                .child(SectionLabel::new(t!("App.RightPanel.target")))
-                .child(text::mono(endpoint.clone()))
+                .child(
+                    SectionLabel::new(t!("App.RightPanel.target")).with_icon(IconName::Globe),
+                )
+                .child(div().overflow_hidden().child(text::mono(endpoint.clone())))
                 .child(text::body(t!("App.RightPanel.Logs.target_body")).secondary()),
         )
         .child(
             Card::new()
                 .padding(SP_3)
-                .child(SectionLabel::new(t!("App.RightPanel.Logs.command")))
+                .child(
+                    SectionLabel::new(t!("App.RightPanel.Logs.command"))
+                        .with_icon(IconName::SquareTerminal),
+                )
                 .child(Input::new(&logs_command_input))
                 .child(
                     div()
@@ -1067,15 +1086,21 @@ fn logs_view(
         col = col.child(
             Card::new()
                 .padding(SP_3)
-                .child(SectionLabel::new(t!("App.RightPanel.Logs.active_command")))
-                .child(text::mono(command)),
+                .child(
+                    SectionLabel::new(t!("App.RightPanel.Logs.active_command"))
+                        .with_icon(IconName::SquareTerminal),
+                )
+                .child(div().overflow_hidden().child(text::mono(command))),
         );
     }
     if let Some(err) = error {
         col = col.child(
             Card::new()
                 .padding(SP_3)
-                .child(SectionLabel::new(t!("App.RightPanel.Logs.stream_error")))
+                .child(
+                    SectionLabel::new(t!("App.RightPanel.Logs.stream_error"))
+                        .with_icon(IconName::TriangleAlert),
+                )
                 .child(text::body(err).secondary()),
         );
     }
@@ -1092,7 +1117,10 @@ fn logs_view(
             .child(
                 Card::new()
                     .padding(SP_3)
-                    .child(SectionLabel::new(t!("App.RightPanel.Logs.output")))
+                    .child(
+                        SectionLabel::new(t!("App.RightPanel.Logs.output"))
+                            .with_icon(IconName::GalleryVerticalEnd),
+                    )
                     .child(text::body(empty_label).secondary()),
             )
             .into_any_element();
@@ -1100,7 +1128,10 @@ fn logs_view(
 
     let mut stream_card = Card::new()
         .padding(SP_3)
-        .child(SectionLabel::new(t!("App.RightPanel.Logs.output")))
+        .child(
+            SectionLabel::new(t!("App.RightPanel.Logs.output"))
+                .with_icon(IconName::GalleryVerticalEnd),
+        )
         .child(text::body(t!("App.RightPanel.Logs.retained_lines", count = lines.len())).secondary());
 
     let visible = lines.iter().rev().take(200).cloned().collect::<Vec<_>>();
@@ -1847,11 +1878,13 @@ fn log_line_row(t: &crate::theme::Theme, index: usize, line: LogLine) -> impl In
         .py(SP_1)
         .border_t_1()
         .border_color(t.color.border_subtle)
-        .child(StatusPill::new(label, kind))
+        .overflow_hidden()
+        .child(div().flex_none().child(StatusPill::new(label, kind)))
         .child(
             div()
                 .flex_1()
                 .min_w(px(0.0))
+                .overflow_hidden()
                 .text_size(SIZE_MONO_SMALL)
                 .font_family(t.font_mono.clone())
                 .text_color(color)

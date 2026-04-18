@@ -24,6 +24,8 @@ pub const LEFT_PANEL_MIN_W: Pixels = px(180.0);
 pub const LEFT_PANEL_DEFAULT_W: Pixels = px(260.0);
 pub const LEFT_PANEL_MAX_W: Pixels = px(400.0);
 
+pub const CENTER_PANEL_MIN_W: Pixels = px(360.0);
+
 pub const RIGHT_PANEL_MIN_W: Pixels = px(320.0);
 pub const RIGHT_PANEL_DEFAULT_W: Pixels = px(360.0);
 pub const RIGHT_PANEL_MAX_W: Pixels = px(600.0);

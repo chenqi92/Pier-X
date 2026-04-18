@@ -176,6 +176,7 @@ impl Render for LeftPanelView {
         };
 
         div()
+            .w_full()
             .h_full()
             .flex()
             .flex_col()
@@ -183,7 +184,7 @@ impl Render for LeftPanelView {
             .border_r_1()
             .border_color(t.color.border_subtle)
             .child(self.render_tab_bar(&t, active_tab, cx))
-            .child(div().flex_1().min_h(px(0.0)).child(body))
+            .child(div().w_full().flex_1().min_h(px(0.0)).child(body))
     }
 }
 
@@ -298,6 +299,7 @@ impl LeftPanelView {
         );
 
         div()
+            .w_full()
             .h_full()
             .flex()
             .flex_col()
@@ -342,6 +344,7 @@ impl LeftPanelView {
         });
 
         div()
+            .w_full()
             .h_full()
             .flex()
             .flex_col()

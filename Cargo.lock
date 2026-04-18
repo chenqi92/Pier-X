@@ -5148,6 +5148,7 @@ dependencies = [
  "embed-resource",
  "gpui",
  "gpui-component",
+ "log",
  "pier-core",
  "pulldown-cmark",
 ]

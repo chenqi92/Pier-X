@@ -22,16 +22,14 @@ use gpui::{
 use gpui_component::{
     input::InputState,
     resizable::{h_resizable, resizable_panel, ResizableState},
-    Icon as UiIcon,
-    IconName,
-    WindowExt as _,
+    Icon as UiIcon, IconName, WindowExt as _,
 };
 use pier_core::connections::ConnectionStore;
 use pier_core::ssh::SshConfig;
 
 use crate::app::layout::{
-    RightMode, LEFT_PANEL_DEFAULT_W, LEFT_PANEL_MAX_W, LEFT_PANEL_MIN_W, RIGHT_PANEL_DEFAULT_W,
-    RIGHT_PANEL_MAX_W, RIGHT_PANEL_MIN_W,
+    RightMode, CENTER_PANEL_MIN_W, LEFT_PANEL_DEFAULT_W, LEFT_PANEL_MAX_W, LEFT_PANEL_MIN_W,
+    RIGHT_PANEL_DEFAULT_W, RIGHT_PANEL_MAX_W, RIGHT_PANEL_MIN_W,
 };
 use crate::app::ssh_session::{
     run_bootstrap, run_docker_command, run_docker_refresh, run_logs_start, run_monitor_refresh,
@@ -157,6 +155,11 @@ impl PierApp {
         let entity = cx.new(|cx| TerminalPanel::new(on_activated, cx));
         self.terminals.push(entity);
         self.active_terminal = Some(self.terminals.len() - 1);
+        log::info!(
+            "app: opened terminal tab active_index={} total_tabs={}",
+            self.active_terminal.unwrap_or(0),
+            self.terminals.len()
+        );
         cx.notify();
     }
 
@@ -170,9 +173,16 @@ impl PierApp {
     /// covers 90 % of the UX with 10 lines of code.
     pub fn open_ssh_terminal(&mut self, idx: usize, cx: &mut Context<Self>) {
         let Some(conn) = self.connections.get(idx).cloned() else {
-            eprintln!("[pier] ssh-open: stale index {idx}");
+            log::warn!("app: ssh-open stale connection index={idx}");
             return;
         };
+        log::info!(
+            "app: opening ssh terminal connection={} host={} user={} port={}",
+            conn.name,
+            conn.host,
+            conn.user,
+            conn.port
+        );
         self.open_terminal_tab(cx);
         let Some(active) = self.active_terminal else {
             return;
@@ -399,25 +409,23 @@ impl Render for PierApp {
                 resizable_panel()
                     .size(self.left_panel_width)
                     .size_range(LEFT_PANEL_MIN_W..LEFT_PANEL_MAX_W)
-                    .child(div().h_full().child(left_entity)),
+                    .child(div().size_full().child(left_entity)),
             );
         }
         row = row.child(
             resizable_panel()
-                .child(div().flex_1().min_w(px(0.0)).h_full().child(center)),
+                .size_range(CENTER_PANEL_MIN_W..gpui::Pixels::MAX)
+                .child(div().size_full().child(center)),
         );
         if let Some(panel) = right {
             row = row.child(
                 resizable_panel()
                     .size(self.right_panel_width)
                     .size_range(RIGHT_PANEL_MIN_W..RIGHT_PANEL_MAX_W)
-                    .child(div().h_full().child(panel)),
+                    .child(div().size_full().child(panel)),
             );
         }
-        let row = div()
-            .flex_1()
-            .min_h(px(0.0))
-            .child(row);
+        let row = div().flex_1().min_h(px(0.0)).w_full().child(row);
 
         div()
             .size_full()

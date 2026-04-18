@@ -58,7 +58,9 @@ impl RenderOnce for WelcomeView {
         } = self;
 
         let column = div()
-            .w(px(480.0))
+            .w_full()
+            .max_w(px(480.0))
+            .px(SP_4)
             .flex()
             .flex_col()
             .items_center()
@@ -67,7 +69,7 @@ impl RenderOnce for WelcomeView {
             .child(SectionLabel::new("Welcome").centered())
             .child(text::h1("Pier-X workspace").centered())
             .child(
-                div().w(px(420.0)).child(
+                div().w_full().max_w(px(420.0)).child(
                     text::body("Open a local terminal or connect to a server to start working.")
                         .secondary()
                         .centered(),
@@ -75,8 +77,10 @@ impl RenderOnce for WelcomeView {
             )
             .child(
                 div()
+                    .w_full()
                     .flex()
                     .flex_row()
+                    .flex_wrap()
                     .justify_center()
                     .gap(SP_1_5)
                     .child(
@@ -92,8 +96,10 @@ impl RenderOnce for WelcomeView {
             )
             .child(
                 div()
+                    .w_full()
                     .flex()
                     .flex_row()
+                    .flex_wrap()
                     .justify_center()
                     .gap(SP_1_5)
                     .child(StatusPill::new(

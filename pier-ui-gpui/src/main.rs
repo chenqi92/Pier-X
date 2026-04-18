@@ -2,6 +2,7 @@ mod app;
 mod assets;
 mod components;
 mod data;
+mod diagnostics;
 mod theme;
 mod ui_kit;
 mod views;
@@ -21,9 +22,17 @@ const INTER_VARIABLE: &[u8] = include_bytes!("../assets/fonts/InterVariable.ttf"
 const JETBRAINS_MONO: &[u8] = include_bytes!("../assets/fonts/JetBrainsMono-Regular.ttf");
 
 fn main() {
+    if let Err(err) = diagnostics::init_logging() {
+        eprintln!("[pier-x] failed to initialize diagnostics logging: {err}");
+    }
+
     let app = Application::new().with_assets(assets::AppAssets);
 
     app.run(|cx: &mut App| {
+        if let Some(path) = diagnostics::current_log_path() {
+            log::info!("app bootstrap starting; diagnostics log={}", path.display());
+        }
+
         cx.text_system()
             .add_fonts(vec![
                 Cow::Borrowed(INTER_VARIABLE),

@@ -33,6 +33,11 @@ pub fn cache_dir() -> Option<PathBuf> {
     project_dirs().map(|d| d.cache_dir().to_path_buf())
 }
 
+/// Directory for diagnostic logs captured by the desktop shell.
+pub fn logs_dir() -> Option<PathBuf> {
+    cache_dir().map(|d| d.join("logs"))
+}
+
 /// Path to the persisted connections JSON file. Lives under the
 /// data directory (not the config directory) because the file is
 /// machine-state, not user-edited config.
@@ -50,6 +55,11 @@ pub fn connections_file() -> Option<PathBuf> {
 /// preferences rather than machine-state caches.
 pub fn settings_file() -> Option<PathBuf> {
     config_dir().map(|d| d.join("settings.json"))
+}
+
+/// Path to the GPUI desktop shell log file.
+pub fn ui_log_file() -> Option<PathBuf> {
+    logs_dir().map(|d| d.join("pier-ui-gpui.log"))
 }
 
 #[cfg(test)]

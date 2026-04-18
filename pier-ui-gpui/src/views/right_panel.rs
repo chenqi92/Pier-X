@@ -142,6 +142,7 @@ impl RenderOnce for RightPanel {
         );
 
         div()
+            .w_full()
             .h_full()
             .flex()
             .flex_row()
@@ -208,7 +209,7 @@ fn render_mode_body(
         .into_any_element(),
     };
 
-    let mut panel = div().h_full().flex().flex_col().child(status);
+    let mut panel = div().w_full().h_full().flex().flex_col().child(status);
     if let Some(overview) = remote_overview.as_ref() {
         panel = panel
             .child(render_services_strip(

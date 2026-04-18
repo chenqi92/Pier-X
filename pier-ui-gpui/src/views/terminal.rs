@@ -54,7 +54,9 @@ const WINDOW_CHROME_HEIGHT: f32 = 212.0;
 const MAX_OSC52_CLIPBOARD_BYTES: usize = 1_000_000;
 const BELL_FLASH_MS: u64 = 180;
 const TERMINAL_REFRESH_MS: u64 = 33;
+const TERMINAL_DIAGNOSTIC_INTERVAL_MS: u64 = 1_000;
 const CURSOR_BLINK_MS: u64 = 530;
+static NEXT_TERMINAL_ID: AtomicUsize = AtomicUsize::new(1);
 
 #[derive(Clone)]
 struct TerminalLine {
@@ -142,6 +144,117 @@ struct TerminalRenderCache {
     lines: Vec<TerminalLine>,
 }
 
+struct TerminalDiagnostics {
+    last_report_at: Instant,
+    refresh_ticks: u32,
+    notify_requests: u32,
+    generation_changes: u32,
+    render_calls: u32,
+    resize_events: u32,
+    window_bounds_events: u32,
+    input_events: u32,
+}
+
+impl Default for TerminalDiagnostics {
+    fn default() -> Self {
+        Self {
+            last_report_at: Instant::now(),
+            refresh_ticks: 0,
+            notify_requests: 0,
+            generation_changes: 0,
+            render_calls: 0,
+            resize_events: 0,
+            window_bounds_events: 0,
+            input_events: 0,
+        }
+    }
+}
+
+impl TerminalDiagnostics {
+    fn note_refresh_tick(&mut self) {
+        self.refresh_ticks = self.refresh_ticks.saturating_add(1);
+    }
+
+    fn note_notify(&mut self) {
+        self.notify_requests = self.notify_requests.saturating_add(1);
+    }
+
+    fn note_generation_change(&mut self) {
+        self.generation_changes = self.generation_changes.saturating_add(1);
+    }
+
+    fn note_render(&mut self) {
+        self.render_calls = self.render_calls.saturating_add(1);
+    }
+
+    fn note_resize(&mut self) {
+        self.resize_events = self.resize_events.saturating_add(1);
+    }
+
+    fn note_window_bounds_event(&mut self) {
+        self.window_bounds_events = self.window_bounds_events.saturating_add(1);
+    }
+
+    fn note_input(&mut self) {
+        self.input_events = self.input_events.saturating_add(1);
+    }
+
+    fn maybe_report(
+        &mut self,
+        terminal_id: usize,
+        active: bool,
+        alive: bool,
+        generation: usize,
+        scrollback_offset: usize,
+    ) {
+        if self.last_report_at.elapsed() < Duration::from_millis(TERMINAL_DIAGNOSTIC_INTERVAL_MS) {
+            return;
+        }
+
+        let suspicious = self.render_calls > 45
+            && self.generation_changes == 0
+            && (self.notify_requests > 10 || self.resize_events > 10);
+
+        if suspicious {
+            log::warn!(
+                "terminal[{terminal_id}] hot-loop suspect active={active} alive={alive} generation={generation} renders={} refresh_ticks={} notifies={} generation_changes={} resize_events={} window_bounds={} inputs={} scrollback={scrollback_offset}",
+                self.render_calls,
+                self.refresh_ticks,
+                self.notify_requests,
+                self.generation_changes,
+                self.resize_events,
+                self.window_bounds_events,
+                self.input_events,
+            );
+        } else if self.render_calls > 0
+            || self.notify_requests > 0
+            || self.generation_changes > 0
+            || self.resize_events > 0
+            || self.input_events > 0
+        {
+            log::info!(
+                "terminal[{terminal_id}] stats active={active} alive={alive} generation={generation} renders={} refresh_ticks={} notifies={} generation_changes={} resize_events={} window_bounds={} inputs={} scrollback={scrollback_offset}",
+                self.render_calls,
+                self.refresh_ticks,
+                self.notify_requests,
+                self.generation_changes,
+                self.resize_events,
+                self.window_bounds_events,
+                self.input_events,
+            );
+        }
+
+        self.last_report_at = Instant::now();
+        self.refresh_ticks = 0;
+        self.notify_requests = 0;
+        self.generation_changes = 0;
+        self.render_calls = 0;
+        self.resize_events = 0;
+        self.window_bounds_events = 0;
+        self.input_events = 0;
+    }
+}
+
 #[derive(Default)]
 struct NotifyState {
     generation: AtomicUsize,
@@ -162,6 +275,7 @@ extern "C" fn terminal_notify(user_data: *mut c_void, event: u32) {
 }
 
 pub struct TerminalPanel {
+    terminal_id: usize,
     focus_handle: FocusHandle,
     on_activated: ActivationHandler,
     shell_path: SharedString,
@@ -190,6 +304,7 @@ pub struct TerminalPanel {
     terminal_font_ligatures: bool,
     cursor_blink_anchor: Instant,
     last_cursor_visible: bool,
+    diagnostics: TerminalDiagnostics,
     notify_state: Box<NotifyState>,
 }
 
@@ -207,8 +322,10 @@ impl TerminalPanel {
     pub fn new(on_activated: ActivationHandler, cx: &mut Context<Self>) -> Self {
         let shell_path: SharedString = preferred_shell().into();
         let notify_state = Box::<NotifyState>::default();
+        let terminal_id = NEXT_TERMINAL_ID.fetch_add(1, Ordering::Relaxed);
 
         let mut panel = Self {
+            terminal_id,
             focus_handle: cx.focus_handle(),
             on_activated,
             shell_path,
@@ -237,8 +354,13 @@ impl TerminalPanel {
             terminal_font_ligatures: false,
             cursor_blink_anchor: Instant::now(),
             last_cursor_visible: true,
+            diagnostics: TerminalDiagnostics::default(),
             notify_state,
         };
+        log::info!(
+            "terminal[{terminal_id}] panel created shell={}",
+            panel.shell_path
+        );
         panel.start_terminal((DEFAULT_COLS, DEFAULT_ROWS));
         panel
     }
@@ -260,6 +382,13 @@ impl TerminalPanel {
                 self.reset_cursor_blink();
                 self.terminal = Some(term);
                 self.clamp_selection_to_terminal();
+                log::info!(
+                    "terminal[{}] started shell={} size={}x{}",
+                    self.terminal_id,
+                    self.shell_path,
+                    size.0,
+                    size.1
+                );
             }
             Err(err) => {
                 self.last_error = Some(
@@ -271,6 +400,11 @@ impl TerminalPanel {
                 self.render_cache = None;
                 self.last_cursor_visible = false;
                 self.terminal = None;
+                log::error!(
+                    "terminal[{}] failed to start shell={}: {err}",
+                    self.terminal_id,
+                    self.shell_path
+                );
             }
         }
     }
@@ -363,13 +497,16 @@ impl TerminalPanel {
 
                     let still_alive = this
                         .update_in(cx, |this, window, cx| {
+                            this.diagnostics.note_refresh_tick();
                             let current = this.notify_state.generation.load(Ordering::Relaxed);
                             let mut should_notify = false;
                             if this.sync_surface_resize(window, cx) {
+                                this.diagnostics.note_resize();
                                 should_notify = true;
                             }
                             if current != seen_generation {
                                 seen_generation = current;
+                                this.diagnostics.note_generation_change();
                                 this.handle_terminal_side_effects(cx);
                                 // Window title needs the PTY title / ssh
                                 // target picked up by handle_terminal_side_effects;
@@ -381,8 +518,21 @@ impl TerminalPanel {
                                 should_notify = true;
                             }
                             if should_notify {
+                                this.diagnostics.note_notify();
                                 cx.notify();
                             }
+                            let alive = this
+                                .terminal
+                                .as_ref()
+                                .map(PierTerminal::is_alive)
+                                .unwrap_or(false);
+                            this.diagnostics.maybe_report(
+                                this.terminal_id,
+                                this.panel_active,
+                                alive,
+                                current,
+                                this.scrollback_offset,
+                            );
                         })
                         .is_ok();
 
@@ -401,7 +551,9 @@ impl TerminalPanel {
         self.resize_observer_started = true;
 
         cx.observe_window_bounds(window, |this, window, cx| {
+            this.diagnostics.note_window_bounds_event();
             if this.resize_for_window(window, cx) {
+                this.diagnostics.note_resize();
                 cx.notify();
             }
         })
@@ -456,6 +608,12 @@ impl TerminalPanel {
             Err(err) => {
                 self.last_error =
                     Some(format!("Failed to resize terminal to {cols}x{rows}: {err}").into());
+                log::warn!(
+                    "terminal[{}] resize failed target={}x{}: {err}",
+                    self.terminal_id,
+                    cols,
+                    rows
+                );
                 true
             }
         }
@@ -903,9 +1061,13 @@ impl TerminalPanel {
             return false;
         };
 
+        if !bytes.is_empty() {
+            self.diagnostics.note_input();
+        }
         let cursor_was_hidden = !self.last_cursor_visible;
         if let Err(err) = term.write(bytes) {
             self.last_error = Some(format!("Failed to write to PTY: {err}").into());
+            log::warn!("terminal[{}] PTY write failed: {err}", self.terminal_id);
             true
         } else {
             self.reset_cursor_blink();
@@ -1110,6 +1272,7 @@ impl Render for TerminalPanel {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         self.ensure_refresh_loop(window, cx);
         self.ensure_resize_observer(window, cx);
+        self.diagnostics.note_render();
 
         // ⚠️ Render is paint-only (CLAUDE.md Rule 6). `sync_window_title` and
         // `update_transient_state` used to run here on every PTY echo — they

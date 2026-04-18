@@ -42,7 +42,8 @@ use crate::app::git_session::{
 use crate::app::route::DbKind;
 use crate::app::ssh_session::{
     run_bootstrap, run_docker_command, run_docker_refresh, run_logs_start, run_monitor_refresh,
-    run_refresh, run_tunnel, ServiceProbeStatus, SshSessionState,
+    run_refresh, run_sftp_mutation, run_tunnel, ServiceProbeStatus, SftpMutationKind,
+    SshSessionState,
 };
 use crate::app::{
     ActivationHandler, CloseActiveTab, NewTab, OpenSettings, ToggleLeftPanel, ToggleRightPanel,
@@ -1138,6 +1139,181 @@ impl PierApp {
         .detach();
     }
 
+    // ─── SFTP mutations (P1-5: mkdir / rename / delete / upload / download)
+    //
+    // schedule_sftp_mutation is the single dispatch point. The 5 thin
+    // wrappers below own UX-specific bits (path prompts, confirm
+    // dialogs) and converge on this fn.
+
+    /// Run an SFTP mutation in the background and refresh the
+    /// listing on success. No-op when there's no live SFTP session
+    /// — UI only exposes mutation buttons after a successful refresh
+    /// so this guard rarely trips.
+    #[allow(dead_code)] // Wired by sftp_browser handlers in commit 4.
+    pub(crate) fn schedule_sftp_mutation(
+        &mut self,
+        kind: SftpMutationKind,
+        cx: &mut Context<Self>,
+    ) {
+        let Some(session) = self.active_session.clone() else {
+            return;
+        };
+        let Some(request) = session.update(cx, |state, _| state.begin_sftp_mutation(kind)) else {
+            return;
+        };
+
+        cx.notify();
+        cx.spawn(
+            move |this: gpui::WeakEntity<Self>, cx: &mut gpui::AsyncApp| {
+                let background = cx.background_executor().clone();
+                let mut async_cx = cx.clone();
+                async move {
+                    let result = background
+                        .spawn(async move { run_sftp_mutation(request) })
+                        .await;
+                    let succeeded = session
+                        .update(&mut async_cx, |state, _| {
+                            state.apply_sftp_mutation_result(result)
+                        })
+                        .unwrap_or(false);
+                    if succeeded {
+                        let _ = this.update(&mut async_cx, |this, cx| {
+                            this.schedule_sftp_refresh(None, cx);
+                        });
+                    } else {
+                        let _ = this.update(&mut async_cx, |_, cx| {
+                            cx.notify();
+                        });
+                    }
+                }
+            },
+        )
+        .detach();
+    }
+
+    /// Open the OS file picker, then upload each chosen path into
+    /// the current SFTP cwd, sequentially (one mutation in flight at
+    /// a time — the existing nonce guard would drop concurrent
+    /// uploads anyway).
+    #[allow(dead_code)] // Wired by sftp_browser header button in commit 4.
+    pub(crate) fn sftp_upload_prompt(&mut self, cx: &mut Context<Self>) {
+        let Some(session) = self.active_session.clone() else {
+            return;
+        };
+        let cwd = session.read(cx).cwd.clone();
+        let receiver = cx.prompt_for_paths(gpui::PathPromptOptions {
+            files: true,
+            directories: false,
+            multiple: true,
+            prompt: Some(SharedString::from("Upload to remote")),
+        });
+        cx.spawn(move |this: gpui::WeakEntity<Self>, cx: &mut gpui::AsyncApp| {
+            let mut async_cx = cx.clone();
+            async move {
+                let Ok(picked) = receiver.await else { return };
+                let Ok(Some(paths)) = picked else { return };
+                for local in paths {
+                    let Some(name) = local.file_name().and_then(|n| n.to_str()) else {
+                        log::warn!("sftp_upload: skipping non-utf8 filename: {local:?}");
+                        continue;
+                    };
+                    let remote = join_remote_path(&cwd, name);
+                    let kind = SftpMutationKind::Upload {
+                        local: local.clone(),
+                        remote,
+                    };
+                    let _ = this.update(&mut async_cx, |this, cx| {
+                        this.schedule_sftp_mutation(kind, cx);
+                    });
+                }
+            }
+        })
+        .detach();
+    }
+
+    /// Open the OS save-file dialog and download `remote_path` into
+    /// the chosen destination. `suggested_name` becomes the default
+    /// filename (i.e. the basename of the remote file).
+    #[allow(dead_code)] // Wired by sftp_browser row hover icon in commit 4.
+    pub(crate) fn sftp_download_prompt(
+        &mut self,
+        remote_path: String,
+        suggested_name: String,
+        cx: &mut Context<Self>,
+    ) {
+        let directory = std::env::var_os("HOME")
+            .map(PathBuf::from)
+            .unwrap_or_else(|| PathBuf::from("."));
+        let receiver = cx.prompt_for_new_path(&directory, Some(&suggested_name));
+        cx.spawn(move |this: gpui::WeakEntity<Self>, cx: &mut gpui::AsyncApp| {
+            let mut async_cx = cx.clone();
+            async move {
+                let Ok(picked) = receiver.await else { return };
+                let Ok(Some(local)) = picked else { return };
+                let kind = SftpMutationKind::Download {
+                    remote: remote_path,
+                    local,
+                };
+                let _ = this.update(&mut async_cx, |this, cx| {
+                    this.schedule_sftp_mutation(kind, cx);
+                });
+            }
+        })
+        .detach();
+    }
+
+    /// Pop the standard delete-confirmation dialog. On OK, dispatch
+    /// the matching mutation (`DeleteFile` for files, `DeleteDir`
+    /// for dirs — the latter is server-enforced empty-only).
+    #[allow(dead_code)] // Wired by sftp_browser row hover icon in commit 4.
+    pub(crate) fn confirm_sftp_delete(
+        &mut self,
+        path: String,
+        name: String,
+        is_dir: bool,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let weak = cx.entity().downgrade();
+        let title: SharedString = format!("Delete {name}?").into();
+        let detail: SharedString = if is_dir {
+            format!(
+                "Remove the directory {name}? This cannot be undone. The directory must be empty \
+                 — non-empty deletes will surface a server error."
+            )
+            .into()
+        } else {
+            format!("Remove the file {name}? This cannot be undone.").into()
+        };
+        window.open_dialog(cx, move |dialog, _w, _app_cx| {
+            let weak = weak.clone();
+            let path = path.clone();
+            let body = crate::components::text::body(detail.clone()).secondary();
+            dialog
+                .title(title.clone())
+                .w(px(380.0))
+                .confirm()
+                .button_props(
+                    gpui_component::dialog::DialogButtonProps::default()
+                        .ok_text("Delete")
+                        .ok_variant(gpui_component::button::ButtonVariant::Danger)
+                        .cancel_text("Cancel"),
+                )
+                .on_ok(move |_, _w, app_cx| {
+                    let kind = if is_dir {
+                        SftpMutationKind::DeleteDir { path: path.clone() }
+                    } else {
+                        SftpMutationKind::DeleteFile { path: path.clone() }
+                    };
+                    let _ = weak.update(app_cx, |this, cx| {
+                        this.schedule_sftp_mutation(kind, cx);
+                    });
+                    true
+                })
+                .child(body)
+        });
+    }
+
     fn schedule_monitor_refresh(&mut self, cx: &mut Context<Self>) {
         let Some(session) = self.active_session.clone() else {
             return;
@@ -1911,3 +2087,19 @@ fn render_terminal_tab_bar(
             ),
     )
 }
+
+/// Append `name` onto the SFTP-side `cwd` (which is a `PathBuf`
+/// modeling a remote POSIX path). PathBuf's join works on POSIX
+/// separators on every platform; just need to handle the cwd ==
+/// `.` case so we get `./foo` rather than `foo` (matches what
+/// `list_dir_blocking` returned).
+#[allow(dead_code)] // Used by sftp_upload_prompt — pulled in by commit 4.
+fn join_remote_path(cwd: &std::path::Path, name: &str) -> String {
+    let mut out = cwd.to_string_lossy().into_owned();
+    if !out.ends_with('/') {
+        out.push('/');
+    }
+    out.push_str(name);
+    out
+}
+

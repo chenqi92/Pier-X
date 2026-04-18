@@ -23,6 +23,7 @@ use gpui_component::{
 };
 use pier_core::connections::ConnectionStore;
 use pier_core::ssh::{AuthMethod, SshConfig};
+use rust_i18n::t;
 
 use crate::app::PierApp;
 use crate::components::text;
@@ -71,26 +72,32 @@ impl AuthMode {
 pub fn open(window: &mut Window, cx: &mut App, app: WeakEntity<PierApp>, target: EditTarget) {
     // Inputs created once outside the builder closure → persist across
     // dialog re-renders.
-    let name = cx.new(|c| InputState::new(window, c).placeholder("e.g. prod-db"));
-    let host = cx.new(|c| InputState::new(window, c).placeholder("e.g. db.example.com"));
+    let name = cx.new(|c| InputState::new(window, c).placeholder(t!("App.EditConnection.Placeholders.name")));
+    let host =
+        cx.new(|c| InputState::new(window, c).placeholder(t!("App.EditConnection.Placeholders.host")));
     let port = cx.new(|c| InputState::new(window, c).placeholder("22"));
-    let user = cx.new(|c| InputState::new(window, c).placeholder("e.g. deploy"));
-    let group = cx.new(|c| InputState::new(window, c).placeholder("optional — groups in sidebar"));
+    let user =
+        cx.new(|c| InputState::new(window, c).placeholder(t!("App.EditConnection.Placeholders.user")));
+    let group = cx.new(|c| {
+        InputState::new(window, c).placeholder(t!("App.EditConnection.Placeholders.group"))
+    });
     let password = cx.new(|c| {
         InputState::new(window, c)
             .masked(true)
-            .placeholder("password")
+            .placeholder(t!("App.EditConnection.Placeholders.password"))
     });
-    let key_path = cx.new(|c| InputState::new(window, c).placeholder("e.g. ~/.ssh/id_ed25519"));
+    let key_path = cx.new(|c| {
+        InputState::new(window, c).placeholder(t!("App.EditConnection.Placeholders.key_path"))
+    });
     let key_passphrase = cx.new(|c| {
         InputState::new(window, c)
             .masked(true)
-            .placeholder("optional passphrase")
+            .placeholder(t!("App.EditConnection.Placeholders.passphrase"))
     });
     let keychain_password = cx.new(|c| {
         InputState::new(window, c)
             .masked(true)
-            .placeholder("password (stored in OS keychain)")
+            .placeholder(t!("App.EditConnection.Placeholders.keychain_password"))
     });
 
     let initial_mode = match &target {
@@ -169,8 +176,10 @@ pub fn open(window: &mut Window, cx: &mut App, app: WeakEntity<PierApp>, target:
     };
     let auth_mode = Rc::new(RefCell::new(initial_mode));
     let title: SharedString = match &target {
-        EditTarget::Add => "New SSH connection".into(),
-        EditTarget::Edit { original, .. } => format!("Edit · {}", original.name).into(),
+        EditTarget::Add => t!("App.EditConnection.title_new").into(),
+        EditTarget::Edit { original, .. } => {
+            t!("App.EditConnection.title_edit", name = original.name.as_str()).into()
+        }
     };
 
     window.open_dialog(cx, move |dialog, _w, app_cx| {
@@ -185,8 +194,8 @@ pub fn open(window: &mut Window, cx: &mut App, app: WeakEntity<PierApp>, target:
             .confirm()
             .button_props(
                 gpui_component::dialog::DialogButtonProps::default()
-                    .ok_text("Save")
-                    .cancel_text("Cancel"),
+                    .ok_text(t!("App.Common.save"))
+                    .cancel_text(t!("App.Common.cancel")),
             )
             .on_ok(move |_, _w, app_cx| {
                 save(
@@ -222,10 +231,10 @@ fn build_body(cx: &App, inputs: &Inputs, auth_mode: Rc<RefCell<AuthMode>>) -> im
     let mode_for_click = auth_mode.clone();
     let radio_group = RadioGroup::horizontal("auth-mode")
         .selected_index(Some(current_mode.index()))
-        .child(Radio::new("auth-agent").label("ssh-agent"))
-        .child(Radio::new("auth-password").label("password"))
-        .child(Radio::new("auth-key").label("key file"))
-        .child(Radio::new("auth-keychain").label("keychain"))
+        .child(Radio::new("auth-agent").label(t!("App.EditConnection.Auth.agent").to_string()))
+        .child(Radio::new("auth-password").label(t!("App.EditConnection.Auth.password").to_string()))
+        .child(Radio::new("auth-key").label(t!("App.EditConnection.Auth.key_file").to_string()))
+        .child(Radio::new("auth-keychain").label(t!("App.EditConnection.Auth.keychain").to_string()))
         .on_click(move |idx, _w, app| {
             *mode_for_click.borrow_mut() = AuthMode::from_index(*idx);
             // Force the dialog body closure to rerun so per-mode fields
@@ -240,67 +249,51 @@ fn build_body(cx: &App, inputs: &Inputs, auth_mode: Rc<RefCell<AuthMode>>) -> im
         .flex_col()
         .gap(SP_3)
         .pt(SP_2)
-        .child(field(&t, "Name", &inputs.name))
-        .child(field(&t, "Host", &inputs.host))
+        .child(field(&t, t!("App.EditConnection.Fields.name"), &inputs.name))
+        .child(field(&t, t!("App.EditConnection.Fields.host"), &inputs.host))
         .child(
             div()
                 .flex()
                 .flex_row()
                 .gap(SP_2)
-                .child(div().flex_1().child(field(&t, "Port", &inputs.port)))
-                .child(div().flex_1().child(field(&t, "User", &inputs.user))),
+                .child(div().flex_1().child(field(&t, t!("App.EditConnection.Fields.port"), &inputs.port)))
+                .child(div().flex_1().child(field(&t, t!("App.EditConnection.Fields.user"), &inputs.user))),
         )
-        .child(field(&t, "Group (tag)", &inputs.group))
+        .child(field(&t, t!("App.EditConnection.Fields.group"), &inputs.group))
         .child(
             div()
                 .flex()
                 .flex_col()
                 .gap(SP_1)
-                .child(label_text(&t, "Authentication"))
+                .child(label_text(&t, t!("App.EditConnection.Fields.authentication")))
                 .child(radio_group),
         );
 
     col = match current_mode {
         AuthMode::Agent => col.child(
-            text::body(
-                "Uses ssh-agent (~/.ssh/config + agent forwarding apply). \
-                 No secret is stored by Pier-X.",
-            )
-            .secondary(),
+            text::body(t!("App.EditConnection.Help.agent")).secondary(),
         ),
-        AuthMode::Password => col.child(field(&t, "Password", &inputs.password)).child(
-            text::body(
-                "Stored in plaintext inside connections.json. Use \
-                     \"keychain\" if you want OS-level secret storage.",
-            )
-            .secondary(),
-        ),
+        AuthMode::Password => col
+            .child(field(&t, t!("App.EditConnection.Fields.password"), &inputs.password))
+            .child(text::body(t!("App.EditConnection.Help.password")).secondary()),
         AuthMode::KeyFile => col
-            .child(field(&t, "Private key path", &inputs.key_path))
-            .child(field(&t, "Passphrase (optional)", &inputs.key_passphrase))
-            .child(
-                text::body(
-                    "OpenSSH private key on disk. Passphrase is stored in \
-                     the OS keychain when present, never in connections.json.",
-                )
-                .secondary(),
-            ),
+            .child(field(&t, t!("App.EditConnection.Fields.private_key_path"), &inputs.key_path))
+            .child(field(
+                &t,
+                t!("App.EditConnection.Fields.passphrase_optional"),
+                &inputs.key_passphrase,
+            ))
+            .child(text::body(t!("App.EditConnection.Help.key_file")).secondary()),
         AuthMode::Keychain => col
-            .child(field(&t, "Password", &inputs.keychain_password))
-            .child(
-                text::body(
-                    "Password is written to the OS keychain on save. \
-                     connections.json only holds an opaque credential id.",
-                )
-                .secondary(),
-            ),
+            .child(field(&t, t!("App.EditConnection.Fields.password"), &inputs.keychain_password))
+            .child(text::body(t!("App.EditConnection.Help.keychain")).secondary()),
     };
     col
 }
 
 fn field(
     t: &crate::theme::Theme,
-    label: &'static str,
+    label: impl Into<SharedString>,
     state: &Entity<InputState>,
 ) -> impl IntoElement {
     div()
@@ -311,12 +304,12 @@ fn field(
         .child(Input::new(state))
 }
 
-fn label_text(t: &crate::theme::Theme, label: &'static str) -> impl IntoElement {
+fn label_text(t: &crate::theme::Theme, label: impl Into<SharedString>) -> impl IntoElement {
     div()
         .text_size(SIZE_CAPTION)
         .font_weight(WEIGHT_MEDIUM)
         .text_color(t.color.text_secondary)
-        .child(SharedString::from(label))
+        .child(label.into())
 }
 
 fn save(

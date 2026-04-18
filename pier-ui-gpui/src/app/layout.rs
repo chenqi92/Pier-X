@@ -88,9 +88,9 @@ impl RightMode {
         match self {
             RightMode::Markdown => t!("App.RightPanel.Modes.markdown").into(),
             RightMode::Monitor => t!("App.RightPanel.Modes.monitor").into(),
-            RightMode::Sftp => "SFTP".into(),
+            RightMode::Sftp => t!("App.RightPanel.Modes.sftp").into(),
             RightMode::Docker => t!("App.RightPanel.Modes.docker").into(),
-            RightMode::Git => "Git".into(),
+            RightMode::Git => t!("App.RightPanel.Modes.git").into(),
             RightMode::Mysql => "MySQL".into(),
             RightMode::Postgres => "PostgreSQL".into(),
             RightMode::Redis => "Redis".into(),
@@ -155,13 +155,16 @@ impl RightMode {
     /// `gpui_component::IconName` instead (resolved in `mode_icon`).
     pub fn icon_asset(self) -> Option<&'static str> {
         match self {
-            RightMode::Sftp | RightMode::Sqlite => Some("icons/server.svg"),
-            RightMode::Docker => Some("icons/database.svg"),
             RightMode::Git => Some("icons/git-branch.svg"),
-            RightMode::Mysql | RightMode::Postgres | RightMode::Redis => Some("icons/database.svg"),
-            RightMode::Logs => Some("icons/ellipsis.svg"),
-            // Markdown + Monitor use built-in lucide icons via `mode_icon()`.
-            RightMode::Markdown | RightMode::Monitor => None,
+            RightMode::Mysql | RightMode::Postgres | RightMode::Redis | RightMode::Sqlite => {
+                Some("icons/database.svg")
+            }
+            // The remaining modes use built-in icons via `mode_icon()`.
+            RightMode::Markdown
+            | RightMode::Monitor
+            | RightMode::Sftp
+            | RightMode::Docker
+            | RightMode::Logs => None,
         }
     }
 

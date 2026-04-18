@@ -27,6 +27,7 @@ use std::rc::Rc;
 
 use gpui::{div, prelude::*, px, App, Entity, IntoElement, SharedString, Window};
 use gpui_component::{scroll::ScrollableElement, Icon as UiIcon, IconName};
+use rust_i18n::t;
 
 use crate::app::ssh_session::{ConnectStatus, RemoteEntry, SshSessionState};
 use crate::components::{text, Card, SectionLabel, StatusKind, StatusPill};
@@ -89,11 +90,21 @@ impl RenderOnce for SftpBrowser {
             let host_label: SharedString = format!("{}@{}", s.config.user, s.config.host).into();
             let entries: Vec<RemoteEntry> = s.entries.clone();
             let status_pill = match &s.status {
-                ConnectStatus::Idle => StatusPill::new("idle", StatusKind::Warning),
-                ConnectStatus::Connecting => StatusPill::new("connecting", StatusKind::Info),
-                ConnectStatus::Refreshing => StatusPill::new("loading", StatusKind::Info),
-                ConnectStatus::Connected => StatusPill::new("connected", StatusKind::Success),
-                ConnectStatus::Failed => StatusPill::new("error", StatusKind::Error),
+                ConnectStatus::Idle => {
+                    StatusPill::new(t!("App.Common.Status.idle"), StatusKind::Warning)
+                }
+                ConnectStatus::Connecting => {
+                    StatusPill::new(t!("App.Common.Status.connecting"), StatusKind::Info)
+                }
+                ConnectStatus::Refreshing => {
+                    StatusPill::new(t!("App.Common.Status.loading"), StatusKind::Info)
+                }
+                ConnectStatus::Connected => {
+                    StatusPill::new(t!("App.Common.Status.connected"), StatusKind::Success)
+                }
+                ConnectStatus::Failed => {
+                    StatusPill::new(t!("App.Common.Status.error"), StatusKind::Error)
+                }
             };
             let last_error = s.last_error.clone();
             let is_loading = s.is_loading();
@@ -166,7 +177,7 @@ impl RenderOnce for SftpBrowser {
                 div().px(SP_3).py(SP_2).child(
                     Card::new()
                         .padding(SP_2)
-                        .child(SectionLabel::new("Error"))
+                        .child(SectionLabel::new(t!("App.Common.error")))
                         .child(text::body(SharedString::from(err)).secondary()),
                 ),
             );
@@ -174,9 +185,9 @@ impl RenderOnce for SftpBrowser {
 
         if entries.is_empty() {
             let empty_label = if is_loading {
-                "(loading remote directory...)"
+                t!("App.Sftp.loading_directory").to_string()
             } else {
-                "(empty directory or not yet listed)"
+                t!("App.Sftp.empty_directory").to_string()
             };
             body = body.child(
                 div()
@@ -223,12 +234,16 @@ fn empty_state(t: &crate::theme::Theme) -> gpui::AnyElement {
                 .text_size(SIZE_CAPTION)
                 .font_weight(WEIGHT_MEDIUM)
                 .text_color(t.color.text_secondary)
-                .child("No active SSH session"),
+                .child(SharedString::from(
+                    t!("App.Sftp.no_active_session_title").to_string(),
+                )),
         )
         .child(
             div()
                 .text_size(SIZE_SMALL)
-                .child("Click a saved connection in the left panel to attach a session here."),
+                .child(SharedString::from(
+                    t!("App.Sftp.no_active_session_body").to_string(),
+                )),
         )
         .into_any_element()
 }
@@ -321,7 +336,7 @@ fn remote_row(
                         div()
                             .text_size(SIZE_SMALL)
                             .text_color(t.color.text_tertiary)
-                            .child("link"),
+                            .child(SharedString::from(t!("App.Sftp.link").to_string())),
                     )
                 }),
         )

@@ -17,6 +17,7 @@ use gpui::{div, prelude::*, px, App, ClickEvent, IntoElement, SharedString, Weak
 use gpui_component::{scroll::ScrollableElement, Icon as UiIcon, IconName, WindowExt as _};
 use pier_core::paths;
 use pier_core::ssh::SshConfig;
+use rust_i18n::t;
 
 use crate::app::PierApp;
 use crate::theme::{
@@ -43,7 +44,7 @@ pub fn open(
     window.open_dialog(cx, move |dialog, _w, app_cx| {
         let body = build_body(app_cx, app.clone(), &connections);
         dialog
-            .title("New tab")
+            .title(t!("App.NewTabChooser.title").to_string())
             .w(px(440.0))
             .close_button(true)
             .overlay_closable(true)
@@ -68,7 +69,9 @@ fn build_body(cx: &App, app: WeakEntity<PierApp>, connections: &[SshConfig]) -> 
                 .text_size(SIZE_CAPTION)
                 .font_weight(WEIGHT_MEDIUM)
                 .text_color(t.color.text_tertiary)
-                .child("Saved SSH connections"),
+                .child(SharedString::from(
+                    t!("App.NewTabChooser.saved_connections").to_string(),
+                )),
         );
         for (idx, conn) in connections.iter().enumerate() {
             col = col.child(ssh_row(&t, app.clone(), idx, conn));
@@ -80,10 +83,10 @@ fn build_body(cx: &App, app: WeakEntity<PierApp>, connections: &[SshConfig]) -> 
                 .py(SP_2)
                 .text_size(SIZE_SMALL)
                 .text_color(t.color.text_tertiary)
-                .child(format!(
-                    "No saved SSH connections yet — add one in Settings or edit {}.",
-                    connections_store_label()
-                )),
+                .child(SharedString::from(t!(
+                    "App.NewTabChooser.empty_state",
+                    store = connections_store_label()
+                ))),
         );
     }
     div().max_h(px(520.0)).overflow_y_scrollbar().child(col)
@@ -96,7 +99,11 @@ fn local_row(t: &crate::theme::Theme, app: WeakEntity<PierApp>) -> impl IntoElem
     };
     row_shell(t, "nt-local", on_click)
         .child(icon_cell(t, IconName::SquareTerminal))
-        .child(label_cell(t, "Local terminal", default_shell_hint()))
+        .child(label_cell(
+            t,
+            t!("App.NewTabChooser.local_terminal"),
+            default_shell_hint(),
+        ))
 }
 
 fn ssh_row(
@@ -172,9 +179,10 @@ fn icon_cell(t: &crate::theme::Theme, name: IconName) -> impl IntoElement {
 
 fn label_cell(
     t: &crate::theme::Theme,
-    primary: &'static str,
+    primary: impl Into<SharedString>,
     secondary: SharedString,
 ) -> impl IntoElement {
+    let primary: SharedString = primary.into();
     div()
         .flex()
         .flex_col()
@@ -205,7 +213,7 @@ fn default_shell_hint() -> SharedString {
                 .to_string()
                 .into()
         })
-        .unwrap_or_else(|_| "system shell".into())
+        .unwrap_or_else(|_| SharedString::from(t!("App.NewTabChooser.system_shell").to_string()))
 }
 
 fn connections_store_label() -> String {

@@ -5,6 +5,7 @@ use std::{
 };
 
 use gpui::{div, prelude::*, px, AnyElement, App, IntoElement, SharedString, WeakEntity, Window};
+use rust_i18n::t;
 
 use crate::{
     app::PierApp,
@@ -30,10 +31,10 @@ pub enum PathPreviewMode {
 }
 
 impl PathPreviewMode {
-    pub const fn label(self) -> &'static str {
+    pub fn label(self) -> String {
         match self {
-            Self::Compact => "compact",
-            Self::Expanded => "expanded",
+            Self::Compact => t!("App.PathInspector.Preview.compact").to_string(),
+            Self::Expanded => t!("App.PathInspector.Preview.expanded").to_string(),
         }
     }
 
@@ -110,7 +111,7 @@ impl PathInspectorSnapshot {
             .map(|parent| parent.to_string_lossy().into_owned().into());
         let parent_label = parent_target
             .clone()
-            .unwrap_or_else(|| SharedString::from("no parent"));
+            .unwrap_or_else(|| SharedString::from(t!("App.PathInspector.no_parent").to_string()));
 
         match fs::metadata(&resolved_path) {
             Ok(metadata) if metadata.is_dir() => {
@@ -121,13 +122,13 @@ impl PathInspectorSnapshot {
                     parent_target,
                     requested_target: requested_target.to_string().into(),
                     resolved_path: resolved_label,
-                    status_label: "local path".into(),
+                    status_label: t!("App.PathInspector.status_local_path").into(),
                     status_kind: StatusKind::Success,
-                    kind_label: "directory".into(),
+                    kind_label: t!("App.PathInspector.kind_directory").into(),
                     parent_label,
                     size_label: "—".into(),
                     detail_label: preview.detail_label.into(),
-                    preview_title: "Entries".into(),
+                    preview_title: t!("App.PathInspector.entries_title").into(),
                     preview_mode,
                     preview_toggle_available: false,
                     preview_meta: preview.meta,
@@ -143,9 +144,9 @@ impl PathInspectorSnapshot {
                     parent_target,
                     requested_target: requested_target.to_string().into(),
                     resolved_path: resolved_label,
-                    status_label: "local path".into(),
+                    status_label: t!("App.PathInspector.status_local_path").into(),
                     status_kind: StatusKind::Success,
-                    kind_label: "file".into(),
+                    kind_label: t!("App.PathInspector.kind_file").into(),
                     parent_label,
                     size_label: format_bytes(metadata.len()).into(),
                     detail_label: preview.detail_label.into(),
@@ -163,17 +164,17 @@ impl PathInspectorSnapshot {
                 parent_target,
                 requested_target: requested_target.to_string().into(),
                 resolved_path: resolved_label,
-                status_label: "missing".into(),
+                status_label: t!("App.PathInspector.status_missing").into(),
                 status_kind: StatusKind::Warning,
-                kind_label: "unavailable".into(),
+                kind_label: t!("App.PathInspector.kind_unavailable").into(),
                 parent_label,
                 size_label: "—".into(),
-                detail_label: format!("metadata: {err}").into(),
-                preview_title: "Preview".into(),
+                detail_label: t!("App.PathInspector.metadata_error", error = err.to_string()).into(),
+                preview_title: t!("App.Common.preview").into(),
                 preview_mode,
                 preview_toggle_available: false,
-                preview_meta: vec!["inspect the parent directory to continue browsing".into()],
-                preview_lines: vec!["path does not exist or is not readable".into()],
+                preview_meta: vec![t!("App.PathInspector.inspect_parent_hint").into()],
+                preview_lines: vec![t!("App.PathInspector.path_missing_body").into()],
                 directory_entries: Vec::new(),
             },
         }
@@ -184,19 +185,19 @@ impl PathInspectorSnapshot {
             kind: PathKind::Waiting,
             inspect_target: None,
             parent_target: None,
-            requested_target: "no local target".into(),
-            resolved_path: "open a path from Terminal to inspect it here".into(),
-            status_label: "idle".into(),
+            requested_target: t!("App.PathInspector.no_local_target").into(),
+            resolved_path: t!("App.PathInspector.empty_resolved_path").into(),
+            status_label: t!("App.Common.Status.idle").into(),
             status_kind: StatusKind::Info,
-            kind_label: "waiting".into(),
+            kind_label: t!("App.PathInspector.kind_waiting").into(),
             parent_label: "—".into(),
             size_label: "—".into(),
-            detail_label: "local file and directory targets stay inside Pier-X".into(),
-            preview_title: "Preview".into(),
+            detail_label: t!("App.PathInspector.empty_detail").into(),
+            preview_title: t!("App.Common.preview").into(),
             preview_mode: PathPreviewMode::Compact,
             preview_toggle_available: false,
-            preview_meta: vec!["Cmd/Ctrl+Click or Alt+Enter on a local path opens it here".into()],
-            preview_lines: vec!["directory entries stay drill-downable inside Inspector".into()],
+            preview_meta: vec![t!("App.PathInspector.empty_meta").into()],
+            preview_lines: vec![t!("App.PathInspector.empty_body").into()],
             directory_entries: Vec::new(),
         }
     }
@@ -244,11 +245,20 @@ impl RenderOnce for PathInspectorView {
         let app = self.app;
 
         let mut metadata = Card::new()
-            .child(SectionLabel::new("Metadata"))
+            .child(SectionLabel::new(t!("App.Common.metadata")))
             .child(text::body(snapshot.kind_label.clone()))
             .child(text::body(snapshot.detail_label.clone()).secondary())
-            .child(text::mono(format!("parent: {}", snapshot.parent_label)).secondary())
-            .child(text::mono(format!("size: {}", snapshot.size_label)).secondary());
+            .child(
+                text::mono(t!(
+                    "App.PathInspector.parent_label",
+                    parent = snapshot.parent_label.as_ref()
+                ))
+                .secondary(),
+            )
+            .child(
+                text::mono(t!("App.PathInspector.size_label", size = snapshot.size_label.as_ref()))
+                    .secondary(),
+            );
 
         let actions = inspector_action_elements(&snapshot, &app);
         if !actions.is_empty() {
@@ -278,7 +288,7 @@ impl RenderOnce for PathInspectorView {
 
         if snapshot.is_directory() {
             if snapshot.directory_entries.is_empty() {
-                preview = preview.child(text::body("directory is empty").secondary());
+                preview = preview.child(text::body(t!("App.PathInspector.directory_empty")).secondary());
             } else {
                 preview = preview.child(div().flex().flex_col().gap(SP_2).pt(SP_2).children(
                     directory_entry_elements(&snapshot.directory_entries, &app, &t),
@@ -308,7 +318,7 @@ impl RenderOnce for PathInspectorView {
                     .flex_row()
                     .items_center()
                     .gap(SP_2)
-                    .child(text::h2("Path Inspector"))
+                    .child(text::h2(t!("App.PathInspector.title")))
                     .child(StatusPill::new(
                         snapshot.status_label.clone(),
                         snapshot.status_kind,
@@ -316,7 +326,7 @@ impl RenderOnce for PathInspectorView {
             )
             .child(
                 Card::new()
-                    .child(SectionLabel::new("Target"))
+                    .child(SectionLabel::new(t!("App.Common.target")))
                     .child(text::mono(snapshot.requested_target.clone()))
                     .child(text::body(snapshot.resolved_path.clone()).secondary()),
             )
@@ -335,9 +345,9 @@ struct DirectoryPreview {
 fn build_directory_preview(path: &Path) -> DirectoryPreview {
     let Ok(entries) = fs::read_dir(path) else {
         return DirectoryPreview {
-            detail_label: "directory preview unavailable".into(),
-            meta: vec!["failed to enumerate this directory".into()],
-            lines: vec!["directory preview unavailable".into()],
+            detail_label: t!("App.PathInspector.directory_preview_unavailable").to_string(),
+            meta: vec![t!("App.PathInspector.failed_to_enumerate").into()],
+            lines: vec![t!("App.PathInspector.directory_preview_unavailable").into()],
             entries: Vec::new(),
         };
     };
@@ -351,16 +361,20 @@ fn build_directory_preview(path: &Path) -> DirectoryPreview {
             let detail = metadata
                 .map(|meta| {
                     if meta.is_dir() {
-                        "directory".to_string()
+                        t!("App.PathInspector.kind_directory").to_string()
                     } else {
                         format_bytes(meta.len())
                     }
                 })
-                .unwrap_or_else(|| "metadata unavailable".to_string());
+                .unwrap_or_else(|| t!("App.PathInspector.metadata_unavailable").to_string());
             PathInspectorEntry {
                 label: format!("{}{}", name, if is_dir { "/" } else { "" }).into(),
                 detail_label: detail.into(),
-                kind_label: if is_dir { "dir" } else { "file" }.into(),
+                kind_label: if is_dir {
+                    t!("App.PathInspector.kind_dir_short").into()
+                } else {
+                    t!("App.PathInspector.kind_file_short").into()
+                },
                 status_kind: if is_dir {
                     StatusKind::Success
                 } else {
@@ -389,16 +403,28 @@ fn build_directory_preview(path: &Path) -> DirectoryPreview {
         .collect::<Vec<_>>();
     let mut meta = Vec::new();
     if total > MAX_DIRECTORY_ENTRIES {
-        meta.push(format!("showing {} of {} entries", visible.len(), total).into());
+        meta.push(
+            t!(
+                "App.PathInspector.showing_entries",
+                shown = visible.len(),
+                total = total
+            )
+            .into(),
+        );
     } else {
-        meta.push(format!("{total} entries").into());
+        meta.push(t!("App.PathInspector.entries_count", count = total).into());
     }
 
     DirectoryPreview {
         detail_label: if total > MAX_DIRECTORY_ENTRIES {
-            format!("directory · {}/{} entries", visible.len(), total)
+            t!(
+                "App.PathInspector.directory_detail_truncated",
+                shown = visible.len(),
+                total = total
+            )
+            .to_string()
         } else {
-            format!("directory · {total} entries")
+            t!("App.PathInspector.directory_detail", count = total).to_string()
         },
         meta,
         lines: Vec::new(),
@@ -419,9 +445,9 @@ fn build_file_preview(path: &Path, file_size: u64, preview_mode: PathPreviewMode
         Ok(file) => file,
         Err(err) => {
             return FilePreview {
-                detail_label: "file preview unavailable".into(),
-                meta: vec![format!("read error: {err}").into()],
-                lines: vec!["file preview unavailable".into()],
+                detail_label: t!("App.PathInspector.file_preview_unavailable").to_string(),
+                meta: vec![t!("App.PathInspector.read_error", error = err.to_string()).into()],
+                lines: vec![t!("App.PathInspector.file_preview_unavailable").into()],
                 preview_toggle_available: false,
             };
         }
@@ -433,9 +459,9 @@ fn build_file_preview(path: &Path, file_size: u64, preview_mode: PathPreviewMode
         .read_to_end(&mut bytes)
     {
         return FilePreview {
-            detail_label: "file preview unavailable".into(),
-            meta: vec![format!("read error: {err}").into()],
-            lines: vec!["file preview unavailable".into()],
+            detail_label: t!("App.PathInspector.file_preview_unavailable").to_string(),
+            meta: vec![t!("App.PathInspector.read_error", error = err.to_string()).into()],
+            lines: vec![t!("App.PathInspector.file_preview_unavailable").into()],
             preview_toggle_available: false,
         };
     }
@@ -459,27 +485,31 @@ fn build_file_preview(path: &Path, file_size: u64, preview_mode: PathPreviewMode
                 .map(|line| truncate_line(&sanitize_preview_line(line)).into())
                 .collect::<Vec<SharedString>>();
             if lines.is_empty() {
-                lines.push("file is empty".into());
+                lines.push(t!("App.PathInspector.file_empty").into());
             }
 
             let mut meta = vec![
-                format!("encoding: {}", decoded.encoding_label).into(),
-                format!("line endings: {}", detect_line_endings(&decoded.text)).into(),
-                format!(
-                    "preview budget: {} / {} lines",
-                    format_bytes(preview_mode.max_bytes() as u64),
-                    preview_mode.max_lines()
+                t!("App.PathInspector.encoding_label", encoding = decoded.encoding_label).into(),
+                t!(
+                    "App.PathInspector.line_endings_label",
+                    endings = detect_line_endings(&decoded.text)
+                )
+                .into(),
+                t!(
+                    "App.PathInspector.preview_budget",
+                    budget = format_bytes(preview_mode.max_bytes() as u64),
+                    lines = preview_mode.max_lines()
                 )
                 .into(),
             ];
 
             if truncated_by_bytes || truncated_by_lines {
                 meta.push(
-                    format!(
-                        "truncated: showing first {} line(s) from first {} of {}",
-                        lines.len(),
-                        format_bytes(preview_mode.max_bytes() as u64),
-                        format_bytes(file_size)
+                    t!(
+                        "App.PathInspector.preview_truncated",
+                        shown = lines.len(),
+                        budget = format_bytes(preview_mode.max_bytes() as u64),
+                        total = format_bytes(file_size)
                     )
                     .into(),
                 );
@@ -487,7 +517,8 @@ fn build_file_preview(path: &Path, file_size: u64, preview_mode: PathPreviewMode
 
             FilePreview {
                 detail_label: format!(
-                    "text · {} · {}",
+                    "{} · {} · {}",
+                    t!("App.PathInspector.kind_text"),
                     decoded.encoding_label,
                     detect_line_endings(&decoded.text)
                 ),
@@ -497,23 +528,23 @@ fn build_file_preview(path: &Path, file_size: u64, preview_mode: PathPreviewMode
             }
         }
         Err(TextPreviewError::Binary(reason)) => FilePreview {
-            detail_label: "binary file".into(),
-            meta: vec![format!("binary detection: {reason}").into()],
-            lines: vec!["Binary preview unavailable in Inspector.".into()],
+            detail_label: t!("App.PathInspector.binary_file").to_string(),
+            meta: vec![t!("App.PathInspector.binary_detection", reason = reason).into()],
+            lines: vec![t!("App.PathInspector.binary_preview_unavailable").into()],
             preview_toggle_available: false,
         },
         Err(TextPreviewError::UnsupportedEncoding(reason)) => FilePreview {
-            detail_label: "unsupported encoding".into(),
+            detail_label: t!("App.PathInspector.unsupported_encoding").to_string(),
             meta: vec![
-                format!("encoding: {reason}").into(),
-                format!(
-                    "preview budget: {} / {} lines",
-                    format_bytes(preview_mode.max_bytes() as u64),
-                    preview_mode.max_lines()
+                t!("App.PathInspector.encoding_label", encoding = reason).into(),
+                t!(
+                    "App.PathInspector.preview_budget",
+                    budget = format_bytes(preview_mode.max_bytes() as u64),
+                    lines = preview_mode.max_lines()
                 )
                 .into(),
             ],
-            lines: vec!["Text preview unavailable for this encoding.".into()],
+            lines: vec![t!("App.PathInspector.text_preview_unavailable").into()],
             preview_toggle_available: false,
         },
     }
@@ -656,7 +687,7 @@ fn split_preview_lines(text: &str) -> Vec<&str> {
     lines
 }
 
-fn detect_line_endings(text: &str) -> &'static str {
+fn detect_line_endings(text: &str) -> String {
     let bytes = text.as_bytes();
     let mut saw_crlf = false;
     let mut saw_lf = false;
@@ -685,11 +716,11 @@ fn detect_line_endings(text: &str) -> &'static str {
     }
 
     match (saw_crlf, saw_lf, saw_cr) {
-        (false, false, false) => "none",
-        (true, false, false) => "CRLF",
-        (false, true, false) => "LF",
-        (false, false, true) => "CR",
-        _ => "mixed",
+        (false, false, false) => t!("App.PathInspector.LineEndings.none").to_string(),
+        (true, false, false) => t!("App.PathInspector.LineEndings.crlf").to_string(),
+        (false, true, false) => t!("App.PathInspector.LineEndings.lf").to_string(),
+        (false, false, true) => t!("App.PathInspector.LineEndings.cr").to_string(),
+        _ => t!("App.PathInspector.LineEndings.mixed").to_string(),
     }
 }
 
@@ -712,7 +743,7 @@ fn inspector_action_elements(
     if snapshot.parent_target_string().is_some() {
         let app = app.clone();
         actions.push(
-            Button::ghost("path-inspector-parent", "Open Parent")
+            Button::ghost("path-inspector-parent", t!("App.PathInspector.open_parent"))
                 .on_click(move |_, window, cx| {
                     let _ = app.update(cx, |this, cx| {
                         this.inspect_path_inspector_parent(window, cx);
@@ -727,7 +758,7 @@ fn inspector_action_elements(
             PathPreviewMode::Compact => {
                 let app = app.clone();
                 actions.push(
-                    Button::ghost("path-inspector-expand", "Expanded Preview")
+                    Button::ghost("path-inspector-expand", t!("App.PathInspector.expand_preview"))
                         .on_click(move |_, window, cx| {
                             let _ = app.update(cx, |this, cx| {
                                 this.set_path_inspector_preview_mode(
@@ -743,7 +774,7 @@ fn inspector_action_elements(
             PathPreviewMode::Expanded => {
                 let app = app.clone();
                 actions.push(
-                    Button::ghost("path-inspector-compact", "Compact Preview")
+                    Button::ghost("path-inspector-compact", t!("App.PathInspector.compact_preview"))
                         .on_click(move |_, window, cx| {
                             let _ = app.update(cx, |this, cx| {
                                 this.set_path_inspector_preview_mode(
@@ -876,10 +907,10 @@ mod tests {
 
     #[test]
     fn detects_mixed_line_endings() {
-        assert_eq!(detect_line_endings("a\r\nb\nc"), "mixed");
-        assert_eq!(detect_line_endings("a\r\nb"), "CRLF");
-        assert_eq!(detect_line_endings("a\nb"), "LF");
-        assert_eq!(detect_line_endings("a\rb"), "CR");
+        assert_eq!(detect_line_endings("a\r\nb\nc"), "mixed".to_string());
+        assert_eq!(detect_line_endings("a\r\nb"), "CRLF".to_string());
+        assert_eq!(detect_line_endings("a\nb"), "LF".to_string());
+        assert_eq!(detect_line_endings("a\rb"), "CR".to_string());
     }
 
     #[test]

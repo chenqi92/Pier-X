@@ -18,6 +18,7 @@ use gpui_component::{
     WindowExt as _,
 };
 use pier_core::db_connections::{DbConnection, DbConnectionStore, DbEngine};
+use rust_i18n::t;
 
 use crate::app::route::DbKind;
 use crate::app::PierApp;
@@ -71,17 +72,18 @@ pub fn open(
 
     // Inputs allocated once outside the builder closure so they
     // persist across dialog re-renders.
-    let name = cx.new(|c| InputState::new(window, c).placeholder("e.g. prod"));
+    let name = cx.new(|c| InputState::new(window, c).placeholder(t!("App.Database.Form.Placeholders.name")));
     let host = cx.new(|c| InputState::new(window, c).placeholder("127.0.0.1"));
     let port = cx.new(|c| InputState::new(window, c).placeholder("3306"));
     let user = cx.new(|c| InputState::new(window, c).placeholder("root"));
     let password = cx.new(|c| {
         InputState::new(window, c)
             .masked(true)
-            .placeholder("password (stored in OS keychain)")
+            .placeholder(t!("App.Database.Form.Placeholders.password"))
     });
-    let database =
-        cx.new(|c| InputState::new(window, c).placeholder("optional — default database to USE"));
+    let database = cx.new(|c| {
+        InputState::new(window, c).placeholder(t!("App.Database.Form.Placeholders.database"))
+    });
 
     match &target {
         DbEditTarget::Add => {
@@ -114,12 +116,16 @@ pub fn open(
         database,
     });
     let title: SharedString = match &target {
-        DbEditTarget::Add => format!("New {} connection", engine.as_str()).into(),
-        DbEditTarget::Edit { original, .. } => format!("Edit · {}", original.name).into(),
+        DbEditTarget::Add => {
+            t!("App.Database.Form.title_new", engine = engine.as_str()).into()
+        }
+        DbEditTarget::Edit { original, .. } => {
+            t!("App.Database.Form.title_edit", name = original.name.as_str()).into()
+        }
     };
 
     window.open_dialog(cx, move |dialog, _w, app_cx| {
-        let body = build_body(app_cx, &inputs);
+        let body = build_body(app_cx, &inputs, engine);
         let on_ok_inputs = inputs.clone();
         let on_ok_target = target.clone();
         let weak = app.clone();
@@ -129,8 +135,8 @@ pub fn open(
             .confirm()
             .button_props(
                 gpui_component::dialog::DialogButtonProps::default()
-                    .ok_text("Save")
-                    .cancel_text("Cancel"),
+                    .ok_text(t!("App.Common.save"))
+                    .cancel_text(t!("App.Common.cancel")),
             )
             .on_ok(move |_, _w, app_cx| {
                 save(&on_ok_inputs, engine, &on_ok_target, &weak, app_cx);
@@ -150,37 +156,41 @@ struct Inputs {
     database: Entity<InputState>,
 }
 
-fn build_body(cx: &App, inputs: &Inputs) -> impl IntoElement {
+fn build_body(cx: &App, inputs: &Inputs, engine: DbEngine) -> impl IntoElement {
     let t = theme(cx).clone();
     div()
         .flex()
         .flex_col()
         .gap(SP_3)
         .pt(SP_2)
-        .child(field(&t, "Name", &inputs.name))
-        .child(field(&t, "Host", &inputs.host))
+        .child(field(&t, t!("App.Database.Form.Fields.name"), &inputs.name))
+        .child(field(&t, t!("App.Database.Form.Fields.host"), &inputs.host))
         .child(
             div()
                 .flex()
                 .flex_row()
                 .gap(SP_2)
-                .child(div().flex_1().child(field(&t, "Port", &inputs.port)))
-                .child(div().flex_1().child(field(&t, "User", &inputs.user))),
+                .child(div().flex_1().child(field(&t, t!("App.Database.Form.Fields.port"), &inputs.port)))
+                .child(div().flex_1().child(field(&t, t!("App.Database.Form.Fields.user"), &inputs.user))),
         )
-        .child(field(&t, "Password", &inputs.password))
-        .child(field(&t, "Database (optional)", &inputs.database))
+        .child(field(&t, t!("App.Database.Form.Fields.password"), &inputs.password))
+        .child(field(
+            &t,
+            t!("App.Database.Form.Fields.database_optional"),
+            &inputs.database,
+        ))
         .child(
-            text::body(
-                "Connection metadata is saved to db-connections.json. \
-                 Password is written to the OS keychain under pier-x.db.{engine}.{name}.",
-            )
+            text::body(t!(
+                "App.Database.Form.help",
+                engine = engine.as_str()
+            ))
             .secondary(),
         )
 }
 
 fn field(
     t: &crate::theme::Theme,
-    label: &'static str,
+    label: impl Into<SharedString>,
     state: &Entity<InputState>,
 ) -> impl IntoElement {
     div()
@@ -191,12 +201,12 @@ fn field(
         .child(Input::new(state))
 }
 
-fn label_text(t: &crate::theme::Theme, label: &'static str) -> impl IntoElement {
+fn label_text(t: &crate::theme::Theme, label: impl Into<SharedString>) -> impl IntoElement {
     div()
         .text_size(SIZE_CAPTION)
         .font_weight(WEIGHT_MEDIUM)
         .text_color(t.color.text_secondary)
-        .child(SharedString::from(label))
+        .child(label.into())
 }
 
 fn save(

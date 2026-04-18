@@ -45,8 +45,8 @@ impl Route {
             Route::Dashboard => t!("App.Route.dashboard").into(),
             Route::Inspector => t!("App.Route.inspector").into(),
             Route::Terminal => t!("App.Route.terminal").into(),
-            Route::Git => "Git".into(),
-            Route::Ssh => "SSH".into(),
+            Route::Git => t!("App.Route.git").into(),
+            Route::Ssh => t!("App.Route.ssh").into(),
             Route::Database(k) => k.label(),
         }
     }

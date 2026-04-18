@@ -216,7 +216,8 @@ fn header_bar(
 ) -> gpui::AnyElement {
     let selected_name = snapshot
         .and_then(|s| s.selected_connection_name.as_deref())
-        .unwrap_or("select connection…");
+        .map(str::to_string)
+        .unwrap_or_else(|| t!("App.Database.select_connection").to_string());
 
     // Find the index of the currently-selected connection (if any)
     // so Edit / Delete know what to operate on.
@@ -240,7 +241,13 @@ fn header_bar(
 
     // Connection dropdown — implemented as a trio: label + ← / → +
     // inline name. Avoids pulling in fork's Dropdown for one use.
-    row = row.child(connection_picker(t, app.clone(), kind, connections, selected_name));
+    row = row.child(connection_picker(
+        t,
+        app.clone(),
+        kind,
+        connections,
+        selected_name.as_str(),
+    ));
 
     // Connect / Disconnect button.
     let connect_app = app.clone();
@@ -371,7 +378,7 @@ fn connection_picker(
             div()
                 .text_size(SIZE_CAPTION)
                 .text_color(t.color.text_tertiary)
-                .child(SharedString::from("no saved connections")),
+                .child(SharedString::from(t!("App.Database.no_saved_connections").to_string())),
         );
     }
 
@@ -480,7 +487,7 @@ fn sidebar(
                 .gap(SP_2)
                 .border_b_1()
                 .border_color(t.color.border_subtle)
-                .child(SectionLabel::new("Databases"))
+                .child(SectionLabel::new(t!("App.Database.databases_section")))
                 .child(div().flex_1()),
         );
 
@@ -496,9 +503,9 @@ fn sidebar(
                 .text_size(SIZE_SMALL)
                 .text_color(t.color.text_tertiary)
                 .child(SharedString::from(if client_alive {
-                    "(no databases listed yet — click Refresh)"
+                    t!("App.Database.no_databases_listed").to_string()
                 } else {
-                    "(connect first to see databases)"
+                    t!("App.Database.connect_first_hint").to_string()
                 })),
         );
     } else {
@@ -529,7 +536,7 @@ fn sidebar(
                     .px(SP_3)
                     .pt(SP_3)
                     .pb(SP_1)
-                    .child(SectionLabel::new("Tables")),
+                    .child(SectionLabel::new(t!("App.Database.tables_section"))),
             );
             for table in tables {
                 let tbl_app = app.clone();
@@ -656,7 +663,9 @@ fn main_pane(
     } else {
         div()
             .text_color(t.color.text_tertiary)
-            .child(SharedString::from("(SQL editor unavailable)"))
+            .child(SharedString::from(
+                t!("App.Database.sql_editor_unavailable").to_string(),
+            ))
             .into_any_element()
     };
 
@@ -671,7 +680,7 @@ fn main_pane(
                 .flex_row()
                 .items_center()
                 .gap(SP_2)
-                .child(SectionLabel::new("SQL"))
+                .child(SectionLabel::new(t!("App.Database.sql_section")))
                 .child(div().flex_1())
                 .child(run_button),
         )
@@ -699,7 +708,7 @@ fn result_pane(
         return div()
             .p(SP_4)
             .text_color(t.color.text_tertiary)
-            .child(SharedString::from("(no session — pick a connection)"))
+            .child(SharedString::from(t!("App.Database.no_session_hint").to_string()))
             .into_any_element();
     };
 
@@ -707,7 +716,7 @@ fn result_pane(
         return div()
             .p(SP_4)
             .text_color(t.color.text_tertiary)
-            .child(SharedString::from("Running query…"))
+            .child(SharedString::from(t!("App.Database.running_query").to_string()))
             .into_any_element();
     }
 
@@ -715,7 +724,7 @@ fn result_pane(
         return div()
             .p(SP_4)
             .text_color(t.color.text_tertiary)
-            .child(SharedString::from("(no results yet — run a query)"))
+            .child(SharedString::from(t!("App.Database.no_results_yet").to_string()))
             .into_any_element();
     };
 
@@ -727,22 +736,34 @@ fn result_pane(
     let affected = result.affected_rows();
     let capped_in_ui = total_rows > rows.len();
 
-    let meta = format!(
-        "{} row{} · {} ms{}{}",
-        total_rows,
-        if total_rows == 1 { "" } else { "s" },
-        elapsed_ms,
-        if truncated {
-            " · server-truncated"
-        } else {
-            ""
-        },
-        if affected > 0 {
-            format!(" · {affected} affected")
-        } else {
-            String::new()
-        },
-    );
+    let meta = if affected > 0 {
+        t!(
+            "App.Database.results_meta_with_affected",
+            count = total_rows,
+            suffix = if total_rows == 1 { "" } else { "s" },
+            elapsed = elapsed_ms,
+            truncated = if truncated {
+                format!(" · {}", t!("App.Database.server_truncated"))
+            } else {
+                String::new()
+            },
+            affected = affected
+        )
+        .to_string()
+    } else {
+        t!(
+            "App.Database.results_meta",
+            count = total_rows,
+            suffix = if total_rows == 1 { "" } else { "s" },
+            elapsed = elapsed_ms,
+            truncated = if truncated {
+                format!(" · {}", t!("App.Database.server_truncated"))
+            } else {
+                String::new()
+            }
+        )
+        .to_string()
+    };
 
     let header_row = {
         let mut row = div()
@@ -797,10 +818,10 @@ fn result_pane(
                 .py(SP_2)
                 .text_size(SIZE_SMALL)
                 .text_color(t.color.text_tertiary)
-                .child(SharedString::from(format!(
-                    "(showing first {} of {} rows; fetch more with LIMIT/OFFSET)",
-                    rows.len(),
-                    total_rows
+                .child(SharedString::from(t!(
+                    "App.Database.showing_first_rows",
+                    shown = rows.len(),
+                    total = total_rows
                 ))),
         );
     }
@@ -836,7 +857,7 @@ fn error_card(_t: &crate::theme::Theme, err: SharedString) -> gpui::AnyElement {
         .child(
             Card::new()
                 .padding(SP_2)
-                .child(SectionLabel::new("Error"))
+                .child(SectionLabel::new(t!("App.Database.error_title")))
                 .child(text::body(err).secondary()),
         )
         .into_any_element()
@@ -848,13 +869,13 @@ fn unsupported_placeholder(t: &crate::theme::Theme, kind: DbKind) -> gpui::AnyEl
     let (label, body_text) = match kind {
         DbKind::Redis => (
             "Redis",
-            "Redis browser ships in Phase B — this tab is a placeholder.",
+            t!("App.Database.phase_b_redis").to_string(),
         ),
         DbKind::Sqlite => (
             "SQLite",
-            "SQLite browser ships in Phase C — this tab is a placeholder.",
+            t!("App.Database.phase_c_sqlite").to_string(),
         ),
-        _ => ("Database", "Unsupported engine"),
+        _ => ("Database", t!("App.Database.unsupported_engine").to_string()),
     };
     div()
         .size_full()
@@ -888,6 +909,8 @@ fn dead_panel_placeholder(t: &crate::theme::Theme) -> gpui::AnyElement {
         .justify_center()
         .p(SP_4)
         .text_color(t.color.text_tertiary)
-        .child(SharedString::from("(app handle dropped — reopen tab)"))
+        .child(SharedString::from(
+            t!("App.Database.app_handle_dropped").to_string(),
+        ))
         .into_any_element()
 }

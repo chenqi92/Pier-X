@@ -708,23 +708,23 @@ impl TerminalPanel {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        self.focus_handle.focus(window);
         if event.button != MouseButton::Left {
-            cx.stop_propagation();
             return;
         }
+        if !self.surface_contains_point(event.position) {
+            return;
+        }
+        self.focus_handle.focus(window);
 
         let Some(position) = self.selection_position_for_point(event.position, false) else {
             self.selection = None;
             self.selection_dragging = false;
-            cx.stop_propagation();
             return;
         };
 
         if event.click_count >= 3 {
             self.selection = self.line_selection_at(position);
             self.selection_dragging = false;
-            cx.stop_propagation();
             cx.notify();
             return;
         }
@@ -732,7 +732,6 @@ impl TerminalPanel {
         if event.click_count >= 2 {
             self.selection = self.word_selection_at(position);
             self.selection_dragging = false;
-            cx.stop_propagation();
             cx.notify();
             return;
         }
@@ -748,7 +747,6 @@ impl TerminalPanel {
         }
         self.selection_dragging = true;
 
-        cx.stop_propagation();
         cx.notify();
     }
 
@@ -758,6 +756,9 @@ impl TerminalPanel {
         _: &mut Window,
         cx: &mut Context<Self>,
     ) {
+        if !self.surface_contains_point(event.position) {
+            return;
+        }
         if !self.selection_dragging || event.pressed_button != Some(MouseButton::Left) {
             return;
         }
@@ -765,7 +766,6 @@ impl TerminalPanel {
         if self.update_selection_head(event.position, true) {
             cx.notify();
         }
-        cx.stop_propagation();
     }
 
     fn on_terminal_mouse_up(
@@ -792,6 +792,9 @@ impl TerminalPanel {
         _: &mut Window,
         cx: &mut Context<Self>,
     ) {
+        if !self.surface_contains_point(event.position) {
+            return;
+        }
         let Some(term) = self.terminal.as_ref() else {
             return;
         };
@@ -816,7 +819,6 @@ impl TerminalPanel {
             self.scrollback_offset = self.scrollback_offset.saturating_sub(step.unsigned_abs());
         }
 
-        cx.stop_propagation();
         cx.notify();
     }
 
@@ -905,6 +907,10 @@ impl TerminalPanel {
         true
     }
 
+    fn surface_contains_point(&self, position: gpui::Point<Pixels>) -> bool {
+        self.selection_position_for_point(position, false).is_some()
+    }
+
     fn finish_selection(
         &mut self,
         position: gpui::Point<Pixels>,
@@ -918,7 +924,6 @@ impl TerminalPanel {
             self.selection = None;
         }
 
-        cx.stop_propagation();
         if changed || self.selection.is_none() {
             cx.notify();
         }

@@ -16,14 +16,10 @@ use std::rc::Rc;
 use std::time::Duration;
 
 use gpui::{
-    div, prelude::*, px, AnyElement, App, ClickEvent, Context, Entity, IntoElement, SharedString,
-    Window,
+    canvas, div, prelude::*, px, AnyElement, App, Bounds, ClickEvent, Context, DragMoveEvent,
+    Empty, Entity, EntityId, IntoElement, Pixels, Render, SharedString, Window,
 };
-use gpui_component::{
-    input::InputState,
-    resizable::{h_resizable, resizable_panel, ResizableState},
-    Icon as UiIcon, IconName, WindowExt as _,
-};
+use gpui_component::{input::InputState, Icon as UiIcon, IconName, PixelsExt as _, WindowExt as _};
 use pier_core::connections::ConnectionStore;
 use pier_core::ssh::SshConfig;
 
@@ -60,6 +56,26 @@ type ClickHandler = Rc<dyn Fn(&ClickEvent, &mut Window, &mut gpui::App) + 'stati
 const REMOTE_PANEL_REFRESH_MS: u64 = 5_000;
 const LOG_STREAM_POLL_MS: u64 = 250;
 const DEFAULT_LOG_COMMAND: &str = "journalctl -f -n 200 --no-pager";
+const PANE_RESIZE_HANDLE_W: Pixels = px(8.0);
+const PANE_RESIZE_RULE_W: Pixels = px(1.0);
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum PaneDivider {
+    Left,
+    Right,
+}
+
+#[derive(Clone)]
+struct PaneResizeDrag {
+    entity_id: EntityId,
+    divider: PaneDivider,
+}
+
+impl Render for PaneResizeDrag {
+    fn render(&mut self, _: &mut Window, _: &mut Context<Self>) -> impl IntoElement {
+        Empty
+    }
+}
 
 pub struct PierApp {
     // ─── Layout state ───
@@ -68,7 +84,7 @@ pub struct PierApp {
     left_panel_width: gpui::Pixels,
     right_panel_width: gpui::Pixels,
     right_mode: RightMode,
-    pane_group: Entity<ResizableState>,
+    pane_bounds: Bounds<Pixels>,
 
     // ─── Backend snapshots ───
     snapshot: ShellSnapshot,
@@ -107,7 +123,6 @@ impl PierApp {
         let connections_for_panel = connections.clone();
         let left_panel =
             cx.new(|lp_cx| LeftPanelView::new(weak_app, connections_for_panel, window, lp_cx));
-        let pane_group = cx.new(|_| ResizableState::default());
         let logs_command_input =
             cx.new(|c| InputState::new(window, c).placeholder("journalctl -f -n 200 --no-pager"));
         logs_command_input.update(cx, |state, c| {
@@ -122,7 +137,7 @@ impl PierApp {
             left_panel_width: LEFT_PANEL_DEFAULT_W,
             right_panel_width: RIGHT_PANEL_DEFAULT_W,
             right_mode: RightMode::Markdown,
-            pane_group,
+            pane_bounds: Bounds::default(),
             snapshot,
             connections,
             terminals: Vec::new(),
@@ -141,11 +156,6 @@ impl PierApp {
     /// [`LeftPanelView`] to keep its local cache in sync via `cx.observe`.
     pub fn connections_snapshot(&self) -> Vec<SshConfig> {
         self.connections.clone()
-    }
-
-    fn capture_current_panel_widths(&mut self, cx: &App) {
-        let sizes = self.pane_group.read(cx).sizes().clone();
-        self.capture_panel_widths(&sizes);
     }
 
     // ─── Terminal session management ───
@@ -393,39 +403,60 @@ impl Render for PierApp {
             .then(|| self.render_right(cx))
             .map(IntoElement::into_any_element);
         let statusbar = self.render_statusbar(&t);
-        let pane_state = self.pane_group.clone();
-        let weak = cx.entity().downgrade();
-        let mut row = h_resizable("pier-main-panes")
-            .with_state(&pane_state)
-            .on_resize(move |state, _, app| {
-                let sizes = state.read(app).sizes().clone();
-                let _ = weak.update(app, |this, _| {
-                    this.capture_panel_widths(&sizes);
-                });
-            });
-
-        if self.left_visible {
-            row = row.child(
-                resizable_panel()
-                    .size(self.left_panel_width)
-                    .size_range(LEFT_PANEL_MIN_W..LEFT_PANEL_MAX_W)
-                    .child(div().size_full().child(left_entity)),
+        let (left_width, right_width) = self.fitted_panel_widths();
+        let pane_bounds_target = cx.entity().downgrade();
+        let row = div()
+            .flex_1()
+            .min_h(px(0.0))
+            .w_full()
+            .relative()
+            .flex()
+            .flex_row()
+            .when(self.left_visible, |this| {
+                this.child(
+                    div()
+                        .flex_none()
+                        .w(left_width)
+                        .h_full()
+                        .min_h(px(0.0))
+                        .overflow_hidden()
+                        .child(left_entity),
+                )
+                .child(self.render_pane_resize_handle(PaneDivider::Left, &t, cx))
+            })
+            .child(
+                div()
+                    .flex_1()
+                    .min_w(CENTER_PANEL_MIN_W)
+                    .min_h(px(0.0))
+                    .h_full()
+                    .overflow_hidden()
+                    .child(center),
+            )
+            .when_some(right, |this, panel| {
+                this.child(self.render_pane_resize_handle(PaneDivider::Right, &t, cx))
+                    .child(
+                        div()
+                            .flex_none()
+                            .w(right_width)
+                            .h_full()
+                            .min_h(px(0.0))
+                            .overflow_hidden()
+                            .child(panel),
+                    )
+            })
+            .child(
+                canvas(
+                    move |bounds, _, cx| {
+                        let _ = pane_bounds_target.update(cx, |this, cx| {
+                            this.update_pane_bounds(bounds, cx);
+                        });
+                    },
+                    |_, _, _, _| {},
+                )
+                .absolute()
+                .size_full(),
             );
-        }
-        row = row.child(
-            resizable_panel()
-                .size_range(CENTER_PANEL_MIN_W..gpui::Pixels::MAX)
-                .child(div().size_full().child(center)),
-        );
-        if let Some(panel) = right {
-            row = row.child(
-                resizable_panel()
-                    .size(self.right_panel_width)
-                    .size_range(RIGHT_PANEL_MIN_W..RIGHT_PANEL_MAX_W)
-                    .child(div().size_full().child(panel)),
-            );
-        }
-        let row = div().flex_1().min_h(px(0.0)).w_full().child(row);
 
         div()
             .size_full()
@@ -439,13 +470,13 @@ impl Render for PierApp {
             // with terminal-internal key handling when terminal not focused.
             .key_context("PierApp")
             .on_action(cx.listener(|this, _: &ToggleLeftPanel, _, cx| {
-                this.capture_current_panel_widths(cx);
                 this.left_visible = !this.left_visible;
+                this.clamp_panel_widths();
                 cx.notify();
             }))
             .on_action(cx.listener(|this, _: &ToggleRightPanel, _, cx| {
-                this.capture_current_panel_widths(cx);
                 this.right_visible = !this.right_visible;
+                this.clamp_panel_widths();
                 cx.notify();
             }))
             .on_action(cx.listener(|this, _: &NewTab, window, cx| {
@@ -468,28 +499,180 @@ impl Render for PierApp {
 }
 
 impl PierApp {
-    fn capture_panel_widths(&mut self, sizes: &[gpui::Pixels]) {
-        match (self.left_visible, self.right_visible) {
-            (true, true) => {
-                if let Some(width) = sizes.first().copied() {
-                    self.left_panel_width = width;
-                }
-                if let Some(width) = sizes.get(2).copied() {
-                    self.right_panel_width = width;
-                }
-            }
-            (true, false) => {
-                if let Some(width) = sizes.first().copied() {
-                    self.left_panel_width = width;
-                }
-            }
-            (false, true) => {
-                if let Some(width) = sizes.get(1).copied() {
-                    self.right_panel_width = width;
-                }
-            }
-            (false, false) => {}
+    fn pane_divider_count(&self) -> usize {
+        usize::from(self.left_visible) + usize::from(self.right_visible)
+    }
+
+    fn pane_divider_total_width(&self) -> Pixels {
+        px(self.pane_divider_count() as f32 * PANE_RESIZE_HANDLE_W.as_f32())
+    }
+
+    fn fitted_panel_widths(&self) -> (Pixels, Pixels) {
+        let mut left = if self.left_visible {
+            self.left_panel_width
+                .clamp(LEFT_PANEL_MIN_W, LEFT_PANEL_MAX_W)
+        } else {
+            px(0.0)
+        };
+        let mut right = if self.right_visible {
+            self.right_panel_width
+                .clamp(RIGHT_PANEL_MIN_W, RIGHT_PANEL_MAX_W)
+        } else {
+            px(0.0)
+        };
+
+        let pane_width = self.pane_bounds.size.width;
+        if pane_width <= px(0.0) {
+            return (left, right);
         }
+
+        let available_side_total =
+            (pane_width - CENTER_PANEL_MIN_W - self.pane_divider_total_width()).max(px(0.0));
+        let total_side = px(left.as_f32() + right.as_f32());
+        if total_side <= available_side_total {
+            return (left, right);
+        }
+
+        let mut overflow = total_side - available_side_total;
+        if self.right_visible {
+            let reducible = (right - RIGHT_PANEL_MIN_W).max(px(0.0));
+            let reduction = overflow.min(reducible);
+            right -= reduction;
+            overflow -= reduction;
+        }
+        if overflow > px(0.0) && self.left_visible {
+            let reducible = (left - LEFT_PANEL_MIN_W).max(px(0.0));
+            let reduction = overflow.min(reducible);
+            left -= reduction;
+        }
+
+        (left, right)
+    }
+
+    fn clamp_panel_widths(&mut self) {
+        let (left_width, right_width) = self.fitted_panel_widths();
+        if self.left_visible {
+            self.left_panel_width = left_width;
+        }
+        if self.right_visible {
+            self.right_panel_width = right_width;
+        }
+    }
+
+    fn max_left_panel_width(&self, right_width: Pixels) -> Pixels {
+        let pane_width = self.pane_bounds.size.width;
+        if pane_width <= px(0.0) {
+            return LEFT_PANEL_MAX_W;
+        }
+
+        (pane_width - CENTER_PANEL_MIN_W - self.pane_divider_total_width() - right_width)
+            .min(LEFT_PANEL_MAX_W)
+            .max(LEFT_PANEL_MIN_W)
+    }
+
+    fn max_right_panel_width(&self, left_width: Pixels) -> Pixels {
+        let pane_width = self.pane_bounds.size.width;
+        if pane_width <= px(0.0) {
+            return RIGHT_PANEL_MAX_W;
+        }
+
+        (pane_width - CENTER_PANEL_MIN_W - self.pane_divider_total_width() - left_width)
+            .min(RIGHT_PANEL_MAX_W)
+            .max(RIGHT_PANEL_MIN_W)
+    }
+
+    fn update_pane_bounds(&mut self, bounds: Bounds<Pixels>, cx: &mut Context<Self>) {
+        let old_left = self.left_panel_width;
+        let old_right = self.right_panel_width;
+        self.pane_bounds = bounds;
+        self.clamp_panel_widths();
+
+        if self.left_panel_width != old_left || self.right_panel_width != old_right {
+            cx.notify();
+        }
+    }
+
+    fn resize_panel_divider(
+        &mut self,
+        divider: PaneDivider,
+        pointer_x: Pixels,
+        cx: &mut Context<Self>,
+    ) {
+        let (left_width, right_width) = self.fitted_panel_widths();
+
+        match divider {
+            PaneDivider::Left => {
+                if !self.left_visible {
+                    return;
+                }
+
+                let raw_width = (pointer_x - self.pane_bounds.left()).max(px(0.0));
+                self.left_panel_width =
+                    raw_width.clamp(LEFT_PANEL_MIN_W, self.max_left_panel_width(right_width));
+            }
+            PaneDivider::Right => {
+                if !self.right_visible {
+                    return;
+                }
+
+                let raw_width = (self.pane_bounds.right() - pointer_x).max(px(0.0));
+                self.right_panel_width =
+                    raw_width.clamp(RIGHT_PANEL_MIN_W, self.max_right_panel_width(left_width));
+            }
+        }
+
+        cx.notify();
+    }
+
+    fn render_pane_resize_handle(
+        &self,
+        divider: PaneDivider,
+        t: &crate::theme::Theme,
+        cx: &mut Context<Self>,
+    ) -> impl IntoElement {
+        div()
+            .id((
+                "pane-divider",
+                match divider {
+                    PaneDivider::Left => 0_u32,
+                    PaneDivider::Right => 1_u32,
+                },
+            ))
+            .h_full()
+            .w(PANE_RESIZE_HANDLE_W)
+            .flex_none()
+            .flex()
+            .items_center()
+            .justify_center()
+            .cursor_col_resize()
+            .hover(|style| style.bg(t.color.bg_hover))
+            .active(|style| style.bg(t.color.bg_active))
+            .on_drag(
+                PaneResizeDrag {
+                    entity_id: cx.entity_id(),
+                    divider,
+                },
+                |drag, _, _, cx| {
+                    cx.stop_propagation();
+                    cx.new(|_| drag.clone())
+                },
+            )
+            .on_drag_move(
+                cx.listener(move |this, e: &DragMoveEvent<PaneResizeDrag>, _, cx| {
+                    let drag = e.drag(cx);
+                    if drag.entity_id != cx.entity_id() || drag.divider != divider {
+                        return;
+                    }
+
+                    this.resize_panel_divider(divider, e.event.position.x, cx);
+                }),
+            )
+            .child(
+                div()
+                    .h_full()
+                    .w(PANE_RESIZE_RULE_W)
+                    .bg(t.color.border_subtle),
+            )
     }
 }
 

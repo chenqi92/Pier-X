@@ -5,14 +5,20 @@
 //!
 //! Lifecycle:
 //!   1. User clicks an SSH connection in the Servers list → PierApp creates
-//!      an `Entity<SshSessionState>` and stashes it as the active session.
-//!   2. First time the right panel renders Sftp mode, this view fires
-//!      `state.refresh()` which runs `connect_blocking + list_dir_blocking`
-//!      on the calling thread (~1-2s freeze on first connect).
-//!   3. Subsequent listings reuse the cached SFTP channel.
+//!      an `Entity<SshSessionState>` and stashes it as the active session;
+//!      `schedule_remote_bootstrap` kicks the SSH connect off on a
+//!      background-executor task.
+//!   2. When the user opens the Sftp tab (or navigates a directory),
+//!      `schedule_sftp_refresh` runs the `connect_blocking +
+//!      open_sftp_blocking + list_dir_blocking` chain inside
+//!      `cx.background_executor().spawn(..)`, so the UI thread never blocks
+//!      — the status pill flips through `Connecting → Refreshing → Connected`
+//!      and the empty-list region shows "(loading remote directory...)"
+//!      while the listing is in flight.
+//!   3. Subsequent listings reuse the cached SFTP channel; only the
+//!      `list_dir_blocking` call runs on the background task.
 //!
 //! Deferred (later phases):
-//!   - background-thread connect with `Connecting…` placeholder
 //!   - download / upload buttons + drag-and-drop into Files panel
 //!   - rename / delete / mkdir context menu
 
@@ -70,11 +76,13 @@ impl RenderOnce for SftpBrowser {
         };
 
         // Pull everything from the cached state. NEVER call refresh here —
-        // refresh runs `connect_blocking` + `list_dir_blocking` which would
-        // freeze the UI thread on first SFTP tab open. PierApp triggers
-        // refresh from the click handlers (open_ssh_terminal /
-        // navigate_sftp / sftp_cd_up) so by the time we render, the cached
-        // entries are already populated.
+        // refresh runs `connect_blocking` + `list_dir_blocking` and even
+        // though those calls live inside `cx.background_executor().spawn`
+        // (see `schedule_sftp_refresh` in app/state.rs), kicking them off
+        // from render would still violate CLAUDE.md Rule 6. PierApp
+        // triggers refresh from the click handlers (open_ssh_terminal /
+        // navigate_sftp / sftp_cd_up); render just reflects whatever
+        // `entries` / `status` / `last_error` the cached state carries.
         let (cwd_label, host_label, entries, status_pill, last_error, is_loading) = {
             let s = state_entity.read(cx);
             let cwd_label: SharedString = s.cwd.display().to_string().into();

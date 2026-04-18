@@ -15,7 +15,7 @@
 //!   layout flags. Single source of truth for cross-panel state.
 //! - **LeftPanelView** owns: file-browser cwd / entries cache, filter
 //!   inputs, active tab. Locally scoped state.
-//! - **`cx.observe(weak_app)`** keeps a cached `connections` snapshot in
+//! - **`cx.observe(weak_app)`** keeps a cached servers sidebar snapshot in
 //!   sync — fires on every PierApp `cx.notify()`, which is rare-ish
 //!   (tab/mode/connection/session changes).
 //!
@@ -25,7 +25,7 @@
 //! `weak_app.update(cx, |pa, cx| pa.open_ssh_terminal(idx, cx))` etc.
 //! File `.md` opens call `weak_app.update(cx, |pa, cx| pa.open_markdown_file(...))`.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::env;
 use std::path::PathBuf;
 use std::rc::Rc;
@@ -40,11 +40,12 @@ use gpui_component::{
     Icon as UiIcon, IconName,
 };
 use pier_core::paths;
-use pier_core::ssh::{AuthMethod, SshConfig};
+use pier_core::ssh::{AuthMethod, DetectedService, ServiceStatus, SshConfig};
 
 use crate::app::layout::LeftTab;
+use crate::app::ssh_session::{ConnectStatus, ServiceProbeStatus, TunnelStatus};
 use crate::app::PierApp;
-use crate::components::{text, Card, SectionLabel, StatusKind, StatusPill};
+use crate::components::{text, Button, Card, SectionLabel, StatusKind, StatusPill};
 use crate::theme::{
     radius::RADIUS_SM,
     spacing::{SP_1, SP_1_5, SP_2, SP_3},
@@ -54,6 +55,41 @@ use crate::theme::{
 use crate::views::file_tree::{self, FileTree, FsEntry};
 
 const UNGROUPED: &str = "Ungrouped";
+
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct ServersSidebarSnapshot {
+    pub connections: Vec<SshConfig>,
+    pub active_session: Option<ActiveServerSessionSnapshot>,
+}
+
+impl ServersSidebarSnapshot {
+    pub fn from_connections(connections: Vec<SshConfig>) -> Self {
+        Self {
+            connections,
+            active_session: None,
+        }
+    }
+}
+
+#[derive(Clone, Debug, PartialEq)]
+pub struct ActiveServerSessionSnapshot {
+    pub config: SshConfig,
+    pub status: ConnectStatus,
+    pub service_probe_status: ServiceProbeStatus,
+    pub service_probe_error: Option<String>,
+    pub services: Vec<DetectedService>,
+    pub tunnels: Vec<ServerTunnelSnapshot>,
+    pub last_error: Option<String>,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct ServerTunnelSnapshot {
+    pub service_name: String,
+    pub remote_port: u16,
+    pub local_port: Option<u16>,
+    pub status: TunnelStatus,
+    pub last_error: Option<String>,
+}
 
 pub struct LeftPanelView {
     weak_app: WeakEntity<PierApp>,
@@ -67,8 +103,9 @@ pub struct LeftPanelView {
     file_tree_entries: Vec<FsEntry>,
     file_tree_error: Option<String>,
 
-    /// Cached connections snapshot. Refreshed via `cx.observe(weak_app)`.
-    connections: Vec<SshConfig>,
+    /// Cached servers sidebar snapshot. Refreshed via `cx.observe(weak_app)`.
+    servers_snapshot: ServersSidebarSnapshot,
+    collapsed_server_groups: BTreeSet<String>,
 }
 
 impl LeftPanelView {
@@ -96,12 +133,16 @@ impl LeftPanelView {
         })
         .detach();
 
-        // Observe PierApp to keep our local connections cache fresh.
+        // Observe PierApp to keep our local servers snapshot fresh.
         if let Some(app_entity) = weak_app.upgrade() {
             cx.observe(&app_entity, |this, app, cx| {
-                let next = app.read(cx).connections_snapshot();
-                if next != this.connections {
-                    this.connections = next;
+                let next = app.read(cx).servers_sidebar_snapshot(cx);
+                if next != this.servers_snapshot {
+                    this.servers_snapshot = next;
+                    prune_collapsed_groups(
+                        &mut this.collapsed_server_groups,
+                        &this.servers_snapshot.connections,
+                    );
                     cx.notify();
                 }
             })
@@ -114,6 +155,8 @@ impl LeftPanelView {
             Err(err) => (Vec::new(), Some(format!("{err}"))),
         };
 
+        let servers_snapshot = ServersSidebarSnapshot::from_connections(initial_connections);
+
         Self {
             weak_app,
             active_tab: LeftTab::Files,
@@ -122,7 +165,8 @@ impl LeftPanelView {
             file_tree_cwd: cwd,
             file_tree_entries: entries,
             file_tree_error: error,
-            connections: initial_connections,
+            servers_snapshot,
+            collapsed_server_groups: BTreeSet::new(),
         }
     }
 
@@ -162,6 +206,15 @@ impl LeftPanelView {
     pub fn refresh_cwd(&mut self, cx: &mut Context<Self>) {
         let cwd = self.file_tree_cwd.clone();
         self.enter_dir(cwd, cx);
+    }
+
+    fn toggle_server_group(&mut self, group: &str, cx: &mut Context<Self>) {
+        if self.collapsed_server_groups.contains(group) {
+            self.collapsed_server_groups.remove(group);
+        } else {
+            self.collapsed_server_groups.insert(group.to_string());
+        }
+        cx.notify();
     }
 }
 
@@ -342,6 +395,9 @@ impl LeftPanelView {
                 .weak_app
                 .update(cx, |pa, cx| pa.open_add_connection(window, cx));
         });
+        let on_toggle_group = cx.listener(|this, group: &SharedString, _w, cx| {
+            this.toggle_server_group(group.as_ref(), cx);
+        });
 
         div()
             .w_full()
@@ -364,12 +420,14 @@ impl LeftPanelView {
                     .overflow_y_scrollbar()
                     .child(render_servers_list(
                         t,
-                        &self.connections,
+                        &self.servers_snapshot,
+                        &self.collapsed_server_groups,
                         &query,
                         Rc::new(on_select),
                         Rc::new(on_edit),
                         Rc::new(on_delete),
-                        Box::new(on_add),
+                        Rc::new(on_add),
+                        Rc::new(on_toggle_group),
                     )),
             )
     }
@@ -380,39 +438,39 @@ impl LeftPanelView {
 // ─────────────────────────────────────────────────────────
 
 type ServerSelector = Rc<dyn Fn(&usize, &mut Window, &mut App) + 'static>;
-type AddConnectionHandler = Box<dyn Fn(&ClickEvent, &mut Window, &mut App) + 'static>;
+type AddConnectionHandler = Rc<dyn Fn(&ClickEvent, &mut Window, &mut App) + 'static>;
+type GroupToggleHandler = Rc<dyn Fn(&SharedString, &mut Window, &mut App) + 'static>;
 
 #[allow(clippy::too_many_arguments)]
 fn render_servers_list(
     t: &crate::theme::Theme,
-    connections: &[SshConfig],
+    snapshot: &ServersSidebarSnapshot,
+    collapsed_groups: &BTreeSet<String>,
     query: &str,
     on_select: ServerSelector,
     on_edit: ServerSelector,
     on_delete: ServerSelector,
     on_add: AddConnectionHandler,
+    on_toggle_group: GroupToggleHandler,
 ) -> impl IntoElement {
     let mut col = div().p(SP_2).flex().flex_col().gap(SP_2);
 
-    col = col.child(servers_header(t, connections.len(), on_add));
+    if let Some(active_session) = snapshot.active_session.as_ref() {
+        col = col.child(active_connection_card(active_session));
+    }
 
-    if connections.is_empty() {
-        col = col.child(
-            Card::new()
-                .padding(SP_2)
-                .child(SectionLabel::new("No saved SSH connections"))
-                .child(
-                    text::body(format!(
-                        "Use the + button above or edit {}.",
-                        connections_store_label()
-                    ))
-                    .secondary(),
-                ),
-        );
+    col = col.child(servers_header(
+        t,
+        snapshot.connections.len(),
+        on_add.clone(),
+    ));
+
+    if snapshot.connections.is_empty() {
+        col = col.child(servers_empty_state(on_add));
         return col;
     }
 
-    let groups = group_servers(connections, query);
+    let groups = group_servers(snapshot, query);
     if groups.is_empty() {
         col = col.child(
             div()
@@ -424,18 +482,18 @@ fn render_servers_list(
         );
         return col;
     }
-    for (group, items) in groups {
-        col = col.child(group_header(t, group, items.len()));
-        for (orig_idx, conn) in items {
-            col = col.child(server_row(
-                t,
-                orig_idx,
-                conn,
-                on_select.clone(),
-                on_edit.clone(),
-                on_delete.clone(),
-            ));
-        }
+    for group in groups {
+        let is_collapsed = collapsed_groups.contains(&group.key);
+        col = col.child(server_group_card(
+            t,
+            &group,
+            snapshot.active_session.as_ref(),
+            is_collapsed,
+            on_toggle_group.clone(),
+            on_select.clone(),
+            on_edit.clone(),
+            on_delete.clone(),
+        ));
     }
     col
 }
@@ -445,6 +503,7 @@ fn servers_header(
     count: usize,
     on_add: AddConnectionHandler,
 ) -> impl IntoElement {
+    let on_add_click = on_add.clone();
     div()
         .h(px(28.0))
         .flex()
@@ -461,7 +520,7 @@ fn servers_header(
         .child(StatusPill::new(
             format!("{count}"),
             if count == 0 {
-                StatusKind::Warning
+                StatusKind::Info
             } else {
                 StatusKind::Success
             },
@@ -482,7 +541,7 @@ fn servers_header(
                 .text_color(t.color.text_secondary)
                 .cursor_pointer()
                 .hover(|s| s.bg(t.color.bg_hover).border_color(t.color.border_default))
-                .on_click(on_add)
+                .on_click(move |ev, window, app| on_add_click(ev, window, app))
                 .child(
                     UiIcon::new(IconName::Plus)
                         .size(px(12.0))
@@ -491,67 +550,86 @@ fn servers_header(
         )
 }
 
-fn group_header(t: &crate::theme::Theme, label: &str, count: usize) -> impl IntoElement {
-    div()
-        .flex()
-        .flex_row()
-        .items_center()
-        .gap(SP_1)
-        .px(SP_3)
-        .pt(SP_2)
-        .child(
-            div()
-                .text_size(SIZE_CAPTION)
-                .font_weight(WEIGHT_MEDIUM)
-                .text_color(t.color.text_tertiary)
-                .child(SharedString::from(label.to_string())),
-        )
-        .child(
-            div()
-                .text_size(SIZE_CAPTION)
-                .text_color(t.color.text_tertiary)
-                .child(format!("· {count}")),
-        )
+struct ServerGroup<'a> {
+    key: String,
+    label: SharedString,
+    active_count: usize,
+    items: Vec<ServerGroupItem<'a>>,
 }
 
-fn group_servers<'a>(
-    connections: &'a [SshConfig],
-    query: &str,
-) -> Vec<(&'static str, Vec<(usize, &'a SshConfig)>)> {
-    let q = query.to_lowercase();
-    let mut named: BTreeMap<String, Vec<(usize, &SshConfig)>> = BTreeMap::new();
-    let mut ungrouped: Vec<(usize, &SshConfig)> = Vec::new();
-    for (idx, conn) in connections.iter().enumerate() {
-        if !q.is_empty()
-            && !conn.name.to_lowercase().contains(&q)
-            && !conn.host.to_lowercase().contains(&q)
-        {
+struct ServerGroupItem<'a> {
+    idx: usize,
+    conn: &'a SshConfig,
+    is_active: bool,
+}
+
+fn group_servers<'a>(snapshot: &'a ServersSidebarSnapshot, query: &str) -> Vec<ServerGroup<'a>> {
+    let q = query.trim().to_lowercase();
+    let mut groups: BTreeMap<String, Vec<ServerGroupItem<'a>>> = BTreeMap::new();
+
+    for (idx, conn) in snapshot.connections.iter().enumerate() {
+        if !connection_matches_query(conn, &q) {
             continue;
         }
-        match conn
-            .tags
-            .first()
-            .map(|s| s.trim())
-            .filter(|s| !s.is_empty())
-        {
-            Some(tag) => named.entry(tag.to_string()).or_default().push((idx, conn)),
-            None => ungrouped.push((idx, conn)),
-        }
+
+        let key = group_key_for_connection(conn);
+        groups.entry(key).or_default().push(ServerGroupItem {
+            idx,
+            conn,
+            is_active: connection_is_active(snapshot, conn),
+        });
     }
-    let mut out: Vec<(&'static str, Vec<(usize, &SshConfig)>)> = named
+
+    groups
         .into_iter()
-        .map(|(k, v)| (string_to_static(k), v))
-        .collect();
-    if !ungrouped.is_empty() {
-        out.push((UNGROUPED, ungrouped));
-    }
-    out
+        .map(|(key, items)| {
+            let active_count = items.iter().filter(|item| item.is_active).count();
+            ServerGroup {
+                label: key.clone().into(),
+                key,
+                active_count,
+                items,
+            }
+        })
+        .collect()
 }
 
-/// Same Box::leak trick as the previous left_panel.rs — bounded leak count
-/// equals number of distinct user tags.
-fn string_to_static(s: String) -> &'static str {
-    Box::leak(s.into_boxed_str())
+fn group_key_for_connection(conn: &SshConfig) -> String {
+    conn.tags
+        .first()
+        .map(|tag| tag.trim())
+        .filter(|tag| !tag.is_empty())
+        .map(ToOwned::to_owned)
+        .unwrap_or_else(|| UNGROUPED.to_string())
+}
+
+fn connection_matches_query(conn: &SshConfig, query: &str) -> bool {
+    if query.is_empty() {
+        return true;
+    }
+
+    conn.name.to_lowercase().contains(query)
+        || conn.host.to_lowercase().contains(query)
+        || conn.user.to_lowercase().contains(query)
+        || conn
+            .tags
+            .iter()
+            .any(|tag| tag.to_lowercase().contains(query))
+}
+
+fn connection_is_active(snapshot: &ServersSidebarSnapshot, conn: &SshConfig) -> bool {
+    snapshot
+        .active_session
+        .as_ref()
+        .is_some_and(|active| active.config == *conn)
+}
+
+fn prune_collapsed_groups(collapsed_groups: &mut BTreeSet<String>, connections: &[SshConfig]) {
+    let live_groups = connections
+        .iter()
+        .map(group_key_for_connection)
+        .collect::<BTreeSet<_>>();
+    collapsed_groups.retain(|group| live_groups.contains(group));
 }
 
 fn connections_store_label() -> String {
@@ -560,10 +638,188 @@ fn connections_store_label() -> String {
         .unwrap_or_else(|| "the Pier-X connection store".to_string())
 }
 
+#[allow(clippy::too_many_arguments)]
+fn server_group_card(
+    t: &crate::theme::Theme,
+    group: &ServerGroup<'_>,
+    active_session: Option<&ActiveServerSessionSnapshot>,
+    is_collapsed: bool,
+    on_toggle_group: GroupToggleHandler,
+    on_select: ServerSelector,
+    on_edit: ServerSelector,
+    on_delete: ServerSelector,
+) -> impl IntoElement {
+    let toggle_key: SharedString = group.key.clone().into();
+    let toggle_id: SharedString = format!("servers-group-{}", group.key).into();
+    let marker = if is_collapsed { ">" } else { "v" };
+
+    let card = Card::new().padding(SP_2).child(
+        div()
+            .id(gpui::ElementId::Name(toggle_id))
+            .h(px(24.0))
+            .flex()
+            .flex_row()
+            .items_center()
+            .gap(SP_2)
+            .cursor_pointer()
+            .hover(|style| style.bg(t.color.bg_hover))
+            .on_click(move |_, window, app| on_toggle_group(&toggle_key, window, app))
+            .child(
+                div()
+                    .w(px(10.0))
+                    .text_size(SIZE_CAPTION)
+                    .font_family(t.font_mono.clone())
+                    .text_color(t.color.text_tertiary)
+                    .child(marker),
+            )
+            .child(
+                div()
+                    .text_size(SIZE_CAPTION)
+                    .font_weight(WEIGHT_MEDIUM)
+                    .text_color(t.color.text_secondary)
+                    .child(group.label.clone()),
+            )
+            .child(StatusPill::new(
+                format!("{}", group.items.len()),
+                StatusKind::Info,
+            ))
+            .child(if group.active_count > 0 {
+                StatusPill::new(format!("{} live", group.active_count), StatusKind::Success)
+                    .into_any_element()
+            } else {
+                div().into_any_element()
+            }),
+    );
+
+    if is_collapsed {
+        return card;
+    }
+
+    let mut rows = div().pt(SP_2).flex().flex_col().gap(SP_2);
+    for item in &group.items {
+        let row_session = active_session.filter(|session| session.config == *item.conn);
+        rows = rows.child(server_row(
+            t,
+            item.idx,
+            item.conn,
+            item.is_active,
+            row_session,
+            on_select.clone(),
+            on_edit.clone(),
+            on_delete.clone(),
+        ));
+    }
+
+    card.child(rows)
+}
+
+fn active_connection_card(session: &ActiveServerSessionSnapshot) -> impl IntoElement {
+    let endpoint = connection_endpoint(&session.config);
+    let (connect_label, connect_kind) = connection_status_pill(session.status);
+    let (probe_label, probe_kind) =
+        service_probe_pill(&session.service_probe_status, !session.services.is_empty());
+
+    let mut card = Card::new()
+        .padding(SP_3)
+        .child(
+            div()
+                .flex()
+                .flex_row()
+                .flex_wrap()
+                .items_center()
+                .gap(SP_2)
+                .child(SectionLabel::new("Active connection"))
+                .child(StatusPill::new(connect_label, connect_kind))
+                .child(StatusPill::new(probe_label, probe_kind)),
+        )
+        .child(text::body(session.config.name.clone()))
+        .child(text::mono(endpoint).secondary());
+
+    if !session.services.is_empty() {
+        let mut services = div().pt(SP_2).flex().flex_row().flex_wrap().gap(SP_2);
+        for service in &session.services {
+            services = services.child(StatusPill::new(
+                service_label(service),
+                service_status_kind(service.status),
+            ));
+        }
+        card = card
+            .child(text::caption("Detected services").secondary())
+            .child(services);
+    } else {
+        let services_empty = match session.service_probe_status {
+            ServiceProbeStatus::Idle => "Service discovery starts after the SSH session boots.",
+            ServiceProbeStatus::Probing => "Detecting MySQL, PostgreSQL, Redis and Docker.",
+            ServiceProbeStatus::Ready => "No supported remote services detected yet.",
+            ServiceProbeStatus::Failed => "Service discovery failed for this connection.",
+        };
+        card = card.child(text::body(services_empty).secondary());
+    }
+
+    if !session.tunnels.is_empty() {
+        let mut tunnels = div().pt(SP_2).flex().flex_row().flex_wrap().gap(SP_2);
+        for tunnel in &session.tunnels {
+            tunnels = tunnels.child(StatusPill::new(
+                tunnel_label(tunnel),
+                tunnel_status_kind(tunnel.status),
+            ));
+        }
+        card = card
+            .child(text::caption("Active tunnels").secondary())
+            .child(tunnels);
+    } else {
+        card = card.child(text::body("No forwarded services yet.").secondary());
+    }
+
+    if let Some(err) = session
+        .service_probe_error
+        .as_ref()
+        .or(session.last_error.as_ref())
+    {
+        card = card.child(text::body(err.clone()).secondary());
+    }
+
+    card
+}
+
+fn servers_empty_state(on_add: AddConnectionHandler) -> impl IntoElement {
+    let on_add_click = on_add.clone();
+    let store_path: SharedString = connections_store_label().into();
+
+    Card::new()
+        .padding(SP_3)
+        .child(SectionLabel::new("No saved SSH connections"))
+        .child(
+            text::body(
+                "Add a server to open remote terminals, browse files, and unlock the right-side service panels.",
+            )
+            .secondary(),
+        )
+        .child(
+            div()
+                .pt(SP_2)
+                .child(
+                    Button::primary("servers-empty-add", "Add SSH Connection")
+                        .on_click(move |ev, window, app| on_add_click(ev, window, app)),
+                ),
+        )
+        .child(
+            div()
+                .pt(SP_2)
+                .flex()
+                .flex_col()
+                .gap(SP_1)
+                .child(text::caption("Connection store").secondary())
+                .child(text::mono(store_path).secondary()),
+        )
+}
+
 fn server_row(
     t: &crate::theme::Theme,
     idx: usize,
     conn: &SshConfig,
+    is_active: bool,
+    active_session: Option<&ActiveServerSessionSnapshot>,
     on_select: ServerSelector,
     on_edit: ServerSelector,
     on_delete: ServerSelector,
@@ -579,6 +835,7 @@ fn server_row(
     let row_id: SharedString = format!("left-server-{idx}").into();
     let edit_id: SharedString = format!("left-server-edit-{idx}").into();
     let delete_id: SharedString = format!("left-server-delete-{idx}").into();
+    let active_pill = active_session.map(|session| connection_status_pill(session.status));
 
     div()
         .id(gpui::ElementId::Name(row_id))
@@ -588,9 +845,17 @@ fn server_row(
         .px(SP_2)
         .py(SP_2)
         .rounded(RADIUS_SM)
-        .bg(t.color.bg_surface)
+        .bg(if is_active {
+            t.color.accent_subtle
+        } else {
+            t.color.bg_surface
+        })
         .border_1()
-        .border_color(t.color.border_subtle)
+        .border_color(if is_active {
+            t.color.accent_muted
+        } else {
+            t.color.border_subtle
+        })
         .cursor_pointer()
         .hover(|s| s.bg(t.color.bg_hover).border_color(t.color.border_default))
         .on_click(move |_, w, app| on_select(&idx, w, app))
@@ -613,6 +878,11 @@ fn server_row(
                         .text_color(t.color.text_tertiary)
                         .child(auth),
                 )
+                .child(if let Some((label, kind)) = active_pill {
+                    StatusPill::new(label, kind).into_any_element()
+                } else {
+                    div().into_any_element()
+                })
                 .child(div().flex_1())
                 .child(row_action_button(
                     t,
@@ -631,11 +901,113 @@ fn server_row(
         )
         .child(
             div()
-                .text_size(SIZE_MONO_SMALL)
-                .font_family(t.font_mono.clone())
-                .text_color(t.color.text_secondary)
-                .child(address),
+                .flex()
+                .flex_row()
+                .flex_wrap()
+                .items_center()
+                .gap(SP_2)
+                .child(
+                    div()
+                        .text_size(SIZE_MONO_SMALL)
+                        .font_family(t.font_mono.clone())
+                        .text_color(t.color.text_secondary)
+                        .child(address),
+                )
+                .child(if conn.tags.is_empty() {
+                    div().into_any_element()
+                } else {
+                    div()
+                        .text_size(SIZE_SMALL)
+                        .text_color(t.color.text_tertiary)
+                        .child(conn.tags.join(", "))
+                        .into_any_element()
+                }),
         )
+}
+
+fn connection_endpoint(config: &SshConfig) -> SharedString {
+    if config.port == 22 {
+        format!("{}@{}", config.user, config.host).into()
+    } else {
+        format!("{}@{}:{}", config.user, config.host, config.port).into()
+    }
+}
+
+fn connection_status_pill(status: ConnectStatus) -> (SharedString, StatusKind) {
+    match status {
+        ConnectStatus::Idle => ("idle".into(), StatusKind::Warning),
+        ConnectStatus::Connecting => ("connecting".into(), StatusKind::Info),
+        ConnectStatus::Refreshing => ("loading".into(), StatusKind::Info),
+        ConnectStatus::Connected => ("connected".into(), StatusKind::Success),
+        ConnectStatus::Failed => ("error".into(), StatusKind::Error),
+    }
+}
+
+fn service_probe_pill(
+    status: &ServiceProbeStatus,
+    has_services: bool,
+) -> (SharedString, StatusKind) {
+    match status {
+        ServiceProbeStatus::Idle => ("idle".into(), StatusKind::Warning),
+        ServiceProbeStatus::Probing => ("detecting".into(), StatusKind::Info),
+        ServiceProbeStatus::Ready if has_services => ("services ready".into(), StatusKind::Success),
+        ServiceProbeStatus::Ready => ("no services".into(), StatusKind::Warning),
+        ServiceProbeStatus::Failed => ("services error".into(), StatusKind::Error),
+    }
+}
+
+fn service_label(service: &DetectedService) -> SharedString {
+    let mut label = match service.name.as_str() {
+        "mysql" => "MySQL".to_string(),
+        "postgresql" => "PostgreSQL".to_string(),
+        "redis" => "Redis".to_string(),
+        "docker" => "Docker".to_string(),
+        other => other.to_string(),
+    };
+
+    if !service.version.is_empty() && service.version != "unknown" {
+        label.push(' ');
+        label.push_str(&service.version);
+    } else if service.port > 0 {
+        label.push_str(&format!(" :{}", service.port));
+    }
+
+    label.into()
+}
+
+fn service_status_kind(status: ServiceStatus) -> StatusKind {
+    match status {
+        ServiceStatus::Running => StatusKind::Success,
+        ServiceStatus::Stopped => StatusKind::Warning,
+        ServiceStatus::Installed => StatusKind::Info,
+    }
+}
+
+fn tunnel_label(tunnel: &ServerTunnelSnapshot) -> SharedString {
+    let service = match tunnel.service_name.as_str() {
+        "mysql" => "MySQL",
+        "postgresql" => "PostgreSQL",
+        "redis" => "Redis",
+        "docker" => "Docker",
+        other => other,
+    };
+
+    match (tunnel.status, tunnel.local_port) {
+        (TunnelStatus::Active, Some(local_port)) => {
+            format!("{service} localhost:{local_port} -> {}", tunnel.remote_port).into()
+        }
+        (TunnelStatus::Opening, _) => format!("{service} opening -> {}", tunnel.remote_port).into(),
+        (TunnelStatus::Failed, _) => format!("{service} error -> {}", tunnel.remote_port).into(),
+        (TunnelStatus::Active, None) => format!("{service} -> {}", tunnel.remote_port).into(),
+    }
+}
+
+fn tunnel_status_kind(status: TunnelStatus) -> StatusKind {
+    match status {
+        TunnelStatus::Opening => StatusKind::Info,
+        TunnelStatus::Active => StatusKind::Success,
+        TunnelStatus::Failed => StatusKind::Error,
+    }
 }
 
 fn row_action_button(
@@ -672,6 +1044,92 @@ fn row_action_button(
                 .size(px(12.0))
                 .text_color(t.color.text_tertiary),
         )
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{
+        group_servers, prune_collapsed_groups, ActiveServerSessionSnapshot, ServerTunnelSnapshot,
+        ServersSidebarSnapshot, UNGROUPED,
+    };
+    use crate::app::ssh_session::{ConnectStatus, ServiceProbeStatus, TunnelStatus};
+    use pier_core::ssh::{AuthMethod, DetectedService, ServiceStatus, SshConfig};
+    use std::collections::BTreeSet;
+
+    fn sample_config(name: &str, host: &str, tag: Option<&str>) -> SshConfig {
+        SshConfig {
+            name: name.into(),
+            host: host.into(),
+            port: 22,
+            user: "pier".into(),
+            auth: AuthMethod::Agent,
+            connect_timeout_secs: 5,
+            tags: tag.into_iter().map(|value| value.to_string()).collect(),
+        }
+    }
+
+    #[test]
+    fn group_servers_tracks_active_connection_and_ungrouped_bucket() {
+        let active = sample_config("api-prod", "10.0.0.2", Some("Production"));
+        let snapshot = ServersSidebarSnapshot {
+            connections: vec![
+                active.clone(),
+                sample_config("db-prod", "10.0.0.3", Some("Production")),
+                sample_config("sandbox", "10.0.0.8", None),
+            ],
+            active_session: Some(ActiveServerSessionSnapshot {
+                config: active,
+                status: ConnectStatus::Connected,
+                service_probe_status: ServiceProbeStatus::Ready,
+                service_probe_error: None,
+                services: vec![DetectedService {
+                    name: "redis".into(),
+                    version: "7.2".into(),
+                    status: ServiceStatus::Running,
+                    port: 6379,
+                }],
+                tunnels: vec![ServerTunnelSnapshot {
+                    service_name: "redis".into(),
+                    remote_port: 6379,
+                    local_port: Some(16379),
+                    status: TunnelStatus::Active,
+                    last_error: None,
+                }],
+                last_error: None,
+            }),
+        };
+
+        let groups = group_servers(&snapshot, "");
+        assert_eq!(groups.len(), 2);
+
+        let production = groups
+            .iter()
+            .find(|group| group.key == "Production")
+            .expect("production group");
+        assert_eq!(production.active_count, 1);
+        assert!(production.items.iter().any(|item| item.is_active));
+
+        let ungrouped = groups
+            .iter()
+            .find(|group| group.key == UNGROUPED)
+            .expect("ungrouped group");
+        assert_eq!(ungrouped.items.len(), 1);
+        assert_eq!(ungrouped.active_count, 0);
+    }
+
+    #[test]
+    fn prune_collapsed_groups_drops_removed_group_keys() {
+        let mut collapsed = BTreeSet::from(["Production".to_string(), "Legacy".to_string()]);
+        let connections = vec![
+            sample_config("api-prod", "10.0.0.2", Some("Production")),
+            sample_config("sandbox", "10.0.0.8", None),
+        ];
+
+        prune_collapsed_groups(&mut collapsed, &connections);
+
+        assert!(collapsed.contains("Production"));
+        assert!(!collapsed.contains("Legacy"));
+    }
 }
 
 // ─────────────────────────────────────────────────────────

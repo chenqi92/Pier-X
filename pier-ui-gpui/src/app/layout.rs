@@ -5,7 +5,7 @@
 //! ```text
 //! ┌──────────┬────────────────────────┬──────────────┐
 //! │  Left    │       Terminal         │  Right Panel │
-//! │  Files / │       (or Welcome      │  (10 modes)  │
+//! │  Files / │       (or Welcome      │  (Pier modes)│
 //! │  Servers │       cover state)     │              │
 //! └──────────┴────────────────────────┴──────────────┘
 //! ```
@@ -58,7 +58,7 @@ impl LeftTab {
     pub const ALL: [LeftTab; 2] = [LeftTab::Files, LeftTab::Servers];
 }
 
-// ─── Right panel: 10 modes ──────────────────────────────────────────────
+// ─── Right panel: Pier-aligned shell modes ──────────────────────────────
 
 #[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
 pub enum RightMode {
@@ -115,9 +115,9 @@ impl RightMode {
 
     pub fn context(self) -> RightContext {
         match self {
-            // Pier defaults to Markdown / Git as local-context tools. Pier-X
-            // adds SQLite (no remote service required, just a file path) to
-            // the local set so the cover-state demo doesn't look bare.
+            // Keep the standard sidebar aligned with Pier: local tooling is
+            // Markdown + Git. SQLite stays implemented as an internal panel,
+            // but it is not exposed in the default right-sidebar flow.
             RightMode::Markdown | RightMode::Git | RightMode::Sqlite => RightContext::Local,
             RightMode::Monitor
             | RightMode::Sftp
@@ -177,10 +177,10 @@ impl RightMode {
         }
     }
 
-    /// Display order in the right panel's vertical icon bar.
-    /// Mirrors Pier's `RightPanelMode` declaration order, with Pier-X's
-    /// extra database modes (Postgres, SQLite) inserted near MySQL/Redis.
-    pub const ALL: [RightMode; 10] = [
+    /// Display order in the right panel's vertical icon bar and the default
+    /// availability set for live sessions. Keep this aligned with Pier's
+    /// standard shell instead of exposing every internal panel by default.
+    pub const ALL: [RightMode; 9] = [
         RightMode::Markdown,
         RightMode::Monitor,
         RightMode::Sftp,
@@ -189,9 +189,19 @@ impl RightMode {
         RightMode::Mysql,
         RightMode::Postgres,
         RightMode::Redis,
-        RightMode::Sqlite,
         RightMode::Logs,
     ];
 
-    pub const LOCAL_ONLY: [RightMode; 3] = [RightMode::Markdown, RightMode::Git, RightMode::Sqlite];
+    pub const LOCAL_ONLY: [RightMode; 2] = [RightMode::Markdown, RightMode::Git];
+}
+
+#[cfg(test)]
+mod tests {
+    use super::RightMode;
+
+    #[test]
+    fn sqlite_is_not_exposed_in_default_sidebar_sets() {
+        assert!(!RightMode::ALL.contains(&RightMode::Sqlite));
+        assert!(!RightMode::LOCAL_ONLY.contains(&RightMode::Sqlite));
+    }
 }

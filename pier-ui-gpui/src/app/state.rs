@@ -17,7 +17,7 @@ use std::time::Duration;
 
 use gpui::{
     canvas, div, prelude::*, px, AnyElement, App, Bounds, ClickEvent, Context, DragMoveEvent,
-    Empty, Entity, EntityId, IntoElement, Pixels, Render, SharedString, Window,
+    Empty, Entity, EntityId, IntoElement, MouseButton, Pixels, Render, SharedString, Window,
 };
 use gpui_component::{input::InputState, Icon as UiIcon, IconName, PixelsExt as _, WindowExt as _};
 use pier_core::connections::ConnectionStore;
@@ -43,7 +43,10 @@ use crate::theme::{
     typography::{SIZE_CAPTION, WEIGHT_MEDIUM},
     ThemeMode,
 };
-use crate::views::left_panel_view::{icons as toolbar_icons, LeftPanelView};
+use crate::views::left_panel_view::{
+    icons as toolbar_icons, ActiveServerSessionSnapshot, LeftPanelView, ServerTunnelSnapshot,
+    ServersSidebarSnapshot,
+};
 use crate::views::right_panel::{
     DockerActionHandler, DockerActionRequest, DockerRefreshHandler, LogsAction, LogsActionHandler,
     ModeSelector, RightPanel,
@@ -107,7 +110,7 @@ pub struct PierApp {
     /// entity so its `cx.notify()` only repaints the left column rather
     /// than the whole shell on every keystroke. PierApp talks to it only
     /// via `cx.observe` (LeftPanelView pulls fresh `connections` on PierApp
-    /// notify) and read-only accessors like [`Self::connections_snapshot`].
+    /// notify) and read-only accessors like [`Self::servers_sidebar_snapshot`].
     left_panel: Entity<LeftPanelView>,
     window_bounds_observer_started: bool,
     remote_panel_poll_loop_started: bool,
@@ -152,10 +155,36 @@ impl PierApp {
         }
     }
 
-    /// Read-only snapshot of the saved connections, used by
+    /// Read-only snapshot of the Servers sidebar model, used by
     /// [`LeftPanelView`] to keep its local cache in sync via `cx.observe`.
-    pub fn connections_snapshot(&self) -> Vec<SshConfig> {
-        self.connections.clone()
+    pub fn servers_sidebar_snapshot(&self, cx: &App) -> ServersSidebarSnapshot {
+        let active_session = self.active_session.as_ref().map(|session_entity| {
+            let session = session_entity.read(cx);
+            ActiveServerSessionSnapshot {
+                config: session.config.clone(),
+                status: session.status,
+                service_probe_status: session.service_probe_status.clone(),
+                service_probe_error: session.service_probe_error.clone(),
+                services: session.services.clone(),
+                tunnels: session
+                    .tunnels
+                    .iter()
+                    .map(|tunnel| ServerTunnelSnapshot {
+                        service_name: tunnel.service_name.clone(),
+                        remote_port: tunnel.remote_port,
+                        local_port: tunnel.local_port,
+                        status: tunnel.status,
+                        last_error: tunnel.last_error.clone(),
+                    })
+                    .collect(),
+                last_error: session.last_error.clone(),
+            }
+        });
+
+        ServersSidebarSnapshot {
+            connections: self.connections.clone(),
+            active_session,
+        }
     }
 
     // ─── Terminal session management ───
@@ -796,23 +825,26 @@ impl PierApp {
                 toggle_left_icon,
                 cx.listener(|this, _: &ClickEvent, _, cx| {
                     this.left_visible = !this.left_visible;
+                    this.clamp_panel_widths();
                     cx.notify();
                 }),
             ))
             .child(
-                div()
-                    .min_w(px(0.0))
-                    .text_size(SIZE_CAPTION)
-                    .font_family(t.font_mono.clone())
-                    .text_color(t.color.text_secondary)
-                    .child(self.snapshot.workspace_path.clone()),
+                div().flex_1().min_w(px(0.0)).overflow_hidden().child(
+                    div()
+                        .w_full()
+                        .text_size(SIZE_CAPTION)
+                        .font_family(t.font_mono.clone())
+                        .text_color(t.color.text_secondary)
+                        .child(self.snapshot.workspace_path.clone()),
+                ),
             )
-            .child(div().flex_1())
             .child(toolbar_icon_button(
                 t,
                 "tb-new-tab",
                 toolbar_icons::NEW_TAB,
                 cx.listener(|this, _: &ClickEvent, window, cx| {
+                    log::info!("toolbar: open new-tab chooser");
                     let weak = cx.entity().downgrade();
                     let connections = this.connections.clone();
                     crate::views::new_tab_chooser::open(window, cx, weak, connections);
@@ -823,6 +855,7 @@ impl PierApp {
                 "tb-open-settings",
                 IconName::Settings,
                 |_: &ClickEvent, window, app| {
+                    log::info!("toolbar: open settings dialog");
                     crate::views::settings_dialog::open(window, app);
                 },
             ))
@@ -832,6 +865,7 @@ impl PierApp {
                 toggle_right_icon,
                 cx.listener(|this, _: &ClickEvent, _, cx| {
                     this.right_visible = !this.right_visible;
+                    this.clamp_panel_widths();
                     cx.notify();
                 }),
             ))
@@ -1181,6 +1215,9 @@ fn toolbar_icon_button(
         .text_color(t.color.text_secondary)
         .cursor_pointer()
         .hover(|s| s.bg(t.color.bg_hover).text_color(t.color.text_primary))
+        .on_mouse_down(MouseButton::Left, |_, window, _| {
+            window.prevent_default();
+        })
         .on_click(on_click)
         .child(
             UiIcon::new(icon)

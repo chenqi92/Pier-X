@@ -36,6 +36,10 @@ pub fn open(
     app: WeakEntity<PierApp>,
     connections: Vec<SshConfig>,
 ) {
+    log::info!(
+        "dialog: opening new-tab chooser saved_connections={}",
+        connections.len()
+    );
     window.open_dialog(cx, move |dialog, _w, app_cx| {
         let body = build_body(app_cx, app.clone(), &connections);
         dialog

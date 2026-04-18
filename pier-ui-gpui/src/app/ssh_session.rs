@@ -41,7 +41,7 @@ pub struct RemoteEntry {
     pub size: u64,
 }
 
-#[derive(Debug, Default)]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub enum ConnectStatus {
     #[default]
     Idle,
@@ -1100,6 +1100,7 @@ mod tests {
         assert!(available.contains(&RightMode::Redis));
         assert!(!available.contains(&RightMode::Mysql));
         assert!(!available.contains(&RightMode::Docker));
+        assert!(!available.contains(&RightMode::Sqlite));
     }
 
     #[test]

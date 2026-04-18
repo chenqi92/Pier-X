@@ -1,7 +1,8 @@
-//! Right panel — 10 mode container + vertical icon sidebar.
+//! Right panel — Pier-aligned mode container + vertical icon sidebar.
 //!
 //! Mirrors `Pier/PierApp/Sources/Views/RightPanel/RightPanelView.swift`.
-//! Pier-X adds Postgres + SQLite to Pier's 8 modes (per "功能只能多不能少").
+//! Postgres remains part of the standard right-panel flow; SQLite stays wired
+//! for follow-up work but is not exposed in the default sidebar yet.
 //!
 //! Modes pulled from existing views:
 //!   - Git    → [`crate::views::git::GitView`]

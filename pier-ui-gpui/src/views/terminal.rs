@@ -11,9 +11,9 @@ use std::{
 use base64::{engine::general_purpose::STANDARD as BASE64_STANDARD, Engine as _};
 use gpui::{
     canvas, div, prelude::*, px, App, Bounds, ClipboardItem, Context, CursorStyle, EventEmitter,
-    FocusHandle, Focusable, IntoElement, KeyDownEvent, Keystroke, MouseButton, MouseDownEvent,
-    MouseMoveEvent, MouseUpEvent, Pixels, Render, ScrollDelta, ScrollWheelEvent, SharedString,
-    StyledText, TextRun, UnderlineStyle, WeakEntity, Window,
+    FocusHandle, Focusable, Hsla, IntoElement, KeyDownEvent, Keystroke, MouseButton,
+    MouseDownEvent, MouseMoveEvent, MouseUpEvent, Pixels, Render, ScrollDelta, ScrollWheelEvent,
+    SharedString, Size, TextRun, UnderlineStyle, WeakEntity, Window,
 };
 use gpui_component::{
     dock::{Panel, PanelControl, PanelEvent, TabPanel},
@@ -26,7 +26,7 @@ use pier_core::{
 
 use crate::{
     app::{route::Route, ActivationHandler},
-    components::StatusKind,
+    components::{terminal_grid, terminal_grid::LayoutState, StatusKind},
     theme::{
         spacing::SP_3,
         terminal::{
@@ -62,12 +62,6 @@ static NEXT_TERMINAL_ID: AtomicUsize = AtomicUsize::new(1);
 pub(crate) struct TerminalLine {
     pub(crate) text: SharedString,
     pub(crate) runs: Vec<TextRun>,
-}
-
-impl TerminalLine {
-    fn into_element(self) -> impl IntoElement {
-        StyledText::new(self.text).with_runs(self.runs)
-    }
 }
 
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -1198,47 +1192,63 @@ impl TerminalPanel {
         lines
     }
 
-    /// Bundle the inputs the upcoming direct-GPU paint pipeline needs in a
-    /// single accessor so render() doesn't have to hand-thread them through
-    /// the canvas closure. Returns `None` only when the terminal has no live
-    /// PTY (same condition under which `current_render_key` returns `None`).
+    /// Bundle everything the direct-GPU cell-grid paint pipeline needs in a
+    /// single accessor so `render()` can hand it to the canvas closure
+    /// without further `&self` access.
     ///
-    /// Phase 11 introduces this for the cell-grid paint pass; the legacy
-    /// StyledText render path keeps calling `render_lines` directly until
-    /// commit 5 of the series flips the switch.
-    #[allow(dead_code)]
-    fn paint_input(&mut self, t: &crate::theme::Theme) -> Option<PaintInput> {
-        let key = self.current_render_key(t)?;
-        let lines = self.render_lines(t);
-        let snapshot = self.render_cache.as_ref()?.snapshot.clone();
+    /// `snapshot` is `None` only when there is no live PTY (the fallback
+    /// `lines` will carry the "Terminal unavailable" message in that case).
+    /// `cursor_paint` is `None` for hidden / Block / scrollback cursor —
+    /// see [`cursor_paint_for_render_key`] for the mapping rules.
+    fn paint_input(&mut self, t: &crate::theme::Theme) -> PaintInput {
         let palette = terminal_palette(self.terminal_theme_preset);
-        Some(PaintInput {
+        let lines = self.render_lines(t);
+        let snapshot = self.render_cache.as_ref().map(|cache| cache.snapshot.clone());
+        let cursor_paint = self
+            .current_render_key(t)
+            .as_ref()
+            .and_then(|key| cursor_paint_for_render_key(key, palette));
+        PaintInput {
             lines,
             snapshot,
-            key,
-            palette,
-            opacity: self.terminal_opacity(),
+            cursor_paint,
             cell_width_px: self.cell_width_px,
             cell_height_px: self.cell_height_px,
             font_family: t.font_mono.clone(),
             font_size_px: self.terminal_font_size_px,
-        })
+        }
     }
 }
 
 /// Everything the direct-GPU cell-grid paint pass consumes for one frame.
-/// Built once per render and read inside the canvas paint closure.
-#[allow(dead_code)]
+/// Built once per render and moved into the canvas prepaint closure.
 struct PaintInput {
     lines: Vec<TerminalLine>,
-    snapshot: GridSnapshot,
-    key: TerminalRenderKey,
-    palette: &'static crate::theme::terminal::TerminalPalette,
-    opacity: f32,
+    snapshot: Option<GridSnapshot>,
+    cursor_paint: Option<(crate::components::terminal_grid::CursorPaintStyle, Hsla)>,
     cell_width_px: f32,
     cell_height_px: f32,
     font_family: SharedString,
     font_size_px: f32,
+}
+
+/// Map a `TerminalRenderKey` to the cursor overlay the paint pass should
+/// draw. Returns `None` for hidden / Block / scrollback cursor — Block is
+/// already encoded by `render_terminal_line` (the cursor cell's fg/bg are
+/// swapped inside its `TextRun`s) so it must not also be drawn as a quad.
+fn cursor_paint_for_render_key(
+    key: &TerminalRenderKey,
+    palette: &TerminalPalette,
+) -> Option<(crate::components::terminal_grid::CursorPaintStyle, Hsla)> {
+    if !key.cursor_visible {
+        return None;
+    }
+    let style = match key.cursor_style {
+        TerminalCursorStyle::Block => return None,
+        TerminalCursorStyle::Underline => crate::components::terminal_grid::CursorPaintStyle::Underline,
+        TerminalCursorStyle::Bar => crate::components::terminal_grid::CursorPaintStyle::Bar,
+    };
+    Some((style, terminal_hex_color(palette.cursor_bg_hex)))
 }
 
 impl Drop for TerminalPanel {
@@ -1339,8 +1349,6 @@ impl Render for TerminalPanel {
             self.render_cache = None;
             self.reset_cursor_blink();
         }
-        let lines = self.render_lines(&t);
-        let cursor_overlay = self.render_cursor_overlay(&t);
         let bell_active = self.bell_flashing();
         let palette = terminal_palette(self.terminal_theme_preset);
         let surface_bg = terminal_bg_color(palette.background_hex, self.terminal_opacity());
@@ -1354,6 +1362,15 @@ impl Render for TerminalPanel {
         let surface_bounds = Rc::clone(&self.surface_bounds);
         let status_line = self.render_status_line(&t, bell_active);
 
+        // Phase 11: build the direct-GPU paint input AFTER all the &mut self
+        // accessors above have run. The canvas closures take ownership and
+        // run at paint time without touching `self` again.
+        let paint_input = self.paint_input(&t);
+        let cell_w = paint_input.cell_width_px;
+        let cell_h = paint_input.cell_height_px;
+        let font_family = paint_input.font_family.clone();
+        let font_size_px = paint_input.font_size_px;
+
         // Slim shell: status row + grid surface. The 30-element Shell /
         // Input / Session / Title chrome that used to live here was
         // rebuilding on every PTY echo and dominated render cost; the
@@ -1366,9 +1383,7 @@ impl Render for TerminalPanel {
             .child(
                 div()
                     .flex_1()
-                    .min_h(px(
-                        (self.cell_height_px * MIN_ROWS as f32).max(TERMINAL_MIN_HEIGHT)
-                    ))
+                    .min_h(px((cell_h * MIN_ROWS as f32).max(TERMINAL_MIN_HEIGHT)))
                     .bg(surface_bg)
                     .border_t_1()
                     .border_color(border_color)
@@ -1385,39 +1400,41 @@ impl Render for TerminalPanel {
                     .on_key_down(cx.listener(Self::on_key_down))
                     .on_scroll_wheel(cx.listener(Self::on_scroll_wheel))
                     .child(
-                        div()
-                            .size_full()
-                            .relative()
-                            .child(
-                                canvas(
-                                    move |bounds, _, _| {
-                                        let mut surface_bounds = surface_bounds.borrow_mut();
-                                        if surface_bounds.as_ref() != Some(&bounds) {
-                                            *surface_bounds = Some(bounds);
-                                        }
-                                    },
-                                    |_, _, _, _| {},
+                        // The cell grid is one canvas — no inner element tree.
+                        // prepaint owns surface_bounds tracking + LayoutState
+                        // build (pure CPU); paint walks the LayoutState with
+                        // shape_line + paint_quad. See components/terminal_grid/.
+                        canvas(
+                            move |bounds, _window, _cx| {
+                                let mut sb = surface_bounds.borrow_mut();
+                                if sb.as_ref() != Some(&bounds) {
+                                    *sb = Some(bounds);
+                                }
+                                let cell_size = Size {
+                                    width: px(cell_w),
+                                    height: px(cell_h),
+                                };
+                                terminal_grid::build(
+                                    &paint_input.lines,
+                                    paint_input.snapshot.as_ref(),
+                                    paint_input.cursor_paint,
+                                    cell_size,
+                                    bounds.origin,
                                 )
-                                .absolute()
-                                .inset_0(),
-                            )
-                            .child(
-                                div()
-                                    .size_full()
-                                    .flex()
-                                    .flex_col()
-                                    .gap(px(0.0))
-                                    .text_size(px(self.terminal_font_size_px))
-                                    .line_height(px(self.cell_height_px))
-                                    .bg(surface_bg)
-                                    .children(lines.into_iter().map(|line| {
-                                        div()
-                                            .min_h(px(self.cell_height_px))
-                                            .whitespace_nowrap()
-                                            .child(line.into_element())
-                                    })),
-                            )
-                            .when_some(cursor_overlay, |this, overlay| this.child(overlay)),
+                            },
+                            move |bounds, layout: LayoutState, window, cx| {
+                                terminal_grid::run(
+                                    bounds,
+                                    &layout,
+                                    &font_family,
+                                    px(font_size_px),
+                                    px(cell_h),
+                                    window,
+                                    cx,
+                                );
+                            },
+                        )
+                        .size_full(),
                     ),
             )
     }
@@ -1475,45 +1492,6 @@ impl TerminalPanel {
         row.child(div().flex_1())
     }
 
-    fn render_cursor_overlay(&self, t: &crate::theme::Theme) -> Option<gpui::AnyElement> {
-        if !self.cursor_visible() || self.terminal_cursor_style == TerminalCursorStyle::Block {
-            return None;
-        }
-
-        let snapshot = &self.render_cache.as_ref()?.snapshot;
-        if snapshot.cols == 0 || snapshot.rows == 0 {
-            return None;
-        }
-
-        let col = (snapshot.cursor_x as usize).min(snapshot.cols.saturating_sub(1) as usize);
-        let row = (snapshot.cursor_y as usize).min(snapshot.rows.saturating_sub(1) as usize);
-        let left = px(self.cell_width_px * col as f32);
-        let top = px(self.cell_height_px * row as f32);
-        let palette = terminal_palette(t.settings.terminal_theme_preset);
-        let cursor_color = terminal_hex_color(palette.cursor_bg_hex);
-
-        let overlay = match self.terminal_cursor_style {
-            TerminalCursorStyle::Underline => div()
-                .absolute()
-                .left(left)
-                .top(top + px((self.cell_height_px - 2.0).max(0.0)))
-                .w(px(self.cell_width_px.max(1.0)))
-                .h(px(2.0))
-                .bg(cursor_color)
-                .into_any_element(),
-            TerminalCursorStyle::Bar => div()
-                .absolute()
-                .left(left)
-                .top(top)
-                .w(px(2.0))
-                .h(px(self.cell_height_px.max(1.0)))
-                .bg(cursor_color)
-                .into_any_element(),
-            TerminalCursorStyle::Block => return None,
-        };
-
-        Some(overlay)
-    }
 }
 
 fn preferred_shell() -> String {

@@ -4,11 +4,6 @@
 //! (`Bounds`, `Pixels`, `Point`, `Size`, `Hsla`) and `TextRun`. That keeps
 //! `build` unit-testable without booting a window.
 
-// Phase 11 step 2 (scaffolding): types and stubs land here unused; the
-// view switches over in step 5. The allow holds across steps 3 and 4
-// while only the unit tests reference these items.
-#![allow(dead_code)]
-
 use gpui::{Bounds, Hsla, Pixels, Point, SharedString, Size, TextRun, px};
 use pier_core::terminal::GridSnapshot;
 
@@ -49,7 +44,6 @@ pub(crate) struct BgRect {
 pub(crate) struct CursorRect {
     pub bounds: Bounds<Pixels>,
     pub color: Hsla,
-    pub style: CursorPaintStyle,
 }
 
 /// Only the cursor styles `paint::run` actually draws — `Block` is encoded
@@ -80,7 +74,7 @@ const CURSOR_UNDERLINE_HEIGHT_PX: f32 = 2.0;
 /// `TerminalLine` with a per-run cell span if it matters in practice.
 pub(crate) fn build(
     lines: &[TerminalLine],
-    snapshot: &GridSnapshot,
+    snapshot: Option<&GridSnapshot>,
     cursor_paint: Option<(CursorPaintStyle, Hsla)>,
     cell_size: Size<Pixels>,
     origin: Point<Pixels>,
@@ -134,7 +128,7 @@ pub(crate) fn build(
         });
     }
 
-    let cursor = cursor_paint.and_then(|(style, color)| {
+    let cursor = cursor_paint.zip(snapshot).and_then(|((style, color), snapshot)| {
         if snapshot.cols == 0 || snapshot.rows == 0 {
             return None;
         }
@@ -161,11 +155,7 @@ pub(crate) fn build(
                 },
             },
         };
-        Some(CursorRect {
-            bounds,
-            color,
-            style,
-        })
+        Some(CursorRect { bounds, color })
     });
 
     LayoutState {
@@ -222,7 +212,7 @@ mod tests {
     fn empty_runs_produce_no_bg_rects() {
         let lines = vec![line("hello", vec![run(5, None)])];
         let snap = make_snapshot(80, 1, 0, 0);
-        let state = build(&lines, &snap, None, cell_size(8.0, 18.0), Point::default());
+        let state = build(&lines, Some(&snap), None, cell_size(8.0, 18.0), Point::default());
 
         assert!(state.bg_rects.is_empty());
         assert_eq!(state.rows.len(), 1);
@@ -241,7 +231,7 @@ mod tests {
             vec![run(2, Some(red)), run(2, None), run(2, Some(blue))],
         )];
         let snap = make_snapshot(80, 1, 0, 0);
-        let state = build(&lines, &snap, None, cell_size(10.0, 20.0), Point::default());
+        let state = build(&lines, Some(&snap), None, cell_size(10.0, 20.0), Point::default());
 
         assert_eq!(state.bg_rects.len(), 2);
         let r0 = &state.bg_rects[0];
@@ -265,7 +255,7 @@ mod tests {
             line("c", vec![run(1, None)]),
         ];
         let snap = make_snapshot(80, 3, 0, 0);
-        let state = build(&lines, &snap, None, cell_size(8.0, 18.0), Point::default());
+        let state = build(&lines, Some(&snap), None, cell_size(8.0, 18.0), Point::default());
 
         assert_eq!(state.rows.len(), 3);
         assert_eq!(f32::from(state.rows[0].origin.y), 0.0);
@@ -282,7 +272,7 @@ mod tests {
             x: px(10.0),
             y: px(5.0),
         };
-        let state = build(&lines, &snap, None, cell_size(8.0, 18.0), origin);
+        let state = build(&lines, Some(&snap), None, cell_size(8.0, 18.0), origin);
 
         assert_eq!(f32::from(state.bg_rects[0].bounds.origin.x), 10.0);
         assert_eq!(f32::from(state.bg_rects[0].bounds.origin.y), 5.0);
@@ -297,14 +287,13 @@ mod tests {
         let cursor_color = hsla(0.5, 1.0, 0.5, 1.0);
         let state = build(
             &lines,
-            &snap,
+            Some(&snap),
             Some((CursorPaintStyle::Underline, cursor_color)),
             cell_size(8.0, 18.0),
             Point::default(),
         );
 
         let c = state.cursor.expect("cursor should be present");
-        assert_eq!(c.style, CursorPaintStyle::Underline);
         assert_eq!(c.color, cursor_color);
         assert_eq!(f32::from(c.bounds.origin.x), 40.0);
         assert_eq!(f32::from(c.bounds.origin.y), 3.0 * 18.0 + 16.0);
@@ -319,14 +308,14 @@ mod tests {
         let cursor_color = hsla(0.5, 1.0, 0.5, 1.0);
         let state = build(
             &lines,
-            &snap,
+            Some(&snap),
             Some((CursorPaintStyle::Bar, cursor_color)),
             cell_size(8.0, 18.0),
             Point::default(),
         );
 
         let c = state.cursor.expect("cursor should be present");
-        assert_eq!(c.style, CursorPaintStyle::Bar);
+        // Bar cursor distinguishes itself by being 2px wide × full cell height.
         assert_eq!(f32::from(c.bounds.size.width), 2.0);
         assert_eq!(f32::from(c.bounds.size.height), 18.0);
     }
@@ -335,7 +324,7 @@ mod tests {
     fn no_cursor_paint_means_no_cursor_rect() {
         let lines = vec![line(" ", vec![run(1, None)])];
         let snap = make_snapshot(80, 24, 5, 3);
-        let state = build(&lines, &snap, None, cell_size(8.0, 18.0), Point::default());
+        let state = build(&lines, Some(&snap), None, cell_size(8.0, 18.0), Point::default());
         assert!(state.cursor.is_none());
     }
 
@@ -347,7 +336,7 @@ mod tests {
         let cursor_color = hsla(0.5, 1.0, 0.5, 1.0);
         let state = build(
             &lines,
-            &snap,
+            Some(&snap),
             Some((CursorPaintStyle::Bar, cursor_color)),
             cell_size(8.0, 18.0),
             Point::default(),
@@ -365,11 +354,30 @@ mod tests {
         let cursor_color = hsla(0.5, 1.0, 0.5, 1.0);
         let state = build(
             &lines,
-            &snap,
+            Some(&snap),
             Some((CursorPaintStyle::Bar, cursor_color)),
             cell_size(8.0, 18.0),
             Point::default(),
         );
+        assert!(state.cursor.is_none());
+    }
+
+    #[test]
+    fn missing_snapshot_drops_cursor_but_keeps_rows() {
+        // Fallback case: terminal not started yet, snapshot is None, but
+        // render_lines still produced a "Terminal unavailable" line — we
+        // should still emit the row (so the message is painted) without a
+        // cursor rect.
+        let lines = vec![line("Terminal unavailable", vec![run(20, None)])];
+        let cursor_color = hsla(0.5, 1.0, 0.5, 1.0);
+        let state = build(
+            &lines,
+            None,
+            Some((CursorPaintStyle::Bar, cursor_color)),
+            cell_size(8.0, 18.0),
+            Point::default(),
+        );
+        assert_eq!(state.rows.len(), 1);
         assert!(state.cursor.is_none());
     }
 
@@ -379,7 +387,7 @@ mod tests {
         // shouldn't), build() should clamp instead of slicing past the end.
         let lines = vec![line("ab", vec![run(99, None)])];
         let snap = make_snapshot(80, 1, 0, 0);
-        let state = build(&lines, &snap, None, cell_size(8.0, 18.0), Point::default());
+        let state = build(&lines, Some(&snap), None, cell_size(8.0, 18.0), Point::default());
         assert_eq!(state.rows.len(), 1);
         assert_eq!(state.rows[0].text.as_ref(), "ab");
     }

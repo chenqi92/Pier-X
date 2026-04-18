@@ -18,7 +18,5 @@
 pub(crate) mod layout;
 pub(crate) mod paint;
 
-#[allow(unused_imports)]
-pub(crate) use layout::{BatchedRow, BgRect, CursorPaintStyle, CursorRect, LayoutState, build};
-#[allow(unused_imports)]
+pub(crate) use layout::{CursorPaintStyle, LayoutState, build};
 pub(crate) use paint::run;

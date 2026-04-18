@@ -1,7 +1,5 @@
 //! Paint pass for the direct-GPU cell grid. See module docs.
 
-#![allow(dead_code)]
-
 use gpui::{App, Bounds, Pixels, SharedString, Window, fill};
 
 use super::layout::LayoutState;

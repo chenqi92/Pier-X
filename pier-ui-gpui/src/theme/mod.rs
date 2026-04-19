@@ -40,10 +40,12 @@ impl Global for Theme {}
 
 impl Theme {
     pub fn from_settings(settings: AppSettings, appearance: WindowAppearance) -> Self {
+        let mut settings = settings;
         let font_mono = settings_terminal_font_family(&settings);
         let font_ui = settings_ui_font_family(&settings);
         let font_ui_features = ui_font_features_for_family(&font_ui);
         let mode = theme_mode_for_settings(&settings, appearance);
+        align_default_terminal_theme_with_mode(&mut settings, mode);
         let color = match mode {
             ThemeMode::Dark => ColorSet::dark(),
             ThemeMode::Light => ColorSet::light(),
@@ -212,11 +214,7 @@ pub fn ui_font(cx: &App, weight: FontWeight) -> Font {
     ui_font_with(&t.font_ui, &t.font_ui_features, weight)
 }
 
-pub fn ui_font_with(
-    family: &SharedString,
-    features: &FontFeatures,
-    weight: FontWeight,
-) -> Font {
+pub fn ui_font_with(family: &SharedString, features: &FontFeatures, weight: FontWeight) -> Font {
     Font {
         family: family.clone(),
         features: features.clone(),
@@ -255,14 +253,18 @@ fn synchronize_default_terminal_theme(
     next: &mut AppSettings,
     appearance: WindowAppearance,
 ) {
-    if theme_mode_for_settings(previous, appearance) == theme_mode_for_settings(next, appearance) {
+    let previous_mode = theme_mode_for_settings(previous, appearance);
+    let next_mode = theme_mode_for_settings(next, appearance);
+    if previous_mode == next_mode {
         return;
     }
 
-    next.terminal_theme_preset = match (
-        previous.terminal_theme_preset,
-        theme_mode_for_settings(next, appearance),
-    ) {
+    next.terminal_theme_preset = previous.terminal_theme_preset;
+    align_default_terminal_theme_with_mode(next, next_mode);
+}
+
+fn align_default_terminal_theme_with_mode(settings: &mut AppSettings, mode: ThemeMode) {
+    settings.terminal_theme_preset = match (settings.terminal_theme_preset, mode) {
         (TerminalThemePreset::DefaultDark, ThemeMode::Light) => TerminalThemePreset::DefaultLight,
         (TerminalThemePreset::DefaultLight, ThemeMode::Dark) => TerminalThemePreset::DefaultDark,
         (preset, _) => preset,
@@ -297,5 +299,59 @@ fn settings_ui_font_family(settings: &AppSettings) -> String {
     match settings.ui_font_family.as_deref().map(str::trim) {
         Some(value) if !value.is_empty() => value.to_string(),
         _ => DEFAULT_UI_FONT_FAMILY.to_string(),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn from_settings_aligns_default_terminal_theme_with_light_mode() {
+        let theme = Theme::from_settings(AppSettings::default(), WindowAppearance::Light);
+
+        assert!(matches!(theme.mode, ThemeMode::Light));
+        assert_eq!(
+            theme.settings.terminal_theme_preset,
+            TerminalThemePreset::DefaultLight
+        );
+    }
+
+    #[test]
+    fn from_settings_keeps_custom_terminal_theme_when_mode_changes() {
+        let settings = AppSettings {
+            appearance_mode: AppearanceMode::Light,
+            terminal_theme_preset: TerminalThemePreset::Dracula,
+            ..AppSettings::default()
+        };
+
+        let theme = Theme::from_settings(settings, WindowAppearance::Dark);
+
+        assert!(matches!(theme.mode, ThemeMode::Light));
+        assert_eq!(
+            theme.settings.terminal_theme_preset,
+            TerminalThemePreset::Dracula
+        );
+    }
+
+    #[test]
+    fn synchronize_default_terminal_theme_flips_between_default_pairs() {
+        let previous = AppSettings {
+            appearance_mode: AppearanceMode::Dark,
+            terminal_theme_preset: TerminalThemePreset::DefaultDark,
+            ..AppSettings::default()
+        };
+        let mut next = AppSettings {
+            appearance_mode: AppearanceMode::Light,
+            terminal_theme_preset: TerminalThemePreset::DefaultDark,
+            ..AppSettings::default()
+        };
+
+        synchronize_default_terminal_theme(&previous, &mut next, WindowAppearance::Dark);
+
+        assert_eq!(
+            next.terminal_theme_preset,
+            TerminalThemePreset::DefaultLight
+        );
     }
 }

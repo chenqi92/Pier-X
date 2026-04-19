@@ -114,6 +114,7 @@ static ASSETS: &[(&str, &[u8])] = &[
         "icons/panel-right-open.svg",
         include_bytes!("../assets/icons/panel-right-open.svg"),
     ),
+    ("icons/play.svg", include_bytes!("../assets/icons/play.svg")),
     ("icons/plus.svg", include_bytes!("../assets/icons/plus.svg")),
     (
         "icons/refresh-cw.svg",
@@ -134,6 +135,10 @@ static ASSETS: &[(&str, &[u8])] = &[
     (
         "icons/square-terminal.svg",
         include_bytes!("../assets/icons/square-terminal.svg"),
+    ),
+    (
+        "icons/square.svg",
+        include_bytes!("../assets/icons/square.svg"),
     ),
     ("icons/sun.svg", include_bytes!("../assets/icons/sun.svg")),
     (

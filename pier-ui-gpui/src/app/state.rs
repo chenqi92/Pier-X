@@ -17,8 +17,8 @@ use std::time::Duration;
 
 use gpui::{
     canvas, div, prelude::*, px, AnyElement, App, Bounds, ClickEvent, Context, DragMoveEvent,
-    Empty, Entity, EntityId, IntoElement, MouseButton, MouseDownEvent, Pixels, Point, Render,
-    ScrollDelta, ScrollHandle, ScrollWheelEvent, SharedString, Window,
+    Empty, Entity, EntityId, IntoElement, MouseButton, MouseDownEvent, Pixels, Render,
+    ScrollHandle, SharedString, Window,
 };
 use gpui_component::{
     input::InputState, Icon as UiIcon, IconName, PixelsExt as _, WindowExt as _,
@@ -2177,30 +2177,12 @@ fn render_terminal_tab_bar(
     // to prepaint, so calling it every render is idempotent.
     scroll_handle.scroll_to_item(active);
 
-    // Redirect vertical mouse-wheel deltas to horizontal scroll so a
-    // plain mouse (no trackpad, no shift modifier) can still move
-    // along the tab row. Trackpad horizontal and shift+wheel already
-    // work natively via `overflow_x_scroll`, so we only intercept
-    // when dx is zero and dy is not.
-    let wheel_handle = scroll_handle.clone();
-    let on_wheel = move |ev: &ScrollWheelEvent, _: &mut Window, _: &mut App| {
-        let (dx, dy) = match ev.delta {
-            ScrollDelta::Pixels(p) => (p.x, p.y),
-            ScrollDelta::Lines(p) => (px(p.x * 16.0), px(p.y * 16.0)),
-        };
-        if f32::from(dx).abs() > f32::EPSILON || f32::from(dy).abs() < f32::EPSILON {
-            // Trackpad horizontal or mixed-axis — let the native
-            // overflow_x_scroll handler on the inner element take it.
-            return;
-        }
-        // GPUI keeps scroll offsets in [-max, 0]; deltas match the
-        // existing y-axis sign, so wheel-down moves content up. The
-        // same sign convention applies here on the x-axis.
-        let current = wheel_handle.offset();
-        let max_offset = wheel_handle.max_offset().width;
-        let next_x = (current.x + dy).clamp(-max_offset, px(0.0));
-        wheel_handle.set_offset(Point::new(next_x, current.y));
-    };
+    // `overflow_x_scroll` already handles both trackpad horizontal
+    // gestures AND vertical mouse-wheel delta (GPUI's native handler
+    // at div.rs:2427 redirects `delta.y → delta.x` when only the
+    // x-axis is scrollable and `restrict_scroll_to_axis` is false,
+    // which is the default). No custom `on_scroll_wheel` needed —
+    // the earlier manual redirect was double-applying the delta.
 
     div()
         .h(ROW_MD_H)
@@ -2212,15 +2194,7 @@ fn render_terminal_tab_bar(
         .bg(t.color.bg_panel)
         .border_b_1()
         .border_color(t.color.border_subtle)
-        .child(
-            div()
-                .id("term-tab-scroll-viewport")
-                .flex_1()
-                .min_w(px(0.0))
-                .overflow_hidden()
-                .on_scroll_wheel(on_wheel)
-                .child(tabs),
-        )
+        .child(div().flex_1().min_w(px(0.0)).overflow_hidden().child(tabs))
         .child(plus_button)
 }
 

@@ -25,12 +25,13 @@ use rust_i18n::t;
 use crate::app::layout::{RightContext, RightMode, RIGHT_ICON_BAR_W};
 use crate::app::PierApp;
 use crate::components::{
-    text, Button, Card, HeaderSize, PageHeader, SectionLabel, StatusKind, StatusPill,
+    text, Button, Card, HeaderSize, IconButton, IconButtonSize, IconButtonVariant, PageHeader,
+    SectionLabel, StatusKind, StatusPill,
 };
 use crate::theme::{
     heights::{BUTTON_MD_H, ICON_MD, ROW_MD_H},
     radius::RADIUS_SM,
-    spacing::{SP_1, SP_2, SP_3, SP_4},
+    spacing::{SP_0_5, SP_1, SP_1_5, SP_2, SP_3, SP_4},
     theme,
     typography::{SIZE_CAPTION, SIZE_MONO_SMALL, SIZE_SMALL, WEIGHT_MEDIUM},
 };
@@ -237,8 +238,7 @@ fn render_mode_body(
         .into_any_element(),
         RightMode::Git => GitView::new(pier_app.clone()).into_any_element(),
         RightMode::Mysql | RightMode::Postgres | RightMode::Redis | RightMode::Sqlite => {
-            DatabaseView::new(pier_app.clone(), mode.db_kind().expect("db mode"))
-                .into_any_element()
+            DatabaseView::new(pier_app.clone(), mode.db_kind().expect("db mode")).into_any_element()
         }
         RightMode::Logs => logs_view(
             t,
@@ -251,20 +251,20 @@ fn render_mode_body(
     };
 
     let mut panel = div().w_full().h_full().flex().flex_col().child(header);
-    // Service / SSH strips are remote-only context. For Local modes
-    // (Markdown, Git, SQLite) they're meaningless — the panel reads
-    // from disk — so suppress them even when a remote session is
-    // active in a sibling terminal tab.
+    // Remote context strip. Only rendered for Remote modes — Local
+    // modes (Markdown / Git / SQLite) would show nothing meaningful
+    // since the panel reads from disk. The two previous strips
+    // (services + ssh) are collapsed into a single compact row so
+    // the docker-row / sftp-row content below them gets back the
+    // 60-80px of vertical space they were eating.
     if matches!(mode.context(), RightContext::Remote) {
         if let Some(overview) = remote_overview.as_ref() {
-            panel = panel
-                .child(render_services_strip(
-                    t,
-                    mode,
-                    overview,
-                    on_select_mode.clone(),
-                ))
-                .child(render_ssh_strip(t, overview));
+            panel = panel.child(render_remote_context_strip(
+                t,
+                mode,
+                overview,
+                on_select_mode.clone(),
+            ));
         }
     }
 
@@ -345,69 +345,46 @@ fn tunnel_overview(tunnel: &ServiceTunnelState) -> TunnelOverview {
     }
 }
 
-fn render_services_strip(
+/// Single compact strip that merges the old "Services" row and
+/// "SSH" row. Drops the `服务` / `SSH` label columns (pure chrome),
+/// drops the "MySQL 8.0.45-0ubuntu0.24.04.1" version string from
+/// each chip, and hides the "无隧道" pill when it's the default
+/// zero-tunnel state — only a live tunnel or an error raises a pill.
+/// The ssh command string is faded out on the far right so the
+/// user sees the connection detail without it competing with the
+/// service chips for attention.
+fn render_remote_context_strip(
     t: &crate::theme::Theme,
     active_mode: RightMode,
     overview: &RemoteOverview,
     on_select: ModeSelector,
 ) -> impl IntoElement {
-    // `min_w(0) + overflow_hidden` on the outer row is what lets the
-    // inner pill/chip column shrink and wrap correctly — without it a
-    // single wide service pill (e.g. "MySQL 8.0.45-Oubuntu0.24.04.1")
-    // spills into the icon rail on the right (seen in the Monitor
-    // page screenshot).
     let mut row = div()
         .px(SP_3)
-        .py(SP_2)
+        .py(SP_1_5)
         .flex()
         .flex_row()
         .flex_wrap()
-        .items_start()
+        .items_center()
         .min_w(px(0.0))
         .overflow_hidden()
         .gap(SP_2)
         .border_b_1()
-        .border_color(t.color.border_subtle)
-        .child(remote_strip_label(t, t!("App.RightPanel.services")));
+        .border_color(t.color.border_subtle);
 
+    // Service chips — compact, name-only. Tunnel port appended only
+    // when the tunnel is actually live (`service_button` handles).
     let services = if matches!(overview.service_probe_status, ServiceProbeStatus::Probing)
         && overview.services.is_empty()
     {
-        div()
-            .flex_1()
-            .min_w(px(0.0))
-            .flex()
-            .flex_row()
-            .items_center()
-            .gap(SP_2)
-            .child(StatusPill::new(t!("App.LeftPanel.Services.detecting"), StatusKind::Info))
-            .child(
-                div()
-                    .text_size(SIZE_SMALL)
-                    .text_color(t.color.text_tertiary)
-                    .child(SharedString::from(
-                        t!("App.RightPanel.services_detecting_detail").to_string(),
-                    )),
-            )
-            .into_any_element()
+        Some(
+            StatusPill::new(t!("App.LeftPanel.Services.detecting"), StatusKind::Info)
+                .into_any_element(),
+        )
     } else if overview.services.is_empty() {
-        div()
-            .flex_1()
-            .min_w(px(0.0))
-            .text_size(SIZE_SMALL)
-            .text_color(t.color.text_tertiary)
-            .child(SharedString::from(
-                t!("App.RightPanel.services_empty").to_string(),
-            ))
-            .into_any_element()
+        None
     } else {
-        let mut pills = div()
-            .flex_1()
-            .min_w(px(0.0))
-            .flex()
-            .flex_row()
-            .flex_wrap()
-            .gap(SP_2);
+        let mut pills = div().flex().flex_row().flex_wrap().gap(SP_1_5);
         for service in &overview.services {
             if let Some(mode) = RightMode::from_service_name(&service.name) {
                 let tunnel = overview
@@ -424,79 +401,48 @@ fn render_services_strip(
                 ));
             }
         }
-        pills.into_any_element()
+        Some(pills.into_any_element())
     };
-
-    row = row.child(services);
-    if let Some(err) = overview.service_probe_error.clone() {
-        row = row.child(
-            div()
-                .text_size(SIZE_SMALL)
-                .text_color(t.color.status_error)
-                .child(err),
-        );
+    if let Some(services) = services {
+        row = row.child(services);
     }
-    row
-}
 
-fn render_ssh_strip(t: &crate::theme::Theme, overview: &RemoteOverview) -> impl IntoElement {
-    let mut row = div()
-        .px(SP_3)
-        .py(SP_2)
-        .flex()
-        .flex_row()
-        .flex_wrap()
-        .items_start()
-        .min_w(px(0.0))
-        .overflow_hidden()
-        .gap(SP_2)
-        .border_b_1()
-        .border_color(t.color.border_subtle)
-        .child(remote_strip_label(t, "SSH"))
-        .child(
-            div()
-                .flex_1()
-                .min_w(px(0.0))
-                .text_size(SIZE_MONO_SMALL)
-                .font_family(t.font_mono.clone())
-                .text_color(t.color.text_secondary)
-                .truncate()
-                .child(overview.ssh_command.clone()),
-        );
-
-    if overview.tunnels.is_empty() {
-        row = row.child(StatusPill::new(t!("App.RightPanel.no_tunnels"), StatusKind::Warning));
-    } else {
-        let mut tunnel_row = div().flex().flex_row().flex_wrap().gap(SP_2);
+    // Live tunnel pills — only pop in when there's actually a tunnel
+    // the user cares about; the "无隧道" warning was noise for the
+    // 95% case where no forwarding is configured.
+    if !overview.tunnels.is_empty() {
+        let mut tunnel_row = div().flex().flex_row().flex_wrap().gap(SP_1_5);
         for tunnel in &overview.tunnels {
             tunnel_row = tunnel_row.child(tunnel_chip(tunnel));
         }
         row = row.child(tunnel_row);
     }
 
-    if let Some(err) = overview.last_error.clone() {
+    // Spacer + mono ssh command (faded, truncates on narrow panels).
+    row = row.child(div().flex_1().min_w(px(0.0))).child(
+        div()
+            .flex_none()
+            .text_size(SIZE_MONO_SMALL)
+            .font_family(t.font_mono.clone())
+            .text_color(t.color.text_tertiary)
+            .truncate()
+            .child(overview.ssh_command.clone()),
+    );
+
+    if let Some(err) = overview
+        .service_probe_error
+        .clone()
+        .or_else(|| overview.last_error.clone())
+    {
         row = row.child(
             div()
+                .w_full()
                 .text_size(SIZE_SMALL)
                 .text_color(t.color.status_error)
                 .child(err),
         );
     }
     row
-}
-
-fn remote_strip_label(
-    t: &crate::theme::Theme,
-    label: impl Into<SharedString>,
-) -> impl IntoElement {
-    let label: SharedString = label.into();
-    div()
-        .w(px(52.0))
-        .pt(px(2.0))
-                .text_size(SIZE_CAPTION)
-                .font_weight(WEIGHT_MEDIUM)
-                .text_color(t.color.text_tertiary)
-                .child(label)
 }
 
 fn service_button(
@@ -508,11 +454,12 @@ fn service_button(
     on_select: ModeSelector,
 ) -> impl IntoElement {
     let id: SharedString = format!("service-{}", service.name).into();
+    // Keep the chip label tight — just the service name. A full
+    // version string like "MySQL 8.0.45-0ubuntu0.24.04.1" eats the
+    // entire strip width on a typical right-panel column. Version
+    // is surfaced in the Monitor / Docker inspector views where the
+    // user has deliberately asked for detail.
     let mut label = mode.label().to_string();
-    if !service.version.is_empty() && service.version != "unknown" {
-        label.push(' ');
-        label.push_str(&service.version);
-    }
     if let Some(local_port) = tunnel
         .filter(|tunnel| matches!(tunnel.status, TunnelStatus::Active))
         .and_then(|tunnel| tunnel.local_port)
@@ -571,14 +518,9 @@ fn service_button(
             div()
                 .text_size(SIZE_CAPTION)
                 .text_color(t.color.status_error)
-                .child(
-                    tunnel
-                        .last_error
-                        .clone()
-                        .unwrap_or_else(|| {
-                            SharedString::from(t!("App.RightPanel.tunnel_failed").to_string())
-                        }),
-                ),
+                .child(tunnel.last_error.clone().unwrap_or_else(|| {
+                    SharedString::from(t!("App.RightPanel.tunnel_failed").to_string())
+                })),
         );
     }
     chip
@@ -592,22 +534,18 @@ fn tunnel_chip(tunnel: &TunnelOverview) -> impl IntoElement {
             tunnel.remote_port
         )
         .into(),
-        (TunnelStatus::Opening, _) => {
-            t!(
-                "App.RightPanel.tunnel_opening",
-                service = service_label.as_ref(),
-                port = tunnel.remote_port
-            )
-            .into()
-        }
-        (TunnelStatus::Failed, _) => {
-            t!(
-                "App.RightPanel.tunnel_error",
-                service = service_label.as_ref(),
-                port = tunnel.remote_port
-            )
-            .into()
-        }
+        (TunnelStatus::Opening, _) => t!(
+            "App.RightPanel.tunnel_opening",
+            service = service_label.as_ref(),
+            port = tunnel.remote_port
+        )
+        .into(),
+        (TunnelStatus::Failed, _) => t!(
+            "App.RightPanel.tunnel_error",
+            service = service_label.as_ref(),
+            port = tunnel.remote_port
+        )
+        .into(),
         (TunnelStatus::Active, None) => format!("{service_label} -> {}", tunnel.remote_port).into(),
     };
     StatusPill::new(label, tunnel_status_kind(tunnel.status)).into_any_element()
@@ -685,7 +623,13 @@ fn mode_status_bar(
                 let (label, kind) = remote_status_pill(&session.status);
                 (label, kind, Some(remote_endpoint_label(&session.config)))
             })
-            .unwrap_or_else(|| (t!("App.RightPanel.no_session").into(), StatusKind::Warning, None)),
+            .unwrap_or_else(|| {
+                (
+                    t!("App.RightPanel.no_session").into(),
+                    StatusKind::Warning,
+                    None,
+                )
+            }),
     };
 
     let mut row = div()
@@ -724,7 +668,10 @@ fn remote_status_pill(status: &ConnectStatus) -> (SharedString, StatusKind) {
         ConnectStatus::Idle => (t!("App.Common.Status.idle").into(), StatusKind::Warning),
         ConnectStatus::Connecting => (t!("App.Common.Status.connecting").into(), StatusKind::Info),
         ConnectStatus::Refreshing => (t!("App.Common.Status.loading").into(), StatusKind::Info),
-        ConnectStatus::Connected => (t!("App.Common.Status.connected").into(), StatusKind::Success),
+        ConnectStatus::Connected => (
+            t!("App.Common.Status.connected").into(),
+            StatusKind::Success,
+        ),
         ConnectStatus::Failed => (t!("App.Common.Status.error").into(), StatusKind::Error),
     }
 }
@@ -800,7 +747,7 @@ fn monitor_view(
         )
     };
 
-    let mut col = div().w_full().flex().flex_col().gap(SP_3).p(SP_4);
+    let mut col = div().w_full().flex().flex_col().gap(SP_2).p(SP_3);
 
     if let Some(err) = error {
         col = col.child(
@@ -921,13 +868,15 @@ fn docker_view(
     };
     let has_snapshot = snapshot.is_some();
 
-    // PageHeader (rendered above this view) already shows "Docker",
-    // session name, endpoint, and connection status — no need to
-    // replay them. Only surface what's *specific* to this mode: the
-    // docker daemon state + pending action + a refresh control. All
-    // of that goes in a single compact header strip instead of the
-    // previous "Target card + duplicate H2 title" combo.
-    let mut header = div()
+    // Mode header: daemon status pill + refresh icon. The generic
+    // PageHeader already shows "Docker / session / endpoint /
+    // connection status" above this, so all we add here is the
+    // *daemon* state (distinct from the SSH connection state) and
+    // the one action we need. The earlier design stacked a
+    // redundant "busy" warning pill next to the refresh button —
+    // busy-ness is now communicated via per-row pending pills and
+    // a disabled refresh icon.
+    let header = div()
         .flex()
         .flex_row()
         .items_center()
@@ -935,33 +884,22 @@ fn docker_view(
         .child(StatusPill::new(
             docker_status_label(&status, has_snapshot),
             docker_status_kind(&status),
-        ));
-    if let Some(action) = pending.as_ref() {
-        header = header.child(StatusPill::new(
-            docker_pending_label(action),
-            StatusKind::Info,
-        ));
-    }
-    header = header.child(div().flex_1());
-    if pending.is_some() {
-        header = header.child(
-            StatusPill::new(t!("App.RightPanel.Docker.busy"), StatusKind::Warning)
-                .into_any_element(),
+        ))
+        .child(div().flex_1())
+        .child(
+            IconButton::new("docker-refresh", IconName::RefreshCw)
+                .size(IconButtonSize::Sm)
+                .variant(IconButtonVariant::Filled)
+                .disabled(pending.is_some())
+                .on_click(move |_, window, app| on_refresh(&(), window, app)),
         );
-    } else {
-        header = header.child(
-            Button::secondary("docker-refresh", t!("App.Common.refresh"))
-                .on_click(move |_, window, app| on_refresh(&(), window, app))
-                .into_any_element(),
-        );
-    }
 
     let mut col = div()
         .w_full()
         .flex()
         .flex_col()
-        .gap(SP_3)
-        .p(SP_4)
+        .gap(SP_2)
+        .p(SP_3)
         .child(header);
 
     if let Some(err) = error {
@@ -1083,8 +1021,8 @@ fn logs_view(
         .w_full()
         .flex()
         .flex_col()
-        .gap(SP_3)
-        .p(SP_4)
+        .gap(SP_2)
+        .p(SP_3)
         .child(header)
         .child(
             Card::new()
@@ -1110,8 +1048,9 @@ fn logs_view(
                                 .on_click(move |_, window, app| on_stop(&stop_action, window, app)),
                         )
                         .child(
-                            Button::secondary("logs-clear", t!("App.Common.clear"))
-                                .on_click(move |_, window, app| on_clear(&clear_action, window, app)),
+                            Button::secondary("logs-clear", t!("App.Common.clear")).on_click(
+                                move |_, window, app| on_clear(&clear_action, window, app),
+                            ),
                         ),
                 )
                 .child(
@@ -1198,7 +1137,13 @@ fn logs_view(
             SectionLabel::new(t!("App.RightPanel.Logs.output"))
                 .with_icon(IconName::GalleryVerticalEnd),
         )
-        .child(text::body(t!("App.RightPanel.Logs.retained_lines", count = lines.len())).secondary());
+        .child(
+            text::body(t!(
+                "App.RightPanel.Logs.retained_lines",
+                count = lines.len()
+            ))
+            .secondary(),
+        );
 
     let visible = lines.iter().rev().take(200).cloned().collect::<Vec<_>>();
     for (index, line) in visible.into_iter().enumerate() {
@@ -1432,15 +1377,24 @@ fn docker_summary_card(snapshot: &DockerPanelSnapshot) -> Card {
                     },
                 ))
                 .child(StatusPill::new(
-                    t!("App.RightPanel.Docker.Inventory.images", count = snapshot.images.len()),
+                    t!(
+                        "App.RightPanel.Docker.Inventory.images",
+                        count = snapshot.images.len()
+                    ),
                     StatusKind::Info,
                 ))
                 .child(StatusPill::new(
-                    t!("App.RightPanel.Docker.Inventory.volumes", count = snapshot.volumes.len()),
+                    t!(
+                        "App.RightPanel.Docker.Inventory.volumes",
+                        count = snapshot.volumes.len()
+                    ),
                     StatusKind::Info,
                 ))
                 .child(StatusPill::new(
-                    t!("App.RightPanel.Docker.Inventory.networks", count = snapshot.networks.len()),
+                    t!(
+                        "App.RightPanel.Docker.Inventory.networks",
+                        count = snapshot.networks.len()
+                    ),
                     StatusKind::Info,
                 )),
         )
@@ -1454,10 +1408,7 @@ fn docker_containers_card(
 ) -> Card {
     let mut card = Card::new()
         .padding(SP_3)
-        .child(
-            SectionLabel::new(t!("App.RightPanel.Docker.containers"))
-                .with_icon(IconName::Inbox),
-        )
+        .child(SectionLabel::new(t!("App.RightPanel.Docker.containers")).with_icon(IconName::Inbox))
         .child(text::body(t!("App.RightPanel.Docker.containers_body")).secondary());
 
     if snapshot.containers.is_empty() {
@@ -1493,19 +1444,17 @@ fn docker_container_row(
     };
     let pending_for_row = pending.filter(|action| action.target_id == container.id);
 
-    // `flex_none().max_w(...)` caps the action column width so wide
-    // action labels (stop / restart / inspect) wrap *inside* their
-    // own column instead of stealing space from the container name.
-    // Without the cap the container name on the left shrinks to a
-    // two-character stub on typical right-panel widths.
+    // Action column. Previously text buttons (停止 / 重启 / Inspect)
+    // that wrapped to two rows on a typical right-panel width and
+    // stole ~170 px from the name column. IconButton `Xs` is 18 px
+    // square — three of them fit in ~60 px, leaving the container
+    // name readable on every panel width.
     let mut actions = div()
+        .flex_none()
         .flex()
         .flex_row()
-        .flex_none()
-        .max_w(px(168.0))
-        .flex_wrap()
-        .justify_end()
-        .gap(SP_1);
+        .items_center()
+        .gap(SP_0_5);
     if let Some(action) = pending_for_row {
         actions = actions.child(StatusPill::new(
             docker_pending_label(action),
@@ -1518,19 +1467,19 @@ fn docker_container_row(
             DockerActionKind::Start
         };
         actions = actions
-            .child(docker_action_button(
+            .child(docker_action_icon(
                 primary_kind,
                 &container.id,
                 &target_label,
                 on_action.clone(),
             ))
-            .child(docker_action_button(
+            .child(docker_action_icon(
                 DockerActionKind::Restart,
                 &container.id,
                 &target_label,
                 on_action.clone(),
             ))
-            .child(docker_action_button(
+            .child(docker_action_icon(
                 DockerActionKind::Inspect,
                 &container.id,
                 &target_label,
@@ -1541,111 +1490,94 @@ fn docker_container_row(
     div()
         .flex()
         .flex_row()
-        .justify_between()
-        .items_start()
-        .gap(SP_3)
-        .p(SP_2)
+        .items_center()
+        .gap(SP_2)
+        .px(SP_2)
+        .py(SP_1_5)
         .rounded(RADIUS_SM)
         .border_1()
         .border_color(t.color.border_subtle)
         .bg(t.color.bg_panel)
         .overflow_hidden()
+        // Status dot — compact indicator to anchor the row visually.
+        .child(
+            div()
+                .flex_none()
+                .w(px(6.0))
+                .h(px(6.0))
+                .rounded(px(3.0))
+                .bg(docker_container_state_color(t, &container.state)),
+        )
+        // Label column: name on top, image + short id underneath.
+        // `truncate()` on both lines keeps the row height stable.
         .child(
             div()
                 .flex_1()
                 .min_w(px(0.0))
                 .flex()
                 .flex_col()
-                .gap(SP_1)
+                .gap(px(2.0))
                 .overflow_hidden()
                 .child(
                     div()
-                        .flex()
-                        .flex_row()
-                        .items_center()
-                        .gap(SP_2)
-                        .min_w(px(0.0))
-                        .child(
-                            div()
-                                .flex_none()
-                                .w(px(6.0))
-                                .h(px(6.0))
-                                .rounded(px(3.0))
-                                .bg(docker_container_state_color(t, &container.state)),
-                        )
-                        .child(
-                            div()
-                                .flex_1()
-                                .min_w(px(0.0))
-                                .text_size(SIZE_SMALL)
-                                .font_weight(WEIGHT_MEDIUM)
-                                .text_color(t.color.text_primary)
-                                .truncate()
-                                .child(target_label.clone()),
-                        )
-                        .child(
-                            div().flex_none().child(StatusPill::new(
-                                state_label.clone(),
-                                docker_container_state_kind(&container.state),
-                            )),
-                        ),
-                )
-                .child(
-                    div()
-                        .text_size(SIZE_SMALL)
-                        .text_color(t.color.text_secondary)
                         .truncate()
-                        .child(SharedString::from(
-                            t!(
-                                "App.RightPanel.Docker.image_label",
-                                image = empty_dash(&container.image)
-                            )
-                            .to_string(),
-                        )),
+                        .text_size(SIZE_SMALL)
+                        .font_weight(WEIGHT_MEDIUM)
+                        .text_color(t.color.text_primary)
+                        .child(target_label.clone()),
                 )
                 .child(
                     div()
+                        .truncate()
                         .text_size(SIZE_SMALL)
-                        .font_family(t.font_mono.clone())
                         .text_color(t.color.text_tertiary)
-                        .truncate()
                         .child(format!(
-                            "{} · ports {} · created {}",
-                            short_docker_id(&container.id),
-                            empty_dash(&container.ports),
-                            empty_dash(&container.created)
+                            "{} · {}",
+                            empty_dash(&container.image),
+                            short_docker_id(&container.id)
                         )),
                 ),
         )
-        .child(div().flex_none().child(actions))
+        // State pill — compact sibling to the actions, not a
+        // separate row. `flex_none` so it never steals space.
+        .child(div().flex_none().child(StatusPill::new(
+            state_label,
+            docker_container_state_kind(&container.state),
+        )))
+        .child(actions)
 }
 
-fn docker_action_button(
+fn docker_action_icon(
     kind: DockerActionKind,
     target_id: &str,
     target_label: &str,
     on_action: DockerActionHandler,
-) -> Button {
+) -> IconButton {
     let request = DockerActionRequest {
         kind,
         target_id: target_id.to_string(),
         target_label: target_label.to_string(),
     };
-
-    Button::secondary(
+    let icon = match kind {
+        DockerActionKind::Start => IconName::Play,
+        DockerActionKind::Stop => IconName::Square,
+        DockerActionKind::Restart => IconName::RefreshCw,
+        DockerActionKind::Inspect => IconName::Inspector,
+    };
+    IconButton::new(
         gpui::ElementId::Name(format!("docker-{}-{target_id}", kind.label()).into()),
-        docker_action_button_label(kind),
+        icon,
     )
+    .size(IconButtonSize::Xs)
+    .variant(IconButtonVariant::Filled)
     .on_click(move |_, window, app| on_action(&request, window, app))
 }
 
 fn docker_images_card(t: &crate::theme::Theme, snapshot: &DockerPanelSnapshot) -> Card {
-    let mut card = Card::new()
-        .padding(SP_3)
-        .child(
-            SectionLabel::new(t!("App.RightPanel.Docker.images"))
-                .with_icon(IconName::GalleryVerticalEnd),
-        );
+    let mut card = Card::new().padding(SP_3).child(
+        SectionLabel::new(t!("App.RightPanel.Docker.images"))
+            .with_icon(IconName::GalleryVerticalEnd),
+    );
 
     if snapshot.images.is_empty() {
         return card.child(text::body(t!("App.RightPanel.Docker.no_images")).secondary());
@@ -1702,12 +1634,10 @@ fn docker_images_card(t: &crate::theme::Theme, snapshot: &DockerPanelSnapshot) -
 }
 
 fn docker_storage_card(t: &crate::theme::Theme, snapshot: &DockerPanelSnapshot) -> Card {
-    let mut card = Card::new()
-        .padding(SP_3)
-        .child(
-            SectionLabel::new(t!("App.RightPanel.Docker.volumes_networks"))
-                .with_icon(IconName::ChartPie),
-        );
+    let mut card = Card::new().padding(SP_3).child(
+        SectionLabel::new(t!("App.RightPanel.Docker.volumes_networks"))
+            .with_icon(IconName::ChartPie),
+    );
 
     card = card.child(text::body(t!("App.RightPanel.Docker.volumes")).secondary());
     if snapshot.volumes.is_empty() {
@@ -1792,8 +1722,7 @@ fn docker_inspect_card(t: &crate::theme::Theme, inspect: &DockerInspectState) ->
     Card::new()
         .padding(SP_3)
         .child(
-            SectionLabel::new(t!("App.RightPanel.Docker.inspect"))
-                .with_icon(IconName::Inspector),
+            SectionLabel::new(t!("App.RightPanel.Docker.inspect")).with_icon(IconName::Inspector),
         )
         .child(
             div()
@@ -1884,7 +1813,12 @@ fn trim_panel_text(value: &str, max_chars: usize) -> SharedString {
     }
 
     let trimmed: String = value.chars().take(max_chars).collect();
-    t!("App.RightPanel.truncated_chars", text = trimmed, total = total).into()
+    t!(
+        "App.RightPanel.truncated_chars",
+        text = trimmed,
+        total = total
+    )
+    .into()
 }
 
 fn logs_preset_button(

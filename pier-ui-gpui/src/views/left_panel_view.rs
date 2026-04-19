@@ -35,7 +35,7 @@ use gpui::{
     Window,
 };
 use gpui_component::{
-    input::{Input, InputEvent, InputState},
+    input::{InputEvent, InputState},
     scroll::ScrollableElement,
     Icon as UiIcon, IconName,
 };
@@ -47,8 +47,8 @@ use crate::app::layout::LeftTab;
 use crate::app::ssh_session::{ConnectStatus, ServiceProbeStatus, TunnelStatus};
 use crate::app::PierApp;
 use crate::components::{
-    text, Button, Card, IconButton, IconButtonSize, IconButtonVariant, MetaLine, PillCluster,
-    SectionLabel, StatusKind, StatusPill, TabItem, Tabs,
+    text, Button, Card, IconButton, IconButtonSize, IconButtonVariant, InlineInput, MetaLine,
+    PillCluster, SectionLabel, StatusKind, StatusPill, TabItem, Tabs,
 };
 use crate::theme::heights::{PILL_DOT, ROW_SM_H};
 use crate::theme::{
@@ -376,7 +376,11 @@ impl LeftPanelView {
                     .bg(t.color.bg_panel)
                     .border_b_1()
                     .border_color(t.color.border_subtle)
-                    .child(Input::new(&self.files_filter)),
+                    .child(
+                        InlineInput::new(&self.files_filter)
+                            .leading_icon(IconName::Folder)
+                            .cleanable(),
+                    ),
             )
             .child(div().flex_1().min_h(px(0.0)).child(file_tree))
     }
@@ -429,7 +433,11 @@ impl LeftPanelView {
                     .bg(t.color.bg_panel)
                     .border_b_1()
                     .border_color(t.color.border_subtle)
-                    .child(Input::new(&self.servers_filter)),
+                    .child(
+                        InlineInput::new(&self.servers_filter)
+                            .leading_icon(IconName::Globe)
+                            .cleanable(),
+                    ),
             )
             .child(
                 div()

@@ -54,9 +54,9 @@
 //! without sometimes dropping events — and dropping log
 //! lines silently is a worse bug than a large buffer.
 
-use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, AtomicI32, Ordering};
 use std::sync::mpsc::{self, Receiver, TryRecvError};
+use std::sync::Arc;
 
 use super::error::Result;
 use super::runtime;

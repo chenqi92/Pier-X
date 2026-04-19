@@ -17,10 +17,11 @@ use std::path::PathBuf;
 use std::time::Instant;
 
 use pier_core::services::docker::{
-    Container as DockerContainer, DockerImage, DockerNetwork, DockerVolume,
+    Container as DockerContainer, DockerImage, DockerNetwork, DockerRunSpec, DockerVolume,
     inspect_container_blocking, list_containers_blocking, list_images_blocking,
     list_networks_blocking, list_volume_files_blocking, list_volumes_blocking, remove_blocking,
-    remove_image_blocking, remove_volume_blocking, restart_blocking, start_blocking, stop_blocking,
+    remove_image_blocking, remove_volume_blocking, restart_blocking, run_container_blocking,
+    start_blocking, stop_blocking,
 };
 use pier_core::services::server_monitor::ServerSnapshot;
 use pier_core::ssh::{
@@ -260,6 +261,13 @@ pub struct SshSessionState {
     pub docker_inspect: Option<DockerInspectState>,
     pub docker_pending_action: Option<PendingDockerAction>,
     pub docker_action_error: Option<String>,
+    /// `true` while a `docker run` command spawned from the image-row
+    /// Run dialog is still executing. The dialog reads this to show
+    /// a busy state and block re-submission.
+    pub docker_run_inflight: bool,
+    /// Last-successful created container id, shown as a confirmation
+    /// strip after the Run dialog closes.
+    pub docker_run_last_id: Option<String>,
     pub logs_lines: Vec<LogLine>,
     pub logs_status: LogsStatus,
     pub logs_error: Option<String>,
@@ -271,6 +279,7 @@ pub struct SshSessionState {
     monitor_refresh_nonce: usize,
     docker_refresh_nonce: usize,
     docker_action_nonce: usize,
+    docker_run_nonce: usize,
     logs_start_nonce: usize,
     /// Bumped per [`Self::begin_sftp_mutation`] so an in-flight
     /// rename / delete / upload / download / mkdir result that
@@ -311,6 +320,8 @@ impl SshSessionState {
             docker_inspect: None,
             docker_pending_action: None,
             docker_action_error: None,
+            docker_run_inflight: false,
+            docker_run_last_id: None,
             logs_lines: Vec::new(),
             logs_status: LogsStatus::Idle,
             logs_error: None,
@@ -322,6 +333,7 @@ impl SshSessionState {
             monitor_refresh_nonce: 0,
             docker_refresh_nonce: 0,
             docker_action_nonce: 0,
+            docker_run_nonce: 0,
             logs_start_nonce: 0,
             sftp_mutation_nonce: 0,
             logs_stream: None,
@@ -477,6 +489,45 @@ impl SshSessionState {
         } else {
             false
         }
+    }
+
+    /// Begin a `docker run` with the supplied spec. Returns None if
+    /// there's no active session or a run is already in flight.
+    pub fn begin_docker_run(&mut self, spec: DockerRunSpec) -> Option<DockerRunRequest> {
+        if self.docker_run_inflight {
+            return None;
+        }
+        let session = self.session.clone()?;
+        self.docker_run_nonce = self.docker_run_nonce.wrapping_add(1);
+        self.docker_run_inflight = true;
+        self.docker_run_last_id = None;
+        self.docker_action_error = None;
+        Some(DockerRunRequest {
+            nonce: self.docker_run_nonce,
+            session,
+            spec,
+        })
+    }
+
+    /// Apply a docker-run outcome. On success stashes the new
+    /// container id for a brief confirmation strip; on failure the
+    /// error goes through `docker_action_error` so the existing
+    /// error strip picks it up for free.
+    pub fn apply_docker_run_result(&mut self, result: DockerRunResult) -> bool {
+        if result.nonce != self.docker_run_nonce {
+            return false;
+        }
+        self.docker_run_inflight = false;
+        match result.outcome {
+            Ok(id) => {
+                self.docker_run_last_id = Some(id);
+                self.docker_action_error = None;
+            }
+            Err(err) => {
+                self.docker_action_error = Some(err);
+            }
+        }
+        true
     }
 
     pub fn begin_logs_start(&mut self, command: String) -> Option<LogsStartRequest> {
@@ -1042,6 +1093,21 @@ pub struct DockerCommandResult {
     outcome: Result<DockerCommandOutput, String>,
 }
 
+/// `docker run` is separate from the container action command
+/// machinery: it carries a full `DockerRunSpec` instead of a
+/// target-id/label pair, so it gets its own Request/Result pair.
+/// Outcome is the new container id on success.
+pub struct DockerRunRequest {
+    nonce: usize,
+    session: SshSession,
+    spec: DockerRunSpec,
+}
+
+pub struct DockerRunResult {
+    nonce: usize,
+    outcome: Result<String, String>,
+}
+
 pub struct LogsStartRequest {
     nonce: usize,
     session: SshSession,
@@ -1372,6 +1438,18 @@ pub fn run_docker_command(request: DockerCommandRequest) -> DockerCommandResult 
     DockerCommandResult {
         nonce: request.nonce,
         action: request.action,
+        outcome,
+    }
+}
+
+/// Background worker: build `docker run` from the spec and execute.
+/// Stdout typically contains just the new container id — surface it
+/// to the UI for a confirmation strip.
+pub fn run_docker_run(request: DockerRunRequest) -> DockerRunResult {
+    let outcome =
+        run_container_blocking(&request.session, &request.spec).map_err(|err| err.to_string());
+    DockerRunResult {
+        nonce: request.nonce,
         outcome,
     }
 }

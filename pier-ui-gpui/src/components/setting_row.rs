@@ -27,7 +27,7 @@
 use gpui::{div, prelude::*, px, AnyElement, IntoElement, ParentElement, SharedString, Window};
 
 use crate::components::text;
-use crate::theme::spacing::{SP_0_5, SP_2, SP_4};
+use crate::theme::spacing::{SP_0_5, SP_1_5, SP_2, SP_4};
 
 #[derive(IntoElement)]
 pub struct SettingRow {
@@ -110,8 +110,8 @@ impl RenderOnce for SettingRow {
         // align cleanly with rich-description rows above / below.
         div()
             .w_full()
-            .min_h(px(40.0))
-            .py(SP_2)
+            .min_h(px(38.0))
+            .py(SP_1_5)
             .flex()
             .flex_row()
             .justify_between()

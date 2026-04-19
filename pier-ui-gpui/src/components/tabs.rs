@@ -17,11 +17,11 @@ use gpui::{div, prelude::*, App, ClickEvent, ElementId, IntoElement, SharedStrin
 use gpui_component::{Icon as UiIcon, IconName};
 
 use crate::theme::{
-    heights::{ROW_SM_H, TAB_GLYPH, TAB_PILL_H},
-    radius::RADIUS_SM,
+    heights::{GLYPH_XS, TAB_PILL_H},
+    radius::RADIUS_MD,
     spacing::{SP_0_5, SP_1, SP_1_5, SP_2},
     theme,
-    typography::{SIZE_UI_LABEL, WEIGHT_MEDIUM, WEIGHT_REGULAR},
+    typography::{SIZE_SMALL, WEIGHT_MEDIUM, WEIGHT_REGULAR},
     ui_font_with,
 };
 
@@ -92,19 +92,14 @@ impl RenderOnce for Tabs {
         // but makes the selection unmistakable.
         let active_bg = t.color.accent_subtle;
         let active_fg = t.color.accent;
-        let idle_fg = t.color.text_tertiary;
+        let idle_fg = t.color.text_secondary;
         let hover_bg = t.color.bg_hover;
         let hover_fg = t.color.text_primary;
 
-        // Slightly taller than ROW_SM_H so the pill doesn't kiss the
-        // bottom rule — a shared 28px-ish height that reads as its
-        // own strip rather than a blended row.
-        let strip_h = ROW_SM_H;
-
         let mut row = div()
             .w_full()
-            .h(strip_h)
-            .px(SP_1)
+            .px(SP_2)
+            .py(SP_1_5)
             .flex()
             .flex_row()
             .items_center()
@@ -128,9 +123,9 @@ impl RenderOnce for Tabs {
                 .flex()
                 .flex_row()
                 .items_center()
-                .gap(SP_1_5)
-                .rounded(RADIUS_SM)
-                .text_size(SIZE_UI_LABEL)
+                .gap(SP_1)
+                .rounded(RADIUS_MD)
+                .text_size(SIZE_SMALL)
                 .text_color(fg)
                 .font(ui_font_with(&t.font_ui, &t.font_ui_features, weight))
                 .cursor_pointer();
@@ -142,7 +137,7 @@ impl RenderOnce for Tabs {
             }
 
             if let Some(icon) = item.icon {
-                el = el.child(UiIcon::new(icon).size(TAB_GLYPH).text_color(fg));
+                el = el.child(UiIcon::new(icon).size(GLYPH_XS).text_color(fg));
             }
             el = el.child(item.label);
             el = el.on_click(move |ev, win, cx| (item.on_click)(ev, win, cx));

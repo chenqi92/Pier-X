@@ -16,7 +16,8 @@ use gpui::{px, Pixels};
 
 // Shell rails.
 pub const TOOLBAR_H: Pixels = px(32.0);
-pub const STATUSBAR_H: Pixels = px(22.0);
+pub const STATUSBAR_H: Pixels = px(24.0);
+pub const TERMINAL_TABBAR_H: Pixels = px(36.0);
 
 // Page grammar containers.
 pub const PAGEHEADER_H: Pixels = px(42.0);

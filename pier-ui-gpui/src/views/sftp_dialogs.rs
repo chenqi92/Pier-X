@@ -25,6 +25,7 @@ use gpui_component::{
     input::{Input, InputState},
     WindowExt as _,
 };
+use rust_i18n::t;
 
 use crate::app::ssh_session::SftpMutationKind;
 use crate::app::PierApp;
@@ -44,22 +45,30 @@ pub fn open_mkdir_dialog(
     app: WeakEntity<PierApp>,
     parent_dir: String,
 ) {
-    let name = cx.new(|c| InputState::new(window, c).placeholder("new-folder"));
+    let placeholder: SharedString = t!("App.Sftp.Mkdir.placeholder").to_string().into();
+    let name = cx.new(|c| InputState::new(window, c).placeholder(placeholder));
 
-    let title: SharedString = "New folder".into();
+    let title: SharedString = t!("App.Sftp.Mkdir.title").to_string().into();
+    let field_label: SharedString = t!("App.Sftp.Mkdir.field_name").to_string().into();
+    let ok_label: SharedString = t!("App.Sftp.Mkdir.ok").to_string().into();
+    let cancel_label: SharedString = t!("App.Common.cancel").to_string().into();
+    let hint: SharedString = t!("App.Sftp.Mkdir.hint_no_slashes").to_string().into();
     window.open_dialog(cx, move |dialog, _w, app_cx| {
-        let body = build_single_field_body(app_cx, "Folder name", &name);
+        let body = build_single_field_body(app_cx, field_label.clone(), hint.clone(), &name);
         let on_ok_name = name.clone();
         let on_ok_parent = parent_dir.clone();
         let weak = app.clone();
         dialog
             .title(title.clone())
             .w(px(380.0))
+            .close_button(true)
+            .overlay_closable(true)
+            .keyboard(true)
             .confirm()
             .button_props(
                 gpui_component::dialog::DialogButtonProps::default()
-                    .ok_text("Create")
-                    .cancel_text("Cancel"),
+                    .ok_text(ok_label.clone())
+                    .cancel_text(cancel_label.clone()),
             )
             .on_ok(move |_, _w, app_cx| {
                 let raw = on_ok_name.read(app_cx).value().to_string();
@@ -100,12 +109,19 @@ pub fn open_rename_dialog(
     original_path: String,
     original_name: String,
 ) {
-    let name = cx.new(|c| InputState::new(window, c).placeholder("new name"));
+    let field_label: SharedString = t!("App.Sftp.Rename.field_new_name").to_string().into();
+    let placeholder: SharedString = field_label.clone();
+    let name = cx.new(|c| InputState::new(window, c).placeholder(placeholder));
     name.update(cx, |s, c| s.set_value(original_name.clone(), window, c));
 
-    let title: SharedString = format!("Rename · {original_name}").into();
+    let title: SharedString = t!("App.Sftp.Rename.title", name = original_name.as_str())
+        .to_string()
+        .into();
+    let ok_label: SharedString = t!("App.Sftp.Rename.ok").to_string().into();
+    let cancel_label: SharedString = t!("App.Common.cancel").to_string().into();
+    let hint: SharedString = t!("App.Sftp.Mkdir.hint_no_slashes").to_string().into();
     window.open_dialog(cx, move |dialog, _w, app_cx| {
-        let body = build_single_field_body(app_cx, "New name", &name);
+        let body = build_single_field_body(app_cx, field_label.clone(), hint.clone(), &name);
         let on_ok_name = name.clone();
         let on_ok_path = original_path.clone();
         let on_ok_original = original_name.clone();
@@ -113,11 +129,14 @@ pub fn open_rename_dialog(
         dialog
             .title(title.clone())
             .w(px(380.0))
+            .close_button(true)
+            .overlay_closable(true)
+            .keyboard(true)
             .confirm()
             .button_props(
                 gpui_component::dialog::DialogButtonProps::default()
-                    .ok_text("Rename")
-                    .cancel_text("Cancel"),
+                    .ok_text(ok_label.clone())
+                    .cancel_text(cancel_label.clone()),
             )
             .on_ok(move |_, _w, app_cx| {
                 let raw = on_ok_name.read(app_cx).value().to_string();
@@ -153,7 +172,8 @@ pub fn open_rename_dialog(
 
 fn build_single_field_body(
     cx: &App,
-    label: &'static str,
+    label: SharedString,
+    hint: SharedString,
     state: &Entity<InputState>,
 ) -> impl IntoElement {
     let t = theme(cx).clone();
@@ -167,17 +187,16 @@ fn build_single_field_body(
                 .text_size(SIZE_CAPTION)
                 .font_weight(WEIGHT_MEDIUM)
                 .text_color(t.color.text_secondary)
-                .child(SharedString::from(label)),
+                .child(label),
         )
         .child(Input::new(state))
         .child(
             div()
                 .pt(SP_2)
                 .pl(SP_3)
+                .text_size(SIZE_CAPTION)
                 .text_color(t.color.text_tertiary)
-                .child(SharedString::from(
-                    "Slashes are not allowed — use the file tree to navigate first.",
-                )),
+                .child(hint),
         )
 }
 

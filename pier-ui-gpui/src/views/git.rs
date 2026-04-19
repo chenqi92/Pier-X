@@ -9,15 +9,15 @@
 //! `PierApp::schedule_git_initial_refresh`, which is flag-guarded.
 
 use gpui::{div, prelude::*, px, App, ElementId, IntoElement, SharedString, WeakEntity, Window};
-use gpui_component::input::{Input, InputState};
+use gpui_component::input::InputState;
 use pier_core::services::git::{BranchInfo, CommitInfo, FileStatus, GitFileChange, StashEntry};
 use rust_i18n::t;
 
 use crate::app::git_session::{DiffSelection, GitPendingAction, GitState, GitStatus};
 use crate::app::PierApp;
 use crate::components::{
-    text, Button, ButtonSize, IconButton, IconButtonSize, IconButtonVariant, InspectorSection,
-    Separator, StatusKind, StatusPill,
+    text, Button, ButtonSize, IconButton, IconButtonSize, IconButtonVariant, InlineInput,
+    InlineInputTone, InspectorSection, Separator, StatusKind, StatusPill,
 };
 use crate::theme::{
     heights::{BUTTON_SM_H, ICON_MD, ICON_SM},
@@ -828,7 +828,7 @@ fn commit_section(
                 .flex()
                 .flex_col()
                 .gap(SP_1_5)
-                .child(Input::new(&input))
+                .child(InlineInput::new(&input).tone(InlineInputTone::Inset))
                 .child(text::caption(t!("App.Git.commit_hint")).secondary()),
         )
 }
@@ -856,7 +856,12 @@ fn stash_section(
     let mut section = InspectorSection::new(t!("App.Git.stash_section"))
         .icon(IconName::Inspector)
         .actions(push_btn)
-        .child(div().px(SP_3).py(SP_1_5).child(Input::new(&input)));
+        .child(
+            div()
+                .px(SP_3)
+                .py(SP_1_5)
+                .child(InlineInput::new(&input).tone(InlineInputTone::Inset)),
+        );
 
     if stashes.is_empty() {
         return section

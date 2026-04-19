@@ -19,7 +19,7 @@ use gpui::{
 
 use crate::theme::{
     radius::{RADIUS_MD, RADIUS_SM},
-    spacing::{SP_0_5, SP_2, SP_3},
+    spacing::{SP_0_5, SP_3},
     theme,
     typography::{SIZE_SMALL, WEIGHT_MEDIUM, WEIGHT_REGULAR},
 };

@@ -1,6 +1,7 @@
 pub mod add_group;
 pub mod database;
 pub mod database_form;
+pub mod docker_dialogs;
 pub mod edit_connection;
 pub mod file_tree;
 pub mod git;

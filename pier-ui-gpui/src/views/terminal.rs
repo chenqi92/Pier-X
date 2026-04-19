@@ -2,6 +2,7 @@ use std::{
     cell::RefCell,
     env,
     ffi::c_void,
+    path::Path,
     rc::Rc,
     sync::atomic::{AtomicBool, AtomicUsize, Ordering},
     time::{Duration, Instant},
@@ -1358,11 +1359,47 @@ impl TerminalPanel {
             .unwrap_or_else(|| "local PTY".into())
     }
 
+    fn shell_basename_label(&self) -> SharedString {
+        Path::new(self.shell_path.as_ref())
+            .file_name()
+            .and_then(|name| name.to_str().map(str::to_owned))
+            .filter(|name| !name.is_empty())
+            .map(SharedString::from)
+            .unwrap_or_else(|| self.shell_path.clone())
+    }
+
     #[allow(dead_code)]
     fn terminal_title_label(&self) -> SharedString {
         self.terminal_title
             .clone()
             .unwrap_or_else(|| "shell default".into())
+    }
+
+    pub(crate) fn tab_label(&self) -> SharedString {
+        self.ssh_target
+            .clone()
+            .or_else(|| self.terminal_title.clone())
+            .unwrap_or_else(|| self.shell_basename_label())
+    }
+
+    pub(crate) fn tab_icon_name(&self) -> IconName {
+        if self.ssh_target.is_some() {
+            IconName::Globe
+        } else {
+            IconName::SquareTerminal
+        }
+    }
+
+    pub(crate) fn is_ssh_tab(&self) -> bool {
+        self.ssh_target.is_some()
+    }
+
+    pub(crate) fn status_bar_label(&self) -> SharedString {
+        if self.ssh_target.is_some() {
+            self.tab_label()
+        } else {
+            self.shell_basename_label()
+        }
     }
 
     fn sync_window_title(&mut self, window: &mut Window) {

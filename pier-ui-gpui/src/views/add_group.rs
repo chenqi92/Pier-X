@@ -12,11 +12,8 @@ use gpui_component::{
 use rust_i18n::t;
 
 use crate::app::PierApp;
-use crate::theme::{
-    spacing::{SP_1, SP_2},
-    theme,
-    typography::{SIZE_CAPTION, WEIGHT_MEDIUM},
-};
+use crate::components::{FormField, FormSection};
+use crate::theme::spacing::SP_2;
 
 /// Open the add-group dialog as a modal sheet.
 pub fn open(window: &mut Window, cx: &mut App, app: WeakEntity<PierApp>) {
@@ -53,21 +50,9 @@ pub fn open(window: &mut Window, cx: &mut App, app: WeakEntity<PierApp>) {
     });
 }
 
-fn build_body(cx: &App, name: &Entity<InputState>) -> impl IntoElement {
-    let t = theme(cx).clone();
-    div()
-        .flex()
-        .flex_col()
-        .gap(SP_1)
-        .pt(SP_2)
-        .child(
-            div()
-                .text_size(SIZE_CAPTION)
-                .font_weight(WEIGHT_MEDIUM)
-                .text_color(t.color.text_secondary)
-                .child(SharedString::from(
-                    t!("App.AddGroup.field_label").to_string(),
-                )),
-        )
-        .child(Input::new(name))
+fn build_body(_cx: &App, name: &Entity<InputState>) -> impl IntoElement {
+    div().w_full().flex().flex_col().gap(SP_2).pt(SP_2).child(
+        FormSection::untitled()
+            .child(FormField::new(t!("App.AddGroup.field_label")).child(Input::new(name))),
+    )
 }

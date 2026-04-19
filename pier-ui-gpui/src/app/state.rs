@@ -43,20 +43,21 @@ use crate::app::layout::{
 use crate::app::route::DbKind;
 use crate::app::shell_location::{RemoteTarget, ShellLocation};
 use crate::app::ssh_session::{
-    run_bootstrap, run_docker_command, run_docker_refresh, run_logs_start, run_monitor_refresh,
-    run_refresh, run_sftp_mutation, run_tunnel, DockerActionKind, ServiceProbeStatus,
-    SftpMutationKind, SshSessionState, TransferDirection,
+    run_bootstrap, run_docker_command, run_docker_refresh, run_docker_run, run_logs_start,
+    run_monitor_refresh, run_refresh, run_sftp_mutation, run_tunnel, DockerActionKind,
+    ServiceProbeStatus, SftpMutationKind, SshSessionState, TransferDirection,
 };
+use pier_core::services::docker::DockerRunSpec;
 use crate::app::{
     ActivationHandler, CloseActiveTab, NewTab, OpenSettings, ToggleLeftPanel, ToggleRightPanel,
 };
 use crate::data::ShellSnapshot;
 use crate::theme::{
-    heights::{BUTTON_SM_H, GLYPH_SM, GLYPH_XS, ICON_SM, ROW_MD_H},
-    radius::RADIUS_SM,
-    spacing::{SP_1, SP_1_5, SP_2, SP_3},
+    heights::{BUTTON_MD_H, GLYPH_SM, GLYPH_XS, ICON_SM, STATUSBAR_H, TERMINAL_TABBAR_H},
+    radius::{RADIUS_MD, RADIUS_SM, RADIUS_XS},
+    spacing::{SP_1, SP_2, SP_3},
     theme,
-    typography::{SIZE_CAPTION, WEIGHT_MEDIUM, WEIGHT_REGULAR},
+    typography::{SIZE_SMALL, WEIGHT_MEDIUM, WEIGHT_REGULAR},
     ui_font_with,
 };
 use crate::views::left_panel_view::{
@@ -1392,6 +1393,13 @@ impl PierApp {
         self.active_terminal
     }
 
+    pub(crate) fn active_terminal_summary(&self, cx: &App) -> Option<(SharedString, bool)> {
+        let idx = self.active_terminal?;
+        let terminal = self.terminals.get(idx)?;
+        let panel = terminal.read(cx);
+        Some((panel.status_bar_label(), panel.is_ssh_tab()))
+    }
+
     pub(crate) fn open_new_tab_chooser(&self, window: &mut Window, cx: &mut Context<Self>) {
         log::info!("toolbar: open new-tab chooser");
         let weak = cx.entity().downgrade();
@@ -2203,6 +2211,38 @@ impl PierApp {
         .detach();
     }
 
+    /// Kick off a `docker run` with the supplied spec. On completion
+    /// the snapshot is refreshed so the new container appears in the
+    /// Containers tab; failures surface via `docker_action_error`.
+    pub fn schedule_docker_run(&mut self, spec: DockerRunSpec, cx: &mut Context<Self>) {
+        let Some(session) = self.active_session.clone() else {
+            return;
+        };
+        let Some(request) = session.update(cx, |state, _| state.begin_docker_run(spec)) else {
+            return;
+        };
+        cx.notify();
+        cx.spawn(
+            move |this: gpui::WeakEntity<Self>, cx: &mut gpui::AsyncApp| {
+                let background = cx.background_executor().clone();
+                let mut async_cx = cx.clone();
+                async move {
+                    let result = background
+                        .spawn(async move { run_docker_run(request) })
+                        .await;
+                    let _ = session.update(&mut async_cx, |state, _| {
+                        state.apply_docker_run_result(result);
+                    });
+                    let _ = this.update(&mut async_cx, |this, cx| {
+                        this.schedule_docker_refresh(cx);
+                        cx.notify();
+                    });
+                }
+            },
+        )
+        .detach();
+    }
+
     fn start_logs_stream(&mut self, force: bool, cx: &mut Context<Self>) {
         let Some(session) = self.active_session.clone() else {
             return;
@@ -2715,7 +2755,8 @@ impl PierApp {
             }
 
             let scroll_handle = self.terminal_tabs_scroll.clone();
-            let tab_bar = render_terminal_tab_bar(t, active, tab_count, &scroll_handle, cx);
+            let tab_bar =
+                render_terminal_tab_bar(t, &self.terminals, active, tab_count, &scroll_handle, cx);
 
             return div()
                 .h_full()
@@ -2771,6 +2812,7 @@ impl PierApp {
 
 fn render_terminal_tab_bar(
     t: &crate::theme::Theme,
+    terminals: &[Entity<TerminalPanel>],
     active: usize,
     count: usize,
     scroll_handle: &ScrollHandle,
@@ -2799,7 +2841,18 @@ fn render_terminal_tab_bar(
 
     for idx in 0..count {
         let is_active = idx == active;
-        let label: SharedString = t!("App.Shell.terminal_tab", index = idx + 1).into();
+        let (label, tab_icon) = terminals
+            .get(idx)
+            .map(|terminal| {
+                let panel = terminal.read(cx);
+                (panel.tab_label(), panel.tab_icon_name())
+            })
+            .unwrap_or_else(|| {
+                (
+                    SharedString::from(t!("App.Shell.terminal_tab", index = idx + 1).to_string()),
+                    IconName::SquareTerminal,
+                )
+            });
         let tab_id: SharedString = format!("term-tab-{idx}").into();
         let close_id: SharedString = format!("term-close-{idx}").into();
 
@@ -2816,18 +2869,27 @@ fn render_terminal_tab_bar(
 
         let mut tab = div()
             .id(gpui::ElementId::Name(tab_id))
+            .relative()
             .flex_none()
-            .h(BUTTON_SM_H)
+            .h(BUTTON_MD_H)
             .px(SP_2)
             .flex()
             .flex_row()
             .items_center()
-            .gap(SP_1_5)
-            .rounded(RADIUS_SM)
-            .text_size(SIZE_CAPTION)
-            .font_weight(WEIGHT_MEDIUM)
+            .gap(SP_1)
+            .rounded(RADIUS_MD)
+            .text_size(SIZE_SMALL)
+            .font(ui_font_with(
+                &t.font_ui,
+                &t.font_ui_features,
+                if is_active {
+                    WEIGHT_MEDIUM
+                } else {
+                    WEIGHT_REGULAR
+                },
+            ))
             .text_color(if is_active {
-                t.color.text_primary
+                t.color.accent
             } else {
                 t.color.text_secondary
             })
@@ -2836,10 +2898,10 @@ fn render_terminal_tab_bar(
             .on_click(on_select)
             .on_mouse_down(MouseButton::Right, on_right_click)
             .child(
-                UiIcon::new(IconName::SquareTerminal)
-                    .size(GLYPH_SM)
+                UiIcon::new(tab_icon)
+                    .size(GLYPH_XS)
                     .text_color(if is_active {
-                        t.color.text_primary
+                        t.color.accent
                     } else {
                         t.color.text_secondary
                     }),
@@ -2865,7 +2927,16 @@ fn render_terminal_tab_bar(
             );
 
         if is_active {
-            tab = tab.bg(t.color.bg_surface);
+            tab = tab.bg(t.color.accent_subtle).child(
+                div()
+                    .absolute()
+                    .left(SP_2)
+                    .right(SP_2)
+                    .bottom(px(0.0))
+                    .h(px(2.0))
+                    .rounded(RADIUS_XS)
+                    .bg(t.color.accent),
+            );
         }
         tabs = tabs.child(tab);
     }
@@ -2879,8 +2950,8 @@ fn render_terminal_tab_bar(
     let plus_button = div()
         .id("term-tab-plus")
         .flex_none()
-        .w(BUTTON_SM_H)
-        .h(BUTTON_SM_H)
+        .w(STATUSBAR_H)
+        .h(STATUSBAR_H)
         .flex()
         .items_center()
         .justify_center()
@@ -2913,7 +2984,7 @@ fn render_terminal_tab_bar(
     );
 
     let mut row = div()
-        .h(ROW_MD_H)
+        .h(TERMINAL_TABBAR_H)
         .px(SP_2)
         .flex()
         .flex_row()
@@ -2959,8 +3030,8 @@ fn tab_scroll_button(
     let mut button = div()
         .id(id)
         .flex_none()
-        .w(BUTTON_SM_H)
-        .h(BUTTON_SM_H)
+        .w(STATUSBAR_H)
+        .h(STATUSBAR_H)
         .flex()
         .items_center()
         .justify_center()

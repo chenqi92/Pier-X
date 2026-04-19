@@ -3,7 +3,7 @@
 //! Mirrors `Pier/PierApp/Sources/Views/Connection/*` editor sheet at MVP
 //! fidelity. Phase 6 adds:
 //!   - edit-existing-entry mode (`EditTarget::Edit(idx, …)`)
-//!   - auth radio: Agent (default) vs DirectPassword (masked input)
+//!   - auth segmented picker: Agent (default) vs password / key modes
 //!   - `Phase 5`'s save-to-disk via [`ConnectionStore::save_default`]
 //!
 //! Deferred (later phases):
@@ -18,7 +18,6 @@ use std::rc::Rc;
 use gpui::{div, prelude::*, px, App, Entity, IntoElement, SharedString, WeakEntity, Window};
 use gpui_component::{
     input::{Input, InputState},
-    radio::{Radio, RadioGroup},
     WindowExt as _,
 };
 use pier_core::connections::ConnectionStore;
@@ -26,12 +25,13 @@ use pier_core::ssh::{AuthMethod, SshConfig};
 use rust_i18n::t;
 
 use crate::app::PierApp;
-use crate::components::text;
+use crate::components::{FormField, FormSection};
 use crate::theme::{
-    spacing::{SP_0_5, SP_1, SP_2, SP_3},
+    spacing::{SP_0_5, SP_1, SP_2, SP_4},
     theme,
-    typography::{SIZE_CAPTION, WEIGHT_MEDIUM},
+    typography::SIZE_CAPTION,
 };
+use crate::widgets::{SegmentedControl, SegmentedItem};
 
 /// What this open() invocation is for — append a brand new entry, or
 /// replace an existing one at the given index.
@@ -47,25 +47,6 @@ enum AuthMode {
     Password,
     KeyFile,
     Keychain,
-}
-
-impl AuthMode {
-    fn from_index(i: usize) -> Self {
-        match i {
-            0 => AuthMode::Agent,
-            1 => AuthMode::Password,
-            2 => AuthMode::KeyFile,
-            _ => AuthMode::Keychain,
-        }
-    }
-    fn index(self) -> usize {
-        match self {
-            AuthMode::Agent => 0,
-            AuthMode::Password => 1,
-            AuthMode::KeyFile => 2,
-            AuthMode::Keychain => 3,
-        }
-    }
 }
 
 /// Open the connection editor as a modal dialog.
@@ -207,7 +188,7 @@ pub fn open(
         let weak = app.clone();
         dialog
             .title(title.clone())
-            .w(px(440.0))
+            .w(px(500.0))
             .confirm()
             .button_props(
                 gpui_component::dialog::DialogButtonProps::default()
@@ -250,113 +231,119 @@ fn build_body(
     let t = theme(cx).clone();
     let current_mode = *auth_mode.borrow();
 
-    let mode_for_click = auth_mode.clone();
-    let radio_group = RadioGroup::horizontal("auth-mode")
-        .selected_index(Some(current_mode.index()))
-        .child(Radio::new("auth-agent").label(t!("App.EditConnection.Auth.agent").to_string()))
-        .child(
-            Radio::new("auth-password").label(t!("App.EditConnection.Auth.password").to_string()),
-        )
-        .child(Radio::new("auth-key").label(t!("App.EditConnection.Auth.key_file").to_string()))
-        .child(
-            Radio::new("auth-keychain").label(t!("App.EditConnection.Auth.keychain").to_string()),
-        )
-        .on_click(move |idx, _w, app| {
-            *mode_for_click.borrow_mut() = AuthMode::from_index(*idx);
-            // Force the dialog body closure to rerun so per-mode fields
-            // appear/disappear. `refresh_windows` is the simplest hook —
-            // the dialog stack lives in Root which re-renders on any
-            // window refresh.
-            app.refresh_windows();
-        });
+    let auth_picker = auth_mode_picker(auth_mode.clone(), current_mode);
+    let auth_help: SharedString = match current_mode {
+        AuthMode::Agent => t!("App.EditConnection.Help.agent").into(),
+        AuthMode::Password => t!("App.EditConnection.Help.password").into(),
+        AuthMode::KeyFile => t!("App.EditConnection.Help.key_file").into(),
+        AuthMode::Keychain => t!("App.EditConnection.Help.keychain").into(),
+    };
 
-    let mut col = div()
-        .flex()
-        .flex_col()
-        .gap(SP_3)
-        .pt(SP_2)
-        .child(field(
-            &t,
-            t!("App.EditConnection.Fields.name"),
-            &inputs.name,
-        ))
-        .child(field(
-            &t,
-            t!("App.EditConnection.Fields.host"),
-            &inputs.host,
-        ))
+    let connection_section = FormSection::untitled()
+        .child(field(t!("App.EditConnection.Fields.name"), &inputs.name))
+        .child(field(t!("App.EditConnection.Fields.host"), &inputs.host))
         .child(
             div()
+                .w_full()
                 .flex()
                 .flex_row()
                 .gap(SP_2)
-                .child(div().flex_1().child(field(
-                    &t,
-                    t!("App.EditConnection.Fields.port"),
-                    &inputs.port,
-                )))
-                .child(div().flex_1().child(field(
-                    &t,
-                    t!("App.EditConnection.Fields.user"),
-                    &inputs.user,
-                ))),
+                .child(
+                    div()
+                        .flex_1()
+                        .min_w(px(0.0))
+                        .child(field(t!("App.EditConnection.Fields.port"), &inputs.port)),
+                )
+                .child(
+                    div()
+                        .flex_1()
+                        .min_w(px(0.0))
+                        .child(field(t!("App.EditConnection.Fields.user"), &inputs.user)),
+                ),
         )
-        .child(group_field(&t, &inputs.group, &known_groups))
-        .child(
-            div()
-                .flex()
-                .flex_col()
-                .gap(SP_1)
-                .child(label_text(
-                    &t,
-                    t!("App.EditConnection.Fields.authentication"),
-                ))
-                .child(radio_group),
-        );
+        .child(group_field(&t, &inputs.group, &known_groups));
 
-    col = match current_mode {
-        AuthMode::Agent => col.child(text::body(t!("App.EditConnection.Help.agent")).secondary()),
-        AuthMode::Password => col
+    let mut auth_section = FormSection::new(t!("App.EditConnection.Fields.authentication"))
+        .child(FormField::unlabeled().help(auth_help).child(auth_picker));
+
+    auth_section = match current_mode {
+        AuthMode::Agent => auth_section,
+        AuthMode::Password => auth_section.child(field(
+            t!("App.EditConnection.Fields.password"),
+            &inputs.password,
+        )),
+        AuthMode::KeyFile => auth_section
             .child(field(
-                &t,
-                t!("App.EditConnection.Fields.password"),
-                &inputs.password,
-            ))
-            .child(text::body(t!("App.EditConnection.Help.password")).secondary()),
-        AuthMode::KeyFile => col
-            .child(field(
-                &t,
                 t!("App.EditConnection.Fields.private_key_path"),
                 &inputs.key_path,
             ))
             .child(field(
-                &t,
                 t!("App.EditConnection.Fields.passphrase_optional"),
                 &inputs.key_passphrase,
-            ))
-            .child(text::body(t!("App.EditConnection.Help.key_file")).secondary()),
-        AuthMode::Keychain => col
-            .child(field(
-                &t,
-                t!("App.EditConnection.Fields.password"),
-                &inputs.keychain_password,
-            ))
-            .child(text::body(t!("App.EditConnection.Help.keychain")).secondary()),
+            )),
+        AuthMode::Keychain => auth_section.child(field(
+            t!("App.EditConnection.Fields.password"),
+            &inputs.keychain_password,
+        )),
     };
-    col
-}
 
-fn field(
-    t: &crate::theme::Theme,
-    label: impl Into<SharedString>,
-    state: &Entity<InputState>,
-) -> impl IntoElement {
     div()
+        .w_full()
         .flex()
         .flex_col()
-        .gap(SP_1)
-        .child(label_text(t, label))
-        .child(Input::new(state))
+        .gap(SP_4)
+        .pt(SP_2)
+        .child(connection_section)
+        .child(auth_section)
+}
+
+fn auth_mode_picker(auth_mode: Rc<RefCell<AuthMode>>, current_mode: AuthMode) -> impl IntoElement {
+    let mode_for_agent = auth_mode.clone();
+    let mode_for_password = auth_mode.clone();
+    let mode_for_key_file = auth_mode.clone();
+    let mode_for_keychain = auth_mode.clone();
+
+    SegmentedControl::new()
+        .item(SegmentedItem::new(
+            "auth-agent",
+            t!("App.EditConnection.Auth.agent"),
+            current_mode == AuthMode::Agent,
+            move |_, _, app| {
+                *mode_for_agent.borrow_mut() = AuthMode::Agent;
+                app.refresh_windows();
+            },
+        ))
+        .item(SegmentedItem::new(
+            "auth-password",
+            t!("App.EditConnection.Auth.password"),
+            current_mode == AuthMode::Password,
+            move |_, _, app| {
+                *mode_for_password.borrow_mut() = AuthMode::Password;
+                app.refresh_windows();
+            },
+        ))
+        .item(SegmentedItem::new(
+            "auth-key",
+            t!("App.EditConnection.Auth.key_file"),
+            current_mode == AuthMode::KeyFile,
+            move |_, _, app| {
+                *mode_for_key_file.borrow_mut() = AuthMode::KeyFile;
+                app.refresh_windows();
+            },
+        ))
+        .item(SegmentedItem::new(
+            "auth-keychain",
+            t!("App.EditConnection.Auth.keychain"),
+            current_mode == AuthMode::Keychain,
+            move |_, _, app| {
+                *mode_for_keychain.borrow_mut() = AuthMode::Keychain;
+                app.refresh_windows();
+            },
+        ))
+}
+
+fn field(label: impl Into<SharedString>, state: &Entity<InputState>) -> impl IntoElement {
+    FormField::new(label).child(Input::new(state))
 }
 
 /// "Group" field with a one-click chip row of already-used group
@@ -368,12 +355,7 @@ fn group_field(
     state: &Entity<InputState>,
     known_groups: &[SharedString],
 ) -> impl IntoElement {
-    let mut col = div()
-        .flex()
-        .flex_col()
-        .gap(SP_1)
-        .child(label_text(t, t!("App.EditConnection.Fields.group")))
-        .child(Input::new(state));
+    let field = FormField::new(t!("App.EditConnection.Fields.group")).child(Input::new(state));
 
     if !known_groups.is_empty() {
         let mut chips = div().flex().flex_row().flex_wrap().gap(SP_1);
@@ -402,18 +384,10 @@ fn group_field(
                     .child(name.clone()),
             );
         }
-        col = col.child(chips);
+        return field.child(chips);
     }
 
-    col
-}
-
-fn label_text(t: &crate::theme::Theme, label: impl Into<SharedString>) -> impl IntoElement {
-    div()
-        .text_size(SIZE_CAPTION)
-        .font_weight(WEIGHT_MEDIUM)
-        .text_color(t.color.text_secondary)
-        .child(label.into())
+    field
 }
 
 fn save(

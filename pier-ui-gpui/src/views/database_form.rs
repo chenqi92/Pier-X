@@ -22,12 +22,8 @@ use rust_i18n::t;
 
 use crate::app::route::DbKind;
 use crate::app::PierApp;
-use crate::components::text;
-use crate::theme::{
-    spacing::{SP_1, SP_2, SP_3},
-    theme,
-    typography::{SIZE_CAPTION, WEIGHT_MEDIUM},
-};
+use crate::components::{text, FormField, FormSection};
+use crate::theme::spacing::{SP_2, SP_4};
 
 /// What this open() invocation is for — a brand-new entry, or an
 /// edit of the existing entry at `idx`.
@@ -132,7 +128,7 @@ pub fn open(
         let weak = app.clone();
         dialog
             .title(title.clone())
-            .w(px(440.0))
+            .w(px(500.0))
             .confirm()
             .button_props(
                 gpui_component::dialog::DialogButtonProps::default()
@@ -157,63 +153,50 @@ struct Inputs {
     database: Entity<InputState>,
 }
 
-fn build_body(cx: &App, inputs: &Inputs, engine: DbEngine) -> impl IntoElement {
-    let t = theme(cx).clone();
+fn build_body(_cx: &App, inputs: &Inputs, engine: DbEngine) -> impl IntoElement {
     div()
+        .w_full()
         .flex()
         .flex_col()
-        .gap(SP_3)
+        .gap(SP_4)
         .pt(SP_2)
-        .child(field(&t, t!("App.Database.Form.Fields.name"), &inputs.name))
-        .child(field(&t, t!("App.Database.Form.Fields.host"), &inputs.host))
         .child(
-            div()
-                .flex()
-                .flex_row()
-                .gap(SP_2)
-                .child(div().flex_1().child(field(
-                    &t,
-                    t!("App.Database.Form.Fields.port"),
-                    &inputs.port,
-                )))
-                .child(div().flex_1().child(field(
-                    &t,
-                    t!("App.Database.Form.Fields.user"),
-                    &inputs.user,
-                ))),
+            FormSection::untitled()
+                .child(field(t!("App.Database.Form.Fields.name"), &inputs.name))
+                .child(field(t!("App.Database.Form.Fields.host"), &inputs.host))
+                .child(
+                    div()
+                        .w_full()
+                        .flex()
+                        .flex_row()
+                        .gap(SP_2)
+                        .child(
+                            div()
+                                .flex_1()
+                                .min_w(px(0.0))
+                                .child(field(t!("App.Database.Form.Fields.port"), &inputs.port)),
+                        )
+                        .child(
+                            div()
+                                .flex_1()
+                                .min_w(px(0.0))
+                                .child(field(t!("App.Database.Form.Fields.user"), &inputs.user)),
+                        ),
+                )
+                .child(field(
+                    t!("App.Database.Form.Fields.password"),
+                    &inputs.password,
+                ))
+                .child(field(
+                    t!("App.Database.Form.Fields.database_optional"),
+                    &inputs.database,
+                )),
         )
-        .child(field(
-            &t,
-            t!("App.Database.Form.Fields.password"),
-            &inputs.password,
-        ))
-        .child(field(
-            &t,
-            t!("App.Database.Form.Fields.database_optional"),
-            &inputs.database,
-        ))
-        .child(text::body(t!("App.Database.Form.help", engine = engine.as_str())).secondary())
+        .child(text::small(t!("App.Database.Form.help", engine = engine.as_str())).secondary())
 }
 
-fn field(
-    t: &crate::theme::Theme,
-    label: impl Into<SharedString>,
-    state: &Entity<InputState>,
-) -> impl IntoElement {
-    div()
-        .flex()
-        .flex_col()
-        .gap(SP_1)
-        .child(label_text(t, label))
-        .child(Input::new(state))
-}
-
-fn label_text(t: &crate::theme::Theme, label: impl Into<SharedString>) -> impl IntoElement {
-    div()
-        .text_size(SIZE_CAPTION)
-        .font_weight(WEIGHT_MEDIUM)
-        .text_color(t.color.text_secondary)
-        .child(label.into())
+fn field(label: impl Into<SharedString>, state: &Entity<InputState>) -> impl IntoElement {
+    FormField::new(label).child(Input::new(state))
 }
 
 fn save(

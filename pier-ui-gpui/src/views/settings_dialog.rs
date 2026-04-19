@@ -38,7 +38,7 @@ use crate::i18n::{self, LOCALE_ENGLISH, LOCALE_PREFERENCE_SYSTEM, LOCALE_ZH_CN};
 use crate::theme::{
     available_terminal_font_families, available_ui_font_families,
     radius::{RADIUS_MD, RADIUS_SM},
-    spacing::{SP_0_5, SP_1, SP_1_5, SP_2, SP_3, SP_4, SP_5, SP_6},
+    spacing::{SP_0_5, SP_1, SP_1_5, SP_2, SP_3, SP_4, SP_5},
     terminal::{available_terminal_palettes, terminal_bg_color, terminal_hex_color},
     terminal_cursor_blink, terminal_cursor_style, terminal_font_for_family,
     terminal_font_ligatures, terminal_font_size, terminal_opacity, theme,
@@ -224,7 +224,7 @@ impl SettingsDialog {
             .w(px(SIDEBAR_W))
             .h_full()
             .px(SP_4)
-            .py(SP_5)
+            .py(SP_4)
             .flex()
             .flex_col()
             .gap(SP_0_5)
@@ -310,14 +310,14 @@ fn page_shell(
     div()
         .h_full()
         .overflow_y_scrollbar()
-        .px(SP_6)
-        .py(SP_5)
+        .px(SP_5)
+        .py(SP_4)
         .flex()
         .flex_col()
         // SP_6 between sections gives grouped cards room to
         // breathe; with SP_4 the cards felt stacked on top of one
         // another when multiple sections are visible at once.
-        .gap(SP_6)
+        .gap(SP_5)
         .child(
             // Page header — title + subtitle, no underline rule.
             // The rule was cluttering the transition into the
@@ -889,8 +889,8 @@ fn settings_sidebar_item(
     div()
         .id(gpui::ElementId::Name(id.into()))
         .w_full()
-        .h(px(32.0))
-        .px(SP_3)
+        .h(px(30.0))
+        .px(SP_2)
         .flex()
         .flex_row()
         .items_center()

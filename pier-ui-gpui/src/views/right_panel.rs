@@ -13,25 +13,21 @@
 
 use std::rc::Rc;
 
-use gpui::{App, IntoElement, Pixels, SharedString, WeakEntity, Window, div, prelude::*, px};
-use gpui_component::{
-    Icon as UiIcon, IconName,
-    input::{Input, InputState},
-    scroll::ScrollableElement,
-};
+use gpui::{div, prelude::*, px, App, IntoElement, Pixels, SharedString, WeakEntity, Window};
+use gpui_component::{input::InputState, scroll::ScrollableElement, Icon as UiIcon, IconName};
 use pier_core::services::server_monitor::ServerSnapshot;
 use rust_i18n::t;
 
+use crate::app::layout::{DockerTab, RightContext, RightMode, RIGHT_ICON_BAR_W};
 use crate::app::PierApp;
-use crate::app::layout::{DockerTab, RIGHT_ICON_BAR_W, RightContext, RightMode};
 use crate::components::{
-    Button, ButtonSize, Card, DataCell, DataTone, HeaderSize, IconButton, IconButtonSize,
-    IconButtonVariant, InspectorSection, PageHeader, PropertyRow, SectionLabel, Separator,
-    StatusKind, StatusPill, data_cell_row, text,
+    data_cell_row, text, Button, ButtonSize, Card, DataCell, DataTone, HeaderSize, IconButton,
+    IconButtonSize, IconButtonVariant, InlineInput, InlineInputTone, InspectorSection, PageHeader,
+    PropertyRow, SectionLabel, Separator, StatusKind, StatusPill,
 };
 use crate::theme::{
-    heights::{BUTTON_MD_H, ICON_MD, ICON_SM, ROW_MD_H},
-    radius::{RADIUS_MD, RADIUS_SM},
+    heights::{BUTTON_MD_H, ICON_SM, ROW_MD_H, TAB_GLYPH},
+    radius::{RADIUS_MD, RADIUS_SM, RADIUS_XS},
     spacing::{SP_0_5, SP_1, SP_1_5, SP_2, SP_3, SP_4},
     theme,
     typography::{SIZE_CAPTION, SIZE_MONO_SMALL, SIZE_SMALL, WEIGHT_MEDIUM},
@@ -60,6 +56,10 @@ pub type DockerRefreshHandler = Rc<dyn Fn(&(), &mut Window, &mut App) + 'static>
 pub type DockerActionHandler = Rc<dyn Fn(&DockerActionRequest, &mut Window, &mut App) + 'static>;
 pub type DockerTabHandler = Rc<dyn Fn(&DockerTab, &mut Window, &mut App) + 'static>;
 pub type LogsActionHandler = Rc<dyn Fn(&LogsAction, &mut Window, &mut App) + 'static>;
+
+const MODE_RAIL_BUTTON_W: Pixels = px(34.0);
+const MODE_RAIL_INDICATOR_W: Pixels = px(2.0);
+const MODE_RAIL_INDICATOR_H: Pixels = px(16.0);
 
 #[derive(Clone, Debug)]
 pub struct DockerActionRequest {
@@ -274,6 +274,7 @@ fn render_mode_body(
             docker_refresh,
             docker_action,
             docker_tab_handler,
+            pier_app.clone(),
             cx,
         )
         .into_any_element(),
@@ -920,6 +921,7 @@ fn docker_view(
     on_refresh: DockerRefreshHandler,
     on_action: DockerActionHandler,
     on_tab: DockerTabHandler,
+    pier_app: WeakEntity<PierApp>,
     cx: &App,
 ) -> gpui::AnyElement {
     let Some(session_entity) = active_session else {
@@ -1069,13 +1071,22 @@ fn docker_view(
         .child(Separator::horizontal());
 
     col = col.child(match docker_tab {
-        DockerTab::Containers => {
-            docker_containers_body(t, &snapshot, pending.as_ref(), on_action.clone())
-                .into_any_element()
-        }
-        DockerTab::Images => {
-            docker_images_body(t, &snapshot, pending.as_ref(), on_action.clone()).into_any_element()
-        }
+        DockerTab::Containers => docker_containers_body(
+            t,
+            &snapshot,
+            pending.as_ref(),
+            on_action.clone(),
+            pier_app.clone(),
+        )
+        .into_any_element(),
+        DockerTab::Images => docker_images_body(
+            t,
+            &snapshot,
+            pending.as_ref(),
+            on_action.clone(),
+            pier_app.clone(),
+        )
+        .into_any_element(),
         DockerTab::Volumes => docker_volumes_body(
             t,
             &snapshot,
@@ -1086,21 +1097,14 @@ fn docker_view(
         .into_any_element(),
     });
 
-    // Bottom inspect section only renders when the current inspect
-    // points at a container. Volume inspects live inline under their
-    // row (see `docker_volume_expanded_block`) so they never show up
-    // at the panel bottom.
-    let show_container_inspect = inspect
-        .as_ref()
-        .map(|s| snapshot.containers.iter().any(|c| c.id == s.target_id))
-        .unwrap_or(false);
-    if show_container_inspect {
-        if let Some(inspect_state) = inspect.as_ref() {
-            col = col
-                .child(Separator::horizontal())
-                .child(docker_inspect_section(t, inspect_state));
-        }
-    }
+    // Container inspects open as a modal dialog (see
+    // `views::docker_dialogs::open_docker_inspect_dialog`), not at
+    // the panel bottom. Volume inspects live inline under their row
+    // (see `docker_volume_expanded_block`). So this function has no
+    // bottom-of-panel inspect rendering — the inspect state still
+    // flows through `session.docker_inspect`, the dialog + volume
+    // block read from it.
+    let _ = inspect; // keep variable live for future routing.
 
     col.into_any_element()
 }
@@ -1238,7 +1242,11 @@ fn logs_view(
         .gap(SP_1_5)
         .px(SP_3)
         .pb(SP_2)
-        .child(Input::new(&logs_command_input))
+        .child(
+            InlineInput::new(&logs_command_input)
+                .tone(InlineInputTone::Inset)
+                .mono(),
+        )
         .child(
             div()
                 .flex()
@@ -1440,7 +1448,11 @@ fn swap_secondary(snapshot: &ServerSnapshot) -> SharedString {
 }
 
 fn empty_dash(value: &str) -> &str {
-    if value.is_empty() { "—" } else { value }
+    if value.is_empty() {
+        "—"
+    } else {
+        value
+    }
 }
 
 /// Segmented control that drives the Docker sub-view. Matches the
@@ -1468,6 +1480,7 @@ fn docker_containers_body(
     snapshot: &DockerPanelSnapshot,
     pending: Option<&PendingDockerAction>,
     on_action: DockerActionHandler,
+    pier_app: WeakEntity<PierApp>,
 ) -> gpui::AnyElement {
     if snapshot.containers.is_empty() {
         return div()
@@ -1483,6 +1496,7 @@ fn docker_containers_body(
             container,
             pending,
             on_action.clone(),
+            pier_app.clone(),
         ));
     }
     col.into_any_element()
@@ -1493,6 +1507,7 @@ fn docker_container_row(
     container: &pier_core::services::docker::Container,
     pending: Option<&PendingDockerAction>,
     on_action: DockerActionHandler,
+    pier_app: WeakEntity<PierApp>,
 ) -> impl IntoElement {
     let state_label = if container.state.is_empty() {
         empty_dash(&container.status).to_string()
@@ -1542,12 +1557,11 @@ fn docker_container_row(
                 &target_label,
                 on_action.clone(),
             ))
-            .child(docker_action_icon(
-                DockerActionKind::Inspect,
-                DockerTargetKind::Container,
+            .child(docker_container_inspect_icon(
                 &container.id,
                 &target_label,
                 on_action.clone(),
+                pier_app.clone(),
             ))
             .child(docker_action_icon(
                 DockerActionKind::Delete,
@@ -1618,6 +1632,44 @@ fn docker_container_row(
         .child(actions)
 }
 
+/// Inspect button for a container row. Diverges from `docker_action_icon`
+/// in one way: the click handler both **dispatches** the Inspect action
+/// (so the backend populates `session.docker_inspect`) and **opens** a
+/// modal dialog that reactively renders that state. Previously Inspect
+/// output appeared in a section at the bottom of the panel; per Pier's
+/// reference the container-inspect pane is a dedicated modal.
+fn docker_container_inspect_icon(
+    target_id: &str,
+    target_label: &str,
+    on_action: DockerActionHandler,
+    pier_app: WeakEntity<PierApp>,
+) -> IconButton {
+    let request = DockerActionRequest {
+        kind: DockerActionKind::Inspect,
+        target_id: target_id.to_string(),
+        target_label: target_label.to_string(),
+        target_kind: DockerTargetKind::Container,
+    };
+    let target_id_owned = target_id.to_string();
+    let target_label_owned: SharedString = target_label.to_string().into();
+    IconButton::new(
+        gpui::ElementId::Name(format!("docker-container-inspect-{target_id}").into()),
+        IconName::Inspector,
+    )
+    .size(IconButtonSize::Xs)
+    .variant(IconButtonVariant::Ghost)
+    .on_click(move |_, window, app| {
+        on_action(&request, window, app);
+        crate::views::docker_dialogs::open_docker_inspect_dialog(
+            window,
+            app,
+            pier_app.clone(),
+            target_id_owned.clone(),
+            target_label_owned.clone(),
+        );
+    })
+}
+
 fn docker_action_icon(
     kind: DockerActionKind,
     target_kind: DockerTargetKind,
@@ -1662,6 +1714,7 @@ fn docker_images_body(
     snapshot: &DockerPanelSnapshot,
     pending: Option<&PendingDockerAction>,
     on_action: DockerActionHandler,
+    pier_app: WeakEntity<PierApp>,
 ) -> gpui::AnyElement {
     let mut col = div().w_full().flex().flex_col().child(docker_pull_strip(t));
 
@@ -1675,7 +1728,13 @@ fn docker_images_body(
         return col.into_any_element();
     }
     for image in &snapshot.images {
-        col = col.child(docker_image_row(t, image, pending, on_action.clone()));
+        col = col.child(docker_image_row(
+            t,
+            image,
+            pending,
+            on_action.clone(),
+            pier_app.clone(),
+        ));
     }
     col.into_any_element()
 }
@@ -1727,6 +1786,7 @@ fn docker_image_row(
     image: &pier_core::services::docker::DockerImage,
     pending: Option<&PendingDockerAction>,
     on_action: DockerActionHandler,
+    pier_app: WeakEntity<PierApp>,
 ) -> impl IntoElement {
     let tag = if image.tag.is_empty() {
         "<none>".to_string()
@@ -1780,6 +1840,7 @@ fn docker_image_row(
                 ),
         )
         .child({
+            let image_ref: SharedString = format!("{repo}:{tag}").into();
             let pending_for_row = pending.filter(|action| action.target_id == image.id);
             if let Some(action) = pending_for_row {
                 div()
@@ -1792,11 +1853,16 @@ fn docker_image_row(
             } else if pending.is_none() {
                 div()
                     .flex_none()
+                    .flex()
+                    .flex_row()
+                    .items_center()
+                    .gap(SP_0_5)
+                    .child(docker_image_run_icon(image_ref.clone(), pier_app.clone()))
                     .child(docker_action_icon(
                         DockerActionKind::Delete,
                         DockerTargetKind::Image,
                         &image.id,
-                        &format!("{repo}:{tag}"),
+                        image_ref.as_ref(),
                         on_action,
                     ))
                     .into_any_element()
@@ -1804,6 +1870,27 @@ fn docker_image_row(
                 div().flex_none().into_any_element()
             }
         })
+}
+
+/// Play-styled IconButton that opens the `docker run` config dialog
+/// for the given image reference. Uses Primary (accent) variant so it
+/// reads as "the main verb" next to the quieter red trash delete.
+fn docker_image_run_icon(image_ref: SharedString, pier_app: WeakEntity<PierApp>) -> IconButton {
+    let id_suffix = image_ref.replace([':', '/', '.'], "-");
+    IconButton::new(
+        gpui::ElementId::Name(format!("docker-image-run-{id_suffix}").into()),
+        IconName::Play,
+    )
+    .size(IconButtonSize::Xs)
+    .variant(IconButtonVariant::Primary)
+    .on_click(move |_, window, app| {
+        crate::views::docker_dialogs::open_docker_run_dialog(
+            window,
+            app,
+            pier_app.clone(),
+            image_ref.clone(),
+        );
+    })
 }
 
 /// Flush list of volume rows. Networks, which used to share this
@@ -2382,33 +2469,38 @@ fn mode_icon_button(
 
     let mut btn = div()
         .id(gpui::ElementId::Name(id_str))
-        .w(BUTTON_MD_H)
+        .w(MODE_RAIL_BUTTON_W)
         .h(BUTTON_MD_H)
+        .px(SP_0_5)
         .flex()
+        .flex_row()
         .items_center()
-        .justify_center()
-        .rounded(RADIUS_SM)
+        .rounded(RADIUS_MD)
         .cursor_pointer()
-        .text_color(if is_active {
-            t.color.accent
-        } else {
-            t.color.text_secondary
-        })
         .hover(|s| s.bg(t.color.bg_hover))
         .on_click(move |_, w, app| on_select(&mode, w, app))
-        .child(icon.size(ICON_MD).text_color(if is_active {
-            t.color.accent
-        } else {
-            t.color.text_secondary
-        }));
+        .child(
+            div()
+                .w(MODE_RAIL_INDICATOR_W)
+                .h(MODE_RAIL_INDICATOR_H)
+                .rounded(RADIUS_XS)
+                .bg(if is_active {
+                    t.color.accent
+                } else {
+                    gpui::Rgba::default()
+                }),
+        )
+        .child(div().flex_1().flex().items_center().justify_center().child(
+            icon.size(TAB_GLYPH).text_color(if is_active {
+                t.color.accent
+            } else {
+                t.color.text_secondary
+            }),
+        ))
+        .child(div().w(MODE_RAIL_INDICATOR_W));
 
     if is_active {
-        btn = btn
-            .bg(t.color.accent_subtle)
-            .border_1()
-            .border_color(t.color.accent_muted);
-    } else {
-        btn = btn.bg(t.color.bg_panel);
+        btn = btn.bg(t.color.accent_subtle);
     }
     btn
 }

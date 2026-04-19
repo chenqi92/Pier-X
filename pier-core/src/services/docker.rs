@@ -368,6 +368,153 @@ pub fn remove_volume_blocking(session: &SshSession, name: &str) -> Result<()> {
     crate::ssh::runtime::shared().block_on(remove_volume(session, name))
 }
 
+/// Full `docker run` configuration — what a user fills into the
+/// image-row Run dialog. Every collection field is interpreted as
+/// "one `-p` / `-v` / `-e` flag per entry"; booleans flip their
+/// respective switches. `command` splits on whitespace inside the
+/// shell (like the CLI would), so `"python app.py --debug"` just
+/// works without the caller pre-tokenising.
+///
+/// All string values are passed through [`shell_quote`] on the way
+/// into the final command — callers can't break the command shape
+/// even with arbitrary input.
+#[allow(missing_docs)]
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct DockerRunSpec {
+    /// `docker run IMAGE_REF` — the image to run (e.g. `nginx:latest`).
+    pub image: String,
+    /// `--name NAME`; empty ⇒ daemon assigns a name.
+    pub name: String,
+    /// `-p HOST:CONTAINER[/proto]` entries, one per line/element.
+    pub ports: Vec<String>,
+    /// `-v SRC:DST[:RO]` entries.
+    pub volumes: Vec<String>,
+    /// `-e KEY=VALUE` entries.
+    pub env: Vec<String>,
+    /// `--network NAME`; empty ⇒ default bridge.
+    pub network: String,
+    /// `--restart POLICY`; empty ⇒ no policy.
+    pub restart: String,
+    /// `--workdir PATH`.
+    pub workdir: String,
+    /// `--user UID[:GID]`.
+    pub user: String,
+    /// `--hostname HOST`.
+    pub hostname: String,
+    /// `--entrypoint CMD` override (rarely used but doc-complete).
+    pub entrypoint: String,
+    /// Trailing image-command args — shell-split on whitespace.
+    pub command: String,
+    /// `-d` detached.
+    pub detached: bool,
+    /// `--rm` auto-remove on exit.
+    pub auto_remove: bool,
+    /// `--privileged`.
+    pub privileged: bool,
+    /// `--read-only`.
+    pub read_only: bool,
+    /// `-it` allocate TTY + stdin (mutually exclusive with `-d`).
+    pub interactive_tty: bool,
+}
+
+impl DockerRunSpec {
+    /// Build the command tail for `docker run ...`. Kept public for
+    /// tests + for the UI's "preview command" affordance.
+    pub fn to_command(&self) -> String {
+        let mut out = String::from("docker run");
+        if self.detached {
+            out.push_str(" -d");
+        }
+        if self.interactive_tty {
+            out.push_str(" -it");
+        }
+        if self.auto_remove {
+            out.push_str(" --rm");
+        }
+        if self.privileged {
+            out.push_str(" --privileged");
+        }
+        if self.read_only {
+            out.push_str(" --read-only");
+        }
+        if !self.name.is_empty() {
+            out.push_str(" --name ");
+            out.push_str(&shell_quote(&self.name));
+        }
+        for port in &self.ports {
+            if !port.is_empty() {
+                out.push_str(" -p ");
+                out.push_str(&shell_quote(port));
+            }
+        }
+        for vol in &self.volumes {
+            if !vol.is_empty() {
+                out.push_str(" -v ");
+                out.push_str(&shell_quote(vol));
+            }
+        }
+        for e in &self.env {
+            if !e.is_empty() {
+                out.push_str(" -e ");
+                out.push_str(&shell_quote(e));
+            }
+        }
+        if !self.network.is_empty() {
+            out.push_str(" --network ");
+            out.push_str(&shell_quote(&self.network));
+        }
+        if !self.restart.is_empty() {
+            out.push_str(" --restart ");
+            out.push_str(&shell_quote(&self.restart));
+        }
+        if !self.workdir.is_empty() {
+            out.push_str(" --workdir ");
+            out.push_str(&shell_quote(&self.workdir));
+        }
+        if !self.user.is_empty() {
+            out.push_str(" --user ");
+            out.push_str(&shell_quote(&self.user));
+        }
+        if !self.hostname.is_empty() {
+            out.push_str(" --hostname ");
+            out.push_str(&shell_quote(&self.hostname));
+        }
+        if !self.entrypoint.is_empty() {
+            out.push_str(" --entrypoint ");
+            out.push_str(&shell_quote(&self.entrypoint));
+        }
+        out.push(' ');
+        out.push_str(&shell_quote(&self.image));
+        if !self.command.trim().is_empty() {
+            let args: Vec<&str> = self.command.split_whitespace().collect();
+            out.push(' ');
+            out.push_str(&join_shell_args(args));
+        }
+        out
+    }
+}
+
+/// `docker run ...` with the composed spec. Returns the new
+/// container id on stdout (docker's default behaviour). A non-zero
+/// exit short-circuits into an error so the caller can surface
+/// stderr-style messages to the user.
+pub async fn run_container(session: &SshSession, spec: &DockerRunSpec) -> Result<String> {
+    let cmd = spec.to_command();
+    let (exit, stdout) = session.exec_command(&cmd).await?;
+    if exit != 0 {
+        return Err(SshError::InvalidConfig(format!(
+            "docker run exited {exit}: {}",
+            stdout.trim()
+        )));
+    }
+    Ok(stdout.trim().to_string())
+}
+
+/// Blocking wrapper.
+pub fn run_container_blocking(session: &SshSession, spec: &DockerRunSpec) -> Result<String> {
+    crate::ssh::runtime::shared().block_on(run_container(session, spec))
+}
+
 /// `ls -la` on a volume's mountpoint. Mirrors Pier's Swift client
 /// which shows the flat file listing (with `total XXK` header) when
 /// the user taps a volume row. The remote shell interprets the path

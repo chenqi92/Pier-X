@@ -853,6 +853,115 @@ App:
       delete:
         en: Delete
         zh-CN: 删除
+      run:
+        en: Run
+        zh-CN: 启动
+      run_image:
+        en: Image
+        zh-CN: 镜像
+      run_preview:
+        en: Preview command
+        zh-CN: 预览命令
+      RunDialog:
+        launch:
+          en: Launch
+          zh-CN: 启动参数
+        launch_body:
+          en: Optional overrides applied before the container starts.
+          zh-CN: 容器启动前可选的覆盖参数。
+        network_mounts:
+          en: Network & Mounts
+          zh-CN: 网络与挂载
+        behavior:
+          en: Behavior
+          zh-CN: 运行行为
+        behavior_body:
+          en: These switches map directly to common `docker run` flags.
+          zh-CN: 这些开关直接对应常见的 `docker run` 参数。
+        preview_body:
+          en: Command assembled in real time from the options above.
+          zh-CN: 下面的命令会根据上面的选项实时拼装。
+        name:
+          en: Container name
+          zh-CN: 容器名称
+        entrypoint:
+          en: Entrypoint
+          zh-CN: 入口命令
+        command:
+          en: Command
+          zh-CN: 命令
+        command_hint:
+          en: Arguments appended after the image name.
+          zh-CN: 追加在镜像名之后的命令参数。
+        ports:
+          en: Published ports
+          zh-CN: 端口映射
+        ports_hint:
+          en: One mapping per line, e.g. 8080:80
+          zh-CN: 每行一条映射，例如 8080:80
+        volumes:
+          en: Volumes
+          zh-CN: 挂载卷
+        volumes_hint:
+          en: One mount per line, e.g. /data:/var/lib/data
+          zh-CN: 每行一条挂载，例如 /data:/var/lib/data
+        environment:
+          en: Environment
+          zh-CN: 环境变量
+        environment_hint:
+          en: One variable per line, e.g. KEY=VALUE
+          zh-CN: 每行一个变量，例如 KEY=VALUE
+        network:
+          en: Network
+          zh-CN: 网络
+        restart:
+          en: Restart policy
+          zh-CN: 重启策略
+        restart_hint:
+          en: no / always / on-failure / unless-stopped
+          zh-CN: no / always / on-failure / unless-stopped
+        workdir:
+          en: Working directory
+          zh-CN: 工作目录
+        user:
+          en: User
+          zh-CN: 用户
+        hostname:
+          en: Hostname
+          zh-CN: 主机名
+        detached:
+          en: Detached
+          zh-CN: 后台运行
+        detached_body:
+          en: Add `-d` and keep the container running in the background.
+          zh-CN: 添加 `-d`，让容器在后台持续运行。
+        auto_remove:
+          en: Auto remove
+          zh-CN: 退出后自动删除
+        auto_remove_body:
+          en: Add `--rm` so the container is cleaned up when it exits.
+          zh-CN: 添加 `--rm`，容器退出后自动清理。
+        interactive_tty:
+          en: Interactive TTY
+          zh-CN: 交互式 TTY
+        interactive_tty_body:
+          en: Add `-it` for interactive commands and shells.
+          zh-CN: 添加 `-it`，用于交互式命令和 shell。
+        privileged:
+          en: Privileged
+          zh-CN: 特权模式
+        privileged_body:
+          en: Add `--privileged` to grant elevated container capabilities.
+          zh-CN: 添加 `--privileged`，为容器授予更高权限。
+        read_only:
+          en: Read-only rootfs
+          zh-CN: 只读根文件系统
+        read_only_body:
+          en: Add `--read-only` to mount the container root filesystem read-only.
+          zh-CN: 添加 `--read-only`，以只读方式挂载容器根文件系统。
+        name_placeholder:
+          en: optional
+          zh-CN: 可选
     Logs:
       placeholder:
         en: Open a saved connection from the left panel to start a remote log stream.

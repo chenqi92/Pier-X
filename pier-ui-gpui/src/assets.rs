@@ -181,6 +181,15 @@ static ASSETS: &[(&str, &[u8])] = &[
         "icons/github.svg",
         include_bytes!("../assets/icons/github.svg"),
     ),
+    // — File-type icons for the file browser row —
+    (
+        "icons/book-open.svg",
+        include_bytes!("../assets/icons/book-open.svg"),
+    ),
+    (
+        "icons/palette.svg",
+        include_bytes!("../assets/icons/palette.svg"),
+    ),
 ];
 
 #[derive(Clone, Copy, Default)]

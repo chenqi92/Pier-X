@@ -31,9 +31,7 @@ use rust_i18n::t;
 use crate::components::{
     text, IconButton, IconButtonSize, IconButtonVariant, SectionLabel, StatusKind, StatusPill,
 };
-use crate::data::{
-    format_file_size, format_permissions, format_relative_time, format_windows_attrs,
-};
+use crate::data::{format_date, format_file_size, format_permissions, format_windows_attrs};
 use crate::theme::{
     heights::{BUTTON_SM_H, GLYPH_SM, ICON_SM, ROW_MD_H, ROW_SM_H},
     radius::{RADIUS_MD, RADIUS_SM},
@@ -52,7 +50,12 @@ const MAX_CHILDREN_PER_DIR: usize = 1000;
 /// Each column is only shown when the panel is wider than the threshold
 /// below — keeping the name column readable down to 180 px.
 const SIZE_COLUMN_W: Pixels = px(56.0);
-const MTIME_COLUMN_W: Pixels = px(56.0);
+/// Width of the mtime column. Sized for the full `YYYY-MM-DD` label
+/// (10 mono chars ≈ 76 px) plus a couple of pixels of right margin.
+/// We render the full date instead of a relative label so the column
+/// never visually jitters day-over-day and the "which file is newer"
+/// question is always answerable at a glance.
+const MTIME_COLUMN_W: Pixels = px(78.0);
 /// POSIX permissions are 10 mono chars (`drwxr-xr-x`) and Windows uses
 /// a 4-char mask (`drw-`). We size the column to the wider (POSIX)
 /// since that's what macOS / Linux users see.
@@ -61,13 +64,13 @@ const PERMS_COLUMN_W: Pixels = px(76.0);
 /// Show the size column when the panel has at least this much space.
 /// Below this we only render [icon] [name].
 const SIZE_COLUMN_MIN_W: Pixels = px(220.0);
-/// Reveal the mtime column a bit wider — name column still gets
-/// ~120 px to breathe.
-const MTIME_COLUMN_MIN_W: Pixels = px(280.0);
+/// Reveal the mtime column once the panel is wide enough to host the
+/// full `YYYY-MM-DD` label without starving the name column.
+const MTIME_COLUMN_MIN_W: Pixels = px(300.0);
 /// The permissions column is the last to appear; on Windows the mask
 /// is narrower but we gate on the POSIX width so macOS renders the
 /// full `drwxr-xr-x` without truncation.
-const PERMS_COLUMN_MIN_W: Pixels = px(360.0);
+const PERMS_COLUMN_MIN_W: Pixels = px(380.0);
 
 pub type EnterDirHandler = Rc<dyn Fn(&PathBuf, &mut Window, &mut App) + 'static>;
 pub type OpenFileHandler = Rc<dyn Fn(&PathBuf, &mut Window, &mut App) + 'static>;
@@ -357,8 +360,14 @@ fn quick_menu(
     on_choose_folder: ChooseFolderHandler,
 ) -> impl IntoElement {
     let t = t.clone();
+    // `.appearance(false)` turns OFF the Popover's default surface
+    // (white rounded box + p_3 padding). We draw our own container
+    // inside `quick_menu_body` with Pier-style bg_elevated + border +
+    // popover shadow so the menu has a single crisp frame instead of
+    // the doubled-box look the default appearance gives us.
     Popover::new("ft-quick-menu")
         .anchor(Corner::TopRight)
+        .appearance(false)
         .trigger(QuickMenuTrigger {
             bg_idle: t.color.bg_surface,
             bg_hover: t.color.bg_hover,
@@ -853,7 +862,7 @@ fn row(
     };
     let mtime_label: SharedString = entry
         .modified_secs
-        .map(format_relative_time)
+        .map(format_date)
         .unwrap_or_else(|| "—".to_string())
         .into();
     // Prefer the POSIX mode when the filesystem supplied one; fall
@@ -940,7 +949,8 @@ fn row(
                 div()
                     .flex_none()
                     .w(MTIME_COLUMN_W)
-                    .text_size(SIZE_SMALL)
+                    .text_size(SIZE_MONO_SMALL)
+                    .font_family(t.font_mono.clone())
                     .text_color(t.color.text_tertiary)
                     .text_right()
                     .child(mtime_label),

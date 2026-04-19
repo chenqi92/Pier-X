@@ -47,7 +47,7 @@ pub fn format_relative_time(mtime_secs: u64) -> String {
 /// stays render-safe and dependency-free. Uses the proleptic
 /// Gregorian calendar — adequate for any mtime a modern filesystem
 /// will produce.
-fn format_date(secs: u64) -> String {
+pub fn format_date(secs: u64) -> String {
     let days_since_epoch = (secs / 86_400) as i64;
     let (y, m, d) = civil_from_days(days_since_epoch);
     format!("{:04}-{:02}-{:02}", y, m, d)

@@ -18,7 +18,22 @@ use pier_core::settings::{
     AppSettings, AppearanceMode, SettingsStore, TerminalCursorStyle, TerminalThemePreset,
 };
 
+/// The UI font family used when the user has not set `ui_font_family`
+/// in settings. Picks the system font on macOS / Windows for a native
+/// feel, and falls back to the bundled Inter on Linux / BSD / etc.
+///
+/// Per SKILL.md §3.1 platform font mapping.
+#[cfg(target_os = "macos")]
+pub const DEFAULT_UI_FONT_FAMILY: &str = ".SystemUIFont";
+#[cfg(target_os = "windows")]
+pub const DEFAULT_UI_FONT_FAMILY: &str = "Segoe UI";
+#[cfg(not(any(target_os = "macos", target_os = "windows")))]
 pub const DEFAULT_UI_FONT_FAMILY: &str = "Inter";
+
+/// The bundled UI font name. Used in the settings picker as an explicit
+/// opt-in alternative on macOS / Windows, and as the default on other
+/// platforms.
+pub const BUNDLED_UI_FONT_FAMILY: &str = "Inter";
 
 #[derive(Clone, Copy, PartialEq, Eq)]
 pub enum ThemeMode {
@@ -46,10 +61,17 @@ impl Theme {
         let font_ui_features = ui_font_features_for_family(&font_ui);
         let mode = theme_mode_for_settings(&settings, appearance);
         align_default_terminal_theme_with_mode(&mut settings, mode);
-        let color = match mode {
+        let mut color = match mode {
             ThemeMode::Dark => ColorSet::dark(),
             ThemeMode::Light => ColorSet::light(),
         };
+        // On macOS / Windows, follow the user's system-wide accent
+        // color (SwiftUI's `Color.accentColor` equivalent). Linux and
+        // other platforms fall back to the brand `#3574F0` defined in
+        // `ColorSet::{dark,light}`.
+        if let Some(rgb) = crate::platform::accent::system_accent() {
+            color = color.with_system_accent(rgb, mode);
+        }
 
         Self {
             settings,
@@ -187,15 +209,39 @@ pub fn available_terminal_font_families() -> &'static [&'static str] {
 }
 
 /// UI font families the settings dialog offers in its picker. The
-/// default (`DEFAULT_UI_FONT_FAMILY`) always comes first. Non-Inter
-/// families disable Inter-specific OpenType features.
+/// platform default (`DEFAULT_UI_FONT_FAMILY`) always comes first, the
+/// bundled Inter is always available as an explicit choice, and the
+/// remaining system fonts show up as fallbacks for users on mixed-fleet
+/// setups. Only Inter gets OpenType feature injection (cv01 / ss03);
+/// every other family uses platform defaults.
 pub fn available_ui_font_families() -> &'static [&'static str] {
-    &[
-        DEFAULT_UI_FONT_FAMILY,
-        "SF Pro",
-        "Segoe UI",
-        ".SystemUIFont",
-    ]
+    #[cfg(target_os = "macos")]
+    {
+        &[
+            ".SystemUIFont",
+            BUNDLED_UI_FONT_FAMILY,
+            "SF Pro",
+            "Segoe UI",
+        ]
+    }
+    #[cfg(target_os = "windows")]
+    {
+        &[
+            "Segoe UI",
+            BUNDLED_UI_FONT_FAMILY,
+            ".SystemUIFont",
+            "SF Pro",
+        ]
+    }
+    #[cfg(not(any(target_os = "macos", target_os = "windows")))]
+    {
+        &[
+            BUNDLED_UI_FONT_FAMILY,
+            ".SystemUIFont",
+            "Segoe UI",
+            "SF Pro",
+        ]
+    }
 }
 
 /// Build the UI `Font` for a given weight, applying the family and
@@ -225,11 +271,12 @@ pub fn ui_font_with(family: &SharedString, features: &FontFeatures, weight: Font
 }
 
 fn ui_font_features_for_family(family: &str) -> FontFeatures {
-    if family.eq_ignore_ascii_case(DEFAULT_UI_FONT_FAMILY) {
-        // Inter's "alternate 1/l/I" (cv01) and "single-story a" (ss03)
-        // are what make the UI read at a glance — the plan refers to
-        // this as the "default tacit layer". Non-Inter fallbacks skip
-        // these features so they don't hit an unknown tag.
+    // cv01 / ss03 are Inter-specific OpenType variants. Applying them
+    // to system fonts (SF Pro / Segoe UI) passes unknown tags to the
+    // platform shaper and risks the shaper "correcting" the request in
+    // subtle ways — worse, SwiftUI's 原生观感 depends on *not* having
+    // those features touched. Gate on the bundled Inter family only.
+    if family.eq_ignore_ascii_case(BUNDLED_UI_FONT_FAMILY) {
         FontFeatures(Arc::new(vec![
             ("cv01".to_string(), 1),
             ("ss03".to_string(), 1),

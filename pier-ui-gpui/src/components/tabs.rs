@@ -25,6 +25,22 @@ use crate::theme::{
     ui_font_with,
 };
 
+/// Visual treatment for the tab strip.
+///
+/// - `Subtle` — quiet bg tint when active; the Raycast / Linear pattern.
+///   Correct for contextual tabs (terminal session switcher, inspector
+///   sub-modes) where the surrounding page already telegraphs what the
+///   user is looking at.
+/// - `Segmented` — solid accent fill + inverse text for the active tab;
+///   matches SwiftUI `Picker(.pickerStyle(.segmented))`. Use for primary
+///   mode switches ("Files / Servers", "Containers / Images / Volumes")
+///   where the user's choice *is* the page's topic.
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub enum TabsVariant {
+    Subtle,
+    Segmented,
+}
+
 pub struct TabItem {
     pub id: ElementId,
     pub label: SharedString,
@@ -58,11 +74,21 @@ impl TabItem {
 #[derive(IntoElement)]
 pub struct Tabs {
     items: Vec<TabItem>,
+    variant: TabsVariant,
 }
 
 impl Tabs {
     pub fn new() -> Self {
-        Self { items: Vec::new() }
+        Self {
+            items: Vec::new(),
+            variant: TabsVariant::Subtle,
+        }
+    }
+
+    /// Promote to `Segmented` — solid accent fill for the active tab.
+    pub fn segmented(mut self) -> Self {
+        self.variant = TabsVariant::Segmented;
+        self
     }
 
     pub fn item(mut self, item: TabItem) -> Self {
@@ -86,12 +112,13 @@ impl RenderOnce for Tabs {
     fn render(self, _: &mut Window, cx: &mut App) -> impl IntoElement {
         let t = theme(cx);
 
-        // Active tab sits inside a subtle tinted pill that matches the
-        // accent family; inactive tabs are flat, lighter weight, and
-        // only flash a hover bg. This keeps the strip quiet at rest
-        // but makes the selection unmistakable.
-        let active_bg = t.color.accent_subtle;
-        let active_fg = t.color.accent;
+        // Subtle: quiet tint; Segmented: solid accent fill for a clear
+        // primary-mode-picker feel. Inactive tabs stay flat + lighter
+        // weight with only a hover bg across both variants.
+        let (active_bg, active_fg) = match self.variant {
+            TabsVariant::Subtle => (t.color.accent_subtle, t.color.accent),
+            TabsVariant::Segmented => (t.color.accent, t.color.text_inverse),
+        };
         let idle_fg = t.color.text_secondary;
         let hover_bg = t.color.bg_hover;
         let hover_fg = t.color.text_primary;

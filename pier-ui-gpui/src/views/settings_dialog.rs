@@ -42,7 +42,9 @@ use crate::theme::{
     terminal::{available_terminal_palettes, terminal_bg_color, terminal_hex_color},
     terminal_cursor_blink, terminal_cursor_style, terminal_font_for_family,
     terminal_font_ligatures, terminal_font_size, terminal_opacity, theme,
-    typography::{SIZE_BODY, SIZE_CAPTION, SIZE_H2, SIZE_SMALL, WEIGHT_EMPHASIS, WEIGHT_MEDIUM},
+    typography::{
+        SIZE_BODY, SIZE_CAPTION, SIZE_H2, SIZE_H3, SIZE_SMALL, WEIGHT_EMPHASIS, WEIGHT_MEDIUM,
+    },
     update_settings, DEFAULT_UI_FONT_FAMILY,
 };
 use crate::widgets::{SegmentedControl, SegmentedItem, SettingsSection};
@@ -234,11 +236,14 @@ impl SettingsDialog {
 
         // Brand + dialog title + current status (theme · locale).
         // Stacked tight so the group reads as a single metadata
-        // block rather than three unrelated rows.
+        // block rather than three unrelated rows. H3 (was H2) and
+        // smaller vertical padding keep the brand block proportional
+        // to the sidebar width — the earlier H2 + SP_4 bottom made
+        // the brand eat ~20 % of the sidebar height.
         col = col.child(
             div()
-                .pb(SP_4)
-                .mb(SP_2)
+                .pb(SP_2)
+                .mb(SP_1)
                 .flex()
                 .flex_col()
                 .gap(SP_0_5)
@@ -246,23 +251,22 @@ impl SettingsDialog {
                 .border_color(t.color.border_subtle)
                 .child(
                     div()
-                        .text_size(SIZE_CAPTION)
+                        .text_size(SIZE_SMALL)
                         .font_weight(WEIGHT_MEDIUM)
                         .text_color(t.color.text_tertiary)
                         .child(SharedString::from("Pier-X")),
                 )
                 .child(
                     div()
-                        .text_size(SIZE_H2)
+                        .text_size(SIZE_H3)
                         .font_weight(WEIGHT_EMPHASIS)
                         .text_color(t.color.text_primary)
                         .child(SharedString::from(t!("App.Settings.title").to_string())),
                 )
                 .child(
                     div()
-                        .pt(SP_0_5)
-                        .text_size(SIZE_CAPTION)
-                        .text_color(t.color.text_secondary)
+                        .text_size(SIZE_SMALL)
+                        .text_color(t.color.text_tertiary)
                         .child(SharedString::from(format!(
                             "{theme_label} · {locale_label}"
                         ))),
@@ -512,18 +516,20 @@ impl SettingsDialog {
             t!("App.Settings.Sections.general_title"),
             t!("App.Settings.General.subtitle"),
         )
-        // ── APPEARANCE section ──
+        // ── APPEARANCE — single-row section; `untitled` drops the
+        //   duplicate section header so the row label alone reads as
+        //   the group name (matching macOS 14 System Settings). ──
         .child(
-            SettingsSection::new(t!("App.Settings.General.appearance")).child(row(
+            SettingsSection::untitled().child(row(
                 t!("App.Settings.General.appearance"),
                 None,
                 appearance_picker.into_any_element(),
                 false,
             )),
         )
-        // ── LANGUAGE section ──
+        // ── LANGUAGE — same pattern; description stays on the row ──
         .child(
-            SettingsSection::new(t!("App.Settings.General.language")).child(row(
+            SettingsSection::untitled().child(row(
                 t!("App.Settings.General.language"),
                 Some(SharedString::from(
                     t!(
@@ -536,7 +542,7 @@ impl SettingsDialog {
                 false,
             )),
         )
-        // ── TYPOGRAPHY section ──
+        // ── TYPOGRAPHY section (keeps title — two distinct rows) ──
         .child(
             SettingsSection::new(t!("App.Settings.Sections.typography"))
                 .child(row(
@@ -772,9 +778,10 @@ impl SettingsDialog {
                     false,
                 )),
         )
-        // ── CURSOR ──
+        // ── CURSOR — drop section title; two distinct row labels
+        //   (光标 / 光标闪烁) already group on their own ──
         .child(
-            SettingsSection::new(t!("App.Settings.Terminal.cursor"))
+            SettingsSection::untitled()
                 .child(row(
                     t!("App.Settings.Terminal.cursor"),
                     None,
@@ -788,18 +795,18 @@ impl SettingsDialog {
                     false,
                 )),
         )
-        // ── BACKGROUND ──
+        // ── BACKGROUND — single row, untitled ──
         .child(
-            SettingsSection::new(t!("App.Settings.Terminal.background_opacity")).child(row(
+            SettingsSection::untitled().child(row(
                 t!("App.Settings.Terminal.background_opacity"),
                 None,
                 opacity_stepper.into_any_element(),
                 false,
             )),
         )
-        // ── SHELL INTEGRATION ──
+        // ── SHELL INTEGRATION — single row, untitled ──
         .child(
-            SettingsSection::new(t!("App.Settings.Terminal.shell_integration")).child(row(
+            SettingsSection::untitled().child(row(
                 t!("App.Settings.Terminal.shell_integration"),
                 Some(t!("App.Settings.Terminal.shell_integration_description").into()),
                 integration_toggle.into_any_element(),
@@ -886,10 +893,13 @@ fn settings_sidebar_item(
     active: bool,
     on_click: Box<dyn Fn(&ClickEvent, &mut Window, &mut App) + 'static>,
 ) -> impl IntoElement {
+    // Sidebar item height aligned to ROW_MD_H so the left nav matches
+    // the density of the main content rows. Was 30 px — one pixel tall
+    // vs every other row primitive, which read as "off-grid".
     div()
         .id(gpui::ElementId::Name(id.into()))
         .w_full()
-        .h(px(30.0))
+        .h(crate::theme::heights::ROW_MD_H)
         .px(SP_2)
         .flex()
         .flex_row()
@@ -929,7 +939,7 @@ fn theme_palette_grid(
     // `calc((100% - 2*gap) / 3)` with flex works identically for
     // our row count and keeps the look consistent across widths.
     let palettes = available_terminal_palettes();
-    let mut wrap = div().w_full().flex().flex_row().flex_wrap().gap(SP_3);
+    let mut wrap = div().w_full().flex().flex_row().flex_wrap().gap(SP_2);
     for palette in palettes {
         let palette = *palette;
         let preset = palette.preset;
@@ -942,16 +952,17 @@ fn theme_palette_grid(
                 // Responsive: claim a flex share with a minimum so
                 // three cards fit a ~880 px content pane, and a
                 // maximum so cards don't stretch past readable
-                // width on wider windows. When the pane shrinks,
-                // flex_wrap drops to 2 columns automatically.
+                // width on wider windows. Tightened from 240/320 to
+                // 200/260 + smaller padding so the 3x2 grid reads as
+                // compact chips, not oversized splash cards.
                 .flex_1()
-                .min_w(px(240.0))
-                .max_w(px(320.0))
-                .p(SP_4)
+                .min_w(px(200.0))
+                .max_w(px(260.0))
+                .p(SP_2)
                 .flex()
                 .flex_row()
                 .items_center()
-                .gap(SP_3)
+                .gap(SP_2)
                 .rounded(RADIUS_MD)
                 .border_1()
                 .border_color(if is_active {
@@ -1121,8 +1132,12 @@ fn shortcut_row(
     } else {
         div()
             .flex_none()
+            // Match button height so kbd pill and "更改" button sit
+            // on the same baseline rather than floating mid-row.
+            .h(crate::theme::heights::BUTTON_SM_H)
             .px(SP_2)
-            .py(px(3.0))
+            .flex()
+            .items_center()
             .rounded(RADIUS_SM)
             .bg(t.color.bg_canvas)
             .border_1()
@@ -1203,8 +1218,12 @@ fn shortcut_capture_pad(
         SharedString::from(t!("App.Settings.Shortcuts.capture_prompt").to_string())
     });
     div()
+        // Same height as the idle kbd pill so entering capture mode
+        // doesn't shift the row vertically.
+        .h(crate::theme::heights::BUTTON_SM_H)
         .px(SP_2)
-        .py(px(3.0))
+        .flex()
+        .items_center()
         .rounded(RADIUS_SM)
         .bg(t.color.bg_canvas)
         .border_1()

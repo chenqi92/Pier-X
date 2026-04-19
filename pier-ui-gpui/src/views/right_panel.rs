@@ -950,9 +950,11 @@ fn docker_view(
     // then a flat run of rows — no nested rounded cards. The outer
     // PageHeader already labels this panel "Docker / host / status";
     // we don't repeat that title here.
+    // Ghost: a refresh button is chrome, not a call-to-action. Filled
+    // made the panel header compete with the row content below it.
     let refresh_btn = IconButton::new("docker-refresh", IconName::RefreshCw)
         .size(IconButtonSize::Sm)
-        .variant(IconButtonVariant::Filled)
+        .variant(IconButtonVariant::Ghost)
         .disabled(pending.is_some())
         .on_click(move |_, window, app| on_refresh(&(), window, app));
 
@@ -1683,17 +1685,17 @@ fn docker_action_icon(
         target_label: target_label.to_string(),
         target_kind,
     };
-    // Color per action matches the Pier Swift reference:
-    // - Stop / Delete → filled red (destructive, unmissable)
-    // - Start         → filled accent blue (primary)
-    // - Restart       → neutral gray filled (supportive)
-    // - Inspect       → ghost (quiet, only on hover)
+    // Pier (SwiftUI) keeps this row *quiet* — only the single most
+    // destructive action (Stop) wears a filled red square. Every
+    // other action is Ghost so the row reads as a list of containers
+    // first, controls second. Users still get semantic cues via the
+    // icons (Play / Refresh / Inspector / Delete).
     let (icon, variant) = match kind {
-        DockerActionKind::Start => (IconName::Play, IconButtonVariant::Primary),
+        DockerActionKind::Start => (IconName::Play, IconButtonVariant::Ghost),
         DockerActionKind::Stop => (IconName::Square, IconButtonVariant::Danger),
-        DockerActionKind::Restart => (IconName::RefreshCw, IconButtonVariant::Filled),
+        DockerActionKind::Restart => (IconName::RefreshCw, IconButtonVariant::Ghost),
         DockerActionKind::Inspect => (IconName::Inspector, IconButtonVariant::Ghost),
-        DockerActionKind::Delete => (IconName::Delete, IconButtonVariant::Danger),
+        DockerActionKind::Delete => (IconName::Delete, IconButtonVariant::Ghost),
     };
     IconButton::new(
         gpui::ElementId::Name(format!("docker-{}-{target_id}", kind.label()).into()),
@@ -1877,12 +1879,14 @@ fn docker_image_row(
 /// reads as "the main verb" next to the quieter red trash delete.
 fn docker_image_run_icon(image_ref: SharedString, pier_app: WeakEntity<PierApp>) -> IconButton {
     let id_suffix = image_ref.replace([':', '/', '.'], "-");
+    // Ghost to match the container-row action grammar — row controls
+    // stay quiet; CTAs live at panel headers, not next to each item.
     IconButton::new(
         gpui::ElementId::Name(format!("docker-image-run-{id_suffix}").into()),
         IconName::Play,
     )
     .size(IconButtonSize::Xs)
-    .variant(IconButtonVariant::Primary)
+    .variant(IconButtonVariant::Ghost)
     .on_click(move |_, window, app| {
         crate::views::docker_dialogs::open_docker_run_dialog(
             window,

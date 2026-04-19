@@ -5,9 +5,9 @@
 //! between rows. Horizontal runs full-width; vertical runs full-height
 //! and is typically used between DataCell columns.
 
-use gpui::{div, prelude::*, px, IntoElement, Window};
+use gpui::{div, prelude::*, IntoElement, Window};
 
-use crate::theme::theme;
+use crate::theme::{heights::HAIRLINE, theme};
 
 #[derive(Clone, Copy, PartialEq, Eq)]
 pub enum SeparatorAxis {
@@ -64,8 +64,8 @@ impl RenderOnce for Separator {
         };
         let mut el = div().flex_none().bg(color);
         el = match self.axis {
-            SeparatorAxis::Horizontal => el.w_full().h(px(1.0)),
-            SeparatorAxis::Vertical => el.h_full().w(px(1.0)),
+            SeparatorAxis::Horizontal => el.w_full().h(HAIRLINE),
+            SeparatorAxis::Vertical => el.h_full().w(HAIRLINE),
         };
         el
     }

@@ -51,6 +51,6 @@ pub use section_label::SectionLabel;
 pub use separator::{Separator, SeparatorAxis, SeparatorVariant};
 pub use setting_row::SettingRow;
 pub use status_pill::{StatusKind, StatusPill};
-pub use tabs::{TabItem, Tabs};
+pub use tabs::{TabItem, Tabs, TabsVariant};
 pub use toggle_row::ToggleRow;
 pub use transfer_toast::TransferToast;

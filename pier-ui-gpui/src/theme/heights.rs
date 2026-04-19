@@ -17,11 +17,17 @@ use gpui::{px, Pixels};
 // Shell rails.
 pub const TOOLBAR_H: Pixels = px(32.0);
 pub const STATUSBAR_H: Pixels = px(24.0);
-pub const TERMINAL_TABBAR_H: Pixels = px(36.0);
+pub const TERMINAL_TABBAR_H: Pixels = px(32.0);
 
 // Page grammar containers.
-pub const PAGEHEADER_H: Pixels = px(42.0);
+pub const PAGEHEADER_H: Pixels = px(36.0);
 pub const ASSIST_STRIP_H: Pixels = px(30.0);
+
+// Sub-pixel hairline stand-in. GPUI cannot render 0.5px borders;
+// semantics are: "use HAIRLINE whenever SwiftUI would use 0.5pt".
+// Components keep `px(1.0)` concretely but the token lets future
+// adjustments land in one place.
+pub const HAIRLINE: Pixels = px(1.0);
 
 // Buttons & interactive rows.
 pub const BUTTON_XS_H: Pixels = px(18.0);
@@ -33,8 +39,17 @@ pub const PILL_H: Pixels = px(18.0);
 pub const PILL_DOT: Pixels = px(6.0);
 
 // List rows / tab rows.
-pub const ROW_SM_H: Pixels = px(24.0);
+pub const ROW_SM_H: Pixels = px(22.0);
 pub const ROW_MD_H: Pixels = px(28.0);
+
+// Native-style list variants (see components/list.rs). Inset list
+// leaves horizontal breathing room and uses ROW_MD density; plain /
+// sidebar lists stay tight. Form rows are one pixel taller than plain
+// list rows so the label column reads as its own grid.
+pub const LIST_ROW_H: Pixels = px(22.0);
+pub const LIST_ROW_INSET_H: Pixels = px(28.0);
+pub const NAV_ROW_H: Pixels = px(22.0);
+pub const FORM_ROW_H: Pixels = px(24.0);
 
 // Inspector-grammar primitives (right-panel mode bodies).
 // PropertyRow tight = 22px (label:value); InspectorSection header =
@@ -48,8 +63,8 @@ pub const INSPECTOR_CELL_H: Pixels = px(56.0);
 // Tab pill — a hair taller than ROW_SM so the pill doesn't kiss the
 // bottom rule, plus its own inline-glyph size so the tab icon feels
 // deliberately smaller than the adjacent label text.
-pub const TAB_PILL_H: Pixels = px(22.0);
-pub const TAB_GLYPH: Pixels = px(13.0);
+pub const TAB_PILL_H: Pixels = px(20.0);
+pub const TAB_GLYPH: Pixels = px(12.0);
 
 // Icon sizes (inside buttons, labels, rows).
 pub const ICON_SM: Pixels = px(14.0);

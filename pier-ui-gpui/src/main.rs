@@ -4,6 +4,7 @@ mod components;
 mod data;
 mod diagnostics;
 mod i18n;
+mod platform;
 mod theme;
 mod ui_kit;
 mod views;
@@ -11,7 +12,10 @@ mod widgets;
 
 rust_i18n::i18n!("locales", fallback = "en");
 
-use gpui::{px, size, App, AppContext, Application, Bounds, WindowBounds, WindowOptions};
+use gpui::{
+    point, px, size, App, AppContext, Application, Bounds, TitlebarOptions, WindowBounds,
+    WindowOptions,
+};
 use gpui_component::Root;
 
 use crate::app::{keybindings, PierApp, ToggleTheme};
@@ -59,10 +63,29 @@ fn main() {
             ui_kit::sync_theme(cx);
         });
 
-        let bounds = Bounds::centered(None, size(px(1100.0), px(760.0)), cx);
+        // Default size matches Pier (SwiftUI) for consistent first-run
+        // impression; minimum size mirrors its `.defaultSize` floor so
+        // the three-panel layout never collapses below a usable width.
+        let bounds = Bounds::centered(None, size(px(1400.0), px(900.0)), cx);
         cx.open_window(
             WindowOptions {
                 window_bounds: Some(WindowBounds::Windowed(bounds)),
+                window_min_size: Some(size(px(1200.0), px(700.0))),
+                // macOS gets a unified title-bar: the system chrome is
+                // transparent and the traffic-light cluster is parked
+                // at y≈10 so it reads as sitting *inside* the 32px
+                // toolbar rail. The toolbar pads its leading edge by
+                // ~72px on macOS (see `app::toolbar::render`) so the
+                // buttons don't collide with the traffic lights.
+                //
+                // On Windows / Linux the transparent titlebar still
+                // removes the system title strip, and we draw our own
+                // rail at the top of the shell — matching macOS.
+                titlebar: Some(TitlebarOptions {
+                    title: None,
+                    appears_transparent: true,
+                    traffic_light_position: Some(point(px(12.0), px(10.0))),
+                }),
                 // Linux desktop environments use `app_id` to group windows and
                 // map them to a desktop entry's icon. macOS / Windows ignore it:
                 // macOS gets the dock icon from the `.app` bundle, while Windows

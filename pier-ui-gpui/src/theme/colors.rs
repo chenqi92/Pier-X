@@ -1,6 +1,8 @@
 #![allow(dead_code)]
 
-use gpui::{rgb, rgba, Rgba};
+use gpui::{rgb, rgba, Hsla, Rgba};
+
+use crate::theme::ThemeMode;
 
 #[derive(Clone, Copy)]
 pub struct ColorSet {
@@ -43,7 +45,9 @@ impl ColorSet {
             bg_elevated: rgb(0x22252a),
             bg_hover: rgba(0xffff_ff0a),
             bg_active: rgba(0xffff_ff0f),
-            bg_selected: rgba(0x3574_f029),
+            // Alpha 0x1f (~0.12) matches SwiftUI `.accentColor.opacity(0.12)`
+            // the reference app uses for selected sidebar/list rows.
+            bg_selected: rgba(0x3574_f01f),
 
             text_primary: rgb(0xe8eaed),
             text_secondary: rgb(0xb4b8bf),
@@ -51,9 +55,11 @@ impl ColorSet {
             text_disabled: rgb(0x5a5e66),
             text_inverse: rgb(0x16181b),
 
-            border_subtle: rgba(0xffff_ff0d),
-            border_default: rgba(0xffff_ff17),
-            border_strong: rgba(0xffff_ff24),
+            // Bumped 0x0d → 0x14 so 1px hairlines stay visible — GPUI
+            // cannot render 0.5px borders, so we compensate with alpha.
+            border_subtle: rgba(0xffff_ff14),
+            border_default: rgba(0xffff_ff1f),
+            border_strong: rgba(0xffff_ff2e),
             border_focus: rgb(0x3574f0),
 
             accent: rgb(0x3574f0),
@@ -84,9 +90,11 @@ impl ColorSet {
             text_disabled: rgb(0xa7a9b0),
             text_inverse: rgb(0xffffff),
 
-            border_subtle: rgba(0x0000_000f),
-            border_default: rgba(0x0000_001a),
-            border_strong: rgba(0x0000_002e),
+            // Bumped 0x0f → 0x17 so 1px hairlines stay visible on
+            // bright canvas (same reasoning as dark mode).
+            border_subtle: rgba(0x0000_0017),
+            border_default: rgba(0x0000_0022),
+            border_strong: rgba(0x0000_0036),
             border_focus: rgb(0x3574f0),
 
             accent: rgb(0x3574f0),
@@ -100,4 +108,54 @@ impl ColorSet {
             status_info: rgb(0x3574f0),
         }
     }
+
+    /// Re-tint every accent-derived slot (`accent`, `accent_hover`,
+    /// `accent_muted`, `accent_subtle`, `border_focus`, `bg_selected`,
+    /// `status_info`) with a platform-supplied accent RGB.
+    ///
+    /// Per SKILL.md §2 the `single chromatic accent` rule still holds:
+    /// the system just tells us *which* color fills the accent slot
+    /// at runtime. Alpha relationships (muted=0.16, subtle=0.08,
+    /// bg_selected=0.12 dark / 0.10 light) are preserved.
+    pub fn with_system_accent(mut self, (r, g, b): (u8, u8, u8), mode: ThemeMode) -> Self {
+        let base = Rgba {
+            r: r as f32 / 255.0,
+            g: g as f32 / 255.0,
+            b: b as f32 / 255.0,
+            a: 1.0,
+        };
+        let hover = brighten(base, 0.12);
+        let muted = with_alpha(base, 0.16);
+        let subtle = with_alpha(base, 0.08);
+        let selected_alpha = match mode {
+            ThemeMode::Dark => 0.12,
+            ThemeMode::Light => 0.10,
+        };
+
+        self.accent = base;
+        self.accent_hover = hover;
+        self.accent_muted = muted;
+        self.accent_subtle = subtle;
+        self.border_focus = base;
+        self.bg_selected = with_alpha(base, selected_alpha);
+        self.status_info = base;
+        self
+    }
+}
+
+fn with_alpha(color: Rgba, alpha: f32) -> Rgba {
+    Rgba { a: alpha, ..color }
+}
+
+/// Shift the accent one step lighter for hover, independent of hue.
+/// Converts via HSLA so we don't bleach saturated system accents
+/// (e.g. macOS "Graphite" would go white under a pure-RGB lighten).
+fn brighten(color: Rgba, amount: f32) -> Rgba {
+    let hsla: Hsla = color.into();
+    let next = Hsla {
+        l: (hsla.l + amount).clamp(0.0, 1.0),
+        ..hsla
+    };
+    let out: Rgba = next.into();
+    out
 }

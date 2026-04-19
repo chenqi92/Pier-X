@@ -17,8 +17,8 @@
 //! (eyebrow / subtitle / status) is context, not instruction.
 //!
 //! Two sizes:
-//! - `HeaderSize::Page` — H2 title, 48px tall. The default for right-
-//!   panel work modes (SSH / Git / DB / SFTP / etc.).
+//! - `HeaderSize::Page` — H3 title (`text::h3`), `PAGEHEADER_H` rail.
+//!   The default for right-panel work modes (SSH / Git / DB / SFTP).
 //! - `HeaderSize::Section` — SectionLabel eyebrow-style title, shorter.
 //!   Use for left-panel group headers ("Files" / "Servers") that sit
 //!   inside a containing pane. Same component, same builder — only the
@@ -38,7 +38,7 @@ use crate::theme::{
 
 #[derive(Clone, Copy, PartialEq, Eq)]
 pub enum HeaderSize {
-    /// Full-weight page header — H2 title, 48px rail. Default.
+    /// Full-weight page header — H3 title, `PAGEHEADER_H` rail. Default.
     Page,
     /// Compact group header — SectionLabel title, for panes inside a
     /// larger surface (left panel group).

@@ -283,7 +283,10 @@ impl LeftPanelView {
             )
             .with_icon(icon)
         });
-        Tabs::new().items(items)
+        // Files / Servers is the left panel's primary mode switch —
+        // segmented variant gives the user an unmistakable "I am here"
+        // cue, matching SwiftUI `Picker(.segmented)` in the ref app.
+        Tabs::new().segmented().items(items)
     }
 
     fn render_files(&self, t: &crate::theme::Theme, cx: &mut Context<Self>) -> impl IntoElement {

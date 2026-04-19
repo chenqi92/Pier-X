@@ -5,7 +5,7 @@ use crate::theme::{
     heights::ICON_SM,
     spacing::SP_2,
     theme,
-    typography::{SIZE_SMALL, WEIGHT_MEDIUM},
+    typography::{SIZE_SMALL, WEIGHT_EMPHASIS},
     ui_font_with,
 };
 
@@ -42,10 +42,13 @@ impl SectionLabel {
 impl RenderOnce for SectionLabel {
     fn render(self, _: &mut Window, cx: &mut gpui::App) -> impl IntoElement {
         let t = theme(cx);
+        // SIZE_SMALL is 10px in the current type ramp; pair with
+        // WEIGHT_EMPHASIS to read like SwiftUI's 10pt semibold section
+        // header without shouting.
         let label = div()
             .text_size(SIZE_SMALL)
             .text_color(t.color.text_tertiary)
-            .font(ui_font_with(&t.font_ui, &t.font_ui_features, WEIGHT_MEDIUM))
+            .font(ui_font_with(&t.font_ui, &t.font_ui_features, WEIGHT_EMPHASIS))
             .child(self.text);
 
         let mut row = div()

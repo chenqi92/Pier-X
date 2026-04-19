@@ -78,7 +78,9 @@ impl IconButton {
             id: id.into(),
             icon,
             variant: IconButtonVariant::Ghost,
-            size: IconButtonSize::Md,
+            // Default Sm (22px) — matches SwiftUI's standard toolbar
+            // icon-button size. Rare `.size(Md)` for emphasis only.
+            size: IconButtonSize::Sm,
             disabled: false,
             on_click: None,
         }

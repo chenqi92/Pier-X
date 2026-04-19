@@ -55,6 +55,16 @@ impl ButtonSize {
             Self::Md => ICON_MD,
         }
     }
+
+    /// Horizontal padding — Sm uses SP_2 (8px) so toolbar buttons read
+    /// as tight as SwiftUI borderless buttons; Md uses SP_3 (12px) for
+    /// dialog-primary weight.
+    fn px(self) -> Pixels {
+        match self {
+            Self::Sm => SP_2,
+            Self::Md => SP_3,
+        }
+    }
 }
 
 #[derive(IntoElement)]
@@ -79,7 +89,10 @@ impl Button {
             id: id.into(),
             label: label.into(),
             variant,
-            size: ButtonSize::Md,
+            // Default Sm — matches SwiftUI's default borderless button
+            // height and the tighter density Pier ships. Dialogs that
+            // want a chunkier primary CTA opt in via `.size(Md)`.
+            size: ButtonSize::Sm,
             width: None,
             leading_icon: None,
             trailing_icon: None,
@@ -177,7 +190,7 @@ impl RenderOnce for Button {
         let mut el = div()
             .id(self.id)
             .h(self.size.height())
-            .px(SP_3)
+            .px(self.size.px())
             .flex()
             .flex_row()
             .flex_none()

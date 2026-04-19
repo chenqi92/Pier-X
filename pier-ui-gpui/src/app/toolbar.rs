@@ -85,9 +85,21 @@ pub fn render(app: &PierApp, cx: &mut Context<PierApp>) -> impl IntoElement {
             .into_any_element()
     });
 
+    // Leave room for the macOS traffic-light cluster, which the
+    // window opens with `appears_transparent` + `traffic_light_position
+    // = (12, 10)` (see `main.rs`). 76px covers the 3×14px buttons + gaps
+    // + right breathing room so the first toolbar button clears them.
+    // Other platforms just use the standard SP_2 inset.
+    let leading_inset = if cfg!(target_os = "macos") {
+        px(76.0)
+    } else {
+        SP_2
+    };
+
     let mut row = div()
         .h(TOOLBAR_H)
-        .px(SP_2)
+        .pl(leading_inset)
+        .pr(SP_2)
         .flex()
         .flex_row()
         .items_center()

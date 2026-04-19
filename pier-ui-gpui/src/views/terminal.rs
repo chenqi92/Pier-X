@@ -12,8 +12,8 @@ use std::path::{Path, PathBuf};
 
 use base64::{engine::general_purpose::STANDARD as BASE64_STANDARD, Engine as _};
 use gpui::{
-    canvas, div, prelude::*, px, App, Bounds, ClipboardItem, Context, CursorStyle, EventEmitter,
-    FocusHandle, Focusable, Hsla, IntoElement, KeyDownEvent, Keystroke, MouseButton,
+    canvas, div, hsla, prelude::*, px, App, Bounds, ClipboardItem, Context, CursorStyle,
+    EventEmitter, FocusHandle, Focusable, Hsla, IntoElement, KeyDownEvent, Keystroke, MouseButton,
     MouseDownEvent, MouseMoveEvent, MouseUpEvent, Pixels, Render, ScrollDelta, ScrollWheelEvent,
     SharedString, Size, TextRun, UnderlineStyle, WeakEntity, Window,
 };
@@ -50,6 +50,7 @@ const SCROLLBACK_LIMIT: usize = 20_000;
 const BASE_TERMINAL_FONT_SIZE_PX: f32 = 13.0;
 const BASE_CELL_WIDTH_PX: f32 = 8.2;
 const BASE_CELL_HEIGHT_PX: f32 = 18.0;
+const CELL_WIDTH_SAMPLE_LEN: usize = 64;
 const TERMINAL_MIN_HEIGHT: f32 = 220.0;
 const MAX_OSC52_CLIPBOARD_BYTES: usize = 1_000_000;
 const BELL_FLASH_MS: u64 = 180;
@@ -407,7 +408,8 @@ impl TerminalPanel {
 
     fn sync_terminal_preferences(
         &mut self,
-        cx: &App,
+        window: &Window,
+        _cx: &App,
         font_family: &SharedString,
         font_size_px: f32,
         cursor_style: TerminalCursorStyle,
@@ -417,8 +419,12 @@ impl TerminalPanel {
         font_ligatures: bool,
     ) -> bool {
         let normalized_font_size = font_size_px.clamp(10.0, 24.0);
-        let cell_width =
-            terminal_cell_width_px(cx, font_family, normalized_font_size, font_ligatures);
+        let cell_width = terminal_cell_width_px(
+            window,
+            font_family,
+            normalized_font_size,
+            font_ligatures,
+        );
         let cell_height = terminal_cell_height_px(normalized_font_size);
         let changed = (self.terminal_font_size_px - normalized_font_size).abs() > f32::EPSILON
             || (self.cell_width_px - cell_width).abs() > f32::EPSILON
@@ -564,9 +570,10 @@ impl TerminalPanel {
         .detach();
     }
 
-    fn resize_for_window(&mut self, _window: &Window, cx: &App) -> bool {
+    fn resize_for_window(&mut self, window: &Window, cx: &App) -> bool {
         let mono_font = theme(cx).font_mono.clone();
         self.sync_terminal_preferences(
+            window,
             cx,
             &mono_font,
             terminal_font_size(cx),
@@ -1355,6 +1362,7 @@ impl Render for TerminalPanel {
         // measured terminal surface size instead of render-time mutation.
         let t = theme(cx).clone();
         let preferences_changed = self.sync_terminal_preferences(
+            window,
             cx,
             &t.font_mono,
             t.settings.terminal_font_size as f32,
@@ -2098,26 +2106,33 @@ fn resolve_terminal_color(
 }
 
 fn terminal_cell_width_px(
-    cx: &App,
+    window: &Window,
     font_family: &SharedString,
     font_size_px: f32,
     font_ligatures: bool,
 ) -> f32 {
-    let text_system = cx.text_system();
+    let text_system = window.text_system();
     let font = terminal_font_for_family(font_family, font_ligatures);
-    let font_id = text_system.resolve_font(&font);
+    let sample = "0".repeat(CELL_WIDTH_SAMPLE_LEN);
+    let shaped = text_system.shape_line(
+        SharedString::from(sample.clone()),
+        px(font_size_px),
+        &[TextRun {
+            len: sample.len(),
+            font,
+            color: hsla(0.0, 0.0, 0.0, 1.0),
+            background_color: None,
+            underline: None,
+            strikethrough: None,
+        }],
+        None,
+    );
+    let width = f32::from(shaped.width) / CELL_WIDTH_SAMPLE_LEN as f32;
 
-    match text_system.ch_advance(font_id, px(font_size_px)) {
-        Ok(width) if f32::from(width) > 0.0 => f32::from(width),
-        Ok(_) => terminal_cell_width_px_fallback(font_size_px),
-        Err(err) => {
-            log::warn!(
-                "terminal: failed to measure mono cell width family={} size={}px: {err}",
-                font_family,
-                font_size_px
-            );
-            terminal_cell_width_px_fallback(font_size_px)
-        }
+    if width > 0.0 {
+        width
+    } else {
+        terminal_cell_width_px_fallback(font_size_px)
     }
 }
 

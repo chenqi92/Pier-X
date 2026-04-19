@@ -21,8 +21,7 @@ use gpui::{
     SharedString, Window,
 };
 use gpui_component::{
-    input::InputState, scroll::ScrollableElement, Icon as UiIcon, IconName, PixelsExt as _,
-    WindowExt as _,
+    input::InputState, Icon as UiIcon, IconName, PixelsExt as _, WindowExt as _,
 };
 use rust_i18n::t;
 use std::collections::HashMap;
@@ -555,12 +554,14 @@ impl PierApp {
     }
 
     pub fn open_add_connection(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let known_groups = self.known_group_names();
         let weak = cx.entity().downgrade();
         crate::views::edit_connection::open(
             window,
             cx,
             weak,
             crate::views::edit_connection::EditTarget::Add,
+            known_groups,
         );
     }
 
@@ -574,13 +575,27 @@ impl PierApp {
             eprintln!("[pier] edit: stale index {idx}");
             return;
         };
+        let known_groups = self.known_group_names();
         let weak = cx.entity().downgrade();
         crate::views::edit_connection::open(
             window,
             cx,
             weak,
             crate::views::edit_connection::EditTarget::Edit { idx, original },
+            known_groups,
         );
+    }
+
+    /// Snapshot of group tags currently in use across saved connections,
+    /// for the connection editor's suggestion chips. Computed from `self`
+    /// so callers don't need a weak-read while they are mid-`update`
+    /// (that path panics with "cannot read PierApp while it is already
+    /// being updated").
+    fn known_group_names(&self) -> Vec<SharedString> {
+        pier_core::connections::known_groups(&self.connections)
+            .into_iter()
+            .map(SharedString::from)
+            .collect()
     }
 
     pub fn delete_connection(&mut self, idx: usize, cx: &mut Context<Self>) {
@@ -769,10 +784,13 @@ impl Render for PierApp {
             .child(toolbar)
             .child(row)
             .child(statusbar)
-            .when_some(
-                self.tab_context_menu,
-                |root, (idx, position)| root.child(render_tab_context_menu(idx, position, cx)),
-            )
+            .when_some(self.tab_context_menu, |root, (idx, position)| {
+                // Snapshot `total` off of `self` *before* calling the
+                // helper — the helper gets `cx` only, and `self` is
+                // unreadable via `cx.entity().read(...)` mid-render.
+                let total = self.terminals.len();
+                root.child(render_tab_context_menu(idx, position, total, cx))
+            })
     }
 }
 
@@ -809,10 +827,6 @@ impl PierApp {
 
     pub(crate) fn terminals_len(&self) -> usize {
         self.terminals.len()
-    }
-
-    pub(crate) fn connections_slice(&self) -> &[SshConfig] {
-        &self.connections
     }
 
     /// Open the Path Inspector dialog on the given local filesystem
@@ -2098,6 +2112,14 @@ fn render_terminal_tab_bar(
                 .text_color(t.color.text_secondary),
         );
 
+    // NOTE: earlier revision tried `tabs.overflow_x_scrollbar()` for
+    // a proper horizontal scroll, but `Scrollable` resets the inner
+    // element's style (which breaks the tabs' own flex_row layout)
+    // and was suspected of contributing to an input-path crash on
+    // tab click. Until we have a hand-rolled scroll that preserves
+    // layout, fall back to plain overflow_hidden — extra tabs get
+    // clipped (user sees a truncated bar rather than scroll
+    // controls) but [+] stays reachable.
     div()
         .h(ROW_MD_H)
         .px(SP_2)
@@ -2108,24 +2130,23 @@ fn render_terminal_tab_bar(
         .bg(t.color.bg_panel)
         .border_b_1()
         .border_color(t.color.border_subtle)
-        .child(
-            div()
-                .flex_1()
-                .min_w(px(0.0))
-                .overflow_hidden()
-                .child(tabs.overflow_x_scrollbar()),
-        )
+        .child(div().flex_1().min_w(px(0.0)).overflow_hidden().child(tabs))
         .child(plus_button)
 }
 
 fn render_tab_context_menu(
     idx: usize,
     position: gpui::Point<Pixels>,
+    total: usize,
     cx: &mut Context<PierApp>,
 ) -> impl IntoElement {
     use crate::components::{ContextMenu, ContextMenuItem};
 
-    let total = cx.entity().read(cx).terminals.len();
+    // Totals are passed in from the caller — *do not* call
+    // `cx.entity().read(cx)` here. During `Render::render` the
+    // entity has been "leased" out of the entity map, and any read
+    // through a weak handle triggers a `double_lease_panic` (GPUI's
+    // way of saying the entity is currently being rendered).
     let last = total.saturating_sub(1);
     let has_others = total > 1;
     let has_left = idx > 0;

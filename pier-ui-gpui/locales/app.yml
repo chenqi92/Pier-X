@@ -495,8 +495,8 @@ App:
         en: Projects
         zh-CN: Projects
       choose_folder:
-        en: Choose Folder…   (native picker — Phase 10)
-        zh-CN: 选择文件夹…   （原生选择器，Phase 10）
+        en: Choose Folder…
+        zh-CN: 选择文件夹…
   LeftPanel:
     filter:
       en: Filter servers…

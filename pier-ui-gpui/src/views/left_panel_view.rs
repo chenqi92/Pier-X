@@ -312,6 +312,35 @@ impl LeftPanelView {
             Rc::new(cx.listener(|this, _: &(), _w, cx| this.refresh_cwd(cx)));
         let on_navigate_to: file_tree::NavigateToHandler =
             Rc::new(cx.listener(|this, path: &PathBuf, _w, cx| this.enter_dir(path.clone(), cx)));
+        let on_choose_folder: file_tree::ChooseFolderHandler =
+            Rc::new(cx.listener(|_this, _: &(), _w, cx| {
+                // Native OS folder picker — resolves asynchronously, so
+                // spawn and update back into LeftPanelView on success.
+                let receiver = cx.prompt_for_paths(gpui::PathPromptOptions {
+                    files: false,
+                    directories: true,
+                    multiple: false,
+                    prompt: Some(SharedString::from(
+                        t!("App.FileTree.Quick.choose_folder").to_string(),
+                    )),
+                });
+                cx.spawn(
+                    move |this: gpui::WeakEntity<LeftPanelView>, cx: &mut gpui::AsyncApp| {
+                        let mut async_cx = cx.clone();
+                        async move {
+                            let Ok(picked) = receiver.await else { return };
+                            let Ok(Some(paths)) = picked else { return };
+                            let Some(first) = paths.into_iter().next() else {
+                                return;
+                            };
+                            let _ = this.update(&mut async_cx, |this, cx| {
+                                this.enter_dir(first, cx);
+                            });
+                        }
+                    },
+                )
+                .detach();
+            }));
 
         let filter_value = self.files_filter.read(cx).value().to_string();
         let file_tree = FileTree::new(
@@ -324,6 +353,7 @@ impl LeftPanelView {
             on_go_up,
             on_refresh,
             on_navigate_to,
+            on_choose_folder,
         );
 
         div()

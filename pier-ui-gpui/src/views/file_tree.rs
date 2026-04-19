@@ -51,6 +51,7 @@ pub type OpenFileHandler = Rc<dyn Fn(&PathBuf, &mut Window, &mut App) + 'static>
 pub type GoUpHandler = Rc<dyn Fn(&(), &mut Window, &mut App) + 'static>;
 pub type RefreshHandler = Rc<dyn Fn(&(), &mut Window, &mut App) + 'static>;
 pub type NavigateToHandler = Rc<dyn Fn(&PathBuf, &mut Window, &mut App) + 'static>;
+pub type ChooseFolderHandler = Rc<dyn Fn(&(), &mut Window, &mut App) + 'static>;
 
 #[derive(IntoElement)]
 pub struct FileTree {
@@ -65,6 +66,7 @@ pub struct FileTree {
     on_go_up: GoUpHandler,
     on_refresh: RefreshHandler,
     on_navigate_to: NavigateToHandler,
+    on_choose_folder: ChooseFolderHandler,
 }
 
 impl FileTree {
@@ -79,6 +81,7 @@ impl FileTree {
         on_go_up: GoUpHandler,
         on_refresh: RefreshHandler,
         on_navigate_to: NavigateToHandler,
+        on_choose_folder: ChooseFolderHandler,
     ) -> Self {
         Self {
             cwd,
@@ -90,6 +93,7 @@ impl FileTree {
             on_go_up,
             on_refresh,
             on_navigate_to,
+            on_choose_folder,
         }
     }
 }
@@ -107,6 +111,7 @@ impl RenderOnce for FileTree {
             on_go_up,
             on_refresh,
             on_navigate_to,
+            on_choose_folder,
         } = self;
         let filter_lower = filter.to_lowercase();
         let cwd_name: SharedString = cwd
@@ -125,6 +130,7 @@ impl RenderOnce for FileTree {
             on_go_up.clone(),
             on_refresh.clone(),
             on_navigate_to.clone(),
+            on_choose_folder.clone(),
         );
 
         // ── Breadcrumb row ──
@@ -238,6 +244,7 @@ fn render_header(
     on_go_up: GoUpHandler,
     on_refresh: RefreshHandler,
     on_navigate_to: NavigateToHandler,
+    on_choose_folder: ChooseFolderHandler,
 ) -> impl IntoElement {
     div()
         .h(ROW_MD_H)
@@ -286,7 +293,7 @@ fn render_header(
                 .child(cwd_name.clone()),
         )
         // 3. ⋯ Quick targets popover (needs Selectable — handwritten).
-        .child(quick_menu(t, on_navigate_to))
+        .child(quick_menu(t, on_navigate_to, on_choose_folder))
         // 4. 🔄 Refresh.
         .child(
             IconButton::new("ft-refresh", IconName::Loader)
@@ -296,7 +303,11 @@ fn render_header(
         )
 }
 
-fn quick_menu(t: &crate::theme::Theme, on_navigate_to: NavigateToHandler) -> impl IntoElement {
+fn quick_menu(
+    t: &crate::theme::Theme,
+    on_navigate_to: NavigateToHandler,
+    on_choose_folder: ChooseFolderHandler,
+) -> impl IntoElement {
     let trigger_color = t.color.text_secondary;
     let trigger_hover = t.color.bg_hover;
     let trigger_bg = t.color.bg_panel;
@@ -317,7 +328,8 @@ fn quick_menu(t: &crate::theme::Theme, on_navigate_to: NavigateToHandler) -> imp
         )
         .content(move |_state, _w, _cx| {
             let nav = on_navigate_to.clone();
-            quick_menu_body(menu_colors, nav)
+            let choose = on_choose_folder.clone();
+            quick_menu_body(menu_colors, nav, choose)
         })
 }
 
@@ -368,6 +380,7 @@ impl RenderOnce for QuickMenuTrigger {
 fn quick_menu_body(
     colors: crate::theme::ColorSet,
     on_navigate_to: NavigateToHandler,
+    on_choose_folder: ChooseFolderHandler,
 ) -> impl IntoElement {
     let home = user_home_dir();
     let desktop = home.join("Desktop");
@@ -428,8 +441,10 @@ fn quick_menu_body(
                 .px(SP_3)
                 .py(SP_1_5)
                 .text_size(SIZE_CAPTION)
-                .text_color(colors.text_tertiary)
-                .cursor_default()
+                .text_color(colors.text_primary)
+                .cursor_pointer()
+                .hover(move |s| s.bg(colors.bg_hover))
+                .on_click(move |_, w, app| on_choose_folder(&(), w, app))
                 .child(SharedString::from(
                     t!("App.FileTree.Quick.choose_folder").to_string(),
                 )),

@@ -69,21 +69,18 @@ impl AuthMode {
 }
 
 /// Open the connection editor as a modal dialog.
-pub fn open(window: &mut Window, cx: &mut App, app: WeakEntity<PierApp>, target: EditTarget) {
-    // Snapshot the already-used group names so the dialog can offer
-    // them as one-click chips below the free-text input. Pulled at
-    // open-time rather than per-render: the list can only grow
-    // while the dialog is open (via saves to *other* dialogs), and
-    // we don't want the chip row to flicker mid-edit.
-    let known_groups: Vec<SharedString> = app
-        .upgrade()
-        .map(|pa| {
-            pier_core::connections::known_groups(pa.read(cx).connections_slice())
-                .into_iter()
-                .map(SharedString::from)
-                .collect()
-        })
-        .unwrap_or_default();
+///
+/// `known_groups` is snapshotted by the caller because this function is
+/// typically invoked from inside a `PierApp::update(...)` closure; reading
+/// the weak handle here would trigger GPUI's double-lease panic
+/// ("cannot read PierApp while it is already being updated").
+pub fn open(
+    window: &mut Window,
+    cx: &mut App,
+    app: WeakEntity<PierApp>,
+    target: EditTarget,
+    known_groups: Vec<SharedString>,
+) {
     // Inputs created once outside the builder closure → persist across
     // dialog re-renders.
     let name = cx.new(|c| InputState::new(window, c).placeholder(t!("App.EditConnection.Placeholders.name")));

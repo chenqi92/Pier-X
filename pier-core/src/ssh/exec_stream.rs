@@ -54,9 +54,9 @@
 //! without sometimes dropping events — and dropping log
 //! lines silently is a worse bug than a large buffer.
 
+use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, AtomicI32, Ordering};
 use std::sync::mpsc::{self, Receiver, TryRecvError};
-use std::sync::Arc;
 
 use super::error::Result;
 use super::runtime;
@@ -122,22 +122,33 @@ impl ExecStream {
     /// — check [`Self::is_alive`] for that. Call pattern on
     /// the UI side is typically a 50–250 ms `QTimer`.
     pub fn drain(&self) -> Vec<ExecEvent> {
+        self.drain_up_to(usize::MAX).0
+    }
+
+    /// Pop up to `limit` currently-buffered events without blocking
+    /// and report whether the receiver was fully drained afterward.
+    ///
+    /// `exhausted == false` means we stopped because the limit was
+    /// reached, so more buffered events may still be waiting.
+    pub fn drain_up_to(&self, limit: usize) -> (Vec<ExecEvent>, bool) {
         let mut out = Vec::new();
         loop {
+            if out.len() >= limit {
+                return (out, false);
+            }
             match self.rx.try_recv() {
                 Ok(ev) => out.push(ev),
-                Err(TryRecvError::Empty) => break,
+                Err(TryRecvError::Empty) => return (out, true),
                 Err(TryRecvError::Disconnected) => {
                     // Producer is gone. Make sure the finished
                     // flag is set so is_alive reports correctly,
                     // even if the producer didn't get to set it
                     // itself (panic path).
                     self.finished.store(true, Ordering::Release);
-                    break;
+                    return (out, true);
                 }
             }
         }
-        out
     }
 
     /// True while the producer task is still running AND no

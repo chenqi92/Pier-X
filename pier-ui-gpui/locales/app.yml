@@ -158,6 +158,9 @@ App:
       shortcuts_caption:
         en: Current built-in key bindings
         zh-CN: 当前内置快捷键
+      typography:
+        en: Typography
+        zh-CN: 字体
     General:
       subtitle:
         en: Interface, theme, and font defaults.
@@ -747,6 +750,15 @@ App:
       placeholder:
         en: Open a saved connection from the left panel to inspect remote containers.
         zh-CN: 从左侧面板打开一个已保存连接，即可查看远程容器。
+      tab_containers:
+        en: Containers
+        zh-CN: 容器
+      tab_images:
+        en: Images
+        zh-CN: 镜像
+      tab_volumes:
+        en: Volumes
+        zh-CN: 存储卷
       busy:
         en: busy
         zh-CN: 忙碌
@@ -832,6 +844,15 @@ App:
         networks:
           en: "%{count} networks"
           zh-CN: "%{count} 个网络"
+      pull_placeholder:
+        en: "Pull image (repo[:tag])"
+        zh-CN: 拉取镜像（repo[:tag]）
+      cleanup_volumes:
+        en: Cleanup unused
+        zh-CN: 清理未使用
+      delete:
+        en: Delete
+        zh-CN: 删除
     Logs:
       placeholder:
         en: Open a saved connection from the left panel to start a remote log stream.

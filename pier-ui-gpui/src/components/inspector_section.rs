@@ -21,9 +21,7 @@
 //!         .child(PropertyRow::new("load-5m", "5 分钟").value(...)))
 //! ```
 
-use gpui::{
-    div, prelude::*, AnyElement, IntoElement, ParentElement, SharedString, Window,
-};
+use gpui::{div, prelude::*, AnyElement, IntoElement, ParentElement, SharedString, Window};
 use gpui_component::{Icon as UiIcon, IconName};
 
 use crate::components::{separator::Separator, text};
@@ -103,8 +101,7 @@ impl RenderOnce for InspectorSection {
             .text_color(t.color.text_tertiary);
 
         if let Some(icon) = self.icon {
-            title_row =
-                title_row.child(div().flex_none().child(UiIcon::new(icon).size(ICON_SM)));
+            title_row = title_row.child(div().flex_none().child(UiIcon::new(icon).size(ICON_SM)));
         }
         title_row = title_row.child(text::caption(self.title).secondary());
         if let Some(eyebrow) = self.eyebrow {

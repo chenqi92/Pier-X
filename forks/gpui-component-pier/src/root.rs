@@ -412,7 +412,9 @@ impl Render for Root {
                 .when_some(self.render_dialog_layer(window, cx), |this, layer| {
                     this.child(layer)
                 })
-                .when_some(self.render_notification_layer(), |this, layer| this.child(layer)),
+                .when_some(self.render_notification_layer(), |this, layer| {
+                    this.child(layer)
+                }),
         )
     }
 }

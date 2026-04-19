@@ -654,7 +654,9 @@ impl Perform for Performer<'_> {
                             *self.command_in_flight = false;
                             // Optional exit code after `D;`
                             let exit = params.get(2).and_then(|p| {
-                                std::str::from_utf8(p).ok().and_then(|s| s.parse::<i32>().ok())
+                                std::str::from_utf8(p)
+                                    .ok()
+                                    .and_then(|s| s.parse::<i32>().ok())
                             });
                             *self.last_command_exit = exit;
                         }

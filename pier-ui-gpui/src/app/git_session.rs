@@ -511,14 +511,12 @@ pub fn run_refresh(request: RefreshRequest) -> RefreshResult {
                     GitError::NotARepo(p) => format!("not a git repository: {p}"),
                     other => other.to_string(),
                 }),
-            GitTarget::Remote { session, cwd } => {
-                GitClient::open_remote(session.clone(), cwd)
-                    .map(Arc::new)
-                    .map_err(|e| match e {
-                        GitError::NotARepo(p) => format!("not a git repository: {p}"),
-                        other => other.to_string(),
-                    })
-            }
+            GitTarget::Remote { session, cwd } => GitClient::open_remote(session.clone(), cwd)
+                .map(Arc::new)
+                .map_err(|e| match e {
+                    GitError::NotARepo(p) => format!("not a git repository: {p}"),
+                    other => other.to_string(),
+                }),
         },
     };
 

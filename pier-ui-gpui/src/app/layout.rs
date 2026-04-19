@@ -83,6 +83,37 @@ pub enum RightContext {
     Remote,
 }
 
+/// Which sub-view the Docker panel is currently showing. The
+/// panel header paints a segmented control driven by this enum.
+#[derive(Clone, Copy, PartialEq, Eq, Hash, Debug, Default)]
+pub enum DockerTab {
+    #[default]
+    Containers,
+    Images,
+    Volumes,
+}
+
+impl DockerTab {
+    pub const ALL: &'static [DockerTab] =
+        &[DockerTab::Containers, DockerTab::Images, DockerTab::Volumes];
+
+    pub fn id(self) -> &'static str {
+        match self {
+            DockerTab::Containers => "containers",
+            DockerTab::Images => "images",
+            DockerTab::Volumes => "volumes",
+        }
+    }
+
+    pub fn label(self) -> SharedString {
+        match self {
+            DockerTab::Containers => t!("App.RightPanel.Docker.tab_containers").into(),
+            DockerTab::Images => t!("App.RightPanel.Docker.tab_images").into(),
+            DockerTab::Volumes => t!("App.RightPanel.Docker.tab_volumes").into(),
+        }
+    }
+}
+
 impl RightMode {
     pub fn label(self) -> SharedString {
         match self {

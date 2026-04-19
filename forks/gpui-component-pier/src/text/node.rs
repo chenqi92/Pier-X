@@ -973,7 +973,9 @@ impl Node {
                                                     }),
                                             )
                                         })
-                                        .child(div().flex_1().min_w_0().overflow_hidden().child(text)),
+                                        .child(
+                                            div().flex_1().min_w_0().overflow_hidden().child(text),
+                                        ),
                                 );
                             }
                             Node::List { .. } => {

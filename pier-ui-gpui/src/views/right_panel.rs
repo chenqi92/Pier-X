@@ -13,37 +13,38 @@
 
 use std::rc::Rc;
 
-use gpui::{div, prelude::*, px, App, IntoElement, Pixels, SharedString, WeakEntity, Window};
+use gpui::{App, IntoElement, Pixels, SharedString, WeakEntity, Window, div, prelude::*, px};
 use gpui_component::{
+    Icon as UiIcon, IconName,
     input::{Input, InputState},
     scroll::ScrollableElement,
-    Icon as UiIcon, IconName,
 };
 use pier_core::services::server_monitor::ServerSnapshot;
 use rust_i18n::t;
 
-use crate::app::layout::{RightContext, RightMode, RIGHT_ICON_BAR_W};
 use crate::app::PierApp;
+use crate::app::layout::{DockerTab, RIGHT_ICON_BAR_W, RightContext, RightMode};
 use crate::components::{
-    data_cell_row, text, Button, Card, DataCell, DataTone, HeaderSize, IconButton, IconButtonSize,
+    Button, ButtonSize, Card, DataCell, DataTone, HeaderSize, IconButton, IconButtonSize,
     IconButtonVariant, InspectorSection, PageHeader, PropertyRow, SectionLabel, Separator,
-    StatusKind, StatusPill,
+    StatusKind, StatusPill, data_cell_row, text,
 };
 use crate::theme::{
-    heights::{BUTTON_MD_H, ICON_MD, ROW_MD_H},
+    heights::{BUTTON_MD_H, ICON_MD, ICON_SM, ROW_MD_H},
     radius::{RADIUS_MD, RADIUS_SM},
     spacing::{SP_0_5, SP_1, SP_1_5, SP_2, SP_3, SP_4},
     theme,
     typography::{SIZE_CAPTION, SIZE_MONO_SMALL, SIZE_SMALL, WEIGHT_MEDIUM},
 };
+use crate::widgets::{SegmentedControl, SegmentedItem};
 use std::path::PathBuf;
 
 use gpui::Entity;
 
 use crate::app::ssh_session::{
     ConnectStatus, DockerActionKind, DockerInspectState, DockerPanelSnapshot, DockerStatus,
-    LogLine, LogLineKind, LogsStatus, MonitorStatus, PendingDockerAction, ServiceProbeStatus,
-    ServiceTunnelState, SshSessionState, TunnelStatus,
+    DockerTargetKind, LogLine, LogLineKind, LogsStatus, MonitorStatus, PendingDockerAction,
+    ServiceProbeStatus, ServiceTunnelState, SshSessionState, TunnelStatus,
 };
 use crate::views::database::DatabaseView;
 use crate::views::git::GitView;
@@ -57,6 +58,7 @@ use crate::views::sftp_browser::{
 pub type ModeSelector = Rc<dyn Fn(&RightMode, &mut Window, &mut App) + 'static>;
 pub type DockerRefreshHandler = Rc<dyn Fn(&(), &mut Window, &mut App) + 'static>;
 pub type DockerActionHandler = Rc<dyn Fn(&DockerActionRequest, &mut Window, &mut App) + 'static>;
+pub type DockerTabHandler = Rc<dyn Fn(&DockerTab, &mut Window, &mut App) + 'static>;
 pub type LogsActionHandler = Rc<dyn Fn(&LogsAction, &mut Window, &mut App) + 'static>;
 
 #[derive(Clone, Debug)]
@@ -64,6 +66,7 @@ pub struct DockerActionRequest {
     pub kind: DockerActionKind,
     pub target_id: String,
     pub target_label: String,
+    pub target_kind: DockerTargetKind,
 }
 
 #[derive(Clone, Debug)]
@@ -94,6 +97,10 @@ pub struct RightPanel {
     sftp_drop_paths: SftpDropPaths,
     docker_refresh: DockerRefreshHandler,
     docker_action: DockerActionHandler,
+    /// Selected Docker sub-view — drives the segmented control.
+    docker_tab: DockerTab,
+    /// Click handler invoked when the user picks a new segment.
+    docker_tab_handler: DockerTabHandler,
     logs_action: LogsActionHandler,
     on_select_mode: ModeSelector,
     /// Current right-panel width (post-clamp). SFTP uses it to decide
@@ -117,6 +124,8 @@ impl RightPanel {
         sftp_drop_paths: SftpDropPaths,
         docker_refresh: DockerRefreshHandler,
         docker_action: DockerActionHandler,
+        docker_tab: DockerTab,
+        docker_tab_handler: DockerTabHandler,
         logs_action: LogsActionHandler,
         on_select_mode: ModeSelector,
         panel_width: Pixels,
@@ -135,6 +144,8 @@ impl RightPanel {
             sftp_drop_paths,
             docker_refresh,
             docker_action,
+            docker_tab,
+            docker_tab_handler,
             logs_action,
             on_select_mode,
             panel_width,
@@ -159,6 +170,8 @@ impl RenderOnce for RightPanel {
             sftp_drop_paths,
             docker_refresh,
             docker_action,
+            docker_tab,
+            docker_tab_handler,
             logs_action,
             on_select_mode,
             panel_width,
@@ -185,6 +198,8 @@ impl RenderOnce for RightPanel {
             sftp_drop_paths,
             docker_refresh,
             docker_action,
+            docker_tab,
+            docker_tab_handler,
             logs_action,
             on_select_mode.clone(),
             sftp_content_width,
@@ -227,6 +242,8 @@ fn render_mode_body(
     sftp_drop_paths: SftpDropPaths,
     docker_refresh: DockerRefreshHandler,
     docker_action: DockerActionHandler,
+    docker_tab: DockerTab,
+    docker_tab_handler: DockerTabHandler,
     logs_action: LogsActionHandler,
     on_select_mode: ModeSelector,
     sftp_content_width: Pixels,
@@ -253,8 +270,10 @@ fn render_mode_body(
         RightMode::Docker => docker_view(
             t,
             active_session.as_ref(),
+            docker_tab,
             docker_refresh,
             docker_action,
+            docker_tab_handler,
             cx,
         )
         .into_any_element(),
@@ -769,11 +788,7 @@ fn monitor_view(
         )
     };
 
-    let mut col = div()
-        .w_full()
-        .flex()
-        .flex_col()
-        .bg(t.color.bg_surface);
+    let mut col = div().w_full().flex().flex_col().bg(t.color.bg_surface);
 
     if let Some(err) = error {
         col = col
@@ -824,9 +839,12 @@ fn monitor_view(
             ))
             .tone(DataTone::Accent)
             .when_some(percent_ratio(snapshot.cpu_pct), DataCell::bar),
-        DataCell::new(t!("App.RightPanel.Monitor.memory"), memory_primary(&snapshot))
-            .secondary(memory_secondary(&snapshot))
-            .when_some(memory_ratio(&snapshot), DataCell::bar),
+        DataCell::new(
+            t!("App.RightPanel.Monitor.memory"),
+            memory_primary(&snapshot),
+        )
+        .secondary(memory_secondary(&snapshot))
+        .when_some(memory_ratio(&snapshot), DataCell::bar),
         DataCell::new(t!("App.RightPanel.Monitor.disk"), disk_primary(&snapshot))
             .secondary(disk_secondary(&snapshot))
             .tone(disk_tone(snapshot.disk_use_pct))
@@ -898,8 +916,10 @@ fn disk_tone(pct: f64) -> DataTone {
 fn docker_view(
     t: &crate::theme::Theme,
     active_session: Option<&Entity<SshSessionState>>,
+    docker_tab: DockerTab,
     on_refresh: DockerRefreshHandler,
     on_action: DockerActionHandler,
+    on_tab: DockerTabHandler,
     cx: &App,
 ) -> gpui::AnyElement {
     let Some(session_entity) = active_session else {
@@ -924,61 +944,99 @@ fn docker_view(
     };
     let has_snapshot = snapshot.is_some();
 
-    // Mode header: daemon status pill + refresh icon. The generic
-    // PageHeader already shows "Docker / session / endpoint /
-    // connection status" above this, so all we add here is the
-    // *daemon* state (distinct from the SSH connection state) and
-    // the one action we need. The earlier design stacked a
-    // redundant "busy" warning pill next to the refresh button —
-    // busy-ness is now communicated via per-row pending pills and
-    // a disabled refresh icon.
-    let header = div()
+    // Flush Pier grammar: inventory chip strip, segmented tab bar,
+    // then a flat run of rows — no nested rounded cards. The outer
+    // PageHeader already labels this panel "Docker / host / status";
+    // we don't repeat that title here.
+    let refresh_btn = IconButton::new("docker-refresh", IconName::RefreshCw)
+        .size(IconButtonSize::Sm)
+        .variant(IconButtonVariant::Filled)
+        .disabled(pending.is_some())
+        .on_click(move |_, window, app| on_refresh(&(), window, app));
+
+    // Top strip: one-line status + inventory as a single caption,
+    // plus refresh on the right. Matches the Pier Swift reference,
+    // where chips are typographic — compact text separated by `·` —
+    // instead of 5 pill islands that eat 60px of vertical space.
+    let status_pill = StatusPill::new(
+        docker_status_label(&status, has_snapshot),
+        docker_status_kind(&status),
+    );
+    let inventory_caption: Option<SharedString> = snapshot.as_ref().map(|snapshot_ref| {
+        let running = snapshot_ref
+            .containers
+            .iter()
+            .filter(|container| container.is_running())
+            .count();
+        format!(
+            "{} · {} · {} · {}",
+            t!(
+                "App.RightPanel.Docker.Inventory.running",
+                running = running,
+                total = snapshot_ref.containers.len()
+            ),
+            t!(
+                "App.RightPanel.Docker.Inventory.images",
+                count = snapshot_ref.images.len()
+            ),
+            t!(
+                "App.RightPanel.Docker.Inventory.volumes",
+                count = snapshot_ref.volumes.len()
+            ),
+            t!(
+                "App.RightPanel.Docker.Inventory.networks",
+                count = snapshot_ref.networks.len()
+            ),
+        )
+        .into()
+    });
+    let mut top_strip = div()
+        .w_full()
         .flex()
         .flex_row()
         .items_center()
         .gap(SP_2)
-        .child(StatusPill::new(
-            docker_status_label(&status, has_snapshot),
-            docker_status_kind(&status),
-        ))
-        .child(div().flex_1())
-        .child(
-            IconButton::new("docker-refresh", IconName::RefreshCw)
-                .size(IconButtonSize::Sm)
-                .variant(IconButtonVariant::Filled)
-                .disabled(pending.is_some())
-                .on_click(move |_, window, app| on_refresh(&(), window, app)),
+        .px(SP_3)
+        .py(SP_1_5)
+        .child(status_pill);
+    if let Some(caption) = inventory_caption {
+        top_strip = top_strip.child(
+            div()
+                .flex_1()
+                .min_w(px(0.0))
+                .overflow_hidden()
+                .child(text::caption(caption).secondary().truncate()),
         );
+    } else {
+        top_strip = top_strip.child(div().flex_1().min_w(px(0.0)));
+    }
+    top_strip = top_strip.child(div().flex_none().child(refresh_btn));
 
     let mut col = div()
         .w_full()
         .flex()
         .flex_col()
-        .gap(SP_2)
-        .p(SP_3)
-        .child(header);
+        .bg(t.color.bg_surface)
+        .child(top_strip)
+        .child(Separator::horizontal());
 
     if let Some(err) = error {
-        col = col.child(
-            Card::new()
-                .padding(SP_3)
-                .child(
-                    SectionLabel::new(t!("App.RightPanel.Docker.refresh_error"))
-                        .with_icon(IconName::TriangleAlert),
-                )
-                .child(text::body(err).secondary()),
-        );
+        col = col
+            .child(docker_error_strip(
+                t,
+                t!("App.RightPanel.Docker.refresh_error"),
+                err,
+            ))
+            .child(Separator::horizontal());
     }
     if let Some(err) = action_error {
-        col = col.child(
-            Card::new()
-                .padding(SP_3)
-                .child(
-                    SectionLabel::new(t!("App.RightPanel.Docker.action_error"))
-                        .with_icon(IconName::TriangleAlert),
-                )
-                .child(text::body(err).secondary()),
-        );
+        col = col
+            .child(docker_error_strip(
+                t,
+                t!("App.RightPanel.Docker.action_error"),
+                err,
+            ))
+            .child(Separator::horizontal());
     }
 
     let Some(snapshot) = snapshot else {
@@ -990,30 +1048,96 @@ fn docker_view(
         };
         return col
             .child(
-                Card::new()
-                    .padding(SP_3)
-                    .child(SectionLabel::new(t!("App.Common.status")))
-                    .child(text::body(empty_label).secondary()),
+                div()
+                    .px(SP_3)
+                    .py(SP_2)
+                    .child(text::caption(empty_label).secondary()),
             )
             .into_any_element();
     };
 
+    // Segmented tab switcher lives in its own padded strip so the
+    // pill outline has breathing room on both sides.
     col = col
-        .child(docker_summary_card(&snapshot))
-        .child(docker_containers_card(
+        .child(
+            div()
+                .w_full()
+                .px(SP_3)
+                .py(SP_1_5)
+                .child(docker_tab_bar(docker_tab, on_tab)),
+        )
+        .child(Separator::horizontal());
+
+    col = col.child(match docker_tab {
+        DockerTab::Containers => {
+            docker_containers_body(t, &snapshot, pending.as_ref(), on_action.clone())
+                .into_any_element()
+        }
+        DockerTab::Images => {
+            docker_images_body(t, &snapshot, pending.as_ref(), on_action.clone()).into_any_element()
+        }
+        DockerTab::Volumes => docker_volumes_body(
             t,
             &snapshot,
             pending.as_ref(),
+            inspect.as_ref(),
             on_action.clone(),
-        ))
-        .child(docker_images_card(t, &snapshot))
-        .child(docker_storage_card(t, &snapshot));
+        )
+        .into_any_element(),
+    });
 
-    if let Some(inspect_state) = inspect.as_ref() {
-        col = col.child(docker_inspect_card(t, inspect_state));
+    // Bottom inspect section only renders when the current inspect
+    // points at a container. Volume inspects live inline under their
+    // row (see `docker_volume_expanded_block`) so they never show up
+    // at the panel bottom.
+    let show_container_inspect = inspect
+        .as_ref()
+        .map(|s| snapshot.containers.iter().any(|c| c.id == s.target_id))
+        .unwrap_or(false);
+    if show_container_inspect {
+        if let Some(inspect_state) = inspect.as_ref() {
+            col = col
+                .child(Separator::horizontal())
+                .child(docker_inspect_section(t, inspect_state));
+        }
     }
 
     col.into_any_element()
+}
+
+/// One-line error strip — replaces the old standalone error Card.
+/// Keeps the flush grammar: icon + title on the left, message on
+/// the right. Padded like every other row so the separator above
+/// and below it line up with the rest of the panel.
+fn docker_error_strip(
+    t: &crate::theme::Theme,
+    title: impl Into<SharedString>,
+    body: SharedString,
+) -> impl IntoElement {
+    div()
+        .w_full()
+        .flex()
+        .flex_row()
+        .items_center()
+        .gap(SP_2)
+        .px(SP_3)
+        .py(SP_1_5)
+        .child(
+            div()
+                .flex_none()
+                .text_color(t.color.status_error)
+                .child(UiIcon::new(IconName::TriangleAlert).size(ICON_SM)),
+        )
+        .child(
+            div()
+                .flex_1()
+                .min_w(px(0.0))
+                .flex()
+                .flex_col()
+                .gap(SP_0_5)
+                .child(text::caption(title).secondary())
+                .child(text::caption(body).truncate()),
+        )
 }
 
 fn logs_view(
@@ -1032,11 +1156,17 @@ fn logs_view(
         .into_any_element();
     };
 
-    let (status, lines, error, command, exit_code) = {
+    const MAX_VISIBLE_LOG_LINES: usize = 200;
+
+    let (status, visible_lines, retained_count, hidden_count, error, command, exit_code) = {
         let session = session_entity.read(cx);
+        let retained_count = session.logs_lines.len();
+        let visible_start = retained_count.saturating_sub(MAX_VISIBLE_LOG_LINES);
         (
             session.logs_status.clone(),
-            session.logs_lines.clone(),
+            session.logs_lines[visible_start..].to_vec(),
+            retained_count,
+            visible_start,
             session.logs_error.clone().map(SharedString::from),
             session.logs_command.clone().map(SharedString::from),
             session.logs_exit_code,
@@ -1072,7 +1202,7 @@ fn logs_view(
                 .on_click(move |_, window, app| on_stop(&stop_action, window, app)),
         )
         .child(
-            IconButton::new("logs-clear", IconName::Eraser)
+            IconButton::new("logs-clear", IconName::Delete)
                 .size(IconButtonSize::Sm)
                 .on_click(move |_, window, app| on_clear(&clear_action, window, app)),
         );
@@ -1160,12 +1290,7 @@ fn logs_view(
             .child(
                 InspectorSection::new(t!("App.RightPanel.Logs.stream_error"))
                     .icon(IconName::TriangleAlert)
-                    .child(
-                        div()
-                            .px(SP_3)
-                            .py(SP_2)
-                            .child(text::body(err).secondary()),
-                    ),
+                    .child(div().px(SP_3).py(SP_2).child(text::body(err).secondary())),
             )
             .child(Separator::horizontal());
     }
@@ -1174,7 +1299,7 @@ fn logs_view(
     // own card is now the section eyebrow — one less stacked card on
     // every refresh. When the stream is live but silent we still want
     // a subtle status line so users know the process is running.
-    let retained_pill = if lines.is_empty() {
+    let retained_pill = if retained_count == 0 {
         StatusPill::new(
             match status {
                 LogsStatus::Idle => t!("App.RightPanel.Logs.idle_hint"),
@@ -1187,10 +1312,7 @@ fn logs_view(
         )
     } else {
         StatusPill::new(
-            t!(
-                "App.RightPanel.Logs.retained_lines",
-                count = lines.len()
-            ),
+            t!("App.RightPanel.Logs.retained_lines", count = retained_count),
             StatusKind::Info,
         )
     };
@@ -1202,25 +1324,21 @@ fn logs_view(
         output_section = output_section.eyebrow(cmd);
     }
 
-    if lines.is_empty() {
+    if retained_count == 0 {
         col.child(output_section).into_any_element()
     } else {
-        let visible = lines.iter().rev().take(200).cloned().collect::<Vec<_>>();
-        for (index, line) in visible.into_iter().enumerate() {
-            output_section = output_section.child(log_line_row(t, index, line));
+        for line in visible_lines.into_iter().rev() {
+            output_section = output_section.child(log_line_row(t, line));
         }
-        if lines.len() > 200 {
+        if hidden_count > 0 {
             output_section = output_section.child(
-                div()
-                    .px(SP_3)
-                    .py(SP_1_5)
-                    .child(
-                        text::caption(t!(
-                            "App.RightPanel.Logs.hidden_older_lines",
-                            count = lines.len() - 200
-                        ))
-                        .secondary(),
-                    ),
+                div().px(SP_3).py(SP_1_5).child(
+                    text::caption(t!(
+                        "App.RightPanel.Logs.hidden_older_lines",
+                        count = hidden_count
+                    ))
+                    .secondary(),
+                ),
             );
         }
         col.child(output_section).into_any_element()
@@ -1322,92 +1440,52 @@ fn swap_secondary(snapshot: &ServerSnapshot) -> SharedString {
 }
 
 fn empty_dash(value: &str) -> &str {
-    if value.is_empty() {
-        "—"
-    } else {
-        value
-    }
+    if value.is_empty() { "—" } else { value }
 }
 
-fn docker_summary_card(snapshot: &DockerPanelSnapshot) -> Card {
-    let running = snapshot
-        .containers
-        .iter()
-        .filter(|container| container.is_running())
-        .count();
-
-    Card::new()
-        .padding(SP_3)
-        .child(
-            SectionLabel::new(t!("App.RightPanel.Docker.inventory"))
-                .with_icon(IconName::LayoutDashboard),
+/// Segmented control that drives the Docker sub-view. Matches the
+/// Swift reference: a pill-shaped track with the active segment
+/// raised. Fires `on_tab(DockerTab::…)` on click — PierApp's
+/// `set_docker_tab` persists the choice and `cx.notify()` repaints.
+fn docker_tab_bar(selected: DockerTab, on_tab: DockerTabHandler) -> impl IntoElement {
+    let items = DockerTab::ALL.iter().copied().map(|tab| {
+        let handler = on_tab.clone();
+        SegmentedItem::new(
+            gpui::ElementId::Name(format!("docker-tab-{}", tab.id()).into()),
+            tab.label(),
+            tab == selected,
+            move |_ev, window, app| handler(&tab, window, app),
         )
-        .child(
-            div()
-                .flex()
-                .flex_row()
-                .flex_wrap()
-                .gap(SP_2)
-                .child(StatusPill::new(
-                    t!(
-                        "App.RightPanel.Docker.Inventory.running",
-                        running = running,
-                        total = snapshot.containers.len()
-                    ),
-                    if running > 0 {
-                        StatusKind::Success
-                    } else {
-                        StatusKind::Warning
-                    },
-                ))
-                .child(StatusPill::new(
-                    t!(
-                        "App.RightPanel.Docker.Inventory.images",
-                        count = snapshot.images.len()
-                    ),
-                    StatusKind::Info,
-                ))
-                .child(StatusPill::new(
-                    t!(
-                        "App.RightPanel.Docker.Inventory.volumes",
-                        count = snapshot.volumes.len()
-                    ),
-                    StatusKind::Info,
-                ))
-                .child(StatusPill::new(
-                    t!(
-                        "App.RightPanel.Docker.Inventory.networks",
-                        count = snapshot.networks.len()
-                    ),
-                    StatusKind::Info,
-                )),
-        )
+    });
+    SegmentedControl::new().items(items)
 }
 
-fn docker_containers_card(
+/// Flush container list — no outer card, rows stack directly against
+/// the tab-bar separator above them with 1px hairlines in between.
+/// Matches the Pier Swift reference (容器 tab).
+fn docker_containers_body(
     t: &crate::theme::Theme,
     snapshot: &DockerPanelSnapshot,
     pending: Option<&PendingDockerAction>,
     on_action: DockerActionHandler,
-) -> Card {
-    let mut card = Card::new()
-        .padding(SP_3)
-        .child(SectionLabel::new(t!("App.RightPanel.Docker.containers")).with_icon(IconName::Inbox))
-        .child(text::body(t!("App.RightPanel.Docker.containers_body")).secondary());
-
+) -> gpui::AnyElement {
     if snapshot.containers.is_empty() {
-        return card.child(text::body(t!("App.RightPanel.Docker.no_containers")).secondary());
+        return div()
+            .px(SP_3)
+            .py(SP_2)
+            .child(text::caption(t!("App.RightPanel.Docker.no_containers")).secondary())
+            .into_any_element();
     }
-
+    let mut col = div().w_full().flex().flex_col();
     for container in &snapshot.containers {
-        card = card.child(docker_container_row(
+        col = col.child(docker_container_row(
             t,
             container,
             pending,
             on_action.clone(),
         ));
     }
-    card
+    col.into_any_element()
 }
 
 fn docker_container_row(
@@ -1428,11 +1506,6 @@ fn docker_container_row(
     };
     let pending_for_row = pending.filter(|action| action.target_id == container.id);
 
-    // Action column. Previously text buttons (停止 / 重启 / Inspect)
-    // that wrapped to two rows on a typical right-panel width and
-    // stole ~170 px from the name column. IconButton `Xs` is 18 px
-    // square — three of them fit in ~60 px, leaving the container
-    // name readable on every panel width.
     let mut actions = div()
         .flex_none()
         .flex()
@@ -1450,40 +1523,58 @@ fn docker_container_row(
         } else {
             DockerActionKind::Start
         };
+        // Order matches Pier reference: primary (Start/Stop) — Restart
+        // — Inspect (quiet) — Delete (destructive, rightmost). The red
+        // trash-icon sitting on the far right reads as "permanent" and
+        // matches the macOS Finder destructive-action convention.
         actions = actions
             .child(docker_action_icon(
                 primary_kind,
+                DockerTargetKind::Container,
                 &container.id,
                 &target_label,
                 on_action.clone(),
             ))
             .child(docker_action_icon(
                 DockerActionKind::Restart,
+                DockerTargetKind::Container,
                 &container.id,
                 &target_label,
                 on_action.clone(),
             ))
             .child(docker_action_icon(
                 DockerActionKind::Inspect,
+                DockerTargetKind::Container,
+                &container.id,
+                &target_label,
+                on_action.clone(),
+            ))
+            .child(docker_action_icon(
+                DockerActionKind::Delete,
+                DockerTargetKind::Container,
                 &container.id,
                 &target_label,
                 on_action,
             ));
     }
 
+    // Flush row: no rounded box, no panel fill — just a padded
+    // flex-row with a 1px bottom hairline. Hover reveals a very
+    // subtle surface so the clickable actions feel anchored.
     div()
+        .id(gpui::ElementId::Name(
+            format!("docker-container-row-{}", short_docker_id(&container.id)).into(),
+        ))
         .flex()
         .flex_row()
         .items_center()
         .gap(SP_2)
-        .px(SP_2)
+        .px(SP_3)
         .py(SP_1_5)
-        .rounded(RADIUS_SM)
-        .border_1()
+        .border_b_1()
         .border_color(t.color.border_subtle)
-        .bg(t.color.bg_panel)
         .overflow_hidden()
-        // Status dot — compact indicator to anchor the row visually.
+        .hover(|s| s.bg(t.color.bg_hover))
         .child(
             div()
                 .flex_none()
@@ -1492,8 +1583,6 @@ fn docker_container_row(
                 .rounded(px(3.0))
                 .bg(docker_container_state_color(t, &container.state)),
         )
-        // Label column: name on top, image + short id underneath.
-        // `truncate()` on both lines keeps the row height stable.
         .child(
             div()
                 .flex_1()
@@ -1522,8 +1611,6 @@ fn docker_container_row(
                         )),
                 ),
         )
-        // State pill — compact sibling to the actions, not a
-        // separate row. `flex_none` so it never steals space.
         .child(div().flex_none().child(StatusPill::new(
             state_label,
             docker_container_state_kind(&container.state),
@@ -1533,6 +1620,7 @@ fn docker_container_row(
 
 fn docker_action_icon(
     kind: DockerActionKind,
+    target_kind: DockerTargetKind,
     target_id: &str,
     target_label: &str,
     on_action: DockerActionHandler,
@@ -1541,186 +1629,460 @@ fn docker_action_icon(
         kind,
         target_id: target_id.to_string(),
         target_label: target_label.to_string(),
+        target_kind,
     };
-    let icon = match kind {
-        DockerActionKind::Start => IconName::Play,
-        DockerActionKind::Stop => IconName::Square,
-        DockerActionKind::Restart => IconName::RefreshCw,
-        DockerActionKind::Inspect => IconName::Inspector,
+    // Color per action matches the Pier Swift reference:
+    // - Stop / Delete → filled red (destructive, unmissable)
+    // - Start         → filled accent blue (primary)
+    // - Restart       → neutral gray filled (supportive)
+    // - Inspect       → ghost (quiet, only on hover)
+    let (icon, variant) = match kind {
+        DockerActionKind::Start => (IconName::Play, IconButtonVariant::Primary),
+        DockerActionKind::Stop => (IconName::Square, IconButtonVariant::Danger),
+        DockerActionKind::Restart => (IconName::RefreshCw, IconButtonVariant::Filled),
+        DockerActionKind::Inspect => (IconName::Inspector, IconButtonVariant::Ghost),
+        DockerActionKind::Delete => (IconName::Delete, IconButtonVariant::Danger),
     };
     IconButton::new(
         gpui::ElementId::Name(format!("docker-{}-{target_id}", kind.label()).into()),
         icon,
     )
     .size(IconButtonSize::Xs)
-    .variant(IconButtonVariant::Filled)
+    .variant(variant)
     .on_click(move |_, window, app| on_action(&request, window, app))
 }
 
-fn docker_images_card(t: &crate::theme::Theme, snapshot: &DockerPanelSnapshot) -> Card {
-    let mut card = Card::new().padding(SP_3).child(
-        SectionLabel::new(t!("App.RightPanel.Docker.images"))
-            .with_icon(IconName::GalleryVerticalEnd),
-    );
+/// Flush list of image rows — each row icon + two-line label + size
+/// chip + per-row actions. Matches the Pier 镜像 tab. Leading the tab
+/// body is a Pull input (non-functional placeholder for now — the
+/// ExecStream-backed pull command lands in a follow-up PR) that keeps
+/// the visual parity with Pier while the backend is wired.
+fn docker_images_body(
+    t: &crate::theme::Theme,
+    snapshot: &DockerPanelSnapshot,
+    pending: Option<&PendingDockerAction>,
+    on_action: DockerActionHandler,
+) -> gpui::AnyElement {
+    let mut col = div().w_full().flex().flex_col().child(docker_pull_strip(t));
 
     if snapshot.images.is_empty() {
-        return card.child(text::body(t!("App.RightPanel.Docker.no_images")).secondary());
-    }
-
-    for image in snapshot.images.iter().take(6) {
-        let tag = if image.tag.is_empty() {
-            "<none>"
-        } else {
-            image.tag.as_str()
-        };
-        card = card.child(
+        col = col.child(
             div()
+                .px(SP_3)
+                .py(SP_2)
+                .child(text::caption(t!("App.RightPanel.Docker.no_images")).secondary()),
+        );
+        return col.into_any_element();
+    }
+    for image in &snapshot.images {
+        col = col.child(docker_image_row(t, image, pending, on_action.clone()));
+    }
+    col.into_any_element()
+}
+
+/// Pull strip: a disabled-look input + download IconButton. The
+/// actual `docker pull` would hit ExecStream so it can report
+/// progress — that backend hook is the next step; for now the UI
+/// presents the affordance so panel parity with Pier is complete.
+fn docker_pull_strip(t: &crate::theme::Theme) -> impl IntoElement {
+    div()
+        .w_full()
+        .flex()
+        .flex_row()
+        .items_center()
+        .gap(SP_2)
+        .px(SP_3)
+        .py(SP_1_5)
+        .border_b_1()
+        .border_color(t.color.border_subtle)
+        .child(
+            div()
+                .flex_1()
+                .min_w(px(0.0))
+                .h(BUTTON_MD_H)
                 .flex()
                 .flex_row()
-                .justify_between()
-                .gap(SP_3)
+                .items_center()
+                .px(SP_2)
+                .rounded(RADIUS_SM)
+                .border_1()
+                .border_color(t.color.border_subtle)
+                .bg(t.color.bg_panel)
+                .text_size(SIZE_SMALL)
+                .text_color(t.color.text_tertiary)
+                .child(SharedString::from(
+                    t!("App.RightPanel.Docker.pull_placeholder").to_string(),
+                )),
+        )
+        .child(
+            IconButton::new("docker-pull", IconName::ArrowDown)
+                .size(IconButtonSize::Sm)
+                .variant(IconButtonVariant::Primary)
+                .disabled(true),
+        )
+}
+
+fn docker_image_row(
+    t: &crate::theme::Theme,
+    image: &pier_core::services::docker::DockerImage,
+    pending: Option<&PendingDockerAction>,
+    on_action: DockerActionHandler,
+) -> impl IntoElement {
+    let tag = if image.tag.is_empty() {
+        "<none>".to_string()
+    } else {
+        image.tag.clone()
+    };
+    let repo = empty_dash(&image.repository).to_string();
+    div()
+        .flex()
+        .flex_row()
+        .items_center()
+        .gap(SP_2)
+        .px(SP_3)
+        .py(SP_1_5)
+        .border_b_1()
+        .border_color(t.color.border_subtle)
+        .overflow_hidden()
+        .hover(|s| s.bg(t.color.bg_hover))
+        .child(
+            div()
+                .flex_none()
+                .text_color(t.color.text_tertiary)
+                .child(UiIcon::new(IconName::GalleryVerticalEnd).size(ICON_SM)),
+        )
+        .child(
+            div()
+                .flex_1()
+                .min_w(px(0.0))
+                .flex()
+                .flex_col()
+                .gap(px(2.0))
                 .overflow_hidden()
                 .child(
                     div()
-                        .flex_1()
-                        .min_w(px(0.0))
+                        .truncate()
                         .text_size(SIZE_MONO_SMALL)
                         .font_family(t.font_mono.clone())
                         .text_color(t.color.text_primary)
-                        .truncate()
-                        .child(format!("{}:{tag}", empty_dash(&image.repository))),
+                        .child(format!("{repo}:{tag}")),
                 )
                 .child(
                     div()
-                        .flex_none()
+                        .truncate()
                         .text_size(SIZE_SMALL)
                         .text_color(t.color.text_tertiary)
-                        .truncate()
                         .child(format!(
                             "{} · {}",
                             empty_dash(&image.size),
                             empty_dash(&image.created)
                         )),
                 ),
-        );
-    }
-
-    if snapshot.images.len() > 6 {
-        card = card.child(
-            text::body(t!(
-                "App.RightPanel.Docker.more_images",
-                count = snapshot.images.len() - 6
-            ))
-            .secondary(),
-        );
-    }
-    card
+        )
+        .child({
+            let pending_for_row = pending.filter(|action| action.target_id == image.id);
+            if let Some(action) = pending_for_row {
+                div()
+                    .flex_none()
+                    .child(StatusPill::new(
+                        docker_pending_label(action),
+                        StatusKind::Info,
+                    ))
+                    .into_any_element()
+            } else if pending.is_none() {
+                div()
+                    .flex_none()
+                    .child(docker_action_icon(
+                        DockerActionKind::Delete,
+                        DockerTargetKind::Image,
+                        &image.id,
+                        &format!("{repo}:{tag}"),
+                        on_action,
+                    ))
+                    .into_any_element()
+            } else {
+                div().flex_none().into_any_element()
+            }
+        })
 }
 
-fn docker_storage_card(t: &crate::theme::Theme, snapshot: &DockerPanelSnapshot) -> Card {
-    let mut card = Card::new().padding(SP_3).child(
-        SectionLabel::new(t!("App.RightPanel.Docker.volumes_networks"))
-            .with_icon(IconName::ChartPie),
+/// Flush list of volume rows. Networks, which used to share this
+/// section via `volumes_networks`, are dropped from the 存储卷 tab
+/// to match the Pier reference (networks belong with a future
+/// "Networks" tab, or an overview in the inventory strip above).
+/// Top strip carries a `Cleanup unused` ghost button that will
+/// eventually dispatch `docker volume prune`.
+fn docker_volumes_body(
+    t: &crate::theme::Theme,
+    snapshot: &DockerPanelSnapshot,
+    pending: Option<&PendingDockerAction>,
+    inspect: Option<&DockerInspectState>,
+    on_action: DockerActionHandler,
+) -> gpui::AnyElement {
+    let mut col = div().w_full().flex().flex_col().child(
+        div()
+            .w_full()
+            .flex()
+            .flex_row()
+            .items_center()
+            .gap(SP_2)
+            .px(SP_3)
+            .py(SP_1_5)
+            .border_b_1()
+            .border_color(t.color.border_subtle)
+            .child(div().flex_1().min_w(px(0.0)))
+            .child(
+                Button::secondary(
+                    "docker-volume-cleanup",
+                    t!("App.RightPanel.Docker.cleanup_volumes"),
+                )
+                .size(ButtonSize::Sm)
+                .leading_icon(IconName::TriangleAlert)
+                // No backend yet — the volume-prune call goes through
+                // `collect_docker_snapshot` after `docker volume prune`
+                // ships. Disable until then so the button still reads
+                // as "present but not wired" instead of silently dying.
+                .on_click(|_, _, _| {}),
+            ),
     );
-
-    card = card.child(text::body(t!("App.RightPanel.Docker.volumes")).secondary());
     if snapshot.volumes.is_empty() {
-        card = card.child(text::body(t!("App.RightPanel.Docker.no_volumes")).secondary());
-    } else {
-        for volume in snapshot.volumes.iter().take(4) {
-            card = card.child(
-                div()
-                    .flex()
-                    .flex_row()
-                    .justify_between()
-                    .gap(SP_3)
-                    .overflow_hidden()
-                    .child(
-                        div()
-                            .flex_1()
-                            .min_w(px(0.0))
-                            .text_size(SIZE_SMALL)
-                            .font_weight(WEIGHT_MEDIUM)
-                            .truncate()
-                            .child(empty_dash(&volume.name).to_string()),
-                    )
-                    .child(
-                        div()
-                            .flex_none()
-                            .text_size(SIZE_SMALL)
-                            .text_color(t.color.text_tertiary)
-                            .truncate()
-                            .child(format!(
-                                "{} · {}",
-                                empty_dash(&volume.driver),
-                                empty_dash(&volume.mountpoint)
-                            )),
-                    ),
-            );
+        col = col.child(
+            div()
+                .px(SP_3)
+                .py(SP_2)
+                .child(text::caption(t!("App.RightPanel.Docker.no_volumes")).secondary()),
+        );
+        return col.into_any_element();
+    }
+    for volume in &snapshot.volumes {
+        let is_expanded = inspect.map(|i| i.target_id == volume.name).unwrap_or(false);
+        let is_loading = pending
+            .filter(|action| {
+                action.target_id == volume.name
+                    && matches!(action.kind, DockerActionKind::Inspect)
+                    && matches!(action.target_kind, DockerTargetKind::Volume)
+            })
+            .is_some();
+        col = col.child(docker_volume_row(
+            t,
+            volume,
+            pending,
+            is_expanded,
+            on_action.clone(),
+        ));
+        if is_loading {
+            col = col.child(docker_volume_loading_block(t, volume));
+        } else if is_expanded {
+            if let Some(inspect_state) = inspect {
+                col = col.child(docker_volume_expanded_block(t, inspect_state));
+            }
         }
     }
-
-    card = card
-        .child(div().pt(SP_2))
-        .child(text::body(t!("App.RightPanel.Docker.networks")).secondary());
-    if snapshot.networks.is_empty() {
-        card = card.child(text::body(t!("App.RightPanel.Docker.no_networks")).secondary());
-    } else {
-        for network in snapshot.networks.iter().take(4) {
-            card = card.child(
-                div()
-                    .flex()
-                    .flex_row()
-                    .justify_between()
-                    .gap(SP_3)
-                    .overflow_hidden()
-                    .child(
-                        div()
-                            .flex_1()
-                            .min_w(px(0.0))
-                            .text_size(SIZE_SMALL)
-                            .font_weight(WEIGHT_MEDIUM)
-                            .truncate()
-                            .child(empty_dash(&network.name).to_string()),
-                    )
-                    .child(
-                        div()
-                            .flex_none()
-                            .text_size(SIZE_SMALL)
-                            .text_color(t.color.text_tertiary)
-                            .truncate()
-                            .child(format!(
-                                "{} · {}",
-                                empty_dash(&network.driver),
-                                empty_dash(&network.scope)
-                            )),
-                    ),
-            );
-        }
-    }
-
-    card
+    col.into_any_element()
 }
 
-fn docker_inspect_card(t: &crate::theme::Theme, inspect: &DockerInspectState) -> Card {
-    Card::new()
-        .padding(SP_3)
+fn docker_volume_row(
+    t: &crate::theme::Theme,
+    volume: &pier_core::services::docker::DockerVolume,
+    pending: Option<&PendingDockerAction>,
+    is_expanded: bool,
+    on_action: DockerActionHandler,
+) -> impl IntoElement {
+    let volume_name = empty_dash(&volume.name).to_string();
+    let mountpoint = volume.mountpoint.clone();
+    let row_id = gpui::ElementId::Name(
+        format!("docker-volume-row-{}", short_docker_id(&volume.name)).into(),
+    );
+    // Tapping the row toggles the expansion. The handler dispatches
+    // `Inspect`; `run_docker_action` folds instead when the target is
+    // already expanded, so clicking twice is a natural toggle.
+    let toggle_handler = {
+        let on_action = on_action.clone();
+        let target_id = volume.name.clone();
+        let target_label = mountpoint.clone();
+        move |_: &gpui::ClickEvent, window: &mut Window, app: &mut App| {
+            let request = DockerActionRequest {
+                kind: DockerActionKind::Inspect,
+                target_id: target_id.clone(),
+                target_label: target_label.clone(),
+                target_kind: DockerTargetKind::Volume,
+            };
+            on_action(&request, window, app);
+        }
+    };
+
+    div()
+        .id(row_id)
+        .flex()
+        .flex_row()
+        .items_center()
+        .gap(SP_2)
+        .px(SP_3)
+        .py(SP_1_5)
+        .border_b_1()
+        .border_color(t.color.border_subtle)
+        .overflow_hidden()
+        .cursor_pointer()
+        .when(is_expanded, |el| el.bg(t.color.bg_panel))
+        .hover(|s| s.bg(t.color.bg_hover))
+        .on_click(toggle_handler)
         .child(
-            SectionLabel::new(t!("App.RightPanel.Docker.inspect")).with_icon(IconName::Inspector),
+            div()
+                .flex_none()
+                .text_color(t.color.status_warning)
+                .child(UiIcon::new(IconName::ChartPie).size(ICON_SM)),
         )
         .child(
             div()
-                .text_size(SIZE_SMALL)
-                .text_color(t.color.text_secondary)
+                .flex_1()
+                .min_w(px(0.0))
+                .flex()
+                .flex_col()
+                .gap(px(2.0))
+                .overflow_hidden()
+                .child(
+                    div()
+                        .truncate()
+                        .text_size(SIZE_SMALL)
+                        .font_weight(WEIGHT_MEDIUM)
+                        .text_color(t.color.text_primary)
+                        .child(empty_dash(&volume.name).to_string()),
+                )
+                .child(
+                    div()
+                        .truncate()
+                        .text_size(SIZE_SMALL)
+                        .text_color(t.color.text_tertiary)
+                        .child(format!(
+                            "{} · {}",
+                            empty_dash(&volume.driver),
+                            empty_dash(&volume.mountpoint)
+                        )),
+                ),
+        )
+        .child({
+            let pending_for_row = pending.filter(|action| action.target_id == volume.name);
+            if let Some(action) = pending_for_row {
+                div()
+                    .flex_none()
+                    .child(StatusPill::new(
+                        docker_pending_label(action),
+                        StatusKind::Info,
+                    ))
+                    .into_any_element()
+            } else if pending.is_none() {
+                // The trash click must NOT bubble up to the row's
+                // click handler — otherwise every delete would also
+                // toggle the expansion state behind it. Wrap the
+                // IconButton in an id'd div that swallows clicks via
+                // GPUI's `.on_click(|ev, ...| ev.stop_propagation())`
+                // pattern.
+                let delete_wrapper_id = gpui::ElementId::Name(
+                    format!(
+                        "docker-volume-delete-wrap-{}",
+                        short_docker_id(&volume.name)
+                    )
+                    .into(),
+                );
+                div()
+                    .id(delete_wrapper_id)
+                    .flex_none()
+                    .on_click(|_, _, cx| cx.stop_propagation())
+                    .child(docker_action_icon(
+                        DockerActionKind::Delete,
+                        DockerTargetKind::Volume,
+                        &volume.name,
+                        &volume_name,
+                        on_action,
+                    ))
+                    .into_any_element()
+            } else {
+                div().flex_none().into_any_element()
+            }
+        })
+}
+
+/// Inline "loading" strip shown under a volume row while its
+/// `ls -la` is in flight. Mirrors the spot where the output will
+/// appear so the row doesn't jump when the data arrives.
+fn docker_volume_loading_block(
+    t: &crate::theme::Theme,
+    volume: &pier_core::services::docker::DockerVolume,
+) -> impl IntoElement {
+    div()
+        .w_full()
+        .flex()
+        .flex_col()
+        .gap(SP_0_5)
+        .px(SP_3)
+        .py(SP_2)
+        .bg(t.color.bg_panel)
+        .border_b_1()
+        .border_color(t.color.border_subtle)
+        .child(
+            div()
+                .overflow_hidden()
+                .text_size(SIZE_MONO_SMALL)
+                .font_family(t.font_mono.clone())
+                .text_color(t.color.text_tertiary)
                 .truncate()
-                .child(format!(
-                    "{} ({})",
-                    inspect.target_label,
-                    short_docker_id(&inspect.target_id)
-                )),
+                .child(SharedString::from(volume.mountpoint.clone())),
+        )
+        .child(text::caption(t!("App.Common.Status.loading")).secondary())
+}
+
+/// Inline file-listing block shown under the expanded volume row.
+/// Pier ships this as `mountpoint path + ls -la output`. The panel
+/// sits on `bg_panel` so it visually nests inside the row above it
+/// without needing its own rounded container.
+fn docker_volume_expanded_block(
+    t: &crate::theme::Theme,
+    inspect: &DockerInspectState,
+) -> impl IntoElement {
+    div()
+        .w_full()
+        .flex()
+        .flex_col()
+        .gap(SP_1)
+        .px(SP_3)
+        .py(SP_2)
+        .bg(t.color.bg_panel)
+        .border_b_1()
+        .border_color(t.color.border_subtle)
+        .child(
+            div()
+                .overflow_hidden()
+                .text_size(SIZE_MONO_SMALL)
+                .font_family(t.font_mono.clone())
+                .text_color(t.color.text_tertiary)
+                .truncate()
+                .child(SharedString::from(inspect.target_label.clone())),
         )
         .child(
             div()
+                .overflow_hidden()
+                .text_size(SIZE_MONO_SMALL)
+                .font_family(t.font_mono.clone())
+                .text_color(t.color.text_secondary)
+                .child(trim_panel_text(&inspect.output, 12_000)),
+        )
+}
+
+fn docker_inspect_section(
+    t: &crate::theme::Theme,
+    inspect: &DockerInspectState,
+) -> impl IntoElement {
+    InspectorSection::new(t!("App.RightPanel.Docker.inspect"))
+        .icon(IconName::Inspector)
+        .eyebrow(format!(
+            "{} ({})",
+            inspect.target_label,
+            short_docker_id(&inspect.target_id)
+        ))
+        .child(
+            div()
+                .px(SP_3)
+                .py(SP_2)
                 .overflow_hidden()
                 .text_size(SIZE_MONO_SMALL)
                 .font_family(t.font_mono.clone())
@@ -1763,6 +2125,7 @@ fn docker_action_button_label(kind: DockerActionKind) -> SharedString {
         DockerActionKind::Stop => t!("App.Common.stop").into(),
         DockerActionKind::Restart => t!("App.RightPanel.Docker.restart").into(),
         DockerActionKind::Inspect => t!("App.RightPanel.Docker.inspect").into(),
+        DockerActionKind::Delete => t!("App.RightPanel.Docker.delete").into(),
     }
 }
 
@@ -1851,20 +2214,24 @@ fn logs_exit_label(exit_code: i32) -> SharedString {
     }
 }
 
-fn log_line_row(t: &crate::theme::Theme, index: usize, line: LogLine) -> impl IntoElement {
+fn log_line_row(t: &crate::theme::Theme, line: LogLine) -> impl IntoElement {
     let (label, kind, color) = match line.kind {
         LogLineKind::Stdout => ("OUT", StatusKind::Info, t.color.text_secondary),
         LogLineKind::Stderr => ("ERR", StatusKind::Error, t.color.status_error),
         LogLineKind::Meta => ("META", StatusKind::Warning, t.color.text_tertiary),
     };
 
+    // Tight IDE-density row: 2px top/bottom padding, 1px hairline
+    // between every row. The OUT/ERR/META pill anchors the left gutter
+    // so the eye can scan kinds quickly without needing color.
     div()
-        .id(("logs-line", index))
+        .id(("logs-line", line.id))
         .flex()
         .flex_row()
         .items_start()
         .gap(SP_2)
-        .py(SP_1)
+        .px(SP_3)
+        .py(SP_0_5)
         .border_t_1()
         .border_color(t.color.border_subtle)
         .overflow_hidden()

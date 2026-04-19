@@ -7,6 +7,7 @@ mod i18n;
 mod theme;
 mod ui_kit;
 mod views;
+mod widgets;
 
 rust_i18n::i18n!("locales", fallback = "en");
 

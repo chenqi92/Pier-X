@@ -15,11 +15,14 @@ use rust_i18n::t;
 
 use crate::app::git_session::{DiffSelection, GitPendingAction, GitState, GitStatus};
 use crate::app::PierApp;
-use crate::components::{text, Button, Card, SectionLabel, StatusKind, StatusPill};
+use crate::components::{
+    text, Button, ButtonSize, IconButton, IconButtonSize, IconButtonVariant, InspectorSection,
+    Separator, StatusKind, StatusPill,
+};
 use crate::theme::{
-    heights::{BUTTON_SM_H, ICON_MD},
+    heights::{BUTTON_SM_H, ICON_MD, ICON_SM},
     radius::RADIUS_SM,
-    spacing::{SP_1, SP_1_5, SP_2, SP_3, SP_4},
+    spacing::{SP_0_5, SP_1, SP_1_5, SP_2, SP_3},
     theme,
     typography::{SIZE_BODY, SIZE_CAPTION, SIZE_MONO_SMALL, SIZE_SMALL, WEIGHT_MEDIUM},
 };
@@ -86,6 +89,10 @@ impl RenderOnce for GitView {
 
 // ─── Layout helpers ──────────────────────────────────────────────────
 
+/// Compact top strip — status pill + optional pending pill, refresh
+/// pushed to the right. No H2 title: the outer PageHeader already
+/// names this panel "Git", and repeating the word made every Git tab
+/// start with 60 px of chrome.
 fn header(
     t: &crate::theme::Theme,
     snap: &GitSnapshot,
@@ -96,11 +103,15 @@ fn header(
     let weak_refresh = weak.clone();
 
     let mut row = div()
+        .w_full()
         .flex()
         .flex_row()
         .items_center()
-        .gap(SP_3)
-        .child(text::h2(t!("App.Git.title")))
+        .flex_wrap()
+        .gap(SP_1_5)
+        .px(SP_3)
+        .py(SP_1_5)
+        .text_color(t.color.text_primary)
         .child(status_pill(snap));
 
     if let Some(label) = pending_label {
@@ -109,21 +120,20 @@ fn header(
             StatusKind::Info,
         ));
     }
-
-    let refresh_btn: gpui::AnyElement = if refresh_busy {
-        StatusPill::new(t!("App.Git.busy"), StatusKind::Warning).into_any_element()
+    row = row.child(div().flex_1().min_w(px(0.0)));
+    if refresh_busy {
+        row = row.child(StatusPill::new(t!("App.Git.busy"), StatusKind::Warning));
     } else {
-        Button::secondary("git-refresh", t!("App.Common.refresh"))
-            .on_click(move |_, _, cx| {
-                let _ = weak_refresh.update(cx, |app, cx| app.schedule_git_refresh(cx));
-            })
-            .into_any_element()
-    };
-
-    // Push refresh to the right.
-    row.child(div().flex_1())
-        .child(refresh_btn)
-        .text_color(t.color.text_primary)
+        row = row.child(
+            IconButton::new("git-refresh", IconName::RefreshCw)
+                .size(IconButtonSize::Sm)
+                .variant(IconButtonVariant::Filled)
+                .on_click(move |_, _, cx| {
+                    let _ = weak_refresh.update(cx, |app, cx| app.schedule_git_refresh(cx));
+                }),
+        );
+    }
+    row
 }
 
 fn status_pill(snap: &GitSnapshot) -> StatusPill {
@@ -143,45 +153,82 @@ fn repo_layout(
     stash_input: gpui::Entity<InputState>,
     weak: WeakEntity<PierApp>,
 ) -> gpui::Div {
+    // Flush grammar: no outer padding, no inter-section gap —
+    // `InspectorSection` supplies each title bar + hairline, and
+    // `Separator::horizontal()` between sections keeps the panel
+    // reading as one connected 1px grid.
     let mut col = div()
         .w_full()
         .flex()
         .flex_col()
-        .gap(SP_4)
-        .p(SP_4)
-        .child(header(t, &snap, weak.clone()));
+        .bg(t.color.bg_surface)
+        .child(header(t, &snap, weak.clone()))
+        .child(Separator::horizontal());
 
     if let Some(msg) = snap.last_confirmation.clone() {
-        col = col.child(confirmation_card(t, msg));
+        col = col
+            .child(git_feedback_strip(
+                t,
+                IconName::Check,
+                t!("App.Git.last_result"),
+                msg,
+                false,
+            ))
+            .child(Separator::horizontal());
     }
     if let Some(err) = snap.action_error.clone() {
-        col = col.child(error_card(t, err));
+        col = col
+            .child(git_feedback_strip(
+                t,
+                IconName::TriangleAlert,
+                t!("App.Common.error"),
+                err,
+                true,
+            ))
+            .child(Separator::horizontal());
     }
     if let Some(err) = snap.last_error.clone() {
-        col = col.child(error_card(t, err));
+        col = col
+            .child(git_feedback_strip(
+                t,
+                IconName::TriangleAlert,
+                t!("App.Common.error"),
+                err,
+                true,
+            ))
+            .child(Separator::horizontal());
     }
 
     if let Some(branch) = snap.branch.clone() {
-        col = col.child(branch_card(
+        col = col
+            .child(branch_section(
+                t,
+                &branch,
+                &snap.repo_path,
+                &snap.branches,
+                weak.clone(),
+            ))
+            .child(Separator::horizontal());
+    }
+    col = col
+        .child(changes_section(
             t,
-            &branch,
-            &snap.repo_path,
-            &snap.branches,
+            &snap.changes,
+            snap.diff_selection.as_ref(),
             weak.clone(),
-        ));
-    }
-    col = col.child(changes_card(
-        t,
-        &snap.changes,
-        snap.diff_selection.as_ref(),
-        weak.clone(),
-    ));
+        ))
+        .child(Separator::horizontal());
     if snap.diff_selection.is_some() {
-        col = col.child(diff_card(t, &snap, weak.clone()));
+        col = col
+            .child(diff_section(t, &snap, weak.clone()))
+            .child(Separator::horizontal());
     }
-    col = col.child(commit_card(t, &snap.changes, commit_input, weak.clone()));
-    col = col.child(stash_card(t, &snap.stashes, stash_input, weak.clone()));
-    col = col.child(log_card(t, &snap.log));
+    col = col
+        .child(commit_section(t, &snap.changes, commit_input, weak.clone()))
+        .child(Separator::horizontal())
+        .child(stash_section(t, &snap.stashes, stash_input, weak.clone()))
+        .child(Separator::horizontal())
+        .child(log_section(t, &snap.log));
     col
 }
 
@@ -194,14 +241,22 @@ fn not_a_repo_layout(
         .w_full()
         .flex()
         .flex_col()
-        .gap(SP_4)
-        .p(SP_4)
+        .bg(t.color.bg_surface)
         .child(header(t, snap, weak))
+        .child(Separator::horizontal())
         .child(
-            Card::new()
-                .child(SectionLabel::new(t!("App.Common.repository")).with_icon(IconName::Folder))
-                .child(text::body(t!("App.Git.not_a_repo_body")).secondary())
-                .child(div().overflow_hidden().child(text::mono(snap.cwd.clone()))),
+            InspectorSection::new(t!("App.Common.repository"))
+                .icon(IconName::Folder)
+                .child(
+                    div()
+                        .px(SP_3)
+                        .py(SP_2)
+                        .flex()
+                        .flex_col()
+                        .gap(SP_1_5)
+                        .child(text::caption(t!("App.Git.not_a_repo_body")).secondary())
+                        .child(div().overflow_hidden().child(text::mono(snap.cwd.clone()))),
+                ),
         )
 }
 
@@ -214,10 +269,16 @@ fn error_layout(
         .w_full()
         .flex()
         .flex_col()
-        .gap(SP_4)
-        .p(SP_4)
+        .bg(t.color.bg_surface)
         .child(header(t, snap, weak))
-        .child(error_card(t, snap.last_error.clone().unwrap_or_default()))
+        .child(Separator::horizontal())
+        .child(git_feedback_strip(
+            t,
+            IconName::TriangleAlert,
+            t!("App.Common.error"),
+            snap.last_error.clone().unwrap_or_default(),
+            true,
+        ))
 }
 
 fn dead_panel(t: &crate::theme::Theme) -> gpui::Div {
@@ -225,22 +286,25 @@ fn dead_panel(t: &crate::theme::Theme) -> gpui::Div {
         .w_full()
         .flex()
         .flex_col()
-        .gap(SP_4)
-        .p(SP_4)
-        .child(text::h2(t!("App.Git.title")))
-        .child(text::body(t!("App.Common.panel_lost")).secondary())
+        .bg(t.color.bg_surface)
+        .child(
+            div()
+                .px(SP_3)
+                .py(SP_2)
+                .child(text::caption(t!("App.Common.panel_lost")).secondary()),
+        )
         .text_color(t.color.text_primary)
 }
 
 // ─── Card: current branch + switcher ────────────────────────────────
 
-fn branch_card(
+fn branch_section(
     t: &crate::theme::Theme,
     branch: &BranchInfo,
     repo_path: &Option<SharedString>,
     branches: &[String],
     weak: WeakEntity<PierApp>,
-) -> Card {
+) -> impl IntoElement {
     let tracking: SharedString = if branch.tracking.is_empty() {
         t!("App.Git.no_upstream").into()
     } else {
@@ -256,75 +320,109 @@ fn branch_card(
     let push_weak = weak.clone();
     let pull_weak = weak.clone();
 
-    let mut card = Card::new()
-        .child(SectionLabel::new(t!("App.Git.current_branch")).with_icon(IconName::GitBranch))
+    // Pull / Push as Sm ghost buttons in the section header actions
+    // slot. Pier pushes these to the header so the body can be a
+    // dense list of branch candidates without fighting for width.
+    let actions = div()
+        .flex_none()
+        .flex()
+        .flex_row()
+        .items_center()
+        .gap(SP_0_5)
+        .child(
+            Button::secondary("git-pull", t!("App.Git.pull"))
+                .size(ButtonSize::Sm)
+                .on_click(move |_, _, cx| {
+                    let _ = pull_weak.update(cx, |app, cx| {
+                        app.schedule_git_action(GitPendingAction::Pull, cx);
+                    });
+                }),
+        )
+        .child(
+            Button::secondary("git-push", t!("App.Git.push"))
+                .size(ButtonSize::Sm)
+                .on_click(move |_, _, cx| {
+                    let _ = push_weak.update(cx, |app, cx| {
+                        app.schedule_git_action(GitPendingAction::Push, cx);
+                    });
+                }),
+        );
+
+    // Info strip: branch name (primary) + tracking + ahead/behind
+    // pace — one padded row so the data is visible without opening
+    // the section. No border; the section header's hairline already
+    // separates it from the branch switcher list below.
+    let info = div()
+        .flex()
+        .flex_row()
+        .items_center()
+        .gap(SP_2)
+        .px(SP_3)
+        .py(SP_1_5)
+        .overflow_hidden()
         .child(
             div()
-                .flex()
-                .flex_row()
-                .items_center()
-                .gap(SP_2)
-                .overflow_hidden()
-                .child(
-                    div()
-                        .flex_1()
-                        .min_w(px(0.0))
-                        .truncate()
-                        .text_size(SIZE_BODY)
-                        .font_weight(WEIGHT_MEDIUM)
-                        .text_color(t.color.text_primary)
-                        .child(SharedString::from(branch.name.clone())),
-                )
-                .child(
-                    div()
-                        .flex_none()
-                        .text_size(SIZE_SMALL)
-                        .text_color(t.color.text_tertiary)
-                        .child(SharedString::from(
-                            t!("App.Git.branch_tracking", tracking = tracking.as_ref()).to_string(),
-                        )),
-                ),
+                .flex_1()
+                .min_w(px(0.0))
+                .truncate()
+                .text_size(SIZE_BODY)
+                .font_weight(WEIGHT_MEDIUM)
+                .text_color(t.color.text_primary)
+                .child(SharedString::from(branch.name.clone())),
         )
         .child(
             div()
-                .flex()
-                .flex_row()
-                .gap(SP_2)
-                .child(
-                    div()
-                        .text_size(SIZE_SMALL)
-                        .text_color(t.color.text_tertiary)
-                        .child(pace),
-                )
-                .child(div().flex_1())
-                .child(Button::secondary("git-pull", t!("App.Git.pull")).on_click(
-                    move |_, _, cx| {
-                        let _ = pull_weak.update(cx, |app, cx| {
-                            app.schedule_git_action(GitPendingAction::Pull, cx);
-                        });
-                    },
-                ))
-                .child(Button::secondary("git-push", t!("App.Git.push")).on_click(
-                    move |_, _, cx| {
-                        let _ = push_weak.update(cx, |app, cx| {
-                            app.schedule_git_action(GitPendingAction::Push, cx);
-                        });
-                    },
-                )),
-        );
-
-    if let Some(path) = repo_path {
-        card = card.child(
-            div()
-                .overflow_hidden()
-                .text_size(SIZE_MONO_SMALL)
-                .font_family(t.font_mono.clone())
+                .flex_none()
+                .text_size(SIZE_SMALL)
                 .text_color(t.color.text_tertiary)
-                .truncate()
                 .child(SharedString::from(
-                    t!("App.Git.repo_path", path = path.as_ref()).to_string(),
+                    t!("App.Git.branch_tracking", tracking = tracking.as_ref()).to_string(),
                 )),
         );
+    let pace_row = div()
+        .flex()
+        .flex_row()
+        .items_center()
+        .gap(SP_2)
+        .px(SP_3)
+        .py(SP_0_5)
+        .child(
+            div()
+                .text_size(SIZE_SMALL)
+                .text_color(t.color.text_tertiary)
+                .child(pace),
+        );
+    let path_row = repo_path.as_ref().map(|path| {
+        div()
+            .flex()
+            .flex_row()
+            .items_center()
+            .gap(SP_2)
+            .px(SP_3)
+            .py(SP_0_5)
+            .overflow_hidden()
+            .child(
+                div()
+                    .flex_1()
+                    .min_w(px(0.0))
+                    .overflow_hidden()
+                    .text_size(SIZE_MONO_SMALL)
+                    .font_family(t.font_mono.clone())
+                    .text_color(t.color.text_tertiary)
+                    .truncate()
+                    .child(SharedString::from(
+                        t!("App.Git.repo_path", path = path.as_ref()).to_string(),
+                    )),
+            )
+    });
+
+    let mut section = InspectorSection::new(t!("App.Git.current_branch"))
+        .icon(IconName::GitBranch)
+        .actions(actions)
+        .child(info)
+        .child(pace_row);
+    if let Some(row) = path_row {
+        section = section.child(row);
     }
 
     // Branch switcher: list other branches, excluding the current.
@@ -333,19 +431,21 @@ fn branch_card(
         .filter(|b| b.as_str() != branch.name)
         .cloned()
         .collect();
-
     if !others.is_empty() {
-        card = card.child(
+        section = section.child(
             div()
-                .pt(SP_2)
-                .child(SectionLabel::new(t!("App.Git.switch_branch")).with_icon(IconName::Map)),
+                .px(SP_3)
+                .py(SP_1)
+                .text_size(SIZE_SMALL)
+                .text_color(t.color.text_tertiary)
+                .child(SharedString::from(t!("App.Git.switch_branch").to_string())),
         );
         for name in others.into_iter().take(24) {
-            card = card.child(branch_row(t, name, weak.clone()));
+            section = section.child(branch_row(t, name, weak.clone()));
         }
     }
 
-    card
+    section
 }
 
 fn branch_row(
@@ -356,12 +456,18 @@ fn branch_row(
     let name_for_click = name.clone();
     let id = ElementId::Name(SharedString::from(format!("git-checkout-{name}")));
     div()
+        .id(ElementId::Name(SharedString::from(format!(
+            "git-branch-row-{}",
+            short_id(&name)
+        ))))
         .flex()
         .flex_row()
         .items_center()
         .gap(SP_2)
-        .py(SP_1)
+        .px(SP_3)
+        .py(SP_0_5)
         .overflow_hidden()
+        .hover(|s| s.bg(t.color.bg_hover))
         .child(
             div()
                 .flex_1()
@@ -373,10 +479,10 @@ fn branch_row(
                 .child(SharedString::from(name)),
         )
         .child(
-            div()
-                .flex_none()
-                .child(
-                    Button::secondary(id, t!("App.Git.checkout")).on_click(move |_, _, cx| {
+            div().flex_none().child(
+                Button::secondary(id, t!("App.Git.checkout"))
+                    .size(ButtonSize::Sm)
+                    .on_click(move |_, _, cx| {
                         let branch_name = name_for_click.clone();
                         let _ = weak.update(cx, |app, cx| {
                             app.schedule_git_action(
@@ -385,30 +491,33 @@ fn branch_row(
                             );
                         });
                     }),
-                ),
+            ),
         )
 }
 
 // ─── Card: working-tree changes + per-file actions ──────────────────
 
-fn changes_card(
+fn changes_section(
     t: &crate::theme::Theme,
     changes: &[GitFileChange],
     diff_selection: Option<&crate::app::git_session::DiffSelection>,
     weak: WeakEntity<PierApp>,
-) -> Card {
+) -> impl IntoElement {
     let staged = changes.iter().filter(|c| c.staged).count();
     let unstaged = changes.len().saturating_sub(staged);
 
     let stage_all_weak = weak.clone();
     let unstage_all_weak = weak.clone();
 
-    let mut header = div()
+    // Actions: staged/unstaged pills + bulk buttons. The pills sit
+    // first so the header reads "Working tree · 2 staged · 3 unstaged
+    // [Stage all]" left-to-right.
+    let mut actions = div()
+        .flex_none()
         .flex()
         .flex_row()
         .items_center()
-        .gap(SP_2)
-        .child(SectionLabel::new(t!("App.Git.working_tree")).with_icon(IconName::Inbox))
+        .gap(SP_1)
         .child(StatusPill::new(
             t!("App.Git.staged_count", count = staged),
             if staged > 0 {
@@ -424,48 +533,56 @@ fn changes_card(
             } else {
                 StatusKind::Success
             },
-        ))
-        .child(div().flex_1());
-
+        ));
     if unstaged > 0 {
-        header = header.child(
-            Button::secondary("git-stage-all", t!("App.Git.stage_all")).on_click(
-                move |_, _, cx| {
+        actions = actions.child(
+            Button::secondary("git-stage-all", t!("App.Git.stage_all"))
+                .size(ButtonSize::Sm)
+                .on_click(move |_, _, cx| {
                     let _ = stage_all_weak.update(cx, |app, cx| {
                         app.schedule_git_action(GitPendingAction::StageAll, cx);
                     });
-                },
-            ),
+                }),
         );
     }
     if staged > 0 {
-        header = header.child(
-            Button::secondary("git-unstage-all", t!("App.Git.unstage_all")).on_click(
-                move |_, _, cx| {
+        actions = actions.child(
+            Button::secondary("git-unstage-all", t!("App.Git.unstage_all"))
+                .size(ButtonSize::Sm)
+                .on_click(move |_, _, cx| {
                     let _ = unstage_all_weak.update(cx, |app, cx| {
                         app.schedule_git_action(GitPendingAction::UnstageAll, cx);
                     });
-                },
-            ),
+                }),
         );
     }
 
-    let mut card = Card::new().child(header);
+    let mut section = InspectorSection::new(t!("App.Git.working_tree"))
+        .icon(IconName::Inbox)
+        .actions(actions);
 
     if changes.is_empty() {
-        card = card.child(text::body(t!("App.Git.working_tree_clean")).secondary());
-        return card;
+        return section
+            .child(
+                div()
+                    .px(SP_3)
+                    .py(SP_2)
+                    .child(text::caption(t!("App.Git.working_tree_clean")).secondary()),
+            )
+            .into_any_element();
     }
 
     for change in changes.iter().take(MAX_CHANGE_ROWS) {
         let is_selected = diff_selection
             .map(|sel| sel.path == change.path && sel.staged == change.staged)
             .unwrap_or(false);
-        card = card.child(file_change_row(t, change, is_selected, weak.clone()));
+        section = section.child(file_change_row(t, change, is_selected, weak.clone()));
     }
     if changes.len() > MAX_CHANGE_ROWS {
-        card = card.child(
+        section = section.child(
             div()
+                .px(SP_3)
+                .py(SP_1)
                 .text_size(SIZE_SMALL)
                 .text_color(t.color.text_tertiary)
                 .child(SharedString::from(
@@ -477,7 +594,7 @@ fn changes_card(
                 )),
         );
     }
-    card
+    section.into_any_element()
 }
 
 fn file_change_row(
@@ -519,16 +636,22 @@ fn file_change_row(
     let path_for_discard = path_str.clone();
     let path_for_diff = path_str.clone();
 
+    let row_id = ElementId::Name(SharedString::from(format!(
+        "git-file-row-{}-{}",
+        if staged { "s" } else { "w" },
+        short_id(&path_str)
+    )));
     let mut row = div()
+        .id(row_id)
         .flex()
         .flex_row()
         .items_center()
-        .gap(SP_2)
-        .py(SP_1)
-        .px(SP_1)
-        .rounded(RADIUS_SM)
+        .gap(SP_1_5)
+        .px(SP_3)
+        .py(SP_0_5)
         .overflow_hidden()
-        .when(is_selected, |el| el.bg(t.color.bg_panel))
+        .when(is_selected, |el| el.bg(t.color.accent_subtle))
+        .hover(|s| s.bg(t.color.bg_hover))
         .child(
             div()
                 .flex_none()
@@ -568,6 +691,7 @@ fn file_change_row(
                         t!("App.Git.view_diff")
                     },
                 )
+                .size(ButtonSize::Sm)
                 .on_click(move |_, _, cx| {
                     let p = path_for_diff.clone();
                     let currently_open = is_selected;
@@ -589,33 +713,47 @@ fn file_change_row(
             ),
         );
 
-    // Per-file actions.
+    // Per-file actions — Sm buttons so 3 of them (Diff + Stage +
+    // Discard) fit on the same row without wrapping on a typical
+    // right-panel width.
     if staged {
-        row = row.child(div().flex_none().child(
-            Button::secondary(unstage_id, t!("App.Git.unstage")).on_click(move |_, _, cx| {
-                let p = path_for_unstage.clone();
-                let _ = unstage_weak.update(cx, |app, cx| {
-                    app.schedule_git_action(GitPendingAction::Unstage { path: p }, cx);
-                });
-            }),
-        ));
+        row = row.child(
+            div().flex_none().child(
+                Button::secondary(unstage_id, t!("App.Git.unstage"))
+                    .size(ButtonSize::Sm)
+                    .on_click(move |_, _, cx| {
+                        let p = path_for_unstage.clone();
+                        let _ = unstage_weak.update(cx, |app, cx| {
+                            app.schedule_git_action(GitPendingAction::Unstage { path: p }, cx);
+                        });
+                    }),
+            ),
+        );
     } else {
-        row = row.child(div().flex_none().child(
-            Button::secondary(stage_id, t!("App.Git.stage")).on_click(move |_, _, cx| {
-                let p = path_for_stage.clone();
-                let _ = stage_weak.update(cx, |app, cx| {
-                    app.schedule_git_action(GitPendingAction::Stage { path: p }, cx);
-                });
-            }),
-        ));
-        row = row.child(div().flex_none().child(
-            Button::danger(discard_id, t!("App.Git.discard")).on_click(move |_, _, cx| {
-                let p = path_for_discard.clone();
-                let _ = discard_weak.update(cx, |app, cx| {
-                    app.schedule_git_action(GitPendingAction::Discard { path: p }, cx);
-                });
-            }),
-        ));
+        row = row.child(
+            div().flex_none().child(
+                Button::secondary(stage_id, t!("App.Git.stage"))
+                    .size(ButtonSize::Sm)
+                    .on_click(move |_, _, cx| {
+                        let p = path_for_stage.clone();
+                        let _ = stage_weak.update(cx, |app, cx| {
+                            app.schedule_git_action(GitPendingAction::Stage { path: p }, cx);
+                        });
+                    }),
+            ),
+        );
+        row = row.child(
+            div().flex_none().child(
+                Button::danger(discard_id, t!("App.Git.discard"))
+                    .size(ButtonSize::Sm)
+                    .on_click(move |_, _, cx| {
+                        let p = path_for_discard.clone();
+                        let _ = discard_weak.update(cx, |app, cx| {
+                            app.schedule_git_action(GitPendingAction::Discard { path: p }, cx);
+                        });
+                    }),
+            ),
+        );
     }
     row
 }
@@ -646,18 +784,21 @@ fn file_status_badge(t: &crate::theme::Theme, status: FileStatus) -> (&'static s
 
 // ─── Card: commit staged changes ────────────────────────────────────
 
-fn commit_card(
-    t: &crate::theme::Theme,
+fn commit_section(
+    _t: &crate::theme::Theme,
     changes: &[GitFileChange],
     input: gpui::Entity<InputState>,
     weak: WeakEntity<PierApp>,
-) -> Card {
+) -> impl IntoElement {
     let has_staged = changes.iter().any(|c| c.staged);
     let commit_weak = weak.clone();
     let input_for_click = input.clone();
 
-    let button: gpui::AnyElement = if has_staged {
+    // Commit button goes in the section header actions slot. Sm
+    // primary when there's staged work, else a warning pill.
+    let action: gpui::AnyElement = if has_staged {
         Button::primary("git-commit", t!("App.Git.commit_staged"))
+            .size(ButtonSize::Sm)
             .on_click(move |_, _, cx| {
                 let text: String = input_for_click.read(cx).value().to_string();
                 if text.trim().is_empty() {
@@ -677,73 +818,64 @@ fn commit_card(
         StatusPill::new(t!("App.Git.no_staged"), StatusKind::Warning).into_any_element()
     };
 
-    Card::new()
-        .child(SectionLabel::new(t!("App.Git.commit_section")).with_icon(IconName::GitCommit))
-        .child(Input::new(&input))
+    InspectorSection::new(t!("App.Git.commit_section"))
+        .icon(IconName::GitCommit)
+        .actions(action)
         .child(
             div()
-                .pt(SP_2)
+                .px(SP_3)
+                .py(SP_1_5)
                 .flex()
-                .flex_row()
-                .items_center()
-                .gap(SP_2)
-                .child(
-                    div()
-                        .flex_1()
-                        .text_size(SIZE_SMALL)
-                        .text_color(t.color.text_tertiary)
-                        .child(SharedString::from(t!("App.Git.commit_hint").to_string())),
-                )
-                .child(button),
+                .flex_col()
+                .gap(SP_1_5)
+                .child(Input::new(&input))
+                .child(text::caption(t!("App.Git.commit_hint")).secondary()),
         )
 }
 
 // ─── Card: stash list + stash push ──────────────────────────────────
 
-fn stash_card(
+fn stash_section(
     t: &crate::theme::Theme,
     stashes: &[StashEntry],
     input: gpui::Entity<InputState>,
     weak: WeakEntity<PierApp>,
-) -> Card {
+) -> impl IntoElement {
     let push_weak = weak.clone();
     let input_for_click = input.clone();
 
-    let mut card = Card::new()
-        .child(SectionLabel::new(t!("App.Git.stash_section")).with_icon(IconName::Inspector))
-        .child(Input::new(&input))
-        .child(
-            div()
-                .pt(SP_2)
-                .flex()
-                .flex_row()
-                .gap(SP_2)
-                .child(div().flex_1())
-                .child(
-                    Button::secondary("git-stash-push", t!("App.Git.stash_push")).on_click(
-                        move |_, _, cx| {
-                            let text: String = input_for_click.read(cx).value().to_string();
-                            let _ = push_weak.update(cx, |app, cx| {
-                                app.schedule_git_action(
-                                    GitPendingAction::StashPush { message: text },
-                                    cx,
-                                );
-                            });
-                        },
-                    ),
-                ),
-        );
+    let push_btn = Button::secondary("git-stash-push", t!("App.Git.stash_push"))
+        .size(ButtonSize::Sm)
+        .on_click(move |_, _, cx| {
+            let text: String = input_for_click.read(cx).value().to_string();
+            let _ = push_weak.update(cx, |app, cx| {
+                app.schedule_git_action(GitPendingAction::StashPush { message: text }, cx);
+            });
+        });
+
+    let mut section = InspectorSection::new(t!("App.Git.stash_section"))
+        .icon(IconName::Inspector)
+        .actions(push_btn)
+        .child(div().px(SP_3).py(SP_1_5).child(Input::new(&input)));
 
     if stashes.is_empty() {
-        card = card.child(text::body(t!("App.Git.no_stashes")).secondary());
-        return card;
+        return section
+            .child(
+                div()
+                    .px(SP_3)
+                    .py(SP_1)
+                    .child(text::caption(t!("App.Git.no_stashes")).secondary()),
+            )
+            .into_any_element();
     }
     for stash in stashes.iter().take(10) {
-        card = card.child(stash_row(t, stash, weak.clone()));
+        section = section.child(stash_row(t, stash, weak.clone()));
     }
     if stashes.len() > 10 {
-        card = card.child(
+        section = section.child(
             div()
+                .px(SP_3)
+                .py(SP_1)
                 .text_size(SIZE_SMALL)
                 .text_color(t.color.text_tertiary)
                 .child(SharedString::from(
@@ -751,7 +883,7 @@ fn stash_card(
                 )),
         );
     }
-    card
+    section.into_any_element()
 }
 
 fn stash_row(
@@ -772,13 +904,17 @@ fn stash_row(
     let pop_id = ElementId::Name(SharedString::from(format!("git-stash-pop-{safe_id}")));
     let drop_id = ElementId::Name(SharedString::from(format!("git-stash-drop-{safe_id}")));
 
+    let row_id = ElementId::Name(SharedString::from(format!("git-stash-row-{}", safe_id)));
     div()
+        .id(row_id)
         .flex()
         .flex_row()
         .items_center()
-        .gap(SP_2)
-        .py(SP_1)
+        .gap(SP_1_5)
+        .px(SP_3)
+        .py(SP_0_5)
         .overflow_hidden()
+        .hover(|s| s.bg(t.color.bg_hover))
         .child(
             div()
                 .flex_none()
@@ -804,52 +940,56 @@ fn stash_row(
                 .child(SharedString::from(stash.relative_date.clone())),
         )
         .child(
-            div()
-                .flex_none()
-                .child(Button::secondary(apply_id, t!("App.Git.apply")).on_click(
-                    move |_, _, cx| {
+            div().flex_none().child(
+                Button::secondary(apply_id, t!("App.Git.apply"))
+                    .size(ButtonSize::Sm)
+                    .on_click(move |_, _, cx| {
                         let id = idx_apply.clone();
                         let _ = apply_weak.update(cx, |app, cx| {
                             app.schedule_git_action(GitPendingAction::StashApply { index: id }, cx);
                         });
-                    },
-                )),
+                    }),
+            ),
         )
         .child(
-            div()
-                .flex_none()
-                .child(
-                    Button::secondary(pop_id, t!("App.Git.pop")).on_click(move |_, _, cx| {
+            div().flex_none().child(
+                Button::secondary(pop_id, t!("App.Git.pop"))
+                    .size(ButtonSize::Sm)
+                    .on_click(move |_, _, cx| {
                         let id = idx_pop.clone();
                         let _ = pop_weak.update(cx, |app, cx| {
                             app.schedule_git_action(GitPendingAction::StashPop { index: id }, cx);
                         });
                     }),
-                ),
+            ),
         )
         .child(
-            div()
-                .flex_none()
-                .child(
-                    Button::danger(drop_id, t!("App.Git.drop")).on_click(move |_, _, cx| {
+            div().flex_none().child(
+                Button::danger(drop_id, t!("App.Git.drop"))
+                    .size(ButtonSize::Sm)
+                    .on_click(move |_, _, cx| {
                         let id = idx_drop.clone();
                         let _ = drop_weak.update(cx, |app, cx| {
                             app.schedule_git_action(GitPendingAction::StashDrop { index: id }, cx);
                         });
                     }),
-                ),
+            ),
         )
 }
 
 // ─── Card: unified diff for the selected file ──────────────────────
 
-fn diff_card(t: &crate::theme::Theme, snap: &GitSnapshot, weak: WeakEntity<PierApp>) -> Card {
-    // Safe: caller only invokes `diff_card` when `diff_selection` is
-    // `Some` (see `repo_layout`).
+fn diff_section(
+    t: &crate::theme::Theme,
+    snap: &GitSnapshot,
+    weak: WeakEntity<PierApp>,
+) -> impl IntoElement {
+    // Safe: caller only invokes `diff_section` when `diff_selection`
+    // is `Some` (see `repo_layout`).
     let selection = snap
         .diff_selection
         .as_ref()
-        .expect("diff_card called without a selection");
+        .expect("diff_section called without a selection");
 
     let close_weak = weak.clone();
     let side_label: SharedString = if selection.untracked {
@@ -860,56 +1000,70 @@ fn diff_card(t: &crate::theme::Theme, snap: &GitSnapshot, weak: WeakEntity<PierA
         t!("App.Git.diff_side_worktree").into()
     };
 
-    let mut card = Card::new().padding(SP_3).child(
-        div()
-            .flex()
-            .flex_row()
-            .items_center()
-            .gap(SP_2)
-            .overflow_hidden()
-            .child(SectionLabel::new(t!("App.Git.diff_section")).with_icon(IconName::Inspector))
-            .child(StatusPill::new(side_label, StatusKind::Info))
-            .child(
-                div()
-                    .flex_1()
-                    .min_w(px(0.0))
-                    .truncate()
-                    .text_size(SIZE_MONO_SMALL)
-                    .font_family(t.font_mono.clone())
-                    .text_color(t.color.text_secondary)
-                    .child(SharedString::from(selection.path.clone())),
-            )
-            .child(div().flex_none().child(
-                Button::ghost("git-diff-close", t!("App.Git.close_diff")).on_click(
-                    move |_, _, cx| {
-                        let _ = close_weak.update(cx, |app, cx| {
-                            app.clear_git_diff_selection(cx);
-                        });
-                    },
-                ),
-            )),
-    );
+    let actions = div()
+        .flex_none()
+        .flex()
+        .flex_row()
+        .items_center()
+        .gap(SP_1)
+        .child(StatusPill::new(side_label, StatusKind::Info))
+        .child(
+            Button::ghost("git-diff-close", t!("App.Git.close_diff"))
+                .size(ButtonSize::Sm)
+                .on_click(move |_, _, cx| {
+                    let _ = close_weak.update(cx, |app, cx| {
+                        app.clear_git_diff_selection(cx);
+                    });
+                }),
+        );
+
+    let mut section = InspectorSection::new(t!("App.Git.diff_section"))
+        .icon(IconName::Inspector)
+        .eyebrow(selection.path.clone())
+        .actions(actions);
 
     if snap.diff_loading {
-        return card.child(text::body(t!("App.Git.diff_loading")).secondary());
+        return section
+            .child(
+                div()
+                    .px(SP_3)
+                    .py(SP_2)
+                    .child(text::caption(t!("App.Git.diff_loading")).secondary()),
+            )
+            .into_any_element();
     }
-
     if let Some(err) = snap.diff_error.clone() {
-        return card.child(
-            div()
-                .overflow_hidden()
-                .text_size(SIZE_SMALL)
-                .text_color(t.color.status_error)
-                .child(err),
-        );
+        return section
+            .child(
+                div()
+                    .px(SP_3)
+                    .py(SP_2)
+                    .overflow_hidden()
+                    .text_size(SIZE_SMALL)
+                    .text_color(t.color.status_error)
+                    .child(err),
+            )
+            .into_any_element();
     }
-
     let Some(text) = snap.diff_output.clone() else {
-        return card.child(text::body(t!("App.Git.diff_empty")).secondary());
+        return section
+            .child(
+                div()
+                    .px(SP_3)
+                    .py(SP_2)
+                    .child(text::caption(t!("App.Git.diff_empty")).secondary()),
+            )
+            .into_any_element();
     };
-
     if text.is_empty() {
-        return card.child(text::body(t!("App.Git.diff_empty")).secondary());
+        return section
+            .child(
+                div()
+                    .px(SP_3)
+                    .py(SP_2)
+                    .child(text::caption(t!("App.Git.diff_empty")).secondary()),
+            )
+            .into_any_element();
     }
 
     // Render the diff one line per row with color coding. Cap the
@@ -918,12 +1072,13 @@ fn diff_card(t: &crate::theme::Theme, snap: &GitSnapshot, weak: WeakEntity<PierA
     let total_lines = text.lines().count();
 
     for (idx, line) in lines.iter().enumerate() {
-        card = card.child(diff_line_row(t, idx, line));
+        section = section.child(diff_line_row(t, idx, line));
     }
-
     if total_lines > MAX_DIFF_LINES {
-        card = card.child(
+        section = section.child(
             div()
+                .px(SP_3)
+                .py(SP_1)
                 .text_size(SIZE_SMALL)
                 .text_color(t.color.text_tertiary)
                 .child(SharedString::from(
@@ -936,8 +1091,7 @@ fn diff_card(t: &crate::theme::Theme, snap: &GitSnapshot, weak: WeakEntity<PierA
                 )),
         );
     }
-
-    card
+    section.into_any_element()
 }
 
 /// Maximum number of diff lines rendered before collapsing into a
@@ -963,6 +1117,8 @@ fn diff_line_row(t: &crate::theme::Theme, index: usize, line: &str) -> impl Into
         .id(("git-diff-line", index))
         .flex()
         .flex_row()
+        .px(SP_3)
+        .py(SP_0_5)
         .overflow_hidden()
         .text_size(SIZE_MONO_SMALL)
         .font_family(t.font_mono.clone())
@@ -978,34 +1134,29 @@ fn diff_line_row(t: &crate::theme::Theme, index: usize, line: &str) -> impl Into
 
 // ─── Card: recent commits (read-only, retained from old view) ───────
 
-fn log_card(t: &crate::theme::Theme, log: &[CommitInfo]) -> Card {
-    let mut card = Card::new().padding(SP_3).child(
-        div()
-            .flex()
-            .flex_row()
-            .items_center()
-            .gap(SP_2)
-            .child(
-                SectionLabel::new(t!("App.Git.recent_commits"))
-                    .with_icon(IconName::GalleryVerticalEnd),
-            )
+fn log_section(t: &crate::theme::Theme, log: &[CommitInfo]) -> impl IntoElement {
+    let count_pill = StatusPill::new(
+        t!("App.Git.entries_count", count = log.len()),
+        StatusKind::Info,
+    );
+    let mut section = InspectorSection::new(t!("App.Git.recent_commits"))
+        .icon(IconName::GalleryVerticalEnd)
+        .actions(count_pill);
+
+    if log.is_empty() {
+        return section
             .child(
                 div()
-                    .text_size(SIZE_SMALL)
-                    .text_color(t.color.text_tertiary)
-                    .child(SharedString::from(
-                        t!("App.Git.entries_count", count = log.len()).to_string(),
-                    )),
-            ),
-    );
-    if log.is_empty() {
-        card = card.child(text::body(t!("App.Git.no_commits")).secondary());
-        return card;
+                    .px(SP_3)
+                    .py(SP_2)
+                    .child(text::caption(t!("App.Git.no_commits")).secondary()),
+            )
+            .into_any_element();
     }
     for c in log.iter().take(MAX_LOG_ROWS) {
-        card = card.child(commit_row(t, c));
+        section = section.child(commit_row(t, c));
     }
-    card
+    section.into_any_element()
 }
 
 fn commit_row(t: &crate::theme::Theme, c: &CommitInfo) -> impl IntoElement {
@@ -1015,9 +1166,9 @@ fn commit_row(t: &crate::theme::Theme, c: &CommitInfo) -> impl IntoElement {
         .items_center()
         .gap(SP_2)
         .h(BUTTON_SM_H)
-        .px(SP_1_5)
-        .rounded(RADIUS_SM)
+        .px(SP_3)
         .overflow_hidden()
+        .hover(|s| s.bg(t.color.bg_hover))
         .child(
             div()
                 .flex_none()
@@ -1053,32 +1204,59 @@ fn commit_row(t: &crate::theme::Theme, c: &CommitInfo) -> impl IntoElement {
         )
 }
 
-// ─── Feedback cards (confirmation / error) ──────────────────────────
+// ─── Feedback strip (confirmation / error) ──────────────────────────
 
-fn confirmation_card(t: &crate::theme::Theme, msg: SharedString) -> Card {
-    Card::new()
-        .padding(SP_3)
-        .child(SectionLabel::new(t!("App.Git.last_result")).with_icon(IconName::Check))
+/// One-line strip that replaces the old `confirmation_card` and
+/// `error_card`. `is_error` flips the icon color so success stays
+/// quiet while errors read in `status_error` red without needing
+/// their own rounded container.
+fn git_feedback_strip(
+    t: &crate::theme::Theme,
+    icon: IconName,
+    title: impl Into<SharedString>,
+    message: SharedString,
+    is_error: bool,
+) -> impl IntoElement {
+    let icon_color = if is_error {
+        t.color.status_error
+    } else {
+        t.color.status_success
+    };
+    let message_color = if is_error {
+        t.color.status_error
+    } else {
+        t.color.text_secondary
+    };
+    div()
+        .w_full()
+        .flex()
+        .flex_row()
+        .items_center()
+        .gap(SP_2)
+        .px(SP_3)
+        .py(SP_1_5)
         .child(
             div()
-                .overflow_hidden()
-                .text_size(SIZE_MONO_SMALL)
-                .font_family(t.font_mono.clone())
-                .text_color(t.color.text_secondary)
-                .child(msg),
+                .flex_none()
+                .text_color(icon_color)
+                .child(gpui_component::Icon::new(icon).size(ICON_SM)),
         )
-}
-
-fn error_card(t: &crate::theme::Theme, msg: SharedString) -> Card {
-    Card::new()
-        .padding(SP_3)
-        .child(SectionLabel::new(t!("App.Common.error")).with_icon(IconName::TriangleAlert))
         .child(
             div()
-                .overflow_hidden()
-                .text_size(SIZE_SMALL)
-                .text_color(t.color.status_error)
-                .child(msg),
+                .flex_1()
+                .min_w(px(0.0))
+                .flex()
+                .flex_col()
+                .gap(SP_0_5)
+                .child(text::caption(title).secondary())
+                .child(
+                    div()
+                        .overflow_hidden()
+                        .text_size(SIZE_SMALL)
+                        .font_family(t.font_mono.clone())
+                        .text_color(message_color)
+                        .child(message),
+                ),
         )
 }
 

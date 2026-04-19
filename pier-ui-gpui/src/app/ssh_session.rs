@@ -17,14 +17,15 @@ use std::path::PathBuf;
 use std::time::Instant;
 
 use pier_core::services::docker::{
-    inspect_container_blocking, list_containers_blocking, list_images_blocking,
-    list_networks_blocking, list_volumes_blocking, restart_blocking, start_blocking, stop_blocking,
     Container as DockerContainer, DockerImage, DockerNetwork, DockerVolume,
+    inspect_container_blocking, list_containers_blocking, list_images_blocking,
+    list_networks_blocking, list_volume_files_blocking, list_volumes_blocking, remove_blocking,
+    remove_image_blocking, remove_volume_blocking, restart_blocking, start_blocking, stop_blocking,
 };
 use pier_core::services::server_monitor::ServerSnapshot;
 use pier_core::ssh::{
-    DetectedService, ExecEvent, ExecStream, HostKeyVerifier, ProgressCallback, SftpClient,
-    SshConfig, SshSession, TransferProgress, Tunnel, EXIT_UNKNOWN,
+    DetectedService, EXIT_UNKNOWN, ExecEvent, ExecStream, HostKeyVerifier, ProgressCallback,
+    SftpClient, SshConfig, SshSession, TransferProgress, Tunnel,
 };
 
 use crate::app::layout::{RightContext, RightMode};
@@ -152,6 +153,18 @@ pub enum DockerActionKind {
     Stop,
     Restart,
     Inspect,
+    /// Remove a container / image / volume. The target kind is carried
+    /// by [`PendingDockerAction::target_kind`] so the dispatcher can
+    /// pick the right `remove_*_blocking` backend.
+    Delete,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Default)]
+pub enum DockerTargetKind {
+    #[default]
+    Container,
+    Image,
+    Volume,
 }
 
 impl DockerActionKind {
@@ -161,6 +174,7 @@ impl DockerActionKind {
             DockerActionKind::Stop => "stop",
             DockerActionKind::Restart => "restart",
             DockerActionKind::Inspect => "inspect",
+            DockerActionKind::Delete => "delete",
         }
     }
 }
@@ -195,6 +209,10 @@ pub struct PendingDockerAction {
     pub kind: DockerActionKind,
     pub target_id: String,
     pub target_label: String,
+    /// Which list the target belongs to. `Start/Stop/Restart/Inspect`
+    /// only make sense for containers; `Delete` is dispatched to the
+    /// matching `remove_*_blocking` backend based on this field.
+    pub target_kind: DockerTargetKind,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -213,6 +231,7 @@ pub enum LogLineKind {
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct LogLine {
+    pub id: u64,
     pub kind: LogLineKind,
     pub text: String,
 }
@@ -246,6 +265,7 @@ pub struct SshSessionState {
     pub logs_error: Option<String>,
     pub logs_command: Option<String>,
     pub logs_exit_code: Option<i32>,
+    log_line_seq: u64,
     refresh_nonce: usize,
     bootstrap_nonce: usize,
     monitor_refresh_nonce: usize,
@@ -296,6 +316,7 @@ impl SshSessionState {
             logs_error: None,
             logs_command: None,
             logs_exit_code: None,
+            log_line_seq: 0,
             refresh_nonce: 0,
             bootstrap_nonce: 0,
             monitor_refresh_nonce: 0,
@@ -416,6 +437,7 @@ impl SshSessionState {
         kind: DockerActionKind,
         target_id: &str,
         target_label: &str,
+        target_kind: DockerTargetKind,
     ) -> Option<DockerCommandRequest> {
         if self.docker_pending_action.is_some() {
             return None;
@@ -428,6 +450,7 @@ impl SshSessionState {
             kind,
             target_id: target_id.to_string(),
             target_label: target_label.to_string(),
+            target_kind,
         });
 
         Some(DockerCommandRequest {
@@ -437,8 +460,23 @@ impl SshSessionState {
                 kind,
                 target_id: target_id.to_string(),
                 target_label: target_label.to_string(),
+                target_kind,
             },
         })
+    }
+
+    /// Clear the inspect pane iff it is currently pinned to this
+    /// target. Used by the volume-row toggle: tapping the row that's
+    /// already expanded folds it instead of re-fetching `ls -la`.
+    /// Returns `true` if the state was mutated so the caller knows
+    /// whether to skip dispatching an SSH round-trip.
+    pub fn clear_docker_inspect_for(&mut self, target_id: &str) -> bool {
+        if self.docker_inspect.as_ref().map(|s| s.target_id.as_str()) == Some(target_id) {
+            self.docker_inspect = None;
+            true
+        } else {
+            false
+        }
     }
 
     pub fn begin_logs_start(&mut self, command: String) -> Option<LogsStartRequest> {
@@ -746,10 +784,12 @@ impl SshSessionState {
     }
 
     pub fn drain_logs_stream(&mut self) -> bool {
+        const MAX_LOG_EVENTS_PER_TICK: usize = 120;
+
         let Some(stream) = self.logs_stream.as_ref() else {
             return false;
         };
-        let events = stream.drain();
+        let (events, exhausted) = stream.drain_up_to(MAX_LOG_EVENTS_PER_TICK);
         let alive_after = stream.is_alive();
 
         if events.is_empty() && alive_after {
@@ -778,7 +818,7 @@ impl SshSessionState {
             }
         }
 
-        if !alive_after {
+        if !alive_after && exhausted {
             should_drop_stream = true;
             if matches!(self.logs_status, LogsStatus::Live | LogsStatus::Starting) {
                 self.logs_status = LogsStatus::Stopped;
@@ -1033,6 +1073,7 @@ struct DockerCommand {
     kind: DockerActionKind,
     target_id: String,
     target_label: String,
+    target_kind: DockerTargetKind,
 }
 
 #[derive(Clone, Debug)]
@@ -1265,14 +1306,65 @@ pub fn run_docker_command(request: DockerCommandRequest) -> DockerCommandResult 
         DockerActionKind::Restart => restart_blocking(&request.session, &request.action.target_id)
             .and_then(|_| collect_docker_snapshot(&request.session))
             .map(DockerCommandOutput::Snapshot),
-        DockerActionKind::Inspect => {
-            inspect_container_blocking(&request.session, &request.action.target_id).map(|output| {
-                DockerCommandOutput::Inspect(DockerInspectState {
+        DockerActionKind::Inspect => match request.action.target_kind {
+            DockerTargetKind::Container => {
+                inspect_container_blocking(&request.session, &request.action.target_id).map(
+                    |output| {
+                        DockerCommandOutput::Inspect(DockerInspectState {
+                            target_id: request.action.target_id.clone(),
+                            target_label: request.action.target_label.clone(),
+                            output,
+                        })
+                    },
+                )
+            }
+            DockerTargetKind::Volume => {
+                // target_id = volume name (stable cache key),
+                // target_label = mountpoint (the path ls walks).
+                list_volume_files_blocking(&request.session, &request.action.target_label).map(
+                    |output| {
+                        DockerCommandOutput::Inspect(DockerInspectState {
+                            target_id: request.action.target_id.clone(),
+                            target_label: request.action.target_label.clone(),
+                            output,
+                        })
+                    },
+                )
+            }
+            DockerTargetKind::Image => {
+                // Images don't expose an expand affordance in the
+                // Pier reference — only containers and volumes do. A
+                // no-op Inspect keeps the action-dispatch shape intact.
+                Ok(DockerCommandOutput::Inspect(DockerInspectState {
                     target_id: request.action.target_id.clone(),
                     target_label: request.action.target_label.clone(),
-                    output,
-                })
-            })
+                    output: String::new(),
+                }))
+            }
+        },
+        // Delete is dispatched per target kind. `force=true` for
+        // containers so the row action works even while the container
+        // is running; the UI already lives behind a visible red
+        // trash-icon button, so the destructive cue is up front.
+        DockerActionKind::Delete => {
+            let remove_result = match request.action.target_kind {
+                DockerTargetKind::Container => {
+                    // force=true: the row action lives behind a visible
+                    // red trash-icon button, so the destructive cue is
+                    // already up front; stopping-then-removing is what
+                    // the user expects when they click it.
+                    remove_blocking(&request.session, &request.action.target_id, true)
+                }
+                DockerTargetKind::Image => {
+                    remove_image_blocking(&request.session, &request.action.target_id, false)
+                }
+                DockerTargetKind::Volume => {
+                    remove_volume_blocking(&request.session, &request.action.target_id)
+                }
+            };
+            remove_result
+                .and_then(|_| collect_docker_snapshot(&request.session))
+                .map(DockerCommandOutput::Snapshot)
         }
     }
     .map_err(|err| err.to_string());
@@ -1346,7 +1438,12 @@ impl SshSessionState {
     fn push_log_line(&mut self, kind: LogLineKind, text: String) {
         const MAX_LOG_LINES: usize = 800;
 
-        self.logs_lines.push(LogLine { kind, text });
+        self.log_line_seq = self.log_line_seq.wrapping_add(1);
+        self.logs_lines.push(LogLine {
+            id: self.log_line_seq,
+            kind,
+            text,
+        });
         if self.logs_lines.len() > MAX_LOG_LINES {
             let overflow = self.logs_lines.len() - MAX_LOG_LINES;
             self.logs_lines.drain(..overflow);
@@ -1362,9 +1459,9 @@ mod tests {
 
     use super::{
         ConnectStatus, DockerActionKind, DockerCommand, DockerCommandOutput, DockerCommandResult,
-        DockerPanelSnapshot, DockerRefreshResult, DockerStatus, LogsStartResult, LogsStatus,
-        MonitorResult, MonitorStatus, PendingDockerAction, RefreshResult, ServiceProbeStatus,
-        SshSessionState,
+        DockerPanelSnapshot, DockerRefreshResult, DockerStatus, DockerTargetKind, LogsStartResult,
+        LogsStatus, MonitorResult, MonitorStatus, PendingDockerAction, RefreshResult,
+        ServiceProbeStatus, SshSessionState,
     };
     use crate::app::layout::RightMode;
 
@@ -1457,6 +1554,7 @@ mod tests {
             kind: DockerActionKind::Start,
             target_id: "abc123".into(),
             target_label: "web".into(),
+            target_kind: DockerTargetKind::Container,
         });
 
         let applied = state.apply_docker_command_result(DockerCommandResult {
@@ -1465,6 +1563,7 @@ mod tests {
                 kind: DockerActionKind::Start,
                 target_id: "abc123".into(),
                 target_label: "web".into(),
+                target_kind: DockerTargetKind::Container,
             },
             outcome: Ok(DockerCommandOutput::Snapshot(DockerPanelSnapshot::default())),
         });
@@ -1495,10 +1594,7 @@ mod tests {
     fn clear_logs_resets_errors_and_exit_code() {
         let mut state = SshSessionState::new(sample_config());
         state.logs_status = LogsStatus::Stopped;
-        state.logs_lines.push(super::LogLine {
-            kind: super::LogLineKind::Meta,
-            text: "stream stopped".into(),
-        });
+        state.push_log_line(super::LogLineKind::Meta, "stream stopped".into());
         state.logs_error = Some("boom".into());
         state.logs_exit_code = Some(1);
 

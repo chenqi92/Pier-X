@@ -368,6 +368,33 @@ pub fn remove_volume_blocking(session: &SshSession, name: &str) -> Result<()> {
     crate::ssh::runtime::shared().block_on(remove_volume(session, name))
 }
 
+/// `ls -la` on a volume's mountpoint. Mirrors Pier's Swift client
+/// which shows the flat file listing (with `total XXK` header) when
+/// the user taps a volume row. The remote shell interprets the path
+/// as a literal argument via single-quote escaping, so volume names
+/// with unusual characters can't change the command shape.
+pub async fn list_volume_files(session: &SshSession, mountpoint: &str) -> Result<String> {
+    // Minimal single-quote escape: wrap in `'...'` and replace each
+    // literal `'` with `'\''` (close-quote, escaped quote, re-open).
+    // Docker mountpoints land under /var/lib/docker/volumes/<name>/_data
+    // so the usual case is metachar-free, but this keeps the tool
+    // defensive for hand-mounted volumes.
+    let quoted = format!("'{}'", mountpoint.replace('\'', "'\\''"));
+    let cmd = format!("ls -la -- {quoted}");
+    let (exit, stdout) = session.exec_command(&cmd).await?;
+    if exit != 0 {
+        return Err(SshError::InvalidConfig(format!(
+            "ls exited {exit} for {mountpoint}"
+        )));
+    }
+    Ok(stdout)
+}
+
+/// Blocking wrapper.
+pub fn list_volume_files_blocking(session: &SshSession, mountpoint: &str) -> Result<String> {
+    crate::ssh::runtime::shared().block_on(list_volume_files(session, mountpoint))
+}
+
 // ═══════════════════════════════════════════════════════════
 // Networks
 // ═══════════════════════════════════════════════════════════

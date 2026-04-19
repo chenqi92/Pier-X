@@ -21,8 +21,17 @@ use crate::theme::{
 
 #[derive(Clone, Copy, PartialEq, Eq)]
 pub enum IconButtonVariant {
+    /// True ghost — transparent; hover reveals a tint. Default on
+    /// toolbar rails / row actions that should feel quiet.
     Ghost,
+    /// Surface-tinted fill with neutral fg. The "show me a button" shape.
     Filled,
+    /// Accent blue fill — primary action in a row (e.g. Start container).
+    Primary,
+    /// Error red fill — destructive action (Stop running container,
+    /// Delete image/volume). Fg stays white for readability; hover
+    /// flashes the solid red so the cue is unmissable.
+    Danger,
 }
 
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -109,6 +118,19 @@ impl RenderOnce for IconButton {
             }
             (IconButtonVariant::Filled, false) => {
                 (t.color.bg_surface, t.color.bg_hover, t.color.text_primary)
+            }
+            (IconButtonVariant::Primary, false) => {
+                (t.color.accent, t.color.accent_hover, t.color.text_inverse)
+            }
+            (IconButtonVariant::Danger, false) => {
+                // Hover stays solid error red; only the brightness
+                // shift reads, but the click target itself does not
+                // change color — mirrors Pier's Swift reference.
+                (
+                    t.color.status_error,
+                    t.color.status_error,
+                    t.color.text_inverse,
+                )
             }
         };
         let square = self.size.square();

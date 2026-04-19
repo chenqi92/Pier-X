@@ -103,8 +103,7 @@ impl RenderOnce for PropertyRow {
             .text_color(t.color.text_tertiary);
 
         if let Some(icon) = self.icon {
-            label_col =
-                label_col.child(div().flex_none().child(UiIcon::new(icon).size(ICON_SM)));
+            label_col = label_col.child(div().flex_none().child(UiIcon::new(icon).size(ICON_SM)));
         }
         label_col = label_col.child(text::caption(self.label).secondary().truncate());
 

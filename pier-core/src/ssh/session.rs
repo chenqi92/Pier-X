@@ -405,15 +405,7 @@ impl SshSession {
     ) -> Result<SshChannelPty> {
         let channel = self.handle.channel_open_session().await?;
         channel
-            .request_pty(
-                false,
-                "xterm-256color",
-                cols as u32,
-                rows as u32,
-                0,
-                0,
-                &[],
-            )
+            .request_pty(false, "xterm-256color", cols as u32, rows as u32, 0, 0, &[])
             .await?;
         channel.exec(false, command.as_bytes()).await?;
         Ok(SshChannelPty::spawn(channel, cols, rows))

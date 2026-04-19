@@ -58,8 +58,7 @@ pub const REMOTE_INTEGRATION_CMD_PATH: &str = ".pier-x/integration.cmd";
 /// cmd.exe launch. `/K` keeps the interpreter running after
 /// executing the batch. `%USERPROFILE%` resolves to the home dir
 /// on Windows, matching where SFTP landed the rc.
-pub const CMD_LAUNCH_COMMAND: &str =
-    "cmd.exe /K call %USERPROFILE%\\.pier-x\\integration.cmd";
+pub const CMD_LAUNCH_COMMAND: &str = "cmd.exe /K call %USERPROFILE%\\.pier-x\\integration.cmd";
 
 // ── Local-side install / uninstall (M4 opt-in) ────────────────
 
@@ -94,7 +93,10 @@ pub fn local_integration_script_path() -> Option<PathBuf> {
 /// benefit is cross-shell-family nested tracking.
 fn write_both_local_rcs() -> io::Result<()> {
     let Some(home) = home_dir() else {
-        return Err(io::Error::new(io::ErrorKind::NotFound, "$HOME is unavailable"));
+        return Err(io::Error::new(
+            io::ErrorKind::NotFound,
+            "$HOME is unavailable",
+        ));
     };
     let base = home.join(".pier-x");
     fs::create_dir_all(&base)?;
@@ -119,7 +121,11 @@ pub fn candidate_local_rc_files() -> Vec<PathBuf> {
         Some(h) => h,
         None => return Vec::new(),
     };
-    vec![home.join(".bashrc"), home.join(".zshrc"), home.join(".profile")]
+    vec![
+        home.join(".bashrc"),
+        home.join(".zshrc"),
+        home.join(".profile"),
+    ]
 }
 
 /// Write the shipped `BASH_INTEGRATION` script to

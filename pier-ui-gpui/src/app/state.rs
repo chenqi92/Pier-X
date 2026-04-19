@@ -37,15 +37,15 @@ use crate::app::git_session::{
     run_refresh as git_run_refresh, DiffSelection, GitPendingAction, GitState,
 };
 use crate::app::layout::{
-    RightMode, CENTER_PANEL_MIN_W, LEFT_PANEL_DEFAULT_W, LEFT_PANEL_MAX_W, LEFT_PANEL_MIN_W,
-    RIGHT_PANEL_DEFAULT_W, RIGHT_PANEL_MAX_W, RIGHT_PANEL_MIN_W,
+    DockerTab, RightMode, CENTER_PANEL_MIN_W, LEFT_PANEL_DEFAULT_W, LEFT_PANEL_MAX_W,
+    LEFT_PANEL_MIN_W, RIGHT_PANEL_DEFAULT_W, RIGHT_PANEL_MAX_W, RIGHT_PANEL_MIN_W,
 };
 use crate::app::route::DbKind;
 use crate::app::shell_location::{RemoteTarget, ShellLocation};
 use crate::app::ssh_session::{
     run_bootstrap, run_docker_command, run_docker_refresh, run_logs_start, run_monitor_refresh,
-    run_refresh, run_sftp_mutation, run_tunnel, ServiceProbeStatus, SftpMutationKind,
-    SshSessionState, TransferDirection,
+    run_refresh, run_sftp_mutation, run_tunnel, DockerActionKind, ServiceProbeStatus,
+    SftpMutationKind, SshSessionState, TransferDirection,
 };
 use crate::app::{
     ActivationHandler, CloseActiveTab, NewTab, OpenSettings, ToggleLeftPanel, ToggleRightPanel,
@@ -142,18 +142,12 @@ fn open_integrated_shell(
     // script when the user jumps to a host of a different shell
     // family. Secondary-write failures are swallowed; only the
     // primary needs to land.
-    let _ = sftp.write_file_blocking(
-        REMOTE_INTEGRATION_BASH_PATH,
-        BASH_INTEGRATION.as_bytes(),
-    );
+    let _ = sftp.write_file_blocking(REMOTE_INTEGRATION_BASH_PATH, BASH_INTEGRATION.as_bytes());
     let _ = sftp.write_file_blocking(
         REMOTE_INTEGRATION_POWERSHELL_PATH,
         POWERSHELL_INTEGRATION.as_bytes(),
     );
-    let _ = sftp.write_file_blocking(
-        REMOTE_INTEGRATION_CMD_PATH,
-        CMD_INTEGRATION.as_bytes(),
-    );
+    let _ = sftp.write_file_blocking(REMOTE_INTEGRATION_CMD_PATH, CMD_INTEGRATION.as_bytes());
 
     let (primary_path, primary_script, launch) = match kind {
         RemoteShellKind::Bash => (
@@ -286,6 +280,12 @@ pub struct PierApp {
     /// schedules the initial refresh. Keeps `Render::render` paint-only.
     git_initial_refresh_done: bool,
 
+    /// Which sub-view the Docker panel is showing — drives the
+    /// segmented control at the top of the Docker body.
+    /// Persists across tab switches (i.e. the user's last
+    /// selection sticks when they jump SSH hosts).
+    docker_tab: DockerTab,
+
     // ─── Subviews owning their own state (Phase 9 perf split) ───
     /// Filter input + file-browser cwd cache + tab state live inside this
     /// entity so its `cx.notify()` only repaints the left column rather
@@ -381,6 +381,7 @@ impl PierApp {
             git_commit_input,
             git_stash_message_input,
             git_initial_refresh_done: false,
+            docker_tab: DockerTab::default(),
             left_panel,
             window_bounds_observer_started: false,
             window_appearance_observer_started: false,
@@ -658,8 +659,8 @@ impl PierApp {
                         })
                         .await;
 
-                    let _ = panel_for_task.update(&mut async_cx, |panel, cx| {
-                        match connect_result {
+                    let _ =
+                        panel_for_task.update(&mut async_cx, |panel, cx| match connect_result {
                             Ok((session, pty)) => {
                                 let _ = session_for_task
                                     .update(cx, |s, _| s.attach_live_session(session));
@@ -672,13 +673,11 @@ impl PierApp {
                                 );
                             }
                             Err(err) => {
-                                let _ = session_for_task.update(cx, |s, _| {
-                                    s.record_connect_failure(err.clone())
-                                });
+                                let _ = session_for_task
+                                    .update(cx, |s, _| s.record_connect_failure(err.clone()));
                                 panel.report_ssh_connect_error(err, cx);
                             }
-                        }
-                    });
+                        });
                 }
             },
         )
@@ -709,6 +708,25 @@ impl PierApp {
             self.sync_git_cwd(cwd, cx);
         }
         self.ensure_right_mode_ready(cx, true);
+        cx.notify();
+    }
+
+    /// Current Docker sub-view (containers / images / volumes).
+    /// Read by `RightPanel::new` — it composes docker_view with
+    /// whatever the user last picked so flipping between right
+    /// modes doesn't reset the user's focus.
+    pub fn docker_tab(&self) -> DockerTab {
+        self.docker_tab
+    }
+
+    /// Switch the Docker panel sub-view. Pure UI state — no
+    /// network work kicks off here; the underlying snapshot
+    /// already contains containers / images / volumes together.
+    pub fn set_docker_tab(&mut self, tab: DockerTab, cx: &mut Context<Self>) {
+        if self.docker_tab == tab {
+            return;
+        }
+        self.docker_tab = tab;
         cx.notify();
     }
 
@@ -2140,8 +2158,26 @@ impl PierApp {
         let Some(session) = self.active_session.clone() else {
             return;
         };
+        // Toggle-fold shortcut: if the user taps the currently-
+        // expanded volume row, just clear the inspect pane — no
+        // SSH round-trip. Same behaviour for containers: tapping
+        // Inspect again on the displayed target folds it.
+        if matches!(action.kind, DockerActionKind::Inspect) {
+            let folded = session.update(cx, |state, _| {
+                state.clear_docker_inspect_for(&action.target_id)
+            });
+            if folded {
+                cx.notify();
+                return;
+            }
+        }
         let Some(request) = session.update(cx, |state, _| {
-            state.begin_docker_action(action.kind, &action.target_id, &action.target_label)
+            state.begin_docker_action(
+                action.kind,
+                &action.target_id,
+                &action.target_label,
+                action.target_kind,
+            )
         }) else {
             return;
         };
@@ -2227,7 +2263,7 @@ impl PierApp {
             return;
         };
         let changed = session.update(cx, |state, _| state.drain_logs_stream());
-        if changed {
+        if changed && self.right_visible && matches!(self.right_mode, RightMode::Logs) {
             cx.notify();
         }
     }
@@ -2642,6 +2678,9 @@ impl PierApp {
                 .map(|ext| ext.eq_ignore_ascii_case("md"))
                 .unwrap_or(false)
         });
+        let on_docker_tab: crate::views::right_panel::DockerTabHandler =
+            Rc::new(cx.listener(|this, tab: &DockerTab, _, cx| this.set_docker_tab(*tab, cx)));
+
         let (_, right_width) = self.fitted_panel_widths();
         RightPanel::new(
             self.right_mode,
@@ -2657,6 +2696,8 @@ impl PierApp {
             on_sftp_drop,
             on_docker_refresh,
             on_docker_action,
+            self.docker_tab,
+            on_docker_tab,
             on_logs_action,
             on_select_mode,
             right_width,

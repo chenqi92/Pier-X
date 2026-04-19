@@ -39,8 +39,8 @@ pub use integration::{
     install_local_powershell_integration, is_local_bash_integration_installed,
     is_local_integration_installed, is_local_powershell_integration_installed,
     uninstall_local_bash_integration, uninstall_local_integration,
-    uninstall_local_powershell_integration, BASH_INTEGRATION, BASH_LAUNCH_COMMAND,
-    CMD_INTEGRATION, CMD_LAUNCH_COMMAND, POWERSHELL_INTEGRATION, POWERSHELL_LAUNCH_COMMAND,
+    uninstall_local_powershell_integration, BASH_INTEGRATION, BASH_LAUNCH_COMMAND, CMD_INTEGRATION,
+    CMD_LAUNCH_COMMAND, POWERSHELL_INTEGRATION, POWERSHELL_LAUNCH_COMMAND,
     REMOTE_INTEGRATION_BASH_PATH, REMOTE_INTEGRATION_CMD_PATH, REMOTE_INTEGRATION_DIR,
     REMOTE_INTEGRATION_POWERSHELL_PATH,
 };

@@ -1347,8 +1347,11 @@ App:
       en: Commit
       zh-CN: 提交
     commit_staged:
-      en: Commit staged
-      zh-CN: 提交暂存
+      en: Commit
+      zh-CN: 提交
+    commit_and_push:
+      en: Commit & Push
+      zh-CN: 提交并推送
     commit_hint:
       en: Writes staged changes to the current branch.
       zh-CN: 将暂存的变更写入当前分支。

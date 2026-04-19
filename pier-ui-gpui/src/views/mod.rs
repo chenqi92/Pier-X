@@ -5,6 +5,7 @@ pub mod docker_dialogs;
 pub mod edit_connection;
 pub mod file_tree;
 pub mod git;
+pub mod git_dialogs;
 pub mod left_panel_view;
 pub mod markdown;
 pub mod new_tab_chooser;

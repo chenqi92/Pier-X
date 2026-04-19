@@ -13,8 +13,8 @@
 //! in `render`.
 
 use gpui::{
-    div, prelude::*, px, uniform_list, App, ClickEvent, ElementId, IntoElement, SharedString,
-    WeakEntity, Window,
+    div, list, prelude::*, px, App, ClickEvent, ElementId, IntoElement, ListState, MouseButton,
+    SharedString, WeakEntity, Window,
 };
 use gpui_component::input::InputState;
 use pier_core::git_graph::GraphRow;
@@ -29,6 +29,7 @@ use crate::app::git_session::{
     GraphDateRange, GraphFilter, GraphHighlightMode, ManagerTab,
 };
 use crate::app::PierApp;
+use crate::views::git_dialogs;
 use crate::components::{
     compute_graph_col_width, graph_row_canvas, is_head_row, palette_color, text, Button,
     ButtonSize, IconButton, IconButtonSize, IconButtonVariant, InlineInput, InlineInputTone,
@@ -111,9 +112,12 @@ fn tab_layout(
     commit_input: gpui::Entity<InputState>,
     stash_input: gpui::Entity<InputState>,
     weak: WeakEntity<PierApp>,
-) -> gpui::Div {
+) -> gpui::Stateful<gpui::Div> {
     let active = snap.tab;
-    let manager_open = snap.manager_panel_open;
+    // Managers are floating dialogs now (see `git_dialogs.rs`) so
+    // the overlay field is kept around only for legacy snapshot
+    // serialisation and never drives the body any more.
+    let manager_open: Option<ManagerTab> = None;
 
     // Feedback strips (confirmation / error) — drawn right under
     // the header so they don't collide with the branch row or tab
@@ -130,7 +134,7 @@ fn tab_layout(
     let action_err_strip = snap.action_error.clone().map(|err| {
         git_feedback_strip(
             t,
-            IconName::TriangleAlert,
+            IconName::WarningFill,
             t!("App.Common.error"),
             err,
             true,
@@ -139,7 +143,7 @@ fn tab_layout(
     let probe_err_strip = snap.last_error.clone().map(|err| {
         git_feedback_strip(
             t,
-            IconName::TriangleAlert,
+            IconName::WarningFill,
             t!("App.Common.error"),
             err,
             true,
@@ -202,15 +206,45 @@ fn tab_layout(
         .child(body);
 
     // Sticky commit footer — only relevant while the user is on
-    // the Changes tab with staged work. Always render so the user
-    // can start typing a message even before they've staged the
-    // first file.
+    // the Changes tab. Always render so the user can type a commit
+    // message before staging. The splitter above it is draggable;
+    // the container captures global mouse-move / mouse-up so the
+    // drag doesn't die when the cursor leaves the splitter.
     if active == GitTab::Changes && manager_open.is_none() {
         col = col
-            .child(Separator::horizontal())
-            .child(commit_footer(t, &snap.changes, commit_input, weak.clone()));
+            .child(commit_footer_splitter(t, weak.clone()))
+            .child(commit_footer(
+                t,
+                &snap.changes,
+                commit_input,
+                weak.clone(),
+                snap.footer_height,
+            ));
     }
-    col
+
+    // Attach mouse-move / mouse-up handlers so a footer drag keeps
+    // tracking even when the cursor wanders outside the splitter.
+    let move_weak = weak.clone();
+    let up_weak = weak.clone();
+    let dragging = snap.footer_dragging;
+    let mut root = col
+        .id("git-panel-root")
+        .on_mouse_move(move |ev, _, cx| {
+            if !dragging {
+                return;
+            }
+            let y = ev.position.y.to_f64() as f32;
+            let _ = move_weak.update(cx, |app, cx| app.update_git_footer_drag(y, cx));
+        })
+        .on_mouse_up(MouseButton::Left, move |_, _, cx| {
+            let _ = up_weak.update(cx, |app, cx| app.end_git_footer_drag(cx));
+        });
+    // When a drag is active, force the cursor style so it doesn't
+    // flicker back to the default as the pointer moves.
+    if dragging {
+        root = root.cursor_row_resize();
+    }
+    root
 }
 
 fn not_a_repo_layout(
@@ -255,7 +289,7 @@ fn error_layout(
         .child(Separator::horizontal())
         .child(git_feedback_strip(
             t,
-            IconName::TriangleAlert,
+            IconName::WarningFill,
             t!("App.Common.error"),
             snap.last_error.clone().unwrap_or_default(),
             true,
@@ -425,9 +459,10 @@ fn branch_actions_row(
 
     row = row.child(div().flex_1().min_w(px(0.0)));
 
-    // Icon action buttons — left-to-right: manager popups, then
-    // fetch / pull / push. Active manager icon keeps the accent
-    // background via the overlay state.
+    // Icon action buttons — left-to-right: floating manager
+    // dialogs, then fetch / pull / push. Each icon pops a modal
+    // via `window.open_dialog`, matching Pier's behaviour.
+    let _ = open_panel; // legacy overlay signal, unused now
     for (mgr, icon) in [
         (ManagerTab::Branches, IconName::GitBranch),
         (ManagerTab::Tags, IconName::BookOpen),
@@ -436,7 +471,6 @@ fn branch_actions_row(
         (ManagerTab::Config, IconName::Settings),
         (ManagerTab::Rebase, IconName::Undo),
     ] {
-        let active = open_panel == Some(mgr);
         let w = weak.clone();
         row = row.child(
             IconButton::new(
@@ -444,15 +478,18 @@ fn branch_actions_row(
                 icon,
             )
             .size(IconButtonSize::Sm)
-            .variant(if active {
-                IconButtonVariant::Filled
-            } else {
-                IconButtonVariant::Ghost
-            })
-            .on_click(move |_, _, cx| {
-                let _ = w.update(cx, |app, cx| {
-                    app.set_git_manager_panel(Some(mgr), cx);
-                });
+            .variant(IconButtonVariant::Ghost)
+            .on_click(move |_, win, cx| {
+                let app = w.clone();
+                match mgr {
+                    ManagerTab::Branches => git_dialogs::open_branches_dialog(win, cx, app),
+                    ManagerTab::Tags => git_dialogs::open_tags_dialog(win, cx, app),
+                    ManagerTab::Remotes => git_dialogs::open_remotes_dialog(win, cx, app),
+                    ManagerTab::Submodules => git_dialogs::open_submodules_dialog(win, cx, app),
+                    ManagerTab::Config => git_dialogs::open_config_dialog(win, cx, app),
+                    ManagerTab::Rebase => git_dialogs::open_rebase_dialog(win, cx, app),
+                    ManagerTab::Conflicts => {} // routed to top-level tab instead
+                }
             }),
         );
     }
@@ -603,6 +640,7 @@ fn commit_footer(
     changes: &[GitFileChange],
     input: gpui::Entity<InputState>,
     weak: WeakEntity<PierApp>,
+    height: f32,
 ) -> impl IntoElement {
     let has_changes = !changes.is_empty();
     let staged = changes.iter().any(|c| c.staged);
@@ -624,22 +662,49 @@ fn commit_footer(
     };
 
     let commit_btn: gpui::AnyElement = if staged {
-        Button::primary("git-footer-commit", t!("App.Git.commit_staged"))
-            .size(ButtonSize::Sm)
-            .on_click(move |_, _, cx| {
-                let text: String = input_for_click.read(cx).value().to_string();
-                if text.trim().is_empty() {
-                    return;
-                }
-                let _ = commit_weak.update(cx, |app, cx| {
-                    app.schedule_git_action(
-                        GitPendingAction::Commit {
-                            message: text.clone(),
-                        },
-                        cx,
-                    );
-                });
-            })
+        let input_for_primary = input_for_click.clone();
+        let commit_push_weak = weak.clone();
+        let input_for_push = input_for_click.clone();
+        // Split button: [提交] + [提交并推送]. Pier's dropdown
+        // variant isn't natively supported by our Button; the
+        // secondary action sits to the right in a ghost style so
+        // the UI grammar stays one-row.
+        div()
+            .flex()
+            .flex_row()
+            .gap(SP_0_5)
+            .child(
+                Button::primary("git-footer-commit", t!("App.Git.commit_staged"))
+                    .size(ButtonSize::Sm)
+                    .on_click(move |_, _, cx| {
+                        let text: String = input_for_primary.read(cx).value().to_string();
+                        if text.trim().is_empty() {
+                            return;
+                        }
+                        let _ = commit_weak.update(cx, |app, cx| {
+                            app.schedule_git_action(
+                                GitPendingAction::Commit { message: text.clone() },
+                                cx,
+                            );
+                        });
+                    }),
+            )
+            .child(
+                Button::secondary(
+                    "git-footer-commit-push",
+                    t!("App.Git.commit_and_push"),
+                )
+                .size(ButtonSize::Sm)
+                .on_click(move |_, _, cx| {
+                    let text: String = input_for_push.read(cx).value().to_string();
+                    if text.trim().is_empty() {
+                        return;
+                    }
+                    let _ = commit_push_weak.update(cx, |app, cx| {
+                        app.schedule_git_commit_and_push(text.clone(), cx);
+                    });
+                }),
+            )
             .into_any_element()
     } else {
         StatusPill::new(t!("App.Git.no_staged"), StatusKind::Warning).into_any_element()
@@ -647,15 +712,22 @@ fn commit_footer(
 
     div()
         .w_full()
+        .h(px(height.max(80.0)))
         .flex()
         .flex_col()
         .gap(SP_1)
         .px(SP_3)
         .py(SP_1_5)
         .bg(t.color.bg_panel)
-        .child(InlineInput::new(&input).tone(InlineInputTone::Inset))
         .child(
             div()
+                .flex_1()
+                .min_h(px(0.0))
+                .child(InlineInput::new(&input).tone(InlineInputTone::Inset)),
+        )
+        .child(
+            div()
+                .flex_none()
                 .flex()
                 .flex_row()
                 .items_center()
@@ -664,6 +736,28 @@ fn commit_footer(
                 .child(stage_all_btn)
                 .child(commit_btn),
         )
+}
+
+/// Thin drag bar between the tab body and the commit footer —
+/// captures `mouse_down` to start a drag, the parent panel (via
+/// `tab_layout`) then streams `mouse_move` / `mouse_up` into
+/// PierApp. Styled as a 4px hairline with a row-resize cursor on
+/// hover.
+fn commit_footer_splitter(
+    t: &crate::theme::Theme,
+    weak: WeakEntity<PierApp>,
+) -> impl IntoElement {
+    div()
+        .id("git-footer-splitter")
+        .w_full()
+        .h(px(4.0))
+        .bg(t.color.border_subtle)
+        .hover(|s| s.bg(t.color.accent_muted))
+        .cursor_row_resize()
+        .on_mouse_down(MouseButton::Left, move |ev, _, cx| {
+            let y = ev.position.y.to_f64() as f32;
+            let _ = weak.update(cx, |app, cx| app.begin_git_footer_drag(y, cx));
+        })
 }
 
 // ─── Tab: Changes ────────────────────────────────────────────────────
@@ -1378,6 +1472,14 @@ fn diff_truncated_row(t: &crate::theme::Theme, total_lines: usize) -> impl IntoE
         ))
 }
 
+pub fn diff_line_row_export(
+    t: &crate::theme::Theme,
+    index: usize,
+    line: &str,
+) -> impl IntoElement {
+    diff_line_row(t, index, line)
+}
+
 fn diff_line_row(t: &crate::theme::Theme, index: usize, line: &str) -> impl IntoElement {
     let color = diff_line_color(t, line);
     div()
@@ -1816,7 +1918,7 @@ fn graph_tab_body(
     if let Some(err) = snap.graph.error.clone() {
         col = col.child(git_feedback_strip(
             t,
-            IconName::TriangleAlert,
+            IconName::WarningFill,
             t!("App.Common.error"),
             err,
             true,
@@ -1842,77 +1944,115 @@ fn graph_tab_body(
         return col;
     }
 
-    // Graph rows — virtualized via `uniform_list` so a 5000-row
-    // log paints the same handful of visible rows every frame. The
-    // `commit_detail_strip` for the selected commit is drawn below
-    // the list (not inline between rows) so each uniform row stays
-    // the same height — a hard requirement of `uniform_list`.
+    // Graph rows — variable-height virtualized list. The selected
+    // commit's row expands with its inline detail strip right
+    // below it (Pier's behaviour), so uniform heights are out —
+    // `gpui::list` handles this via re-measurement.
     let col_w = compute_graph_col_width(&snap.graph.rows).max(60.0);
     let rows: std::sync::Arc<Vec<GraphRow>> =
         std::sync::Arc::new(snap.graph.rows.iter().take(MAX_GRAPH_ROWS).cloned().collect());
     let selected_hash = snap.graph.selected.clone();
     let graph_snap_for_list = snap.graph.clone();
+    let detail_snapshot = snap.commit_detail.clone();
+    let unpushed_for_list = snap.graph.unpushed.clone();
+    let parents_by_hash: std::sync::Arc<std::collections::HashMap<String, Option<String>>> = {
+        let mut m = std::collections::HashMap::with_capacity(rows.len());
+        for r in rows.iter() {
+            let parent = r
+                .parents
+                .split(' ')
+                .find(|p| !p.is_empty())
+                .map(|p| p.to_string());
+            m.insert(r.hash.clone(), parent);
+        }
+        std::sync::Arc::new(m)
+    };
     let t_clone = t.clone();
     let weak_for_rows = weak.clone();
-    let total = rows.len();
 
-    let list = uniform_list(
-        "git-graph-list",
-        total,
-        move |range, _window, _cx| {
-            let mut items: Vec<gpui::AnyElement> = Vec::with_capacity(range.end - range.start);
-            for idx in range {
-                if let Some(row) = rows.get(idx) {
-                    let is_selected = selected_hash.as_deref() == Some(row.hash.as_str());
-                    let dimmed = should_dim_row_ns(row, &graph_snap_for_list);
-                    let zebra = graph_snap_for_list.zebra_stripes && idx % 2 == 1;
-                    items.push(
-                        graph_row_element(
-                            &t_clone,
-                            row,
-                            col_w,
-                            dimmed,
-                            is_selected,
-                            zebra,
-                            &graph_snap_for_list,
-                            weak_for_rows.clone(),
-                        )
-                        .into_any_element(),
-                    );
-                }
-            }
-            items
-        },
-    )
-    .h(px(22.0 * 18.0)) // show ~18 rows in the default window height
-    .w_full();
+    // Auto-paginate once the user scrolls within 20 rows of the
+    // bottom. The background fetch appends to the row buffer so
+    // scroll position stays stable.
+    let has_more = snap.graph.has_more;
+    let load_weak_scroll = weak.clone();
+    let list_state = snap.graph.list_state.clone();
+    list_state.set_scroll_handler(move |ev, _window, cx| {
+        if has_more && ev.visible_range.end + 20 >= ev.count {
+            let _ = load_weak_scroll.update(cx, |app, cx| {
+                app.schedule_git_graph(false, cx);
+            });
+        }
+    });
 
-    col = col.child(list);
+    let list_element = list(list_state, move |idx, _window, _cx| {
+        let Some(row) = rows.get(idx) else {
+            return div().into_any_element();
+        };
+        let is_selected = selected_hash.as_deref() == Some(row.hash.as_str());
+        let dimmed = should_dim_row_ns(row, &graph_snap_for_list);
+        let zebra = graph_snap_for_list.zebra_stripes && idx % 2 == 1;
 
-    // Detail strip for the selected commit — sits below the list,
-    // always visible while something is selected.
-    if snap.graph.selected.is_some() {
-        if let Some(detail) = snap.commit_detail.detail.as_ref() {
-            col = col
-                .child(Separator::horizontal())
-                .child(commit_detail_strip(t, detail, snap, weak.clone()));
-        } else if snap.commit_detail.loading {
-            col = col.child(Separator::horizontal()).child(
-                div()
-                    .px(SP_3)
-                    .py(SP_1_5)
-                    .child(text::caption(t!("App.Common.Status.loading")).secondary()),
-            );
-        } else if let Some(err) = snap.commit_detail.error.clone() {
-            col = col.child(Separator::horizontal()).child(git_feedback_strip(
-                t,
-                IconName::TriangleAlert,
+        let row_el = graph_row_element(
+            &t_clone,
+            row,
+            col_w,
+            dimmed,
+            is_selected,
+            zebra,
+            &graph_snap_for_list,
+            weak_for_rows.clone(),
+        )
+        .into_any_element();
+
+        if !is_selected {
+            return row_el;
+        }
+
+        // Inline detail — renders directly below the selected row.
+        // `commit_detail_strip` needs (hash → parent) lookups +
+        // unpushed set; pass pre-built clones to the closure.
+        let parent = parents_by_hash.get(&row.hash).cloned().flatten();
+        let detail_el: gpui::AnyElement = if let Some(d) = detail_snapshot.detail.as_ref() {
+            commit_detail_strip_standalone(
+                &t_clone,
+                d,
+                &unpushed_for_list,
+                parent,
+                weak_for_rows.clone(),
+            )
+            .into_any_element()
+        } else if detail_snapshot.loading {
+            div()
+                .px(SP_3)
+                .py(SP_1_5)
+                .child(text::caption(t!("App.Common.Status.loading")).secondary())
+                .into_any_element()
+        } else if let Some(err) = detail_snapshot.error.clone() {
+            git_feedback_strip(
+                &t_clone,
+                IconName::WarningFill,
                 t!("App.Common.error"),
                 err,
                 true,
-            ));
-        }
-    }
+            )
+            .into_any_element()
+        } else {
+            div().into_any_element()
+        };
+
+        div()
+            .w_full()
+            .flex()
+            .flex_col()
+            .child(row_el)
+            .child(Separator::horizontal())
+            .child(detail_el)
+            .into_any_element()
+    })
+    .w_full()
+    .flex_grow();
+
+    col = col.child(list_element);
 
     // Load-more / all-loaded footer.
     if snap.graph.has_more {
@@ -2051,7 +2191,9 @@ fn graph_toolbar(
     row = row.child(filter_chip(
         t,
         "git-graph-user",
-        IconName::User,
+        // Phosphor `user-fill` = SF `person.fill`, matching Pier's
+        // graph author chip.
+        IconName::UserFill,
         user_label,
         graph.filter.author.is_some(),
         move |_, _, cx| {
@@ -2531,10 +2673,29 @@ fn should_dim_row(row: &GraphRow, snap: &GitSnapshot, _is_head: bool) -> bool {
     }
 }
 
+/// Thin wrapper for callers that already have the outer
+/// `GitSnapshot` — extracts the two pieces (unpushed set + parent
+/// hash) that the inline detail needs.
 fn commit_detail_strip(
     t: &crate::theme::Theme,
     detail: &CommitDetail,
     snap: &GitSnapshot,
+    weak: WeakEntity<PierApp>,
+) -> impl IntoElement {
+    let parent = snap
+        .graph
+        .rows
+        .iter()
+        .find(|r| r.hash == detail.hash)
+        .and_then(|r| r.parents.split(' ').next().map(|s| s.to_string()));
+    commit_detail_strip_standalone(t, detail, &snap.graph.unpushed, parent, weak)
+}
+
+fn commit_detail_strip_standalone(
+    t: &crate::theme::Theme,
+    detail: &CommitDetail,
+    unpushed: &std::collections::HashSet<String>,
+    parent: Option<String>,
     weak: WeakEntity<PierApp>,
 ) -> impl IntoElement {
     let weak_ctx_new_branch = weak.clone();
@@ -2552,13 +2713,7 @@ fn commit_detail_strip(
     let hash_for_cb_reset_mixed = detail.hash.clone();
     let hash_for_cb_reset_hard = detail.hash.clone();
     let hash_for_cb_checkout = detail.hash.clone();
-    let is_unpushed = snap.graph.unpushed.contains(&detail.hash);
-    let parent = snap
-        .graph
-        .rows
-        .iter()
-        .find(|r| r.hash == detail.hash)
-        .and_then(|r| r.parents.split(' ').next().map(|s| s.to_string()));
+    let is_unpushed = unpushed.contains(&detail.hash);
 
     let action_row = div()
         .flex()
@@ -2731,7 +2886,11 @@ fn commit_detail_strip(
                     .to_string(),
                 )),
         );
-        for (i, f) in detail.files.iter().enumerate().take(24) {
+        for (i, f) in detail.files.iter().enumerate().take(64) {
+            let hash_for_file = detail.hash.clone();
+            let short_for_file = detail.short_hash.clone();
+            let path_for_file = f.path.clone();
+            let file_weak = weak.clone();
             detail_col = detail_col.child(
                 div()
                     .id(("git-detail-file", i))
@@ -2741,6 +2900,38 @@ fn commit_detail_strip(
                     .px(SP_3)
                     .py(SP_0_5)
                     .items_center()
+                    .cursor_pointer()
+                    .hover(|s| s.bg(t.color.bg_hover))
+                    .on_click(move |_, win, cx| {
+                        let hash = hash_for_file.clone();
+                        let path = path_for_file.clone();
+                        let short = short_for_file.clone();
+                        let title = format!("{short}  {path}");
+                        // Pull the client off the state, run the
+                        // diff synchronously (a single-file diff is
+                        // fast, typically < 50 ms), then pop the
+                        // dialog. If the client disappeared between
+                        // clicks we silently no-op.
+                        let Some(app_entity) = file_weak.upgrade() else {
+                            return;
+                        };
+                        let client = app_entity
+                            .read(cx)
+                            .git_state()
+                            .read(cx)
+                            .client
+                            .clone();
+                        let Some(client) = client else {
+                            return;
+                        };
+                        let text = match client.commit_file_diff(&hash, &path) {
+                            Ok(t) => t,
+                            Err(e) => format!("(diff failed: {e})"),
+                        };
+                        git_dialogs::open_commit_file_diff_dialog(
+                            win, cx, title, text,
+                        );
+                    })
                     .child(
                         div()
                             .flex_none()
@@ -2840,7 +3031,7 @@ fn managers_tab_body(
     if let Some(err) = snap.managers.error.clone() {
         col = col.child(git_feedback_strip(
             t,
-            IconName::TriangleAlert,
+            IconName::WarningFill,
             t!("App.Common.error"),
             err,
             true,
@@ -2956,6 +3147,16 @@ fn branches_manager(
         col = col.child(branch_mgr_row(t, b, weak.clone()));
     }
     col.into_any_element()
+}
+
+/// Alias exported to `git_dialogs.rs` so the branches dialog can
+/// reuse the same row renderer without peeking into private helpers.
+pub fn branch_mgr_row_export(
+    t: &crate::theme::Theme,
+    b: &BranchEntry,
+    weak: WeakEntity<PierApp>,
+) -> impl IntoElement {
+    branch_mgr_row(t, b, weak)
 }
 
 fn branch_mgr_row(
@@ -3123,6 +3324,14 @@ fn tags_manager(
     col.into_any_element()
 }
 
+pub fn tag_row_export(
+    t: &crate::theme::Theme,
+    tag: &TagInfo,
+    weak: WeakEntity<PierApp>,
+) -> impl IntoElement {
+    tag_row(t, tag, weak)
+}
+
 fn tag_row(
     t: &crate::theme::Theme,
     tag: &TagInfo,
@@ -3244,6 +3453,14 @@ fn remotes_manager(
         col = col.child(remote_row(t, r, weak.clone()));
     }
     col.into_any_element()
+}
+
+pub fn remote_row_export(
+    t: &crate::theme::Theme,
+    r: &RemoteInfo,
+    weak: WeakEntity<PierApp>,
+) -> impl IntoElement {
+    remote_row(t, r, weak)
 }
 
 fn remote_row(
@@ -3397,6 +3614,64 @@ fn config_manager(
     col.into_any_element()
 }
 
+pub fn config_row_export(
+    t: &crate::theme::Theme,
+    i: usize,
+    e: &ConfigEntry,
+    weak: WeakEntity<PierApp>,
+) -> impl IntoElement {
+    config_row(t, i, e, weak)
+}
+
+/// User identity top strip (user.name + user.email) extracted so
+/// the config dialog can render it above the entry list.
+pub fn config_user_strip(
+    t: &crate::theme::Theme,
+    mgrs: &ManagersSnapshot,
+) -> impl IntoElement {
+    div()
+        .flex()
+        .flex_row()
+        .flex_wrap()
+        .gap(SP_2)
+        .px(SP_3)
+        .py(SP_1_5)
+        .child(
+            div()
+                .flex_none()
+                .text_size(SIZE_CAPTION)
+                .text_color(t.color.text_tertiary)
+                .child(SharedString::from("user.name".to_string())),
+        )
+        .child(
+            div()
+                .flex_1()
+                .min_w(px(0.0))
+                .truncate()
+                .text_size(SIZE_SMALL)
+                .font_family(t.font_mono.clone())
+                .text_color(t.color.text_primary)
+                .child(SharedString::from(mgrs.user_name.clone())),
+        )
+        .child(
+            div()
+                .flex_none()
+                .text_size(SIZE_CAPTION)
+                .text_color(t.color.text_tertiary)
+                .child(SharedString::from("user.email".to_string())),
+        )
+        .child(
+            div()
+                .flex_1()
+                .min_w(px(0.0))
+                .truncate()
+                .text_size(SIZE_SMALL)
+                .font_family(t.font_mono.clone())
+                .text_color(t.color.text_primary)
+                .child(SharedString::from(mgrs.user_email.clone())),
+        )
+}
+
 fn config_row(
     t: &crate::theme::Theme,
     i: usize,
@@ -3508,6 +3783,15 @@ fn submodules_manager(
     col.into_any_element()
 }
 
+pub fn submodule_row_export(
+    t: &crate::theme::Theme,
+    i: usize,
+    s: &SubmoduleInfo,
+    weak: WeakEntity<PierApp>,
+) -> impl IntoElement {
+    submodule_row(t, i, s, weak)
+}
+
 fn submodule_row(
     t: &crate::theme::Theme,
     i: usize,
@@ -3578,6 +3862,13 @@ fn submodule_row(
 }
 
 // ─── Managers: Rebase ──────────────────────────────────────────────
+
+pub fn rebase_manager_export(
+    t: &crate::theme::Theme,
+    weak: WeakEntity<PierApp>,
+) -> impl IntoElement {
+    rebase_manager(t, weak)
+}
 
 fn rebase_manager(t: &crate::theme::Theme, weak: WeakEntity<PierApp>) -> impl IntoElement {
     let cont_weak = weak.clone();
@@ -3797,6 +4088,8 @@ struct GitSnapshot {
     graph: GraphStateSnapshot,
     commit_detail: CommitDetailSnapshot,
     managers: ManagersSnapshot,
+    footer_height: f32,
+    footer_dragging: bool,
 }
 
 #[derive(Clone)]
@@ -3814,6 +4107,7 @@ struct GraphStateSnapshot {
     zebra_stripes: bool,
     highlight_mode: GraphHighlightMode,
     user_name: String,
+    list_state: ListState,
 }
 
 #[derive(Clone)]
@@ -3823,18 +4117,18 @@ struct CommitDetailSnapshot {
     error: Option<SharedString>,
 }
 
-#[derive(Clone)]
-struct ManagersSnapshot {
-    branches: Vec<BranchEntry>,
-    tags: Vec<TagInfo>,
-    remotes: Vec<RemoteInfo>,
-    config: Vec<ConfigEntry>,
-    submodules: Vec<SubmoduleInfo>,
-    conflicts: Vec<String>,
-    user_name: String,
-    user_email: String,
-    loading: bool,
-    error: Option<SharedString>,
+#[derive(Clone, Default)]
+pub struct ManagersSnapshot {
+    pub branches: Vec<BranchEntry>,
+    pub tags: Vec<TagInfo>,
+    pub remotes: Vec<RemoteInfo>,
+    pub config: Vec<ConfigEntry>,
+    pub submodules: Vec<SubmoduleInfo>,
+    pub conflicts: Vec<String>,
+    pub user_name: String,
+    pub user_email: String,
+    pub loading: bool,
+    pub error: Option<SharedString>,
 }
 
 impl From<&GitState> for GitSnapshot {
@@ -3877,6 +4171,7 @@ impl From<&GitState> for GitSnapshot {
                 zebra_stripes: state.graph.zebra_stripes,
                 highlight_mode: state.graph.highlight_mode,
                 user_name: state.managers.user_name.clone(),
+                list_state: state.graph.list_state.clone(),
             },
             commit_detail: CommitDetailSnapshot {
                 detail: state.commit_detail.detail.clone(),
@@ -3895,6 +4190,8 @@ impl From<&GitState> for GitSnapshot {
                 loading: state.managers.loading,
                 error: state.managers.error.clone(),
             },
+            footer_height: state.footer_height,
+            footer_dragging: state.footer_drag.is_some(),
         }
     }
 }

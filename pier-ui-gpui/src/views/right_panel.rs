@@ -795,7 +795,9 @@ fn monitor_view(
         col = col
             .child(
                 InspectorSection::new(t!("App.RightPanel.Monitor.probe_error"))
-                    .icon(IconName::TriangleAlert)
+                    // Fill variant — matches Pier's `exclamationmark.triangle.fill`
+                    // at the equivalent error-surface position.
+                    .icon(IconName::WarningFill)
                     .child(
                         div()
                             .px(SP_3)
@@ -1132,7 +1134,7 @@ fn docker_error_strip(
             div()
                 .flex_none()
                 .text_color(t.color.status_error)
-                .child(UiIcon::new(IconName::TriangleAlert).size(ICON_SM)),
+                .child(UiIcon::new(IconName::WarningFill).size(ICON_SM)),
         )
         .child(
             div()
@@ -1199,11 +1201,15 @@ fn logs_view(
         .child(
             Button::primary("logs-run", t!("App.Common.run"))
                 .size(ButtonSize::Sm)
-                .leading_icon(IconName::Play)
+                // Phosphor `play-fill` = SF `play.fill`, matching
+                // Pier's LogViewer "run" primary button.
+                .leading_icon(IconName::PlayFill)
                 .on_click(move |_, window, app| on_run(&run_action, window, app)),
         )
         .child(
-            IconButton::new("logs-stop", IconName::Square)
+            // Phosphor `stop-fill` = SF `stop.fill`, matches Pier's
+            // LogViewer stop button.
+            IconButton::new("logs-stop", IconName::StopFill)
                 .size(IconButtonSize::Sm)
                 .on_click(move |_, window, app| on_stop(&stop_action, window, app)),
         )
@@ -1299,7 +1305,7 @@ fn logs_view(
         col = col
             .child(
                 InspectorSection::new(t!("App.RightPanel.Logs.stream_error"))
-                    .icon(IconName::TriangleAlert)
+                    .icon(IconName::WarningFill)
                     .child(div().px(SP_3).py(SP_2).child(text::body(err).secondary())),
             )
             .child(Separator::horizontal());
@@ -1690,9 +1696,13 @@ fn docker_action_icon(
     // other action is Ghost so the row reads as a list of containers
     // first, controls second. Users still get semantic cues via the
     // icons (Play / Refresh / Inspector / Delete).
+    // Start / Stop use the Phosphor `fill` variants so they echo
+    // Pier's `play.fill` / `stop.fill` usage on the same controls.
+    // Restart/Inspect/Delete stay stroke-weight — those actions feel
+    // quieter in Pier's row too.
     let (icon, variant) = match kind {
-        DockerActionKind::Start => (IconName::Play, IconButtonVariant::Ghost),
-        DockerActionKind::Stop => (IconName::Square, IconButtonVariant::Danger),
+        DockerActionKind::Start => (IconName::PlayFill, IconButtonVariant::Ghost),
+        DockerActionKind::Stop => (IconName::StopFill, IconButtonVariant::Danger),
         DockerActionKind::Restart => (IconName::RefreshCw, IconButtonVariant::Ghost),
         DockerActionKind::Inspect => (IconName::Inspector, IconButtonVariant::Ghost),
         DockerActionKind::Delete => (IconName::Delete, IconButtonVariant::Ghost),
@@ -1883,7 +1893,8 @@ fn docker_image_run_icon(image_ref: SharedString, pier_app: WeakEntity<PierApp>)
     // stay quiet; CTAs live at panel headers, not next to each item.
     IconButton::new(
         gpui::ElementId::Name(format!("docker-image-run-{id_suffix}").into()),
-        IconName::Play,
+        // Fill variant matches Pier's play.fill on the same control.
+        IconName::PlayFill,
     )
     .size(IconButtonSize::Xs)
     .variant(IconButtonVariant::Ghost)

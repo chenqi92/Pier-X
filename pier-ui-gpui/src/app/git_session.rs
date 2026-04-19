@@ -17,7 +17,7 @@ use std::collections::HashSet;
 use std::path::PathBuf;
 use std::sync::Arc;
 
-use gpui::SharedString;
+use gpui::{px, ListAlignment, ListState, SharedString};
 use pier_core::git_graph::{
     self, compute_graph_layout, CommitEntry, GraphRow, LayoutInput, LayoutParams,
 };
@@ -356,7 +356,6 @@ pub enum GraphColumn {
 }
 
 /// Sub-state: IDEA-style commit graph. Populated by `run_graph`.
-#[derive(Default)]
 pub struct GraphState {
     /// Rendered rows (node + segments + arrows), bounded by paging.
     pub rows: Vec<GraphRow>,
@@ -402,6 +401,13 @@ pub struct GraphState {
     pub zebra_stripes: bool,
     /// Stale-result guard for run_graph.
     pub nonce: u64,
+    /// Scroll + measurement state for the History list. Stored here
+    /// so the view can use `gpui::list` with variable-height rows
+    /// (the selected commit expands its row with an inline detail
+    /// strip). `ListState` is Rc-backed so cheap to clone into the
+    /// view snapshot; resets are driven from
+    /// `apply_graph_result` / `set_graph_selected`.
+    pub list_state: ListState,
 }
 
 impl GraphState {
@@ -419,11 +425,11 @@ impl GraphState {
                 show_long_edges: false,
                 ..Default::default()
             },
-            // 200 is large enough for a normal "scroll 4 pages without
-            // fetching more" feel, and small enough that the initial
-            // layout + canvas paint stays under ~30 ms even on a
-            // 5000-commit repo.
-            page_size: 200,
+            // Bumped to 1000 for Pier-parity — uniform virtualization
+            // means only the visible 18 rows cost anything to render,
+            // so a 1000-row initial load is fine even on older Macs.
+            // Auto-pagination still kicks in past this threshold.
+            page_size: 1000,
             has_more: false,
             loading: false,
             load_more_loading: false,
@@ -436,8 +442,19 @@ impl GraphState {
             show_date_col: true,
             zebra_stripes: true,
             nonce: 0,
+            list_state: ListState::new(0, ListAlignment::Top, px(200.0)),
         }
     }
+}
+
+/// Commit-input footer drag state — captured at `mouse_down` on the
+/// splitter, held until `mouse_up` fires globally. A live drag
+/// snaps the footer height to `start_height - (current_y -
+/// start_y)` so dragging up grows the footer.
+#[derive(Clone, Copy, Debug)]
+pub struct FooterDrag {
+    pub start_mouse_y: f32,
+    pub start_height: f32,
 }
 
 /// Sub-state: commit detail strip shown below the selected graph row.
@@ -558,6 +575,12 @@ pub struct GitState {
     pub blame: BlameState,
     /// Managers tab state.
     pub managers: ManagersState,
+    /// Current height (in logical pixels) of the commit-input footer
+    /// on the Changes tab. Persisted across renders; only the
+    /// resizer splitter mutates it.
+    pub footer_height: f32,
+    /// Active drag on the footer splitter, if any.
+    pub footer_drag: Option<FooterDrag>,
 }
 
 /// One selected file change, drives the diff card.
@@ -603,6 +626,8 @@ impl GitState {
             commit_detail: CommitDetailState::default(),
             blame: BlameState::default(),
             managers: ManagersState::default(),
+            footer_height: 120.0,
+            footer_drag: None,
         }
     }
 
@@ -702,6 +727,30 @@ impl GitState {
         self.manager_panel_open = Some(tab);
     }
 
+    pub fn begin_footer_drag(&mut self, mouse_y: f32) {
+        self.footer_drag = Some(FooterDrag {
+            start_mouse_y: mouse_y,
+            start_height: self.footer_height,
+        });
+    }
+
+    pub fn update_footer_drag(&mut self, mouse_y: f32) -> bool {
+        if let Some(drag) = self.footer_drag {
+            // Dragging upward (current < start) grows the footer.
+            let delta = drag.start_mouse_y - mouse_y;
+            let next = (drag.start_height + delta).clamp(80.0, 480.0);
+            if (next - self.footer_height).abs() > 0.5 {
+                self.footer_height = next;
+                return true;
+            }
+        }
+        false
+    }
+
+    pub fn end_footer_drag(&mut self) {
+        self.footer_drag = None;
+    }
+
     pub fn set_diff_mode(&mut self, mode: DiffMode) {
         self.diff_mode = mode;
     }
@@ -727,11 +776,26 @@ impl GitState {
     }
 
     pub fn set_graph_selected(&mut self, hash: Option<String>) {
+        let previous = self.graph.selected.clone();
         self.graph.selected = hash.clone();
         // Clear detail state whenever the selection changes; the
         // detail load fills it back in.
         if hash.is_none() {
             self.commit_detail = CommitDetailState::default();
+        }
+        // gpui::list caches row heights per item — when a row
+        // toggles into / out of "selected with inline detail" its
+        // height changes, so re-splice those rows to force a
+        // fresh measurement pass. Only the two rows that changed
+        // need updating.
+        if previous != hash {
+            for h in [previous.as_deref(), hash.as_deref()].into_iter().flatten() {
+                if let Some(idx) = self.graph.rows.iter().position(|r| r.hash == h) {
+                    if idx < self.graph.list_state.item_count() {
+                        self.graph.list_state.splice(idx..idx + 1, 1);
+                    }
+                }
+            }
         }
     }
 
@@ -959,6 +1023,19 @@ impl GitState {
                 self.graph.authors = payload.authors;
                 self.graph.files = payload.files;
                 self.graph.error = None;
+                // Resize the list scroll / measurement state so
+                // gpui::list knows how many items exist. `reset`
+                // clears cached measurements; `splice` just tacks
+                // new items onto the end for append-style loads.
+                if result.initial {
+                    self.graph.list_state.reset(self.graph.rows.len());
+                } else {
+                    let new_count = self.graph.rows.len();
+                    let old_count = self.graph.list_state.item_count();
+                    if new_count > old_count {
+                        self.graph.list_state.splice(old_count..old_count, new_count - old_count);
+                    }
+                }
             }
             Err(err) => {
                 self.graph.error = Some(err.into());
@@ -989,6 +1066,18 @@ impl GitState {
         self.commit_detail.loading = false;
         match result.outcome {
             Ok(detail) => {
+                // Remeasure the now-expanded selected row so gpui::list
+                // picks up the taller geometry from the inline strip.
+                if let Some(idx) = self
+                    .graph
+                    .rows
+                    .iter()
+                    .position(|r| r.hash == detail.hash)
+                {
+                    if idx < self.graph.list_state.item_count() {
+                        self.graph.list_state.splice(idx..idx + 1, 1);
+                    }
+                }
                 self.commit_detail.detail = Some(detail);
                 self.commit_detail.error = None;
             }

@@ -58,7 +58,11 @@ pub enum FileIconTone {
 ///   are recognized by full name as a nicety.
 pub fn file_icon(name: &str, is_dir: bool) -> (IconName, FileIconTone) {
     if is_dir {
-        return (IconName::Folder, FileIconTone::Directory);
+        // Directories use the *filled* folder glyph — matches Pier's
+        // `folder.fill` usage in `LocalFileView.swift` and makes the
+        // row icon visually dominate over file glyphs (which stay as
+        // stroke-weight Phosphor icons).
+        return (IconName::FolderFill, FileIconTone::Directory);
     }
 
     // Whole-name matches first — these don't have an extension but
@@ -139,7 +143,7 @@ mod tests {
     #[test]
     fn directory_wins_over_extension() {
         let (icon, tone) = file_icon("src.rs", true);
-        assert!(matches!(icon, IconName::Folder));
+        assert!(matches!(icon, IconName::FolderFill));
         assert!(matches!(tone, FileIconTone::Directory));
     }
 

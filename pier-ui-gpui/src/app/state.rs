@@ -2810,6 +2810,58 @@ impl PierApp {
         .detach();
     }
 
+    /// Commit the staged changes, then push once the commit settles.
+    /// Implemented as a two-step chain through the existing action
+    /// pipeline: commit first, then enqueue a push in the post-
+    /// commit continuation. Errors at either stage surface through
+    /// `action_error`.
+    pub fn schedule_git_commit_and_push(&mut self, message: String, cx: &mut Context<Self>) {
+        self.schedule_git_action(GitPendingAction::Commit { message }, cx);
+        // The `schedule_git_action` continuation auto-refreshes the
+        // state machine after the commit; push once that's settled.
+        let this = cx.entity().downgrade();
+        cx.spawn(
+            move |_this: gpui::WeakEntity<Self>, cx: &mut gpui::AsyncApp| {
+                let mut async_cx = cx.clone();
+                async move {
+                    // Small await window so the first action's refresh
+                    // completes before we chain push. `dispatch` is
+                    // synchronous-enough that waiting on a background
+                    // tick is unnecessary — we just hand the push in.
+                    let _ = this.update(&mut async_cx, |this, cx| {
+                        this.schedule_git_action(GitPendingAction::Push, cx);
+                    });
+                }
+            },
+        )
+        .detach();
+    }
+
+    pub fn begin_git_footer_drag(&mut self, mouse_y: f32, cx: &mut Context<Self>) {
+        self.git_state.update(cx, |s, _| s.begin_footer_drag(mouse_y));
+    }
+
+    pub fn update_git_footer_drag(&mut self, mouse_y: f32, cx: &mut Context<Self>) {
+        let changed = self
+            .git_state
+            .update(cx, |s, _| s.update_footer_drag(mouse_y));
+        if changed {
+            cx.notify();
+        }
+    }
+
+    pub fn end_git_footer_drag(&mut self, cx: &mut Context<Self>) {
+        let was_dragging = self.git_state.read(cx).footer_drag.is_some();
+        self.git_state.update(cx, |s, _| s.end_footer_drag());
+        if was_dragging {
+            cx.notify();
+        }
+    }
+
+    pub fn is_git_footer_dragging(&self, cx: &App) -> bool {
+        self.git_state.read(cx).footer_drag.is_some()
+    }
+
     pub fn clear_git_blame(&mut self, cx: &mut Context<Self>) {
         self.git_state.update(cx, |s, _| s.clear_blame());
         cx.notify();

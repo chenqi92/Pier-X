@@ -31,7 +31,10 @@ use rust_i18n::t;
 use crate::components::{
     text, IconButton, IconButtonSize, IconButtonVariant, SectionLabel, StatusKind, StatusPill,
 };
-use crate::data::{format_date, format_file_size, format_permissions, format_windows_attrs};
+use crate::data::{
+    file_icon, format_date, format_file_size, format_permissions, format_windows_attrs,
+    FileIconTone,
+};
 use crate::theme::{
     heights::{BUTTON_SM_H, GLYPH_SM, ICON_SM, ROW_MD_H, ROW_SM_H},
     radius::{RADIUS_MD, RADIUS_SM},
@@ -578,9 +581,9 @@ fn quick_menu_entries() -> Vec<QuickMenuEntry> {
     out.push(QuickMenuEntry {
         id: "ft-qm-home",
         label: t!("App.FileTree.Quick.home").into(),
-        // gpui-component's icon set has no dedicated Home glyph; `User`
-        // is the closest proxy and reads as "your home" in context.
-        icon: IconName::User,
+        // Phosphor `user-circle-fill` = SF `person.circle.fill` — Pier
+        // uses the same glyph for "the current user" chips.
+        icon: IconName::CircleUserFill,
         target: Some(home.clone()),
     });
     out.push(QuickMenuEntry {
@@ -836,6 +839,36 @@ mod tests {
 // Single row
 // ─────────────────────────────────────────────────────────
 
+/// Resolve a `FileIconTone` bucket to a concrete theme color. Kept at
+/// the view level so the tone enum stays UI-framework-agnostic (lives
+/// in `crate::data`) and only the renderer knows about `Theme`.
+fn tone_color(t: &crate::theme::Theme, tone: FileIconTone) -> gpui::Rgba {
+    match tone {
+        // Directories keep the accent blue — the primary "this is a
+        // navigable target" cue in the panel.
+        FileIconTone::Directory => t.color.accent,
+        // Docs / markdown lean on status_info (blue) for readability.
+        FileIconTone::Docs => t.color.status_info,
+        // Shell scripts feel like a "run this" surface — success green.
+        FileIconTone::Shell => t.color.status_success,
+        // Configs → warning amber (matches the "you are editing infra"
+        // convention most IDEs use for YAML / env files).
+        FileIconTone::Config => t.color.status_warning,
+        // Web files also lean warning-ish but distinct from config —
+        // reuse accent to avoid introducing a new hue.
+        FileIconTone::Web => t.color.accent,
+        // Code / images / media / archives all share the accent since
+        // the enum is already communicated by the glyph shape; giving
+        // each its own color would turn the panel into a parade.
+        FileIconTone::Code
+        | FileIconTone::Image
+        | FileIconTone::Media
+        | FileIconTone::Archive => t.color.text_secondary,
+        // Default / unknown — tertiary so the row's name does the work.
+        FileIconTone::Neutral => t.color.text_tertiary,
+    }
+}
+
 fn row(
     t: &crate::theme::Theme,
     entry: &FsEntry,
@@ -847,11 +880,8 @@ fn row(
 ) -> impl IntoElement {
     let id_str: SharedString = format!("ft-row-{}", entry.path.display()).into();
     let label: SharedString = entry.name.clone().into();
-    let glyph = if entry.is_dir {
-        IconName::Folder
-    } else {
-        IconName::FileText
-    };
+    let (glyph, tone) = file_icon(&entry.name, entry.is_dir);
+    let glyph_color = tone_color(t, tone);
     let path = entry.path.clone();
     let is_dir = entry.is_dir;
 
@@ -909,20 +939,8 @@ fn row(
                 .flex()
                 .items_center()
                 .justify_center()
-                .text_color(if entry.is_dir {
-                    t.color.accent
-                } else {
-                    t.color.text_tertiary
-                })
-                .child(
-                    UiIcon::new(glyph)
-                        .size(GLYPH_SM)
-                        .text_color(if entry.is_dir {
-                            t.color.accent
-                        } else {
-                            t.color.text_tertiary
-                        }),
-                ),
+                .text_color(glyph_color)
+                .child(UiIcon::new(glyph).size(GLYPH_SM).text_color(glyph_color)),
         )
         .child(
             div()

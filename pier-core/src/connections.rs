@@ -107,6 +107,15 @@ pub struct ConnectionStore {
     /// The actual connections list, in display order.
     #[serde(default)]
     pub connections: Vec<SshConfig>,
+    /// User-declared groups, in display order. A group may exist
+    /// here without holding any connections yet (how the "New
+    /// Group" sidebar action creates an empty bucket the user can
+    /// file fresh connections into). Derived groups from
+    /// `connection.tags[0]` are still honored at render time via
+    /// [`known_groups`]; this list is specifically for *empty*
+    /// groups that would otherwise be invisible.
+    #[serde(default)]
+    pub groups: Vec<String>,
 }
 
 impl Default for ConnectionStore {
@@ -114,6 +123,7 @@ impl Default for ConnectionStore {
         Self {
             version: CURRENT_SCHEMA_VERSION,
             connections: Vec::new(),
+            groups: Vec::new(),
         }
     }
 }
@@ -176,6 +186,7 @@ impl ConnectionStore {
         let stamped = Self {
             version: CURRENT_SCHEMA_VERSION,
             connections: self.connections.clone(),
+            groups: self.groups.clone(),
         };
         let json = serde_json::to_vec_pretty(&stamped)?;
 
@@ -207,6 +218,30 @@ impl ConnectionStore {
     /// connections list.
     pub fn known_groups(&self) -> Vec<String> {
         known_groups(&self.connections)
+    }
+
+    /// Declare an empty group so it shows up in the sidebar even
+    /// before any connection is filed under it. Trims whitespace,
+    /// rejects empties, and is idempotent on duplicates (returns
+    /// `false` so the caller can surface a "already exists" hint
+    /// if it wants).
+    pub fn add_group(&mut self, name: &str) -> bool {
+        let trimmed = name.trim();
+        if trimmed.is_empty() {
+            return false;
+        }
+        if self.groups.iter().any(|g| g == trimmed) {
+            return false;
+        }
+        self.groups.push(trimmed.to_string());
+        true
+    }
+
+    /// Forget a declared group. Connections already tagged with
+    /// this group keep their tag; the group header simply stops
+    /// appearing when no connection is tagged with it.
+    pub fn remove_group(&mut self, name: &str) {
+        self.groups.retain(|g| g != name);
     }
 }
 
@@ -307,6 +342,39 @@ mod tests {
             }
             other => panic!("expected KeychainPassword, got {other:?}"),
         }
+        let _ = fs::remove_file(&path);
+    }
+
+    #[test]
+    fn declared_groups_round_trip_and_dedupe() {
+        let path = fresh_tmp("groups");
+        let mut store = ConnectionStore::new();
+        assert!(store.add_group("Production"));
+        assert!(store.add_group("  Staging  "));
+        // Whitespace-normalised dupe is rejected.
+        assert!(!store.add_group("Production"));
+        assert!(!store.add_group(""));
+        assert_eq!(store.groups, vec!["Production", "Staging"]);
+        store.save_to_path(&path).expect("save");
+
+        let loaded = ConnectionStore::load_from_path(&path).expect("load");
+        assert_eq!(loaded.groups, vec!["Production", "Staging"]);
+        store.remove_group("Production");
+        assert_eq!(store.groups, vec!["Staging"]);
+        let _ = fs::remove_file(&path);
+    }
+
+    #[test]
+    fn legacy_file_without_groups_field_still_loads() {
+        let path = fresh_tmp("legacy");
+        // Intentionally omit "groups" — serde default should kick in.
+        let json = serde_json::json!({
+            "version": CURRENT_SCHEMA_VERSION,
+            "connections": []
+        });
+        fs::write(&path, serde_json::to_vec(&json).unwrap()).unwrap();
+        let loaded = ConnectionStore::load_from_path(&path).expect("load");
+        assert!(loaded.groups.is_empty());
         let _ = fs::remove_file(&path);
     }
 

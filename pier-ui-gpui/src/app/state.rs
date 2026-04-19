@@ -108,6 +108,10 @@ pub struct PierApp {
     // ─── Backend snapshots ───
     snapshot: ShellSnapshot,
     connections: Vec<SshConfig>,
+    /// User-declared server groups (distinct from tag-derived
+    /// groups) — lets an empty group show up in the sidebar as
+    /// soon as the user creates it via the "New Group" button.
+    declared_groups: Vec<String>,
     /// Saved database connections (MySQL / PostgreSQL for Phase A).
     /// Loaded from `db-connections.json` at startup; mutated by the
     /// connection-form Save / Delete buttons in later commits. The
@@ -167,8 +171,8 @@ pub struct PierApp {
 
 impl PierApp {
     pub fn new(window: &mut Window, cx: &mut Context<Self>) -> Self {
-        let connections = ConnectionStore::load_default()
-            .map(|s| s.connections)
+        let (connections, declared_groups) = ConnectionStore::load_default()
+            .map(|s| (s.connections, s.groups))
             .unwrap_or_default();
         let db_connections = DbConnectionStore::load_default()
             .map(|s| s.connections)
@@ -231,6 +235,7 @@ impl PierApp {
             pane_bounds: Bounds::default(),
             snapshot,
             connections,
+            declared_groups,
             db_connections,
             db_sessions: HashMap::new(),
             db_query_inputs,
@@ -280,6 +285,7 @@ impl PierApp {
 
         ServersSidebarSnapshot {
             connections: self.connections.clone(),
+            declared_groups: self.declared_groups.clone(),
             active_session,
         }
     }
@@ -497,9 +503,11 @@ impl PierApp {
     }
 
     pub fn refresh_connections(&mut self) {
-        self.connections = ConnectionStore::load_default()
-            .map(|s| s.connections)
+        let (connections, groups) = ConnectionStore::load_default()
+            .map(|s| (s.connections, s.groups))
             .unwrap_or_default();
+        self.connections = connections;
+        self.declared_groups = groups;
     }
 
     /// Reload the database connections list from disk after the
@@ -592,10 +600,42 @@ impl PierApp {
     /// (that path panics with "cannot read PierApp while it is already
     /// being updated").
     fn known_group_names(&self) -> Vec<SharedString> {
-        pier_core::connections::known_groups(&self.connections)
-            .into_iter()
-            .map(SharedString::from)
-            .collect()
+        // Union of tag-derived groups (from existing connections)
+        // and user-declared empty groups — both are valid chip
+        // suggestions in the edit-connection dialog.
+        let mut seen = std::collections::BTreeSet::new();
+        for g in pier_core::connections::known_groups(&self.connections) {
+            seen.insert(g);
+        }
+        for g in &self.declared_groups {
+            seen.insert(g.clone());
+        }
+        seen.into_iter().map(SharedString::from).collect()
+    }
+
+    /// Entry point for the "New Group" folder icon in the Servers
+    /// sidebar. Pops the add-group dialog; on save, persists via
+    /// [`Self::add_connection_group`].
+    pub fn open_add_group(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let weak = cx.entity().downgrade();
+        crate::views::add_group::open(window, cx, weak);
+    }
+
+    /// Append a user-declared group to the on-disk store. No-op if
+    /// the trimmed name is empty or already present. Callers
+    /// (typically the add-group dialog) should invoke this from
+    /// outside a `PierApp::update` lease.
+    pub fn add_connection_group(&mut self, name: String, cx: &mut Context<Self>) {
+        let mut store = ConnectionStore::load_default().unwrap_or_default();
+        if !store.add_group(&name) {
+            return;
+        }
+        if let Err(err) = store.save_default() {
+            log::warn!("add_connection_group: save failed: {err}");
+            return;
+        }
+        self.refresh_connections();
+        cx.notify();
     }
 
     pub fn delete_connection(&mut self, idx: usize, cx: &mut Context<Self>) {

@@ -857,6 +857,19 @@ App:
     system_shell:
       en: system shell
       zh-CN: 系统 shell
+  AddGroup:
+    title:
+      en: New group
+      zh-CN: 新建分组
+    field_label:
+      en: Group name
+      zh-CN: 分组名称
+    placeholder:
+      en: e.g. Production, Home, Lab
+      zh-CN: 例如：生产环境、家庭、实验室
+    tooltip:
+      en: New group
+      zh-CN: 新建分组
   EditConnection:
     title_new:
       en: New SSH connection

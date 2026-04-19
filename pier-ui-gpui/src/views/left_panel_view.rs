@@ -64,6 +64,11 @@ const UNGROUPED: &str = "Ungrouped";
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct ServersSidebarSnapshot {
     pub connections: Vec<SshConfig>,
+    /// Groups the user declared explicitly (via the "New Group"
+    /// button) that may have zero connections under them. Merged
+    /// at render time with tag-derived groups so empty buckets
+    /// still appear in the sidebar.
+    pub declared_groups: Vec<String>,
     pub active_session: Option<ActiveServerSessionSnapshot>,
 }
 
@@ -71,6 +76,7 @@ impl ServersSidebarSnapshot {
     pub fn from_connections(connections: Vec<SshConfig>) -> Self {
         Self {
             connections,
+            declared_groups: Vec::new(),
             active_session: None,
         }
     }
@@ -149,6 +155,7 @@ impl LeftPanelView {
                     prune_collapsed_groups(
                         &mut this.collapsed_server_groups,
                         &this.servers_snapshot.connections,
+                        &this.servers_snapshot.declared_groups,
                     );
                     cx.notify();
                 }
@@ -400,6 +407,11 @@ impl LeftPanelView {
                 .weak_app
                 .update(cx, |pa, cx| pa.open_add_connection(window, cx));
         });
+        let on_add_group = cx.listener(|this, _: &ClickEvent, window, cx| {
+            let _ = this
+                .weak_app
+                .update(cx, |pa, cx| pa.open_add_group(window, cx));
+        });
         let on_toggle_group = cx.listener(|this, group: &SharedString, _w, cx| {
             this.toggle_server_group(group.as_ref(), cx);
         });
@@ -432,6 +444,7 @@ impl LeftPanelView {
                         Rc::new(on_edit),
                         Rc::new(on_delete),
                         Rc::new(on_add),
+                        Rc::new(on_add_group),
                         Rc::new(on_toggle_group),
                     )),
             )
@@ -444,6 +457,7 @@ impl LeftPanelView {
 
 type ServerSelector = Rc<dyn Fn(&usize, &mut Window, &mut App) + 'static>;
 type AddConnectionHandler = Rc<dyn Fn(&ClickEvent, &mut Window, &mut App) + 'static>;
+type AddGroupHandler = Rc<dyn Fn(&ClickEvent, &mut Window, &mut App) + 'static>;
 type GroupToggleHandler = Rc<dyn Fn(&SharedString, &mut Window, &mut App) + 'static>;
 
 #[allow(clippy::too_many_arguments)]
@@ -456,6 +470,7 @@ fn render_servers_list(
     on_edit: ServerSelector,
     on_delete: ServerSelector,
     on_add: AddConnectionHandler,
+    on_add_group: AddGroupHandler,
     on_toggle_group: GroupToggleHandler,
 ) -> impl IntoElement {
     // Deliberately *not* rendering the "Active Connection" summary
@@ -473,9 +488,14 @@ fn render_servers_list(
         t,
         snapshot.connections.len(),
         on_add.clone(),
+        on_add_group.clone(),
     ));
 
-    if snapshot.connections.is_empty() {
+    // With declared groups the sidebar can be non-empty even
+    // when there are zero saved connections — show the list.
+    // Only fall back to the welcome-style "Empty" card when both
+    // buckets are empty.
+    if snapshot.connections.is_empty() && snapshot.declared_groups.is_empty() {
         col = col.child(servers_empty_state(on_add));
         return col;
     }
@@ -514,13 +534,14 @@ fn servers_header(
     t: &crate::theme::Theme,
     count: usize,
     on_add: AddConnectionHandler,
+    on_add_group: AddGroupHandler,
 ) -> impl IntoElement {
     // Pier-style compact bar: no PageHeader "Section" chrome, just a
     // thin row with an eyebrow label + "(n)" count as caption text
-    // and a subtle "+" IconButton. The previous count pill and Page
-    // Header border made this feel like a major section; it's really
-    // just a filter/add toolbar above the actual group list.
+    // and two subtle icon buttons — [📁+] for "New Group", [+] for
+    // "New Connection". Matches the original Pier sidebar grammar.
     let on_add_click = on_add.clone();
+    let on_add_group_click = on_add_group.clone();
     let count_label: SharedString = format!("({count})").into();
     div()
         .flex()
@@ -539,6 +560,17 @@ fn servers_header(
                 .child(count_label),
         )
         .child(div().flex_1())
+        // "New Group" — Folder icon distinguishes it from the
+        // adjacent Plus ("New Connection"). The fork's icon set has
+        // no FolderPlus glyph; pairing [📁][+] side-by-side reads as
+        // "new group, new connection" the same way the reference Pier
+        // sidebar does.
+        .child(
+            IconButton::new("servers-add-group", IconName::Folder)
+                .size(IconButtonSize::Sm)
+                .variant(IconButtonVariant::Ghost)
+                .on_click(move |ev, window, app| on_add_group_click(ev, window, app)),
+        )
         .child(
             IconButton::new("servers-add", IconName::Plus)
                 .size(IconButtonSize::Sm)
@@ -568,6 +600,16 @@ struct ServerGroupItem<'a> {
 fn group_servers<'a>(snapshot: &'a ServersSidebarSnapshot, query: &str) -> Vec<ServerGroup<'a>> {
     let q = query.trim().to_lowercase();
     let mut groups: BTreeMap<String, Vec<ServerGroupItem<'a>>> = BTreeMap::new();
+
+    // Seed BTreeMap entries for declared (possibly empty) groups so
+    // they still show up as headers in the sidebar. A declared group
+    // is only surfaced when the filter is empty — once the user is
+    // narrowing by text, an empty bucket is just noise.
+    if q.is_empty() {
+        for name in &snapshot.declared_groups {
+            groups.entry(name.clone()).or_default();
+        }
+    }
 
     for (idx, conn) in snapshot.connections.iter().enumerate() {
         if !connection_matches_query(conn, &q) {
@@ -626,11 +668,18 @@ fn connection_is_active(snapshot: &ServersSidebarSnapshot, conn: &SshConfig) -> 
         .is_some_and(|active| active.config == *conn)
 }
 
-fn prune_collapsed_groups(collapsed_groups: &mut BTreeSet<String>, connections: &[SshConfig]) {
-    let live_groups = connections
+fn prune_collapsed_groups(
+    collapsed_groups: &mut BTreeSet<String>,
+    connections: &[SshConfig],
+    declared_groups: &[String],
+) {
+    let mut live_groups = connections
         .iter()
         .map(group_key_for_connection)
         .collect::<BTreeSet<_>>();
+    for g in declared_groups {
+        live_groups.insert(g.clone());
+    }
     collapsed_groups.retain(|group| live_groups.contains(group));
 }
 
@@ -1071,6 +1120,7 @@ mod tests {
                 sample_config("db-prod", "10.0.0.3", Some("Production")),
                 sample_config("sandbox", "10.0.0.8", None),
             ],
+            declared_groups: Vec::new(),
             active_session: Some(ActiveServerSessionSnapshot {
                 config: active,
                 status: ConnectStatus::Connected,
@@ -1119,10 +1169,45 @@ mod tests {
             sample_config("sandbox", "10.0.0.8", None),
         ];
 
-        prune_collapsed_groups(&mut collapsed, &connections);
+        prune_collapsed_groups(&mut collapsed, &connections, &[]);
 
         assert!(collapsed.contains("Production"));
         assert!(!collapsed.contains("Legacy"));
+    }
+
+    #[test]
+    fn declared_groups_appear_even_without_connections() {
+        let snapshot = ServersSidebarSnapshot {
+            connections: Vec::new(),
+            declared_groups: vec!["Lab".into(), "Home".into()],
+            active_session: None,
+        };
+        let groups = group_servers(&snapshot, "");
+        let keys: Vec<_> = groups.iter().map(|g| g.key.as_str()).collect();
+        // BTreeMap sorts the keys — so we get alphabetical order.
+        assert_eq!(keys, vec!["Home", "Lab"]);
+        for g in &groups {
+            assert!(g.items.is_empty());
+        }
+    }
+
+    #[test]
+    fn declared_groups_hidden_while_filtering() {
+        let snapshot = ServersSidebarSnapshot {
+            connections: vec![sample_config("prod-api", "10.0.0.1", Some("Production"))],
+            declared_groups: vec!["Lab".into()],
+            active_session: None,
+        };
+        let groups = group_servers(&snapshot, "prod");
+        let keys: Vec<_> = groups.iter().map(|g| g.key.as_str()).collect();
+        assert_eq!(keys, vec!["Production"]);
+    }
+
+    #[test]
+    fn prune_collapsed_groups_keeps_declared_empty_groups() {
+        let mut collapsed = BTreeSet::from(["Lab".to_string()]);
+        prune_collapsed_groups(&mut collapsed, &[], &["Lab".to_string()]);
+        assert!(collapsed.contains("Lab"));
     }
 }
 

@@ -1294,7 +1294,8 @@ fn logs_view(
         .bg(t.color.bg_surface)
         .child(
             InspectorSection::new(t!("App.RightPanel.Logs.command"))
-                .icon(IconName::SquareTerminal)
+                // Pier's LogViewer command strip uses plain `terminal`.
+                .icon(IconName::Terminal)
                 .actions(command_actions)
                 .child(status_row)
                 .child(command_body),
@@ -1334,7 +1335,9 @@ fn logs_view(
     };
 
     let mut output_section = InspectorSection::new(t!("App.RightPanel.Logs.output"))
-        .icon(IconName::GalleryVerticalEnd)
+        // SF `list.bullet` in Pier's LogViewer output header — the
+        // scrolling stream reads as a bulleted list.
+        .icon(IconName::ListBullets)
         .actions(retained_pill);
     if let Some(cmd) = command {
         output_section = output_section.eyebrow(cmd);
@@ -1786,7 +1789,8 @@ fn docker_pull_strip(t: &crate::theme::Theme) -> impl IntoElement {
                 )),
         )
         .child(
-            IconButton::new("docker-pull", IconName::ArrowDown)
+            // Pier uses `arrow.down.circle.fill` for docker pull.
+            IconButton::new("docker-pull", IconName::ArrowCircleDownFill)
                 .size(IconButtonSize::Sm)
                 .variant(IconButtonVariant::Primary)
                 .disabled(true),
@@ -1821,7 +1825,8 @@ fn docker_image_row(
             div()
                 .flex_none()
                 .text_color(t.color.text_tertiary)
-                .child(UiIcon::new(IconName::GalleryVerticalEnd).size(ICON_SM)),
+                // Pier renders docker image rows with `square.stack.3d.up.fill`.
+                .child(UiIcon::new(IconName::StackFill).size(ICON_SM)),
         )
         .child(
             div()

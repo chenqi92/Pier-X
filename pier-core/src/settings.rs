@@ -104,6 +104,13 @@ pub struct AppSettings {
     /// injection doesn't apply.
     #[serde(default)]
     pub terminal_shell_integration: bool,
+    /// Height (in integer logical pixels) of the Git panel's commit
+    /// input footer. Persisted across restarts so the splitter
+    /// position the user dragged is preserved. Default 120 px
+    /// matches Pier. Stored as `u16` to keep `AppSettings: Eq`
+    /// intact; the drag logic clamps within `80..=480`.
+    #[serde(default = "default_git_footer_height")]
+    pub git_footer_height: u16,
     /// User-assigned keystrokes, keyed by a UI-layer action ID (e.g.
     /// `"new_tab"`, `"toggle_left_panel"`). An empty map falls back to
     /// the UI layer's built-in defaults. The value format is whatever
@@ -120,6 +127,7 @@ pub struct AppSettings {
 impl Default for AppSettings {
     fn default() -> Self {
         Self {
+            git_footer_height: default_git_footer_height(),
             appearance_mode: AppearanceMode::System,
             ui_locale: default_ui_locale(),
             ui_font_family: None,
@@ -255,6 +263,10 @@ fn default_terminal_font_ligatures() -> bool {
     false
 }
 
+fn default_git_footer_height() -> u16 {
+    120
+}
+
 fn tmp_path_for(path: &Path) -> PathBuf {
     let mut name = path
         .file_name()
@@ -316,6 +328,7 @@ mod tests {
                 terminal_opacity_pct: 85,
                 terminal_font_ligatures: true,
                 terminal_shell_integration: true,
+                git_footer_height: 140,
                 keybindings: BTreeMap::from([
                     ("new_tab".to_string(), "cmd-n".to_string()),
                     ("toggle_theme".to_string(), "cmd-shift-l".to_string()),

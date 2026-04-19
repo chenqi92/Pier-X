@@ -122,7 +122,8 @@ fn ssh_row(
     let address: SharedString = format!("{}@{}:{}", conn.user, conn.host, conn.port).into();
 
     row_shell(t, id_str, on_click)
-        .child(icon_cell(t, IconName::Globe))
+        // `network` is Pier's glyph for remote-endpoint rows.
+        .child(icon_cell(t, IconName::Network))
         .child(
             div()
                 .flex()

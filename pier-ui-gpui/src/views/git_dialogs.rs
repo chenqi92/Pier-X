@@ -123,6 +123,72 @@ pub fn open_rebase_dialog(window: &mut Window, cx: &mut App, app: WeakEntity<Pie
     });
 }
 
+/// Edit message dialog — only meaningful on HEAD (commit --amend).
+/// Pre-fills the current commit message; Save dispatches
+/// `schedule_git_commit_amend`.
+pub fn open_edit_message_dialog(
+    window: &mut Window,
+    cx: &mut App,
+    app: WeakEntity<PierApp>,
+    short_hash: String,
+    current_message: String,
+) {
+    let title: SharedString = format!("{}  {}", t!("App.Git.ctx_edit_message"), short_hash).into();
+    let placeholder: SharedString = t!("App.Git.commit_placeholder").to_string().into();
+    let input = cx.new(|c| {
+        gpui_component::input::InputState::new(window, c)
+            .multi_line(true)
+            .placeholder(placeholder)
+    });
+    input.update(cx, |s, c| s.set_value(current_message, window, c));
+    window.open_dialog(cx, move |dialog, _w, app_cx| {
+        let body = edit_message_dialog_body(app_cx, &input);
+        let ok_input = input.clone();
+        let ok_weak = app.clone();
+        dialog
+            .title(title.clone())
+            .w(px(640.0))
+            .close_button(true)
+            .overlay_closable(true)
+            .keyboard(true)
+            .confirm()
+            .button_props(
+                gpui_component::dialog::DialogButtonProps::default()
+                    .ok_text(t!("App.Git.ctx_edit_save").to_string())
+                    .cancel_text(t!("App.Common.cancel").to_string()),
+            )
+            .on_ok(move |_, _w, app_cx| {
+                let text = ok_input.read(app_cx).value().to_string();
+                if text.trim().is_empty() {
+                    return true;
+                }
+                let _ = ok_weak.update(app_cx, |this, cx| {
+                    this.schedule_git_commit_amend(text, cx);
+                });
+                true
+            })
+            .child(body)
+    });
+}
+
+fn edit_message_dialog_body(
+    cx: &mut App,
+    input: &gpui::Entity<gpui_component::input::InputState>,
+) -> gpui::AnyElement {
+    let t = theme(cx).clone();
+    div()
+        .w_full()
+        .min_h(px(220.0))
+        .px(SP_3)
+        .py(SP_2)
+        .bg(t.color.bg_panel)
+        .child(
+            crate::components::InlineInput::new(input)
+                .tone(crate::components::InlineInputTone::Inset),
+        )
+        .into_any_element()
+}
+
 /// Per-file commit diff dialog. Fetches the diff via
 /// `schedule_git_action` through a specialised one-shot path —
 /// here we re-use `commit_file_diff` synchronously on a background

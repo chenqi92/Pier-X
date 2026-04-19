@@ -82,13 +82,14 @@ impl RenderOnce for GitView {
             app.schedule_git_initial_refresh(cx);
         });
 
-        let (snapshot, commit_input, stash_input) = {
+        let (snapshot, commit_input, stash_input, graph_search_input) = {
             let app = app_entity.read(cx);
             let state = app.git_state().read(cx);
             (
                 GitSnapshot::from(state),
                 app.git_commit_input(),
                 app.git_stash_message_input(),
+                app.git_graph_search_input(),
             )
         };
 
@@ -99,7 +100,15 @@ impl RenderOnce for GitView {
             GitStatus::Failed if snapshot.repo_path.is_none() => {
                 error_layout(&t, &snapshot, weak).into_any_element()
             }
-            _ => tab_layout(&t, snapshot, commit_input, stash_input, weak).into_any_element(),
+            _ => tab_layout(
+                &t,
+                snapshot,
+                commit_input,
+                stash_input,
+                graph_search_input,
+                weak,
+            )
+            .into_any_element(),
         }
     }
 }
@@ -111,6 +120,7 @@ fn tab_layout(
     snap: GitSnapshot,
     commit_input: gpui::Entity<InputState>,
     stash_input: gpui::Entity<InputState>,
+    graph_search_input: gpui::Entity<InputState>,
     weak: WeakEntity<PierApp>,
 ) -> gpui::Stateful<gpui::Div> {
     let active = snap.tab;
@@ -158,7 +168,8 @@ fn tab_layout(
             GitTab::Changes => {
                 changes_tab_body(t, &snap, weak.clone()).into_any_element()
             }
-            GitTab::History => graph_tab_body(t, &snap, weak.clone()).into_any_element(),
+            GitTab::History => graph_tab_body(t, &snap, graph_search_input.clone(), weak.clone())
+                .into_any_element(),
             GitTab::Stash => {
                 stash_tab_body(t, &snap, stash_input, weak.clone()).into_any_element()
             }
@@ -261,7 +272,8 @@ fn not_a_repo_layout(
         .child(Separator::horizontal())
         .child(
             InspectorSection::new(t!("App.Common.repository"))
-                .icon(IconName::Folder)
+                // SF `folder.fill` on the repo section header in Pier.
+                .icon(IconName::FolderFill)
                 .child(
                     div()
                         .px(SP_3)
@@ -370,10 +382,14 @@ fn primary_tabs(active: GitTab, weak: WeakEntity<PierApp>) -> impl IntoElement {
     let mut tabs = Tabs::new();
     for tab in GitTab::all() {
         let is_active = tab == active;
+        // Per-tab icon mapping mirrors Pier's GitPanelView segmented
+        // picker: Changes=`tray.full` (filled inbox), History=commit
+        // glyph, Stash=`square.stack.3d.up.fill`, Conflicts=warning
+        // (outline — filled would scream "error" on every load).
         let (label_key, icon) = match tab {
-            GitTab::Changes => ("App.Git.tab_changes", IconName::Inbox),
+            GitTab::Changes => ("App.Git.tab_changes", IconName::TrayFill),
             GitTab::History => ("App.Git.tab_graph", IconName::GitCommit),
-            GitTab::Stash => ("App.Git.tab_stash", IconName::Inspector),
+            GitTab::Stash => ("App.Git.tab_stash", IconName::StackFill),
             GitTab::Conflicts => ("App.Git.mgr_conflicts", IconName::TriangleAlert),
         };
         let w = weak.clone();
@@ -463,13 +479,17 @@ fn branch_actions_row(
     // dialogs, then fetch / pull / push. Each icon pops a modal
     // via `window.open_dialog`, matching Pier's behaviour.
     let _ = open_panel; // legacy overlay signal, unused now
+    // Manager-dialog trigger icons — aligned with Pier's
+    // GitBranchManagerView / GitTagManagerView / … SF Symbol choices:
+    //   Tags → `tag.fill`, Config → `gearshape.fill`,
+    //   Rebase → `arrow.triangle.2.circlepath`.
     for (mgr, icon) in [
         (ManagerTab::Branches, IconName::GitBranch),
-        (ManagerTab::Tags, IconName::BookOpen),
+        (ManagerTab::Tags, IconName::TagFill),
         (ManagerTab::Remotes, IconName::Globe),
         (ManagerTab::Submodules, IconName::Container),
-        (ManagerTab::Config, IconName::Settings),
-        (ManagerTab::Rebase, IconName::Undo),
+        (ManagerTab::Config, IconName::GearFill),
+        (ManagerTab::Rebase, IconName::ArrowsCounterClockwise),
     ] {
         let w = weak.clone();
         row = row.child(
@@ -494,6 +514,10 @@ fn branch_actions_row(
         );
     }
 
+    // Fetch / Pull / Push — Pier uses `arrow.clockwise` / `arrow.down.doc.fill` /
+    // `arrow.up.doc.fill` respectively on these exact controls. The file-
+    // arrow icons read instantly as "fetch the file contents" vs a generic
+    // arrow glyph.
     let fetch_w = weak.clone();
     row = row.child(
         IconButton::new("git-row-fetch", IconName::RefreshCw)
@@ -507,7 +531,7 @@ fn branch_actions_row(
     );
     let pull_w = weak.clone();
     row = row.child(
-        IconButton::new("git-row-pull", IconName::ArrowDown)
+        IconButton::new("git-row-pull", IconName::FileArrowDownFill)
             .size(IconButtonSize::Sm)
             .variant(IconButtonVariant::Ghost)
             .on_click(move |_, _, cx| {
@@ -518,7 +542,7 @@ fn branch_actions_row(
     );
     let push_w = weak.clone();
     row = row.child(
-        IconButton::new("git-row-push", IconName::ArrowUp)
+        IconButton::new("git-row-push", IconName::FileArrowUpFill)
             .size(IconButtonSize::Sm)
             .variant(IconButtonVariant::Ghost)
             .on_click(move |_, _, cx| {
@@ -1036,7 +1060,8 @@ fn changes_section(
     }
 
     let mut section = InspectorSection::new(t!("App.Git.working_tree"))
-        .icon(IconName::Inbox)
+        // Pier's working-tree section uses `tray.full` (filled inbox).
+        .icon(IconName::TrayFill)
         .actions(actions);
 
     if changes.is_empty() {
@@ -1370,7 +1395,9 @@ fn diff_section(
         );
 
     let mut section = InspectorSection::new(t!("App.Git.diff_section"))
-        .icon(IconName::Inspector)
+        // Pier's DiffView section uses `doc.text.magnifyingglass` — the
+        // "examine this file" cue.
+        .icon(IconName::FileMagnifyingGlass)
         .eyebrow(selection.path.clone())
         .actions(actions);
 
@@ -1650,7 +1677,8 @@ fn stash_section(
         });
 
     let mut section = InspectorSection::new(t!("App.Git.stash_section"))
-        .icon(IconName::Inspector)
+        // Pier's stash UI stamps each entry with `square.stack.3d.up.fill`.
+        .icon(IconName::StackFill)
         .actions(push_btn)
         .child(
             div()
@@ -1787,7 +1815,9 @@ fn log_section(t: &crate::theme::Theme, log: &[CommitInfo]) -> impl IntoElement 
         StatusKind::Info,
     );
     let mut section = InspectorSection::new(t!("App.Git.recent_commits"))
-        .icon(IconName::GalleryVerticalEnd)
+        // Pier's recent-commits strip uses `clock.arrow.circlepath`
+        // — "things that happened recently".
+        .icon(IconName::ClockCounterClockwise)
         .actions(count_pill);
 
     if log.is_empty() {
@@ -1909,10 +1939,11 @@ fn git_feedback_strip(
 fn graph_tab_body(
     t: &crate::theme::Theme,
     snap: &GitSnapshot,
+    search_input: gpui::Entity<InputState>,
     weak: WeakEntity<PierApp>,
 ) -> gpui::Div {
     let mut col = div().w_full().flex().flex_col();
-    col = col.child(graph_toolbar(t, &snap.graph, weak.clone()));
+    col = col.child(graph_toolbar(t, &snap.graph, search_input, weak.clone()));
     col = col.child(Separator::horizontal());
 
     if let Some(err) = snap.graph.error.clone() {
@@ -2111,6 +2142,7 @@ fn should_dim_row_ns(row: &GraphRow, g: &GraphStateSnapshot) -> bool {
 fn graph_toolbar(
     t: &crate::theme::Theme,
     graph: &GraphStateSnapshot,
+    search_input: gpui::Entity<InputState>,
     weak: WeakEntity<PierApp>,
 ) -> gpui::Div {
     let mut row = div()
@@ -2124,34 +2156,55 @@ fn graph_toolbar(
         .py(SP_1_5)
         .bg(t.color.bg_panel);
 
-    // Search box (placeholder — live click re-triggers graph reload).
-    let search = graph.filter.search_text.clone().unwrap_or_default();
-    let search_label: SharedString = if search.is_empty() {
-        t!("App.Git.graph_search_placeholder").into()
-    } else {
-        SharedString::from(search.clone())
-    };
-    let cur_filter = graph.filter.clone();
-    let weak_search = weak.clone();
-    row = row.child(
-        filter_chip(
-            t,
-            "git-graph-search",
-            IconName::Search,
-            search_label,
-            !search.is_empty(),
-            move |_, _, cx| {
-                // Toggle: clear search if already set.
-                let next = GraphFilter {
-                    search_text: None,
-                    ..cur_filter.clone()
-                };
-                let _ = weak_search.update(cx, |app, cx| {
-                    app.set_git_graph_filter(next.clone(), cx);
-                });
-            },
-        ),
-    );
+    // Live search input — Enter triggers a reload through
+    // `commit_git_graph_search` (subscribed once at app-boot in
+    // `PierApp::new`), the ✕ button clears filter + input.
+    let mut search_row = div()
+        .flex_none()
+        .flex()
+        .flex_row()
+        .items_center()
+        .gap(SP_0_5)
+        .h(BUTTON_SM_H)
+        .px(SP_1)
+        .min_w(px(180.0))
+        .max_w(px(260.0))
+        .rounded(RADIUS_SM)
+        .bg(t.color.bg_surface)
+        .border_1()
+        .border_color(t.color.border_subtle)
+        .child(
+            div()
+                .flex_none()
+                .text_color(t.color.text_tertiary)
+                .child(gpui_component::Icon::new(IconName::Search).size(ICON_SM)),
+        )
+        .child(
+            div().flex_1().min_w(px(0.0)).child(
+                InlineInput::new(&search_input).tone(InlineInputTone::Inset),
+            ),
+        );
+    if graph.filter.search_text.is_some() {
+        let clear_weak = weak.clone();
+        let cur_filter_clear = graph.filter.clone();
+        let clear_input = search_input.clone();
+        search_row = search_row.child(
+            IconButton::new("git-graph-search-clear", IconName::Close)
+                .size(IconButtonSize::Sm)
+                .variant(IconButtonVariant::Ghost)
+                .on_click(move |_, win, cx| {
+                    clear_input.update(cx, |s, c| s.set_value("", win, c));
+                    let next = GraphFilter {
+                        search_text: None,
+                        ..cur_filter_clear.clone()
+                    };
+                    let _ = clear_weak.update(cx, |app, cx| {
+                        app.set_git_graph_filter(next.clone(), cx);
+                    });
+                }),
+        );
+    }
+    row = row.child(search_row);
 
     // Branch chip
     let branch_label: SharedString = graph
@@ -2256,7 +2309,9 @@ fn graph_toolbar(
     row = row.child(filter_chip(
         t,
         "git-graph-path",
-        IconName::Folder,
+        // Filled folder — the chip is a decorative label, not a
+        // directory-in-a-list, so the heavier glyph reads better.
+        IconName::FolderFill,
         path_label,
         path_active,
         move |_, _, cx| {
@@ -2394,7 +2449,8 @@ fn graph_toolbar(
     row = row.child(filter_chip(
         t,
         "git-graph-zebra",
-        IconName::LayoutDashboard,
+        // SF `rectangle.split.2x1` — Pier's "alternate row stripes" cue.
+        IconName::Columns,
         t!("App.Git.graph_zebra"),
         graph.zebra_stripes,
         move |_, _, cx| {
@@ -2548,6 +2604,8 @@ fn graph_row_element(
         }
     }
 
+    let right_click_weak = weak.clone();
+    let right_click_hash = hash.clone();
     let mut outer = div()
         .id(row_id)
         .flex()
@@ -2562,6 +2620,13 @@ fn graph_row_element(
             let h = click_hash.clone();
             let _ = click_weak.update(cx, |app, cx| {
                 app.toggle_git_graph_selected(h, cx);
+            });
+        })
+        .on_mouse_down(MouseButton::Right, move |ev, _, cx| {
+            let h = right_click_hash.clone();
+            let pos = ev.position;
+            let _ = right_click_weak.update(cx, |app, cx| {
+                app.open_git_commit_menu(h, pos, cx);
             });
         })
         .child(
@@ -3066,13 +3131,16 @@ fn managers_tab_strip(active: ManagerTab, weak: WeakEntity<PierApp>) -> impl Int
     let mut tabs = Tabs::new().segmented();
     for tab in ManagerTab::icons() {
         let is_active = tab == active;
+        // Keep these glyphs in lockstep with the trigger-icon list
+        // ~2600 lines above — both are user-facing references to the
+        // same manager dialog, so they must read identically.
         let (label_key, icon) = match tab {
             ManagerTab::Branches => ("App.Git.mgr_branches", IconName::GitBranch),
-            ManagerTab::Tags => ("App.Git.mgr_tags", IconName::BookOpen),
+            ManagerTab::Tags => ("App.Git.mgr_tags", IconName::TagFill),
             ManagerTab::Remotes => ("App.Git.mgr_remotes", IconName::Globe),
-            ManagerTab::Config => ("App.Git.mgr_config", IconName::Settings),
+            ManagerTab::Config => ("App.Git.mgr_config", IconName::GearFill),
             ManagerTab::Submodules => ("App.Git.mgr_submodules", IconName::Container),
-            ManagerTab::Rebase => ("App.Git.mgr_rebase", IconName::Undo),
+            ManagerTab::Rebase => ("App.Git.mgr_rebase", IconName::ArrowsCounterClockwise),
             ManagerTab::Conflicts => ("App.Git.mgr_conflicts", IconName::TriangleAlert),
         };
         let w = weak.clone();

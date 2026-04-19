@@ -217,7 +217,8 @@ impl RenderOnce for SftpBrowser {
             .border_b_1()
             .border_color(t.color.border_subtle)
             .child(
-                IconButton::new("sftp-up", IconName::ArrowUp)
+                // Pier's RemoteFileView up nav uses `arrow.up.circle`.
+                IconButton::new("sftp-up", IconName::ArrowCircleUp)
                     .size(IconButtonSize::Sm)
                     .variant(IconButtonVariant::Filled)
                     .on_click({
@@ -243,7 +244,8 @@ impl RenderOnce for SftpBrowser {
             )
             .child(status_pill)
             .child(
-                IconButton::new("sftp-mkdir", IconName::Plus)
+                // Pier's RemoteFileView mkdir uses `folder.badge.plus`.
+                IconButton::new("sftp-mkdir", IconName::FolderPlus)
                     .size(IconButtonSize::Sm)
                     .variant(IconButtonVariant::Filled)
                     .on_click({
@@ -252,7 +254,8 @@ impl RenderOnce for SftpBrowser {
                     }),
             )
             .child(
-                IconButton::new("sftp-upload", IconName::ArrowUp)
+                // Pier's RemoteFileView upload uses `arrow.up.doc.fill`.
+                IconButton::new("sftp-upload", IconName::FileArrowUpFill)
                     .size(IconButtonSize::Sm)
                     .variant(IconButtonVariant::Filled)
                     .on_click({
@@ -360,8 +363,11 @@ fn remote_row(
     on_navigate: NavigateHandler,
     on_row_action: RowActionHandler,
 ) -> impl IntoElement {
+    // Directories use the filled folder glyph (SF `folder.fill` parity
+    // with the local file tree row); files keep the stroke variant so
+    // the mixed list reads "bold folders, quiet files" like Pier.
     let glyph = if entry.is_dir {
-        IconName::Folder
+        IconName::FolderFill
     } else {
         IconName::File
     };
@@ -534,7 +540,8 @@ fn row_action_icons(
         icons = icons.child(
             IconButton::new(
                 gpui::ElementId::Name(format!("sftp-row-rename-{id_path}").into()),
-                IconName::Replace,
+                // Pier uses `square.and.pencil` for rename row actions.
+                IconName::PencilSimpleLine,
             )
             .size(IconButtonSize::Xs)
             .on_click(move |_, w, app| on_action(&payload, w, app)),
@@ -552,7 +559,8 @@ fn row_action_icons(
         icons = icons.child(
             IconButton::new(
                 gpui::ElementId::Name(format!("sftp-row-dl-{id_path}").into()),
-                IconName::ArrowDown,
+                // Pier uses `arrow.down.doc.fill` for file downloads.
+                IconName::FileArrowDownFill,
             )
             .size(IconButtonSize::Xs)
             .on_click(move |_, w, app| on_action(&payload, w, app)),

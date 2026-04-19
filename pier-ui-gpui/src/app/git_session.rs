@@ -457,6 +457,31 @@ pub struct FooterDrag {
     pub start_height: f32,
 }
 
+/// Open context menu for a graph commit — stores everything the
+/// menu renderer needs (hash, parsed refs, unpushed flag, browser
+/// URL) so `PierApp::Render` can paint the menu without re-reading
+/// state mid-render (which double-leases the entity).
+#[derive(Clone, Debug)]
+pub struct CommitMenuState {
+    pub position: gpui::Point<gpui::Pixels>,
+    pub hash: String,
+    pub short_hash: String,
+    pub message: String,
+    /// First parent hash (for `rebase --onto` when dropping a non-HEAD commit).
+    pub parent: Option<String>,
+    /// Ref decoration tokens, already split on `,` and trimmed.
+    pub refs: Vec<String>,
+    /// `true` if the commit is not yet pushed (enables Undo / Edit /
+    /// Drop). Driven by `GraphState::unpushed`.
+    pub is_unpushed: bool,
+    /// `true` if the selected commit is HEAD (enables `--amend` for
+    /// Edit message, and `reset --hard HEAD~1` for Drop).
+    pub is_head: bool,
+    /// Optional browser URL derived from the first remote — non-None
+    /// surfaces an "Open in browser" menu item.
+    pub browser_url: Option<String>,
+}
+
 /// Sub-state: commit detail strip shown below the selected graph row.
 #[derive(Default)]
 pub struct CommitDetailState {

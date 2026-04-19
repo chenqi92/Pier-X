@@ -1533,8 +1533,14 @@ App:
       en: Checkout
       zh-CN: 检出
     ctx_checkout_revision:
-      en: Checkout revision
-      zh-CN: 检出版本
+      en: "Checkout revision %{short}…"
+      zh-CN: "检出版本 %{short}…"
+    ctx_checkout_branch_of:
+      en: "Checkout branch '%{name}'"
+      zh-CN: "检出分支 '%{name}'"
+    ctx_edit_save:
+      en: Save amended message
+      zh-CN: 保存修改后的信息
     ctx_checkout_branch:
       en: Checkout branch
       zh-CN: 检出分支

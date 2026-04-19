@@ -87,9 +87,12 @@ impl RenderOnce for TransferToast {
             (0.25, true)
         };
 
+        // Pier toasts use `arrow.up.doc.fill` / `arrow.down.doc.fill`
+        // — the file-arrow glyphs read as "a file is moving" instead
+        // of a generic arrow.
         let arrow = match direction {
-            TransferDirection::Upload => IconName::ArrowUp,
-            TransferDirection::Download => IconName::ArrowDown,
+            TransferDirection::Upload => IconName::FileArrowUpFill,
+            TransferDirection::Download => IconName::FileArrowDownFill,
         };
 
         let name_label: SharedString = name.into();

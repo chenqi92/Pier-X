@@ -330,7 +330,8 @@ fn render_header(
                 .rounded(RADIUS_SM)
                 .bg(t.color.accent_subtle)
                 .child(
-                    UiIcon::new(IconName::Folder)
+                    // Pier's LocalFileView cwd chip uses `folder.fill`.
+                    UiIcon::new(IconName::FolderFill)
                         .size(GLYPH_SM)
                         .text_color(t.color.accent),
                 ),
@@ -586,10 +587,14 @@ fn quick_menu_entries() -> Vec<QuickMenuEntry> {
         icon: IconName::CircleUserFill,
         target: Some(home.clone()),
     });
+    // All destination entries wear `folder.fill` (Phosphor FolderFill)
+    // — matches Pier's sidebar-style listing where each row is a real
+    // folder you can open. The Choose action stays outline `folder-open`
+    // since it's a modal trigger, not a destination.
     out.push(QuickMenuEntry {
         id: "ft-qm-desktop",
         label: t!("App.FileTree.Quick.desktop").into(),
-        icon: IconName::Folder,
+        icon: IconName::FolderFill,
         target: Some(home.join("Desktop")),
     });
     out.push(QuickMenuEntry {
@@ -601,15 +606,15 @@ fn quick_menu_entries() -> Vec<QuickMenuEntry> {
     out.push(QuickMenuEntry {
         id: "ft-qm-downloads",
         label: t!("App.FileTree.Quick.downloads").into(),
-        // Stand-in for a download-tray glyph (our icon set lacks one);
-        // `ArrowDown` reads as "downloads" when paired with the label.
-        icon: IconName::ArrowDown,
+        // Phosphor `file-arrow-down` reads as "downloads" specifically —
+        // mirrors Pier's `arrow.down.doc.fill` usage.
+        icon: IconName::FileArrowDown,
         target: Some(home.join("Downloads")),
     });
     out.push(QuickMenuEntry {
         id: "ft-qm-projects",
         label: t!("App.FileTree.Quick.projects").into(),
-        icon: IconName::Folder,
+        icon: IconName::FolderFill,
         target: Some(home.join("Projects")),
     });
 
@@ -621,7 +626,7 @@ fn quick_menu_entries() -> Vec<QuickMenuEntry> {
         out.push(QuickMenuEntry {
             id: "ft-qm-applications",
             label: t!("App.FileTree.Quick.applications").into(),
-            icon: IconName::Folder,
+            icon: IconName::FolderFill,
             target: Some(PathBuf::from("/Applications")),
         });
     }
@@ -641,7 +646,8 @@ fn quick_menu_entries() -> Vec<QuickMenuEntry> {
             out.push(QuickMenuEntry {
                 id,
                 label: t!("App.FileTree.Quick.drive", letter = letter).into(),
-                icon: IconName::Folder,
+                // Phosphor `hard-drive-fill` matches SF `externaldrive.fill`.
+                icon: IconName::HardDriveFill,
                 target: Some(drive),
             });
         }
@@ -651,7 +657,7 @@ fn quick_menu_entries() -> Vec<QuickMenuEntry> {
         out.push(QuickMenuEntry {
             id: "ft-qm-root",
             label: t!("App.FileTree.Quick.root").into(),
-            icon: IconName::Folder,
+            icon: IconName::FolderFill,
             target: Some(PathBuf::from("/")),
         });
     }
@@ -660,6 +666,8 @@ fn quick_menu_entries() -> Vec<QuickMenuEntry> {
     out.push(QuickMenuEntry {
         id: "__divider__",
         label: SharedString::default(),
+        // Icon here is unused (divider branch in the render loop
+        // short-circuits) but the struct field is non-optional.
         icon: IconName::Folder,
         target: None,
     });

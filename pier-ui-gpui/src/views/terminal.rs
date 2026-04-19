@@ -1384,7 +1384,9 @@ impl TerminalPanel {
 
     pub(crate) fn tab_icon_name(&self) -> IconName {
         if self.ssh_target.is_some() {
-            IconName::Globe
+            // Pier tags remote terminal tabs with `network` rather
+            // than a globe — matches the Servers list's endpoint glyph.
+            IconName::Network
         } else {
             IconName::SquareTerminal
         }

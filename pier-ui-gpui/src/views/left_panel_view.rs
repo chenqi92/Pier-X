@@ -272,8 +272,12 @@ impl LeftPanelView {
     ) -> impl IntoElement {
         let items = LeftTab::ALL.iter().copied().map(|tab| {
             let icon = match tab {
-                LeftTab::Files => IconName::Folder,
-                LeftTab::Servers => IconName::Globe,
+                // Pier's LeftPanel tab uses `folder.fill` / `server.rack`.
+                // Pier-X: `FolderFill` + `HardDriveFill` — the filled
+                // folder reads as "contents here", HardDriveFill reads
+                // as "server rack" (Phosphor doesn't ship server.rack).
+                LeftTab::Files => IconName::FolderFill,
+                LeftTab::Servers => IconName::HardDriveFill,
             };
             TabItem::new(
                 gpui::ElementId::Name(format!("left-tab-{}", tab.id()).into()),
@@ -392,8 +396,9 @@ impl LeftPanelView {
                     .border_b_1()
                     .border_color(t.color.border_subtle)
                     .child(
+                        // Pier's LocalFileView filter uses `magnifyingglass`.
                         InlineInput::new(&self.files_filter)
-                            .leading_icon(IconName::Folder)
+                            .leading_icon(IconName::Search)
                             .cleanable(),
                     ),
             )
@@ -449,8 +454,9 @@ impl LeftPanelView {
                     .border_b_1()
                     .border_color(t.color.border_subtle)
                     .child(
+                        // Pier's LeftPanel server filter uses `magnifyingglass`.
                         InlineInput::new(&self.servers_filter)
-                            .leading_icon(IconName::Globe)
+                            .leading_icon(IconName::Search)
                             .cleanable(),
                     ),
             )
@@ -825,7 +831,8 @@ fn active_connection_card(session: &ActiveServerSessionSnapshot) -> impl IntoEle
                 .child(text::h3(session.config.name.clone()))
                 .child(StatusPill::new(connect_label, connect_kind)),
         )
-        .child(MetaLine::new(endpoint).with_icon(IconName::Globe));
+        // Pier marks endpoint lines with `network`; use the same glyph.
+        .child(MetaLine::new(endpoint).with_icon(IconName::Network));
 
     if !session.services.is_empty() {
         let mut services = PillCluster::new();

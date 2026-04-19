@@ -36,8 +36,8 @@ use crate::app::git_session::{
     default_cwd as git_default_cwd, run_action as git_run_action, run_blame as git_run_blame,
     run_commit_detail as git_run_commit_detail, run_diff as git_run_diff,
     run_graph as git_run_graph, run_managers as git_run_managers, run_refresh as git_run_refresh,
-    DiffMode, DiffSelection, GitPendingAction, GitState, GitTab, GraphColumn, GraphFilter,
-    GraphHighlightMode, ManagerTab,
+    CommitMenuState, DiffMode, DiffSelection, GitPendingAction, GitState, GitTab, GraphColumn,
+    GraphFilter, GraphHighlightMode, ManagerTab,
 };
 use crate::app::layout::{
     DockerTab, RightMode, CENTER_PANEL_MIN_W, LEFT_PANEL_DEFAULT_W, LEFT_PANEL_MAX_W,
@@ -252,6 +252,14 @@ pub struct PierApp {
     /// Tab right-click menu state. `Some((idx, pos))` while the menu
     /// is open over terminal tab `idx` anchored at viewport `pos`.
     tab_context_menu: Option<(usize, gpui::Point<Pixels>)>,
+    /// Open commit context menu on the History tab. Built by
+    /// `open_git_commit_menu`; rendered as the last child of the
+    /// PierApp root so it floats above the Git panel.
+    git_commit_menu: Option<CommitMenuState>,
+    /// Entity holding the graph-search input state (InlineInput
+    /// bound on the Graph tab toolbar). Submitting bumps the graph
+    /// filter via `set_git_graph_filter`.
+    git_graph_search_input: Entity<InputState>,
     /// Horizontal scroll state for the terminal tab bar. Persisted on
     /// PierApp so scroll position survives cross-renders.
     terminal_tabs_scroll: ScrollHandle,
@@ -346,8 +354,13 @@ impl PierApp {
         // actual `git status` / `log` / `branch_list` roundtrip is
         // scheduled on the first render of the Git mode (see
         // `schedule_git_initial_refresh`).
-        let git_state = cx.new(|_| {
+        let git_state = cx.new(|c| {
             let mut state = GitState::new(git_default_cwd());
+            // Restore the persisted commit-footer height from
+            // AppSettings so the splitter sits exactly where the
+            // user dragged it last session.
+            let saved = crate::theme::theme(c).settings.git_footer_height as f32;
+            state.footer_height = saved.clamp(80.0, 480.0);
             state.ensure_client();
             state
         });
@@ -373,6 +386,24 @@ impl PierApp {
             db_query_inputs,
             terminals: Vec::new(),
             tab_context_menu: None,
+            git_commit_menu: None,
+            git_graph_search_input: {
+                let placeholder: SharedString = t!("App.Git.graph_search_placeholder")
+                    .to_string()
+                    .into();
+                let input = cx.new(|c| InputState::new(window, c).placeholder(placeholder));
+                // Subscribe once: Enter in the graph search box commits
+                // the current value into the filter and reloads. No
+                // debounce on Change — live filtering the graph would
+                // re-run `git log --grep` on every keystroke.
+                cx.subscribe(&input, |this, _, ev: &gpui_component::input::InputEvent, cx| {
+                    if matches!(ev, gpui_component::input::InputEvent::PressEnter { .. }) {
+                        this.commit_git_graph_search(cx);
+                    }
+                })
+                .detach();
+                input
+            },
             active_terminal: None,
             terminal_tabs_scroll: ScrollHandle::new(),
             terminal_tabs_last_revealed: None,
@@ -1321,6 +1352,9 @@ impl Render for PierApp {
                 // unreadable via `cx.entity().read(...)` mid-render.
                 let total = self.terminals.len();
                 root.child(render_tab_context_menu(idx, position, total, cx))
+            })
+            .when_some(self.git_commit_menu.clone(), |root, menu_state| {
+                root.child(render_git_commit_context_menu(menu_state, cx))
             })
     }
 }
@@ -2837,6 +2871,109 @@ impl PierApp {
         .detach();
     }
 
+    /// Public getter for the graph-search input entity so the view
+    /// can mount a live `InlineInput` on the graph toolbar.
+    pub fn git_graph_search_input(&self) -> Entity<InputState> {
+        self.git_graph_search_input.clone()
+    }
+
+    /// Accept the current search-input value, push it into the graph
+    /// filter and reload. Called on Enter / on blur of the input.
+    pub fn commit_git_graph_search(&mut self, cx: &mut Context<Self>) {
+        let text = self.git_graph_search_input.read(cx).value().to_string();
+        let trimmed = text.trim();
+        let filter = {
+            let state = self.git_state.read(cx);
+            GraphFilter {
+                search_text: if trimmed.is_empty() {
+                    None
+                } else {
+                    Some(trimmed.to_string())
+                },
+                ..state.graph.filter.clone()
+            }
+        };
+        self.set_git_graph_filter(filter, cx);
+    }
+
+    /// Open the commit context menu at screen-space `position` for
+    /// `hash`. Builds `CommitMenuState` by reading the live graph
+    /// cache so the menu renderer never has to re-read `self` mid-
+    /// render (which would trip GPUI's double-lease guard).
+    pub fn open_git_commit_menu(
+        &mut self,
+        hash: String,
+        position: gpui::Point<Pixels>,
+        cx: &mut Context<Self>,
+    ) {
+        let (short_hash, message, parent, refs, is_unpushed, is_head) = {
+            let state = self.git_state.read(cx);
+            let row = state.graph.rows.iter().find(|r| r.hash == hash);
+            let short = row
+                .map(|r| r.short_hash.clone())
+                .unwrap_or_else(|| hash.chars().take(8).collect());
+            let msg = row.map(|r| r.message.clone()).unwrap_or_default();
+            let parent = row
+                .and_then(|r| r.parents.split(' ').find(|p| !p.is_empty()).map(String::from));
+            let refs: Vec<String> = row
+                .map(|r| r.refs.clone())
+                .map(|s| {
+                    s.trim()
+                        .trim_start_matches('(')
+                        .trim_end_matches(')')
+                        .split(',')
+                        .map(|p| p.trim().to_string())
+                        .filter(|p| !p.is_empty())
+                        .collect()
+                })
+                .unwrap_or_default();
+            let is_unpushed = state.graph.unpushed.contains(&hash);
+            let is_head = state.graph.rows.first().map(|r| r.hash == hash).unwrap_or(false);
+            (short, msg, parent, refs, is_unpushed, is_head)
+        };
+
+        // Browser URL from the active client — non-blocking (just
+        // reads the `remote.origin.url` config, <5 ms typical).
+        let browser_url = self
+            .git_state
+            .read(cx)
+            .client
+            .as_ref()
+            .and_then(|c| c.commit_browser_url(&hash));
+
+        self.git_commit_menu = Some(CommitMenuState {
+            position,
+            hash,
+            short_hash,
+            message,
+            parent,
+            refs,
+            is_unpushed,
+            is_head,
+            browser_url,
+        });
+        cx.notify();
+    }
+
+    pub fn close_git_commit_menu(&mut self, cx: &mut Context<Self>) {
+        if self.git_commit_menu.take().is_some() {
+            cx.notify();
+        }
+    }
+
+    /// Copy a hash to the system clipboard. Invoked from the commit
+    /// context menu's "Copy hash" item.
+    pub fn copy_text_to_clipboard(&self, text: &str, cx: &mut Context<Self>) {
+        cx.write_to_clipboard(gpui::ClipboardItem::new_string(text.to_string()));
+    }
+
+    /// Amend the current HEAD commit with a new message — used by
+    /// the Edit-message menu item (only fires when the selection is
+    /// HEAD, verified at render time).
+    pub fn schedule_git_commit_amend(&mut self, message: String, cx: &mut Context<Self>) {
+        self.schedule_git_action(GitPendingAction::CommitAmend { message }, cx);
+    }
+
     pub fn begin_git_footer_drag(&mut self, mouse_y: f32, cx: &mut Context<Self>) {
         self.git_state.update(cx, |s, _| s.begin_footer_drag(mouse_y));
     }
@@ -2854,6 +2991,13 @@ impl PierApp {
         let was_dragging = self.git_state.read(cx).footer_drag.is_some();
         self.git_state.update(cx, |s, _| s.end_footer_drag());
         if was_dragging {
+            // Persist the final height so next launch lands in the
+            // same layout. `u16` is plenty — drag is clamped to
+            // 80..=480 so precision loss is irrelevant.
+            let h = self.git_state.read(cx).footer_height.round() as u16;
+            crate::theme::update_settings(cx, move |settings| {
+                settings.git_footer_height = h;
+            });
             cx.notify();
         }
     }
@@ -3392,6 +3536,244 @@ fn render_tab_context_menu(
             })),
     )
     .on_dismiss(cx.listener(|this, _: &(), _window, cx| this.close_tab_context_menu(cx)))
+}
+
+/// Render the floating commit context menu on the History tab.
+/// Mirrors Pier's IDEA-style menu: Checkout, Cherry-pick, Revert,
+/// Reset (mixed / hard), New branch / tag, Undo / Edit / Drop
+/// (unpushed-only), Copy hash, Open in browser.
+fn render_git_commit_context_menu(
+    state: CommitMenuState,
+    cx: &mut Context<PierApp>,
+) -> impl IntoElement {
+    use crate::components::{ContextMenu, ContextMenuItem};
+    use pier_core::services::git::ResetMode;
+
+    let hash = state.hash.clone();
+    let short = state.short_hash.clone();
+    let is_unpushed = state.is_unpushed;
+    let is_head = state.is_head;
+    let parent = state.parent.clone();
+    let message = state.message.clone();
+
+    // Local branch refs (drop HEAD / origin/* / tag:*).
+    let local_branches: Vec<String> = state
+        .refs
+        .iter()
+        .filter(|r| {
+            !r.starts_with("HEAD")
+                && !r.starts_with("origin/")
+                && !r.starts_with("tag:")
+        })
+        .cloned()
+        .collect();
+
+    let mut menu = ContextMenu::new(
+        gpui::ElementId::Name(format!("git-commit-ctx-{short}").into()),
+        state.position,
+    );
+
+    // ── Checkout ──
+    let hash_for_checkout = hash.clone();
+    menu = menu.item(
+        ContextMenuItem::new(t!(
+            "App.Git.ctx_checkout_revision",
+            short = short.as_str()
+        ))
+        .on_click(cx.listener(move |this, _, _, cx| {
+            let h = hash_for_checkout.clone();
+            this.schedule_git_action(GitPendingAction::CheckoutHash { hash: h }, cx);
+            this.close_git_commit_menu(cx);
+        })),
+    );
+    for branch in local_branches.iter().take(4) {
+        let b = branch.clone();
+        menu = menu.item(
+            ContextMenuItem::new(t!(
+                "App.Git.ctx_checkout_branch_of",
+                name = b.as_str()
+            ))
+            .on_click(cx.listener(move |this, _, _, cx| {
+                let name = b.clone();
+                this.schedule_git_action(GitPendingAction::CheckoutBranch { name }, cx);
+                this.close_git_commit_menu(cx);
+            })),
+        );
+    }
+
+    // ── Reset ──
+    let hash_for_reset_mixed = hash.clone();
+    menu = menu.item(
+        ContextMenuItem::new(t!("App.Git.reset_mixed"))
+            .with_separator()
+            .on_click(cx.listener(move |this, _, _, cx| {
+                let h = hash_for_reset_mixed.clone();
+                this.schedule_git_action(
+                    GitPendingAction::Reset {
+                        mode: ResetMode::Mixed,
+                        target: h,
+                    },
+                    cx,
+                );
+                this.close_git_commit_menu(cx);
+            })),
+    );
+    let hash_for_reset_hard = hash.clone();
+    menu = menu.item(
+        ContextMenuItem::new(t!("App.Git.reset_hard"))
+            .danger()
+            .on_click(cx.listener(move |this, _, _, cx| {
+                let h = hash_for_reset_hard.clone();
+                this.schedule_git_action(
+                    GitPendingAction::Reset {
+                        mode: ResetMode::Hard,
+                        target: h,
+                    },
+                    cx,
+                );
+                this.close_git_commit_menu(cx);
+            })),
+    );
+
+    // ── Cherry-pick / Revert ──
+    let hash_for_cherry = hash.clone();
+    menu = menu.item(
+        ContextMenuItem::new(t!("App.Git.ctx_cherry_pick"))
+            .with_separator()
+            .on_click(cx.listener(move |this, _, _, cx| {
+                let h = hash_for_cherry.clone();
+                this.schedule_git_action(GitPendingAction::CherryPick { hash: h }, cx);
+                this.close_git_commit_menu(cx);
+            })),
+    );
+    let hash_for_revert = hash.clone();
+    menu = menu.item(
+        ContextMenuItem::new(t!("App.Git.ctx_revert"))
+            .on_click(cx.listener(move |this, _, _, cx| {
+                let h = hash_for_revert.clone();
+                this.schedule_git_action(GitPendingAction::Revert { hash: h }, cx);
+                this.close_git_commit_menu(cx);
+            })),
+    );
+
+    // ── New branch / tag ──
+    let hash_for_new_branch = hash.clone();
+    let short_for_new_branch = short.clone();
+    menu = menu.item(
+        ContextMenuItem::new(t!("App.Git.ctx_new_branch"))
+            .with_separator()
+            .on_click(cx.listener(move |this, _, _, cx| {
+                let h = hash_for_new_branch.clone();
+                let name = format!(
+                    "branch-{}",
+                    short_for_new_branch.chars().take(7).collect::<String>()
+                );
+                this.schedule_git_action(
+                    GitPendingAction::BranchCreate {
+                        name,
+                        base: Some(h),
+                    },
+                    cx,
+                );
+                this.close_git_commit_menu(cx);
+            })),
+    );
+    let hash_for_new_tag = hash.clone();
+    let short_for_new_tag = short.clone();
+    menu = menu.item(
+        ContextMenuItem::new(t!("App.Git.ctx_new_tag"))
+            .on_click(cx.listener(move |this, _, _, cx| {
+                let h = hash_for_new_tag.clone();
+                let name = format!(
+                    "tag-{}",
+                    short_for_new_tag.chars().take(7).collect::<String>()
+                );
+                this.schedule_git_action(
+                    GitPendingAction::TagCreate {
+                        name,
+                        message: String::new(),
+                        at: Some(h),
+                    },
+                    cx,
+                );
+                this.close_git_commit_menu(cx);
+            })),
+    );
+
+    // ── Unpushed-only destructive block ──
+    if is_unpushed {
+        let hash_for_undo = hash.clone();
+        menu = menu.item(
+            ContextMenuItem::new(t!("App.Git.ctx_undo_commit"))
+                .with_separator()
+                .on_click(cx.listener(move |this, _, _, cx| {
+                    let h = hash_for_undo.clone();
+                    this.schedule_git_action(GitPendingAction::UndoCommit { hash: h }, cx);
+                    this.close_git_commit_menu(cx);
+                })),
+        );
+        // Edit message only works on HEAD via `--amend`.
+        let short_for_edit = short.clone();
+        let msg_for_edit = message.clone();
+        menu = menu.item(
+            ContextMenuItem::new(t!("App.Git.ctx_edit_message"))
+                .disabled(!is_head)
+                .on_click(cx.listener(move |this, _, win, cx| {
+                    // Grab the weak handle before re-borrowing cx for
+                    // the dialog open call — avoids the simultaneous
+                    // `cx.entity()` + `&mut cx` borrow.
+                    let weak = cx.entity().downgrade();
+                    crate::views::git_dialogs::open_edit_message_dialog(
+                        win,
+                        cx,
+                        weak,
+                        short_for_edit.clone(),
+                        msg_for_edit.clone(),
+                    );
+                    this.close_git_commit_menu(cx);
+                })),
+        );
+        let hash_for_drop = hash.clone();
+        let parent_for_drop = parent.clone();
+        menu = menu.item(
+            ContextMenuItem::new(t!("App.Git.ctx_drop_commit"))
+                .danger()
+                .on_click(cx.listener(move |this, _, _, cx| {
+                    let h = hash_for_drop.clone();
+                    let p = parent_for_drop.clone();
+                    this.schedule_git_action(
+                        GitPendingAction::DropCommit { hash: h, parent: p },
+                        cx,
+                    );
+                    this.close_git_commit_menu(cx);
+                })),
+        );
+    }
+
+    // ── Copy hash ──
+    let hash_for_copy = hash.clone();
+    menu = menu.item(
+        ContextMenuItem::new(t!("App.Git.ctx_copy_hash"))
+            .with_separator()
+            .on_click(cx.listener(move |this, _, _, cx| {
+                let h = hash_for_copy.clone();
+                this.copy_text_to_clipboard(&h, cx);
+                this.close_git_commit_menu(cx);
+            })),
+    );
+
+    // ── Open in browser ──
+    if let Some(url) = state.browser_url.clone() {
+        menu = menu.item(
+            ContextMenuItem::new(t!("App.Git.ctx_open_browser"))
+                .on_click(cx.listener(move |this, _, _, cx| {
+                    cx.open_url(&url);
+                    this.close_git_commit_menu(cx);
+                })),
+        );
+    }
+
+    menu.on_dismiss(cx.listener(|this, _: &(), _window, cx| this.close_git_commit_menu(cx)))
 }
 
 /// Append `name` onto the SFTP-side `cwd` (which is a `PathBuf`

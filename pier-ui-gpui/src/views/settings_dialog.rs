@@ -100,8 +100,12 @@ impl SettingsSectionId {
     /// the three titles are short compound words.
     fn icon(self) -> IconName {
         match self {
-            Self::General => IconName::Settings,
-            Self::Terminal => IconName::SquareTerminal,
+            // Pier's SettingsView leads General with `gearshape.fill`.
+            Self::General => IconName::GearFill,
+            // Pier uses plain `terminal` (no frame) for the terminal
+            // section — `Terminal` is the Phosphor equivalent; frame-
+            // wrapped `SquareTerminal` is reserved for tab icons.
+            Self::Terminal => IconName::Terminal,
             // gpui_component has no Keyboard glyph — `Settings2` is a
             // different-looking gear that at least reads as "another
             // settings subtopic" rather than duplicating `Settings`.

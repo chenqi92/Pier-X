@@ -10,8 +10,10 @@
 //! - `Filled` — always-visible surface fill. Use when the button needs
 //!   to feel "present" (e.g. a detached FAB-style control).
 
-use gpui::{div, prelude::*, App, ClickEvent, ElementId, IntoElement, Pixels, Rgba, Window};
-use gpui_component::{Icon as UiIcon, IconName};
+use gpui::{
+    div, prelude::*, App, ClickEvent, ElementId, IntoElement, Pixels, Rgba, SharedString, Window,
+};
+use gpui_component::{tooltip::Tooltip, Icon as UiIcon, IconName};
 
 use crate::theme::{
     heights::{BUTTON_MD_H, BUTTON_SM_H, BUTTON_XS_H, GLYPH_2XS, ICON_MD, ICON_SM},
@@ -69,6 +71,7 @@ pub struct IconButton {
     variant: IconButtonVariant,
     size: IconButtonSize,
     disabled: bool,
+    tooltip: Option<SharedString>,
     on_click: Option<Box<dyn Fn(&ClickEvent, &mut Window, &mut App) + 'static>>,
 }
 
@@ -82,8 +85,17 @@ impl IconButton {
             // icon-button size. Rare `.size(Md)` for emphasis only.
             size: IconButtonSize::Sm,
             disabled: false,
+            tooltip: None,
             on_click: None,
         }
+    }
+
+    /// Attach a hover tooltip — mirrors SwiftUI's `.help(…)` on
+    /// toolbar icons. Shown after the OS-standard hover delay via
+    /// gpui_component's shared tooltip infrastructure.
+    pub fn tooltip(mut self, text: impl Into<SharedString>) -> Self {
+        self.tooltip = Some(text.into());
+        self
     }
 
     pub fn variant(mut self, variant: IconButtonVariant) -> Self {
@@ -155,6 +167,9 @@ impl RenderOnce for IconButton {
             if let Some(cb) = self.on_click {
                 el = el.on_click(move |ev, win, cx| cb(ev, win, cx));
             }
+        }
+        if let Some(text) = self.tooltip {
+            el = el.tooltip(move |win, cx| Tooltip::new(text.clone()).build(win, cx));
         }
         el
     }

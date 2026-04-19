@@ -552,16 +552,14 @@ fn quick_menu_body(
     for entry in entries {
         let is_divider = entry.id == "__divider__";
         if is_divider {
-            container = container.child(
-                div()
-                    .h(px(1.0))
-                    .w_full()
-                    .my(SP_1)
-                    .bg(colors.border_subtle),
-            );
-        } else {
             container =
-                container.child(render_item(entry, on_navigate_to.clone(), on_choose_folder.clone()));
+                container.child(div().h(px(1.0)).w_full().my(SP_1).bg(colors.border_subtle));
+        } else {
+            container = container.child(render_item(
+                entry,
+                on_navigate_to.clone(),
+                on_choose_folder.clone(),
+            ));
         }
     }
 
@@ -868,10 +866,9 @@ fn tone_color(t: &crate::theme::Theme, tone: FileIconTone) -> gpui::Rgba {
         // Code / images / media / archives all share the accent since
         // the enum is already communicated by the glyph shape; giving
         // each its own color would turn the panel into a parade.
-        FileIconTone::Code
-        | FileIconTone::Image
-        | FileIconTone::Media
-        | FileIconTone::Archive => t.color.text_secondary,
+        FileIconTone::Code | FileIconTone::Image | FileIconTone::Media | FileIconTone::Archive => {
+            t.color.text_secondary
+        }
         // Default / unknown — tertiary so the row's name does the work.
         FileIconTone::Neutral => t.color.text_tertiary,
     }

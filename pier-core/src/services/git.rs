@@ -905,7 +905,12 @@ impl GitClient {
     }
 
     /// Create a tag at a specific commit.
-    pub fn tag_create_at(&self, name: &str, message: &str, target: &str) -> Result<String, GitError> {
+    pub fn tag_create_at(
+        &self,
+        name: &str,
+        message: &str,
+        target: &str,
+    ) -> Result<String, GitError> {
         if message.is_empty() {
             self.git(&["tag", name, target])
         } else {

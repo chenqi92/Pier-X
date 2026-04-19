@@ -3,7 +3,7 @@
 use gpui::{
     div, prelude::*, App, ClickEvent, ElementId, IntoElement, Pixels, Rgba, SharedString, Window,
 };
-use gpui_component::{Icon as UiIcon, IconName};
+use gpui_component::{tooltip::Tooltip, Icon as UiIcon, IconName};
 
 use crate::theme::{
     heights::{BUTTON_MD_H, BUTTON_SM_H, ICON_MD, ICON_SM},
@@ -76,6 +76,8 @@ pub struct Button {
     width: Option<Pixels>,
     leading_icon: Option<IconName>,
     trailing_icon: Option<IconName>,
+    tooltip: Option<SharedString>,
+    disabled: bool,
     on_click: Option<Box<dyn Fn(&ClickEvent, &mut Window, &mut App) + 'static>>,
 }
 
@@ -96,6 +98,8 @@ impl Button {
             width: None,
             leading_icon: None,
             trailing_icon: None,
+            tooltip: None,
+            disabled: false,
             on_click: None,
         }
     }
@@ -138,6 +142,21 @@ impl Button {
 
     pub fn on_click(mut self, f: impl Fn(&ClickEvent, &mut Window, &mut App) + 'static) -> Self {
         self.on_click = Some(Box::new(f));
+        self
+    }
+
+    /// Attach a hover tooltip (SwiftUI `.help(…)` equivalent). Shown
+    /// after the OS hover delay via gpui_component's shared tooltip
+    /// infra — no coordinate math needed, it auto-positions.
+    pub fn tooltip(mut self, text: impl Into<SharedString>) -> Self {
+        self.tooltip = Some(text.into());
+        self
+    }
+
+    /// Render the button in a disabled state — greyed fill, no
+    /// hover, click handler suppressed.
+    pub fn disabled(mut self, disabled: bool) -> Self {
+        self.disabled = disabled;
         self
     }
 }
@@ -186,6 +205,27 @@ impl RenderOnce for Button {
         let palette = palette_for(self.variant, t);
         let icon_size = self.size.icon_size();
         let has_icon = self.leading_icon.is_some() || self.trailing_icon.is_some();
+        let disabled = self.disabled;
+
+        // Disabled buttons read as a greyed-out version of the same
+        // palette: dim the fill + text, no hover, no click. Primary /
+        // danger variants pick up an additional half-alpha muted bg
+        // so they don't shout when disabled.
+        let (bg, fg, hover_bg) = if disabled {
+            (
+                gpui::Rgba {
+                    a: 0.35,
+                    ..palette.bg
+                },
+                t.color.text_disabled,
+                gpui::Rgba {
+                    a: 0.35,
+                    ..palette.bg
+                },
+            )
+        } else {
+            (palette.bg, palette.fg, palette.hover_bg)
+        };
 
         let mut el = div()
             .id(self.id)
@@ -197,15 +237,14 @@ impl RenderOnce for Button {
             .items_center()
             .justify_center()
             .rounded(RADIUS_SM)
-            .bg(palette.bg)
+            .bg(bg)
             .text_size(SIZE_UI_LABEL)
-            .text_color(palette.fg)
-            .font(ui_font_with(&t.font_ui, &t.font_ui_features, WEIGHT_MEDIUM))
-            .cursor_pointer()
-            .hover({
-                let hover_bg = palette.hover_bg;
-                move |s| s.bg(hover_bg)
-            });
+            .text_color(fg)
+            .font(ui_font_with(&t.font_ui, &t.font_ui_features, WEIGHT_MEDIUM));
+
+        if !disabled {
+            el = el.cursor_pointer().hover(move |s| s.bg(hover_bg));
+        }
 
         if has_icon {
             el = el.gap(SP_2);
@@ -224,8 +263,13 @@ impl RenderOnce for Button {
         if let Some(b) = palette.border {
             el = el.border_1().border_color(b);
         }
-        if let Some(cb) = self.on_click {
-            el = el.on_click(move |ev, win, cx| cb(ev, win, cx));
+        if !disabled {
+            if let Some(cb) = self.on_click {
+                el = el.on_click(move |ev, win, cx| cb(ev, win, cx));
+            }
+        }
+        if let Some(text) = self.tooltip {
+            el = el.tooltip(move |win, cx| Tooltip::new(text.clone()).build(win, cx));
         }
         el
     }

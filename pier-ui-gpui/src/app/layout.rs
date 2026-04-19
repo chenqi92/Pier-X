@@ -40,7 +40,11 @@ pub const RIGHT_PANEL_MIN_W: Pixels = px(320.0);
 pub const RIGHT_PANEL_DEFAULT_W: Pixels = px(350.0);
 pub const RIGHT_PANEL_MAX_W: Pixels = px(600.0);
 
-pub const RIGHT_ICON_BAR_W: Pixels = px(38.0);
+/// Width of the vertical mode-picker rail on the far right of the
+/// shell. Sized so a 32-px square button (ICON_MD glyph) has ~4 px of
+/// breathing room on each side — matches Pier's filled-hover look at
+/// the cost of ~4 px over the previous 38-px rail.
+pub const RIGHT_ICON_BAR_W: Pixels = px(40.0);
 
 // ─── Left panel: Files / Servers ────────────────────────────────────────
 

@@ -14,7 +14,7 @@
 //! rgba literal in this file. Colors are tokens; the IDEA palette
 //! itself lives in `theme/colors.rs`.
 
-use gpui::{canvas, point, prelude::*, px, Pixels, PathBuilder, Rgba};
+use gpui::{canvas, point, prelude::*, px, PathBuilder, Pixels, Rgba};
 use pier_core::git_graph::GraphRow;
 
 use crate::theme::Theme;
@@ -78,10 +78,7 @@ pub fn graph_row_canvas(
                     dim,
                 );
                 let mut builder = PathBuilder::stroke(px(STROKE_WIDTH));
-                builder.move_to(point(
-                    origin.x + px(seg.x_top),
-                    origin.y + px(seg.y_top),
-                ));
+                builder.move_to(point(origin.x + px(seg.x_top), origin.y + px(seg.y_top)));
                 builder.line_to(point(
                     origin.x + px(seg.x_bottom),
                     origin.y + px(seg.y_bottom),
@@ -147,11 +144,8 @@ pub fn graph_row_canvas(
                     window.paint_path(ring, dot_color);
                 }
             }
-            if let Some(dot) = circle_fill(
-                origin.x + px(cx_pos),
-                origin.y + px(cy_pos),
-                DOT_RADIUS,
-            ) {
+            if let Some(dot) = circle_fill(origin.x + px(cx_pos), origin.y + px(cy_pos), DOT_RADIUS)
+            {
                 window.paint_path(dot, dot_color);
             }
 
@@ -178,12 +172,7 @@ fn apply_alpha(base: Rgba, factor: f32) -> Rgba {
 /// Build a stroked circle path via two cubic Bézier half-arcs.
 /// The curve control offset (0.5523 × radius) is the standard
 /// quarter-circle cubic approximation.
-fn circle_stroke(
-    cx: Pixels,
-    cy: Pixels,
-    radius: f32,
-    width: f32,
-) -> Option<gpui::Path<Pixels>> {
+fn circle_stroke(cx: Pixels, cy: Pixels, radius: f32, width: f32) -> Option<gpui::Path<Pixels>> {
     let r = radius;
     let k = r * 0.5522847498;
     let mut b = PathBuilder::stroke(px(width));

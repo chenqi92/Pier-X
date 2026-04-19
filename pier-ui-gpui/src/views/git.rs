@@ -29,7 +29,6 @@ use crate::app::git_session::{
     GraphDateRange, GraphFilter, GraphHighlightMode, ManagerTab,
 };
 use crate::app::PierApp;
-use crate::views::git_dialogs;
 use crate::components::{
     compute_graph_col_width, graph_row_canvas, is_head_row, palette_color, text, Button,
     ButtonSize, IconButton, IconButtonSize, IconButtonVariant, InlineInput, InlineInputTone,
@@ -42,6 +41,7 @@ use crate::theme::{
     theme,
     typography::{SIZE_BODY, SIZE_CAPTION, SIZE_MONO_SMALL, SIZE_SMALL, WEIGHT_MEDIUM},
 };
+use crate::views::git_dialogs;
 use gpui_component::IconName;
 
 /// Maximum number of file-change rows rendered before collapsing
@@ -129,34 +129,52 @@ fn tab_layout(
     // serialisation and never drives the body any more.
     let manager_open: Option<ManagerTab> = None;
 
-    // Feedback strips (confirmation / error) — drawn right under
-    // the header so they don't collide with the branch row or tab
-    // body. Chained into the header column below.
+    // Feedback strips — coloured banners floating above the tab
+    // body. Each has its own ✕ dismiss so the user can clear them
+    // without waiting for the next action to overwrite the state.
+    let confirm_dismiss_weak = weak.clone();
     let confirm_strip = snap.last_confirmation.clone().map(|msg| {
         git_feedback_strip(
             t,
+            "git-fb-ok",
             IconName::Check,
-            t!("App.Git.last_result"),
             msg,
             false,
+            move |_, _, cx| {
+                let _ = confirm_dismiss_weak.update(cx, |app, cx| {
+                    app.clear_git_last_confirmation(cx);
+                });
+            },
         )
     });
+    let action_err_dismiss_weak = weak.clone();
     let action_err_strip = snap.action_error.clone().map(|err| {
         git_feedback_strip(
             t,
+            "git-fb-action-err",
             IconName::WarningFill,
-            t!("App.Common.error"),
             err,
             true,
+            move |_, _, cx| {
+                let _ = action_err_dismiss_weak.update(cx, |app, cx| {
+                    app.clear_git_action_error(cx);
+                });
+            },
         )
     });
+    let probe_err_dismiss_weak = weak.clone();
     let probe_err_strip = snap.last_error.clone().map(|err| {
         git_feedback_strip(
             t,
+            "git-fb-probe-err",
             IconName::WarningFill,
-            t!("App.Common.error"),
             err,
             true,
+            move |_, _, cx| {
+                let _ = probe_err_dismiss_weak.update(cx, |app, cx| {
+                    app.clear_git_last_error(cx);
+                });
+            },
         )
     });
 
@@ -165,17 +183,11 @@ fn tab_layout(
         manager_overlay(t, panel, &snap, weak.clone()).into_any_element()
     } else {
         match active {
-            GitTab::Changes => {
-                changes_tab_body(t, &snap, weak.clone()).into_any_element()
-            }
+            GitTab::Changes => changes_tab_body(t, &snap, weak.clone()).into_any_element(),
             GitTab::History => graph_tab_body(t, &snap, graph_search_input.clone(), weak.clone())
                 .into_any_element(),
-            GitTab::Stash => {
-                stash_tab_body(t, &snap, stash_input, weak.clone()).into_any_element()
-            }
-            GitTab::Conflicts => {
-                conflicts_tab_body(t, &snap, weak.clone()).into_any_element()
-            }
+            GitTab::Stash => stash_tab_body(t, &snap, stash_input, weak.clone()).into_any_element(),
+            GitTab::Conflicts => conflicts_tab_body(t, &snap, weak.clone()).into_any_element(),
         }
     };
 
@@ -297,14 +309,20 @@ fn error_layout(
         .flex()
         .flex_col()
         .bg(t.color.bg_surface)
-        .child(header(t, snap, weak))
+        .child(header(t, snap, weak.clone()))
         .child(Separator::horizontal())
         .child(git_feedback_strip(
             t,
+            "git-fb-error-layout",
             IconName::WarningFill,
-            t!("App.Common.error"),
             snap.last_error.clone().unwrap_or_default(),
             true,
+            {
+                let w = weak.clone();
+                move |_, _, cx| {
+                    let _ = w.update(cx, |app, cx| app.clear_git_last_error(cx));
+                }
+            },
         ))
 }
 
@@ -479,17 +497,29 @@ fn branch_actions_row(
     // dialogs, then fetch / pull / push. Each icon pops a modal
     // via `window.open_dialog`, matching Pier's behaviour.
     let _ = open_panel; // legacy overlay signal, unused now
-    // Manager-dialog trigger icons — aligned with Pier's
-    // GitBranchManagerView / GitTagManagerView / … SF Symbol choices:
-    //   Tags → `tag.fill`, Config → `gearshape.fill`,
-    //   Rebase → `arrow.triangle.2.circlepath`.
-    for (mgr, icon) in [
-        (ManagerTab::Branches, IconName::GitBranch),
-        (ManagerTab::Tags, IconName::TagFill),
-        (ManagerTab::Remotes, IconName::Globe),
-        (ManagerTab::Submodules, IconName::Container),
-        (ManagerTab::Config, IconName::GearFill),
-        (ManagerTab::Rebase, IconName::ArrowsCounterClockwise),
+                        // Manager-dialog trigger icons — aligned with Pier's
+                        // GitBranchManagerView / GitTagManagerView / … SF Symbol choices:
+                        //   Tags → `tag.fill`, Config → `gearshape.fill`,
+                        //   Rebase → `arrow.triangle.2.circlepath`.
+    for (mgr, icon, tooltip_key) in [
+        (
+            ManagerTab::Branches,
+            IconName::GitBranch,
+            "App.Git.mgr_branches",
+        ),
+        (ManagerTab::Tags, IconName::TagFill, "App.Git.mgr_tags"),
+        (ManagerTab::Remotes, IconName::Globe, "App.Git.mgr_remotes"),
+        (
+            ManagerTab::Submodules,
+            IconName::Container,
+            "App.Git.mgr_submodules",
+        ),
+        (ManagerTab::Config, IconName::GearFill, "App.Git.mgr_config"),
+        (
+            ManagerTab::Rebase,
+            IconName::ArrowsCounterClockwise,
+            "App.Git.mgr_rebase",
+        ),
     ] {
         let w = weak.clone();
         row = row.child(
@@ -499,6 +529,7 @@ fn branch_actions_row(
             )
             .size(IconButtonSize::Sm)
             .variant(IconButtonVariant::Ghost)
+            .tooltip(t!(tooltip_key))
             .on_click(move |_, win, cx| {
                 let app = w.clone();
                 match mgr {
@@ -523,6 +554,7 @@ fn branch_actions_row(
         IconButton::new("git-row-fetch", IconName::RefreshCw)
             .size(IconButtonSize::Sm)
             .variant(IconButtonVariant::Ghost)
+            .tooltip(t!("App.Git.remote_fetch"))
             .on_click(move |_, _, cx| {
                 let _ = fetch_w.update(cx, |app, cx| {
                     app.schedule_git_action(GitPendingAction::RemoteFetch { name: None }, cx);
@@ -534,6 +566,7 @@ fn branch_actions_row(
         IconButton::new("git-row-pull", IconName::FileArrowDownFill)
             .size(IconButtonSize::Sm)
             .variant(IconButtonVariant::Ghost)
+            .tooltip(t!("App.Git.pull"))
             .on_click(move |_, _, cx| {
                 let _ = pull_w.update(cx, |app, cx| {
                     app.schedule_git_action(GitPendingAction::Pull, cx);
@@ -545,6 +578,7 @@ fn branch_actions_row(
         IconButton::new("git-row-push", IconName::FileArrowUpFill)
             .size(IconButtonSize::Sm)
             .variant(IconButtonVariant::Ghost)
+            .tooltip(t!("App.Git.push"))
             .on_click(move |_, _, cx| {
                 let _ = push_w.update(cx, |app, cx| {
                     app.schedule_git_action(GitPendingAction::Push, cx);
@@ -669,12 +703,17 @@ fn commit_footer(
     let has_changes = !changes.is_empty();
     let staged = changes.iter().any(|c| c.staged);
     let commit_weak = weak.clone();
-    let input_for_click = input.clone();
-
+    let input_for_primary = input.clone();
+    let commit_push_weak = weak.clone();
+    let input_for_push = input.clone();
     let stage_all_weak = weak.clone();
+
+    // "Stage all" — only rendered when something is unstaged, so a
+    // clean worktree doesn't carry a no-op button.
     let stage_all_btn: gpui::AnyElement = if has_changes && !staged {
         Button::secondary("git-footer-stage-all", t!("App.Git.stage_all"))
             .size(ButtonSize::Sm)
+            .tooltip(t!("App.Git.stage_all"))
             .on_click(move |_, _, cx| {
                 let _ = stage_all_weak.update(cx, |app, cx| {
                     app.schedule_git_action(GitPendingAction::StageAll, cx);
@@ -685,56 +724,45 @@ fn commit_footer(
         div().flex_none().into_any_element()
     };
 
-    let commit_btn: gpui::AnyElement = if staged {
-        let input_for_primary = input_for_click.clone();
-        let commit_push_weak = weak.clone();
-        let input_for_push = input_for_click.clone();
-        // Split button: [提交] + [提交并推送]. Pier's dropdown
-        // variant isn't natively supported by our Button; the
-        // secondary action sits to the right in a ghost style so
-        // the UI grammar stays one-row.
-        div()
-            .flex()
-            .flex_row()
-            .gap(SP_0_5)
-            .child(
-                Button::primary("git-footer-commit", t!("App.Git.commit_staged"))
-                    .size(ButtonSize::Sm)
-                    .on_click(move |_, _, cx| {
-                        let text: String = input_for_primary.read(cx).value().to_string();
-                        if text.trim().is_empty() {
-                            return;
-                        }
-                        let _ = commit_weak.update(cx, |app, cx| {
-                            app.schedule_git_action(
-                                GitPendingAction::Commit { message: text.clone() },
-                                cx,
-                            );
-                        });
-                    }),
-            )
-            .child(
-                Button::secondary(
-                    "git-footer-commit-push",
-                    t!("App.Git.commit_and_push"),
-                )
-                .size(ButtonSize::Sm)
-                .on_click(move |_, _, cx| {
-                    let text: String = input_for_push.read(cx).value().to_string();
-                    if text.trim().is_empty() {
-                        return;
-                    }
-                    let _ = commit_push_weak.update(cx, |app, cx| {
-                        app.schedule_git_commit_and_push(text.clone(), cx);
-                    });
-                }),
-            )
-            .into_any_element()
-    } else {
-        StatusPill::new(t!("App.Git.no_staged"), StatusKind::Warning).into_any_element()
-    };
+    // Commit + Commit-and-Push — always visible. Disabled when no
+    // staged changes so the user gets a visual "stage something
+    // first" cue instead of a warning pill that takes up room the
+    // primary buttons should occupy.
+    let commit_btn = Button::primary("git-footer-commit", t!("App.Git.commit_staged"))
+        .size(ButtonSize::Sm)
+        .disabled(!staged)
+        .tooltip(t!("App.Git.commit_staged"))
+        .on_click(move |_, _, cx| {
+            let text: String = input_for_primary.read(cx).value().to_string();
+            if text.trim().is_empty() {
+                return;
+            }
+            let _ = commit_weak.update(cx, |app, cx| {
+                app.schedule_git_action(
+                    GitPendingAction::Commit {
+                        message: text.clone(),
+                    },
+                    cx,
+                );
+            });
+        });
+    let commit_push_btn =
+        Button::secondary("git-footer-commit-push", t!("App.Git.commit_and_push"))
+            .size(ButtonSize::Sm)
+            .disabled(!staged)
+            .tooltip(t!("App.Git.commit_and_push"))
+            .on_click(move |_, _, cx| {
+                let text: String = input_for_push.read(cx).value().to_string();
+                if text.trim().is_empty() {
+                    return;
+                }
+                let _ = commit_push_weak.update(cx, |app, cx| {
+                    app.schedule_git_commit_and_push(text.clone(), cx);
+                });
+            });
 
     div()
+        .flex_none()
         .w_full()
         .h(px(height.max(80.0)))
         .flex()
@@ -750,15 +778,25 @@ fn commit_footer(
                 .child(InlineInput::new(&input).tone(InlineInputTone::Inset)),
         )
         .child(
+            // Pier layout: Stage-all on the left, Commit / Commit &
+            // Push joined as a split button on the right.
             div()
                 .flex_none()
                 .flex()
                 .flex_row()
                 .items_center()
                 .gap(SP_1)
-                .child(div().flex_1().min_w(px(0.0)))
                 .child(stage_all_btn)
-                .child(commit_btn),
+                .child(div().flex_1().min_w(px(0.0)))
+                .child(
+                    div()
+                        .flex_none()
+                        .flex()
+                        .flex_row()
+                        .gap(px(1.0))
+                        .child(commit_btn)
+                        .child(commit_push_btn),
+                ),
         )
 }
 
@@ -767,10 +805,7 @@ fn commit_footer(
 /// `tab_layout`) then streams `mouse_move` / `mouse_up` into
 /// PierApp. Styled as a 4px hairline with a row-resize cursor on
 /// hover.
-fn commit_footer_splitter(
-    t: &crate::theme::Theme,
-    weak: WeakEntity<PierApp>,
-) -> impl IntoElement {
+fn commit_footer_splitter(t: &crate::theme::Theme, weak: WeakEntity<PierApp>) -> impl IntoElement {
     div()
         .id("git-footer-splitter")
         .w_full()
@@ -1103,7 +1138,7 @@ fn changes_section(
 fn file_change_row(
     t: &crate::theme::Theme,
     change: &GitFileChange,
-    is_selected: bool,
+    _is_selected: bool,
     weak: WeakEntity<PierApp>,
 ) -> impl IntoElement {
     let (badge, badge_color) = file_status_badge(t, change.status.clone());
@@ -1111,10 +1146,14 @@ fn file_change_row(
     let staged = change.staged;
     let untracked = matches!(change.status, FileStatus::Untracked);
 
+    // Split "src/foo/bar.rs" → ("bar.rs", "src/foo") so the row
+    // reads "<filename>   <relative dir>" the way Pier shows it.
+    let (name, parent) = split_path_for_display(&path_str);
+
     let stage_weak = weak.clone();
     let unstage_weak = weak.clone();
     let discard_weak = weak.clone();
-    let diff_weak = weak.clone();
+    let dbl_weak = weak.clone();
 
     let stage_id = ElementId::Name(SharedString::from(format!(
         "git-stage-{}",
@@ -1128,23 +1167,18 @@ fn file_change_row(
         "git-discard-{}",
         short_id(&path_str)
     )));
-    let diff_id = ElementId::Name(SharedString::from(format!(
-        "git-diff-{}-{}",
-        if staged { "s" } else { "w" },
-        short_id(&path_str)
-    )));
 
     let path_for_stage = path_str.clone();
     let path_for_unstage = path_str.clone();
     let path_for_discard = path_str.clone();
-    let path_for_diff = path_str.clone();
+    let path_for_dbl = path_str.clone();
 
     let row_id = ElementId::Name(SharedString::from(format!(
         "git-file-row-{}-{}",
         if staged { "s" } else { "w" },
         short_id(&path_str)
     )));
-    let mut row = div()
+    let row = div()
         .id(row_id)
         .flex()
         .flex_row()
@@ -1153,8 +1187,19 @@ fn file_change_row(
         .px(SP_3)
         .py(SP_0_5)
         .overflow_hidden()
-        .when(is_selected, |el| el.bg(t.color.accent_subtle))
         .hover(|s| s.bg(t.color.bg_hover))
+        .cursor_pointer()
+        // Double-click opens the full diff dialog — matches Pier's
+        // behaviour (DiffWindowController.show on file row click).
+        .on_mouse_down(MouseButton::Left, move |ev, win, cx| {
+            if ev.click_count < 2 {
+                return;
+            }
+            let p = path_for_dbl.clone();
+            let _ = dbl_weak.update(cx, |app, cx| {
+                app.open_git_file_diff_dialog(p, staged, untracked, win, cx);
+            });
+        })
         .child(
             div()
                 .flex_none()
@@ -1172,8 +1217,7 @@ fn file_change_row(
         )
         .child(
             div()
-                .flex_1()
-                .min_w(px(0.0))
+                .flex_none()
                 .truncate()
                 .text_size(SIZE_SMALL)
                 .font_family(t.font_mono.clone())
@@ -1182,80 +1226,73 @@ fn file_change_row(
                 } else {
                     t.color.text_secondary
                 })
-                .child(SharedString::from(path_str.clone())),
+                .child(SharedString::from(name)),
         )
         .child(
-            div().flex_none().child(
-                Button::secondary(
-                    diff_id,
-                    if is_selected {
-                        t!("App.Git.close_diff")
-                    } else {
-                        t!("App.Git.view_diff")
-                    },
-                )
-                .size(ButtonSize::Sm)
-                .on_click(move |_, _, cx| {
-                    let p = path_for_diff.clone();
-                    let currently_open = is_selected;
-                    let _ = diff_weak.update(cx, |app, cx| {
-                        if currently_open {
-                            app.clear_git_diff_selection(cx);
-                        } else {
-                            app.schedule_git_diff(
-                                DiffSelection {
-                                    path: p,
-                                    staged,
-                                    untracked,
-                                },
-                                cx,
-                            );
-                        }
-                    });
-                }),
-            ),
+            div()
+                .flex_1()
+                .min_w(px(0.0))
+                .truncate()
+                .text_size(SIZE_CAPTION)
+                .text_color(t.color.text_tertiary)
+                .child(SharedString::from(parent)),
         );
 
+    // Per-file icon actions — Pier parity. Ghost icon buttons so
+    // the row stays visually quiet; hover reveals the tint.
+    let mut row = row;
     if staged {
         row = row.child(
-            div().flex_none().child(
-                Button::secondary(unstage_id, t!("App.Git.unstage"))
-                    .size(ButtonSize::Sm)
-                    .on_click(move |_, _, cx| {
-                        let p = path_for_unstage.clone();
-                        let _ = unstage_weak.update(cx, |app, cx| {
-                            app.schedule_git_action(GitPendingAction::Unstage { path: p }, cx);
-                        });
-                    }),
-            ),
+            IconButton::new(unstage_id, IconName::Minus)
+                .size(IconButtonSize::Sm)
+                .variant(IconButtonVariant::Ghost)
+                .tooltip(t!("App.Git.unstage"))
+                .on_click(move |_, _, cx| {
+                    let p = path_for_unstage.clone();
+                    let _ = unstage_weak.update(cx, |app, cx| {
+                        app.schedule_git_action(GitPendingAction::Unstage { path: p }, cx);
+                    });
+                }),
         );
     } else {
         row = row.child(
-            div().flex_none().child(
-                Button::secondary(stage_id, t!("App.Git.stage"))
-                    .size(ButtonSize::Sm)
-                    .on_click(move |_, _, cx| {
-                        let p = path_for_stage.clone();
-                        let _ = stage_weak.update(cx, |app, cx| {
-                            app.schedule_git_action(GitPendingAction::Stage { path: p }, cx);
-                        });
-                    }),
-            ),
+            IconButton::new(stage_id, IconName::Plus)
+                .size(IconButtonSize::Sm)
+                .variant(IconButtonVariant::Ghost)
+                .tooltip(t!("App.Git.stage"))
+                .on_click(move |_, _, cx| {
+                    let p = path_for_stage.clone();
+                    let _ = stage_weak.update(cx, |app, cx| {
+                        app.schedule_git_action(GitPendingAction::Stage { path: p }, cx);
+                    });
+                }),
         );
         row = row.child(
-            div().flex_none().child(
-                Button::danger(discard_id, t!("App.Git.discard"))
-                    .size(ButtonSize::Sm)
-                    .on_click(move |_, _, cx| {
-                        let p = path_for_discard.clone();
-                        let _ = discard_weak.update(cx, |app, cx| {
-                            app.schedule_git_action(GitPendingAction::Discard { path: p }, cx);
-                        });
-                    }),
-            ),
+            IconButton::new(discard_id, IconName::Delete)
+                .size(IconButtonSize::Sm)
+                .variant(IconButtonVariant::Ghost)
+                .tooltip(t!("App.Git.discard"))
+                .on_click(move |_, _, cx| {
+                    let p = path_for_discard.clone();
+                    let _ = discard_weak.update(cx, |app, cx| {
+                        app.schedule_git_action(GitPendingAction::Discard { path: p }, cx);
+                    });
+                }),
         );
     }
     row
+}
+
+/// Split a repo-relative path into `(filename, parent_dir)`. Root
+/// files return `(name, "")`. Used by the Changes file row so the
+/// row reads "foo.rs   src/bar" — matches Pier's `file.lastPathComponent`
+/// + `file.deletingLastPathComponent()` layout.
+fn split_path_for_display(path: &str) -> (String, String) {
+    if let Some(idx) = path.rfind('/') {
+        (path[idx + 1..].to_string(), path[..idx].to_string())
+    } else {
+        (path.to_string(), String::new())
+    }
 }
 
 fn short_id(path: &str) -> String {
@@ -1477,9 +1514,13 @@ fn mode_toggle(
     on_click: impl Fn(&ClickEvent, &mut Window, &mut App) + 'static,
 ) -> impl IntoElement {
     if active {
-        Button::primary(id, label).size(ButtonSize::Sm).on_click(on_click)
+        Button::primary(id, label)
+            .size(ButtonSize::Sm)
+            .on_click(on_click)
     } else {
-        Button::ghost(id, label).size(ButtonSize::Sm).on_click(on_click)
+        Button::ghost(id, label)
+            .size(ButtonSize::Sm)
+            .on_click(on_click)
     }
 }
 
@@ -1499,11 +1540,7 @@ fn diff_truncated_row(t: &crate::theme::Theme, total_lines: usize) -> impl IntoE
         ))
 }
 
-pub fn diff_line_row_export(
-    t: &crate::theme::Theme,
-    index: usize,
-    line: &str,
-) -> impl IntoElement {
+pub fn diff_line_row_export(t: &crate::theme::Theme, index: usize, line: &str) -> impl IntoElement {
     diff_line_row(t, index, line)
 }
 
@@ -1612,8 +1649,11 @@ fn split_side_by_side(text: &str, max_pairs: usize) -> Vec<(String, String)> {
         if out.len() >= max_pairs {
             break;
         }
-        if line.starts_with("@@") || line.starts_with("diff --git") || line.starts_with("index ")
-            || line.starts_with("+++") || line.starts_with("---")
+        if line.starts_with("@@")
+            || line.starts_with("diff --git")
+            || line.starts_with("index ")
+            || line.starts_with("+++")
+            || line.starts_with("---")
         {
             flush_pairs(&mut out, &mut deletes, &mut inserts);
             out.push((line.to_string(), line.to_string()));
@@ -1632,7 +1672,11 @@ fn split_side_by_side(text: &str, max_pairs: usize) -> Vec<(String, String)> {
     out
 }
 
-fn flush_pairs(out: &mut Vec<(String, String)>, deletes: &mut Vec<String>, inserts: &mut Vec<String>) {
+fn flush_pairs(
+    out: &mut Vec<(String, String)>,
+    deletes: &mut Vec<String>,
+    inserts: &mut Vec<String>,
+) {
     let n = deletes.len().max(inserts.len());
     for i in 0..n {
         let left = deletes.get(i).cloned().unwrap_or_default();
@@ -1884,22 +1928,35 @@ fn commit_row(t: &crate::theme::Theme, c: &CommitInfo) -> impl IntoElement {
 
 // ─── Feedback strip (confirmation / error) ──────────────────────────
 
+/// Colored feedback banner — "拉取完成" / "推送失败" style. Shown
+/// briefly after every Git action; the user can also dismiss it
+/// with the trailing ✕. Success uses a green tint, errors red —
+/// alpha 0.12 over the surface so it reads as a banner, not a
+/// slab. No title line; the message is the content.
 fn git_feedback_strip(
     t: &crate::theme::Theme,
+    id: impl Into<ElementId>,
     icon: IconName,
-    title: impl Into<SharedString>,
     message: SharedString,
     is_error: bool,
+    on_dismiss: impl Fn(&ClickEvent, &mut Window, &mut App) + 'static,
 ) -> impl IntoElement {
-    let icon_color = if is_error {
-        t.color.status_error
+    let (tint, fg) = if is_error {
+        (
+            gpui::Rgba {
+                a: 0.12,
+                ..t.color.status_error
+            },
+            t.color.status_error,
+        )
     } else {
-        t.color.status_success
-    };
-    let message_color = if is_error {
-        t.color.status_error
-    } else {
-        t.color.text_secondary
+        (
+            gpui::Rgba {
+                a: 0.12,
+                ..t.color.status_success
+            },
+            t.color.status_success,
+        )
     };
     div()
         .w_full()
@@ -1908,29 +1965,28 @@ fn git_feedback_strip(
         .items_center()
         .gap(SP_2)
         .px(SP_3)
-        .py(SP_1_5)
+        .py(SP_1)
+        .bg(tint)
         .child(
             div()
                 .flex_none()
-                .text_color(icon_color)
+                .text_color(fg)
                 .child(gpui_component::Icon::new(icon).size(ICON_SM)),
         )
         .child(
             div()
                 .flex_1()
                 .min_w(px(0.0))
-                .flex()
-                .flex_col()
-                .gap(SP_0_5)
-                .child(text::caption(title).secondary())
-                .child(
-                    div()
-                        .overflow_hidden()
-                        .text_size(SIZE_SMALL)
-                        .font_family(t.font_mono.clone())
-                        .text_color(message_color)
-                        .child(message),
-                ),
+                .overflow_hidden()
+                .text_size(SIZE_SMALL)
+                .text_color(fg)
+                .child(message),
+        )
+        .child(
+            IconButton::new(id, IconName::Close)
+                .size(IconButtonSize::Sm)
+                .variant(IconButtonVariant::Ghost)
+                .on_click(on_dismiss),
         )
 }
 
@@ -1947,12 +2003,16 @@ fn graph_tab_body(
     col = col.child(Separator::horizontal());
 
     if let Some(err) = snap.graph.error.clone() {
+        let w = weak.clone();
         col = col.child(git_feedback_strip(
             t,
+            "git-fb-graph-err",
             IconName::WarningFill,
-            t!("App.Common.error"),
             err,
             true,
+            move |_, _, cx| {
+                let _ = w.update(cx, |app, cx| app.clear_git_action_error(cx));
+            },
         ));
         return col;
     }
@@ -1980,8 +2040,14 @@ fn graph_tab_body(
     // below it (Pier's behaviour), so uniform heights are out —
     // `gpui::list` handles this via re-measurement.
     let col_w = compute_graph_col_width(&snap.graph.rows).max(60.0);
-    let rows: std::sync::Arc<Vec<GraphRow>> =
-        std::sync::Arc::new(snap.graph.rows.iter().take(MAX_GRAPH_ROWS).cloned().collect());
+    let rows: std::sync::Arc<Vec<GraphRow>> = std::sync::Arc::new(
+        snap.graph
+            .rows
+            .iter()
+            .take(MAX_GRAPH_ROWS)
+            .cloned()
+            .collect(),
+    );
     let selected_hash = snap.graph.selected.clone();
     let graph_snap_for_list = snap.graph.clone();
     let detail_snapshot = snap.commit_detail.clone();
@@ -2061,10 +2127,11 @@ fn graph_tab_body(
         } else if let Some(err) = detail_snapshot.error.clone() {
             git_feedback_strip(
                 &t_clone,
+                "git-fb-detail-err",
                 IconName::WarningFill,
-                t!("App.Common.error"),
                 err,
                 true,
+                |_, _, _| {},
             )
             .into_any_element()
         } else {
@@ -2180,9 +2247,10 @@ fn graph_toolbar(
                 .child(gpui_component::Icon::new(IconName::Search).size(ICON_SM)),
         )
         .child(
-            div().flex_1().min_w(px(0.0)).child(
-                InlineInput::new(&search_input).tone(InlineInputTone::Inset),
-            ),
+            div()
+                .flex_1()
+                .min_w(px(0.0))
+                .child(InlineInput::new(&search_input).tone(InlineInputTone::Inset)),
         );
     if graph.filter.search_text.is_some() {
         let clear_weak = weak.clone();
@@ -2574,10 +2642,7 @@ fn graph_row_element(
     if !row.refs.is_empty() {
         // The `refs` string from pier-core is like "(HEAD -> main, origin/main, tag: v1)"
         // Split by comma.
-        let inner = row
-            .refs
-            .trim_start_matches(" (")
-            .trim_end_matches(')');
+        let inner = row.refs.trim_start_matches(" (").trim_end_matches(')');
         for (i, piece) in inner
             .split(',')
             .map(|s| s.trim())
@@ -2733,7 +2798,9 @@ fn should_dim_row(row: &GraphRow, snap: &GitSnapshot, _is_head: bool) -> bool {
             let me = &snap.graph.user_name;
             !me.is_empty() && row.author != *me
         }
-        GraphHighlightMode::MergeCommits => row.parents.split(' ').filter(|s| !s.is_empty()).count() < 2,
+        GraphHighlightMode::MergeCommits => {
+            row.parents.split(' ').filter(|s| !s.is_empty()).count() < 2
+        }
         GraphHighlightMode::CurrentBranch => row.color_index != 0,
     }
 }
@@ -2944,11 +3011,7 @@ fn commit_detail_strip_standalone(
                 .text_size(SIZE_CAPTION)
                 .text_color(t.color.text_tertiary)
                 .child(SharedString::from(
-                    t!(
-                        "App.Git.detail_files_changed",
-                        count = detail.files.len()
-                    )
-                    .to_string(),
+                    t!("App.Git.detail_files_changed", count = detail.files.len()).to_string(),
                 )),
         );
         for (i, f) in detail.files.iter().enumerate().take(64) {
@@ -2980,12 +3043,7 @@ fn commit_detail_strip_standalone(
                         let Some(app_entity) = file_weak.upgrade() else {
                             return;
                         };
-                        let client = app_entity
-                            .read(cx)
-                            .git_state()
-                            .read(cx)
-                            .client
-                            .clone();
+                        let client = app_entity.read(cx).git_state().read(cx).client.clone();
                         let Some(client) = client else {
                             return;
                         };
@@ -2993,9 +3051,7 @@ fn commit_detail_strip_standalone(
                             Ok(t) => t,
                             Err(e) => format!("(diff failed: {e})"),
                         };
-                        git_dialogs::open_commit_file_diff_dialog(
-                            win, cx, title, text,
-                        );
+                        git_dialogs::open_commit_file_diff_dialog(win, cx, title, text);
                     })
                     .child(
                         div()
@@ -3048,7 +3104,10 @@ fn commit_detail_strip_standalone(
                         .on_click(move |_, _, cx| {
                             let h = h_undo.clone();
                             let _ = weak_undo.update(cx, |app, cx| {
-                                app.schedule_git_action(GitPendingAction::UndoCommit { hash: h }, cx);
+                                app.schedule_git_action(
+                                    GitPendingAction::UndoCommit { hash: h },
+                                    cx,
+                                );
                             });
                         }),
                 )
@@ -3096,16 +3155,18 @@ fn managers_tab_body(
     if let Some(err) = snap.managers.error.clone() {
         col = col.child(git_feedback_strip(
             t,
+            "git-fb-managers-err",
             IconName::WarningFill,
-            t!("App.Common.error"),
             err,
             true,
+            |_, _, _| {},
         ));
     }
 
     let body = match snap.manager_tab {
-        ManagerTab::Branches => branches_manager(t, &snap.managers.branches, weak.clone())
-            .into_any_element(),
+        ManagerTab::Branches => {
+            branches_manager(t, &snap.managers.branches, weak.clone()).into_any_element()
+        }
         ManagerTab::Tags => tags_manager(t, &snap.managers.tags, weak.clone()).into_any_element(),
         ManagerTab::Remotes => {
             remotes_manager(t, &snap.managers.remotes, weak.clone()).into_any_element()
@@ -3161,10 +3222,7 @@ fn managers_tab_strip(active: ManagerTab, weak: WeakEntity<PierApp>) -> impl Int
 // Shared inline-input helper — creates a read-only placeholder display
 // for now. The form-style inline editing is delegated to the user
 // via existing commit_input / stash_input patterns (adapted later).
-fn text_input_line(
-    t: &crate::theme::Theme,
-    value: impl Into<SharedString>,
-) -> impl IntoElement {
+fn text_input_line(t: &crate::theme::Theme, value: impl Into<SharedString>) -> impl IntoElement {
     div()
         .flex_1()
         .min_w(px(0.0))
@@ -3255,9 +3313,7 @@ fn branch_mgr_row(
     };
 
     div()
-        .id(ElementId::Name(
-            format!("git-mgr-branch-{name_id}").into(),
-        ))
+        .id(ElementId::Name(format!("git-mgr-branch-{name_id}").into()))
         .flex()
         .flex_row()
         .items_center()
@@ -3349,7 +3405,10 @@ fn branch_mgr_row(
             .on_click(move |_, _, cx| {
                 let name = n_delete.clone();
                 let _ = delete_weak.update(cx, |app, cx| {
-                    app.schedule_git_action(GitPendingAction::BranchDelete { name, force: false }, cx);
+                    app.schedule_git_action(
+                        GitPendingAction::BranchDelete { name, force: false },
+                        cx,
+                    );
                 });
             }),
         )
@@ -3362,7 +3421,10 @@ fn branch_mgr_row(
             .on_click(move |_, _, cx| {
                 let name = n_force.clone();
                 let _ = force_weak.update(cx, |app, cx| {
-                    app.schedule_git_action(GitPendingAction::BranchDelete { name, force: true }, cx);
+                    app.schedule_git_action(
+                        GitPendingAction::BranchDelete { name, force: true },
+                        cx,
+                    );
                 });
             }),
         )
@@ -3400,11 +3462,7 @@ pub fn tag_row_export(
     tag_row(t, tag, weak)
 }
 
-fn tag_row(
-    t: &crate::theme::Theme,
-    tag: &TagInfo,
-    weak: WeakEntity<PierApp>,
-) -> impl IntoElement {
+fn tag_row(t: &crate::theme::Theme, tag: &TagInfo, weak: WeakEntity<PierApp>) -> impl IntoElement {
     let name = tag.name.clone();
     let id = short_id(&name);
 
@@ -3487,24 +3545,15 @@ fn remotes_manager(
 
     let fetch_all_weak = weak.clone();
     col = col.child(
-        div()
-            .flex()
-            .flex_row()
-            .gap(SP_1)
-            .px(SP_3)
-            .py(SP_1_5)
-            .child(
-                Button::secondary("git-remote-fetch-all", t!("App.Git.remote_fetch_all"))
-                    .size(ButtonSize::Sm)
-                    .on_click(move |_, _, cx| {
-                        let _ = fetch_all_weak.update(cx, |app, cx| {
-                            app.schedule_git_action(
-                                GitPendingAction::RemoteFetch { name: None },
-                                cx,
-                            );
-                        });
-                    }),
-            ),
+        div().flex().flex_row().gap(SP_1).px(SP_3).py(SP_1_5).child(
+            Button::secondary("git-remote-fetch-all", t!("App.Git.remote_fetch_all"))
+                .size(ButtonSize::Sm)
+                .on_click(move |_, _, cx| {
+                    let _ = fetch_all_weak.update(cx, |app, cx| {
+                        app.schedule_git_action(GitPendingAction::RemoteFetch { name: None }, cx);
+                    });
+                }),
+        ),
     );
 
     if remotes.is_empty() {
@@ -3601,10 +3650,7 @@ fn remote_row(
                     .on_click(move |_, _, cx| {
                         let name = n_remove.clone();
                         let _ = remove_weak.update(cx, |app, cx| {
-                            app.schedule_git_action(
-                                GitPendingAction::RemoteRemove { name },
-                                cx,
-                            );
+                            app.schedule_git_action(GitPendingAction::RemoteRemove { name }, cx);
                         });
                     }),
                 ),
@@ -3693,10 +3739,7 @@ pub fn config_row_export(
 
 /// User identity top strip (user.name + user.email) extracted so
 /// the config dialog can render it above the entry list.
-pub fn config_user_strip(
-    t: &crate::theme::Theme,
-    mgrs: &ManagersSnapshot,
-) -> impl IntoElement {
+pub fn config_user_strip(t: &crate::theme::Theme, mgrs: &ManagersSnapshot) -> impl IntoElement {
     div()
         .flex()
         .flex_row()
@@ -3819,21 +3862,15 @@ fn submodules_manager(
     let mut col = div().w_full().flex().flex_col();
     let update_weak = weak.clone();
     col = col.child(
-        div()
-            .flex()
-            .flex_row()
-            .gap(SP_1)
-            .px(SP_3)
-            .py(SP_1_5)
-            .child(
-                Button::secondary("git-sub-update", t!("App.Git.submodule_update"))
-                    .size(ButtonSize::Sm)
-                    .on_click(move |_, _, cx| {
-                        let _ = update_weak.update(cx, |app, cx| {
-                            app.schedule_git_action(GitPendingAction::SubmoduleUpdate, cx);
-                        });
-                    }),
-            ),
+        div().flex().flex_row().gap(SP_1).px(SP_3).py(SP_1_5).child(
+            Button::secondary("git-sub-update", t!("App.Git.submodule_update"))
+                .size(ButtonSize::Sm)
+                .on_click(move |_, _, cx| {
+                    let _ = update_weak.update(cx, |app, cx| {
+                        app.schedule_git_action(GitPendingAction::SubmoduleUpdate, cx);
+                    });
+                }),
+        ),
     );
     if subs.is_empty() {
         return col
@@ -3983,10 +4020,7 @@ fn rebase_manager(t: &crate::theme::Theme, weak: WeakEntity<PierApp>) -> impl In
                         }),
                 ),
         )
-        .child(text_input_line(
-            t,
-            t!("App.Git.rebase_onto_placeholder"),
-        ))
+        .child(text_input_line(t, t!("App.Git.rebase_onto_placeholder")))
 }
 
 // ─── Managers: Conflicts ───────────────────────────────────────────
@@ -4000,21 +4034,15 @@ fn conflicts_manager(
 
     let abort_weak = weak.clone();
     col = col.child(
-        div()
-            .flex()
-            .flex_row()
-            .gap(SP_1)
-            .px(SP_3)
-            .py(SP_1_5)
-            .child(
-                Button::danger("git-merge-abort", t!("App.Git.merge_abort"))
-                    .size(ButtonSize::Sm)
-                    .on_click(move |_, _, cx| {
-                        let _ = abort_weak.update(cx, |app, cx| {
-                            app.schedule_git_action(GitPendingAction::MergeAbort, cx);
-                        });
-                    }),
-            ),
+        div().flex().flex_row().gap(SP_1).px(SP_3).py(SP_1_5).child(
+            Button::danger("git-merge-abort", t!("App.Git.merge_abort"))
+                .size(ButtonSize::Sm)
+                .on_click(move |_, _, cx| {
+                    let _ = abort_weak.update(cx, |app, cx| {
+                        app.schedule_git_action(GitPendingAction::MergeAbort, cx);
+                    });
+                }),
+        ),
     );
 
     if conflicts.is_empty() {
@@ -4095,14 +4123,17 @@ fn conflict_row(
                 .child(SharedString::from(path.to_string())),
         )
         .child(
-            Button::secondary(("git-conflict-ours", i), t!("App.Git.conflicts_resolve_ours"))
-                .size(ButtonSize::Sm)
-                .on_click(move |_, _, cx| {
-                    let path = p_ours.clone();
-                    let _ = w_ours.update(cx, |app, cx| {
-                        app.schedule_git_action(GitPendingAction::ResolveOurs { path }, cx);
-                    });
-                }),
+            Button::secondary(
+                ("git-conflict-ours", i),
+                t!("App.Git.conflicts_resolve_ours"),
+            )
+            .size(ButtonSize::Sm)
+            .on_click(move |_, _, cx| {
+                let path = p_ours.clone();
+                let _ = w_ours.update(cx, |app, cx| {
+                    app.schedule_git_action(GitPendingAction::ResolveOurs { path }, cx);
+                });
+            }),
         )
         .child(
             Button::secondary(
@@ -4118,14 +4149,17 @@ fn conflict_row(
             }),
         )
         .child(
-            Button::primary(("git-conflict-mark", i), t!("App.Git.conflicts_mark_resolved"))
-                .size(ButtonSize::Sm)
-                .on_click(move |_, _, cx| {
-                    let path = p_mark.clone();
-                    let _ = w_mark.update(cx, |app, cx| {
-                        app.schedule_git_action(GitPendingAction::MarkResolved { path }, cx);
-                    });
-                }),
+            Button::primary(
+                ("git-conflict-mark", i),
+                t!("App.Git.conflicts_mark_resolved"),
+            )
+            .size(ButtonSize::Sm)
+            .on_click(move |_, _, cx| {
+                let path = p_mark.clone();
+                let _ = w_mark.update(cx, |app, cx| {
+                    app.schedule_git_action(GitPendingAction::MarkResolved { path }, cx);
+                });
+            }),
         )
 }
 
@@ -4263,4 +4297,3 @@ impl From<&GitState> for GitSnapshot {
         }
     }
 }
-

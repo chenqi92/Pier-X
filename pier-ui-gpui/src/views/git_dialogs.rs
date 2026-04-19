@@ -8,6 +8,8 @@
 //! `PierApp::schedule_git_action` pipeline — the dialog is purely
 //! a UI vessel.
 
+use std::sync::Arc;
+
 use gpui::{div, prelude::*, px, App, IntoElement, SharedString, WeakEntity, Window};
 use gpui_component::WindowExt;
 use rust_i18n::t;
@@ -189,30 +191,560 @@ fn edit_message_dialog_body(
         .into_any_element()
 }
 
-/// Per-file commit diff dialog. Fetches the diff via
-/// `schedule_git_action` through a specialised one-shot path —
-/// here we re-use `commit_file_diff` synchronously on a background
-/// task dispatched by the view's click handler (see the caller
-/// site in views/git.rs). The dialog shows the precomputed diff
-/// text that the caller has already loaded.
+/// Per-file commit diff dialog. Caller has already loaded the
+/// unified diff text; this thin wrapper pops it inside the shared
+/// Pier-style `DiffDialog` renderer.
 pub fn open_commit_file_diff_dialog(
     window: &mut Window,
     cx: &mut App,
     title_text: String,
     diff_text: String,
 ) {
-    let t: SharedString = title_text.into();
-    let text_arc: std::sync::Arc<String> = std::sync::Arc::new(diff_text);
+    open_pier_diff_dialog(window, cx, title_text, diff_text);
+}
+
+/// Full-screen Pier-style diff dialog. Parses the unified diff
+/// once up front, keeps the parsed view-state on the shared
+/// [`DiffDialogState`] entity, and re-renders each frame from
+/// there — gives the inline / side-by-side toggle persistence.
+pub fn open_pier_diff_dialog(
+    window: &mut Window,
+    cx: &mut App,
+    title_text: String,
+    diff_text: String,
+) {
+    let parsed = parse_unified_diff(&diff_text);
+    let title: SharedString = title_text.into();
+    let state = cx.new(|_| DiffDialogState {
+        mode: DiffDisplayMode::Inline,
+        lines: Arc::new(parsed),
+    });
     window.open_dialog(cx, move |dialog, _w, app_cx| {
-        let body = diff_dialog_body(text_arc.clone(), app_cx);
+        let body = render_diff_dialog_body(title.clone(), state.clone(), app_cx);
         dialog
-            .title(t.clone())
-            .w(px(960.0))
+            .title("")
+            .w(px(1000.0))
             .close_button(true)
             .overlay_closable(true)
             .keyboard(true)
             .child(body)
     });
+}
+
+// ─── Pier-style diff data model ─────────────────────────────────────
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum DiffDisplayMode {
+    Inline,
+    SideBySide,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum DiffLineKind {
+    Context,
+    Addition,
+    Deletion,
+    Header,
+}
+
+#[derive(Clone)]
+struct ParsedDiffLine {
+    text: String,
+    kind: DiffLineKind,
+    old_ln: Option<u32>,
+    new_ln: Option<u32>,
+}
+
+pub struct DiffDialogState {
+    mode: DiffDisplayMode,
+    lines: Arc<Vec<ParsedDiffLine>>,
+}
+
+fn parse_unified_diff(raw: &str) -> Vec<ParsedDiffLine> {
+    let mut out = Vec::new();
+    let mut old_ln: u32 = 0;
+    let mut new_ln: u32 = 0;
+    for line in raw.split('\n') {
+        if line.starts_with("@@") {
+            // @@ -a,b +c,d @@
+            let mut parts = line.split_whitespace();
+            parts.next(); // @@
+            if let (Some(old_part), Some(new_part)) = (parts.next(), parts.next()) {
+                old_ln = old_part
+                    .trim_start_matches('-')
+                    .split(',')
+                    .next()
+                    .and_then(|s| s.parse().ok())
+                    .unwrap_or(0);
+                new_ln = new_part
+                    .trim_start_matches('+')
+                    .split(',')
+                    .next()
+                    .and_then(|s| s.parse().ok())
+                    .unwrap_or(0);
+            }
+            out.push(ParsedDiffLine {
+                text: line.to_string(),
+                kind: DiffLineKind::Header,
+                old_ln: None,
+                new_ln: None,
+            });
+        } else if line.starts_with("+++") || line.starts_with("---") || line.starts_with("diff ")
+            || line.starts_with("index ")
+            || line.starts_with("new file mode")
+            || line.starts_with("deleted file mode")
+        {
+            // File-header lines are omitted from the rendered body
+            // — the dialog title already shows the path.
+            continue;
+        } else if let Some(rest) = line.strip_prefix('+') {
+            out.push(ParsedDiffLine {
+                text: rest.to_string(),
+                kind: DiffLineKind::Addition,
+                old_ln: None,
+                new_ln: Some(new_ln),
+            });
+            new_ln += 1;
+        } else if let Some(rest) = line.strip_prefix('-') {
+            out.push(ParsedDiffLine {
+                text: rest.to_string(),
+                kind: DiffLineKind::Deletion,
+                old_ln: Some(old_ln),
+                new_ln: None,
+            });
+            old_ln += 1;
+        } else if let Some(rest) = line.strip_prefix(' ') {
+            out.push(ParsedDiffLine {
+                text: rest.to_string(),
+                kind: DiffLineKind::Context,
+                old_ln: Some(old_ln),
+                new_ln: Some(new_ln),
+            });
+            old_ln += 1;
+            new_ln += 1;
+        }
+    }
+    out
+}
+
+fn render_diff_dialog_body(
+    title: SharedString,
+    state: gpui::Entity<DiffDialogState>,
+    cx: &mut App,
+) -> gpui::AnyElement {
+    let t = theme(cx).clone();
+    let snap = state.read(cx);
+    let mode = snap.mode;
+    let lines = snap.lines.clone();
+
+    // +/- counts (Pier's header stat).
+    let additions = lines
+        .iter()
+        .filter(|l| l.kind == DiffLineKind::Addition)
+        .count();
+    let deletions = lines
+        .iter()
+        .filter(|l| l.kind == DiffLineKind::Deletion)
+        .count();
+
+    // Picker: [Inline | SideBySide] — styled as Pier's segmented
+    // control. Active segment is the accent-filled one.
+    let state_inline = state.clone();
+    let state_side = state.clone();
+    let picker = div()
+        .flex_none()
+        .flex()
+        .flex_row()
+        .rounded(crate::theme::radius::RADIUS_SM)
+        .bg(t.color.bg_panel)
+        .border_1()
+        .border_color(t.color.border_subtle)
+        .child(diff_mode_segment(
+            &t,
+            "diff-dlg-inline",
+            gpui_component::IconName::ListBullets,
+            mode == DiffDisplayMode::Inline,
+            move |_, _, cx| {
+                state_inline.update(cx, |s, cx| {
+                    s.mode = DiffDisplayMode::Inline;
+                    cx.notify();
+                });
+            },
+        ))
+        .child(diff_mode_segment(
+            &t,
+            "diff-dlg-side",
+            gpui_component::IconName::Stack,
+            mode == DiffDisplayMode::SideBySide,
+            move |_, _, cx| {
+                state_side.update(cx, |s, cx| {
+                    s.mode = DiffDisplayMode::SideBySide;
+                    cx.notify();
+                });
+            },
+        ));
+
+    let header = div()
+        .w_full()
+        .flex()
+        .flex_row()
+        .items_center()
+        .gap(crate::theme::spacing::SP_2)
+        .px(crate::theme::spacing::SP_3)
+        .py(crate::theme::spacing::SP_1_5)
+        .child(
+            div()
+                .flex_none()
+                .text_color(t.color.status_warning)
+                .child(gpui_component::Icon::new(gpui_component::IconName::FileText)
+                    .size(crate::theme::heights::ICON_SM)),
+        )
+        .child(
+            div()
+                .flex_1()
+                .min_w(px(0.0))
+                .truncate()
+                .text_size(crate::theme::typography::SIZE_MONO_SMALL)
+                .font_family(t.font_mono.clone())
+                .font_weight(crate::theme::typography::WEIGHT_MEDIUM)
+                .text_color(t.color.text_primary)
+                .child(title),
+        )
+        .child(
+            div()
+                .flex_none()
+                .text_size(crate::theme::typography::SIZE_CAPTION)
+                .font_family(t.font_mono.clone())
+                .text_color(t.color.status_success)
+                .child(SharedString::from(format!("+{additions}"))),
+        )
+        .child(
+            div()
+                .flex_none()
+                .text_size(crate::theme::typography::SIZE_CAPTION)
+                .font_family(t.font_mono.clone())
+                .text_color(t.color.status_error)
+                .child(SharedString::from(format!("-{deletions}"))),
+        )
+        .child(picker);
+
+    let body: gpui::AnyElement = if lines.is_empty() {
+        div()
+            .w_full()
+            .min_h(px(400.0))
+            .flex()
+            .items_center()
+            .justify_center()
+            .child(
+                crate::components::text::caption(t!("App.Git.diff_empty")).secondary(),
+            )
+            .into_any_element()
+    } else {
+        match mode {
+            DiffDisplayMode::Inline => render_inline_diff(&t, lines.clone()).into_any_element(),
+            DiffDisplayMode::SideBySide => {
+                render_side_by_side_diff(&t, lines.clone()).into_any_element()
+            }
+        }
+    };
+
+    div()
+        .w_full()
+        .flex()
+        .flex_col()
+        .child(header)
+        .child(crate::components::Separator::horizontal())
+        .child(body)
+        .into_any_element()
+}
+
+fn diff_mode_segment(
+    t: &crate::theme::Theme,
+    id: impl Into<gpui::ElementId>,
+    icon: gpui_component::IconName,
+    active: bool,
+    on_click: impl Fn(&gpui::ClickEvent, &mut Window, &mut App) + 'static,
+) -> impl IntoElement {
+    let (bg, fg) = if active {
+        (t.color.accent, t.color.text_inverse)
+    } else {
+        (gpui::Rgba::default(), t.color.text_secondary)
+    };
+    div()
+        .id(id.into())
+        .h(crate::theme::heights::BUTTON_SM_H)
+        .w(px(30.0))
+        .flex()
+        .items_center()
+        .justify_center()
+        .bg(bg)
+        .text_color(fg)
+        .cursor_pointer()
+        .hover({
+            let hover_bg = if active {
+                t.color.accent_hover
+            } else {
+                t.color.bg_hover
+            };
+            move |s| s.bg(hover_bg)
+        })
+        .child(gpui_component::Icon::new(icon).size(crate::theme::heights::ICON_SM))
+        .on_click(on_click)
+}
+
+fn render_inline_diff(
+    t: &crate::theme::Theme,
+    lines: Arc<Vec<ParsedDiffLine>>,
+) -> impl IntoElement {
+    let mut col = div()
+        .id("git-diff-dlg-inline")
+        .w_full()
+        .max_h(px(520.0))
+        .overflow_y_scroll()
+        .flex()
+        .flex_col()
+        .bg(t.color.bg_canvas);
+    for (i, line) in lines.iter().enumerate().take(5000) {
+        col = col.child(render_inline_diff_line(t, i, line));
+    }
+    col
+}
+
+fn render_inline_diff_line(
+    t: &crate::theme::Theme,
+    index: usize,
+    line: &ParsedDiffLine,
+) -> impl IntoElement {
+    let (fg, bg, gutter_char): (gpui::Rgba, gpui::Rgba, &str) = match line.kind {
+        DiffLineKind::Addition => (
+            t.color.status_success,
+            diff_bg(t, DiffLineKind::Addition),
+            "+",
+        ),
+        DiffLineKind::Deletion => (
+            t.color.status_error,
+            diff_bg(t, DiffLineKind::Deletion),
+            "-",
+        ),
+        DiffLineKind::Header => (t.color.status_info, diff_bg(t, DiffLineKind::Header), "@"),
+        DiffLineKind::Context => (t.color.text_primary, gpui::Rgba::default(), " "),
+    };
+    let old_num: SharedString = line
+        .old_ln
+        .map(|n| SharedString::from(n.to_string()))
+        .unwrap_or_default();
+    let new_num: SharedString = line
+        .new_ln
+        .map(|n| SharedString::from(n.to_string()))
+        .unwrap_or_default();
+    div()
+        .id(("git-diff-ln", index))
+        .flex()
+        .flex_row()
+        .w_full()
+        .bg(bg)
+        .text_size(crate::theme::typography::SIZE_MONO_SMALL)
+        .font_family(t.font_mono.clone())
+        .child(
+            div()
+                .flex_none()
+                .w(px(40.0))
+                .pr(crate::theme::spacing::SP_1)
+                .text_size(crate::theme::typography::SIZE_SMALL)
+                .text_color(t.color.text_tertiary)
+                .child(old_num),
+        )
+        .child(
+            div()
+                .flex_none()
+                .w(px(40.0))
+                .pr(crate::theme::spacing::SP_1)
+                .text_size(crate::theme::typography::SIZE_SMALL)
+                .text_color(t.color.text_tertiary)
+                .child(new_num),
+        )
+        .child(
+            div()
+                .flex_none()
+                .w(px(16.0))
+                .text_color(fg)
+                .font_weight(crate::theme::typography::WEIGHT_EMPHASIS)
+                .child(SharedString::from(gutter_char.to_string())),
+        )
+        .child(
+            div()
+                .flex_1()
+                .min_w(px(0.0))
+                .text_color(fg)
+                .child(SharedString::from(if line.text.is_empty() {
+                    " ".to_string()
+                } else {
+                    line.text.clone()
+                })),
+        )
+}
+
+fn render_side_by_side_diff(
+    t: &crate::theme::Theme,
+    lines: Arc<Vec<ParsedDiffLine>>,
+) -> impl IntoElement {
+    let (left, right) = split_side_by_side(&lines);
+    let left_col = {
+        let mut col = div()
+            .id("git-diff-dlg-side-left")
+            .flex_1()
+            .max_h(px(520.0))
+            .overflow_y_scroll()
+            .flex()
+            .flex_col()
+            .bg(t.color.bg_canvas);
+        for (i, line) in left.iter().enumerate().take(5000) {
+            col = col.child(render_side_line(t, ("git-diff-l", i), line, /*is_left=*/ true));
+        }
+        col
+    };
+    let right_col = {
+        let mut col = div()
+            .id("git-diff-dlg-side-right")
+            .flex_1()
+            .max_h(px(520.0))
+            .overflow_y_scroll()
+            .flex()
+            .flex_col()
+            .bg(t.color.bg_canvas);
+        for (i, line) in right.iter().enumerate().take(5000) {
+            col = col.child(render_side_line(t, ("git-diff-r", i), line, /*is_left=*/ false));
+        }
+        col
+    };
+    div()
+        .w_full()
+        .flex()
+        .flex_row()
+        .child(left_col)
+        .child(
+            div()
+                .w(px(1.0))
+                .bg(t.color.border_subtle),
+        )
+        .child(right_col)
+}
+
+fn split_side_by_side(
+    lines: &[ParsedDiffLine],
+) -> (Vec<ParsedDiffLine>, Vec<ParsedDiffLine>) {
+    let mut left: Vec<ParsedDiffLine> = Vec::with_capacity(lines.len());
+    let mut right: Vec<ParsedDiffLine> = Vec::with_capacity(lines.len());
+    let mut pending_del: Vec<ParsedDiffLine> = Vec::new();
+    let mut pending_add: Vec<ParsedDiffLine> = Vec::new();
+    let blank = || ParsedDiffLine {
+        text: String::new(),
+        kind: DiffLineKind::Context,
+        old_ln: None,
+        new_ln: None,
+    };
+    let flush = |left: &mut Vec<ParsedDiffLine>,
+                 right: &mut Vec<ParsedDiffLine>,
+                 pd: &mut Vec<ParsedDiffLine>,
+                 pa: &mut Vec<ParsedDiffLine>| {
+        let n = pd.len().max(pa.len());
+        for i in 0..n {
+            left.push(pd.get(i).cloned().unwrap_or_else(blank));
+            right.push(pa.get(i).cloned().unwrap_or_else(blank));
+        }
+        pd.clear();
+        pa.clear();
+    };
+    for line in lines.iter() {
+        match line.kind {
+            DiffLineKind::Header | DiffLineKind::Context => {
+                flush(&mut left, &mut right, &mut pending_del, &mut pending_add);
+                left.push(line.clone());
+                right.push(line.clone());
+            }
+            DiffLineKind::Deletion => {
+                if !pending_add.is_empty() {
+                    flush(&mut left, &mut right, &mut pending_del, &mut pending_add);
+                }
+                pending_del.push(line.clone());
+            }
+            DiffLineKind::Addition => pending_add.push(line.clone()),
+        }
+    }
+    flush(&mut left, &mut right, &mut pending_del, &mut pending_add);
+    (left, right)
+}
+
+fn render_side_line(
+    t: &crate::theme::Theme,
+    id: impl Into<gpui::ElementId>,
+    line: &ParsedDiffLine,
+    is_left: bool,
+) -> impl IntoElement {
+    let (fg, bg) = match line.kind {
+        DiffLineKind::Addition => (t.color.status_success, diff_bg(t, DiffLineKind::Addition)),
+        DiffLineKind::Deletion => (t.color.status_error, diff_bg(t, DiffLineKind::Deletion)),
+        DiffLineKind::Header => (t.color.status_info, diff_bg(t, DiffLineKind::Header)),
+        DiffLineKind::Context => (t.color.text_primary, gpui::Rgba::default()),
+    };
+    let num: SharedString = if is_left {
+        line.old_ln
+            .map(|n| SharedString::from(n.to_string()))
+            .unwrap_or_default()
+    } else {
+        line.new_ln
+            .map(|n| SharedString::from(n.to_string()))
+            .unwrap_or_default()
+    };
+    div()
+        .id(id.into())
+        .flex()
+        .flex_row()
+        .w_full()
+        .bg(bg)
+        .text_size(crate::theme::typography::SIZE_MONO_SMALL)
+        .font_family(t.font_mono.clone())
+        .child(
+            div()
+                .flex_none()
+                .w(px(40.0))
+                .pr(crate::theme::spacing::SP_1)
+                .text_size(crate::theme::typography::SIZE_SMALL)
+                .text_color(t.color.text_tertiary)
+                .child(num),
+        )
+        .child(
+            div()
+                .flex_1()
+                .min_w(px(0.0))
+                .px(crate::theme::spacing::SP_1)
+                .text_color(fg)
+                .child(SharedString::from(if line.text.is_empty() {
+                    " ".to_string()
+                } else {
+                    line.text.clone()
+                })),
+        )
+}
+
+/// Line-background tint for a diff line — matches Pier's
+/// `Color.green/red/cyan.opacity(0.08)` (headers use 0.05).
+fn diff_bg(t: &crate::theme::Theme, kind: DiffLineKind) -> gpui::Rgba {
+    match kind {
+        DiffLineKind::Addition => gpui::Rgba {
+            a: 0.08,
+            ..t.color.status_success
+        },
+        DiffLineKind::Deletion => gpui::Rgba {
+            a: 0.08,
+            ..t.color.status_error
+        },
+        DiffLineKind::Header => gpui::Rgba {
+            a: 0.05,
+            ..t.color.status_info
+        },
+        DiffLineKind::Context => gpui::Rgba::default(),
+    }
 }
 
 // ─── Dialog body builders ───────────────────────────────────────────
@@ -257,23 +789,18 @@ fn remotes_dialog_body(app: WeakEntity<PierApp>, cx: &mut App) -> gpui::AnyEleme
         .unwrap_or_default();
     let fetch_all_weak = app.clone();
     let mut body = scroll_body().child(
-        div()
-            .flex()
-            .flex_row()
-            .px(SP_3)
-            .py(SP_2)
-            .child(
-                crate::components::Button::secondary(
-                    "git-dlg-fetch-all",
-                    t!("App.Git.remote_fetch_all"),
-                )
-                .size(crate::components::ButtonSize::Sm)
-                .on_click(move |_, _, cx| {
-                    let _ = fetch_all_weak.update(cx, |app, cx| {
-                        app.schedule_git_action(GitPendingAction::RemoteFetch { name: None }, cx);
-                    });
-                }),
-            ),
+        div().flex().flex_row().px(SP_3).py(SP_2).child(
+            crate::components::Button::secondary(
+                "git-dlg-fetch-all",
+                t!("App.Git.remote_fetch_all"),
+            )
+            .size(crate::components::ButtonSize::Sm)
+            .on_click(move |_, _, cx| {
+                let _ = fetch_all_weak.update(cx, |app, cx| {
+                    app.schedule_git_action(GitPendingAction::RemoteFetch { name: None }, cx);
+                });
+            }),
+        ),
     );
     body = body.child(Separator::horizontal());
     if remotes.is_empty() {
@@ -342,23 +869,6 @@ fn rebase_dialog_body(app: WeakEntity<PierApp>, cx: &mut App) -> gpui::AnyElemen
     super::git::rebase_manager_export(&t, app).into_any_element()
 }
 
-fn diff_dialog_body(
-    text: std::sync::Arc<String>,
-    cx: &mut App,
-) -> gpui::AnyElement {
-    let t = theme(cx).clone();
-    let mut body = div()
-        .id("git-diff-dlg-body")
-        .w_full()
-        .max_h(px(520.0))
-        .overflow_y_scroll()
-        .flex()
-        .flex_col();
-    for (i, line) in text.lines().take(5000).enumerate() {
-        body = body.child(super::git::diff_line_row_export(&t, i, line));
-    }
-    body.into_any_element()
-}
 
 // ─── Internal helpers ──────────────────────────────────────────────
 

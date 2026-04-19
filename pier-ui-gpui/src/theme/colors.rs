@@ -7,14 +7,54 @@ use crate::theme::ThemeMode;
 /// IDEA-style 8-color palette used by the Git commit-graph component.
 /// Literals live in the theme module only, per the component rules.
 const IDEA_GRAPH_PALETTE: [Rgba; 8] = [
-    Rgba { r: 0.27, g: 0.69, b: 0.35, a: 1.0 }, // 0 = main (green)
-    Rgba { r: 0.25, g: 0.58, b: 0.96, a: 1.0 }, // blue
-    Rgba { r: 0.87, g: 0.42, b: 0.12, a: 1.0 }, // orange
-    Rgba { r: 0.68, g: 0.35, b: 0.82, a: 1.0 }, // purple
-    Rgba { r: 0.94, g: 0.33, b: 0.31, a: 1.0 }, // red
-    Rgba { r: 0.16, g: 0.71, b: 0.76, a: 1.0 }, // teal
-    Rgba { r: 0.89, g: 0.68, b: 0.12, a: 1.0 }, // yellow
-    Rgba { r: 0.85, g: 0.35, b: 0.60, a: 1.0 }, // pink
+    Rgba {
+        r: 0.27,
+        g: 0.69,
+        b: 0.35,
+        a: 1.0,
+    }, // 0 = main (green)
+    Rgba {
+        r: 0.25,
+        g: 0.58,
+        b: 0.96,
+        a: 1.0,
+    }, // blue
+    Rgba {
+        r: 0.87,
+        g: 0.42,
+        b: 0.12,
+        a: 1.0,
+    }, // orange
+    Rgba {
+        r: 0.68,
+        g: 0.35,
+        b: 0.82,
+        a: 1.0,
+    }, // purple
+    Rgba {
+        r: 0.94,
+        g: 0.33,
+        b: 0.31,
+        a: 1.0,
+    }, // red
+    Rgba {
+        r: 0.16,
+        g: 0.71,
+        b: 0.76,
+        a: 1.0,
+    }, // teal
+    Rgba {
+        r: 0.89,
+        g: 0.68,
+        b: 0.12,
+        a: 1.0,
+    }, // yellow
+    Rgba {
+        r: 0.85,
+        g: 0.35,
+        b: 0.60,
+        a: 1.0,
+    }, // pink
 ];
 
 #[derive(Clone, Copy)]

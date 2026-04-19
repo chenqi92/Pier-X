@@ -26,8 +26,8 @@ use crate::components::{
     PropertyRow, SectionLabel, Separator, StatusKind, StatusPill,
 };
 use crate::theme::{
-    heights::{BUTTON_MD_H, ICON_SM, ROW_MD_H, TAB_GLYPH},
-    radius::{RADIUS_MD, RADIUS_SM, RADIUS_XS},
+    heights::{BUTTON_MD_H, ICON_MD, ICON_SM, ROW_MD_H},
+    radius::{RADIUS_MD, RADIUS_SM},
     spacing::{SP_0_5, SP_1, SP_1_5, SP_2, SP_3, SP_4},
     theme,
     typography::{SIZE_CAPTION, SIZE_MONO_SMALL, SIZE_SMALL, WEIGHT_MEDIUM},
@@ -57,9 +57,11 @@ pub type DockerActionHandler = Rc<dyn Fn(&DockerActionRequest, &mut Window, &mut
 pub type DockerTabHandler = Rc<dyn Fn(&DockerTab, &mut Window, &mut App) + 'static>;
 pub type LogsActionHandler = Rc<dyn Fn(&LogsAction, &mut Window, &mut App) + 'static>;
 
-const MODE_RAIL_BUTTON_W: Pixels = px(34.0);
-const MODE_RAIL_INDICATOR_W: Pixels = px(2.0);
-const MODE_RAIL_INDICATOR_H: Pixels = px(16.0);
+/// Square side of each mode button on the right rail. Picked so the
+/// button is visually dominant — an accent-filled rounded chip behind
+/// a 16-px glyph, matching Pier's right-sidebar look. Pairs with
+/// `RIGHT_ICON_BAR_W = 40` leaving 4-px gutters on each side.
+const MODE_RAIL_BUTTON_SIZE: Pixels = px(32.0);
 
 #[derive(Clone, Debug)]
 pub struct DockerActionRequest {
@@ -2379,19 +2381,6 @@ fn render_icon_sidebar(
     available_modes: &[RightMode],
     on_select: ModeSelector,
 ) -> impl IntoElement {
-    let mut rail = div()
-        .w_full()
-        .flex()
-        .flex_col()
-        .items_center()
-        .gap(SP_1)
-        .px(SP_1)
-        .py(SP_2)
-        .rounded(RADIUS_MD)
-        .bg(t.color.bg_panel)
-        .border_1()
-        .border_color(t.color.border_subtle);
-
     let local_modes: Vec<RightMode> = available_modes
         .iter()
         .copied()
@@ -2403,6 +2392,20 @@ fn render_icon_sidebar(
         .filter(|mode| matches!(mode.context(), RightContext::Remote))
         .collect();
 
+    // Rail sits directly on bg_surface — no inner container, no
+    // border, no rounded panel. Mirrors Pier's right-sidebar where
+    // icons float against the panel surface; the previous nested
+    // bg_panel/border frame read as a doubled-container.
+    let mut rail = div()
+        .w(RIGHT_ICON_BAR_W)
+        .h_full()
+        .flex()
+        .flex_col()
+        .items_center()
+        .gap(SP_0_5)
+        .py(SP_2)
+        .bg(t.color.bg_surface);
+
     for mode in local_modes {
         rail = rail.child(mode_icon_button(
             t,
@@ -2412,9 +2415,13 @@ fn render_icon_sidebar(
         ));
     }
     if !remote_modes.is_empty() {
+        // Thin horizontal rule between the local-only section and
+        // the remote-section below it, matching Pier. Width is
+        // deliberately narrower than the rail so it reads as a
+        // section divider, not a panel edge.
         rail = rail.child(
             div()
-                .w(px(18.0))
+                .w(px(20.0))
                 .h(px(1.0))
                 .my(SP_1)
                 .bg(t.color.border_subtle),
@@ -2428,13 +2435,7 @@ fn render_icon_sidebar(
             ));
         }
     }
-    div()
-        .w(RIGHT_ICON_BAR_W)
-        .h_full()
-        .px(SP_1)
-        .py(SP_2)
-        .bg(t.color.bg_surface)
-        .child(rail)
+    rail
 }
 
 fn mode_icon_button(
@@ -2446,42 +2447,30 @@ fn mode_icon_button(
     let id_str: SharedString = format!("right-icon-{}", mode.id()).into();
     let icon = mode_icon(mode);
 
-    let mut btn = div()
-        .id(gpui::ElementId::Name(id_str))
-        .w(MODE_RAIL_BUTTON_W)
-        .h(BUTTON_MD_H)
-        .px(SP_0_5)
-        .flex()
-        .flex_row()
-        .items_center()
-        .rounded(RADIUS_MD)
-        .cursor_pointer()
-        .hover(|s| s.bg(t.color.bg_hover))
-        .on_click(move |_, w, app| on_select(&mode, w, app))
-        .child(
-            div()
-                .w(MODE_RAIL_INDICATOR_W)
-                .h(MODE_RAIL_INDICATOR_H)
-                .rounded(RADIUS_XS)
-                .bg(if is_active {
-                    t.color.accent
-                } else {
-                    gpui::Rgba::default()
-                }),
-        )
-        .child(div().flex_1().flex().items_center().justify_center().child(
-            icon.size(TAB_GLYPH).text_color(if is_active {
-                t.color.accent
-            } else {
-                t.color.text_secondary
-            }),
-        ))
-        .child(div().w(MODE_RAIL_INDICATOR_W));
+    // Square filled button, ICON_MD glyph. Active state uses the
+    // accent-tinted surface (same token as selected rows in the
+    // left panel) so the selection cue is consistent across the
+    // shell.
+    let (bg, fg) = if is_active {
+        (t.color.accent_subtle, t.color.accent)
+    } else {
+        (gpui::Rgba::default(), t.color.text_secondary)
+    };
 
-    if is_active {
-        btn = btn.bg(t.color.accent_subtle);
-    }
-    btn
+    div()
+        .id(gpui::ElementId::Name(id_str))
+        .w(MODE_RAIL_BUTTON_SIZE)
+        .h(MODE_RAIL_BUTTON_SIZE)
+        .flex()
+        .flex_none()
+        .items_center()
+        .justify_center()
+        .rounded(RADIUS_MD)
+        .bg(bg)
+        .cursor_pointer()
+        .hover(move |s| if is_active { s } else { s.bg(t.color.bg_hover) })
+        .on_click(move |_, w, app| on_select(&mode, w, app))
+        .child(icon.size(ICON_MD).text_color(fg))
 }
 
 fn mode_icon(mode: RightMode) -> UiIcon {

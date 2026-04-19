@@ -341,18 +341,12 @@ static ASSETS: &[(&str, &[u8])] = &[
         "icons/hard-drive-fill.svg",
         include_bytes!("../assets/icons/hard-drive-fill.svg"),
     ),
-    (
-        "icons/hash.svg",
-        include_bytes!("../assets/icons/hash.svg"),
-    ),
+    ("icons/hash.svg", include_bytes!("../assets/icons/hash.svg")),
     (
         "icons/identification-card.svg",
         include_bytes!("../assets/icons/identification-card.svg"),
     ),
-    (
-        "icons/key.svg",
-        include_bytes!("../assets/icons/key.svg"),
-    ),
+    ("icons/key.svg", include_bytes!("../assets/icons/key.svg")),
     (
         "icons/key-fill.svg",
         include_bytes!("../assets/icons/key-fill.svg"),
@@ -365,10 +359,7 @@ static ASSETS: &[(&str, &[u8])] = &[
         "icons/lightning-fill.svg",
         include_bytes!("../assets/icons/lightning-fill.svg"),
     ),
-    (
-        "icons/link.svg",
-        include_bytes!("../assets/icons/link.svg"),
-    ),
+    ("icons/link.svg", include_bytes!("../assets/icons/link.svg")),
     (
         "icons/list-bullets.svg",
         include_bytes!("../assets/icons/list-bullets.svg"),
@@ -461,10 +452,7 @@ static ASSETS: &[(&str, &[u8])] = &[
         "icons/table.svg",
         include_bytes!("../assets/icons/table.svg"),
     ),
-    (
-        "icons/tag.svg",
-        include_bytes!("../assets/icons/tag.svg"),
-    ),
+    ("icons/tag.svg", include_bytes!("../assets/icons/tag.svg")),
     (
         "icons/tag-fill.svg",
         include_bytes!("../assets/icons/tag-fill.svg"),
@@ -489,10 +477,7 @@ static ASSETS: &[(&str, &[u8])] = &[
         "icons/warning-fill.svg",
         include_bytes!("../assets/icons/warning-fill.svg"),
     ),
-    (
-        "icons/wifi.svg",
-        include_bytes!("../assets/icons/wifi.svg"),
-    ),
+    ("icons/wifi.svg", include_bytes!("../assets/icons/wifi.svg")),
     (
         "icons/wifi-slash.svg",
         include_bytes!("../assets/icons/wifi-slash.svg"),

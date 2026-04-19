@@ -115,8 +115,8 @@ pub fn file_icon(name: &str, is_dir: bool) -> (IconName, FileIconTone) {
         }
 
         // Video / audio.
-        "mp4" | "mov" | "avi" | "mkv" | "webm" | "m4v" | "mp3" | "wav" | "flac" | "ogg"
-        | "aac" | "m4a" => (IconName::Play, FileIconTone::Media),
+        "mp4" | "mov" | "avi" | "mkv" | "webm" | "m4v" | "mp3" | "wav" | "flac" | "ogg" | "aac"
+        | "m4a" => (IconName::Play, FileIconTone::Media),
 
         // Archives — Container glyph reads as "package".
         "zip" | "tar" | "gz" | "tgz" | "bz2" | "xz" | "7z" | "rar" | "dmg" | "iso" => {

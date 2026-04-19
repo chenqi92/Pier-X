@@ -238,60 +238,146 @@ pub struct GraphFilter {
 #[allow(missing_docs)]
 pub enum GitPendingAction {
     Refresh,
-    Stage { path: String },
-    Unstage { path: String },
-    Discard { path: String },
+    Stage {
+        path: String,
+    },
+    Unstage {
+        path: String,
+    },
+    Discard {
+        path: String,
+    },
     StageAll,
     UnstageAll,
-    Commit { message: String },
-    CommitAmend { message: String },
-    CheckoutBranch { name: String },
-    CheckoutHash { hash: String },
-    CheckoutTracking { local: String, remote: String },
-    StashPush { message: String },
-    StashApply { index: String },
-    StashPop { index: String },
-    StashDrop { index: String },
+    Commit {
+        message: String,
+    },
+    CommitAmend {
+        message: String,
+    },
+    CheckoutBranch {
+        name: String,
+    },
+    CheckoutHash {
+        hash: String,
+    },
+    CheckoutTracking {
+        local: String,
+        remote: String,
+    },
+    StashPush {
+        message: String,
+    },
+    StashApply {
+        index: String,
+    },
+    StashPop {
+        index: String,
+    },
+    StashDrop {
+        index: String,
+    },
     Push,
     Pull,
     // Branch ops
-    BranchCreate { name: String, base: Option<String> },
-    BranchDelete { name: String, force: bool },
-    BranchRename { old: String, new: String },
+    BranchCreate {
+        name: String,
+        base: Option<String>,
+    },
+    BranchDelete {
+        name: String,
+        force: bool,
+    },
+    BranchRename {
+        old: String,
+        new: String,
+    },
     // Reset / cherry-pick / revert / drop
-    Reset { mode: ResetMode, target: String },
-    CherryPick { hash: String },
-    Revert { hash: String },
-    UndoCommit { hash: String },
-    DropCommit { hash: String, parent: Option<String> },
+    Reset {
+        mode: ResetMode,
+        target: String,
+    },
+    CherryPick {
+        hash: String,
+    },
+    Revert {
+        hash: String,
+    },
+    UndoCommit {
+        hash: String,
+    },
+    DropCommit {
+        hash: String,
+        parent: Option<String>,
+    },
     // Merge
-    Merge { branch: String },
+    Merge {
+        branch: String,
+    },
     MergeAbort,
     // Rebase
-    Rebase { onto: String },
+    Rebase {
+        onto: String,
+    },
     RebaseContinue,
     RebaseAbort,
     RebaseSkip,
     // Tags
-    TagCreate { name: String, message: String, at: Option<String> },
-    TagDelete { name: String },
-    TagPush { name: String },
+    TagCreate {
+        name: String,
+        message: String,
+        at: Option<String>,
+    },
+    TagDelete {
+        name: String,
+    },
+    TagPush {
+        name: String,
+    },
     // Remotes
-    RemoteAdd { name: String, url: String },
-    RemoteRemove { name: String },
-    RemoteSetUrl { name: String, url: String },
-    RemoteFetch { name: Option<String> },
+    RemoteAdd {
+        name: String,
+        url: String,
+    },
+    RemoteRemove {
+        name: String,
+    },
+    RemoteSetUrl {
+        name: String,
+        url: String,
+    },
+    RemoteFetch {
+        name: Option<String>,
+    },
     // Config
-    ConfigSet { key: String, value: String, global: bool },
-    ConfigUnset { key: String, global: bool },
+    ConfigSet {
+        key: String,
+        value: String,
+        global: bool,
+    },
+    ConfigUnset {
+        key: String,
+        global: bool,
+    },
     // Submodules
-    SubmoduleAdd { url: String, path: String },
+    SubmoduleAdd {
+        url: String,
+        path: String,
+    },
     SubmoduleUpdate,
-    SubmoduleRemove { path: String },
+    SubmoduleRemove {
+        path: String,
+    },
     // Conflicts
-    ResolveOurs { path: String },
-    ResolveTheirs { path: String },
-    MarkResolved { path: String },
+    ResolveOurs {
+        path: String,
+    },
+    ResolveTheirs {
+        path: String,
+    },
+    MarkResolved {
+        path: String,
+    },
 }
 
 impl GitPendingAction {
@@ -1058,7 +1144,9 @@ impl GitState {
                     let new_count = self.graph.rows.len();
                     let old_count = self.graph.list_state.item_count();
                     if new_count > old_count {
-                        self.graph.list_state.splice(old_count..old_count, new_count - old_count);
+                        self.graph
+                            .list_state
+                            .splice(old_count..old_count, new_count - old_count);
                     }
                 }
             }
@@ -1093,12 +1181,7 @@ impl GitState {
             Ok(detail) => {
                 // Remeasure the now-expanded selected row so gpui::list
                 // picks up the taller geometry from the inline strip.
-                if let Some(idx) = self
-                    .graph
-                    .rows
-                    .iter()
-                    .position(|r| r.hash == detail.hash)
-                {
+                if let Some(idx) = self.graph.rows.iter().position(|r| r.hash == detail.hash) {
                     if idx < self.graph.list_state.item_count() {
                         self.graph.list_state.splice(idx..idx + 1, 1);
                     }
@@ -1719,7 +1802,11 @@ fn run_graph_inner(request: &GraphRequest) -> Result<GraphPayload, String> {
         let files = git_graph::list_tracked_files(&request.repo_path).unwrap_or_default();
         // Unpushed: use git CLI via a fresh client.
         let unpushed = match GitClient::open(&request.repo_path) {
-            Ok(c) => c.unpushed_hashes().unwrap_or_default().into_iter().collect(),
+            Ok(c) => c
+                .unpushed_hashes()
+                .unwrap_or_default()
+                .into_iter()
+                .collect(),
             Err(_) => HashSet::new(),
         };
         (branches, authors, files, unpushed)

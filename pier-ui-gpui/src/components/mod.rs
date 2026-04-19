@@ -36,8 +36,8 @@ pub use assist_strip::AssistStrip;
 pub use button::{Button, ButtonSize, ButtonVariant};
 pub use card::Card;
 pub use commit_graph::{
-    compute_graph_col_width, graph_row_canvas, is_head_row, palette_color, DOT_RADIUS,
-    LANE_WIDTH, ROW_HEIGHT,
+    compute_graph_col_width, graph_row_canvas, is_head_row, palette_color, DOT_RADIUS, LANE_WIDTH,
+    ROW_HEIGHT,
 };
 pub use context_menu::{ContextMenu, ContextMenuItem};
 pub use data_cell::{data_cell_row, DataCell, DataTone};

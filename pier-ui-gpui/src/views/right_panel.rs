@@ -251,15 +251,21 @@ fn render_mode_body(
     };
 
     let mut panel = div().w_full().h_full().flex().flex_col().child(header);
-    if let Some(overview) = remote_overview.as_ref() {
-        panel = panel
-            .child(render_services_strip(
-                t,
-                mode,
-                overview,
-                on_select_mode.clone(),
-            ))
-            .child(render_ssh_strip(t, overview));
+    // Service / SSH strips are remote-only context. For Local modes
+    // (Markdown, Git, SQLite) they're meaningless — the panel reads
+    // from disk — so suppress them even when a remote session is
+    // active in a sibling terminal tab.
+    if matches!(mode.context(), RightContext::Remote) {
+        if let Some(overview) = remote_overview.as_ref() {
+            panel = panel
+                .child(render_services_strip(
+                    t,
+                    mode,
+                    overview,
+                    on_select_mode.clone(),
+                ))
+                .child(render_ssh_strip(t, overview));
+        }
     }
 
     panel
@@ -609,59 +615,56 @@ fn tunnel_chip(tunnel: &TunnelOverview) -> impl IntoElement {
 
 /// Build the PageHeader for the given right-panel mode.
 ///
-/// Grammar (per the "default tacit layer" plan):
-/// - eyebrow = `mode.label()` — "SSH / Git / SFTP / …" so the user can
-///   tell at a glance *what kind of work this is*.
-/// - title   = session name when we have one, else "Local".
-/// - subtitle_mono = endpoint (`user@host:port`) for remote modes.
-/// - status  = connection pill (Connecting / Connected / Failed).
-///
-/// Mode-specific refinements (Git branch in the title, SFTP cwd as
-/// subtitle, etc.) live inside each view's own header — this helper is
-/// the base that makes every mode recognisable at the top.
+/// Grammar:
+/// - **Local modes** (Markdown / Git / SQLite) — the mode name *is*
+///   the context; no eyebrow, no subtitle, no status pill. The
+///   result is a single clean H2 that reads "Markdown" or "Git"
+///   and nothing else. The inner view (GitView, MarkdownView) is
+///   free to surface its own per-view context below.
+/// - **Remote modes** (SSH / SFTP / Docker / Logs / DB) — the mode
+///   name becomes the eyebrow, title is the session name, subtitle
+///   is the endpoint, and a connection pill carries state. When no
+///   session is active, a single warning pill is shown.
 fn mode_page_header(
     mode: RightMode,
     active_session: Option<&Entity<SshSessionState>>,
     cx: &App,
 ) -> PageHeader {
-    let eyebrow = mode.label();
-    let (title, subtitle, status_pill) = match mode.context() {
-        RightContext::Local => (
-            SharedString::from(t!("App.Common.local").to_string()),
-            None,
-            None,
-        ),
-        RightContext::Remote => match active_session {
-            Some(session_entity) => {
-                let session = session_entity.read(cx);
-                let (label, kind) = remote_status_pill(&session.status);
-                (
-                    SharedString::from(session.config.name.clone()),
-                    Some(remote_endpoint_label(&session.config)),
-                    Some(StatusPill::new(label, kind)),
-                )
+    match mode.context() {
+        RightContext::Local => PageHeader::new(mode.label()).size(HeaderSize::Page),
+        RightContext::Remote => {
+            let eyebrow = mode.label();
+            let (title, subtitle, status_pill) = match active_session {
+                Some(session_entity) => {
+                    let session = session_entity.read(cx);
+                    let (label, kind) = remote_status_pill(&session.status);
+                    (
+                        SharedString::from(session.config.name.clone()),
+                        Some(remote_endpoint_label(&session.config)),
+                        Some(StatusPill::new(label, kind)),
+                    )
+                }
+                None => (
+                    SharedString::from(t!("App.RightPanel.no_session").to_string()),
+                    None,
+                    Some(StatusPill::new(
+                        t!("App.RightPanel.no_session").to_string(),
+                        StatusKind::Warning,
+                    )),
+                ),
+            };
+            let mut header = PageHeader::new(title)
+                .size(HeaderSize::Page)
+                .eyebrow(eyebrow);
+            if let Some(subtitle) = subtitle {
+                header = header.subtitle_mono(subtitle);
             }
-            None => (
-                SharedString::from(t!("App.RightPanel.no_session").to_string()),
-                None,
-                Some(StatusPill::new(
-                    t!("App.RightPanel.no_session").to_string(),
-                    StatusKind::Warning,
-                )),
-            ),
-        },
-    };
-
-    let mut header = PageHeader::new(title)
-        .size(HeaderSize::Page)
-        .eyebrow(eyebrow);
-    if let Some(subtitle) = subtitle {
-        header = header.subtitle_mono(subtitle);
+            if let Some(pill) = status_pill {
+                header = header.status(pill);
+            }
+            header
+        }
     }
-    if let Some(pill) = status_pill {
-        header = header.status(pill);
-    }
-    header
 }
 
 /// Legacy helper kept around during the transition — identical to the

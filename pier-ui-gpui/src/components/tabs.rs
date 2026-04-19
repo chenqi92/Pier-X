@@ -19,11 +19,11 @@ use gpui::{
 use gpui_component::{Icon as UiIcon, IconName};
 
 use crate::theme::{
-    heights::{ICON_SM, ROW_SM_H},
+    heights::{ROW_SM_H, TAB_GLYPH, TAB_PILL_H},
     radius::RADIUS_SM,
-    spacing::{SP_1, SP_1_5, SP_2, SP_3},
+    spacing::{SP_0_5, SP_1, SP_1_5, SP_2},
     theme, ui_font_with,
-    typography::{SIZE_UI_LABEL, WEIGHT_MEDIUM},
+    typography::{SIZE_UI_LABEL, WEIGHT_MEDIUM, WEIGHT_REGULAR},
 };
 
 pub struct TabItem {
@@ -86,29 +86,46 @@ impl Default for Tabs {
 impl RenderOnce for Tabs {
     fn render(self, _: &mut Window, cx: &mut App) -> impl IntoElement {
         let t = theme(cx);
-        let active_color = t.color.accent;
-        let idle_color = t.color.text_secondary;
+
+        // Active tab sits inside a subtle tinted pill that matches the
+        // accent family; inactive tabs are flat, lighter weight, and
+        // only flash a hover bg. This keeps the strip quiet at rest
+        // but makes the selection unmistakable.
+        let active_bg = t.color.accent_subtle;
+        let active_fg = t.color.accent;
+        let idle_fg = t.color.text_tertiary;
         let hover_bg = t.color.bg_hover;
         let hover_fg = t.color.text_primary;
 
+        // Slightly taller than ROW_SM_H so the pill doesn't kiss the
+        // bottom rule — a shared 28px-ish height that reads as its
+        // own strip rather than a blended row.
+        let strip_h = ROW_SM_H;
+
         let mut row = div()
             .w_full()
-            .h(ROW_SM_H)
-            .px(SP_2)
+            .h(strip_h)
+            .px(SP_1)
             .flex()
             .flex_row()
             .items_center()
-            .gap(SP_1)
-            .bg(t.color.bg_surface)
+            .gap(SP_0_5)
+            .bg(t.color.bg_panel)
             .border_b_1()
             .border_color(t.color.border_subtle);
 
         for item in self.items {
-            let fg = if item.active { active_color } else { idle_color };
+            let is_active = item.active;
+            let fg = if is_active { active_fg } else { idle_fg };
+            let weight = if is_active {
+                WEIGHT_MEDIUM
+            } else {
+                WEIGHT_REGULAR
+            };
             let mut el = div()
                 .id(item.id)
-                .h(ROW_SM_H)
-                .px(SP_3)
+                .h(TAB_PILL_H)
+                .px(SP_2)
                 .flex()
                 .flex_row()
                 .items_center()
@@ -116,12 +133,17 @@ impl RenderOnce for Tabs {
                 .rounded(RADIUS_SM)
                 .text_size(SIZE_UI_LABEL)
                 .text_color(fg)
-                .font(ui_font_with(&t.font_ui, &t.font_ui_features, WEIGHT_MEDIUM))
-                .cursor_pointer()
-                .hover(move |s| s.bg(hover_bg).text_color(hover_fg));
+                .font(ui_font_with(&t.font_ui, &t.font_ui_features, weight))
+                .cursor_pointer();
+
+            if is_active {
+                el = el.bg(active_bg);
+            } else {
+                el = el.hover(move |s| s.bg(hover_bg).text_color(hover_fg));
+            }
 
             if let Some(icon) = item.icon {
-                el = el.child(UiIcon::new(icon).size(ICON_SM).text_color(fg));
+                el = el.child(UiIcon::new(icon).size(TAB_GLYPH).text_color(fg));
             }
             el = el.child(item.label);
             el = el.on_click(move |ev, win, cx| (item.on_click)(ev, win, cx));

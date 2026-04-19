@@ -35,6 +35,12 @@ pub const PILL_DOT: Pixels = px(6.0);
 pub const ROW_SM_H: Pixels = px(24.0);
 pub const ROW_MD_H: Pixels = px(28.0);
 
+// Tab pill — a hair taller than ROW_SM so the pill doesn't kiss the
+// bottom rule, plus its own inline-glyph size so the tab icon feels
+// deliberately smaller than the adjacent label text.
+pub const TAB_PILL_H: Pixels = px(22.0);
+pub const TAB_GLYPH: Pixels = px(13.0);
+
 // Icon sizes (inside buttons, labels, rows).
 pub const ICON_SM: Pixels = px(14.0);
 pub const ICON_MD: Pixels = px(16.0);

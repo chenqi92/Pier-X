@@ -296,7 +296,7 @@ fn render_header(
         .child(quick_menu(t, on_navigate_to, on_choose_folder))
         // 4. 🔄 Refresh.
         .child(
-            IconButton::new("ft-refresh", IconName::Loader)
+            IconButton::new("ft-refresh", IconName::RefreshCw)
                 .size(IconButtonSize::Sm)
                 .variant(IconButtonVariant::Filled)
                 .on_click(move |_, w, app| on_refresh(&(), w, app)),
@@ -605,7 +605,7 @@ fn row(
     let glyph = if entry.is_dir {
         IconName::Folder
     } else {
-        IconName::File
+        IconName::FileText
     };
     let path = entry.path.clone();
     let is_dir = entry.is_dir;

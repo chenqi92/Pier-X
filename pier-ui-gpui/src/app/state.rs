@@ -17,8 +17,8 @@ use std::time::Duration;
 
 use gpui::{
     canvas, div, prelude::*, px, AnyElement, App, Bounds, ClickEvent, Context, DragMoveEvent,
-    Empty, Entity, EntityId, IntoElement, MouseButton, MouseDownEvent, Pixels, Render,
-    SharedString, Window,
+    Empty, Entity, EntityId, IntoElement, MouseButton, MouseDownEvent, Pixels, Point, Render,
+    ScrollDelta, ScrollHandle, ScrollWheelEvent, SharedString, Window,
 };
 use gpui_component::{
     input::InputState, Icon as UiIcon, IconName, PixelsExt as _, WindowExt as _,
@@ -106,7 +106,6 @@ pub struct PierApp {
     pane_bounds: Bounds<Pixels>,
 
     // ─── Backend snapshots ───
-    snapshot: ShellSnapshot,
     connections: Vec<SshConfig>,
     /// User-declared server groups (distinct from tag-derived
     /// groups) — lets an empty group show up in the sidebar as
@@ -134,6 +133,10 @@ pub struct PierApp {
     /// Tab right-click menu state. `Some((idx, pos))` while the menu
     /// is open over terminal tab `idx` anchored at viewport `pos`.
     tab_context_menu: Option<(usize, gpui::Point<Pixels>)>,
+    /// Horizontal scroll state for the terminal tab bar. Persisted on
+    /// PierApp so scroll position survives cross-renders; also makes
+    /// it trivial to call `scroll_to_item(active)` on tab activation.
+    terminal_tabs_scroll: ScrollHandle,
 
     /// Last file the user opened from the left panel that should drive the
     /// right-panel Markdown mode. Set by [`Self::open_markdown_file`].
@@ -233,7 +236,6 @@ impl PierApp {
             right_panel_width: RIGHT_PANEL_DEFAULT_W,
             right_mode: RightMode::Markdown,
             pane_bounds: Bounds::default(),
-            snapshot,
             connections,
             declared_groups,
             db_connections,
@@ -242,6 +244,7 @@ impl PierApp {
             terminals: Vec::new(),
             tab_context_menu: None,
             active_terminal: None,
+            terminal_tabs_scroll: ScrollHandle::new(),
             last_opened_file: None,
             active_session: None,
             logs_command_input,
@@ -843,14 +846,21 @@ impl PierApp {
         self.right_visible
     }
 
-    pub(crate) fn workspace_path(&self) -> SharedString {
-        self.snapshot.workspace_path.clone()
-    }
-
     pub(crate) fn active_session_name(&self, cx: &App) -> Option<SharedString> {
         self.active_session
             .as_ref()
             .map(|s| SharedString::from(s.read(cx).config.name.clone()))
+    }
+
+    pub(crate) fn active_session_endpoint(&self, cx: &App) -> Option<SharedString> {
+        self.active_session.as_ref().map(|s| {
+            let cfg = &s.read(cx).config;
+            if cfg.port == 22 {
+                SharedString::from(format!("{}@{}", cfg.user, cfg.host))
+            } else {
+                SharedString::from(format!("{}@{}:{}", cfg.user, cfg.host, cfg.port))
+            }
+        })
     }
 
     pub(crate) fn toggle_left_pane(&mut self, cx: &mut Context<Self>) {
@@ -1986,7 +1996,8 @@ impl PierApp {
             let tab_count = self.terminals.len();
             let active_term = self.terminals[active].clone();
 
-            let tab_bar = render_terminal_tab_bar(t, active, tab_count, cx);
+            let scroll_handle = self.terminal_tabs_scroll.clone();
+            let tab_bar = render_terminal_tab_bar(t, active, tab_count, &scroll_handle, cx);
 
             return div()
                 .h_full()
@@ -2041,6 +2052,7 @@ fn render_terminal_tab_bar(
     t: &crate::theme::Theme,
     active: usize,
     count: usize,
+    scroll_handle: &ScrollHandle,
     cx: &mut Context<PierApp>,
 ) -> impl IntoElement {
     // Tabs container: horizontally scrollable so 20+ terminals don't
@@ -2052,7 +2064,15 @@ fn render_terminal_tab_bar(
         .flex()
         .flex_row()
         .items_center()
-        .gap(SP_1);
+        .gap(SP_1)
+        // Horizontal scroll backed by a persistent handle on PierApp.
+        // `overflow_x_scroll` alone natively handles trackpad two-finger
+        // horizontal gestures and shift+wheel on a traditional mouse.
+        // Vertical-only mouse wheel is re-mapped below via
+        // `on_scroll_wheel` — macOS & Windows mice without horizontal
+        // capability should still be able to scroll the tabs.
+        .overflow_x_scroll()
+        .track_scroll(scroll_handle);
 
     for idx in 0..count {
         let is_active = idx == active;
@@ -2152,14 +2172,36 @@ fn render_terminal_tab_bar(
                 .text_color(t.color.text_secondary),
         );
 
-    // NOTE: earlier revision tried `tabs.overflow_x_scrollbar()` for
-    // a proper horizontal scroll, but `Scrollable` resets the inner
-    // element's style (which breaks the tabs' own flex_row layout)
-    // and was suspected of contributing to an input-path crash on
-    // tab click. Until we have a hand-rolled scroll that preserves
-    // layout, fall back to plain overflow_hidden — extra tabs get
-    // clipped (user sees a truncated bar rather than scroll
-    // controls) but [+] stays reachable.
+    // Make sure the active tab is always visible after selection —
+    // GPUI's `ScrollHandle::scroll_to_item` defers the actual scroll
+    // to prepaint, so calling it every render is idempotent.
+    scroll_handle.scroll_to_item(active);
+
+    // Redirect vertical mouse-wheel deltas to horizontal scroll so a
+    // plain mouse (no trackpad, no shift modifier) can still move
+    // along the tab row. Trackpad horizontal and shift+wheel already
+    // work natively via `overflow_x_scroll`, so we only intercept
+    // when dx is zero and dy is not.
+    let wheel_handle = scroll_handle.clone();
+    let on_wheel = move |ev: &ScrollWheelEvent, _: &mut Window, _: &mut App| {
+        let (dx, dy) = match ev.delta {
+            ScrollDelta::Pixels(p) => (p.x, p.y),
+            ScrollDelta::Lines(p) => (px(p.x * 16.0), px(p.y * 16.0)),
+        };
+        if f32::from(dx).abs() > f32::EPSILON || f32::from(dy).abs() < f32::EPSILON {
+            // Trackpad horizontal or mixed-axis — let the native
+            // overflow_x_scroll handler on the inner element take it.
+            return;
+        }
+        // GPUI keeps scroll offsets in [-max, 0]; deltas match the
+        // existing y-axis sign, so wheel-down moves content up. The
+        // same sign convention applies here on the x-axis.
+        let current = wheel_handle.offset();
+        let max_offset = wheel_handle.max_offset().width;
+        let next_x = (current.x + dy).clamp(-max_offset, px(0.0));
+        wheel_handle.set_offset(Point::new(next_x, current.y));
+    };
+
     div()
         .h(ROW_MD_H)
         .px(SP_2)
@@ -2170,7 +2212,15 @@ fn render_terminal_tab_bar(
         .bg(t.color.bg_panel)
         .border_b_1()
         .border_color(t.color.border_subtle)
-        .child(div().flex_1().min_w(px(0.0)).overflow_hidden().child(tabs))
+        .child(
+            div()
+                .id("term-tab-scroll-viewport")
+                .flex_1()
+                .min_w(px(0.0))
+                .overflow_hidden()
+                .on_scroll_wheel(on_wheel)
+                .child(tabs),
+        )
         .child(plus_button)
 }
 

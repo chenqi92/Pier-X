@@ -560,13 +560,10 @@ fn servers_header(
                 .child(count_label),
         )
         .child(div().flex_1())
-        // "New Group" — Folder icon distinguishes it from the
-        // adjacent Plus ("New Connection"). The fork's icon set has
-        // no FolderPlus glyph; pairing [📁][+] side-by-side reads as
-        // "new group, new connection" the same way the reference Pier
-        // sidebar does.
+        // "New Group" — FolderPlus reads as "add a folder" and
+        // pairs naturally with the adjacent Plus ("New Connection").
         .child(
-            IconButton::new("servers-add-group", IconName::Folder)
+            IconButton::new("servers-add-group", IconName::FolderPlus)
                 .size(IconButtonSize::Sm)
                 .variant(IconButtonVariant::Ghost)
                 .on_click(move |ev, window, app| on_add_group_click(ev, window, app)),

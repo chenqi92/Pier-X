@@ -255,7 +255,7 @@ fn branch_card(
     let mut card = Card::new()
         .child(
             SectionLabel::new(t!("App.Git.current_branch"))
-                .with_icon(IconName::GalleryVerticalEnd),
+                .with_icon(IconName::GitBranch),
         )
         .child(
             div()
@@ -671,7 +671,7 @@ fn commit_card(
 
     Card::new()
         .child(
-            SectionLabel::new(t!("App.Git.commit_section")).with_icon(IconName::Check),
+            SectionLabel::new(t!("App.Git.commit_section")).with_icon(IconName::GitCommit),
         )
         .child(Input::new(&input))
         .child(

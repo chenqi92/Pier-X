@@ -153,14 +153,21 @@ impl RightMode {
     /// Asset path for the SVG icon. Loaded via `gpui::Application::with_assets`.
     pub fn icon_asset(self) -> Option<&'static str> {
         match self {
-            RightMode::Markdown => Some("icons/file.svg"),
-            RightMode::Monitor => Some("icons/layout-dashboard.svg"),
+            // `file-text` reads as "document with content" better than
+            // a blank file — closer to a Markdown preview affordance.
+            RightMode::Markdown => Some("icons/file-text.svg"),
+            RightMode::Monitor => Some("icons/chart-pie.svg"),
             RightMode::Sftp => Some("icons/folder.svg"),
-            RightMode::Docker => Some("icons/server.svg"),
+            // Container — Docker's own brand reads as "containers" more
+            // than a generic server rack.
+            RightMode::Docker => Some("icons/container.svg"),
             RightMode::Git => Some("icons/git-branch.svg"),
             RightMode::Mysql | RightMode::Postgres | RightMode::Redis | RightMode::Sqlite => {
                 Some("icons/database.svg")
             }
+            // Logs read as "journaled output" — the inspector glyph
+            // lands closer to that meaning than the generic terminal
+            // square (which is already the terminal-tab icon).
             RightMode::Logs => Some("icons/square-terminal.svg"),
         }
     }

@@ -1,33 +1,27 @@
 //! App toolbar rail.
 //!
-//! Lives above everything else. Three columns:
+//! Single-row layout:
 //!
-//! 1. **Leading** — IconButton rail for opening/collapsing the left pane
-//!    and for quick actions (new tab).
-//! 2. **Center** — `SessionContext`: the *name* of what the user is
-//!    currently looking at (active SSH session or "Local"), paired with
-//!    a mono workspace path beneath. This is the one piece of text that
-//!    tells the user where they are, which the previous toolbar buried
-//!    inside a mono caption-only path string.
-//! 3. **Trailing** — IconButton rail for the right pane toggle,
-//!    settings, theme.
-//!
-//! Pills that used to live in the status bar (theme mode, right-mode
-//! name) were absorbed here: theme is expressed by the sun/moon icon
-//! button, and the right-mode context is displayed in the right-panel
-//! PageHeader itself — both resolving to "statusbar has fewer things
-//! shouting at you."
+//! 1. **Leading** — IconButton rail: left-pane toggle, new-tab chooser.
+//! 2. **Center** — session context chip. Shown only when there is an
+//!    active remote session (so "本地" mode keeps the toolbar quiet).
+//!    The chip is a single row: icon + strong session name +
+//!    mono-caption endpoint. The window title already carries the
+//!    workspace path; we don't duplicate it here.
+//! 3. **Trailing** — right pane toggle, settings, theme.
 
-use gpui::{div, prelude::*, ClickEvent, Context, IntoElement, MouseButton, SharedString};
-use gpui_component::IconName;
-use rust_i18n::t;
+use gpui::{div, prelude::*, px, ClickEvent, Context, IntoElement, MouseButton, SharedString};
+use gpui_component::{Icon as UiIcon, IconName};
 
 use crate::app::PierApp;
-use crate::components::{text, IconButton, IconButtonSize, MetaLine};
+use crate::components::{IconButton, IconButtonSize};
 use crate::theme::{
-    heights::TOOLBAR_H,
-    spacing::{SP_2, SP_3},
-    theme, ThemeMode,
+    heights::{GLYPH_SM, TOOLBAR_H},
+    radius::RADIUS_SM,
+    spacing::{SP_1, SP_1_5, SP_2, SP_3},
+    theme,
+    typography::{SIZE_MONO_SMALL, SIZE_UI_LABEL, WEIGHT_MEDIUM},
+    ThemeMode,
 };
 use crate::views::left_panel_view::icons as toolbar_icons;
 
@@ -50,11 +44,8 @@ pub fn render(app: &PierApp, cx: &mut Context<PierApp>) -> impl IntoElement {
         toolbar_icons::MOON
     };
 
-    let session_label: SharedString = match app.active_session_name(cx) {
-        Some(name) => name,
-        None => t!("App.Common.local").into(),
-    };
-    let workspace_label = app.workspace_path();
+    let session_name = app.active_session_name(cx);
+    let session_endpoint = app.active_session_endpoint(cx);
 
     div()
         .h(TOOLBAR_H)
@@ -80,17 +71,10 @@ pub fn render(app: &PierApp, cx: &mut Context<PierApp>) -> impl IntoElement {
                     this.open_new_tab_chooser(window, cx);
                 })),
         )
-        .child(
-            div()
-                .flex_1()
-                .min_w_0()
-                .flex()
-                .flex_col()
-                .items_start()
-                .justify_center()
-                .child(text::ui_label(session_label))
-                .child(MetaLine::new(workspace_label).tertiary()),
-        )
+        // Spacer — center chip only renders when remote. Keeping the
+        // chip's column as `flex_1` means local mode just gets a
+        // breathing gap, not an empty slot with weird framing.
+        .child(session_chip(t, session_name, session_endpoint))
         .child(
             IconButton::new("tb-toggle-right", toggle_right_icon)
                 .size(IconButtonSize::Sm)
@@ -117,4 +101,52 @@ pub fn render(app: &PierApp, cx: &mut Context<PierApp>) -> impl IntoElement {
         .on_mouse_down(MouseButton::Left, |_, window, _| {
             window.prevent_default();
         })
+}
+
+fn session_chip(
+    t: &crate::theme::Theme,
+    name: Option<SharedString>,
+    endpoint: Option<SharedString>,
+) -> impl IntoElement {
+    let mut wrap = div().flex_1().min_w(px(0.0)).flex().flex_row().items_center();
+    let Some(name) = name else {
+        // Local mode: keep the center column blank so the toolbar
+        // reads as a clean icon rail.
+        return wrap;
+    };
+
+    let mut chip = div()
+        .flex()
+        .flex_row()
+        .items_center()
+        .gap(SP_1_5)
+        .px(SP_2)
+        .py(SP_1)
+        .rounded(RADIUS_SM)
+        .bg(t.color.accent_subtle)
+        .child(
+            UiIcon::new(IconName::Globe)
+                .size(GLYPH_SM)
+                .text_color(t.color.accent),
+        )
+        .child(
+            div()
+                .flex_none()
+                .text_size(SIZE_UI_LABEL)
+                .font_weight(WEIGHT_MEDIUM)
+                .text_color(t.color.text_primary)
+                .child(name),
+        );
+    if let Some(endpoint) = endpoint {
+        chip = chip.child(
+            div()
+                .flex_none()
+                .text_size(SIZE_MONO_SMALL)
+                .font_family(t.font_mono.clone())
+                .text_color(t.color.text_tertiary)
+                .child(endpoint),
+        );
+    }
+    wrap = wrap.child(chip);
+    wrap
 }

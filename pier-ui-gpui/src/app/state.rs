@@ -1149,7 +1149,6 @@ impl PierApp {
     /// listing on success. No-op when there's no live SFTP session
     /// — UI only exposes mutation buttons after a successful refresh
     /// so this guard rarely trips.
-    #[allow(dead_code)] // Wired by sftp_browser handlers in commit 4.
     pub(crate) fn schedule_sftp_mutation(
         &mut self,
         kind: SftpMutationKind,
@@ -1195,7 +1194,6 @@ impl PierApp {
     /// the current SFTP cwd, sequentially (one mutation in flight at
     /// a time — the existing nonce guard would drop concurrent
     /// uploads anyway).
-    #[allow(dead_code)] // Wired by sftp_browser header button in commit 4.
     pub(crate) fn sftp_upload_prompt(&mut self, cx: &mut Context<Self>) {
         let Some(session) = self.active_session.clone() else {
             return;
@@ -1234,7 +1232,6 @@ impl PierApp {
     /// Open the OS save-file dialog and download `remote_path` into
     /// the chosen destination. `suggested_name` becomes the default
     /// filename (i.e. the basename of the remote file).
-    #[allow(dead_code)] // Wired by sftp_browser row hover icon in commit 4.
     pub(crate) fn sftp_download_prompt(
         &mut self,
         remote_path: String,
@@ -1265,7 +1262,6 @@ impl PierApp {
     /// Pop the standard delete-confirmation dialog. On OK, dispatch
     /// the matching mutation (`DeleteFile` for files, `DeleteDir`
     /// for dirs — the latter is server-enforced empty-only).
-    #[allow(dead_code)] // Wired by sftp_browser row hover icon in commit 4.
     pub(crate) fn confirm_sftp_delete(
         &mut self,
         path: String,
@@ -1838,6 +1834,33 @@ impl PierApp {
             }));
         let on_sftp_go_up: crate::views::sftp_browser::GoUpHandler =
             Rc::new(cx.listener(|this, _: &(), _, cx| this.sftp_cd_up(cx)));
+        let on_sftp_mkdir: crate::views::sftp_browser::HeaderActionHandler =
+            Rc::new(cx.listener(|this, _: &(), window, cx| {
+                let Some(session) = this.active_session.as_ref() else {
+                    return;
+                };
+                let cwd = session.read(cx).cwd.to_string_lossy().into_owned();
+                let weak = cx.entity().downgrade();
+                crate::views::sftp_dialogs::open_mkdir_dialog(window, cx, weak, cwd);
+            }));
+        let on_sftp_upload: crate::views::sftp_browser::HeaderActionHandler =
+            Rc::new(cx.listener(|this, _: &(), _, cx| this.sftp_upload_prompt(cx)));
+        let on_sftp_row_action: crate::views::sftp_browser::RowActionHandler =
+            Rc::new(cx.listener(|this, action: &crate::views::sftp_browser::RowAction, window, cx| {
+                use crate::views::sftp_browser::RowAction;
+                match action.clone() {
+                    RowAction::Rename { path, name } => {
+                        let weak = cx.entity().downgrade();
+                        crate::views::sftp_dialogs::open_rename_dialog(window, cx, weak, path, name);
+                    }
+                    RowAction::Delete { path, name, is_dir } => {
+                        this.confirm_sftp_delete(path, name, is_dir, window, cx);
+                    }
+                    RowAction::Download { path, name } => {
+                        this.sftp_download_prompt(path, name, cx);
+                    }
+                }
+            }));
         let on_docker_refresh: DockerRefreshHandler =
             Rc::new(cx.listener(|this, _: &(), _, cx| this.schedule_docker_refresh(cx)));
         let on_docker_action: DockerActionHandler =
@@ -1865,6 +1888,9 @@ impl PierApp {
             cx.entity().downgrade(),
             on_sftp_navigate,
             on_sftp_go_up,
+            on_sftp_mkdir,
+            on_sftp_upload,
+            on_sftp_row_action,
             on_docker_refresh,
             on_docker_action,
             on_logs_action,
@@ -2093,7 +2119,6 @@ fn render_terminal_tab_bar(
 /// separators on every platform; just need to handle the cwd ==
 /// `.` case so we get `./foo` rather than `foo` (matches what
 /// `list_dir_blocking` returned).
-#[allow(dead_code)] // Used by sftp_upload_prompt — pulled in by commit 4.
 fn join_remote_path(cwd: &std::path::Path, name: &str) -> String {
     let mut out = cwd.to_string_lossy().into_owned();
     if !out.ends_with('/') {

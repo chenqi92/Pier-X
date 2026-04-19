@@ -18,8 +18,6 @@
 //!
 //! Wired to the sftp_browser hover icons in commit 4 of the series.
 
-#![allow(dead_code)] // commit 4 wires the entry points.
-
 use std::path::Path;
 
 use gpui::{div, prelude::*, px, App, Entity, IntoElement, SharedString, WeakEntity, Window};

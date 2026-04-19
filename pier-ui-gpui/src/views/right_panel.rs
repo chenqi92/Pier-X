@@ -44,7 +44,8 @@ use crate::views::database::DatabaseView;
 use crate::views::git::GitView;
 use crate::views::markdown::MarkdownView;
 use crate::views::sftp_browser::{
-    GoUpHandler as SftpGoUp, NavigateHandler as SftpNavigate, SftpBrowser,
+    GoUpHandler as SftpGoUp, HeaderActionHandler as SftpHeaderAction,
+    NavigateHandler as SftpNavigate, RowActionHandler as SftpRowAction, SftpBrowser,
 };
 
 pub type ModeSelector = Rc<dyn Fn(&RightMode, &mut Window, &mut App) + 'static>;
@@ -81,6 +82,9 @@ pub struct RightPanel {
     pier_app: WeakEntity<PierApp>,
     sftp_navigate: SftpNavigate,
     sftp_go_up: SftpGoUp,
+    sftp_mkdir: SftpHeaderAction,
+    sftp_upload: SftpHeaderAction,
+    sftp_row_action: SftpRowAction,
     docker_refresh: DockerRefreshHandler,
     docker_action: DockerActionHandler,
     logs_action: LogsActionHandler,
@@ -97,6 +101,9 @@ impl RightPanel {
         pier_app: WeakEntity<PierApp>,
         sftp_navigate: SftpNavigate,
         sftp_go_up: SftpGoUp,
+        sftp_mkdir: SftpHeaderAction,
+        sftp_upload: SftpHeaderAction,
+        sftp_row_action: SftpRowAction,
         docker_refresh: DockerRefreshHandler,
         docker_action: DockerActionHandler,
         logs_action: LogsActionHandler,
@@ -110,6 +117,9 @@ impl RightPanel {
             pier_app,
             sftp_navigate,
             sftp_go_up,
+            sftp_mkdir,
+            sftp_upload,
+            sftp_row_action,
             docker_refresh,
             docker_action,
             logs_action,
@@ -129,6 +139,9 @@ impl RenderOnce for RightPanel {
             pier_app,
             sftp_navigate,
             sftp_go_up,
+            sftp_mkdir,
+            sftp_upload,
+            sftp_row_action,
             docker_refresh,
             docker_action,
             logs_action,
@@ -145,6 +158,9 @@ impl RenderOnce for RightPanel {
             pier_app,
             sftp_navigate,
             sftp_go_up,
+            sftp_mkdir,
+            sftp_upload,
+            sftp_row_action,
             docker_refresh,
             docker_action,
             logs_action,
@@ -184,6 +200,9 @@ fn render_mode_body(
     pier_app: WeakEntity<PierApp>,
     sftp_navigate: SftpNavigate,
     sftp_go_up: SftpGoUp,
+    sftp_mkdir: SftpHeaderAction,
+    sftp_upload: SftpHeaderAction,
+    sftp_row_action: SftpRowAction,
     docker_refresh: DockerRefreshHandler,
     docker_action: DockerActionHandler,
     logs_action: LogsActionHandler,
@@ -196,9 +215,15 @@ fn render_mode_body(
     let content: gpui::AnyElement = match mode {
         RightMode::Markdown => MarkdownView::new(current_markdown).into_any_element(),
         RightMode::Monitor => monitor_view(t, active_session.as_ref(), cx).into_any_element(),
-        RightMode::Sftp => {
-            SftpBrowser::new(active_session.clone(), sftp_navigate, sftp_go_up).into_any_element()
-        }
+        RightMode::Sftp => SftpBrowser::new(
+            active_session.clone(),
+            sftp_navigate,
+            sftp_go_up,
+            sftp_mkdir,
+            sftp_upload,
+            sftp_row_action,
+        )
+        .into_any_element(),
         RightMode::Docker => docker_view(
             t,
             active_session.as_ref(),
@@ -2047,20 +2072,7 @@ fn mode_icon_button(
 }
 
 fn mode_icon(mode: RightMode) -> UiIcon {
-    if let Some(asset) = mode.icon_asset() {
-        return UiIcon::empty().path(asset);
-    }
-    let name = match mode {
-        RightMode::Markdown => IconName::File,
-        RightMode::Monitor => IconName::LayoutDashboard,
-        RightMode::Sftp => IconName::FolderOpen,
-        RightMode::Docker => IconName::GalleryVerticalEnd,
-        RightMode::Logs => IconName::SquareTerminal,
-        RightMode::Git | RightMode::Mysql | RightMode::Postgres | RightMode::Redis | RightMode::Sqlite => {
-            IconName::Frame
-        }
-    };
-    UiIcon::new(name)
+    UiIcon::empty().path(mode.icon_asset().unwrap_or("icons/file.svg"))
 }
 
 // `Card` debug helper for the placeholder — silences an unused warning when

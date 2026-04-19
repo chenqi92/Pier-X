@@ -390,7 +390,6 @@ impl SshSessionState {
     /// (mkdir / rename / delete / upload / download). Returns
     /// `None` when no SFTP channel is open — callers should
     /// schedule a refresh first.
-    #[allow(dead_code)] // Wired by `PierApp::schedule_sftp_mutation` in commit 2.
     pub fn begin_sftp_mutation(&mut self, kind: SftpMutationKind) -> Option<SftpMutationRequest> {
         let sftp = self.sftp.clone()?;
         self.sftp_mutation_nonce = self.sftp_mutation_nonce.wrapping_add(1);
@@ -407,7 +406,6 @@ impl SshSessionState {
     /// it. Returns `true` when the result was applied AND the
     /// underlying mutation succeeded — callers use that signal to
     /// schedule a follow-up refresh.
-    #[allow(dead_code)] // Wired by `PierApp::schedule_sftp_mutation` in commit 2.
     pub fn apply_sftp_mutation_result(&mut self, result: SftpMutationResult) -> bool {
         if result.nonce != self.sftp_mutation_nonce {
             log::debug!(
@@ -947,7 +945,6 @@ pub struct SftpMutationResult {
 /// stringifies any error. Designed to be invoked from
 /// `cx.background_executor().spawn(async move { run_sftp_mutation(req) })`
 /// so the UI thread never blocks on the SSH round-trip.
-#[allow(dead_code)] // Wired by `PierApp::schedule_sftp_mutation` in commit 2.
 pub fn run_sftp_mutation(request: SftpMutationRequest) -> SftpMutationResult {
     let verb = request.kind.verb();
     let outcome = match &request.kind {

@@ -2620,9 +2620,15 @@ impl PierApp {
                         // up immediately.
                         let tab = this.git_state.read(cx).tab;
                         match tab {
-                            GitTab::Graph => this.schedule_git_graph(true, cx),
-                            GitTab::Managers => this.schedule_git_managers(cx),
+                            GitTab::History => this.schedule_git_graph(true, cx),
+                            GitTab::Conflicts => this.schedule_git_managers(cx),
                             _ => {}
+                        }
+                        // A manager overlay (if open) also wants
+                        // fresh data — branch entries / tags /
+                        // remotes / config / submodules.
+                        if this.git_state.read(cx).manager_panel_open.is_some() {
+                            this.schedule_git_managers(cx);
                         }
                     });
                 }
@@ -2635,17 +2641,39 @@ impl PierApp {
     /// on-demand data load (graph / managers) the first time each
     /// tab is opened.
     pub fn set_git_tab(&mut self, tab: GitTab, cx: &mut Context<Self>) {
-        let needs_graph = tab == GitTab::Graph
+        let needs_graph = tab == GitTab::History
             && self.git_state.read(cx).graph.rows.is_empty()
             && !self.git_state.read(cx).graph.loading;
-        let needs_managers = tab == GitTab::Managers
+        let needs_managers_for_conflicts = tab == GitTab::Conflicts
             && self.git_state.read(cx).managers.branches.is_empty()
             && !self.git_state.read(cx).managers.loading;
         self.git_state.update(cx, |s, _| s.set_tab(tab));
         if needs_graph {
             self.schedule_git_graph(true, cx);
         }
-        if needs_managers {
+        if needs_managers_for_conflicts {
+            self.schedule_git_managers(cx);
+        }
+        cx.notify();
+    }
+
+    /// Open, close, or toggle the manager overlay panel (Branches /
+    /// Tags / Remotes / Config / Submodules / Rebase). Passing
+    /// `None` closes the panel; passing the already-open panel toggles
+    /// it shut; passing a different panel switches into it. The
+    /// managers data is refreshed on first open.
+    pub fn set_git_manager_panel(
+        &mut self,
+        panel: Option<ManagerTab>,
+        cx: &mut Context<Self>,
+    ) {
+        let current = self.git_state.read(cx).manager_panel_open;
+        let next = if current == panel { None } else { panel };
+        let needs_load = next.is_some()
+            && self.git_state.read(cx).managers.branches.is_empty()
+            && !self.git_state.read(cx).managers.loading;
+        self.git_state.update(cx, |s, _| s.set_manager_panel(next));
+        if needs_load {
             self.schedule_git_managers(cx);
         }
         cx.notify();

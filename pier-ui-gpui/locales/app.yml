@@ -556,9 +556,24 @@ App:
       desktop:
         en: Desktop
         zh-CN: 桌面
+      documents:
+        en: Documents
+        zh-CN: 文稿
+      downloads:
+        en: Downloads
+        zh-CN: 下载
       projects:
         en: Projects
-        zh-CN: Projects
+        zh-CN: 项目
+      applications:
+        en: Applications
+        zh-CN: 应用程序
+      root:
+        en: Root (/)
+        zh-CN: 根目录 (/)
+      drive:
+        en: "Drive %{letter}:"
+        zh-CN: "%{letter}: 盘"
       choose_folder:
         en: Choose Folder…
         zh-CN: 选择文件夹…

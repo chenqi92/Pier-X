@@ -85,33 +85,35 @@ pub enum GitStatus {
 }
 
 /// Top-level tab of the Git panel, mirrors Pier's 4-tab
-/// picker (Changes / Graph / Stash / Managers).
+/// picker (Changes / History / Stash / Conflicts). Non-conflict
+/// managers (Branches / Tags / Remotes / Config / Submodules /
+/// Rebase) are exposed as icon buttons in the branch action row
+/// and open as an inline panel above the tab body, not as a
+/// top-level tab — matching Pier's visual grammar.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub enum GitTab {
-    /// Working tree — staged + unstaged, diff, commit, history.
+    /// Working tree — staged + unstaged, diff.
     #[default]
     Changes,
-    /// IDEA-style commit graph (history + lanes + filters).
-    Graph,
+    /// IDEA-style commit graph + filters.
+    History,
     /// Stash list + stash push.
     Stash,
-    /// Branch / Tag / Remote / Config / Submodule / Rebase / Conflicts.
-    Managers,
+    /// Merge conflict resolver.
+    Conflicts,
 }
 
 impl GitTab {
-    /// Sort order used by the tab strip.
     pub fn all() -> [Self; 4] {
-        [Self::Changes, Self::Graph, Self::Stash, Self::Managers]
+        [Self::Changes, Self::History, Self::Stash, Self::Conflicts]
     }
 
-    /// Short token used for ElementIds.
     pub fn id_token(self) -> &'static str {
         match self {
             Self::Changes => "changes",
-            Self::Graph => "graph",
+            Self::History => "history",
             Self::Stash => "stash",
-            Self::Managers => "managers",
+            Self::Conflicts => "conflicts",
         }
     }
 }
@@ -137,7 +139,11 @@ pub enum ManagerTab {
 }
 
 impl ManagerTab {
-    pub fn all() -> [Self; 7] {
+    /// Managers exposed as branch-row icon buttons. Conflicts is
+    /// absent because it lives on the top-level `GitTab::Conflicts`
+    /// tab — the Pier target treats conflicts as a first-class mode
+    /// alongside Changes / History / Stash, not as a manager popup.
+    pub fn icons() -> [Self; 6] {
         [
             Self::Branches,
             Self::Tags,
@@ -145,7 +151,6 @@ impl ManagerTab {
             Self::Config,
             Self::Submodules,
             Self::Rebase,
-            Self::Conflicts,
         ]
     }
 
@@ -414,7 +419,11 @@ impl GraphState {
                 show_long_edges: false,
                 ..Default::default()
             },
-            page_size: 500,
+            // 200 is large enough for a normal "scroll 4 pages without
+            // fetching more" feel, and small enough that the initial
+            // layout + canvas paint stays under ~30 ms even on a
+            // 5000-commit repo.
+            page_size: 200,
             has_more: false,
             loading: false,
             load_more_loading: false,
@@ -533,7 +542,13 @@ pub struct GitState {
     pub diff_mode: DiffMode,
     /// Currently active top-level tab.
     pub tab: GitTab,
-    /// Currently active manager sub-tab (used when `tab == Managers`).
+    /// Currently open manager overlay panel. `None` = no overlay
+    /// (tab body is visible); `Some(t)` = overlay panel drawn above
+    /// the tab body for the matching manager. Branch-row icons
+    /// toggle this.
+    pub manager_panel_open: Option<ManagerTab>,
+    /// Currently active manager sub-tab — now only used by the
+    /// overlay panel to remember which manager was last opened.
     pub manager_tab: ManagerTab,
     /// Graph sub-state (populated by `run_graph`).
     pub graph: GraphState,
@@ -582,6 +597,7 @@ impl GitState {
             diff_nonce: 0,
             diff_mode: DiffMode::Inline,
             tab: GitTab::Changes,
+            manager_panel_open: None,
             manager_tab: ManagerTab::Branches,
             graph: GraphState::new(),
             commit_detail: CommitDetailState::default(),
@@ -665,13 +681,25 @@ impl GitState {
         true
     }
 
-    /// Set the active top-level tab.
+    /// Set the active top-level tab. Closes any open manager
+    /// overlay, since the user is asking for a different context.
     pub fn set_tab(&mut self, tab: GitTab) {
         self.tab = tab;
+        self.manager_panel_open = None;
+    }
+
+    /// Open / close the manager overlay panel above the tab body.
+    /// Passing the already-open panel closes it (toggle).
+    pub fn set_manager_panel(&mut self, panel: Option<ManagerTab>) {
+        self.manager_panel_open = panel;
+        if let Some(p) = panel {
+            self.manager_tab = p;
+        }
     }
 
     pub fn set_manager_tab(&mut self, tab: ManagerTab) {
         self.manager_tab = tab;
+        self.manager_panel_open = Some(tab);
     }
 
     pub fn set_diff_mode(&mut self, mode: DiffMode) {

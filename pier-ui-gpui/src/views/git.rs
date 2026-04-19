@@ -13,7 +13,8 @@
 //! in `render`.
 
 use gpui::{
-    div, prelude::*, px, App, ClickEvent, ElementId, IntoElement, SharedString, WeakEntity, Window,
+    div, prelude::*, px, uniform_list, App, ClickEvent, ElementId, IntoElement, SharedString,
+    WeakEntity, Window,
 };
 use gpui_component::input::InputState;
 use pier_core::git_graph::GraphRow;
@@ -112,12 +113,55 @@ fn tab_layout(
     weak: WeakEntity<PierApp>,
 ) -> gpui::Div {
     let active = snap.tab;
+    let manager_open = snap.manager_panel_open;
 
-    let body = match active {
-        GitTab::Changes => changes_tab_body(t, &snap, commit_input, weak.clone()).into_any_element(),
-        GitTab::Graph => graph_tab_body(t, &snap, weak.clone()).into_any_element(),
-        GitTab::Stash => stash_tab_body(t, &snap, stash_input, weak.clone()).into_any_element(),
-        GitTab::Managers => managers_tab_body(t, &snap, weak.clone()).into_any_element(),
+    // Feedback strips (confirmation / error) — drawn right under
+    // the header so they don't collide with the branch row or tab
+    // body. Chained into the header column below.
+    let confirm_strip = snap.last_confirmation.clone().map(|msg| {
+        git_feedback_strip(
+            t,
+            IconName::Check,
+            t!("App.Git.last_result"),
+            msg,
+            false,
+        )
+    });
+    let action_err_strip = snap.action_error.clone().map(|err| {
+        git_feedback_strip(
+            t,
+            IconName::TriangleAlert,
+            t!("App.Common.error"),
+            err,
+            true,
+        )
+    });
+    let probe_err_strip = snap.last_error.clone().map(|err| {
+        git_feedback_strip(
+            t,
+            IconName::TriangleAlert,
+            t!("App.Common.error"),
+            err,
+            true,
+        )
+    });
+
+    // Body: either the active tab or the manager overlay.
+    let body: gpui::AnyElement = if let Some(panel) = manager_open {
+        manager_overlay(t, panel, &snap, weak.clone()).into_any_element()
+    } else {
+        match active {
+            GitTab::Changes => {
+                changes_tab_body(t, &snap, weak.clone()).into_any_element()
+            }
+            GitTab::History => graph_tab_body(t, &snap, weak.clone()).into_any_element(),
+            GitTab::Stash => {
+                stash_tab_body(t, &snap, stash_input, weak.clone()).into_any_element()
+            }
+            GitTab::Conflicts => {
+                conflicts_tab_body(t, &snap, weak.clone()).into_any_element()
+            }
+        }
     };
 
     let mut col = div()
@@ -126,46 +170,46 @@ fn tab_layout(
         .flex_col()
         .bg(t.color.bg_surface)
         .child(header(t, &snap, weak.clone()))
-        .child(Separator::horizontal())
-        .child(primary_tabs(active, weak.clone()))
         .child(Separator::horizontal());
 
-    // Feedback strips appear once, above the tab body, across all tabs.
-    if let Some(msg) = snap.last_confirmation.clone() {
-        col = col
-            .child(git_feedback_strip(
-                t,
-                IconName::Check,
-                t!("App.Git.last_result"),
-                msg,
-                false,
-            ))
-            .child(Separator::horizontal());
+    if let Some(el) = confirm_strip {
+        col = col.child(el).child(Separator::horizontal());
     }
-    if let Some(err) = snap.action_error.clone() {
-        col = col
-            .child(git_feedback_strip(
-                t,
-                IconName::TriangleAlert,
-                t!("App.Common.error"),
-                err,
-                true,
-            ))
-            .child(Separator::horizontal());
+    if let Some(el) = action_err_strip {
+        col = col.child(el).child(Separator::horizontal());
     }
-    if let Some(err) = snap.last_error.clone() {
+    if let Some(el) = probe_err_strip {
+        col = col.child(el).child(Separator::horizontal());
+    }
+
+    // Branch row is the Pier-native action bar: branch name, pace
+    // pills, then icon buttons for pull / push and manager popups.
+    if let Some(branch) = snap.branch.clone() {
         col = col
-            .child(git_feedback_strip(
+            .child(branch_actions_row(
                 t,
-                IconName::TriangleAlert,
-                t!("App.Common.error"),
-                err,
-                true,
+                &branch,
+                &snap.branches,
+                manager_open,
+                weak.clone(),
             ))
             .child(Separator::horizontal());
     }
 
-    col = col.child(body);
+    col = col
+        .child(primary_tabs(active, weak.clone()))
+        .child(Separator::horizontal())
+        .child(body);
+
+    // Sticky commit footer — only relevant while the user is on
+    // the Changes tab with staged work. Always render so the user
+    // can start typing a message even before they've staged the
+    // first file.
+    if active == GitTab::Changes && manager_open.is_none() {
+        col = col
+            .child(Separator::horizontal())
+            .child(commit_footer(t, &snap.changes, commit_input, weak.clone()));
+    }
     col
 }
 
@@ -289,14 +333,14 @@ fn status_pill(snap: &GitSnapshot) -> StatusPill {
 }
 
 fn primary_tabs(active: GitTab, weak: WeakEntity<PierApp>) -> impl IntoElement {
-    let mut tabs = Tabs::new().segmented();
+    let mut tabs = Tabs::new();
     for tab in GitTab::all() {
         let is_active = tab == active;
         let (label_key, icon) = match tab {
             GitTab::Changes => ("App.Git.tab_changes", IconName::Inbox),
-            GitTab::Graph => ("App.Git.tab_graph", IconName::GitCommit),
+            GitTab::History => ("App.Git.tab_graph", IconName::GitCommit),
             GitTab::Stash => ("App.Git.tab_stash", IconName::Inspector),
-            GitTab::Managers => ("App.Git.tab_managers", IconName::Settings2),
+            GitTab::Conflicts => ("App.Git.mgr_conflicts", IconName::TriangleAlert),
         };
         let w = weak.clone();
         let item = TabItem::new(
@@ -313,49 +357,341 @@ fn primary_tabs(active: GitTab, weak: WeakEntity<PierApp>) -> impl IntoElement {
     tabs
 }
 
+/// One-line branch action bar — lives directly under the header.
+/// Layout: branch pill + ahead/behind pills + fetch/pull/push icons
+/// + manager-popup icons (branches / tags / remotes / config /
+/// submodules / rebase). Toggling a manager icon opens the
+/// overlay panel above the tab body.
+fn branch_actions_row(
+    t: &crate::theme::Theme,
+    branch: &BranchInfo,
+    _branches: &[String],
+    open_panel: Option<ManagerTab>,
+    weak: WeakEntity<PierApp>,
+) -> impl IntoElement {
+    let tracking = if branch.tracking.is_empty() {
+        String::new()
+    } else {
+        format!(" → {}", branch.tracking)
+    };
+    let name_line = SharedString::from(format!("{}{}", branch.name, tracking));
+
+    let mut row = div()
+        .w_full()
+        .flex()
+        .flex_row()
+        .items_center()
+        .flex_wrap()
+        .gap(SP_1)
+        .px(SP_3)
+        .py(SP_1);
+
+    row = row.child(
+        div()
+            .flex_none()
+            .flex()
+            .flex_row()
+            .items_center()
+            .gap(SP_1)
+            .child(
+                div()
+                    .flex_none()
+                    .text_color(t.color.accent)
+                    .child(gpui_component::Icon::new(IconName::GitBranch).size(ICON_SM)),
+            )
+            .child(
+                div()
+                    .flex_none()
+                    .text_size(SIZE_SMALL)
+                    .font_weight(WEIGHT_MEDIUM)
+                    .text_color(t.color.text_primary)
+                    .child(name_line),
+            ),
+    );
+
+    if branch.ahead > 0 || branch.behind > 0 {
+        row = row.child(
+            div()
+                .flex_none()
+                .text_size(SIZE_CAPTION)
+                .text_color(t.color.text_tertiary)
+                .px(SP_1)
+                .child(SharedString::from(format!(
+                    "↑{} ↓{}",
+                    branch.ahead, branch.behind
+                ))),
+        );
+    }
+
+    row = row.child(div().flex_1().min_w(px(0.0)));
+
+    // Icon action buttons — left-to-right: manager popups, then
+    // fetch / pull / push. Active manager icon keeps the accent
+    // background via the overlay state.
+    for (mgr, icon) in [
+        (ManagerTab::Branches, IconName::GitBranch),
+        (ManagerTab::Tags, IconName::BookOpen),
+        (ManagerTab::Remotes, IconName::Globe),
+        (ManagerTab::Submodules, IconName::Container),
+        (ManagerTab::Config, IconName::Settings),
+        (ManagerTab::Rebase, IconName::Undo),
+    ] {
+        let active = open_panel == Some(mgr);
+        let w = weak.clone();
+        row = row.child(
+            IconButton::new(
+                ElementId::Name(format!("git-mgr-icon-{}", mgr.id_token()).into()),
+                icon,
+            )
+            .size(IconButtonSize::Sm)
+            .variant(if active {
+                IconButtonVariant::Filled
+            } else {
+                IconButtonVariant::Ghost
+            })
+            .on_click(move |_, _, cx| {
+                let _ = w.update(cx, |app, cx| {
+                    app.set_git_manager_panel(Some(mgr), cx);
+                });
+            }),
+        );
+    }
+
+    let fetch_w = weak.clone();
+    row = row.child(
+        IconButton::new("git-row-fetch", IconName::RefreshCw)
+            .size(IconButtonSize::Sm)
+            .variant(IconButtonVariant::Ghost)
+            .on_click(move |_, _, cx| {
+                let _ = fetch_w.update(cx, |app, cx| {
+                    app.schedule_git_action(GitPendingAction::RemoteFetch { name: None }, cx);
+                });
+            }),
+    );
+    let pull_w = weak.clone();
+    row = row.child(
+        IconButton::new("git-row-pull", IconName::ArrowDown)
+            .size(IconButtonSize::Sm)
+            .variant(IconButtonVariant::Ghost)
+            .on_click(move |_, _, cx| {
+                let _ = pull_w.update(cx, |app, cx| {
+                    app.schedule_git_action(GitPendingAction::Pull, cx);
+                });
+            }),
+    );
+    let push_w = weak.clone();
+    row = row.child(
+        IconButton::new("git-row-push", IconName::ArrowUp)
+            .size(IconButtonSize::Sm)
+            .variant(IconButtonVariant::Ghost)
+            .on_click(move |_, _, cx| {
+                let _ = push_w.update(cx, |app, cx| {
+                    app.schedule_git_action(GitPendingAction::Push, cx);
+                });
+            }),
+    );
+
+    row
+}
+
+/// Manager overlay — wraps a single manager panel (Branches / Tags /
+/// Remotes / Config / Submodules / Rebase) above the tab body with a
+/// small breadcrumb header + close button. Mirrors Pier's "click
+/// manager icon → panel floats on top" behaviour.
+fn manager_overlay(
+    t: &crate::theme::Theme,
+    panel: ManagerTab,
+    snap: &GitSnapshot,
+    weak: WeakEntity<PierApp>,
+) -> gpui::Div {
+    let close_w = weak.clone();
+    let title: SharedString = match panel {
+        ManagerTab::Branches => t!("App.Git.mgr_branches").into(),
+        ManagerTab::Tags => t!("App.Git.mgr_tags").into(),
+        ManagerTab::Remotes => t!("App.Git.mgr_remotes").into(),
+        ManagerTab::Config => t!("App.Git.mgr_config").into(),
+        ManagerTab::Submodules => t!("App.Git.mgr_submodules").into(),
+        ManagerTab::Rebase => t!("App.Git.mgr_rebase").into(),
+        ManagerTab::Conflicts => t!("App.Git.mgr_conflicts").into(),
+    };
+
+    let header = div()
+        .w_full()
+        .flex()
+        .flex_row()
+        .items_center()
+        .gap(SP_1)
+        .px(SP_3)
+        .py(SP_1)
+        .bg(t.color.bg_panel)
+        .border_b_1()
+        .border_color(t.color.border_subtle)
+        .child(
+            div()
+                .flex_1()
+                .min_w(px(0.0))
+                .text_size(SIZE_SMALL)
+                .font_weight(WEIGHT_MEDIUM)
+                .text_color(t.color.text_primary)
+                .child(title),
+        )
+        .child(
+            IconButton::new("git-mgr-close", IconName::Close)
+                .size(IconButtonSize::Sm)
+                .variant(IconButtonVariant::Ghost)
+                .on_click(move |_, _, cx| {
+                    let _ = close_w.update(cx, |app, cx| {
+                        app.set_git_manager_panel(None, cx);
+                    });
+                }),
+        );
+
+    let body: gpui::AnyElement = if snap.managers.loading && snap.managers.branches.is_empty() {
+        div()
+            .px(SP_3)
+            .py(SP_3)
+            .child(text::caption(t!("App.Common.Status.loading")).secondary())
+            .into_any_element()
+    } else {
+        match panel {
+            ManagerTab::Branches => {
+                branches_manager(t, &snap.managers.branches, weak.clone()).into_any_element()
+            }
+            ManagerTab::Tags => {
+                tags_manager(t, &snap.managers.tags, weak.clone()).into_any_element()
+            }
+            ManagerTab::Remotes => {
+                remotes_manager(t, &snap.managers.remotes, weak.clone()).into_any_element()
+            }
+            ManagerTab::Config => {
+                config_manager(t, &snap.managers.config, &snap.managers, weak.clone())
+                    .into_any_element()
+            }
+            ManagerTab::Submodules => {
+                submodules_manager(t, &snap.managers.submodules, weak.clone()).into_any_element()
+            }
+            ManagerTab::Rebase => rebase_manager(t, weak.clone()).into_any_element(),
+            ManagerTab::Conflicts => {
+                conflicts_manager(t, &snap.managers.conflicts, weak.clone()).into_any_element()
+            }
+        }
+    };
+
+    div().w_full().flex().flex_col().child(header).child(body)
+}
+
+/// Standalone Conflicts tab body — wraps the conflicts_manager so
+/// the user can resolve merges without going through the overlay.
+fn conflicts_tab_body(
+    t: &crate::theme::Theme,
+    snap: &GitSnapshot,
+    weak: WeakEntity<PierApp>,
+) -> gpui::Div {
+    div()
+        .w_full()
+        .flex()
+        .flex_col()
+        .child(conflicts_manager(t, &snap.managers.conflicts, weak))
+}
+
+/// Sticky commit footer — the Pier-native "always-visible commit
+/// box" that sits below the tab body. Shows the commit input, a
+/// "stage all" shortcut, and a `Commit` primary button that stays
+/// disabled-looking when there is nothing staged.
+fn commit_footer(
+    t: &crate::theme::Theme,
+    changes: &[GitFileChange],
+    input: gpui::Entity<InputState>,
+    weak: WeakEntity<PierApp>,
+) -> impl IntoElement {
+    let has_changes = !changes.is_empty();
+    let staged = changes.iter().any(|c| c.staged);
+    let commit_weak = weak.clone();
+    let input_for_click = input.clone();
+
+    let stage_all_weak = weak.clone();
+    let stage_all_btn: gpui::AnyElement = if has_changes && !staged {
+        Button::secondary("git-footer-stage-all", t!("App.Git.stage_all"))
+            .size(ButtonSize::Sm)
+            .on_click(move |_, _, cx| {
+                let _ = stage_all_weak.update(cx, |app, cx| {
+                    app.schedule_git_action(GitPendingAction::StageAll, cx);
+                });
+            })
+            .into_any_element()
+    } else {
+        div().flex_none().into_any_element()
+    };
+
+    let commit_btn: gpui::AnyElement = if staged {
+        Button::primary("git-footer-commit", t!("App.Git.commit_staged"))
+            .size(ButtonSize::Sm)
+            .on_click(move |_, _, cx| {
+                let text: String = input_for_click.read(cx).value().to_string();
+                if text.trim().is_empty() {
+                    return;
+                }
+                let _ = commit_weak.update(cx, |app, cx| {
+                    app.schedule_git_action(
+                        GitPendingAction::Commit {
+                            message: text.clone(),
+                        },
+                        cx,
+                    );
+                });
+            })
+            .into_any_element()
+    } else {
+        StatusPill::new(t!("App.Git.no_staged"), StatusKind::Warning).into_any_element()
+    };
+
+    div()
+        .w_full()
+        .flex()
+        .flex_col()
+        .gap(SP_1)
+        .px(SP_3)
+        .py(SP_1_5)
+        .bg(t.color.bg_panel)
+        .child(InlineInput::new(&input).tone(InlineInputTone::Inset))
+        .child(
+            div()
+                .flex()
+                .flex_row()
+                .items_center()
+                .gap(SP_1)
+                .child(div().flex_1().min_w(px(0.0)))
+                .child(stage_all_btn)
+                .child(commit_btn),
+        )
+}
+
 // ─── Tab: Changes ────────────────────────────────────────────────────
 
 fn changes_tab_body(
     t: &crate::theme::Theme,
     snap: &GitSnapshot,
-    commit_input: gpui::Entity<InputState>,
     weak: WeakEntity<PierApp>,
 ) -> gpui::Div {
     let mut col = div().w_full().flex().flex_col();
-
-    if let Some(branch) = snap.branch.clone() {
-        col = col
-            .child(branch_section(
-                t,
-                &branch,
-                &snap.repo_path,
-                &snap.branches,
-                weak.clone(),
-            ))
-            .child(Separator::horizontal());
-    }
-    col = col
-        .child(changes_section(
-            t,
-            &snap.changes,
-            snap.diff_selection.as_ref(),
-            weak.clone(),
-        ))
-        .child(Separator::horizontal());
+    col = col.child(changes_section(
+        t,
+        &snap.changes,
+        snap.diff_selection.as_ref(),
+        weak.clone(),
+    ));
     if snap.diff_selection.is_some() {
         col = col
-            .child(diff_section(t, snap, weak.clone()))
-            .child(Separator::horizontal());
+            .child(Separator::horizontal())
+            .child(diff_section(t, snap, weak.clone()));
     }
-    col = col
-        .child(commit_section(t, &snap.changes, commit_input, weak.clone()))
-        .child(Separator::horizontal())
-        .child(log_section(t, &snap.log));
     col
 }
 
-// ─── Branch card ─────────────────────────────────────────────────────
+// ─── Branch card (legacy — kept `fn branch_section` stubbed out
+//     until the remaining callers are removed; see `#[allow]`).
 
+#[allow(dead_code)]
 fn branch_section(
     t: &crate::theme::Theme,
     branch: &BranchInfo,
@@ -498,6 +834,7 @@ fn branch_section(
     section
 }
 
+#[allow(dead_code)]
 fn branch_row(
     t: &crate::theme::Theme,
     name: String,
@@ -828,6 +1165,7 @@ fn file_status_badge(t: &crate::theme::Theme, status: FileStatus) -> (&'static s
 
 // ─── Commit card ────────────────────────────────────────────────────
 
+#[allow(dead_code)]
 fn commit_section(
     _t: &crate::theme::Theme,
     changes: &[GitFileChange],
@@ -1340,6 +1678,7 @@ fn stash_row(
 
 // ─── Recent-commits log (kept on the Changes tab) ───────────────────
 
+#[allow(dead_code)]
 fn log_section(t: &crate::theme::Theme, log: &[CommitInfo]) -> impl IntoElement {
     let count_pill = StatusPill::new(
         t!("App.Git.entries_count", count = log.len()),
@@ -1365,6 +1704,7 @@ fn log_section(t: &crate::theme::Theme, log: &[CommitInfo]) -> impl IntoElement 
     section.into_any_element()
 }
 
+#[allow(dead_code)]
 fn commit_row(t: &crate::theme::Theme, c: &CommitInfo) -> impl IntoElement {
     div()
         .flex()
@@ -1502,60 +1842,82 @@ fn graph_tab_body(
         return col;
     }
 
-    // Graph rows — paginated client-side with a visible cap.
+    // Graph rows — virtualized via `uniform_list` so a 5000-row
+    // log paints the same handful of visible rows every frame. The
+    // `commit_detail_strip` for the selected commit is drawn below
+    // the list (not inline between rows) so each uniform row stays
+    // the same height — a hard requirement of `uniform_list`.
     let col_w = compute_graph_col_width(&snap.graph.rows).max(60.0);
-    let rows_to_render: Vec<&GraphRow> = snap.graph.rows.iter().take(MAX_GRAPH_ROWS).collect();
+    let rows: std::sync::Arc<Vec<GraphRow>> =
+        std::sync::Arc::new(snap.graph.rows.iter().take(MAX_GRAPH_ROWS).cloned().collect());
+    let selected_hash = snap.graph.selected.clone();
+    let graph_snap_for_list = snap.graph.clone();
+    let t_clone = t.clone();
+    let weak_for_rows = weak.clone();
+    let total = rows.len();
 
-    let mut list = div()
-        .w_full()
-        .flex()
-        .flex_col()
-        .id("git-graph-list");
-    let head_hash = snap
-        .graph
-        .rows
-        .first()
-        .map(|r| r.hash.clone())
-        .unwrap_or_default();
-    for (idx, row) in rows_to_render.iter().enumerate() {
-        let is_selected = snap.graph.selected.as_deref() == Some(row.hash.as_str());
-        let is_head = row.hash == head_hash;
-        let dimmed = should_dim_row(row, snap, is_head);
-        let zebra = snap.graph.zebra_stripes && idx % 2 == 1;
-        list = list.child(graph_row_element(
-            t,
-            row,
-            col_w,
-            dimmed,
-            is_selected,
-            zebra,
-            snap,
-            weak.clone(),
-        ));
-        if is_selected {
-            if let Some(detail) = snap.commit_detail.detail.as_ref() {
-                list = list.child(commit_detail_strip(t, detail, snap, weak.clone()));
-            } else if snap.commit_detail.loading {
-                list = list.child(
-                    div()
-                        .px(SP_3)
-                        .py(SP_1_5)
-                        .child(text::caption(t!("App.Common.Status.loading")).secondary()),
-                );
-            } else if let Some(err) = snap.commit_detail.error.clone() {
-                list = list.child(git_feedback_strip(
-                    t,
-                    IconName::TriangleAlert,
-                    t!("App.Common.error"),
-                    err,
-                    true,
-                ));
+    let list = uniform_list(
+        "git-graph-list",
+        total,
+        move |range, _window, _cx| {
+            let mut items: Vec<gpui::AnyElement> = Vec::with_capacity(range.end - range.start);
+            for idx in range {
+                if let Some(row) = rows.get(idx) {
+                    let is_selected = selected_hash.as_deref() == Some(row.hash.as_str());
+                    let dimmed = should_dim_row_ns(row, &graph_snap_for_list);
+                    let zebra = graph_snap_for_list.zebra_stripes && idx % 2 == 1;
+                    items.push(
+                        graph_row_element(
+                            &t_clone,
+                            row,
+                            col_w,
+                            dimmed,
+                            is_selected,
+                            zebra,
+                            &graph_snap_for_list,
+                            weak_for_rows.clone(),
+                        )
+                        .into_any_element(),
+                    );
+                }
             }
+            items
+        },
+    )
+    .h(px(22.0 * 18.0)) // show ~18 rows in the default window height
+    .w_full();
+
+    col = col.child(list);
+
+    // Detail strip for the selected commit — sits below the list,
+    // always visible while something is selected.
+    if snap.graph.selected.is_some() {
+        if let Some(detail) = snap.commit_detail.detail.as_ref() {
+            col = col
+                .child(Separator::horizontal())
+                .child(commit_detail_strip(t, detail, snap, weak.clone()));
+        } else if snap.commit_detail.loading {
+            col = col.child(Separator::horizontal()).child(
+                div()
+                    .px(SP_3)
+                    .py(SP_1_5)
+                    .child(text::caption(t!("App.Common.Status.loading")).secondary()),
+            );
+        } else if let Some(err) = snap.commit_detail.error.clone() {
+            col = col.child(Separator::horizontal()).child(git_feedback_strip(
+                t,
+                IconName::TriangleAlert,
+                t!("App.Common.error"),
+                err,
+                true,
+            ));
         }
     }
+
+    // Load-more / all-loaded footer.
     if snap.graph.has_more {
         let load_weak = weak.clone();
-        list = list.child(
+        col = col.child(
             div()
                 .w_full()
                 .px(SP_3)
@@ -1574,7 +1936,7 @@ fn graph_tab_body(
                 ),
         );
     } else if !snap.graph.rows.is_empty() {
-        list = list.child(
+        col = col.child(
             div()
                 .w_full()
                 .px(SP_3)
@@ -1586,7 +1948,24 @@ fn graph_tab_body(
         );
     }
 
-    col.child(list)
+    col
+}
+
+/// Non-snapshot version of `should_dim_row` — operates on the
+/// inner `GraphStateSnapshot` so `uniform_list`'s `'static` closure
+/// doesn't need to borrow the outer `GitSnapshot`.
+fn should_dim_row_ns(row: &GraphRow, g: &GraphStateSnapshot) -> bool {
+    match g.highlight_mode {
+        GraphHighlightMode::None => false,
+        GraphHighlightMode::MyCommits => {
+            let me = &g.user_name;
+            !me.is_empty() && row.author != *me
+        }
+        GraphHighlightMode::MergeCommits => {
+            row.parents.split(' ').filter(|s| !s.is_empty()).count() < 2
+        }
+        GraphHighlightMode::CurrentBranch => row.color_index != 0,
+    }
 }
 
 fn graph_toolbar(
@@ -1965,7 +2344,7 @@ fn graph_row_element(
     dimmed: bool,
     selected: bool,
     zebra: bool,
-    snap: &GitSnapshot,
+    graph: &GraphStateSnapshot,
     weak: WeakEntity<PierApp>,
 ) -> impl IntoElement {
     let hash = row.hash.clone();
@@ -2051,7 +2430,7 @@ fn graph_row_element(
                 .child(graph_row_canvas(row, t, col_w, dim_factor)),
         );
 
-    if snap.graph.show_hash_col {
+    if graph.show_hash_col {
         outer = outer.child(
             div()
                 .flex_none()
@@ -2088,7 +2467,7 @@ fn graph_row_element(
             ),
     );
 
-    if snap.graph.show_author_col {
+    if graph.show_author_col {
         outer = outer.child(
             div()
                 .flex_none()
@@ -2100,7 +2479,7 @@ fn graph_row_element(
                 .child(SharedString::from(row.author.clone())),
         );
     }
-    if snap.graph.show_date_col {
+    if graph.show_date_col {
         outer = outer.child(
             div()
                 .flex_none()
@@ -2436,8 +2815,10 @@ fn commit_detail_strip(
     detail_col
 }
 
-// ─── Tab: Managers ───────────────────────────────────────────────────
+// ─── Tab: Managers (legacy — replaced by manager_overlay, retained
+//     with #[allow(dead_code)] until fully removed) ─────────────────
 
+#[allow(dead_code)]
 fn managers_tab_body(
     t: &crate::theme::Theme,
     snap: &GitSnapshot,
@@ -2489,9 +2870,10 @@ fn managers_tab_body(
     col
 }
 
+#[allow(dead_code)]
 fn managers_tab_strip(active: ManagerTab, weak: WeakEntity<PierApp>) -> impl IntoElement {
     let mut tabs = Tabs::new().segmented();
-    for tab in ManagerTab::all() {
+    for tab in ManagerTab::icons() {
         let is_active = tab == active;
         let (label_key, icon) = match tab {
             ManagerTab::Branches => ("App.Git.mgr_branches", IconName::GitBranch),
@@ -3410,6 +3792,7 @@ struct GitSnapshot {
     diff_error: Option<SharedString>,
     diff_mode: DiffMode,
     tab: GitTab,
+    manager_panel_open: Option<ManagerTab>,
     manager_tab: ManagerTab,
     graph: GraphStateSnapshot,
     commit_detail: CommitDetailSnapshot,
@@ -3478,6 +3861,7 @@ impl From<&GitState> for GitSnapshot {
             diff_error: state.diff_error.clone(),
             diff_mode: state.diff_mode,
             tab: state.tab,
+            manager_panel_open: state.manager_panel_open,
             manager_tab: state.manager_tab,
             graph: GraphStateSnapshot {
                 rows: state.graph.rows.clone(),

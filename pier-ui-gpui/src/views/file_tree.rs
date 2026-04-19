@@ -24,16 +24,20 @@
 use std::path::{Path, PathBuf};
 use std::rc::Rc;
 
-use gpui::{div, prelude::*, px, App, Corner, IntoElement, SharedString, Window};
+use gpui::{div, prelude::*, px, App, Corner, IntoElement, Pixels, SharedString, Window};
 use gpui_component::{popover::Popover, scroll::ScrollableElement, Icon as UiIcon, IconName};
 use rust_i18n::t;
 
 use crate::components::{
     text, IconButton, IconButtonSize, IconButtonVariant, SectionLabel, StatusKind, StatusPill,
 };
+use crate::data::{
+    format_file_size, format_permissions, format_relative_time, format_windows_attrs,
+};
 use crate::theme::{
     heights::{BUTTON_SM_H, GLYPH_SM, ICON_SM, ROW_MD_H, ROW_SM_H},
-    radius::RADIUS_SM,
+    radius::{RADIUS_MD, RADIUS_SM},
+    shadow,
     spacing::{SP_0_5, SP_1, SP_1_5, SP_2, SP_3},
     theme,
     typography::{SIZE_CAPTION, SIZE_MONO_SMALL, SIZE_SMALL, WEIGHT_MEDIUM},
@@ -43,6 +47,27 @@ use crate::theme::{
 /// pathological dirs (e.g. `/usr/bin` with thousands of entries) so the
 /// element tree stays bounded.
 const MAX_CHILDREN_PER_DIR: usize = 1000;
+
+/// Fixed widths for the right-aligned metadata columns in a file row.
+/// Each column is only shown when the panel is wider than the threshold
+/// below — keeping the name column readable down to 180 px.
+const SIZE_COLUMN_W: Pixels = px(56.0);
+const MTIME_COLUMN_W: Pixels = px(56.0);
+/// POSIX permissions are 10 mono chars (`drwxr-xr-x`) and Windows uses
+/// a 4-char mask (`drw-`). We size the column to the wider (POSIX)
+/// since that's what macOS / Linux users see.
+const PERMS_COLUMN_W: Pixels = px(76.0);
+
+/// Show the size column when the panel has at least this much space.
+/// Below this we only render [icon] [name].
+const SIZE_COLUMN_MIN_W: Pixels = px(220.0);
+/// Reveal the mtime column a bit wider — name column still gets
+/// ~120 px to breathe.
+const MTIME_COLUMN_MIN_W: Pixels = px(280.0);
+/// The permissions column is the last to appear; on Windows the mask
+/// is narrower but we gate on the POSIX width so macOS renders the
+/// full `drwxr-xr-x` without truncation.
+const PERMS_COLUMN_MIN_W: Pixels = px(360.0);
 
 pub type EnterDirHandler = Rc<dyn Fn(&PathBuf, &mut Window, &mut App) + 'static>;
 pub type OpenFileHandler = Rc<dyn Fn(&PathBuf, &mut Window, &mut App) + 'static>;
@@ -61,6 +86,9 @@ pub struct FileTree {
     error: Option<String>,
     /// Case-insensitive substring filter on entry names. Empty = show all.
     filter: String,
+    /// Current width of the left panel. Drives which metadata columns
+    /// are visible (size / mtime / permissions).
+    content_width: Pixels,
     on_enter_dir: EnterDirHandler,
     on_open_file: OpenFileHandler,
     on_go_up: GoUpHandler,
@@ -76,6 +104,7 @@ impl FileTree {
         entries: Vec<FsEntry>,
         error: Option<String>,
         filter: String,
+        content_width: Pixels,
         on_enter_dir: EnterDirHandler,
         on_open_file: OpenFileHandler,
         on_go_up: GoUpHandler,
@@ -88,6 +117,7 @@ impl FileTree {
             entries,
             error,
             filter,
+            content_width,
             on_enter_dir,
             on_open_file,
             on_go_up,
@@ -106,6 +136,7 @@ impl RenderOnce for FileTree {
             entries,
             error,
             filter,
+            content_width,
             on_enter_dir,
             on_open_file,
             on_go_up,
@@ -113,6 +144,9 @@ impl RenderOnce for FileTree {
             on_navigate_to,
             on_choose_folder,
         } = self;
+        let show_size = content_width >= SIZE_COLUMN_MIN_W;
+        let show_mtime = content_width >= MTIME_COLUMN_MIN_W;
+        let show_perms = content_width >= PERMS_COLUMN_MIN_W;
         let filter_lower = filter.to_lowercase();
         let cwd_name: SharedString = cwd
             .file_name()
@@ -183,7 +217,15 @@ impl RenderOnce for FileTree {
                 if !filter_lower.is_empty() && !entry.name.to_lowercase().contains(&filter_lower) {
                     continue;
                 }
-                body = body.child(row(t, entry, on_enter_dir.clone(), on_open_file.clone()));
+                body = body.child(row(
+                    t,
+                    entry,
+                    show_size,
+                    show_mtime,
+                    show_perms,
+                    on_enter_dir.clone(),
+                    on_open_file.clone(),
+                ));
                 visible += 1;
             }
             if visible == 0 {
@@ -314,39 +356,31 @@ fn quick_menu(
     on_navigate_to: NavigateToHandler,
     on_choose_folder: ChooseFolderHandler,
 ) -> impl IntoElement {
-    let trigger_color = t.color.text_secondary;
-    let trigger_hover = t.color.bg_hover;
-    let trigger_bg = t.color.bg_panel;
-    let trigger_border = t.color.border_subtle;
-    let menu_colors = t.color;
+    let t = t.clone();
     Popover::new("ft-quick-menu")
         .anchor(Corner::TopRight)
-        .trigger(
-            // Selectable trigger element — Popover wraps it with click handling.
-            // Using a button-like styled div via gpui_component::button::Button
-            // would also work; div + Selectable impl is the lighter path here.
-            QuickMenuTrigger {
-                color: trigger_color,
-                hover: trigger_hover,
-                bg: trigger_bg,
-                border: trigger_border,
-            },
-        )
+        .trigger(QuickMenuTrigger {
+            bg_idle: t.color.bg_surface,
+            bg_hover: t.color.bg_hover,
+            fg: t.color.text_primary,
+        })
         .content(move |_state, _w, _cx| {
             let nav = on_navigate_to.clone();
             let choose = on_choose_folder.clone();
-            quick_menu_body(menu_colors, nav, choose)
+            quick_menu_body(&t, nav, choose)
         })
 }
 
 /// Internal trigger element for the ⋯ popover. Implementing Selectable is
-/// required by [`Popover::trigger`].
+/// required by [`Popover::trigger`]. Visual parity with the adjacent
+/// `IconButton::new(_, Ellipsis).variant(Filled).size(Sm)` — bg_surface
+/// fill, no border, ICON_SM glyph, 22px square — so the three header
+/// icons (← / ⋯ / 🔄) line up pixel-for-pixel.
 #[derive(IntoElement)]
 struct QuickMenuTrigger {
-    color: gpui::Rgba,
-    hover: gpui::Rgba,
-    bg: gpui::Rgba,
-    border: gpui::Rgba,
+    bg_idle: gpui::Rgba,
+    bg_hover: gpui::Rgba,
+    fg: gpui::Rgba,
 }
 
 impl gpui_component::Selectable for QuickMenuTrigger {
@@ -360,101 +394,286 @@ impl gpui_component::Selectable for QuickMenuTrigger {
 
 impl RenderOnce for QuickMenuTrigger {
     fn render(self, _: &mut Window, _: &mut App) -> impl IntoElement {
-        let hover = self.hover;
+        let hover = self.bg_hover;
         div()
             .id("ft-quick-trigger")
             .w(BUTTON_SM_H)
             .h(BUTTON_SM_H)
             .flex()
+            .flex_none()
             .items_center()
             .justify_center()
             .rounded(RADIUS_SM)
-            .bg(self.bg)
-            .border_1()
-            .border_color(self.border)
-            .text_color(self.color)
+            .bg(self.bg_idle)
+            .text_color(self.fg)
             .cursor_pointer()
             .hover(move |s| s.bg(hover))
             .child(
                 UiIcon::new(IconName::Ellipsis)
-                    .size(GLYPH_SM)
-                    .text_color(self.color),
+                    .size(ICON_SM)
+                    .text_color(self.fg),
             )
     }
 }
 
+/// One entry in the ⋯ quick-targets popover.
+struct QuickMenuEntry {
+    /// Element id — must be unique across the menu.
+    id: &'static str,
+    /// Localized label.
+    label: SharedString,
+    /// Icon shown to the left of the label. Folder-glyph variants
+    /// (Folder / Home / Download / FileText) cover all the standard
+    /// directory-role cues we need.
+    icon: IconName,
+    /// Destination path. Absent only for the "Choose Folder…" row,
+    /// which triggers a native picker instead of jumping directly.
+    target: Option<PathBuf>,
+}
+
 fn quick_menu_body(
-    colors: crate::theme::ColorSet,
+    t: &crate::theme::Theme,
     on_navigate_to: NavigateToHandler,
     on_choose_folder: ChooseFolderHandler,
 ) -> impl IntoElement {
-    let home = user_home_dir();
-    let desktop = home.join("Desktop");
-    let projects = home.join("Projects");
+    let entries = quick_menu_entries();
+    let colors = t.color;
+    let mono = t.font_mono.clone();
 
-    let make_item = |id: &'static str,
-                     label: SharedString,
-                     path: PathBuf,
-                     handler: NavigateToHandler|
+    let render_item = |entry: QuickMenuEntry,
+                       on_navigate: NavigateToHandler,
+                       on_choose: ChooseFolderHandler|
      -> gpui::AnyElement {
+        let label_color = colors.text_primary;
+        let icon_color = colors.text_tertiary;
+        let hover_bg = colors.bg_hover;
+        let hint_color = colors.text_tertiary;
+        let hint: Option<SharedString> = entry
+            .target
+            .as_ref()
+            .and_then(|p| p.to_str())
+            .map(|s| {
+                // Replace the user's home prefix with `~` so the hint
+                // stays short and doesn't reveal the user account name.
+                let home = user_home_dir();
+                let home_str = home.to_string_lossy().to_string();
+                if let Some(rest) = s.strip_prefix(&home_str) {
+                    if rest.is_empty() {
+                        "~".to_string()
+                    } else {
+                        format!("~{}", rest)
+                    }
+                } else {
+                    s.to_string()
+                }
+            })
+            .map(SharedString::from);
+
         div()
-            .id(id)
-            .min_w(px(180.0))
+            .id(entry.id)
+            .h(ROW_MD_H)
+            .min_w(px(240.0))
             .px(SP_3)
-            .py(SP_1_5)
+            .flex()
+            .flex_row()
+            .items_center()
+            .gap(SP_2)
             .text_size(SIZE_CAPTION)
-            .text_color(colors.text_primary)
+            .text_color(label_color)
             .cursor_pointer()
-            .hover(move |s| s.bg(colors.bg_hover))
-            .on_click(move |_, w, app| handler(&path, w, app))
-            .child(label)
+            .hover(move |s| s.bg(hover_bg))
+            .on_click({
+                let target = entry.target.clone();
+                move |_, w, app| match &target {
+                    Some(path) => on_navigate(path, w, app),
+                    None => on_choose(&(), w, app),
+                }
+            })
+            .child(
+                div()
+                    .w(ICON_SM)
+                    .h(ICON_SM)
+                    .flex_none()
+                    .flex()
+                    .items_center()
+                    .justify_center()
+                    .child(
+                        UiIcon::new(entry.icon)
+                            .size(GLYPH_SM)
+                            .text_color(icon_color),
+                    ),
+            )
+            .child(
+                div()
+                    .flex_1()
+                    .min_w(px(0.0))
+                    .truncate()
+                    .font_weight(WEIGHT_MEDIUM)
+                    .child(entry.label),
+            )
+            .when_some(hint, |row, hint_text| {
+                row.child(
+                    div()
+                        .flex_none()
+                        .max_w(px(180.0))
+                        .truncate()
+                        .text_size(SIZE_MONO_SMALL)
+                        .font_family(mono.clone())
+                        .text_color(hint_color)
+                        .child(hint_text),
+                )
+            })
             .into_any_element()
     };
 
-    div()
+    let mut container = div()
         .flex()
         .flex_col()
         .py(SP_1)
-        .child(make_item(
-            "ft-qm-home",
-            t!("App.FileTree.Quick.home").into(),
-            home,
-            on_navigate_to.clone(),
-        ))
-        .child(make_item(
-            "ft-qm-desktop",
-            t!("App.FileTree.Quick.desktop").into(),
-            desktop,
-            on_navigate_to.clone(),
-        ))
-        .child(make_item(
-            "ft-qm-projects",
-            t!("App.FileTree.Quick.projects").into(),
-            projects,
-            on_navigate_to.clone(),
-        ))
-        .child(
-            div()
-                .h(px(1.0))
-                .w_full()
-                .my(px(2.0))
-                .bg(colors.border_subtle),
-        )
-        .child(
-            div()
-                .id("ft-qm-choose")
-                .min_w(px(180.0))
-                .px(SP_3)
-                .py(SP_1_5)
-                .text_size(SIZE_CAPTION)
-                .text_color(colors.text_primary)
-                .cursor_pointer()
-                .hover(move |s| s.bg(colors.bg_hover))
-                .on_click(move |_, w, app| on_choose_folder(&(), w, app))
-                .child(SharedString::from(
-                    t!("App.FileTree.Quick.choose_folder").to_string(),
-                )),
-        )
+        .bg(colors.bg_elevated)
+        .rounded(RADIUS_MD)
+        .border_1()
+        .border_color(colors.border_subtle)
+        .shadow(shadow::popover());
+
+    for entry in entries {
+        let is_divider = entry.id == "__divider__";
+        if is_divider {
+            container = container.child(
+                div()
+                    .h(px(1.0))
+                    .w_full()
+                    .my(SP_1)
+                    .bg(colors.border_subtle),
+            );
+        } else {
+            container =
+                container.child(render_item(entry, on_navigate_to.clone(), on_choose_folder.clone()));
+        }
+    }
+
+    container
+}
+
+/// Build the OS-appropriate quick-targets list. Order mirrors the
+/// sidebar ordering macOS Finder / Windows Explorer use so the list
+/// feels native.
+fn quick_menu_entries() -> Vec<QuickMenuEntry> {
+    let home = user_home_dir();
+    let mut out: Vec<QuickMenuEntry> = Vec::new();
+
+    // Home / Desktop / Documents / Downloads — present on every
+    // supported OS (Windows + macOS + Linux). We list the folders
+    // under $HOME rather than OS-specific special folders so the
+    // entries are predictable cross-platform.
+    out.push(QuickMenuEntry {
+        id: "ft-qm-home",
+        label: t!("App.FileTree.Quick.home").into(),
+        // gpui-component's icon set has no dedicated Home glyph; `User`
+        // is the closest proxy and reads as "your home" in context.
+        icon: IconName::User,
+        target: Some(home.clone()),
+    });
+    out.push(QuickMenuEntry {
+        id: "ft-qm-desktop",
+        label: t!("App.FileTree.Quick.desktop").into(),
+        icon: IconName::Folder,
+        target: Some(home.join("Desktop")),
+    });
+    out.push(QuickMenuEntry {
+        id: "ft-qm-documents",
+        label: t!("App.FileTree.Quick.documents").into(),
+        icon: IconName::FileText,
+        target: Some(home.join("Documents")),
+    });
+    out.push(QuickMenuEntry {
+        id: "ft-qm-downloads",
+        label: t!("App.FileTree.Quick.downloads").into(),
+        // Stand-in for a download-tray glyph (our icon set lacks one);
+        // `ArrowDown` reads as "downloads" when paired with the label.
+        icon: IconName::ArrowDown,
+        target: Some(home.join("Downloads")),
+    });
+    out.push(QuickMenuEntry {
+        id: "ft-qm-projects",
+        label: t!("App.FileTree.Quick.projects").into(),
+        icon: IconName::Folder,
+        target: Some(home.join("Projects")),
+    });
+
+    // OS-specific tail: macOS → /Applications; Linux → /; Windows →
+    // one entry per mounted drive. Everything else falls back to the
+    // filesystem root.
+    #[cfg(target_os = "macos")]
+    {
+        out.push(QuickMenuEntry {
+            id: "ft-qm-applications",
+            label: t!("App.FileTree.Quick.applications").into(),
+            icon: IconName::Folder,
+            target: Some(PathBuf::from("/Applications")),
+        });
+    }
+    #[cfg(target_os = "windows")]
+    {
+        for drive in windows_drive_roots() {
+            let letter = drive
+                .to_string_lossy()
+                .chars()
+                .next()
+                .map(|c| c.to_string())
+                .unwrap_or_default();
+            // Static &str ids would require a hand-rolled cache; we
+            // clone into `Box::leak` *once* per drive since the list
+            // is ≤ 26 entries and lives for the session.
+            let id: &'static str = Box::leak(format!("ft-qm-drive-{letter}").into_boxed_str());
+            out.push(QuickMenuEntry {
+                id,
+                label: t!("App.FileTree.Quick.drive", letter = letter).into(),
+                icon: IconName::Folder,
+                target: Some(drive),
+            });
+        }
+    }
+    #[cfg(all(not(target_os = "macos"), not(target_os = "windows")))]
+    {
+        out.push(QuickMenuEntry {
+            id: "ft-qm-root",
+            label: t!("App.FileTree.Quick.root").into(),
+            icon: IconName::Folder,
+            target: Some(PathBuf::from("/")),
+        });
+    }
+
+    // Divider + Choose Folder…
+    out.push(QuickMenuEntry {
+        id: "__divider__",
+        label: SharedString::default(),
+        icon: IconName::Folder,
+        target: None,
+    });
+    out.push(QuickMenuEntry {
+        id: "ft-qm-choose",
+        label: t!("App.FileTree.Quick.choose_folder").into(),
+        icon: IconName::FolderOpen,
+        target: None,
+    });
+
+    out
+}
+
+/// Enumerate mounted drive roots on Windows by probing `A:\..Z:\`.
+/// Cheap (26 stat calls) and avoids pulling the `windows-sys` crate
+/// just for `GetLogicalDrives`.
+#[cfg(target_os = "windows")]
+fn windows_drive_roots() -> Vec<PathBuf> {
+    let mut out = Vec::new();
+    for letter in b'A'..=b'Z' {
+        let path = PathBuf::from(format!("{}:\\", letter as char));
+        if path.exists() {
+            out.push(path);
+        }
+    }
+    out
 }
 
 fn user_home_dir() -> PathBuf {
@@ -611,6 +830,9 @@ mod tests {
 fn row(
     t: &crate::theme::Theme,
     entry: &FsEntry,
+    show_size: bool,
+    show_mtime: bool,
+    show_perms: bool,
     on_enter_dir: EnterDirHandler,
     on_open_file: OpenFileHandler,
 ) -> impl IntoElement {
@@ -623,6 +845,28 @@ fn row(
     };
     let path = entry.path.clone();
     let is_dir = entry.is_dir;
+
+    let size_label: SharedString = if entry.is_dir {
+        "—".into()
+    } else {
+        format_file_size(entry.size).into()
+    };
+    let mtime_label: SharedString = entry
+        .modified_secs
+        .map(format_relative_time)
+        .unwrap_or_else(|| "—".to_string())
+        .into();
+    // Prefer the POSIX mode when the filesystem supplied one; fall
+    // back to the Windows attribute mask otherwise. A remote mount
+    // (e.g. NFS on macOS) may expose neither, in which case we render
+    // an em-dash so the column still aligns.
+    let perms_label: SharedString = if let Some(mode) = entry.unix_mode {
+        format_permissions(mode, entry.is_dir, entry.is_link).into()
+    } else if let Some(attrs) = entry.windows_attrs {
+        format_windows_attrs(attrs, entry.is_dir, entry.is_link).into()
+    } else {
+        "—".into()
+    };
 
     div()
         .id(gpui::ElementId::Name(id_str))
@@ -652,6 +896,7 @@ fn row(
             div()
                 .w(ICON_SM)
                 .h(ICON_SM)
+                .flex_none()
                 .flex()
                 .items_center()
                 .justify_center()
@@ -674,10 +919,45 @@ fn row(
             div()
                 .flex_1()
                 .min_w(px(0.0))
+                .truncate()
                 .text_size(SIZE_CAPTION)
                 .font_weight(WEIGHT_MEDIUM)
                 .child(label),
         )
+        .when(show_size, |row| {
+            row.child(
+                div()
+                    .flex_none()
+                    .w(SIZE_COLUMN_W)
+                    .text_size(SIZE_SMALL)
+                    .text_color(t.color.text_tertiary)
+                    .text_right()
+                    .child(size_label),
+            )
+        })
+        .when(show_mtime, |row| {
+            row.child(
+                div()
+                    .flex_none()
+                    .w(MTIME_COLUMN_W)
+                    .text_size(SIZE_SMALL)
+                    .text_color(t.color.text_tertiary)
+                    .text_right()
+                    .child(mtime_label),
+            )
+        })
+        .when(show_perms, |row| {
+            row.child(
+                div()
+                    .flex_none()
+                    .w(PERMS_COLUMN_W)
+                    .text_size(SIZE_MONO_SMALL)
+                    .font_family(t.font_mono.clone())
+                    .text_color(t.color.text_tertiary)
+                    .text_right()
+                    .child(perms_label),
+            )
+        })
 }
 
 // ─────────────────────────────────────────────────────────
@@ -689,6 +969,20 @@ pub struct FsEntry {
     pub path: PathBuf,
     pub name: String,
     pub is_dir: bool,
+    pub is_link: bool,
+    /// File byte count. `0` for directories (we render `—`).
+    pub size: u64,
+    /// Last-modified time in Unix seconds. `None` when the OS didn't
+    /// expose it (e.g. FAT filesystems, remote mounts without mtime).
+    pub modified_secs: Option<u64>,
+    /// POSIX permission bits (low 9 bits used). Always populated on
+    /// Unix; on Windows this stays `None` — Windows reports attributes
+    /// via [`Self::windows_attrs`] instead.
+    pub unix_mode: Option<u32>,
+    /// Windows file attributes (`FILE_ATTRIBUTE_*` mask). Always
+    /// populated on Windows so the permissions column can render
+    /// `RO`/`H` hints; `None` on Unix.
+    pub windows_attrs: Option<u32>,
 }
 
 /// Read a single directory level from disk. Called from
@@ -706,11 +1000,48 @@ pub fn list_dir(root: &Path) -> std::io::Result<Vec<FsEntry>> {
                 .unwrap_or(true)
         })
         .map(|entry| {
-            let is_dir = entry.file_type().map(|t| t.is_dir()).unwrap_or(false);
+            let file_type = entry.file_type().ok();
+            let is_dir = file_type.as_ref().map(|t| t.is_dir()).unwrap_or(false);
+            let is_link = file_type.as_ref().map(|t| t.is_symlink()).unwrap_or(false);
+            // One `metadata()` call per row — the cost is paid here in
+            // the LeftPanelView::enter_dir handler, never during render,
+            // so paint latency stays flat. `read_dir` already walks the
+            // directory entry by entry; `metadata()` just stats it.
+            let metadata = entry.metadata().ok();
+            let size = if is_dir {
+                0
+            } else {
+                metadata.as_ref().map(|m| m.len()).unwrap_or(0)
+            };
+            let modified_secs = metadata.as_ref().and_then(|m| {
+                m.modified()
+                    .ok()
+                    .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
+                    .map(|d| d.as_secs())
+            });
+            #[cfg(unix)]
+            let unix_mode = {
+                use std::os::unix::fs::PermissionsExt;
+                metadata.as_ref().map(|m| m.permissions().mode())
+            };
+            #[cfg(not(unix))]
+            let unix_mode = None::<u32>;
+            #[cfg(windows)]
+            let windows_attrs = {
+                use std::os::windows::fs::MetadataExt;
+                metadata.as_ref().map(|m| m.file_attributes())
+            };
+            #[cfg(not(windows))]
+            let windows_attrs = None::<u32>;
             FsEntry {
                 name: entry.file_name().to_string_lossy().into_owned(),
                 path: entry.path(),
                 is_dir,
+                is_link,
+                size,
+                modified_secs,
+                unix_mode,
+                windows_attrs,
             }
         })
         .collect();

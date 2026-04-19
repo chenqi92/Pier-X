@@ -74,6 +74,69 @@ fn civil_from_days(z: i64) -> (i32, u32, u32) {
     (y as i32, m, d)
 }
 
+/// Compact file-size label for the file-browser `size` column. Output
+/// is always right-aligned-ready (4–7 glyphs), so the column can use a
+/// fixed width without ragged edges:
+///
+///   - `< 1 KiB`       → `N B`
+///   - `< 1 MiB`       → `N.N KB`
+///   - `< 1 GiB`       → `N.N MB`
+///   - otherwise       → `N.N GB`
+///
+/// Directories should render `—` instead — callers handle that above
+/// this function.
+pub fn format_file_size(bytes: u64) -> String {
+    const KB: u64 = 1024;
+    const MB: u64 = KB * 1024;
+    const GB: u64 = MB * 1024;
+    if bytes < KB {
+        format!("{} B", bytes)
+    } else if bytes < MB {
+        format!("{:.1} KB", bytes as f64 / KB as f64)
+    } else if bytes < GB {
+        format!("{:.1} MB", bytes as f64 / MB as f64)
+    } else {
+        format!("{:.1} GB", bytes as f64 / GB as f64)
+    }
+}
+
+/// Render Windows file attributes as a 4-char `drwh` mask so the
+/// permissions column is the same visible width on every platform:
+///
+///   - slot 0: `d` directory / `l` reparse point / `-` file
+///   - slot 1: `r` always (Windows always allows read when the file is
+///     visible to this process)
+///   - slot 2: `w` if NOT readonly, `-` if readonly (`FILE_ATTRIBUTE_READONLY`)
+///   - slot 3: `h` if hidden (`FILE_ATTRIBUTE_HIDDEN`), else `-`
+///
+/// Using a narrow 4-char mask instead of the 10-char POSIX string keeps
+/// the left-panel column ~32 px wide, which is the most we can spare
+/// at the 280–350 px panel widths users actually drag to.
+pub fn format_windows_attrs(attrs: u32, is_dir: bool, is_link: bool) -> String {
+    const READONLY: u32 = 0x0000_0001;
+    const HIDDEN: u32 = 0x0000_0002;
+    const DIRECTORY: u32 = 0x0000_0010;
+    const REPARSE_POINT: u32 = 0x0000_0400;
+
+    let dir = is_dir || attrs & DIRECTORY != 0;
+    let link = is_link || attrs & REPARSE_POINT != 0;
+    let type_char = if link {
+        'l'
+    } else if dir {
+        'd'
+    } else {
+        '-'
+    };
+    let w_char = if attrs & READONLY != 0 { '-' } else { 'w' };
+    let h_char = if attrs & HIDDEN != 0 { 'h' } else { '-' };
+    let mut out = String::with_capacity(4);
+    out.push(type_char);
+    out.push('r');
+    out.push(w_char);
+    out.push(h_char);
+    out
+}
+
 /// Format a POSIX mode as `drwxr-xr-x` / `-rw-r--r--` / `lrwxrwxrwx`.
 /// Only the low 9 permission bits plus the file-type hint are used;
 /// setuid/setgid/sticky are intentionally skipped to keep the column
@@ -136,5 +199,31 @@ mod tests {
     fn civil_from_days_known() {
         // 2026-01-01 = 20_454 days since epoch.
         assert_eq!(civil_from_days(20_454), (2026, 1, 1));
+    }
+
+    #[test]
+    fn file_size_bytes() {
+        assert_eq!(format_file_size(512), "512 B");
+    }
+
+    #[test]
+    fn file_size_kilobytes() {
+        assert_eq!(format_file_size(1500), "1.5 KB");
+    }
+
+    #[test]
+    fn file_size_megabytes() {
+        assert_eq!(format_file_size(3 * 1024 * 1024), "3.0 MB");
+    }
+
+    #[test]
+    fn windows_attrs_plain_file() {
+        assert_eq!(format_windows_attrs(0x20, false, false), "-rw-");
+    }
+
+    #[test]
+    fn windows_attrs_readonly_hidden_dir() {
+        // READONLY | HIDDEN | DIRECTORY.
+        assert_eq!(format_windows_attrs(0x13, true, false), "dr-h");
     }
 }

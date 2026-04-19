@@ -354,11 +354,23 @@ impl LeftPanelView {
             }));
 
         let filter_value = self.files_filter.read(cx).value().to_string();
+        // Mirror the SFTP browser's responsive-column approach — the
+        // left panel's width drives which metadata columns fit. Pulling
+        // from PierApp keeps LeftPanelView oblivious of shell geometry
+        // when the app is inactive (weak_app.upgrade fails during
+        // shutdown; we fall back to the configured default so the
+        // FileTree still builds its columns).
+        let content_width = self
+            .weak_app
+            .upgrade()
+            .map(|app| app.read(cx).left_panel_width_px())
+            .unwrap_or(crate::app::layout::LEFT_PANEL_DEFAULT_W);
         let file_tree = FileTree::new(
             self.file_tree_cwd.clone(),
             self.file_tree_entries.clone(),
             self.file_tree_error.clone(),
             filter_value,
+            content_width,
             on_enter_dir,
             on_open_file,
             on_go_up,

@@ -1,5 +1,8 @@
 name: Release
 
+# Triggers on both `release: published` (normal path — tag a commit,
+# create a GitHub release → artifacts attach automatically) and on
+# `workflow_dispatch` with an explicit tag (for rebuilds / dry runs).
 on:
   release:
     types: [published]
@@ -14,30 +17,33 @@ concurrency:
   group: ${{ github.workflow }}-${{ github.event.release.tag_name || inputs.tag || github.ref }}
   cancel-in-progress: true
 
+env:
+  CARGO_TERM_COLOR: always
+
 jobs:
-  publish-gpui:
-    name: Publish · ${{ matrix.name }}
+  # ─────────────────────────────────────────────────────────────
+  # macOS — universal2 .app bundle via `scripts/bundle-macos.sh`
+  #
+  # The script already knows how to produce a proper `.app` with
+  # Info.plist, AppIcon.icns, codesign + notarize. It ships on the
+  # `macos-latest` (Apple-Silicon) runner; we build both `x86_64` and
+  # `aarch64` and stitch them with `lipo` into a universal binary so
+  # one download runs on Intel and Apple Silicon Macs.
+  #
+  # Signing + notarization are optional — they run only when the
+  # required secrets are present, so a public fork with no Apple
+  # Developer ID can still produce an unsigned (install-with-warning)
+  # artifact.
+  # ─────────────────────────────────────────────────────────────
+  macos:
+    name: macOS · universal .app
+    runs-on: macos-latest
     permissions:
       contents: write
-    strategy:
-      fail-fast: false
-      matrix:
-        include:
-          - name: Windows
-            os: windows-latest
-            archive_name: pier-x-windows-x64.zip
-            binary_path: target/release/pier-ui-gpui.exe
-          - name: macOS
-            os: macos-latest
-            archive_name: pier-x-macos.zip
-            binary_path: target/release/pier-ui-gpui
-    runs-on: ${{ matrix.os }}
-
     steps:
-      - name: Checkout
-        uses: actions/checkout@v4
+      - uses: actions/checkout@v4
 
-      - name: Determine tag
+      - name: Resolve release tag
         id: tag
         shell: bash
         run: |
@@ -47,28 +53,216 @@ jobs:
             echo "value=${{ github.event.release.tag_name }}" >> "$GITHUB_OUTPUT"
           fi
 
-      - name: Install Rust toolchain
+      - name: Install Rust toolchain (Intel + Apple Silicon)
         uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: x86_64-apple-darwin,aarch64-apple-darwin
 
-      - name: Build GPUI shell
-        run: cargo build -p pier-ui-gpui --release
+      - uses: Swatinem/rust-cache@v2
+        with:
+          shared-key: release-macos
 
-      - name: Package Windows binary
-        if: runner.os == 'Windows'
-        shell: pwsh
+      - name: Build x86_64-apple-darwin
+        run: cargo build -p pier-ui-gpui --release --locked --target x86_64-apple-darwin
+
+      - name: Build aarch64-apple-darwin
+        run: cargo build -p pier-ui-gpui --release --locked --target aarch64-apple-darwin
+
+      # `lipo -create` fuses both slices into one universal Mach-O
+      # binary. `bundle-macos.sh` picks it up via `target/release/` by
+      # default, so we stage it there before invoking the script.
+      - name: Fuse into universal binary
         run: |
-          New-Item -ItemType Directory -Force -Path dist | Out-Null
-          Compress-Archive -LiteralPath "${{ matrix.binary_path }}" -DestinationPath "dist\\${{ matrix.archive_name }}" -Force
+          mkdir -p target/release
+          lipo -create \
+            target/x86_64-apple-darwin/release/pier-ui-gpui \
+            target/aarch64-apple-darwin/release/pier-ui-gpui \
+            -output target/release/pier-ui-gpui
+          file target/release/pier-ui-gpui
 
-      - name: Package macOS binary
-        if: runner.os == 'macOS'
-        shell: bash
+      # Optional code-signing. The script reads `MACOS_SIGN*` and
+      # `MACOS_NOTARIZE` from the environment; if the signing identity
+      # or notary credentials aren't configured in repo secrets, we
+      # skip signing and ship an unsigned `.app` (user sees a Gatekeeper
+      # warning but can still `xattr -dr com.apple.quarantine` to run).
+      - name: Bundle (and optionally sign + notarize) .app
+        env:
+          BUILD_TYPE: Release
+          MACOS_SIGN: ${{ secrets.MACOS_SIGN_IDENTITY != '' && '1' || '' }}
+          MACOS_SIGN_IDENTITY: ${{ secrets.MACOS_SIGN_IDENTITY }}
+          MACOS_NOTARIZE: ${{ secrets.MACOS_NOTARY_APPLE_ID != '' && '1' || '' }}
+          MACOS_NOTARY_APPLE_ID: ${{ secrets.MACOS_NOTARY_APPLE_ID }}
+          MACOS_NOTARY_PASSWORD: ${{ secrets.MACOS_NOTARY_PASSWORD }}
+          MACOS_NOTARY_TEAM_ID: ${{ secrets.MACOS_NOTARY_TEAM_ID }}
+        run: ./scripts/bundle-macos.sh --skip-build
+
+      # Produce a .dmg rather than a .zip — this is the idiomatic
+      # macOS distribution format:
+      #   - one download users recognise (disk-image icon in Finder)
+      #   - mount → drag `.app` onto the `/Applications` symlink → done
+      #   - `hdiutil create -format UDZO` gives us LZFSE compression
+      #     comparable to zip without the "unzip + xattr" two-step dance
+      #
+      # A temporary staging dir holds the .app next to a symlink named
+      # "Applications" → `/Applications`; hdiutil captures the whole dir
+      # as the DMG's root so the drag-to-install affordance appears the
+      # moment the user mounts it.
+      - name: Stage DMG
+        id: stage
         run: |
+          VERSION=$(sed -n 's/^version *= *"\(.*\)"$/\1/p' pier-ui-gpui/Cargo.toml | head -n 1)
+          ARCHIVE=Pier-X_${VERSION}_macos_universal.dmg
+
+          STAGING=$(mktemp -d)
+          cp -R target/release/Pier-X.app "${STAGING}/Pier-X.app"
+          ln -s /Applications "${STAGING}/Applications"
+
           mkdir -p dist
-          ditto -c -k "${{ matrix.binary_path }}" "dist/${{ matrix.archive_name }}"
+          hdiutil create \
+            -volname "Pier-X ${VERSION}" \
+            -srcfolder "${STAGING}" \
+            -ov \
+            -format UDZO \
+            "dist/${ARCHIVE}"
+
+          ( cd dist && shasum -a 256 "${ARCHIVE}" > "${ARCHIVE}.sha256" )
+          echo "archive=${ARCHIVE}" >> "$GITHUB_OUTPUT"
 
       - name: Upload release assets
         uses: softprops/action-gh-release@v2
         with:
           tag_name: ${{ steps.tag.outputs.value }}
-          files: dist/${{ matrix.archive_name }}
+          generate_release_notes: true
+          files: |
+            dist/${{ steps.stage.outputs.archive }}
+            dist/${{ steps.stage.outputs.archive }}.sha256
+
+  # ─────────────────────────────────────────────────────────────
+  # Windows — raw release .zip of `pier-ui-gpui.exe`.
+  # Code-signing flow isn't wired yet (needs an Authenticode cert in
+  # repo secrets); SmartScreen will flag unsigned downloads, but the
+  # executable itself runs fine.
+  # ─────────────────────────────────────────────────────────────
+  windows:
+    name: Windows · x64
+    runs-on: windows-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Resolve release tag
+        id: tag
+        shell: bash
+        run: |
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
+            echo "value=${{ inputs.tag }}" >> "$GITHUB_OUTPUT"
+          else
+            echo "value=${{ github.event.release.tag_name }}" >> "$GITHUB_OUTPUT"
+          fi
+
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+        with:
+          shared-key: release-windows
+
+      - name: Build
+        run: cargo build -p pier-ui-gpui --release --locked
+
+      - name: Package
+        id: stage
+        shell: pwsh
+        run: |
+          $version = (Select-String -Path pier-ui-gpui/Cargo.toml -Pattern '^version = "(.+)"$' | Select-Object -First 1).Matches.Groups[1].Value
+          $archive = "Pier-X_${version}_windows_x64.zip"
+          New-Item -ItemType Directory -Force -Path dist | Out-Null
+          Compress-Archive -LiteralPath target/release/pier-ui-gpui.exe -DestinationPath "dist/$archive" -Force
+          (Get-FileHash "dist/$archive" -Algorithm SHA256).Hash.ToLower() + "  $archive" | Out-File -Encoding ascii "dist/$archive.sha256"
+          "archive=$archive" >> $env:GITHUB_OUTPUT
+
+      - name: Upload release assets
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ steps.tag.outputs.value }}
+          generate_release_notes: true
+          files: |
+            dist/${{ steps.stage.outputs.archive }}
+            dist/${{ steps.stage.outputs.archive }}.sha256
+
+  # ─────────────────────────────────────────────────────────────
+  # Linux — .deb + AppImage via `scripts/package-linux.sh`.
+  # Built on ubuntu-latest, packaged into both formats in one job;
+  # the script emits files under `target/release/packages/linux/`.
+  # ─────────────────────────────────────────────────────────────
+  linux:
+    name: Linux · deb + AppImage
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Resolve release tag
+        id: tag
+        shell: bash
+        run: |
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
+            echo "value=${{ inputs.tag }}" >> "$GITHUB_OUTPUT"
+          else
+            echo "value=${{ github.event.release.tag_name }}" >> "$GITHUB_OUTPUT"
+          fi
+
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+        with:
+          shared-key: release-linux
+
+      # Same system-dep list as CI `gpui-shell` plus `dpkg` / fuse tools
+      # required by `package-linux.sh`.
+      - name: Install system dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            build-essential pkg-config \
+            libssl-dev \
+            libx11-dev libxcb1-dev libxkbcommon-dev libxkbcommon-x11-dev \
+            libxcb-render0-dev libxcb-shape0-dev libxcb-xfixes0-dev \
+            libfontconfig-dev libfreetype-dev \
+            libasound2-dev \
+            libwayland-dev \
+            libvulkan-dev \
+            dpkg fakeroot desktop-file-utils \
+            fuse libfuse2
+
+      - name: Install appimagetool
+        run: |
+          curl -L -o /tmp/appimagetool \
+            https://github.com/AppImage/AppImageKit/releases/download/continuous/appimagetool-x86_64.AppImage
+          chmod +x /tmp/appimagetool
+          sudo mv /tmp/appimagetool /usr/local/bin/appimagetool
+
+      - name: Build + package (.deb + AppImage)
+        env:
+          PACKAGE_FORMATS: deb,appimage
+          BUILD_TYPE: Release
+        run: ./scripts/package-linux.sh
+
+      # The script places artifacts under
+      # `target/release/packages/linux/` with the `Pier-X_<v>_linux_*`
+      # naming convention; collect them all into `dist/` + shasums.
+      - name: Stage archives
+        run: |
+          mkdir -p dist
+          cp target/release/packages/linux/Pier-X_*_linux_*.deb dist/
+          cp target/release/packages/linux/Pier-X_*_linux_*.AppImage dist/
+          ( cd dist && sha256sum Pier-X_*_linux_* > SHA256SUMS-linux.txt )
+
+      - name: Upload release assets
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ steps.tag.outputs.value }}
+          generate_release_notes: true
+          files: |
+            dist/*.deb
+            dist/*.AppImage
+            dist/SHA256SUMS-linux.txt

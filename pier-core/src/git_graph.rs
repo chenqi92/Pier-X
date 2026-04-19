@@ -492,7 +492,7 @@ pub struct LayoutInput {
 }
 
 /// Fully computed graph row with layout data.
-#[derive(Serialize)]
+#[derive(Serialize, Clone)]
 pub struct GraphRow {
     pub hash: String,
     pub short_hash: String,

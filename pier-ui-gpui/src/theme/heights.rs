@@ -14,8 +14,10 @@
 
 use gpui::{px, Pixels};
 
-// Shell rails.
-pub const TOOLBAR_H: Pixels = px(32.0);
+// Shell rails. Toolbar raised to 40 px to match the Pier SwiftUI
+// reference — 32 px was visibly shorter than the native macOS
+// titlebar it sits flush against, and buttons inside felt cramped.
+pub const TOOLBAR_H: Pixels = px(40.0);
 pub const STATUSBAR_H: Pixels = px(24.0);
 pub const TERMINAL_TABBAR_H: Pixels = px(32.0);
 

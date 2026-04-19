@@ -129,6 +129,10 @@ static ASSETS: &[(&str, &[u8])] = &[
         include_bytes!("../assets/icons/server.svg"),
     ),
     (
+        "icons/settings-2.svg",
+        include_bytes!("../assets/icons/settings-2.svg"),
+    ),
+    (
         "icons/settings.svg",
         include_bytes!("../assets/icons/settings.svg"),
     ),
@@ -144,6 +148,38 @@ static ASSETS: &[(&str, &[u8])] = &[
     (
         "icons/triangle-alert.svg",
         include_bytes!("../assets/icons/triangle-alert.svg"),
+    ),
+    // — Added for the Git graph/managers views —
+    (
+        "icons/search.svg",
+        include_bytes!("../assets/icons/search.svg"),
+    ),
+    ("icons/user.svg", include_bytes!("../assets/icons/user.svg")),
+    ("icons/copy.svg", include_bytes!("../assets/icons/copy.svg")),
+    (
+        "icons/calendar.svg",
+        include_bytes!("../assets/icons/calendar.svg"),
+    ),
+    (
+        "icons/external-link.svg",
+        include_bytes!("../assets/icons/external-link.svg"),
+    ),
+    ("icons/undo.svg", include_bytes!("../assets/icons/undo.svg")),
+    (
+        "icons/circle-check.svg",
+        include_bytes!("../assets/icons/circle-check.svg"),
+    ),
+    (
+        "icons/folder-open.svg",
+        include_bytes!("../assets/icons/folder-open.svg"),
+    ),
+    (
+        "icons/ellipsis-vertical.svg",
+        include_bytes!("../assets/icons/ellipsis-vertical.svg"),
+    ),
+    (
+        "icons/github.svg",
+        include_bytes!("../assets/icons/github.svg"),
     ),
 ];
 

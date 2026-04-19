@@ -1,27 +1,21 @@
-//! Settings page section — macOS 14 style "grouped card" built from
-//! a title (outside the card) over a rounded panel container that
-//! holds its rows with hairline dividers between them.
-//!
-//! Why grouped cards: the prior chrome-less design (flush rows,
-//! UPPERCASE caption title) read as a single flat list in zh-CN
-//! where the title can't lean on uppercasing to create a landmark.
-//! The grouped card turns every section into a distinct visual
-//! block, the way macOS 14 System Settings does, which lets the
-//! eye parse the page without having to read section titles.
+//! Settings page section — flat row group under a small uppercase
+//! title. The enclosing dialog already draws a rounded white card;
+//! layering another bg_panel card on top created a "card-inside-a-
+//! card" look that read as nested modals. The flat layout keeps
+//! the grouped-list rhythm (SwiftUI `Form` / macOS System Settings)
+//! without the extra chrome.
 //!
 //! Layout:
 //!
 //! ```text
-//! TYPOGRAPHY           ← title (outside the card)
-//! ┌─────────────────────────────────── bg_panel ──┐
-//! │  UI Font                          [Inter ▾]   │  ← row 1
-//! │  ─────────────────────────── border_subtle ── │  ← auto divider
-//! │  Terminal Font                    [Menlo ▾]   │  ← row 2
-//! └───────────────────────────────────────────────┘
+//! TYPOGRAPHY           ← tertiary caption, uppercase when ASCII
+//!   UI Font                          [Inter ▾]
+//!   ─────────────────────────── border_subtle ──
+//!   Terminal Font                    [Menlo ▾]
 //! ```
 //!
 //! Use with [`crate::components::SettingRow`] for labeled rows. For
-//! content that stands alone (a preview card, a 3-column theme
+//! content that stands alone (a preview block, a 3-column theme
 //! grid), use [`SettingsSection::untitled`] and pass the element
 //! as a child — dividers are still auto-inserted between multiple
 //! children, so mixing a preview and a row works as expected.
@@ -30,10 +24,9 @@ use gpui::{div, AnyElement, IntoElement, ParentElement, RenderOnce, SharedString
 
 use crate::components::Separator;
 use crate::theme::{
-    radius::RADIUS_LG,
-    spacing::{SP_1, SP_2, SP_4},
+    spacing::SP_1,
     theme,
-    typography::{SIZE_BODY, WEIGHT_EMPHASIS},
+    typography::{SIZE_SMALL, WEIGHT_EMPHASIS},
 };
 
 #[derive(IntoElement, Default)]
@@ -72,15 +65,15 @@ impl RenderOnce for SettingsSection {
     fn render(self, _: &mut Window, cx: &mut gpui::App) -> impl IntoElement {
         let t = theme(cx);
 
-        let mut col = div().w_full().flex().flex_col().gap(SP_2);
+        let mut col = div().w_full().flex().flex_col().gap(SP_1);
 
         if let Some(title) = self.title {
-            // Title sits outside the card. 13 px emphasis weight +
-            // secondary color makes it register as a landmark
-            // without being as loud as a page header. Skip
-            // uppercase transform when the label contains non-ASCII
-            // (CJK etc.) — `.to_uppercase()` on Chinese is a no-op
-            // but on mixed-script labels it looks strange.
+            // Small, tertiary, uppercase-when-ASCII section title —
+            // SwiftUI `Form` / macOS System Settings idiom. Sits
+            // above a FLAT row group (no bg, no border) so the dialog
+            // frame itself is the only container visible; the
+            // earlier grouped-card surface produced a "card-inside-a
+            // -card" look against the modal chrome.
             let label: SharedString = if title.as_ref().is_ascii() {
                 SharedString::from(title.as_ref().to_uppercase())
             } else {
@@ -88,32 +81,20 @@ impl RenderOnce for SettingsSection {
             };
             col = col.child(
                 div()
-                    .pl(SP_1)
-                    .text_size(SIZE_BODY)
+                    .text_size(SIZE_SMALL)
                     .font_weight(WEIGHT_EMPHASIS)
-                    .text_color(t.color.text_secondary)
+                    .text_color(t.color.text_tertiary)
                     .child(label),
             );
         }
 
-        // Card body — rounded bg_panel surface with 1px hairline.
-        // Rows inside get natural py(SP_2) from SettingRow; the
-        // card itself only adds horizontal padding so dividers can
-        // run edge-to-edge inside the rounded box.
-        let mut body = div()
-            .w_full()
-            .flex()
-            .flex_col()
-            .px(SP_4)
-            .py(SP_1)
-            .rounded(RADIUS_LG)
-            .bg(t.color.bg_panel)
-            .border_1()
-            .border_color(t.color.border_subtle);
+        // Flat row group — rows stack directly on the dialog surface,
+        // separated by subtle hairlines instead of a card fill. The
+        // surrounding `page_shell` already provides horizontal
+        // padding so the hairlines run full-bleed within the content
+        // column.
+        let mut body = div().w_full().flex().flex_col();
 
-        // Interleave dividers between children. Skip before the
-        // first child — the card's top edge already separates it
-        // from the title/previous section.
         for (ix, child) in self.children.into_iter().enumerate() {
             if ix > 0 {
                 body = body.child(Separator::horizontal());

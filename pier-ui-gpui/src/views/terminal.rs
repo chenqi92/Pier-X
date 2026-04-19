@@ -645,7 +645,7 @@ impl TerminalPanel {
         let elapsed_ms = Instant::now()
             .saturating_duration_since(self.cursor_blink_anchor)
             .as_millis() as u64;
-        ((elapsed_ms / CURSOR_BLINK_MS) % 2) == 0
+        (elapsed_ms / CURSOR_BLINK_MS).is_multiple_of(2)
     }
 
     fn terminal_opacity(&self) -> f32 {

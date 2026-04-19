@@ -25,6 +25,7 @@ pub mod services;
 pub mod settings;
 pub mod ssh;
 pub mod terminal;
+pub mod updates;
 
 /// Crate version, derived from `Cargo.toml` at compile time.
 pub const VERSION: &str = env!("CARGO_PKG_VERSION");

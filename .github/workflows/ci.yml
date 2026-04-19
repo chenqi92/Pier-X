@@ -1,84 +1,135 @@
-name: Release Checks
+name: CI
 
+# Quality gate for every change that lands on `main` or is proposed
+# against it. Release publishing is handled separately by
+# `release.yml` — do not add release-artifact jobs here.
 on:
-  release:
-    types: [published]
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
   workflow_dispatch:
 
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: true
 
+# Keep cargo output quiet + fail fast. `RUSTFLAGS -D warnings` mirrors
+# clippy's gate so plain `cargo build` also surfaces regressions; any
+# `#[allow]`s should live in code (documented) rather than CI config.
+env:
+  CARGO_TERM_COLOR: always
+  RUST_BACKTRACE: short
+  RUSTFLAGS: -D warnings
+
 jobs:
+  # ── Formatting + lint on every PR. Runs on Ubuntu (fastest runner);
+  #   platform-specific lint is covered by the per-OS build jobs below.
   lint:
-    name: Lint
+    name: fmt + clippy (shared)
     runs-on: ubuntu-latest
-
     steps:
-      - name: Checkout
-        uses: actions/checkout@v4
-
-      - name: Install Rust toolchain
-        uses: dtolnay/rust-toolchain@stable
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
         with:
           components: rustfmt, clippy
-
+      - uses: Swatinem/rust-cache@v2
+        with:
+          shared-key: lint
       - name: cargo fmt --check
         run: cargo fmt --all --check
+      - name: cargo clippy (workspace)
+        run: cargo clippy --workspace --all-targets --locked -- -D warnings
 
-      - name: cargo clippy (core)
-        run: cargo clippy -p pier-core --all-targets -- -D warnings
-
-      - name: cargo clippy (shell)
-        run: cargo clippy -p pier-ui-gpui --all-targets -- -D warnings
-
+  # ── `pier-core` is fully cross-platform (no UI framework deps), so
+  #   build + test it on all three OSes. Catches regressions in
+  #   platform-specific modules (windows-sys console, unix pty).
   rust-core:
-    name: Rust core · ${{ matrix.os }}
+    name: pier-core · ${{ matrix.os }}
     runs-on: ${{ matrix.os }}
     strategy:
       fail-fast: false
       matrix:
         os: [ubuntu-latest, windows-latest, macos-latest]
-
     steps:
-      - name: Checkout
-        uses: actions/checkout@v4
-
-      - name: Install Rust toolchain
-        uses: dtolnay/rust-toolchain@stable
-
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+        with:
+          shared-key: core-${{ matrix.os }}
       - name: cargo build
-        run: cargo build -p pier-core --release
-
+        run: cargo build -p pier-core --release --locked
       - name: cargo test
-        run: cargo test -p pier-core --release
+        run: cargo test -p pier-core --release --locked
 
+  # ── GPUI shell build. Ubuntu is included so we catch missing Linux
+  #   system deps early; the release workflow packages .deb / AppImage
+  #   from the same build artifact shape.
   gpui-shell:
-    name: GPUI shell · ${{ matrix.os }}
+    name: pier-ui-gpui · ${{ matrix.os }}
     runs-on: ${{ matrix.os }}
     strategy:
       fail-fast: false
       matrix:
-        os: [windows-latest, macos-latest]
-
+        os: [ubuntu-latest, windows-latest, macos-latest]
     steps:
-      - name: Checkout
-        uses: actions/checkout@v4
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy
+      - uses: Swatinem/rust-cache@v2
+        with:
+          shared-key: shell-${{ matrix.os }}
 
-      - name: Install Rust toolchain
-        uses: dtolnay/rust-toolchain@stable
+      # Linux-only: GPUI links against X11 / Wayland / Vulkan stacks.
+      # The list mirrors `zed-industries/zed`'s CI requirements since
+      # GPUI shares their runtime; packaging workflow adds the deb /
+      # AppImage tools on top.
+      - name: Install Linux system dependencies
+        if: matrix.os == 'ubuntu-latest'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            build-essential pkg-config \
+            libssl-dev \
+            libx11-dev libxcb1-dev libxkbcommon-dev libxkbcommon-x11-dev \
+            libxcb-render0-dev libxcb-shape0-dev libxcb-xfixes0-dev \
+            libfontconfig-dev libfreetype-dev \
+            libasound2-dev \
+            libwayland-dev \
+            libvulkan-dev
+
+      # Platform-specific clippy — makes sure the macOS (objc2 + AppKit)
+      # and Windows (registry / console) code paths are linted on their
+      # own OS, not only via the Ubuntu `lint` job which cfg-compiles them
+      # out.
+      - name: cargo clippy (shell, platform-specific)
+        run: cargo clippy -p pier-ui-gpui --all-targets --locked -- -D warnings
 
       - name: cargo build
-        run: cargo build -p pier-ui-gpui --release
+        run: cargo build -p pier-ui-gpui --release --locked
 
-  integration-tests:
-    name: Integration tests · DB backends
+  # ── Supply-chain vulnerability scan. Reads Cargo.lock and flags
+  #   any dep that has an open RUSTSEC advisory; uses the official
+  #   rustsec/audit-check action so advisories render as annotations
+  #   on the PR Files-changed view instead of a wall of log output.
+  #   Runs on every push / PR so a new advisory against a pinned
+  #   transitive is caught before it ships.
+  audit:
+    name: cargo-audit · supply chain
     runs-on: ubuntu-latest
-    # Soft-required: lint / rust-core / gpui-shell are the gates that
-    # block main. This job is informational while we tune flake rates;
-    # once stable, drop continue-on-error and promote it to required.
-    continue-on-error: true
+    steps:
+      - uses: actions/checkout@v4
+      - uses: rustsec/audit-check@v2.0.0
+        with:
+          token: ${{ secrets.GITHUB_TOKEN }}
 
+  # ── Integration tests that require real MySQL / Postgres instances.
+  #   Kept soft-required while flake rate stabilises.
+  integration-tests:
+    name: integration tests · DB backends
+    runs-on: ubuntu-latest
+    continue-on-error: true
     services:
       mysql:
         image: mysql:8
@@ -103,7 +154,6 @@ jobs:
           --health-interval=10s
           --health-timeout=5s
           --health-retries=10
-
     env:
       PIER_TEST_MYSQL_HOST: 127.0.0.1
       PIER_TEST_MYSQL_PORT: "3306"
@@ -113,17 +163,12 @@ jobs:
       PIER_TEST_PG_PORT: "5432"
       PIER_TEST_PG_USER: postgres
       PIER_TEST_PG_PASSWORD: pier-x-test
-
     steps:
-      - name: Checkout
-        uses: actions/checkout@v4
-
-      - name: Install Rust toolchain
-        uses: dtolnay/rust-toolchain@stable
-
-      # MySQL 8 / Postgres 16 occasionally take ~15s to be ready
-      # despite the service health-check; the explicit wait makes
-      # connect-refused failures impossible to mistake for auth flakes.
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+        with:
+          shared-key: integration
       - name: Wait for MySQL
         run: |
           for i in {1..20}; do
@@ -144,10 +189,10 @@ jobs:
             sleep 1
           done
           echo "Postgres never came up" && exit 1
-
       - name: Run integration tests
         run: |
           cargo test -p pier-core \
             --features integration-tests \
             --test integration_db \
+            --locked \
             -- --test-threads=1 --nocapture

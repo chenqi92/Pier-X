@@ -13,12 +13,17 @@
 //!
 //! The view stays pure — it renders from the cached snapshot only.
 
+use std::collections::HashSet;
 use std::path::PathBuf;
 use std::sync::Arc;
 
 use gpui::SharedString;
+use pier_core::git_graph::{
+    self, compute_graph_layout, CommitEntry, GraphRow, LayoutInput, LayoutParams,
+};
 use pier_core::services::git::{
-    BranchInfo, CommitInfo, GitClient, GitError, GitFileChange, StashEntry,
+    BlameLine, BranchEntry, BranchInfo, CommitDetail, CommitInfo, ConfigEntry, GitClient, GitError,
+    GitFileChange, RemoteInfo, ResetMode, StashEntry, SubmoduleInfo, TagInfo,
 };
 use pier_core::ssh::SshSession;
 
@@ -79,9 +84,153 @@ pub enum GitStatus {
     Failed,
 }
 
+/// Top-level tab of the Git panel, mirrors Pier's 4-tab
+/// picker (Changes / Graph / Stash / Managers).
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum GitTab {
+    /// Working tree — staged + unstaged, diff, commit, history.
+    #[default]
+    Changes,
+    /// IDEA-style commit graph (history + lanes + filters).
+    Graph,
+    /// Stash list + stash push.
+    Stash,
+    /// Branch / Tag / Remote / Config / Submodule / Rebase / Conflicts.
+    Managers,
+}
+
+impl GitTab {
+    /// Sort order used by the tab strip.
+    pub fn all() -> [Self; 4] {
+        [Self::Changes, Self::Graph, Self::Stash, Self::Managers]
+    }
+
+    /// Short token used for ElementIds.
+    pub fn id_token(self) -> &'static str {
+        match self {
+            Self::Changes => "changes",
+            Self::Graph => "graph",
+            Self::Stash => "stash",
+            Self::Managers => "managers",
+        }
+    }
+}
+
+/// Sub-tab inside the Managers tab.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum ManagerTab {
+    /// Branch list / create / delete / rename / switch.
+    #[default]
+    Branches,
+    /// Tag list / create / delete / push.
+    Tags,
+    /// Remote list / add / edit / remove / fetch.
+    Remotes,
+    /// Git config entries (user.name, user.email, etc.).
+    Config,
+    /// Submodule list / add / update / remove.
+    Submodules,
+    /// Interactive rebase controls (continue / abort / skip).
+    Rebase,
+    /// Merge conflict resolver.
+    Conflicts,
+}
+
+impl ManagerTab {
+    pub fn all() -> [Self; 7] {
+        [
+            Self::Branches,
+            Self::Tags,
+            Self::Remotes,
+            Self::Config,
+            Self::Submodules,
+            Self::Rebase,
+            Self::Conflicts,
+        ]
+    }
+
+    pub fn id_token(self) -> &'static str {
+        match self {
+            Self::Branches => "branches",
+            Self::Tags => "tags",
+            Self::Remotes => "remotes",
+            Self::Config => "config",
+            Self::Submodules => "submodules",
+            Self::Rebase => "rebase",
+            Self::Conflicts => "conflicts",
+        }
+    }
+}
+
+/// Diff rendering mode for the diff panel.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum DiffMode {
+    /// Unified single-column diff (legacy + default).
+    #[default]
+    Inline,
+    /// Two-column old / new side-by-side diff.
+    SideBySide,
+}
+
+/// Date range filter for the graph toolbar.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum GraphDateRange {
+    #[default]
+    All,
+    Today,
+    LastWeek,
+    LastMonth,
+    LastYear,
+}
+
+impl GraphDateRange {
+    /// Unix timestamp threshold for this range (0 = no filter).
+    pub fn after_timestamp(self) -> i64 {
+        use std::time::{SystemTime, UNIX_EPOCH};
+        let now = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .map(|d| d.as_secs() as i64)
+            .unwrap_or(0);
+        match self {
+            Self::All => 0,
+            Self::Today => now - 86_400,
+            Self::LastWeek => now - 7 * 86_400,
+            Self::LastMonth => now - 30 * 86_400,
+            Self::LastYear => now - 365 * 86_400,
+        }
+    }
+}
+
+/// Highlight mode for the graph — dims non-matching rows.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum GraphHighlightMode {
+    #[default]
+    None,
+    MyCommits,
+    MergeCommits,
+    CurrentBranch,
+}
+
+/// IDEA-style graph filter — user-tweakable inputs that drive the
+/// next `run_graph`.
+#[derive(Clone, Debug, Default)]
+pub struct GraphFilter {
+    pub branch: Option<String>,
+    pub author: Option<String>,
+    pub search_text: Option<String>,
+    pub date_range: GraphDateRange,
+    pub path_filter: Option<String>,
+    /// Topo order vs date order.
+    pub sort_by_date: bool,
+    pub first_parent_only: bool,
+    pub no_merges: bool,
+    pub show_long_edges: bool,
+}
+
 /// Pending mutation against the repo — drives the spinner label
 /// and blocks additional actions until the current one settles.
 #[derive(Clone, Debug, PartialEq, Eq)]
+#[allow(missing_docs)]
 pub enum GitPendingAction {
     Refresh,
     Stage { path: String },
@@ -90,13 +239,54 @@ pub enum GitPendingAction {
     StageAll,
     UnstageAll,
     Commit { message: String },
+    CommitAmend { message: String },
     CheckoutBranch { name: String },
+    CheckoutHash { hash: String },
+    CheckoutTracking { local: String, remote: String },
     StashPush { message: String },
     StashApply { index: String },
     StashPop { index: String },
     StashDrop { index: String },
     Push,
     Pull,
+    // Branch ops
+    BranchCreate { name: String, base: Option<String> },
+    BranchDelete { name: String, force: bool },
+    BranchRename { old: String, new: String },
+    // Reset / cherry-pick / revert / drop
+    Reset { mode: ResetMode, target: String },
+    CherryPick { hash: String },
+    Revert { hash: String },
+    UndoCommit { hash: String },
+    DropCommit { hash: String, parent: Option<String> },
+    // Merge
+    Merge { branch: String },
+    MergeAbort,
+    // Rebase
+    Rebase { onto: String },
+    RebaseContinue,
+    RebaseAbort,
+    RebaseSkip,
+    // Tags
+    TagCreate { name: String, message: String, at: Option<String> },
+    TagDelete { name: String },
+    TagPush { name: String },
+    // Remotes
+    RemoteAdd { name: String, url: String },
+    RemoteRemove { name: String },
+    RemoteSetUrl { name: String, url: String },
+    RemoteFetch { name: Option<String> },
+    // Config
+    ConfigSet { key: String, value: String, global: bool },
+    ConfigUnset { key: String, global: bool },
+    // Submodules
+    SubmoduleAdd { url: String, path: String },
+    SubmoduleUpdate,
+    SubmoduleRemove { path: String },
+    // Conflicts
+    ResolveOurs { path: String },
+    ResolveTheirs { path: String },
+    MarkResolved { path: String },
 }
 
 impl GitPendingAction {
@@ -109,15 +299,173 @@ impl GitPendingAction {
             Self::StageAll => "stage-all".into(),
             Self::UnstageAll => "unstage-all".into(),
             Self::Commit { .. } => "commit".into(),
+            Self::CommitAmend { .. } => "commit-amend".into(),
             Self::CheckoutBranch { .. } => "checkout".into(),
+            Self::CheckoutHash { .. } => "checkout".into(),
+            Self::CheckoutTracking { .. } => "checkout".into(),
             Self::StashPush { .. } => "stash-push".into(),
             Self::StashApply { .. } => "stash-apply".into(),
             Self::StashPop { .. } => "stash-pop".into(),
             Self::StashDrop { .. } => "stash-drop".into(),
             Self::Push => "push".into(),
             Self::Pull => "pull".into(),
+            Self::BranchCreate { .. } => "branch-create".into(),
+            Self::BranchDelete { .. } => "branch-delete".into(),
+            Self::BranchRename { .. } => "branch-rename".into(),
+            Self::Reset { .. } => "reset".into(),
+            Self::CherryPick { .. } => "cherry-pick".into(),
+            Self::Revert { .. } => "revert".into(),
+            Self::UndoCommit { .. } => "undo-commit".into(),
+            Self::DropCommit { .. } => "drop-commit".into(),
+            Self::Merge { .. } => "merge".into(),
+            Self::MergeAbort => "merge-abort".into(),
+            Self::Rebase { .. } => "rebase".into(),
+            Self::RebaseContinue => "rebase-continue".into(),
+            Self::RebaseAbort => "rebase-abort".into(),
+            Self::RebaseSkip => "rebase-skip".into(),
+            Self::TagCreate { .. } => "tag-create".into(),
+            Self::TagDelete { .. } => "tag-delete".into(),
+            Self::TagPush { .. } => "tag-push".into(),
+            Self::RemoteAdd { .. } => "remote-add".into(),
+            Self::RemoteRemove { .. } => "remote-remove".into(),
+            Self::RemoteSetUrl { .. } => "remote-set-url".into(),
+            Self::RemoteFetch { .. } => "fetch".into(),
+            Self::ConfigSet { .. } => "config-set".into(),
+            Self::ConfigUnset { .. } => "config-unset".into(),
+            Self::SubmoduleAdd { .. } => "submodule-add".into(),
+            Self::SubmoduleUpdate => "submodule-update".into(),
+            Self::SubmoduleRemove { .. } => "submodule-remove".into(),
+            Self::ResolveOurs { .. } => "resolve-ours".into(),
+            Self::ResolveTheirs { .. } => "resolve-theirs".into(),
+            Self::MarkResolved { .. } => "mark-resolved".into(),
         }
     }
+}
+
+/// Column in the graph detail table. Used by `toggle_graph_column`.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum GraphColumn {
+    Hash,
+    Author,
+    Date,
+}
+
+/// Sub-state: IDEA-style commit graph. Populated by `run_graph`.
+#[derive(Default)]
+pub struct GraphState {
+    /// Rendered rows (node + segments + arrows), bounded by paging.
+    pub rows: Vec<GraphRow>,
+    /// Rendering parameters used at last layout — kept so the view
+    /// can echo them back for mouse hit-testing.
+    pub lane_width: f32,
+    pub row_height: f32,
+    /// Default branch (e.g. "main" or "origin/main") used as the
+    /// main-chain baseline for color assignment.
+    pub default_branch: String,
+    /// Unpushed commit hashes — drives the "disable destructive
+    /// actions on pushed commits" rule.
+    pub unpushed: HashSet<String>,
+    /// Available branches (for the filter dropdown).
+    pub branches: Vec<String>,
+    /// Unique authors (for the filter dropdown).
+    pub authors: Vec<String>,
+    /// Tracked file list (for the path picker).
+    pub files: Vec<String>,
+    /// User-edited filter state.
+    pub filter: GraphFilter,
+    /// Current page size — grows as the user scrolls.
+    pub page_size: usize,
+    /// `true` if the last load returned a full page (more may exist).
+    pub has_more: bool,
+    /// `true` while a load is in flight.
+    pub loading: bool,
+    pub load_more_loading: bool,
+    /// Last error from `run_graph` — surfaces in the graph toolbar.
+    pub error: Option<SharedString>,
+    /// Monotonic counter, bumped on every filter change so stale
+    /// results drop and the view can reset scroll on reload.
+    pub generation: u64,
+    /// `none | my-commits | merges | current-branch` — dim filter.
+    pub highlight_mode: GraphHighlightMode,
+    /// Selected commit hash (drives the detail strip).
+    pub selected: Option<String>,
+    /// Column visibility toggles — keep the columns selectable.
+    pub show_hash_col: bool,
+    pub show_author_col: bool,
+    pub show_date_col: bool,
+    /// Zebra stripes on alternate rows.
+    pub zebra_stripes: bool,
+    /// Stale-result guard for run_graph.
+    pub nonce: u64,
+}
+
+impl GraphState {
+    pub fn new() -> Self {
+        Self {
+            rows: Vec::new(),
+            lane_width: 14.0,
+            row_height: 22.0,
+            default_branch: String::new(),
+            unpushed: HashSet::new(),
+            branches: Vec::new(),
+            authors: Vec::new(),
+            files: Vec::new(),
+            filter: GraphFilter {
+                show_long_edges: false,
+                ..Default::default()
+            },
+            page_size: 500,
+            has_more: false,
+            loading: false,
+            load_more_loading: false,
+            error: None,
+            generation: 0,
+            highlight_mode: GraphHighlightMode::None,
+            selected: None,
+            show_hash_col: true,
+            show_author_col: true,
+            show_date_col: true,
+            zebra_stripes: true,
+            nonce: 0,
+        }
+    }
+}
+
+/// Sub-state: commit detail strip shown below the selected graph row.
+#[derive(Default)]
+pub struct CommitDetailState {
+    pub hash: Option<String>,
+    pub detail: Option<CommitDetail>,
+    pub loading: bool,
+    pub error: Option<SharedString>,
+    pub nonce: u64,
+}
+
+/// Sub-state: blame for a single file.
+#[derive(Default)]
+pub struct BlameState {
+    pub path: Option<String>,
+    pub lines: Vec<BlameLine>,
+    pub loading: bool,
+    pub error: Option<SharedString>,
+    pub nonce: u64,
+}
+
+/// Sub-state: data behind the Managers tab (branches, tags,
+/// remotes, config, submodules, conflicts).
+#[derive(Default)]
+pub struct ManagersState {
+    pub branches: Vec<BranchEntry>,
+    pub tags: Vec<TagInfo>,
+    pub remotes: Vec<RemoteInfo>,
+    pub config: Vec<ConfigEntry>,
+    pub submodules: Vec<SubmoduleInfo>,
+    pub conflicts: Vec<String>,
+    pub user_name: String,
+    pub user_email: String,
+    pub loading: bool,
+    pub error: Option<SharedString>,
+    pub nonce: u64,
 }
 
 /// Cached live state for the current working directory's repo.
@@ -181,6 +529,20 @@ pub struct GitState {
     /// Stale-result guard for the diff fetch — bumped on every
     /// `begin_diff` / `clear_diff_selection`.
     pub diff_nonce: u64,
+    /// Diff rendering mode (inline vs side-by-side).
+    pub diff_mode: DiffMode,
+    /// Currently active top-level tab.
+    pub tab: GitTab,
+    /// Currently active manager sub-tab (used when `tab == Managers`).
+    pub manager_tab: ManagerTab,
+    /// Graph sub-state (populated by `run_graph`).
+    pub graph: GraphState,
+    /// Commit detail strip state.
+    pub commit_detail: CommitDetailState,
+    /// Blame panel state.
+    pub blame: BlameState,
+    /// Managers tab state.
+    pub managers: ManagersState,
 }
 
 /// One selected file change, drives the diff card.
@@ -218,6 +580,13 @@ impl GitState {
             diff_loading: false,
             diff_error: None,
             diff_nonce: 0,
+            diff_mode: DiffMode::Inline,
+            tab: GitTab::Changes,
+            manager_tab: ManagerTab::Branches,
+            graph: GraphState::new(),
+            commit_detail: CommitDetailState::default(),
+            blame: BlameState::default(),
+            managers: ManagersState::default(),
         }
     }
 
@@ -273,7 +642,69 @@ impl GitState {
         self.diff_error = None;
         self.refresh_nonce = self.refresh_nonce.wrapping_add(1);
         self.diff_nonce = self.diff_nonce.wrapping_add(1);
+        // Reset the graph + detail + blame + managers caches — they
+        // belong to the previous repo and would mislead the user
+        // otherwise. Preserve user preferences (column toggles,
+        // zebra stripes, diff mode, active tab).
+        self.graph.rows.clear();
+        self.graph.unpushed.clear();
+        self.graph.branches.clear();
+        self.graph.authors.clear();
+        self.graph.files.clear();
+        self.graph.default_branch.clear();
+        self.graph.selected = None;
+        self.graph.error = None;
+        self.graph.loading = false;
+        self.graph.load_more_loading = false;
+        self.graph.has_more = false;
+        self.graph.generation = self.graph.generation.wrapping_add(1);
+        self.graph.nonce = self.graph.nonce.wrapping_add(1);
+        self.commit_detail = CommitDetailState::default();
+        self.blame = BlameState::default();
+        self.managers = ManagersState::default();
         true
+    }
+
+    /// Set the active top-level tab.
+    pub fn set_tab(&mut self, tab: GitTab) {
+        self.tab = tab;
+    }
+
+    pub fn set_manager_tab(&mut self, tab: ManagerTab) {
+        self.manager_tab = tab;
+    }
+
+    pub fn set_diff_mode(&mut self, mode: DiffMode) {
+        self.diff_mode = mode;
+    }
+
+    pub fn toggle_graph_column(&mut self, kind: GraphColumn) {
+        match kind {
+            GraphColumn::Hash => self.graph.show_hash_col = !self.graph.show_hash_col,
+            GraphColumn::Author => self.graph.show_author_col = !self.graph.show_author_col,
+            GraphColumn::Date => self.graph.show_date_col = !self.graph.show_date_col,
+        }
+    }
+
+    pub fn toggle_zebra_stripes(&mut self) {
+        self.graph.zebra_stripes = !self.graph.zebra_stripes;
+    }
+
+    pub fn set_graph_highlight(&mut self, mode: GraphHighlightMode) {
+        self.graph.highlight_mode = mode;
+    }
+
+    pub fn set_graph_filter(&mut self, filter: GraphFilter) {
+        self.graph.filter = filter;
+    }
+
+    pub fn set_graph_selected(&mut self, hash: Option<String>) {
+        self.graph.selected = hash.clone();
+        // Clear detail state whenever the selection changes; the
+        // detail load fills it back in.
+        if hash.is_none() {
+            self.commit_detail = CommitDetailState::default();
+        }
     }
 
     /// Mint a diff fetch request for the given selection. Bumps the
@@ -443,6 +874,173 @@ impl GitState {
             }
         }
     }
+
+    // ── Graph ───────────────────────────────────────────
+
+    /// Mint a graph-load request. `initial=true` resets the cache,
+    /// `initial=false` appends (infinite scroll "load more").
+    pub fn begin_graph(&mut self, initial: bool) -> Option<GraphRequest> {
+        let repo_path = self.repo_path.as_ref()?.to_string_lossy().to_string();
+        self.graph.nonce = self.graph.nonce.wrapping_add(1);
+        if initial {
+            self.graph.loading = true;
+            self.graph.error = None;
+            self.graph.generation = self.graph.generation.wrapping_add(1);
+        } else {
+            self.graph.load_more_loading = true;
+        }
+        let limit = if initial {
+            self.graph.page_size
+        } else {
+            self.graph.page_size
+        };
+        let skip = if initial { 0 } else { self.graph.rows.len() };
+        Some(GraphRequest {
+            nonce: self.graph.nonce,
+            generation: self.graph.generation,
+            repo_path,
+            filter: self.graph.filter.clone(),
+            lane_width: self.graph.lane_width,
+            row_height: self.graph.row_height,
+            limit,
+            skip,
+            initial,
+        })
+    }
+
+    pub fn apply_graph_result(&mut self, result: GraphResult) {
+        if result.nonce != self.graph.nonce {
+            return;
+        }
+        if result.initial {
+            self.graph.loading = false;
+        } else {
+            self.graph.load_more_loading = false;
+        }
+        match result.outcome {
+            Ok(payload) => {
+                if result.initial {
+                    self.graph.rows = payload.rows;
+                } else {
+                    self.graph.rows.extend(payload.rows);
+                }
+                self.graph.has_more = payload.has_more;
+                self.graph.unpushed = payload.unpushed;
+                self.graph.default_branch = payload.default_branch;
+                self.graph.branches = payload.branches;
+                self.graph.authors = payload.authors;
+                self.graph.files = payload.files;
+                self.graph.error = None;
+            }
+            Err(err) => {
+                self.graph.error = Some(err.into());
+            }
+        }
+    }
+
+    // ── Commit detail ───────────────────────────────────
+
+    pub fn begin_commit_detail(&mut self, hash: String) -> Option<CommitDetailRequest> {
+        let client = self.client.clone()?;
+        self.commit_detail.nonce = self.commit_detail.nonce.wrapping_add(1);
+        self.commit_detail.hash = Some(hash.clone());
+        self.commit_detail.loading = true;
+        self.commit_detail.error = None;
+        self.commit_detail.detail = None;
+        Some(CommitDetailRequest {
+            nonce: self.commit_detail.nonce,
+            client,
+            hash,
+        })
+    }
+
+    pub fn apply_commit_detail_result(&mut self, result: CommitDetailResult) {
+        if result.nonce != self.commit_detail.nonce {
+            return;
+        }
+        self.commit_detail.loading = false;
+        match result.outcome {
+            Ok(detail) => {
+                self.commit_detail.detail = Some(detail);
+                self.commit_detail.error = None;
+            }
+            Err(err) => {
+                self.commit_detail.error = Some(err.into());
+            }
+        }
+    }
+
+    // ── Blame ───────────────────────────────────────────
+
+    pub fn begin_blame(&mut self, path: String) -> Option<BlameRequest> {
+        let client = self.client.clone()?;
+        self.blame.nonce = self.blame.nonce.wrapping_add(1);
+        self.blame.path = Some(path.clone());
+        self.blame.loading = true;
+        self.blame.error = None;
+        self.blame.lines.clear();
+        Some(BlameRequest {
+            nonce: self.blame.nonce,
+            client,
+            path,
+        })
+    }
+
+    pub fn apply_blame_result(&mut self, result: BlameResult) {
+        if result.nonce != self.blame.nonce {
+            return;
+        }
+        self.blame.loading = false;
+        match result.outcome {
+            Ok(lines) => {
+                self.blame.lines = lines;
+                self.blame.error = None;
+            }
+            Err(err) => {
+                self.blame.error = Some(err.into());
+            }
+        }
+    }
+
+    pub fn clear_blame(&mut self) {
+        self.blame = BlameState::default();
+    }
+
+    // ── Managers ────────────────────────────────────────
+
+    pub fn begin_managers(&mut self) -> Option<ManagersRequest> {
+        let client = self.client.clone()?;
+        self.managers.nonce = self.managers.nonce.wrapping_add(1);
+        self.managers.loading = true;
+        self.managers.error = None;
+        Some(ManagersRequest {
+            nonce: self.managers.nonce,
+            client,
+        })
+    }
+
+    pub fn apply_managers_result(&mut self, result: ManagersResult) {
+        if result.nonce != self.managers.nonce {
+            return;
+        }
+        self.managers.loading = false;
+        match result.outcome {
+            Ok(payload) => {
+                self.managers.branches = payload.branches;
+                self.managers.tags = payload.tags;
+                self.managers.remotes = payload.remotes;
+                self.managers.config = payload.config;
+                self.managers.submodules = payload.submodules;
+                self.managers.conflicts = payload.conflicts;
+                self.managers.user_name = payload.user_name;
+                self.managers.user_email = payload.user_email;
+                self.managers.error = None;
+            }
+            Err(err) => {
+                self.managers.error = Some(err.into());
+            }
+        }
+    }
 }
 
 // ─── Background-task request / result envelopes ───────────────────────
@@ -494,6 +1092,77 @@ pub struct ActionResult {
     /// the ones that do (commit → hash, stash_push → ref) surface
     /// it here so the view can show it briefly.
     pub outcome: Result<Option<String>, String>,
+}
+
+pub struct GraphRequest {
+    pub nonce: u64,
+    pub generation: u64,
+    pub repo_path: String,
+    pub filter: GraphFilter,
+    pub lane_width: f32,
+    pub row_height: f32,
+    pub limit: usize,
+    pub skip: usize,
+    pub initial: bool,
+}
+
+pub struct GraphPayload {
+    pub rows: Vec<GraphRow>,
+    pub has_more: bool,
+    pub unpushed: HashSet<String>,
+    pub default_branch: String,
+    pub branches: Vec<String>,
+    pub authors: Vec<String>,
+    pub files: Vec<String>,
+}
+
+pub struct GraphResult {
+    pub nonce: u64,
+    pub initial: bool,
+    pub outcome: Result<GraphPayload, String>,
+}
+
+pub struct CommitDetailRequest {
+    pub nonce: u64,
+    pub client: Arc<GitClient>,
+    pub hash: String,
+}
+
+pub struct CommitDetailResult {
+    pub nonce: u64,
+    pub outcome: Result<CommitDetail, String>,
+}
+
+pub struct BlameRequest {
+    pub nonce: u64,
+    pub client: Arc<GitClient>,
+    pub path: String,
+}
+
+pub struct BlameResult {
+    pub nonce: u64,
+    pub outcome: Result<Vec<BlameLine>, String>,
+}
+
+pub struct ManagersRequest {
+    pub nonce: u64,
+    pub client: Arc<GitClient>,
+}
+
+pub struct ManagersPayload {
+    pub branches: Vec<BranchEntry>,
+    pub tags: Vec<TagInfo>,
+    pub remotes: Vec<RemoteInfo>,
+    pub config: Vec<ConfigEntry>,
+    pub submodules: Vec<SubmoduleInfo>,
+    pub conflicts: Vec<String>,
+    pub user_name: String,
+    pub user_email: String,
+}
+
+pub struct ManagersResult {
+    pub nonce: u64,
+    pub outcome: Result<ManagersPayload, String>,
 }
 
 // ─── Background-task workers ──────────────────────────────────────────
@@ -612,6 +1281,186 @@ pub fn run_action(request: ActionRequest) -> ActionResult {
             .map_err(|e| e.to_string()),
         GitPendingAction::Push => request.client.push().map(Some).map_err(|e| e.to_string()),
         GitPendingAction::Pull => request.client.pull().map(Some).map_err(|e| e.to_string()),
+        GitPendingAction::CommitAmend { message } => request
+            .client
+            .commit_amend(message)
+            .map(Some)
+            .map_err(|e| e.to_string()),
+        GitPendingAction::CheckoutHash { hash } => request
+            .client
+            .checkout_branch(hash)
+            .map(Some)
+            .map_err(|e| e.to_string()),
+        GitPendingAction::CheckoutTracking { local, remote } => request
+            .client
+            .checkout_tracking(local, remote)
+            .map(Some)
+            .map_err(|e| e.to_string()),
+        GitPendingAction::BranchCreate { name, base } => request
+            .client
+            .branch_create(name, base.as_deref())
+            .map(Some)
+            .map_err(|e| e.to_string()),
+        GitPendingAction::BranchDelete { name, force } => request
+            .client
+            .branch_delete(name, *force)
+            .map(Some)
+            .map_err(|e| e.to_string()),
+        GitPendingAction::BranchRename { old, new } => request
+            .client
+            .branch_rename(old, new)
+            .map(Some)
+            .map_err(|e| e.to_string()),
+        GitPendingAction::Reset { mode, target } => request
+            .client
+            .reset(*mode, target)
+            .map(Some)
+            .map_err(|e| e.to_string()),
+        GitPendingAction::CherryPick { hash } => request
+            .client
+            .cherry_pick(hash)
+            .map(Some)
+            .map_err(|e| e.to_string()),
+        GitPendingAction::Revert { hash } => request
+            .client
+            .revert(hash)
+            .map(Some)
+            .map_err(|e| e.to_string()),
+        GitPendingAction::UndoCommit { hash } => request
+            .client
+            .reset(ResetMode::Soft, &format!("{hash}~1"))
+            .map(Some)
+            .map_err(|e| e.to_string()),
+        GitPendingAction::DropCommit { hash, parent } => {
+            // HEAD → `reset --hard HEAD~1`; non-HEAD → rebase --onto <parent> <hash>.
+            if let Some(parent) = parent {
+                request
+                    .client
+                    .rebase_drop(parent, hash)
+                    .map(Some)
+                    .map_err(|e| e.to_string())
+            } else {
+                request
+                    .client
+                    .reset(ResetMode::Hard, "HEAD~1")
+                    .map(Some)
+                    .map_err(|e| e.to_string())
+            }
+        }
+        GitPendingAction::Merge { branch } => request
+            .client
+            .merge(branch)
+            .map(Some)
+            .map_err(|e| e.to_string()),
+        GitPendingAction::MergeAbort => request
+            .client
+            .merge_abort()
+            .map(Some)
+            .map_err(|e| e.to_string()),
+        GitPendingAction::Rebase { onto } => request
+            .client
+            .rebase(onto)
+            .map(Some)
+            .map_err(|e| e.to_string()),
+        GitPendingAction::RebaseContinue => request
+            .client
+            .rebase_continue()
+            .map(Some)
+            .map_err(|e| e.to_string()),
+        GitPendingAction::RebaseAbort => request
+            .client
+            .rebase_abort()
+            .map(Some)
+            .map_err(|e| e.to_string()),
+        GitPendingAction::RebaseSkip => request
+            .client
+            .rebase_skip()
+            .map(Some)
+            .map_err(|e| e.to_string()),
+        GitPendingAction::TagCreate { name, message, at } => {
+            // Need to tag at a specific commit if requested; tag_create
+            // uses HEAD, so run raw command with optional target.
+            let result = if let Some(target) = at {
+                if message.is_empty() {
+                    request.client.tag_create_at(name, "", target)
+                } else {
+                    request.client.tag_create_at(name, message, target)
+                }
+            } else {
+                request.client.tag_create(name, message)
+            };
+            result.map(Some).map_err(|e| e.to_string())
+        }
+        GitPendingAction::TagDelete { name } => request
+            .client
+            .tag_delete(name)
+            .map(Some)
+            .map_err(|e| e.to_string()),
+        GitPendingAction::TagPush { name } => request
+            .client
+            .tag_push(name, None)
+            .map(Some)
+            .map_err(|e| e.to_string()),
+        GitPendingAction::RemoteAdd { name, url } => request
+            .client
+            .remote_add(name, url)
+            .map(Some)
+            .map_err(|e| e.to_string()),
+        GitPendingAction::RemoteRemove { name } => request
+            .client
+            .remote_remove(name)
+            .map(Some)
+            .map_err(|e| e.to_string()),
+        GitPendingAction::RemoteSetUrl { name, url } => request
+            .client
+            .remote_set_url(name, url)
+            .map(Some)
+            .map_err(|e| e.to_string()),
+        GitPendingAction::RemoteFetch { name } => request
+            .client
+            .remote_fetch(name.as_deref())
+            .map(Some)
+            .map_err(|e| e.to_string()),
+        GitPendingAction::ConfigSet { key, value, global } => request
+            .client
+            .config_set(key, value, *global)
+            .map(Some)
+            .map_err(|e| e.to_string()),
+        GitPendingAction::ConfigUnset { key, global } => request
+            .client
+            .config_unset(key, *global)
+            .map(Some)
+            .map_err(|e| e.to_string()),
+        GitPendingAction::SubmoduleAdd { url, path } => request
+            .client
+            .submodule_add(url, path)
+            .map(Some)
+            .map_err(|e| e.to_string()),
+        GitPendingAction::SubmoduleUpdate => request
+            .client
+            .submodule_update()
+            .map(Some)
+            .map_err(|e| e.to_string()),
+        GitPendingAction::SubmoduleRemove { path } => request
+            .client
+            .submodule_remove(path)
+            .map(Some)
+            .map_err(|e| e.to_string()),
+        GitPendingAction::ResolveOurs { path } => request
+            .client
+            .resolve_ours(path)
+            .map(Some)
+            .map_err(|e| e.to_string()),
+        GitPendingAction::ResolveTheirs { path } => request
+            .client
+            .resolve_theirs(path)
+            .map(Some)
+            .map_err(|e| e.to_string()),
+        GitPendingAction::MarkResolved { path } => request
+            .client
+            .mark_resolved(path)
+            .map(Some)
+            .map_err(|e| e.to_string()),
     };
     ActionResult { outcome }
 }
@@ -635,6 +1484,167 @@ pub fn run_diff(request: DiffRequest) -> DiffResult {
         nonce: request.nonce,
         outcome,
     }
+}
+
+pub fn run_graph(request: GraphRequest) -> GraphResult {
+    let outcome = run_graph_inner(&request);
+    GraphResult {
+        nonce: request.nonce,
+        initial: request.initial,
+        outcome,
+    }
+}
+
+fn run_graph_inner(request: &GraphRequest) -> Result<GraphPayload, String> {
+    // Resolve default branch first — used as the main-chain baseline
+    // for lane color assignment.
+    let default_branch = git_graph::detect_default_branch(&request.repo_path)?;
+
+    // Load the commit slice for this page.
+    let core_filter = pier_core::git_graph::GraphFilter {
+        branch: request.filter.branch.clone(),
+        author: request.filter.author.clone(),
+        search_text: request
+            .filter
+            .search_text
+            .as_ref()
+            .filter(|s| !s.is_empty())
+            .cloned(),
+        after_timestamp: request.filter.date_range.after_timestamp(),
+        topo_order: !request.filter.sort_by_date,
+        first_parent_only: request.filter.first_parent_only,
+        no_merges: request.filter.no_merges,
+        paths: request
+            .filter
+            .path_filter
+            .as_ref()
+            .map(|s| {
+                s.split('\n')
+                    .filter(|p| !p.is_empty())
+                    .map(|p| p.to_string())
+                    .collect()
+            })
+            .unwrap_or_default(),
+    };
+
+    let entries: Vec<CommitEntry> = git_graph::graph_log(
+        &request.repo_path,
+        request.limit,
+        request.skip,
+        &core_filter,
+    )?;
+
+    let has_more = entries.len() >= request.limit;
+
+    // Main chain hashes — first-parent traversal of the default branch.
+    let main_chain_vec = git_graph::first_parent_chain(
+        &request.repo_path,
+        &default_branch,
+        request.limit + request.skip,
+    )
+    .unwrap_or_default();
+    let main_chain_set: HashSet<String> = main_chain_vec.into_iter().collect();
+
+    // Convert CommitEntry → LayoutInput (same schema).
+    let layout_inputs: Vec<LayoutInput> = entries
+        .iter()
+        .map(|c| LayoutInput {
+            hash: c.hash.clone(),
+            parents: c.parents.clone(),
+            short_hash: c.short_hash.clone(),
+            refs: c.refs.clone(),
+            message: c.message.clone(),
+            author: c.author.clone(),
+            date_timestamp: c.date_timestamp,
+        })
+        .collect();
+
+    let rows = compute_graph_layout(
+        &layout_inputs,
+        &main_chain_set,
+        &LayoutParams {
+            lane_width: request.lane_width,
+            row_height: request.row_height,
+            show_long_edges: request.filter.show_long_edges,
+        },
+    );
+
+    // Only do the expensive "all branches / all authors / all files"
+    // sidebar queries on the initial load — saves ~200ms per page.
+    let (branches, authors, files, unpushed) = if request.initial {
+        let branches = git_graph::list_branches(&request.repo_path).unwrap_or_default();
+        let authors = git_graph::list_authors(&request.repo_path, 500).unwrap_or_default();
+        let files = git_graph::list_tracked_files(&request.repo_path).unwrap_or_default();
+        // Unpushed: use git CLI via a fresh client.
+        let unpushed = match GitClient::open(&request.repo_path) {
+            Ok(c) => c.unpushed_hashes().unwrap_or_default().into_iter().collect(),
+            Err(_) => HashSet::new(),
+        };
+        (branches, authors, files, unpushed)
+    } else {
+        (Vec::new(), Vec::new(), Vec::new(), HashSet::new())
+    };
+
+    Ok(GraphPayload {
+        rows,
+        has_more,
+        unpushed,
+        default_branch,
+        branches,
+        authors,
+        files,
+    })
+}
+
+pub fn run_commit_detail(request: CommitDetailRequest) -> CommitDetailResult {
+    let outcome = request
+        .client
+        .commit_detail(&request.hash)
+        .map_err(|e| e.to_string());
+    CommitDetailResult {
+        nonce: request.nonce,
+        outcome,
+    }
+}
+
+pub fn run_blame(request: BlameRequest) -> BlameResult {
+    let outcome = request
+        .client
+        .blame(&request.path)
+        .map_err(|e| e.to_string());
+    BlameResult {
+        nonce: request.nonce,
+        outcome,
+    }
+}
+
+pub fn run_managers(request: ManagersRequest) -> ManagersResult {
+    let outcome = run_managers_inner(&request.client);
+    ManagersResult {
+        nonce: request.nonce,
+        outcome,
+    }
+}
+
+fn run_managers_inner(client: &GitClient) -> Result<ManagersPayload, String> {
+    let branches = client.branch_entries().map_err(|e| e.to_string())?;
+    let tags = client.tag_list().map_err(|e| e.to_string())?;
+    let remotes = client.remote_list().map_err(|e| e.to_string())?;
+    let config = client.config_list().map_err(|e| e.to_string())?;
+    let submodules = client.submodule_list().unwrap_or_default();
+    let conflicts = client.list_conflicts().unwrap_or_default();
+    let user_name = client.user_name();
+    let user_email = client.user_email();
+    Ok(ManagersPayload {
+        branches,
+        tags,
+        remotes,
+        config,
+        submodules,
+        conflicts,
+        user_name,
+        user_email,
+    })
 }
 
 /// Resolve the starting cwd for the view — used by `PierApp::new`.

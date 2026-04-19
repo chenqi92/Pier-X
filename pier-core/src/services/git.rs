@@ -60,6 +60,8 @@ pub struct LocalGitTransport {
 }
 
 impl LocalGitTransport {
+    /// Build a local transport rooted at `repo_path`. The path is
+    /// where every `git <args>` call will run (`command.current_dir`).
     pub fn new(repo_path: PathBuf) -> Self {
         Self { repo_path }
     }
@@ -114,6 +116,10 @@ pub struct SshGitTransport {
 }
 
 impl SshGitTransport {
+    /// Build an SSH-backed transport. `session` is a live SSH session
+    /// (auth + channel already established) and `repo_path` is the
+    /// absolute POSIX path to the remote repo — every invocation is
+    /// rewritten to `git -C '<repo_path>' <args>`.
     pub fn new(session: SshSession, repo_path: String) -> Self {
         Self { session, repo_path }
     }
@@ -353,6 +359,69 @@ pub struct BranchInfo {
     pub ahead: i32,
     /// Commits behind tracking branch.
     pub behind: i32,
+}
+
+/// Detailed branch entry, richer than the name-only [`branch_list`].
+#[allow(missing_docs)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct BranchEntry {
+    pub name: String,
+    pub is_remote: bool,
+    pub is_current: bool,
+    pub tracking: String,
+}
+
+/// Submodule entry.
+#[allow(missing_docs)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SubmoduleInfo {
+    pub path: String,
+    pub url: String,
+    pub hash: String,
+    pub described: String,
+}
+
+/// Per-file change inside a commit.
+#[allow(missing_docs)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct CommitFile {
+    pub path: String,
+    pub additions: u32,
+    pub deletions: u32,
+}
+
+/// Full commit detail (author, email, body, file diffstat).
+#[allow(missing_docs)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct CommitDetail {
+    pub hash: String,
+    pub short_hash: String,
+    pub author: String,
+    pub author_email: String,
+    pub timestamp: i64,
+    pub date: String,
+    pub message: String,
+    pub files: Vec<CommitFile>,
+}
+
+/// Reset modes — mirrors `git reset --<mode>`.
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[allow(missing_docs)]
+pub enum ResetMode {
+    Soft,
+    Mixed,
+    Hard,
+}
+
+impl ResetMode {
+    /// Git CLI flag for this mode.
+    pub fn flag(self) -> &'static str {
+        match self {
+            Self::Soft => "--soft",
+            Self::Mixed => "--mixed",
+            Self::Hard => "--hard",
+        }
+    }
 }
 
 // ─────────────────────────────────────────────────────────
@@ -835,6 +904,15 @@ impl GitClient {
         self.git(&["tag", "-d", name])
     }
 
+    /// Create a tag at a specific commit.
+    pub fn tag_create_at(&self, name: &str, message: &str, target: &str) -> Result<String, GitError> {
+        if message.is_empty() {
+            self.git(&["tag", name, target])
+        } else {
+            self.git(&["tag", "-a", name, "-m", message, target])
+        }
+    }
+
     // ── Remotes ──────────────────────────────────────────
 
     /// List remotes with URLs.
@@ -917,6 +995,360 @@ impl GitClient {
         }
     }
 
+    // ── Extended branch ops ─────────────────────────────
+
+    /// List branches with richer metadata (remote-ness, current, tracking).
+    pub fn branch_entries(&self) -> Result<Vec<BranchEntry>, GitError> {
+        let sep = "\x1f";
+        let fmt = format!(
+            "%(HEAD){sep}%(refname:short){sep}%(upstream:short){sep}%(refname)",
+            sep = sep
+        );
+        let output = self.git(&["branch", "-a", &format!("--format={fmt}")])?;
+        let mut entries = Vec::new();
+        for line in output.lines() {
+            if line.is_empty() {
+                continue;
+            }
+            let parts: Vec<&str> = line.splitn(4, sep).collect();
+            if parts.len() < 4 {
+                continue;
+            }
+            let is_current = parts[0].trim() == "*";
+            let name = parts[1].trim().to_string();
+            let tracking = parts[2].trim().to_string();
+            let full_ref = parts[3].trim();
+            let is_remote = full_ref.starts_with("refs/remotes/");
+            if name.is_empty() || name.ends_with("/HEAD") {
+                continue;
+            }
+            entries.push(BranchEntry {
+                name,
+                is_remote,
+                is_current,
+                tracking,
+            });
+        }
+        Ok(entries)
+    }
+
+    /// Create a new branch. If `from` is `Some`, uses `git branch <name> <from>`.
+    /// Otherwise branches from HEAD.
+    pub fn branch_create(&self, name: &str, from: Option<&str>) -> Result<String, GitError> {
+        match from {
+            Some(base) => self.git(&["branch", name, base]),
+            None => self.git(&["branch", name]),
+        }
+    }
+
+    /// Delete a branch. `force=true` uses `-D` (destructive).
+    pub fn branch_delete(&self, name: &str, force: bool) -> Result<String, GitError> {
+        let flag = if force { "-D" } else { "-d" };
+        self.git(&["branch", flag, name])
+    }
+
+    /// Rename a branch.
+    pub fn branch_rename(&self, old: &str, new: &str) -> Result<String, GitError> {
+        self.git(&["branch", "-m", old, new])
+    }
+
+    /// Checkout a remote branch as a local tracking branch:
+    /// `git checkout -b <local> <remote>`.
+    pub fn checkout_tracking(&self, local: &str, remote: &str) -> Result<String, GitError> {
+        self.git(&["checkout", "-b", local, remote])
+    }
+
+    /// Merge `branch` into the current branch.
+    pub fn merge(&self, branch: &str) -> Result<String, GitError> {
+        self.git(&["merge", branch])
+    }
+
+    /// Abort an in-progress merge.
+    pub fn merge_abort(&self) -> Result<String, GitError> {
+        self.git(&["merge", "--abort"])
+    }
+
+    // ── Reset / cherry-pick / revert ─────────────────────
+
+    /// `git reset --<mode> <target>`.
+    pub fn reset(&self, mode: ResetMode, target: &str) -> Result<String, GitError> {
+        self.git(&["reset", mode.flag(), target])
+    }
+
+    /// `git cherry-pick <hash>`.
+    pub fn cherry_pick(&self, hash: &str) -> Result<String, GitError> {
+        self.git(&["cherry-pick", hash])
+    }
+
+    /// `git revert <hash>` — no edit, auto message.
+    pub fn revert(&self, hash: &str) -> Result<String, GitError> {
+        self.git(&["revert", "--no-edit", hash])
+    }
+
+    /// Amend the current HEAD commit with a new message.
+    /// `git commit --amend -m <message>`.
+    pub fn commit_amend(&self, message: &str) -> Result<String, GitError> {
+        self.git(&["commit", "--amend", "-m", message])
+    }
+
+    // ── Rebase ───────────────────────────────────────────
+
+    /// Start a rebase onto `target`.
+    pub fn rebase(&self, target: &str) -> Result<String, GitError> {
+        self.git(&["rebase", target])
+    }
+
+    /// Continue an in-progress rebase after resolving conflicts.
+    pub fn rebase_continue(&self) -> Result<String, GitError> {
+        self.git(&["rebase", "--continue"])
+    }
+
+    /// Abort an in-progress rebase.
+    pub fn rebase_abort(&self) -> Result<String, GitError> {
+        self.git(&["rebase", "--abort"])
+    }
+
+    /// Skip the current commit in an in-progress rebase.
+    pub fn rebase_skip(&self) -> Result<String, GitError> {
+        self.git(&["rebase", "--skip"])
+    }
+
+    /// Drop a non-HEAD commit: `git rebase --onto <parent> <hash>`.
+    /// The range `<hash>..HEAD` is replayed onto `<parent>`, omitting
+    /// the target commit itself.
+    pub fn rebase_drop(&self, parent: &str, hash: &str) -> Result<String, GitError> {
+        self.git(&["rebase", "--onto", parent, hash])
+    }
+
+    // ── Extended tag ops ────────────────────────────────
+
+    /// Push a single tag to a remote (default `origin`).
+    pub fn tag_push(&self, name: &str, remote: Option<&str>) -> Result<String, GitError> {
+        let remote = remote.unwrap_or("origin");
+        self.git(&["push", remote, name])
+    }
+
+    // ── Extended remote ops ─────────────────────────────
+
+    /// `git remote set-url <name> <url>`.
+    pub fn remote_set_url(&self, name: &str, url: &str) -> Result<String, GitError> {
+        self.git(&["remote", "set-url", name, url])
+    }
+
+    /// `git fetch [<name>]`. Passing `None` fetches all remotes.
+    pub fn remote_fetch(&self, name: Option<&str>) -> Result<String, GitError> {
+        match name {
+            Some(n) => self.git(&["fetch", n]),
+            None => self.git(&["fetch", "--all"]),
+        }
+    }
+
+    // ── Submodules ──────────────────────────────────────
+
+    /// List submodules (path, url, current hash, describe-based label).
+    pub fn submodule_list(&self) -> Result<Vec<SubmoduleInfo>, GitError> {
+        // `git submodule status` outputs: " <hash> <path> (<described>)"
+        let output = self.git(&["submodule", "status"]).unwrap_or_default();
+        let mut infos = Vec::new();
+        for line in output.lines() {
+            if line.trim().is_empty() {
+                continue;
+            }
+            let mut rest = line.trim_start();
+            // skip leading status char (space, -, +, U)
+            if let Some(c) = rest.chars().next() {
+                if matches!(c, '-' | '+' | 'U' | ' ') {
+                    rest = &rest[c.len_utf8()..];
+                }
+            }
+            let mut it = rest.splitn(3, ' ');
+            let hash = it.next().unwrap_or("").to_string();
+            let path = it.next().unwrap_or("").to_string();
+            let described = it
+                .next()
+                .unwrap_or("")
+                .trim_matches(|c| c == '(' || c == ')')
+                .to_string();
+            if path.is_empty() {
+                continue;
+            }
+
+            // Pull URL from `.gitmodules` via `git config -f`.
+            let url = self
+                .git(&[
+                    "config",
+                    "-f",
+                    ".gitmodules",
+                    "--get",
+                    &format!("submodule.{path}.url"),
+                ])
+                .map(|s| s.trim().to_string())
+                .unwrap_or_default();
+
+            infos.push(SubmoduleInfo {
+                path,
+                url,
+                hash,
+                described,
+            });
+        }
+        Ok(infos)
+    }
+
+    /// Add a new submodule.
+    pub fn submodule_add(&self, url: &str, path: &str) -> Result<String, GitError> {
+        self.git(&["submodule", "add", url, path])
+    }
+
+    /// Initialise + update every submodule (recursive).
+    pub fn submodule_update(&self) -> Result<String, GitError> {
+        self.git(&["submodule", "update", "--init", "--recursive"])
+    }
+
+    /// Deinitialise and remove a submodule.
+    pub fn submodule_remove(&self, path: &str) -> Result<String, GitError> {
+        self.git(&["submodule", "deinit", "-f", path])?;
+        self.git(&["rm", "-f", path])?;
+        Ok(String::new())
+    }
+
+    // ── Commit detail ───────────────────────────────────
+
+    /// Load full commit metadata and diffstat for `hash`.
+    pub fn commit_detail(&self, hash: &str) -> Result<CommitDetail, GitError> {
+        let sep = "\x1f";
+        let fmt = format!(
+            "%H{sep}%h{sep}%an{sep}%ae{sep}%ct{sep}%ci{sep}%B",
+            sep = sep
+        );
+        let raw = self.git(&["show", "-s", &format!("--format={fmt}"), hash])?;
+        let parts: Vec<&str> = raw.trim_end().splitn(7, sep).collect();
+        if parts.len() < 7 {
+            return Err(GitError::Command("unexpected commit format".into()));
+        }
+        let files = self.commit_files(hash).unwrap_or_default();
+        Ok(CommitDetail {
+            hash: parts[0].to_string(),
+            short_hash: parts[1].to_string(),
+            author: parts[2].to_string(),
+            author_email: parts[3].to_string(),
+            timestamp: parts[4].parse().unwrap_or(0),
+            date: parts[5].to_string(),
+            message: parts[6].trim_end().to_string(),
+            files,
+        })
+    }
+
+    /// List files changed in a single commit with +/- counts.
+    pub fn commit_files(&self, hash: &str) -> Result<Vec<CommitFile>, GitError> {
+        let raw = self.git(&["show", "--numstat", "--format=", hash])?;
+        let mut files = Vec::new();
+        for line in raw.lines() {
+            if line.is_empty() {
+                continue;
+            }
+            // Format: <additions>\t<deletions>\t<path>
+            let parts: Vec<&str> = line.splitn(3, '\t').collect();
+            if parts.len() < 3 {
+                continue;
+            }
+            let additions: u32 = parts[0].parse().unwrap_or(0);
+            let deletions: u32 = parts[1].parse().unwrap_or(0);
+            files.push(CommitFile {
+                path: parts[2].to_string(),
+                additions,
+                deletions,
+            });
+        }
+        Ok(files)
+    }
+
+    /// Show the unified diff for a single file inside a single commit.
+    pub fn commit_file_diff(&self, hash: &str, path: &str) -> Result<String, GitError> {
+        // Prefer `git show <hash> -- <path>` (includes hunks for the
+        // one file), fall back to `git diff <hash>~1 <hash> -- <path>`.
+        self.git(&["show", "--no-color", hash, "--", path])
+    }
+
+    /// Diff a commit against the current working tree for a file.
+    pub fn diff_vs_worktree(&self, hash: &str, path: &str) -> Result<String, GitError> {
+        self.git(&["diff", "--no-color", hash, "--", path])
+    }
+
+    // ── Conflicts ───────────────────────────────────────
+
+    /// List paths that currently have merge conflicts.
+    pub fn list_conflicts(&self) -> Result<Vec<String>, GitError> {
+        let output = self.git(&["diff", "--name-only", "--diff-filter=U"])?;
+        Ok(output
+            .lines()
+            .filter(|l| !l.is_empty())
+            .map(|l| l.to_string())
+            .collect())
+    }
+
+    /// Mark a conflicted file as resolved (add to index).
+    pub fn mark_resolved(&self, path: &str) -> Result<String, GitError> {
+        self.git(&["add", "--", path])
+    }
+
+    /// Resolve a conflict by taking the `ours` side (current branch).
+    pub fn resolve_ours(&self, path: &str) -> Result<String, GitError> {
+        self.git(&["checkout", "--ours", "--", path])?;
+        self.git(&["add", "--", path])
+    }
+
+    /// Resolve a conflict by taking the `theirs` side (merged branch).
+    pub fn resolve_theirs(&self, path: &str) -> Result<String, GitError> {
+        self.git(&["checkout", "--theirs", "--", path])?;
+        self.git(&["add", "--", path])
+    }
+
+    // ── Graph helpers ───────────────────────────────────
+
+    /// Return commit hashes on the current branch that are ahead of
+    /// its upstream (i.e. not yet pushed). Empty if no upstream.
+    pub fn unpushed_hashes(&self) -> Result<Vec<String>, GitError> {
+        let output = self
+            .git(&["log", "@{u}..HEAD", "--format=%H"])
+            .unwrap_or_default();
+        Ok(output
+            .lines()
+            .filter(|l| !l.is_empty())
+            .map(|l| l.to_string())
+            .collect())
+    }
+
+    /// Configured `user.name` for this repo (falls back to empty string).
+    pub fn user_name(&self) -> String {
+        self.git(&["config", "user.name"])
+            .map(|s| s.trim().to_string())
+            .unwrap_or_default()
+    }
+
+    /// Configured `user.email` for this repo.
+    pub fn user_email(&self) -> String {
+        self.git(&["config", "user.email"])
+            .map(|s| s.trim().to_string())
+            .unwrap_or_default()
+    }
+
+    /// Best-effort browser URL for a single commit, derived from the
+    /// first remote's `url` config (GitHub / GitLab / Bitbucket).
+    pub fn commit_browser_url(&self, hash: &str) -> Option<String> {
+        let url = self
+            .git(&["config", "--get", "remote.origin.url"])
+            .ok()?
+            .trim()
+            .to_string();
+        let base = normalise_remote_url(&url)?;
+        if base.contains("bitbucket.") {
+            Some(format!("{base}/commits/{hash}"))
+        } else {
+            Some(format!("{base}/commit/{hash}"))
+        }
+    }
+
     // ── Internal ─────────────────────────────────────────
 
     /// Run a git command and return stdout. Delegates to the
@@ -925,6 +1357,25 @@ impl GitClient {
     fn git(&self, args: &[&str]) -> Result<String, GitError> {
         self.transport.run(args)
     }
+}
+
+/// Normalise a git remote URL into a browser base URL.
+/// `git@github.com:user/repo.git` → `https://github.com/user/repo`
+/// `https://github.com/user/repo.git` → `https://github.com/user/repo`
+fn normalise_remote_url(url: &str) -> Option<String> {
+    let trimmed = url.trim().trim_end_matches(".git");
+    if let Some(rest) = trimmed.strip_prefix("git@") {
+        // git@host:path → https://host/path
+        let (host, path) = rest.split_once(':')?;
+        return Some(format!("https://{host}/{path}"));
+    }
+    if trimmed.starts_with("http://") || trimmed.starts_with("https://") {
+        return Some(trimmed.to_string());
+    }
+    if let Some(rest) = trimmed.strip_prefix("ssh://git@") {
+        return Some(format!("https://{rest}"));
+    }
+    None
 }
 
 // Send + Sync — no interior mutability, no pointers.

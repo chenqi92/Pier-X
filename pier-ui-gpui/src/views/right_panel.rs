@@ -2421,47 +2421,6 @@ fn render_icon_sidebar(
         .child(rail)
 }
 
-#[cfg(test)]
-mod tests {
-    use pier_core::ssh::{AuthMethod, SshConfig};
-
-    use super::{remote_endpoint_label, remote_status_pill};
-    use crate::app::ssh_session::ConnectStatus;
-    use crate::components::StatusKind;
-
-    #[test]
-    fn remote_status_pill_maps_transient_states_to_info() {
-        assert_eq!(
-            remote_status_pill(&ConnectStatus::Connecting),
-            ("connecting".into(), StatusKind::Info)
-        );
-        assert_eq!(
-            remote_status_pill(&ConnectStatus::Refreshing),
-            ("loading".into(), StatusKind::Info)
-        );
-    }
-
-    #[test]
-    fn remote_endpoint_label_omits_default_port() {
-        let default_port = SshConfig {
-            name: "demo".into(),
-            host: "example.com".into(),
-            port: 22,
-            user: "pier".into(),
-            auth: AuthMethod::Agent,
-            tags: Vec::new(),
-            connect_timeout_secs: 5,
-        };
-        let custom_port = SshConfig {
-            port: 2222,
-            ..default_port.clone()
-        };
-
-        assert_eq!(remote_endpoint_label(&default_port), "pier@example.com");
-        assert_eq!(remote_endpoint_label(&custom_port), "pier@example.com:2222");
-    }
-}
-
 fn mode_icon_button(
     t: &crate::theme::Theme,
     mode: RightMode,
@@ -2524,4 +2483,45 @@ fn _hint_card(t: &crate::theme::Theme, label: &'static str) -> Card {
             .text_color(t.color.text_tertiary)
             .child(label),
     )
+}
+
+#[cfg(test)]
+mod tests {
+    use pier_core::ssh::{AuthMethod, SshConfig};
+
+    use super::{remote_endpoint_label, remote_status_pill};
+    use crate::app::ssh_session::ConnectStatus;
+    use crate::components::StatusKind;
+
+    #[test]
+    fn remote_status_pill_maps_transient_states_to_info() {
+        assert_eq!(
+            remote_status_pill(&ConnectStatus::Connecting),
+            ("connecting".into(), StatusKind::Info)
+        );
+        assert_eq!(
+            remote_status_pill(&ConnectStatus::Refreshing),
+            ("loading".into(), StatusKind::Info)
+        );
+    }
+
+    #[test]
+    fn remote_endpoint_label_omits_default_port() {
+        let default_port = SshConfig {
+            name: "demo".into(),
+            host: "example.com".into(),
+            port: 22,
+            user: "pier".into(),
+            auth: AuthMethod::Agent,
+            tags: Vec::new(),
+            connect_timeout_secs: 5,
+        };
+        let custom_port = SshConfig {
+            port: 2222,
+            ..default_port.clone()
+        };
+
+        assert_eq!(remote_endpoint_label(&default_port), "pier@example.com");
+        assert_eq!(remote_endpoint_label(&custom_port), "pier@example.com:2222");
+    }
 }

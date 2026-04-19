@@ -19,42 +19,43 @@
 //! Tauri reference.
 
 use gpui::{
-    div, prelude::*, px, App, ClickEvent, Context, FocusHandle, IntoElement, KeyDownEvent,
-    SharedString, WeakEntity, Window,
+    div, point, prelude::*, px, size, App, AppContext, Bounds, ClickEvent, Context, FocusHandle,
+    IntoElement, KeyDownEvent, SharedString, TitlebarOptions, WeakEntity, Window, WindowBounds,
+    WindowOptions,
 };
 use pier_core::settings::{AppSettings, AppearanceMode, TerminalCursorStyle, TerminalThemePreset};
 use rust_i18n::t;
 
-use gpui_component::{scroll::ScrollableElement, switch::Switch, WindowExt as _};
-
-use gpui_component::IconName;
+use gpui_component::{scroll::ScrollableElement, switch::Switch, IconName, Root};
 
 use crate::app::keybindings::{format_keystroke, is_modifier_only, resolved_keystroke, ActionId};
 use crate::components::{
     Button, ButtonSize, Dropdown, DropdownOption, IconButton, IconButtonSize, IconButtonVariant,
-    SettingRow,
+    SettingRow, StatusKind, StatusPill,
 };
 use crate::i18n::{self, LOCALE_ENGLISH, LOCALE_PREFERENCE_SYSTEM, LOCALE_ZH_CN};
 use crate::theme::{
     available_terminal_font_families, available_ui_font_families,
     radius::{RADIUS_MD, RADIUS_SM},
-    spacing::{SP_0_5, SP_1, SP_1_5, SP_2, SP_3, SP_4, SP_5},
+    spacing::{SP_0_5, SP_1, SP_1_5, SP_2, SP_4, SP_5},
     terminal::{available_terminal_palettes, terminal_bg_color, terminal_hex_color},
     terminal_cursor_blink, terminal_cursor_style, terminal_font_for_family,
     terminal_font_ligatures, terminal_font_size, terminal_opacity, theme,
-    typography::{
-        SIZE_BODY, SIZE_CAPTION, SIZE_H2, SIZE_H3, SIZE_SMALL, WEIGHT_EMPHASIS, WEIGHT_MEDIUM,
-    },
+    typography::{SIZE_BODY, SIZE_CAPTION, SIZE_H2, SIZE_SMALL, WEIGHT_EMPHASIS, WEIGHT_MEDIUM},
     update_settings, DEFAULT_UI_FONT_FAMILY,
 };
 use crate::widgets::{SegmentedControl, SegmentedItem, SettingsSection};
 
 // ── Layout constants ─────────────────────────────────────────
 
-/// Overall dialog footprint. The content pane is 1088−200 = 888 px
-/// wide, enough for a 3-column theme grid with comfortable gutters.
-const SETTINGS_DIALOG_W: f32 = 1088.0;
-const SETTINGS_DIALOG_H: f32 = 672.0;
+/// Settings window footprint. Opens as a standalone OS window with
+/// native titlebar (SwiftUI Pier reference does the same — users
+/// close via the traffic light, not an X button drawn over content).
+/// Sized so the 6-item terminal theme list fits without scrolling.
+const SETTINGS_WINDOW_W: f32 = 960.0;
+const SETTINGS_WINDOW_H: f32 = 680.0;
+const SETTINGS_WINDOW_MIN_W: f32 = 760.0;
+const SETTINGS_WINDOW_MIN_H: f32 = 560.0;
 const SIDEBAR_W: f32 = 200.0;
 
 // ── Section enum + dialog struct (unchanged public shape) ────
@@ -64,16 +65,23 @@ enum SettingsSectionId {
     General,
     Terminal,
     Shortcuts,
+    Updates,
 }
 
 impl SettingsSectionId {
-    const ALL: [Self; 3] = [Self::General, Self::Terminal, Self::Shortcuts];
+    const ALL: [Self; 4] = [
+        Self::General,
+        Self::Terminal,
+        Self::Shortcuts,
+        Self::Updates,
+    ];
 
     fn id(self) -> &'static str {
         match self {
             Self::General => "general",
             Self::Terminal => "terminal",
             Self::Shortcuts => "shortcuts",
+            Self::Updates => "updates",
         }
     }
 
@@ -82,8 +90,39 @@ impl SettingsSectionId {
             Self::General => t!("App.Settings.Sections.general_title").into(),
             Self::Terminal => t!("App.Settings.Sections.terminal_title").into(),
             Self::Shortcuts => t!("App.Settings.Sections.shortcuts_title").into(),
+            Self::Updates => t!("App.Settings.Sections.updates_title").into(),
         }
     }
+
+    /// Leading icon for the sidebar nav item. Matches Pier's SwiftUI
+    /// settings sidebar where each section leads with a contextual
+    /// glyph — the label alone felt under-specified in zh-CN where
+    /// the three titles are short compound words.
+    fn icon(self) -> IconName {
+        match self {
+            Self::General => IconName::Settings,
+            Self::Terminal => IconName::SquareTerminal,
+            // gpui_component has no Keyboard glyph — `Settings2` is a
+            // different-looking gear that at least reads as "another
+            // settings subtopic" rather than duplicating `Settings`.
+            Self::Shortcuts => IconName::Settings2,
+            Self::Updates => IconName::RefreshCw,
+        }
+    }
+}
+
+/// State machine for the version-update flow. Kept on `SettingsDialog`
+/// so the result persists across sidebar switches within one session.
+#[derive(Clone)]
+enum UpdateCheckState {
+    /// No check has run this session.
+    Idle,
+    /// Background task in flight.
+    Checking,
+    /// Check completed; UI branches on `outcome.is_newer`.
+    Loaded(pier_core::updates::UpdateCheckOutcome),
+    /// Error string from `pier_core::updates::UpdateError::Display`.
+    Failed(SharedString),
 }
 
 pub struct SettingsDialog {
@@ -92,6 +131,7 @@ pub struct SettingsDialog {
     capturing: Option<ActionId>,
     capture_focus: FocusHandle,
     capture_error: Option<SharedString>,
+    update_state: UpdateCheckState,
 }
 
 impl SettingsDialog {
@@ -102,7 +142,43 @@ impl SettingsDialog {
             capturing: None,
             capture_focus: cx.focus_handle(),
             capture_error: None,
+            update_state: UpdateCheckState::Idle,
         }
+    }
+
+    fn start_update_check(&mut self, cx: &mut Context<Self>) {
+        if matches!(self.update_state, UpdateCheckState::Checking) {
+            return;
+        }
+        self.update_state = UpdateCheckState::Checking;
+        cx.notify();
+
+        // Blocking HTTP is pushed to the background executor so the UI
+        // thread never blocks on the network. The weak-entity pattern
+        // ensures a closed settings window (entity dropped) doesn't
+        // produce a ghost write when the task eventually resolves.
+        cx.spawn(
+            move |weak: gpui::WeakEntity<Self>, cx: &mut gpui::AsyncApp| {
+                let background = cx.background_executor().clone();
+                let mut async_cx = cx.clone();
+                async move {
+                    let outcome = background
+                        .spawn(async move {
+                            pier_core::updates::check_latest_release(env!("CARGO_PKG_VERSION"))
+                        })
+                        .await;
+                    let next = match outcome {
+                        Ok(info) => UpdateCheckState::Loaded(info),
+                        Err(err) => UpdateCheckState::Failed(err.to_string().into()),
+                    };
+                    let _ = weak.update(&mut async_cx, move |this, cx| {
+                        this.update_state = next;
+                        cx.notify();
+                    });
+                }
+            },
+        )
+        .detach();
     }
 
     fn select_section(&mut self, section: SettingsSectionId, cx: &mut Context<Self>) {
@@ -190,23 +266,62 @@ impl SettingsDialog {
 impl Render for SettingsDialog {
     fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let t = theme(cx).clone();
+        // Column layout — custom titlebar strip on top, content below.
+        // Top strip bg matches sidebar so there's no visible seam; it
+        // reserves space on the left for the traffic-light cluster
+        // (we set `traffic_light_position: (12, 14)` at window open).
         div()
-            .w(px(SETTINGS_DIALOG_W))
-            .h(px(SETTINGS_DIALOG_H))
+            .size_full()
             .flex()
-            .flex_row()
+            .flex_col()
             .bg(t.color.bg_canvas)
-            .child(self.render_sidebar(&t, cx))
+            .child(self.render_titlebar(&t))
             .child(
                 div()
                     .flex_1()
-                    .min_w(px(0.0))
-                    .h_full()
-                    // Content pane sits on bg_canvas so the inner
-                    // grouped-card sections (bg_panel) can pop.
-                    .bg(t.color.bg_canvas)
-                    .child(self.render_content(cx)),
+                    .min_h(px(0.0))
+                    .flex()
+                    .flex_row()
+                    .child(self.render_sidebar(&t, cx))
+                    .child(
+                        div()
+                            .flex_1()
+                            .min_w(px(0.0))
+                            .h_full()
+                            .bg(t.color.bg_canvas)
+                            .child(self.render_content(cx)),
+                    ),
             )
+    }
+}
+
+impl SettingsDialog {
+    fn render_titlebar(&self, t: &crate::theme::Theme) -> impl IntoElement {
+        // 40 px strip — matches Pier (SwiftUI)'s settings window titlebar
+        // height. Traffic lights occupy the left 76 px; title sits
+        // centered so it reads like a native macOS settings window.
+        let title: SharedString = t!("App.Settings.title").to_string().into();
+        div()
+            .w_full()
+            .h(px(40.0))
+            .flex()
+            .flex_row()
+            .items_center()
+            .bg(t.color.bg_panel)
+            .border_b_1()
+            .border_color(t.color.border_subtle)
+            .child(div().w(px(76.0)).flex_none())
+            .child(
+                div()
+                    .flex_1()
+                    .flex()
+                    .justify_center()
+                    .text_size(SIZE_BODY)
+                    .font_weight(WEIGHT_EMPHASIS)
+                    .text_color(t.color.text_primary)
+                    .child(title),
+            )
+            .child(div().w(px(76.0)).flex_none())
     }
 }
 
@@ -214,64 +329,21 @@ impl Render for SettingsDialog {
 
 impl SettingsDialog {
     fn render_sidebar(&self, t: &crate::theme::Theme, cx: &mut Context<Self>) -> impl IntoElement {
-        let locale_label =
-            localized_locale_label(&i18n::resolve_locale_preference(&t.settings.ui_locale));
-        let theme_label = match t.settings.appearance_mode {
-            AppearanceMode::System => t!("App.Settings.General.appearance_system").to_string(),
-            AppearanceMode::Dark => t!("App.Settings.General.dark").to_string(),
-            AppearanceMode::Light => t!("App.Settings.General.light").to_string(),
-        };
-
+        // Sidebar: native-feeling list of nav items. No brand block —
+        // the OS window titlebar already shows "设置" / "Settings"
+        // as the window title, so repeating it here (the previous
+        // Pier-X / 设置 / theme · locale stack) was wasted chrome.
         let mut col = div()
             .w(px(SIDEBAR_W))
             .h_full()
-            .px(SP_4)
-            .py(SP_4)
+            .px(SP_2)
+            .py(SP_2)
             .flex()
             .flex_col()
             .gap(SP_0_5)
             .bg(t.color.bg_panel)
             .border_r_1()
             .border_color(t.color.border_subtle);
-
-        // Brand + dialog title + current status (theme · locale).
-        // Stacked tight so the group reads as a single metadata
-        // block rather than three unrelated rows. H3 (was H2) and
-        // smaller vertical padding keep the brand block proportional
-        // to the sidebar width — the earlier H2 + SP_4 bottom made
-        // the brand eat ~20 % of the sidebar height.
-        col = col.child(
-            div()
-                .pb(SP_2)
-                .mb(SP_1)
-                .flex()
-                .flex_col()
-                .gap(SP_0_5)
-                .border_b_1()
-                .border_color(t.color.border_subtle)
-                .child(
-                    div()
-                        .text_size(SIZE_SMALL)
-                        .font_weight(WEIGHT_MEDIUM)
-                        .text_color(t.color.text_tertiary)
-                        .child(SharedString::from("Pier-X")),
-                )
-                .child(
-                    div()
-                        .text_size(SIZE_H3)
-                        .font_weight(WEIGHT_EMPHASIS)
-                        .text_color(t.color.text_primary)
-                        .child(SharedString::from(t!("App.Settings.title").to_string())),
-                )
-                .child(
-                    div()
-                        .text_size(SIZE_SMALL)
-                        .text_color(t.color.text_tertiary)
-                        .child(SharedString::from(format!(
-                            "{theme_label} · {locale_label}"
-                        ))),
-                ),
-        );
 
         for section in SettingsSectionId::ALL {
             let is_active = section == self.selected_section;
@@ -282,6 +354,7 @@ impl SettingsDialog {
                 t,
                 section.id(),
                 section.title(),
+                section.icon(),
                 is_active,
                 Box::new(on_click),
             ));
@@ -295,6 +368,7 @@ impl SettingsDialog {
             SettingsSectionId::General => self.render_general(cx).into_any_element(),
             SettingsSectionId::Terminal => self.render_terminal(cx).into_any_element(),
             SettingsSectionId::Shortcuts => self.render_shortcuts(cx).into_any_element(),
+            SettingsSectionId::Updates => self.render_updates(cx).into_any_element(),
         }
     }
 }
@@ -519,14 +593,12 @@ impl SettingsDialog {
         // ── APPEARANCE — single-row section; `untitled` drops the
         //   duplicate section header so the row label alone reads as
         //   the group name (matching macOS 14 System Settings). ──
-        .child(
-            SettingsSection::untitled().child(row(
-                t!("App.Settings.General.appearance"),
-                None,
-                appearance_picker.into_any_element(),
-                false,
-            )),
-        )
+        .child(SettingsSection::untitled().child(row(
+            t!("App.Settings.General.appearance"),
+            None,
+            appearance_picker.into_any_element(),
+            false,
+        )))
         // ── LANGUAGE — same pattern; description stays on the row ──
         .child(
             SettingsSection::untitled().child(row(
@@ -796,23 +868,19 @@ impl SettingsDialog {
                 )),
         )
         // ── BACKGROUND — single row, untitled ──
-        .child(
-            SettingsSection::untitled().child(row(
-                t!("App.Settings.Terminal.background_opacity"),
-                None,
-                opacity_stepper.into_any_element(),
-                false,
-            )),
-        )
+        .child(SettingsSection::untitled().child(row(
+            t!("App.Settings.Terminal.background_opacity"),
+            None,
+            opacity_stepper.into_any_element(),
+            false,
+        )))
         // ── SHELL INTEGRATION — single row, untitled ──
-        .child(
-            SettingsSection::untitled().child(row(
-                t!("App.Settings.Terminal.shell_integration"),
-                Some(t!("App.Settings.Terminal.shell_integration_description").into()),
-                integration_toggle.into_any_element(),
-                true,
-            )),
-        )
+        .child(SettingsSection::untitled().child(row(
+            t!("App.Settings.Terminal.shell_integration"),
+            Some(t!("App.Settings.Terminal.shell_integration_description").into()),
+            integration_toggle.into_any_element(),
+            true,
+        )))
     }
 }
 
@@ -860,19 +928,255 @@ impl SettingsDialog {
     }
 }
 
+// ── Updates tab ──────────────────────────────────────────────
+
+impl SettingsDialog {
+    fn render_updates(&self, cx: &mut Context<Self>) -> impl IntoElement {
+        let t = theme(cx).clone();
+        let current_version: SharedString = env!("CARGO_PKG_VERSION").to_string().into();
+
+        // Current / latest version row.
+        let version_row = div()
+            .w_full()
+            .py(SP_1_5)
+            .flex()
+            .flex_row()
+            .items_center()
+            .justify_between()
+            .child(
+                div()
+                    .text_size(SIZE_BODY)
+                    .font_weight(WEIGHT_MEDIUM)
+                    .text_color(t.color.text_primary)
+                    .child(SharedString::from(
+                        t!("App.Settings.Updates.current_version").to_string(),
+                    )),
+            )
+            .child(
+                div()
+                    .font_family(t.font_mono.clone())
+                    .text_size(SIZE_CAPTION)
+                    .text_color(t.color.text_secondary)
+                    .child(current_version.clone()),
+            );
+
+        // Action + status block depends on state machine.
+        let (button_label, button_enabled): (SharedString, bool) = match &self.update_state {
+            UpdateCheckState::Idle => (
+                t!("App.Settings.Updates.check_button").to_string().into(),
+                true,
+            ),
+            UpdateCheckState::Checking => (
+                t!("App.Settings.Updates.checking").to_string().into(),
+                false,
+            ),
+            UpdateCheckState::Loaded(_) | UpdateCheckState::Failed(_) => (
+                t!("App.Settings.Updates.check_again").to_string().into(),
+                true,
+            ),
+        };
+
+        let check_button = {
+            let mut b = Button::primary("settings-updates-check", button_label);
+            if button_enabled {
+                b = b.on_click(cx.listener(|this, _: &ClickEvent, _, cx| {
+                    this.start_update_check(cx);
+                }));
+            }
+            b
+        };
+
+        // Status surface — a status pill + optional release metadata.
+        let status = match &self.update_state {
+            UpdateCheckState::Idle => None,
+            UpdateCheckState::Checking => Some(
+                div()
+                    .flex()
+                    .flex_row()
+                    .items_center()
+                    .gap(SP_2)
+                    .child(StatusPill::new(
+                        SharedString::from(t!("App.Settings.Updates.checking").to_string()),
+                        StatusKind::Info,
+                    ))
+                    .into_any_element(),
+            ),
+            UpdateCheckState::Loaded(outcome) => Some(update_result_block(&t, outcome, cx)),
+            UpdateCheckState::Failed(err) => Some(
+                div()
+                    .flex()
+                    .flex_col()
+                    .gap(SP_1)
+                    .child(StatusPill::new(
+                        SharedString::from(t!("App.Settings.Sections.updates_title").to_string()),
+                        StatusKind::Error,
+                    ))
+                    .child(
+                        div()
+                            .text_size(SIZE_SMALL)
+                            .text_color(t.color.text_secondary)
+                            .child(SharedString::from(format!(
+                                "{}{err}",
+                                t!("App.Settings.Updates.error_prefix")
+                            ))),
+                    )
+                    .into_any_element(),
+            ),
+        };
+
+        let mut body = div()
+            .w_full()
+            .flex()
+            .flex_col()
+            .gap(SP_4)
+            .child(SettingsSection::untitled().child(version_row))
+            .child(
+                div()
+                    .flex()
+                    .flex_row()
+                    .items_center()
+                    .gap(SP_2)
+                    .child(check_button),
+            );
+        if let Some(status_el) = status {
+            body = body.child(status_el);
+        }
+
+        page_shell(
+            &t,
+            t!("App.Settings.Sections.updates_title"),
+            t!("App.Settings.Updates.subtitle"),
+        )
+        .child(body)
+    }
+}
+
+fn update_result_block(
+    t: &crate::theme::Theme,
+    outcome: &pier_core::updates::UpdateCheckOutcome,
+    cx: &mut Context<SettingsDialog>,
+) -> gpui::AnyElement {
+    let (pill_label, pill_kind): (SharedString, StatusKind) = if outcome.is_newer {
+        (
+            SharedString::from(t!("App.Settings.Updates.available").to_string()),
+            StatusKind::Info,
+        )
+    } else {
+        (
+            SharedString::from(t!("App.Settings.Updates.up_to_date").to_string()),
+            StatusKind::Success,
+        )
+    };
+
+    let latest_line: SharedString = format!(
+        "{}: {}",
+        t!("App.Settings.Updates.latest_version"),
+        outcome.latest_version
+    )
+    .into();
+
+    let mut col = div()
+        .w_full()
+        .flex()
+        .flex_col()
+        .gap(SP_2)
+        .child(StatusPill::new(pill_label, pill_kind))
+        .child(
+            div()
+                .text_size(SIZE_BODY)
+                .font_weight(WEIGHT_MEDIUM)
+                .text_color(t.color.text_primary)
+                .child(latest_line),
+        );
+
+    if let Some(published) = outcome.published_at.as_ref() {
+        let formatted: SharedString = format!(
+            "{}",
+            t!(
+                "App.Settings.Updates.released_at",
+                date = published.as_str()
+            )
+        )
+        .into();
+        col = col.child(
+            div()
+                .text_size(SIZE_SMALL)
+                .text_color(t.color.text_tertiary)
+                .child(formatted),
+        );
+    }
+
+    if let Some(notes) = outcome.release_notes.as_ref() {
+        // Truncate release notes — full markdown rendering is out of
+        // scope for this surface; we just show the first 600 chars so
+        // users get a taste and open the browser for the rest.
+        let trimmed: SharedString = if notes.chars().count() > 600 {
+            let mut s: String = notes.chars().take(600).collect();
+            s.push('…');
+            s.into()
+        } else {
+            notes.clone().into()
+        };
+        col = col.child(
+            div()
+                .text_size(SIZE_SMALL)
+                .text_color(t.color.text_secondary)
+                .child(trimmed),
+        );
+    }
+
+    // Release-page link — always shown so the user can always open
+    // notes / assets in the browser (not just when there's an update).
+    let url = outcome.release_url.clone();
+    col = col.child(
+        div().child(
+            Button::secondary(
+                "settings-updates-open",
+                t!("App.Settings.Updates.open_release").to_string(),
+            )
+            .on_click(cx.listener(move |_, _: &ClickEvent, _, cx| {
+                cx.open_url(&url);
+            })),
+        ),
+    );
+    col.into_any_element()
+}
+
 // ── Opener ──────────────────────────────────────────────────
 
-pub fn open(window: &mut Window, cx: &mut App) {
-    log::info!("dialog: opening settings dialog");
-    let view = cx.new(SettingsDialog::new);
-    window.open_dialog(cx, move |dialog, _w, _app| {
-        dialog
-            .w(px(SETTINGS_DIALOG_W))
-            .close_button(true)
-            .overlay_closable(true)
-            .keyboard(true)
-            .child(view.clone())
-    });
+pub fn open(_window: &mut Window, cx: &mut App) {
+    log::info!("settings: opening standalone window");
+
+    // Standalone OS window — not a modal overlay. Native titlebar
+    // with a title, traffic lights for close/min/max, resizable.
+    // Matches the Pier SwiftUI reference where settings is its own
+    // window (never clipped by the main app bounds, never has its
+    // close button obscured by dialog chrome).
+    let bounds = Bounds::centered(None, size(px(SETTINGS_WINDOW_W), px(SETTINGS_WINDOW_H)), cx);
+    let options = WindowOptions {
+        window_bounds: Some(WindowBounds::Windowed(bounds)),
+        window_min_size: Some(size(px(SETTINGS_WINDOW_MIN_W), px(SETTINGS_WINDOW_MIN_H))),
+        // Transparent titlebar so we can paint the top strip ourselves
+        // in-theme. The native titlebar honours NSAppearance, which
+        // doesn't track our custom light/dark preference — it rendered
+        // a black top stripe over a light settings window on macOS.
+        // We keep the traffic lights (system-drawn) parked over our
+        // custom strip.
+        titlebar: Some(TitlebarOptions {
+            title: None,
+            appears_transparent: true,
+            traffic_light_position: Some(point(px(12.0), px(14.0))),
+        }),
+        app_id: Some("com.pier-x.settings".into()),
+        ..Default::default()
+    };
+
+    if let Err(err) = cx.open_window(options, |window, cx| {
+        let view = cx.new(SettingsDialog::new);
+        cx.new(|cx| Root::new(view, window, cx))
+    }) {
+        log::error!("settings: failed to open window: {err}");
+    }
 }
 
 fn apply_dialog_settings(
@@ -890,12 +1194,19 @@ fn settings_sidebar_item(
     t: &crate::theme::Theme,
     id: &'static str,
     label: SharedString,
+    icon: IconName,
     active: bool,
     on_click: Box<dyn Fn(&ClickEvent, &mut Window, &mut App) + 'static>,
 ) -> impl IntoElement {
-    // Sidebar item height aligned to ROW_MD_H so the left nav matches
-    // the density of the main content rows. Was 30 px — one pixel tall
-    // vs every other row primitive, which read as "off-grid".
+    // Nav item — icon + label. Matches macOS System Settings / Pier
+    // SwiftUI sidebar rhythm: compact (28px), neutral selection fill
+    // (bg_selected, not accent_subtle) so the sidebar feels like a
+    // list, not a strip of activated buttons.
+    let fg = if active {
+        t.color.text_primary
+    } else {
+        t.color.text_secondary
+    };
     div()
         .id(gpui::ElementId::Name(id.into()))
         .w_full()
@@ -904,9 +1215,10 @@ fn settings_sidebar_item(
         .flex()
         .flex_row()
         .items_center()
+        .gap(SP_2)
         .rounded(RADIUS_SM)
         .bg(if active {
-            t.color.accent_subtle
+            t.color.bg_selected
         } else {
             t.color.bg_panel
         })
@@ -919,12 +1231,13 @@ fn settings_sidebar_item(
         } else {
             WEIGHT_MEDIUM
         })
-        .text_color(if active {
-            t.color.accent
-        } else {
-            t.color.text_secondary
-        })
-        .child(label)
+        .text_color(fg)
+        .child(
+            gpui_component::Icon::new(icon)
+                .size(crate::theme::heights::ICON_SM)
+                .text_color(fg),
+        )
+        .child(div().flex_1().min_w(px(0.0)).child(label))
 }
 
 // ── Theme palette grid (3 columns) ──────────────────────────

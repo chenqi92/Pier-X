@@ -43,8 +43,7 @@ mod platform_impl {
             // system accent (macOS 10.14+). Always available on our
             // minimum supported version.
             let accent_cls = NSColor::class();
-            let accent_obj: *mut AnyObject =
-                msg_send![accent_cls, controlAccentColor];
+            let accent_obj: *mut AnyObject = msg_send![accent_cls, controlAccentColor];
             if accent_obj.is_null() {
                 return None;
             }

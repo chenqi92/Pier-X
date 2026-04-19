@@ -20,4 +20,10 @@ pub fn configure_background_command(command: &mut Command) {
     {
         command.creation_flags(CREATE_NO_WINDOW);
     }
+    // On non-Windows targets we don't need any tweaks; the `command`
+    // parameter is consumed by the `cfg(windows)` branch so marking it
+    // `_` here would change the public signature. Silence the unused
+    // lint locally instead.
+    #[cfg(not(target_os = "windows"))]
+    let _ = command;
 }

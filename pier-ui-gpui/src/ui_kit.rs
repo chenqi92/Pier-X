@@ -101,8 +101,21 @@ fn map_colors(colors: ColorSet, mode: ThemeMode) -> ThemeColor {
     mapped.success_active = hsla(colors.status_success);
     mapped.success_foreground = hsla(colors.text_inverse);
     mapped.success_hover = hsla(colors.status_success);
-    mapped.switch = hsla(colors.bg_panel);
-    mapped.switch_thumb = hsla(colors.text_primary);
+    // Switch OFF track — `bg_panel` was invisible against `bg_canvas`
+    // and let the thumb read as a solid dark pill (reported as "switch
+    // colors wrong in light mode"). `border_strong` gives 18 % black
+    // on light, 14 % white on dark — both read as a visible neutral
+    // track similar to macOS-native switches.
+    mapped.switch = hsla(colors.border_strong);
+    // Thumb always white — macOS native behavior. `text_primary` was
+    // near-black on light mode, which turned OFF switches into a solid
+    // black knob floating over the dialog.
+    mapped.switch_thumb = hsla(Rgba {
+        r: 1.0,
+        g: 1.0,
+        b: 1.0,
+        a: 1.0,
+    });
     mapped.tab = hsla(colors.bg_panel);
     mapped.tab_active = hsla(colors.bg_surface);
     mapped.tab_active_foreground = hsla(colors.text_primary);

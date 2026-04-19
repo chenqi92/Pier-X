@@ -89,6 +89,13 @@ pulldown-cmark = { version = "0.13", default-features = false, features = ["html
 # pure-Rust backend (no zlib system dep).
 mysql_async = { version = "0.36", default-features = false, features = ["minimal-rust"] }
 
+# HTTPS client for `updates.rs` — queries GitHub's Releases API to
+# check for a newer Pier-X version. `ureq` is small + blocking, which
+# is ideal here: the UI shell spawns the check on a background
+# executor thread, so blocking it for one network round-trip is
+# harmless and avoids pulling a second async HTTP stack.
+ureq = { version = "2.12", default-features = false, features = ["json", "tls"] }
+
 # Async runtime for russh. Only the `rt-multi-thread` + time + net
 # features — we don't need full. `fs` is pulled in for the SFTP
 # upload/download helpers that read/write local files from inside

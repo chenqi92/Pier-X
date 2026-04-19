@@ -161,6 +161,13 @@ impl PierTerminal {
         #[cfg(unix)]
         {
             let pty: Box<dyn Pty> = Box::new(super::pty::UnixPty::spawn_shell(cols, rows, shell)?);
+            // The explicit return is required: the function body is a
+            // sequence of `cfg`-gated blocks (unix / windows / other),
+            // and without it the unix branch becomes a statement with
+            // no tail expression, leaving the function with `()` where
+            // `Result<Self, _>` is expected. Clippy's `needless_return`
+            // doesn't see through cfg arms.
+            #[allow(clippy::needless_return)]
             return Self::with_pty(pty, cols, rows, notify, user_data);
         }
         #[cfg(windows)]

@@ -33,8 +33,11 @@ use crate::app::db_session::{
     DbSessionState,
 };
 use crate::app::git_session::{
-    default_cwd as git_default_cwd, run_action as git_run_action, run_diff as git_run_diff,
-    run_refresh as git_run_refresh, DiffSelection, GitPendingAction, GitState,
+    default_cwd as git_default_cwd, run_action as git_run_action, run_blame as git_run_blame,
+    run_commit_detail as git_run_commit_detail, run_diff as git_run_diff,
+    run_graph as git_run_graph, run_managers as git_run_managers, run_refresh as git_run_refresh,
+    DiffMode, DiffSelection, GitPendingAction, GitState, GitTab, GraphColumn, GraphFilter,
+    GraphHighlightMode, ManagerTab,
 };
 use crate::app::layout::{
     DockerTab, RightMode, CENTER_PANEL_MIN_W, LEFT_PANEL_DEFAULT_W, LEFT_PANEL_MAX_W,
@@ -47,7 +50,6 @@ use crate::app::ssh_session::{
     run_monitor_refresh, run_refresh, run_sftp_mutation, run_tunnel, DockerActionKind,
     ServiceProbeStatus, SftpMutationKind, SshSessionState, TransferDirection,
 };
-use pier_core::services::docker::DockerRunSpec;
 use crate::app::{
     ActivationHandler, CloseActiveTab, NewTab, OpenSettings, ToggleLeftPanel, ToggleRightPanel,
 };
@@ -69,6 +71,7 @@ use crate::views::right_panel::{
 };
 use crate::views::terminal::{ShellLocationChangedEvent, TerminalPanel};
 use crate::views::welcome::WelcomeView;
+use pier_core::services::docker::DockerRunSpec;
 
 /// Cols / rows to request when opening a russh shell channel before
 /// the terminal view has measured its surface. The resize loop inside
@@ -663,8 +666,11 @@ impl PierApp {
                     let _ =
                         panel_for_task.update(&mut async_cx, |panel, cx| match connect_result {
                             Ok((session, pty)) => {
-                                let _ = session_for_task
-                                    .update(cx, |s, _| s.attach_live_session(session));
+                                // `Entity::update` inside a sync `Context`
+                                // returns the closure's value directly
+                                // (not a `Result`), and the closure here
+                                // returns `()` — no need to bind.
+                                session_for_task.update(cx, |s, _| s.attach_live_session(session));
                                 panel.attach_ssh_pty(
                                     Box::new(pty),
                                     SSH_DEFAULT_COLS,
@@ -674,7 +680,7 @@ impl PierApp {
                                 );
                             }
                             Err(err) => {
-                                let _ = session_for_task
+                                session_for_task
                                     .update(cx, |s, _| s.record_connect_failure(err.clone()));
                                 panel.report_ssh_connect_error(err, cx);
                             }
@@ -2609,6 +2615,197 @@ impl PierApp {
                     // shows fresh branches / status / log / stashes.
                     let _ = this.update(&mut async_cx, |this, cx| {
                         this.schedule_git_refresh(cx);
+                        // Cross-refresh: re-pull whichever derived cache
+                        // the active tab is looking at so mutations show
+                        // up immediately.
+                        let tab = this.git_state.read(cx).tab;
+                        match tab {
+                            GitTab::Graph => this.schedule_git_graph(true, cx),
+                            GitTab::Managers => this.schedule_git_managers(cx),
+                            _ => {}
+                        }
+                    });
+                }
+            },
+        )
+        .detach();
+    }
+
+    /// Switch the top-level Git tab and fire the corresponding
+    /// on-demand data load (graph / managers) the first time each
+    /// tab is opened.
+    pub fn set_git_tab(&mut self, tab: GitTab, cx: &mut Context<Self>) {
+        let needs_graph = tab == GitTab::Graph
+            && self.git_state.read(cx).graph.rows.is_empty()
+            && !self.git_state.read(cx).graph.loading;
+        let needs_managers = tab == GitTab::Managers
+            && self.git_state.read(cx).managers.branches.is_empty()
+            && !self.git_state.read(cx).managers.loading;
+        self.git_state.update(cx, |s, _| s.set_tab(tab));
+        if needs_graph {
+            self.schedule_git_graph(true, cx);
+        }
+        if needs_managers {
+            self.schedule_git_managers(cx);
+        }
+        cx.notify();
+    }
+
+    pub fn set_git_manager_tab(&mut self, tab: ManagerTab, cx: &mut Context<Self>) {
+        self.git_state.update(cx, |s, _| s.set_manager_tab(tab));
+        cx.notify();
+    }
+
+    pub fn set_git_diff_mode(&mut self, mode: DiffMode, cx: &mut Context<Self>) {
+        self.git_state.update(cx, |s, _| s.set_diff_mode(mode));
+        cx.notify();
+    }
+
+    pub fn toggle_git_graph_column(&mut self, col: GraphColumn, cx: &mut Context<Self>) {
+        self.git_state.update(cx, |s, _| s.toggle_graph_column(col));
+        cx.notify();
+    }
+
+    pub fn toggle_git_graph_zebra(&mut self, cx: &mut Context<Self>) {
+        self.git_state.update(cx, |s, _| s.toggle_zebra_stripes());
+        cx.notify();
+    }
+
+    pub fn set_git_graph_highlight(
+        &mut self,
+        mode: GraphHighlightMode,
+        cx: &mut Context<Self>,
+    ) {
+        self.git_state
+            .update(cx, |s, _| s.set_graph_highlight(mode));
+        cx.notify();
+    }
+
+    /// Replace the graph filter and trigger an immediate reload.
+    pub fn set_git_graph_filter(&mut self, filter: GraphFilter, cx: &mut Context<Self>) {
+        self.git_state.update(cx, |s, _| s.set_graph_filter(filter));
+        self.schedule_git_graph(true, cx);
+    }
+
+    /// Toggle expand/collapse for the given commit hash. When a new
+    /// hash is selected, schedules a commit detail fetch.
+    pub fn toggle_git_graph_selected(&mut self, hash: String, cx: &mut Context<Self>) {
+        let next: Option<String> = self.git_state.update(cx, |s, _| {
+            if s.graph.selected.as_deref() == Some(hash.as_str()) {
+                s.set_graph_selected(None);
+                None
+            } else {
+                s.set_graph_selected(Some(hash.clone()));
+                Some(hash)
+            }
+        });
+        if let Some(h) = next {
+            self.schedule_git_commit_detail(h, cx);
+        }
+        cx.notify();
+    }
+
+    /// Load (or reload) the commit graph for the current filter.
+    /// `initial=true` clears the current page and starts from scratch;
+    /// `initial=false` appends more rows (infinite scroll).
+    pub fn schedule_git_graph(&mut self, initial: bool, cx: &mut Context<Self>) {
+        let state = self.git_state.clone();
+        let Some(request) = state.update(cx, |s, _| s.begin_graph(initial)) else {
+            return;
+        };
+        cx.notify();
+        cx.spawn(
+            move |_this: gpui::WeakEntity<Self>, cx: &mut gpui::AsyncApp| {
+                let background = cx.background_executor().clone();
+                let mut async_cx = cx.clone();
+                async move {
+                    let result = background
+                        .spawn(async move { git_run_graph(request) })
+                        .await;
+                    let _ = state.update(&mut async_cx, |s, cx| {
+                        s.apply_graph_result(result);
+                        cx.notify();
+                    });
+                }
+            },
+        )
+        .detach();
+    }
+
+    /// Load full detail (author, body, diffstat) for a single commit.
+    pub fn schedule_git_commit_detail(&mut self, hash: String, cx: &mut Context<Self>) {
+        let state = self.git_state.clone();
+        let Some(request) = state.update(cx, |s, _| s.begin_commit_detail(hash)) else {
+            return;
+        };
+        cx.notify();
+        cx.spawn(
+            move |_this: gpui::WeakEntity<Self>, cx: &mut gpui::AsyncApp| {
+                let background = cx.background_executor().clone();
+                let mut async_cx = cx.clone();
+                async move {
+                    let result = background
+                        .spawn(async move { git_run_commit_detail(request) })
+                        .await;
+                    let _ = state.update(&mut async_cx, |s, cx| {
+                        s.apply_commit_detail_result(result);
+                        cx.notify();
+                    });
+                }
+            },
+        )
+        .detach();
+    }
+
+    /// Load git blame for a single file.
+    pub fn schedule_git_blame(&mut self, path: String, cx: &mut Context<Self>) {
+        let state = self.git_state.clone();
+        let Some(request) = state.update(cx, |s, _| s.begin_blame(path)) else {
+            return;
+        };
+        cx.notify();
+        cx.spawn(
+            move |_this: gpui::WeakEntity<Self>, cx: &mut gpui::AsyncApp| {
+                let background = cx.background_executor().clone();
+                let mut async_cx = cx.clone();
+                async move {
+                    let result = background
+                        .spawn(async move { git_run_blame(request) })
+                        .await;
+                    let _ = state.update(&mut async_cx, |s, cx| {
+                        s.apply_blame_result(result);
+                        cx.notify();
+                    });
+                }
+            },
+        )
+        .detach();
+    }
+
+    pub fn clear_git_blame(&mut self, cx: &mut Context<Self>) {
+        self.git_state.update(cx, |s, _| s.clear_blame());
+        cx.notify();
+    }
+
+    /// Refresh the managers tab data (branches / tags / remotes /
+    /// config / submodules / conflicts).
+    pub fn schedule_git_managers(&mut self, cx: &mut Context<Self>) {
+        let state = self.git_state.clone();
+        let Some(request) = state.update(cx, |s, _| s.begin_managers()) else {
+            return;
+        };
+        cx.notify();
+        cx.spawn(
+            move |_this: gpui::WeakEntity<Self>, cx: &mut gpui::AsyncApp| {
+                let background = cx.background_executor().clone();
+                let mut async_cx = cx.clone();
+                async move {
+                    let result = background
+                        .spawn(async move { git_run_managers(request) })
+                        .await;
+                    let _ = state.update(&mut async_cx, |s, cx| {
+                        s.apply_managers_result(result);
+                        cx.notify();
                     });
                 }
             },

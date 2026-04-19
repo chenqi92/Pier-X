@@ -48,7 +48,11 @@ impl RenderOnce for SectionLabel {
         let label = div()
             .text_size(SIZE_SMALL)
             .text_color(t.color.text_tertiary)
-            .font(ui_font_with(&t.font_ui, &t.font_ui_features, WEIGHT_EMPHASIS))
+            .font(ui_font_with(
+                &t.font_ui,
+                &t.font_ui_features,
+                WEIGHT_EMPHASIS,
+            ))
             .child(self.text);
 
         let mut row = div()

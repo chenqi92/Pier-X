@@ -18,7 +18,7 @@ pub use actions::{
     CloseActiveTab, NewTab, OpenSettings, ToggleLeftPanel, ToggleRightPanel, ToggleTheme,
 };
 pub use route::Route;
-pub use shell_location::{RemoteTarget, ShellLocation};
+pub use shell_location::ShellLocation;
 pub use state::PierApp;
 
 /// Vestigial signature kept around so [`crate::views::terminal::TerminalPanel`]

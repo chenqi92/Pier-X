@@ -161,6 +161,9 @@ App:
       typography:
         en: Typography
         zh-CN: 字体
+      updates_title:
+        en: Updates
+        zh-CN: 更新
     General:
       subtitle:
         en: Interface, theme, and font defaults.
@@ -279,6 +282,43 @@ App:
         nord:
           en: Cool muted palette with softer contrast
           zh-CN: 偏冷静、对比更柔和的调色板
+    Updates:
+      subtitle:
+        en: Check for a newer Pier-X release from the project repository.
+        zh-CN: 从项目仓库检查是否有新的 Pier-X 版本。
+      current_version:
+        en: Current Version
+        zh-CN: 当前版本
+      latest_version:
+        en: Latest Release
+        zh-CN: 最新版本
+      check_button:
+        en: Check for Updates
+        zh-CN: 检查更新
+      check_again:
+        en: Check Again
+        zh-CN: 重新检查
+      checking:
+        en: Checking…
+        zh-CN: 检查中…
+      up_to_date:
+        en: You're on the latest version.
+        zh-CN: 当前已是最新版本。
+      available:
+        en: A new version is available.
+        zh-CN: 发现新版本。
+      open_release:
+        en: Open Release Page
+        zh-CN: 打开发布页
+      released_at:
+        en: "Released: %{date}"
+        zh-CN: "发布时间：%{date}"
+      error_prefix:
+        en: "Update check failed: "
+        zh-CN: "检查失败："
+      release_notes:
+        en: Release Notes
+        zh-CN: 更新日志
     Shortcuts:
       subtitle:
         en: Click Change and press a new key combination. Updates apply immediately.
@@ -1357,6 +1397,393 @@ App:
     diff_truncated:
       en: "… %{shown} of %{total} lines shown."
       zh-CN: "… 已显示 %{total} 行中的前 %{shown} 行。"
+    # ── Top-level tabs ──
+    tab_changes:
+      en: Changes
+      zh-CN: 变更
+    tab_graph:
+      en: Graph
+      zh-CN: 图谱
+    tab_stash:
+      en: Stash
+      zh-CN: 贮藏
+    tab_managers:
+      en: Managers
+      zh-CN: 管理器
+    # ── Graph tab ──
+    graph_search_placeholder:
+      en: Search commits...
+      zh-CN: 搜索提交…
+    graph_all_branches:
+      en: All branches
+      zh-CN: 全部分支
+    graph_all_users:
+      en: All users
+      zh-CN: 全部作者
+    graph_user:
+      en: User
+      zh-CN: 作者
+    graph_path:
+      en: Path
+      zh-CN: 路径
+    graph_date:
+      en: Date
+      zh-CN: 日期
+    graph_date_today:
+      en: Today
+      zh-CN: 今天
+    graph_date_week:
+      en: Last week
+      zh-CN: 最近一周
+    graph_date_month:
+      en: Last month
+      zh-CN: 最近一月
+    graph_date_year:
+      en: Last year
+      zh-CN: 最近一年
+    graph_sort:
+      en: Sort
+      zh-CN: 排序
+    graph_sort_date:
+      en: By date
+      zh-CN: 按日期
+    graph_sort_topo:
+      en: Topological
+      zh-CN: 拓扑序
+    graph_options:
+      en: Options
+      zh-CN: 选项
+    graph_first_parent:
+      en: First-parent only
+      zh-CN: 仅第一父提交
+    graph_no_merges:
+      en: No merges
+      zh-CN: 忽略合并
+    graph_collapse_lin:
+      en: Collapse linear history
+      zh-CN: 收起线性历史
+    graph_expand_lin:
+      en: Expand linear history
+      zh-CN: 展开线性历史
+    graph_highlight:
+      en: Highlight
+      zh-CN: 高亮
+    graph_highlight_none:
+      en: None
+      zh-CN: 无
+    graph_highlight_my:
+      en: My commits
+      zh-CN: 我的提交
+    graph_highlight_merge:
+      en: Merge commits
+      zh-CN: 合并提交
+    graph_highlight_branch:
+      en: Current branch
+      zh-CN: 当前分支
+    graph_display:
+      en: Display
+      zh-CN: 显示
+    graph_zebra:
+      en: Zebra stripes
+      zh-CN: 斑马条纹
+    graph_columns:
+      en: Columns
+      zh-CN: 列
+    graph_col_hash:
+      en: Hash column
+      zh-CN: 哈希列
+    graph_col_author:
+      en: Author column
+      zh-CN: 作者列
+    graph_col_date:
+      en: Date column
+      zh-CN: 日期列
+    graph_loading_more:
+      en: Loading more commits…
+      zh-CN: 加载更多提交…
+    graph_load_more:
+      en: Load more
+      zh-CN: 加载更多
+    graph_all_loaded:
+      en: All commits loaded.
+      zh-CN: 所有提交已加载。
+    graph_empty:
+      en: No commits match the current filter.
+      zh-CN: 当前筛选条件下无提交。
+    # ── Commit context menu ──
+    ctx_checkout:
+      en: Checkout
+      zh-CN: 检出
+    ctx_checkout_revision:
+      en: Checkout revision
+      zh-CN: 检出版本
+    ctx_checkout_branch:
+      en: Checkout branch
+      zh-CN: 检出分支
+    ctx_new_branch:
+      en: New branch…
+      zh-CN: 新建分支…
+    ctx_new_tag:
+      en: New tag…
+      zh-CN: 新建标签…
+    ctx_cherry_pick:
+      en: Cherry-pick
+      zh-CN: 拣选
+    ctx_revert:
+      en: Revert
+      zh-CN: 回退提交
+    ctx_reset_here:
+      en: Reset to here…
+      zh-CN: 重置到此…
+    ctx_undo_commit:
+      en: Undo commit
+      zh-CN: 撤销提交
+    ctx_edit_message:
+      en: Edit message…
+      zh-CN: 编辑信息…
+    ctx_drop_commit:
+      en: Drop commit
+      zh-CN: 丢弃提交
+    ctx_copy_hash:
+      en: Copy hash
+      zh-CN: 复制哈希
+    ctx_open_browser:
+      en: Open in browser
+      zh-CN: 浏览器中打开
+    # ── Commit detail strip ──
+    detail_author:
+      en: Author
+      zh-CN: 作者
+    detail_date:
+      en: Date
+      zh-CN: 日期
+    detail_files_changed:
+      en: "Files changed (%{count})"
+      zh-CN: "变更文件 (%{count})"
+    # ── Diff mode toggle ──
+    diff_inline:
+      en: Inline
+      zh-CN: 合并视图
+    diff_side_by_side:
+      en: Side-by-side
+      zh-CN: 并排视图
+    # ── Blame ──
+    blame_title:
+      en: Blame
+      zh-CN: 追溯
+    blame_loading:
+      en: Loading blame…
+      zh-CN: 加载追溯…
+    blame_empty:
+      en: No blame data.
+      zh-CN: 无追溯数据。
+    blame_for_file:
+      en: "Blame: %{path}"
+      zh-CN: "追溯：%{path}"
+    # ── Managers tab ──
+    mgr_branches:
+      en: Branches
+      zh-CN: 分支
+    mgr_tags:
+      en: Tags
+      zh-CN: 标签
+    mgr_remotes:
+      en: Remotes
+      zh-CN: 远端
+    mgr_config:
+      en: Config
+      zh-CN: 配置
+    mgr_submodules:
+      en: Submodules
+      zh-CN: 子模块
+    mgr_rebase:
+      en: Rebase
+      zh-CN: 变基
+    mgr_conflicts:
+      en: Conflicts
+      zh-CN: 冲突
+    # ── Branch manager ──
+    branch_local:
+      en: local
+      zh-CN: 本地
+    branch_remote:
+      en: remote
+      zh-CN: 远端
+    branch_current:
+      en: current
+      zh-CN: 当前
+    branch_new_placeholder:
+      en: New branch name…
+      zh-CN: 新分支名称…
+    branch_create:
+      en: Create branch
+      zh-CN: 新建分支
+    branch_delete:
+      en: Delete
+      zh-CN: 删除
+    branch_force_delete:
+      en: Force delete
+      zh-CN: 强制删除
+    branch_rename:
+      en: Rename
+      zh-CN: 重命名
+    branch_merge:
+      en: Merge into current
+      zh-CN: 合并到当前
+    branch_rebase_onto:
+      en: Rebase onto
+      zh-CN: 变基到此
+    # ── Tag manager ──
+    tag_new_placeholder:
+      en: Tag name…
+      zh-CN: 标签名称…
+    tag_message_placeholder:
+      en: Tag message (optional)
+      zh-CN: 标签信息（可选）
+    tag_create:
+      en: Create tag
+      zh-CN: 新建标签
+    tag_delete:
+      en: Delete tag
+      zh-CN: 删除标签
+    tag_push:
+      en: Push to origin
+      zh-CN: 推送到 origin
+    no_tags:
+      en: No tags.
+      zh-CN: 无标签。
+    # ── Remote manager ──
+    remote_name_placeholder:
+      en: Remote name
+      zh-CN: 远端名称
+    remote_url_placeholder:
+      en: Remote URL (ssh or https)
+      zh-CN: 远端 URL（ssh 或 https）
+    remote_add:
+      en: Add remote
+      zh-CN: 添加远端
+    remote_remove:
+      en: Remove
+      zh-CN: 移除
+    remote_set_url:
+      en: Set URL
+      zh-CN: 设置 URL
+    remote_fetch:
+      en: Fetch
+      zh-CN: 拉取
+    remote_fetch_all:
+      en: Fetch all
+      zh-CN: 全部拉取
+    no_remotes:
+      en: No remotes configured.
+      zh-CN: 尚未配置远端。
+    # ── Config manager ──
+    config_key_placeholder:
+      en: config.key
+      zh-CN: config.key
+    config_value_placeholder:
+      en: value
+      zh-CN: 值
+    config_local:
+      en: local
+      zh-CN: 本地
+    config_global:
+      en: global
+      zh-CN: 全局
+    config_set:
+      en: Set
+      zh-CN: 设置
+    config_unset:
+      en: Unset
+      zh-CN: 移除
+    config_scope:
+      en: Scope
+      zh-CN: 范围
+    no_config:
+      en: No config entries.
+      zh-CN: 无配置项。
+    # ── Submodule manager ──
+    submodule_add_url:
+      en: Submodule URL
+      zh-CN: 子模块 URL
+    submodule_add_path:
+      en: Submodule path
+      zh-CN: 子模块路径
+    submodule_add:
+      en: Add submodule
+      zh-CN: 添加子模块
+    submodule_update:
+      en: Update all
+      zh-CN: 全部更新
+    submodule_remove:
+      en: Remove
+      zh-CN: 移除
+    no_submodules:
+      en: No submodules.
+      zh-CN: 无子模块。
+    # ── Rebase manager ──
+    rebase_onto_placeholder:
+      en: Branch or commit to rebase onto
+      zh-CN: 要变基到的分支或提交
+    rebase_start:
+      en: Start rebase
+      zh-CN: 开始变基
+    rebase_continue:
+      en: Continue
+      zh-CN: 继续
+    rebase_abort:
+      en: Abort
+      zh-CN: 中止
+    rebase_skip:
+      en: Skip current commit
+      zh-CN: 跳过当前提交
+    rebase_body:
+      en: >-
+        After resolving conflicts in the Conflicts tab, return here to
+        continue or abort the in-progress rebase.
+      zh-CN: 在“冲突”标签页解决完冲突后，回到这里继续或中止进行中的变基。
+    # ── Conflicts manager ──
+    conflicts_empty:
+      en: No merge conflicts.
+      zh-CN: 无合并冲突。
+    conflicts_count:
+      en: "%{count} conflicted file%{suffix}"
+      zh-CN: "冲突文件：%{count} 个"
+    conflicts_resolve_ours:
+      en: Use ours
+      zh-CN: 使用我方
+    conflicts_resolve_theirs:
+      en: Use theirs
+      zh-CN: 使用对方
+    conflicts_mark_resolved:
+      en: Mark resolved
+      zh-CN: 标记已解决
+    merge_abort:
+      en: Abort merge
+      zh-CN: 中止合并
+    # ── Reset mode picker ──
+    reset_soft:
+      en: Soft (keep staged)
+      zh-CN: 软重置（保留暂存）
+    reset_mixed:
+      en: Mixed (keep worktree)
+      zh-CN: 混合重置（保留工作区）
+    reset_hard:
+      en: Hard (destructive)
+      zh-CN: 硬重置（销毁变更）
+    # ── Generic ──
+    create:
+      en: Create
+      zh-CN: 创建
+    confirm:
+      en: Confirm
+      zh-CN: 确认
+    copy:
+      en: Copy
+      zh-CN: 复制
+    copied:
+      en: Copied
+      zh-CN: 已复制
   Shell:
     terminal_position:
       en: Terminal %{current} of %{total}

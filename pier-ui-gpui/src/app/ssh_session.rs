@@ -17,16 +17,16 @@ use std::path::PathBuf;
 use std::time::Instant;
 
 use pier_core::services::docker::{
-    Container as DockerContainer, DockerImage, DockerNetwork, DockerRunSpec, DockerVolume,
     inspect_container_blocking, list_containers_blocking, list_images_blocking,
     list_networks_blocking, list_volume_files_blocking, list_volumes_blocking, remove_blocking,
     remove_image_blocking, remove_volume_blocking, restart_blocking, run_container_blocking,
-    start_blocking, stop_blocking,
+    start_blocking, stop_blocking, Container as DockerContainer, DockerImage, DockerNetwork,
+    DockerRunSpec, DockerVolume,
 };
 use pier_core::services::server_monitor::ServerSnapshot;
 use pier_core::ssh::{
-    DetectedService, EXIT_UNKNOWN, ExecEvent, ExecStream, HostKeyVerifier, ProgressCallback,
-    SftpClient, SshConfig, SshSession, TransferProgress, Tunnel,
+    DetectedService, ExecEvent, ExecStream, HostKeyVerifier, ProgressCallback, SftpClient,
+    SshConfig, SshSession, TransferProgress, Tunnel, EXIT_UNKNOWN,
 };
 
 use crate::app::layout::{RightContext, RightMode};

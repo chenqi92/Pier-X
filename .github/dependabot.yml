@@ -1,0 +1,39 @@
+# Dependabot keeps the Cargo workspace + GitHub Actions versions
+# rolling forward. The weekly cadence is loud enough that security
+# advisories land within ~7 days of disclosure, but quiet enough
+# that it doesn't flood the PR queue.
+#
+# `groups` batches minor + patch updates into single PRs per
+# ecosystem, so an average week has one cargo PR and one actions PR,
+# not fifty.
+version: 2
+updates:
+  - package-ecosystem: cargo
+    directory: /
+    schedule:
+      interval: weekly
+      day: monday
+      time: "04:00"
+      timezone: Asia/Shanghai
+    open-pull-requests-limit: 5
+    groups:
+      cargo-minor-and-patch:
+        update-types: ["minor", "patch"]
+    commit-message:
+      prefix: chore(deps)
+      include: scope
+
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: weekly
+      day: monday
+      time: "04:00"
+      timezone: Asia/Shanghai
+    open-pull-requests-limit: 3
+    groups:
+      actions-all:
+        patterns: ["*"]
+    commit-message:
+      prefix: chore(ci)
+      include: scope

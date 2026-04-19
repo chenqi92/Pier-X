@@ -76,6 +76,9 @@ fn home_dir() -> Option<PathBuf> {
 /// file (`~/.bashrc` / `~/.zshrc`). Keeps uninstall surgical — we
 /// only strip our own block without touching anything around it.
 pub const LOCAL_MARKER_BEGIN: &str = "# Pier-X BEGIN — shell integration (managed)";
+/// Closing counterpart of [`LOCAL_MARKER_BEGIN`]. Every managed block
+/// must be wrapped in `BEGIN…END` so uninstall can locate and delete
+/// the entire region atomically.
 pub const LOCAL_MARKER_END: &str = "# Pier-X END";
 
 /// Absolute path where the local-side **bash** integration script

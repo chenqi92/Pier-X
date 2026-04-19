@@ -1,3 +1,20 @@
+// Crate-wide lint policy. These three can't be cleaned up piecemeal
+// without distorting code we actually want:
+// - `dead_code` — the shell keeps helpers (panel getters, session
+//   helpers, route queries) that are planned for cross-panel wiring
+//   still in flight. Silencing per-item would scatter `#[allow]`
+//   annotations across a dozen files; reviewing the next release is
+//   the natural choke-point for pruning them.
+// - `clippy::type_complexity` — every interactive component carries
+//   a `Box<dyn Fn(&ClickEvent, &mut Window, &mut App) + 'static>`
+//   click handler. Wrapping that in a `type` alias per component
+//   crate-wide is more indirection than it's worth.
+// - `clippy::too_many_arguments` — render functions for heavy views
+//   (docker panel, terminal row) legitimately need 8–10 params of
+//   theme / state / callbacks. Bundling them into a struct just to
+//   pass in one place creates more noise than it removes.
+#![allow(dead_code, clippy::type_complexity, clippy::too_many_arguments)]
+
 mod app;
 mod assets;
 mod components;

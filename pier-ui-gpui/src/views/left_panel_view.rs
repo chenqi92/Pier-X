@@ -370,9 +370,9 @@ impl LeftPanelView {
             .flex_col()
             .child(
                 div()
-                    .px(SP_2)
+                    .px(SP_3)
                     .py(SP_2)
-                    .bg(t.color.bg_surface)
+                    .bg(t.color.bg_panel)
                     .border_b_1()
                     .border_color(t.color.border_subtle)
                     .child(Input::new(&self.files_filter)),
@@ -423,9 +423,9 @@ impl LeftPanelView {
             .flex_col()
             .child(
                 div()
-                    .px(SP_2)
+                    .px(SP_3)
                     .py(SP_2)
-                    .bg(t.color.bg_surface)
+                    .bg(t.color.bg_panel)
                     .border_b_1()
                     .border_color(t.color.border_subtle)
                     .child(Input::new(&self.servers_filter)),
@@ -482,7 +482,7 @@ fn render_servers_list(
     // places for the same state. The active session is still
     // visually anchored in this list by the highlight on the
     // matching `server_row`.
-    let mut col = div().p(SP_2).flex().flex_col().gap(SP_2);
+    let mut col = div().px(SP_3).py(SP_2).flex().flex_col().gap(SP_1_5);
 
     col = col.child(servers_header(
         t,
@@ -501,19 +501,19 @@ fn render_servers_list(
     }
 
     let groups = group_servers(snapshot, query);
-        if groups.is_empty() {
-            col = col.child(
-                div()
-                    .px(SP_3)
-                    .py(SP_2)
-                    .text_size(SIZE_SMALL)
-                    .text_color(t.color.text_tertiary)
-                    .child(SharedString::from(
-                        t!("App.Common.no_matches", query = query).to_string(),
-                    )),
-            );
-            return col;
-        }
+    if groups.is_empty() {
+        col = col.child(
+            div()
+                .px(SP_3)
+                .py(SP_2)
+                .text_size(SIZE_SMALL)
+                .text_color(t.color.text_tertiary)
+                .child(SharedString::from(
+                    t!("App.Common.no_matches", query = query).to_string(),
+                )),
+        );
+        return col;
+    }
     for group in groups {
         let is_collapsed = collapsed_groups.contains(&group.key);
         col = col.child(server_group_card(
@@ -550,9 +550,9 @@ fn servers_header(
         .gap(SP_2)
         .px(SP_2)
         .py(SP_1)
-        .child(SectionLabel::new(
-            t!("App.LeftPanel.Headers.saved_connections"),
-        ))
+        .child(SectionLabel::new(t!(
+            "App.LeftPanel.Headers.saved_connections"
+        )))
         .child(
             div()
                 .text_size(SIZE_CAPTION)
@@ -788,9 +788,9 @@ fn active_connection_card(session: &ActiveServerSessionSnapshot) -> impl IntoEle
     //      user can read it as "address" without needing the label.
     let mut card = Card::new()
         .padding(SP_3)
-        .child(SectionLabel::new(
-            t!("App.LeftPanel.Headers.active_connection"),
-        ))
+        .child(SectionLabel::new(t!(
+            "App.LeftPanel.Headers.active_connection"
+        )))
         .child(
             div()
                 .flex()
@@ -857,16 +857,12 @@ fn servers_empty_state(on_add: AddConnectionHandler) -> impl IntoElement {
     Card::new()
         .padding(SP_3)
         .child(SectionLabel::new(t!("App.LeftPanel.Empty.title")))
+        .child(text::body(t!("App.LeftPanel.Empty.body")).secondary())
         .child(
-            text::body(t!("App.LeftPanel.Empty.body")).secondary(),
-        )
-        .child(
-            div()
-                .pt(SP_2)
-                .child(
-                    Button::primary("servers-empty-add", t!("App.LeftPanel.Actions.add_ssh"))
-                        .on_click(move |ev, window, app| on_add_click(ev, window, app)),
-                ),
+            div().pt(SP_2).child(
+                Button::primary("servers-empty-add", t!("App.LeftPanel.Actions.add_ssh"))
+                    .on_click(move |ev, window, app| on_add_click(ev, window, app)),
+            ),
         )
         .child(
             div()
@@ -997,7 +993,10 @@ fn connection_status_pill(status: ConnectStatus) -> (SharedString, StatusKind) {
         ConnectStatus::Idle => (t!("App.Common.Status.idle").into(), StatusKind::Warning),
         ConnectStatus::Connecting => (t!("App.Common.Status.connecting").into(), StatusKind::Info),
         ConnectStatus::Refreshing => (t!("App.Common.Status.loading").into(), StatusKind::Info),
-        ConnectStatus::Connected => (t!("App.Common.Status.connected").into(), StatusKind::Success),
+        ConnectStatus::Connected => (
+            t!("App.Common.Status.connected").into(),
+            StatusKind::Success,
+        ),
         ConnectStatus::Failed => (t!("App.Common.Status.error").into(), StatusKind::Error),
     }
 }
@@ -1042,22 +1041,18 @@ fn tunnel_label(tunnel: &ServerTunnelSnapshot) -> SharedString {
         (TunnelStatus::Active, Some(local_port)) => {
             format!("{service} localhost:{local_port} -> {}", tunnel.remote_port).into()
         }
-        (TunnelStatus::Opening, _) => {
-            t!(
-                "App.LeftPanel.Tunnels.opening",
-                service = service,
-                port = tunnel.remote_port
-            )
-            .into()
-        }
-        (TunnelStatus::Failed, _) => {
-            t!(
-                "App.LeftPanel.Tunnels.error",
-                service = service,
-                port = tunnel.remote_port
-            )
-            .into()
-        }
+        (TunnelStatus::Opening, _) => t!(
+            "App.LeftPanel.Tunnels.opening",
+            service = service,
+            port = tunnel.remote_port
+        )
+        .into(),
+        (TunnelStatus::Failed, _) => t!(
+            "App.LeftPanel.Tunnels.error",
+            service = service,
+            port = tunnel.remote_port
+        )
+        .into(),
         (TunnelStatus::Active, None) => format!("{service} -> {}", tunnel.remote_port).into(),
     }
 }

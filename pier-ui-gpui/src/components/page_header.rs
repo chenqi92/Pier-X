@@ -27,9 +27,7 @@
 //! Unfilled slots simply do not render. A minimal header is just a
 //! title.
 
-use gpui::{
-    div, prelude::*, AnyElement, IntoElement, ParentElement, SharedString, Window,
-};
+use gpui::{div, prelude::*, AnyElement, IntoElement, ParentElement, SharedString, Window};
 
 use crate::components::{text, SectionLabel, StatusPill};
 use crate::theme::{
@@ -108,9 +106,7 @@ impl RenderOnce for PageHeader {
         // component) for Section. Always truncate: a header takes one
         // line by contract; overflow is always a mistake.
         let title_el: AnyElement = match self.size {
-            HeaderSize::Page => text::h2(self.title.clone())
-                .truncate()
-                .into_any_element(),
+            HeaderSize::Page => text::h2(self.title.clone()).truncate().into_any_element(),
             HeaderSize::Section => SectionLabel::new(self.title.clone()).into_any_element(),
         };
 
@@ -132,12 +128,7 @@ impl RenderOnce for PageHeader {
         }
 
         // Right column — trailing actions + optional status pill.
-        let mut right = div()
-            .flex()
-            .flex_row()
-            .items_center()
-            .gap(SP_2)
-            .flex_none();
+        let mut right = div().flex().flex_row().items_center().gap(SP_2).flex_none();
         if let Some(pill) = self.status {
             right = right.child(pill);
         }

@@ -68,11 +68,7 @@ impl RenderOnce for MetaLine {
             .text_color(color);
 
         if let Some(icon) = self.icon {
-            row = row.child(
-                div()
-                    .flex_none()
-                    .child(UiIcon::new(icon).size(ICON_SM)),
-            );
+            row = row.child(div().flex_none().child(UiIcon::new(icon).size(ICON_SM)));
         }
 
         // MetaLine values are usually mono paths/endpoints — long strings

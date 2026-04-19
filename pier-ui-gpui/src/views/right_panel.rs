@@ -13,7 +13,7 @@
 
 use std::rc::Rc;
 
-use gpui::{div, prelude::*, px, App, IntoElement, SharedString, WeakEntity, Window};
+use gpui::{div, prelude::*, px, App, IntoElement, Pixels, SharedString, WeakEntity, Window};
 use gpui_component::{
     input::{Input, InputState},
     scroll::ScrollableElement,
@@ -30,7 +30,7 @@ use crate::components::{
 };
 use crate::theme::{
     heights::{BUTTON_MD_H, ICON_MD, ROW_MD_H},
-    radius::RADIUS_SM,
+    radius::{RADIUS_MD, RADIUS_SM},
     spacing::{SP_0_5, SP_1, SP_1_5, SP_2, SP_3, SP_4},
     theme,
     typography::{SIZE_CAPTION, SIZE_MONO_SMALL, SIZE_SMALL, WEIGHT_MEDIUM},
@@ -48,8 +48,9 @@ use crate::views::database::DatabaseView;
 use crate::views::git::GitView;
 use crate::views::markdown::MarkdownView;
 use crate::views::sftp_browser::{
-    GoUpHandler as SftpGoUp, HeaderActionHandler as SftpHeaderAction,
-    NavigateHandler as SftpNavigate, RowActionHandler as SftpRowAction, SftpBrowser,
+    DropPathsHandler as SftpDropPaths, GoUpHandler as SftpGoUp,
+    HeaderActionHandler as SftpHeaderAction, NavigateHandler as SftpNavigate,
+    RowActionHandler as SftpRowAction, SftpBrowser,
 };
 
 pub type ModeSelector = Rc<dyn Fn(&RightMode, &mut Window, &mut App) + 'static>;
@@ -89,10 +90,14 @@ pub struct RightPanel {
     sftp_mkdir: SftpHeaderAction,
     sftp_upload: SftpHeaderAction,
     sftp_row_action: SftpRowAction,
+    sftp_drop_paths: SftpDropPaths,
     docker_refresh: DockerRefreshHandler,
     docker_action: DockerActionHandler,
     logs_action: LogsActionHandler,
     on_select_mode: ModeSelector,
+    /// Current right-panel width (post-clamp). SFTP uses it to decide
+    /// whether to reveal the mtime / permissions columns.
+    panel_width: Pixels,
 }
 
 impl RightPanel {
@@ -108,10 +113,12 @@ impl RightPanel {
         sftp_mkdir: SftpHeaderAction,
         sftp_upload: SftpHeaderAction,
         sftp_row_action: SftpRowAction,
+        sftp_drop_paths: SftpDropPaths,
         docker_refresh: DockerRefreshHandler,
         docker_action: DockerActionHandler,
         logs_action: LogsActionHandler,
         on_select_mode: ModeSelector,
+        panel_width: Pixels,
     ) -> Self {
         Self {
             active_mode,
@@ -124,10 +131,12 @@ impl RightPanel {
             sftp_mkdir,
             sftp_upload,
             sftp_row_action,
+            sftp_drop_paths,
             docker_refresh,
             docker_action,
             logs_action,
             on_select_mode,
+            panel_width,
         }
     }
 }
@@ -146,12 +155,19 @@ impl RenderOnce for RightPanel {
             sftp_mkdir,
             sftp_upload,
             sftp_row_action,
+            sftp_drop_paths,
             docker_refresh,
             docker_action,
             logs_action,
             on_select_mode,
+            panel_width,
         } = self;
         let available_modes = available_right_modes(active_session.as_ref(), cx);
+
+        // SFTP content sits to the left of the 36 px vertical icon bar
+        // plus a 1 px separator — subtract those so the browser sees its
+        // real column budget rather than the outer panel width.
+        let sftp_content_width = (panel_width - RIGHT_ICON_BAR_W - px(1.0)).max(px(0.0));
 
         let body = render_mode_body(
             &t,
@@ -165,10 +181,12 @@ impl RenderOnce for RightPanel {
             sftp_mkdir,
             sftp_upload,
             sftp_row_action,
+            sftp_drop_paths,
             docker_refresh,
             docker_action,
             logs_action,
             on_select_mode.clone(),
+            sftp_content_width,
             cx,
         );
 
@@ -177,7 +195,7 @@ impl RenderOnce for RightPanel {
             .h_full()
             .flex()
             .flex_row()
-            .bg(t.color.bg_panel)
+            .bg(t.color.bg_surface)
             .border_l_1()
             .border_color(t.color.border_subtle)
             // Content
@@ -207,10 +225,12 @@ fn render_mode_body(
     sftp_mkdir: SftpHeaderAction,
     sftp_upload: SftpHeaderAction,
     sftp_row_action: SftpRowAction,
+    sftp_drop_paths: SftpDropPaths,
     docker_refresh: DockerRefreshHandler,
     docker_action: DockerActionHandler,
     logs_action: LogsActionHandler,
     on_select_mode: ModeSelector,
+    sftp_content_width: Pixels,
     cx: &mut App,
 ) -> gpui::AnyElement {
     let header = mode_page_header(mode, active_session.as_ref(), cx);
@@ -226,6 +246,8 @@ fn render_mode_body(
             sftp_mkdir,
             sftp_upload,
             sftp_row_action,
+            sftp_drop_paths,
+            sftp_content_width,
         )
         .into_any_element(),
         RightMode::Docker => docker_view(
@@ -259,12 +281,11 @@ fn render_mode_body(
     // 60-80px of vertical space they were eating.
     if matches!(mode.context(), RightContext::Remote) {
         if let Some(overview) = remote_overview.as_ref() {
-            panel = panel.child(render_remote_context_strip(
-                t,
-                mode,
-                overview,
-                on_select_mode.clone(),
-            ));
+            if let Some(strip) =
+                render_remote_context_strip(t, mode, overview, on_select_mode.clone())
+            {
+                panel = panel.child(strip);
+            }
         }
     }
 
@@ -292,7 +313,6 @@ fn render_mode_body(
 
 #[derive(Clone)]
 struct RemoteOverview {
-    ssh_command: SharedString,
     services: Vec<pier_core::ssh::DetectedService>,
     service_probe_status: ServiceProbeStatus,
     service_probe_error: Option<SharedString>,
@@ -325,7 +345,6 @@ fn remote_overview(
     active_session.map(|session_entity| {
         let session = session_entity.read(cx);
         RemoteOverview {
-            ssh_command: remote_ssh_command(&session.config),
             services: session.services.clone(),
             service_probe_status: session.service_probe_status.clone(),
             service_probe_error: session.service_probe_error.clone().map(SharedString::from),
@@ -358,7 +377,22 @@ fn render_remote_context_strip(
     active_mode: RightMode,
     overview: &RemoteOverview,
     on_select: ModeSelector,
-) -> impl IntoElement {
+) -> Option<gpui::AnyElement> {
+    let error = overview
+        .service_probe_error
+        .clone()
+        .or_else(|| overview.last_error.clone());
+    let should_show_detecting =
+        matches!(overview.service_probe_status, ServiceProbeStatus::Probing)
+            && overview.services.is_empty();
+    if overview.services.is_empty()
+        && overview.tunnels.is_empty()
+        && error.is_none()
+        && !should_show_detecting
+    {
+        return None;
+    }
+
     let mut row = div()
         .px(SP_3)
         .py(SP_1_5)
@@ -374,9 +408,7 @@ fn render_remote_context_strip(
 
     // Service chips — compact, name-only. Tunnel port appended only
     // when the tunnel is actually live (`service_button` handles).
-    let services = if matches!(overview.service_probe_status, ServiceProbeStatus::Probing)
-        && overview.services.is_empty()
-    {
+    let services = if should_show_detecting {
         Some(
             StatusPill::new(t!("App.LeftPanel.Services.detecting"), StatusKind::Info)
                 .into_any_element(),
@@ -418,22 +450,7 @@ fn render_remote_context_strip(
         row = row.child(tunnel_row);
     }
 
-    // Spacer + mono ssh command (faded, truncates on narrow panels).
-    row = row.child(div().flex_1().min_w(px(0.0))).child(
-        div()
-            .flex_none()
-            .text_size(SIZE_MONO_SMALL)
-            .font_family(t.font_mono.clone())
-            .text_color(t.color.text_tertiary)
-            .truncate()
-            .child(overview.ssh_command.clone()),
-    );
-
-    if let Some(err) = overview
-        .service_probe_error
-        .clone()
-        .or_else(|| overview.last_error.clone())
-    {
+    if let Some(err) = error {
         row = row.child(
             div()
                 .w_full()
@@ -442,7 +459,7 @@ fn render_remote_context_strip(
                 .child(err),
         );
     }
-    row
+    Some(row.into_any_element())
 }
 
 fn service_button(
@@ -553,16 +570,11 @@ fn tunnel_chip(tunnel: &TunnelOverview) -> impl IntoElement {
 
 /// Build the PageHeader for the given right-panel mode.
 ///
-/// Grammar:
-/// - **Local modes** (Markdown / Git / SQLite) — the mode name *is*
-///   the context; no eyebrow, no subtitle, no status pill. The
-///   result is a single clean H2 that reads "Markdown" or "Git"
-///   and nothing else. The inner view (GitView, MarkdownView) is
-///   free to surface its own per-view context below.
-/// - **Remote modes** (SSH / SFTP / Docker / Logs / DB) — the mode
-///   name becomes the eyebrow, title is the session name, subtitle
-///   is the endpoint, and a connection pill carries state. When no
-///   session is active, a single warning pill is shown.
+/// Remote headers intentionally stay single-line and do not repeat the
+/// endpoint string: the terminal tab already shows `user@host`, and the
+/// service strip below the header already communicates the remote context.
+/// Repeating `root@host` and `ssh root@host` in three places was the main
+/// source of the "stacked chrome" feel in the right panel.
 fn mode_page_header(
     mode: RightMode,
     active_session: Option<&Entity<SshSessionState>>,
@@ -571,32 +583,24 @@ fn mode_page_header(
     match mode.context() {
         RightContext::Local => PageHeader::new(mode.label()).size(HeaderSize::Page),
         RightContext::Remote => {
-            let eyebrow = mode.label();
-            let (title, subtitle, status_pill) = match active_session {
+            let (title, status_pill) = match active_session {
                 Some(session_entity) => {
                     let session = session_entity.read(cx);
                     let (label, kind) = remote_status_pill(&session.status);
                     (
                         SharedString::from(session.config.name.clone()),
-                        Some(remote_endpoint_label(&session.config)),
                         Some(StatusPill::new(label, kind)),
                     )
                 }
                 None => (
                     SharedString::from(t!("App.RightPanel.no_session").to_string()),
-                    None,
                     Some(StatusPill::new(
                         t!("App.RightPanel.no_session").to_string(),
                         StatusKind::Warning,
                     )),
                 ),
             };
-            let mut header = PageHeader::new(title)
-                .size(HeaderSize::Page)
-                .eyebrow(eyebrow);
-            if let Some(subtitle) = subtitle {
-                header = header.subtitle_mono(subtitle);
-            }
+            let mut header = PageHeader::new(title).size(HeaderSize::Page);
             if let Some(pill) = status_pill {
                 header = header.status(pill);
             }
@@ -681,14 +685,6 @@ fn remote_endpoint_label(config: &pier_core::ssh::SshConfig) -> SharedString {
         format!("{}@{}", config.user, config.host).into()
     } else {
         format!("{}@{}:{}", config.user, config.host, config.port).into()
-    }
-}
-
-fn remote_ssh_command(config: &pier_core::ssh::SshConfig) -> SharedString {
-    if config.port == 22 {
-        format!("ssh {}@{}", config.user, config.host).into()
-    } else {
-        format!("ssh {}@{} -p {}", config.user, config.host, config.port).into()
     }
 }
 
@@ -1916,15 +1912,18 @@ fn render_icon_sidebar(
     available_modes: &[RightMode],
     on_select: ModeSelector,
 ) -> impl IntoElement {
-    let mut col = div()
-        .w(RIGHT_ICON_BAR_W)
-        .h_full()
+    let mut rail = div()
+        .w_full()
         .flex()
         .flex_col()
         .items_center()
         .gap(SP_1)
+        .px(SP_1)
         .py(SP_2)
-        .bg(t.color.bg_panel);
+        .rounded(RADIUS_MD)
+        .bg(t.color.bg_panel)
+        .border_1()
+        .border_color(t.color.border_subtle);
 
     let local_modes: Vec<RightMode> = available_modes
         .iter()
@@ -1938,7 +1937,7 @@ fn render_icon_sidebar(
         .collect();
 
     for mode in local_modes {
-        col = col.child(mode_icon_button(
+        rail = rail.child(mode_icon_button(
             t,
             mode,
             mode == active_mode,
@@ -1946,7 +1945,7 @@ fn render_icon_sidebar(
         ));
     }
     if !remote_modes.is_empty() {
-        col = col.child(
+        rail = rail.child(
             div()
                 .w(px(18.0))
                 .h(px(1.0))
@@ -1954,7 +1953,7 @@ fn render_icon_sidebar(
                 .bg(t.color.border_subtle),
         );
         for mode in remote_modes {
-            col = col.child(mode_icon_button(
+            rail = rail.child(mode_icon_button(
                 t,
                 mode,
                 mode == active_mode,
@@ -1962,7 +1961,13 @@ fn render_icon_sidebar(
             ));
         }
     }
-    col
+    div()
+        .w(RIGHT_ICON_BAR_W)
+        .h_full()
+        .px(SP_1)
+        .py(SP_2)
+        .bg(t.color.bg_surface)
+        .child(rail)
 }
 
 #[cfg(test)]
@@ -2042,6 +2047,8 @@ fn mode_icon_button(
             .bg(t.color.accent_subtle)
             .border_1()
             .border_color(t.color.accent_muted);
+    } else {
+        btn = btn.bg(t.color.bg_panel);
     }
     btn
 }

@@ -54,9 +54,12 @@ pub fn render(app: &PierApp, cx: &gpui::App) -> impl IntoElement {
         ));
     } else {
         let label = match app.active_terminal() {
-            Some(i) if i < term_count => {
-                t!("App.Shell.terminal_position", current = i + 1, total = term_count).to_string()
-            }
+            Some(i) if i < term_count => t!(
+                "App.Shell.terminal_position",
+                current = i + 1,
+                total = term_count
+            )
+            .to_string(),
             _ => t!("App.Shell.no_active_tab").to_string(),
         };
         row = row.child(text::caption(label).secondary());

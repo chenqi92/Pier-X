@@ -30,8 +30,9 @@ use crate::theme::{
     radius::RADIUS_SM,
     shadow,
     spacing::{SP_0_5, SP_1, SP_3},
-    theme, ui_font_with,
+    theme,
     typography::{SIZE_UI_LABEL, WEIGHT_REGULAR},
+    ui_font_with,
 };
 
 pub struct ContextMenuItem {
@@ -104,10 +105,7 @@ impl ContextMenu {
 
     /// Register the "clicked anywhere else" callback — matches the
     /// shape produced by `cx.listener(|this, _: &(), window, cx| …)`.
-    pub fn on_dismiss(
-        mut self,
-        handler: impl Fn(&(), &mut Window, &mut App) + 'static,
-    ) -> Self {
+    pub fn on_dismiss(mut self, handler: impl Fn(&(), &mut Window, &mut App) + 'static) -> Self {
         self.on_dismiss = Some(Box::new(handler));
         self
     }
@@ -176,7 +174,11 @@ impl RenderOnce for ContextMenu {
                 .flex_row()
                 .items_center()
                 .text_size(SIZE_UI_LABEL)
-                .font(ui_font_with(&t.font_ui, &t.font_ui_features, WEIGHT_REGULAR))
+                .font(ui_font_with(
+                    &t.font_ui,
+                    &t.font_ui_features,
+                    WEIGHT_REGULAR,
+                ))
                 .text_color(label_color)
                 .child(item.label);
 
@@ -193,12 +195,9 @@ impl RenderOnce for ContextMenu {
 
         let mut backdrop = div().absolute().top(px(0.0)).left(px(0.0)).size_full();
         if let Some(on_dismiss) = on_dismiss {
-            backdrop = backdrop.on_mouse_down(
-                gpui::MouseButton::Left,
-                move |_, win, cx| {
-                    on_dismiss(&(), win, cx);
-                },
-            );
+            backdrop = backdrop.on_mouse_down(gpui::MouseButton::Left, move |_, win, cx| {
+                on_dismiss(&(), win, cx);
+            });
         }
         backdrop.child(menu)
     }

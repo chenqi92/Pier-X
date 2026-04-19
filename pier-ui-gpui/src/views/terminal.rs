@@ -36,8 +36,9 @@ use crate::{
             terminal_bg_color, terminal_hex_color, terminal_indexed_hex, terminal_palette,
             TerminalPalette,
         },
-        terminal_cursor_blink, terminal_font_for_family, terminal_font_size, theme, ui_font_with,
+        terminal_cursor_blink, terminal_font_for_family, terminal_font_size, theme,
         typography::{SIZE_CAPTION, WEIGHT_EMPHASIS, WEIGHT_REGULAR},
+        ui_font_with,
     },
 };
 
@@ -420,12 +421,8 @@ impl TerminalPanel {
         font_ligatures: bool,
     ) -> bool {
         let normalized_font_size = font_size_px.clamp(10.0, 24.0);
-        let cell_width = terminal_cell_width_px(
-            window,
-            font_family,
-            normalized_font_size,
-            font_ligatures,
-        );
+        let cell_width =
+            terminal_cell_width_px(window, font_family, normalized_font_size, font_ligatures);
         let cell_height = terminal_cell_height_px(normalized_font_size);
         let changed = (self.terminal_font_size_px - normalized_font_size).abs() > f32::EPSILON
             || (self.cell_width_px - cell_width).abs() > f32::EPSILON
@@ -1517,7 +1514,11 @@ impl TerminalPanel {
             .gap(SP_3)
             .bg(t.color.bg_panel)
             .text_size(SIZE_CAPTION)
-            .font(ui_font_with(&t.font_ui, &t.font_ui_features, WEIGHT_REGULAR))
+            .font(ui_font_with(
+                &t.font_ui,
+                &t.font_ui_features,
+                WEIGHT_REGULAR,
+            ))
             .text_color(t.color.text_tertiary)
             // shell · size — most common columns, always shown.
             .child(div().text_color(t.color.text_secondary).child(shell_label))

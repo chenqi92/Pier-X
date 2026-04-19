@@ -1,26 +1,27 @@
 use gpui::{
-    div, prelude::*, px, App, ClickEvent, Context, FocusHandle, InteractiveElement, IntoElement,
-    KeyDownEvent, SharedString, StatefulInteractiveElement, WeakEntity, Window,
+    div, prelude::*, px, App, ClickEvent, Context, FocusHandle, IntoElement, KeyDownEvent,
+    SharedString, WeakEntity, Window,
 };
 use pier_core::settings::{AppSettings, AppearanceMode, TerminalCursorStyle, TerminalThemePreset};
 use rust_i18n::t;
 
-use gpui_component::{scroll::ScrollableElement, WindowExt as _};
+use gpui_component::{scroll::ScrollableElement, switch::Switch, WindowExt as _};
 
-use crate::components::ToggleRow;
-use crate::app::keybindings::{
-    format_keystroke, is_modifier_only, resolved_keystroke, ActionId,
-};
+use crate::app::keybindings::{format_keystroke, is_modifier_only, resolved_keystroke, ActionId};
+use crate::components::{Button, ButtonSize, Card, SectionLabel, SettingRow};
 use crate::i18n::{self, LOCALE_ENGLISH, LOCALE_PREFERENCE_SYSTEM, LOCALE_ZH_CN};
 use crate::theme::{
-    available_terminal_font_families, available_ui_font_families, DEFAULT_UI_FONT_FAMILY,
+    available_terminal_font_families, available_ui_font_families,
+    heights::BUTTON_MD_H,
     radius::{RADIUS_MD, RADIUS_SM},
-    spacing::{SP_0_5, SP_1, SP_1_5, SP_2, SP_3, SP_4, SP_5, SP_8},
+    spacing::{SP_0_5, SP_1, SP_1_5, SP_2, SP_3, SP_4, SP_5, SP_6, SP_8},
     terminal::{available_terminal_palettes, terminal_bg_color, terminal_hex_color},
     terminal_cursor_blink, terminal_cursor_style, terminal_font_for_family,
     terminal_font_ligatures, terminal_font_size, terminal_opacity, theme,
-    typography::{SIZE_BODY, SIZE_CAPTION, SIZE_H2, SIZE_SMALL, WEIGHT_EMPHASIS, WEIGHT_MEDIUM},
-    update_settings,
+    typography::{
+        SIZE_BODY, SIZE_CAPTION, SIZE_H1, SIZE_H3, SIZE_SMALL, WEIGHT_EMPHASIS, WEIGHT_MEDIUM,
+    },
+    update_settings, DEFAULT_UI_FONT_FAMILY,
 };
 
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -30,10 +31,10 @@ enum SettingsSection {
     Shortcuts,
 }
 
-const SETTINGS_DIALOG_W: f32 = 920.0;
-const SETTINGS_DIALOG_H: f32 = 620.0;
-const SETTINGS_DIALOG_OUTER_H: f32 = 708.0;
-const SETTINGS_DIALOG_MIN_TOP: f32 = 24.0;
+const SETTINGS_DIALOG_W: f32 = 1088.0;
+const SETTINGS_DIALOG_H: f32 = 672.0;
+const SETTINGS_DIALOG_OUTER_H: f32 = 760.0;
+const SETTINGS_DIALOG_MIN_TOP: f32 = 20.0;
 
 impl SettingsSection {
     const ALL: [Self; 3] = [Self::General, Self::Terminal, Self::Shortcuts];
@@ -51,14 +52,6 @@ impl SettingsSection {
             Self::General => t!("App.Settings.Sections.general_title").into(),
             Self::Terminal => t!("App.Settings.Sections.terminal_title").into(),
             Self::Shortcuts => t!("App.Settings.Sections.shortcuts_title").into(),
-        }
-    }
-
-    fn caption(self) -> SharedString {
-        match self {
-            Self::General => t!("App.Settings.Sections.general_caption").into(),
-            Self::Terminal => t!("App.Settings.Sections.terminal_caption").into(),
-            Self::Shortcuts => t!("App.Settings.Sections.shortcuts_caption").into(),
         }
     }
 }
@@ -157,8 +150,7 @@ impl SettingsDialog {
             && !keystroke.modifiers.platform
             && !keystroke.modifiers.function
         {
-            self.capture_error =
-                Some(t!("App.Settings.Shortcuts.capture_need_modifier").into());
+            self.capture_error = Some(t!("App.Settings.Shortcuts.capture_need_modifier").into());
             cx.notify();
             return;
         }
@@ -207,19 +199,18 @@ impl SettingsDialog {
         };
 
         let mut col = div()
-            .w(px(236.0))
+            .w(px(192.0))
             .h_full()
             .px(SP_3)
             .py(SP_4)
             .flex()
             .flex_col()
-            .gap(SP_2)
+            .gap(SP_1)
             .bg(t.color.bg_panel)
             .border_r_1()
             .border_color(t.color.border_subtle)
             .child(
                 div()
-                    .px(SP_2)
                     .pb(SP_3)
                     .border_b_1()
                     .border_color(t.color.border_subtle)
@@ -233,28 +224,20 @@ impl SettingsDialog {
                     .child(
                         div()
                             .pt(SP_1)
-                            .text_size(SIZE_H2)
+                            .text_size(SIZE_H3)
                             .font_weight(WEIGHT_EMPHASIS)
                             .text_color(t.color.text_primary)
                             .child(SharedString::from(t!("App.Settings.title").to_string())),
                     )
                     .child(
                         div()
-                            .pt(px(4.0))
-                            .text_size(SIZE_SMALL)
-                            .text_color(t.color.text_tertiary)
-                            .child(SharedString::from(t!("App.Settings.sidebar_note").to_string())),
+                            .pt(SP_1)
+                            .text_size(SIZE_CAPTION)
+                            .text_color(t.color.text_secondary)
+                            .child(SharedString::from(format!(
+                                "{theme_label} · {locale_label}"
+                            ))),
                     ),
-            )
-            .child(
-                div()
-                    .px(SP_2)
-                    .flex()
-                    .flex_row()
-                    .flex_wrap()
-                    .gap(SP_1_5)
-                    .child(summary_badge(t, SharedString::from(theme_label)))
-                    .child(summary_badge(t, SharedString::from(locale_label))),
             );
 
         for section in SettingsSection::ALL {
@@ -263,49 +246,13 @@ impl SettingsDialog {
                 this.select_section(section, cx);
             });
 
-            col = col.child(
-                div()
-                    .id(section.id())
-                    .px(SP_3)
-                    .py(SP_2)
-                    .rounded(RADIUS_MD)
-                    .border_1()
-                    .border_color(if is_active {
-                        t.color.accent
-                    } else {
-                        t.color.border_subtle
-                    })
-                    .cursor_pointer()
-                    .bg(if is_active {
-                        t.color.accent_subtle
-                    } else {
-                        t.color.bg_surface
-                    })
-                    .text_color(if is_active {
-                        t.color.accent
-                        } else {
-                        t.color.text_secondary
-                    })
-                    .hover(|style| style.bg(t.color.bg_hover).border_color(t.color.border_default))
-                    .on_click(on_click)
-                    .child(
-                        div()
-                            .text_size(SIZE_BODY)
-                            .font_weight(WEIGHT_MEDIUM)
-                            .child(section.title()),
-                    )
-                    .child(
-                        div()
-                            .pt(px(3.0))
-                            .text_size(SIZE_SMALL)
-                            .text_color(if is_active {
-                                t.color.text_secondary
-                            } else {
-                                t.color.text_tertiary
-                            })
-                            .child(section.caption()),
-                    ),
-            );
+            col = col.child(settings_sidebar_item(
+                t,
+                section.id(),
+                section.title(),
+                is_active,
+                Box::new(on_click),
+            ));
         }
 
         col
@@ -337,204 +284,202 @@ impl SettingsDialog {
             t!("App.Settings.Sections.general_title"),
             t!("App.Settings.General.subtitle"),
         )
-        .child(setting_group(
-            &t,
-            t!("App.Settings.General.language"),
-            vec![
-                settings_note(
-                    &t,
-                    SharedString::from(
-                        t!(
-                            "App.Settings.General.language_description",
-                            language = active_locale.as_str()
-                        )
-                        .to_string(),
-                    ),
-                )
-                .into_any_element(),
-                choice_wrap(vec![
-                    choice_chip(
-                        &t,
-                        "locale-system",
-                        t!("App.Settings.General.language_system"),
-                        locale_pref == LOCALE_PREFERENCE_SYSTEM,
-                        Box::new({
-                            let dialog = dialog.clone();
-                            move |_, _, app| {
-                                apply_dialog_settings(&dialog, app, |settings| {
-                                    settings.ui_locale = LOCALE_PREFERENCE_SYSTEM.to_string();
-                                });
-                            }
-                        }),
-                    )
-                    .into_any_element(),
-                    choice_chip(
-                        &t,
-                        "locale-en",
-                        t!("App.Settings.General.language_english"),
-                        locale_pref == LOCALE_ENGLISH,
-                        Box::new({
-                            let dialog = dialog.clone();
-                            move |_, _, app| {
-                                apply_dialog_settings(&dialog, app, |settings| {
-                                    settings.ui_locale = LOCALE_ENGLISH.to_string();
-                                });
-                            }
-                        }),
-                    )
-                    .into_any_element(),
-                    choice_chip(
-                        &t,
-                        "locale-zh-cn",
-                        t!("App.Settings.General.language_simplified_chinese"),
-                        locale_pref == LOCALE_ZH_CN,
-                        Box::new({
-                            let dialog = dialog.clone();
-                            move |_, _, app| {
-                                apply_dialog_settings(&dialog, app, |settings| {
-                                    settings.ui_locale = LOCALE_ZH_CN.to_string();
-                                });
-                            }
-                        }),
-                    )
-                    .into_any_element(),
-                ])
-                .into_any_element(),
-            ],
-        ))
-        .child(setting_group(
-            &t,
-            t!("App.Settings.General.appearance"),
-            vec![choice_wrap(vec![
-                choice_chip(
-                    &t,
-                    "appearance-system",
-                    t!("App.Settings.General.appearance_system"),
-                    appearance == AppearanceMode::System,
-                    Box::new({
-                        let dialog = dialog.clone();
-                        move |_, _, app| {
-                            apply_dialog_settings(&dialog, app, |settings| {
-                                settings.appearance_mode = AppearanceMode::System;
-                            });
-                        }
-                    }),
-                )
-                .into_any_element(),
-                choice_chip(
-                    &t,
-                    "appearance-dark",
-                    t!("App.Settings.General.dark"),
-                    appearance == AppearanceMode::Dark,
-                    Box::new({
-                        let dialog = dialog.clone();
-                        move |_, _, app| {
-                            apply_dialog_settings(&dialog, app, |settings| {
-                                settings.appearance_mode = AppearanceMode::Dark;
-                            });
-                        }
-                    }),
-                )
-                .into_any_element(),
-                choice_chip(
-                    &t,
-                    "appearance-light",
-                    t!("App.Settings.General.light"),
-                    appearance == AppearanceMode::Light,
-                    Box::new({
-                        let dialog = dialog.clone();
-                        move |_, _, app| {
-                            apply_dialog_settings(&dialog, app, |settings| {
-                                settings.appearance_mode = AppearanceMode::Light;
-                            });
-                        }
-                    }),
-                )
-                .into_any_element(),
-            ])
-            .into_any_element()],
-        ))
-        .child(setting_group(
-            &t,
-            t!("App.Settings.General.ui_font_family"),
-            vec![
-                settings_note(&t, t!("App.Settings.General.ui_font_family_description"))
-                    .into_any_element(),
-                choice_wrap(
-                    available_ui_font_families()
-                        .iter()
-                        .map(|family| {
-                            let family_name = (*family).to_string();
-                            let id = format!(
-                                "ui-font-family-{}",
-                                family_name.to_ascii_lowercase().replace([' ', '.'], "-")
-                            );
+        .child(
+            settings_card()
+                .child(
+                    SettingRow::new(t!("App.Settings.General.language"))
+                        .description(SharedString::from(
+                            t!(
+                                "App.Settings.General.language_description",
+                                language = active_locale.as_str()
+                            )
+                            .to_string(),
+                        ))
+                        .align_top()
+                        .child(choice_wrap(vec![
                             choice_chip(
                                 &t,
-                                id,
-                                *family,
-                                ui_font == family_name,
+                                "locale-system",
+                                t!("App.Settings.General.language_system"),
+                                locale_pref == LOCALE_PREFERENCE_SYSTEM,
                                 Box::new({
                                     let dialog = dialog.clone();
                                     move |_, _, app| {
-                                        let family_name = family_name.clone();
-                                        apply_dialog_settings(&dialog, app, move |settings| {
-                                            // None = "use the default", so
-                                            // the setting round-trips cleanly
-                                            // to disk for the default pick.
-                                            if family_name == DEFAULT_UI_FONT_FAMILY {
-                                                settings.ui_font_family = None;
-                                            } else {
-                                                settings.ui_font_family = Some(family_name.clone());
+                                        apply_dialog_settings(&dialog, app, |settings| {
+                                            settings.ui_locale =
+                                                LOCALE_PREFERENCE_SYSTEM.to_string();
+                                        });
+                                    }
+                                }),
+                            )
+                            .into_any_element(),
+                            choice_chip(
+                                &t,
+                                "locale-en",
+                                t!("App.Settings.General.language_english"),
+                                locale_pref == LOCALE_ENGLISH,
+                                Box::new({
+                                    let dialog = dialog.clone();
+                                    move |_, _, app| {
+                                        apply_dialog_settings(&dialog, app, |settings| {
+                                            settings.ui_locale = LOCALE_ENGLISH.to_string();
+                                        });
+                                    }
+                                }),
+                            )
+                            .into_any_element(),
+                            choice_chip(
+                                &t,
+                                "locale-zh-cn",
+                                t!("App.Settings.General.language_simplified_chinese"),
+                                locale_pref == LOCALE_ZH_CN,
+                                Box::new({
+                                    let dialog = dialog.clone();
+                                    move |_, _, app| {
+                                        apply_dialog_settings(&dialog, app, |settings| {
+                                            settings.ui_locale = LOCALE_ZH_CN.to_string();
+                                        });
+                                    }
+                                }),
+                            )
+                            .into_any_element(),
+                        ])),
+                )
+                .child(
+                    SettingRow::new(t!("App.Settings.General.appearance"))
+                        .align_top()
+                        .child(choice_wrap(vec![
+                            choice_chip(
+                                &t,
+                                "appearance-system",
+                                t!("App.Settings.General.appearance_system"),
+                                appearance == AppearanceMode::System,
+                                Box::new({
+                                    let dialog = dialog.clone();
+                                    move |_, _, app| {
+                                        apply_dialog_settings(&dialog, app, |settings| {
+                                            settings.appearance_mode = AppearanceMode::System;
+                                        });
+                                    }
+                                }),
+                            )
+                            .into_any_element(),
+                            choice_chip(
+                                &t,
+                                "appearance-dark",
+                                t!("App.Settings.General.dark"),
+                                appearance == AppearanceMode::Dark,
+                                Box::new({
+                                    let dialog = dialog.clone();
+                                    move |_, _, app| {
+                                        apply_dialog_settings(&dialog, app, |settings| {
+                                            settings.appearance_mode = AppearanceMode::Dark;
+                                        });
+                                    }
+                                }),
+                            )
+                            .into_any_element(),
+                            choice_chip(
+                                &t,
+                                "appearance-light",
+                                t!("App.Settings.General.light"),
+                                appearance == AppearanceMode::Light,
+                                Box::new({
+                                    let dialog = dialog.clone();
+                                    move |_, _, app| {
+                                        apply_dialog_settings(&dialog, app, |settings| {
+                                            settings.appearance_mode = AppearanceMode::Light;
+                                        });
+                                    }
+                                }),
+                            )
+                            .into_any_element(),
+                        ])),
+                ),
+        )
+        .child(
+            settings_card()
+                .child(
+                    SettingRow::new(t!("App.Settings.General.ui_font_family"))
+                        .description(t!("App.Settings.General.ui_font_family_description"))
+                        .align_top()
+                        .child(choice_wrap(
+                            available_ui_font_families()
+                                .iter()
+                                .map(|family| {
+                                    let family_name = (*family).to_string();
+                                    let id = format!(
+                                        "ui-font-family-{}",
+                                        family_name.to_ascii_lowercase().replace([' ', '.'], "-")
+                                    );
+                                    choice_chip(
+                                        &t,
+                                        id,
+                                        *family,
+                                        ui_font == family_name,
+                                        Box::new({
+                                            let dialog = dialog.clone();
+                                            move |_, _, app| {
+                                                let family_name = family_name.clone();
+                                                apply_dialog_settings(
+                                                    &dialog,
+                                                    app,
+                                                    move |settings| {
+                                                        if family_name == DEFAULT_UI_FONT_FAMILY {
+                                                            settings.ui_font_family = None;
+                                                        } else {
+                                                            settings.ui_font_family =
+                                                                Some(family_name.clone());
+                                                        }
+                                                    },
+                                                );
                                             }
-                                        });
-                                    }
-                                }),
-                            )
-                            .into_any_element()
-                        })
-                        .collect(),
+                                        }),
+                                    )
+                                    .into_any_element()
+                                })
+                                .collect(),
+                        )),
                 )
-                .into_any_element(),
-            ],
-        ))
-        .child(setting_group(
-            &t,
-            t!("App.Settings.General.terminal_font_family"),
-            vec![
-                settings_note(&t, t!("App.Settings.General.terminal_font_family_description"))
-                    .into_any_element(),
-                choice_wrap(
-                    available_terminal_font_families()
-                        .iter()
-                        .map(|family| {
-                            let family_name = (*family).to_string();
-                            let id = format!(
-                                "font-family-{}",
-                                family_name.to_ascii_lowercase().replace(' ', "-")
-                            );
-                            choice_chip(
-                                &t,
-                                id,
-                                *family,
-                                mono_font == family_name,
-                                Box::new({
-                                    let dialog = dialog.clone();
-                                    move |_, _, app| {
-                                        let family_name = family_name.clone();
-                                        apply_dialog_settings(&dialog, app, move |settings| {
-                                            settings.terminal_font_family = family_name.clone();
-                                        });
-                                    }
-                                }),
-                            )
-                            .into_any_element()
-                        })
-                        .collect(),
-                )
-                .into_any_element(),
-            ],
-        ))
+                .child(
+                    SettingRow::new(t!("App.Settings.General.terminal_font_family"))
+                        .description(t!("App.Settings.General.terminal_font_family_description"))
+                        .align_top()
+                        .child(choice_wrap(
+                            available_terminal_font_families()
+                                .iter()
+                                .map(|family| {
+                                    let family_name = (*family).to_string();
+                                    let id = format!(
+                                        "font-family-{}",
+                                        family_name.to_ascii_lowercase().replace(' ', "-")
+                                    );
+                                    choice_chip(
+                                        &t,
+                                        id,
+                                        *family,
+                                        mono_font == family_name,
+                                        Box::new({
+                                            let dialog = dialog.clone();
+                                            move |_, _, app| {
+                                                let family_name = family_name.clone();
+                                                apply_dialog_settings(
+                                                    &dialog,
+                                                    app,
+                                                    move |settings| {
+                                                        settings.terminal_font_family =
+                                                            family_name.clone();
+                                                    },
+                                                );
+                                            }
+                                        }),
+                                    )
+                                    .into_any_element()
+                                })
+                                .collect(),
+                        )),
+                ),
+        )
     }
 
     fn render_terminal(&self, cx: &mut Context<Self>) -> impl IntoElement {
@@ -558,200 +503,224 @@ impl SettingsDialog {
             t!("App.Settings.Sections.terminal_title"),
             t!("App.Settings.Terminal.subtitle"),
         )
-        .child(setting_group(
-            &t,
-            t!("App.Settings.Terminal.theme"),
-            available_terminal_palettes()
-                .iter()
-                .map(|palette| {
-                    let palette = *palette;
-                    let preset = palette.preset;
-                    terminal_theme_option(
-                        &t,
-                        palette,
-                        theme_preset == preset,
-                        Box::new({
-                            let dialog = dialog.clone();
-                            move |_, _, app| {
-                                apply_dialog_settings(&dialog, app, move |settings| {
-                                    settings.terminal_theme_preset = preset;
-                                });
-                            }
-                        }),
-                    )
-                    .into_any_element()
-                })
-                .collect(),
-        ))
-        .child(setting_group(
-            &t,
-            t!("App.Settings.Terminal.typography"),
-            vec![
-                stepper_row(
-                    &t,
-                    "terminal-font-size",
-                    t!("App.Settings.Terminal.font_size_label"),
-                    format!("{} px", font_size as u16).into(),
-                    Box::new({
-                        let dialog = dialog.clone();
-                        move |_, _, app| {
-                            apply_dialog_settings(&dialog, app, |settings| {
-                                settings.terminal_font_size =
-                                    settings.terminal_font_size.saturating_sub(1).max(10);
-                            });
-                        }
-                    }),
-                    Box::new({
-                        let dialog = dialog.clone();
-                        move |_, _, app| {
-                            apply_dialog_settings(&dialog, app, |settings| {
-                                settings.terminal_font_size =
-                                    settings.terminal_font_size.saturating_add(1).min(24);
-                            });
-                        }
-                    }),
+        .child(
+            settings_card()
+                .child(SectionLabel::new(t!("App.Settings.Terminal.preview")))
+                .child(
+                    div()
+                        .p(SP_3)
+                        .rounded(RADIUS_MD)
+                        .bg(preview_bg)
+                        .border_1()
+                        .border_color(t.color.border_subtle)
+                        .child(
+                            div()
+                                .pb(SP_2)
+                                .text_size(SIZE_CAPTION)
+                                .font_weight(WEIGHT_MEDIUM)
+                                .text_color(t.color.text_secondary)
+                                .child(SharedString::from(
+                                    t!("App.Settings.Terminal.Palettes.default").to_string(),
+                                )),
+                        )
+                        .child(
+                            div()
+                                .font(preview_font)
+                                .text_size(preview_size)
+                                .line_height(px(font_size * 1.38))
+                                .text_color(preview_fg)
+                                .child("ssh root@prod-box\nprintf \"!= => <= ===\"\ncargo check -p pier-ui-gpui"),
+                        ),
+                ),
+        )
+        .child(
+            settings_card()
+                .child(
+                    SettingRow::new(t!("App.Settings.Terminal.theme"))
+                        .align_top()
+                        .child(
+                            choice_wrap(
+                                available_terminal_palettes()
+                                    .iter()
+                                    .map(|palette| {
+                                        let palette = *palette;
+                                        let preset = palette.preset;
+                                        terminal_theme_option(
+                                            &t,
+                                            palette,
+                                            theme_preset == preset,
+                                            Box::new({
+                                                let dialog = dialog.clone();
+                                                move |_, _, app| {
+                                                    apply_dialog_settings(
+                                                        &dialog,
+                                                        app,
+                                                        move |settings| {
+                                                            settings.terminal_theme_preset =
+                                                                preset;
+                                                        },
+                                                    );
+                                                }
+                                            }),
+                                        )
+                                        .into_any_element()
+                                    })
+                                    .collect(),
+                            ),
+                        ),
                 )
-                .into_any_element(),
-                div()
-                    .p(SP_2)
-                    .rounded(RADIUS_SM)
-                    .bg(preview_bg)
-                    .border_1()
-                    .border_color(t.color.border_subtle)
-                    .child(
-                        div()
-                            .pb(SP_2)
-                            .text_size(SIZE_CAPTION)
-                            .font_weight(WEIGHT_MEDIUM)
-                            .text_color(t.color.text_secondary)
-                            .child(SharedString::from(t!("App.Settings.Terminal.preview").to_string())),
-                    )
-                    .child(
-                        div()
-                            .font(preview_font)
-                            .text_size(preview_size)
-                            .line_height(px(font_size * 1.38))
-                            .text_color(preview_fg)
-                            .child("ssh root@prod-box\nprintf \"!= => <= ===\"\ncargo check -p pier-ui-gpui"),
-                    )
-                    .into_any_element(),
-            ],
-        ))
-        .child(setting_group(
-            &t,
-            t!("App.Settings.Terminal.rendering"),
-            vec![
-                stepper_row(
-                    &t,
-                    "terminal-opacity",
-                    t!("App.Settings.Terminal.background_opacity"),
-                    format!("{opacity_pct}%").into(),
-                    Box::new({
-                        let dialog = dialog.clone();
-                        move |_, _, app| {
-                            apply_dialog_settings(&dialog, app, |settings| {
-                                settings.terminal_opacity_pct =
-                                    settings.terminal_opacity_pct.saturating_sub(5).max(30);
-                            });
-                        }
-                    }),
-                    Box::new({
-                        let dialog = dialog.clone();
-                        move |_, _, app| {
-                            apply_dialog_settings(&dialog, app, |settings| {
-                                settings.terminal_opacity_pct =
-                                    settings.terminal_opacity_pct.saturating_add(5).min(100);
-                            });
-                        }
-                    }),
+                .child(
+                    SettingRow::new(t!("App.Settings.Terminal.background_opacity")).child(
+                        stepper_control(
+                            &t,
+                            "terminal-opacity",
+                            format!("{opacity_pct}%").into(),
+                            Box::new({
+                                let dialog = dialog.clone();
+                                move |_, _, app| {
+                                    apply_dialog_settings(&dialog, app, |settings| {
+                                        settings.terminal_opacity_pct = settings
+                                            .terminal_opacity_pct
+                                            .saturating_sub(5)
+                                            .max(30);
+                                    });
+                                }
+                            }),
+                            Box::new({
+                                let dialog = dialog.clone();
+                                move |_, _, app| {
+                                    apply_dialog_settings(&dialog, app, |settings| {
+                                        settings.terminal_opacity_pct = settings
+                                            .terminal_opacity_pct
+                                            .saturating_add(5)
+                                            .min(100);
+                                    });
+                                }
+                            }),
+                        ),
+                    ),
+                ),
+        )
+        .child(
+            settings_card()
+                .child(
+                    SettingRow::new(t!("App.Settings.Terminal.font_size_label")).child(
+                        stepper_control(
+                            &t,
+                            "terminal-font-size",
+                            format!("{} px", font_size as u16).into(),
+                            Box::new({
+                                let dialog = dialog.clone();
+                                move |_, _, app| {
+                                    apply_dialog_settings(&dialog, app, |settings| {
+                                        settings.terminal_font_size = settings
+                                            .terminal_font_size
+                                            .saturating_sub(1)
+                                            .max(10);
+                                    });
+                                }
+                            }),
+                            Box::new({
+                                let dialog = dialog.clone();
+                                move |_, _, app| {
+                                    apply_dialog_settings(&dialog, app, |settings| {
+                                        settings.terminal_font_size = settings
+                                            .terminal_font_size
+                                            .saturating_add(1)
+                                            .min(24);
+                                    });
+                                }
+                            }),
+                        ),
+                    ),
                 )
-                .into_any_element(),
-                ToggleRow::new(
-                    "settings-toggle-ligatures",
-                    t!("App.Settings.Terminal.font_ligatures"),
+                .child(
+                    SettingRow::new(t!("App.Settings.Terminal.font_ligatures"))
+                        .description(t!("App.Settings.Terminal.font_ligatures_description"))
+                        .child(settings_switch(
+                            "settings-toggle-ligatures",
+                            font_ligatures,
+                            Box::new({
+                                let dialog = dialog.clone();
+                                move |value, _, app| {
+                                    apply_dialog_settings(&dialog, app, move |settings| {
+                                        settings.terminal_font_ligatures = *value;
+                                    });
+                                }
+                            }),
+                        )),
                 )
-                .description(t!("App.Settings.Terminal.font_ligatures_description"))
-                .checked(font_ligatures)
-                .on_toggle({
-                    let dialog = dialog.clone();
-                    move |value, _, app| {
-                        apply_dialog_settings(&dialog, app, move |settings| {
-                            settings.terminal_font_ligatures = *value;
-                        });
-                    }
-                })
-                .into_any_element(),
-            ],
-        ))
-        .child(setting_group(
-            &t,
-            t!("App.Settings.Terminal.cursor"),
-            vec![
-                choice_wrap(vec![
-                    choice_chip(
-                        &t,
-                        "cursor-block",
-                        t!("App.Settings.Terminal.cursor_block"),
-                        cursor_style == TerminalCursorStyle::Block,
-                        Box::new({
-                            let dialog = dialog.clone();
-                            move |_, _, app| {
-                                apply_dialog_settings(&dialog, app, |settings| {
-                                    settings.terminal_cursor_style = TerminalCursorStyle::Block;
-                                });
-                            }
-                        }),
-                    )
-                    .into_any_element(),
-                    choice_chip(
-                        &t,
-                        "cursor-underline",
-                        t!("App.Settings.Terminal.cursor_underline"),
-                        cursor_style == TerminalCursorStyle::Underline,
-                        Box::new({
-                            let dialog = dialog.clone();
-                            move |_, _, app| {
-                                apply_dialog_settings(&dialog, app, |settings| {
-                                    settings.terminal_cursor_style = TerminalCursorStyle::Underline;
-                                });
-                            }
-                        }),
-                    )
-                    .into_any_element(),
-                    choice_chip(
-                        &t,
-                        "cursor-bar",
-                        t!("App.Settings.Terminal.cursor_bar"),
-                        cursor_style == TerminalCursorStyle::Bar,
-                        Box::new({
-                            let dialog = dialog.clone();
-                            move |_, _, app| {
-                                apply_dialog_settings(&dialog, app, |settings| {
-                                    settings.terminal_cursor_style = TerminalCursorStyle::Bar;
-                                });
-                            }
-                        }),
-                    )
-                    .into_any_element(),
-                ])
-                .into_any_element(),
-                ToggleRow::new(
-                    "settings-toggle-cursor-blink",
-                    t!("App.Settings.Terminal.cursor_blink"),
+                .child(
+                    SettingRow::new(t!("App.Settings.Terminal.cursor"))
+                        .align_top()
+                        .child(choice_wrap(vec![
+                            choice_chip(
+                                &t,
+                                "cursor-block",
+                                t!("App.Settings.Terminal.cursor_block"),
+                                cursor_style == TerminalCursorStyle::Block,
+                                Box::new({
+                                    let dialog = dialog.clone();
+                                    move |_, _, app| {
+                                        apply_dialog_settings(&dialog, app, |settings| {
+                                            settings.terminal_cursor_style =
+                                                TerminalCursorStyle::Block;
+                                        });
+                                    }
+                                }),
+                            )
+                            .into_any_element(),
+                            choice_chip(
+                                &t,
+                                "cursor-underline",
+                                t!("App.Settings.Terminal.cursor_underline"),
+                                cursor_style == TerminalCursorStyle::Underline,
+                                Box::new({
+                                    let dialog = dialog.clone();
+                                    move |_, _, app| {
+                                        apply_dialog_settings(&dialog, app, |settings| {
+                                            settings.terminal_cursor_style =
+                                                TerminalCursorStyle::Underline;
+                                        });
+                                    }
+                                }),
+                            )
+                            .into_any_element(),
+                            choice_chip(
+                                &t,
+                                "cursor-bar",
+                                t!("App.Settings.Terminal.cursor_bar"),
+                                cursor_style == TerminalCursorStyle::Bar,
+                                Box::new({
+                                    let dialog = dialog.clone();
+                                    move |_, _, app| {
+                                        apply_dialog_settings(&dialog, app, |settings| {
+                                            settings.terminal_cursor_style =
+                                                TerminalCursorStyle::Bar;
+                                        });
+                                    }
+                                }),
+                            )
+                            .into_any_element(),
+                        ])),
                 )
-                .description(t!("App.Settings.Terminal.cursor_blink_description"))
-                .checked(cursor_blink)
-                .on_toggle({
-                    let dialog = dialog.clone();
-                    move |value, _, app| {
-                        apply_dialog_settings(&dialog, app, move |settings| {
-                            settings.terminal_cursor_blink = *value;
-                        });
-                    }
-                })
-                .into_any_element(),
-            ],
-        ))
+                .child(
+                    SettingRow::new(t!("App.Settings.Terminal.cursor_blink"))
+                        .description(t!("App.Settings.Terminal.cursor_blink_description"))
+                        .child(settings_switch(
+                            "settings-toggle-cursor-blink",
+                            cursor_blink,
+                            Box::new({
+                                let dialog = dialog.clone();
+                                move |value, _, app| {
+                                    apply_dialog_settings(&dialog, app, move |settings| {
+                                        settings.terminal_cursor_blink = *value;
+                                    });
+                                }
+                            }),
+                        )),
+                ),
+        )
     }
 
     fn render_shortcuts(&self, cx: &mut Context<Self>) -> impl IntoElement {
@@ -765,9 +734,7 @@ impl SettingsDialog {
         for action in ActionId::ALL {
             let stroke = resolved_keystroke(&settings, action);
             let is_capturing = capturing == Some(action);
-            let is_overridden = settings
-                .keybindings
-                .contains_key(action.storage_id());
+            let is_overridden = settings.keybindings.contains_key(action.storage_id());
             let row_error = if is_capturing {
                 capture_error.clone()
             } else {
@@ -798,13 +765,7 @@ impl SettingsDialog {
             t!("App.Settings.Sections.shortcuts_title"),
             t!("App.Settings.Shortcuts.subtitle"),
         )
-        .child(
-            div()
-                .flex()
-                .flex_col()
-                .gap(SP_0_5)
-                .children(rows),
-        )
+        .child(settings_card().gap(SP_1).children(rows))
     }
 }
 
@@ -844,79 +805,48 @@ fn section_shell(
 ) -> gpui_component::scroll::Scrollable<gpui::Div> {
     let title: SharedString = title.into();
     let subtitle: SharedString = subtitle.into();
-    // Scrollbar thumb draws *on top of* the content area, not in a
-    // dedicated gutter. We need enough right padding that the thumb
-    // has a clear lane *and* the rightmost button (`更改`) still has
-    // room to breathe. SP_8 (32px) works out to ~14px thumb + ~18px
-    // visual margin.
     div()
         .h_full()
         .overflow_y_scrollbar()
-        .pl(SP_5)
+        .pl(SP_6)
         .pr(SP_8)
         .py(SP_5)
         .flex()
         .flex_col()
-        .gap(SP_4)
+        .gap(SP_5)
         .child(
             div()
-                .pb(SP_2)
+                .pb(SP_3)
                 .border_b_1()
                 .border_color(t.color.border_subtle)
                 .child(
                     div()
-                        .text_size(SIZE_H2)
+                        .text_size(SIZE_H1)
                         .font_weight(WEIGHT_EMPHASIS)
                         .text_color(t.color.text_primary)
                         .child(title),
                 )
                 .child(
                     div()
-                        .pt(px(4.0))
-                        .text_size(SIZE_SMALL)
-                        .text_color(t.color.text_tertiary)
+                        .pt(SP_1)
+                        .text_size(SIZE_CAPTION)
+                        .text_color(t.color.text_secondary)
                         .child(subtitle),
                 ),
         )
 }
 
-fn setting_group(
-    t: &crate::theme::Theme,
-    title: impl Into<SharedString>,
-    children: Vec<gpui::AnyElement>,
-) -> impl IntoElement {
-    let title: SharedString = title.into();
-    div()
-        .p(SP_4)
-        .flex()
-        .flex_col()
-        .gap(SP_3)
-        .rounded(RADIUS_MD)
-        .bg(t.color.bg_panel)
-        .border_1()
-        .border_color(t.color.border_default)
-        .child(
-            div()
-                .text_size(SIZE_BODY)
-                .font_weight(WEIGHT_MEDIUM)
-                .text_color(t.color.text_primary)
-                .child(title),
-        )
-        .children(children)
+fn settings_card() -> Card {
+    Card::new().padding(SP_4).gap(SP_4)
 }
 
 fn choice_wrap(children: Vec<gpui::AnyElement>) -> impl IntoElement {
-    div().flex().flex_row().flex_wrap().gap(SP_2).children(children)
-}
-
-fn settings_note(
-    t: &crate::theme::Theme,
-    label: impl Into<SharedString>,
-) -> impl IntoElement {
     div()
-        .text_size(SIZE_SMALL)
-        .text_color(t.color.text_tertiary)
-        .child(label.into())
+        .flex()
+        .flex_row()
+        .flex_wrap()
+        .gap(SP_2)
+        .children(children)
 }
 
 fn choice_chip(
@@ -931,8 +861,8 @@ fn choice_chip(
     let id: SharedString = format!("settings-chip-{}", id_suffix.as_ref()).into();
     div()
         .id(gpui::ElementId::Name(id))
-        .min_w(px(116.0))
-        .h(px(32.0))
+        .min_w(px(96.0))
+        .h(BUTTON_MD_H)
         .px(SP_3)
         .flex()
         .items_center()
@@ -947,7 +877,7 @@ fn choice_chip(
         .bg(if selected {
             t.color.accent_subtle
         } else {
-            t.color.bg_surface
+            t.color.bg_canvas
         })
         .text_color(if selected {
             t.color.accent
@@ -955,7 +885,11 @@ fn choice_chip(
             t.color.text_secondary
         })
         .cursor_pointer()
-        .hover(|style| style.bg(t.color.bg_hover).border_color(t.color.border_default))
+        .hover(|style| {
+            style
+                .bg(t.color.bg_hover)
+                .border_color(t.color.border_default)
+        })
         .on_click(on_click)
         .child(
             div()
@@ -965,40 +899,32 @@ fn choice_chip(
         )
 }
 
-fn stepper_row(
+fn stepper_control(
     t: &crate::theme::Theme,
     id_prefix: &'static str,
-    label: impl Into<SharedString>,
     value: SharedString,
     on_minus: Box<dyn Fn(&ClickEvent, &mut Window, &mut App) + 'static>,
     on_plus: Box<dyn Fn(&ClickEvent, &mut Window, &mut App) + 'static>,
 ) -> impl IntoElement {
-    let label: SharedString = label.into();
     div()
-        .p(SP_2)
+        .px(SP_1)
+        .py(SP_1)
         .flex()
         .flex_row()
         .items_center()
-        .gap(SP_2)
+        .gap(SP_1_5)
         .rounded(RADIUS_SM)
-        .bg(t.color.bg_surface)
+        .bg(t.color.bg_canvas)
         .border_1()
         .border_color(t.color.border_subtle)
-        .child(
-            div().flex_1().min_w(px(0.0)).child(
-                div()
-                    .text_size(SIZE_BODY)
-                    .text_color(t.color.text_secondary)
-                    .child(label),
-            ),
-        )
         .child(icon_step_button(t, id_prefix, "-", on_minus))
         .child(
             div()
-                .min_w(px(58.0))
+                .min_w(px(56.0))
                 .text_size(SIZE_CAPTION)
                 .font_weight(WEIGHT_MEDIUM)
                 .text_color(t.color.text_primary)
+                .text_center()
                 .child(value),
         )
         .child(icon_step_button(t, id_prefix, "+", on_plus))
@@ -1013,15 +939,13 @@ fn icon_step_button(
     let id: SharedString = format!("settings-step-{id_prefix}-{label}").into();
     div()
         .id(gpui::ElementId::Name(id))
-        .w(px(24.0))
-        .h(px(24.0))
+        .w(BUTTON_MD_H)
+        .h(BUTTON_MD_H)
         .flex()
         .items_center()
         .justify_center()
         .rounded(RADIUS_SM)
         .bg(t.color.bg_surface)
-        .border_1()
-        .border_color(t.color.border_subtle)
         .text_color(t.color.text_secondary)
         .cursor_pointer()
         .hover(|style| style.bg(t.color.bg_hover).text_color(t.color.text_primary))
@@ -1033,7 +957,6 @@ fn icon_step_button(
                 .child(label),
         )
 }
-
 
 fn shortcut_row_interactive(
     t: &crate::theme::Theme,
@@ -1047,21 +970,13 @@ fn shortcut_row_interactive(
 ) -> impl IntoElement {
     let label = action.label();
 
-    // Shortcut rows used to be framed like individual cards (bordered
-    // panels stacked vertically). With the gap between rows fixed at
-    // SP_4 the panel-style border made them look "glued together" —
-    // every shortcut looked like a nested sub-card. Pier's own
-    // keybindings sheet renders each shortcut as a *row* inside the
-    // surrounding section card: no per-row border, no surface fill,
-    // just a hover tint. Follow that here; `is_capturing` still gets
-    // a highlight but via an accent background, not an accent border.
     let mut row = div()
-        .px(SP_3)
-        .py(SP_1_5)
+        .px(SP_2)
+        .py(SP_2)
         .flex()
         .flex_row()
         .items_center()
-        .gap(SP_2)
+        .gap(SP_3)
         .rounded(RADIUS_SM)
         .hover(|s| s.bg(t.color.bg_hover))
         .when(is_capturing, |el| el.bg(t.color.accent_subtle))
@@ -1071,28 +986,24 @@ fn shortcut_row_interactive(
                 .min_w(px(0.0))
                 .truncate()
                 .text_size(SIZE_BODY)
+                .font_weight(WEIGHT_MEDIUM)
                 .text_color(t.color.text_primary)
                 .child(label),
         );
 
     if is_capturing {
-        row = row.child(shortcut_capture_pad(
-            t,
-            capture_error,
-            capture_focus,
-            cx,
-        ));
+        row = row.child(shortcut_capture_pad(t, capture_error, capture_focus, cx));
     } else {
         row = row.child(
             div()
                 .flex_none()
                 .px(SP_2)
-                .py(SP_1)
+                .py(SP_1_5)
                 .rounded(RADIUS_SM)
                 .bg(t.color.bg_canvas)
                 .border_1()
                 .border_color(if is_overridden {
-                    t.color.accent_subtle
+                    t.color.accent_muted
                 } else {
                     t.color.border_subtle
                 })
@@ -1110,19 +1021,8 @@ fn shortcut_row_interactive(
     };
     let change_id = format!("shortcut-change-{}", action.storage_id());
     row = row.child(
-        div()
-            .id(gpui::ElementId::Name(SharedString::from(change_id)))
-            .flex_none()
-            .px(SP_2)
-            .py(SP_1)
-            .rounded(RADIUS_SM)
-            .border_1()
-            .border_color(t.color.border_default)
-            .cursor_pointer()
-            .hover(|style| style.bg(t.color.bg_hover))
-            .text_size(SIZE_CAPTION)
-            .text_color(t.color.text_primary)
-            .child(change_label)
+        Button::secondary(gpui::ElementId::Name(change_id.into()), change_label)
+            .size(ButtonSize::Sm)
             .on_click(cx.listener(move |this, _: &ClickEvent, window, cx| {
                 if this.capturing == Some(action) {
                     this.cancel_capture(cx);
@@ -1135,24 +1035,14 @@ fn shortcut_row_interactive(
     if is_overridden {
         let reset_id = format!("shortcut-reset-{}", action.storage_id());
         row = row.child(
-            div()
-                .id(gpui::ElementId::Name(SharedString::from(reset_id)))
-                .flex_none()
-                .px(SP_2)
-                .py(SP_1)
-                .rounded(RADIUS_SM)
-                .border_1()
-                .border_color(t.color.border_subtle)
-                .cursor_pointer()
-                .hover(|style| style.bg(t.color.bg_hover))
-                .text_size(SIZE_CAPTION)
-                .text_color(t.color.text_tertiary)
-                .child(SharedString::from(
-                    t!("App.Settings.Shortcuts.reset").to_string(),
-                ))
-                .on_click(cx.listener(move |this, _: &ClickEvent, _window, cx| {
-                    this.reset_to_default(action, cx);
-                })),
+            Button::ghost(
+                gpui::ElementId::Name(reset_id.into()),
+                SharedString::from(t!("App.Settings.Shortcuts.reset").to_string()),
+            )
+            .size(ButtonSize::Sm)
+            .on_click(cx.listener(move |this, _: &ClickEvent, _window, cx| {
+                this.reset_to_default(action, cx);
+            })),
         );
     }
 
@@ -1170,7 +1060,7 @@ fn shortcut_capture_pad(
     });
     div()
         .px(SP_2)
-        .py(SP_1)
+        .py(SP_1_5)
         .rounded(RADIUS_SM)
         .bg(t.color.bg_canvas)
         .border_1()
@@ -1195,11 +1085,12 @@ fn terminal_theme_option(
 
     div()
         .id(gpui::ElementId::Name(id))
+        .min_w(px(220.0))
         .px(SP_2)
         .py(SP_2)
         .flex()
         .flex_row()
-        .items_center()
+        .items_start()
         .gap(SP_2)
         .rounded(RADIUS_SM)
         .border_1()
@@ -1211,21 +1102,24 @@ fn terminal_theme_option(
         .bg(if selected {
             t.color.accent_subtle
         } else {
-            t.color.bg_panel
+            t.color.bg_canvas
         })
         .cursor_pointer()
-        .hover(|style| style.bg(t.color.bg_hover))
+        .hover(|style| {
+            style
+                .bg(t.color.bg_hover)
+                .border_color(t.color.border_default)
+        })
         .on_click(on_click)
         .child(
             div()
                 .flex()
                 .flex_row()
                 .items_center()
-                .gap(px(4.0))
+                .gap(SP_1)
                 .child(color_dot(palette.background_hex))
                 .child(color_dot(palette.foreground_hex))
                 .child(color_dot(palette.cursor_bg_hex))
-                .child(color_dot(palette.ansi_16[4]))
                 .child(color_dot(palette.ansi_16[2]))
                 .child(color_dot(palette.ansi_16[1])),
         )
@@ -1246,7 +1140,7 @@ fn terminal_theme_option(
                 )
                 .child(
                     div()
-                        .pt(px(2.0))
+                        .pt(SP_0_5)
                         .text_size(SIZE_SMALL)
                         .text_color(t.color.text_tertiary)
                         .child(SharedString::from(match palette.preset {
@@ -1273,23 +1167,59 @@ fn terminal_theme_option(
 
 fn color_dot(hex: u32) -> impl IntoElement {
     div()
-        .w(px(12.0))
-        .h(px(12.0))
+        .w(px(10.0))
+        .h(px(10.0))
         .rounded(px(999.0))
         .bg(terminal_hex_color(hex))
 }
 
-fn summary_badge(t: &crate::theme::Theme, label: SharedString) -> impl IntoElement {
+fn settings_switch(
+    id: impl Into<SharedString>,
+    checked: bool,
+    on_toggle: Box<dyn Fn(&bool, &mut Window, &mut App) + 'static>,
+) -> impl IntoElement {
+    Switch::new(gpui::ElementId::Name(id.into()))
+        .checked(checked)
+        .on_click(on_toggle)
+}
+
+fn settings_sidebar_item(
+    t: &crate::theme::Theme,
+    id: &'static str,
+    label: SharedString,
+    active: bool,
+    on_click: Box<dyn Fn(&ClickEvent, &mut Window, &mut App) + 'static>,
+) -> impl IntoElement {
     div()
-        .px(SP_2)
-        .py(SP_1)
-        .rounded(RADIUS_SM)
-        .bg(t.color.bg_surface)
+        .id(gpui::ElementId::Name(id.into()))
+        .px(SP_3)
+        .py(SP_2)
+        .rounded(RADIUS_MD)
+        .bg(if active {
+            t.color.accent_subtle
+        } else {
+            t.color.bg_panel
+        })
         .border_1()
-        .border_color(t.color.border_subtle)
-        .text_size(SIZE_SMALL)
+        .border_color(if active {
+            t.color.accent_muted
+        } else {
+            t.color.bg_panel
+        })
+        .cursor_pointer()
+        .hover(|style| {
+            style
+                .bg(t.color.bg_hover)
+                .border_color(t.color.border_default)
+        })
+        .on_click(on_click)
+        .text_size(SIZE_BODY)
         .font_weight(WEIGHT_MEDIUM)
-        .text_color(t.color.text_secondary)
+        .text_color(if active {
+            t.color.accent
+        } else {
+            t.color.text_secondary
+        })
         .child(label)
 }
 

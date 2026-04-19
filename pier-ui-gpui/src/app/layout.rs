@@ -21,17 +21,17 @@ use crate::app::route::DbKind;
 
 pub const TOOLBAR_HEIGHT: Pixels = px(36.0);
 
-pub const LEFT_PANEL_MIN_W: Pixels = px(180.0);
-pub const LEFT_PANEL_DEFAULT_W: Pixels = px(260.0);
-pub const LEFT_PANEL_MAX_W: Pixels = px(400.0);
+pub const LEFT_PANEL_MIN_W: Pixels = px(196.0);
+pub const LEFT_PANEL_DEFAULT_W: Pixels = px(280.0);
+pub const LEFT_PANEL_MAX_W: Pixels = px(420.0);
 
-pub const CENTER_PANEL_MIN_W: Pixels = px(360.0);
+pub const CENTER_PANEL_MIN_W: Pixels = px(400.0);
 
-pub const RIGHT_PANEL_MIN_W: Pixels = px(320.0);
-pub const RIGHT_PANEL_DEFAULT_W: Pixels = px(360.0);
-pub const RIGHT_PANEL_MAX_W: Pixels = px(600.0);
+pub const RIGHT_PANEL_MIN_W: Pixels = px(344.0);
+pub const RIGHT_PANEL_DEFAULT_W: Pixels = px(416.0);
+pub const RIGHT_PANEL_MAX_W: Pixels = px(640.0);
 
-pub const RIGHT_ICON_BAR_W: Pixels = px(36.0);
+pub const RIGHT_ICON_BAR_W: Pixels = px(44.0);
 
 // ─── Left panel: Files / Servers ────────────────────────────────────────
 

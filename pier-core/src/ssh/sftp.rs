@@ -26,9 +26,6 @@
 //!
 //! ## Not yet
 //!
-//! * Chunked upload/download with progress callbacks. M3d+
-//!   adds a streaming `open_read` / `open_write` pair plus a
-//!   progress channel the UI binds to.
 //! * Recursive operations (`rm -rf`, `mkdir -p`). The shell
 //!   composes these from the single-step primitives today;
 //!   we'll move them into this module when recursion becomes
@@ -42,9 +39,41 @@ use std::sync::Arc;
 
 use russh_sftp::client::SftpSession;
 use serde::{Deserialize, Serialize};
+use tokio::io::{AsyncReadExt, AsyncWriteExt};
 
 use super::error::{Result, SshError};
 use super::runtime;
+
+/// Chunk used for streaming uploads / downloads. Sized to stay well
+/// under russh-sftp's per-packet ceiling (~256 KiB) while still
+/// keeping the read/write loop short enough that progress updates
+/// arrive fluidly (~16 updates per MB at the default emit rate).
+const TRANSFER_CHUNK: usize = 64 * 1024;
+
+/// Emit a progress tick at least this often during a streaming
+/// transfer. Tuned so a 10 MB download produces ~20 updates and the
+/// UI's progress bar animates without the callback path becoming a
+/// hot loop on large files.
+const PROGRESS_EMIT_STEP: u64 = 512 * 1024;
+
+/// Snapshot of a single in-flight transfer. Emitted through
+/// [`ProgressCallback`] by the chunked transfer loop so the UI can
+/// animate a progress bar, show bytes transferred, and compute a
+/// throughput estimate.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct TransferProgress {
+    /// Bytes moved across the wire so far.
+    pub transferred: u64,
+    /// Total bytes expected. `0` means the remote didn't report a
+    /// size — render the bar in indeterminate mode in that case.
+    pub total: u64,
+}
+
+/// Called by [`SftpClient::download_to`] / [`SftpClient::upload_from`]
+/// once per chunk (subject to [`PROGRESS_EMIT_STEP`]). Must be
+/// `Send + Sync` because the transfer loop runs on the shared tokio
+/// runtime, not on the caller's thread.
+pub type ProgressCallback = Arc<dyn Fn(TransferProgress) + Send + Sync + 'static>;
 
 /// One remote filesystem entry. Serializable so the shell can
 /// move it through command payloads without re-inventing the
@@ -240,34 +269,125 @@ impl SftpClient {
         runtime::shared().block_on(self.write_file(path, data))
     }
 
-    /// Download `remote` to the local filesystem at `local`.
-    /// Convenience wrapper around [`Self::read_file`] plus
-    /// [`tokio::fs::write`].
-    pub async fn download_to(&self, remote: &str, local: &Path) -> Result<()> {
-        let data = self.read_file(remote).await?;
-        tokio::fs::write(local, data).await.map_err(SshError::Io)?;
+    /// Download `remote` to the local filesystem at `local`, streamed
+    /// in [`TRANSFER_CHUNK`]-sized blocks so multi-MB files don't
+    /// balloon memory. If `progress` is `Some`, the callback fires
+    /// once with `transferred = 0` before the first read (so the UI
+    /// can show the total right away), then every
+    /// [`PROGRESS_EMIT_STEP`] bytes, and once more at completion.
+    pub async fn download_to(
+        &self,
+        remote: &str,
+        local: &Path,
+        progress: Option<ProgressCallback>,
+    ) -> Result<()> {
+        let mut remote_file = self
+            .inner
+            .open(remote.to_string())
+            .await
+            .map_err(sftp_error)?;
+        let total = remote_file
+            .metadata()
+            .await
+            .map_err(sftp_error)?
+            .size
+            .unwrap_or(0);
+
+        let mut local_file = tokio::fs::File::create(local).await.map_err(SshError::Io)?;
+        let mut buf = vec![0u8; TRANSFER_CHUNK];
+        let mut transferred: u64 = 0;
+        let mut last_emitted: u64 = 0;
+        emit_progress(progress.as_ref(), 0, total);
+
+        loop {
+            let n = remote_file.read(&mut buf).await.map_err(SshError::Io)?;
+            if n == 0 {
+                break;
+            }
+            local_file
+                .write_all(&buf[..n])
+                .await
+                .map_err(SshError::Io)?;
+            transferred += n as u64;
+            if transferred - last_emitted >= PROGRESS_EMIT_STEP {
+                emit_progress(progress.as_ref(), transferred, total);
+                last_emitted = transferred;
+            }
+        }
+        local_file.flush().await.map_err(SshError::Io)?;
+        emit_progress(progress.as_ref(), transferred, total.max(transferred));
         log::info!("downloaded {remote} -> {local}", local = local.display());
         Ok(())
     }
 
     /// Sync wrapper for [`Self::download_to`].
-    pub fn download_to_blocking(&self, remote: &str, local: &Path) -> Result<()> {
-        runtime::shared().block_on(self.download_to(remote, local))
+    pub fn download_to_blocking(
+        &self,
+        remote: &str,
+        local: &Path,
+        progress: Option<ProgressCallback>,
+    ) -> Result<()> {
+        runtime::shared().block_on(self.download_to(remote, local, progress))
     }
 
-    /// Upload local file at `local` to remote path `remote`.
-    /// Convenience wrapper around [`tokio::fs::read`] plus
-    /// [`Self::write_file`].
-    pub async fn upload_from(&self, local: &Path, remote: &str) -> Result<()> {
-        let data = tokio::fs::read(local).await.map_err(SshError::Io)?;
-        self.write_file(remote, &data).await?;
+    /// Upload `local` to remote path `remote`, streamed in
+    /// [`TRANSFER_CHUNK`]-sized blocks. Progress semantics mirror
+    /// [`Self::download_to`]: an initial tick with `transferred = 0`
+    /// followed by periodic updates and a final tick at completion.
+    pub async fn upload_from(
+        &self,
+        local: &Path,
+        remote: &str,
+        progress: Option<ProgressCallback>,
+    ) -> Result<()> {
+        let total = tokio::fs::metadata(local)
+            .await
+            .map_err(SshError::Io)?
+            .len();
+        let mut local_file = tokio::fs::File::open(local).await.map_err(SshError::Io)?;
+        let mut remote_file = self
+            .inner
+            .create(remote.to_string())
+            .await
+            .map_err(sftp_error)?;
+
+        let mut buf = vec![0u8; TRANSFER_CHUNK];
+        let mut transferred: u64 = 0;
+        let mut last_emitted: u64 = 0;
+        emit_progress(progress.as_ref(), 0, total);
+
+        loop {
+            let n = local_file.read(&mut buf).await.map_err(SshError::Io)?;
+            if n == 0 {
+                break;
+            }
+            remote_file
+                .write_all(&buf[..n])
+                .await
+                .map_err(SshError::Io)?;
+            transferred += n as u64;
+            if transferred - last_emitted >= PROGRESS_EMIT_STEP {
+                emit_progress(progress.as_ref(), transferred, total);
+                last_emitted = transferred;
+            }
+        }
+        // Explicit shutdown is required so russh-sftp releases the
+        // remote handle; without it the server may leave the file
+        // half-synced until the SFTP session closes.
+        remote_file.shutdown().await.map_err(SshError::Io)?;
+        emit_progress(progress.as_ref(), transferred, total.max(transferred));
         log::info!("uploaded {local} -> {remote}", local = local.display());
         Ok(())
     }
 
     /// Sync wrapper for [`Self::upload_from`].
-    pub fn upload_from_blocking(&self, local: &Path, remote: &str) -> Result<()> {
-        runtime::shared().block_on(self.upload_from(local, remote))
+    pub fn upload_from_blocking(
+        &self,
+        local: &Path,
+        remote: &str,
+        progress: Option<ProgressCallback>,
+    ) -> Result<()> {
+        runtime::shared().block_on(self.upload_from(local, remote, progress))
     }
 
     // ── Directory / entry management ──────────────────────
@@ -341,6 +461,15 @@ impl SftpClient {
     /// Synchronous wrapper for [`Self::canonicalize`].
     pub fn canonicalize_blocking(&self, path: &str) -> Result<String> {
         runtime::shared().block_on(self.canonicalize(path))
+    }
+}
+
+/// Fire a progress callback if one was supplied. Kept as a free
+/// function so both the download and upload loops can share the
+/// exact same emission shape.
+fn emit_progress(callback: Option<&ProgressCallback>, transferred: u64, total: u64) {
+    if let Some(cb) = callback {
+        cb(TransferProgress { transferred, total });
     }
 }
 

@@ -72,7 +72,8 @@ pub fn open(
 
     // Inputs allocated once outside the builder closure so they
     // persist across dialog re-renders.
-    let name = cx.new(|c| InputState::new(window, c).placeholder(t!("App.Database.Form.Placeholders.name")));
+    let name = cx
+        .new(|c| InputState::new(window, c).placeholder(t!("App.Database.Form.Placeholders.name")));
     let host = cx.new(|c| InputState::new(window, c).placeholder("127.0.0.1"));
     let port = cx.new(|c| InputState::new(window, c).placeholder("3306"));
     let user = cx.new(|c| InputState::new(window, c).placeholder("root"));
@@ -116,12 +117,12 @@ pub fn open(
         database,
     });
     let title: SharedString = match &target {
-        DbEditTarget::Add => {
-            t!("App.Database.Form.title_new", engine = engine.as_str()).into()
-        }
-        DbEditTarget::Edit { original, .. } => {
-            t!("App.Database.Form.title_edit", name = original.name.as_str()).into()
-        }
+        DbEditTarget::Add => t!("App.Database.Form.title_new", engine = engine.as_str()).into(),
+        DbEditTarget::Edit { original, .. } => t!(
+            "App.Database.Form.title_edit",
+            name = original.name.as_str()
+        )
+        .into(),
     };
 
     window.open_dialog(cx, move |dialog, _w, app_cx| {
@@ -170,22 +171,28 @@ fn build_body(cx: &App, inputs: &Inputs, engine: DbEngine) -> impl IntoElement {
                 .flex()
                 .flex_row()
                 .gap(SP_2)
-                .child(div().flex_1().child(field(&t, t!("App.Database.Form.Fields.port"), &inputs.port)))
-                .child(div().flex_1().child(field(&t, t!("App.Database.Form.Fields.user"), &inputs.user))),
+                .child(div().flex_1().child(field(
+                    &t,
+                    t!("App.Database.Form.Fields.port"),
+                    &inputs.port,
+                )))
+                .child(div().flex_1().child(field(
+                    &t,
+                    t!("App.Database.Form.Fields.user"),
+                    &inputs.user,
+                ))),
         )
-        .child(field(&t, t!("App.Database.Form.Fields.password"), &inputs.password))
+        .child(field(
+            &t,
+            t!("App.Database.Form.Fields.password"),
+            &inputs.password,
+        ))
         .child(field(
             &t,
             t!("App.Database.Form.Fields.database_optional"),
             &inputs.database,
         ))
-        .child(
-            text::body(t!(
-                "App.Database.Form.help",
-                engine = engine.as_str()
-            ))
-            .secondary(),
-        )
+        .child(text::body(t!("App.Database.Form.help", engine = engine.as_str())).secondary())
 }
 
 fn field(
@@ -233,7 +240,10 @@ fn save(
         return;
     }
 
-    let port: u16 = port_str.trim().parse().unwrap_or_else(|_| engine.default_port());
+    let port: u16 = port_str
+        .trim()
+        .parse()
+        .unwrap_or_else(|_| engine.default_port());
 
     // Empty password → no credential entry, connect with "" (some
     // local DBs are set up trust-auth or peer-auth).

@@ -9,8 +9,9 @@ use crate::theme::{
     heights::{BUTTON_MD_H, BUTTON_SM_H, ICON_MD, ICON_SM},
     radius::RADIUS_SM,
     spacing::{SP_2, SP_3},
-    theme, ui_font_with,
+    theme,
     typography::{SIZE_UI_LABEL, WEIGHT_MEDIUM},
+    ui_font_with,
 };
 
 /// Visual button variants. Semantics per SKILL.md §5:

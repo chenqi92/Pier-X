@@ -154,24 +154,19 @@ fn body(
     let status = snapshot.as_ref().map(|s| s.status).unwrap_or_default();
     let status_pill = status_pill_for(status);
     let last_error = snapshot.as_ref().and_then(|s| s.last_error.clone());
-    let header = header_bar(t, app.clone(), kind, engine, &connections, snapshot.as_ref(), status_pill);
-
-    let sidebar = sidebar(
+    let header = header_bar(
         t,
         app.clone(),
         kind,
         engine,
+        &connections,
         snapshot.as_ref(),
+        status_pill,
     );
 
-    let main = main_pane(
-        t,
-        app.clone(),
-        kind,
-        engine,
-        snapshot.as_ref(),
-        query_input,
-    );
+    let sidebar = sidebar(t, app.clone(), kind, engine, snapshot.as_ref());
+
+    let main = main_pane(t, app.clone(), kind, engine, snapshot.as_ref(), query_input);
 
     let mut col = div().size_full().flex().flex_col().child(header);
 
@@ -195,9 +190,7 @@ fn body(
 fn status_pill_for(status: DbStatus) -> StatusPill {
     match status {
         DbStatus::Idle => StatusPill::new(t!("App.Database.not_connected"), StatusKind::Warning),
-        DbStatus::Connecting => {
-            StatusPill::new(t!("App.Database.connecting"), StatusKind::Info)
-        }
+        DbStatus::Connecting => StatusPill::new(t!("App.Database.connecting"), StatusKind::Info),
         DbStatus::Connected => StatusPill::new(t!("App.Database.connected"), StatusKind::Success),
         DbStatus::Failed => StatusPill::new(t!("App.Database.error"), StatusKind::Error),
     }
@@ -224,7 +217,12 @@ fn header_bar(
     // so Edit / Delete know what to operate on.
     let selected_idx = snapshot
         .and_then(|s| s.selected_connection_name.as_deref())
-        .and_then(|name| connections.iter().find(|(_, c)| c.name == name).map(|(i, _)| *i));
+        .and_then(|name| {
+            connections
+                .iter()
+                .find(|(_, c)| c.name == name)
+                .map(|(i, _)| *i)
+        });
 
     let client_alive = snapshot.map(|s| s.client_alive).unwrap_or(false);
     let status = snapshot.map(|s| s.status).unwrap_or_default();
@@ -267,7 +265,9 @@ fn header_bar(
             if !can_connect {
                 return;
             }
-            let Some(app) = connect_app.upgrade() else { return };
+            let Some(app) = connect_app.upgrade() else {
+                return;
+            };
             app.update(cx, |app, cx| {
                 if client_alive {
                     // "Disconnect" = drop session entity & reset.
@@ -301,22 +301,31 @@ fn header_bar(
     // Add / Edit / Delete.
     let add_app = app.clone();
     row = row.child(
-        Button::secondary("db-add", SharedString::from(t!("App.Database.add").to_string()))
-            .on_click(move |_, window, cx| {
-                if let Some(app) = add_app.upgrade() {
-                    let weak = app.downgrade();
-                    database_form::open(window, cx, weak, kind, DbEditTarget::Add);
-                }
-            }),
+        Button::secondary(
+            "db-add",
+            SharedString::from(t!("App.Database.add").to_string()),
+        )
+        .on_click(move |_, window, cx| {
+            if let Some(app) = add_app.upgrade() {
+                let weak = app.downgrade();
+                database_form::open(window, cx, weak, kind, DbEditTarget::Add);
+            }
+        }),
     );
 
     if let Some(idx) = selected_idx {
         let edit_app = app.clone();
-        let original = connections.iter().find(|(i, _)| *i == idx).map(|(_, c)| c.clone());
+        let original = connections
+            .iter()
+            .find(|(i, _)| *i == idx)
+            .map(|(_, c)| c.clone());
         if let Some(original) = original {
             row = row.child(
-                Button::secondary("db-edit", SharedString::from(t!("App.Database.edit").to_string()))
-                    .on_click(move |_, window, cx| {
+                Button::secondary(
+                    "db-edit",
+                    SharedString::from(t!("App.Database.edit").to_string()),
+                )
+                .on_click(move |_, window, cx| {
                     if let Some(app) = edit_app.upgrade() {
                         let weak = app.downgrade();
                         database_form::open(
@@ -336,8 +345,11 @@ fn header_bar(
 
         let del_app = app.clone();
         row = row.child(
-            Button::danger("db-del", SharedString::from(t!("App.Database.delete").to_string()))
-                .on_click(move |_, _w, cx| {
+            Button::danger(
+                "db-del",
+                SharedString::from(t!("App.Database.delete").to_string()),
+            )
+            .on_click(move |_, _w, cx| {
                 if let Some(app) = del_app.upgrade() {
                     app.update(cx, |app, cx| {
                         app.delete_db_connection(idx);
@@ -348,7 +360,9 @@ fn header_bar(
         );
     }
 
-    row.child(div().flex_1()).child(status_pill).into_any_element()
+    row.child(div().flex_1())
+        .child(status_pill)
+        .into_any_element()
 }
 
 fn connection_picker(
@@ -362,24 +376,21 @@ fn connection_picker(
     // one per saved connection, with the currently-selected one
     // highlighted. Pier doesn't ship a dropdown atom in components/
     // yet and the fork's Dropdown is overkill for ≤5 pills.
-    let mut row = div()
-        .flex()
-        .flex_row()
-        .items_center()
-        .gap(SP_1_5)
-        .child(
-            div()
-                .text_size(SIZE_CAPTION)
-                .text_color(t.color.text_tertiary)
-                .child(SharedString::from("·")),
-        );
+    let mut row = div().flex().flex_row().items_center().gap(SP_1_5).child(
+        div()
+            .text_size(SIZE_CAPTION)
+            .text_color(t.color.text_tertiary)
+            .child(SharedString::from("·")),
+    );
 
     if connections.is_empty() {
         row = row.child(
             div()
                 .text_size(SIZE_CAPTION)
                 .text_color(t.color.text_tertiary)
-                .child(SharedString::from(t!("App.Database.no_saved_connections").to_string())),
+                .child(SharedString::from(
+                    t!("App.Database.no_saved_connections").to_string(),
+                )),
         );
     }
 
@@ -639,21 +650,22 @@ fn main_pane(
     } else {
         t!("App.Database.run").into()
     };
-    let run_button = Button::primary("db-run", run_label)
-        .on_click(move |_, _w, cx| {
-            if !can_run {
+    let run_button = Button::primary("db-run", run_label).on_click(move |_, _w, cx| {
+        if !can_run {
+            return;
+        }
+        let Some(app) = run_app.upgrade() else { return };
+        let Some(input) = run_input.clone() else {
+            return;
+        };
+        app.update(cx, |app, cx| {
+            let sql = input.read(cx).value().to_string();
+            if sql.trim().is_empty() {
                 return;
             }
-            let Some(app) = run_app.upgrade() else { return };
-            let Some(input) = run_input.clone() else { return };
-            app.update(cx, |app, cx| {
-                let sql = input.read(cx).value().to_string();
-                if sql.trim().is_empty() {
-                    return;
-                }
-                app.schedule_db_execute(kind, sql, cx);
-            });
+            app.schedule_db_execute(kind, sql, cx);
         });
+    });
 
     let editor = if let Some(state) = query_input {
         div()
@@ -701,15 +713,14 @@ fn main_pane(
         .into_any_element()
 }
 
-fn result_pane(
-    t: &crate::theme::Theme,
-    snapshot: Option<&SessionSnapshot>,
-) -> gpui::AnyElement {
+fn result_pane(t: &crate::theme::Theme, snapshot: Option<&SessionSnapshot>) -> gpui::AnyElement {
     let Some(snap) = snapshot else {
         return div()
             .p(SP_4)
             .text_color(t.color.text_tertiary)
-            .child(SharedString::from(t!("App.Database.no_session_hint").to_string()))
+            .child(SharedString::from(
+                t!("App.Database.no_session_hint").to_string(),
+            ))
             .into_any_element();
     };
 
@@ -717,7 +728,9 @@ fn result_pane(
         return div()
             .p(SP_4)
             .text_color(t.color.text_tertiary)
-            .child(SharedString::from(t!("App.Database.running_query").to_string()))
+            .child(SharedString::from(
+                t!("App.Database.running_query").to_string(),
+            ))
             .into_any_element();
     }
 
@@ -725,13 +738,20 @@ fn result_pane(
         return div()
             .p(SP_4)
             .text_color(t.color.text_tertiary)
-            .child(SharedString::from(t!("App.Database.no_results_yet").to_string()))
+            .child(SharedString::from(
+                t!("App.Database.no_results_yet").to_string(),
+            ))
             .into_any_element();
     };
 
     let columns = result.columns().to_vec();
     let total_rows = result.rows().len();
-    let rows = result.rows().iter().take(MAX_RENDERED_ROWS).cloned().collect::<Vec<_>>();
+    let rows = result
+        .rows()
+        .iter()
+        .take(MAX_RENDERED_ROWS)
+        .cloned()
+        .collect::<Vec<_>>();
     let truncated = result.truncated();
     let elapsed_ms = result.elapsed_ms();
     let affected = result.affected_rows();
@@ -868,15 +888,12 @@ fn error_card(_t: &crate::theme::Theme, err: SharedString) -> gpui::AnyElement {
 
 fn unsupported_placeholder(t: &crate::theme::Theme, kind: DbKind) -> gpui::AnyElement {
     let (label, body_text) = match kind {
-        DbKind::Redis => (
-            "Redis",
-            t!("App.Database.phase_b_redis").to_string(),
+        DbKind::Redis => ("Redis", t!("App.Database.phase_b_redis").to_string()),
+        DbKind::Sqlite => ("SQLite", t!("App.Database.phase_c_sqlite").to_string()),
+        _ => (
+            "Database",
+            t!("App.Database.unsupported_engine").to_string(),
         ),
-        DbKind::Sqlite => (
-            "SQLite",
-            t!("App.Database.phase_c_sqlite").to_string(),
-        ),
-        _ => ("Database", t!("App.Database.unsupported_engine").to_string()),
     };
     div()
         .size_full()

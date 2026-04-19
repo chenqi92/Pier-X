@@ -4,7 +4,7 @@
 //! (`Bounds`, `Pixels`, `Point`, `Size`, `Hsla`) and `TextRun`. That keeps
 //! `build` unit-testable without booting a window.
 
-use gpui::{Bounds, Hsla, Pixels, Point, SharedString, Size, TextRun, px};
+use gpui::{px, Bounds, Hsla, Pixels, Point, SharedString, Size, TextRun};
 use pier_core::terminal::GridSnapshot;
 
 use crate::views::terminal::TerminalLine;
@@ -113,35 +113,37 @@ pub(crate) fn build(
         });
     }
 
-    let cursor = cursor_paint.zip(snapshot).and_then(|((style, color), snapshot)| {
-        if snapshot.cols == 0 || snapshot.rows == 0 {
-            return None;
-        }
-        let col = (snapshot.cursor_x as usize).min(snapshot.cols.saturating_sub(1) as usize);
-        let row = (snapshot.cursor_y as usize).min(snapshot.rows.saturating_sub(1) as usize);
-        let left = origin.x + cell_size.width * col as f32;
-        let top = origin.y + cell_size.height * row as f32;
-        let bounds = match style {
-            CursorPaintStyle::Underline => Bounds {
-                origin: Point {
-                    x: left,
-                    y: top + cell_size.height - px(CURSOR_UNDERLINE_HEIGHT_PX),
+    let cursor = cursor_paint
+        .zip(snapshot)
+        .and_then(|((style, color), snapshot)| {
+            if snapshot.cols == 0 || snapshot.rows == 0 {
+                return None;
+            }
+            let col = (snapshot.cursor_x as usize).min(snapshot.cols.saturating_sub(1) as usize);
+            let row = (snapshot.cursor_y as usize).min(snapshot.rows.saturating_sub(1) as usize);
+            let left = origin.x + cell_size.width * col as f32;
+            let top = origin.y + cell_size.height * row as f32;
+            let bounds = match style {
+                CursorPaintStyle::Underline => Bounds {
+                    origin: Point {
+                        x: left,
+                        y: top + cell_size.height - px(CURSOR_UNDERLINE_HEIGHT_PX),
+                    },
+                    size: Size {
+                        width: cell_size.width,
+                        height: px(CURSOR_UNDERLINE_HEIGHT_PX),
+                    },
                 },
-                size: Size {
-                    width: cell_size.width,
-                    height: px(CURSOR_UNDERLINE_HEIGHT_PX),
+                CursorPaintStyle::Bar => Bounds {
+                    origin: Point { x: left, y: top },
+                    size: Size {
+                        width: px(CURSOR_BAR_WIDTH_PX),
+                        height: cell_size.height,
+                    },
                 },
-            },
-            CursorPaintStyle::Bar => Bounds {
-                origin: Point { x: left, y: top },
-                size: Size {
-                    width: px(CURSOR_BAR_WIDTH_PX),
-                    height: cell_size.height,
-                },
-            },
-        };
-        Some(CursorRect { bounds, color })
-    });
+            };
+            Some(CursorRect { bounds, color })
+        });
 
     LayoutState {
         bg_rects,
@@ -197,7 +199,13 @@ mod tests {
     fn empty_runs_produce_no_bg_rects() {
         let lines = vec![line("hello", vec![run(5, None)])];
         let snap = make_snapshot(80, 1, 0, 0);
-        let state = build(&lines, Some(&snap), None, cell_size(8.0, 18.0), Point::default());
+        let state = build(
+            &lines,
+            Some(&snap),
+            None,
+            cell_size(8.0, 18.0),
+            Point::default(),
+        );
 
         assert!(state.bg_rects.is_empty());
         assert_eq!(state.rows.len(), 1);
@@ -216,7 +224,13 @@ mod tests {
             vec![run(2, Some(red)), run(2, None), run(2, Some(blue))],
         )];
         let snap = make_snapshot(80, 1, 0, 0);
-        let state = build(&lines, Some(&snap), None, cell_size(10.0, 20.0), Point::default());
+        let state = build(
+            &lines,
+            Some(&snap),
+            None,
+            cell_size(10.0, 20.0),
+            Point::default(),
+        );
 
         assert_eq!(state.bg_rects.len(), 2);
         let r0 = &state.bg_rects[0];
@@ -240,7 +254,13 @@ mod tests {
             line("c", vec![run(1, None)]),
         ];
         let snap = make_snapshot(80, 3, 0, 0);
-        let state = build(&lines, Some(&snap), None, cell_size(8.0, 18.0), Point::default());
+        let state = build(
+            &lines,
+            Some(&snap),
+            None,
+            cell_size(8.0, 18.0),
+            Point::default(),
+        );
 
         assert_eq!(state.rows.len(), 3);
         assert_eq!(f32::from(state.rows[0].origin.y), 0.0);
@@ -309,7 +329,13 @@ mod tests {
     fn no_cursor_paint_means_no_cursor_rect() {
         let lines = vec![line(" ", vec![run(1, None)])];
         let snap = make_snapshot(80, 24, 5, 3);
-        let state = build(&lines, Some(&snap), None, cell_size(8.0, 18.0), Point::default());
+        let state = build(
+            &lines,
+            Some(&snap),
+            None,
+            cell_size(8.0, 18.0),
+            Point::default(),
+        );
         assert!(state.cursor.is_none());
     }
 
@@ -372,7 +398,13 @@ mod tests {
         // shouldn't), build() should clamp instead of slicing past the end.
         let lines = vec![line("ab", vec![run(99, None)])];
         let snap = make_snapshot(80, 1, 0, 0);
-        let state = build(&lines, Some(&snap), None, cell_size(8.0, 18.0), Point::default());
+        let state = build(
+            &lines,
+            Some(&snap),
+            None,
+            cell_size(8.0, 18.0),
+            Point::default(),
+        );
         assert_eq!(state.rows.len(), 1);
         assert_eq!(state.rows[0].text.as_ref(), "ab");
     }

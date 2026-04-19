@@ -156,8 +156,13 @@ impl RenderOnce for FileTree {
                             .flex_row()
                             .items_center()
                             .gap(SP_2)
-                            .child(SectionLabel::new(t!("App.FileTree.Errors.cannot_read_directory")))
-                            .child(StatusPill::new(t!("App.FileTree.Errors.io_error"), StatusKind::Error)),
+                            .child(SectionLabel::new(t!(
+                                "App.FileTree.Errors.cannot_read_directory"
+                            )))
+                            .child(StatusPill::new(
+                                t!("App.FileTree.Errors.io_error"),
+                                StatusKind::Error,
+                            )),
                     )
                     .child(text::body(SharedString::from(err)).secondary()),
             );

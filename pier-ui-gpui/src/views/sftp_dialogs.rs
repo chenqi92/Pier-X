@@ -171,9 +171,13 @@ fn build_single_field_body(
         )
         .child(Input::new(state))
         .child(
-            div().pt(SP_2).pl(SP_3).text_color(t.color.text_tertiary).child(
-                SharedString::from("Slashes are not allowed — use the file tree to navigate first."),
-            ),
+            div()
+                .pt(SP_2)
+                .pl(SP_3)
+                .text_color(t.color.text_tertiary)
+                .child(SharedString::from(
+                    "Slashes are not allowed — use the file tree to navigate first.",
+                )),
         )
 }
 

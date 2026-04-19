@@ -31,9 +31,7 @@ pub fn normalize_locale_preference(raw: &str) -> String {
     match normalized.as_str() {
         "" | "system" | "auto" | "default" => LOCALE_PREFERENCE_SYSTEM.to_string(),
         "en" | "en-us" | "en-gb" | "english" => LOCALE_ENGLISH.to_string(),
-        "zh" | "zh-cn" | "zh-hans" | "zh-sg" | "simplified-chinese" => {
-            LOCALE_ZH_CN.to_string()
-        }
+        "zh" | "zh-cn" | "zh-hans" | "zh-sg" | "simplified-chinese" => LOCALE_ZH_CN.to_string(),
         _ => LOCALE_PREFERENCE_SYSTEM.to_string(),
     }
 }

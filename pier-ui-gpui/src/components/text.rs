@@ -3,11 +3,12 @@
 use gpui::{div, prelude::*, IntoElement, SharedString};
 
 use crate::theme::{
-    theme, ui_font_with,
+    theme,
     typography::{
         SIZE_BODY, SIZE_BODY_LARGE, SIZE_CAPTION, SIZE_DISPLAY, SIZE_H1, SIZE_H2, SIZE_H3,
         SIZE_MONO_CODE, SIZE_SMALL, SIZE_UI_LABEL, WEIGHT_MEDIUM, WEIGHT_REGULAR,
     },
+    ui_font_with,
 };
 
 #[allow(dead_code)]

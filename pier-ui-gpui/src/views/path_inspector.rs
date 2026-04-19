@@ -165,7 +165,8 @@ impl PathInspectorSnapshot {
                 kind_label: t!("App.PathInspector.kind_unavailable").into(),
                 parent_label,
                 size_label: "—".into(),
-                detail_label: t!("App.PathInspector.metadata_error", error = err.to_string()).into(),
+                detail_label: t!("App.PathInspector.metadata_error", error = err.to_string())
+                    .into(),
                 preview_title: t!("App.Common.preview").into(),
                 preview_mode,
                 preview_toggle_available: false,
@@ -256,8 +257,11 @@ impl RenderOnce for PathInspectorView {
                 .secondary(),
             )
             .child(
-                text::mono(t!("App.PathInspector.size_label", size = snapshot.size_label.as_ref()))
-                    .secondary(),
+                text::mono(t!(
+                    "App.PathInspector.size_label",
+                    size = snapshot.size_label.as_ref()
+                ))
+                .secondary(),
             );
 
         let actions = inspector_action_elements(&snapshot, &app, dialog.as_ref());
@@ -288,7 +292,8 @@ impl RenderOnce for PathInspectorView {
 
         if snapshot.is_directory() {
             if snapshot.directory_entries.is_empty() {
-                preview = preview.child(text::body(t!("App.PathInspector.directory_empty")).secondary());
+                preview =
+                    preview.child(text::body(t!("App.PathInspector.directory_empty")).secondary());
             } else {
                 preview = preview.child(div().flex().flex_col().gap(SP_2).pt(SP_2).children(
                     directory_entry_elements(&snapshot.directory_entries, &app, &t),
@@ -489,7 +494,11 @@ fn build_file_preview(path: &Path, file_size: u64, preview_mode: PathPreviewMode
             }
 
             let mut meta = vec![
-                t!("App.PathInspector.encoding_label", encoding = decoded.encoding_label).into(),
+                t!(
+                    "App.PathInspector.encoding_label",
+                    encoding = decoded.encoding_label
+                )
+                .into(),
                 t!(
                     "App.PathInspector.line_endings_label",
                     endings = detect_line_endings(&decoded.text)
@@ -774,8 +783,8 @@ fn inspector_action_elements(
             actions.push(
                 Button::ghost(id, label)
                     .on_click(move |_, _window, cx| {
-                        let _ = dialog_weak
-                            .update(cx, |dlg, cx| dlg.set_preview_mode(next_mode, cx));
+                        let _ =
+                            dialog_weak.update(cx, |dlg, cx| dlg.set_preview_mode(next_mode, cx));
                     })
                     .into_any_element(),
             );
@@ -934,19 +943,16 @@ impl PathInspectorDialog {
                 let mut async_cx = async_cx.clone();
                 async move {
                     let snapshot = background
-                        .spawn(async move {
-                            PathInspectorSnapshot::inspect_with_mode(&target, mode)
-                        })
+                        .spawn(
+                            async move { PathInspectorSnapshot::inspect_with_mode(&target, mode) },
+                        )
                         .await;
-                    let _ = weak.update(
-                        &mut async_cx,
-                        |dlg: &mut Self, cx: &mut Context<Self>| {
-                            if dlg.load_token == token {
-                                dlg.snapshot = Some(snapshot);
-                                cx.notify();
-                            }
-                        },
-                    );
+                    let _ = weak.update(&mut async_cx, |dlg: &mut Self, cx: &mut Context<Self>| {
+                        if dlg.load_token == token {
+                            dlg.snapshot = Some(snapshot);
+                            cx.notify();
+                        }
+                    });
                 }
             },
         )
@@ -976,11 +982,7 @@ impl Render for PathInspectorDialog {
                     .items_center()
                     .gap(SP_2)
                     .child(text::body(
-                        t!(
-                            "App.PathInspector.loading",
-                            target = self.target.as_ref()
-                        )
-                        .to_string(),
+                        t!("App.PathInspector.loading", target = self.target.as_ref()).to_string(),
                     ))
                     .into_any_element(),
             })

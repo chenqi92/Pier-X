@@ -9,9 +9,9 @@ use crate::components::{text, Button, Card, IconBadge, SectionLabel, StatusKind,
 use crate::theme::{
     radius::RADIUS_SM,
     spacing::{SP_1, SP_1_5, SP_2, SP_3, SP_4},
-    theme, ui_font_with,
+    theme,
     typography::{SIZE_BODY, SIZE_SMALL, WEIGHT_MEDIUM, WEIGHT_REGULAR},
-    ThemeMode,
+    ui_font_with, ThemeMode,
 };
 
 pub type OnClick = Rc<dyn Fn(&ClickEvent, &mut Window, &mut App) + 'static>;
@@ -97,9 +97,12 @@ impl RenderOnce for WelcomeView {
                             .on_click(move |ev, win, app| on_new_ssh(ev, win, app)),
                     )
                     .child(
-                        Button::secondary("welcome-local-term", t!("App.Welcome.Actions.open_local_terminal"))
-                            .width(WELCOME_BUTTON_W)
-                            .on_click(move |ev, win, app| on_open_terminal(ev, win, app)),
+                        Button::secondary(
+                            "welcome-local-term",
+                            t!("App.Welcome.Actions.open_local_terminal"),
+                        )
+                        .width(WELCOME_BUTTON_W)
+                        .on_click(move |ev, win, app| on_open_terminal(ev, win, app)),
                     ),
             )
             .child(
@@ -131,7 +134,11 @@ impl RenderOnce for WelcomeView {
             .size_full()
             .bg(t.color.bg_canvas)
             .text_color(t.color.text_primary)
-            .font(ui_font_with(&t.font_ui, &t.font_ui_features, WEIGHT_REGULAR))
+            .font(ui_font_with(
+                &t.font_ui,
+                &t.font_ui_features,
+                WEIGHT_REGULAR,
+            ))
             .flex()
             .items_center()
             .justify_center()

@@ -23,7 +23,9 @@ pub struct AssistStrip {
 
 impl AssistStrip {
     pub fn new() -> Self {
-        Self { children: Vec::new() }
+        Self {
+            children: Vec::new(),
+        }
     }
 
     pub fn child(mut self, child: impl IntoElement) -> Self {

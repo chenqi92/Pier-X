@@ -10,9 +10,7 @@
 //! - `Filled` — always-visible surface fill. Use when the button needs
 //!   to feel "present" (e.g. a detached FAB-style control).
 
-use gpui::{
-    div, prelude::*, App, ClickEvent, ElementId, IntoElement, Pixels, Rgba, Window,
-};
+use gpui::{div, prelude::*, App, ClickEvent, ElementId, IntoElement, Pixels, Rgba, Window};
 use gpui_component::{Icon as UiIcon, IconName};
 
 use crate::theme::{

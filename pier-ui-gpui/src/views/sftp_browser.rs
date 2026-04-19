@@ -25,7 +25,7 @@
 use std::path::PathBuf;
 use std::rc::Rc;
 
-use gpui::{div, prelude::*, px, App, Entity, IntoElement, SharedString, Window};
+use gpui::{div, prelude::*, px, App, Entity, IntoElement, Pixels, SharedString, Window};
 use gpui_component::{scroll::ScrollableElement, Icon as UiIcon, IconName};
 use rust_i18n::t;
 
@@ -33,6 +33,7 @@ use crate::app::ssh_session::{ConnectStatus, RemoteEntry, SshSessionState};
 use crate::components::{
     text, Card, IconButton, IconButtonSize, IconButtonVariant, SectionLabel, StatusKind, StatusPill,
 };
+use crate::data::{format_permissions, format_relative_time};
 use crate::theme::{
     heights::{GLYPH_SM, ICON_SM, ROW_MD_H, ROW_SM_H},
     radius::RADIUS_SM,
@@ -40,6 +41,21 @@ use crate::theme::{
     theme,
     typography::{SIZE_CAPTION, SIZE_MONO_SMALL, SIZE_SMALL, WEIGHT_MEDIUM},
 };
+
+/// Reveal the relative-mtime column when the browser has at least
+/// this much horizontal room. Sized so the name column still has
+/// ~140 px to work with at the threshold.
+const MTIME_COLUMN_MIN_W: Pixels = px(380.0);
+/// Reveal the POSIX-permissions column at this budget. The perm
+/// string is a fixed 10 mono chars (~78 px at 12 px) so only make
+/// room for it once the name column can afford to give that up.
+const PERMS_COLUMN_MIN_W: Pixels = px(460.0);
+/// Fixed width for the mtime cell — wide enough for `YYYY-MM-DD`
+/// without making short labels like `5m` look lost.
+const MTIME_COLUMN_W: Pixels = px(68.0);
+/// Fixed width for the permissions cell. 10 chars × 8 px monospace
+/// ≈ 80 px.
+const PERMS_COLUMN_W: Pixels = px(82.0);
 
 pub type NavigateHandler = Rc<dyn Fn(&PathBuf, &mut Window, &mut App) + 'static>;
 pub type GoUpHandler = Rc<dyn Fn(&(), &mut Window, &mut App) + 'static>;
@@ -52,6 +68,11 @@ pub type HeaderActionHandler = Rc<dyn Fn(&(), &mut Window, &mut App) + 'static>;
 /// path/name/is_dir context (cheaper than passing each through its
 /// own handler type).
 pub type RowActionHandler = Rc<dyn Fn(&RowAction, &mut Window, &mut App) + 'static>;
+/// Drop handler for OS files dragged into the browser body. Carries
+/// a `Vec<PathBuf>` since GPUI's `ExternalPaths` event supplies one;
+/// PierApp routes these through the same pipeline as the header
+/// upload button.
+pub type DropPathsHandler = Rc<dyn Fn(&Vec<PathBuf>, &mut Window, &mut App) + 'static>;
 
 /// Action requested by the per-row hover icons.
 #[derive(Clone, Debug)]
@@ -92,6 +113,10 @@ pub struct SftpBrowser {
     on_mkdir: HeaderActionHandler,
     on_upload: HeaderActionHandler,
     on_row_action: RowActionHandler,
+    on_drop_paths: DropPathsHandler,
+    /// Width available to the browser (right panel minus icon sidebar).
+    /// Used to decide whether to render the mtime / permissions columns.
+    content_width: Pixels,
 }
 
 impl SftpBrowser {
@@ -103,6 +128,8 @@ impl SftpBrowser {
         on_mkdir: HeaderActionHandler,
         on_upload: HeaderActionHandler,
         on_row_action: RowActionHandler,
+        on_drop_paths: DropPathsHandler,
+        content_width: Pixels,
     ) -> Self {
         Self {
             state,
@@ -111,6 +138,8 @@ impl SftpBrowser {
             on_mkdir,
             on_upload,
             on_row_action,
+            on_drop_paths,
+            content_width,
         }
     }
 }
@@ -125,7 +154,12 @@ impl RenderOnce for SftpBrowser {
             on_mkdir,
             on_upload,
             on_row_action,
+            on_drop_paths,
+            content_width,
         } = self;
+
+        let show_mtime = content_width >= MTIME_COLUMN_MIN_W;
+        let show_perms = content_width >= PERMS_COLUMN_MIN_W;
 
         let Some(state_entity) = state else {
             return empty_state(t).into_any_element();
@@ -259,6 +293,8 @@ impl RenderOnce for SftpBrowser {
                 body = body.child(remote_row(
                     t,
                     &entry,
+                    show_mtime,
+                    show_perms,
                     on_navigate.clone(),
                     on_row_action.clone(),
                 ));
@@ -275,6 +311,16 @@ impl RenderOnce for SftpBrowser {
                     .flex_1()
                     .min_h(px(0.0))
                     .overflow_y_scrollbar()
+                    // OS file drop — mounts here (not on the outer
+                    // column) so the header's buttons still get
+                    // their own hitboxes during a drag; GPUI's
+                    // on_drop::<ExternalPaths> fires once at Submit.
+                    .on_drop::<gpui::ExternalPaths>(move |paths, window, app| {
+                        let paths = paths.paths().to_vec();
+                        if !paths.is_empty() {
+                            on_drop_paths(&paths, window, app);
+                        }
+                    })
                     .child(body),
             )
             .into_any_element()
@@ -300,19 +346,17 @@ fn empty_state(t: &crate::theme::Theme) -> gpui::AnyElement {
                     t!("App.Sftp.no_active_session_title").to_string(),
                 )),
         )
-        .child(
-            div()
-                .text_size(SIZE_SMALL)
-                .child(SharedString::from(
-                    t!("App.Sftp.no_active_session_body").to_string(),
-                )),
-        )
+        .child(div().text_size(SIZE_SMALL).child(SharedString::from(
+            t!("App.Sftp.no_active_session_body").to_string(),
+        )))
         .into_any_element()
 }
 
 fn remote_row(
     t: &crate::theme::Theme,
     entry: &RemoteEntry,
+    show_mtime: bool,
+    show_perms: bool,
     on_navigate: NavigateHandler,
     on_row_action: RowActionHandler,
 ) -> impl IntoElement {
@@ -410,6 +454,37 @@ fn remote_row(
                     )
                 }),
         )
+        .when(show_perms, |row| {
+            let perms_label: SharedString = entry
+                .permissions
+                .map(|mode| format_permissions(mode, entry.is_dir, entry.is_link))
+                .unwrap_or_else(|| "—".to_string())
+                .into();
+            row.child(
+                div()
+                    .flex_none()
+                    .w(PERMS_COLUMN_W)
+                    .text_size(SIZE_MONO_SMALL)
+                    .font_family(t.font_mono.clone())
+                    .text_color(t.color.text_tertiary)
+                    .child(perms_label),
+            )
+        })
+        .when(show_mtime, |row| {
+            let mtime_label: SharedString = entry
+                .modified
+                .map(format_relative_time)
+                .unwrap_or_else(|| "—".to_string())
+                .into();
+            row.child(
+                div()
+                    .flex_none()
+                    .w(MTIME_COLUMN_W)
+                    .text_size(SIZE_SMALL)
+                    .text_color(t.color.text_tertiary)
+                    .child(mtime_label),
+            )
+        })
         .child(
             div()
                 .flex_none()

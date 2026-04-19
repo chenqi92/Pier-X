@@ -4,8 +4,9 @@ use crate::theme::{
     heights::{PILL_DOT, PILL_H},
     radius::RADIUS_PILL,
     spacing::{SP_1, SP_2},
-    theme, ui_font_with,
+    theme,
     typography::{SIZE_CAPTION, WEIGHT_MEDIUM},
+    ui_font_with,
 };
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -56,13 +57,7 @@ impl RenderOnce for StatusPill {
             .border_1()
             .border_color(t.color.border_subtle)
             .rounded(RADIUS_PILL)
-            .child(
-                div()
-                    .w(PILL_DOT)
-                    .h(PILL_DOT)
-                    .rounded(RADIUS_PILL)
-                    .bg(dot),
-            )
+            .child(div().w(PILL_DOT).h(PILL_DOT).rounded(RADIUS_PILL).bg(dot))
             .child(
                 div()
                     .text_size(SIZE_CAPTION)

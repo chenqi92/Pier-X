@@ -160,14 +160,14 @@ App:
         zh-CN: 当前内置快捷键
     General:
       subtitle:
-        en: Shell-level preferences that already map cleanly to GPUI.
-        zh-CN: 已经可以直接映射到 GPUI shell 的基础偏好。
+        en: Interface, theme, and font defaults.
+        zh-CN: 界面、主题与字体。
       language:
         en: Language
         zh-CN: 语言
       language_description:
-        en: Change the interface language instantly. System is currently %{language}.
-        zh-CN: 立即切换界面语言。当前系统语言为 %{language}。
+        en: Applied immediately. System is currently %{language}.
+        zh-CN: 立即生效。当前系统语言：%{language}。
       language_system:
         en: System
         zh-CN: 跟随系统
@@ -193,18 +193,18 @@ App:
         en: UI Font Family
         zh-CN: 界面字体
       ui_font_family_description:
-        en: "Choose the UI font for labels, menus, and dialogs. Inter enables OpenType features cv01 and ss03 for sharper 1/l/I and a single-story 'a'; other picks disable those."
-        zh-CN: 选择界面字体。默认 Inter 会启用 OpenType 特性 cv01 与 ss03，让 1/l/I 更易区分、a 采用 single-story 字形；其他字体则不启用这些特性。
+        en: "Used by labels, tabs, menus, and dialogs. Inter keeps cv01 and ss03 enabled."
+        zh-CN: 用于标签、Tab、菜单和弹框。Inter 默认启用 cv01 与 ss03。
       terminal_font_family:
         en: Terminal Font Family
         zh-CN: 终端字体
       terminal_font_family_description:
-        en: Choose the mono font used by every terminal tab in the shell.
-        zh-CN: 选择 shell 中所有终端标签页使用的等宽字体。
+        en: Used by every terminal tab.
+        zh-CN: 应用于所有终端标签页。
     Terminal:
       subtitle:
-        en: Settings below are applied immediately to the active GPUI terminal surface.
-        zh-CN: 下面的设置会立即应用到当前 GPUI 终端表面。
+        en: Visual changes apply to the active terminal immediately.
+        zh-CN: 终端外观修改会立即生效。
       theme:
         en: Theme
         zh-CN: 主题
@@ -230,8 +230,8 @@ App:
         en: Font Ligatures
         zh-CN: 字体连字
       font_ligatures_description:
-        en: Disable contextual alternates if you want raw terminal glyph rendering.
-        zh-CN: 如果你希望终端字形保持原始渲染效果，可以关闭上下文连字。
+        en: Turn this off if you prefer literal glyph rendering.
+        zh-CN: 如果你更偏好原始字形渲染，可以关闭。
       cursor:
         en: Cursor
         zh-CN: 光标
@@ -248,8 +248,8 @@ App:
         en: Cursor Blink
         zh-CN: 光标闪烁
       cursor_blink_description:
-        en: Turn off if you prefer a stable insertion point.
-        zh-CN: 如果你更喜欢稳定不闪烁的插入点，可以关闭它。
+        en: Turn this off for a stable insertion point.
+        zh-CN: 如果你更喜欢稳定的插入点，可以关闭。
       Palettes:
         default:
           en: Pier default shell palette
@@ -268,8 +268,8 @@ App:
           zh-CN: 偏冷静、对比更柔和的调色板
     Shortcuts:
       subtitle:
-        en: Click Change, press any key combination to rebind. New bindings apply immediately.
-        zh-CN: 点击“更改”后按下任意组合键即可重绑。保存后立即生效。
+        en: Click Change and press a new key combination. Updates apply immediately.
+        zh-CN: 点击“更改”后按下新的组合键，立即生效。
       change:
         en: Change
         zh-CN: 更改

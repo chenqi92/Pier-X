@@ -83,12 +83,16 @@ pub fn open(
 ) {
     // Inputs created once outside the builder closure → persist across
     // dialog re-renders.
-    let name = cx.new(|c| InputState::new(window, c).placeholder(t!("App.EditConnection.Placeholders.name")));
-    let host =
-        cx.new(|c| InputState::new(window, c).placeholder(t!("App.EditConnection.Placeholders.host")));
+    let name = cx.new(|c| {
+        InputState::new(window, c).placeholder(t!("App.EditConnection.Placeholders.name"))
+    });
+    let host = cx.new(|c| {
+        InputState::new(window, c).placeholder(t!("App.EditConnection.Placeholders.host"))
+    });
     let port = cx.new(|c| InputState::new(window, c).placeholder("22"));
-    let user =
-        cx.new(|c| InputState::new(window, c).placeholder(t!("App.EditConnection.Placeholders.user")));
+    let user = cx.new(|c| {
+        InputState::new(window, c).placeholder(t!("App.EditConnection.Placeholders.user"))
+    });
     let group = cx.new(|c| {
         InputState::new(window, c).placeholder(t!("App.EditConnection.Placeholders.group"))
     });
@@ -188,9 +192,11 @@ pub fn open(
     let auth_mode = Rc::new(RefCell::new(initial_mode));
     let title: SharedString = match &target {
         EditTarget::Add => t!("App.EditConnection.title_new").into(),
-        EditTarget::Edit { original, .. } => {
-            t!("App.EditConnection.title_edit", name = original.name.as_str()).into()
-        }
+        EditTarget::Edit { original, .. } => t!(
+            "App.EditConnection.title_edit",
+            name = original.name.as_str()
+        )
+        .into(),
     };
 
     window.open_dialog(cx, move |dialog, _w, app_cx| {
@@ -248,9 +254,13 @@ fn build_body(
     let radio_group = RadioGroup::horizontal("auth-mode")
         .selected_index(Some(current_mode.index()))
         .child(Radio::new("auth-agent").label(t!("App.EditConnection.Auth.agent").to_string()))
-        .child(Radio::new("auth-password").label(t!("App.EditConnection.Auth.password").to_string()))
+        .child(
+            Radio::new("auth-password").label(t!("App.EditConnection.Auth.password").to_string()),
+        )
         .child(Radio::new("auth-key").label(t!("App.EditConnection.Auth.key_file").to_string()))
-        .child(Radio::new("auth-keychain").label(t!("App.EditConnection.Auth.keychain").to_string()))
+        .child(
+            Radio::new("auth-keychain").label(t!("App.EditConnection.Auth.keychain").to_string()),
+        )
         .on_click(move |idx, _w, app| {
             *mode_for_click.borrow_mut() = AuthMode::from_index(*idx);
             // Force the dialog body closure to rerun so per-mode fields
@@ -265,15 +275,31 @@ fn build_body(
         .flex_col()
         .gap(SP_3)
         .pt(SP_2)
-        .child(field(&t, t!("App.EditConnection.Fields.name"), &inputs.name))
-        .child(field(&t, t!("App.EditConnection.Fields.host"), &inputs.host))
+        .child(field(
+            &t,
+            t!("App.EditConnection.Fields.name"),
+            &inputs.name,
+        ))
+        .child(field(
+            &t,
+            t!("App.EditConnection.Fields.host"),
+            &inputs.host,
+        ))
         .child(
             div()
                 .flex()
                 .flex_row()
                 .gap(SP_2)
-                .child(div().flex_1().child(field(&t, t!("App.EditConnection.Fields.port"), &inputs.port)))
-                .child(div().flex_1().child(field(&t, t!("App.EditConnection.Fields.user"), &inputs.user))),
+                .child(div().flex_1().child(field(
+                    &t,
+                    t!("App.EditConnection.Fields.port"),
+                    &inputs.port,
+                )))
+                .child(div().flex_1().child(field(
+                    &t,
+                    t!("App.EditConnection.Fields.user"),
+                    &inputs.user,
+                ))),
         )
         .child(group_field(&t, &inputs.group, &known_groups))
         .child(
@@ -281,19 +307,28 @@ fn build_body(
                 .flex()
                 .flex_col()
                 .gap(SP_1)
-                .child(label_text(&t, t!("App.EditConnection.Fields.authentication")))
+                .child(label_text(
+                    &t,
+                    t!("App.EditConnection.Fields.authentication"),
+                ))
                 .child(radio_group),
         );
 
     col = match current_mode {
-        AuthMode::Agent => col.child(
-            text::body(t!("App.EditConnection.Help.agent")).secondary(),
-        ),
+        AuthMode::Agent => col.child(text::body(t!("App.EditConnection.Help.agent")).secondary()),
         AuthMode::Password => col
-            .child(field(&t, t!("App.EditConnection.Fields.password"), &inputs.password))
+            .child(field(
+                &t,
+                t!("App.EditConnection.Fields.password"),
+                &inputs.password,
+            ))
             .child(text::body(t!("App.EditConnection.Help.password")).secondary()),
         AuthMode::KeyFile => col
-            .child(field(&t, t!("App.EditConnection.Fields.private_key_path"), &inputs.key_path))
+            .child(field(
+                &t,
+                t!("App.EditConnection.Fields.private_key_path"),
+                &inputs.key_path,
+            ))
             .child(field(
                 &t,
                 t!("App.EditConnection.Fields.passphrase_optional"),
@@ -301,7 +336,11 @@ fn build_body(
             ))
             .child(text::body(t!("App.EditConnection.Help.key_file")).secondary()),
         AuthMode::Keychain => col
-            .child(field(&t, t!("App.EditConnection.Fields.password"), &inputs.keychain_password))
+            .child(field(
+                &t,
+                t!("App.EditConnection.Fields.password"),
+                &inputs.keychain_password,
+            ))
             .child(text::body(t!("App.EditConnection.Help.keychain")).secondary()),
     };
     col
@@ -337,16 +376,11 @@ fn group_field(
         .child(Input::new(state));
 
     if !known_groups.is_empty() {
-        let mut chips = div()
-            .flex()
-            .flex_row()
-            .flex_wrap()
-            .gap(SP_1);
+        let mut chips = div().flex().flex_row().flex_wrap().gap(SP_1);
         for (i, name) in known_groups.iter().enumerate() {
             let value = name.clone();
             let state = state.clone();
-            let chip_id =
-                gpui::ElementId::Name(format!("group-chip-{i}").into());
+            let chip_id = gpui::ElementId::Name(format!("group-chip-{i}").into());
             chips = chips.child(
                 div()
                     .id(chip_id)

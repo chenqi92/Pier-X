@@ -32,7 +32,8 @@ fn mysql_config_from_env() -> MysqlConfig {
             .and_then(|v| v.parse().ok())
             .unwrap_or(3306),
         user: std::env::var("PIER_TEST_MYSQL_USER").unwrap_or_else(|_| "root".into()),
-        password: std::env::var("PIER_TEST_MYSQL_PASSWORD").unwrap_or_else(|_| "pier-x-test".into()),
+        password: std::env::var("PIER_TEST_MYSQL_PASSWORD")
+            .unwrap_or_else(|_| "pier-x-test".into()),
         database: std::env::var("PIER_TEST_MYSQL_DB").ok(),
     }
 }
@@ -58,8 +59,7 @@ fn mysql_connect_then_list_databases() {
 
 #[test]
 fn mysql_execute_simple_select() {
-    let client =
-        MysqlClient::connect_blocking(mysql_config_from_env()).expect("connect to MySQL");
+    let client = MysqlClient::connect_blocking(mysql_config_from_env()).expect("connect to MySQL");
     let result = client
         .execute_blocking("SELECT 1 AS n")
         .expect("execute SELECT 1");
@@ -78,8 +78,8 @@ fn mysql_execute_simple_select() {
 fn mysql_invalid_password_surfaces_auth_error() {
     let mut bad = mysql_config_from_env();
     bad.password = "definitely-not-the-password".into();
-    let err = MysqlClient::connect_blocking(bad)
-        .expect_err("bad password must fail authentication");
+    let err =
+        MysqlClient::connect_blocking(bad).expect_err("bad password must fail authentication");
     let msg = err.to_string().to_lowercase();
     assert!(
         msg.contains("access")
@@ -109,9 +109,7 @@ fn postgres_config_from_env() -> PostgresConfig {
 fn postgres_connect_then_list_databases() {
     let client = PostgresClient::connect_blocking(postgres_config_from_env())
         .expect("connect to PostgreSQL — is the test server running?");
-    let dbs = client
-        .list_databases_blocking()
-        .expect("list PG databases");
+    let dbs = client.list_databases_blocking().expect("list PG databases");
     // `postgres` is the default maintenance DB on every install. It's
     // the safest single name to assert on without snowflaking on
     // template0/template1 visibility rules across PG versions.
@@ -143,8 +141,8 @@ fn postgres_execute_simple_select() {
 fn postgres_invalid_password_surfaces_auth_error() {
     let mut bad = postgres_config_from_env();
     bad.password = "definitely-not-the-password".into();
-    let err = PostgresClient::connect_blocking(bad)
-        .expect_err("bad password must fail authentication");
+    let err =
+        PostgresClient::connect_blocking(bad).expect_err("bad password must fail authentication");
     let msg = err.to_string().to_lowercase();
     assert!(
         msg.contains("password") || msg.contains("auth") || msg.contains("authentication"),

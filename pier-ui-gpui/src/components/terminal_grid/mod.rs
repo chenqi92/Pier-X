@@ -18,5 +18,5 @@
 pub(crate) mod layout;
 pub(crate) mod paint;
 
-pub(crate) use layout::{CursorPaintStyle, LayoutState, build};
+pub(crate) use layout::{build, CursorPaintStyle, LayoutState};
 pub(crate) use paint::run;

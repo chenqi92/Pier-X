@@ -8,13 +8,9 @@
 //! round-trip is scheduled at the top of `render` via
 //! `PierApp::schedule_git_initial_refresh`, which is flag-guarded.
 
-use gpui::{
-    div, prelude::*, px, App, ElementId, IntoElement, SharedString, WeakEntity, Window,
-};
+use gpui::{div, prelude::*, px, App, ElementId, IntoElement, SharedString, WeakEntity, Window};
 use gpui_component::input::{Input, InputState};
-use pier_core::services::git::{
-    BranchInfo, CommitInfo, FileStatus, GitFileChange, StashEntry,
-};
+use pier_core::services::git::{BranchInfo, CommitInfo, FileStatus, GitFileChange, StashEntry};
 use rust_i18n::t;
 
 use crate::app::git_session::{DiffSelection, GitPendingAction, GitState, GitStatus};
@@ -83,15 +79,18 @@ impl RenderOnce for GitView {
             GitStatus::Failed if snapshot.repo_path.is_none() => {
                 error_layout(&t, &snapshot, weak).into_any_element()
             }
-            _ => repo_layout(&t, snapshot, commit_input, stash_input, weak)
-                .into_any_element(),
+            _ => repo_layout(&t, snapshot, commit_input, stash_input, weak).into_any_element(),
         }
     }
 }
 
 // ─── Layout helpers ──────────────────────────────────────────────────
 
-fn header(t: &crate::theme::Theme, snap: &GitSnapshot, weak: WeakEntity<PierApp>) -> impl IntoElement {
+fn header(
+    t: &crate::theme::Theme,
+    snap: &GitSnapshot,
+    weak: WeakEntity<PierApp>,
+) -> impl IntoElement {
     let pending_label = snap.pending.as_ref().map(|action| action.label());
     let refresh_busy = snap.pending.is_some();
     let weak_refresh = weak.clone();
@@ -122,7 +121,9 @@ fn header(t: &crate::theme::Theme, snap: &GitSnapshot, weak: WeakEntity<PierApp>
     };
 
     // Push refresh to the right.
-    row.child(div().flex_1()).child(refresh_btn).text_color(t.color.text_primary)
+    row.child(div().flex_1())
+        .child(refresh_btn)
+        .text_color(t.color.text_primary)
 }
 
 fn status_pill(snap: &GitSnapshot) -> StatusPill {
@@ -161,7 +162,13 @@ fn repo_layout(
     }
 
     if let Some(branch) = snap.branch.clone() {
-        col = col.child(branch_card(t, &branch, &snap.repo_path, &snap.branches, weak.clone()));
+        col = col.child(branch_card(
+            t,
+            &branch,
+            &snap.repo_path,
+            &snap.branches,
+            weak.clone(),
+        ));
     }
     col = col.child(changes_card(
         t,
@@ -192,10 +199,7 @@ fn not_a_repo_layout(
         .child(header(t, snap, weak))
         .child(
             Card::new()
-                .child(
-                    SectionLabel::new(t!("App.Common.repository"))
-                        .with_icon(IconName::Folder),
-                )
+                .child(SectionLabel::new(t!("App.Common.repository")).with_icon(IconName::Folder))
                 .child(text::body(t!("App.Git.not_a_repo_body")).secondary())
                 .child(div().overflow_hidden().child(text::mono(snap.cwd.clone()))),
         )
@@ -253,10 +257,7 @@ fn branch_card(
     let pull_weak = weak.clone();
 
     let mut card = Card::new()
-        .child(
-            SectionLabel::new(t!("App.Git.current_branch"))
-                .with_icon(IconName::GitBranch),
-        )
+        .child(SectionLabel::new(t!("App.Git.current_branch")).with_icon(IconName::GitBranch))
         .child(
             div()
                 .flex()
@@ -280,8 +281,7 @@ fn branch_card(
                         .text_size(SIZE_SMALL)
                         .text_color(t.color.text_tertiary)
                         .child(SharedString::from(
-                            t!("App.Git.branch_tracking", tracking = tracking.as_ref())
-                                .to_string(),
+                            t!("App.Git.branch_tracking", tracking = tracking.as_ref()).to_string(),
                         )),
                 ),
         )
@@ -297,22 +297,20 @@ fn branch_card(
                         .child(pace),
                 )
                 .child(div().flex_1())
-                .child(
-                    Button::secondary("git-pull", t!("App.Git.pull"))
-                        .on_click(move |_, _, cx| {
-                            let _ = pull_weak.update(cx, |app, cx| {
-                                app.schedule_git_action(GitPendingAction::Pull, cx);
-                            });
-                        }),
-                )
-                .child(
-                    Button::secondary("git-push", t!("App.Git.push"))
-                        .on_click(move |_, _, cx| {
-                            let _ = push_weak.update(cx, |app, cx| {
-                                app.schedule_git_action(GitPendingAction::Push, cx);
-                            });
-                        }),
-                ),
+                .child(Button::secondary("git-pull", t!("App.Git.pull")).on_click(
+                    move |_, _, cx| {
+                        let _ = pull_weak.update(cx, |app, cx| {
+                            app.schedule_git_action(GitPendingAction::Pull, cx);
+                        });
+                    },
+                ))
+                .child(Button::secondary("git-push", t!("App.Git.push")).on_click(
+                    move |_, _, cx| {
+                        let _ = push_weak.update(cx, |app, cx| {
+                            app.schedule_git_action(GitPendingAction::Push, cx);
+                        });
+                    },
+                )),
         );
 
     if let Some(path) = repo_path {
@@ -337,9 +335,11 @@ fn branch_card(
         .collect();
 
     if !others.is_empty() {
-        card = card.child(div().pt(SP_2).child(
-            SectionLabel::new(t!("App.Git.switch_branch")).with_icon(IconName::Map),
-        ));
+        card = card.child(
+            div()
+                .pt(SP_2)
+                .child(SectionLabel::new(t!("App.Git.switch_branch")).with_icon(IconName::Map)),
+        );
         for name in others.into_iter().take(24) {
             card = card.child(branch_row(t, name, weak.clone()));
         }
@@ -348,7 +348,11 @@ fn branch_card(
     card
 }
 
-fn branch_row(t: &crate::theme::Theme, name: String, weak: WeakEntity<PierApp>) -> impl IntoElement {
+fn branch_row(
+    t: &crate::theme::Theme,
+    name: String,
+    weak: WeakEntity<PierApp>,
+) -> impl IntoElement {
     let name_for_click = name.clone();
     let id = ElementId::Name(SharedString::from(format!("git-checkout-{name}")));
     div()
@@ -369,17 +373,19 @@ fn branch_row(t: &crate::theme::Theme, name: String, weak: WeakEntity<PierApp>) 
                 .child(SharedString::from(name)),
         )
         .child(
-            div().flex_none().child(
-                Button::secondary(id, t!("App.Git.checkout")).on_click(move |_, _, cx| {
-                    let branch_name = name_for_click.clone();
-                    let _ = weak.update(cx, |app, cx| {
-                        app.schedule_git_action(
-                            GitPendingAction::CheckoutBranch { name: branch_name },
-                            cx,
-                        );
-                    });
-                }),
-            ),
+            div()
+                .flex_none()
+                .child(
+                    Button::secondary(id, t!("App.Git.checkout")).on_click(move |_, _, cx| {
+                        let branch_name = name_for_click.clone();
+                        let _ = weak.update(cx, |app, cx| {
+                            app.schedule_git_action(
+                                GitPendingAction::CheckoutBranch { name: branch_name },
+                                cx,
+                            );
+                        });
+                    }),
+                ),
         )
 }
 
@@ -402,9 +408,7 @@ fn changes_card(
         .flex_row()
         .items_center()
         .gap(SP_2)
-        .child(
-            SectionLabel::new(t!("App.Git.working_tree")).with_icon(IconName::Inbox),
-        )
+        .child(SectionLabel::new(t!("App.Git.working_tree")).with_icon(IconName::Inbox))
         .child(StatusPill::new(
             t!("App.Git.staged_count", count = staged),
             if staged > 0 {
@@ -425,20 +429,24 @@ fn changes_card(
 
     if unstaged > 0 {
         header = header.child(
-            Button::secondary("git-stage-all", t!("App.Git.stage_all")).on_click(move |_, _, cx| {
-                let _ = stage_all_weak.update(cx, |app, cx| {
-                    app.schedule_git_action(GitPendingAction::StageAll, cx);
-                });
-            }),
+            Button::secondary("git-stage-all", t!("App.Git.stage_all")).on_click(
+                move |_, _, cx| {
+                    let _ = stage_all_weak.update(cx, |app, cx| {
+                        app.schedule_git_action(GitPendingAction::StageAll, cx);
+                    });
+                },
+            ),
         );
     }
     if staged > 0 {
         header = header.child(
-            Button::secondary("git-unstage-all", t!("App.Git.unstage_all")).on_click(move |_, _, cx| {
-                let _ = unstage_all_weak.update(cx, |app, cx| {
-                    app.schedule_git_action(GitPendingAction::UnstageAll, cx);
-                });
-            }),
+            Button::secondary("git-unstage-all", t!("App.Git.unstage_all")).on_click(
+                move |_, _, cx| {
+                    let _ = unstage_all_weak.update(cx, |app, cx| {
+                        app.schedule_git_action(GitPendingAction::UnstageAll, cx);
+                    });
+                },
+            ),
         );
     }
 
@@ -670,9 +678,7 @@ fn commit_card(
     };
 
     Card::new()
-        .child(
-            SectionLabel::new(t!("App.Git.commit_section")).with_icon(IconName::GitCommit),
-        )
+        .child(SectionLabel::new(t!("App.Git.commit_section")).with_icon(IconName::GitCommit))
         .child(Input::new(&input))
         .child(
             div()
@@ -704,9 +710,7 @@ fn stash_card(
     let input_for_click = input.clone();
 
     let mut card = Card::new()
-        .child(
-            SectionLabel::new(t!("App.Git.stash_section")).with_icon(IconName::Inspector),
-        )
+        .child(SectionLabel::new(t!("App.Git.stash_section")).with_icon(IconName::Inspector))
         .child(Input::new(&input))
         .child(
             div()
@@ -716,8 +720,8 @@ fn stash_card(
                 .gap(SP_2)
                 .child(div().flex_1())
                 .child(
-                    Button::secondary("git-stash-push", t!("App.Git.stash_push"))
-                        .on_click(move |_, _, cx| {
+                    Button::secondary("git-stash-push", t!("App.Git.stash_push")).on_click(
+                        move |_, _, cx| {
                             let text: String = input_for_click.read(cx).value().to_string();
                             let _ = push_weak.update(cx, |app, cx| {
                                 app.schedule_git_action(
@@ -725,7 +729,8 @@ fn stash_card(
                                     cx,
                                 );
                             });
-                        }),
+                        },
+                    ),
                 ),
         );
 
@@ -742,18 +747,18 @@ fn stash_card(
                 .text_size(SIZE_SMALL)
                 .text_color(t.color.text_tertiary)
                 .child(SharedString::from(
-                    t!(
-                        "App.Git.more_stashes",
-                        count = stashes.len() - 10
-                    )
-                    .to_string(),
+                    t!("App.Git.more_stashes", count = stashes.len() - 10).to_string(),
                 )),
         );
     }
     card
 }
 
-fn stash_row(t: &crate::theme::Theme, stash: &StashEntry, weak: WeakEntity<PierApp>) -> impl IntoElement {
+fn stash_row(
+    t: &crate::theme::Theme,
+    stash: &StashEntry,
+    weak: WeakEntity<PierApp>,
+) -> impl IntoElement {
     let apply_weak = weak.clone();
     let pop_weak = weak.clone();
     let drop_weak = weak.clone();
@@ -798,39 +803,47 @@ fn stash_row(t: &crate::theme::Theme, stash: &StashEntry, weak: WeakEntity<PierA
                 .text_color(t.color.text_tertiary)
                 .child(SharedString::from(stash.relative_date.clone())),
         )
-        .child(div().flex_none().child(
-            Button::secondary(apply_id, t!("App.Git.apply")).on_click(move |_, _, cx| {
-                let id = idx_apply.clone();
-                let _ = apply_weak.update(cx, |app, cx| {
-                    app.schedule_git_action(GitPendingAction::StashApply { index: id }, cx);
-                });
-            }),
-        ))
-        .child(div().flex_none().child(
-            Button::secondary(pop_id, t!("App.Git.pop")).on_click(move |_, _, cx| {
-                let id = idx_pop.clone();
-                let _ = pop_weak.update(cx, |app, cx| {
-                    app.schedule_git_action(GitPendingAction::StashPop { index: id }, cx);
-                });
-            }),
-        ))
-        .child(div().flex_none().child(
-            Button::danger(drop_id, t!("App.Git.drop")).on_click(move |_, _, cx| {
-                let id = idx_drop.clone();
-                let _ = drop_weak.update(cx, |app, cx| {
-                    app.schedule_git_action(GitPendingAction::StashDrop { index: id }, cx);
-                });
-            }),
-        ))
+        .child(
+            div()
+                .flex_none()
+                .child(Button::secondary(apply_id, t!("App.Git.apply")).on_click(
+                    move |_, _, cx| {
+                        let id = idx_apply.clone();
+                        let _ = apply_weak.update(cx, |app, cx| {
+                            app.schedule_git_action(GitPendingAction::StashApply { index: id }, cx);
+                        });
+                    },
+                )),
+        )
+        .child(
+            div()
+                .flex_none()
+                .child(
+                    Button::secondary(pop_id, t!("App.Git.pop")).on_click(move |_, _, cx| {
+                        let id = idx_pop.clone();
+                        let _ = pop_weak.update(cx, |app, cx| {
+                            app.schedule_git_action(GitPendingAction::StashPop { index: id }, cx);
+                        });
+                    }),
+                ),
+        )
+        .child(
+            div()
+                .flex_none()
+                .child(
+                    Button::danger(drop_id, t!("App.Git.drop")).on_click(move |_, _, cx| {
+                        let id = idx_drop.clone();
+                        let _ = drop_weak.update(cx, |app, cx| {
+                            app.schedule_git_action(GitPendingAction::StashDrop { index: id }, cx);
+                        });
+                    }),
+                ),
+        )
 }
 
 // ─── Card: unified diff for the selected file ──────────────────────
 
-fn diff_card(
-    t: &crate::theme::Theme,
-    snap: &GitSnapshot,
-    weak: WeakEntity<PierApp>,
-) -> Card {
+fn diff_card(t: &crate::theme::Theme, snap: &GitSnapshot, weak: WeakEntity<PierApp>) -> Card {
     // Safe: caller only invokes `diff_card` when `diff_selection` is
     // `Some` (see `repo_layout`).
     let selection = snap
@@ -847,42 +860,35 @@ fn diff_card(
         t!("App.Git.diff_side_worktree").into()
     };
 
-    let mut card = Card::new()
-        .padding(SP_3)
-        .child(
-            div()
-                .flex()
-                .flex_row()
-                .items_center()
-                .gap(SP_2)
-                .overflow_hidden()
-                .child(
-                    SectionLabel::new(t!("App.Git.diff_section"))
-                        .with_icon(IconName::Inspector),
-                )
-                .child(StatusPill::new(side_label, StatusKind::Info))
-                .child(
-                    div()
-                        .flex_1()
-                        .min_w(px(0.0))
-                        .truncate()
-                        .text_size(SIZE_MONO_SMALL)
-                        .font_family(t.font_mono.clone())
-                        .text_color(t.color.text_secondary)
-                        .child(SharedString::from(selection.path.clone())),
-                )
-                .child(
-                    div().flex_none().child(
-                        Button::ghost("git-diff-close", t!("App.Git.close_diff")).on_click(
-                            move |_, _, cx| {
-                                let _ = close_weak.update(cx, |app, cx| {
-                                    app.clear_git_diff_selection(cx);
-                                });
-                            },
-                        ),
-                    ),
+    let mut card = Card::new().padding(SP_3).child(
+        div()
+            .flex()
+            .flex_row()
+            .items_center()
+            .gap(SP_2)
+            .overflow_hidden()
+            .child(SectionLabel::new(t!("App.Git.diff_section")).with_icon(IconName::Inspector))
+            .child(StatusPill::new(side_label, StatusKind::Info))
+            .child(
+                div()
+                    .flex_1()
+                    .min_w(px(0.0))
+                    .truncate()
+                    .text_size(SIZE_MONO_SMALL)
+                    .font_family(t.font_mono.clone())
+                    .text_color(t.color.text_secondary)
+                    .child(SharedString::from(selection.path.clone())),
+            )
+            .child(div().flex_none().child(
+                Button::ghost("git-diff-close", t!("App.Git.close_diff")).on_click(
+                    move |_, _, cx| {
+                        let _ = close_weak.update(cx, |app, cx| {
+                            app.clear_git_diff_selection(cx);
+                        });
+                    },
                 ),
-        );
+            )),
+    );
 
     if snap.diff_loading {
         return card.child(text::body(t!("App.Git.diff_loading")).secondary());
@@ -1052,9 +1058,7 @@ fn commit_row(t: &crate::theme::Theme, c: &CommitInfo) -> impl IntoElement {
 fn confirmation_card(t: &crate::theme::Theme, msg: SharedString) -> Card {
     Card::new()
         .padding(SP_3)
-        .child(
-            SectionLabel::new(t!("App.Git.last_result")).with_icon(IconName::Check),
-        )
+        .child(SectionLabel::new(t!("App.Git.last_result")).with_icon(IconName::Check))
         .child(
             div()
                 .overflow_hidden()
@@ -1068,9 +1072,7 @@ fn confirmation_card(t: &crate::theme::Theme, msg: SharedString) -> Card {
 fn error_card(t: &crate::theme::Theme, msg: SharedString) -> Card {
     Card::new()
         .padding(SP_3)
-        .child(
-            SectionLabel::new(t!("App.Common.error")).with_icon(IconName::TriangleAlert),
-        )
+        .child(SectionLabel::new(t!("App.Common.error")).with_icon(IconName::TriangleAlert))
         .child(
             div()
                 .overflow_hidden()
@@ -1127,4 +1129,3 @@ impl From<&GitState> for GitSnapshot {
         }
     }
 }
-

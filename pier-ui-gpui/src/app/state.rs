@@ -20,9 +20,7 @@ use gpui::{
     Empty, Entity, EntityId, IntoElement, MouseButton, MouseDownEvent, Pixels, Render,
     ScrollHandle, SharedString, Window,
 };
-use gpui_component::{
-    input::InputState, Icon as UiIcon, IconName, PixelsExt as _, WindowExt as _,
-};
+use gpui_component::{input::InputState, Icon as UiIcon, IconName, PixelsExt as _, WindowExt as _};
 use rust_i18n::t;
 use std::collections::HashMap;
 
@@ -30,10 +28,6 @@ use pier_core::connections::ConnectionStore;
 use pier_core::db_connections::{DbConnection, DbConnectionStore};
 use pier_core::ssh::SshConfig;
 
-use crate::app::layout::{
-    RightMode, CENTER_PANEL_MIN_W, LEFT_PANEL_DEFAULT_W, LEFT_PANEL_MAX_W, LEFT_PANEL_MIN_W,
-    RIGHT_PANEL_DEFAULT_W, RIGHT_PANEL_MAX_W, RIGHT_PANEL_MIN_W,
-};
 use crate::app::db_session::{
     run_connect as db_run_connect, run_execute as db_run_execute, run_list as db_run_list,
     DbSessionState,
@@ -42,11 +36,15 @@ use crate::app::git_session::{
     default_cwd as git_default_cwd, run_action as git_run_action, run_diff as git_run_diff,
     run_refresh as git_run_refresh, DiffSelection, GitPendingAction, GitState,
 };
+use crate::app::layout::{
+    RightMode, CENTER_PANEL_MIN_W, LEFT_PANEL_DEFAULT_W, LEFT_PANEL_MAX_W, LEFT_PANEL_MIN_W,
+    RIGHT_PANEL_DEFAULT_W, RIGHT_PANEL_MAX_W, RIGHT_PANEL_MIN_W,
+};
 use crate::app::route::DbKind;
 use crate::app::ssh_session::{
     run_bootstrap, run_docker_command, run_docker_refresh, run_logs_start, run_monitor_refresh,
     run_refresh, run_sftp_mutation, run_tunnel, ServiceProbeStatus, SftpMutationKind,
-    SshSessionState,
+    SshSessionState, TransferDirection,
 };
 use crate::app::{
     ActivationHandler, CloseActiveTab, NewTab, OpenSettings, ToggleLeftPanel, ToggleRightPanel,
@@ -55,13 +53,13 @@ use crate::data::ShellSnapshot;
 use crate::theme::{
     heights::{BUTTON_SM_H, GLYPH_SM, GLYPH_XS, ICON_SM, ROW_MD_H},
     radius::RADIUS_SM,
-    spacing::{SP_1, SP_1_5, SP_2},
-    theme, ui_font_with,
+    spacing::{SP_1, SP_1_5, SP_2, SP_3},
+    theme,
     typography::{SIZE_CAPTION, WEIGHT_MEDIUM, WEIGHT_REGULAR},
+    ui_font_with,
 };
 use crate::views::left_panel_view::{
-    ActiveServerSessionSnapshot, LeftPanelView, ServerTunnelSnapshot,
-    ServersSidebarSnapshot,
+    ActiveServerSessionSnapshot, LeftPanelView, ServerTunnelSnapshot, ServersSidebarSnapshot,
 };
 use crate::views::right_panel::{
     DockerActionHandler, DockerActionRequest, DockerRefreshHandler, LogsAction, LogsActionHandler,
@@ -225,9 +223,8 @@ impl PierApp {
                 .multi_line(true)
                 .placeholder(t!("App.Git.commit_placeholder"))
         });
-        let git_stash_message_input = cx.new(|c| {
-            InputState::new(window, c).placeholder(t!("App.Git.stash_placeholder"))
-        });
+        let git_stash_message_input =
+            cx.new(|c| InputState::new(window, c).placeholder(t!("App.Git.stash_placeholder")));
 
         Self {
             left_visible: true,
@@ -424,11 +421,7 @@ impl PierApp {
 
     /// Close every terminal except `keep_idx`. Active index snaps to
     /// the kept tab, which becomes the only one left.
-    pub(crate) fn close_terminal_tabs_others(
-        &mut self,
-        keep_idx: usize,
-        cx: &mut Context<Self>,
-    ) {
+    pub(crate) fn close_terminal_tabs_others(&mut self, keep_idx: usize, cx: &mut Context<Self>) {
         if keep_idx >= self.terminals.len() {
             return;
         }
@@ -440,11 +433,7 @@ impl PierApp {
     }
 
     /// Close every tab with an index less than `from_idx`.
-    pub(crate) fn close_terminal_tabs_left(
-        &mut self,
-        from_idx: usize,
-        cx: &mut Context<Self>,
-    ) {
+    pub(crate) fn close_terminal_tabs_left(&mut self, from_idx: usize, cx: &mut Context<Self>) {
         if from_idx == 0 || from_idx > self.terminals.len() {
             return;
         }
@@ -459,11 +448,7 @@ impl PierApp {
     }
 
     /// Close every tab with an index greater than `from_idx`.
-    pub(crate) fn close_terminal_tabs_right(
-        &mut self,
-        from_idx: usize,
-        cx: &mut Context<Self>,
-    ) {
+    pub(crate) fn close_terminal_tabs_right(&mut self, from_idx: usize, cx: &mut Context<Self>) {
         if from_idx + 1 >= self.terminals.len() {
             return;
         }
@@ -685,8 +670,11 @@ impl PierApp {
             return;
         };
         let weak = cx.entity().downgrade();
-        let title: SharedString =
-            t!("App.Shell.DeleteConnection.title", name = conn.name.as_str()).into();
+        let title: SharedString = t!(
+            "App.Shell.DeleteConnection.title",
+            name = conn.name.as_str()
+        )
+        .into();
         let detail: SharedString = t!(
             "App.Shell.DeleteConnection.detail",
             user = conn.user.as_str(),
@@ -794,7 +782,11 @@ impl Render for PierApp {
             .size_full()
             .bg(t.color.bg_canvas)
             .text_color(t.color.text_primary)
-            .font(ui_font_with(&t.font_ui, &t.font_ui_features, WEIGHT_REGULAR))
+            .font(ui_font_with(
+                &t.font_ui,
+                &t.font_ui_features,
+                WEIGHT_REGULAR,
+            ))
             .flex()
             .flex_col()
             // Key-binding context — matches `Some("PierApp")` bindings in
@@ -827,6 +819,20 @@ impl Render for PierApp {
             .child(toolbar)
             .child(row)
             .child(statusbar)
+            .when_some(self.active_transfer_toast(cx), |root, toast| {
+                // Pinned bottom-right, hovering above the status bar.
+                // Absolute positioning keeps the rest of the layout
+                // from reflowing when the toast appears or disappears.
+                root.child(
+                    div()
+                        .absolute()
+                        .right(SP_3)
+                        .bottom(SP_3)
+                        .flex()
+                        .flex_col()
+                        .child(toast),
+                )
+            })
             .when_some(self.tab_context_menu, |root, (idx, position)| {
                 // Snapshot `total` off of `self` *before* calling the
                 // helper — the helper gets `cx` only, and `self` is
@@ -838,29 +844,26 @@ impl Render for PierApp {
 }
 
 impl PierApp {
+    /// Snapshot the active session's in-flight transfer (if any) into
+    /// a ready-to-render toast. Kept on PierApp (not on the session
+    /// view) because the toast floats above the whole shell, not
+    /// inside the SFTP panel — it stays visible even if the user
+    /// switches to Markdown or Git mid-transfer.
+    fn active_transfer_toast(
+        &self,
+        cx: &mut Context<Self>,
+    ) -> Option<crate::components::TransferToast> {
+        let session = self.active_session.as_ref()?;
+        let state = session.read(cx).active_transfer.clone()?;
+        Some(crate::components::TransferToast::new(state))
+    }
+
     pub(crate) fn left_visible(&self) -> bool {
         self.left_visible
     }
 
     pub(crate) fn right_visible(&self) -> bool {
         self.right_visible
-    }
-
-    pub(crate) fn active_session_name(&self, cx: &App) -> Option<SharedString> {
-        self.active_session
-            .as_ref()
-            .map(|s| SharedString::from(s.read(cx).config.name.clone()))
-    }
-
-    pub(crate) fn active_session_endpoint(&self, cx: &App) -> Option<SharedString> {
-        self.active_session.as_ref().map(|s| {
-            let cfg = &s.read(cx).config;
-            if cfg.port == 22 {
-                SharedString::from(format!("{}@{}", cfg.user, cfg.host))
-            } else {
-                SharedString::from(format!("{}@{}:{}", cfg.user, cfg.host, cfg.port))
-            }
-        })
     }
 
     pub(crate) fn toggle_left_pane(&mut self, cx: &mut Context<Self>) {
@@ -1281,9 +1284,124 @@ impl PierApp {
         let Some(session) = self.active_session.clone() else {
             return;
         };
-        let Some(request) = session.update(cx, |state, _| state.begin_sftp_mutation(kind)) else {
+        let Some(mut request) = session.update(cx, |state, _| state.begin_sftp_mutation(kind))
+        else {
             return;
         };
+
+        // Wire up progress tracking for Upload / Download. The
+        // callback fires on pier-core's tokio worker — it writes into
+        // a pair of AtomicU64s (transferred + total) and bumps a
+        // generation counter. A GPUI-async task polls that slot at
+        // ~16 fps and forwards the latest value into
+        // `active_transfer`, respecting Rule 6 (render stays paint-
+        // only) without needing a cross-runtime channel.
+        use std::sync::atomic::{AtomicU64, Ordering};
+        use std::sync::Arc;
+
+        struct ProgressSlot {
+            transferred: AtomicU64,
+            total: AtomicU64,
+            gen: AtomicU64,
+        }
+
+        let transfer_slot: Option<(u64, Arc<ProgressSlot>)> = match &request.kind {
+            SftpMutationKind::Upload { local, remote } => {
+                let name = std::path::Path::new(remote)
+                    .file_name()
+                    .or_else(|| local.file_name())
+                    .map(|s| s.to_string_lossy().into_owned())
+                    .unwrap_or_else(|| remote.clone());
+                let total = std::fs::metadata(local).map(|m| m.len()).unwrap_or(0);
+                let slot = Arc::new(ProgressSlot {
+                    transferred: AtomicU64::new(0),
+                    total: AtomicU64::new(total),
+                    gen: AtomicU64::new(0),
+                });
+                let slot_cb = slot.clone();
+                request.progress = Some(Arc::new(move |p| {
+                    slot_cb.transferred.store(p.transferred, Ordering::Relaxed);
+                    slot_cb.total.store(p.total, Ordering::Relaxed);
+                    slot_cb.gen.fetch_add(1, Ordering::Release);
+                }));
+                let id = session.update(cx, |s, _| {
+                    s.begin_transfer(TransferDirection::Upload, name, total)
+                });
+                Some((id, slot))
+            }
+            SftpMutationKind::Download { remote, local } => {
+                let name = std::path::Path::new(remote)
+                    .file_name()
+                    .or_else(|| local.file_name())
+                    .map(|s| s.to_string_lossy().into_owned())
+                    .unwrap_or_else(|| remote.clone());
+                let slot = Arc::new(ProgressSlot {
+                    transferred: AtomicU64::new(0),
+                    total: AtomicU64::new(0),
+                    gen: AtomicU64::new(0),
+                });
+                let slot_cb = slot.clone();
+                request.progress = Some(Arc::new(move |p| {
+                    slot_cb.transferred.store(p.transferred, Ordering::Relaxed);
+                    slot_cb.total.store(p.total, Ordering::Relaxed);
+                    slot_cb.gen.fetch_add(1, Ordering::Release);
+                }));
+                let id = session.update(cx, |s, _| {
+                    s.begin_transfer(TransferDirection::Download, name, 0)
+                });
+                Some((id, slot))
+            }
+            _ => None,
+        };
+
+        let transfer_id_for_result = transfer_slot.as_ref().map(|(id, _)| *id);
+
+        // Progress pump — polls the atomic slot at ~16 fps and
+        // forwards the latest tick into SshSessionState. Terminates
+        // once the toast with this id is no longer the active one
+        // (either replaced by a newer transfer or cleared by the
+        // auto-hide timer).
+        if let Some((id, slot)) = transfer_slot {
+            let session_pump = session.clone();
+            cx.spawn(move |_: gpui::WeakEntity<Self>, cx: &mut gpui::AsyncApp| {
+                let mut async_cx = cx.clone();
+                async move {
+                    let mut last_gen = 0u64;
+                    loop {
+                        async_cx
+                            .background_executor()
+                            .timer(Duration::from_millis(60))
+                            .await;
+                        let gen = slot.gen.load(Ordering::Acquire);
+                        let alive = session_pump
+                            .update(&mut async_cx, |state, cx| {
+                                let still_ours = state
+                                    .active_transfer
+                                    .as_ref()
+                                    .map(|t| t.id == id)
+                                    .unwrap_or(false);
+                                if still_ours && gen != last_gen {
+                                    state.update_transfer_progress(
+                                        id,
+                                        pier_core::ssh::TransferProgress {
+                                            transferred: slot.transferred.load(Ordering::Relaxed),
+                                            total: slot.total.load(Ordering::Relaxed),
+                                        },
+                                    );
+                                    cx.notify();
+                                }
+                                still_ours
+                            })
+                            .unwrap_or(false);
+                        if !alive {
+                            break;
+                        }
+                        last_gen = gen;
+                    }
+                }
+            })
+            .detach();
+        }
 
         cx.notify();
         cx.spawn(
@@ -1299,6 +1417,26 @@ impl PierApp {
                             state.apply_sftp_mutation_result(result)
                         })
                         .unwrap_or(false);
+
+                    if let Some(id) = transfer_id_for_result {
+                        let _ = session.update(&mut async_cx, |state, cx| {
+                            state.finish_transfer(id, succeeded);
+                            cx.notify();
+                        });
+                        // Hold the toast briefly so the user sees the
+                        // terminal phase, then clear.
+                        let hold = if succeeded {
+                            Duration::from_millis(1_500)
+                        } else {
+                            Duration::from_millis(2_500)
+                        };
+                        async_cx.background_executor().timer(hold).await;
+                        let _ = session.update(&mut async_cx, |state, cx| {
+                            state.clear_transfer(id);
+                            cx.notify();
+                        });
+                    }
+
                     if succeeded {
                         let _ = this.update(&mut async_cx, |this, cx| {
                             this.schedule_sftp_refresh(None, cx);
@@ -1329,28 +1467,61 @@ impl PierApp {
             multiple: true,
             prompt: Some(SharedString::from("Upload to remote")),
         });
-        cx.spawn(move |this: gpui::WeakEntity<Self>, cx: &mut gpui::AsyncApp| {
-            let mut async_cx = cx.clone();
-            async move {
-                let Ok(picked) = receiver.await else { return };
-                let Ok(Some(paths)) = picked else { return };
-                for local in paths {
-                    let Some(name) = local.file_name().and_then(|n| n.to_str()) else {
-                        log::warn!("sftp_upload: skipping non-utf8 filename: {local:?}");
-                        continue;
-                    };
-                    let remote = join_remote_path(&cwd, name);
-                    let kind = SftpMutationKind::Upload {
-                        local: local.clone(),
-                        remote,
-                    };
+        cx.spawn(
+            move |this: gpui::WeakEntity<Self>, cx: &mut gpui::AsyncApp| {
+                let mut async_cx = cx.clone();
+                async move {
+                    let Ok(picked) = receiver.await else { return };
+                    let Ok(Some(paths)) = picked else { return };
                     let _ = this.update(&mut async_cx, |this, cx| {
-                        this.schedule_sftp_mutation(kind, cx);
+                        this.enqueue_sftp_uploads(&cwd, paths, cx);
                     });
                 }
-            }
-        })
+            },
+        )
         .detach();
+    }
+
+    /// Entry point for drag-and-drop upload: filesystem paths arrive
+    /// from the OS (via `on_drop::<ExternalPaths>`) and get uploaded
+    /// into the current SFTP cwd, one mutation per file. Mirrors the
+    /// post-picker tail of [`Self::sftp_upload_prompt`] without the
+    /// dialog round-trip.
+    pub(crate) fn sftp_upload_paths(&mut self, paths: Vec<PathBuf>, cx: &mut Context<Self>) {
+        let Some(session) = self.active_session.clone() else {
+            return;
+        };
+        let cwd = session.read(cx).cwd.clone();
+        self.enqueue_sftp_uploads(&cwd, paths, cx);
+    }
+
+    /// Shared loop body for both the picker and the drop handler.
+    /// Directories are skipped with a warn — recursive upload isn't
+    /// in the current transfer primitives, and dropping a folder
+    /// silently ignoring its contents would be worse than telling
+    /// the user nothing happened.
+    fn enqueue_sftp_uploads(
+        &mut self,
+        cwd: &std::path::Path,
+        paths: Vec<PathBuf>,
+        cx: &mut Context<Self>,
+    ) {
+        for local in paths {
+            if local.is_dir() {
+                log::warn!("sftp_upload: directories are not yet supported: {local:?}");
+                continue;
+            }
+            let Some(name) = local.file_name().and_then(|n| n.to_str()) else {
+                log::warn!("sftp_upload: skipping non-utf8 filename: {local:?}");
+                continue;
+            };
+            let remote = join_remote_path(cwd, name);
+            let kind = SftpMutationKind::Upload {
+                local: local.clone(),
+                remote,
+            };
+            self.schedule_sftp_mutation(kind, cx);
+        }
     }
 
     /// Open the OS save-file dialog and download `remote_path` into
@@ -1366,20 +1537,22 @@ impl PierApp {
             .map(PathBuf::from)
             .unwrap_or_else(|| PathBuf::from("."));
         let receiver = cx.prompt_for_new_path(&directory, Some(&suggested_name));
-        cx.spawn(move |this: gpui::WeakEntity<Self>, cx: &mut gpui::AsyncApp| {
-            let mut async_cx = cx.clone();
-            async move {
-                let Ok(picked) = receiver.await else { return };
-                let Ok(Some(local)) = picked else { return };
-                let kind = SftpMutationKind::Download {
-                    remote: remote_path,
-                    local,
-                };
-                let _ = this.update(&mut async_cx, |this, cx| {
-                    this.schedule_sftp_mutation(kind, cx);
-                });
-            }
-        })
+        cx.spawn(
+            move |this: gpui::WeakEntity<Self>, cx: &mut gpui::AsyncApp| {
+                let mut async_cx = cx.clone();
+                async move {
+                    let Ok(picked) = receiver.await else { return };
+                    let Ok(Some(local)) = picked else { return };
+                    let kind = SftpMutationKind::Download {
+                        remote: remote_path,
+                        local,
+                    };
+                    let _ = this.update(&mut async_cx, |this, cx| {
+                        this.schedule_sftp_mutation(kind, cx);
+                    });
+                }
+            },
+        )
         .detach();
     }
 
@@ -1683,40 +1856,42 @@ impl PierApp {
         };
 
         cx.notify();
-        cx.spawn(move |_this: gpui::WeakEntity<Self>, cx: &mut gpui::AsyncApp| {
-            let background = cx.background_executor().clone();
-            let mut async_cx = cx.clone();
-            async move {
-                let result = background.spawn(async move { db_run_connect(request) }).await;
-                let _ = session.update(&mut async_cx, |state, _| {
-                    state.apply_connect_result(result);
-                });
-            }
-        })
+        cx.spawn(
+            move |_this: gpui::WeakEntity<Self>, cx: &mut gpui::AsyncApp| {
+                let background = cx.background_executor().clone();
+                let mut async_cx = cx.clone();
+                async move {
+                    let result = background
+                        .spawn(async move { db_run_connect(request) })
+                        .await;
+                    let _ = session.update(&mut async_cx, |state, _| {
+                        state.apply_connect_result(result);
+                    });
+                }
+            },
+        )
         .detach();
     }
 
     /// Fetch the database list for the session's active client.
-    pub(crate) fn schedule_db_list_databases(
-        &mut self,
-        kind: DbKind,
-        cx: &mut Context<Self>,
-    ) {
+    pub(crate) fn schedule_db_list_databases(&mut self, kind: DbKind, cx: &mut Context<Self>) {
         let session = self.db_session_for(kind, cx);
         let Some(request) = session.update(cx, |state, _| state.begin_list_databases()) else {
             return;
         };
 
-        cx.spawn(move |_this: gpui::WeakEntity<Self>, cx: &mut gpui::AsyncApp| {
-            let background = cx.background_executor().clone();
-            let mut async_cx = cx.clone();
-            async move {
-                let result = background.spawn(async move { db_run_list(request) }).await;
-                let _ = session.update(&mut async_cx, |state, _| {
-                    state.apply_list_result(result);
-                });
-            }
-        })
+        cx.spawn(
+            move |_this: gpui::WeakEntity<Self>, cx: &mut gpui::AsyncApp| {
+                let background = cx.background_executor().clone();
+                let mut async_cx = cx.clone();
+                async move {
+                    let result = background.spawn(async move { db_run_list(request) }).await;
+                    let _ = session.update(&mut async_cx, |state, _| {
+                        state.apply_list_result(result);
+                    });
+                }
+            },
+        )
         .detach();
     }
 
@@ -1729,22 +1904,23 @@ impl PierApp {
         cx: &mut Context<Self>,
     ) {
         let session = self.db_session_for(kind, cx);
-        let Some(request) = session.update(cx, |state, _| state.begin_list_tables(database))
-        else {
+        let Some(request) = session.update(cx, |state, _| state.begin_list_tables(database)) else {
             return;
         };
 
         cx.notify();
-        cx.spawn(move |_this: gpui::WeakEntity<Self>, cx: &mut gpui::AsyncApp| {
-            let background = cx.background_executor().clone();
-            let mut async_cx = cx.clone();
-            async move {
-                let result = background.spawn(async move { db_run_list(request) }).await;
-                let _ = session.update(&mut async_cx, |state, _| {
-                    state.apply_list_result(result);
-                });
-            }
-        })
+        cx.spawn(
+            move |_this: gpui::WeakEntity<Self>, cx: &mut gpui::AsyncApp| {
+                let background = cx.background_executor().clone();
+                let mut async_cx = cx.clone();
+                async move {
+                    let result = background.spawn(async move { db_run_list(request) }).await;
+                    let _ = session.update(&mut async_cx, |state, _| {
+                        state.apply_list_result(result);
+                    });
+                }
+            },
+        )
         .detach();
     }
 
@@ -1763,16 +1939,20 @@ impl PierApp {
         };
 
         cx.notify();
-        cx.spawn(move |_this: gpui::WeakEntity<Self>, cx: &mut gpui::AsyncApp| {
-            let background = cx.background_executor().clone();
-            let mut async_cx = cx.clone();
-            async move {
-                let result = background.spawn(async move { db_run_execute(request) }).await;
-                let _ = session.update(&mut async_cx, |state, _| {
-                    state.apply_execute_result(result);
-                });
-            }
-        })
+        cx.spawn(
+            move |_this: gpui::WeakEntity<Self>, cx: &mut gpui::AsyncApp| {
+                let background = cx.background_executor().clone();
+                let mut async_cx = cx.clone();
+                async move {
+                    let result = background
+                        .spawn(async move { db_run_execute(request) })
+                        .await;
+                    let _ = session.update(&mut async_cx, |state, _| {
+                        state.apply_execute_result(result);
+                    });
+                }
+            },
+        )
         .detach();
     }
 
@@ -1815,17 +1995,21 @@ impl PierApp {
         };
 
         cx.notify();
-        cx.spawn(move |_this: gpui::WeakEntity<Self>, cx: &mut gpui::AsyncApp| {
-            let background = cx.background_executor().clone();
-            let mut async_cx = cx.clone();
-            async move {
-                let result = background.spawn(async move { git_run_refresh(request) }).await;
-                let _ = state.update(&mut async_cx, |s, cx| {
-                    s.apply_refresh_result(result);
-                    cx.notify();
-                });
-            }
-        })
+        cx.spawn(
+            move |_this: gpui::WeakEntity<Self>, cx: &mut gpui::AsyncApp| {
+                let background = cx.background_executor().clone();
+                let mut async_cx = cx.clone();
+                async move {
+                    let result = background
+                        .spawn(async move { git_run_refresh(request) })
+                        .await;
+                    let _ = state.update(&mut async_cx, |s, cx| {
+                        s.apply_refresh_result(result);
+                        cx.notify();
+                    });
+                }
+            },
+        )
         .detach();
     }
 
@@ -1833,17 +2017,19 @@ impl PierApp {
         let state = self.git_state.clone();
         let request = state.update(cx, |s, _| s.begin_diff(selection));
         cx.notify();
-        cx.spawn(move |_this: gpui::WeakEntity<Self>, cx: &mut gpui::AsyncApp| {
-            let background = cx.background_executor().clone();
-            let mut async_cx = cx.clone();
-            async move {
-                let result = background.spawn(async move { git_run_diff(request) }).await;
-                let _ = state.update(&mut async_cx, |s, cx| {
-                    s.apply_diff_result(result);
-                    cx.notify();
-                });
-            }
-        })
+        cx.spawn(
+            move |_this: gpui::WeakEntity<Self>, cx: &mut gpui::AsyncApp| {
+                let background = cx.background_executor().clone();
+                let mut async_cx = cx.clone();
+                async move {
+                    let result = background.spawn(async move { git_run_diff(request) }).await;
+                    let _ = state.update(&mut async_cx, |s, cx| {
+                        s.apply_diff_result(result);
+                        cx.notify();
+                    });
+                }
+            },
+        )
         .detach();
     }
 
@@ -1859,23 +2045,27 @@ impl PierApp {
         };
         cx.notify();
         let this = cx.entity().downgrade();
-        cx.spawn(move |_this: gpui::WeakEntity<Self>, cx: &mut gpui::AsyncApp| {
-            let background = cx.background_executor().clone();
-            let mut async_cx = cx.clone();
-            async move {
-                let result = background.spawn(async move { git_run_action(request) }).await;
-                let _ = state.update(&mut async_cx, |s, cx| {
-                    s.apply_action_result(result);
-                    cx.notify();
-                });
-                // A successful mutation invalidates the cached
-                // snapshot — always schedule a refresh so the view
-                // shows fresh branches / status / log / stashes.
-                let _ = this.update(&mut async_cx, |this, cx| {
-                    this.schedule_git_refresh(cx);
-                });
-            }
-        })
+        cx.spawn(
+            move |_this: gpui::WeakEntity<Self>, cx: &mut gpui::AsyncApp| {
+                let background = cx.background_executor().clone();
+                let mut async_cx = cx.clone();
+                async move {
+                    let result = background
+                        .spawn(async move { git_run_action(request) })
+                        .await;
+                    let _ = state.update(&mut async_cx, |s, cx| {
+                        s.apply_action_result(result);
+                        cx.notify();
+                    });
+                    // A successful mutation invalidates the cached
+                    // snapshot — always schedule a refresh so the view
+                    // shows fresh branches / status / log / stashes.
+                    let _ = this.update(&mut async_cx, |this, cx| {
+                        this.schedule_git_refresh(cx);
+                    });
+                }
+            },
+        )
         .detach();
     }
 
@@ -1939,20 +2129,28 @@ impl PierApp {
         let on_sftp_upload: crate::views::sftp_browser::HeaderActionHandler =
             Rc::new(cx.listener(|this, _: &(), _, cx| this.sftp_upload_prompt(cx)));
         let on_sftp_row_action: crate::views::sftp_browser::RowActionHandler =
-            Rc::new(cx.listener(|this, action: &crate::views::sftp_browser::RowAction, window, cx| {
-                use crate::views::sftp_browser::RowAction;
-                match action.clone() {
-                    RowAction::Rename { path, name } => {
-                        let weak = cx.entity().downgrade();
-                        crate::views::sftp_dialogs::open_rename_dialog(window, cx, weak, path, name);
+            Rc::new(cx.listener(
+                |this, action: &crate::views::sftp_browser::RowAction, window, cx| {
+                    use crate::views::sftp_browser::RowAction;
+                    match action.clone() {
+                        RowAction::Rename { path, name } => {
+                            let weak = cx.entity().downgrade();
+                            crate::views::sftp_dialogs::open_rename_dialog(
+                                window, cx, weak, path, name,
+                            );
+                        }
+                        RowAction::Delete { path, name, is_dir } => {
+                            this.confirm_sftp_delete(path, name, is_dir, window, cx);
+                        }
+                        RowAction::Download { path, name } => {
+                            this.sftp_download_prompt(path, name, cx);
+                        }
                     }
-                    RowAction::Delete { path, name, is_dir } => {
-                        this.confirm_sftp_delete(path, name, is_dir, window, cx);
-                    }
-                    RowAction::Download { path, name } => {
-                        this.sftp_download_prompt(path, name, cx);
-                    }
-                }
+                },
+            ));
+        let on_sftp_drop: crate::views::sftp_browser::DropPathsHandler =
+            Rc::new(cx.listener(|this, paths: &Vec<PathBuf>, _, cx| {
+                this.sftp_upload_paths(paths.clone(), cx);
             }));
         let on_docker_refresh: DockerRefreshHandler =
             Rc::new(cx.listener(|this, _: &(), _, cx| this.schedule_docker_refresh(cx)));
@@ -1973,6 +2171,7 @@ impl PierApp {
                 .map(|ext| ext.eq_ignore_ascii_case("md"))
                 .unwrap_or(false)
         });
+        let (_, right_width) = self.fitted_panel_widths();
         RightPanel::new(
             self.right_mode,
             current_markdown,
@@ -1984,10 +2183,12 @@ impl PierApp {
             on_sftp_mkdir,
             on_sftp_upload,
             on_sftp_row_action,
+            on_sftp_drop,
             on_docker_refresh,
             on_docker_action,
             on_logs_action,
             on_select_mode,
+            right_width,
         )
     }
 
@@ -2086,11 +2287,10 @@ fn render_terminal_tab_bar(
         let on_close = cx.listener(move |this, _: &ClickEvent, _, cx| {
             this.close_terminal_tab(idx, cx);
         });
-        let on_right_click =
-            cx.listener(move |this, ev: &MouseDownEvent, _, cx| {
-                this.open_tab_context_menu(idx, ev.position, cx);
-                cx.stop_propagation();
-            });
+        let on_right_click = cx.listener(move |this, ev: &MouseDownEvent, _, cx| {
+            this.open_tab_context_menu(idx, ev.position, cx);
+            cx.stop_propagation();
+        });
 
         let mut tab = div()
             .id(gpui::ElementId::Name(tab_id))
@@ -2221,11 +2421,12 @@ fn render_tab_context_menu(
         position,
     )
     .item(
-        ContextMenuItem::new(t!("App.Shell.Tabs.close"))
-            .on_click(cx.listener(move |this, _, _, cx| {
+        ContextMenuItem::new(t!("App.Shell.Tabs.close")).on_click(cx.listener(
+            move |this, _, _, cx| {
                 this.close_terminal_tab(idx, cx);
                 this.close_tab_context_menu(cx);
-            })),
+            },
+        )),
     )
     .item(
         ContextMenuItem::new(t!("App.Shell.Tabs.close_others"))
@@ -2267,4 +2468,3 @@ fn join_remote_path(cwd: &std::path::Path, name: &str) -> String {
     out.push_str(name);
     out
 }
-

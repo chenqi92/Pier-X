@@ -22,9 +22,7 @@ use crate::theme::{
 pub fn open(window: &mut Window, cx: &mut App, app: WeakEntity<PierApp>) {
     // Input entity created outside the dialog closure so it
     // persists across re-renders (mirrors edit_connection::open).
-    let name = cx.new(|c| {
-        InputState::new(window, c).placeholder(t!("App.AddGroup.placeholder"))
-    });
+    let name = cx.new(|c| InputState::new(window, c).placeholder(t!("App.AddGroup.placeholder")));
     let title: SharedString = t!("App.AddGroup.title").into();
 
     window.open_dialog(cx, move |dialog, _w, app_cx| {

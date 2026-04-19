@@ -14,6 +14,7 @@
 //!   - `AuthMethod::PublicKeyFile`    — pier-core reads file + opt. passphrase
 
 use std::path::PathBuf;
+use std::time::Instant;
 
 use pier_core::services::docker::{
     inspect_container_blocking, list_containers_blocking, list_images_blocking,
@@ -22,8 +23,8 @@ use pier_core::services::docker::{
 };
 use pier_core::services::server_monitor::ServerSnapshot;
 use pier_core::ssh::{
-    DetectedService, ExecEvent, ExecStream, HostKeyVerifier, SftpClient, SshConfig, SshSession,
-    Tunnel, EXIT_UNKNOWN,
+    DetectedService, ExecEvent, ExecStream, HostKeyVerifier, ProgressCallback, SftpClient,
+    SshConfig, SshSession, TransferProgress, Tunnel, EXIT_UNKNOWN,
 };
 
 use crate::app::layout::{RightContext, RightMode};
@@ -39,6 +40,63 @@ pub struct RemoteEntry {
     pub is_dir: bool,
     pub is_link: bool,
     pub size: u64,
+    /// Last-modified time in seconds since the Unix epoch, if the SFTP
+    /// server provided one. Rendered as a relative label ("5m", "2d")
+    /// when the right-panel is wide enough.
+    pub modified: Option<u64>,
+    /// POSIX mode bits, if the server provided them. Formatted as
+    /// `drwxr-xr-x` in the wide-panel column.
+    pub permissions: Option<u32>,
+}
+
+/// Which way bytes are flowing in the currently displayed transfer
+/// toast. Also drives the icon (↑ vs ↓) on the overlay.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum TransferDirection {
+    Upload,
+    Download,
+}
+
+/// Lifecycle of a single tracked transfer. Stays on `Running` through
+/// the streaming loop, flips to `Done` or `Failed` when the background
+/// mutation returns, and is cleared after a short visual hold so the
+/// user sees the terminal state.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum TransferPhase {
+    Running,
+    Done,
+    Failed,
+}
+
+/// Live view of the one in-flight SFTP transfer. Consumed by the
+/// bottom-right transfer toast — `None` on `SshSessionState` means no
+/// toast. Only one transfer is tracked at a time because the SFTP
+/// mutation runner is single-inflight by nonce.
+#[derive(Clone, Debug)]
+pub struct TransferState {
+    pub direction: TransferDirection,
+    pub name: String,
+    pub transferred: u64,
+    pub total: u64,
+    pub phase: TransferPhase,
+    pub started_at: Instant,
+    /// Monotonically-increasing id so the UI can schedule a delayed
+    /// auto-clear keyed to the *current* transfer, not a stale one.
+    pub id: u64,
+}
+
+impl TransferState {
+    fn new(id: u64, direction: TransferDirection, name: String, total: u64) -> Self {
+        Self {
+            direction,
+            name,
+            transferred: 0,
+            total,
+            phase: TransferPhase::Running,
+            started_at: Instant::now(),
+            id,
+        }
+    }
 }
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
@@ -199,6 +257,15 @@ pub struct SshSessionState {
     /// arrives after a newer mutation gets dropped on the floor.
     sftp_mutation_nonce: usize,
     logs_stream: Option<ExecStream>,
+    /// Currently-displayed transfer toast. `None` = no SFTP
+    /// upload/download in flight or recently finished. Only one
+    /// transfer is ever tracked because the mutation runner is
+    /// single-inflight.
+    pub active_transfer: Option<TransferState>,
+    /// Monotonic counter for transfer ids — the toast's delayed
+    /// auto-clear keys on this so a new transfer doesn't get its
+    /// first tick cleared by an older one's timer.
+    transfer_id_seq: u64,
 }
 
 impl SshSessionState {
@@ -237,6 +304,8 @@ impl SshSessionState {
             logs_start_nonce: 0,
             sftp_mutation_nonce: 0,
             logs_stream: None,
+            active_transfer: None,
+            transfer_id_seq: 0,
         }
     }
 
@@ -397,7 +466,67 @@ impl SshSessionState {
             nonce: self.sftp_mutation_nonce,
             sftp,
             kind,
+            progress: None,
         })
+    }
+
+    /// Install a fresh `TransferState` and return its id — the id lets
+    /// callers key the delayed auto-clear to this specific transfer
+    /// (so a new transfer isn't cleared by an older one's timer).
+    pub fn begin_transfer(
+        &mut self,
+        direction: TransferDirection,
+        name: String,
+        total: u64,
+    ) -> u64 {
+        self.transfer_id_seq = self.transfer_id_seq.wrapping_add(1);
+        let id = self.transfer_id_seq;
+        self.active_transfer = Some(TransferState::new(id, direction, name, total));
+        id
+    }
+
+    /// Patch the current transfer with a progress tick. Ignored if
+    /// the toast has already been cleared or replaced (common when
+    /// the final tick races the mutation result).
+    pub fn update_transfer_progress(&mut self, id: u64, progress: TransferProgress) {
+        if let Some(state) = self.active_transfer.as_mut() {
+            if state.id != id || state.phase != TransferPhase::Running {
+                return;
+            }
+            state.transferred = progress.transferred;
+            if progress.total > state.total {
+                state.total = progress.total;
+            }
+        }
+    }
+
+    /// Flip the transfer to its terminal phase. Called once from the
+    /// mutation-result path; the toast stays visible for a short hold
+    /// so the user can read the outcome.
+    pub fn finish_transfer(&mut self, id: u64, success: bool) {
+        if let Some(state) = self.active_transfer.as_mut() {
+            if state.id != id {
+                return;
+            }
+            state.phase = if success {
+                TransferPhase::Done
+            } else {
+                TransferPhase::Failed
+            };
+            if success && state.total > 0 {
+                state.transferred = state.total;
+            }
+        }
+    }
+
+    /// Drop the toast. No-op if a newer transfer has already replaced
+    /// it (the ids won't match).
+    pub fn clear_transfer(&mut self, id: u64) {
+        if let Some(state) = self.active_transfer.as_ref() {
+            if state.id == id {
+                self.active_transfer = None;
+            }
+        }
     }
 
     /// Apply a [`SftpMutationResult`]. Stale nonces are dropped
@@ -930,6 +1059,10 @@ pub struct SftpMutationRequest {
     pub(crate) nonce: usize,
     pub(crate) sftp: SftpClient,
     pub(crate) kind: SftpMutationKind,
+    /// Only set for Upload / Download — the chunked transfer loop
+    /// inside pier-core invokes this every ~512 KiB plus at the
+    /// start and end, so the UI can animate the progress bar.
+    pub(crate) progress: Option<ProgressCallback>,
 }
 
 /// Result of [`run_sftp_mutation`]. `verb` is echoed back so
@@ -947,6 +1080,7 @@ pub struct SftpMutationResult {
 /// so the UI thread never blocks on the SSH round-trip.
 pub fn run_sftp_mutation(request: SftpMutationRequest) -> SftpMutationResult {
     let verb = request.kind.verb();
+    let progress = request.progress.clone();
     let outcome = match &request.kind {
         SftpMutationKind::Mkdir { path } => request
             .sftp
@@ -966,11 +1100,11 @@ pub fn run_sftp_mutation(request: SftpMutationRequest) -> SftpMutationResult {
             .map_err(|e| e.to_string()),
         SftpMutationKind::Upload { local, remote } => request
             .sftp
-            .upload_from_blocking(local, remote)
+            .upload_from_blocking(local, remote, progress)
             .map_err(|e| e.to_string()),
         SftpMutationKind::Download { remote, local } => request
             .sftp
-            .download_to_blocking(remote, local)
+            .download_to_blocking(remote, local, progress)
             .map_err(|e| e.to_string()),
     };
     SftpMutationResult {
@@ -1022,6 +1156,8 @@ pub fn run_refresh(request: RefreshRequest) -> RefreshResult {
                 is_dir: e.is_dir,
                 is_link: e.is_link,
                 size: e.size,
+                modified: e.modified,
+                permissions: e.permissions,
             })
             .filter(|e| !e.name.starts_with('.'))
             .collect::<Vec<_>>();

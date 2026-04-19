@@ -65,5 +65,5 @@ pub use exec_stream::{ExecEvent, ExecStream, EXIT_UNKNOWN};
 pub use known_hosts::HostKeyVerifier;
 pub use service_detector::{detect_all, detect_all_blocking, DetectedService, ServiceStatus};
 pub use session::SshSession;
-pub use sftp::{RemoteFileEntry, SftpClient};
+pub use sftp::{ProgressCallback, RemoteFileEntry, SftpClient, TransferProgress};
 pub use tunnel::Tunnel;

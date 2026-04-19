@@ -13,17 +13,16 @@
 //! closures) so each tab can close over caller-specific state without
 //! the component having to know anything about its parent type.
 
-use gpui::{
-    div, prelude::*, App, ClickEvent, ElementId, IntoElement, SharedString, Window,
-};
+use gpui::{div, prelude::*, App, ClickEvent, ElementId, IntoElement, SharedString, Window};
 use gpui_component::{Icon as UiIcon, IconName};
 
 use crate::theme::{
     heights::{ROW_SM_H, TAB_GLYPH, TAB_PILL_H},
     radius::RADIUS_SM,
     spacing::{SP_0_5, SP_1, SP_1_5, SP_2},
-    theme, ui_font_with,
+    theme,
     typography::{SIZE_UI_LABEL, WEIGHT_MEDIUM, WEIGHT_REGULAR},
+    ui_font_with,
 };
 
 pub struct TabItem {

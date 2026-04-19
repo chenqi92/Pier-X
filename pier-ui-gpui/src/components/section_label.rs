@@ -4,8 +4,9 @@ use gpui_component::{Icon as UiIcon, IconName};
 use crate::theme::{
     heights::ICON_SM,
     spacing::SP_2,
-    theme, ui_font_with,
+    theme,
     typography::{SIZE_SMALL, WEIGHT_MEDIUM},
+    ui_font_with,
 };
 
 #[derive(IntoElement)]

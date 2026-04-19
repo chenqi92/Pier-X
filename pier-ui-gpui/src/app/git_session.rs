@@ -466,16 +466,8 @@ pub fn run_action(request: ActionRequest) -> ActionResult {
             .stash_drop(index)
             .map(Some)
             .map_err(|e| e.to_string()),
-        GitPendingAction::Push => request
-            .client
-            .push()
-            .map(Some)
-            .map_err(|e| e.to_string()),
-        GitPendingAction::Pull => request
-            .client
-            .pull()
-            .map(Some)
-            .map_err(|e| e.to_string()),
+        GitPendingAction::Push => request.client.push().map(Some).map_err(|e| e.to_string()),
+        GitPendingAction::Pull => request.client.pull().map(Some).map_err(|e| e.to_string()),
     };
     ActionResult { outcome }
 }

@@ -175,11 +175,9 @@ fn empty_state(t: &crate::theme::Theme) -> impl IntoElement {
                     t!("App.Markdown.no_file_selected").to_string(),
                 )),
         )
-        .child(
-            div()
-                .text_size(SIZE_SMALL)
-                .child(SharedString::from(t!("App.Markdown.empty_hint").to_string())),
-        )
+        .child(div().text_size(SIZE_SMALL).child(SharedString::from(
+            t!("App.Markdown.empty_hint").to_string(),
+        )))
 }
 
 // ─────────────────────────────────────────────────────────

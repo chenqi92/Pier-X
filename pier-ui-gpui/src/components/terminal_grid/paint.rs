@@ -1,6 +1,6 @@
 //! Paint pass for the direct-GPU cell grid. See module docs.
 
-use gpui::{App, Bounds, Pixels, SharedString, Window, fill};
+use gpui::{fill, App, Bounds, Pixels, SharedString, Window};
 
 use super::layout::LayoutState;
 
@@ -30,12 +30,9 @@ pub(crate) fn run(
     }
 
     for row in &layout.rows {
-        let shaped = window.text_system().shape_line(
-            row.text.clone(),
-            font_size,
-            &row.runs,
-            None,
-        );
+        let shaped = window
+            .text_system()
+            .shape_line(row.text.clone(), font_size, &row.runs, None);
         // ShapedLine::paint only fails on missing fonts; in that case the
         // glyphs are already absent and there's nothing useful to fall back
         // to — log and continue so the rest of the frame still paints.

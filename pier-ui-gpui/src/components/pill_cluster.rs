@@ -12,9 +12,7 @@
 //! "MySQL pill spilling onto the git rail" bug). This component bakes
 //! in those four lines so callers can stop remembering them.
 
-use gpui::{
-    div, prelude::*, px, AnyElement, IntoElement, ParentElement, Window,
-};
+use gpui::{div, prelude::*, px, AnyElement, IntoElement, ParentElement, Window};
 
 use crate::theme::spacing::SP_2;
 

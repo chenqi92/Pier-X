@@ -1208,6 +1208,19 @@ App:
     terminal_tab:
       en: "Terminal %{index}"
       zh-CN: "终端 %{index}"
+    Tabs:
+      close:
+        en: Close Tab
+        zh-CN: 关闭标签页
+      close_others:
+        en: Close Other Tabs
+        zh-CN: 关闭其他标签页
+      close_left:
+        en: Close Tabs to the Left
+        zh-CN: 关闭左侧标签页
+      close_right:
+        en: Close Tabs to the Right
+        zh-CN: 关闭右侧标签页
     DeleteConnection:
       title:
         en: Delete "%{name}"?

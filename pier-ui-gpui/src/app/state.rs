@@ -17,9 +17,13 @@ use std::time::Duration;
 
 use gpui::{
     canvas, div, prelude::*, px, AnyElement, App, Bounds, ClickEvent, Context, DragMoveEvent,
-    Empty, Entity, EntityId, IntoElement, Pixels, Render, SharedString, Window,
+    Empty, Entity, EntityId, IntoElement, MouseButton, MouseDownEvent, Pixels, Render,
+    SharedString, Window,
 };
-use gpui_component::{input::InputState, Icon as UiIcon, IconName, PixelsExt as _, WindowExt as _};
+use gpui_component::{
+    input::InputState, scroll::ScrollableElement, Icon as UiIcon, IconName, PixelsExt as _,
+    WindowExt as _,
+};
 use rust_i18n::t;
 use std::collections::HashMap;
 
@@ -124,6 +128,9 @@ pub struct PierApp {
     // ─── Terminal sessions (Pier mirror: multi-tab) ───
     terminals: Vec<Entity<TerminalPanel>>,
     active_terminal: Option<usize>,
+    /// Tab right-click menu state. `Some((idx, pos))` while the menu
+    /// is open over terminal tab `idx` anchored at viewport `pos`.
+    tab_context_menu: Option<(usize, gpui::Point<Pixels>)>,
 
     /// Last file the user opened from the left panel that should drive the
     /// right-panel Markdown mode. Set by [`Self::open_markdown_file`].
@@ -229,6 +236,7 @@ impl PierApp {
             db_sessions: HashMap::new(),
             db_query_inputs,
             terminals: Vec::new(),
+            tab_context_menu: None,
             active_terminal: None,
             last_opened_file: None,
             active_session: None,
@@ -404,6 +412,79 @@ impl PierApp {
             self.active_terminal = Some(new_active);
         }
         cx.notify();
+    }
+
+    /// Close every terminal except `keep_idx`. Active index snaps to
+    /// the kept tab, which becomes the only one left.
+    pub(crate) fn close_terminal_tabs_others(
+        &mut self,
+        keep_idx: usize,
+        cx: &mut Context<Self>,
+    ) {
+        if keep_idx >= self.terminals.len() {
+            return;
+        }
+        let kept = self.terminals.remove(keep_idx);
+        self.terminals.clear();
+        self.terminals.push(kept);
+        self.active_terminal = Some(0);
+        cx.notify();
+    }
+
+    /// Close every tab with an index less than `from_idx`.
+    pub(crate) fn close_terminal_tabs_left(
+        &mut self,
+        from_idx: usize,
+        cx: &mut Context<Self>,
+    ) {
+        if from_idx == 0 || from_idx > self.terminals.len() {
+            return;
+        }
+        self.terminals.drain(0..from_idx);
+        // The reference tab is now at index 0; snap active to it if
+        // the previous active was inside the dropped range.
+        self.active_terminal = Some(match self.active_terminal {
+            Some(active) if active >= from_idx => active - from_idx,
+            _ => 0,
+        });
+        cx.notify();
+    }
+
+    /// Close every tab with an index greater than `from_idx`.
+    pub(crate) fn close_terminal_tabs_right(
+        &mut self,
+        from_idx: usize,
+        cx: &mut Context<Self>,
+    ) {
+        if from_idx + 1 >= self.terminals.len() {
+            return;
+        }
+        self.terminals.truncate(from_idx + 1);
+        self.active_terminal = Some(match self.active_terminal {
+            Some(active) if active > from_idx => from_idx,
+            Some(active) => active,
+            None => from_idx,
+        });
+        cx.notify();
+    }
+
+    pub(crate) fn open_tab_context_menu(
+        &mut self,
+        idx: usize,
+        position: gpui::Point<Pixels>,
+        cx: &mut Context<Self>,
+    ) {
+        if idx >= self.terminals.len() {
+            return;
+        }
+        self.tab_context_menu = Some((idx, position));
+        cx.notify();
+    }
+
+    pub(crate) fn close_tab_context_menu(&mut self, cx: &mut Context<Self>) {
+        if self.tab_context_menu.take().is_some() {
+            cx.notify();
+        }
     }
 
     /// Called by [`LeftPanelView`] when the user clicks a `.md` file in
@@ -688,6 +769,10 @@ impl Render for PierApp {
             .child(toolbar)
             .child(row)
             .child(statusbar)
+            .when_some(
+                self.tab_context_menu,
+                |root, (idx, position)| root.child(render_tab_context_menu(idx, position, cx)),
+            )
     }
 }
 
@@ -724,6 +809,10 @@ impl PierApp {
 
     pub(crate) fn terminals_len(&self) -> usize {
         self.terminals.len()
+    }
+
+    pub(crate) fn connections_slice(&self) -> &[SshConfig] {
+        &self.connections
     }
 
     /// Open the Path Inspector dialog on the given local filesystem
@@ -1900,16 +1989,16 @@ fn render_terminal_tab_bar(
     count: usize,
     cx: &mut Context<PierApp>,
 ) -> impl IntoElement {
-    let mut row = div()
-        .h(ROW_MD_H)
-        .px(SP_2)
+    // Tabs container: horizontally scrollable so 20+ terminals don't
+    // push the [+] button (and, eventually, the window chrome) off
+    // the right edge. Wrapped in a `flex_1 min_w_0` cell so the
+    // scrollable steals from the rest of the row, not from [+].
+    let mut tabs = div()
+        .id("term-tab-scroll")
         .flex()
         .flex_row()
         .items_center()
-        .gap(SP_1)
-        .bg(t.color.bg_panel)
-        .border_b_1()
-        .border_color(t.color.border_subtle);
+        .gap(SP_1);
 
     for idx in 0..count {
         let is_active = idx == active;
@@ -1923,6 +2012,11 @@ fn render_terminal_tab_bar(
         let on_close = cx.listener(move |this, _: &ClickEvent, _, cx| {
             this.close_terminal_tab(idx, cx);
         });
+        let on_right_click =
+            cx.listener(move |this, ev: &MouseDownEvent, _, cx| {
+                this.open_tab_context_menu(idx, ev.position, cx);
+                cx.stop_propagation();
+            });
 
         let mut tab = div()
             .id(gpui::ElementId::Name(tab_id))
@@ -1943,6 +2037,7 @@ fn render_terminal_tab_bar(
             .cursor_pointer()
             .hover(|s| s.bg(t.color.bg_hover))
             .on_click(on_select)
+            .on_mouse_down(MouseButton::Right, on_right_click)
             .child(
                 UiIcon::new(IconName::SquareTerminal)
                     .size(GLYPH_SM)
@@ -1975,7 +2070,7 @@ fn render_terminal_tab_bar(
         if is_active {
             tab = tab.bg(t.color.bg_surface);
         }
-        row = row.child(tab);
+        tabs = tabs.child(tab);
     }
 
     // Inline "+" at end-of-row — same chooser as the toolbar [+].
@@ -1984,25 +2079,94 @@ fn render_terminal_tab_bar(
         let connections = this.connections.clone();
         crate::views::new_tab_chooser::open(window, cx, weak, connections);
     });
-    row.child(
-        div()
-            .id("term-tab-plus")
-            .w(BUTTON_SM_H)
-            .h(BUTTON_SM_H)
-            .flex()
-            .items_center()
-            .justify_center()
-            .rounded(RADIUS_SM)
-            .text_color(t.color.text_secondary)
-            .cursor_pointer()
-            .hover(|s| s.bg(t.color.bg_hover))
-            .on_click(on_new)
-            .child(
-                UiIcon::new(IconName::Plus)
-                    .size(GLYPH_SM)
-                    .text_color(t.color.text_secondary),
-            ),
+    let plus_button = div()
+        .id("term-tab-plus")
+        .flex_none()
+        .w(BUTTON_SM_H)
+        .h(BUTTON_SM_H)
+        .flex()
+        .items_center()
+        .justify_center()
+        .rounded(RADIUS_SM)
+        .text_color(t.color.text_secondary)
+        .cursor_pointer()
+        .hover(|s| s.bg(t.color.bg_hover))
+        .on_click(on_new)
+        .child(
+            UiIcon::new(IconName::Plus)
+                .size(GLYPH_SM)
+                .text_color(t.color.text_secondary),
+        );
+
+    div()
+        .h(ROW_MD_H)
+        .px(SP_2)
+        .flex()
+        .flex_row()
+        .items_center()
+        .gap(SP_1)
+        .bg(t.color.bg_panel)
+        .border_b_1()
+        .border_color(t.color.border_subtle)
+        .child(
+            div()
+                .flex_1()
+                .min_w(px(0.0))
+                .overflow_hidden()
+                .child(tabs.overflow_x_scrollbar()),
+        )
+        .child(plus_button)
+}
+
+fn render_tab_context_menu(
+    idx: usize,
+    position: gpui::Point<Pixels>,
+    cx: &mut Context<PierApp>,
+) -> impl IntoElement {
+    use crate::components::{ContextMenu, ContextMenuItem};
+
+    let total = cx.entity().read(cx).terminals.len();
+    let last = total.saturating_sub(1);
+    let has_others = total > 1;
+    let has_left = idx > 0;
+    let has_right = idx < last;
+
+    ContextMenu::new(
+        gpui::ElementId::Name(format!("tab-ctx-menu-{idx}").into()),
+        position,
     )
+    .item(
+        ContextMenuItem::new(t!("App.Shell.Tabs.close"))
+            .on_click(cx.listener(move |this, _, _, cx| {
+                this.close_terminal_tab(idx, cx);
+                this.close_tab_context_menu(cx);
+            })),
+    )
+    .item(
+        ContextMenuItem::new(t!("App.Shell.Tabs.close_others"))
+            .disabled(!has_others)
+            .on_click(cx.listener(move |this, _, _, cx| {
+                this.close_terminal_tabs_others(idx, cx);
+                this.close_tab_context_menu(cx);
+            })),
+    )
+    .item(
+        ContextMenuItem::new(t!("App.Shell.Tabs.close_left"))
+            .disabled(!has_left)
+            .on_click(cx.listener(move |this, _, _, cx| {
+                this.close_terminal_tabs_left(idx, cx);
+                this.close_tab_context_menu(cx);
+            })),
+    )
+    .item(
+        ContextMenuItem::new(t!("App.Shell.Tabs.close_right"))
+            .disabled(!has_right)
+            .on_click(cx.listener(move |this, _, _, cx| {
+                this.close_terminal_tabs_right(idx, cx);
+                this.close_tab_context_menu(cx);
+            })),
+    )
+    .on_dismiss(cx.listener(|this, _: &(), _window, cx| this.close_tab_context_menu(cx)))
 }
 
 /// Append `name` onto the SFTP-side `cwd` (which is a `PathBuf`

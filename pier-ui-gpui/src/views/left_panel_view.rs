@@ -37,23 +37,23 @@ use gpui::{
 use gpui_component::{
     input::{Input, InputEvent, InputState},
     scroll::ScrollableElement,
-    IconName,
+    Icon as UiIcon, IconName,
 };
 use pier_core::paths;
-use pier_core::ssh::{AuthMethod, DetectedService, ServiceStatus, SshConfig};
+use pier_core::ssh::{DetectedService, ServiceStatus, SshConfig};
 use rust_i18n::t;
 
 use crate::app::layout::LeftTab;
 use crate::app::ssh_session::{ConnectStatus, ServiceProbeStatus, TunnelStatus};
 use crate::app::PierApp;
 use crate::components::{
-    text, Button, Card, HeaderSize, IconButton, IconButtonSize, IconButtonVariant, MetaLine,
-    PageHeader, PillCluster, SectionLabel, StatusKind, StatusPill, TabItem, Tabs,
+    text, Button, Card, IconButton, IconButtonSize, IconButtonVariant, MetaLine, PillCluster,
+    SectionLabel, StatusKind, StatusPill, TabItem, Tabs,
 };
-use crate::theme::heights::ROW_SM_H;
+use crate::theme::heights::{PILL_DOT, ROW_SM_H};
 use crate::theme::{
-    radius::RADIUS_SM,
-    spacing::{SP_1, SP_2, SP_3},
+    radius::{RADIUS_PILL, RADIUS_SM},
+    spacing::{SP_0_5, SP_1, SP_1_5, SP_2, SP_3},
     theme,
     typography::{SIZE_BODY, SIZE_CAPTION, SIZE_MONO_SMALL, SIZE_SMALL, WEIGHT_MEDIUM},
 };
@@ -428,11 +428,16 @@ fn render_servers_list(
     on_add: AddConnectionHandler,
     on_toggle_group: GroupToggleHandler,
 ) -> impl IntoElement {
+    // Deliberately *not* rendering the "Active Connection" summary
+    // card here any more — the same information (session name,
+    // endpoint, status, detected services, tunnels) is already
+    // surfaced by the top toolbar (session context) and the right-
+    // panel PageHeader (endpoint + connection pill). Duplicating it
+    // in the left panel forces the user to keep checking three
+    // places for the same state. The active session is still
+    // visually anchored in this list by the highlight on the
+    // matching `server_row`.
     let mut col = div().p(SP_2).flex().flex_col().gap(SP_2);
-
-    if let Some(active_session) = snapshot.active_session.as_ref() {
-        col = col.child(active_connection_card(active_session));
-    }
 
     col = col.child(servers_header(
         t,
@@ -476,28 +481,38 @@ fn render_servers_list(
 }
 
 fn servers_header(
-    _t: &crate::theme::Theme,
+    t: &crate::theme::Theme,
     count: usize,
     on_add: AddConnectionHandler,
 ) -> impl IntoElement {
-    // Group header composes the standard grammar: SectionLabel eyebrow
-    // title + count pill (static counts aren't "status" but the visual
-    // is right for "X items"), with a compact "+" IconButton trailing.
+    // Pier-style compact bar: no PageHeader "Section" chrome, just a
+    // thin row with an eyebrow label + "(n)" count as caption text
+    // and a subtle "+" IconButton. The previous count pill and Page
+    // Header border made this feel like a major section; it's really
+    // just a filter/add toolbar above the actual group list.
     let on_add_click = on_add.clone();
-    PageHeader::new(t!("App.LeftPanel.Headers.saved_connections"))
-        .size(HeaderSize::Section)
-        .status(StatusPill::new(
-            format!("{count}"),
-            if count == 0 {
-                StatusKind::Info
-            } else {
-                StatusKind::Success
-            },
+    let count_label: SharedString = format!("({count})").into();
+    div()
+        .flex()
+        .flex_row()
+        .items_center()
+        .gap(SP_2)
+        .px(SP_2)
+        .py(SP_1)
+        .child(SectionLabel::new(
+            t!("App.LeftPanel.Headers.saved_connections"),
         ))
-        .trailing(
+        .child(
+            div()
+                .text_size(SIZE_CAPTION)
+                .text_color(t.color.text_tertiary)
+                .child(count_label),
+        )
+        .child(div().flex_1())
+        .child(
             IconButton::new("servers-add", IconName::Plus)
                 .size(IconButtonSize::Sm)
-                .variant(IconButtonVariant::Filled)
+                .variant(IconButtonVariant::Ghost)
                 .on_click(move |ev, window, app| on_add_click(ev, window, app)),
         )
 }
@@ -505,6 +520,11 @@ fn servers_header(
 struct ServerGroup<'a> {
     key: String,
     label: SharedString,
+    /// Currently only observed by the unit tests — the compact Pier-
+    /// style group header no longer shows a "live" pill. Keep the
+    /// field so the tests stay meaningful; we can re-introduce the
+    /// pill later without changing the data model.
+    #[allow(dead_code)]
     active_count: usize,
     items: Vec<ServerGroupItem<'a>>,
 }
@@ -611,54 +631,53 @@ fn server_group_card(
 ) -> impl IntoElement {
     let toggle_key: SharedString = group.key.clone().into();
     let toggle_id: SharedString = format!("servers-group-{}", group.key).into();
-    let marker = if is_collapsed { ">" } else { "v" };
+    let marker_icon = if is_collapsed {
+        IconName::ChevronRight
+    } else {
+        IconName::ChevronDown
+    };
+    let count_label: SharedString = format!("({})", group.items.len()).into();
 
-    let card = Card::new().padding(SP_2).child(
-        div()
-            .id(gpui::ElementId::Name(toggle_id))
-            .h(ROW_SM_H)
-            .flex()
-            .flex_row()
-            .items_center()
-            .gap(SP_2)
-            .cursor_pointer()
-            .hover(|style| style.bg(t.color.bg_hover))
-            .on_click(move |_, window, app| on_toggle_group(&toggle_key, window, app))
-            .child(
-                div()
-                    .w(px(10.0))
-                    .text_size(SIZE_CAPTION)
-                    .font_family(t.font_mono.clone())
-                    .text_color(t.color.text_tertiary)
-                    .child(marker),
-            )
-            .child(
-                div()
-                    .text_size(SIZE_CAPTION)
-                    .font_weight(WEIGHT_MEDIUM)
-                    .text_color(t.color.text_secondary)
-                    .child(group.label.clone()),
-            )
-            .child(StatusPill::new(
-                format!("{}", group.items.len()),
-                StatusKind::Info,
-            ))
-            .child(if group.active_count > 0 {
-                StatusPill::new(
-                    t!("App.LeftPanel.Groups.live_count", count = group.active_count),
-                    StatusKind::Success,
-                )
-                .into_any_element()
-            } else {
-                div().into_any_element()
-            }),
-    );
+    // Pier-style group header: a single chevron + name (count) row,
+    // no pills, no card frame. The whole list lives directly on the
+    // left-panel surface; wrapping each group in a Card was making
+    // every group look like a separate pane.
+    let header = div()
+        .id(gpui::ElementId::Name(toggle_id))
+        .h(ROW_SM_H)
+        .px(SP_2)
+        .flex()
+        .flex_row()
+        .items_center()
+        .gap(SP_1)
+        .rounded(RADIUS_SM)
+        .cursor_pointer()
+        .hover(|style| style.bg(t.color.bg_hover))
+        .on_click(move |_, window, app| on_toggle_group(&toggle_key, window, app))
+        .child(
+            UiIcon::new(marker_icon)
+                .size(crate::theme::heights::GLYPH_SM)
+                .text_color(t.color.text_tertiary),
+        )
+        .child(
+            div()
+                .text_size(SIZE_CAPTION)
+                .font_weight(WEIGHT_MEDIUM)
+                .text_color(t.color.text_secondary)
+                .child(group.label.clone()),
+        )
+        .child(
+            div()
+                .text_size(SIZE_CAPTION)
+                .text_color(t.color.text_tertiary)
+                .child(count_label),
+        );
 
     if is_collapsed {
-        return card;
+        return div().flex().flex_col().child(header);
     }
 
-    let mut rows = div().pt(SP_2).flex().flex_col().gap(SP_2);
+    let mut rows = div().flex().flex_col().gap(SP_0_5);
     for item in &group.items {
         let row_session = active_session.filter(|session| session.config == *item.conn);
         rows = rows.child(server_row(
@@ -673,9 +692,13 @@ fn server_group_card(
         ));
     }
 
-    card.child(rows)
+    div().flex().flex_col().child(header).child(rows)
 }
 
+// Kept for now in case we re-introduce a dedicated "currently
+// connected" surface (e.g. in a future multi-session dashboard).
+// Not rendered by the left panel any more — see `render_servers_list`.
+#[allow(dead_code)]
 fn active_connection_card(session: &ActiveServerSessionSnapshot) -> impl IntoElement {
     let endpoint = connection_endpoint(&session.config);
     let (connect_label, connect_kind) = connection_status_pill(session.status);
@@ -785,54 +808,89 @@ fn server_row(
     idx: usize,
     conn: &SshConfig,
     is_active: bool,
-    active_session: Option<&ActiveServerSessionSnapshot>,
+    _active_session: Option<&ActiveServerSessionSnapshot>,
     on_select: ServerSelector,
     on_edit: ServerSelector,
     on_delete: ServerSelector,
 ) -> impl IntoElement {
+    // Pier-style compact row:
+    //   • status dot  Name
+    //                 user@host:port
+    // Actions (⚙ / ❌) only on hover, via the `group` selector
+    // pattern. Auth method pill / "已连接" pill / the detached
+    // border frame all went — their signal was redundant with the
+    // selection highlight and the toolbar's session context.
     let address: SharedString = format!("{}@{}:{}", conn.user, conn.host, conn.port).into();
-    let auth: SharedString = match &conn.auth {
-        AuthMethod::Agent => t!("App.LeftPanel.Auth.agent").into(),
-        AuthMethod::PublicKeyFile { .. } => t!("App.LeftPanel.Auth.key").into(),
-        AuthMethod::KeychainPassword { .. } => t!("App.LeftPanel.Auth.keychain").into(),
-        AuthMethod::DirectPassword { .. } => t!("App.LeftPanel.Auth.password").into(),
-    };
     let name: SharedString = conn.name.clone().into();
     let row_id: SharedString = format!("left-server-{idx}").into();
+    let group_id: SharedString = format!("server-group-{idx}").into();
     let edit_id: SharedString = format!("left-server-edit-{idx}").into();
     let delete_id: SharedString = format!("left-server-delete-{idx}").into();
-    let active_pill = active_session.map(|session| connection_status_pill(session.status));
+
+    // Online-status dot: bright when this row is the active session;
+    // muted border-color dot otherwise. (Being "saved" vs "online" is
+    // the same thing in the current model — the dot mirrors `is_active`.)
+    let dot_color = if is_active {
+        t.color.status_success
+    } else {
+        t.color.border_default
+    };
+
+    let actions = div()
+        .flex_none()
+        .flex()
+        .flex_row()
+        .gap(SP_0_5)
+        .invisible()
+        .group_hover(group_id.clone(), |s| s.visible())
+        .child(row_action_button(
+            t,
+            edit_id,
+            IconName::Settings,
+            on_edit,
+            idx,
+        ))
+        .child(row_action_button(
+            t,
+            delete_id,
+            IconName::Delete,
+            on_delete,
+            idx,
+        ));
 
     div()
         .id(gpui::ElementId::Name(row_id))
+        .group(group_id)
         .flex()
-        .flex_col()
-        .gap(SP_1)
+        .flex_row()
+        .items_center()
+        .gap(SP_2)
         .px(SP_2)
-        .py(SP_2)
+        .py(SP_1_5)
         .rounded(RADIUS_SM)
-        .bg(if is_active {
-            t.color.accent_subtle
-        } else {
-            t.color.bg_surface
-        })
-        .border_1()
-        .border_color(if is_active {
-            t.color.accent_muted
-        } else {
-            t.color.border_subtle
-        })
+        .when(is_active, |s| s.bg(t.color.accent_subtle))
         .cursor_pointer()
-        .hover(|s| s.bg(t.color.bg_hover).border_color(t.color.border_default))
+        .hover(|s| s.bg(t.color.bg_hover))
         .on_click(move |_, w, app| on_select(&idx, w, app))
+        // Status dot (flex_none so the label column gets the rest)
         .child(
             div()
+                .flex_none()
+                .w(PILL_DOT)
+                .h(PILL_DOT)
+                .rounded(RADIUS_PILL)
+                .bg(dot_color),
+        )
+        // Label column — name + endpoint, stacked tight.
+        .child(
+            div()
+                .flex_1()
+                .min_w(px(0.0))
                 .flex()
-                .flex_row()
-                .items_center()
-                .gap(SP_2)
+                .flex_col()
                 .child(
                     div()
+                        .truncate()
                         .text_size(SIZE_BODY)
                         .font_weight(WEIGHT_MEDIUM)
                         .text_color(t.color.text_primary)
@@ -840,55 +898,14 @@ fn server_row(
                 )
                 .child(
                     div()
-                        .text_size(SIZE_SMALL)
-                        .text_color(t.color.text_tertiary)
-                        .child(auth),
-                )
-                .child(if let Some((label, kind)) = active_pill {
-                    StatusPill::new(label, kind).into_any_element()
-                } else {
-                    div().into_any_element()
-                })
-                .child(div().flex_1())
-                .child(row_action_button(
-                    t,
-                    edit_id,
-                    IconName::Settings,
-                    on_edit,
-                    idx,
-                ))
-                .child(row_action_button(
-                    t,
-                    delete_id,
-                    IconName::Delete,
-                    on_delete,
-                    idx,
-                )),
-        )
-        .child(
-            div()
-                .flex()
-                .flex_row()
-                .flex_wrap()
-                .items_center()
-                .gap(SP_2)
-                .child(
-                    div()
+                        .truncate()
                         .text_size(SIZE_MONO_SMALL)
                         .font_family(t.font_mono.clone())
-                        .text_color(t.color.text_secondary)
-                        .child(address),
-                )
-                .child(if conn.tags.is_empty() {
-                    div().into_any_element()
-                } else {
-                    div()
-                        .text_size(SIZE_SMALL)
                         .text_color(t.color.text_tertiary)
-                        .child(conn.tags.join(", "))
-                        .into_any_element()
-                }),
+                        .child(address),
+                ),
         )
+        .child(actions)
 }
 
 fn connection_endpoint(config: &SshConfig) -> SharedString {

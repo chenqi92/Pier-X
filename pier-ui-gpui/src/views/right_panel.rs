@@ -781,40 +781,23 @@ fn monitor_view(
         .into_any_element();
     };
 
-    let (endpoint, status, snapshot, error) = {
+    // The page-level PageHeader (rendered above `monitor_view` by
+    // `mode_page_header`) already shows the eyebrow "Monitor",
+    // session name, remote endpoint, and connection status pill —
+    // we don't re-render them here. That removes the old duplicated
+    // H2 title row and the dedicated "Target" card, which were
+    // pushing the actual metrics below the fold and wasting the one
+    // thing a monitor view should maximise: signal density.
+    let (status, snapshot, error) = {
         let session = session_entity.read(cx);
         (
-            remote_endpoint_label(&session.config),
             session.monitor_status.clone(),
             session.monitor_snapshot.clone(),
             session.monitor_error.clone().map(SharedString::from),
         )
     };
 
-    let mut col = div()
-        .w_full()
-        .flex()
-        .flex_col()
-        .gap(SP_3)
-        .p(SP_4)
-        .child(
-            div()
-                .flex()
-                .flex_row()
-                .items_center()
-                .gap(SP_3)
-                .child(text::h2(t!("App.RightPanel.Monitor.title")))
-                .child(StatusPill::new(monitor_status_label(&status), monitor_status_kind(&status))),
-        )
-        .child(
-            Card::new()
-                .padding(SP_3)
-                .child(
-                    SectionLabel::new(t!("App.RightPanel.target")).with_icon(IconName::Globe),
-                )
-                .child(div().overflow_hidden().child(text::mono(endpoint.clone())))
-                .child(text::body(t!("App.RightPanel.Monitor.target_body")).secondary()),
-        );
+    let mut col = div().w_full().flex().flex_col().gap(SP_3).p(SP_4);
 
     if let Some(err) = error {
         col = col.child(
@@ -824,7 +807,7 @@ fn monitor_view(
                     SectionLabel::new(t!("App.RightPanel.Monitor.probe_error"))
                         .with_icon(IconName::TriangleAlert),
                 )
-                .child(text::body(err).secondary()),
+                .child(text::caption(err).secondary()),
         );
     }
 
@@ -840,12 +823,12 @@ fn monitor_view(
                 Card::new()
                     .padding(SP_3)
                     .child(SectionLabel::new(t!("App.Common.status")))
-                    .child(text::body(empty_label).secondary()),
+                    .child(text::caption(empty_label).secondary()),
             )
             .into_any_element();
     };
 
-    let mut grid = div().flex().flex_row().flex_wrap().gap(SP_3);
+    let mut grid = div().flex().flex_row().flex_wrap().gap(SP_2);
     grid = grid.child(monitor_meter_card(
         t,
         "CPU",
@@ -922,10 +905,9 @@ fn docker_view(
         .into_any_element();
     };
 
-    let (endpoint, status, snapshot, error, pending, action_error, inspect) = {
+    let (status, snapshot, error, pending, action_error, inspect) = {
         let session = session_entity.read(cx);
         (
-            remote_endpoint_label(&session.config),
             session.docker_status.clone(),
             session.docker_snapshot.clone(),
             session.docker_error.clone().map(SharedString::from),
@@ -936,12 +918,17 @@ fn docker_view(
     };
     let has_snapshot = snapshot.is_some();
 
+    // PageHeader (rendered above this view) already shows "Docker",
+    // session name, endpoint, and connection status — no need to
+    // replay them. Only surface what's *specific* to this mode: the
+    // docker daemon state + pending action + a refresh control. All
+    // of that goes in a single compact header strip instead of the
+    // previous "Target card + duplicate H2 title" combo.
     let mut header = div()
         .flex()
         .flex_row()
         .items_center()
-        .gap(SP_3)
-        .child(text::h2(t!("App.RightPanel.Modes.docker")))
+        .gap(SP_2)
         .child(StatusPill::new(
             docker_status_label(&status, has_snapshot),
             docker_status_kind(&status),
@@ -952,14 +939,19 @@ fn docker_view(
             StatusKind::Info,
         ));
     }
-
-    let refresh_control = if pending.is_some() {
-        StatusPill::new(t!("App.RightPanel.Docker.busy"), StatusKind::Warning).into_any_element()
+    header = header.child(div().flex_1());
+    if pending.is_some() {
+        header = header.child(
+            StatusPill::new(t!("App.RightPanel.Docker.busy"), StatusKind::Warning)
+                .into_any_element(),
+        );
     } else {
-        Button::secondary("docker-refresh", t!("App.Common.refresh"))
-            .on_click(move |_, window, app| on_refresh(&(), window, app))
-            .into_any_element()
-    };
+        header = header.child(
+            Button::secondary("docker-refresh", t!("App.Common.refresh"))
+                .on_click(move |_, window, app| on_refresh(&(), window, app))
+                .into_any_element(),
+        );
+    }
 
     let mut col = div()
         .w_full()
@@ -967,34 +959,7 @@ fn docker_view(
         .flex_col()
         .gap(SP_3)
         .p(SP_4)
-        .child(header)
-        .child(
-            Card::new().padding(SP_3).child(
-                div()
-                    .flex()
-                    .flex_row()
-                    .justify_between()
-                    .items_start()
-                    .gap(SP_3)
-                    .overflow_hidden()
-                    .child(
-                        div()
-                            .flex_1()
-                            .min_w(px(0.0))
-                            .flex()
-                            .flex_col()
-                            .gap(SP_1)
-                            .overflow_hidden()
-                            .child(
-                                SectionLabel::new(t!("App.RightPanel.target"))
-                                    .with_icon(IconName::Globe),
-                            )
-                            .child(text::mono(endpoint.clone()))
-                            .child(text::body(t!("App.RightPanel.Docker.target_body")).secondary()),
-                    )
-                    .child(div().flex_none().child(refresh_control)),
-            ),
-        );
+        .child(header);
 
     if let Some(err) = error {
         col = col.child(
@@ -1070,10 +1035,9 @@ fn logs_view(
         .into_any_element();
     };
 
-    let (endpoint, status, lines, error, command, exit_code) = {
+    let (status, lines, error, command, exit_code) = {
         let session = session_entity.read(cx);
         (
-            remote_endpoint_label(&session.config),
             session.logs_status.clone(),
             session.logs_lines.clone(),
             session.logs_error.clone().map(SharedString::from),
@@ -1089,12 +1053,14 @@ fn logs_view(
     let on_stop = on_action.clone();
     let on_clear = on_action.clone();
 
+    // PageHeader already shows "Logs" + endpoint + connection status.
+    // Here we only surface what's specific to the logs process: its
+    // run status and optional exit code.
     let mut header = div()
         .flex()
         .flex_row()
         .items_center()
-        .gap(SP_3)
-        .child(text::h2(t!("App.RightPanel.Modes.logs")))
+        .gap(SP_2)
         .child(StatusPill::new(
             logs_status_label(&status),
             logs_status_kind(&status),
@@ -1117,15 +1083,6 @@ fn logs_view(
         .gap(SP_3)
         .p(SP_4)
         .child(header)
-        .child(
-            Card::new()
-                .padding(SP_3)
-                .child(
-                    SectionLabel::new(t!("App.RightPanel.target")).with_icon(IconName::Globe),
-                )
-                .child(div().overflow_hidden().child(text::mono(endpoint.clone())))
-                .child(text::body(t!("App.RightPanel.Logs.target_body")).secondary()),
-        )
         .child(
             Card::new()
                 .padding(SP_3)
@@ -1266,14 +1223,19 @@ fn monitor_meter_card(
     fill: gpui::Rgba,
 ) -> impl IntoElement {
     let title: SharedString = title.into();
-    let bar_w = 148.0;
-    div().w(px(176.0)).child(
+    // 148px card fits two per row in the typical ~320px right panel
+    // width (previous 176px was stuck at one-per-row). Primary number
+    // promoted to H3 (16px) — this is the number the user is actually
+    // looking at; secondary demoted to Caption so it stops competing.
+    let bar_w = 124.0;
+    div().w(px(148.0)).child(
         Card::new()
             .padding(SP_3)
+            .gap(SP_1)
             .child(SectionLabel::new(title))
-            .child(text::body(primary))
-            .child(text::body(secondary).secondary())
-            .child(div().pt(SP_2).child(monitor_bar(t, bar_w, ratio, fill))),
+            .child(text::h3(primary))
+            .child(monitor_bar(t, bar_w, ratio, fill))
+            .child(text::caption(secondary).secondary().truncate()),
     )
 }
 
@@ -1283,12 +1245,13 @@ fn monitor_detail_card(
     secondary: SharedString,
 ) -> impl IntoElement {
     let title: SharedString = title.into();
-    div().w(px(176.0)).child(
+    div().w(px(148.0)).child(
         Card::new()
             .padding(SP_3)
+            .gap(SP_1)
             .child(SectionLabel::new(title))
-            .child(text::body(primary))
-            .child(text::body(secondary).secondary()),
+            .child(text::h3(primary))
+            .child(text::caption(secondary).secondary().truncate()),
     )
 }
 
@@ -1310,24 +1273,6 @@ fn monitor_bar(
                 .rounded(px(3.0))
                 .bg(fill),
         )
-}
-
-fn monitor_status_label(status: &MonitorStatus) -> SharedString {
-    match status {
-        MonitorStatus::Idle => t!("App.Common.Status.idle").into(),
-        MonitorStatus::Loading => t!("App.RightPanel.Monitor.polling").into(),
-        MonitorStatus::Ready => t!("App.RightPanel.Monitor.live_5s").into(),
-        MonitorStatus::Failed => t!("App.Common.Status.stale").into(),
-    }
-}
-
-fn monitor_status_kind(status: &MonitorStatus) -> StatusKind {
-    match status {
-        MonitorStatus::Idle => StatusKind::Warning,
-        MonitorStatus::Loading => StatusKind::Info,
-        MonitorStatus::Ready => StatusKind::Success,
-        MonitorStatus::Failed => StatusKind::Error,
-    }
 }
 
 fn percentage_label(value: f64) -> SharedString {

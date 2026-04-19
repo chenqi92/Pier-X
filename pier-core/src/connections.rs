@@ -202,6 +202,30 @@ impl ConnectionStore {
             None
         }
     }
+
+    /// Shortcut for [`known_groups`] over this store's own
+    /// connections list.
+    pub fn known_groups(&self) -> Vec<String> {
+        known_groups(&self.connections)
+    }
+}
+
+/// Distinct non-empty `tags[0]` values across any connection slice,
+/// sorted alphabetically. The UI's "group" concept is currently a
+/// derived view over the first tag — this helper is what lets the
+/// connection-edit form show already-used group names as chips so
+/// the user doesn't have to re-type them.
+pub fn known_groups(connections: &[SshConfig]) -> Vec<String> {
+    let mut seen = std::collections::BTreeSet::new();
+    for conn in connections {
+        if let Some(first) = conn.tags.first() {
+            let trimmed = first.trim();
+            if !trimmed.is_empty() {
+                seen.insert(trimmed.to_string());
+            }
+        }
+    }
+    seen.into_iter().collect()
 }
 
 /// Compute the temp-file sibling path used by atomic save.

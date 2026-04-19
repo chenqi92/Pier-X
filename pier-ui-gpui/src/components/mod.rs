@@ -8,6 +8,7 @@
 pub mod assist_strip;
 pub mod button;
 pub mod card;
+pub mod context_menu;
 pub mod icon_badge;
 pub mod icon_button;
 pub mod meta_line;
@@ -24,6 +25,7 @@ pub mod toggle_row;
 pub use assist_strip::AssistStrip;
 pub use button::{Button, ButtonSize, ButtonVariant};
 pub use card::Card;
+pub use context_menu::{ContextMenu, ContextMenuItem};
 pub use icon_badge::IconBadge;
 pub use icon_button::{IconButton, IconButtonSize, IconButtonVariant};
 pub use meta_line::MetaLine;

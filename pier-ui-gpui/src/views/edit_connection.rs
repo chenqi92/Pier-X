@@ -28,7 +28,7 @@ use rust_i18n::t;
 use crate::app::PierApp;
 use crate::components::text;
 use crate::theme::{
-    spacing::{SP_1, SP_2, SP_3},
+    spacing::{SP_0_5, SP_1, SP_2, SP_3},
     theme,
     typography::{SIZE_CAPTION, WEIGHT_MEDIUM},
 };
@@ -70,6 +70,20 @@ impl AuthMode {
 
 /// Open the connection editor as a modal dialog.
 pub fn open(window: &mut Window, cx: &mut App, app: WeakEntity<PierApp>, target: EditTarget) {
+    // Snapshot the already-used group names so the dialog can offer
+    // them as one-click chips below the free-text input. Pulled at
+    // open-time rather than per-render: the list can only grow
+    // while the dialog is open (via saves to *other* dialogs), and
+    // we don't want the chip row to flicker mid-edit.
+    let known_groups: Vec<SharedString> = app
+        .upgrade()
+        .map(|pa| {
+            pier_core::connections::known_groups(pa.read(cx).connections_slice())
+                .into_iter()
+                .map(SharedString::from)
+                .collect()
+        })
+        .unwrap_or_default();
     // Inputs created once outside the builder closure → persist across
     // dialog re-renders.
     let name = cx.new(|c| InputState::new(window, c).placeholder(t!("App.EditConnection.Placeholders.name")));
@@ -183,7 +197,7 @@ pub fn open(window: &mut Window, cx: &mut App, app: WeakEntity<PierApp>, target:
     };
 
     window.open_dialog(cx, move |dialog, _w, app_cx| {
-        let body = build_body(app_cx, &inputs, auth_mode.clone());
+        let body = build_body(app_cx, &inputs, auth_mode.clone(), known_groups.clone());
         let on_ok_inputs = inputs.clone();
         let on_ok_mode = auth_mode.clone();
         let on_ok_target = target.clone();
@@ -224,7 +238,12 @@ struct Inputs {
     keychain_password: Entity<InputState>,
 }
 
-fn build_body(cx: &App, inputs: &Inputs, auth_mode: Rc<RefCell<AuthMode>>) -> impl IntoElement {
+fn build_body(
+    cx: &App,
+    inputs: &Inputs,
+    auth_mode: Rc<RefCell<AuthMode>>,
+    known_groups: Vec<SharedString>,
+) -> impl IntoElement {
     let t = theme(cx).clone();
     let current_mode = *auth_mode.borrow();
 
@@ -259,7 +278,7 @@ fn build_body(cx: &App, inputs: &Inputs, auth_mode: Rc<RefCell<AuthMode>>) -> im
                 .child(div().flex_1().child(field(&t, t!("App.EditConnection.Fields.port"), &inputs.port)))
                 .child(div().flex_1().child(field(&t, t!("App.EditConnection.Fields.user"), &inputs.user))),
         )
-        .child(field(&t, t!("App.EditConnection.Fields.group"), &inputs.group))
+        .child(group_field(&t, &inputs.group, &known_groups))
         .child(
             div()
                 .flex()
@@ -302,6 +321,60 @@ fn field(
         .gap(SP_1)
         .child(label_text(t, label))
         .child(Input::new(state))
+}
+
+/// "Group" field with a one-click chip row of already-used group
+/// names below the input. Clicking a chip writes that name into the
+/// input (replacing whatever is there); typing a new name still
+/// works normally — this is a suggest-don't-constrain dropdown.
+fn group_field(
+    t: &crate::theme::Theme,
+    state: &Entity<InputState>,
+    known_groups: &[SharedString],
+) -> impl IntoElement {
+    let mut col = div()
+        .flex()
+        .flex_col()
+        .gap(SP_1)
+        .child(label_text(t, t!("App.EditConnection.Fields.group")))
+        .child(Input::new(state));
+
+    if !known_groups.is_empty() {
+        let mut chips = div()
+            .flex()
+            .flex_row()
+            .flex_wrap()
+            .gap(SP_1);
+        for (i, name) in known_groups.iter().enumerate() {
+            let value = name.clone();
+            let state = state.clone();
+            let chip_id =
+                gpui::ElementId::Name(format!("group-chip-{i}").into());
+            chips = chips.child(
+                div()
+                    .id(chip_id)
+                    .flex_none()
+                    .px(SP_2)
+                    .py(SP_0_5)
+                    .rounded(crate::theme::radius::RADIUS_SM)
+                    .bg(t.color.bg_surface)
+                    .border_1()
+                    .border_color(t.color.border_subtle)
+                    .text_size(SIZE_CAPTION)
+                    .text_color(t.color.text_secondary)
+                    .cursor_pointer()
+                    .hover(|s| s.bg(t.color.bg_hover))
+                    .on_click(move |_, window, app_cx| {
+                        let v = value.clone();
+                        state.update(app_cx, |s, c| s.set_value(v, window, c));
+                    })
+                    .child(name.clone()),
+            );
+        }
+        col = col.child(chips);
+    }
+
+    col
 }
 
 fn label_text(t: &crate::theme::Theme, label: impl Into<SharedString>) -> impl IntoElement {

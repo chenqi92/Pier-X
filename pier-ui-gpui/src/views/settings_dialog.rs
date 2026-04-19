@@ -15,7 +15,7 @@ use crate::i18n::{self, LOCALE_ENGLISH, LOCALE_PREFERENCE_SYSTEM, LOCALE_ZH_CN};
 use crate::theme::{
     available_terminal_font_families, available_ui_font_families, DEFAULT_UI_FONT_FAMILY,
     radius::{RADIUS_MD, RADIUS_SM},
-    spacing::{SP_1, SP_1_5, SP_2, SP_3, SP_4, SP_5, SP_6},
+    spacing::{SP_0_5, SP_1, SP_1_5, SP_2, SP_3, SP_4, SP_5, SP_8},
     terminal::{available_terminal_palettes, terminal_bg_color, terminal_hex_color},
     terminal_cursor_blink, terminal_cursor_style, terminal_font_for_family,
     terminal_font_ligatures, terminal_font_size, terminal_opacity, theme,
@@ -788,12 +788,23 @@ impl SettingsDialog {
             );
         }
 
+        // Wrap rows in their own flex_col so we can control the row
+        // gap independently of the section-level gap (SP_4). SP_0_5
+        // is correct for rowless shortcut lines — bigger gaps leave
+        // too much empty air between rows once the per-row border is
+        // gone.
         section_shell(
             &t,
             t!("App.Settings.Sections.shortcuts_title"),
             t!("App.Settings.Shortcuts.subtitle"),
         )
-        .children(rows)
+        .child(
+            div()
+                .flex()
+                .flex_col()
+                .gap(SP_0_5)
+                .children(rows),
+        )
     }
 }
 
@@ -833,15 +844,16 @@ fn section_shell(
 ) -> gpui_component::scroll::Scrollable<gpui::Div> {
     let title: SharedString = title.into();
     let subtitle: SharedString = subtitle.into();
-    // Extra right padding (= SP_6) reserves space for the scrollbar
-    // gutter. Without it, the "更改" / "重置" buttons at the end of
-    // shortcut rows get painted under the scroll thumb and look
-    // clipped to "更c".
+    // Scrollbar thumb draws *on top of* the content area, not in a
+    // dedicated gutter. We need enough right padding that the thumb
+    // has a clear lane *and* the rightmost button (`更改`) still has
+    // room to breathe. SP_8 (32px) works out to ~14px thumb + ~18px
+    // visual margin.
     div()
         .h_full()
         .overflow_y_scrollbar()
         .pl(SP_5)
-        .pr(SP_6)
+        .pr(SP_8)
         .py(SP_5)
         .flex()
         .flex_col()
@@ -1035,28 +1047,31 @@ fn shortcut_row_interactive(
 ) -> impl IntoElement {
     let label = action.label();
 
+    // Shortcut rows used to be framed like individual cards (bordered
+    // panels stacked vertically). With the gap between rows fixed at
+    // SP_4 the panel-style border made them look "glued together" —
+    // every shortcut looked like a nested sub-card. Pier's own
+    // keybindings sheet renders each shortcut as a *row* inside the
+    // surrounding section card: no per-row border, no surface fill,
+    // just a hover tint. Follow that here; `is_capturing` still gets
+    // a highlight but via an accent background, not an accent border.
     let mut row = div()
         .px(SP_3)
-        .py(SP_2)
+        .py(SP_1_5)
         .flex()
         .flex_row()
         .items_center()
         .gap(SP_2)
-        .rounded(RADIUS_MD)
-        .bg(t.color.bg_panel)
-        .border_1()
-        .border_color(if is_capturing {
-            t.color.accent
-        } else {
-            t.color.border_default
-        })
+        .rounded(RADIUS_SM)
+        .hover(|s| s.bg(t.color.bg_hover))
+        .when(is_capturing, |el| el.bg(t.color.accent_subtle))
         .child(
             div()
                 .flex_1()
                 .min_w(px(0.0))
                 .truncate()
                 .text_size(SIZE_BODY)
-                .text_color(t.color.text_secondary)
+                .text_color(t.color.text_primary)
                 .child(label),
         );
 

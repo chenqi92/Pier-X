@@ -953,6 +953,64 @@ App:
     link:
       en: link
       zh-CN: 链接
+    # P1-5: file-operation action labels (header buttons + per-row
+    # hover icons). Same key referenced by sftp_browser tooltip text
+    # — once tooltips wire through the fork's component, these become
+    # the natural source of truth.
+    action_mkdir:
+      en: New folder
+      zh-CN: 新建文件夹
+    action_upload:
+      en: Upload
+      zh-CN: 上传
+    action_rename:
+      en: Rename
+      zh-CN: 重命名
+    action_download:
+      en: Download
+      zh-CN: 下载
+    action_delete:
+      en: Delete
+      zh-CN: 删除
+    # mkdir / rename modal copy
+    Mkdir:
+      title:
+        en: New folder
+        zh-CN: 新建文件夹
+      field_name:
+        en: Folder name
+        zh-CN: 文件夹名称
+      placeholder:
+        en: new-folder
+        zh-CN: new-folder
+      ok:
+        en: Create
+        zh-CN: 创建
+      hint_no_slashes:
+        en: Slashes are not allowed — use the file tree to navigate first.
+        zh-CN: 不允许使用斜杠 — 请先在文件树中切换到目标目录。
+    Rename:
+      title:
+        en: "Rename · %{name}"
+        zh-CN: "重命名 · %{name}"
+      field_new_name:
+        en: New name
+        zh-CN: 新名称
+      ok:
+        en: Rename
+        zh-CN: 重命名
+    # delete confirmation
+    Delete:
+      title:
+        en: "Delete %{name}?"
+        zh-CN: "删除 %{name}？"
+      detail_file:
+        en: "Remove the file %{name}? This cannot be undone."
+        zh-CN: "确定要删除文件 %{name} 吗？此操作不可撤销。"
+      detail_dir:
+        en: "Remove the directory %{name}? This cannot be undone. The directory must be empty — \
+             non-empty deletes will surface a server error."
+        zh-CN: "确定要删除目录 %{name} 吗？此操作不可撤销。目录必须为空 — 非空目录的删除会被服务器拒绝。"
   Git:
     title:
       en: Git

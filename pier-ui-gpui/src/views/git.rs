@@ -192,7 +192,7 @@ fn tab_layout(
     };
 
     let mut col = div()
-        .w_full()
+        .size_full()
         .flex()
         .flex_col()
         .bg(t.color.bg_surface)
@@ -223,10 +223,21 @@ fn tab_layout(
             .child(Separator::horizontal());
     }
 
+    // Wrap the tab body in a flex-1 container so the graph list /
+    // changes list / stash list all fill the space between the tabs
+    // and the commit footer. Without this `gpui::list` gets 0 height
+    // from its `flex_grow()` chain and the graph stays blank.
     col = col
         .child(primary_tabs(active, weak.clone()))
         .child(Separator::horizontal())
-        .child(body);
+        .child(
+            div()
+                .flex_1()
+                .min_h(px(0.0))
+                .w_full()
+                .overflow_hidden()
+                .child(body),
+        );
 
     // Sticky commit footer — only relevant while the user is on
     // the Changes tab. Always render so the user can type a commit
@@ -245,29 +256,27 @@ fn tab_layout(
             ));
     }
 
-    // Attach mouse-move / mouse-up handlers so a footer drag keeps
-    // tracking even when the cursor wanders outside the splitter.
+    // Drag listeners are only attached WHILE a drag is in flight.
+    // Otherwise the root captures every mouse move / mouse up and
+    // makes the input / tab bar / graph rows feel laggy — and in
+    // some cases, GPUI's input subsystem sees the mouse-up capture
+    // and drops the input's pending keystroke state.
+    let dragging = snap.footer_dragging;
+    let root = col.id("git-panel-root");
+    if !dragging {
+        return root;
+    }
+
     let move_weak = weak.clone();
     let up_weak = weak.clone();
-    let dragging = snap.footer_dragging;
-    let mut root = col
-        .id("git-panel-root")
+    root.cursor_row_resize()
         .on_mouse_move(move |ev, _, cx| {
-            if !dragging {
-                return;
-            }
             let y = ev.position.y.to_f64() as f32;
             let _ = move_weak.update(cx, |app, cx| app.update_git_footer_drag(y, cx));
         })
         .on_mouse_up(MouseButton::Left, move |_, _, cx| {
             let _ = up_weak.update(cx, |app, cx| app.end_git_footer_drag(cx));
-        });
-    // When a drag is active, force the cursor style so it doesn't
-    // flicker back to the default as the pointer moves.
-    if dragging {
-        root = root.cursor_row_resize();
-    }
-    root
+        })
 }
 
 fn not_a_repo_layout(
@@ -806,13 +815,25 @@ fn commit_footer(
 /// PierApp. Styled as a 4px hairline with a row-resize cursor on
 /// hover.
 fn commit_footer_splitter(t: &crate::theme::Theme, weak: WeakEntity<PierApp>) -> impl IntoElement {
+    // 6 px hit target with a 1 px visible hairline in the middle.
+    // Matches Pier's `SideBySideContainerView` divider grammar:
+    // wider invisible hit area, thin visible rule.
     div()
         .id("git-footer-splitter")
         .w_full()
-        .h(px(4.0))
-        .bg(t.color.border_subtle)
+        .h(px(6.0))
+        .flex()
+        .flex_col()
+        .justify_center()
+        .bg(t.color.bg_panel)
         .hover(|s| s.bg(t.color.accent_muted))
         .cursor_row_resize()
+        .child(
+            div()
+                .w_full()
+                .h(px(1.0))
+                .bg(t.color.border_default),
+        )
         .on_mouse_down(MouseButton::Left, move |ev, _, cx| {
             let y = ev.position.y.to_f64() as f32;
             let _ = weak.update(cx, |app, cx| app.begin_git_footer_drag(y, cx));
@@ -1998,7 +2019,7 @@ fn graph_tab_body(
     search_input: gpui::Entity<InputState>,
     weak: WeakEntity<PierApp>,
 ) -> gpui::Div {
-    let mut col = div().w_full().flex().flex_col();
+    let mut col = div().size_full().flex().flex_col();
     col = col.child(graph_toolbar(t, &snap.graph, search_input, weak.clone()));
     col = col.child(Separator::horizontal());
 
@@ -2148,7 +2169,13 @@ fn graph_tab_body(
             .into_any_element()
     })
     .w_full()
-    .flex_grow();
+    .flex_1()
+    // `gpui::list` needs a bounded vertical axis to virtualize —
+    // `min_h(0)` kicks the flex solver so the list takes exactly
+    // the space our flex_1 parent hands it (instead of trying to
+    // measure every child up-front and collapsing to 0).
+    .min_h(px(0.0))
+    .h_full();
 
     col = col.child(list_element);
 

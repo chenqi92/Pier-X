@@ -737,7 +737,10 @@ impl GitState {
             commit_detail: CommitDetailState::default(),
             blame: BlameState::default(),
             managers: ManagersState::default(),
-            footer_height: 120.0,
+            // 92 px is the tightest height where the commit input
+            // + bottom button row both fit; drag the splitter up
+            // for more room.
+            footer_height: 92.0,
             footer_drag: None,
         }
     }

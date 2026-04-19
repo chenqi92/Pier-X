@@ -4,6 +4,7 @@ pub mod git_session;
 pub mod keybindings;
 pub mod layout;
 pub mod route;
+pub mod shell_location;
 pub mod ssh_session;
 pub mod state;
 pub mod statusbar;
@@ -17,6 +18,7 @@ pub use actions::{
     CloseActiveTab, NewTab, OpenSettings, ToggleLeftPanel, ToggleRightPanel, ToggleTheme,
 };
 pub use route::Route;
+pub use shell_location::{RemoteTarget, ShellLocation};
 pub use state::PierApp;
 
 /// Vestigial signature kept around so [`crate::views::terminal::TerminalPanel`]

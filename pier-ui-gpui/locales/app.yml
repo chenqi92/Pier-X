@@ -250,6 +250,15 @@ App:
       cursor_blink_description:
         en: Turn this off for a stable insertion point.
         zh-CN: 如果你更喜欢稳定的插入点，可以关闭。
+      shell_integration:
+        en: Shell integration
+        zh-CN: 终端深度集成
+      shell_integration_description:
+        en: >-
+          Installs a tiny rc snippet into your ~/.bashrc / ~/.zshrc so manual
+          `ssh` commands in a local terminal also make the left file panel
+          follow the remote host. Off by default.
+        zh-CN: 在 ~/.bashrc / ~/.zshrc 里追加一小段脚本，让你在本地终端手动敲 `ssh` 时左侧文件面板也能自动跟随到远端。默认关闭。
       Palettes:
         default:
           en: Pier default shell palette
@@ -310,6 +319,12 @@ App:
     truncated:
       en: Truncated
       zh-CN: 已截断
+    copy:
+      en: Copy
+      zh-CN: 复制
+    copy_all:
+      en: Copy All
+      zh-CN: 复制全文
     truncated_message:
       en: Showing the first %{shown_kb} KB of a %{total_kb} KB file.
       zh-CN: 当前仅显示 %{total_kb} KB 文件中的前 %{shown_kb} KB。
@@ -471,6 +486,12 @@ App:
     filter:
       en: Filter files…
       zh-CN: 过滤文件…
+    remote_unmatched_title:
+      en: Connected to %{target}
+      zh-CN: 已连接到 %{target}
+    remote_unmatched_hint:
+      en: Add this server to Pier-X to browse its files here.
+      zh-CN: 将该主机保存到 Pier-X 后即可在此浏览远端文件。
     empty_directory:
       en: (empty directory)
       zh-CN: （空目录）

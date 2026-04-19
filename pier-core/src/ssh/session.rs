@@ -387,6 +387,48 @@ impl SshSession {
         runtime::shared().block_on(self.open_shell_channel(cols, rows))
     }
 
+    /// Open a channel and `exec` `command` on the remote side with a
+    /// PTY attached — the combination we need to run a custom
+    /// interactive shell (e.g. `bash --rcfile ~/.pier-x/integration.sh
+    /// -i`) instead of the user's default login shell. Returns a
+    /// fully functional [`SshChannelPty`], same as
+    /// [`Self::open_shell_channel`].
+    ///
+    /// Used by Pier-X's shell-integration path to inject OSC 7 hooks
+    /// on the remote side. If `command` fails to start, russh reports
+    /// the error through `request_exec`.
+    pub async fn open_exec_channel(
+        &self,
+        cols: u16,
+        rows: u16,
+        command: &str,
+    ) -> Result<SshChannelPty> {
+        let channel = self.handle.channel_open_session().await?;
+        channel
+            .request_pty(
+                false,
+                "xterm-256color",
+                cols as u32,
+                rows as u32,
+                0,
+                0,
+                &[],
+            )
+            .await?;
+        channel.exec(false, command.as_bytes()).await?;
+        Ok(SshChannelPty::spawn(channel, cols, rows))
+    }
+
+    /// Sync convenience for [`Self::open_exec_channel`].
+    pub fn open_exec_channel_blocking(
+        &self,
+        cols: u16,
+        rows: u16,
+        command: &str,
+    ) -> Result<SshChannelPty> {
+        runtime::shared().block_on(self.open_exec_channel(cols, rows, command))
+    }
+
     /// Open an SFTP subsystem channel on this session.
     ///
     /// Internally this opens a fresh channel, calls

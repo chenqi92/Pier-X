@@ -16,9 +16,9 @@ use std::rc::Rc;
 use std::time::Duration;
 
 use gpui::{
-    canvas, div, prelude::*, px, AnyElement, App, Bounds, ClickEvent, Context, DragMoveEvent,
-    Empty, Entity, EntityId, IntoElement, MouseButton, MouseDownEvent, Pixels, Render,
-    ScrollHandle, SharedString, Window,
+    canvas, div, point, prelude::*, px, AnyElement, App, Bounds, ClickEvent, Context,
+    DragMoveEvent, Empty, Entity, EntityId, IntoElement, IsZero, MouseButton, MouseDownEvent,
+    Pixels, Render, ScrollHandle, ScrollWheelEvent, SharedString, Window,
 };
 use gpui_component::{input::InputState, Icon as UiIcon, IconName, PixelsExt as _, WindowExt as _};
 use rust_i18n::t;
@@ -41,6 +41,7 @@ use crate::app::layout::{
     RIGHT_PANEL_DEFAULT_W, RIGHT_PANEL_MAX_W, RIGHT_PANEL_MIN_W,
 };
 use crate::app::route::DbKind;
+use crate::app::shell_location::{RemoteTarget, ShellLocation};
 use crate::app::ssh_session::{
     run_bootstrap, run_docker_command, run_docker_refresh, run_logs_start, run_monitor_refresh,
     run_refresh, run_sftp_mutation, run_tunnel, ServiceProbeStatus, SftpMutationKind,
@@ -65,19 +66,35 @@ use crate::views::right_panel::{
     DockerActionHandler, DockerActionRequest, DockerRefreshHandler, LogsAction, LogsActionHandler,
     ModeSelector, RightPanel,
 };
-use crate::views::terminal::TerminalPanel;
+use crate::views::terminal::{ShellLocationChangedEvent, TerminalPanel};
 use crate::views::welcome::WelcomeView;
+
+/// Cols / rows to request when opening a russh shell channel before
+/// the terminal view has measured its surface. The resize loop inside
+/// `TerminalPanel` re-syncs the remote PTY size from its real cell
+/// grid on the first frame, so these are short-lived placeholders.
+const SSH_DEFAULT_COLS: u16 = 120;
+const SSH_DEFAULT_ROWS: u16 = 32;
 
 type ClickHandler = Rc<dyn Fn(&ClickEvent, &mut Window, &mut gpui::App) + 'static>;
 
 const REMOTE_PANEL_REFRESH_MS: u64 = 5_000;
 const LOG_STREAM_POLL_MS: u64 = 250;
 const DEFAULT_LOG_COMMAND: &str = "journalctl -f -n 200 --no-pager";
-const PANE_RESIZE_HANDLE_W: Pixels = px(8.0);
+const PANE_RESIZE_HANDLE_W: Pixels = px(6.0);
 const PANE_RESIZE_RULE_W: Pixels = px(1.0);
+const TAB_STRIP_SCROLL_STEP: Pixels = px(160.0);
+const TAB_STRIP_HOLD_DELAY_MS: u64 = 280;
+const TAB_STRIP_HOLD_REPEAT_MS: u64 = 60;
 
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum PaneDivider {
+    Left,
+    Right,
+}
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum TerminalTabScrollDirection {
     Left,
     Right,
 }
@@ -132,9 +149,15 @@ pub struct PierApp {
     /// is open over terminal tab `idx` anchored at viewport `pos`.
     tab_context_menu: Option<(usize, gpui::Point<Pixels>)>,
     /// Horizontal scroll state for the terminal tab bar. Persisted on
-    /// PierApp so scroll position survives cross-renders; also makes
-    /// it trivial to call `scroll_to_item(active)` on tab activation.
+    /// PierApp so scroll position survives cross-renders.
     terminal_tabs_scroll: ScrollHandle,
+    /// Last `(active, count)` pair auto-revealed. This keeps the
+    /// current tab visible when selection changes, without snapping
+    /// the strip back on every unrelated repaint.
+    terminal_tabs_last_revealed: Option<(usize, usize)>,
+    /// Press-and-hold state for the tab-strip arrow buttons.
+    terminal_tabs_scroll_hold: Option<(u64, TerminalTabScrollDirection)>,
+    terminal_tabs_scroll_hold_generation: u64,
 
     /// Last file the user opened from the left panel that should drive the
     /// right-panel Markdown mode. Set by [`Self::open_markdown_file`].
@@ -242,6 +265,9 @@ impl PierApp {
             tab_context_menu: None,
             active_terminal: None,
             terminal_tabs_scroll: ScrollHandle::new(),
+            terminal_tabs_last_revealed: None,
+            terminal_tabs_scroll_hold: None,
+            terminal_tabs_scroll_hold_generation: 0,
             last_opened_file: None,
             active_session: None,
             logs_command_input,
@@ -295,6 +321,18 @@ impl PierApp {
     pub fn open_terminal_tab(&mut self, cx: &mut Context<Self>) {
         let on_activated: ActivationHandler = Rc::new(|_, _, _| {});
         let entity = cx.new(|cx| TerminalPanel::new(on_activated, cx));
+        // Subscribe to shell-location transitions on this tab so the
+        // left file panel + right SFTP panel follow whatever host the
+        // user is currently sitting on (manual `ssh` in a local shell,
+        // `exit` back to local, `cd` on the remote side, ...).
+        let entity_for_handler = entity.clone();
+        cx.subscribe(
+            &entity,
+            move |this: &mut PierApp, _, event: &ShellLocationChangedEvent, cx| {
+                this.on_terminal_location_changed(&entity_for_handler, &event.0, cx);
+            },
+        )
+        .detach();
         self.terminals.push(entity);
         self.active_terminal = Some(self.terminals.len() - 1);
         log::info!(
@@ -305,47 +343,262 @@ impl PierApp {
         cx.notify();
     }
 
-    /// Open a terminal tab and immediately type `ssh user@host -p port` into
-    /// the new PTY. Mirrors Pier's "click a saved server → terminal opens
-    /// connecting" flow; the OS-level `ssh` binary handles auth (key + agent
-    /// + Keychain pop-ups), so Pier-X doesn't have to ship a parallel SSH
-    /// auth UI for the common case.
+    /// Callback for `ShellLocationChangedEvent` on any terminal this
+    /// app owns. Two responsibilities:
     ///
-    /// Real `russh`-backed sessions land in a later phase — the placeholder
-    /// covers 90 % of the UX with 10 lines of code.
+    ///  1. If the location went `Remote` and the tab doesn't yet have a
+    ///     `ssh_session`, try to match the target against the saved
+    ///     connections list — if we recognise the host, spin up a
+    ///     `SshSessionState` and attach it so the SFTP / Git panels
+    ///     become live. (Manual-ssh autodiscovery — see M2.4 of the
+    ///     plan.)
+    ///  2. If the tab whose location changed is the currently-focused
+    ///     one, resync `active_session` and kick right-panel refreshes
+    ///     so the panels track the new `user@host:cwd` immediately.
+    fn on_terminal_location_changed(
+        &mut self,
+        terminal: &Entity<TerminalPanel>,
+        location: &ShellLocation,
+        cx: &mut Context<Self>,
+    ) {
+        let terminal_id = terminal.entity_id();
+        let tab_idx = self
+            .terminals
+            .iter()
+            .position(|panel| panel.entity_id() == terminal_id);
+        let Some(idx) = tab_idx else {
+            return;
+        };
+
+        // (1) Autodiscover: if the remote target matches a saved
+        // connection and the tab doesn't already have a session, attach
+        // one. We don't try to *create* new connections here — the user
+        // may be ssh-ing somewhere they don't want us to remember.
+        if let ShellLocation::Remote { target, .. } = location {
+            let panel = self.terminals[idx].clone();
+            let has_session = panel.read(cx).ssh_session().is_some();
+            if !has_session {
+                if let Some(conn) = self.match_saved_connection(target) {
+                    let session_state = cx.new(|_| SshSessionState::new(conn));
+                    panel.update(cx, |p, _| p.set_ssh_session(session_state.clone()));
+                    log::info!(
+                        "app: auto-attached ssh session for manual ssh tab={} host={} user={}",
+                        idx,
+                        target.host,
+                        target.user
+                    );
+                }
+            }
+        }
+
+        // (2) If this is the focused tab, resync downstream state. The
+        // session mirror + right-mode bootstrap live in one helper so
+        // closes / opens / location changes all route through it.
+        if self.active_terminal == Some(idx) {
+            self.right_visible = true;
+            self.sync_active_session_from_focused_tab(cx);
+            cx.notify();
+        }
+    }
+
+    /// Best-effort lookup: a saved connection is a match when host +
+    /// user + port all line up (case-insensitive host). Users can type
+    /// `ssh root@box` in a local shell and, if `box` is saved, we'll
+    /// attach that session. No fuzzy matching — misattribution is much
+    /// worse than "no panel" here.
+    fn match_saved_connection(&self, target: &RemoteTarget) -> Option<SshConfig> {
+        let host_lc = target.host.to_ascii_lowercase();
+        self.connections
+            .iter()
+            .find(|c| {
+                c.host.eq_ignore_ascii_case(&host_lc)
+                    && c.user == target.user
+                    && c.port == target.port
+            })
+            .cloned()
+    }
+
+    /// Where is the currently-focused terminal running? Cheap derived
+    /// read — every right/left panel that needs to branch on
+    /// local vs. remote calls this.
+    pub fn active_shell_location(&self, cx: &App) -> ShellLocation {
+        self.active_terminal
+            .and_then(|idx| self.terminals.get(idx))
+            .map(|panel| panel.read(cx).shell_location().clone())
+            .unwrap_or_default()
+    }
+
+    /// Open a terminal tab whose backing PTY is a **live russh shell
+    /// channel** against the saved connection — no local `ssh` binary,
+    /// no `send_input("ssh …")` trick, no second TCP connection for
+    /// SFTP. The shell channel and the SFTP channel share one
+    /// `SshSession` so bandwidth, auth, and host-key verification all
+    /// happen exactly once.
+    ///
+    /// Flow:
+    ///   1. Build a `SshSessionState` and a `TerminalPanel` in a
+    ///      "pending" shape (no PTY yet). Attach them to each other.
+    ///   2. Subscribe to the panel's `ShellLocationChangedEvent` so
+    ///      cwd / exit events on this remote shell route through the
+    ///      same autowiring path a local shell's manual `ssh` does.
+    ///   3. Spawn a background task that runs
+    ///      `SshSession::connect_blocking` + `open_shell_channel_blocking`
+    ///      on the shared tokio runtime (see `pier_core::ssh::runtime`).
+    ///   4. When it finishes, hop back to the UI thread, stash the
+    ///      live session on the `SshSessionState`, and hand the
+    ///      channel PTY to `TerminalPanel::attach_ssh_pty`. On
+    ///      failure, surface the error in the panel.
     pub fn open_ssh_terminal(&mut self, idx: usize, cx: &mut Context<Self>) {
         let Some(conn) = self.connections.get(idx).cloned() else {
             log::warn!("app: ssh-open stale connection index={idx}");
             return;
         };
         log::info!(
-            "app: opening ssh terminal connection={} host={} user={} port={}",
+            "app: opening ssh terminal (russh direct) connection={} host={} user={} port={}",
             conn.name,
             conn.host,
             conn.user,
             conn.port
         );
-        self.open_terminal_tab(cx);
-        let Some(active) = self.active_terminal else {
-            return;
-        };
-        let entity = self.terminals[active].clone();
-        let command = if conn.port == 22 {
-            format!("ssh {}@{}\n", conn.user, conn.host)
-        } else {
-            format!("ssh {}@{} -p {}\n", conn.user, conn.host, conn.port)
-        };
-        entity.update(cx, |panel, cx| panel.send_input(&command, cx));
 
-        // Attach a parallel native SSH session for the right-panel SFTP
-        // browser. Lazy-connects on first list_dir; replacing whatever
-        // previous session was active.
-        let session_state = cx.new(|_| SshSessionState::new(conn));
-        self.active_session = Some(session_state);
+        let target = RemoteTarget::new(conn.host.clone(), conn.user.clone(), conn.port);
+        let session_state = cx.new(|_| SshSessionState::new(conn.clone()));
+
+        // Build a TerminalPanel that will receive the PTY once the
+        // background connect finishes. Keeps the UI responsive during
+        // SSH handshake (~hundreds of ms).
+        let on_activated: ActivationHandler = Rc::new(|_, _, _| {});
+        let session_for_panel = session_state.clone();
+        let target_for_panel = target.clone();
+        let panel_entity = cx.new(|panel_cx| {
+            TerminalPanel::new_ssh_pending(
+                on_activated,
+                session_for_panel,
+                target_for_panel,
+                panel_cx,
+            )
+        });
+
+        // Mirror the location-event subscription done by
+        // `open_terminal_tab` so remote cd / nested ssh / exit all
+        // route through the same autowiring path.
+        let panel_for_handler = panel_entity.clone();
+        cx.subscribe(
+            &panel_entity,
+            move |this: &mut PierApp, _, event: &ShellLocationChangedEvent, cx| {
+                this.on_terminal_location_changed(&panel_for_handler, &event.0, cx);
+            },
+        )
+        .detach();
+
+        self.terminals.push(panel_entity.clone());
+        self.active_terminal = Some(self.terminals.len() - 1);
+        self.active_session = Some(session_state.clone());
         self.right_visible = true;
         self.normalize_right_mode(cx);
-        self.schedule_remote_bootstrap(cx);
         cx.notify();
+
+        // Background connect + open shell channel. Same pattern as
+        // `schedule_remote_bootstrap` / `schedule_sftp_refresh`:
+        // block_on pier-core `*_blocking` helpers inside the background
+        // executor so the UI thread never blocks.
+        let panel_for_task = panel_entity.clone();
+        let session_for_task = session_state.clone();
+        cx.spawn(
+            move |_app_weak: gpui::WeakEntity<Self>, cx: &mut gpui::AsyncApp| {
+                let background = cx.background_executor().clone();
+                let mut async_cx = cx.clone();
+                async move {
+                    let connect_result: Result<
+                        (pier_core::ssh::SshSession, pier_core::ssh::SshChannelPty),
+                        String,
+                    > = background
+                        .spawn(async move {
+                            use pier_core::ssh::{HostKeyVerifier, SshSession};
+                            use pier_core::terminal::{
+                                BASH_INTEGRATION, BASH_LAUNCH_COMMAND,
+                                REMOTE_INTEGRATION_BASH_PATH, REMOTE_INTEGRATION_DIR,
+                            };
+                            let verifier = HostKeyVerifier::default();
+                            let session = SshSession::connect_blocking(&conn, verifier)
+                                .map_err(|e| e.to_string())?;
+
+                            // Try to upload the shell-integration rc
+                            // and launch `bash --rcfile` against it.
+                            // Any failure here (no bash on remote,
+                            // SFTP denied, write failed, whatever)
+                            // drops us to a plain `request_shell` so
+                            // the user still gets a working terminal.
+                            let try_with_integration = (|| -> Result<
+                                pier_core::ssh::SshChannelPty,
+                                String,
+                            > {
+                                let sftp = session
+                                    .open_sftp_blocking()
+                                    .map_err(|e| e.to_string())?;
+                                // Idempotent create — "already exists"
+                                // is fine, we just need the dir to be
+                                // there before write_file.
+                                let _ = sftp.create_dir_blocking(REMOTE_INTEGRATION_DIR);
+                                sftp.write_file_blocking(
+                                    REMOTE_INTEGRATION_BASH_PATH,
+                                    BASH_INTEGRATION.as_bytes(),
+                                )
+                                .map_err(|e| e.to_string())?;
+                                session
+                                    .open_exec_channel_blocking(
+                                        SSH_DEFAULT_COLS,
+                                        SSH_DEFAULT_ROWS,
+                                        BASH_LAUNCH_COMMAND,
+                                    )
+                                    .map_err(|e| e.to_string())
+                            })();
+
+                            let pty = match try_with_integration {
+                                Ok(pty) => pty,
+                                Err(err) => {
+                                    log::warn!(
+                                        "shell integration unavailable on remote \
+                                         ({err}); falling back to default login shell"
+                                    );
+                                    session
+                                        .open_shell_channel_blocking(
+                                            SSH_DEFAULT_COLS,
+                                            SSH_DEFAULT_ROWS,
+                                        )
+                                        .map_err(|e| e.to_string())?
+                                }
+                            };
+
+                            Ok::<_, String>((session, pty))
+                        })
+                        .await;
+
+                    let _ = panel_for_task.update(&mut async_cx, |panel, cx| {
+                        match connect_result {
+                            Ok((session, pty)) => {
+                                let _ = session_for_task
+                                    .update(cx, |s, _| s.attach_live_session(session));
+                                panel.attach_ssh_pty(
+                                    Box::new(pty),
+                                    SSH_DEFAULT_COLS,
+                                    SSH_DEFAULT_ROWS,
+                                    target,
+                                    cx,
+                                );
+                            }
+                            Err(err) => {
+                                let _ = session_for_task.update(cx, |s, _| {
+                                    s.record_connect_failure(err.clone())
+                                });
+                                panel.report_ssh_connect_error(err, cx);
+                            }
+                        }
+                    });
+                }
+            },
+        )
+        .detach();
     }
 
     pub fn navigate_sftp(&mut self, path: PathBuf, cx: &mut Context<Self>) {
@@ -393,7 +646,123 @@ impl PierApp {
     fn activate_terminal_tab(&mut self, idx: usize, cx: &mut Context<Self>) {
         if idx < self.terminals.len() {
             self.active_terminal = Some(idx);
+            self.sync_active_session_from_focused_tab(cx);
             cx.notify();
+        }
+    }
+
+    /// Re-derive `self.active_session` from whichever terminal tab is
+    /// currently focused, then normalize the right-panel mode so it
+    /// doesn't sit on a remote-only mode (SFTP / Docker / ...) when the
+    /// user switched to a local shell tab. Also kicks off any one-shot
+    /// refresh the newly-active remote mode needs.
+    ///
+    /// Called from `activate_terminal_tab` and every `close_terminal_*`
+    /// path so the right panel tracks the focused tab rather than the
+    /// "last opened SSH session" (the previous bug — see the plan).
+    fn sync_active_session_from_focused_tab(&mut self, cx: &mut Context<Self>) {
+        let new_session = self
+            .active_terminal
+            .and_then(|idx| self.terminals.get(idx))
+            .and_then(|panel| panel.read(cx).ssh_session().cloned());
+        self.active_session = new_session;
+        self.ensure_right_mode_ready(cx, false);
+    }
+
+    fn scroll_terminal_tabs_by(&mut self, delta_x: Pixels, cx: &mut Context<Self>) -> bool {
+        let current = self.terminal_tabs_scroll.offset();
+        let max_x = self.terminal_tabs_scroll.max_offset().width;
+        let next_x = (current.x + delta_x).clamp(-max_x, px(0.0));
+        if next_x == current.x {
+            return false;
+        }
+
+        self.terminal_tabs_scroll
+            .set_offset(point(next_x, current.y));
+        cx.notify();
+        true
+    }
+
+    fn scroll_terminal_tabs_step(
+        &mut self,
+        direction: TerminalTabScrollDirection,
+        cx: &mut Context<Self>,
+    ) -> bool {
+        let delta_x = match direction {
+            TerminalTabScrollDirection::Left => TAB_STRIP_SCROLL_STEP,
+            TerminalTabScrollDirection::Right => -TAB_STRIP_SCROLL_STEP,
+        };
+        self.scroll_terminal_tabs_by(delta_x, cx)
+    }
+
+    fn start_terminal_tab_scroll_hold(
+        &mut self,
+        direction: TerminalTabScrollDirection,
+        cx: &mut Context<Self>,
+    ) {
+        self.terminal_tabs_scroll_hold_generation =
+            self.terminal_tabs_scroll_hold_generation.wrapping_add(1);
+        let generation = self.terminal_tabs_scroll_hold_generation;
+        self.terminal_tabs_scroll_hold = Some((generation, direction));
+        self.scroll_terminal_tabs_step(direction, cx);
+
+        let app = cx.entity().downgrade();
+        cx.spawn(move |_: gpui::WeakEntity<Self>, cx: &mut gpui::AsyncApp| {
+            let background = cx.background_executor().clone();
+            let mut async_cx = cx.clone();
+            async move {
+                background
+                    .timer(Duration::from_millis(TAB_STRIP_HOLD_DELAY_MS))
+                    .await;
+
+                loop {
+                    let keep_scrolling = app
+                        .update(&mut async_cx, |this, cx| {
+                            match this.terminal_tabs_scroll_hold {
+                                Some((current_generation, current_direction))
+                                    if current_generation == generation
+                                        && current_direction == direction =>
+                                {
+                                    this.scroll_terminal_tabs_step(direction, cx)
+                                }
+                                _ => false,
+                            }
+                        })
+                        .unwrap_or(false);
+
+                    if !keep_scrolling {
+                        break;
+                    }
+
+                    background
+                        .timer(Duration::from_millis(TAB_STRIP_HOLD_REPEAT_MS))
+                        .await;
+                }
+            }
+        })
+        .detach();
+    }
+
+    fn stop_terminal_tab_scroll_hold(&mut self) {
+        self.terminal_tabs_scroll_hold = None;
+        self.terminal_tabs_scroll_hold_generation =
+            self.terminal_tabs_scroll_hold_generation.wrapping_add(1);
+    }
+
+    fn on_terminal_tab_bar_scroll_wheel(
+        &mut self,
+        event: &ScrollWheelEvent,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let delta = event.delta.pixel_delta(window.line_height());
+        let delta_x = if !delta.x.is_zero() { delta.x } else { delta.y };
+        if delta_x.is_zero() {
+            return;
+        }
+
+        if self.scroll_terminal_tabs_by(delta_x, cx) {
+            cx.stop_propagation();
         }
     }
 
@@ -416,6 +785,7 @@ impl PierApp {
             };
             self.active_terminal = Some(new_active);
         }
+        self.sync_active_session_from_focused_tab(cx);
         cx.notify();
     }
 
@@ -429,6 +799,7 @@ impl PierApp {
         self.terminals.clear();
         self.terminals.push(kept);
         self.active_terminal = Some(0);
+        self.sync_active_session_from_focused_tab(cx);
         cx.notify();
     }
 
@@ -444,6 +815,7 @@ impl PierApp {
             Some(active) if active >= from_idx => active - from_idx,
             _ => 0,
         });
+        self.sync_active_session_from_focused_tab(cx);
         cx.notify();
     }
 
@@ -458,6 +830,7 @@ impl PierApp {
             Some(active) => active,
             None => from_idx,
         });
+        self.sync_active_session_from_focused_tab(cx);
         cx.notify();
     }
 
@@ -882,6 +1255,22 @@ impl PierApp {
         self.terminals.len()
     }
 
+    /// Read-only view of the currently focused tab's SSH session,
+    /// exposed so the left file panel can embed `SftpBrowser` when
+    /// the tab is remote. `active_session` itself stays crate-private
+    /// because only PierApp is allowed to mutate it (through
+    /// `sync_active_session_from_focused_tab`).
+    pub fn active_session_ref(&self) -> Option<&Entity<SshSessionState>> {
+        self.active_session.as_ref()
+    }
+
+    /// Current left-panel width in pixels — exposed so child panels
+    /// that render size-responsive content (e.g. SFTP column hiding)
+    /// can keep their decisions in sync with the app layout.
+    pub fn left_panel_width_px(&self) -> Pixels {
+        self.left_panel_width
+    }
+
     /// Open the Path Inspector dialog on the given local filesystem
     /// target. Called from the file tree and from directory-entry rows
     /// inside an already-open inspector dialog ("drill in"). The
@@ -1054,8 +1443,6 @@ impl PierApp {
             .items_center()
             .justify_center()
             .cursor_col_resize()
-            .hover(|style| style.bg(t.color.bg_hover))
-            .active(|style| style.bg(t.color.bg_active))
             .on_drag(
                 PaneResizeDrag {
                     entity_id: cx.entity_id(),
@@ -2197,6 +2584,11 @@ impl PierApp {
             let tab_count = self.terminals.len();
             let active_term = self.terminals[active].clone();
 
+            if self.terminal_tabs_last_revealed != Some((active, tab_count)) {
+                self.terminal_tabs_scroll.scroll_to_item(active);
+                self.terminal_tabs_last_revealed = Some((active, tab_count));
+            }
+
             let scroll_handle = self.terminal_tabs_scroll.clone();
             let tab_bar = render_terminal_tab_bar(t, active, tab_count, &scroll_handle, cx);
 
@@ -2208,6 +2600,9 @@ impl PierApp {
                 .child(div().flex_1().min_h(px(0.0)).child(active_term))
                 .into_any_element();
         }
+
+        self.terminal_tabs_last_revealed = None;
+        self.stop_terminal_tab_scroll_hold();
 
         // Welcome cover state — buttons stay truthful to their labels:
         // "new SSH" opens the add-connection flow, saved cards open SSH.
@@ -2256,6 +2651,11 @@ fn render_terminal_tab_bar(
     scroll_handle: &ScrollHandle,
     cx: &mut Context<PierApp>,
 ) -> impl IntoElement {
+    let current_offset = scroll_handle.offset().x;
+    let max_offset = scroll_handle.max_offset().width;
+    let can_go_left = current_offset < px(0.0);
+    let can_go_right = max_offset > px(0.0) && current_offset > -max_offset;
+
     // Tabs container: horizontally scrollable so 20+ terminals don't
     // push the [+] button (and, eventually, the window chrome) off
     // the right edge. Wrapped in a `flex_1 min_w_0` cell so the
@@ -2266,14 +2666,11 @@ fn render_terminal_tab_bar(
         .flex_row()
         .items_center()
         .gap(SP_1)
-        // Horizontal scroll backed by a persistent handle on PierApp.
-        // `overflow_x_scroll` alone natively handles trackpad two-finger
-        // horizontal gestures and shift+wheel on a traditional mouse.
-        // Vertical-only mouse wheel is re-mapped below via
-        // `on_scroll_wheel` — macOS & Windows mice without horizontal
-        // capability should still be able to scroll the tabs.
         .overflow_x_scroll()
-        .track_scroll(scroll_handle);
+        .track_scroll(scroll_handle)
+        .on_scroll_wheel(cx.listener(|this, event: &ScrollWheelEvent, window, cx| {
+            this.on_terminal_tab_bar_scroll_wheel(event, window, cx);
+        }));
 
     for idx in 0..count {
         let is_active = idx == active;
@@ -2294,6 +2691,7 @@ fn render_terminal_tab_bar(
 
         let mut tab = div()
             .id(gpui::ElementId::Name(tab_id))
+            .flex_none()
             .h(BUTTON_SM_H)
             .px(SP_2)
             .flex()
@@ -2372,19 +2770,24 @@ fn render_terminal_tab_bar(
                 .text_color(t.color.text_secondary),
         );
 
-    // Make sure the active tab is always visible after selection —
-    // GPUI's `ScrollHandle::scroll_to_item` defers the actual scroll
-    // to prepaint, so calling it every render is idempotent.
-    scroll_handle.scroll_to_item(active);
+    let prev_button = tab_scroll_button(
+        "term-tab-prev",
+        IconName::ChevronLeft,
+        can_go_left,
+        TerminalTabScrollDirection::Left,
+        t,
+        cx,
+    );
+    let next_button = tab_scroll_button(
+        "term-tab-next",
+        IconName::ChevronRight,
+        can_go_right,
+        TerminalTabScrollDirection::Right,
+        t,
+        cx,
+    );
 
-    // `overflow_x_scroll` already handles both trackpad horizontal
-    // gestures AND vertical mouse-wheel delta (GPUI's native handler
-    // at div.rs:2427 redirects `delta.y → delta.x` when only the
-    // x-axis is scrollable and `restrict_scroll_to_axis` is false,
-    // which is the default). No custom `on_scroll_wheel` needed —
-    // the earlier manual redirect was double-applying the delta.
-
-    div()
+    let mut row = div()
         .h(ROW_MD_H)
         .px(SP_2)
         .flex()
@@ -2393,9 +2796,72 @@ fn render_terminal_tab_bar(
         .gap(SP_1)
         .bg(t.color.bg_panel)
         .border_b_1()
-        .border_color(t.color.border_subtle)
-        .child(div().flex_1().min_w(px(0.0)).overflow_hidden().child(tabs))
-        .child(plus_button)
+        .border_color(t.color.border_subtle);
+
+    if count > 1 {
+        row = row.child(prev_button);
+    }
+
+    row = row.child(div().flex_1().min_w(px(0.0)).overflow_hidden().child(tabs));
+
+    if count > 1 {
+        row = row.child(next_button);
+    }
+
+    row.child(plus_button)
+}
+
+fn tab_scroll_button(
+    id: &'static str,
+    icon: IconName,
+    enabled: bool,
+    direction: TerminalTabScrollDirection,
+    t: &crate::theme::Theme,
+    cx: &mut Context<PierApp>,
+) -> impl IntoElement {
+    let on_mouse_down = cx.listener(move |this, _: &MouseDownEvent, _, cx| {
+        if enabled {
+            this.start_terminal_tab_scroll_hold(direction, cx);
+        }
+    });
+    let on_mouse_up = cx.listener(|this, _, _, _| {
+        this.stop_terminal_tab_scroll_hold();
+    });
+    let on_mouse_up_out = cx.listener(|this, _, _, _| {
+        this.stop_terminal_tab_scroll_hold();
+    });
+
+    let mut button = div()
+        .id(id)
+        .flex_none()
+        .w(BUTTON_SM_H)
+        .h(BUTTON_SM_H)
+        .flex()
+        .items_center()
+        .justify_center()
+        .rounded(RADIUS_SM)
+        .text_color(if enabled {
+            t.color.text_secondary
+        } else {
+            t.color.text_disabled
+        })
+        .child(UiIcon::new(icon).size(ICON_SM).text_color(if enabled {
+            t.color.text_secondary
+        } else {
+            t.color.text_disabled
+        }));
+
+    if enabled {
+        button = button
+            .cursor_pointer()
+            .hover(|s| s.bg(t.color.bg_hover))
+            .active(|s| s.bg(t.color.bg_active))
+            .on_mouse_down(MouseButton::Left, on_mouse_down)
+            .on_mouse_up(MouseButton::Left, on_mouse_up)
+            .on_mouse_up_out(MouseButton::Left, on_mouse_up_out);
+    }
+
+    button
 }
 
 fn render_tab_context_menu(

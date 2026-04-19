@@ -488,6 +488,7 @@ impl SettingsDialog {
         let cursor_style = terminal_cursor_style(cx);
         let cursor_blink = terminal_cursor_blink(cx);
         let font_ligatures = terminal_font_ligatures(cx);
+        let shell_integration_on = t.settings.terminal_shell_integration;
         let theme_preset = t.settings.terminal_theme_preset;
         let opacity_pct = t.settings.terminal_opacity_pct;
         let opacity = terminal_opacity(cx);
@@ -715,6 +716,42 @@ impl SettingsDialog {
                                 move |value, _, app| {
                                     apply_dialog_settings(&dialog, app, move |settings| {
                                         settings.terminal_cursor_blink = *value;
+                                    });
+                                }
+                            }),
+                        )),
+                )
+                .child(
+                    SettingRow::new(t!("App.Settings.Terminal.shell_integration"))
+                        .description(t!("App.Settings.Terminal.shell_integration_description"))
+                        .child(settings_switch(
+                            "settings-toggle-shell-integration",
+                            shell_integration_on,
+                            Box::new({
+                                let dialog = dialog.clone();
+                                move |value, _, app| {
+                                    let enable = *value;
+                                    // Install / uninstall first so any
+                                    // file-IO error can short-circuit
+                                    // the persisted flag — we don't
+                                    // want settings.json to claim
+                                    // "enabled" while the rc files
+                                    // were never written.
+                                    let io_result = if enable {
+                                        pier_core::terminal::install_local_bash_integration()
+                                            .map(|_rc| ())
+                                    } else {
+                                        pier_core::terminal::uninstall_local_bash_integration()
+                                    };
+                                    if let Err(err) = &io_result {
+                                        log::error!(
+                                            "shell integration {}: {err}",
+                                            if enable { "install" } else { "uninstall" }
+                                        );
+                                    }
+                                    let persist_flag = io_result.is_ok() && enable;
+                                    apply_dialog_settings(&dialog, app, move |settings| {
+                                        settings.terminal_shell_integration = persist_flag;
                                     });
                                 }
                             }),

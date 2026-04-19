@@ -295,6 +295,7 @@ fn render_header(
                 .font_family(t.font_mono.clone())
                 .font_weight(WEIGHT_MEDIUM)
                 .text_color(t.color.text_primary)
+                .truncate()
                 .child(cwd_name.clone()),
         )
         // 3. ⋯ Quick targets popover (needs Selectable — handwritten).
@@ -489,6 +490,8 @@ fn render_breadcrumbs(
         .flex_row()
         .items_center()
         .gap(SP_0_5)
+        .min_w(px(0.0))
+        .overflow_hidden()
         .bg(t.color.bg_surface);
 
     for (idx, (label, path)) in segments.into_iter().enumerate() {
@@ -512,6 +515,8 @@ fn render_breadcrumbs(
         row = row.child(
             div()
                 .id(gpui::ElementId::Name(id_str))
+                .when(is_last, |this| this.flex_1().min_w(px(0.0)))
+                .when(!is_last, |this| this.flex_none())
                 .px(px(4.0))
                 .h(px(18.0))
                 .flex()
@@ -527,7 +532,11 @@ fn render_breadcrumbs(
                 .cursor_pointer()
                 .hover(|s| s.bg(t.color.bg_hover))
                 .on_click(move |_, w, app| nav(&target, w, app))
-                .child(label),
+                .child(
+                    div()
+                        .when(is_last, |this| this.min_w(px(0.0)).truncate())
+                        .child(label),
+                ),
         );
     }
     row

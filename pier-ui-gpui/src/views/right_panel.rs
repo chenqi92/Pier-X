@@ -196,8 +196,6 @@ impl RenderOnce for RightPanel {
             .flex()
             .flex_row()
             .bg(t.color.bg_surface)
-            .border_l_1()
-            .border_color(t.color.border_subtle)
             // Content
             .child(div().flex_1().min_w(px(0.0)).child(body))
             // Vertical separator
@@ -233,7 +231,8 @@ fn render_mode_body(
     sftp_content_width: Pixels,
     cx: &mut App,
 ) -> gpui::AnyElement {
-    let header = mode_page_header(mode, active_session.as_ref(), cx);
+    let shell_header = mode_uses_shell_header(mode)
+        .then(|| mode_page_header(mode, active_session.as_ref(), cx).into_any_element());
     let remote_overview = remote_overview(active_session.as_ref(), cx);
 
     let content: gpui::AnyElement = match mode {
@@ -272,7 +271,10 @@ fn render_mode_body(
         .into_any_element(),
     };
 
-    let mut panel = div().w_full().h_full().flex().flex_col().child(header);
+    let mut panel = div().w_full().h_full().flex().flex_col();
+    if let Some(header) = shell_header {
+        panel = panel.child(header);
+    }
     // Remote context strip. Only rendered for Remote modes — Local
     // modes (Markdown / Git / SQLite) would show nothing meaningful
     // since the panel reads from disk. The two previous strips
@@ -309,6 +311,19 @@ fn render_mode_body(
                 .into_any_element()
         })
         .into_any_element()
+}
+
+fn mode_uses_shell_header(mode: RightMode) -> bool {
+    !matches!(
+        mode,
+        RightMode::Markdown
+            | RightMode::Sftp
+            | RightMode::Git
+            | RightMode::Mysql
+            | RightMode::Postgres
+            | RightMode::Redis
+            | RightMode::Sqlite
+    )
 }
 
 #[derive(Clone)]
@@ -395,7 +410,7 @@ fn render_remote_context_strip(
 
     let mut row = div()
         .px(SP_3)
-        .py(SP_1_5)
+        .py(SP_1)
         .flex()
         .flex_row()
         .flex_wrap()
@@ -570,19 +585,27 @@ fn tunnel_chip(tunnel: &TunnelOverview) -> impl IntoElement {
 
 /// Build the PageHeader for the given right-panel mode.
 ///
-/// Remote headers intentionally stay single-line and do not repeat the
-/// endpoint string: the terminal tab already shows `user@host`, and the
-/// service strip below the header already communicates the remote context.
-/// Repeating `root@host` and `ssh root@host` in three places was the main
-/// source of the "stacked chrome" feel in the right panel.
+/// Only the lightweight inspector-style modes (Monitor / Docker / Logs)
+/// use the outer shell header. Modes that already ship their own local
+/// control/header row (Markdown / SFTP / Git / DBs) own that space
+/// themselves; rendering *both* was the main source of the stacked,
+/// repetitive chrome in the right pane.
+///
+/// Remote shell headers intentionally stay single-line and do not repeat
+/// the endpoint string: the terminal tab already shows `user@host`, and
+/// the service strip below the header already communicates the remote
+/// context.
 fn mode_page_header(
     mode: RightMode,
     active_session: Option<&Entity<SshSessionState>>,
     cx: &App,
 ) -> PageHeader {
     match mode.context() {
-        RightContext::Local => PageHeader::new(mode.label()).size(HeaderSize::Page),
+        RightContext::Local => PageHeader::new(mode.label())
+            .size(HeaderSize::Page)
+            .eyebrow(t!("App.Common.local")),
         RightContext::Remote => {
+            let eyebrow = mode.label();
             let (title, status_pill) = match active_session {
                 Some(session_entity) => {
                     let session = session_entity.read(cx);
@@ -600,7 +623,9 @@ fn mode_page_header(
                     )),
                 ),
             };
-            let mut header = PageHeader::new(title).size(HeaderSize::Page);
+            let mut header = PageHeader::new(title)
+                .size(HeaderSize::Page)
+                .eyebrow(eyebrow);
             if let Some(pill) = status_pill {
                 header = header.status(pill);
             }

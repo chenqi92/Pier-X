@@ -75,9 +75,15 @@ fn map_colors(colors: ColorSet, mode: ThemeMode) -> ThemeColor {
     mapped.primary_hover = hsla(colors.accent_hover);
     mapped.progress_bar = hsla(colors.accent);
     mapped.ring = hsla(colors.border_focus);
-    mapped.scrollbar = hsla(colors.bg_panel);
-    mapped.scrollbar_thumb = hsla(colors.border_default);
-    mapped.scrollbar_thumb_hover = hsla(colors.border_strong);
+    mapped.scrollbar = hsla(Rgba::default());
+    mapped.scrollbar_thumb = hsla(Rgba {
+        a: 0.28,
+        ..colors.text_tertiary
+    });
+    mapped.scrollbar_thumb_hover = hsla(Rgba {
+        a: 0.42,
+        ..colors.text_secondary
+    });
     mapped.secondary = hsla(colors.bg_surface);
     mapped.secondary_active = hsla(colors.bg_active);
     mapped.secondary_foreground = hsla(colors.text_primary);

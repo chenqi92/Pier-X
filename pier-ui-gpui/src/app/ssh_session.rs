@@ -344,6 +344,31 @@ impl SshSessionState {
         }
     }
 
+    /// Inject a freshly-connected `SshSession` into this state. Called
+    /// from the background task spawned by `open_ssh_terminal` once the
+    /// russh handshake finishes — so subsequent SFTP / monitor /
+    /// docker bootstraps on this same tab can reuse the handle
+    /// instead of re-connecting. Idempotent: if a session is already
+    /// attached we keep the existing one (new channels open cheaply
+    /// on an existing Handle; tearing it down would orphan any
+    /// in-flight channels).
+    pub fn attach_live_session(&mut self, session: SshSession) {
+        if self.session.is_none() {
+            self.session = Some(session);
+        }
+        self.status = ConnectStatus::Connected;
+        self.last_error = None;
+    }
+
+    /// Record a connect error on this session — flips `status` to
+    /// `Failed` and stores the message so the terminal panel / right
+    /// panel can surface it. Called from the shell-channel bootstrap
+    /// path when the russh connect or `open_shell_channel` fails.
+    pub fn record_connect_failure(&mut self, err: String) {
+        self.status = ConnectStatus::Failed;
+        self.last_error = Some(err);
+    }
+
     pub fn begin_monitor_refresh(&mut self) -> Option<MonitorRequest> {
         if matches!(self.monitor_status, MonitorStatus::Loading) {
             return None;

@@ -937,11 +937,18 @@ impl Node {
                                         .items_start()
                                         .content_start()
                                         .when(!options.todo && checked.is_none(), |this| {
-                                            this.child(list_item_prefix(
-                                                ix,
-                                                options.ordered,
-                                                options.depth,
-                                            ))
+                                            this.child(
+                                                div()
+                                                    .flex_none()
+                                                    .w(rems(1.6))
+                                                    .mr_1()
+                                                    .text_right()
+                                                    .child(list_item_prefix(
+                                                        ix,
+                                                        options.ordered,
+                                                        options.depth,
+                                                    )),
+                                            )
                                         })
                                         .when_some(*checked, |this, checked| {
                                             // Todo list checkbox
@@ -966,7 +973,7 @@ impl Node {
                                                     }),
                                             )
                                         })
-                                        .child(div().overflow_hidden().child(text)),
+                                        .child(div().flex_1().min_w_0().overflow_hidden().child(text)),
                                 );
                             }
                             Node::List { .. } => {

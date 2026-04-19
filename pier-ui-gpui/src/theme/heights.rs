@@ -19,7 +19,7 @@ pub const TOOLBAR_H: Pixels = px(32.0);
 pub const STATUSBAR_H: Pixels = px(22.0);
 
 // Page grammar containers.
-pub const PAGEHEADER_H: Pixels = px(48.0);
+pub const PAGEHEADER_H: Pixels = px(42.0);
 pub const ASSIST_STRIP_H: Pixels = px(30.0);
 
 // Buttons & interactive rows.

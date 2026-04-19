@@ -146,12 +146,15 @@ impl LeftPanelView {
         })
         .detach();
 
-        // Observe PierApp to keep our local servers snapshot fresh.
+        // Observe PierApp to keep the cached servers sidebar snapshot
+        // fresh. The left "Files" tab is intentionally *always* local
+        // — remote filesystems belong to the right-panel SFTP mode,
+        // which has its own read path and UI affordances.
         if let Some(app_entity) = weak_app.upgrade() {
             cx.observe(&app_entity, |this, app, cx| {
-                let next = app.read(cx).servers_sidebar_snapshot(cx);
-                if next != this.servers_snapshot {
-                    this.servers_snapshot = next;
+                let next_servers = app.read(cx).servers_sidebar_snapshot(cx);
+                if next_servers != this.servers_snapshot {
+                    this.servers_snapshot = next_servers;
                     prune_collapsed_groups(
                         &mut this.collapsed_server_groups,
                         &this.servers_snapshot.connections,
@@ -255,8 +258,6 @@ impl Render for LeftPanelView {
             .flex()
             .flex_col()
             .bg(t.color.bg_panel)
-            .border_r_1()
-            .border_color(t.color.border_subtle)
             .child(self.render_tab_bar(&t, active_tab, cx))
             .child(div().w_full().flex_1().min_h(px(0.0)).child(body))
     }

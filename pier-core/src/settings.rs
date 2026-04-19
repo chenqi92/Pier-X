@@ -96,6 +96,14 @@ pub struct AppSettings {
     /// Whether terminal ligatures should stay enabled.
     #[serde(default = "default_terminal_font_ligatures")]
     pub terminal_font_ligatures: bool,
+    /// Install Pier-X's shell-integration rc into the user's local
+    /// `~/.bashrc` / `~/.zshrc` so OSC 7 cwd reporting + `ssh`
+    /// hijacking work for manual `ssh` commands typed in a local
+    /// shell tab. Off by default — writing to dotfiles is an opt-in
+    /// action. Mirrored (no-op) across platforms where shell rc
+    /// injection doesn't apply.
+    #[serde(default)]
+    pub terminal_shell_integration: bool,
     /// User-assigned keystrokes, keyed by a UI-layer action ID (e.g.
     /// `"new_tab"`, `"toggle_left_panel"`). An empty map falls back to
     /// the UI layer's built-in defaults. The value format is whatever
@@ -122,6 +130,7 @@ impl Default for AppSettings {
             terminal_theme_preset: TerminalThemePreset::DefaultDark,
             terminal_opacity_pct: default_terminal_opacity_pct(),
             terminal_font_ligatures: default_terminal_font_ligatures(),
+            terminal_shell_integration: false,
             keybindings: BTreeMap::new(),
         }
     }
@@ -306,6 +315,7 @@ mod tests {
                 terminal_theme_preset: TerminalThemePreset::Dracula,
                 terminal_opacity_pct: 85,
                 terminal_font_ligatures: true,
+                terminal_shell_integration: true,
                 keybindings: BTreeMap::from([
                     ("new_tab".to_string(), "cmd-n".to_string()),
                     ("toggle_theme".to_string(), "cmd-shift-l".to_string()),

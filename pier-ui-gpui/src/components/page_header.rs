@@ -32,7 +32,7 @@ use gpui::{div, prelude::*, AnyElement, IntoElement, ParentElement, SharedString
 use crate::components::{text, SectionLabel, StatusPill};
 use crate::theme::{
     heights::PAGEHEADER_H,
-    spacing::{SP_1, SP_2, SP_3},
+    spacing::{SP_1, SP_2},
     theme,
 };
 
@@ -106,7 +106,7 @@ impl RenderOnce for PageHeader {
         // component) for Section. Always truncate: a header takes one
         // line by contract; overflow is always a mistake.
         let title_el: AnyElement = match self.size {
-            HeaderSize::Page => text::h2(self.title.clone()).truncate().into_any_element(),
+            HeaderSize::Page => text::h3(self.title.clone()).truncate().into_any_element(),
             HeaderSize::Section => SectionLabel::new(self.title.clone()).into_any_element(),
         };
 
@@ -144,11 +144,11 @@ impl RenderOnce for PageHeader {
         div()
             .w_full()
             .h(height)
-            .px(SP_3)
+            .px(SP_2)
             .flex()
             .flex_row()
             .items_center()
-            .gap(SP_3)
+            .gap(SP_2)
             .bg(t.color.bg_surface)
             .border_b_1()
             .border_color(t.color.border_subtle)

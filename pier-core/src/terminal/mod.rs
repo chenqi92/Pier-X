@@ -29,10 +29,16 @@
 //!    drops into the same `Pty` trait and reuses the emulator.
 
 pub mod emulator;
+pub mod integration;
 pub mod pty;
 pub mod session;
 
 pub use emulator::{Cell, Color, VtEmulator};
+pub use integration::{
+    install_local_bash_integration, is_local_bash_integration_installed,
+    uninstall_local_bash_integration, BASH_INTEGRATION, BASH_LAUNCH_COMMAND,
+    REMOTE_INTEGRATION_BASH_PATH, REMOTE_INTEGRATION_DIR,
+};
 pub use pty::{Pty, TerminalError};
 pub use session::{GridSnapshot, NotifyEvent, NotifyFn, PierTerminal};
 

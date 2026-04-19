@@ -12,7 +12,7 @@ use std::path::{Path, PathBuf};
 
 use base64::{engine::general_purpose::STANDARD as BASE64_STANDARD, Engine as _};
 use gpui::{
-    canvas, div, hsla, prelude::*, px, App, Bounds, ClipboardItem, Context, CursorStyle,
+    canvas, div, hsla, prelude::*, px, App, Bounds, ClipboardItem, Context, CursorStyle, Entity,
     EventEmitter, FocusHandle, Focusable, Hsla, IntoElement, KeyDownEvent, Keystroke, MouseButton,
     MouseDownEvent, MouseMoveEvent, MouseUpEvent, Pixels, Render, ScrollDelta, ScrollWheelEvent,
     SharedString, Size, TextRun, UnderlineStyle, WeakEntity, Window,
@@ -27,7 +27,10 @@ use pier_core::{
 };
 
 use crate::{
-    app::{route::Route, ActivationHandler},
+    app::{
+        route::Route, shell_location::RemoteTarget, ssh_session::SshSessionState,
+        ActivationHandler, ShellLocation,
+    },
     components::{terminal_grid, terminal_grid::LayoutState, StatusKind},
     theme::{
         heights::{ICON_SM, STATUSBAR_H},
@@ -305,7 +308,26 @@ pub struct TerminalPanel {
     last_cursor_visible: bool,
     diagnostics: TerminalDiagnostics,
     notify_state: Box<NotifyState>,
+    // SSH session attached to this tab. Created by `open_ssh_terminal`
+    // for tabs opened from the Servers list; `None` for local shells.
+    // The right panel (SFTP / Git remote) reads this through
+    // `PierApp::active_session`, which is a mirror of the focused tab's
+    // `ssh_session`.
+    ssh_session: Option<Entity<SshSessionState>>,
+    /// Where this terminal is currently running — Local by default,
+    /// promoted to Remote when the emulator's SSH detector fires, and
+    /// demoted again on `exit`/`logout`. Mutated only by
+    /// `sync_ssh_target` (refresh loop); observed by PierApp through
+    /// `ShellLocationChangedEvent`.
+    shell_location: ShellLocation,
 }
+
+/// Event emitted when this terminal's shell location changes (entered
+/// / left ssh, cwd updated). `PierApp` subscribes to this on every
+/// `TerminalPanel` it creates so the left/right panels can follow the
+/// focused tab automatically.
+#[derive(Clone, Debug)]
+pub struct ShellLocationChangedEvent(pub ShellLocation);
 
 impl TerminalPanel {
     /// Public escape hatch for callers (e.g. the Servers list) that want to
@@ -316,6 +338,143 @@ impl TerminalPanel {
         if self.write_input(s.as_bytes()) {
             cx.notify();
         }
+    }
+
+    pub fn ssh_session(&self) -> Option<&Entity<SshSessionState>> {
+        self.ssh_session.as_ref()
+    }
+
+    pub fn set_ssh_session(&mut self, session: Entity<SshSessionState>) {
+        self.ssh_session = Some(session);
+    }
+
+    pub fn shell_location(&self) -> &ShellLocation {
+        &self.shell_location
+    }
+
+    /// Construct a panel that will be wired to an SSH channel PTY
+    /// (instead of spawning a local shell). No terminal is started
+    /// yet — `attach_ssh_pty` plugs one in once the background
+    /// `SshSession::connect` + `open_shell_channel` task finishes.
+    ///
+    /// The panel shows an empty viewport with a "connecting..."
+    /// feel until attach; callers are responsible for scheduling the
+    /// background task. See `PierApp::open_ssh_terminal`.
+    pub fn new_ssh_pending(
+        on_activated: ActivationHandler,
+        ssh_session: Entity<SshSessionState>,
+        target: RemoteTarget,
+        cx: &mut Context<Self>,
+    ) -> Self {
+        let shell_path: SharedString = format!("ssh://{}", target.short_label()).into();
+        let notify_state = Box::<NotifyState>::default();
+        let terminal_id = NEXT_TERMINAL_ID.fetch_add(1, Ordering::Relaxed);
+
+        log::info!(
+            "terminal[{terminal_id}] ssh pending target={} (awaiting russh shell channel)",
+            target.short_label()
+        );
+
+        Self {
+            terminal_id,
+            focus_handle: cx.focus_handle(),
+            on_activated,
+            shell_path,
+            terminal: None,
+            last_error: None,
+            terminal_title: None,
+            applied_window_title: None,
+            ssh_target: Some(target.short_label().into()),
+            bell_flash_until: None,
+            scrollback_offset: 0,
+            refresh_loop_started: false,
+            resize_observer_started: false,
+            panel_active: false,
+            surface_bounds: Rc::new(RefCell::new(None)),
+            last_surface_size_key: None,
+            selection: None,
+            selection_dragging: false,
+            render_cache: None,
+            terminal_font_size_px: BASE_TERMINAL_FONT_SIZE_PX,
+            cell_width_px: BASE_CELL_WIDTH_PX,
+            cell_height_px: BASE_CELL_HEIGHT_PX,
+            terminal_cursor_style: TerminalCursorStyle::Block,
+            terminal_cursor_blink: true,
+            terminal_theme_preset: TerminalThemePreset::DefaultDark,
+            terminal_opacity_pct: 100,
+            terminal_font_ligatures: false,
+            cursor_blink_anchor: Instant::now(),
+            last_cursor_visible: true,
+            diagnostics: TerminalDiagnostics::default(),
+            notify_state,
+            ssh_session: Some(ssh_session),
+            shell_location: ShellLocation::Remote {
+                target,
+                cwd: None,
+                depth: 1,
+            },
+        }
+    }
+
+    /// Plug in an SSH-backed PTY (typically an `SshChannelPty`) once
+    /// the background russh connect + `open_shell_channel` chain is
+    /// done. Fires `ShellLocationChangedEvent` so panels refresh.
+    pub fn attach_ssh_pty(
+        &mut self,
+        pty: Box<dyn pier_core::terminal::Pty>,
+        cols: u16,
+        rows: u16,
+        target: RemoteTarget,
+        cx: &mut Context<Self>,
+    ) -> bool {
+        let user_data = self.notify_state.as_mut() as *mut NotifyState as *mut c_void;
+        match PierTerminal::with_pty(pty, cols, rows, terminal_notify, user_data) {
+            Ok(term) => {
+                term.set_scrollback_limit(SCROLLBACK_LIMIT);
+                self.notify_state.generation.store(0, Ordering::Relaxed);
+                self.notify_state.exited.store(false, Ordering::Relaxed);
+                self.scrollback_offset = 0;
+                self.last_error = None;
+                self.terminal_title = None;
+                self.applied_window_title = None;
+                self.bell_flash_until = None;
+                self.render_cache = None;
+                self.reset_cursor_blink();
+                self.terminal = Some(term);
+                self.clamp_selection_to_terminal();
+                log::info!(
+                    "terminal[{}] ssh pty attached target={} size={}x{}",
+                    self.terminal_id,
+                    target.short_label(),
+                    cols,
+                    rows
+                );
+                self.update_shell_location(
+                    ShellLocation::Remote {
+                        target,
+                        cwd: None,
+                        depth: 1,
+                    },
+                    cx,
+                );
+                cx.notify();
+                true
+            }
+            Err(err) => {
+                let msg: SharedString = format!("Failed to attach SSH pty: {err}").into();
+                log::error!("terminal[{}] {msg}", self.terminal_id);
+                self.last_error = Some(msg);
+                cx.notify();
+                false
+            }
+        }
+    }
+
+    /// Record a connect failure in the panel so the UI surfaces it.
+    pub fn report_ssh_connect_error(&mut self, err: String, cx: &mut Context<Self>) {
+        log::error!("terminal[{}] ssh connect failed: {err}", self.terminal_id);
+        self.last_error = Some(err.into());
+        cx.notify();
     }
 
     pub fn new(on_activated: ActivationHandler, cx: &mut Context<Self>) -> Self {
@@ -355,6 +514,8 @@ impl TerminalPanel {
             last_cursor_visible: true,
             diagnostics: TerminalDiagnostics::default(),
             notify_state,
+            ssh_session: None,
+            shell_location: ShellLocation::Local,
         };
         log::info!(
             "terminal[{terminal_id}] panel created shell={}",
@@ -663,7 +824,7 @@ impl TerminalPanel {
     fn handle_terminal_side_effects(&mut self, cx: &mut Context<Self>) {
         self.clamp_scrollback();
         self.sync_terminal_title();
-        self.sync_ssh_target();
+        self.sync_ssh_target(cx);
         self.sync_bell_flash();
         self.apply_osc52_clipboard(cx);
         self.reset_cursor_blink();
@@ -970,19 +1131,70 @@ impl TerminalPanel {
             .map(Into::into);
     }
 
-    fn sync_ssh_target(&mut self) {
-        let Some(term) = self.terminal.as_ref() else {
-            self.ssh_target = None;
-            return;
+    fn sync_ssh_target(&mut self, cx: &mut Context<Self>) {
+        // Extract every signal we need from the terminal up front so
+        // the subsequent `update_shell_location` mutable calls don't
+        // collide with a live borrow of `self.terminal`.
+        let (detected_ssh, exit_detected, current_dir) = match self.terminal.as_ref() {
+            Some(term) => (
+                term.take_ssh_detected(),
+                term.take_ssh_exit_detected(),
+                term.current_dir(),
+            ),
+            None => (None, false, None),
         };
 
-        if let Some((host, user, port)) = term.take_ssh_detected() {
-            self.ssh_target = Some(format_ssh_target(&user, &host, port).into());
+        if self.terminal.is_none() {
+            self.ssh_target = None;
+            self.update_shell_location(ShellLocation::Local, cx);
+            return;
         }
 
-        if term.take_ssh_exit_detected() {
-            self.ssh_target = None;
+        // One-shot entry event from the emulator — promote into the
+        // persistent `ShellLocation::Remote` and the window-title label.
+        if let Some((host, user, port)) = detected_ssh {
+            self.ssh_target = Some(format_ssh_target(&user, &host, port).into());
+            let target = RemoteTarget::new(host, user, port);
+            self.update_shell_location(
+                ShellLocation::Remote {
+                    target,
+                    cwd: current_dir.clone(),
+                    depth: 1,
+                },
+                cx,
+            );
         }
+
+        // Exit / logout — back to local.
+        if exit_detected {
+            self.ssh_target = None;
+            self.update_shell_location(ShellLocation::Local, cx);
+        }
+
+        // While we're remote, keep the cwd fresh from OSC 7.
+        if let ShellLocation::Remote {
+            target,
+            cwd: existing,
+            depth,
+        } = &self.shell_location
+        {
+            if current_dir.as_deref() != existing.as_deref() {
+                let next = ShellLocation::Remote {
+                    target: target.clone(),
+                    cwd: current_dir,
+                    depth: *depth,
+                };
+                self.update_shell_location(next, cx);
+            }
+        }
+    }
+
+    fn update_shell_location(&mut self, next: ShellLocation, cx: &mut Context<Self>) {
+        if self.shell_location == next {
+            return;
+        }
+        self.shell_location = next.clone();
+        cx.emit(ShellLocationChangedEvent(next));
     }
 
     fn sync_bell_flash(&mut self) {
@@ -1340,6 +1552,7 @@ impl Panel for TerminalPanel {
 }
 
 impl EventEmitter<PanelEvent> for TerminalPanel {}
+impl EventEmitter<ShellLocationChangedEvent> for TerminalPanel {}
 
 impl Focusable for TerminalPanel {
     fn focus_handle(&self, _: &App) -> FocusHandle {

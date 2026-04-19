@@ -154,6 +154,21 @@ pub struct VtEmulator {
     /// Set when `exit` or `logout` is detected — signals that
     /// the user left the current SSH session.
     pub ssh_exit_detected: bool,
+
+    /// OSC 133 command-boundary marker state. The shell integration
+    /// rc emits `OSC 133 ; A/B/C/D[;<exit>]` so we can tell prompt-
+    /// starts from command-runs from command-finishes. The UI layer
+    /// uses this to auto-refresh Git / monitor panels exactly when
+    /// a command returns, instead of polling.
+    pub prompt_started: bool,
+    /// `D` exit code from the most recent completed command, or
+    /// `None` if the command ran to completion without reporting
+    /// one. Cleared on the next prompt `A`.
+    pub last_command_exit: Option<i32>,
+    /// True while the user is running a command (between `B` and
+    /// `D`) — gives the UI a reliable "busy" signal without heuristics
+    /// on the PTY output.
+    pub command_in_flight: bool,
 }
 
 impl VtEmulator {
@@ -182,6 +197,9 @@ impl VtEmulator {
             ssh_detected_user: String::new(),
             ssh_detected_port: 22,
             ssh_exit_detected: false,
+            prompt_started: false,
+            last_command_exit: None,
+            command_in_flight: false,
         }
     }
 
@@ -212,6 +230,9 @@ impl VtEmulator {
             ssh_detected_host: &mut self.ssh_detected_host,
             ssh_detected_user: &mut self.ssh_detected_user,
             ssh_detected_port: &mut self.ssh_detected_port,
+            prompt_started: &mut self.prompt_started,
+            last_command_exit: &mut self.last_command_exit,
+            command_in_flight: &mut self.command_in_flight,
         };
         // Remember cursor row before processing to detect line changes
         // after the parser advances.
@@ -466,6 +487,9 @@ struct Performer<'a> {
     ssh_detected_host: &'a mut String,
     ssh_detected_user: &'a mut String,
     ssh_detected_port: &'a mut u16,
+    prompt_started: &'a mut bool,
+    last_command_exit: &'a mut Option<i32>,
+    command_in_flight: &'a mut bool,
 }
 
 impl Performer<'_> {
@@ -601,6 +625,40 @@ impl Perform for Performer<'_> {
                         } else {
                             Some(Arc::<str>::from(uri))
                         };
+                    }
+                }
+            }
+            // OSC 133 — command-boundary markers (FinalTerm proposal,
+            // adopted by iTerm2, WezTerm, VS Code, Kitty, and our
+            // shell integration rc). Payload forms:
+            //   `A`              — prompt start (new prompt painting)
+            //   `B`              — command start (user pressed Enter)
+            //   `C`              — command executed (same as B but
+            //                      allows an intermediate state)
+            //   `D[;<exit>]`     — command finished, optional exit code
+            //
+            // We only track high-level state here; the UI layer turns
+            // `last_command_exit` into Git / monitor auto-refresh
+            // triggers.
+            b"133" => {
+                if let Some(kind) = params.get(1).and_then(|p| p.first().copied()) {
+                    match kind {
+                        b'A' => {
+                            *self.prompt_started = true;
+                            *self.command_in_flight = false;
+                        }
+                        b'B' | b'C' => {
+                            *self.command_in_flight = true;
+                        }
+                        b'D' => {
+                            *self.command_in_flight = false;
+                            // Optional exit code after `D;`
+                            let exit = params.get(2).and_then(|p| {
+                                std::str::from_utf8(p).ok().and_then(|s| s.parse::<i32>().ok())
+                            });
+                            *self.last_command_exit = exit;
+                        }
+                        _ => {}
                     }
                 }
             }

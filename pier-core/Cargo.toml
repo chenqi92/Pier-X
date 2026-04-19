@@ -6,6 +6,12 @@ description = "Cross-platform core engine for Pier-X — terminal, SSH, RDP, VNC
 license = "MIT"
 repository = "https://github.com/chenqi92/Pier-X"
 
+[features]
+# Opt-in tests that require external services (MySQL / PostgreSQL).
+# Default `cargo test -p pier-core` does NOT run these — see
+# `tests/integration_db.rs` and `docs/INTEGRATION_TESTS.md`.
+integration-tests = []
+
 [dependencies]
 # Error handling
 thiserror = "2"

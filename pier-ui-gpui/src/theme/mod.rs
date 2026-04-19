@@ -1,4 +1,5 @@
 pub mod colors;
+pub mod heights;
 pub mod radius;
 pub mod shadow;
 pub mod spacing;
@@ -7,10 +8,17 @@ pub mod typography;
 
 pub use colors::ColorSet;
 
-use gpui::{font, App, Font, FontFeatures, Global, SharedString, Window, WindowAppearance};
+use std::sync::Arc;
+
+use gpui::{
+    font, App, Font, FontFeatures, FontStyle, FontWeight, Global, SharedString, Window,
+    WindowAppearance,
+};
 use pier_core::settings::{
     AppSettings, AppearanceMode, SettingsStore, TerminalCursorStyle, TerminalThemePreset,
 };
+
+pub const DEFAULT_UI_FONT_FAMILY: &str = "Inter";
 
 #[derive(Clone, Copy, PartialEq, Eq)]
 pub enum ThemeMode {
@@ -24,6 +32,7 @@ pub struct Theme {
     pub mode: ThemeMode,
     pub color: ColorSet,
     pub font_ui: SharedString,
+    pub font_ui_features: FontFeatures,
     pub font_mono: SharedString,
 }
 
@@ -32,6 +41,8 @@ impl Global for Theme {}
 impl Theme {
     pub fn from_settings(settings: AppSettings, appearance: WindowAppearance) -> Self {
         let font_mono = settings_terminal_font_family(&settings);
+        let font_ui = settings_ui_font_family(&settings);
+        let font_ui_features = ui_font_features_for_family(&font_ui);
         let mode = theme_mode_for_settings(&settings, appearance);
         let color = match mode {
             ThemeMode::Dark => ColorSet::dark(),
@@ -42,7 +53,8 @@ impl Theme {
             settings,
             mode,
             color,
-            font_ui: "Inter".into(),
+            font_ui: font_ui.into(),
+            font_ui_features,
             font_mono: font_mono.into(),
         }
     }
@@ -172,6 +184,63 @@ pub fn available_terminal_font_families() -> &'static [&'static str] {
     ]
 }
 
+/// UI font families the settings dialog offers in its picker. The
+/// default (`DEFAULT_UI_FONT_FAMILY`) always comes first. Non-Inter
+/// families disable Inter-specific OpenType features.
+pub fn available_ui_font_families() -> &'static [&'static str] {
+    &[
+        DEFAULT_UI_FONT_FAMILY,
+        "SF Pro",
+        "Segoe UI",
+        ".SystemUIFont",
+    ]
+}
+
+/// Build the UI `Font` for a given weight, applying the family and
+/// Inter-specific OpenType features that the current Theme has cached.
+/// This is a convenience for call sites that already have an `&App`
+/// (vs. a `&Theme`); view-level code mostly goes through `ui_font_with`
+/// directly and hence this helper is currently unused.
+#[allow(dead_code)]
+/// Call this once per `text_*` helper / view label — `Styled::font(...)`
+/// writes the full font (family + features + weight + style) in one
+/// shot, which is required for features like cv01 / ss03 to actually
+/// reach the platform text shaper (`Styled::font_family` alone drops
+/// features).
+pub fn ui_font(cx: &App, weight: FontWeight) -> Font {
+    let t = theme(cx);
+    ui_font_with(&t.font_ui, &t.font_ui_features, weight)
+}
+
+pub fn ui_font_with(
+    family: &SharedString,
+    features: &FontFeatures,
+    weight: FontWeight,
+) -> Font {
+    Font {
+        family: family.clone(),
+        features: features.clone(),
+        fallbacks: None,
+        weight,
+        style: FontStyle::Normal,
+    }
+}
+
+fn ui_font_features_for_family(family: &str) -> FontFeatures {
+    if family.eq_ignore_ascii_case(DEFAULT_UI_FONT_FAMILY) {
+        // Inter's "alternate 1/l/I" (cv01) and "single-story a" (ss03)
+        // are what make the UI read at a glance — the plan refers to
+        // this as the "default tacit layer". Non-Inter fallbacks skip
+        // these features so they don't hit an unknown tag.
+        FontFeatures(Arc::new(vec![
+            ("cv01".to_string(), 1),
+            ("ss03".to_string(), 1),
+        ]))
+    } else {
+        FontFeatures::default()
+    }
+}
+
 fn normalize_settings(settings: &mut AppSettings) {
     settings.ui_locale = crate::i18n::normalize_locale_preference(&settings.ui_locale);
     settings.terminal_font_size = settings.terminal_font_size.clamp(10, 24);
@@ -221,5 +290,12 @@ fn settings_terminal_font_family(settings: &AppSettings) -> String {
         "JetBrains Mono".to_string()
     } else {
         family.to_string()
+    }
+}
+
+fn settings_ui_font_family(settings: &AppSettings) -> String {
+    match settings.ui_font_family.as_deref().map(str::trim) {
+        Some(value) if !value.is_empty() => value.to_string(),
+        _ => DEFAULT_UI_FONT_FAMILY.to_string(),
     }
 }

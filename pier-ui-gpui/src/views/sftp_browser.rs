@@ -30,8 +30,11 @@ use gpui_component::{scroll::ScrollableElement, Icon as UiIcon, IconName};
 use rust_i18n::t;
 
 use crate::app::ssh_session::{ConnectStatus, RemoteEntry, SshSessionState};
-use crate::components::{text, Card, SectionLabel, StatusKind, StatusPill};
+use crate::components::{
+    text, Card, IconButton, IconButtonSize, IconButtonVariant, SectionLabel, StatusKind, StatusPill,
+};
 use crate::theme::{
+    heights::{GLYPH_SM, ICON_SM, ROW_MD_H, ROW_SM_H},
     radius::RADIUS_SM,
     spacing::{SP_1, SP_1_5, SP_2, SP_3, SP_4},
     theme,
@@ -171,7 +174,7 @@ impl RenderOnce for SftpBrowser {
         };
 
         let header = div()
-            .h(px(32.0))
+            .h(ROW_MD_H)
             .px(SP_2)
             .flex()
             .flex_row()
@@ -180,29 +183,13 @@ impl RenderOnce for SftpBrowser {
             .border_b_1()
             .border_color(t.color.border_subtle)
             .child(
-                div()
-                    .id("sftp-up")
-                    .w(px(22.0))
-                    .h(px(22.0))
-                    .flex()
-                    .items_center()
-                    .justify_center()
-                    .rounded(RADIUS_SM)
-                    .bg(t.color.bg_panel)
-                    .border_1()
-                    .border_color(t.color.border_subtle)
-                    .text_color(t.color.text_secondary)
-                    .cursor_pointer()
-                    .hover(|s| s.bg(t.color.bg_hover).border_color(t.color.border_default))
+                IconButton::new("sftp-up", IconName::ArrowUp)
+                    .size(IconButtonSize::Sm)
+                    .variant(IconButtonVariant::Filled)
                     .on_click({
                         let go_up = on_go_up.clone();
                         move |_, w, app| go_up(&(), w, app)
-                    })
-                    .child(
-                        UiIcon::new(IconName::ArrowUp)
-                            .size(px(12.0))
-                            .text_color(t.color.text_secondary),
-                    ),
+                    }),
             )
             .child(
                 div()
@@ -221,26 +208,24 @@ impl RenderOnce for SftpBrowser {
                     .child(cwd_label),
             )
             .child(status_pill)
-            .child(header_button(
-                t,
-                "sftp-mkdir",
-                IconName::Plus,
-                t!("App.Sftp.action_mkdir").to_string(),
-                {
-                    let on_mkdir = on_mkdir.clone();
-                    move |_, w, app| on_mkdir(&(), w, app)
-                },
-            ))
-            .child(header_button(
-                t,
-                "sftp-upload",
-                IconName::ArrowUp,
-                t!("App.Sftp.action_upload").to_string(),
-                {
-                    let on_upload = on_upload.clone();
-                    move |_, w, app| on_upload(&(), w, app)
-                },
-            ));
+            .child(
+                IconButton::new("sftp-mkdir", IconName::Plus)
+                    .size(IconButtonSize::Sm)
+                    .variant(IconButtonVariant::Filled)
+                    .on_click({
+                        let on_mkdir = on_mkdir.clone();
+                        move |_, w, app| on_mkdir(&(), w, app)
+                    }),
+            )
+            .child(
+                IconButton::new("sftp-upload", IconName::ArrowUp)
+                    .size(IconButtonSize::Sm)
+                    .variant(IconButtonVariant::Filled)
+                    .on_click({
+                        let on_upload = on_upload.clone();
+                        move |_, w, app| on_upload(&(), w, app)
+                    }),
+            );
 
         let mut body = div().flex().flex_col().px(SP_2).py(SP_2).gap(SP_1);
 
@@ -356,7 +341,7 @@ fn remote_row(
     div()
         .id(gpui::ElementId::Name(id_str))
         .group(group_name.clone())
-        .h(px(24.0))
+        .h(ROW_SM_H)
         .px(SP_2)
         .flex()
         .flex_row()
@@ -378,8 +363,8 @@ fn remote_row(
         })
         .child(
             div()
-                .w(px(14.0))
-                .h(px(14.0))
+                .w(ICON_SM)
+                .h(ICON_SM)
                 .flex()
                 .items_center()
                 .justify_center()
@@ -390,7 +375,7 @@ fn remote_row(
                 })
                 .child(
                     UiIcon::new(glyph)
-                        .size(px(12.0))
+                        .size(GLYPH_SM)
                         .text_color(if entry.is_dir {
                             t.color.accent
                         } else {
@@ -444,7 +429,7 @@ fn remote_row(
 /// don't clutter the file list when the user isn't pointing at the
 /// row.
 fn row_action_icons(
-    t: &crate::theme::Theme,
+    _t: &crate::theme::Theme,
     group_name: &SharedString,
     path: &str,
     name: &str,
@@ -467,13 +452,14 @@ fn row_action_icons(
             path: path.to_string(),
             name: name.to_string(),
         };
-        icons = icons.child(row_icon_button(
-            t,
-            format!("sftp-row-rename-{id_path}"),
-            IconName::Replace,
-            t!("App.Sftp.action_rename").to_string(),
-            move |_, w, app| on_action(&payload, w, app),
-        ));
+        icons = icons.child(
+            IconButton::new(
+                gpui::ElementId::Name(format!("sftp-row-rename-{id_path}").into()),
+                IconName::Replace,
+            )
+            .size(IconButtonSize::Xs)
+            .on_click(move |_, w, app| on_action(&payload, w, app)),
+        );
     }
 
     // Download — files only.
@@ -484,16 +470,19 @@ fn row_action_icons(
             path: path.to_string(),
             name: name.to_string(),
         };
-        icons = icons.child(row_icon_button(
-            t,
-            format!("sftp-row-dl-{id_path}"),
-            IconName::ArrowDown,
-            t!("App.Sftp.action_download").to_string(),
-            move |_, w, app| on_action(&payload, w, app),
-        ));
+        icons = icons.child(
+            IconButton::new(
+                gpui::ElementId::Name(format!("sftp-row-dl-{id_path}").into()),
+                IconName::ArrowDown,
+            )
+            .size(IconButtonSize::Xs)
+            .on_click(move |_, w, app| on_action(&payload, w, app)),
+        );
     }
 
-    // Delete — file or dir.
+    // Delete — file or dir. Destructive, so visually (through the
+    // icon only at this size) we keep it Ghost; confirmation lives
+    // in the delete dialog.
     {
         let id_path = path.to_string();
         let payload = RowAction::Delete {
@@ -501,73 +490,15 @@ fn row_action_icons(
             name: name.to_string(),
             is_dir,
         };
-        icons = icons.child(row_icon_button(
-            t,
-            format!("sftp-row-del-{id_path}"),
-            IconName::Delete,
-            t!("App.Sftp.action_delete").to_string(),
-            move |_, w, app| on_row_action(&payload, w, app),
-        ));
+        icons = icons.child(
+            IconButton::new(
+                gpui::ElementId::Name(format!("sftp-row-del-{id_path}").into()),
+                IconName::Delete,
+            )
+            .size(IconButtonSize::Xs)
+            .on_click(move |_, w, app| on_row_action(&payload, w, app)),
+        );
     }
 
     icons
-}
-
-/// Compact 18×18 icon button used for both header actions and per-row
-/// hover actions. Hard-coded to the same chrome as the existing cd-up
-/// button at the top of the panel to keep the visual rhythm consistent.
-fn row_icon_button(
-    t: &crate::theme::Theme,
-    id: String,
-    icon: IconName,
-    tooltip_text: String,
-    on_click: impl Fn(&gpui::ClickEvent, &mut Window, &mut App) + 'static,
-) -> impl IntoElement {
-    let _ = tooltip_text; // tooltips not yet wired here; commit 5 may add via fork
-    div()
-        .id(gpui::ElementId::Name(id.into()))
-        .w(px(18.0))
-        .h(px(18.0))
-        .flex()
-        .items_center()
-        .justify_center()
-        .rounded(RADIUS_SM)
-        .text_color(t.color.text_secondary)
-        .cursor_pointer()
-        .hover(|s| s.bg(t.color.bg_hover).text_color(t.color.text_primary))
-        .on_click(on_click)
-        .child(UiIcon::new(icon).size(px(11.0)))
-}
-
-/// Header action button (mkdir / upload). Slightly bigger than row
-/// icons because the toolbar is always visible — see [`row_icon_button`]
-/// for the styling rationale.
-fn header_button(
-    t: &crate::theme::Theme,
-    id: &'static str,
-    icon: IconName,
-    tooltip_text: String,
-    on_click: impl Fn(&gpui::ClickEvent, &mut Window, &mut App) + 'static,
-) -> impl IntoElement {
-    let _ = tooltip_text; // see row_icon_button
-    div()
-        .id(id)
-        .w(px(22.0))
-        .h(px(22.0))
-        .flex()
-        .items_center()
-        .justify_center()
-        .rounded(RADIUS_SM)
-        .bg(t.color.bg_panel)
-        .border_1()
-        .border_color(t.color.border_subtle)
-        .text_color(t.color.text_secondary)
-        .cursor_pointer()
-        .hover(|s| s.bg(t.color.bg_hover).border_color(t.color.border_default))
-        .on_click(on_click)
-        .child(
-            UiIcon::new(icon)
-                .size(px(12.0))
-                .text_color(t.color.text_secondary),
-        )
 }

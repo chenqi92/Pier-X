@@ -21,6 +21,7 @@ use crate::app::git_session::{DiffSelection, GitPendingAction, GitState, GitStat
 use crate::app::PierApp;
 use crate::components::{text, Button, Card, SectionLabel, StatusKind, StatusPill};
 use crate::theme::{
+    heights::{BUTTON_SM_H, ICON_MD},
     radius::RADIUS_SM,
     spacing::{SP_1, SP_1_5, SP_2, SP_3, SP_4},
     theme,
@@ -113,7 +114,7 @@ fn header(t: &crate::theme::Theme, snap: &GitSnapshot, weak: WeakEntity<PierApp>
     let refresh_btn: gpui::AnyElement = if refresh_busy {
         StatusPill::new(t!("App.Git.busy"), StatusKind::Warning).into_any_element()
     } else {
-        Button::ghost("git-refresh", t!("App.Common.refresh"))
+        Button::secondary("git-refresh", t!("App.Common.refresh"))
             .on_click(move |_, _, cx| {
                 let _ = weak_refresh.update(cx, |app, cx| app.schedule_git_refresh(cx));
             })
@@ -297,7 +298,7 @@ fn branch_card(
                 )
                 .child(div().flex_1())
                 .child(
-                    Button::ghost("git-pull", t!("App.Git.pull"))
+                    Button::secondary("git-pull", t!("App.Git.pull"))
                         .on_click(move |_, _, cx| {
                             let _ = pull_weak.update(cx, |app, cx| {
                                 app.schedule_git_action(GitPendingAction::Pull, cx);
@@ -305,7 +306,7 @@ fn branch_card(
                         }),
                 )
                 .child(
-                    Button::ghost("git-push", t!("App.Git.push"))
+                    Button::secondary("git-push", t!("App.Git.push"))
                         .on_click(move |_, _, cx| {
                             let _ = push_weak.update(cx, |app, cx| {
                                 app.schedule_git_action(GitPendingAction::Push, cx);
@@ -369,7 +370,7 @@ fn branch_row(t: &crate::theme::Theme, name: String, weak: WeakEntity<PierApp>) 
         )
         .child(
             div().flex_none().child(
-                Button::ghost(id, t!("App.Git.checkout")).on_click(move |_, _, cx| {
+                Button::secondary(id, t!("App.Git.checkout")).on_click(move |_, _, cx| {
                     let branch_name = name_for_click.clone();
                     let _ = weak.update(cx, |app, cx| {
                         app.schedule_git_action(
@@ -424,7 +425,7 @@ fn changes_card(
 
     if unstaged > 0 {
         header = header.child(
-            Button::ghost("git-stage-all", t!("App.Git.stage_all")).on_click(move |_, _, cx| {
+            Button::secondary("git-stage-all", t!("App.Git.stage_all")).on_click(move |_, _, cx| {
                 let _ = stage_all_weak.update(cx, |app, cx| {
                     app.schedule_git_action(GitPendingAction::StageAll, cx);
                 });
@@ -433,7 +434,7 @@ fn changes_card(
     }
     if staged > 0 {
         header = header.child(
-            Button::ghost("git-unstage-all", t!("App.Git.unstage_all")).on_click(move |_, _, cx| {
+            Button::secondary("git-unstage-all", t!("App.Git.unstage_all")).on_click(move |_, _, cx| {
                 let _ = unstage_all_weak.update(cx, |app, cx| {
                     app.schedule_git_action(GitPendingAction::UnstageAll, cx);
                 });
@@ -523,12 +524,12 @@ fn file_change_row(
         .child(
             div()
                 .flex_none()
-                .w(px(16.0))
-                .h(px(16.0))
+                .w(ICON_MD)
+                .h(ICON_MD)
                 .flex()
                 .items_center()
                 .justify_center()
-                .rounded(px(2.0))
+                .rounded(RADIUS_SM)
                 .bg(badge_color)
                 .text_color(t.color.text_inverse)
                 .text_size(SIZE_CAPTION)
@@ -551,7 +552,7 @@ fn file_change_row(
         )
         .child(
             div().flex_none().child(
-                Button::ghost(
+                Button::secondary(
                     diff_id,
                     if is_selected {
                         t!("App.Git.close_diff")
@@ -583,7 +584,7 @@ fn file_change_row(
     // Per-file actions.
     if staged {
         row = row.child(div().flex_none().child(
-            Button::ghost(unstage_id, t!("App.Git.unstage")).on_click(move |_, _, cx| {
+            Button::secondary(unstage_id, t!("App.Git.unstage")).on_click(move |_, _, cx| {
                 let p = path_for_unstage.clone();
                 let _ = unstage_weak.update(cx, |app, cx| {
                     app.schedule_git_action(GitPendingAction::Unstage { path: p }, cx);
@@ -592,7 +593,7 @@ fn file_change_row(
         ));
     } else {
         row = row.child(div().flex_none().child(
-            Button::ghost(stage_id, t!("App.Git.stage")).on_click(move |_, _, cx| {
+            Button::secondary(stage_id, t!("App.Git.stage")).on_click(move |_, _, cx| {
                 let p = path_for_stage.clone();
                 let _ = stage_weak.update(cx, |app, cx| {
                     app.schedule_git_action(GitPendingAction::Stage { path: p }, cx);
@@ -600,7 +601,7 @@ fn file_change_row(
             }),
         ));
         row = row.child(div().flex_none().child(
-            Button::ghost(discard_id, t!("App.Git.discard")).on_click(move |_, _, cx| {
+            Button::danger(discard_id, t!("App.Git.discard")).on_click(move |_, _, cx| {
                 let p = path_for_discard.clone();
                 let _ = discard_weak.update(cx, |app, cx| {
                     app.schedule_git_action(GitPendingAction::Discard { path: p }, cx);
@@ -715,7 +716,7 @@ fn stash_card(
                 .gap(SP_2)
                 .child(div().flex_1())
                 .child(
-                    Button::ghost("git-stash-push", t!("App.Git.stash_push"))
+                    Button::secondary("git-stash-push", t!("App.Git.stash_push"))
                         .on_click(move |_, _, cx| {
                             let text: String = input_for_click.read(cx).value().to_string();
                             let _ = push_weak.update(cx, |app, cx| {
@@ -798,7 +799,7 @@ fn stash_row(t: &crate::theme::Theme, stash: &StashEntry, weak: WeakEntity<PierA
                 .child(SharedString::from(stash.relative_date.clone())),
         )
         .child(div().flex_none().child(
-            Button::ghost(apply_id, t!("App.Git.apply")).on_click(move |_, _, cx| {
+            Button::secondary(apply_id, t!("App.Git.apply")).on_click(move |_, _, cx| {
                 let id = idx_apply.clone();
                 let _ = apply_weak.update(cx, |app, cx| {
                     app.schedule_git_action(GitPendingAction::StashApply { index: id }, cx);
@@ -806,7 +807,7 @@ fn stash_row(t: &crate::theme::Theme, stash: &StashEntry, weak: WeakEntity<PierA
             }),
         ))
         .child(div().flex_none().child(
-            Button::ghost(pop_id, t!("App.Git.pop")).on_click(move |_, _, cx| {
+            Button::secondary(pop_id, t!("App.Git.pop")).on_click(move |_, _, cx| {
                 let id = idx_pop.clone();
                 let _ = pop_weak.update(cx, |app, cx| {
                     app.schedule_git_action(GitPendingAction::StashPop { index: id }, cx);
@@ -814,7 +815,7 @@ fn stash_row(t: &crate::theme::Theme, stash: &StashEntry, weak: WeakEntity<PierA
             }),
         ))
         .child(div().flex_none().child(
-            Button::ghost(drop_id, t!("App.Git.drop")).on_click(move |_, _, cx| {
+            Button::danger(drop_id, t!("App.Git.drop")).on_click(move |_, _, cx| {
                 let id = idx_drop.clone();
                 let _ = drop_weak.update(cx, |app, cx| {
                     app.schedule_git_action(GitPendingAction::StashDrop { index: id }, cx);
@@ -1007,7 +1008,7 @@ fn commit_row(t: &crate::theme::Theme, c: &CommitInfo) -> impl IntoElement {
         .flex_row()
         .items_center()
         .gap(SP_2)
-        .h(px(22.0))
+        .h(BUTTON_SM_H)
         .px(SP_1_5)
         .rounded(RADIUS_SM)
         .overflow_hidden()

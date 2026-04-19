@@ -189,6 +189,12 @@ App:
       light:
         en: Light
         zh-CN: 浅色
+      ui_font_family:
+        en: UI Font Family
+        zh-CN: 界面字体
+      ui_font_family_description:
+        en: "Choose the UI font for labels, menus, and dialogs. Inter enables OpenType features cv01 and ss03 for sharper 1/l/I and a single-story 'a'; other picks disable those."
+        zh-CN: 选择界面字体。默认 Inter 会启用 OpenType 特性 cv01 与 ss03，让 1/l/I 更易区分、a 采用 single-story 字形；其他字体则不启用这些特性。
       terminal_font_family:
         en: Terminal Font Family
         zh-CN: 终端字体

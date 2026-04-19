@@ -12,7 +12,7 @@ use crate::app::keybindings::{
 };
 use crate::i18n::{self, LOCALE_ENGLISH, LOCALE_PREFERENCE_SYSTEM, LOCALE_ZH_CN};
 use crate::theme::{
-    available_terminal_font_families,
+    available_terminal_font_families, available_ui_font_families, DEFAULT_UI_FONT_FAMILY,
     radius::{RADIUS_MD, RADIUS_SM},
     spacing::{SP_1, SP_1_5, SP_2, SP_3, SP_4, SP_5},
     terminal::{available_terminal_palettes, terminal_bg_color, terminal_hex_color},
@@ -324,6 +324,11 @@ impl SettingsDialog {
         let locale_pref = i18n::normalize_locale_preference(&t.settings.ui_locale);
         let active_locale = localized_locale_label(&i18n::resolve_locale_preference(&locale_pref));
         let mono_font = t.settings.terminal_font_family.clone();
+        let ui_font = t
+            .settings
+            .ui_font_family
+            .clone()
+            .unwrap_or_else(|| DEFAULT_UI_FONT_FAMILY.to_string());
         let dialog = self.entity.clone();
 
         section_shell(
@@ -447,6 +452,50 @@ impl SettingsDialog {
                 .into_any_element(),
             ])
             .into_any_element()],
+        ))
+        .child(setting_group(
+            &t,
+            t!("App.Settings.General.ui_font_family"),
+            vec![
+                settings_note(&t, t!("App.Settings.General.ui_font_family_description"))
+                    .into_any_element(),
+                choice_wrap(
+                    available_ui_font_families()
+                        .iter()
+                        .map(|family| {
+                            let family_name = (*family).to_string();
+                            let id = format!(
+                                "ui-font-family-{}",
+                                family_name.to_ascii_lowercase().replace([' ', '.'], "-")
+                            );
+                            choice_chip(
+                                &t,
+                                id,
+                                *family,
+                                ui_font == family_name,
+                                Box::new({
+                                    let dialog = dialog.clone();
+                                    move |_, _, app| {
+                                        let family_name = family_name.clone();
+                                        apply_dialog_settings(&dialog, app, move |settings| {
+                                            // None = "use the default", so
+                                            // the setting round-trips cleanly
+                                            // to disk for the default pick.
+                                            if family_name == DEFAULT_UI_FONT_FAMILY {
+                                                settings.ui_font_family = None;
+                                            } else {
+                                                settings.ui_font_family = Some(family_name.clone());
+                                            }
+                                        });
+                                    }
+                                }),
+                            )
+                            .into_any_element()
+                        })
+                        .collect(),
+                )
+                .into_any_element(),
+            ],
         ))
         .child(setting_group(
             &t,

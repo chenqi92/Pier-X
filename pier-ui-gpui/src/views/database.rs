@@ -26,6 +26,7 @@ use crate::app::route::DbKind;
 use crate::app::PierApp;
 use crate::components::{text, Button, Card, SectionLabel, StatusKind, StatusPill};
 use crate::theme::{
+    heights::{BUTTON_SM_H, STATUSBAR_H},
     radius::RADIUS_SM,
     spacing::{SP_1, SP_1_5, SP_2, SP_3, SP_4},
     theme,
@@ -300,7 +301,7 @@ fn header_bar(
     // Add / Edit / Delete.
     let add_app = app.clone();
     row = row.child(
-        Button::ghost("db-add", SharedString::from(t!("App.Database.add").to_string()))
+        Button::secondary("db-add", SharedString::from(t!("App.Database.add").to_string()))
             .on_click(move |_, window, cx| {
                 if let Some(app) = add_app.upgrade() {
                     let weak = app.downgrade();
@@ -314,7 +315,7 @@ fn header_bar(
         let original = connections.iter().find(|(i, _)| *i == idx).map(|(_, c)| c.clone());
         if let Some(original) = original {
             row = row.child(
-                Button::ghost("db-edit", SharedString::from(t!("App.Database.edit").to_string()))
+                Button::secondary("db-edit", SharedString::from(t!("App.Database.edit").to_string()))
                     .on_click(move |_, window, cx| {
                     if let Some(app) = edit_app.upgrade() {
                         let weak = app.downgrade();
@@ -335,7 +336,7 @@ fn header_bar(
 
         let del_app = app.clone();
         row = row.child(
-            Button::ghost("db-del", SharedString::from(t!("App.Database.delete").to_string()))
+            Button::danger("db-del", SharedString::from(t!("App.Database.delete").to_string()))
                 .on_click(move |_, _w, cx| {
                 if let Some(app) = del_app.upgrade() {
                     app.update(cx, |app, cx| {
@@ -405,7 +406,7 @@ fn connection_picker(
             div()
                 .id(pill_id)
                 .px(SP_2)
-                .h(px(22.0))
+                .h(BUTTON_SM_H)
                 .flex()
                 .items_center()
                 .rounded(RADIUS_SM)
@@ -455,7 +456,7 @@ fn sidebar(
     let refresh_app = app.clone();
     let refresh_button = if client_alive {
         Some(
-            Button::ghost(
+            Button::secondary(
                 "db-refresh-dbs",
                 SharedString::from(t!("App.Database.refresh").to_string()),
             )
@@ -835,7 +836,7 @@ fn result_pane(
         .child(div().flex_1().min_h(px(0.0)).child(rows_col))
         .child(
             div()
-                .h(px(22.0))
+                .h(STATUSBAR_H)
                 .px(SP_3)
                 .flex()
                 .flex_row()

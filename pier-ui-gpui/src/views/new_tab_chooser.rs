@@ -21,6 +21,7 @@ use rust_i18n::t;
 
 use crate::app::PierApp;
 use crate::theme::{
+    heights::{ICON_SM, ROW_SM_H},
     radius::RADIUS_SM,
     spacing::{SP_1, SP_2, SP_3},
     theme,
@@ -166,15 +167,15 @@ fn row_shell(
 
 fn icon_cell(t: &crate::theme::Theme, name: IconName) -> impl IntoElement {
     div()
-        .w(px(24.0))
-        .h(px(24.0))
+        .w(ROW_SM_H)
+        .h(ROW_SM_H)
         .flex()
         .items_center()
         .justify_center()
         .rounded(RADIUS_SM)
         .bg(t.color.accent_subtle)
         .text_color(t.color.accent)
-        .child(UiIcon::new(name).size(px(14.0)).text_color(t.color.accent))
+        .child(UiIcon::new(name).size(ICON_SM).text_color(t.color.accent))
 }
 
 fn label_cell(

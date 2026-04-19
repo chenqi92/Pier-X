@@ -3,10 +3,10 @@
 use gpui::{div, prelude::*, IntoElement, SharedString};
 
 use crate::theme::{
-    theme,
+    theme, ui_font_with,
     typography::{
         SIZE_BODY, SIZE_BODY_LARGE, SIZE_CAPTION, SIZE_DISPLAY, SIZE_H1, SIZE_H2, SIZE_H3,
-        SIZE_MONO_CODE, SIZE_SMALL, WEIGHT_MEDIUM, WEIGHT_REGULAR,
+        SIZE_MONO_CODE, SIZE_SMALL, SIZE_UI_LABEL, WEIGHT_MEDIUM, WEIGHT_REGULAR,
     },
 };
 
@@ -16,6 +16,7 @@ pub enum TextRole {
     H1,
     H2,
     H3,
+    UiLabel,
     BodyLarge,
     Body,
     Caption,
@@ -61,9 +62,10 @@ impl RenderOnce for Text {
             TextRole::H1 => (SIZE_H1, WEIGHT_MEDIUM, false),
             TextRole::H2 => (SIZE_H2, WEIGHT_MEDIUM, false),
             TextRole::H3 => (SIZE_H3, WEIGHT_MEDIUM, false),
+            TextRole::UiLabel => (SIZE_UI_LABEL, WEIGHT_MEDIUM, false),
             TextRole::BodyLarge => (SIZE_BODY_LARGE, WEIGHT_REGULAR, false),
             TextRole::Body => (SIZE_BODY, WEIGHT_REGULAR, false),
-            TextRole::Caption => (SIZE_CAPTION, WEIGHT_MEDIUM, false),
+            TextRole::Caption => (SIZE_CAPTION, WEIGHT_REGULAR, false),
             TextRole::Small => (SIZE_SMALL, WEIGHT_REGULAR, false),
             TextRole::Mono => (SIZE_MONO_CODE, WEIGHT_REGULAR, true),
         };
@@ -74,18 +76,21 @@ impl RenderOnce for Text {
             t.color.text_primary
         };
 
-        let family = if mono {
-            t.font_mono.clone()
+        let mut el = div().text_size(size).text_color(color);
+        if mono {
+            // Mono is terminal/code text — it intentionally doesn't share
+            // the UI FontFeatures (cv01/ss03 are Inter-specific and would
+            // do nothing against a mono family anyway). Go family+weight.
+            el = el.font_family(t.font_mono.clone()).font_weight(weight);
         } else {
-            t.font_ui.clone()
-        };
+            // `.font(...)` is the only GPUI path that writes FontFeatures
+            // through to the platform shaper — `.font_family(...)` alone
+            // drops features. Use the cached UI font for every role so
+            // cv01/ss03 actually activate on Inter.
+            el = el.font(ui_font_with(&t.font_ui, &t.font_ui_features, weight));
+        }
 
-        let mut el = div()
-            .text_size(size)
-            .font_weight(weight)
-            .font_family(family)
-            .text_color(color)
-            .child(self.label);
+        let mut el = el.child(self.label);
         if self.centered {
             el = el.text_center();
         }
@@ -109,12 +114,24 @@ pub fn h3(s: impl Into<SharedString>) -> Text {
     Text::new(TextRole::H3, s)
 }
 
+pub fn ui_label(s: impl Into<SharedString>) -> Text {
+    Text::new(TextRole::UiLabel, s)
+}
+
+pub fn body_large(s: impl Into<SharedString>) -> Text {
+    Text::new(TextRole::BodyLarge, s)
+}
+
 pub fn body(s: impl Into<SharedString>) -> Text {
     Text::new(TextRole::Body, s)
 }
 
 pub fn caption(s: impl Into<SharedString>) -> Text {
     Text::new(TextRole::Caption, s)
+}
+
+pub fn small(s: impl Into<SharedString>) -> Text {
+    Text::new(TextRole::Small, s)
 }
 
 pub fn mono(s: impl Into<SharedString>) -> Text {

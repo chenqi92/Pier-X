@@ -30,12 +30,13 @@ use crate::{
     app::{route::Route, ActivationHandler},
     components::{terminal_grid, terminal_grid::LayoutState, StatusKind},
     theme::{
+        heights::{ICON_SM, STATUSBAR_H},
         spacing::SP_3,
         terminal::{
             terminal_bg_color, terminal_hex_color, terminal_indexed_hex, terminal_palette,
             TerminalPalette,
         },
-        terminal_cursor_blink, terminal_font_for_family, terminal_font_size, theme,
+        terminal_cursor_blink, terminal_font_for_family, terminal_font_size, theme, ui_font_with,
         typography::{SIZE_CAPTION, WEIGHT_EMPHASIS, WEIGHT_REGULAR},
     },
 };
@@ -1296,7 +1297,7 @@ impl Panel for TerminalPanel {
             .flex_row()
             .items_center()
             .gap(px(6.0))
-            .child(UiIcon::new(IconName::SquareTerminal).size(px(14.0)))
+            .child(UiIcon::new(IconName::SquareTerminal).size(ICON_SM))
             .child(Route::Terminal.label())
     }
 
@@ -1508,7 +1509,7 @@ impl TerminalPanel {
         };
 
         let mut row = div()
-            .h(px(22.0))
+            .h(STATUSBAR_H)
             .px(SP_3)
             .flex()
             .flex_row()
@@ -1516,7 +1517,7 @@ impl TerminalPanel {
             .gap(SP_3)
             .bg(t.color.bg_panel)
             .text_size(SIZE_CAPTION)
-            .font_family(t.font_ui.clone())
+            .font(ui_font_with(&t.font_ui, &t.font_ui_features, WEIGHT_REGULAR))
             .text_color(t.color.text_tertiary)
             // shell · size — most common columns, always shown.
             .child(div().text_color(t.color.text_secondary).child(shell_label))

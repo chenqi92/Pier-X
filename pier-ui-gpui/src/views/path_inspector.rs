@@ -4,7 +4,11 @@ use std::{
     path::{Path, PathBuf},
 };
 
-use gpui::{div, prelude::*, px, AnyElement, App, IntoElement, SharedString, WeakEntity, Window};
+use gpui::{
+    div, prelude::*, px, AnyElement, App, Context, IntoElement, Render, SharedString, WeakEntity,
+    Window,
+};
+use gpui_component::WindowExt as _;
 use rust_i18n::t;
 
 use crate::{
@@ -73,7 +77,6 @@ pub struct PathInspectorEntry {
 #[derive(Clone)]
 pub struct PathInspectorSnapshot {
     kind: PathKind,
-    inspect_target: Option<SharedString>,
     parent_target: Option<SharedString>,
     pub requested_target: SharedString,
     pub resolved_path: SharedString,
@@ -92,10 +95,6 @@ pub struct PathInspectorSnapshot {
 }
 
 impl PathInspectorSnapshot {
-    pub fn inspect(target: &str) -> Self {
-        Self::inspect_with_mode(target, PathPreviewMode::Compact)
-    }
-
     pub fn inspect_with_mode(target: &str, preview_mode: PathPreviewMode) -> Self {
         let requested_target = target.trim();
         if requested_target.is_empty() {
@@ -118,7 +117,6 @@ impl PathInspectorSnapshot {
                 let preview = build_directory_preview(&resolved_path);
                 Self {
                     kind: PathKind::Directory,
-                    inspect_target: Some(resolved_label.clone()),
                     parent_target,
                     requested_target: requested_target.to_string().into(),
                     resolved_path: resolved_label,
@@ -140,7 +138,6 @@ impl PathInspectorSnapshot {
                 let preview = build_file_preview(&resolved_path, metadata.len(), preview_mode);
                 Self {
                     kind: PathKind::File,
-                    inspect_target: Some(resolved_label.clone()),
                     parent_target,
                     requested_target: requested_target.to_string().into(),
                     resolved_path: resolved_label,
@@ -160,7 +157,6 @@ impl PathInspectorSnapshot {
             }
             Err(err) => Self {
                 kind: PathKind::Unavailable,
-                inspect_target: Some(requested_target.to_string().into()),
                 parent_target,
                 requested_target: requested_target.to_string().into(),
                 resolved_path: resolved_label,
@@ -183,7 +179,6 @@ impl PathInspectorSnapshot {
     pub fn empty() -> Self {
         Self {
             kind: PathKind::Waiting,
-            inspect_target: None,
             parent_target: None,
             requested_target: t!("App.PathInspector.no_local_target").into(),
             resolved_path: t!("App.PathInspector.empty_resolved_path").into(),
@@ -200,12 +195,6 @@ impl PathInspectorSnapshot {
             preview_lines: vec![t!("App.PathInspector.empty_body").into()],
             directory_entries: Vec::new(),
         }
-    }
-
-    pub fn inspect_target_string(&self) -> Option<String> {
-        self.inspect_target
-            .as_ref()
-            .map(|target| target.as_ref().to_string())
     }
 
     pub fn parent_target_string(&self) -> Option<String> {
@@ -227,6 +216,7 @@ impl PathInspectorSnapshot {
 pub struct PathInspectorView {
     snapshot: PathInspectorSnapshot,
     app: WeakEntity<PierApp>,
+    dialog: Option<WeakEntity<PathInspectorDialog>>,
 }
 
 impl PathInspectorView {
@@ -234,7 +224,16 @@ impl PathInspectorView {
         Self {
             snapshot: snapshot.unwrap_or_else(PathInspectorSnapshot::empty),
             app,
+            dialog: None,
         }
+    }
+
+    /// Attach a weak handle to the enclosing dialog — lets parent /
+    /// preview-toggle buttons drive the dialog directly instead of
+    /// going through `PierApp` stubs.
+    pub fn dialog(mut self, dialog: WeakEntity<PathInspectorDialog>) -> Self {
+        self.dialog = Some(dialog);
+        self
     }
 }
 
@@ -243,6 +242,7 @@ impl RenderOnce for PathInspectorView {
         let t = theme(cx).clone();
         let snapshot = self.snapshot;
         let app = self.app;
+        let dialog = self.dialog;
 
         let mut metadata = Card::new()
             .child(SectionLabel::new(t!("App.Common.metadata")))
@@ -260,7 +260,7 @@ impl RenderOnce for PathInspectorView {
                     .secondary(),
             );
 
-        let actions = inspector_action_elements(&snapshot, &app);
+        let actions = inspector_action_elements(&snapshot, &app, dialog.as_ref());
         if !actions.is_empty() {
             metadata = metadata.child(
                 div()
@@ -736,57 +736,49 @@ fn sanitize_preview_line(line: &str) -> String {
 
 fn inspector_action_elements(
     snapshot: &PathInspectorSnapshot,
-    app: &WeakEntity<PierApp>,
+    _app: &WeakEntity<PierApp>,
+    dialog: Option<&WeakEntity<PathInspectorDialog>>,
 ) -> Vec<AnyElement> {
     let mut actions = Vec::new();
 
-    if snapshot.parent_target_string().is_some() {
-        let app = app.clone();
+    if let (Some(parent), Some(dialog_weak)) = (snapshot.parent_target_string(), dialog) {
+        let dialog_weak = dialog_weak.clone();
+        let parent: SharedString = parent.into();
         actions.push(
             Button::ghost("path-inspector-parent", t!("App.PathInspector.open_parent"))
-                .on_click(move |_, window, cx| {
-                    let _ = app.update(cx, |this, cx| {
-                        this.inspect_path_inspector_parent(window, cx);
-                    });
+                .on_click(move |_, _window, cx| {
+                    let parent = parent.clone();
+                    let _ = dialog_weak.update(cx, |dlg, cx| dlg.navigate_to(parent, cx));
                 })
                 .into_any_element(),
         );
     }
 
     if snapshot.is_file() && snapshot.preview_toggle_available {
-        match snapshot.preview_mode {
-            PathPreviewMode::Compact => {
-                let app = app.clone();
-                actions.push(
-                    Button::ghost("path-inspector-expand", t!("App.PathInspector.expand_preview"))
-                        .on_click(move |_, window, cx| {
-                            let _ = app.update(cx, |this, cx| {
-                                this.set_path_inspector_preview_mode(
-                                    PathPreviewMode::Expanded,
-                                    window,
-                                    cx,
-                                );
-                            });
-                        })
-                        .into_any_element(),
-                );
-            }
-            PathPreviewMode::Expanded => {
-                let app = app.clone();
-                actions.push(
-                    Button::ghost("path-inspector-compact", t!("App.PathInspector.compact_preview"))
-                        .on_click(move |_, window, cx| {
-                            let _ = app.update(cx, |this, cx| {
-                                this.set_path_inspector_preview_mode(
-                                    PathPreviewMode::Compact,
-                                    window,
-                                    cx,
-                                );
-                            });
-                        })
-                        .into_any_element(),
-                );
-            }
+        if let Some(dialog_weak) = dialog {
+            let (label, next_mode) = match snapshot.preview_mode {
+                PathPreviewMode::Compact => (
+                    SharedString::from(t!("App.PathInspector.expand_preview").to_string()),
+                    PathPreviewMode::Expanded,
+                ),
+                PathPreviewMode::Expanded => (
+                    SharedString::from(t!("App.PathInspector.compact_preview").to_string()),
+                    PathPreviewMode::Compact,
+                ),
+            };
+            let dialog_weak = dialog_weak.clone();
+            let id = match snapshot.preview_mode {
+                PathPreviewMode::Compact => "path-inspector-expand",
+                PathPreviewMode::Expanded => "path-inspector-compact",
+            };
+            actions.push(
+                Button::ghost(id, label)
+                    .on_click(move |_, _window, cx| {
+                        let _ = dialog_weak
+                            .update(cx, |dlg, cx| dlg.set_preview_mode(next_mode, cx));
+                    })
+                    .into_any_element(),
+            );
         }
     }
 
@@ -875,6 +867,151 @@ fn format_bytes(bytes: u64) -> String {
     } else {
         format!("{value:.1} {}", UNITS[unit])
     }
+}
+
+// ─────────────────────────────────────────────────────────────────────
+// Modal wrapper — `open(window, cx, pier_app, target)` opens the Path
+// Inspector as a dialog. Respect CLAUDE.md Rule 6: `inspect()` does
+// synchronous fs IO, so it runs on the background executor and the
+// dialog renders a lightweight placeholder until the snapshot arrives.
+// ─────────────────────────────────────────────────────────────────────
+
+const DIALOG_W: f32 = 560.0;
+const DIALOG_MARGIN_TOP: f32 = 96.0;
+
+pub struct PathInspectorDialog {
+    target: SharedString,
+    preview_mode: PathPreviewMode,
+    snapshot: Option<PathInspectorSnapshot>,
+    app: WeakEntity<PierApp>,
+    /// Monotonic token the async loader checks before writing back —
+    /// protects against a stale inspect() finishing after the user
+    /// navigated to a different path.
+    load_token: u64,
+}
+
+impl PathInspectorDialog {
+    fn new(target: SharedString, app: WeakEntity<PierApp>) -> Self {
+        Self {
+            target,
+            preview_mode: PathPreviewMode::Compact,
+            snapshot: None,
+            app,
+            load_token: 0,
+        }
+    }
+
+    /// Navigate to a new target (e.g. the parent of the current one).
+    /// Keeps the current preview mode; resets the snapshot to trigger
+    /// the loading placeholder.
+    pub fn navigate_to(&mut self, target: SharedString, cx: &mut Context<Self>) {
+        self.target = target;
+        self.snapshot = None;
+        self.kick_load(cx);
+    }
+
+    /// Flip the preview between Compact / Expanded without changing the
+    /// target — re-runs `inspect_with_mode` so the line budget updates.
+    pub fn set_preview_mode(&mut self, mode: PathPreviewMode, cx: &mut Context<Self>) {
+        if self.preview_mode == mode {
+            return;
+        }
+        self.preview_mode = mode;
+        self.snapshot = None;
+        self.kick_load(cx);
+    }
+
+    fn kick_load(&mut self, cx: &mut Context<Self>) {
+        self.load_token = self.load_token.wrapping_add(1);
+        let token = self.load_token;
+        let target = self.target.to_string();
+        let mode = self.preview_mode;
+        cx.notify();
+
+        cx.spawn(
+            move |weak: gpui::WeakEntity<Self>, async_cx: &mut gpui::AsyncApp| {
+                let background = async_cx.background_executor().clone();
+                let mut async_cx = async_cx.clone();
+                async move {
+                    let snapshot = background
+                        .spawn(async move {
+                            PathInspectorSnapshot::inspect_with_mode(&target, mode)
+                        })
+                        .await;
+                    let _ = weak.update(
+                        &mut async_cx,
+                        |dlg: &mut Self, cx: &mut Context<Self>| {
+                            if dlg.load_token == token {
+                                dlg.snapshot = Some(snapshot);
+                                cx.notify();
+                            }
+                        },
+                    );
+                }
+            },
+        )
+        .detach();
+    }
+}
+
+impl Render for PathInspectorDialog {
+    fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        let t = theme(cx).clone();
+        let dialog_weak = cx.entity().downgrade();
+
+        div()
+            .w(px(DIALOG_W))
+            .min_h(px(200.0))
+            .bg(t.color.bg_canvas)
+            .p(SP_4)
+            .flex()
+            .flex_col()
+            .gap(SP_3)
+            .child(match self.snapshot.clone() {
+                Some(snapshot) => PathInspectorView::new(Some(snapshot), self.app.clone())
+                    .dialog(dialog_weak)
+                    .into_any_element(),
+                None => div()
+                    .flex()
+                    .items_center()
+                    .gap(SP_2)
+                    .child(text::body(
+                        t!(
+                            "App.PathInspector.loading",
+                            target = self.target.as_ref()
+                        )
+                        .to_string(),
+                    ))
+                    .into_any_element(),
+            })
+    }
+}
+
+pub fn open(
+    window: &mut Window,
+    cx: &mut App,
+    pier_app: WeakEntity<PierApp>,
+    target: impl Into<SharedString>,
+) {
+    let target: SharedString = target.into();
+    let dialog = cx.new(|cx| {
+        let mut d = PathInspectorDialog::new(target.clone(), pier_app);
+        d.kick_load(cx);
+        d
+    });
+
+    let margin_top = px(DIALOG_MARGIN_TOP);
+    window.open_dialog(cx, move |dlg, _window, _app| {
+        dlg.title(SharedString::from(
+            t!("App.PathInspector.title", target = target.as_ref()).to_string(),
+        ))
+        .w(px(DIALOG_W))
+        .margin_top(margin_top)
+        .close_button(true)
+        .overlay_closable(true)
+        .keyboard(true)
+        .child(dialog.clone())
+    });
 }
 
 #[cfg(test)]

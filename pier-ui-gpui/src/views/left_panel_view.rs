@@ -37,7 +37,7 @@ use gpui::{
 use gpui_component::{
     input::{Input, InputEvent, InputState},
     scroll::ScrollableElement,
-    Icon as UiIcon, IconName,
+    IconName,
 };
 use pier_core::paths;
 use pier_core::ssh::{AuthMethod, DetectedService, ServiceStatus, SshConfig};
@@ -46,10 +46,14 @@ use rust_i18n::t;
 use crate::app::layout::LeftTab;
 use crate::app::ssh_session::{ConnectStatus, ServiceProbeStatus, TunnelStatus};
 use crate::app::PierApp;
-use crate::components::{text, Button, Card, SectionLabel, StatusKind, StatusPill};
+use crate::components::{
+    text, Button, Card, HeaderSize, IconButton, IconButtonSize, IconButtonVariant, MetaLine,
+    PageHeader, SectionLabel, StatusKind, StatusPill, TabItem, Tabs,
+};
+use crate::theme::heights::ROW_SM_H;
 use crate::theme::{
     radius::RADIUS_SM,
-    spacing::{SP_1, SP_1_5, SP_2, SP_3},
+    spacing::{SP_1, SP_2, SP_3},
     theme,
     typography::{SIZE_BODY, SIZE_CAPTION, SIZE_MONO_SMALL, SIZE_SMALL, WEIGHT_MEDIUM},
 };
@@ -254,68 +258,24 @@ impl Render for LeftPanelView {
 impl LeftPanelView {
     fn render_tab_bar(
         &self,
-        t: &crate::theme::Theme,
+        _t: &crate::theme::Theme,
         active: LeftTab,
         cx: &mut Context<Self>,
     ) -> impl IntoElement {
-        let mut row = div()
-            .h(px(36.0))
-            .px(SP_2)
-            .py(SP_1)
-            .flex()
-            .flex_row()
-            .items_center()
-            .gap(SP_1)
-            .bg(t.color.bg_surface)
-            .border_b_1()
-            .border_color(t.color.border_subtle);
-
-        for tab in LeftTab::ALL {
-            let is_active = tab == active;
-            let id_str: SharedString = format!("left-tab-{}", tab.id()).into();
+        let items = LeftTab::ALL.iter().copied().map(|tab| {
             let icon = match tab {
                 LeftTab::Files => IconName::Folder,
                 LeftTab::Servers => IconName::Globe,
             };
-            let on_click = cx.listener(move |this, _: &ClickEvent, _w, cx| {
-                this.select_tab(tab, cx);
-            });
-
-            let mut btn = div()
-                .id(gpui::ElementId::Name(id_str))
-                .h(px(24.0))
-                .px(SP_3)
-                .flex()
-                .flex_row()
-                .items_center()
-                .gap(SP_1_5)
-                .rounded(RADIUS_SM)
-                .text_size(SIZE_BODY)
-                .font_weight(WEIGHT_MEDIUM)
-                .cursor_pointer()
-                .text_color(if is_active {
-                    t.color.accent
-                } else {
-                    t.color.text_secondary
-                })
-                .hover(|s| s.bg(t.color.bg_hover).text_color(t.color.text_primary))
-                .on_click(on_click)
-                .child(UiIcon::new(icon).size(px(12.0)).text_color(if is_active {
-                    t.color.accent
-                } else {
-                    t.color.text_secondary
-                }))
-                .child(tab.label());
-
-            if is_active {
-                btn = btn
-                    .bg(t.color.accent_subtle)
-                    .border_1()
-                    .border_color(t.color.accent_muted);
-            }
-            row = row.child(btn);
-        }
-        row
+            TabItem::new(
+                gpui::ElementId::Name(format!("left-tab-{}", tab.id()).into()),
+                tab.label(),
+                tab == active,
+                cx.listener(move |this, _: &ClickEvent, _w, cx| this.select_tab(tab, cx)),
+            )
+            .with_icon(icon)
+        });
+        Tabs::new().items(items)
     }
 
     fn render_files(&self, t: &crate::theme::Theme, cx: &mut Context<Self>) -> impl IntoElement {
@@ -325,8 +285,10 @@ impl LeftPanelView {
             Rc::new(cx.listener(|this, path: &PathBuf, _w, cx| this.enter_dir(path.clone(), cx)));
         let weak_app = self.weak_app.clone();
         let on_open_file: file_tree::OpenFileHandler =
-            Rc::new(move |path: &PathBuf, _w, app_cx| {
-                // .md → forward to PierApp (Markdown mode renders the file).
+            Rc::new(move |path: &PathBuf, window, app_cx| {
+                // .md → forward to PierApp (Markdown mode renders the file);
+                // everything else gets the Path Inspector dialog so the user
+                // can see what they just clicked without leaving the shell.
                 let path = path.clone();
                 if path
                     .extension()
@@ -338,7 +300,10 @@ impl LeftPanelView {
                         pa.open_markdown_file(path, cx);
                     });
                 } else {
-                    eprintln!("[pier] file opened: {}", path.display());
+                    let target = path.to_string_lossy().into_owned();
+                    let _ = weak_app.update(app_cx, |pa, cx| {
+                        pa.inspect_local_path(target, window, cx);
+                    });
                 }
             });
         let on_go_up: file_tree::GoUpHandler =
@@ -511,25 +476,17 @@ fn render_servers_list(
 }
 
 fn servers_header(
-    t: &crate::theme::Theme,
+    _t: &crate::theme::Theme,
     count: usize,
     on_add: AddConnectionHandler,
 ) -> impl IntoElement {
+    // Group header composes the standard grammar: SectionLabel eyebrow
+    // title + count pill (static counts aren't "status" but the visual
+    // is right for "X items"), with a compact "+" IconButton trailing.
     let on_add_click = on_add.clone();
-    div()
-        .h(px(28.0))
-        .flex()
-        .flex_row()
-        .items_center()
-        .gap(SP_2)
-        .px(SP_2)
-        .py(SP_1)
-        .rounded(RADIUS_SM)
-        .bg(t.color.bg_surface)
-        .border_1()
-        .border_color(t.color.border_subtle)
-        .child(SectionLabel::new(t!("App.LeftPanel.Headers.saved_connections")))
-        .child(StatusPill::new(
+    PageHeader::new(t!("App.LeftPanel.Headers.saved_connections"))
+        .size(HeaderSize::Section)
+        .status(StatusPill::new(
             format!("{count}"),
             if count == 0 {
                 StatusKind::Info
@@ -537,28 +494,11 @@ fn servers_header(
                 StatusKind::Success
             },
         ))
-        .child(div().flex_1())
-        .child(
-            div()
-                .id("servers-add")
-                .w(px(22.0))
-                .h(px(22.0))
-                .flex()
-                .items_center()
-                .justify_center()
-                .rounded(RADIUS_SM)
-                .bg(t.color.bg_panel)
-                .border_1()
-                .border_color(t.color.border_subtle)
-                .text_color(t.color.text_secondary)
-                .cursor_pointer()
-                .hover(|s| s.bg(t.color.bg_hover).border_color(t.color.border_default))
-                .on_click(move |ev, window, app| on_add_click(ev, window, app))
-                .child(
-                    UiIcon::new(IconName::Plus)
-                        .size(px(12.0))
-                        .text_color(t.color.text_secondary),
-                ),
+        .trailing(
+            IconButton::new("servers-add", IconName::Plus)
+                .size(IconButtonSize::Sm)
+                .variant(IconButtonVariant::Filled)
+                .on_click(move |ev, window, app| on_add_click(ev, window, app)),
         )
 }
 
@@ -676,7 +616,7 @@ fn server_group_card(
     let card = Card::new().padding(SP_2).child(
         div()
             .id(gpui::ElementId::Name(toggle_id))
-            .h(px(24.0))
+            .h(ROW_SM_H)
             .flex()
             .flex_row()
             .items_center()
@@ -739,11 +679,19 @@ fn server_group_card(
 fn active_connection_card(session: &ActiveServerSessionSnapshot) -> impl IntoElement {
     let endpoint = connection_endpoint(&session.config);
     let (connect_label, connect_kind) = connection_status_pill(session.status);
-    let (probe_label, probe_kind) =
-        service_probe_pill(&session.service_probe_status, !session.services.is_empty());
 
+    // New grammar:
+    //   1. Eyebrow — SectionLabel as "the role of this card".
+    //   2. Title row — H3 connection name flanked by the single most
+    //      urgent status pill (connection itself). The probe/service
+    //      pill drops into the services strip below where it belongs.
+    //   3. Endpoint MetaLine — mono address with a globe icon so the
+    //      user can read it as "address" without needing the label.
     let mut card = Card::new()
         .padding(SP_3)
+        .child(SectionLabel::new(
+            t!("App.LeftPanel.Headers.active_connection"),
+        ))
         .child(
             div()
                 .flex()
@@ -751,12 +699,10 @@ fn active_connection_card(session: &ActiveServerSessionSnapshot) -> impl IntoEle
                 .flex_wrap()
                 .items_center()
                 .gap(SP_2)
-                .child(SectionLabel::new(t!("App.LeftPanel.Headers.active_connection")))
-                .child(StatusPill::new(connect_label, connect_kind))
-                .child(StatusPill::new(probe_label, probe_kind)),
+                .child(text::h3(session.config.name.clone()))
+                .child(StatusPill::new(connect_label, connect_kind)),
         )
-        .child(text::body(session.config.name.clone()))
-        .child(text::mono(endpoint).secondary());
+        .child(MetaLine::new(endpoint).with_icon(IconName::Globe));
 
     if !session.services.is_empty() {
         let mut services = div().pt(SP_2).flex().flex_row().flex_wrap().gap(SP_2);
@@ -963,27 +909,6 @@ fn connection_status_pill(status: ConnectStatus) -> (SharedString, StatusKind) {
     }
 }
 
-fn service_probe_pill(
-    status: &ServiceProbeStatus,
-    has_services: bool,
-) -> (SharedString, StatusKind) {
-    match status {
-        ServiceProbeStatus::Idle => (t!("App.Common.Status.idle").into(), StatusKind::Warning),
-        ServiceProbeStatus::Probing => {
-            (t!("App.LeftPanel.Services.detecting").into(), StatusKind::Info)
-        }
-        ServiceProbeStatus::Ready if has_services => {
-            (t!("App.LeftPanel.Services.ready").into(), StatusKind::Success)
-        }
-        ServiceProbeStatus::Ready => {
-            (t!("App.LeftPanel.Services.none").into(), StatusKind::Warning)
-        }
-        ServiceProbeStatus::Failed => {
-            (t!("App.LeftPanel.Services.error").into(), StatusKind::Error)
-        }
-    }
-}
-
 fn service_label(service: &DetectedService) -> SharedString {
     let mut label = match service.name.as_str() {
         "mysql" => "MySQL".to_string(),
@@ -1053,39 +978,19 @@ fn tunnel_status_kind(status: TunnelStatus) -> StatusKind {
 }
 
 fn row_action_button(
-    t: &crate::theme::Theme,
+    _t: &crate::theme::Theme,
     id: SharedString,
     icon: IconName,
     handler: ServerSelector,
     idx: usize,
 ) -> impl IntoElement {
-    div()
-        .id(gpui::ElementId::Name(id))
-        .w(px(20.0))
-        .h(px(20.0))
-        .flex()
-        .items_center()
-        .justify_center()
-        .rounded(RADIUS_SM)
-        .bg(t.color.bg_panel)
-        .border_1()
-        .border_color(t.color.border_subtle)
-        .text_color(t.color.text_tertiary)
-        .cursor_pointer()
-        .hover(|s| {
-            s.bg(t.color.bg_active)
-                .border_color(t.color.border_default)
-                .text_color(t.color.text_primary)
-        })
+    IconButton::new(gpui::ElementId::Name(id), icon)
+        .size(IconButtonSize::Xs)
+        .variant(IconButtonVariant::Filled)
         .on_click(move |_, w, app| {
             handler(&idx, w, app);
             app.stop_propagation();
         })
-        .child(
-            UiIcon::new(icon)
-                .size(px(12.0))
-                .text_color(t.color.text_tertiary),
-        )
 }
 
 #[cfg(test)]

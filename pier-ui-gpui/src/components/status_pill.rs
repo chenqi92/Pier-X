@@ -1,9 +1,10 @@
-use gpui::{div, prelude::*, px, IntoElement, SharedString, Window};
+use gpui::{div, prelude::*, IntoElement, SharedString, Window};
 
 use crate::theme::{
+    heights::{PILL_DOT, PILL_H},
     radius::RADIUS_PILL,
     spacing::{SP_1, SP_2},
-    theme,
+    theme, ui_font_with,
     typography::{SIZE_CAPTION, WEIGHT_MEDIUM},
 };
 
@@ -39,9 +40,12 @@ impl RenderOnce for StatusPill {
             StatusKind::Error => t.color.status_error,
             StatusKind::Info => t.color.status_info,
         };
-        // SKILL.md §9: status pill 高度 18px、左侧 6px dot、12px caption 字
+        // SKILL.md §9: status pill 高度 18px、左侧 6px dot、12px caption 字。
+        // Pill label goes through `.font(...)` (not `.font_family(...)`)
+        // so Inter's cv01/ss03 reach the platform shaper — important for
+        // caption-sized labels that lean hard on 1/l/I disambiguation.
         div()
-            .h(px(18.0))
+            .h(PILL_H)
             .px(SP_2)
             .flex()
             .flex_row()
@@ -51,13 +55,18 @@ impl RenderOnce for StatusPill {
             .border_1()
             .border_color(t.color.border_subtle)
             .rounded(RADIUS_PILL)
-            .child(div().w(px(6.0)).h(px(6.0)).rounded(px(3.0)).bg(dot))
+            .child(
+                div()
+                    .w(PILL_DOT)
+                    .h(PILL_DOT)
+                    .rounded(RADIUS_PILL)
+                    .bg(dot),
+            )
             .child(
                 div()
                     .text_size(SIZE_CAPTION)
-                    .font_weight(WEIGHT_MEDIUM)
-                    .font_family(t.font_ui.clone())
                     .text_color(t.color.text_secondary)
+                    .font(ui_font_with(&t.font_ui, &t.font_ui_features, WEIGHT_MEDIUM))
                     .child(self.label),
             )
     }

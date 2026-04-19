@@ -17,7 +17,7 @@ use std::time::Duration;
 
 use gpui::{
     canvas, div, prelude::*, px, AnyElement, App, Bounds, ClickEvent, Context, DragMoveEvent,
-    Empty, Entity, EntityId, IntoElement, MouseButton, Pixels, Render, SharedString, Window,
+    Empty, Entity, EntityId, IntoElement, Pixels, Render, SharedString, Window,
 };
 use gpui_component::{input::InputState, Icon as UiIcon, IconName, PixelsExt as _, WindowExt as _};
 use rust_i18n::t;
@@ -48,17 +48,16 @@ use crate::app::ssh_session::{
 use crate::app::{
     ActivationHandler, CloseActiveTab, NewTab, OpenSettings, ToggleLeftPanel, ToggleRightPanel,
 };
-use crate::components::{StatusKind, StatusPill};
 use crate::data::ShellSnapshot;
 use crate::theme::{
+    heights::{BUTTON_SM_H, GLYPH_SM, GLYPH_XS, ICON_SM, ROW_MD_H},
     radius::RADIUS_SM,
-    spacing::{SP_1, SP_1_5, SP_2, SP_3},
-    theme,
-    typography::{SIZE_CAPTION, WEIGHT_MEDIUM},
-    ThemeMode,
+    spacing::{SP_1, SP_1_5, SP_2},
+    theme, ui_font_with,
+    typography::{SIZE_CAPTION, WEIGHT_MEDIUM, WEIGHT_REGULAR},
 };
 use crate::views::left_panel_view::{
-    icons as toolbar_icons, ActiveServerSessionSnapshot, LeftPanelView, ServerTunnelSnapshot,
+    ActiveServerSessionSnapshot, LeftPanelView, ServerTunnelSnapshot,
     ServersSidebarSnapshot,
 };
 use crate::views::right_panel::{
@@ -586,7 +585,7 @@ impl Render for PierApp {
         self.ensure_logs_poll_loop(cx);
         let t = theme(cx).clone();
 
-        let toolbar = self.render_toolbar(&t, cx);
+        let toolbar = crate::app::toolbar::render(self, cx);
         // LeftPanelView is its own Entity — embedding the entity instead of
         // re-building a RenderOnce here means PierApp re-renders DON'T
         // rebuild the file tree cache or filter inputs (Phase 9 perf win).
@@ -596,7 +595,7 @@ impl Render for PierApp {
             .right_visible
             .then(|| self.render_right(cx))
             .map(IntoElement::into_any_element);
-        let statusbar = self.render_statusbar(&t);
+        let statusbar = crate::app::statusbar::render(self, cx);
         let (left_width, right_width) = self.fitted_panel_widths();
         let pane_bounds_target = cx.entity().downgrade();
         let row = div()
@@ -656,7 +655,7 @@ impl Render for PierApp {
             .size_full()
             .bg(t.color.bg_canvas)
             .text_color(t.color.text_primary)
-            .font_family(t.font_ui.clone())
+            .font(ui_font_with(&t.font_ui, &t.font_ui_features, WEIGHT_REGULAR))
             .flex()
             .flex_col()
             // Key-binding context — matches `Some("PierApp")` bindings in
@@ -693,6 +692,66 @@ impl Render for PierApp {
 }
 
 impl PierApp {
+    pub(crate) fn left_visible(&self) -> bool {
+        self.left_visible
+    }
+
+    pub(crate) fn right_visible(&self) -> bool {
+        self.right_visible
+    }
+
+    pub(crate) fn workspace_path(&self) -> SharedString {
+        self.snapshot.workspace_path.clone()
+    }
+
+    pub(crate) fn active_session_name(&self, cx: &App) -> Option<SharedString> {
+        self.active_session
+            .as_ref()
+            .map(|s| SharedString::from(s.read(cx).config.name.clone()))
+    }
+
+    pub(crate) fn toggle_left_pane(&mut self, cx: &mut Context<Self>) {
+        self.left_visible = !self.left_visible;
+        self.clamp_panel_widths();
+        cx.notify();
+    }
+
+    pub(crate) fn toggle_right_pane(&mut self, cx: &mut Context<Self>) {
+        self.right_visible = !self.right_visible;
+        self.clamp_panel_widths();
+        cx.notify();
+    }
+
+    pub(crate) fn terminals_len(&self) -> usize {
+        self.terminals.len()
+    }
+
+    /// Open the Path Inspector dialog on the given local filesystem
+    /// target. Called from the file tree and from directory-entry rows
+    /// inside an already-open inspector dialog ("drill in"). The
+    /// parent-navigation and preview-toggle actions live on the dialog
+    /// entity itself — no PierApp plumbing needed.
+    pub(crate) fn inspect_local_path(
+        &mut self,
+        target: impl Into<SharedString>,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let weak = cx.entity().downgrade();
+        crate::views::path_inspector::open(window, cx, weak, target);
+    }
+
+    pub(crate) fn active_terminal(&self) -> Option<usize> {
+        self.active_terminal
+    }
+
+    pub(crate) fn open_new_tab_chooser(&self, window: &mut Window, cx: &mut Context<Self>) {
+        log::info!("toolbar: open new-tab chooser");
+        let weak = cx.entity().downgrade();
+        let connections = self.connections.clone();
+        crate::views::new_tab_chooser::open(window, cx, weak, connections);
+    }
+
     fn pane_divider_count(&self) -> usize {
         usize::from(self.left_visible) + usize::from(self.right_visible)
     }
@@ -968,94 +1027,6 @@ impl PierApp {
             },
         )
         .detach();
-    }
-
-    fn render_toolbar(&self, t: &crate::theme::Theme, cx: &mut Context<Self>) -> impl IntoElement {
-        let toggle_left_icon = if self.left_visible {
-            toolbar_icons::TOGGLE_LEFT_OPEN
-        } else {
-            toolbar_icons::TOGGLE_LEFT_CLOSED
-        };
-        let toggle_right_icon = if self.right_visible {
-            toolbar_icons::TOGGLE_RIGHT_OPEN
-        } else {
-            toolbar_icons::TOGGLE_RIGHT_CLOSED
-        };
-        let theme_icon = if t.mode == ThemeMode::Dark {
-            toolbar_icons::SUN
-        } else {
-            toolbar_icons::MOON
-        };
-
-        div()
-            .h(px(32.0))
-            .px(SP_3)
-            .flex()
-            .flex_row()
-            .items_center()
-            .gap(SP_2)
-            .bg(t.color.bg_panel)
-            .border_b_1()
-            .border_color(t.color.border_subtle)
-            .child(toolbar_icon_button(
-                t,
-                "tb-toggle-left",
-                toggle_left_icon,
-                cx.listener(|this, _: &ClickEvent, _, cx| {
-                    this.left_visible = !this.left_visible;
-                    this.clamp_panel_widths();
-                    cx.notify();
-                }),
-            ))
-            .child(
-                div().flex_1().min_w(px(0.0)).overflow_hidden().child(
-                    div()
-                        .w_full()
-                        .text_size(SIZE_CAPTION)
-                        .font_family(t.font_mono.clone())
-                        .text_color(t.color.text_secondary)
-                        .child(self.snapshot.workspace_path.clone()),
-                ),
-            )
-            .child(toolbar_icon_button(
-                t,
-                "tb-new-tab",
-                toolbar_icons::NEW_TAB,
-                cx.listener(|this, _: &ClickEvent, window, cx| {
-                    log::info!("toolbar: open new-tab chooser");
-                    let weak = cx.entity().downgrade();
-                    let connections = this.connections.clone();
-                    crate::views::new_tab_chooser::open(window, cx, weak, connections);
-                }),
-            ))
-            .child(toolbar_icon_button(
-                t,
-                "tb-open-settings",
-                IconName::Settings,
-                |_: &ClickEvent, window, app| {
-                    log::info!("toolbar: open settings dialog");
-                    crate::views::settings_dialog::open(window, app);
-                },
-            ))
-            .child(toolbar_icon_button(
-                t,
-                "tb-toggle-right",
-                toggle_right_icon,
-                cx.listener(|this, _: &ClickEvent, _, cx| {
-                    this.right_visible = !this.right_visible;
-                    this.clamp_panel_widths();
-                    cx.notify();
-                }),
-            ))
-            .child(toolbar_icon_button(
-                t,
-                "tb-toggle-theme",
-                theme_icon,
-                |_: &ClickEvent, _, app| {
-                    crate::theme::toggle(app);
-                    crate::ui_kit::sync_theme(app);
-                },
-            ))
     }
 
     fn available_right_modes(&self, cx: &App) -> Vec<RightMode> {
@@ -1787,37 +1758,6 @@ impl PierApp {
     }
 }
 
-fn toolbar_icon_button(
-    t: &crate::theme::Theme,
-    id: &'static str,
-    icon: IconName,
-    on_click: impl Fn(&ClickEvent, &mut Window, &mut gpui::App) + 'static,
-) -> impl IntoElement {
-    div()
-        .id(id)
-        .w(px(28.0))
-        .h(px(24.0))
-        .flex()
-        .items_center()
-        .justify_center()
-        .rounded(RADIUS_SM)
-        .bg(t.color.bg_surface)
-        .border_1()
-        .border_color(t.color.border_default)
-        .text_color(t.color.text_secondary)
-        .cursor_pointer()
-        .hover(|s| s.bg(t.color.bg_hover).text_color(t.color.text_primary))
-        .on_mouse_down(MouseButton::Left, |_, window, _| {
-            window.prevent_default();
-        })
-        .on_click(on_click)
-        .child(
-            UiIcon::new(icon)
-                .size(px(14.0))
-                .text_color(t.color.text_primary),
-        )
-}
-
 // ─────────────────────────────────────────────────────────
 // Right / Center
 // (Left is now a separate `Entity<LeftPanelView>` — embedded directly
@@ -1898,55 +1838,6 @@ impl PierApp {
         )
     }
 
-    fn render_statusbar(&self, t: &crate::theme::Theme) -> impl IntoElement {
-        let term_count = self.terminals.len();
-        let active_label: SharedString = match self.active_terminal {
-            Some(i) if i < term_count => {
-                t!("App.Shell.terminal_position", current = i + 1, total = term_count).into()
-            }
-            _ if term_count == 0 => t!("App.Shell.no_terminal").into(),
-            _ => t!("App.Shell.no_active_tab").into(),
-        };
-        let mode_label: SharedString =
-            t!("App.Shell.right_mode", mode = self.right_mode.label().as_ref()).into();
-        let theme_label: SharedString = if t.mode == ThemeMode::Dark {
-            t!("App.Shell.theme_dark").into()
-        } else {
-            t!("App.Shell.theme_light").into()
-        };
-
-        div()
-            .h(px(22.0))
-            .px(SP_3)
-            .flex()
-            .flex_row()
-            .items_center()
-            .gap(SP_2)
-            .bg(t.color.bg_panel)
-            .border_t_1()
-            .border_color(t.color.border_subtle)
-            .child(StatusPill::new(
-                active_label,
-                if term_count == 0 {
-                    StatusKind::Warning
-                } else {
-                    StatusKind::Success
-                },
-            ))
-            .child(StatusPill::new(mode_label, StatusKind::Info))
-            .child(StatusPill::new(theme_label, StatusKind::Success))
-            .child(div().flex_1())
-            .child(
-                div()
-                    .text_size(SIZE_CAPTION)
-                    .text_color(t.color.text_tertiary)
-                    .child(SharedString::from(
-                        t!("App.Shell.saved_connections_count", count = self.connections.len())
-                            .to_string(),
-                    )),
-            )
-    }
-
     fn render_center(&mut self, t: &crate::theme::Theme, cx: &mut Context<Self>) -> AnyElement {
         if let Some(active) = self.active_terminal {
             let tab_count = self.terminals.len();
@@ -2010,7 +1901,7 @@ fn render_terminal_tab_bar(
     cx: &mut Context<PierApp>,
 ) -> impl IntoElement {
     let mut row = div()
-        .h(px(28.0))
+        .h(ROW_MD_H)
         .px(SP_2)
         .flex()
         .flex_row()
@@ -2035,7 +1926,7 @@ fn render_terminal_tab_bar(
 
         let mut tab = div()
             .id(gpui::ElementId::Name(tab_id))
-            .h(px(22.0))
+            .h(BUTTON_SM_H)
             .px(SP_2)
             .flex()
             .flex_row()
@@ -2054,7 +1945,7 @@ fn render_terminal_tab_bar(
             .on_click(on_select)
             .child(
                 UiIcon::new(IconName::SquareTerminal)
-                    .size(px(12.0))
+                    .size(GLYPH_SM)
                     .text_color(if is_active {
                         t.color.text_primary
                     } else {
@@ -2065,18 +1956,18 @@ fn render_terminal_tab_bar(
             .child(
                 div()
                     .id(gpui::ElementId::Name(close_id))
-                    .w(px(14.0))
-                    .h(px(14.0))
+                    .w(ICON_SM) // 14px — tight hit target inside tab
+                    .h(ICON_SM)
                     .flex()
                     .items_center()
                     .justify_center()
-                    .rounded(px(2.0))
+                    .rounded(RADIUS_SM)
                     .text_color(t.color.text_tertiary)
                     .hover(|s| s.bg(t.color.bg_active).text_color(t.color.text_primary))
                     .on_click(on_close)
                     .child(
                         UiIcon::new(IconName::Close)
-                            .size(px(10.0))
+                            .size(GLYPH_XS)
                             .text_color(t.color.text_tertiary),
                     ),
             );
@@ -2096,8 +1987,8 @@ fn render_terminal_tab_bar(
     row.child(
         div()
             .id("term-tab-plus")
-            .w(px(22.0))
-            .h(px(22.0))
+            .w(BUTTON_SM_H)
+            .h(BUTTON_SM_H)
             .flex()
             .items_center()
             .justify_center()
@@ -2108,7 +1999,7 @@ fn render_terminal_tab_bar(
             .on_click(on_new)
             .child(
                 UiIcon::new(IconName::Plus)
-                    .size(px(12.0))
+                    .size(GLYPH_SM)
                     .text_color(t.color.text_secondary),
             ),
     )

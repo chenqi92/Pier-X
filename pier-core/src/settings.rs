@@ -70,6 +70,11 @@ pub struct AppSettings {
     /// UI locale preference. `"system"` follows the OS locale.
     #[serde(default = "default_ui_locale")]
     pub ui_locale: String,
+    /// UI font family name. `None` falls back to the default (Inter).
+    /// Setting a non-Inter family disables Inter-specific OpenType features
+    /// (cv01, ss03).
+    #[serde(default)]
+    pub ui_font_family: Option<String>,
     /// Terminal font family name.
     #[serde(default = "default_terminal_font_family")]
     pub terminal_font_family: String,
@@ -109,6 +114,7 @@ impl Default for AppSettings {
         Self {
             appearance_mode: AppearanceMode::System,
             ui_locale: default_ui_locale(),
+            ui_font_family: None,
             terminal_font_family: default_terminal_font_family(),
             terminal_font_size: default_terminal_font_size(),
             terminal_cursor_style: TerminalCursorStyle::Block,
@@ -292,6 +298,7 @@ mod tests {
             settings: AppSettings {
                 appearance_mode: AppearanceMode::Light,
                 ui_locale: "zh-CN".into(),
+                ui_font_family: Some("SF Pro".into()),
                 terminal_font_family: "Cascadia Code".into(),
                 terminal_font_size: 15,
                 terminal_cursor_style: TerminalCursorStyle::Underline,

@@ -1,9 +1,10 @@
-use gpui::{div, prelude::*, px, IntoElement, SharedString, Window};
+use gpui::{div, prelude::*, IntoElement, SharedString, Window};
 use gpui_component::{Icon as UiIcon, IconName};
 
 use crate::theme::{
+    heights::ICON_SM,
     spacing::SP_2,
-    theme,
+    theme, ui_font_with,
     typography::{SIZE_SMALL, WEIGHT_MEDIUM},
 };
 
@@ -42,9 +43,8 @@ impl RenderOnce for SectionLabel {
         let t = theme(cx);
         let label = div()
             .text_size(SIZE_SMALL)
-            .font_weight(WEIGHT_MEDIUM)
-            .font_family(t.font_ui.clone())
             .text_color(t.color.text_tertiary)
+            .font(ui_font_with(&t.font_ui, &t.font_ui_features, WEIGHT_MEDIUM))
             .child(self.text);
 
         let mut row = div()
@@ -57,7 +57,7 @@ impl RenderOnce for SectionLabel {
             row = row.justify_center();
         }
         if let Some(icon) = self.icon {
-            row = row.child(UiIcon::new(icon).size(px(14.0)));
+            row = row.child(UiIcon::new(icon).size(ICON_SM));
         }
         row.child(label)
     }

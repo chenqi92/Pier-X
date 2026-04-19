@@ -9,13 +9,20 @@ use crate::components::{text, Button, Card, IconBadge, SectionLabel, StatusKind,
 use crate::theme::{
     radius::RADIUS_SM,
     spacing::{SP_1, SP_1_5, SP_2, SP_3, SP_4},
-    theme,
-    typography::{SIZE_BODY, SIZE_SMALL, WEIGHT_MEDIUM},
+    theme, ui_font_with,
+    typography::{SIZE_BODY, SIZE_SMALL, WEIGHT_MEDIUM, WEIGHT_REGULAR},
     ThemeMode,
 };
 
 pub type OnClick = Rc<dyn Fn(&ClickEvent, &mut Window, &mut App) + 'static>;
 pub type OnSelectRecent = Rc<dyn Fn(&usize, &mut Window, &mut App) + 'static>;
+
+/// Welcome page primary-action button width. Hoisted out of the view
+/// so it's a named token rather than a bare `px(...)` literal — the
+/// value itself is a design constant (see SKILL.md §5 button size
+/// guidance; welcome buttons want to feel "big enough to land on"
+/// without filling the column).
+const WELCOME_BUTTON_W: gpui::Pixels = px(148.0);
 
 /// Welcome / cover view — 三栏 GPUI 实现，token 全走 SKILL.md。
 #[derive(IntoElement)]
@@ -86,12 +93,12 @@ impl RenderOnce for WelcomeView {
                     .gap(SP_1_5)
                     .child(
                         Button::primary("welcome-new-ssh", t!("App.Welcome.Actions.new_ssh"))
-                            .width(px(148.0))
+                            .width(WELCOME_BUTTON_W)
                             .on_click(move |ev, win, app| on_new_ssh(ev, win, app)),
                     )
                     .child(
-                        Button::ghost("welcome-local-term", t!("App.Welcome.Actions.open_local_terminal"))
-                            .width(px(148.0))
+                        Button::secondary("welcome-local-term", t!("App.Welcome.Actions.open_local_terminal"))
+                            .width(WELCOME_BUTTON_W)
                             .on_click(move |ev, win, app| on_open_terminal(ev, win, app)),
                     ),
             )
@@ -124,7 +131,7 @@ impl RenderOnce for WelcomeView {
             .size_full()
             .bg(t.color.bg_canvas)
             .text_color(t.color.text_primary)
-            .font_family(t.font_ui.clone())
+            .font(ui_font_with(&t.font_ui, &t.font_ui_features, WEIGHT_REGULAR))
             .flex()
             .items_center()
             .justify_center()

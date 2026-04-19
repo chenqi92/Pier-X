@@ -24,8 +24,11 @@ use rust_i18n::t;
 
 use crate::app::layout::{RightContext, RightMode, RIGHT_ICON_BAR_W};
 use crate::app::PierApp;
-use crate::components::{text, Button, Card, SectionLabel, StatusKind, StatusPill};
+use crate::components::{
+    text, Button, Card, HeaderSize, PageHeader, SectionLabel, StatusKind, StatusPill,
+};
 use crate::theme::{
+    heights::{BUTTON_MD_H, ICON_MD, ROW_MD_H},
     radius::RADIUS_SM,
     spacing::{SP_1, SP_2, SP_3, SP_4},
     theme,
@@ -209,7 +212,7 @@ fn render_mode_body(
     on_select_mode: ModeSelector,
     cx: &mut App,
 ) -> gpui::AnyElement {
-    let status = mode_status_bar(t, mode, active_session.as_ref(), cx);
+    let header = mode_page_header(mode, active_session.as_ref(), cx);
     let remote_overview = remote_overview(active_session.as_ref(), cx);
 
     let content: gpui::AnyElement = match mode {
@@ -247,7 +250,7 @@ fn render_mode_body(
         .into_any_element(),
     };
 
-    let mut panel = div().w_full().h_full().flex().flex_col().child(status);
+    let mut panel = div().w_full().h_full().flex().flex_col().child(header);
     if let Some(overview) = remote_overview.as_ref() {
         panel = panel
             .child(render_services_strip(
@@ -496,7 +499,7 @@ fn service_button(
 
     let mut chip = div()
         .id(gpui::ElementId::Name(id))
-        .min_h(px(22.0))
+        .min_h(crate::theme::heights::BUTTON_SM_H)
         .px(SP_2)
         .flex()
         .flex_row()
@@ -587,6 +590,67 @@ fn tunnel_chip(tunnel: &TunnelOverview) -> impl IntoElement {
     StatusPill::new(label, tunnel_status_kind(tunnel.status)).into_any_element()
 }
 
+/// Build the PageHeader for the given right-panel mode.
+///
+/// Grammar (per the "default tacit layer" plan):
+/// - eyebrow = `mode.label()` — "SSH / Git / SFTP / …" so the user can
+///   tell at a glance *what kind of work this is*.
+/// - title   = session name when we have one, else "Local".
+/// - subtitle_mono = endpoint (`user@host:port`) for remote modes.
+/// - status  = connection pill (Connecting / Connected / Failed).
+///
+/// Mode-specific refinements (Git branch in the title, SFTP cwd as
+/// subtitle, etc.) live inside each view's own header — this helper is
+/// the base that makes every mode recognisable at the top.
+fn mode_page_header(
+    mode: RightMode,
+    active_session: Option<&Entity<SshSessionState>>,
+    cx: &App,
+) -> PageHeader {
+    let eyebrow = mode.label();
+    let (title, subtitle, status_pill) = match mode.context() {
+        RightContext::Local => (
+            SharedString::from(t!("App.Common.local").to_string()),
+            None,
+            None,
+        ),
+        RightContext::Remote => match active_session {
+            Some(session_entity) => {
+                let session = session_entity.read(cx);
+                let (label, kind) = remote_status_pill(&session.status);
+                (
+                    SharedString::from(session.config.name.clone()),
+                    Some(remote_endpoint_label(&session.config)),
+                    Some(StatusPill::new(label, kind)),
+                )
+            }
+            None => (
+                SharedString::from(t!("App.RightPanel.no_session").to_string()),
+                None,
+                Some(StatusPill::new(
+                    t!("App.RightPanel.no_session").to_string(),
+                    StatusKind::Warning,
+                )),
+            ),
+        },
+    };
+
+    let mut header = PageHeader::new(title)
+        .size(HeaderSize::Page)
+        .eyebrow(eyebrow);
+    if let Some(subtitle) = subtitle {
+        header = header.subtitle_mono(subtitle);
+    }
+    if let Some(pill) = status_pill {
+        header = header.status(pill);
+    }
+    header
+}
+
+/// Legacy helper kept around during the transition — identical to the
+/// old inline strip but now only used by call sites not yet migrated.
+/// Remove once every mode body composes via `mode_page_header`.
+#[allow(dead_code)]
 fn mode_status_bar(
     t: &crate::theme::Theme,
     mode: RightMode,
@@ -605,7 +669,7 @@ fn mode_status_bar(
     };
 
     let mut row = div()
-        .h(px(28.0))
+        .h(ROW_MD_H)
         .px(SP_3)
         .flex()
         .flex_row()
@@ -875,7 +939,7 @@ fn docker_view(
     let refresh_control = if pending.is_some() {
         StatusPill::new(t!("App.RightPanel.Docker.busy"), StatusKind::Warning).into_any_element()
     } else {
-        Button::ghost("docker-refresh", t!("App.Common.refresh"))
+        Button::secondary("docker-refresh", t!("App.Common.refresh"))
             .on_click(move |_, window, app| on_refresh(&(), window, app))
             .into_any_element()
     };
@@ -1065,11 +1129,11 @@ fn logs_view(
                                 .on_click(move |_, window, app| on_run(&run_action, window, app)),
                         )
                         .child(
-                            Button::ghost("logs-stop", t!("App.Common.stop"))
+                            Button::secondary("logs-stop", t!("App.Common.stop"))
                                 .on_click(move |_, window, app| on_stop(&stop_action, window, app)),
                         )
                         .child(
-                            Button::ghost("logs-clear", t!("App.Common.clear"))
+                            Button::secondary("logs-clear", t!("App.Common.clear"))
                                 .on_click(move |_, window, app| on_clear(&clear_action, window, app)),
                         ),
                 )
@@ -1591,7 +1655,7 @@ fn docker_action_button(
         target_label: target_label.to_string(),
     };
 
-    Button::ghost(
+    Button::secondary(
         gpui::ElementId::Name(format!("docker-{}-{target_id}", kind.label()).into()),
         docker_action_button_label(kind),
     )
@@ -1856,7 +1920,7 @@ fn logs_preset_button(
         command: command.to_string(),
     };
 
-    Button::ghost(id, label).on_click(move |_, window, app| on_action(&action, window, app))
+    Button::secondary(id, label).on_click(move |_, window, app| on_action(&action, window, app))
 }
 
 fn logs_status_label(status: &LogsStatus) -> SharedString {
@@ -2042,8 +2106,8 @@ fn mode_icon_button(
 
     let mut btn = div()
         .id(gpui::ElementId::Name(id_str))
-        .w(px(28.0))
-        .h(px(28.0))
+        .w(BUTTON_MD_H)
+        .h(BUTTON_MD_H)
         .flex()
         .items_center()
         .justify_center()
@@ -2056,7 +2120,7 @@ fn mode_icon_button(
         })
         .hover(|s| s.bg(t.color.bg_hover))
         .on_click(move |_, w, app| on_select(&mode, w, app))
-        .child(icon.size(px(16.0)).text_color(if is_active {
+        .child(icon.size(ICON_MD).text_color(if is_active {
             t.color.accent
         } else {
             t.color.text_secondary

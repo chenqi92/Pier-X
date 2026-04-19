@@ -28,8 +28,11 @@ use gpui::{div, prelude::*, px, App, Corner, IntoElement, SharedString, Window};
 use gpui_component::{popover::Popover, scroll::ScrollableElement, Icon as UiIcon, IconName};
 use rust_i18n::t;
 
-use crate::components::{text, SectionLabel, StatusKind, StatusPill};
+use crate::components::{
+    text, IconButton, IconButtonSize, IconButtonVariant, SectionLabel, StatusKind, StatusPill,
+};
 use crate::theme::{
+    heights::{BUTTON_SM_H, GLYPH_SM, ICON_SM, ROW_MD_H, ROW_SM_H},
     radius::RADIUS_SM,
     spacing::{SP_0_5, SP_1, SP_1_5, SP_2, SP_3},
     theme,
@@ -236,13 +239,8 @@ fn render_header(
     on_refresh: RefreshHandler,
     on_navigate_to: NavigateToHandler,
 ) -> impl IntoElement {
-    let up_color = if at_root {
-        t.color.text_disabled
-    } else {
-        t.color.text_secondary
-    };
     div()
-        .h(px(32.0))
+        .h(ROW_MD_H)
         .px(SP_2)
         .flex()
         .flex_row()
@@ -250,34 +248,18 @@ fn render_header(
         .gap(SP_1_5)
         .border_b_1()
         .border_color(t.color.border_subtle)
-        // 1. ⤴ Up
+        // 1. ⤴ Up (disabled when already at filesystem root).
         .child(
-            div()
-                .id("ft-up")
-                .w(px(22.0))
-                .h(px(22.0))
-                .flex()
-                .items_center()
-                .justify_center()
-                .rounded(RADIUS_SM)
-                .bg(t.color.bg_panel)
-                .border_1()
-                .border_color(t.color.border_subtle)
-                .text_color(up_color)
-                .when(!at_root, |s| {
-                    s.cursor_pointer()
-                        .hover(|s| s.bg(t.color.bg_hover).border_color(t.color.border_default))
-                })
-                .when(!at_root, move |s| {
-                    s.on_click(move |_, w, app| on_go_up(&(), w, app))
-                })
-                .child(
-                    UiIcon::new(IconName::ChevronLeft)
-                        .size(px(12.0))
-                        .text_color(up_color),
-                ),
+            IconButton::new("ft-up", IconName::ChevronLeft)
+                .size(IconButtonSize::Sm)
+                .variant(IconButtonVariant::Filled)
+                .disabled(at_root)
+                .on_click(move |_, w, app| on_go_up(&(), w, app)),
         )
-        // 2. Folder icon + cwd basename
+        // 2. Folder icon + cwd basename — decorative, not a button, so
+        //    it stays as a small styled div. (px(18) is an in-view token
+        //    for this chip, allowed because the chip is conceptually a
+        //    one-off visual atom that doesn't justify its own component.)
         .child(
             div()
                 .w(px(18.0))
@@ -289,7 +271,7 @@ fn render_header(
                 .bg(t.color.accent_subtle)
                 .child(
                     UiIcon::new(IconName::Folder)
-                        .size(px(12.0))
+                        .size(GLYPH_SM)
                         .text_color(t.color.accent),
                 ),
         )
@@ -303,30 +285,14 @@ fn render_header(
                 .text_color(t.color.text_primary)
                 .child(cwd_name.clone()),
         )
-        // 3. ⋯ Quick targets popover
+        // 3. ⋯ Quick targets popover (needs Selectable — handwritten).
         .child(quick_menu(t, on_navigate_to))
-        // 4. 🔄 Refresh
+        // 4. 🔄 Refresh.
         .child(
-            div()
-                .id("ft-refresh")
-                .w(px(22.0))
-                .h(px(22.0))
-                .flex()
-                .items_center()
-                .justify_center()
-                .rounded(RADIUS_SM)
-                .bg(t.color.bg_panel)
-                .border_1()
-                .border_color(t.color.border_subtle)
-                .text_color(t.color.text_secondary)
-                .cursor_pointer()
-                .hover(|s| s.bg(t.color.bg_hover).border_color(t.color.border_default))
-                .on_click(move |_, w, app| on_refresh(&(), w, app))
-                .child(
-                    UiIcon::new(IconName::Loader)
-                        .size(px(12.0))
-                        .text_color(t.color.text_secondary),
-                ),
+            IconButton::new("ft-refresh", IconName::Loader)
+                .size(IconButtonSize::Sm)
+                .variant(IconButtonVariant::Filled)
+                .on_click(move |_, w, app| on_refresh(&(), w, app)),
         )
 }
 
@@ -379,8 +345,8 @@ impl RenderOnce for QuickMenuTrigger {
         let hover = self.hover;
         div()
             .id("ft-quick-trigger")
-            .w(px(22.0))
-            .h(px(22.0))
+            .w(BUTTON_SM_H)
+            .h(BUTTON_SM_H)
             .flex()
             .items_center()
             .justify_center()
@@ -393,7 +359,7 @@ impl RenderOnce for QuickMenuTrigger {
             .hover(move |s| s.bg(hover))
             .child(
                 UiIcon::new(IconName::Ellipsis)
-                    .size(px(12.0))
+                    .size(GLYPH_SM)
                     .text_color(self.color),
             )
     }
@@ -497,12 +463,12 @@ fn render_breadcrumbs(
     let segments = path_segments(cwd);
     let total = segments.len();
     let mut row = div()
-        .h(px(24.0))
+        .h(ROW_SM_H)
         .px(SP_2)
         .flex()
         .flex_row()
         .items_center()
-        .gap(px(2.0))
+        .gap(SP_0_5)
         .bg(t.color.bg_surface);
 
     for (idx, (label, path)) in segments.into_iter().enumerate() {
@@ -631,7 +597,7 @@ fn row(
 
     div()
         .id(gpui::ElementId::Name(id_str))
-        .h(px(24.0))
+        .h(ROW_SM_H)
         .px(SP_2)
         .flex()
         .flex_row()
@@ -655,8 +621,8 @@ fn row(
         })
         .child(
             div()
-                .w(px(14.0))
-                .h(px(14.0))
+                .w(ICON_SM)
+                .h(ICON_SM)
                 .flex()
                 .items_center()
                 .justify_center()
@@ -667,7 +633,7 @@ fn row(
                 })
                 .child(
                     UiIcon::new(glyph)
-                        .size(px(12.0))
+                        .size(GLYPH_SM)
                         .text_color(if entry.is_dir {
                             t.color.accent
                         } else {

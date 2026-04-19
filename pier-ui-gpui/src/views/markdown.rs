@@ -23,6 +23,7 @@ use rust_i18n::t;
 
 use crate::components::{text, Card, SectionLabel, StatusKind, StatusPill};
 use crate::theme::{
+    heights::ROW_MD_H,
     radius::RADIUS_SM,
     spacing::{SP_1, SP_1_5, SP_2, SP_3, SP_4},
     theme,
@@ -135,7 +136,7 @@ fn file_header(
     };
 
     div()
-        .h(px(28.0))
+        .h(ROW_MD_H)
         .px(SP_3)
         .flex()
         .flex_row()

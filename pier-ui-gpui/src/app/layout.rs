@@ -150,21 +150,18 @@ impl RightMode {
         }
     }
 
-    /// Asset path for the SVG icon. Loaded via `gpui::Application::with_assets`
-    /// → `assets::AppAssets`. None means the mode renders a built-in
-    /// `gpui_component::IconName` instead (resolved in `mode_icon`).
+    /// Asset path for the SVG icon. Loaded via `gpui::Application::with_assets`.
     pub fn icon_asset(self) -> Option<&'static str> {
         match self {
+            RightMode::Markdown => Some("icons/file.svg"),
+            RightMode::Monitor => Some("icons/layout-dashboard.svg"),
+            RightMode::Sftp => Some("icons/folder.svg"),
+            RightMode::Docker => Some("icons/server.svg"),
             RightMode::Git => Some("icons/git-branch.svg"),
             RightMode::Mysql | RightMode::Postgres | RightMode::Redis | RightMode::Sqlite => {
                 Some("icons/database.svg")
             }
-            // The remaining modes use built-in icons via `mode_icon()`.
-            RightMode::Markdown
-            | RightMode::Monitor
-            | RightMode::Sftp
-            | RightMode::Docker
-            | RightMode::Logs => None,
+            RightMode::Logs => Some("icons/square-terminal.svg"),
         }
     }
 

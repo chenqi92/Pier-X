@@ -25,6 +25,170 @@ use std::process::Command;
 use serde::{Deserialize, Serialize};
 
 use crate::process_util::configure_background_command;
+use crate::ssh::SshSession;
+
+// ─────────────────────────────────────────────────────────
+// Transport
+// ─────────────────────────────────────────────────────────
+
+/// How a `GitClient` reaches its repository. Local transports
+/// spawn `git` as a subprocess in a cwd; remote transports bounce
+/// every command through an SSH session against a server-side
+/// working tree. Parsers and methods on [`GitClient`] consume the
+/// stdout identically either way.
+pub trait GitTransport: Send + Sync {
+    /// Run `git <args>` against the transport's repository and
+    /// return the captured stdout as UTF-8 (lossy).
+    fn run(&self, args: &[&str]) -> Result<String, GitError>;
+
+    /// Best-effort read of a file inside the repository. Optional
+    /// because only the `diff_untracked` path needs it today —
+    /// transports that can't provide raw file contents return
+    /// `NotSupported`. Local → fs read; SSH → `cat` via exec.
+    fn read_repo_file(&self, _relative: &str) -> Result<String, GitError> {
+        Err(GitError::Command(
+            "raw file read not supported by this git transport".into(),
+        ))
+    }
+}
+
+/// Subprocess-backed transport — runs `git` as a child process in
+/// `repo_path`. This is the original implementation pulled out of
+/// the old monolithic `GitClient::git`.
+pub struct LocalGitTransport {
+    repo_path: PathBuf,
+}
+
+impl LocalGitTransport {
+    pub fn new(repo_path: PathBuf) -> Self {
+        Self { repo_path }
+    }
+}
+
+impl GitTransport for LocalGitTransport {
+    fn run(&self, args: &[&str]) -> Result<String, GitError> {
+        let mut command = Command::new("git");
+        command.current_dir(&self.repo_path);
+        command.args(args);
+        configure_background_command(&mut command);
+        let output = command.output().map_err(|e| {
+            GitError::Command(format!("failed to run git {}: {}", args.join(" "), e))
+        })?;
+
+        if !output.status.success() {
+            let stderr = String::from_utf8_lossy(&output.stderr);
+            // Some git commands (e.g. `diff --no-index`) use exit
+            // code 1 for "files differ", which isn't an error for
+            // our callers.
+            if output.status.code() == Some(1) && stderr.is_empty() {
+                return Ok(String::from_utf8_lossy(&output.stdout).to_string());
+            }
+            return Err(GitError::Command(format!(
+                "git {} failed: {}",
+                args.join(" "),
+                stderr.trim()
+            )));
+        }
+        Ok(String::from_utf8_lossy(&output.stdout).to_string())
+    }
+
+    fn read_repo_file(&self, relative: &str) -> Result<String, GitError> {
+        std::fs::read_to_string(self.repo_path.join(relative))
+            .map_err(|e| GitError::Command(format!("cannot read {relative}: {e}")))
+    }
+}
+
+/// SSH-backed transport — turns every `git <args>` call into
+/// `git -C '<repo>' <args>` via [`SshSession::exec_command_blocking`].
+/// All arguments are POSIX-single-quote escaped so paths and
+/// commit messages with spaces / quotes pass through intact.
+///
+/// Targets POSIX remotes (Linux, macOS, BSD, Windows with git-bash
+/// exposed through OpenSSH). Windows-native OpenSSH with cmd.exe
+/// as default shell would need `-Command "git -C …"` instead —
+/// out of scope for this transport; use the bash-powered integration
+/// path if that's the target.
+pub struct SshGitTransport {
+    session: SshSession,
+    repo_path: String,
+}
+
+impl SshGitTransport {
+    pub fn new(session: SshSession, repo_path: String) -> Self {
+        Self { session, repo_path }
+    }
+
+    fn build_command(&self, args: &[&str]) -> String {
+        let mut cmd = String::from("git -C ");
+        cmd.push_str(&posix_single_quote(&self.repo_path));
+        for a in args {
+            cmd.push(' ');
+            cmd.push_str(&posix_single_quote(a));
+        }
+        cmd
+    }
+}
+
+impl GitTransport for SshGitTransport {
+    fn run(&self, args: &[&str]) -> Result<String, GitError> {
+        let cmd = self.build_command(args);
+        let (code, stdout) = self
+            .session
+            .exec_command_blocking(&cmd)
+            .map_err(|e| GitError::Command(format!("ssh exec: {e}")))?;
+        if code == 0 {
+            return Ok(stdout);
+        }
+        // Exit 1 with empty stdout commonly means "not a repo" or
+        // "files differ" depending on command — preserve the
+        // existing local behaviour of returning stdout in that
+        // edge case so `diff --no-index` keeps working.
+        if code == 1 && stdout.trim().is_empty() {
+            return Ok(stdout);
+        }
+        Err(GitError::Command(format!(
+            "git {} failed on remote (exit {code})",
+            args.join(" ")
+        )))
+    }
+
+    fn read_repo_file(&self, relative: &str) -> Result<String, GitError> {
+        // Cheap and universal: `cat <repo>/<rel>` over exec. We
+        // rebuild the path on the remote instead of passing the
+        // client-side `repo_path.join` so Windows-on-POSIX path
+        // quirks don't sneak in.
+        let mut cmd = String::from("cat ");
+        cmd.push_str(&posix_single_quote(&format!(
+            "{}/{}",
+            self.repo_path, relative
+        )));
+        let (code, stdout) = self
+            .session
+            .exec_command_blocking(&cmd)
+            .map_err(|e| GitError::Command(format!("ssh exec: {e}")))?;
+        if code == 0 {
+            Ok(stdout)
+        } else {
+            Err(GitError::Command(format!("cat {relative} exit {code}")))
+        }
+    }
+}
+
+/// POSIX-safe single-quote quoting for shell arguments.
+/// `O'Brien` → `'O'\''Brien'`. Every possible byte survives.
+fn posix_single_quote(s: &str) -> String {
+    let mut out = String::with_capacity(s.len() + 2);
+    out.push('\'');
+    for ch in s.chars() {
+        if ch == '\'' {
+            out.push_str("'\\''");
+        } else {
+            out.push(ch);
+        }
+    }
+    out.push('\'');
+    out
+}
 
 // ─────────────────────────────────────────────────────────
 // Error
@@ -195,21 +359,26 @@ pub struct BranchInfo {
 // Client
 // ─────────────────────────────────────────────────────────
 
-/// Git client bound to a specific repository path.
+/// Git client bound to a specific repository path + transport.
+/// The transport is what makes a single client work identically
+/// over a local subprocess or a remote SSH session; see the
+/// [`GitTransport`] trait.
 pub struct GitClient {
-    /// Absolute path to the repository root (the directory
-    /// containing `.git/`).
+    /// Path to the repository root, as known to the transport.
+    /// For `LocalGitTransport` this is an absolute filesystem
+    /// path; for `SshGitTransport` it's the remote string that
+    /// was canonicalised by `rev-parse --show-toplevel`.
     repo_path: PathBuf,
+    transport: Box<dyn GitTransport>,
 }
 
 impl GitClient {
     // ── Construction ──────────────────────────────────────
 
-    /// Open a Git client for the repository at or above `path`.
-    ///
-    /// Runs `git rev-parse --show-toplevel` to resolve the repo
-    /// root. Returns an error if the path is not inside a Git
-    /// working tree.
+    /// Open a Git client against a local repository rooted at or
+    /// above `path`. Resolves the real root via
+    /// `rev-parse --show-toplevel`; returns `NotARepo` if `path`
+    /// doesn't live inside a Git working tree.
     pub fn open(path: &str) -> Result<Self, GitError> {
         if path.is_empty() {
             return Err(GitError::InvalidPath("empty path".into()));
@@ -221,25 +390,50 @@ impl GitClient {
             )));
         }
 
-        let mut command = Command::new("git");
-        command.current_dir(p);
-        command.args(["rev-parse", "--show-toplevel"]);
-        configure_background_command(&mut command);
-        let output = command
-            .output()
-            .map_err(|e| GitError::Command(format!("failed to run git: {e}")))?;
+        // Temporary local transport pinned to `path` so we can ask
+        // git to tell us the real repo root. The permanent
+        // transport gets rebound to that canonical path below so
+        // subsequent `git -C` subprocess calls land correctly.
+        let probe = LocalGitTransport::new(p.to_path_buf());
+        let root = probe
+            .run(&["rev-parse", "--show-toplevel"])
+            .map_err(|_| GitError::NotARepo(path.to_string()))?
+            .trim()
+            .to_string();
 
-        if !output.status.success() {
-            return Err(GitError::NotARepo(path.to_string()));
-        }
-
-        let root = String::from_utf8_lossy(&output.stdout).trim().to_string();
+        let repo_path = PathBuf::from(&root);
         Ok(Self {
-            repo_path: PathBuf::from(root),
+            transport: Box::new(LocalGitTransport::new(repo_path.clone())),
+            repo_path,
         })
     }
 
-    /// The resolved repository root path.
+    /// Open a Git client against a remote repository that lives at
+    /// `cwd` on `session`. Runs `git -C <cwd> rev-parse --show-toplevel`
+    /// over exec; returns `NotARepo` when `cwd` isn't inside a
+    /// working tree on that host.
+    ///
+    /// The transport clones `session` cheaply (russh handle is
+    /// reference-counted), so the caller can keep using the same
+    /// session for its SFTP panel / shell channel in parallel.
+    pub fn open_remote(session: SshSession, cwd: &str) -> Result<Self, GitError> {
+        if cwd.is_empty() {
+            return Err(GitError::InvalidPath("empty remote path".into()));
+        }
+        let probe = SshGitTransport::new(session.clone(), cwd.to_string());
+        let root = probe
+            .run(&["rev-parse", "--show-toplevel"])
+            .map_err(|_| GitError::NotARepo(cwd.to_string()))?
+            .trim()
+            .to_string();
+        Ok(Self {
+            repo_path: PathBuf::from(&root),
+            transport: Box::new(SshGitTransport::new(session, root)),
+        })
+    }
+
+    /// The resolved repository root path — filesystem path for
+    /// local transports, remote POSIX path for SSH transports.
     pub fn repo_path(&self) -> &Path {
         &self.repo_path
     }
@@ -328,21 +522,19 @@ impl GitClient {
             .or_else(|_| {
                 // --no-index returns exit code 1 when files differ,
                 // which is normal — try reading the file directly
-                let full_path = self.repo_path.join(path);
-                std::fs::read_to_string(&full_path)
-                    .map(|content| {
-                        // Format as a pseudo-diff
-                        let mut out = format!("new file: {path}\n\n");
-                        for (i, line) in content.lines().enumerate() {
-                            out.push_str(&format!("+{line}\n"));
-                            if i > 2000 {
-                                out.push_str("\n... (truncated)\n");
-                                break;
-                            }
+                // through the transport (local fs read or `cat`
+                // over SSH).
+                self.transport.read_repo_file(path).map(|content| {
+                    let mut out = format!("new file: {path}\n\n");
+                    for (i, line) in content.lines().enumerate() {
+                        out.push_str(&format!("+{line}\n"));
+                        if i > 2000 {
+                            out.push_str("\n... (truncated)\n");
+                            break;
                         }
-                        out
-                    })
-                    .map_err(|e| GitError::Command(format!("cannot read {path}: {e}")))
+                    }
+                    out
+                })
             })
     }
 
@@ -727,31 +919,11 @@ impl GitClient {
 
     // ── Internal ─────────────────────────────────────────
 
-    /// Run a git command and return stdout as a String.
+    /// Run a git command and return stdout. Delegates to the
+    /// active transport so both local and SSH repos take the same
+    /// code path through every caller above.
     fn git(&self, args: &[&str]) -> Result<String, GitError> {
-        let mut command = Command::new("git");
-        command.current_dir(&self.repo_path);
-        command.args(args);
-        configure_background_command(&mut command);
-        let output = command.output().map_err(|e| {
-            GitError::Command(format!("failed to run git {}: {}", args.join(" "), e))
-        })?;
-
-        if !output.status.success() {
-            let stderr = String::from_utf8_lossy(&output.stderr);
-            // Some commands (like diff --no-index) use exit code 1 for "files differ"
-            // which is not actually an error
-            if output.status.code() == Some(1) && stderr.is_empty() {
-                return Ok(String::from_utf8_lossy(&output.stdout).to_string());
-            }
-            return Err(GitError::Command(format!(
-                "git {} failed: {}",
-                args.join(" "),
-                stderr.trim()
-            )));
-        }
-
-        Ok(String::from_utf8_lossy(&output.stdout).to_string())
+        self.transport.run(args)
     }
 }
 

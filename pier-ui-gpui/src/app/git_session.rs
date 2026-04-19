@@ -20,6 +20,45 @@ use gpui::SharedString;
 use pier_core::services::git::{
     BranchInfo, CommitInfo, GitClient, GitError, GitFileChange, StashEntry,
 };
+use pier_core::ssh::SshSession;
+
+/// Where a [`GitState`] points. A local path means "run the `git`
+/// subprocess in this directory"; a remote target means "exec
+/// `git -C <cwd> …` across this SSH session". The client
+/// transport picks the right one at refresh time.
+#[derive(Clone)]
+pub enum GitTarget {
+    Local(PathBuf),
+    Remote { session: SshSession, cwd: String },
+}
+
+impl GitTarget {
+    /// Human-readable label for debug logs and the status pill.
+    pub fn label(&self) -> String {
+        match self {
+            Self::Local(p) => p.to_string_lossy().into_owned(),
+            Self::Remote { cwd, .. } => format!("remote:{cwd}"),
+        }
+    }
+
+    pub fn is_remote(&self) -> bool {
+        matches!(self, Self::Remote { .. })
+    }
+
+    /// True when the two targets are the "same repo" — same
+    /// variant and same path / cwd. `SshSession` identity is not
+    /// compared: two clones of the same session are cheap and
+    /// indistinguishable anyway, and swapping between unrelated
+    /// sessions always comes with a cwd change in practice
+    /// (different `$HOME`, OSC 7 reports a new path).
+    pub fn same_repo(&self, other: &Self) -> bool {
+        match (self, other) {
+            (Self::Local(a), Self::Local(b)) => a == b,
+            (Self::Remote { cwd: a, .. }, Self::Remote { cwd: b, .. }) => a == b,
+            _ => false,
+        }
+    }
+}
 
 /// Top-level repo status, drives the status pill + gates which
 /// controls render.
@@ -84,7 +123,15 @@ impl GitPendingAction {
 /// Cached live state for the current working directory's repo.
 /// Everything the UI reads lives here.
 pub struct GitState {
-    /// Directory currently mirrored from the left file tree.
+    /// Transport + location the client is bound to. Written
+    /// through `set_cwd` / `set_remote_target`; read by
+    /// `run_refresh` to decide whether to open a subprocess
+    /// `GitClient::open` or an SSH-backed `GitClient::open_remote`.
+    pub target: GitTarget,
+    /// Directory currently mirrored from the left file tree —
+    /// kept around for label rendering. For remote targets this
+    /// is a `PathBuf` built from the remote cwd string; it is
+    /// *never* treated as a live filesystem path.
     pub cwd: PathBuf,
     /// Top-level status, updated by `apply_refresh_result`.
     pub status: GitStatus,
@@ -150,6 +197,7 @@ pub struct DiffSelection {
 impl GitState {
     pub fn new(cwd: PathBuf) -> Self {
         Self {
+            target: GitTarget::Local(cwd.clone()),
             cwd,
             status: GitStatus::Idle,
             client: None,
@@ -173,14 +221,40 @@ impl GitState {
         }
     }
 
+    /// Current transport target.
+    pub fn target(&self) -> &GitTarget {
+        &self.target
+    }
+
     /// Retarget the cached Git state to a new left-panel directory.
-    /// Returns `true` when the cwd actually changed.
+    /// Returns `true` when the cwd actually changed. Shim over
+    /// `set_target` kept for callers that still pass a `PathBuf`.
     pub fn set_cwd(&mut self, cwd: PathBuf) -> bool {
-        if self.cwd == cwd {
+        self.set_target(GitTarget::Local(cwd))
+    }
+
+    /// Retarget to a remote repo reachable through `session` at
+    /// `cwd`. Clears the cached snapshot so the view falls back to
+    /// the loading state until the next refresh lands.
+    pub fn set_remote_target(&mut self, session: SshSession, cwd: String) -> bool {
+        self.set_target(GitTarget::Remote { session, cwd })
+    }
+
+    fn set_target(&mut self, target: GitTarget) -> bool {
+        if self.target.same_repo(&target) {
             return false;
         }
 
-        self.cwd = cwd;
+        // Keep the `cwd: PathBuf` field in sync for UI components
+        // that still read it (e.g. label rendering). For remote
+        // targets we mirror the remote path into `cwd` as a plain
+        // PathBuf — good enough for display; it is never used as
+        // a real filesystem path.
+        match &target {
+            GitTarget::Local(p) => self.cwd = p.clone(),
+            GitTarget::Remote { cwd, .. } => self.cwd = PathBuf::from(cwd),
+        }
+        self.target = target;
         self.client = None;
         self.repo_path = None;
         self.branch = None;
@@ -246,12 +320,25 @@ impl GitState {
         self.diff_selection = None;
     }
 
-    /// Open a fresh handle to the repo on disk. Does not probe;
-    /// caller still needs to schedule a refresh.
+    /// Open a fresh handle to the repo. For `Local` targets we
+    /// probe synchronously (cheap subprocess); for `Remote`
+    /// targets we defer — opening an SSH-backed client calls
+    /// `rev-parse --show-toplevel` over the network, which can't
+    /// run on the UI thread. The first refresh does the open and
+    /// caches the result via `apply_refresh_result`.
     pub fn ensure_client(&mut self) {
         if self.client.is_some() {
             return;
         }
+        match &self.target {
+            GitTarget::Remote { .. } => {
+                // Defer — the first `run_refresh` opens + caches.
+            }
+            GitTarget::Local(_) => self.ensure_local_client(),
+        }
+    }
+
+    fn ensure_local_client(&mut self) {
         let path = self.cwd.to_string_lossy().to_string();
         match GitClient::open(&path) {
             Ok(client) => {
@@ -275,16 +362,20 @@ impl GitState {
         }
     }
 
-    /// Mint a refresh request + bump the nonce. Returns `None` if
-    /// there is no client (e.g. the cwd is not a repo).
+    /// Mint a refresh request + bump the nonce. Always produces a
+    /// request — Local targets that aren't a repo bubble up as
+    /// `NotARepo` through the refresh result, same as the Remote
+    /// path. Previously only emitted when `self.client.is_some()`,
+    /// which blocked the first refresh on a Remote target (the
+    /// client is opened *inside* the background task).
     pub fn begin_refresh(&mut self) -> Option<RefreshRequest> {
-        let client = self.client.clone()?;
         self.refresh_nonce = self.refresh_nonce.wrapping_add(1);
         self.status = GitStatus::Loading;
         self.pending = Some(GitPendingAction::Refresh);
         Some(RefreshRequest {
             nonce: self.refresh_nonce,
-            client,
+            target: self.target.clone(),
+            client: self.client.clone(),
             log_limit: self.log_limit,
         })
     }
@@ -292,6 +383,13 @@ impl GitState {
     pub fn apply_refresh_result(&mut self, result: RefreshResult) {
         if result.nonce != self.refresh_nonce {
             return;
+        }
+        // Refresh may have opened a fresh client (Remote first-refresh
+        // path). Cache it so subsequent actions / refreshes reuse
+        // the live handle.
+        if let Some(client) = result.client.clone() {
+            self.repo_path = Some(client.repo_path().to_path_buf());
+            self.client = Some(client);
         }
         self.pending = None;
         match result.outcome {
@@ -305,8 +403,16 @@ impl GitState {
                 self.last_error = None;
             }
             Err(err) => {
-                self.status = GitStatus::Failed;
-                self.last_error = Some(err.into());
+                // "NotARepo" is a legitimate state, not a hard error
+                // — fold it into the dedicated status so the view
+                // shows the placeholder.
+                if err.starts_with("not a git repository") {
+                    self.status = GitStatus::NotARepo;
+                    self.last_error = None;
+                } else {
+                    self.status = GitStatus::Failed;
+                    self.last_error = Some(err.into());
+                }
             }
         }
     }
@@ -343,7 +449,10 @@ impl GitState {
 
 pub struct RefreshRequest {
     pub nonce: u64,
-    pub client: Arc<GitClient>,
+    pub target: GitTarget,
+    /// Cached client from a previous refresh, if any. Skipping the
+    /// `rev-parse` probe on warm refreshes saves ~50ms over SSH.
+    pub client: Option<Arc<GitClient>>,
     pub log_limit: usize,
 }
 
@@ -357,6 +466,10 @@ pub struct RefreshSnapshot {
 
 pub struct RefreshResult {
     pub nonce: u64,
+    /// Client opened / reused by this refresh. Echoed back so
+    /// `apply_refresh_result` can cache the live handle for
+    /// subsequent actions + warm refreshes.
+    pub client: Option<Arc<GitClient>>,
     pub outcome: Result<RefreshSnapshot, String>,
 }
 
@@ -386,10 +499,43 @@ pub struct ActionResult {
 // ─── Background-task workers ──────────────────────────────────────────
 
 pub fn run_refresh(request: RefreshRequest) -> RefreshResult {
-    let outcome = refresh_inner(&request.client, request.log_limit);
-    RefreshResult {
-        nonce: request.nonce,
-        outcome,
+    // Reuse cached client when we have one; otherwise open a fresh
+    // one matching the target. The open is on the background task
+    // — safe even for Remote (which SSH-exec's `rev-parse`).
+    let client_result: Result<Arc<GitClient>, String> = match request.client.clone() {
+        Some(c) => Ok(c),
+        None => match &request.target {
+            GitTarget::Local(path) => GitClient::open(&path.to_string_lossy())
+                .map(Arc::new)
+                .map_err(|e| match e {
+                    GitError::NotARepo(p) => format!("not a git repository: {p}"),
+                    other => other.to_string(),
+                }),
+            GitTarget::Remote { session, cwd } => {
+                GitClient::open_remote(session.clone(), cwd)
+                    .map(Arc::new)
+                    .map_err(|e| match e {
+                        GitError::NotARepo(p) => format!("not a git repository: {p}"),
+                        other => other.to_string(),
+                    })
+            }
+        },
+    };
+
+    match client_result {
+        Ok(client) => {
+            let outcome = refresh_inner(&client, request.log_limit);
+            RefreshResult {
+                nonce: request.nonce,
+                client: Some(client),
+                outcome,
+            }
+        }
+        Err(err) => RefreshResult {
+            nonce: request.nonce,
+            client: None,
+            outcome: Err(err),
+        },
     }
 }
 

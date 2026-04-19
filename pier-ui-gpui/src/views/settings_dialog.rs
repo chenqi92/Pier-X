@@ -737,11 +737,14 @@ impl SettingsDialog {
                                     // want settings.json to claim
                                     // "enabled" while the rc files
                                     // were never written.
+                                    // Platform-aware: routes to bash
+                                    // on Unix and PowerShell profile
+                                    // on Windows. See pier-core's
+                                    // `install_local_integration`.
                                     let io_result = if enable {
-                                        pier_core::terminal::install_local_bash_integration()
-                                            .map(|_rc| ())
+                                        pier_core::terminal::install_local_integration()
                                     } else {
-                                        pier_core::terminal::uninstall_local_bash_integration()
+                                        pier_core::terminal::uninstall_local_integration()
                                     };
                                     if let Err(err) = &io_result {
                                         log::error!(

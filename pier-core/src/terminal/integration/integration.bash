@@ -77,43 +77,32 @@ printf '\033]133;A\033\\'
 
 # ── 3. Nested ssh hijacker ────────────────────────────────────
 # Goal: when the user types `ssh [flags] [user@]host [command]`,
-# try to upload this rc to the target first, then launch the
-# remote shell with `bash --rcfile <that path>`. If anything
-# fails, fall through to a plain ssh so the command still works.
+# detect whether the target is a POSIX host (bash) or a Windows
+# OpenSSH host (pwsh), upload the matching rc, and launch the
+# remote interactively with that rc sourced. Any step failing
+# falls through to `command ssh "$@"` so the user's command line
+# still works exactly as typed.
 #
-# We keep the flag parser deliberately minimal: recognise `-p
-# PORT`, pass everything else through. If the user supplied a
-# remote command (i.e. a non-flag arg after the host), we do NOT
-# hijack — they likely want `ssh host 'one-liner'` semantics, not
-# an interactive shell.
+# Flag parser is deliberately minimal: recognise `-p PORT`, pass
+# everything else through. A remote command (non-flag arg after
+# the host) disables hijacking — the user wants `ssh host 'cmd'`
+# one-liner semantics, not an interactive shell.
 
-__pier_ssh_integration_path="$HOME/.pier-x/integration.sh"
+__pier_bash_rc="$HOME/.pier-x/integration.sh"
+__pier_pwsh_rc="$HOME/.pier-x/integration.ps1"
 
 __pier_parse_ssh_target() {
-    # Walk argv; on success echoes "host port" to stdout, returns 0.
-    # On any shape we don't understand (remote command, flags we
-    # don't know what to do with), returns 1 and echoes nothing.
     local port=22
     local host=""
     local saw_command=0
     while [ $# -gt 0 ]; do
         case "$1" in
             -p)
-                shift
-                [ $# -gt 0 ] || return 1
-                port="$1"
+                shift; [ $# -gt 0 ] || return 1; port="$1"
                 ;;
-            -l)
-                # user override — we don't need to split it out
-                # because the remote shell will already know who
-                # it is; drop the flag.
-                shift
-                [ $# -gt 0 ] || return 1
-                ;;
-            -i|-F|-o|-J|-L|-R|-D|-W|-B|-b|-c|-E|-e|-I|-m|-O|-Q|-S|-w)
+            -l|-i|-F|-o|-J|-L|-R|-D|-W|-B|-b|-c|-E|-e|-I|-m|-O|-Q|-S|-w)
                 # Flags that take an argument — skip both.
-                shift
-                [ $# -gt 0 ] || return 1
+                shift; [ $# -gt 0 ] || return 1
                 ;;
             -*)
                 # Boolean flag (e.g. -v, -4, -A). Leave it alone.
@@ -122,8 +111,6 @@ __pier_parse_ssh_target() {
                 if [ -z "$host" ]; then
                     host="$1"
                 else
-                    # A second non-flag arg means "ssh host cmd …"
-                    # — bail out, the user wants a one-shot exec.
                     saw_command=1
                 fi
                 ;;
@@ -137,31 +124,23 @@ __pier_parse_ssh_target() {
     return 0
 }
 
-__pier_ssh_upload() {
-    # Try to place our rc at ~/.pier-x/integration.sh on $1 (the
-    # ssh target, possibly `user@host`). Uses scp in batch mode so
-    # it either succeeds via an already-available key / agent or
-    # fails instantly — it never hangs asking for a password.
-    local target="$1"
+__pier_detect_remote_shell() {
+    local host="$1"
     local port="$2"
-    # Use BatchMode to avoid password prompts; propagate the port.
-    scp -q -B -P "$port" \
-        -o ControlMaster=auto \
-        -o ControlPath="$HOME/.ssh/pier-x-%C" \
-        -o ControlPersist=60 \
-        "$__pier_ssh_integration_path" \
-        "$target:.pier-x/integration.sh" \
-        > /dev/null 2>&1
+    if command ssh -B -o BatchMode=yes -o StrictHostKeyChecking=accept-new \
+        -p "$port" "$host" 'bash --version' > /dev/null 2>&1; then
+        printf 'bash'
+        return 0
+    fi
+    if command ssh -B -o BatchMode=yes -o StrictHostKeyChecking=accept-new \
+        -p "$port" "$host" 'pwsh -Version' > /dev/null 2>&1; then
+        printf 'pwsh'
+        return 0
+    fi
+    return 1
 }
 
 ssh() {
-    # Only engage the hijack when the target is parseable and the
-    # integration script exists on this side — otherwise we have
-    # nothing to upload. For all other shapes, pass through.
-    if ! [ -f "$__pier_ssh_integration_path" ]; then
-        command ssh "$@"; return $?
-    fi
-
     local parsed
     if ! parsed=$(__pier_parse_ssh_target "$@"); then
         command ssh "$@"; return $?
@@ -169,20 +148,43 @@ ssh() {
     local host="${parsed% *}"
     local port="${parsed##* }"
 
-    # Pre-create ~/.pier-x on the target so scp can drop into it.
-    # BatchMode again — never block.
-    command ssh -B -o BatchMode=yes -o StrictHostKeyChecking=accept-new \
-        -p "$port" "$host" 'mkdir -p ~/.pier-x' > /dev/null 2>&1 || {
-        command ssh "$@"; return $?
-    }
-
-    if ! __pier_ssh_upload "$host" "$port"; then
+    local kind
+    if ! kind=$(__pier_detect_remote_shell "$host" "$port"); then
         command ssh "$@"; return $?
     fi
 
-    # Relaunch with rcfile — forces an interactive bash on the
-    # remote regardless of the user's login shell. `-t` keeps the
-    # pty allocated since we're running a non-default command.
-    command ssh -t -p "$port" "$host" \
-        "bash --rcfile ~/.pier-x/integration.sh -i"
+    # Choose local rc, remote name, mkdir cmd, and launch command
+    # per detected target flavour.
+    local local_rc remote_name mkdir_cmd launch_cmd
+    if [ "$kind" = "bash" ]; then
+        local_rc="$__pier_bash_rc"
+        remote_name=".pier-x/integration.sh"
+        mkdir_cmd='mkdir -p ~/.pier-x'
+        launch_cmd='bash --rcfile ~/.pier-x/integration.sh -i'
+    else
+        local_rc="$__pier_pwsh_rc"
+        remote_name=".pier-x/integration.ps1"
+        mkdir_cmd='New-Item -ItemType Directory -Force -Path "$HOME/.pier-x" | Out-Null'
+        launch_cmd='pwsh -NoLogo -NoExit -Command ". $HOME/.pier-x/integration.ps1"'
+    fi
+
+    if ! [ -f "$local_rc" ]; then
+        command ssh "$@"; return $?
+    fi
+
+    command ssh -B -o BatchMode=yes \
+        -p "$port" "$host" "$mkdir_cmd" > /dev/null 2>&1 || {
+        command ssh "$@"; return $?
+    }
+
+    scp -q -B -P "$port" \
+        -o ControlMaster=auto \
+        -o ControlPath="$HOME/.ssh/pier-x-%C" \
+        -o ControlPersist=60 \
+        "$local_rc" \
+        "$host:$remote_name" > /dev/null 2>&1 || {
+        command ssh "$@"; return $?
+    }
+
+    command ssh -t -p "$port" "$host" "$launch_cmd"
 }

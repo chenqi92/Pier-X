@@ -441,6 +441,14 @@ impl TerminalPanel {
                 self.render_cache = None;
                 self.reset_cursor_blink();
                 self.terminal = Some(term);
+                // Force the next refresh tick to re-sync the remote
+                // PTY to the real measured surface size. Without this
+                // the channel stays at the bootstrap `cols×rows`
+                // placeholder (120×32) until the user happens to
+                // resize the window — `sync_surface_resize` gates on
+                // size-changed and we haven't changed sizes, just
+                // PTYs.
+                self.last_surface_size_key = None;
                 self.clamp_selection_to_terminal();
                 log::info!(
                     "terminal[{}] ssh pty attached target={} size={}x{}",

@@ -35,6 +35,15 @@ pub const PILL_DOT: Pixels = px(6.0);
 pub const ROW_SM_H: Pixels = px(24.0);
 pub const ROW_MD_H: Pixels = px(28.0);
 
+// Inspector-grammar primitives (right-panel mode bodies).
+// PropertyRow tight = 22px (label:value); InspectorSection header =
+// 28px (small section title bar); DataCell = 56px two-line stat tile.
+// Kept separate from the generic list rows so the inspector grid feels
+// denser than a navigable list without stealing ROW_SM/ROW_MD values.
+pub const INSPECTOR_ROW_H: Pixels = px(22.0);
+pub const INSPECTOR_HEADER_H: Pixels = px(28.0);
+pub const INSPECTOR_CELL_H: Pixels = px(56.0);
+
 // Tab pill — a hair taller than ROW_SM so the pill doesn't kiss the
 // bottom rule, plus its own inline-glyph size so the tab icon feels
 // deliberately smaller than the adjacent label text.

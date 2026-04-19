@@ -76,6 +76,112 @@ use crate::views::welcome::WelcomeView;
 const SSH_DEFAULT_COLS: u16 = 120;
 const SSH_DEFAULT_ROWS: u16 = 32;
 
+/// Which remote shell we managed to upload integration for. `None`
+/// means we couldn't land any flavour and the caller should fall
+/// back to a plain shell channel (no OSC 7 / OSC 133 at all).
+#[derive(Clone, Copy, Debug)]
+enum RemoteShellKind {
+    Bash,
+    Powershell,
+    Cmd,
+}
+
+/// Probe the remote for a usable shell, upload the matching
+/// Pier-X integration rc over SFTP, and open an exec channel that
+/// launches the rc for an interactive session.
+///
+/// Tries bash first (by far the most common remote shell); if
+/// that's missing on the target — e.g. a Windows Server OpenSSH
+/// host — it falls back to PowerShell. Each probe is a cheap
+/// `exec_command_blocking` against the same russh handle; the
+/// upload reuses the existing SFTP subsystem the SFTP panel would
+/// open anyway.
+fn open_integrated_shell(
+    session: &pier_core::ssh::SshSession,
+) -> Result<pier_core::ssh::SshChannelPty, String> {
+    use pier_core::terminal::{
+        BASH_INTEGRATION, BASH_LAUNCH_COMMAND, CMD_INTEGRATION, CMD_LAUNCH_COMMAND,
+        POWERSHELL_INTEGRATION, POWERSHELL_LAUNCH_COMMAND, REMOTE_INTEGRATION_BASH_PATH,
+        REMOTE_INTEGRATION_CMD_PATH, REMOTE_INTEGRATION_DIR, REMOTE_INTEGRATION_POWERSHELL_PATH,
+    };
+
+    // Probe chain in descending order of shell-integration fidelity:
+    //   1. bash  — full OSC 7 + OSC 133 + nested `ssh` hijack
+    //   2. pwsh  — same fidelity adapted to PowerShell hooks
+    //   3. cmd   — OSC 7 only (cmd has no prompt hook for boundaries)
+    // Each probe is one cheap `exec_command_blocking` against the
+    // already-authenticated handle (~50ms on a LAN).
+    let kind = if session
+        .exec_command_blocking("bash --version")
+        .map(|(code, _)| code == 0)
+        .unwrap_or(false)
+    {
+        RemoteShellKind::Bash
+    } else if session
+        .exec_command_blocking("pwsh -Version")
+        .map(|(code, _)| code == 0)
+        .unwrap_or(false)
+    {
+        RemoteShellKind::Powershell
+    } else if session
+        .exec_command_blocking("cmd /C ver")
+        .map(|(code, _)| code == 0)
+        .unwrap_or(false)
+    {
+        RemoteShellKind::Cmd
+    } else {
+        return Err("no supported shell (bash / pwsh / cmd) on remote".into());
+    };
+
+    let sftp = session.open_sftp_blocking().map_err(|e| e.to_string())?;
+    // Idempotent create — "already exists" is fine.
+    let _ = sftp.create_dir_blocking(REMOTE_INTEGRATION_DIR);
+
+    // Upload ALL flavours we ship — a few KB on disk, but means the
+    // chosen rc's nested-`ssh` hijacker already has every counterpart
+    // script when the user jumps to a host of a different shell
+    // family. Secondary-write failures are swallowed; only the
+    // primary needs to land.
+    let _ = sftp.write_file_blocking(
+        REMOTE_INTEGRATION_BASH_PATH,
+        BASH_INTEGRATION.as_bytes(),
+    );
+    let _ = sftp.write_file_blocking(
+        REMOTE_INTEGRATION_POWERSHELL_PATH,
+        POWERSHELL_INTEGRATION.as_bytes(),
+    );
+    let _ = sftp.write_file_blocking(
+        REMOTE_INTEGRATION_CMD_PATH,
+        CMD_INTEGRATION.as_bytes(),
+    );
+
+    let (primary_path, primary_script, launch) = match kind {
+        RemoteShellKind::Bash => (
+            REMOTE_INTEGRATION_BASH_PATH,
+            BASH_INTEGRATION,
+            BASH_LAUNCH_COMMAND,
+        ),
+        RemoteShellKind::Powershell => (
+            REMOTE_INTEGRATION_POWERSHELL_PATH,
+            POWERSHELL_INTEGRATION,
+            POWERSHELL_LAUNCH_COMMAND,
+        ),
+        RemoteShellKind::Cmd => (
+            REMOTE_INTEGRATION_CMD_PATH,
+            CMD_INTEGRATION,
+            CMD_LAUNCH_COMMAND,
+        ),
+    };
+    // Re-write the primary as the authoritative upload so a real
+    // error surfaces if *it* failed (secondary failures above are
+    // swallowed).
+    sftp.write_file_blocking(primary_path, primary_script.as_bytes())
+        .map_err(|e| e.to_string())?;
+    session
+        .open_exec_channel_blocking(SSH_DEFAULT_COLS, SSH_DEFAULT_ROWS, launch)
+        .map_err(|e| e.to_string())
+}
+
 type ClickHandler = Rc<dyn Fn(&ClickEvent, &mut Window, &mut gpui::App) + 'static>;
 
 const REMOTE_PANEL_REFRESH_MS: u64 = 5_000;
@@ -394,6 +500,13 @@ impl PierApp {
         // (2) If this is the focused tab, resync downstream state. The
         // session mirror + right-mode bootstrap live in one helper so
         // closes / opens / location changes all route through it.
+        //
+        // Markdown + Git panels are deliberately NOT resynced on tab
+        // switch — they track the left file panel (i.e. the local
+        // workspace) regardless of which remote host the terminal
+        // is sitting on. Only the "remote-aware" right panels (SFTP
+        // / Monitor / Docker / Logs / DB) swap context with the
+        // focused tab.
         if self.active_terminal == Some(idx) {
             self.right_visible = true;
             self.sync_active_session_from_focused_tab(cx);
@@ -515,46 +628,17 @@ impl PierApp {
                     > = background
                         .spawn(async move {
                             use pier_core::ssh::{HostKeyVerifier, SshSession};
-                            use pier_core::terminal::{
-                                BASH_INTEGRATION, BASH_LAUNCH_COMMAND,
-                                REMOTE_INTEGRATION_BASH_PATH, REMOTE_INTEGRATION_DIR,
-                            };
                             let verifier = HostKeyVerifier::default();
                             let session = SshSession::connect_blocking(&conn, verifier)
                                 .map_err(|e| e.to_string())?;
 
-                            // Try to upload the shell-integration rc
-                            // and launch `bash --rcfile` against it.
-                            // Any failure here (no bash on remote,
-                            // SFTP denied, write failed, whatever)
-                            // drops us to a plain `request_shell` so
-                            // the user still gets a working terminal.
-                            let try_with_integration = (|| -> Result<
-                                pier_core::ssh::SshChannelPty,
-                                String,
-                            > {
-                                let sftp = session
-                                    .open_sftp_blocking()
-                                    .map_err(|e| e.to_string())?;
-                                // Idempotent create — "already exists"
-                                // is fine, we just need the dir to be
-                                // there before write_file.
-                                let _ = sftp.create_dir_blocking(REMOTE_INTEGRATION_DIR);
-                                sftp.write_file_blocking(
-                                    REMOTE_INTEGRATION_BASH_PATH,
-                                    BASH_INTEGRATION.as_bytes(),
-                                )
-                                .map_err(|e| e.to_string())?;
-                                session
-                                    .open_exec_channel_blocking(
-                                        SSH_DEFAULT_COLS,
-                                        SSH_DEFAULT_ROWS,
-                                        BASH_LAUNCH_COMMAND,
-                                    )
-                                    .map_err(|e| e.to_string())
-                            })();
-
-                            let pty = match try_with_integration {
+                            // Detect the remote shell flavour, then
+                            // upload the matching rc + launch with the
+                            // matching command. Any failure in the
+                            // integration path silently falls back to
+                            // a plain `request_shell` so the user
+                            // always gets a working terminal.
+                            let pty = match open_integrated_shell(&session) {
                                 Ok(pty) => pty,
                                 Err(err) => {
                                     log::warn!(

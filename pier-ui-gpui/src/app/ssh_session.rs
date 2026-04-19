@@ -344,6 +344,14 @@ impl SshSessionState {
         }
     }
 
+    /// Borrow the live russh session, if one has connected. Used
+    /// by Git-remote / SFTP-remote callers that need to piggyback
+    /// a new exec or SFTP channel onto the already-open connection
+    /// instead of paying a second auth handshake.
+    pub fn live_session(&self) -> Option<SshSession> {
+        self.session.clone()
+    }
+
     /// Inject a freshly-connected `SshSession` into this state. Called
     /// from the background task spawned by `open_ssh_terminal` once the
     /// russh handshake finishes — so subsequent SFTP / monitor /

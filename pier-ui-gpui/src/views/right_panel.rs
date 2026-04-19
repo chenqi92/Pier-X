@@ -25,8 +25,9 @@ use rust_i18n::t;
 use crate::app::layout::{RightContext, RightMode, RIGHT_ICON_BAR_W};
 use crate::app::PierApp;
 use crate::components::{
-    text, Button, Card, HeaderSize, IconButton, IconButtonSize, IconButtonVariant, PageHeader,
-    SectionLabel, StatusKind, StatusPill,
+    data_cell_row, text, Button, Card, DataCell, DataTone, HeaderSize, IconButton, IconButtonSize,
+    IconButtonVariant, InspectorSection, PageHeader, PropertyRow, SectionLabel, Separator,
+    StatusKind, StatusPill,
 };
 use crate::theme::{
     heights::{BUTTON_MD_H, ICON_MD, ROW_MD_H},
@@ -752,13 +753,13 @@ fn monitor_view(
         .into_any_element();
     };
 
-    // The page-level PageHeader (rendered above `monitor_view` by
-    // `mode_page_header`) already shows the eyebrow "Monitor",
-    // session name, remote endpoint, and connection status pill —
-    // we don't re-render them here. That removes the old duplicated
-    // H2 title row and the dedicated "Target" card, which were
-    // pushing the actual metrics below the fold and wasting the one
-    // thing a monitor view should maximise: signal density.
+    // Flush inspector grammar: no outer padding, no gap between
+    // sections — each `InspectorSection` supplies its own title bar +
+    // hairline, and a `Separator::horizontal()` between sections keeps
+    // the panel reading as one connected 1px grid (see the reference
+    // trading app's right column). The PageHeader rendered above us by
+    // `mode_page_header` already carries session name / endpoint /
+    // connection status, so we never re-state them here.
     let (status, snapshot, error) = {
         let session = session_entity.read(cx);
         (
@@ -768,18 +769,25 @@ fn monitor_view(
         )
     };
 
-    let mut col = div().w_full().flex().flex_col().gap(SP_2).p(SP_3);
+    let mut col = div()
+        .w_full()
+        .flex()
+        .flex_col()
+        .bg(t.color.bg_surface);
 
     if let Some(err) = error {
-        col = col.child(
-            Card::new()
-                .padding(SP_3)
-                .child(
-                    SectionLabel::new(t!("App.RightPanel.Monitor.probe_error"))
-                        .with_icon(IconName::TriangleAlert),
-                )
-                .child(text::caption(err).secondary()),
-        );
+        col = col
+            .child(
+                InspectorSection::new(t!("App.RightPanel.Monitor.probe_error"))
+                    .icon(IconName::TriangleAlert)
+                    .child(
+                        div()
+                            .px(SP_3)
+                            .py(SP_2)
+                            .child(text::caption(err).secondary()),
+                    ),
+            )
+            .child(Separator::horizontal());
     }
 
     let Some(snapshot) = snapshot else {
@@ -791,73 +799,100 @@ fn monitor_view(
         };
         return col
             .child(
-                Card::new()
-                    .padding(SP_3)
-                    .child(SectionLabel::new(t!("App.Common.status")))
-                    .child(text::caption(empty_label).secondary()),
+                InspectorSection::new(t!("App.Common.status")).child(
+                    div()
+                        .px(SP_3)
+                        .py(SP_2)
+                        .child(text::caption(empty_label).secondary()),
+                ),
             )
             .into_any_element();
     };
 
-    let mut grid = div().flex().flex_row().flex_wrap().gap(SP_2);
-    grid = grid.child(monitor_meter_card(
-        t,
-        "CPU",
-        percentage_label(snapshot.cpu_pct),
-        load_label(snapshot.load_1, snapshot.load_5, snapshot.load_15),
-        percent_ratio(snapshot.cpu_pct),
-        t.color.accent,
-    ));
-    grid = grid.child(monitor_meter_card(
-        t,
-        t!("App.RightPanel.Monitor.memory"),
-        memory_primary(&snapshot),
-        memory_secondary(&snapshot),
-        memory_ratio(&snapshot),
-        t.color.status_info,
-    ));
-    grid = grid.child(monitor_meter_card(
-        t,
-        t!("App.RightPanel.Monitor.disk"),
-        disk_primary(&snapshot),
-        disk_secondary(&snapshot),
-        percent_ratio(snapshot.disk_use_pct),
-        disk_color(t, snapshot.disk_use_pct),
-    ));
-    grid = grid.child(monitor_meter_card(
-        t,
-        t!("App.RightPanel.Monitor.swap"),
-        swap_primary(&snapshot),
-        swap_secondary(&snapshot),
-        swap_ratio(&snapshot),
-        t.color.status_warning,
-    ));
-    grid = grid.child(monitor_detail_card(
-        t!("App.RightPanel.Monitor.load"),
-        compact_label(snapshot.load_1),
-        t!(
-            "App.RightPanel.Monitor.load_tail",
-            load_5 = compact_label(snapshot.load_5).as_ref(),
-            load_15 = compact_label(snapshot.load_15).as_ref()
+    // Primary stats row: CPU / Memory / Disk — the three resources a
+    // user checks first. `data_cell_row` renders equal-width cells
+    // separated by 1px subtle rules, so the row reads as a unit rather
+    // than three floating tiles. Each cell pulls its bar color from
+    // the tone so disk transitions warning→error without a color
+    // literal at the call site.
+    let primary = data_cell_row(vec![
+        DataCell::new("CPU", percentage_label(snapshot.cpu_pct))
+            .secondary(t!(
+                "App.RightPanel.Monitor.load_tail",
+                load_5 = compact_label(snapshot.load_5).as_ref(),
+                load_15 = compact_label(snapshot.load_15).as_ref()
+            ))
+            .tone(DataTone::Accent)
+            .when_some(percent_ratio(snapshot.cpu_pct), DataCell::bar),
+        DataCell::new(t!("App.RightPanel.Monitor.memory"), memory_primary(&snapshot))
+            .secondary(memory_secondary(&snapshot))
+            .when_some(memory_ratio(&snapshot), DataCell::bar),
+        DataCell::new(t!("App.RightPanel.Monitor.disk"), disk_primary(&snapshot))
+            .secondary(disk_secondary(&snapshot))
+            .tone(disk_tone(snapshot.disk_use_pct))
+            .when_some(percent_ratio(snapshot.disk_use_pct), DataCell::bar),
+    ]);
+
+    // Secondary stats row: Swap / Uptime — less critical, no bar.
+    let secondary = data_cell_row(vec![
+        DataCell::new(t!("App.RightPanel.Monitor.swap"), swap_primary(&snapshot))
+            .secondary(swap_secondary(&snapshot))
+            .when_some(swap_ratio(&snapshot), DataCell::bar)
+            .tone(DataTone::Warning),
+        DataCell::new(
+            t!("App.RightPanel.Monitor.uptime"),
+            if snapshot.uptime.is_empty() {
+                SharedString::from("—")
+            } else {
+                SharedString::from(snapshot.uptime.clone())
+            },
         )
-        .into(),
-    ));
-    grid = grid.child(monitor_detail_card(
-        t!("App.RightPanel.Monitor.uptime"),
-        if snapshot.uptime.is_empty() {
-            "—".into()
-        } else {
-            snapshot.uptime.clone().into()
-        },
-        t!(
+        .secondary(t!(
             "App.RightPanel.Monitor.root_free",
             avail = empty_dash(&snapshot.disk_avail),
             total = empty_dash(&snapshot.disk_total)
-        )
-        .into(),
-    ));
+        ))
+        .mono(),
+    ]);
 
-    col.child(grid).into_any_element()
+    col.child(
+        InspectorSection::new(t!("App.RightPanel.Modes.monitor"))
+            .icon(IconName::ChartPie)
+            .child(primary)
+            .child(Separator::horizontal())
+            .child(secondary),
+    )
+    .child(Separator::horizontal())
+    .child(
+        InspectorSection::new(t!("App.RightPanel.Monitor.load"))
+            .icon(IconName::ChartPie)
+            .child(
+                PropertyRow::new("monitor-load-1", t!("App.RightPanel.Monitor.load_1m"))
+                    .value(text::mono(compact_label(snapshot.load_1))),
+            )
+            .child(
+                PropertyRow::new("monitor-load-5", t!("App.RightPanel.Monitor.load_5m"))
+                    .value(text::mono(compact_label(snapshot.load_5))),
+            )
+            .child(
+                PropertyRow::new("monitor-load-15", t!("App.RightPanel.Monitor.load_15m"))
+                    .value(text::mono(compact_label(snapshot.load_15))),
+            ),
+    )
+    .into_any_element()
+}
+
+/// Translate disk-use percent → inspector tone. Keeps the 75/90
+/// thresholds in one place so the DataCell value *and* its bar share
+/// the same warn/error signal.
+fn disk_tone(pct: f64) -> DataTone {
+    if pct >= 90.0 {
+        DataTone::Negative
+    } else if pct >= 75.0 {
+        DataTone::Warning
+    } else {
+        DataTone::Default
+    }
 }
 
 fn docker_view(
@@ -1015,20 +1050,46 @@ fn logs_view(
     let on_stop = on_action.clone();
     let on_clear = on_action.clone();
 
-    // PageHeader already shows "Logs" + endpoint + connection status.
-    // Here we only surface what's specific to the logs process: its
-    // run status and optional exit code.
-    let mut header = div()
+    // Command section actions: Run (primary sm) + Stop / Clear as
+    // quiet icon buttons. Status + exit pills live inside the section
+    // body as a single eyebrow row so the header stays single-line on
+    // narrow panels.
+    let command_actions = div()
+        .flex_none()
         .flex()
         .flex_row()
         .items_center()
-        .gap(SP_2)
+        .gap(SP_1)
+        .child(
+            Button::primary("logs-run", t!("App.Common.run"))
+                .size(ButtonSize::Sm)
+                .leading_icon(IconName::Play)
+                .on_click(move |_, window, app| on_run(&run_action, window, app)),
+        )
+        .child(
+            IconButton::new("logs-stop", IconName::Square)
+                .size(IconButtonSize::Sm)
+                .on_click(move |_, window, app| on_stop(&stop_action, window, app)),
+        )
+        .child(
+            IconButton::new("logs-clear", IconName::Eraser)
+                .size(IconButtonSize::Sm)
+                .on_click(move |_, window, app| on_clear(&clear_action, window, app)),
+        );
+
+    let mut status_row = div()
+        .flex()
+        .flex_row()
+        .items_center()
+        .gap(SP_1_5)
+        .px(SP_3)
+        .py(SP_1_5)
         .child(StatusPill::new(
             logs_status_label(&status),
             logs_status_kind(&status),
         ));
     if let Some(exit_code) = exit_code {
-        header = header.child(StatusPill::new(
+        status_row = status_row.child(StatusPill::new(
             logs_exit_label(exit_code),
             if exit_code == 0 {
                 StatusKind::Success
@@ -1038,210 +1099,132 @@ fn logs_view(
         ));
     }
 
+    // Command input + preset row — lives flush inside the section,
+    // no surrounding card. Preset buttons downgraded to `Sm` so a
+    // 4-wide row fits on a typical 380px panel without wrapping.
+    let command_body = div()
+        .flex()
+        .flex_col()
+        .gap(SP_1_5)
+        .px(SP_3)
+        .pb(SP_2)
+        .child(Input::new(&logs_command_input))
+        .child(
+            div()
+                .flex()
+                .flex_row()
+                .flex_wrap()
+                .gap(SP_1)
+                .child(logs_preset_button(
+                    "logs-preset-journal",
+                    "Journal",
+                    "journalctl -f -n 200 --no-pager",
+                    on_action.clone(),
+                ))
+                .child(logs_preset_button(
+                    "logs-preset-syslog",
+                    "Syslog",
+                    "tail -n 200 -F /var/log/syslog",
+                    on_action.clone(),
+                ))
+                .child(logs_preset_button(
+                    "logs-preset-messages",
+                    "Messages",
+                    "tail -n 200 -F /var/log/messages",
+                    on_action.clone(),
+                ))
+                .child(logs_preset_button(
+                    "logs-preset-app",
+                    "App.log",
+                    "tail -n 200 -F ~/app.log",
+                    on_action,
+                )),
+        );
+
     let mut col = div()
         .w_full()
         .flex()
         .flex_col()
-        .gap(SP_2)
-        .p(SP_3)
-        .child(header)
+        .bg(t.color.bg_surface)
         .child(
-            Card::new()
-                .padding(SP_3)
-                .child(
-                    SectionLabel::new(t!("App.RightPanel.Logs.command"))
-                        .with_icon(IconName::SquareTerminal),
-                )
-                .child(Input::new(&logs_command_input))
-                .child(
-                    div()
-                        .pt(SP_2)
-                        .flex()
-                        .flex_row()
-                        .flex_wrap()
-                        .gap(SP_2)
-                        .child(
-                            Button::primary("logs-run", t!("App.Common.run"))
-                                .on_click(move |_, window, app| on_run(&run_action, window, app)),
-                        )
-                        .child(
-                            Button::secondary("logs-stop", t!("App.Common.stop"))
-                                .on_click(move |_, window, app| on_stop(&stop_action, window, app)),
-                        )
-                        .child(
-                            Button::secondary("logs-clear", t!("App.Common.clear")).on_click(
-                                move |_, window, app| on_clear(&clear_action, window, app),
-                            ),
-                        ),
-                )
-                .child(
-                    div()
-                        .pt(SP_2)
-                        .flex()
-                        .flex_row()
-                        .flex_wrap()
-                        .gap(SP_2)
-                        .child(logs_preset_button(
-                            "logs-preset-journal",
-                            "Journal",
-                            "journalctl -f -n 200 --no-pager",
-                            on_action.clone(),
-                        ))
-                        .child(logs_preset_button(
-                            "logs-preset-syslog",
-                            "Syslog",
-                            "tail -n 200 -F /var/log/syslog",
-                            on_action.clone(),
-                        ))
-                        .child(logs_preset_button(
-                            "logs-preset-messages",
-                            "Messages",
-                            "tail -n 200 -F /var/log/messages",
-                            on_action.clone(),
-                        ))
-                        .child(logs_preset_button(
-                            "logs-preset-app",
-                            "App.log",
-                            "tail -n 200 -F ~/app.log",
-                            on_action,
-                        )),
-                ),
-        );
+            InspectorSection::new(t!("App.RightPanel.Logs.command"))
+                .icon(IconName::SquareTerminal)
+                .actions(command_actions)
+                .child(status_row)
+                .child(command_body),
+        )
+        .child(Separator::horizontal());
 
-    if let Some(command) = command {
-        col = col.child(
-            Card::new()
-                .padding(SP_3)
-                .child(
-                    SectionLabel::new(t!("App.RightPanel.Logs.active_command"))
-                        .with_icon(IconName::SquareTerminal),
-                )
-                .child(div().overflow_hidden().child(text::mono(command))),
-        );
-    }
     if let Some(err) = error {
-        col = col.child(
-            Card::new()
-                .padding(SP_3)
-                .child(
-                    SectionLabel::new(t!("App.RightPanel.Logs.stream_error"))
-                        .with_icon(IconName::TriangleAlert),
-                )
-                .child(text::body(err).secondary()),
-        );
+        col = col
+            .child(
+                InspectorSection::new(t!("App.RightPanel.Logs.stream_error"))
+                    .icon(IconName::TriangleAlert)
+                    .child(
+                        div()
+                            .px(SP_3)
+                            .py(SP_2)
+                            .child(text::body(err).secondary()),
+                    ),
+            )
+            .child(Separator::horizontal());
+    }
+
+    // Output section. The "active command" echo that used to be its
+    // own card is now the section eyebrow — one less stacked card on
+    // every refresh. When the stream is live but silent we still want
+    // a subtle status line so users know the process is running.
+    let retained_pill = if lines.is_empty() {
+        StatusPill::new(
+            match status {
+                LogsStatus::Idle => t!("App.RightPanel.Logs.idle_hint"),
+                LogsStatus::Starting => t!("App.RightPanel.Logs.starting_stream"),
+                LogsStatus::Live => t!("App.RightPanel.Logs.waiting_first_line"),
+                LogsStatus::Stopped => t!("App.RightPanel.Logs.stream_stopped"),
+                LogsStatus::Failed => t!("App.RightPanel.Logs.failed_before_line"),
+            },
+            logs_status_kind(&status),
+        )
+    } else {
+        StatusPill::new(
+            t!(
+                "App.RightPanel.Logs.retained_lines",
+                count = lines.len()
+            ),
+            StatusKind::Info,
+        )
+    };
+
+    let mut output_section = InspectorSection::new(t!("App.RightPanel.Logs.output"))
+        .icon(IconName::GalleryVerticalEnd)
+        .actions(retained_pill);
+    if let Some(cmd) = command {
+        output_section = output_section.eyebrow(cmd);
     }
 
     if lines.is_empty() {
-        let empty_label = match status {
-            LogsStatus::Idle => t!("App.RightPanel.Logs.idle_hint"),
-            LogsStatus::Starting => t!("App.RightPanel.Logs.starting_stream"),
-            LogsStatus::Live => t!("App.RightPanel.Logs.waiting_first_line"),
-            LogsStatus::Stopped => t!("App.RightPanel.Logs.stream_stopped"),
-            LogsStatus::Failed => t!("App.RightPanel.Logs.failed_before_line"),
-        };
-        return col
-            .child(
-                Card::new()
-                    .padding(SP_3)
+        col.child(output_section).into_any_element()
+    } else {
+        let visible = lines.iter().rev().take(200).cloned().collect::<Vec<_>>();
+        for (index, line) in visible.into_iter().enumerate() {
+            output_section = output_section.child(log_line_row(t, index, line));
+        }
+        if lines.len() > 200 {
+            output_section = output_section.child(
+                div()
+                    .px(SP_3)
+                    .py(SP_1_5)
                     .child(
-                        SectionLabel::new(t!("App.RightPanel.Logs.output"))
-                            .with_icon(IconName::GalleryVerticalEnd),
-                    )
-                    .child(text::body(empty_label).secondary()),
-            )
-            .into_any_element();
+                        text::caption(t!(
+                            "App.RightPanel.Logs.hidden_older_lines",
+                            count = lines.len() - 200
+                        ))
+                        .secondary(),
+                    ),
+            );
+        }
+        col.child(output_section).into_any_element()
     }
-
-    let mut stream_card = Card::new()
-        .padding(SP_3)
-        .child(
-            SectionLabel::new(t!("App.RightPanel.Logs.output"))
-                .with_icon(IconName::GalleryVerticalEnd),
-        )
-        .child(
-            text::body(t!(
-                "App.RightPanel.Logs.retained_lines",
-                count = lines.len()
-            ))
-            .secondary(),
-        );
-
-    let visible = lines.iter().rev().take(200).cloned().collect::<Vec<_>>();
-    for (index, line) in visible.into_iter().enumerate() {
-        stream_card = stream_card.child(log_line_row(t, index, line));
-    }
-    if lines.len() > 200 {
-        stream_card = stream_card.child(
-            text::body(t!(
-                "App.RightPanel.Logs.hidden_older_lines",
-                count = lines.len() - 200
-            ))
-            .secondary(),
-        );
-    }
-
-    col.child(stream_card).into_any_element()
-}
-
-fn monitor_meter_card(
-    t: &crate::theme::Theme,
-    title: impl Into<SharedString>,
-    primary: SharedString,
-    secondary: SharedString,
-    ratio: Option<f32>,
-    fill: gpui::Rgba,
-) -> impl IntoElement {
-    let title: SharedString = title.into();
-    // 148px card fits two per row in the typical ~320px right panel
-    // width (previous 176px was stuck at one-per-row). Primary number
-    // promoted to H3 (16px) — this is the number the user is actually
-    // looking at; secondary demoted to Caption so it stops competing.
-    let bar_w = 124.0;
-    div().w(px(148.0)).child(
-        Card::new()
-            .padding(SP_3)
-            .gap(SP_1)
-            .child(SectionLabel::new(title))
-            .child(text::h3(primary))
-            .child(monitor_bar(t, bar_w, ratio, fill))
-            .child(text::caption(secondary).secondary().truncate()),
-    )
-}
-
-fn monitor_detail_card(
-    title: impl Into<SharedString>,
-    primary: SharedString,
-    secondary: SharedString,
-) -> impl IntoElement {
-    let title: SharedString = title.into();
-    div().w(px(148.0)).child(
-        Card::new()
-            .padding(SP_3)
-            .gap(SP_1)
-            .child(SectionLabel::new(title))
-            .child(text::h3(primary))
-            .child(text::caption(secondary).secondary().truncate()),
-    )
-}
-
-fn monitor_bar(
-    t: &crate::theme::Theme,
-    width: f32,
-    ratio: Option<f32>,
-    fill: gpui::Rgba,
-) -> impl IntoElement {
-    div()
-        .w(px(width))
-        .h(px(6.0))
-        .rounded(px(3.0))
-        .bg(t.color.bg_panel)
-        .child(
-            div()
-                .w(px(width * ratio.unwrap_or(0.0).clamp(0.0, 1.0)))
-                .h_full()
-                .rounded(px(3.0))
-                .bg(fill),
-        )
 }
 
 fn percentage_label(value: f64) -> SharedString {
@@ -1335,26 +1318,6 @@ fn swap_secondary(snapshot: &ServerSnapshot) -> SharedString {
         t!("App.RightPanel.Monitor.swap_unavailable").into()
     } else {
         format!("{:.0} MB total", snapshot.swap_total_mb).into()
-    }
-}
-
-fn load_label(load_1: f64, load_5: f64, load_15: f64) -> SharedString {
-    t!(
-        "App.RightPanel.Monitor.load_breakdown",
-        load_1 = compact_label(load_1).as_ref(),
-        load_5 = compact_label(load_5).as_ref(),
-        load_15 = compact_label(load_15).as_ref()
-    )
-    .into()
-}
-
-fn disk_color(t: &crate::theme::Theme, disk_use_pct: f64) -> gpui::Rgba {
-    if disk_use_pct >= 90.0 {
-        t.color.status_error
-    } else if disk_use_pct >= 75.0 {
-        t.color.status_warning
-    } else {
-        t.color.status_success
     }
 }
 
@@ -1852,7 +1815,12 @@ fn logs_preset_button(
         command: command.to_string(),
     };
 
-    Button::secondary(id, label).on_click(move |_, window, app| on_action(&action, window, app))
+    // Sm (22px) so four presets fit in one row on a typical ~380px
+    // panel without the old wrapped 28px row eating a whole extra
+    // vertical band of chrome.
+    Button::secondary(id, label)
+        .size(ButtonSize::Sm)
+        .on_click(move |_, window, app| on_action(&action, window, app))
 }
 
 fn logs_status_label(status: &LogsStatus) -> SharedString {

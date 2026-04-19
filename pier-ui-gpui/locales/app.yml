@@ -255,10 +255,11 @@ App:
         zh-CN: 终端深度集成
       shell_integration_description:
         en: >-
-          Installs a tiny rc snippet into your ~/.bashrc / ~/.zshrc so manual
-          `ssh` commands in a local terminal also make the left file panel
-          follow the remote host. Off by default.
-        zh-CN: 在 ~/.bashrc / ~/.zshrc 里追加一小段脚本，让你在本地终端手动敲 `ssh` 时左侧文件面板也能自动跟随到远端。默认关闭。
+          Installs a tiny rc snippet into your shell profile (bash / zsh on
+          macOS & Linux, PowerShell on Windows) so manual `ssh` commands in
+          a local terminal also keep the right-side panels tracking the
+          remote host. Off by default.
+        zh-CN: 在你的 shell profile 里追加一小段脚本（macOS / Linux 写 bash / zsh，Windows 写 PowerShell），让你在本地终端手动敲 `ssh` 时右侧面板也能自动跟随到远端。默认关闭。
       Palettes:
         default:
           en: Pier default shell palette
@@ -733,6 +734,15 @@ App:
       load_breakdown:
         en: "1m %{load_1} · 5m %{load_5} · 15m %{load_15}"
         zh-CN: "1 分钟 %{load_1} · 5 分钟 %{load_5} · 15 分钟 %{load_15}"
+      load_1m:
+        en: 1-minute load
+        zh-CN: 1 分钟负载
+      load_5m:
+        en: 5-minute load
+        zh-CN: 5 分钟负载
+      load_15m:
+        en: 15-minute load
+        zh-CN: 15 分钟负载
     Docker:
       placeholder:
         en: Open a saved connection from the left panel to inspect remote containers.

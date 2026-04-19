@@ -120,6 +120,7 @@ impl RenderOnce for IconButton {
             .w(square)
             .h(square)
             .flex()
+            .flex_none()
             .items_center()
             .justify_center()
             .rounded(RADIUS_SM)

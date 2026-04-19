@@ -30,6 +30,7 @@ pub struct Text {
     role: TextRole,
     centered: bool,
     secondary: bool,
+    truncate: bool,
 }
 
 impl Text {
@@ -39,6 +40,7 @@ impl Text {
             label: label.into(),
             centered: false,
             secondary: false,
+            truncate: false,
         }
     }
 
@@ -49,6 +51,19 @@ impl Text {
 
     pub fn secondary(mut self) -> Self {
         self.secondary = true;
+        self
+    }
+
+    /// Truncate the text to one line with an ellipsis on overflow.
+    ///
+    /// Critical for CJK text inside a flex row: without `whitespace_nowrap`
+    /// (which this enables via GPUI's `.truncate()`), a long Chinese path
+    /// will wrap *per character* and render vertically (see the SFTP bug
+    /// in the layout plan). Callers should also ensure the containing
+    /// flex child has `.flex_1().min_w(px(0.0))` so the truncate has a
+    /// bounded width to shrink into.
+    pub fn truncate(mut self) -> Self {
+        self.truncate = true;
         self
     }
 }
@@ -93,6 +108,9 @@ impl RenderOnce for Text {
         let mut el = el.child(self.label);
         if self.centered {
             el = el.text_center();
+        }
+        if self.truncate {
+            el = el.truncate();
         }
         el
     }

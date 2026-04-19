@@ -63,15 +63,27 @@ impl RenderOnce for MetaLine {
             .flex()
             .flex_row()
             .items_center()
+            .min_w(gpui::px(0.0))
             .gap(SP_1)
             .text_color(color);
 
         if let Some(icon) = self.icon {
-            row = row.child(UiIcon::new(icon).size(ICON_SM));
+            row = row.child(
+                div()
+                    .flex_none()
+                    .child(UiIcon::new(icon).size(ICON_SM)),
+            );
         }
 
+        // MetaLine values are usually mono paths/endpoints — long strings
+        // would otherwise wrap per-character (CJK) or per-word (ASCII)
+        // inside a flex child. Force truncate so the caller only has to
+        // ensure the surrounding row gives us a bounded width.
         row.child(
             div()
+                .flex_1()
+                .min_w(gpui::px(0.0))
+                .truncate()
                 .text_size(SIZE_MONO_SMALL)
                 .font_family(t.font_mono.clone())
                 .font_weight(WEIGHT_REGULAR)

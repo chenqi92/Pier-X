@@ -393,7 +393,9 @@ fn remote_row(
                 .gap(SP_1)
                 .child(
                     div()
+                        .flex_1()
                         .min_w(px(0.0))
+                        .truncate()
                         .text_size(SIZE_CAPTION)
                         .font_weight(WEIGHT_MEDIUM)
                         .child(name),
@@ -401,6 +403,7 @@ fn remote_row(
                 .when(entry.is_link, |el| {
                     el.child(
                         div()
+                            .flex_none()
                             .text_size(SIZE_SMALL)
                             .text_color(t.color.text_tertiary)
                             .child(SharedString::from(t!("App.Sftp.link").to_string())),
@@ -409,6 +412,7 @@ fn remote_row(
         )
         .child(
             div()
+                .flex_none()
                 .text_size(SIZE_SMALL)
                 .text_color(t.color.text_tertiary)
                 .child(size_label),

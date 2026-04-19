@@ -7,6 +7,7 @@ use rust_i18n::t;
 
 use gpui_component::{scroll::ScrollableElement, WindowExt as _};
 
+use crate::components::ToggleRow;
 use crate::app::keybindings::{
     format_keystroke, is_modifier_only, resolved_keystroke, ActionId,
 };
@@ -14,7 +15,7 @@ use crate::i18n::{self, LOCALE_ENGLISH, LOCALE_PREFERENCE_SYSTEM, LOCALE_ZH_CN};
 use crate::theme::{
     available_terminal_font_families, available_ui_font_families, DEFAULT_UI_FONT_FAMILY,
     radius::{RADIUS_MD, RADIUS_SM},
-    spacing::{SP_1, SP_1_5, SP_2, SP_3, SP_4, SP_5},
+    spacing::{SP_1, SP_1_5, SP_2, SP_3, SP_4, SP_5, SP_6},
     terminal::{available_terminal_palettes, terminal_bg_color, terminal_hex_color},
     terminal_cursor_blink, terminal_cursor_style, terminal_font_for_family,
     terminal_font_ligatures, terminal_font_size, terminal_opacity, theme,
@@ -665,20 +666,20 @@ impl SettingsDialog {
                     }),
                 )
                 .into_any_element(),
-                toggle_row(
-                    &t,
+                ToggleRow::new(
+                    "settings-toggle-ligatures",
                     t!("App.Settings.Terminal.font_ligatures"),
-                    t!("App.Settings.Terminal.font_ligatures_description"),
-                    font_ligatures,
-                    Box::new({
-                        let dialog = dialog.clone();
-                        move |value, _, app| {
-                            apply_dialog_settings(&dialog, app, move |settings| {
-                                settings.terminal_font_ligatures = *value;
-                            });
-                        }
-                    }),
                 )
+                .description(t!("App.Settings.Terminal.font_ligatures_description"))
+                .checked(font_ligatures)
+                .on_toggle({
+                    let dialog = dialog.clone();
+                    move |value, _, app| {
+                        apply_dialog_settings(&dialog, app, move |settings| {
+                            settings.terminal_font_ligatures = *value;
+                        });
+                    }
+                })
                 .into_any_element(),
             ],
         ))
@@ -734,20 +735,20 @@ impl SettingsDialog {
                     .into_any_element(),
                 ])
                 .into_any_element(),
-                toggle_row(
-                    &t,
+                ToggleRow::new(
+                    "settings-toggle-cursor-blink",
                     t!("App.Settings.Terminal.cursor_blink"),
-                    t!("App.Settings.Terminal.cursor_blink_description"),
-                    cursor_blink,
-                    Box::new({
-                        let dialog = dialog.clone();
-                        move |value, _, app| {
-                            apply_dialog_settings(&dialog, app, move |settings| {
-                                settings.terminal_cursor_blink = *value;
-                            });
-                        }
-                    }),
                 )
+                .description(t!("App.Settings.Terminal.cursor_blink_description"))
+                .checked(cursor_blink)
+                .on_toggle({
+                    let dialog = dialog.clone();
+                    move |value, _, app| {
+                        apply_dialog_settings(&dialog, app, move |settings| {
+                            settings.terminal_cursor_blink = *value;
+                        });
+                    }
+                })
                 .into_any_element(),
             ],
         ))
@@ -832,10 +833,15 @@ fn section_shell(
 ) -> gpui_component::scroll::Scrollable<gpui::Div> {
     let title: SharedString = title.into();
     let subtitle: SharedString = subtitle.into();
+    // Extra right padding (= SP_6) reserves space for the scrollbar
+    // gutter. Without it, the "更改" / "重置" buttons at the end of
+    // shortcut rows get painted under the scroll thumb and look
+    // clipped to "更c".
     div()
         .h_full()
         .overflow_y_scrollbar()
-        .px(SP_5)
+        .pl(SP_5)
+        .pr(SP_6)
         .py(SP_5)
         .flex()
         .flex_col()
@@ -1016,51 +1022,6 @@ fn icon_step_button(
         )
 }
 
-fn toggle_row(
-    t: &crate::theme::Theme,
-    title: impl Into<SharedString>,
-    description: impl Into<SharedString>,
-    checked: bool,
-    on_click: Box<dyn Fn(&bool, &mut Window, &mut App) + 'static>,
-) -> impl IntoElement {
-    let title: SharedString = title.into();
-    let description: SharedString = description.into();
-    let switch_label = title.clone();
-    div()
-        .p(SP_2)
-        .flex()
-        .flex_row()
-        .items_center()
-        .gap(SP_2)
-        .rounded(RADIUS_SM)
-        .bg(t.color.bg_surface)
-        .border_1()
-        .border_color(t.color.border_subtle)
-        .child(
-            div()
-                .flex_1()
-                .min_w(px(0.0))
-                .child(
-                    div()
-                        .text_size(SIZE_BODY)
-                        .font_weight(WEIGHT_MEDIUM)
-                        .text_color(t.color.text_primary)
-                        .child(title),
-                )
-                .child(
-                    div()
-                        .pt(px(2.0))
-                        .text_size(SIZE_SMALL)
-                        .text_color(t.color.text_tertiary)
-                        .child(description),
-                ),
-        )
-        .child(
-            gpui_component::switch::Switch::new(switch_label)
-                .checked(checked)
-                .on_click(on_click),
-        )
-}
 
 fn shortcut_row_interactive(
     t: &crate::theme::Theme,
@@ -1109,6 +1070,7 @@ fn shortcut_row_interactive(
     } else {
         row = row.child(
             div()
+                .flex_none()
                 .px(SP_2)
                 .py(SP_1)
                 .rounded(RADIUS_SM)
@@ -1135,6 +1097,7 @@ fn shortcut_row_interactive(
     row = row.child(
         div()
             .id(gpui::ElementId::Name(SharedString::from(change_id)))
+            .flex_none()
             .px(SP_2)
             .py(SP_1)
             .rounded(RADIUS_SM)
@@ -1159,6 +1122,7 @@ fn shortcut_row_interactive(
         row = row.child(
             div()
                 .id(gpui::ElementId::Name(SharedString::from(reset_id)))
+                .flex_none()
                 .px(SP_2)
                 .py(SP_1)
                 .rounded(RADIUS_SM)

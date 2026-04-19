@@ -48,7 +48,7 @@ use crate::app::ssh_session::{ConnectStatus, ServiceProbeStatus, TunnelStatus};
 use crate::app::PierApp;
 use crate::components::{
     text, Button, Card, HeaderSize, IconButton, IconButtonSize, IconButtonVariant, MetaLine,
-    PageHeader, SectionLabel, StatusKind, StatusPill, TabItem, Tabs,
+    PageHeader, PillCluster, SectionLabel, StatusKind, StatusPill, TabItem, Tabs,
 };
 use crate::theme::heights::ROW_SM_H;
 use crate::theme::{
@@ -705,7 +705,7 @@ fn active_connection_card(session: &ActiveServerSessionSnapshot) -> impl IntoEle
         .child(MetaLine::new(endpoint).with_icon(IconName::Globe));
 
     if !session.services.is_empty() {
-        let mut services = div().pt(SP_2).flex().flex_row().flex_wrap().gap(SP_2);
+        let mut services = PillCluster::new();
         for service in &session.services {
             services = services.child(StatusPill::new(
                 service_label(service),
@@ -726,7 +726,7 @@ fn active_connection_card(session: &ActiveServerSessionSnapshot) -> impl IntoEle
     }
 
     if !session.tunnels.is_empty() {
-        let mut tunnels = div().pt(SP_2).flex().flex_row().flex_wrap().gap(SP_2);
+        let mut tunnels = PillCluster::new();
         for tunnel in &session.tunnels {
             tunnels = tunnels.child(StatusPill::new(
                 tunnel_label(tunnel),

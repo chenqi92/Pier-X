@@ -179,6 +179,7 @@ impl RenderOnce for Button {
             .px(SP_3)
             .flex()
             .flex_row()
+            .flex_none()
             .items_center()
             .justify_center()
             .rounded(RADIUS_SM)

@@ -105,9 +105,12 @@ impl RenderOnce for PageHeader {
         let t = theme(cx);
 
         // Title element — H2 for Page, UiLabel-ish (via SectionLabel
-        // component) for Section.
+        // component) for Section. Always truncate: a header takes one
+        // line by contract; overflow is always a mistake.
         let title_el: AnyElement = match self.size {
-            HeaderSize::Page => text::h2(self.title.clone()).into_any_element(),
+            HeaderSize::Page => text::h2(self.title.clone())
+                .truncate()
+                .into_any_element(),
             HeaderSize::Section => SectionLabel::new(self.title.clone()).into_any_element(),
         };
 
@@ -122,7 +125,10 @@ impl RenderOnce for PageHeader {
         }
         left = left.child(title_el);
         if let Some(subtitle) = self.subtitle_mono {
-            left = left.child(text::mono(subtitle).secondary());
+            // Mono subtitles are usually a path or `user@host:port` —
+            // long values are the norm. Truncate so the header never
+            // wraps to two lines.
+            left = left.child(text::mono(subtitle).secondary().truncate());
         }
 
         // Right column — trailing actions + optional status pill.

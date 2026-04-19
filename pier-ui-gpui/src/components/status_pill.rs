@@ -49,6 +49,7 @@ impl RenderOnce for StatusPill {
             .px(SP_2)
             .flex()
             .flex_row()
+            .flex_none()
             .items_center()
             .gap(SP_1)
             .bg(t.color.bg_surface)

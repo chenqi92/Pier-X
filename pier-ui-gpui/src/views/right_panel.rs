@@ -345,6 +345,11 @@ fn render_services_strip(
     overview: &RemoteOverview,
     on_select: ModeSelector,
 ) -> impl IntoElement {
+    // `min_w(0) + overflow_hidden` on the outer row is what lets the
+    // inner pill/chip column shrink and wrap correctly — without it a
+    // single wide service pill (e.g. "MySQL 8.0.45-Oubuntu0.24.04.1")
+    // spills into the icon rail on the right (seen in the Monitor
+    // page screenshot).
     let mut row = div()
         .px(SP_3)
         .py(SP_2)
@@ -352,6 +357,8 @@ fn render_services_strip(
         .flex_row()
         .flex_wrap()
         .items_start()
+        .min_w(px(0.0))
+        .overflow_hidden()
         .gap(SP_2)
         .border_b_1()
         .border_color(t.color.border_subtle)
@@ -362,6 +369,7 @@ fn render_services_strip(
     {
         div()
             .flex_1()
+            .min_w(px(0.0))
             .flex()
             .flex_row()
             .items_center()
@@ -379,6 +387,7 @@ fn render_services_strip(
     } else if overview.services.is_empty() {
         div()
             .flex_1()
+            .min_w(px(0.0))
             .text_size(SIZE_SMALL)
             .text_color(t.color.text_tertiary)
             .child(SharedString::from(
@@ -386,7 +395,13 @@ fn render_services_strip(
             ))
             .into_any_element()
     } else {
-        let mut pills = div().flex_1().flex().flex_row().flex_wrap().gap(SP_2);
+        let mut pills = div()
+            .flex_1()
+            .min_w(px(0.0))
+            .flex()
+            .flex_row()
+            .flex_wrap()
+            .gap(SP_2);
         for service in &overview.services {
             if let Some(mode) = RightMode::from_service_name(&service.name) {
                 let tunnel = overview
@@ -426,6 +441,8 @@ fn render_ssh_strip(t: &crate::theme::Theme, overview: &RemoteOverview) -> impl 
         .flex_row()
         .flex_wrap()
         .items_start()
+        .min_w(px(0.0))
+        .overflow_hidden()
         .gap(SP_2)
         .border_b_1()
         .border_color(t.color.border_subtle)
@@ -1528,7 +1545,19 @@ fn docker_container_row(
     };
     let pending_for_row = pending.filter(|action| action.target_id == container.id);
 
-    let mut actions = div().flex().flex_row().flex_wrap().justify_end().gap(SP_1);
+    // `flex_none().max_w(...)` caps the action column width so wide
+    // action labels (stop / restart / inspect) wrap *inside* their
+    // own column instead of stealing space from the container name.
+    // Without the cap the container name on the left shrinks to a
+    // two-character stub on typical right-panel widths.
+    let mut actions = div()
+        .flex()
+        .flex_row()
+        .flex_none()
+        .max_w(px(168.0))
+        .flex_wrap()
+        .justify_end()
+        .gap(SP_1);
     if let Some(action) = pending_for_row {
         actions = actions.child(StatusPill::new(
             docker_pending_label(action),

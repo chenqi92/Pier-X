@@ -70,3 +70,84 @@ jobs:
 
       - name: cargo build
         run: cargo build -p pier-ui-gpui --release
+
+  integration-tests:
+    name: Integration tests · DB backends
+    runs-on: ubuntu-latest
+    # Soft-required: lint / rust-core / gpui-shell are the gates that
+    # block main. This job is informational while we tune flake rates;
+    # once stable, drop continue-on-error and promote it to required.
+    continue-on-error: true
+
+    services:
+      mysql:
+        image: mysql:8
+        env:
+          MYSQL_ROOT_PASSWORD: pier-x-test
+        ports:
+          - 3306:3306
+        options: >-
+          --health-cmd="mysqladmin ping --silent"
+          --health-interval=10s
+          --health-timeout=5s
+          --health-retries=10
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: pier-x-test
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd="pg_isready -U postgres"
+          --health-interval=10s
+          --health-timeout=5s
+          --health-retries=10
+
+    env:
+      PIER_TEST_MYSQL_HOST: 127.0.0.1
+      PIER_TEST_MYSQL_PORT: "3306"
+      PIER_TEST_MYSQL_USER: root
+      PIER_TEST_MYSQL_PASSWORD: pier-x-test
+      PIER_TEST_PG_HOST: 127.0.0.1
+      PIER_TEST_PG_PORT: "5432"
+      PIER_TEST_PG_USER: postgres
+      PIER_TEST_PG_PASSWORD: pier-x-test
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+
+      # MySQL 8 / Postgres 16 occasionally take ~15s to be ready
+      # despite the service health-check; the explicit wait makes
+      # connect-refused failures impossible to mistake for auth flakes.
+      - name: Wait for MySQL
+        run: |
+          for i in {1..20}; do
+            if mysqladmin ping -h127.0.0.1 -uroot -ppier-x-test --silent 2>/dev/null; then
+              echo "MySQL ready after ${i}s"
+              exit 0
+            fi
+            sleep 1
+          done
+          echo "MySQL never came up" && exit 1
+      - name: Wait for Postgres
+        run: |
+          for i in {1..20}; do
+            if pg_isready -h 127.0.0.1 -U postgres -t 1 >/dev/null 2>&1; then
+              echo "Postgres ready after ${i}s"
+              exit 0
+            fi
+            sleep 1
+          done
+          echo "Postgres never came up" && exit 1
+
+      - name: Run integration tests
+        run: |
+          cargo test -p pier-core \
+            --features integration-tests \
+            --test integration_db \
+            -- --test-threads=1 --nocapture

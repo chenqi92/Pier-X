@@ -508,6 +508,10 @@ export type TabState = {
   sshAuthMode: "password" | "agent" | "key";
   sshPassword: string;
   sshKeyPath: string;
+  /** Index into the saved-connections list. When set, the backend
+   * resolves the password from the secure store instead of relying on
+   * `sshPassword` being passed from the frontend. */
+  sshSavedConnectionIndex: number | null;
   // Terminal session
   terminalSessionId: string | null;
   // Right panel tool preference

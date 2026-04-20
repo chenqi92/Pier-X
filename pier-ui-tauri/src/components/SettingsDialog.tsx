@@ -363,6 +363,17 @@ export default function SettingsDialog({ open, onClose }: Props) {
                 <SettingRow label={t("Audio bell")} description={t("Play a system sound on bell character.")}>
                   <Toggle checked={settings.audioBell} onChange={settings.setAudioBell} />
                 </SettingRow>
+
+                <SectionTitle>{t("Display")}</SectionTitle>
+                <SettingRow
+                  label={t("Row separators")}
+                  description={t("Draw a 1px divider between terminal rows — off by default.")}
+                >
+                  <Toggle
+                    checked={settings.terminalRowSeparators}
+                    onChange={settings.setTerminalRowSeparators}
+                  />
+                </SettingRow>
               </div>
             )}
 

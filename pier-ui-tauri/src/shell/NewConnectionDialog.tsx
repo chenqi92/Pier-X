@@ -27,6 +27,8 @@ type Props = {
     password: string;
     keyPath: string;
   }) => void;
+  /** Connect using a saved connection index — backend resolves credentials. */
+  onConnectSaved?: (index: number) => void;
   initialConnection?: SavedSshConnection | null;
 };
 
@@ -42,7 +44,7 @@ function toDraft(connection?: SavedSshConnection | null): ConnectionDraft {
   };
 }
 
-export default function NewConnectionDialog({ open, onClose, onConnect, initialConnection }: Props) {
+export default function NewConnectionDialog({ open, onClose, onConnect, onConnectSaved, initialConnection }: Props) {
   const { t } = useI18n();
   const { save, update } = useConnectionStore();
   const isEditing = !!initialConnection;
@@ -71,6 +73,7 @@ export default function NewConnectionDialog({ open, onClose, onConnect, initialC
   if (!open) return null;
 
   const p = Number.parseInt(port, 10);
+  const isEditingKept = isEditing && initialConnection?.authKind === authMode;
   const canSave =
     host.trim() &&
     user.trim() &&
@@ -78,14 +81,17 @@ export default function NewConnectionDialog({ open, onClose, onConnect, initialC
     p > 0 &&
     (authMode === "agent"
       || (authMode === "password"
-        ? (password.length > 0 || (isEditing && initialConnection?.authKind === "password"))
-        : keyPath.trim().length > 0));
+        ? (password.length > 0 || isEditingKept)
+        : (keyPath.trim().length > 0 || isEditingKept)));
   const canDirectConnect =
     host.trim() &&
     user.trim() &&
     Number.isFinite(p) &&
     p > 0 &&
-    (authMode === "agent" || (authMode === "password" ? password.length > 0 : keyPath.trim().length > 0));
+    (authMode === "agent"
+      || (authMode === "password"
+        ? (password.length > 0 || isEditingKept)
+        : (keyPath.trim().length > 0 || isEditingKept)));
   const canSaveAndConnect = canSave && canDirectConnect;
 
   const connectionName = name.trim() || `${user.trim()}@${host.trim()}`;
@@ -136,7 +142,14 @@ export default function NewConnectionDialog({ open, onClose, onConnect, initialC
     };
     try {
       await persistConnection();
-      onConnect(params);
+      // When editing an existing connection, use the saved-index path so the
+      // backend resolves the password from the keychain (avoids sending empty
+      // string when the user didn't retype).
+      if (isEditing && typeof initialDraft.index === "number" && onConnectSaved) {
+        onConnectSaved(initialDraft.index);
+      } else {
+        onConnect(params);
+      }
       onClose();
     } catch (e) {
       setError(String(e));
@@ -145,6 +158,13 @@ export default function NewConnectionDialog({ open, onClose, onConnect, initialC
 
   function handleConnect() {
     if (!canDirectConnect) return;
+    // Editing an existing connection — prefer the saved-index connect path
+    // so the backend resolves secrets from the keychain.
+    if (isEditing && typeof initialDraft.index === "number" && onConnectSaved) {
+      onConnectSaved(initialDraft.index);
+      onClose();
+      return;
+    }
     onConnect({
       name: connectionName,
       host: host.trim(),

@@ -122,17 +122,34 @@ function App() {
 
   function openSshSaved(index: number) {
     const conn = useConnectionStore.getState().connections.find((c) => c.index === index);
-    if (conn) {
-      addTab({
-        backend: "ssh",
-        title: conn.name || `${conn.user}@${conn.host}`,
-        sshHost: conn.host,
-        sshPort: conn.port,
-        sshUser: conn.user,
-        sshAuthMode: conn.authKind,
-        sshKeyPath: conn.keyPath,
-        rightTool: "monitor",
-      });
+    if (!conn) return;
+    // Seed the tab synchronously so the terminal starts launching
+    // via terminalCreateSshSaved (backend resolves password itself).
+    const tabId = addTab({
+      backend: "ssh",
+      title: conn.name || `${conn.user}@${conn.host}`,
+      sshHost: conn.host,
+      sshPort: conn.port,
+      sshUser: conn.user,
+      sshAuthMode: conn.authKind,
+      sshKeyPath: conn.keyPath,
+      sshSavedConnectionIndex: conn.index,
+      rightTool: "monitor",
+    });
+    // Prime the in-memory password from the keychain so non-terminal
+    // commands (probe, detect, docker, db) that take an explicit
+    // password parameter work for saved password connections.
+    if (conn.authKind === "password") {
+      cmd
+        .sshConnectionResolvePassword(conn.index)
+        .then((password) => {
+          if (password) {
+            useTabStore.getState().updateTab(tabId, { sshPassword: password });
+          }
+        })
+        .catch(() => {
+          /* fall through — backend terminal will still work via saved-index path */
+        });
     }
   }
 
@@ -353,6 +370,7 @@ function App() {
             setEditingConnection(null);
           }}
           onConnect={openSshTab}
+          onConnectSaved={openSshSaved}
         />
         <SettingsDialog
           open={settingsOpen}

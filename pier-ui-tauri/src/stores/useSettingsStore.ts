@@ -17,6 +17,8 @@ type SettingsState = {
   scrollbackLines: number;
   visualBell: boolean;
   audioBell: boolean;
+  /** Show a 1px divider between terminal rows. Default off (iTerm/VSCode style). */
+  terminalRowSeparators: boolean;
   // Setters
   setLocale: (locale: Locale) => void;
   setPerformanceOverlay: (on: boolean) => void;
@@ -29,6 +31,7 @@ type SettingsState = {
   setScrollbackLines: (lines: number) => void;
   setVisualBell: (on: boolean) => void;
   setAudioBell: (on: boolean) => void;
+  setTerminalRowSeparators: (on: boolean) => void;
 };
 
 export const UI_FONT_OPTIONS = [
@@ -62,6 +65,7 @@ export const useSettingsStore = create<SettingsState>((set) => ({
   scrollbackLines: 10000,
   visualBell: true,
   audioBell: false,
+  terminalRowSeparators: false,
   setLocale: (locale) => set({ locale }),
   setPerformanceOverlay: (performanceOverlay) => set({ performanceOverlay }),
   setUiFontFamily: (uiFontFamily) => {
@@ -90,4 +94,5 @@ export const useSettingsStore = create<SettingsState>((set) => ({
   setScrollbackLines: (scrollbackLines) => set({ scrollbackLines }),
   setVisualBell: (visualBell) => set({ visualBell }),
   setAudioBell: (audioBell) => set({ audioBell }),
+  setTerminalRowSeparators: (terminalRowSeparators) => set({ terminalRowSeparators }),
 }));

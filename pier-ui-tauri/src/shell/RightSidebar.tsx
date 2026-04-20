@@ -35,18 +35,33 @@ function ToolContent({
   openTabFirstLabel: string;
   unknownToolLabel: string;
 }) {
+  // `key={tab.id}` forces a remount when the active tab changes so panel
+  // state (connection status, probed services, query results) resets for
+  // the new context instead of leaking across tabs.
+  const tabKey = tab?.id ?? "no-tab";
   switch (tool) {
-    case "git": return <GitPanel browserPath={browserPath} />;
-    case "monitor": return tab ? <ServerMonitorPanel tab={tab} /> : <div className="empty-note">{openTabFirstLabel}</div>;
-    case "docker": return tab ? <DockerPanel tab={tab} /> : <div className="empty-note">{openTabFirstLabel}</div>;
-    case "mysql": return tab ? <MySqlPanel tab={tab} /> : <div className="empty-note">{openTabFirstLabel}</div>;
-    case "postgres": return tab ? <PostgresPanel tab={tab} /> : <div className="empty-note">{openTabFirstLabel}</div>;
-    case "redis": return tab ? <RedisPanel tab={tab} /> : <div className="empty-note">{openTabFirstLabel}</div>;
-    case "log": return tab ? <LogViewerPanel tab={tab} /> : <div className="empty-note">{openTabFirstLabel}</div>;
-    case "sftp": return tab ? <SftpPanel tab={tab} /> : <div className="empty-note">{openTabFirstLabel}</div>;
-    case "sqlite": return <SqlitePanel />;
-    case "markdown": return <MarkdownPanel filePath={markdownPath} />;
-    default: return <div className="empty-note">{unknownToolLabel}</div>;
+    case "git":
+      return <GitPanel key={tabKey} browserPath={browserPath} />;
+    case "monitor":
+      return tab ? <ServerMonitorPanel key={tab.id} tab={tab} /> : <div className="empty-note">{openTabFirstLabel}</div>;
+    case "docker":
+      return tab ? <DockerPanel key={tab.id} tab={tab} /> : <div className="empty-note">{openTabFirstLabel}</div>;
+    case "mysql":
+      return tab ? <MySqlPanel key={tab.id} tab={tab} /> : <div className="empty-note">{openTabFirstLabel}</div>;
+    case "postgres":
+      return tab ? <PostgresPanel key={tab.id} tab={tab} /> : <div className="empty-note">{openTabFirstLabel}</div>;
+    case "redis":
+      return tab ? <RedisPanel key={tab.id} tab={tab} /> : <div className="empty-note">{openTabFirstLabel}</div>;
+    case "log":
+      return tab ? <LogViewerPanel key={tab.id} tab={tab} /> : <div className="empty-note">{openTabFirstLabel}</div>;
+    case "sftp":
+      return tab ? <SftpPanel key={tab.id} tab={tab} /> : <div className="empty-note">{openTabFirstLabel}</div>;
+    case "sqlite":
+      return <SqlitePanel key={tabKey} />;
+    case "markdown":
+      return <MarkdownPanel key={markdownPath} filePath={markdownPath} />;
+    default:
+      return <div className="empty-note">{unknownToolLabel}</div>;
   }
 }
 

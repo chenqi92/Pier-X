@@ -6,11 +6,48 @@ import { SquareTerminal } from "lucide-react";
 import { startTransition, useEffect, useRef, useState } from "react";
 import * as cmd from "../lib/commands";
 import { controlKeyMap } from "../lib/commands";
+import ContextMenu, { type ContextMenuItem } from "../components/ContextMenu";
 import { useI18n } from "../i18n/useI18n";
 import type { TabState, TerminalSessionInfo, TerminalSnapshot, TerminalSize } from "../lib/types";
 import { useTabStore } from "../stores/useTabStore";
 import { useSettingsStore } from "../stores/useSettingsStore";
 import { useThemeStore, TERMINAL_THEMES } from "../stores/useThemeStore";
+
+/**
+ * Resolve a backend-emitted color tag against the user's selected terminal
+ * theme palette.
+ *
+ * Backend tags (see `render_terminal_color` in `src-tauri/src/lib.rs`):
+ * - `""` → default fg/bg (returns `undefined` to inherit from the
+ *   parent `<div className="terminal-screen">` which is painted with
+ *   `termTheme.fg` / `termTheme.bg`).
+ * - `"ansi:N"` → N in 0..=15 maps directly to `termTheme.ansi[N]`.
+ *   N in 16..=231 is the 6×6×6 color cube, N in 232..=255 is grayscale —
+ *   both get calculated hex values (themes don't re-skin these).
+ * - `"#rrggbb"` → truecolor from ANSI SGR 38/48;2;r;g;b — pass through.
+ */
+function resolveTerminalColor(tag: string, ansi: string[]): string | undefined {
+  if (!tag) return undefined;
+  if (tag.startsWith("ansi:")) {
+    const n = Number.parseInt(tag.slice(5), 10);
+    if (!Number.isFinite(n)) return undefined;
+    if (n >= 0 && n < 16 && ansi[n]) return ansi[n];
+    if (n >= 16 && n <= 231) {
+      const value = n - 16;
+      const steps = [0, 95, 135, 175, 215, 255];
+      const r = steps[Math.floor(value / 36) % 6];
+      const g = steps[Math.floor(value / 6) % 6];
+      const b = steps[value % 6];
+      return `rgb(${r},${g},${b})`;
+    }
+    if (n >= 232 && n <= 255) {
+      const shade = 8 + (n - 232) * 10;
+      return `rgb(${shade},${shade},${shade})`;
+    }
+    return undefined;
+  }
+  return tag;
+}
 
 type Props = {
   tab: TabState;
@@ -27,6 +64,7 @@ export default function TerminalPanel({ tab, isActive }: Props) {
   const scrollbackLines = useSettingsStore((s) => s.scrollbackLines);
   const visualBell = useSettingsStore((s) => s.visualBell);
   const audioBell = useSettingsStore((s) => s.audioBell);
+  const rowSeparators = useSettingsStore((s) => s.terminalRowSeparators);
   const termThemeIdx = useThemeStore((s) => s.terminalThemeIndex);
   const termTheme = TERMINAL_THEMES[termThemeIdx] ?? TERMINAL_THEMES[0];
   const [session, setSession] = useState<TerminalSessionInfo | null>(null);
@@ -35,6 +73,7 @@ export default function TerminalPanel({ tab, isActive }: Props) {
   const [terminalSize, setTerminalSize] = useState<TerminalSize>({ cols: 120, rows: 26 });
   const [scrollbackOffset, setScrollbackOffset] = useState(0);
   const [visualBellActive, setVisualBellActive] = useState(false);
+  const [ctxMenu, setCtxMenu] = useState<{ x: number; y: number } | null>(null);
   const viewportRef = useRef<HTMLDivElement | null>(null);
   const measureRef = useRef<HTMLSpanElement | null>(null);
   const startupAppliedRef = useRef<string | null>(null);
@@ -80,19 +119,30 @@ export default function TerminalPanel({ tab, isActive }: Props) {
 
     async function create() {
       try {
-        const next =
-          tab.backend === "ssh"
-            ? await cmd.terminalCreateSsh({
-                cols: terminalSize.cols,
-                rows: terminalSize.rows,
-                host: tab.sshHost,
-                port: tab.sshPort,
-                user: tab.sshUser,
-                authMode: tab.sshAuthMode,
-                password: tab.sshPassword,
-                keyPath: tab.sshKeyPath,
-              })
-            : await cmd.terminalCreate(terminalSize.cols, terminalSize.rows);
+        let next: TerminalSessionInfo;
+        if (tab.backend === "ssh") {
+          if (tab.sshSavedConnectionIndex !== null) {
+            // Saved connection — backend resolves password from secure store
+            next = await cmd.terminalCreateSshSaved(
+              terminalSize.cols,
+              terminalSize.rows,
+              tab.sshSavedConnectionIndex,
+            );
+          } else {
+            next = await cmd.terminalCreateSsh({
+              cols: terminalSize.cols,
+              rows: terminalSize.rows,
+              host: tab.sshHost,
+              port: tab.sshPort,
+              user: tab.sshUser,
+              authMode: tab.sshAuthMode,
+              password: tab.sshPassword,
+              keyPath: tab.sshKeyPath,
+            });
+          }
+        } else {
+          next = await cmd.terminalCreate(terminalSize.cols, terminalSize.rows);
+        }
         if (!cancelled) {
           setSession(next);
           setError("");
@@ -343,6 +393,42 @@ export default function TerminalPanel({ tab, isActive }: Props) {
     setScrollbackOffset(0);
   }
 
+  async function copySelection() {
+    const sel = window.getSelection?.()?.toString() ?? "";
+    if (!sel) return;
+    try {
+      await navigator.clipboard.writeText(sel);
+    } catch {
+      /* clipboard blocked — silently skip */
+    }
+  }
+
+  async function pasteClipboard() {
+    if (!session) return;
+    try {
+      const text = await navigator.clipboard.readText();
+      if (text) await cmd.terminalWrite(session.sessionId, text);
+    } catch {
+      /* clipboard blocked */
+    }
+  }
+
+  function selectAllInTerminal() {
+    const screen = viewportRef.current?.querySelector(".terminal-screen");
+    if (!screen) return;
+    const range = document.createRange();
+    range.selectNodeContents(screen);
+    const sel = window.getSelection();
+    sel?.removeAllRanges();
+    sel?.addRange(range);
+  }
+
+  async function clearTerminal() {
+    if (!session) return;
+    // Send form-feed / "clear" sequence (xterm CSI 3 J erases scrollback, \x1b[H\x1b[2J clears screen).
+    await cmd.terminalWrite(session.sessionId, "\x1b[H\x1b[2J\x1b[3J").catch(() => {});
+  }
+
   const surfaceStatus = snapshot?.alive ? t("Live") : session ? t("Exited") : t("Booting");
 
   return (
@@ -387,6 +473,10 @@ export default function TerminalPanel({ tab, isActive }: Props) {
         onKeyDown={handleKeyDown}
         onMouseDown={(e) => e.currentTarget.focus()}
         onWheel={handleWheel}
+        onContextMenu={(e) => {
+          e.preventDefault();
+          setCtxMenu({ x: e.clientX, y: e.clientY });
+        }}
         ref={viewportRef}
         className={visualBellActive ? "terminal-viewport terminal-viewport--bell" : "terminal-viewport"}
         style={{ background: termTheme.bg }}
@@ -405,7 +495,7 @@ export default function TerminalPanel({ tab, isActive }: Props) {
           <div className="terminal-placeholder terminal-placeholder--error">{error}</div>
         ) : snapshot ? (
           <div
-            className="terminal-screen"
+            className={rowSeparators ? "terminal-screen terminal-screen--ruled" : "terminal-screen"}
             style={{
               fontFamily: `"${monoFont}", monospace`,
               fontSize: `${terminalFontSize}px`,
@@ -425,13 +515,19 @@ export default function TerminalPanel({ tab, isActive }: Props) {
                         ? "terminal-segment terminal-segment--cursor-underline"
                         : "terminal-segment terminal-segment--cursor"
                     : "terminal-segment";
+                  const segBg = isCursor
+                    ? undefined
+                    : resolveTerminalColor(seg.bg, termTheme.ansi);
+                  const segFg = isCursor
+                    ? undefined
+                    : resolveTerminalColor(seg.fg, termTheme.ansi);
                   return (
                     <span
                       className={cursorClass}
                       key={`seg-${i}-${j}`}
                       style={{
-                        backgroundColor: isCursor ? undefined : seg.bg,
-                        color: isCursor ? undefined : seg.fg,
+                        backgroundColor: segBg,
+                        color: segFg,
                         fontWeight: seg.bold ? 510 : 400,
                         textDecoration: seg.underline ? "underline" : "none",
                         animation: isCursor && cursorBlink ? "cursor-blink 1s step-end infinite" : undefined,
@@ -448,6 +544,51 @@ export default function TerminalPanel({ tab, isActive }: Props) {
           <div className="terminal-placeholder">{t("Launching shell...")}</div>
         )}
       </div>
+
+      {ctxMenu && (() => {
+        const hasSelection = (window.getSelection?.()?.toString() ?? "").length > 0;
+        const isMac = navigator.platform.includes("Mac");
+        const mod = isMac ? "\u2318" : "Ctrl+";
+        const items: ContextMenuItem[] = [
+          {
+            label: t("Copy"),
+            shortcut: `${mod}C`,
+            disabled: !hasSelection,
+            action: () => void copySelection(),
+          },
+          {
+            label: t("Paste"),
+            shortcut: `${mod}V`,
+            disabled: !session,
+            action: () => void pasteClipboard(),
+          },
+          { divider: true },
+          {
+            label: t("Select All"),
+            shortcut: `${mod}A`,
+            action: selectAllInTerminal,
+          },
+          {
+            label: t("Clear terminal"),
+            shortcut: `${mod}K`,
+            disabled: !session,
+            action: () => void clearTerminal(),
+          },
+          { divider: true },
+          {
+            label: t("Restart terminal"),
+            action: () => void restartTerminal(),
+          },
+        ];
+        return (
+          <ContextMenu
+            x={ctxMenu.x}
+            y={ctxMenu.y}
+            items={items}
+            onClose={() => setCtxMenu(null)}
+          />
+        );
+      })()}
     </section>
   );
 }

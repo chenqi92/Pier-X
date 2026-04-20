@@ -1,5 +1,5 @@
 import { ActivitySquare, Database, PackageSearch } from "lucide-react";
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import * as cmd from "../lib/commands";
 import type { DetectedServiceView, RightTool, ServerSnapshotView, TabState } from "../lib/types";
 import { useI18n } from "../i18n/useI18n";
@@ -181,6 +181,34 @@ export default function ServerMonitorPanel({ tab }: Props) {
   }
 
   const canProbe = isLocal || hasSsh;
+
+  // Auto-probe + detect when this panel mounts for an SSH or local tab —
+  // the component is keyed by tab.id in RightSidebar so this fires on
+  // tab switch too. Password-auth saved tabs that haven't primed their
+  // password yet will no-op here; user can tap "探测服务器" to retry.
+  useEffect(() => {
+    const ready =
+      isLocal ||
+      (hasSsh &&
+        (tab.sshAuthMode !== "password" ||
+          tab.sshPassword.length > 0 ||
+          tab.sshSavedConnectionIndex !== null));
+    if (!ready) return;
+    void probe();
+    if (hasSsh) {
+      void detect();
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [
+    tab.id,
+    tab.backend,
+    tab.sshHost,
+    tab.sshPort,
+    tab.sshUser,
+    tab.sshAuthMode,
+    // Re-run once the async password resolution lands:
+    tab.sshPassword.length > 0,
+  ]);
 
   const headerMeta = hasSsh
     ? `${tab.sshUser}@${tab.sshHost}:${tab.sshPort}`

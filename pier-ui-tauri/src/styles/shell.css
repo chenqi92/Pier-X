@@ -1434,6 +1434,12 @@ body {
   white-space: pre;
   color: var(--ink);
 }
+.terminal-screen--ruled .terminal-row {
+  border-bottom: 1px solid var(--bg-hover);
+}
+.terminal-screen--ruled .terminal-row:last-child {
+  border-bottom: none;
+}
 .terminal-screen,
 .terminal-row,
 .terminal-segment { user-select: text; }

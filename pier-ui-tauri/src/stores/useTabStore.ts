@@ -50,6 +50,7 @@ function makeDefaultTab(
     sshAuthMode: partial.sshAuthMode ?? "password",
     sshPassword: partial.sshPassword ?? "",
     sshKeyPath: partial.sshKeyPath ?? "",
+    sshSavedConnectionIndex: partial.sshSavedConnectionIndex ?? null,
     terminalSessionId: partial.terminalSessionId ?? null,
     rightTool: partial.rightTool ?? (partial.backend === "local" ? "markdown" : "monitor"),
     redisHost: partial.redisHost ?? "127.0.0.1",

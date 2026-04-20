@@ -293,6 +293,16 @@ export const sshConnectionUpdate = (params: {
 export const sshConnectionDelete = (index: number) =>
   invoke<void>("ssh_connection_delete", { index });
 
+/**
+ * Resolve the stored password for a saved SSH connection from the OS
+ * keychain. Returns an empty string for non-password auth. Use this to
+ * prime in-memory state on the frontend so probe/detect/docker/db
+ * commands that require an explicit password parameter can work for
+ * saved connections, without persisting the secret.
+ */
+export const sshConnectionResolvePassword = (index: number) =>
+  invoke<string>("ssh_connection_resolve_password", { index });
+
 export const sshTunnelOpen = (params: {
   host: string;
   port: number;

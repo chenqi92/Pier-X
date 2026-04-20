@@ -870,64 +870,26 @@ fn create_ssh_terminal_from_config(
     store_terminal_session(state, terminal, shell, resolved_cols, resolved_rows)
 }
 
-fn render_terminal_color(color: Color, foreground: bool) -> String {
+/// Emit a semantic color tag so the frontend can remap to the user's
+/// selected theme palette.
+///
+/// Formats:
+/// - `""` → use the theme's default foreground / background (inherit)
+/// - `"ansi:N"` → indexed ANSI color (0..=255); 0..=15 are mapped to the
+///   theme's 16-color palette, 16..=255 go through the fixed 256-color
+///   cube approximation.
+/// - `"#rrggbb"` → truecolor, passed through as-is.
+fn render_terminal_color(color: Color, _foreground: bool) -> String {
     match color {
-        Color::Default => {
-            if foreground {
-                String::from("#e8eaed")
-            } else {
-                String::from("#0e0f11")
-            }
-        }
-        Color::Indexed(index) => {
-            let (r, g, b) = ansi_index_to_rgb(index);
-            format!("#{r:02x}{g:02x}{b:02x}")
-        }
+        Color::Default => String::new(),
+        Color::Indexed(index) => format!("ansi:{index}"),
         Color::Rgb(r, g, b) => format!("#{r:02x}{g:02x}{b:02x}"),
     }
 }
 
-fn ansi_index_to_rgb(index: u8) -> (u8, u8, u8) {
-    match index {
-        0 => (0x1c, 0x1e, 0x22),
-        1 => (0xfa, 0x66, 0x75),
-        2 => (0x5f, 0xb8, 0x65),
-        3 => (0xf0, 0xa8, 0x3a),
-        4 => (0x35, 0x74, 0xf0),
-        5 => (0xc6, 0x78, 0xdd),
-        6 => (0x56, 0xb6, 0xc2),
-        7 => (0xb4, 0xb8, 0xbf),
-        8 => (0x5a, 0x5e, 0x66),
-        9 => (0xff, 0x85, 0x93),
-        10 => (0x7f, 0xcf, 0x85),
-        11 => (0xff, 0xc1, 0x5c),
-        12 => (0x5e, 0x92, 0xff),
-        13 => (0xd8, 0x94, 0xed),
-        14 => (0x7f, 0xc8, 0xd1),
-        15 => (0xe8, 0xea, 0xed),
-        16..=231 => {
-            let value = index - 16;
-            let r = value / 36;
-            let g = (value % 36) / 6;
-            let b = value % 6;
-            let channel = |step: u8| -> u8 {
-                match step {
-                    0 => 0,
-                    1 => 95,
-                    2 => 135,
-                    3 => 175,
-                    4 => 215,
-                    _ => 255,
-                }
-            };
-            (channel(r), channel(g), channel(b))
-        }
-        232..=255 => {
-            let shade = 8 + (index - 232) * 10;
-            (shade, shade, shade)
-        }
-    }
-}
+// ANSI palette mapping moved to the frontend (src/panels/TerminalPanel.tsx
+// `resolveTerminalColor`) so the user-selected terminal theme can be
+// applied to the 16 basic ANSI colors.
 
 fn resolve_segment_style(cell: &Cell, is_cursor: bool) -> SegmentStyle {
     let mut fg = render_terminal_color(cell.fg, true);
@@ -1334,6 +1296,28 @@ fn ssh_connection_delete(index: usize) -> Result<(), String> {
         .ok_or_else(|| format!("unknown saved SSH connection: {}", index))?;
     store.save_default().map_err(|error| error.to_string())?;
     delete_auth_credentials(&removed.auth)
+}
+
+/// Resolve the stored password for a saved SSH connection.
+/// Returns an empty string for non-password auth (agent/key) or when the
+/// keychain has no entry. Only held in-memory on the frontend for the
+/// session's lifetime; never persisted to localStorage.
+#[tauri::command]
+fn ssh_connection_resolve_password(index: usize) -> Result<String, String> {
+    let store = ConnectionStore::load_default().map_err(|error| error.to_string())?;
+    let conn = store
+        .connections
+        .get(index)
+        .ok_or_else(|| format!("unknown saved SSH connection: {}", index))?;
+    match &conn.auth {
+        AuthMethod::KeychainPassword { credential_id } => {
+            match credentials::get(credential_id).map_err(|error| error.to_string())? {
+                Some(password) => Ok(password),
+                None => Ok(String::new()),
+            }
+        }
+        _ => Ok(String::new()),
+    }
 }
 
 #[tauri::command]
@@ -2739,6 +2723,7 @@ pub fn run() {
             ssh_connections_list,
             ssh_connection_save,
             ssh_connection_delete,
+            ssh_connection_resolve_password,
             ssh_connection_update,
             ssh_tunnel_open,
             ssh_tunnel_info,

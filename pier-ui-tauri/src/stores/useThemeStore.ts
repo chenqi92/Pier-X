@@ -1,6 +1,8 @@
 import { create } from "zustand";
 
 export type ThemeMode = "system" | "dark" | "light";
+export type AccentName = "blue" | "green" | "amber" | "violet" | "coral";
+export type Density = "compact" | "comfortable";
 
 export type TerminalTheme = {
   name: string;
@@ -51,10 +53,42 @@ export const TERMINAL_THEMES: TerminalTheme[] = [
 type ThemeState = {
   mode: ThemeMode;
   resolvedDark: boolean;
+  accent: AccentName;
+  density: Density;
   terminalThemeIndex: number;
   setMode: (mode: ThemeMode) => void;
+  setAccent: (accent: AccentName) => void;
+  setDensity: (density: Density) => void;
   setTerminalTheme: (index: number) => void;
 };
+
+const PREFS_KEY = "pierx:appearance";
+
+type PersistedPrefs = {
+  mode?: ThemeMode;
+  accent?: AccentName;
+  density?: Density;
+  terminalThemeIndex?: number;
+};
+
+function loadPrefs(): PersistedPrefs {
+  try {
+    const raw = localStorage.getItem(PREFS_KEY);
+    if (!raw) return {};
+    const parsed = JSON.parse(raw) as PersistedPrefs;
+    return parsed && typeof parsed === "object" ? parsed : {};
+  } catch {
+    return {};
+  }
+}
+
+function savePrefs(next: PersistedPrefs) {
+  try {
+    localStorage.setItem(PREFS_KEY, JSON.stringify(next));
+  } catch {
+    /* swallow quota errors */
+  }
+}
 
 function resolveTheme(mode: ThemeMode): boolean {
   if (mode === "dark") return true;
@@ -65,13 +99,25 @@ function resolveTheme(mode: ThemeMode): boolean {
 function applyTheme(dark: boolean) {
   document.documentElement.dataset.theme = dark ? "dark" : "light";
 }
+function applyAccent(accent: AccentName) {
+  document.documentElement.dataset.accent = accent;
+}
+function applyDensity(density: Density) {
+  document.documentElement.dataset.density = density;
+}
 
-export const useThemeStore = create<ThemeState>((set) => {
-  const initialMode: ThemeMode = "dark";
+export const useThemeStore = create<ThemeState>((set, get) => {
+  const stored = loadPrefs();
+  const initialMode: ThemeMode = stored.mode ?? "dark";
+  const initialAccent: AccentName = stored.accent ?? "blue";
+  const initialDensity: Density = stored.density ?? "compact";
+  const initialTerminalIndex = stored.terminalThemeIndex ?? 0;
   const initialDark = resolveTheme(initialMode);
-  applyTheme(initialDark);
 
-  // Listen for system theme changes
+  applyTheme(initialDark);
+  applyAccent(initialAccent);
+  applyDensity(initialDensity);
+
   const mql = window.matchMedia("(prefers-color-scheme: dark)");
   mql.addEventListener("change", () => {
     const state = useThemeStore.getState();
@@ -82,16 +128,42 @@ export const useThemeStore = create<ThemeState>((set) => {
     }
   });
 
+  const persist = () => {
+    const s = get();
+    savePrefs({
+      mode: s.mode,
+      accent: s.accent,
+      density: s.density,
+      terminalThemeIndex: s.terminalThemeIndex,
+    });
+  };
+
   return {
     mode: initialMode,
     resolvedDark: initialDark,
-    terminalThemeIndex: 0,
+    accent: initialAccent,
+    density: initialDensity,
+    terminalThemeIndex: initialTerminalIndex,
     setMode: (mode) => {
       const dark = resolveTheme(mode);
       applyTheme(dark);
       set({ mode, resolvedDark: dark });
+      persist();
     },
-    setTerminalTheme: (index) =>
-      set({ terminalThemeIndex: Math.max(0, Math.min(index, TERMINAL_THEMES.length - 1)) }),
+    setAccent: (accent) => {
+      applyAccent(accent);
+      set({ accent });
+      persist();
+    },
+    setDensity: (density) => {
+      applyDensity(density);
+      set({ density });
+      persist();
+    },
+    setTerminalTheme: (index) => {
+      const clamped = Math.max(0, Math.min(index, TERMINAL_THEMES.length - 1));
+      set({ terminalThemeIndex: clamped });
+      persist();
+    },
   };
 });

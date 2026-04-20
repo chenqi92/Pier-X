@@ -1,0 +1,435 @@
+/* ── Pier-X Shared Atoms ──────────────────────────────────────────
+ * Token-driven primitives used across shell, panels, and dialogs.
+ * Every value must resolve to a token in tokens.css; do not inline
+ * hex/rgb/hsl or raw px for spacing/font-size here.
+ *
+ * Class vocabulary is intentionally aligned with the Remix reference
+ * so shell.css and panel components can be cross-checked visually.
+ */
+
+/* ─── Buttons ─────────────────────────────────────────────── */
+.mini-btn {
+  background: transparent;
+  border: none;
+  color: var(--muted);
+  width: 20px;
+  height: 20px;
+  border-radius: var(--radius-xs);
+  display: grid;
+  place-items: center;
+  cursor: pointer;
+  transition: background var(--dur-fast) var(--easing),
+              color var(--dur-fast) var(--easing);
+  padding: 0;
+}
+.mini-btn:hover { background: var(--panel-2); color: var(--ink); }
+.mini-btn:active { background: var(--bg-active); }
+.mini-btn:disabled { opacity: 0.4; cursor: default; }
+.mini-btn.is-destructive:hover { color: var(--neg); }
+.mini-btn svg { width: var(--icon-xs); height: var(--icon-xs); }
+
+.icon-btn {
+  width: 26px;
+  height: 26px;
+  border-radius: var(--radius-sm);
+  background: transparent;
+  border: none;
+  color: var(--ink-2);
+  display: grid;
+  place-items: center;
+  cursor: pointer;
+  transition: background var(--dur-fast) var(--easing),
+              color var(--dur-fast) var(--easing);
+  padding: 0;
+}
+.icon-btn:hover { background: var(--panel-2); color: var(--ink); }
+.icon-btn.is-active { background: var(--accent-dim); color: var(--accent); }
+.icon-btn:disabled { opacity: 0.4; cursor: default; }
+.icon-btn svg { width: var(--icon-md); height: var(--icon-md); }
+
+.ts-btn {
+  width: 32px;
+  height: 32px;
+  border-radius: var(--radius-md);
+  background: transparent;
+  border: none;
+  color: var(--muted);
+  display: grid;
+  place-items: center;
+  cursor: pointer;
+  position: relative;
+  transition: background var(--dur-fast) var(--easing),
+              color var(--dur-fast) var(--easing);
+  padding: 0;
+}
+.ts-btn:hover { background: var(--panel-2); color: var(--ink); }
+.ts-btn.is-active {
+  background: var(--accent-dim);
+  color: var(--accent);
+}
+.ts-btn.is-active::before {
+  content: "";
+  position: absolute;
+  left: -1px;
+  top: 6px;
+  bottom: 6px;
+  width: 2px;
+  background: var(--accent);
+  border-radius: var(--radius-xs);
+}
+.ts-btn svg { width: var(--icon-lg); height: var(--icon-lg); }
+.ts-btn.is-dim { opacity: 0.32; }
+.ts-btn.is-dim:hover { opacity: 0.6; }
+
+.ts-det {
+  position: absolute;
+  top: 4px;
+  right: 4px;
+  width: 5px;
+  height: 5px;
+  border-radius: 50%;
+  background: var(--pos);
+  box-shadow: 0 0 0 1.5px var(--surface);
+}
+.ts-divider {
+  width: 20px;
+  height: 1px;
+  background: var(--line-2);
+  margin: var(--sp-1) 0;
+}
+
+/* Primary / ghost buttons for dialogs, forms, commit compose */
+.btn {
+  height: var(--control-height);
+  padding: 0 var(--sp-3);
+  border-radius: var(--radius-sm);
+  border: 1px solid var(--line-2);
+  background: var(--panel);
+  color: var(--ink);
+  font-family: var(--sans);
+  font-size: var(--ui-fs);
+  font-weight: var(--weight-medium);
+  display: inline-flex;
+  align-items: center;
+  gap: var(--sp-1-5);
+  cursor: pointer;
+  transition: background var(--dur-fast) var(--easing),
+              border-color var(--dur-fast) var(--easing);
+}
+.btn:hover { background: var(--panel-2); border-color: var(--line-3); }
+.btn:active { background: var(--bg-active); }
+.btn:disabled { opacity: 0.5; cursor: default; }
+.btn svg { width: var(--icon-sm); height: var(--icon-sm); }
+
+.btn.is-primary {
+  background: var(--accent);
+  color: var(--accent-ink);
+  border-color: var(--accent);
+}
+.btn.is-primary:hover { background: var(--accent-hover); border-color: var(--accent-hover); }
+
+.btn.is-ghost {
+  background: transparent;
+  border-color: transparent;
+  color: var(--ink-2);
+}
+.btn.is-ghost:hover { background: var(--panel-2); color: var(--ink); }
+
+.btn.is-danger {
+  background: transparent;
+  border-color: var(--neg-dim);
+  color: var(--neg);
+}
+.btn.is-danger:hover { background: var(--neg-dim); }
+
+.btn.is-compact { height: 24px; padding: 0 var(--sp-2); font-size: var(--ui-fs-sm); }
+
+/* ─── Panel Header (34px mono uppercase) ─────────────────── */
+.panel-header {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-2);
+  padding: 0 var(--sp-3);
+  border-bottom: 1px solid var(--line);
+  background: var(--surface-2);
+  height: var(--panel-header-h);
+  flex: none;
+}
+.panel-header .ptitle {
+  font-family: var(--mono);
+  font-size: var(--ui-fs-sm);
+  font-weight: var(--weight-semibold);
+  color: var(--ink);
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  display: inline-flex;
+  align-items: center;
+  gap: var(--sp-1-5);
+}
+.panel-header .ptitle svg { width: var(--icon-xs); height: var(--icon-xs); color: var(--accent); }
+.panel-header .pspacer { flex: 1; }
+.panel-header .pmeta {
+  font-family: var(--mono);
+  font-size: var(--size-micro);
+  color: var(--muted);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  max-width: 50%;
+}
+.panel-header .pactions { display: inline-flex; align-items: center; gap: var(--sp-0-5); }
+
+/* ─── DB connection row (used by every DB/remote panel) ──── */
+.db-conn-row {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-2);
+  padding: var(--sp-2) var(--sp-3);
+  border-bottom: 1px solid var(--line);
+  background: var(--surface);
+}
+.db-conn-icon {
+  width: 22px;
+  height: 22px;
+  border-radius: var(--radius-sm);
+  display: grid;
+  place-items: center;
+  flex: none;
+  background: var(--panel-2);
+  color: var(--accent);
+}
+.db-conn-icon svg { width: var(--icon-xs); height: var(--icon-xs); }
+.db-conn-title { flex: 1; min-width: 0; }
+.db-conn-name {
+  font-size: var(--ui-fs-lg);
+  font-weight: var(--weight-semibold);
+  color: var(--ink);
+  letter-spacing: -0.01em;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.db-conn-sub {
+  font-family: var(--mono);
+  font-size: var(--size-micro);
+  color: var(--muted);
+  margin-top: 1px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.db-conn-tag {
+  flex: none;
+  display: inline-flex;
+  align-items: center;
+  gap: var(--sp-1);
+  font-family: var(--mono);
+  font-size: var(--size-micro);
+  color: var(--ink-2);
+  background: var(--panel-2);
+  border: 1px solid var(--line-2);
+  border-radius: var(--radius-pill);
+  padding: 2px var(--sp-2) 2px var(--sp-1-5);
+}
+
+/* ─── Status dots / badges ───────────────────────────────── */
+.gb-dot {
+  display: inline-block;
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  flex: none;
+}
+.gb-dot.is-pos {
+  background: var(--pos);
+  box-shadow: 0 0 0 2px color-mix(in srgb, var(--pos) 28%, transparent);
+}
+.gb-dot.is-off { background: var(--dim); opacity: 0.55; }
+.gb-dot.is-warn {
+  background: var(--warn);
+  box-shadow: 0 0 0 2px color-mix(in srgb, var(--warn) 28%, transparent);
+}
+.gb-dot.is-neg {
+  background: var(--neg);
+  box-shadow: 0 0 0 2px color-mix(in srgb, var(--neg) 28%, transparent);
+}
+
+.db-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--sp-1);
+  padding: 2px var(--sp-1-5);
+  border-radius: var(--radius-sm);
+  font-family: var(--mono);
+  font-size: var(--size-micro);
+  letter-spacing: 0.02em;
+}
+.db-badge.is-pos { background: var(--pos-dim); color: var(--pos); }
+.db-badge.is-warn { background: var(--warn-dim); color: var(--warn); }
+.db-badge.is-neg { background: var(--neg-dim); color: var(--neg); }
+.db-badge.is-info { background: var(--accent-dim); color: var(--accent); }
+.db-badge.is-muted { background: var(--panel-2); color: var(--muted); }
+
+/* ─── Pill (meta/host/tunnel indicators) ─────────────────── */
+.pill {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--sp-1);
+  padding: 2px var(--sp-2);
+  border-radius: var(--radius-pill);
+  font-family: var(--mono);
+  font-size: var(--size-micro);
+  color: var(--ink-2);
+  background: var(--panel);
+  border: 1px solid var(--line-2);
+  white-space: nowrap;
+}
+.pill.is-tinted { background: var(--accent-dim); color: var(--accent); border-color: transparent; }
+
+/* ─── Keyboard cap ───────────────────────────────────────── */
+.kbd {
+  font-family: var(--mono);
+  font-size: var(--size-micro);
+  color: var(--muted);
+  background: var(--panel-2);
+  padding: 2px var(--sp-1-5);
+  border-radius: var(--radius-xs);
+  border: 1px solid var(--line-2);
+  line-height: 1;
+}
+
+/* ─── Utilities ──────────────────────────────────────────── */
+.mono { font-family: var(--mono); }
+.text-muted { color: var(--muted); }
+.text-dim { color: var(--dim); }
+.text-ink { color: var(--ink); }
+.text-ink-2 { color: var(--ink-2); }
+.text-pos { color: var(--pos); }
+.text-neg { color: var(--neg); }
+.text-warn { color: var(--warn); }
+.text-info { color: var(--info); }
+.text-right { text-align: right; }
+.truncate { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+
+/* ─── Section header (smaller mono uppercase, used inside panels) ── */
+.section-header {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-1-5);
+  padding: var(--sp-1-5) var(--sp-3);
+  font-family: var(--mono);
+  font-size: var(--size-micro);
+  font-weight: var(--weight-semibold);
+  color: var(--muted);
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  border-bottom: 1px solid var(--line);
+  background: transparent;
+}
+.section-header .shspacer { flex: 1; }
+
+/* ─── Form field ─────────────────────────────────────────── */
+.field {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-1);
+}
+.field-label {
+  font-family: var(--mono);
+  font-size: var(--size-micro);
+  font-weight: var(--weight-medium);
+  color: var(--muted);
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+}
+.field-input,
+.field-select {
+  height: var(--field-height);
+  padding: 0 var(--sp-2);
+  background: var(--panel);
+  color: var(--ink);
+  border: 1px solid var(--line-2);
+  border-radius: var(--radius-sm);
+  font-family: var(--sans);
+  font-size: var(--ui-fs);
+  outline: none;
+  transition: border-color var(--dur-fast) var(--easing);
+}
+.field-input:focus,
+.field-select:focus { border-color: var(--accent); }
+.field-input.is-mono,
+.field-select.is-mono { font-family: var(--mono); }
+
+/* ─── Toggle switch ──────────────────────────────────────── */
+.switch {
+  width: 32px;
+  height: 18px;
+  border-radius: var(--radius-pill);
+  background: var(--panel-2);
+  position: relative;
+  cursor: pointer;
+  border: none;
+  padding: 0;
+  transition: background var(--dur-fast) var(--easing);
+}
+.switch::after {
+  content: "";
+  position: absolute;
+  top: 2px;
+  left: 2px;
+  width: 14px;
+  height: 14px;
+  border-radius: 50%;
+  background: var(--ink);
+  transition: transform var(--dur-fast) var(--easing);
+}
+.switch.is-on { background: var(--accent); }
+.switch.is-on::after { transform: translateX(14px); background: var(--accent-ink); }
+
+/* ─── Segmented control ──────────────────────────────────── */
+.segmented {
+  display: inline-flex;
+  background: var(--panel);
+  border: 1px solid var(--line-2);
+  border-radius: var(--radius-sm);
+  padding: 2px;
+  gap: 2px;
+}
+.segmented button {
+  height: 24px;
+  padding: 0 var(--sp-2);
+  background: transparent;
+  color: var(--ink-2);
+  border: none;
+  border-radius: var(--radius-xs);
+  font-family: var(--sans);
+  font-size: var(--ui-fs-sm);
+  cursor: pointer;
+}
+.segmented button:hover { color: var(--ink); }
+.segmented button.is-active {
+  background: var(--accent-dim);
+  color: var(--accent);
+}
+
+/* ─── Accent swatches (Settings / Appearance) ───────────── */
+.swatches {
+  display: flex;
+  gap: var(--sp-1-5);
+}
+.swatches button {
+  width: 22px;
+  height: 22px;
+  border-radius: 50%;
+  border: 2px solid transparent;
+  cursor: pointer;
+  padding: 0;
+  transition: border-color var(--dur-fast) var(--easing), transform var(--dur-fast) var(--easing);
+}
+.swatches button:hover { transform: scale(1.1); }
+.swatches button.is-active { border-color: var(--ink); }
+.swatch-blue { background: #4aa3ff; }
+.swatch-green { background: #3dd68c; }
+.swatch-amber { background: #ffb547; }
+.swatch-violet { background: #b48cff; }
+.swatch-coral { background: #ff7a59; }

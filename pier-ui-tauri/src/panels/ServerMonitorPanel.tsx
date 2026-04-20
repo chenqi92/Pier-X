@@ -3,6 +3,9 @@ import { useState } from "react";
 import * as cmd from "../lib/commands";
 import type { DetectedServiceView, RightTool, ServerSnapshotView, TabState } from "../lib/types";
 import { useI18n } from "../i18n/useI18n";
+import DbConnRow from "../components/DbConnRow";
+import PanelHeader from "../components/PanelHeader";
+import StatusDot from "../components/StatusDot";
 import { useTabStore } from "../stores/useTabStore";
 
 type Props = { tab: TabState };
@@ -179,10 +182,45 @@ export default function ServerMonitorPanel({ tab }: Props) {
 
   const canProbe = isLocal || hasSsh;
 
+  const headerMeta = hasSsh
+    ? `${tab.sshUser}@${tab.sshHost}:${tab.sshPort}`
+    : isLocal
+      ? "local"
+      : "—";
+  const connName = hasSsh
+    ? `${tab.sshUser}@${tab.sshHost}`
+    : isLocal
+      ? t("Local Host")
+      : t("Server Monitor");
+  const connSub = hasSsh
+    ? `port ${tab.sshPort}`
+    : isLocal
+      ? t("Local probe")
+      : t("Not connected");
+  const connTag = (
+    <>
+      <StatusDot tone={snap ? "pos" : "off"} />
+      {snap ? t("ready") : t("offline")}
+    </>
+  );
+
   return (
-    <div className="panel-scroll">
+    <>
+      <PanelHeader
+        icon={ActivitySquare}
+        title="SERVER MONITOR"
+        meta={headerMeta}
+      />
+      <DbConnRow
+        icon={ActivitySquare}
+        tint="var(--pos-dim)"
+        iconTint="var(--pos)"
+        name={connName}
+        sub={connSub}
+        tag={connTag}
+      />
+      <div className="panel-scroll">
       <section className="panel-section">
-        <div className="panel-section__title"><ActivitySquare size={14} /><span>{t("Server Monitor")}</span></div>
         <div className="form-stack">
           <button className="mini-button" disabled={!canProbe || busy} onClick={() => void probe()} type="button">{busy ? t("Probing...") : t("Probe Server")}</button>
           {!canProbe && <div className="inline-note">{t("No connection available.")}</div>}
@@ -263,5 +301,6 @@ export default function ServerMonitorPanel({ tab }: Props) {
         </section>
       )}
     </div>
+    </>
   );
 }

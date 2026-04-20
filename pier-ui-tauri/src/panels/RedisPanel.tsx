@@ -1,9 +1,13 @@
+import { Zap } from "lucide-react";
 import { useEffect, useState } from "react";
 import * as cmd from "../lib/commands";
 import { quoteCommandArg } from "../lib/commands";
 import { closeTunnelSlot, ensureTunnelSlot, syncTunnelState } from "../lib/sshTunnel";
 import type { RedisBrowserState, RedisCommandResult, TabState } from "../lib/types";
 import { useI18n } from "../i18n/useI18n";
+import DbConnRow from "../components/DbConnRow";
+import PanelHeader from "../components/PanelHeader";
+import StatusDot from "../components/StatusDot";
 import { useTabStore } from "../stores/useTabStore";
 
 type Props = { tab: TabState };
@@ -186,10 +190,34 @@ export default function RedisPanel({ tab }: Props) {
     }
   }
 
+  const connName = host.trim() || t("Redis Browser");
+  const connSub = host.trim()
+    ? `${host}:${port} · db ${db}${hasSsh ? " · ssh tunnel" : ""}`
+    : t("Not connected");
+  const connTag = (
+    <>
+      <StatusDot tone={state ? "pos" : "off"} />
+      {state ? `:${port}` : t("offline")}
+    </>
+  );
+
   return (
-    <div className="panel-scroll">
+    <>
+      <PanelHeader
+        icon={Zap}
+        title="REDIS"
+        meta={state ? `${host}:${port} · db ${db}` : `${host}:${port}`}
+      />
+      <DbConnRow
+        icon={Zap}
+        tint="var(--neg-dim)"
+        iconTint="var(--neg)"
+        name={connName}
+        sub={connSub}
+        tag={connTag}
+      />
+      <div className="panel-scroll">
       <section className="panel-section">
-        <div className="panel-section__title"><span>{t("Redis Browser")}</span></div>
         <div className="form-stack">
           <div className="field-grid">
             <label className="field-stack">
@@ -339,5 +367,6 @@ export default function RedisPanel({ tab }: Props) {
         </section>
       )}
     </div>
+    </>
   );
 }

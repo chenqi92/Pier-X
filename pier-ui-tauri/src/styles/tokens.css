@@ -1,111 +1,202 @@
 /* ── Pier-X Design Tokens ─────────────────────────────────────────
- * Ported from Qt Theme.qml — single source of truth for all
- * colors, typography, spacing, radius, and motion.
- * Dark mode is default; light mode via [data-theme="light"].
+ * Single source of truth for colors, typography, spacing, radius,
+ * and motion. Aligned with the Remix reference: IBM Plex family,
+ * luminance-stacked backgrounds, semi-transparent borders, and a
+ * single chromatic accent (IntelliJ blue #4AA3FF by default).
+ *
+ * Dark theme is default; [data-theme="light"] mirrors it.
+ * [data-accent="blue|green|amber|violet|coral"] swaps the accent.
+ * [data-density="compact|comfortable"] scales row heights/UI size.
+ *
+ * Legacy aliases (--text-primary, --bg-panel, etc.) are kept so
+ * shell/panel CSS migrated incrementally in Phase B/C still works;
+ * remove them at the end of Phase E.
  */
 
 :root,
 [data-theme="dark"] {
   color-scheme: dark;
 
-  /* ── Backgrounds ─────────────────────────────────────────── */
-  --bg-canvas: #0f1115;
-  --bg-chrome: #14171c;
-  --bg-panel: #171a1f;
-  --bg-surface: #1d2127;
-  --bg-elevated: #242931;
-  --bg-inset: #11141a;
-  --bg-hover: rgba(255, 255, 255, 0.05);
-  --bg-active: rgba(255, 255, 255, 0.08);
-  --bg-selected: rgba(53, 116, 240, 0.18);
+  /* ── Backgrounds (luminance stacking) ────────────────────── */
+  --bg: #0e1116;
+  --surface: #12161d;
+  --surface-2: #171c25;
+  --panel: #1a202b;
+  --panel-2: #222937;
+  --elev: #252d3d;
 
   /* ── Text ────────────────────────────────────────────────── */
-  --text-primary: #e8eaed;
-  --text-secondary: #b5b9c1;
-  --text-tertiary: #878c95;
-  --text-disabled: #5c6068;
-  --text-inverse: #16181b;
+  --ink: #e5e9f0;
+  --ink-2: #b9c1cc;
+  --muted: #747d8b;
+  --dim: #4e5663;
 
-  /* ── Borders ─────────────────────────────────────────────── */
-  --border-subtle: rgba(255, 255, 255, 0.05);
-  --border-default: rgba(255, 255, 255, 0.09);
-  --border-strong: rgba(255, 255, 255, 0.14);
-  --border-focus: #3574f0;
-  --split-handle-idle: transparent;
-  --split-handle-hover: rgba(255, 255, 255, 0.028);
-  --split-handle-active: rgba(53, 116, 240, 0.12);
-  --split-handle-line: rgba(255, 255, 255, 0.08);
-  --split-handle-line-active: rgba(53, 116, 240, 0.52);
+  /* ── Borders (always semi-transparent, never solid) ──────── */
+  --line: #242a36;
+  --line-2: #2e3542;
+  --line-3: #3a4254;
 
-  /* ── Accent ──────────────────────────────────────────────── */
-  --accent: #3574f0;
-  --accent-hover: #4f8aff;
-  --accent-muted: rgba(53, 116, 240, 0.18);
-  --accent-subtle: rgba(53, 116, 240, 0.08);
+  /* ── Accent (single chromatic accent) ────────────────────── */
+  --accent: #4aa3ff;
+  --accent-ink: #0a1420;
+  --accent-dim: #1e3a5c;
 
   /* ── Status ──────────────────────────────────────────────── */
-  --status-success: #5fb865;
-  --status-warning: #f0a83a;
-  --status-error: #fa6675;
-  --status-info: #3574f0;
+  --pos: #3dd68c;
+  --pos-dim: #17402c;
+  --neg: #ff5a5f;
+  --neg-dim: #3e1c1f;
+  --warn: #ffb547;
+  --warn-dim: #3e2c14;
+  --info: #7aa2f7;
+
+  /* ── Git diff / syntax ───────────────────────────────────── */
+  --add: #3dd68c;
+  --del: #ff5a5f;
+  --mod: #ffb547;
+
+  /* ── Legacy aliases (Phase A/B/C compat) ─────────────────── */
+  --bg-canvas: var(--bg);
+  --bg-chrome: var(--surface);
+  --bg-panel: var(--surface);
+  --bg-surface: var(--surface-2);
+  --bg-elevated: var(--elev);
+  --bg-inset: var(--panel);
+  --bg-hover: rgba(255, 255, 255, 0.05);
+  --bg-active: rgba(255, 255, 255, 0.08);
+  --bg-selected: var(--accent-dim);
+
+  --text-primary: var(--ink);
+  --text-secondary: var(--ink-2);
+  --text-tertiary: var(--muted);
+  --text-disabled: var(--dim);
+  --text-inverse: var(--accent-ink);
+
+  --border-subtle: var(--line);
+  --border-default: var(--line-2);
+  --border-strong: var(--line-3);
+  --border-focus: var(--accent);
+
+  --split-handle-idle: transparent;
+  --split-handle-hover: rgba(255, 255, 255, 0.028);
+  --split-handle-active: rgba(74, 163, 255, 0.12);
+  --split-handle-line: var(--line);
+  --split-handle-line-active: rgba(74, 163, 255, 0.52);
+
+  --accent-hover: #6eb6ff;
+  --accent-muted: var(--accent-dim);
+  --accent-subtle: rgba(74, 163, 255, 0.08);
+
+  --status-success: var(--pos);
+  --status-warning: var(--warn);
+  --status-error: var(--neg);
+  --status-info: var(--accent);
 }
 
 [data-theme="light"] {
   color-scheme: light;
 
   /* ── Backgrounds ─────────────────────────────────────────── */
-  --bg-canvas: #fbfcfd;
-  --bg-chrome: #f5f6f8;
-  --bg-panel: #f4f6f9;
-  --bg-surface: #ffffff;
-  --bg-elevated: #ffffff;
-  --bg-inset: #eef1f5;
-  --bg-hover: rgba(0, 0, 0, 0.05);
-  --bg-active: rgba(0, 0, 0, 0.08);
-  --bg-selected: rgba(53, 116, 240, 0.12);
+  --bg: #f5f3ee;
+  --surface: #fbfaf5;
+  --surface-2: #f3f1ea;
+  --panel: #ffffff;
+  --panel-2: #f9f7f1;
+  --elev: #ffffff;
 
   /* ── Text ────────────────────────────────────────────────── */
-  --text-primary: #1f2329;
-  --text-secondary: #454b55;
-  --text-tertiary: #727887;
-  --text-disabled: #a6aab4;
-  --text-inverse: #ffffff;
+  --ink: #14171d;
+  --ink-2: #384050;
+  --muted: #6e7585;
+  --dim: #9aa0ad;
 
   /* ── Borders ─────────────────────────────────────────────── */
-  --border-subtle: rgba(0, 0, 0, 0.06);
-  --border-default: rgba(0, 0, 0, 0.10);
-  --border-strong: rgba(0, 0, 0, 0.18);
-  --split-handle-hover: rgba(0, 0, 0, 0.024);
-  --split-handle-active: rgba(53, 116, 240, 0.08);
-  --split-handle-line: rgba(0, 0, 0, 0.09);
-  --split-handle-line-active: rgba(53, 116, 240, 0.40);
+  --line: #e4e0d4;
+  --line-2: #d6d2c4;
+  --line-3: #c6c1b0;
 
-  /* ── Accent (light-specific overrides) ───────────────────── */
-  --accent-muted: rgba(53, 116, 240, 0.12);
+  /* ── Accent ──────────────────────────────────────────────── */
+  --accent-ink: #ffffff;
+  --accent-dim: #d6e6fa;
+
+  /* ── Status (dim overrides for light backgrounds) ───────── */
+  --pos-dim: #cdeedb;
+  --neg-dim: #f9d3d5;
+  --warn-dim: #f7e4bf;
+
+  /* ── Legacy aliases ──────────────────────────────────────── */
+  --bg-hover: rgba(0, 0, 0, 0.05);
+  --bg-active: rgba(0, 0, 0, 0.08);
+  --bg-selected: var(--accent-dim);
+  --split-handle-hover: rgba(0, 0, 0, 0.024);
+  --split-handle-active: rgba(74, 163, 255, 0.08);
+  --split-handle-line-active: rgba(74, 163, 255, 0.40);
+  --accent-muted: var(--accent-dim);
+  --accent-subtle: rgba(74, 163, 255, 0.08);
 }
 
-/* ── Shell Dimensions (from Qt Theme.qml) ──────────────────────── */
+/* ── Accent variants (apply to both themes) ────────────────────── */
+[data-accent="blue"]   { --accent: #4aa3ff; --accent-dim: #1e3a5c; }
+[data-accent="green"]  { --accent: #3dd68c; --accent-dim: #17402c; }
+[data-accent="amber"]  { --accent: #ffb547; --accent-dim: #3e2c14; }
+[data-accent="violet"] { --accent: #b48cff; --accent-dim: #2e2142; }
+[data-accent="coral"]  { --accent: #ff7a59; --accent-dim: #3e1e14; }
 
+[data-theme="light"][data-accent="blue"]   { --accent-dim: #d6e6fa; }
+[data-theme="light"][data-accent="green"]  { --accent-dim: #cdeedb; }
+[data-theme="light"][data-accent="amber"]  { --accent-dim: #f7e4bf; }
+[data-theme="light"][data-accent="violet"] { --accent-dim: #e4d8fa; }
+[data-theme="light"][data-accent="coral"]  { --accent-dim: #f7dccf; }
+
+/* ── Chrome metrics + typography (shared across themes) ──────── */
 :root {
-  --topbar-height: 38px;
-  --tabbar-height: 36px;
-  --tab-height: 30px;
-  --statusbar-height: 24px;
-  --sidebar-width: 272px;
-  --right-sidebar-width: 400px;
-  --tool-rail-width: 44px;
-  --control-height: 30px;
-  --field-height: 34px;
-  --compact-row-height: 28px;
-  --list-row-height: 32px;
-  --dialog-header-height: 56px;
-  --dialog-footer-height: 60px;
+  /* Chrome heights & widths (Remix: compact default) */
+  --titlebar-h: 36px;
+  --tabbar-h: 34px;
+  --statusbar-h: 24px;
+  --sidebar-w: 244px;
+  --toolstrip-w: 42px;
+  --rightpanel-w: 360px;
+  --panel-header-h: 34px;
+  --dialog-header-h: 56px;
+  --dialog-footer-h: 60px;
 
-  /* ── Typography ──────────────────────────────────────────── */
-  --font-ui: "Inter", "SF Pro Text", "Segoe UI", system-ui, sans-serif;
-  --font-mono: "JetBrains Mono", "SF Mono", "Cascadia Code", "Fira Code", monospace;
+  /* Legacy aliases (Phase compat) */
+  --topbar-height: var(--titlebar-h);
+  --tabbar-height: var(--tabbar-h);
+  --tab-height: calc(var(--tabbar-h) - 1px);
+  --statusbar-height: var(--statusbar-h);
+  --sidebar-width: var(--sidebar-w);
+  --right-sidebar-width: var(--rightpanel-w);
+  --tool-rail-width: var(--toolstrip-w);
+  --dialog-header-height: var(--dialog-header-h);
+  --dialog-footer-height: var(--dialog-footer-h);
 
-  --size-display: 32px;
+  /* Density — compact default (Remix baseline) */
+  --row-h: 26px;
+  --row-pad: 8px;
+  --ui-fs: 12px;
+  --ui-fs-sm: 11px;
+  --ui-fs-lg: 13px;
+
+  /* Legacy row-height aliases */
+  --compact-row-height: var(--row-h);
+  --list-row-height: calc(var(--row-h) + 6px);
+  --control-height: 28px;
+  --field-height: 32px;
+
+  /* ── Typography (IBM Plex family) ────────────────────────── */
+  --sans: "IBM Plex Sans", -apple-system, "SF Pro Text", "Segoe UI", system-ui, sans-serif;
+  --mono: "IBM Plex Mono", "JetBrains Mono", "SF Mono", ui-monospace, Consolas, monospace;
+  --serif: "IBM Plex Serif", Georgia, "Times New Roman", serif;
+
+  /* Legacy font aliases */
+  --font-ui: var(--sans);
+  --font-mono: var(--mono);
+  --font-serif: var(--serif);
+
+  /* Type scale */
+  --size-display: 44px;
   --size-h1: 24px;
   --size-h2: 20px;
   --size-h3: 16px;
@@ -113,10 +204,13 @@
   --size-body: 13px;
   --size-caption: 12px;
   --size-small: 11px;
+  --size-micro: 10.5px;
 
+  /* Weights (Inter 510 is signature → keep for IBM Plex 500) */
   --weight-regular: 400;
-  --weight-medium: 510;
-  --weight-semibold: 590;
+  --weight-medium: 500;
+  --weight-semibold: 600;
+  --weight-bold: 700;
 
   /* ── Spacing (4px grid) ──────────────────────────────────── */
   --sp-0: 0px;
@@ -137,18 +231,62 @@
   --radius-sm: 4px;
   --radius-md: 6px;
   --radius-lg: 8px;
-  --radius-xl: 12px;
+  --radius-xl: 10px;
+  --radius-2xl: 12px;
   --radius-pill: 9999px;
 
-  /* ── Icon Sizes ──────────────────────────────────────────── */
-  --icon-xs: 12px;
-  --icon-sm: 14px;
-  --icon-md: 16px;
-  --icon-lg: 18px;
+  /* ── Icon sizes ──────────────────────────────────────────── */
+  --icon-xs: 11px;
+  --icon-sm: 13px;
+  --icon-md: 14px;
+  --icon-lg: 16px;
+  --icon-xl: 18px;
 
   /* ── Motion ──────────────────────────────────────────────── */
   --dur-fast: 120ms;
   --dur-normal: 200ms;
   --dur-slow: 320ms;
-  --easing: cubic-bezier(0.33, 1, 0.68, 1); /* OutCubic */
+  --easing: cubic-bezier(0.33, 1, 0.68, 1);
+
+  /* ── Elevation shadows (stage frame + popovers) ─────────── */
+  --shadow-app:
+    0 0 0 0.5px rgba(255, 255, 255, 0.06),
+    0 40px 80px -20px rgba(0, 0, 0, 0.6),
+    0 18px 32px -12px rgba(0, 0, 0, 0.5);
+  --shadow-popover: 0 24px 60px -20px rgba(0, 0, 0, 0.7);
+  --shadow-dialog: 0 30px 80px -24px rgba(0, 0, 0, 0.65);
+
+  /* ── Stage backdrop (window-in-viewport gradient) ───────── */
+  --stage-gradient:
+    radial-gradient(ellipse at 50% 0%, #18202F 0%, #0A0D14 60%, #05070D 100%);
+  --overlay-scrim: rgba(5, 7, 13, 0.55);
+}
+
+[data-theme="light"] {
+  --stage-gradient:
+    radial-gradient(ellipse at 50% 0%, #EBE6D8 0%, #D8D2C0 60%, #BFBAA8 100%);
+  --overlay-scrim: rgba(31, 35, 41, 0.28);
+}
+
+[data-theme="light"] {
+  --shadow-app:
+    0 0 0 0.5px rgba(0, 0, 0, 0.08),
+    0 40px 80px -20px rgba(0, 0, 0, 0.18),
+    0 18px 32px -12px rgba(0, 0, 0, 0.14);
+  --shadow-popover: 0 24px 60px -20px rgba(0, 0, 0, 0.22);
+  --shadow-dialog: 0 30px 80px -24px rgba(0, 0, 0, 0.22);
+}
+
+/* ── Comfortable density ───────────────────────────────────── */
+[data-density="comfortable"] {
+  --row-h: 32px;
+  --row-pad: 12px;
+  --ui-fs: 13px;
+  --ui-fs-sm: 12px;
+  --ui-fs-lg: 14px;
+  --titlebar-h: 40px;
+  --tabbar-h: 38px;
+  --panel-header-h: 38px;
+  --control-height: 32px;
+  --field-height: 36px;
 }

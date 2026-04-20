@@ -7,6 +7,7 @@ import * as cmd from "./lib/commands";
 import type { CoreInfo, FileEntry, RightTool, SavedSshConnection } from "./lib/types";
 import ResizeHandle from "./components/ResizeHandle";
 import SettingsDialog from "./components/SettingsDialog";
+import Stage from "./components/Stage";
 import TerminalPanel from "./panels/TerminalPanel";
 import CommandPalette, { type PaletteCommand } from "./shell/CommandPalette";
 import NewConnectionDialog from "./shell/NewConnectionDialog";
@@ -20,7 +21,9 @@ import { useTabStore } from "./stores/useTabStore";
 import { useConnectionStore } from "./stores/useConnectionStore";
 import { useSettingsStore } from "./stores/useSettingsStore";
 import { useThemeStore as useThemeStoreRef } from "./stores/useThemeStore";
+import "./styles/fonts.css";
 import "./styles/tokens.css";
+import "./styles/atoms.css";
 import "./styles/shell.css";
 
 const MARKDOWN_EXTENSIONS = /\.(md|markdown|mdown|mkdn|mkd|mdx)$/i;
@@ -241,20 +244,34 @@ function App() {
     return () => window.removeEventListener("keydown", handleGlobalKeyDown);
   }, [handleGlobalKeyDown]);
 
+  const TOOLSTRIP_W = 42;
+  const rightPanelW = Math.max(rightWidth - TOOLSTRIP_W, 0);
+  const isRightCollapsed = rightPanelW === 0;
+  const appShellStyle: React.CSSProperties = {
+    ["--sidebar-w" as never]: `${sidebarWidth}px`,
+    ["--rightpanel-w" as never]: `${rightPanelW}px`,
+  };
+
   return (
     <I18nContext.Provider value={i18n}>
-      <div className="app-shell">
-        <TopBar
-          onNewTab={openNewTab}
-          onSettings={() => setSettingsOpen(true)}
-          onToggleTheme={() => {
-            const s = useThemeStoreRef.getState();
-            s.setMode(s.resolvedDark ? "light" : "dark");
-          }}
-          version={coreInfo?.version}
-        />
+      <Stage>
+        <div
+          className={`app-shell${isRightCollapsed ? " is-right-collapsed" : ""}`}
+          style={appShellStyle}
+        >
+          <TopBar
+            onNewTab={openNewTab}
+            onSettings={() => setSettingsOpen(true)}
+            onToggleTheme={() => {
+              const s = useThemeStoreRef.getState();
+              s.setMode(s.resolvedDark ? "light" : "dark");
+            }}
+            version={coreInfo?.version}
+            onCommandPalette={() => setPaletteOpen(true)}
+          />
 
-        <div className="workspace">
+          <TabBar onNewTab={openNewTab} />
+
           <Sidebar
             onOpenLocalTerminal={openLocalTerminal}
             onConnectSaved={openSshSaved}
@@ -264,12 +281,9 @@ function App() {
             onFileSelect={handleFileSelect}
             selectedFilePath={selectedMarkdownPath}
             workspaceRoot={coreInfo?.workspaceRoot}
-            width={sidebarWidth}
           />
-          <ResizeHandle direction="left" size={sidebarWidth} min={180} max={420} onResize={setSidebarWidth} />
 
           <div className="workspace__center">
-            <TabBar onNewTab={openNewTab} />
             <div className="workspace__content">
               {tabs.length === 0 ? (
                 <WelcomeView
@@ -293,20 +307,37 @@ function App() {
             </div>
           </div>
 
-          <ResizeHandle direction="right" size={rightWidth} min={44} max={600} onResize={setRightWidth} />
           <RightSidebar
             activeTab={activeTab}
             browserPath={browserPath}
             selectedMarkdownPath={selectedMarkdownPath}
             onToolChange={handleToolChange}
-            width={rightWidth}
           />
-        </div>
 
-        <StatusBar
-          version={coreInfo?.version}
-          coreInfo={coreInfo?.profile}
-        />
+          <StatusBar
+            version={coreInfo?.version}
+            coreInfo={coreInfo?.profile}
+            activeTab={activeTab}
+          />
+
+          <ResizeHandle
+            className="resize-handle--left"
+            direction="left"
+            size={sidebarWidth}
+            min={180}
+            max={420}
+            onResize={setSidebarWidth}
+          />
+          {!isRightCollapsed && (
+            <ResizeHandle
+              className="resize-handle--right"
+              direction="right"
+              size={rightWidth}
+              min={TOOLSTRIP_W + 220}
+              max={900}
+              onResize={setRightWidth}
+            />
+          )}
 
         {/* Overlays */}
         <CommandPalette
@@ -327,7 +358,8 @@ function App() {
           open={settingsOpen}
           onClose={() => setSettingsOpen(false)}
         />
-      </div>
+        </div>
+      </Stage>
     </I18nContext.Provider>
   );
 }

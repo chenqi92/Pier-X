@@ -1,4 +1,6 @@
+import { FileText } from "lucide-react";
 import { useEffect, useState } from "react";
+import PanelHeader from "../components/PanelHeader";
 import * as cmd from "../lib/commands";
 import { useI18n } from "../i18n/useI18n";
 
@@ -47,22 +49,25 @@ export default function MarkdownPanel({ filePath }: Props) {
   }, [filePath]);
 
   return (
-    <div className="panel-scroll">
-      <section className="panel-section">
-        <div className="panel-section__title">
-          <span>{t("Markdown")}</span>
-          {filePath && <span className="panel-section__hint">{basename(filePath)}</span>}
-        </div>
-        {!filePath ? (
-          <div className="empty-note">{t("Select a Markdown file on the left to preview.")}</div>
-        ) : loading ? (
-          <div className="empty-note">{t("Rendering…")}</div>
-        ) : error ? (
-          <div className="empty-note empty-note--error">{error}</div>
-        ) : (
-          <div className="markdown-preview" dangerouslySetInnerHTML={{ __html: html }} />
-        )}
-      </section>
-    </div>
+    <>
+      <PanelHeader
+        icon={FileText}
+        title="MARKDOWN"
+        meta={filePath ? basename(filePath) : undefined}
+      />
+      <div className="panel-scroll">
+        <section className="panel-section">
+          {!filePath ? (
+            <div className="empty-note">{t("Select a Markdown file on the left to preview.")}</div>
+          ) : loading ? (
+            <div className="empty-note">{t("Rendering…")}</div>
+          ) : error ? (
+            <div className="empty-note empty-note--error">{error}</div>
+          ) : (
+            <div className="markdown-preview" dangerouslySetInnerHTML={{ __html: html }} />
+          )}
+        </section>
+      </div>
+    </>
   );
 }

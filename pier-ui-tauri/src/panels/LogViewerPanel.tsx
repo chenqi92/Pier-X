@@ -3,6 +3,7 @@ import { useEffect, useRef, useState } from "react";
 import * as cmd from "../lib/commands";
 import type { LogEventView, TabState } from "../lib/types";
 import { useI18n } from "../i18n/useI18n";
+import PanelHeader from "../components/PanelHeader";
 import { useTabStore } from "../stores/useTabStore";
 
 type Props = { tab: TabState };
@@ -128,10 +129,21 @@ export default function LogViewerPanel({ tab }: Props) {
     }
   }, [streamId]);
 
+  const headerMeta = streamId
+    ? "streaming"
+    : events.length > 0
+      ? `${events.length} lines`
+      : undefined;
+
   return (
-    <div className="panel-scroll">
+    <>
+      <PanelHeader
+        icon={ScrollText}
+        title="LOG"
+        meta={headerMeta}
+      />
+      <div className="panel-scroll">
       <section className="panel-section">
-        <div className="panel-section__title"><ScrollText size={14} /><span>{t("Logs")}</span></div>
         <div className="form-stack">
           <label className="field-stack">
             <span className="field-label">{t("Remote command")}</span>
@@ -179,5 +191,6 @@ export default function LogViewerPanel({ tab }: Props) {
         )}
       </section>
     </div>
+    </>
   );
 }

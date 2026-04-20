@@ -43,25 +43,34 @@ wins for code structure.
 
 Every color, font family, font size, spacing, radius, and shadow used in a
 component or panel **must** reference a CSS custom property defined in
-[`src/styles/tokens.css`](pier-ui-tauri/src/styles/tokens.css).
+[`src/styles/tokens.css`](pier-ui-tauri/src/styles/tokens.css) — or a shared
+atom class from [`src/styles/atoms.css`](pier-ui-tauri/src/styles/atoms.css).
 
-**Forbidden in `src/shell/`, `src/panels/`, and `src/components/`:**
+**Forbidden in `src/shell/`, `src/panels/`, `src/components/`, and any stylesheet under `src/styles/` other than `tokens.css`:**
 
-- Hex / rgb / hsl color literals in `.css` or inline styles
-  (`color: "#0f1115"`, `background: rgb(...)`, etc.)
-- Hardcoded pixel values for spacing, radius, or typography when a token
-  exists
-- Hardcoded font family strings like `"Inter"`, `"JetBrains Mono"`
+- Hex / rgb / rgba / hsl color literals in `.css` or inline styles
+  (`color: "#0e1116"`, `background: rgba(...)`, etc.)
+- Hardcoded pixel values for spacing, radius, or typography when a token exists
+  (use `--sp-X` / `--radius-X` / `--size-X` / `--ui-fs*`)
+- Hardcoded font family strings like `"IBM Plex Sans"`, `"Inter"`, `"JetBrains Mono"`
+- Bypassing `IconButton` / `.btn` / `PanelHeader` / `DbConnRow` / `StatusDot` / `Badge` to roll your own button or panel chrome
 
 **Allowed:**
 
-- `var(--bg-surface)`, `var(--text-primary)`, `var(--accent)`, etc. for color
-- `var(--sp-0..sp-12)` for spacing, `var(--radius-xs..radius-pill)` for
-  corners, `var(--size-display..size-small)` for type scale
-- `var(--font-ui)` / `var(--font-mono)` for font families
+- Backgrounds: `var(--bg)` / `var(--surface)` / `var(--surface-2)` / `var(--panel)` / `var(--panel-2)` / `var(--elev)`
+- Text: `var(--ink)` / `var(--ink-2)` / `var(--muted)` / `var(--dim)`
+- Borders: `var(--line)` / `var(--line-2)` / `var(--line-3)`
+- Accent: `var(--accent)` / `var(--accent-dim)` / `var(--accent-subtle)` / `var(--accent-hover)` / `var(--accent-ink)`
+- Status: `var(--pos)` / `var(--neg)` / `var(--warn)` / `var(--info)` + their `-dim` variants
+- Diff: `var(--add)` / `var(--del)` / `var(--mod)`
+- Spacing/radius: `var(--sp-0..sp-12)` / `var(--radius-xs..radius-pill)`
+- Typography: `var(--size-display..size-small)` / `var(--ui-fs)` / `var(--ui-fs-sm)` / `var(--ui-fs-lg)` / `var(--size-micro)`
+- Font families: `var(--sans)` / `var(--mono)` / `var(--serif)`
+- Elevation/scrim: `var(--shadow-app)` / `var(--shadow-popover)` / `var(--shadow-dialog)` / `var(--stage-gradient)` / `var(--overlay-scrim)`
 
-If a token is missing, **add it to `tokens.css` first** (dark + light), then
-consume it. Do not "just this once" inline a raw value.
+Legacy aliases (`--text-primary`, `--bg-canvas`, `--border-subtle`, `--font-ui`, etc.) remain for transitional code but new code should use the primary names above. See [`.agents/skills/pier-design-system/SKILL.md`](.agents/skills/pier-design-system/SKILL.md) §8 for the shared-atom catalog.
+
+If a token is missing, **add it to `tokens.css` first** (dark + light, plus any accent variants), then consume it. Do not "just this once" inline a raw value.
 
 ### Rule 2 — Module layout
 

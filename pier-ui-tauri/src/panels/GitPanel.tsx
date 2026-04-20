@@ -27,6 +27,7 @@ import { Group as PanelGroup, Panel, Separator as PanelResizeHandle } from "reac
 import { startTransition, useDeferredValue, useEffect, useMemo, useRef, useState } from "react";
 import { openUrl } from "@tauri-apps/plugin-opener";
 import * as cmd from "../lib/commands";
+import PanelHeader from "../components/PanelHeader";
 import "../styles/git-panel.css";
 import type {
   GitBlameLineView,
@@ -1646,10 +1647,23 @@ export default function GitPanel({ browserPath }: Props) {
   const workingTreeClean = panelState?.workingTreeClean ?? true;
 
   if (!browserPath) {
-    return <div className="git-panel git-panel--loading">{t("Loading Git panel…")}</div>;
+    return (
+      <>
+        <PanelHeader icon={GitBranch} title="GIT" meta={t("Loading…")} />
+        <div className="git-panel git-panel--loading">{t("Loading Git panel…")}</div>
+      </>
+    );
   }
 
+  const headerMeta = gitReady
+    ? `${panelState?.currentBranch || t("Detached")}${
+        panelState?.aheadCount ? ` · ↑${panelState.aheadCount}` : ""
+      }${panelState?.behindCount ? ` · ↓${panelState.behindCount}` : ""}`
+    : repoDisplayPath || repoName;
+
   return (
+    <>
+    <PanelHeader icon={GitBranch} title="GIT" meta={headerMeta} />
     <div className="git-panel" ref={panelRef}>
       <div className="git-panel__chrome">
         <div className="git-panel__repo-row">
@@ -3732,5 +3746,6 @@ export default function GitPanel({ browserPath }: Props) {
         </div>
       </GitDialog>
     </div>
+    </>
   );
 }

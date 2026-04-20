@@ -3,6 +3,9 @@ import { useMemo, useState } from "react";
 import * as cmd from "../lib/commands";
 import type { SftpBrowseState, SftpEntryView, TabState } from "../lib/types";
 import { useI18n } from "../i18n/useI18n";
+import DbConnRow from "../components/DbConnRow";
+import PanelHeader from "../components/PanelHeader";
+import StatusDot from "../components/StatusDot";
 
 type Props = { tab: TabState };
 
@@ -229,10 +232,33 @@ export default function SftpPanel({ tab }: Props) {
     setDownloadLocalPath(entry.isDir ? "" : localBaseName(entry.path));
   }
 
+  const currentRemotePath = state?.currentPath || path || "/";
+  const connName = hasSsh ? `${tab.sshUser}@${tab.sshHost}` : t("SFTP");
+  const connSub = hasSsh ? currentRemotePath : t("Not connected");
+  const connTag = (
+    <>
+      <StatusDot tone={hasSsh ? "pos" : "off"} />
+      {hasSsh ? `:${tab.sshPort}` : t("offline")}
+    </>
+  );
+
   return (
-    <div className="panel-scroll">
+    <>
+      <PanelHeader
+        icon={FolderTree}
+        title="SFTP"
+        meta={currentRemotePath}
+      />
+      <DbConnRow
+        icon={FolderTree}
+        tint="var(--accent-dim)"
+        iconTint="var(--accent)"
+        name={connName}
+        sub={connSub}
+        tag={connTag}
+      />
+      <div className="panel-scroll">
       <section className="panel-section">
-        <div className="panel-section__title"><FolderTree size={14} /><span>{t("SFTP")}</span></div>
         <div className="form-stack">
           <label className="field-stack">
             <span className="field-label">{t("Remote path")}</span>
@@ -342,5 +368,6 @@ export default function SftpPanel({ tab }: Props) {
         </>
       )}
     </div>
+    </>
   );
 }

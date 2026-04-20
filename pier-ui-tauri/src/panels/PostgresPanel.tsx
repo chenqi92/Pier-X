@@ -1,11 +1,15 @@
+import { Database } from "lucide-react";
 import { useEffect, useState } from "react";
 import * as cmd from "../lib/commands";
 import { isReadOnlySql, queryResultToTsv } from "../lib/commands";
 import { closeTunnelSlot, ensureTunnelSlot, syncTunnelState } from "../lib/sshTunnel";
 import type { PostgresBrowserState, QueryExecutionResult, TabState } from "../lib/types";
 import { useI18n } from "../i18n/useI18n";
+import DbConnRow from "../components/DbConnRow";
+import PanelHeader from "../components/PanelHeader";
 import PreviewTable from "../components/PreviewTable";
 import QueryResultPanel from "../components/QueryResultPanel";
+import StatusDot from "../components/StatusDot";
 import { useTabStore } from "../stores/useTabStore";
 
 type Props = { tab: TabState };
@@ -207,10 +211,34 @@ export default function PostgresPanel({ tab }: Props) {
     }
   }
 
+  const connName = dbName.trim() || host.trim() || t("PostgreSQL Browser");
+  const connSub = host.trim()
+    ? `${user || "?"}@${host}:${port}${hasSsh ? " · ssh tunnel" : ""}`
+    : t("Not connected");
+  const connTag = (
+    <>
+      <StatusDot tone={state ? "pos" : "off"} />
+      {state ? `:${port}` : t("offline")}
+    </>
+  );
+
   return (
-    <div className="panel-scroll">
+    <>
+      <PanelHeader
+        icon={Database}
+        title="POSTGRESQL"
+        meta={hasSsh ? `tunnel ${tab.sshHost}:${port}` : `${host}:${port}`}
+      />
+      <DbConnRow
+        icon={Database}
+        tint="var(--accent-dim)"
+        iconTint="var(--accent)"
+        name={connName}
+        sub={connSub}
+        tag={connTag}
+      />
+      <div className="panel-scroll">
       <section className="panel-section">
-        <div className="panel-section__title"><span>{t("PostgreSQL Browser")}</span></div>
         <div className="form-stack">
           <div className="field-grid">
             <label className="field-stack">
@@ -409,5 +437,6 @@ export default function PostgresPanel({ tab }: Props) {
         <QueryResultPanel result={queryResult} error={queryError} emptyLabel={t("Run a query to see results.")} />
       </section>
     </div>
+    </>
   );
 }

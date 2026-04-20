@@ -11,9 +11,11 @@ type Props = {
   max: number;
   /** Callback when size changes */
   onResize: (newSize: number) => void;
+  /** Extra class for positioning (e.g. "resize-handle--left") */
+  className?: string;
 };
 
-export default function ResizeHandle({ direction, size, min, max, onResize }: Props) {
+export default function ResizeHandle({ direction, size, min, max, onResize, className }: Props) {
   const dragging = useRef(false);
   const startX = useRef(0);
   const startSize = useRef(0);
@@ -55,10 +57,6 @@ export default function ResizeHandle({ direction, size, min, max, onResize }: Pr
     };
   }, [direction, min, max, onResize]);
 
-  return (
-    <div
-      className="resize-handle"
-      onMouseDown={handleMouseDown}
-    />
-  );
+  const cls = className ? `resize-handle ${className}` : "resize-handle";
+  return <div className={cls} onMouseDown={handleMouseDown} />;
 }

@@ -33,7 +33,6 @@ type Props = {
   onFileSelect?: (entry: FileEntry) => void;
   selectedFilePath?: string;
   workspaceRoot?: string;
-  width?: number;
 };
 
 function pathSegments(path: string, home: string): { name: string; path: string }[] {
@@ -62,7 +61,7 @@ function goUp(currentPath: string): string {
   return trimmed.slice(0, slash);
 }
 
-export default function Sidebar({ onOpenLocalTerminal, onConnectSaved, onNewConnection, onEditConnection, onPathChange, onFileSelect, selectedFilePath, workspaceRoot, width }: Props) {
+export default function Sidebar({ onOpenLocalTerminal, onConnectSaved, onNewConnection, onEditConnection, onPathChange, onFileSelect, selectedFilePath, workspaceRoot }: Props) {
   const { t } = useI18n();
   const [section, setSection] = useState<0 | 1>(0);
   const [entries, setEntries] = useState<FileEntry[]>([]);
@@ -105,12 +104,11 @@ export default function Sidebar({ onOpenLocalTerminal, onConnectSaved, onNewConn
 
   const segments = pathSegments(currentPath, homeDir);
   const folderName = segments.length > 0 ? segments[segments.length - 1].name : t("Files");
-  const sidebarWidth = width ?? 272;
-  const showModified = sidebarWidth >= 240;
-  const showSize = sidebarWidth >= 200;
+  const showModified = true;
+  const showSize = true;
 
   return (
-    <aside className="sidebar" style={{ width: `${sidebarWidth}px` }}>
+    <aside className="sidebar">
       <div className="sidebar__tabs">
         <button className={section === 0 ? "sidebar__tab sidebar__tab--active" : "sidebar__tab"} onClick={() => setSection(0)} type="button">
           <FolderTree size={12} />{t("Files")}

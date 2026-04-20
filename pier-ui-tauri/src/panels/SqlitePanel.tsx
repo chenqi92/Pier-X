@@ -1,10 +1,14 @@
+import { HardDrive } from "lucide-react";
 import { useState } from "react";
 import * as cmd from "../lib/commands";
 import { isReadOnlySql, queryResultToTsv } from "../lib/commands";
 import type { QueryExecutionResult, SqliteBrowserState } from "../lib/types";
 import { useI18n } from "../i18n/useI18n";
+import DbConnRow from "../components/DbConnRow";
+import PanelHeader from "../components/PanelHeader";
 import PreviewTable from "../components/PreviewTable";
 import QueryResultPanel from "../components/QueryResultPanel";
+import StatusDot from "../components/StatusDot";
 
 export default function SqlitePanel() {
   const { t } = useI18n();
@@ -45,10 +49,33 @@ export default function SqlitePanel() {
     finally { setQueryBusy(false); }
   }
 
+  const trimmedPath = path.trim();
+  const connName = trimmedPath || t("SQLite Browser");
+  const connSub = trimmedPath ? trimmedPath : t("Not connected");
+  const connTag = (
+    <>
+      <StatusDot tone={state ? "pos" : "off"} />
+      {state ? t("open") : t("offline")}
+    </>
+  );
+
   return (
-    <div className="panel-scroll">
+    <>
+      <PanelHeader
+        icon={HardDrive}
+        title="SQLITE"
+        meta={trimmedPath || "no database"}
+      />
+      <DbConnRow
+        icon={HardDrive}
+        tint="var(--panel-2)"
+        iconTint="var(--ink-2)"
+        name={connName}
+        sub={connSub}
+        tag={connTag}
+      />
+      <div className="panel-scroll">
       <section className="panel-section">
-        <div className="panel-section__title"><span>{t("SQLite Browser")}</span></div>
         <div className="form-stack">
           <label className="field-stack">
             <span className="field-label">{t("Database file")}</span>
@@ -92,5 +119,6 @@ export default function SqlitePanel() {
 
       <section className="panel-section"><div className="panel-section__title"><span>{t("Query Results")}</span></div><QueryResultPanel result={queryResult} error={queryError} emptyLabel={t("Run a query.")} /></section>
     </div>
+    </>
   );
 }

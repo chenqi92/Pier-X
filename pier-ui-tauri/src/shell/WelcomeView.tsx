@@ -48,14 +48,13 @@ export default function WelcomeView({
   return (
     <div className="welcome">
       <div className="welcome__container">
-        {/* ── Hero ──────────────────────────────────────── */}
+        {/* ── Hero (Remix editorial: serif italic) ───────── */}
         <div className="welcome__hero">
           <div className="welcome__hero-left">
-            <div className="welcome__icon">
-              <span className="welcome__dot" />
-            </div>
             <div>
-              <h1 className="welcome__title">Pier-X</h1>
+              <h1 className="welcome__title">
+                Welcome to <em>Pier-X</em>
+              </h1>
               <p className="welcome__subtitle">{t("Cross-platform terminal workspace")}</p>
             </div>
           </div>

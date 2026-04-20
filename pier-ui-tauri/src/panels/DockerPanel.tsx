@@ -1,8 +1,12 @@
+import { Container } from "lucide-react";
 import { useState } from "react";
 import * as cmd from "../lib/commands";
 import { quoteCommandArg } from "../lib/commands";
 import type { DockerOverview, TabState } from "../lib/types";
 import { useI18n } from "../i18n/useI18n";
+import DbConnRow from "../components/DbConnRow";
+import PanelHeader from "../components/PanelHeader";
+import StatusDot from "../components/StatusDot";
 import { useTabStore } from "../stores/useTabStore";
 
 type Props = { tab: TabState };
@@ -194,10 +198,37 @@ export default function DockerPanel({ tab }: Props) {
 
   const canRefresh = isLocal || hasSsh;
 
+  const headerMeta = hasSsh ? tab.sshHost : isLocal ? "local" : "—";
+  const connName = hasSsh
+    ? `${tab.sshUser}@${tab.sshHost}`
+    : isLocal
+      ? t("Local Docker")
+      : t("Docker");
+  const connSub = hasSsh ? `port ${tab.sshPort}` : isLocal ? t("Local socket") : t("Not connected");
+  const connTag = (
+    <>
+      <StatusDot tone={state ? "pos" : "off"} />
+      {state ? t("ready") : t("offline")}
+    </>
+  );
+
   return (
-    <div className="panel-scroll">
+    <>
+      <PanelHeader
+        icon={Container}
+        title="DOCKER"
+        meta={headerMeta}
+      />
+      <DbConnRow
+        icon={Container}
+        tint="var(--pos-dim)"
+        iconTint="var(--pos)"
+        name={connName}
+        sub={connSub}
+        tag={connTag}
+      />
+      <div className="panel-scroll">
       <section className="panel-section">
-        <div className="panel-section__title"><span>{t("Docker")}</span></div>
         <div className="form-stack">
           <div className="button-row">
             <button className="mini-button" disabled={!canRefresh || busy} onClick={() => void refresh()} type="button">{busy ? t("Loading...") : t("Refresh Docker")}</button>
@@ -295,5 +326,6 @@ export default function DockerPanel({ tab }: Props) {
         </section>
       )}
     </div>
+    </>
   );
 }

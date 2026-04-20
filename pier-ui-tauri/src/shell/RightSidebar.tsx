@@ -1,6 +1,5 @@
-import { X } from "lucide-react";
-import { useState } from "react";
 import type { RightTool, TabState } from "../lib/types";
+import { useState } from "react";
 import { useI18n } from "../i18n/useI18n";
 import GitPanel from "../panels/GitPanel";
 import MySqlPanel from "../panels/MySqlPanel";
@@ -19,20 +18,6 @@ type Props = {
   browserPath: string;
   selectedMarkdownPath: string;
   onToolChange: (tool: RightTool) => void;
-  width?: number;
-};
-
-const TOOL_TITLES: Record<string, string> = {
-  git: "Git",
-  monitor: "Server Monitor",
-  docker: "Docker",
-  mysql: "MySQL",
-  postgres: "PostgreSQL",
-  redis: "Redis",
-  log: "Logs",
-  sftp: "SFTP",
-  sqlite: "SQLite",
-  markdown: "Markdown",
 };
 
 function ToolContent({
@@ -65,59 +50,33 @@ function ToolContent({
   }
 }
 
-export default function RightSidebar({ activeTab, browserPath, selectedMarkdownPath, onToolChange, width }: Props) {
+/**
+ * RightSidebar owns the right grid cell — a rightpanel (panel content) and
+ * the ToolStrip rail beside it. Each panel renders its own PanelHeader
+ * internally, so RightSidebar only provides the frame.
+ */
+export default function RightSidebar({ activeTab, browserPath, selectedMarkdownPath, onToolChange }: Props) {
   const { t } = useI18n();
   const [expanded, setExpanded] = useState(true);
 
   const activeTool: RightTool = activeTab?.rightTool ?? "markdown";
   const hasRemoteContext = activeTab?.backend === "ssh";
-  const title = TOOL_TITLES[activeTool] ?? activeTool;
-  const isGitTool = activeTool === "git";
   const openTabFirst = t("Open a tab first.");
   const unknownTool = t("Unknown tool.");
-  const toolContent = (
-    <ToolContent
-      tool={activeTool}
-      tab={activeTab}
-      browserPath={browserPath}
-      markdownPath={selectedMarkdownPath}
-      openTabFirstLabel={openTabFirst}
-      unknownToolLabel={unknownTool}
-    />
-  );
 
   return (
-    <div className="right-sidebar" style={width ? { width: `${width}px` } : undefined}>
+    <div className="right-sidebar">
       {expanded && (
-        isGitTool ? (
-          <div className="right-sidebar__content right-sidebar__content--git">
-            {toolContent}
-          </div>
-        ) : (
-          <div className="right-sidebar__content">
-            <div className="right-sidebar__header">
-              <div>
-                <h3 className="right-sidebar__title">{t(title)}</h3>
-                {activeTab?.backend === "ssh" && (
-                  <span className="right-sidebar__subtitle">
-                    {activeTab.sshUser}@{activeTab.sshHost}:{activeTab.sshPort}
-                  </span>
-                )}
-              </div>
-              <button
-                className="topbar__icon-btn"
-                onClick={() => setExpanded(false)}
-                title={t("Close")}
-                type="button"
-              >
-                <X size={14} />
-              </button>
-            </div>
-            <div className="right-sidebar__body">
-              {toolContent}
-            </div>
-          </div>
-        )
+        <div className="right-sidebar__content">
+          <ToolContent
+            tool={activeTool}
+            tab={activeTab}
+            browserPath={browserPath}
+            markdownPath={selectedMarkdownPath}
+            openTabFirstLabel={openTabFirst}
+            unknownToolLabel={unknownTool}
+          />
+        </div>
       )}
       <ToolStrip
         activeTool={activeTool}

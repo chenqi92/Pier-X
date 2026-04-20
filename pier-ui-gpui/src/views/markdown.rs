@@ -1,45 +1,44 @@
 //! Lightweight Markdown preview for the right panel.
 //!
-//! We intentionally avoid `gpui_component::text::TextView::markdown` here:
-//! the generic rich-text component builds a much heavier node tree than the
-//! right inspector needs, and its default Markdown styles do not align with
-//! Pier-X's tokenized reader aesthetic.
+//! We intentionally avoid `gpui_component::text::TextView::markdown`
+//! here: the generic rich-text component builds a much heavier node
+//! tree than the right inspector needs, and its default Markdown
+//! styles do not align with Pier-X's tokenized reader aesthetic.
+//!
+//! Rule 6 note (CLAUDE.md): `load_markdown_document` does a blocking
+//! `std::fs::read` + full parse. It runs inside `use_keyed_state`'s
+//! init closure, so it fires **only when the cache key changes** —
+//! the render path is paint-only. The cache key is the document path
+//! alone; reloading after an external edit is an explicit action (the
+//! user re-selects the file from the tree, which re-creates the view).
 
-use std::{
-    collections::hash_map::DefaultHasher,
-    hash::{Hash, Hasher},
-    ops::Range,
-    path::{Path, PathBuf},
-    sync::Arc,
-    time::UNIX_EPOCH,
-};
+use std::{ops::Range, path::PathBuf, sync::Arc};
 
 use gpui::{
-    div, prelude::*, px, relative, App, ClipboardItem, FontStyle, HighlightStyle, IntoElement,
-    Pixels, SharedString, StyledText, UnderlineStyle, Window,
+    div, prelude::*, px, relative, App, FontStyle, HighlightStyle, IntoElement, SharedString,
+    StyledText, UnderlineStyle, Window,
 };
-use gpui_component::{scroll::ScrollableElement, IconName};
 use pulldown_cmark::{Alignment, CodeBlockKind, Event, HeadingLevel, Options, Parser, Tag, TagEnd};
 use rust_i18n::t;
 
-use crate::components::{text, Button, ButtonSize, Card, SectionLabel, StatusKind, StatusPill};
+use crate::components::{
+    text, Card, MarkdownBlockquote, MarkdownCodeBlock, MarkdownDataTable, MarkdownTableAlign,
+    SectionLabel, StatusKind, StatusPill,
+};
 use crate::theme::{
-    heights::{HAIRLINE, ROW_SM_H},
-    radius::{RADIUS_LG, RADIUS_MD, RADIUS_PILL, RADIUS_XS},
-    spacing::{SP_0_5, SP_1, SP_2, SP_3, SP_4, SP_6},
+    heights::{HAIRLINE, MARKDOWN_READER_MAX_W, ROW_SM_H},
+    radius::{RADIUS_LG, RADIUS_XS},
+    spacing::{SP_1, SP_2, SP_3, SP_4, SP_6},
     theme,
     typography::{
-        SIZE_BODY, SIZE_BODY_LARGE, SIZE_H1, SIZE_H2, SIZE_H3, SIZE_MONO_SMALL, WEIGHT_EMPHASIS,
-        WEIGHT_MEDIUM, WEIGHT_REGULAR,
+        SIZE_BODY_LARGE, SIZE_H1, SIZE_H2, SIZE_H3, WEIGHT_EMPHASIS, WEIGHT_MEDIUM, WEIGHT_REGULAR,
     },
-    ui_font_with,
+    ui_font_with, Theme,
 };
 
-/// Files larger than this are truncated with an explanatory banner — keeps
-/// the synchronous read on the render path bounded.
+/// Files larger than this are truncated with an explanatory banner —
+/// keeps the synchronous read bounded.
 const MAX_RENDER_BYTES: usize = 2 * 1024 * 1024;
-const MARKDOWN_READER_MAX_W: Pixels = px(760.0);
-const MARKDOWN_TABLE_COL_MIN_W: Pixels = px(144.0);
 
 #[derive(Clone)]
 enum MarkdownDocument {
@@ -79,16 +78,9 @@ struct MarkdownListItem {
 
 #[derive(Clone, Debug, PartialEq)]
 struct MarkdownTable {
-    aligns: Vec<MarkdownAlign>,
+    aligns: Vec<MarkdownTableAlign>,
     header: Vec<MarkdownText>,
     rows: Vec<Vec<MarkdownText>>,
-}
-
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-enum MarkdownAlign {
-    Left,
-    Center,
-    Right,
 }
 
 #[derive(Clone, Debug, Default, PartialEq)]
@@ -114,30 +106,17 @@ struct InlineStyle {
 
 impl InlineStyle {
     fn strong(self) -> Self {
-        Self {
-            strong: true,
-            ..self
-        }
+        Self { strong: true, ..self }
     }
-
     fn emphasis(self) -> Self {
-        Self {
-            emphasis: true,
-            ..self
-        }
+        Self { emphasis: true, ..self }
     }
-
     fn strike(self) -> Self {
-        Self {
-            strike: true,
-            ..self
-        }
+        Self { strike: true, ..self }
     }
-
     fn code(self) -> Self {
         Self { code: true, ..self }
     }
-
     fn link(self) -> Self {
         Self { link: true, ..self }
     }
@@ -158,22 +137,18 @@ impl MarkdownTextBuilder {
         if chunk.is_empty() {
             return;
         }
-
         let start = self.text.len();
         self.text.push_str(chunk);
         let end = self.text.len();
-
         if style == InlineStyle::default() {
             return;
         }
-
         if let Some(last) = self.spans.last_mut() {
             if last.style == style && last.range.end == start {
                 last.range.end = end;
                 return;
             }
         }
-
         self.spans.push(MarkdownSpan {
             range: start..end,
             style,
@@ -213,7 +188,11 @@ impl gpui::RenderOnce for MarkdownView {
         };
 
         let path_label: SharedString = path.display().to_string().into();
-        let cache_key = markdown_cache_key(&path);
+        // Path-only cache key — `use_keyed_state` invokes the init
+        // closure exactly once per key, so the render path never
+        // touches the filesystem. See the module header for the
+        // reload-on-external-edit tradeoff.
+        let cache_key: SharedString = format!("markdown-preview:{}", path.display()).into();
         let path_for_state = path.clone();
         let document = window.use_keyed_state(cache_key, cx, move |_, _| {
             load_markdown_document(path_for_state.as_path())
@@ -226,26 +205,23 @@ impl gpui::RenderOnce for MarkdownView {
                 blocks,
             } => markdown_document_view(&t, &path_label, bytes_len, truncated, blocks, window, cx)
                 .into_any_element(),
-            MarkdownDocument::Error(err) => div()
-                .flex()
-                .flex_col()
-                .child(markdown_reader_shell(
-                    &t,
-                    file_header(&t, &path_label, 0, false),
-                    div().p(SP_4).child(
-                        Card::new()
-                            .padding(SP_3)
-                            .child(SectionLabel::new(t!("App.Markdown.cannot_read_file")))
-                            .child(text::body(err).secondary()),
-                    ),
-                ))
-                .into_any_element(),
+            MarkdownDocument::Error(err) => reader_shell(
+                &t,
+                file_header(&t, &path_label, 0, false),
+                div().p(SP_4).child(
+                    Card::new()
+                        .padding(SP_3)
+                        .child(SectionLabel::new(t!("App.Markdown.cannot_read_file")))
+                        .child(text::body(err).secondary()),
+                ),
+            )
+            .into_any_element(),
         }
     }
 }
 
 fn markdown_document_view(
-    t: &crate::theme::Theme,
+    t: &Theme,
     path_label: &SharedString,
     bytes_len: usize,
     truncated: bool,
@@ -253,7 +229,14 @@ fn markdown_document_view(
     window: &mut Window,
     cx: &mut App,
 ) -> impl IntoElement {
-    let mut body = div().w_full().px(SP_4).py(SP_4).flex().flex_col().gap(SP_4);
+    let mut body = div()
+        .w_full()
+        .px(SP_4)
+        .py(SP_4)
+        .flex()
+        .flex_col()
+        .gap(SP_4);
+
     if truncated {
         body = body.child(
             Card::new()
@@ -276,11 +259,11 @@ fn markdown_document_view(
         body = body.child(render_markdown_blocks(&blocks, t, window, cx));
     }
 
-    markdown_reader_shell(t, file_header(t, path_label, bytes_len, truncated), body)
+    reader_shell(t, file_header(t, path_label, bytes_len, truncated), body)
 }
 
 fn file_header(
-    t: &crate::theme::Theme,
+    t: &Theme,
     path: &SharedString,
     bytes: usize,
     truncated: bool,
@@ -320,8 +303,8 @@ fn file_header(
         .child(status)
 }
 
-fn markdown_reader_shell(
-    t: &crate::theme::Theme,
+fn reader_shell(
+    t: &Theme,
     header: impl IntoElement,
     body: impl IntoElement,
 ) -> impl IntoElement {
@@ -351,7 +334,7 @@ fn markdown_reader_shell(
 
 fn render_markdown_blocks(
     blocks: &[MarkdownBlock],
-    t: &crate::theme::Theme,
+    t: &Theme,
     window: &mut Window,
     cx: &mut App,
 ) -> impl IntoElement {
@@ -366,7 +349,7 @@ fn render_markdown_blocks(
 fn render_markdown_block(
     block: &MarkdownBlock,
     index: usize,
-    t: &crate::theme::Theme,
+    t: &Theme,
     window: &mut Window,
     cx: &mut App,
 ) -> gpui::AnyElement {
@@ -389,56 +372,30 @@ fn render_markdown_block(
                 2 => (SIZE_H2, WEIGHT_MEDIUM),
                 _ => (SIZE_H3, WEIGHT_MEDIUM),
             };
-            let color = if *level == 1 {
-                t.color.text_primary
-            } else {
-                t.color.text_primary
-            };
             div()
                 .w_full()
-                .text_color(color)
+                .text_color(t.color.text_primary)
                 .text_size(size)
                 .line_height(relative(1.32))
                 .font(ui_font_with(&t.font_ui, &t.font_ui_features, weight))
                 .child(styled_markdown_text(text, t))
                 .into_any_element()
         }
-        MarkdownBlock::Quote(blocks) => div()
-            .w_full()
-            .flex()
-            .flex_row()
-            .gap(SP_3)
-            .child(
-                div()
-                    .w(px(3.0))
-                    .h_full()
-                    .bg(t.color.accent_muted)
-                    .rounded(RADIUS_PILL),
-            )
-            .child(
-                div()
-                    .flex_1()
-                    .min_w(px(0.0))
-                    .px(SP_1)
-                    .flex()
-                    .flex_col()
-                    .gap(SP_2)
-                    .children(
-                        blocks
-                            .iter()
-                            .enumerate()
-                            .map(|(ix, child)| render_markdown_block(child, ix, t, window, cx)),
-                    ),
-            )
-            .into_any_element(),
+        MarkdownBlock::Quote(children) => {
+            let mut quote = MarkdownBlockquote::new();
+            for (child_ix, child) in children.iter().enumerate() {
+                quote = quote.child(render_markdown_block(child, child_ix, t, window, cx));
+            }
+            quote.into_any_element()
+        }
         MarkdownBlock::List {
             ordered,
             start,
             items,
         } => render_markdown_list(*ordered, *start, items, t, window, cx).into_any_element(),
-        MarkdownBlock::CodeBlock { language, code } => {
-            render_code_block(index, language.as_ref(), code, t, cx).into_any_element()
-        }
+        MarkdownBlock::CodeBlock { language, code } => MarkdownCodeBlock::new(index, code.clone())
+            .language(language.clone())
+            .into_any_element(),
         MarkdownBlock::Table(table) => render_markdown_table(table, t).into_any_element(),
         MarkdownBlock::Rule => div()
             .w_full()
@@ -453,7 +410,7 @@ fn render_markdown_list(
     ordered: bool,
     start: u64,
     items: &[MarkdownListItem],
-    t: &crate::theme::Theme,
+    t: &Theme,
     window: &mut Window,
     cx: &mut App,
 ) -> impl IntoElement {
@@ -468,19 +425,23 @@ fn render_markdown_list(
             } else {
                 "•".into()
             };
+            // Marker sizing mirrors the paragraph (SIZE_BODY_LARGE +
+            // line-height 1.58) so bullets sit on the first text line
+            // instead of drifting up/down per glyph-size mismatch.
             div()
                 .w_full()
                 .flex()
                 .flex_row()
                 .items_start()
-                .gap(SP_2)
+                .gap(SP_1)
                 .child(
                     div()
                         .w(SP_6)
-                        .pt(SP_0_5)
+                        .flex_none()
                         .text_color(t.color.text_secondary)
-                        .text_size(SIZE_BODY)
-                        .font(ui_font_with(&t.font_ui, &t.font_ui_features, WEIGHT_MEDIUM))
+                        .text_size(SIZE_BODY_LARGE)
+                        .line_height(relative(1.58))
+                        .font(ui_font_with(&t.font_ui, &t.font_ui_features, WEIGHT_REGULAR))
                         .child(marker),
                 )
                 .child(
@@ -497,180 +458,27 @@ fn render_markdown_list(
         }))
 }
 
-fn render_code_block(
-    index: usize,
-    language: Option<&SharedString>,
-    code: &SharedString,
-    t: &crate::theme::Theme,
-    _cx: &mut App,
-) -> impl IntoElement {
-    let copy_id: SharedString = format!("markdown-code-copy-{}", stable_hash(&code)).into();
-    let code_for_copy = code.to_string();
-    let lines: Vec<SharedString> = if code.is_empty() {
-        vec![" ".into()]
-    } else {
-        code.split('\n')
-            .map(|line| {
-                if line.is_empty() {
-                    " ".into()
-                } else {
-                    line.to_string().into()
-                }
-            })
-            .collect()
-    };
-    let mut meta = div().flex().flex_row().items_center().gap(SP_2);
-    if let Some(lang) = language {
-        meta = meta.child(StatusPill::new(lang.clone(), StatusKind::Info));
-    } else {
-        meta = meta.child(text::small("code").secondary());
+fn render_markdown_table(table: &MarkdownTable, t: &Theme) -> impl IntoElement {
+    let header_cells: Vec<gpui::AnyElement> = table
+        .header
+        .iter()
+        .map(|cell| styled_markdown_text(cell, t).into_any_element())
+        .collect();
+
+    let mut out = MarkdownDataTable::new(table.aligns.clone()).header(header_cells);
+
+    for row in &table.rows {
+        let cells: Vec<gpui::AnyElement> = row
+            .iter()
+            .map(|cell| styled_markdown_text(cell, t).into_any_element())
+            .collect();
+        out = out.row(cells);
     }
 
-    div()
-        .w_full()
-        .flex()
-        .flex_col()
-        .bg(t.color.bg_surface)
-        .border_1()
-        .border_color(t.color.border_default)
-        .rounded(RADIUS_MD)
-        .overflow_hidden()
-        .child(
-            div()
-                .h(ROW_SM_H)
-                .px(SP_3)
-                .flex()
-                .flex_row()
-                .items_center()
-                .justify_between()
-                .gap(SP_2)
-                .bg(t.color.bg_hover)
-                .border_b_1()
-                .border_color(t.color.border_subtle)
-                .child(meta)
-                .child(
-                    Button::secondary(copy_id, t!("App.Markdown.copy"))
-                        .size(ButtonSize::Sm)
-                        .leading_icon(IconName::Copy)
-                        .on_click({
-                            let code_owned = code_for_copy.clone();
-                            move |_, _, cx| {
-                                cx.write_to_clipboard(ClipboardItem::new_string(
-                                    code_owned.clone(),
-                                ));
-                            }
-                        }),
-                ),
-        )
-        .child(
-            div()
-                .id(("markdown-code-scroll", index))
-                .w_full()
-                .overflow_x_scrollbar()
-                .child(
-                    div()
-                        .min_w_full()
-                        .px(SP_3)
-                        .py(SP_3)
-                        .flex()
-                        .flex_col()
-                        .gap(SP_1)
-                        .children(lines.into_iter().map(|line| {
-                            div()
-                                .whitespace_nowrap()
-                                .text_size(SIZE_MONO_SMALL)
-                                .line_height(relative(1.5))
-                                .text_color(t.color.text_primary)
-                                .font_family(t.font_mono.clone())
-                                .font_weight(WEIGHT_REGULAR)
-                                .child(line)
-                        })),
-                ),
-        )
+    out
 }
 
-fn render_markdown_table(table: &MarkdownTable, t: &crate::theme::Theme) -> impl IntoElement {
-    let mut col = div()
-        .id("markdown-table-scroll")
-        .w_full()
-        .overflow_x_scrollbar()
-        .child(
-            div()
-                .min_w_full()
-                .border_1()
-                .border_color(t.color.border_subtle)
-                .rounded(RADIUS_MD)
-                .overflow_hidden()
-                .flex()
-                .flex_col(),
-        );
-    if !table.header.is_empty() {
-        col = col.child(render_table_row(&table.header, &table.aligns, true, t));
-    }
-    col = col.children(table.rows.iter().enumerate().map(|(ix, row)| {
-        let mut row_el = div();
-        if ix > 0 || !table.header.is_empty() {
-            row_el = row_el.border_t_1().border_color(t.color.border_subtle);
-        }
-        row_el.child(render_table_row(row, &table.aligns, false, t))
-    }));
-    col
-}
-
-fn render_table_row(
-    row: &[MarkdownText],
-    aligns: &[MarkdownAlign],
-    header: bool,
-    t: &crate::theme::Theme,
-) -> impl IntoElement {
-    div()
-        .w_full()
-        .flex()
-        .flex_row()
-        .children(row.iter().enumerate().map(|(ix, cell)| {
-            let align = aligns.get(ix).copied().unwrap_or(MarkdownAlign::Left);
-            let mut base = div()
-                .flex_1()
-                .min_w(MARKDOWN_TABLE_COL_MIN_W)
-                .px(SP_3)
-                .py(SP_2);
-            if ix > 0 {
-                base = base.border_l_1().border_color(t.color.border_subtle);
-            }
-            if header {
-                base = base.bg(t.color.bg_hover);
-            }
-            base.child(render_table_cell_text(cell, align, header, t))
-        }))
-}
-
-fn render_table_cell_text(
-    cell: &MarkdownText,
-    align: MarkdownAlign,
-    header: bool,
-    t: &crate::theme::Theme,
-) -> impl IntoElement {
-    let weight = if header {
-        WEIGHT_MEDIUM
-    } else {
-        WEIGHT_REGULAR
-    };
-    let text = styled_markdown_text(cell, t);
-    let container = div()
-        .w_full()
-        .text_size(SIZE_BODY)
-        .line_height(relative(1.45))
-        .text_color(t.color.text_primary)
-        .font(ui_font_with(&t.font_ui, &t.font_ui_features, weight))
-        .child(text);
-    match align {
-        MarkdownAlign::Left => container,
-        MarkdownAlign::Center => container.text_center(),
-        MarkdownAlign::Right => container.text_right(),
-    }
-}
-
-fn styled_markdown_text(text: &MarkdownText, t: &crate::theme::Theme) -> StyledText {
+fn styled_markdown_text(text: &MarkdownText, t: &Theme) -> StyledText {
     let mut styled = StyledText::new(text.text.clone());
     if text.spans.is_empty() {
         return styled;
@@ -685,7 +493,7 @@ fn styled_markdown_text(text: &MarkdownText, t: &crate::theme::Theme) -> StyledT
     styled
 }
 
-fn highlight_for_span(style: &InlineStyle, t: &crate::theme::Theme) -> HighlightStyle {
+fn highlight_for_span(style: &InlineStyle, t: &Theme) -> HighlightStyle {
     let mut highlight = HighlightStyle::default();
     if style.strong {
         highlight.font_weight = Some(WEIGHT_MEDIUM);
@@ -714,7 +522,7 @@ fn highlight_for_span(style: &InlineStyle, t: &crate::theme::Theme) -> Highlight
     highlight
 }
 
-fn load_markdown_document(path: &Path) -> MarkdownDocument {
+fn load_markdown_document(path: &std::path::Path) -> MarkdownDocument {
     match std::fs::read(path) {
         Ok(bytes) => {
             let truncated = bytes.len() > MAX_RENDER_BYTES;
@@ -746,17 +554,35 @@ fn parse_blocks<'a>(
     until: Option<TagEnd>,
 ) -> Vec<MarkdownBlock> {
     let mut blocks = Vec::new();
+    // Tight lists (no blank lines between items) emit inline events
+    // directly inside an Item with no wrapping `Start(Paragraph)`.
+    // Accumulate consecutive inline events into a single paragraph
+    // instead of exploding each one into its own block — otherwise a
+    // sentence with five inline `code` spans becomes ten tiny stacked
+    // paragraphs.
+    let mut inline: Option<MarkdownTextBuilder> = None;
+
+    fn flush(blocks: &mut Vec<MarkdownBlock>, inline: &mut Option<MarkdownTextBuilder>) {
+        if let Some(builder) = inline.take() {
+            let text = builder.finish();
+            if !text.is_blank() {
+                blocks.push(MarkdownBlock::Paragraph(text));
+            }
+        }
+    }
 
     while let Some(event) = events.next() {
         match event {
             Event::Start(tag) => match tag {
                 Tag::Paragraph => {
+                    flush(&mut blocks, &mut inline);
                     let text = parse_inline_text(events, TagEnd::Paragraph);
                     if !text.is_blank() {
                         blocks.push(MarkdownBlock::Paragraph(text));
                     }
                 }
                 Tag::Heading { level, .. } => {
+                    flush(&mut blocks, &mut inline);
                     let text = parse_inline_text(events, TagEnd::Heading(level));
                     if !text.is_blank() {
                         blocks.push(MarkdownBlock::Heading {
@@ -766,21 +592,26 @@ fn parse_blocks<'a>(
                     }
                 }
                 Tag::BlockQuote(kind) => {
+                    flush(&mut blocks, &mut inline);
                     let quote_blocks = parse_blocks(events, Some(TagEnd::BlockQuote(kind)));
                     if !quote_blocks.is_empty() {
                         blocks.push(MarkdownBlock::Quote(quote_blocks));
                     }
                 }
                 Tag::List(start) => {
+                    flush(&mut blocks, &mut inline);
                     blocks.push(parse_list(events, start));
                 }
                 Tag::CodeBlock(kind) => {
+                    flush(&mut blocks, &mut inline);
                     blocks.push(parse_code_block(events, kind));
                 }
                 Tag::Table(aligns) => {
+                    flush(&mut blocks, &mut inline);
                     blocks.push(parse_table(events, aligns));
                 }
                 Tag::HtmlBlock => {
+                    flush(&mut blocks, &mut inline);
                     let html = parse_raw_until(events, TagEnd::HtmlBlock);
                     if !html.trim().is_empty() {
                         blocks.push(MarkdownBlock::CodeBlock {
@@ -790,6 +621,7 @@ fn parse_blocks<'a>(
                     }
                 }
                 Tag::FootnoteDefinition(label) => {
+                    flush(&mut blocks, &mut inline);
                     let footnote_blocks = parse_blocks(events, Some(TagEnd::FootnoteDefinition));
                     if !footnote_blocks.is_empty() {
                         let mut prefixed = vec![MarkdownBlock::Paragraph(MarkdownText {
@@ -803,6 +635,76 @@ fn parse_blocks<'a>(
                         blocks.push(MarkdownBlock::Quote(prefixed));
                     }
                 }
+                // Inline-style starts encountered at block level — the
+                // paragraph wrapper is implicit (tight list item), so
+                // feed them into the running inline builder.
+                Tag::Emphasis => {
+                    let builder = inline.get_or_insert_with(MarkdownTextBuilder::default);
+                    parse_inline_segments(
+                        events,
+                        builder,
+                        InlineStyle::default().emphasis(),
+                        TagEnd::Emphasis,
+                    );
+                }
+                Tag::Strong => {
+                    let builder = inline.get_or_insert_with(MarkdownTextBuilder::default);
+                    parse_inline_segments(
+                        events,
+                        builder,
+                        InlineStyle::default().strong(),
+                        TagEnd::Strong,
+                    );
+                }
+                Tag::Strikethrough => {
+                    let builder = inline.get_or_insert_with(MarkdownTextBuilder::default);
+                    parse_inline_segments(
+                        events,
+                        builder,
+                        InlineStyle::default().strike(),
+                        TagEnd::Strikethrough,
+                    );
+                }
+                Tag::Superscript => {
+                    let builder = inline.get_or_insert_with(MarkdownTextBuilder::default);
+                    parse_inline_segments(
+                        events,
+                        builder,
+                        InlineStyle::default(),
+                        TagEnd::Superscript,
+                    );
+                }
+                Tag::Subscript => {
+                    let builder = inline.get_or_insert_with(MarkdownTextBuilder::default);
+                    parse_inline_segments(
+                        events,
+                        builder,
+                        InlineStyle::default(),
+                        TagEnd::Subscript,
+                    );
+                }
+                Tag::Link { .. } => {
+                    let builder = inline.get_or_insert_with(MarkdownTextBuilder::default);
+                    parse_inline_segments(
+                        events,
+                        builder,
+                        InlineStyle::default().link(),
+                        TagEnd::Link,
+                    );
+                }
+                Tag::Image { dest_url, .. } => {
+                    let builder = inline.get_or_insert_with(MarkdownTextBuilder::default);
+                    let start = builder.len();
+                    parse_inline_segments(
+                        events,
+                        builder,
+                        InlineStyle::default().link(),
+                        TagEnd::Image,
+                    );
+                    if builder.len() == start {
+                        builder.push_text(&dest_url, InlineStyle::default().link());
+                    }
+                }
                 Tag::DefinitionList
                 | Tag::DefinitionListDefinition
                 | Tag::DefinitionListTitle
@@ -810,69 +712,61 @@ fn parse_blocks<'a>(
                 | Tag::TableHead
                 | Tag::TableRow
                 | Tag::TableCell
-                | Tag::Emphasis
-                | Tag::Strong
-                | Tag::Strikethrough
-                | Tag::Superscript
-                | Tag::Subscript
-                | Tag::Link { .. }
-                | Tag::Image { .. }
                 | Tag::MetadataBlock(_) => {}
             },
-            Event::Rule => blocks.push(MarkdownBlock::Rule),
+            Event::Rule => {
+                flush(&mut blocks, &mut inline);
+                blocks.push(MarkdownBlock::Rule);
+            }
             Event::Text(text) => {
-                let text = MarkdownText {
-                    text: text.to_string().into(),
-                    spans: Vec::new(),
-                };
-                if !text.is_blank() {
-                    blocks.push(MarkdownBlock::Paragraph(text));
-                }
+                inline
+                    .get_or_insert_with(MarkdownTextBuilder::default)
+                    .push_text(&text, InlineStyle::default());
             }
-            Event::Code(code) => blocks.push(MarkdownBlock::Paragraph(MarkdownText {
-                text: code.to_string().into(),
-                spans: vec![MarkdownSpan {
-                    range: 0..code.len(),
-                    style: InlineStyle::default().code(),
-                }],
-            })),
-            Event::End(end) => {
-                if until.as_ref().is_some_and(|expected| expected == &end) {
-                    break;
-                }
-            }
-            Event::InlineMath(math) | Event::DisplayMath(math) => {
-                let len = math.len();
-                blocks.push(MarkdownBlock::Paragraph(MarkdownText {
-                    text: math.to_string().into(),
-                    spans: vec![MarkdownSpan {
-                        range: 0..len,
-                        style: InlineStyle::default().code(),
-                    }],
-                }));
+            Event::Code(code) | Event::InlineMath(code) | Event::DisplayMath(code) => {
+                inline
+                    .get_or_insert_with(MarkdownTextBuilder::default)
+                    .push_text(&code, InlineStyle::default().code());
             }
             Event::Html(html) | Event::InlineHtml(html) => {
-                if !html.trim().is_empty() {
-                    blocks.push(MarkdownBlock::Paragraph(MarkdownText {
-                        text: html.to_string().into(),
-                        spans: Vec::new(),
-                    }));
+                inline
+                    .get_or_insert_with(MarkdownTextBuilder::default)
+                    .push_text(&html, InlineStyle::default());
+            }
+            Event::SoftBreak => {
+                if let Some(builder) = inline.as_mut() {
+                    builder.push_text(" ", InlineStyle::default());
                 }
+            }
+            Event::HardBreak => {
+                if let Some(builder) = inline.as_mut() {
+                    builder.push_text("\n", InlineStyle::default());
+                }
+            }
+            Event::TaskListMarker(checked) => {
+                inline
+                    .get_or_insert_with(MarkdownTextBuilder::default)
+                    .push_text(
+                        if checked { "[x] " } else { "[ ] " },
+                        InlineStyle::default(),
+                    );
             }
             Event::FootnoteReference(label) => {
                 let text = format!("[^{}]", label);
-                blocks.push(MarkdownBlock::Paragraph(MarkdownText {
-                    text: text.clone().into(),
-                    spans: vec![MarkdownSpan {
-                        range: 0..text.len(),
-                        style: InlineStyle::default().link(),
-                    }],
-                }));
+                inline
+                    .get_or_insert_with(MarkdownTextBuilder::default)
+                    .push_text(&text, InlineStyle::default().link());
             }
-            Event::SoftBreak | Event::HardBreak | Event::TaskListMarker(_) => {}
+            Event::End(end) => {
+                if until.as_ref().is_some_and(|expected| expected == &end) {
+                    flush(&mut blocks, &mut inline);
+                    return blocks;
+                }
+            }
         }
     }
 
+    flush(&mut blocks, &mut inline);
     blocks
 }
 
@@ -947,7 +841,7 @@ fn parse_table<'a>(
     }
 
     MarkdownBlock::Table(MarkdownTable {
-        aligns: aligns.into_iter().map(MarkdownAlign::from).collect(),
+        aligns: aligns.into_iter().map(align_from).collect(),
         header,
         rows,
     })
@@ -1075,29 +969,7 @@ fn parse_raw_until<'a>(events: &mut std::iter::Peekable<Parser<'a>>, until: TagE
     raw
 }
 
-fn markdown_cache_key(path: &Path) -> SharedString {
-    let signature = std::fs::metadata(path)
-        .ok()
-        .map(|meta| {
-            let modified = meta
-                .modified()
-                .ok()
-                .and_then(|time| time.duration_since(UNIX_EPOCH).ok())
-                .map(|duration| duration.as_millis())
-                .unwrap_or_default();
-            format!("{}:{modified}", meta.len())
-        })
-        .unwrap_or_else(|| "missing".to_string());
-    format!("markdown-preview:{}:{signature}", path.display()).into()
-}
-
-fn stable_hash<T: Hash>(value: &T) -> u64 {
-    let mut hasher = DefaultHasher::new();
-    value.hash(&mut hasher);
-    hasher.finish()
-}
-
-fn empty_state(t: &crate::theme::Theme) -> impl IntoElement {
+fn empty_state(t: &Theme) -> impl IntoElement {
     div()
         .size_full()
         .flex()
@@ -1128,13 +1000,11 @@ fn heading_level_number(level: HeadingLevel) -> u8 {
     }
 }
 
-impl From<Alignment> for MarkdownAlign {
-    fn from(value: Alignment) -> Self {
-        match value {
-            Alignment::Center => Self::Center,
-            Alignment::Right => Self::Right,
-            Alignment::Left | Alignment::None => Self::Left,
-        }
+fn align_from(value: Alignment) -> MarkdownTableAlign {
+    match value {
+        Alignment::Center => MarkdownTableAlign::Center,
+        Alignment::Right => MarkdownTableAlign::Right,
+        Alignment::Left | Alignment::None => MarkdownTableAlign::Left,
     }
 }
 
@@ -1166,7 +1036,7 @@ mod tests {
         };
         assert_eq!(table.header.len(), 2);
         assert_eq!(table.rows.len(), 1);
-        assert_eq!(table.aligns[1], MarkdownAlign::Right);
+        assert_eq!(table.aligns[1], MarkdownTableAlign::Right);
     }
 
     #[test]

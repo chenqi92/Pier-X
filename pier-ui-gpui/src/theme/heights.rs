@@ -84,3 +84,8 @@ pub const GLYPH_XS: Pixels = px(10.0);
 pub const GLYPH_2XS: Pixels = px(11.0);
 pub const GLYPH_SM: Pixels = px(12.0);
 pub const GLYPH_MD: Pixels = px(14.0);
+
+// Markdown reader measure — caps the paragraph column at a readable
+// width (≈70ch at SIZE_BODY_LARGE). Matches SKILL.md §1 reader spec;
+// lives here so views can compose without literal `px(760.)`.
+pub const MARKDOWN_READER_MAX_W: Pixels = px(760.0);

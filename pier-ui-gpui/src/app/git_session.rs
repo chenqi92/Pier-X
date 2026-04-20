@@ -177,6 +177,34 @@ pub enum DiffMode {
     SideBySide,
 }
 
+/// Which action the commit split-button fires when its primary half
+/// is clicked. Picking the other option from the dropdown switches
+/// this *and* fires the action — see views/git.rs.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum CommitActionMode {
+    #[default]
+    Commit,
+    CommitAndPush,
+}
+
+impl CommitActionMode {
+    /// Stable string used as the dropdown option value.
+    pub fn id(self) -> &'static str {
+        match self {
+            Self::Commit => "commit",
+            Self::CommitAndPush => "commit_push",
+        }
+    }
+
+    pub fn from_id(id: &str) -> Option<Self> {
+        match id {
+            "commit" => Some(Self::Commit),
+            "commit_push" => Some(Self::CommitAndPush),
+            _ => None,
+        }
+    }
+}
+
 /// Date range filter for the graph toolbar.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub enum GraphDateRange {
@@ -692,6 +720,8 @@ pub struct GitState {
     pub footer_height: f32,
     /// Active drag on the footer splitter, if any.
     pub footer_drag: Option<FooterDrag>,
+    /// Remembered default action for the commit split-button.
+    pub commit_action_mode: CommitActionMode,
 }
 
 /// One selected file change, drives the diff card.
@@ -742,6 +772,7 @@ impl GitState {
             // for more room.
             footer_height: 92.0,
             footer_drag: None,
+            commit_action_mode: CommitActionMode::Commit,
         }
     }
 

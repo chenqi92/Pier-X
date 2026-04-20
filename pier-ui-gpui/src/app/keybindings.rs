@@ -120,6 +120,12 @@ pub fn resolved_keystroke(settings: &AppSettings, action: ActionId) -> String {
 /// change.
 pub fn apply_all(cx: &mut App, settings: &AppSettings) {
     cx.clear_key_bindings();
+    // `clear_key_bindings` also wipes GPUI Component's built-in input /
+    // list / popup bindings. Re-initialize the component registry first
+    // so Backspace/Delete/Enter and other context-scoped controls keep
+    // working, then re-apply Pier's own shortcuts on top.
+    crate::ui_kit::init(cx);
+    crate::ui_kit::sync_theme(cx);
     let mut bindings: Vec<KeyBinding> = Vec::with_capacity(ActionId::ALL.len());
     for action in ActionId::ALL {
         let stroke = resolved_keystroke(settings, action);

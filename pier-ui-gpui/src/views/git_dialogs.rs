@@ -289,7 +289,9 @@ fn parse_unified_diff(raw: &str) -> Vec<ParsedDiffLine> {
                 old_ln: None,
                 new_ln: None,
             });
-        } else if line.starts_with("+++") || line.starts_with("---") || line.starts_with("diff ")
+        } else if line.starts_with("+++")
+            || line.starts_with("---")
+            || line.starts_with("diff ")
             || line.starts_with("index ")
             || line.starts_with("new file mode")
             || line.starts_with("deleted file mode")
@@ -393,11 +395,10 @@ fn render_diff_dialog_body(
         .px(crate::theme::spacing::SP_3)
         .py(crate::theme::spacing::SP_1_5)
         .child(
-            div()
-                .flex_none()
-                .text_color(t.color.status_warning)
-                .child(gpui_component::Icon::new(gpui_component::IconName::FileText)
-                    .size(crate::theme::heights::ICON_SM)),
+            div().flex_none().text_color(t.color.status_warning).child(
+                gpui_component::Icon::new(gpui_component::IconName::FileText)
+                    .size(crate::theme::heights::ICON_SM),
+            ),
         )
         .child(
             div()
@@ -435,9 +436,7 @@ fn render_diff_dialog_body(
             .flex()
             .items_center()
             .justify_center()
-            .child(
-                crate::components::text::caption(t!("App.Git.diff_empty")).secondary(),
-            )
+            .child(crate::components::text::caption(t!("App.Git.diff_empty")).secondary())
             .into_any_element()
     } else {
         match mode {
@@ -599,7 +598,12 @@ fn render_side_by_side_diff(
             .flex_col()
             .bg(t.color.bg_canvas);
         for (i, line) in left.iter().enumerate().take(5000) {
-            col = col.child(render_side_line(t, ("git-diff-l", i), line, /*is_left=*/ true));
+            col = col.child(render_side_line(
+                t,
+                ("git-diff-l", i),
+                line,
+                /*is_left=*/ true,
+            ));
         }
         col
     };
@@ -613,7 +617,12 @@ fn render_side_by_side_diff(
             .flex_col()
             .bg(t.color.bg_canvas);
         for (i, line) in right.iter().enumerate().take(5000) {
-            col = col.child(render_side_line(t, ("git-diff-r", i), line, /*is_left=*/ false));
+            col = col.child(render_side_line(
+                t,
+                ("git-diff-r", i),
+                line,
+                /*is_left=*/ false,
+            ));
         }
         col
     };
@@ -622,17 +631,11 @@ fn render_side_by_side_diff(
         .flex()
         .flex_row()
         .child(left_col)
-        .child(
-            div()
-                .w(px(1.0))
-                .bg(t.color.border_subtle),
-        )
+        .child(div().w(px(1.0)).bg(t.color.border_subtle))
         .child(right_col)
 }
 
-fn split_side_by_side(
-    lines: &[ParsedDiffLine],
-) -> (Vec<ParsedDiffLine>, Vec<ParsedDiffLine>) {
+fn split_side_by_side(lines: &[ParsedDiffLine]) -> (Vec<ParsedDiffLine>, Vec<ParsedDiffLine>) {
     let mut left: Vec<ParsedDiffLine> = Vec::with_capacity(lines.len());
     let mut right: Vec<ParsedDiffLine> = Vec::with_capacity(lines.len());
     let mut pending_del: Vec<ParsedDiffLine> = Vec::new();
@@ -868,7 +871,6 @@ fn rebase_dialog_body(app: WeakEntity<PierApp>, cx: &mut App) -> gpui::AnyElemen
     let t = theme(cx).clone();
     super::git::rebase_manager_export(&t, app).into_any_element()
 }
-
 
 // ─── Internal helpers ──────────────────────────────────────────────
 

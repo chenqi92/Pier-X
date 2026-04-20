@@ -9,7 +9,7 @@ use std::{
 };
 
 #[cfg(windows)]
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 
 use base64::{engine::general_purpose::STANDARD as BASE64_STANDARD, Engine as _};
 use gpui::{

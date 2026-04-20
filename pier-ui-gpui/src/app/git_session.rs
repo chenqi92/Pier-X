@@ -27,6 +27,29 @@ use pier_core::services::git::{
 };
 use pier_core::ssh::SshSession;
 
+/// Commit footer height policy. Matches sibling Pier's 120 px default
+/// and 300 px upper cap, but keeps an 80 px floor because GPUI packs
+/// the editor + action row into one shell.
+pub const GIT_FOOTER_MIN_H: f32 = 80.0;
+pub const GIT_FOOTER_DEFAULT_H: f32 = 120.0;
+pub const GIT_FOOTER_MAX_H: f32 = 300.0;
+
+/// Clamp an in-session drag result to the supported footer range.
+pub fn clamp_git_footer_height(height: f32) -> f32 {
+    height.clamp(GIT_FOOTER_MIN_H, GIT_FOOTER_MAX_H)
+}
+
+/// Recover a persisted footer height. Legacy builds stored values up
+/// to 480 px; those should snap back to the Pier-sized default rather
+/// than relaunching with an oversized composer.
+pub fn restore_git_footer_height(saved: f32) -> f32 {
+    if (GIT_FOOTER_MIN_H..=GIT_FOOTER_MAX_H).contains(&saved) {
+        saved
+    } else {
+        GIT_FOOTER_DEFAULT_H
+    }
+}
+
 /// Where a [`GitState`] points. A local path means "run the `git`
 /// subprocess in this directory"; a remote target means "exec
 /// `git -C <cwd> …` across this SSH session". The client
@@ -767,10 +790,10 @@ impl GitState {
             commit_detail: CommitDetailState::default(),
             blame: BlameState::default(),
             managers: ManagersState::default(),
-            // 92 px is the tightest height where the commit input
-            // + bottom button row both fit; drag the splitter up
-            // for more room.
-            footer_height: 92.0,
+            // Start at the same default as sibling Pier. Any
+            // persisted user override is restored later by
+            // `PierApp::new`.
+            footer_height: GIT_FOOTER_DEFAULT_H,
             footer_drag: None,
             commit_action_mode: CommitActionMode::Commit,
         }
@@ -883,7 +906,7 @@ impl GitState {
         if let Some(drag) = self.footer_drag {
             // Dragging upward (current < start) grows the footer.
             let delta = drag.start_mouse_y - mouse_y;
-            let next = (drag.start_height + delta).clamp(80.0, 480.0);
+            let next = clamp_git_footer_height(drag.start_height + delta);
             if (next - self.footer_height).abs() > 0.5 {
                 self.footer_height = next;
                 return true;

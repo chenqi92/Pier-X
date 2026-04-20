@@ -10,3 +10,4 @@
 //! which stays UI-agnostic per the CLAUDE.md architecture rules.
 
 pub mod accent;
+pub mod window_chrome;

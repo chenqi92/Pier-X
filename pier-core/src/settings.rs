@@ -108,7 +108,8 @@ pub struct AppSettings {
     /// input footer. Persisted across restarts so the splitter
     /// position the user dragged is preserved. Default 120 px
     /// matches Pier. Stored as `u16` to keep `AppSettings: Eq`
-    /// intact; the drag logic clamps within `80..=480`.
+    /// intact; the GPUI shell restores values within `80..=300` and
+    /// falls back to 120 for legacy out-of-range values.
     #[serde(default = "default_git_footer_height")]
     pub git_footer_height: u16,
     /// User-assigned keystrokes, keyed by a UI-layer action ID (e.g.

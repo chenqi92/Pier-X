@@ -62,6 +62,11 @@ pub const INSPECTOR_ROW_H: Pixels = px(22.0);
 pub const INSPECTOR_HEADER_H: Pixels = px(28.0);
 pub const INSPECTOR_CELL_H: Pixels = px(56.0);
 
+// Git Changes — cap for the staged list so a huge stage set doesn't
+// starve the unstaged section below. Mirrors Pier's
+// `.frame(maxHeight: 150)` on the staged section of GitPanelView.
+pub const CHANGES_STAGED_MAX_H: Pixels = px(150.0);
+
 // Tab pill — a hair taller than ROW_SM so the pill doesn't kiss the
 // bottom rule, plus its own inline-glyph size so the tab icon feels
 // deliberately smaller than the adjacent label text.

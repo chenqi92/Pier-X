@@ -19,9 +19,8 @@
 //! Tauri reference.
 
 use gpui::{
-    div, point, prelude::*, px, size, App, AppContext, Bounds, ClickEvent, Context, FocusHandle,
-    IntoElement, KeyDownEvent, SharedString, TitlebarOptions, WeakEntity, Window, WindowBounds,
-    WindowOptions,
+    div, prelude::*, px, size, App, AppContext, Bounds, ClickEvent, Context, FocusHandle,
+    IntoElement, KeyDownEvent, SharedString, WeakEntity, Window, WindowBounds, WindowOptions,
 };
 use pier_core::settings::{AppSettings, AppearanceMode, TerminalCursorStyle, TerminalThemePreset};
 use rust_i18n::t;
@@ -270,32 +269,35 @@ impl SettingsDialog {
 impl Render for SettingsDialog {
     fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let t = theme(cx).clone();
-        // Column layout — custom titlebar strip on top, content below.
-        // Top strip bg matches sidebar so there's no visible seam; it
-        // reserves space on the left for the traffic-light cluster
-        // (we set `traffic_light_position: (12, 14)` at window open).
-        div()
-            .size_full()
-            .flex()
-            .flex_col()
-            .bg(t.color.bg_canvas)
-            .child(self.render_titlebar(&t))
-            .child(
-                div()
-                    .flex_1()
-                    .min_h(px(0.0))
-                    .flex()
-                    .flex_row()
-                    .child(self.render_sidebar(&t, cx))
-                    .child(
-                        div()
-                            .flex_1()
-                            .min_w(px(0.0))
-                            .h_full()
-                            .bg(t.color.bg_canvas)
-                            .child(self.render_content(cx)),
-                    ),
-            )
+        // Column layout — macOS keeps the embedded title strip because
+        // we hide the native titlebar there; Windows uses the native
+        // caption so the content starts directly under it.
+        let show_embedded_titlebar =
+            crate::platform::window_chrome::shows_embedded_settings_titlebar();
+        let root = div().size_full().flex().flex_col().bg(t.color.bg_canvas);
+
+        let root = if show_embedded_titlebar {
+            root.child(self.render_titlebar(&t))
+        } else {
+            root
+        };
+
+        root.child(
+            div()
+                .flex_1()
+                .min_h(px(0.0))
+                .flex()
+                .flex_row()
+                .child(self.render_sidebar(&t, cx))
+                .child(
+                    div()
+                        .flex_1()
+                        .min_w(px(0.0))
+                        .h_full()
+                        .bg(t.color.bg_canvas)
+                        .child(self.render_content(cx)),
+                ),
+        )
     }
 }
 
@@ -1160,17 +1162,10 @@ pub fn open(_window: &mut Window, cx: &mut App) {
     let options = WindowOptions {
         window_bounds: Some(WindowBounds::Windowed(bounds)),
         window_min_size: Some(size(px(SETTINGS_WINDOW_MIN_W), px(SETTINGS_WINDOW_MIN_H))),
-        // Transparent titlebar so we can paint the top strip ourselves
-        // in-theme. The native titlebar honours NSAppearance, which
-        // doesn't track our custom light/dark preference — it rendered
-        // a black top stripe over a light settings window on macOS.
-        // We keep the traffic lights (system-drawn) parked over our
-        // custom strip.
-        titlebar: Some(TitlebarOptions {
-            title: None,
-            appears_transparent: true,
-            traffic_light_position: Some(point(px(12.0), px(14.0))),
-        }),
+        // macOS keeps the in-theme transparent strip; Windows uses the
+        // native caption so close/min/max and the system menu stay
+        // available without custom hit-testing.
+        titlebar: Some(crate::platform::window_chrome::settings_window_titlebar()),
         app_id: Some("com.pier-x.settings".into()),
         ..Default::default()
     };

@@ -25,14 +25,15 @@ use pier_core::services::git::{
 use rust_i18n::t;
 
 use crate::app::git_session::{
-    DiffMode, DiffSelection, GitPendingAction, GitState, GitStatus, GitTab, GraphColumn,
-    GraphDateRange, GraphFilter, GraphHighlightMode, ManagerTab,
+    clamp_git_footer_height, CommitActionMode, DiffMode, DiffSelection, GitPendingAction, GitState,
+    GitStatus, GitTab, GraphColumn, GraphDateRange, GraphFilter, GraphHighlightMode, ManagerTab,
 };
 use crate::app::PierApp;
 use crate::components::{
     compute_graph_col_width, graph_row_canvas, is_head_row, palette_color, text, Button,
-    ButtonSize, IconButton, IconButtonSize, IconButtonVariant, InlineInput, InlineInputTone,
-    InspectorSection, Separator, StatusKind, StatusPill, TabItem, Tabs,
+    ButtonSize, CommitComposer, IconButton, IconButtonSize, IconButtonVariant, InlineInput,
+    InlineInputTone, InspectorSection, Separator, SplitButton, SplitButtonOption, StatusKind,
+    StatusPill, TabItem, Tabs,
 };
 use crate::theme::{
     heights::{BUTTON_SM_H, ICON_MD, ICON_SM},
@@ -107,6 +108,7 @@ impl RenderOnce for GitView {
                 stash_input,
                 graph_search_input,
                 weak,
+                cx,
             )
             .into_any_element(),
         }
@@ -122,6 +124,7 @@ fn tab_layout(
     stash_input: gpui::Entity<InputState>,
     graph_search_input: gpui::Entity<InputState>,
     weak: WeakEntity<PierApp>,
+    cx: &mut App,
 ) -> gpui::Stateful<gpui::Div> {
     let active = snap.tab;
     // Managers are floating dialogs now (see `git_dialogs.rs`) so
@@ -252,7 +255,10 @@ fn tab_layout(
                 &snap.changes,
                 commit_input,
                 weak.clone(),
+                cx,
                 snap.footer_height,
+                snap.commit_action_mode,
+                snap.action_error.clone(),
             ));
     }
 
@@ -463,13 +469,30 @@ fn branch_actions_row(
         .px(SP_3)
         .py(SP_1);
 
+    // Pill opens the branches manager dialog — mirrors Pier's
+    // clickable "current branch" chip in the top-right chrome.
+    let pill_weak = weak.clone();
     row = row.child(
         div()
+            .id("git-branch-pill")
             .flex_none()
             .flex()
             .flex_row()
             .items_center()
             .gap(SP_1)
+            .px(SP_1_5)
+            .py(SP_0_5)
+            .rounded(RADIUS_SM)
+            .cursor_pointer()
+            .hover(|s| s.bg(t.color.bg_hover))
+            .tooltip(|win, cx| {
+                gpui_component::tooltip::Tooltip::new(t!("App.Git.switch_branch").to_string())
+                    .build(win, cx)
+            })
+            .on_click(move |_, win, cx| {
+                let app = pill_weak.clone();
+                git_dialogs::open_branches_dialog(win, cx, app);
+            })
             .child(
                 div()
                     .flex_none()
@@ -483,6 +506,12 @@ fn branch_actions_row(
                     .font_weight(WEIGHT_MEDIUM)
                     .text_color(t.color.text_primary)
                     .child(name_line),
+            )
+            .child(
+                div()
+                    .flex_none()
+                    .text_color(t.color.text_tertiary)
+                    .child(gpui_component::Icon::new(IconName::ChevronDown).size(ICON_SM)),
             ),
     );
 
@@ -699,28 +728,31 @@ fn conflicts_tab_body(
 }
 
 /// Sticky commit footer — the Pier-native "always-visible commit
-/// box" that sits below the tab body. Shows the commit input, a
-/// "stage all" shortcut, and a `Commit` primary button that stays
-/// disabled-looking when there is nothing staged.
+/// box" that sits below the tab body. Wraps the commit input inside
+/// a single bordered shell that also hosts the stage-all shortcut at
+/// bottom-left and the Commit / Commit & Push split-button at
+/// bottom-right.
 fn commit_footer(
     t: &crate::theme::Theme,
     changes: &[GitFileChange],
     input: gpui::Entity<InputState>,
     weak: WeakEntity<PierApp>,
+    cx: &App,
     height: f32,
+    mode: CommitActionMode,
+    action_error: Option<SharedString>,
 ) -> impl IntoElement {
     let has_changes = !changes.is_empty();
     let staged = changes.iter().any(|c| c.staged);
-    let commit_weak = weak.clone();
-    let input_for_primary = input.clone();
-    let commit_push_weak = weak.clone();
-    let input_for_push = input.clone();
+    let has_message = !input.read(cx).value().trim().is_empty();
+    let can_submit = staged && has_message;
     let stage_all_weak = weak.clone();
 
-    // "Stage all" — only rendered when something is unstaged, so a
-    // clean worktree doesn't carry a no-op button.
+    // Stage-all lives inside the composer at bottom-left. Keep a
+    // placeholder div when the worktree is clean so the split-button
+    // on the right doesn't jump horizontally.
     let stage_all_btn: gpui::AnyElement = if has_changes && !staged {
-        Button::secondary("git-footer-stage-all", t!("App.Git.stage_all"))
+        Button::ghost("git-footer-stage-all", t!("App.Git.stage_all"))
             .size(ButtonSize::Sm)
             .tooltip(t!("App.Git.stage_all"))
             .on_click(move |_, _, cx| {
@@ -733,79 +765,115 @@ fn commit_footer(
         div().flex_none().into_any_element()
     };
 
-    // Commit + Commit-and-Push — always visible. Disabled when no
-    // staged changes so the user gets a visual "stage something
-    // first" cue instead of a warning pill that takes up room the
-    // primary buttons should occupy.
-    let commit_btn = Button::primary("git-footer-commit", t!("App.Git.commit_staged"))
+    // Label + tooltip derive from the currently-selected mode so the
+    // primary half of the split-button reads as the action it will
+    // fire.
+    let (primary_label_key, primary_tooltip_key) = match mode {
+        CommitActionMode::Commit => ("App.Git.commit_staged", "App.Git.commit_staged"),
+        CommitActionMode::CommitAndPush => ("App.Git.commit_and_push", "App.Git.commit_and_push"),
+    };
+    let primary_label: SharedString = t!(primary_label_key).to_string().into();
+
+    let input_for_primary = input.clone();
+    let primary_weak = weak.clone();
+    let input_for_pick = input.clone();
+    let pick_weak = weak.clone();
+
+    let split = SplitButton::new("git-footer-commit", primary_label)
         .size(ButtonSize::Sm)
-        .disabled(!staged)
-        .tooltip(t!("App.Git.commit_staged"))
-        .on_click(move |_, _, cx| {
+        .disabled(!can_submit)
+        .tooltip(t!(primary_tooltip_key))
+        .current(mode.id())
+        .option(SplitButtonOption::new(
+            CommitActionMode::Commit.id(),
+            t!("App.Git.commit_staged").to_string(),
+        ))
+        .option(SplitButtonOption::new(
+            CommitActionMode::CommitAndPush.id(),
+            t!("App.Git.commit_and_push").to_string(),
+        ))
+        .on_primary_click(move |_, _, cx| {
             let text: String = input_for_primary.read(cx).value().to_string();
-            if text.trim().is_empty() {
+            if !staged || text.trim().is_empty() {
                 return;
             }
-            let _ = commit_weak.update(cx, |app, cx| {
-                app.schedule_git_action(
-                    GitPendingAction::Commit {
-                        message: text.clone(),
-                    },
-                    cx,
-                );
+            let _ = primary_weak.update(cx, |app, cx| match mode {
+                CommitActionMode::Commit => {
+                    app.schedule_git_action(
+                        GitPendingAction::Commit {
+                            message: text.clone(),
+                        },
+                        cx,
+                    );
+                }
+                CommitActionMode::CommitAndPush => {
+                    app.schedule_git_commit_and_push(text.clone(), cx);
+                }
             });
-        });
-    let commit_push_btn =
-        Button::secondary("git-footer-commit-push", t!("App.Git.commit_and_push"))
-            .size(ButtonSize::Sm)
-            .disabled(!staged)
-            .tooltip(t!("App.Git.commit_and_push"))
-            .on_click(move |_, _, cx| {
-                let text: String = input_for_push.read(cx).value().to_string();
-                if text.trim().is_empty() {
+        })
+        .on_pick(move |value, _, cx| {
+            let Some(picked) = CommitActionMode::from_id(value) else {
+                return;
+            };
+            let text: String = input_for_pick.read(cx).value().to_string();
+            let _ = pick_weak.update(cx, |app, cx| {
+                app.set_git_commit_action_mode(picked, cx);
+                if !staged || text.trim().is_empty() {
                     return;
                 }
-                let _ = commit_push_weak.update(cx, |app, cx| {
-                    app.schedule_git_commit_and_push(text.clone(), cx);
-                });
+                match picked {
+                    CommitActionMode::Commit => {
+                        app.schedule_git_action(
+                            GitPendingAction::Commit {
+                                message: text.clone(),
+                            },
+                            cx,
+                        );
+                    }
+                    CommitActionMode::CommitAndPush => {
+                        app.schedule_git_commit_and_push(text.clone(), cx);
+                    }
+                }
             });
+        });
+
+    // Compact inline feedback — surfaces the most recent action
+    // error right above the composer so users see commit / push
+    // failures without scrolling to the top banner.
+    let feedback_strip: gpui::AnyElement = if let Some(err) = action_error {
+        let dismiss_weak = weak.clone();
+        git_feedback_strip(
+            t,
+            "git-footer-fb",
+            IconName::WarningFill,
+            err,
+            true,
+            move |_, _, cx| {
+                let _ = dismiss_weak.update(cx, |app, cx| app.clear_git_action_error(cx));
+            },
+        )
+        .into_any_element()
+    } else {
+        div().flex_none().into_any_element()
+    };
 
     div()
         .flex_none()
         .w_full()
-        .h(px(height.max(80.0)))
+        .h(px(clamp_git_footer_height(height)))
         .flex()
         .flex_col()
         .gap(SP_1)
         .px(SP_3)
         .py(SP_1_5)
         .bg(t.color.bg_panel)
+        .child(feedback_strip)
         .child(
-            div()
-                .flex_1()
-                .min_h(px(0.0))
-                .child(InlineInput::new(&input).tone(InlineInputTone::Inset)),
-        )
-        .child(
-            // Pier layout: Stage-all on the left, Commit / Commit &
-            // Push joined as a split button on the right.
-            div()
-                .flex_none()
-                .flex()
-                .flex_row()
-                .items_center()
-                .gap(SP_1)
-                .child(stage_all_btn)
-                .child(div().flex_1().min_w(px(0.0)))
-                .child(
-                    div()
-                        .flex_none()
-                        .flex()
-                        .flex_row()
-                        .gap(px(1.0))
-                        .child(commit_btn)
-                        .child(commit_push_btn),
-                ),
+            div().flex_1().min_h(px(0.0)).child(
+                CommitComposer::new(&input)
+                    .bottom_left(stage_all_btn)
+                    .bottom_right(split),
+            ),
         )
 }
 
@@ -828,12 +896,7 @@ fn commit_footer_splitter(t: &crate::theme::Theme, weak: WeakEntity<PierApp>) ->
         .bg(t.color.bg_panel)
         .hover(|s| s.bg(t.color.accent_muted))
         .cursor_row_resize()
-        .child(
-            div()
-                .w_full()
-                .h(px(1.0))
-                .bg(t.color.border_default),
-        )
+        .child(div().w_full().h(px(1.0)).bg(t.color.border_default))
         .on_mouse_down(MouseButton::Left, move |ev, _, cx| {
             let y = ev.position.y.to_f64() as f32;
             let _ = weak.update(cx, |app, cx| app.begin_git_footer_drag(y, cx));
@@ -847,19 +910,174 @@ fn changes_tab_body(
     snap: &GitSnapshot,
     weak: WeakEntity<PierApp>,
 ) -> gpui::Div {
-    let mut col = div().w_full().flex().flex_col();
-    col = col.child(changes_section(
+    // Pier parity: render staged above unstaged as two standalone
+    // sections. Staged is capped (see CHANGES_STAGED_MAX_H) so a huge
+    // stage set doesn't starve the unstaged area; unstaged fills the
+    // remaining height. If neither side has changes we still render
+    // the unstaged shell so users see the "working_tree_clean" hint.
+    let staged: Vec<&GitFileChange> = snap.changes.iter().filter(|c| c.staged).collect();
+    let unstaged: Vec<&GitFileChange> = snap.changes.iter().filter(|c| !c.staged).collect();
+
+    let mut col = div().size_full().flex().flex_col().min_h(px(0.0));
+
+    if !staged.is_empty() {
+        col = col.child(changes_list_view(
+            t,
+            &staged,
+            true,
+            snap.diff_selection.as_ref(),
+            Some(crate::theme::heights::CHANGES_STAGED_MAX_H),
+            weak.clone(),
+        ));
+    }
+
+    col = col.child(changes_list_view(
         t,
-        &snap.changes,
+        &unstaged,
+        false,
         snap.diff_selection.as_ref(),
+        None,
         weak.clone(),
     ));
+
     if snap.diff_selection.is_some() {
         col = col
             .child(Separator::horizontal())
             .child(diff_section(t, snap, weak.clone()));
     }
     col
+}
+
+/// One staged-or-unstaged section: coloured-dot header with count and
+/// a single trailing action ("Stage all" / "Unstage all"), then a
+/// scrolling list of file rows. `max_h` bounds the section (used for
+/// staged in Pier) — when None the section is flex-1 and fills the
+/// remaining vertical space.
+fn changes_list_view(
+    t: &crate::theme::Theme,
+    files: &[&GitFileChange],
+    staged: bool,
+    diff_selection: Option<&crate::app::git_session::DiffSelection>,
+    max_h: Option<gpui::Pixels>,
+    weak: WeakEntity<PierApp>,
+) -> impl IntoElement {
+    let count = files.len();
+    let (title, dot_color): (SharedString, gpui::Rgba) = if staged {
+        (
+            t!("App.Git.staged_count", count = count).to_string().into(),
+            t.color.status_success,
+        )
+    } else {
+        (
+            t!("App.Git.unstaged_count", count = count)
+                .to_string()
+                .into(),
+            t.color.status_warning,
+        )
+    };
+
+    let action_weak = weak.clone();
+    let action: gpui::AnyElement = if staged && count > 0 {
+        Button::ghost("git-section-unstage-all", t!("App.Git.unstage_all"))
+            .size(ButtonSize::Sm)
+            .on_click(move |_, _, cx| {
+                let _ = action_weak.update(cx, |app, cx| {
+                    app.schedule_git_action(GitPendingAction::UnstageAll, cx);
+                });
+            })
+            .into_any_element()
+    } else if !staged && count > 0 {
+        Button::ghost("git-section-stage-all", t!("App.Git.stage_all"))
+            .size(ButtonSize::Sm)
+            .on_click(move |_, _, cx| {
+                let _ = action_weak.update(cx, |app, cx| {
+                    app.schedule_git_action(GitPendingAction::StageAll, cx);
+                });
+            })
+            .into_any_element()
+    } else {
+        div().flex_none().into_any_element()
+    };
+
+    let header = div()
+        .w_full()
+        .flex_none()
+        .h(crate::theme::heights::INSPECTOR_HEADER_H)
+        .flex()
+        .flex_row()
+        .items_center()
+        .gap(SP_2)
+        .px(SP_3)
+        .bg(t.color.bg_panel)
+        .child(
+            div()
+                .flex_none()
+                .w(crate::theme::heights::PILL_DOT)
+                .h(crate::theme::heights::PILL_DOT)
+                .rounded(RADIUS_PILL)
+                .bg(dot_color),
+        )
+        .child(text::caption(title).secondary())
+        .child(div().flex_1().min_w(px(0.0)))
+        .child(div().flex_none().child(action));
+
+    // Body: scrolling list of rows. Empty unstaged section still
+    // shows the "clean" hint so the panel never looks blank.
+    let body_id: ElementId = if staged {
+        ElementId::Name(SharedString::from("git-staged-body"))
+    } else {
+        ElementId::Name(SharedString::from("git-unstaged-body"))
+    };
+    let mut body = div()
+        .id(body_id)
+        .w_full()
+        .flex_1()
+        .min_h(px(0.0))
+        .overflow_y_scroll()
+        .flex()
+        .flex_col();
+    if files.is_empty() {
+        body = body.child(
+            div()
+                .px(SP_3)
+                .py(SP_2)
+                .child(text::caption(t!("App.Git.working_tree_clean")).secondary()),
+        );
+    } else {
+        for change in files.iter().take(MAX_CHANGE_ROWS) {
+            let is_selected = diff_selection
+                .map(|sel| sel.path == change.path && sel.staged == change.staged)
+                .unwrap_or(false);
+            body = body.child(file_change_row(t, change, is_selected, weak.clone()));
+        }
+        if files.len() > MAX_CHANGE_ROWS {
+            body = body.child(
+                div()
+                    .px(SP_3)
+                    .py(SP_1)
+                    .text_size(SIZE_SMALL)
+                    .text_color(t.color.text_tertiary)
+                    .child(SharedString::from(
+                        t!(
+                            "App.Git.more_changes",
+                            count = files.len() - MAX_CHANGE_ROWS
+                        )
+                        .to_string(),
+                    )),
+            );
+        }
+    }
+
+    let mut section = div().w_full().flex().flex_col().min_h(px(0.0));
+    if let Some(cap) = max_h {
+        section = section.flex_none().max_h(cap);
+    } else {
+        section = section.flex_1();
+    }
+    section
+        .child(header)
+        .child(Separator::horizontal())
+        .child(body)
 }
 
 // ─── Branch card (legacy — kept `fn branch_section` stubbed out
@@ -1057,104 +1275,10 @@ fn branch_row(
 }
 
 // ─── Changes card ────────────────────────────────────────────────────
-
-fn changes_section(
-    t: &crate::theme::Theme,
-    changes: &[GitFileChange],
-    diff_selection: Option<&crate::app::git_session::DiffSelection>,
-    weak: WeakEntity<PierApp>,
-) -> impl IntoElement {
-    let staged = changes.iter().filter(|c| c.staged).count();
-    let unstaged = changes.len().saturating_sub(staged);
-
-    let stage_all_weak = weak.clone();
-    let unstage_all_weak = weak.clone();
-
-    let mut actions = div()
-        .flex_none()
-        .flex()
-        .flex_row()
-        .items_center()
-        .gap(SP_1)
-        .child(StatusPill::new(
-            t!("App.Git.staged_count", count = staged),
-            if staged > 0 {
-                StatusKind::Info
-            } else {
-                StatusKind::Success
-            },
-        ))
-        .child(StatusPill::new(
-            t!("App.Git.unstaged_count", count = unstaged),
-            if unstaged > 0 {
-                StatusKind::Warning
-            } else {
-                StatusKind::Success
-            },
-        ));
-    if unstaged > 0 {
-        actions = actions.child(
-            Button::secondary("git-stage-all", t!("App.Git.stage_all"))
-                .size(ButtonSize::Sm)
-                .on_click(move |_, _, cx| {
-                    let _ = stage_all_weak.update(cx, |app, cx| {
-                        app.schedule_git_action(GitPendingAction::StageAll, cx);
-                    });
-                }),
-        );
-    }
-    if staged > 0 {
-        actions = actions.child(
-            Button::secondary("git-unstage-all", t!("App.Git.unstage_all"))
-                .size(ButtonSize::Sm)
-                .on_click(move |_, _, cx| {
-                    let _ = unstage_all_weak.update(cx, |app, cx| {
-                        app.schedule_git_action(GitPendingAction::UnstageAll, cx);
-                    });
-                }),
-        );
-    }
-
-    let mut section = InspectorSection::new(t!("App.Git.working_tree"))
-        // Pier's working-tree section uses `tray.full` (filled inbox).
-        .icon(IconName::TrayFill)
-        .actions(actions);
-
-    if changes.is_empty() {
-        return section
-            .child(
-                div()
-                    .px(SP_3)
-                    .py(SP_2)
-                    .child(text::caption(t!("App.Git.working_tree_clean")).secondary()),
-            )
-            .into_any_element();
-    }
-
-    for change in changes.iter().take(MAX_CHANGE_ROWS) {
-        let is_selected = diff_selection
-            .map(|sel| sel.path == change.path && sel.staged == change.staged)
-            .unwrap_or(false);
-        section = section.child(file_change_row(t, change, is_selected, weak.clone()));
-    }
-    if changes.len() > MAX_CHANGE_ROWS {
-        section = section.child(
-            div()
-                .px(SP_3)
-                .py(SP_1)
-                .text_size(SIZE_SMALL)
-                .text_color(t.color.text_tertiary)
-                .child(SharedString::from(
-                    t!(
-                        "App.Git.more_changes",
-                        count = changes.len() - MAX_CHANGE_ROWS
-                    )
-                    .to_string(),
-                )),
-        );
-    }
-    section.into_any_element()
-}
+// The single "working_tree" InspectorSection has been replaced by the
+// split staged / unstaged layout in `changes_list_view` above (matches
+// Pier's GitPanelView layering). The old helper is gone; if you land
+// here looking for it, see `changes_tab_body`.
 
 fn file_change_row(
     t: &crate::theme::Theme,
@@ -4219,6 +4343,7 @@ struct GitSnapshot {
     managers: ManagersSnapshot,
     footer_height: f32,
     footer_dragging: bool,
+    commit_action_mode: CommitActionMode,
 }
 
 #[derive(Clone)]
@@ -4321,6 +4446,7 @@ impl From<&GitState> for GitSnapshot {
             },
             footer_height: state.footer_height,
             footer_dragging: state.footer_drag.is_some(),
+            commit_action_mode: state.commit_action_mode,
         }
     }
 }

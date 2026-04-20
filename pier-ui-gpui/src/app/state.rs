@@ -20,7 +20,10 @@ use gpui::{
     DragMoveEvent, Empty, Entity, EntityId, IntoElement, IsZero, MouseButton, MouseDownEvent,
     Pixels, Render, ScrollHandle, ScrollWheelEvent, SharedString, Window,
 };
-use gpui_component::{input::InputState, Icon as UiIcon, IconName, PixelsExt as _, WindowExt as _};
+use gpui_component::{
+    input::{InputEvent, InputState},
+    Icon as UiIcon, IconName, PixelsExt as _, WindowExt as _,
+};
 use rust_i18n::t;
 use std::collections::HashMap;
 
@@ -33,7 +36,8 @@ use crate::app::db_session::{
     DbSessionState,
 };
 use crate::app::git_session::{
-    default_cwd as git_default_cwd, run_action as git_run_action, run_blame as git_run_blame,
+    clamp_git_footer_height, default_cwd as git_default_cwd, restore_git_footer_height,
+    run_action as git_run_action, run_blame as git_run_blame,
     run_commit_detail as git_run_commit_detail, run_diff as git_run_diff,
     run_graph as git_run_graph, run_managers as git_run_managers, run_refresh as git_run_refresh,
     CommitMenuState, DiffMode, DiffSelection, GitPendingAction, GitState, GitTab, GraphColumn,
@@ -357,18 +361,31 @@ impl PierApp {
         let git_state = cx.new(|c| {
             let mut state = GitState::new(git_default_cwd());
             // Restore the persisted commit-footer height from
-            // AppSettings so the splitter sits exactly where the
-            // user dragged it last session.
+            // AppSettings. Legacy builds allowed much taller values;
+            // recover those to the Pier-sized default instead of
+            // relaunching with an oversized footer.
             let saved = crate::theme::theme(c).settings.git_footer_height as f32;
-            state.footer_height = saved.clamp(80.0, 480.0);
+            state.footer_height = restore_git_footer_height(saved);
             state.ensure_client();
             state
         });
-        let git_commit_input = cx.new(|c| {
-            InputState::new(window, c)
-                .multi_line(true)
-                .placeholder(t!("App.Git.commit_placeholder"))
-        });
+        let git_commit_input = {
+            let input = cx.new(|c| {
+                InputState::new(window, c)
+                    .multi_line(true)
+                    .placeholder(t!("App.Git.commit_placeholder"))
+            });
+            // Repaint the Git footer while the user types so the
+            // commit split-button enables/disables immediately and the
+            // composer reflects the latest draft state.
+            cx.subscribe(&input, |_, _, ev: &InputEvent, cx| {
+                if matches!(ev, InputEvent::Change) {
+                    cx.notify();
+                }
+            })
+            .detach();
+            input
+        };
         let git_stash_message_input =
             cx.new(|c| InputState::new(window, c).placeholder(t!("App.Git.stash_placeholder")));
 
@@ -2843,6 +2860,22 @@ impl PierApp {
     /// pipeline: commit first, then enqueue a push in the post-
     /// commit continuation. Errors at either stage surface through
     /// `action_error`.
+    /// Remember which action the commit split-button should fire by
+    /// default. Persisted on `GitState` so the choice survives across
+    /// re-renders.
+    pub fn set_git_commit_action_mode(
+        &mut self,
+        mode: crate::app::git_session::CommitActionMode,
+        cx: &mut Context<Self>,
+    ) {
+        self.git_state.update(cx, |state, cx| {
+            if state.commit_action_mode != mode {
+                state.commit_action_mode = mode;
+                cx.notify();
+            }
+        });
+    }
+
     pub fn schedule_git_commit_and_push(&mut self, message: String, cx: &mut Context<Self>) {
         self.schedule_git_action(GitPendingAction::Commit { message }, cx);
         // The `schedule_git_action` continuation auto-refreshes the
@@ -3021,9 +3054,9 @@ impl PierApp {
         self.git_state.update(cx, |s, _| s.end_footer_drag());
         if was_dragging {
             // Persist the final height so next launch lands in the
-            // same layout. `u16` is plenty — drag is clamped to
-            // 80..=480 so precision loss is irrelevant.
-            let h = self.git_state.read(cx).footer_height.round() as u16;
+            // same layout. `u16` is plenty — the footer stays within
+            // 80..=300 so precision loss is irrelevant.
+            let h = clamp_git_footer_height(self.git_state.read(cx).footer_height).round() as u16;
             crate::theme::update_settings(cx, move |settings| {
                 settings.git_footer_height = h;
             });

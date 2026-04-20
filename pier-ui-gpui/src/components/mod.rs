@@ -8,10 +8,12 @@
 pub mod assist_strip;
 pub mod button;
 pub mod card;
+pub mod commit_composer;
 pub mod commit_graph;
 pub mod context_menu;
 pub mod data_cell;
 pub mod dropdown;
+pub mod split_button;
 pub mod form_field;
 pub mod icon_badge;
 pub mod icon_button;
@@ -35,6 +37,7 @@ pub mod transfer_toast;
 pub use assist_strip::AssistStrip;
 pub use button::{Button, ButtonSize, ButtonVariant};
 pub use card::Card;
+pub use commit_composer::CommitComposer;
 pub use commit_graph::{
     compute_graph_col_width, graph_row_canvas, is_head_row, palette_color, DOT_RADIUS, LANE_WIDTH,
     ROW_HEIGHT,
@@ -55,6 +58,7 @@ pub use property_row::{PropertyRow, PropertyRowVariant};
 pub use section_label::SectionLabel;
 pub use separator::{Separator, SeparatorAxis, SeparatorVariant};
 pub use setting_row::SettingRow;
+pub use split_button::{SplitButton, SplitButtonOption};
 pub use status_pill::{StatusKind, StatusPill};
 pub use tabs::{TabItem, Tabs, TabsVariant};
 pub use toggle_row::ToggleRow;

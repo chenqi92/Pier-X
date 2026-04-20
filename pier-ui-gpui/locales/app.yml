@@ -112,12 +112,6 @@ App:
     subtitle:
       en: Open a local terminal or connect to a server to start working.
       zh-CN: 打开本地终端，或连接一台服务器开始工作。
-    quick_status:
-      en: Quick status
-      zh-CN: 快速状态
-    launch_hint:
-      en: Pick a resource on the left, launch a session here, and keep context visible on the right.
-      zh-CN: 左侧选择资源，在这里启动会话，并在右侧持续查看上下文。
     mode_dark:
       en: Dark mode
       zh-CN: 深色模式
@@ -139,33 +133,8 @@ App:
         en: "%{count} saved"
         zh-CN: "已保存 %{count} 个"
       empty:
-        en: No saved SSH connections yet. Create one above or from the Servers panel on the left.
-        zh-CN: 还没有保存的 SSH 连接。可以先用上方按钮，或到左侧“服务器”面板里创建。
-    Layout:
-      title:
-        en: Workbench layout
-        zh-CN: 工作台布局
-      hint:
-        en: The center area should feel connected to the panes around it, not isolated from them.
-        zh-CN: 中间区域应当和两侧窗格协同工作，而不是孤立悬浮。
-      left_title:
-        en: Files and servers
-        zh-CN: 文件与服务器
-      left_caption:
-        en: Browse the workspace tree and manage saved hosts from the left pane.
-        zh-CN: 在左侧窗格浏览项目目录，并管理已保存的主机连接。
-      center_title:
-        en: Terminal workspace
-        zh-CN: 终端工作区
-      center_caption:
-        en: Local terminals and SSH tabs both open here and stay in focus.
-        zh-CN: 本地终端和 SSH 标签页都在这里打开，并保持为主工作区。
-      right_title:
-        en: Docs and inspector
-        zh-CN: 文档与检查面板
-      right_caption:
-        en: Markdown, monitor, SFTP, and database context stay visible on the right.
-        zh-CN: Markdown、监控、SFTP 与数据库上下文都在右侧持续可见。
+        en: No saved SSH connections yet.
+        zh-CN: 还没有保存的 SSH 连接。
   Settings:
     title:
       en: Settings

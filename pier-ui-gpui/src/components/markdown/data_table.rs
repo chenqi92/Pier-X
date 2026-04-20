@@ -91,7 +91,11 @@ fn render_row(
     header: bool,
     t: &Theme,
 ) -> impl IntoElement {
-    let weight = if header { WEIGHT_MEDIUM } else { WEIGHT_REGULAR };
+    let weight = if header {
+        WEIGHT_MEDIUM
+    } else {
+        WEIGHT_REGULAR
+    };
     // Default cross-axis alignment in flex is stretch, so each cell
     // grows to match the tallest one — no `items_stretch` helper needed.
     div()
@@ -99,18 +103,11 @@ fn render_row(
         .flex()
         .flex_row()
         .children(cells.into_iter().enumerate().map(|(ix, cell)| {
-            let align = aligns
-                .get(ix)
-                .copied()
-                .unwrap_or(MarkdownTableAlign::Left);
+            let align = aligns.get(ix).copied().unwrap_or(MarkdownTableAlign::Left);
             // Each cell gets an equal `flex_1` share with `min_w(0)` so
             // long content wraps inside the cell instead of pushing the
             // table past the panel width.
-            let mut base = div()
-                .flex_1()
-                .min_w(gpui::px(0.0))
-                .px(SP_3)
-                .py(SP_2);
+            let mut base = div().flex_1().min_w(gpui::px(0.0)).px(SP_3).py(SP_2);
             if ix > 0 {
                 base = base.border_l_1().border_color(t.color.border_subtle);
             }

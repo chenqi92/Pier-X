@@ -102,29 +102,25 @@ impl RenderOnce for MarkdownCodeBlock {
                     ),
             )
             .child(
-                div()
-                    .id(scroll_id)
-                    .w_full()
-                    .overflow_x_scrollbar()
-                    .child(
-                        div()
-                            .min_w_full()
-                            .px(SP_3)
-                            .py(SP_3)
-                            .flex()
-                            .flex_col()
-                            .gap(SP_1)
-                            .children(lines.into_iter().map(|line| {
-                                div()
-                                    .whitespace_nowrap()
-                                    .text_size(SIZE_MONO_SMALL)
-                                    .line_height(relative(1.5))
-                                    .text_color(t.color.text_primary)
-                                    .font_family(t.font_mono.clone())
-                                    .font_weight(WEIGHT_REGULAR)
-                                    .child(line)
-                            })),
-                    ),
+                div().id(scroll_id).w_full().overflow_x_scrollbar().child(
+                    div()
+                        .min_w_full()
+                        .px(SP_3)
+                        .py(SP_3)
+                        .flex()
+                        .flex_col()
+                        .gap(SP_1)
+                        .children(lines.into_iter().map(|line| {
+                            div()
+                                .whitespace_nowrap()
+                                .text_size(SIZE_MONO_SMALL)
+                                .line_height(relative(1.5))
+                                .text_color(t.color.text_primary)
+                                .font_family(t.font_mono.clone())
+                                .font_weight(WEIGHT_REGULAR)
+                                .child(line)
+                        })),
+                ),
             )
     }
 }

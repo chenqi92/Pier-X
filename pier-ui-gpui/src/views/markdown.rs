@@ -106,13 +106,22 @@ struct InlineStyle {
 
 impl InlineStyle {
     fn strong(self) -> Self {
-        Self { strong: true, ..self }
+        Self {
+            strong: true,
+            ..self
+        }
     }
     fn emphasis(self) -> Self {
-        Self { emphasis: true, ..self }
+        Self {
+            emphasis: true,
+            ..self
+        }
     }
     fn strike(self) -> Self {
-        Self { strike: true, ..self }
+        Self {
+            strike: true,
+            ..self
+        }
     }
     fn code(self) -> Self {
         Self { code: true, ..self }
@@ -229,13 +238,7 @@ fn markdown_document_view(
     window: &mut Window,
     cx: &mut App,
 ) -> impl IntoElement {
-    let mut body = div()
-        .w_full()
-        .px(SP_4)
-        .py(SP_4)
-        .flex()
-        .flex_col()
-        .gap(SP_4);
+    let mut body = div().w_full().px(SP_4).py(SP_4).flex().flex_col().gap(SP_4);
 
     if truncated {
         body = body.child(
@@ -262,12 +265,7 @@ fn markdown_document_view(
     reader_shell(t, file_header(t, path_label, bytes_len, truncated), body)
 }
 
-fn file_header(
-    t: &Theme,
-    path: &SharedString,
-    bytes: usize,
-    truncated: bool,
-) -> impl IntoElement {
+fn file_header(t: &Theme, path: &SharedString, bytes: usize, truncated: bool) -> impl IntoElement {
     let size_label: SharedString = if bytes == 0 {
         "—".into()
     } else if bytes < 1024 {
@@ -303,11 +301,7 @@ fn file_header(
         .child(status)
 }
 
-fn reader_shell(
-    t: &Theme,
-    header: impl IntoElement,
-    body: impl IntoElement,
-) -> impl IntoElement {
+fn reader_shell(t: &Theme, header: impl IntoElement, body: impl IntoElement) -> impl IntoElement {
     div()
         .w_full()
         .px(SP_4)
@@ -441,7 +435,11 @@ fn render_markdown_list(
                         .text_color(t.color.text_secondary)
                         .text_size(SIZE_BODY_LARGE)
                         .line_height(relative(1.58))
-                        .font(ui_font_with(&t.font_ui, &t.font_ui_features, WEIGHT_REGULAR))
+                        .font(ui_font_with(
+                            &t.font_ui,
+                            &t.font_ui_features,
+                            WEIGHT_REGULAR,
+                        ))
                         .child(marker),
                 )
                 .child(

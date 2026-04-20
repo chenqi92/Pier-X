@@ -1,30 +1,40 @@
 use std::rc::Rc;
 
 use gpui::{div, prelude::*, px, App, ClickEvent, IntoElement, SharedString, Window};
-use gpui_component::label::Label as UiLabel;
+use gpui_component::scroll::ScrollableElement;
+use gpui_component::{Icon as UiIcon, IconName};
 use pier_core::ssh::SshConfig;
 use rust_i18n::t;
 
-use crate::components::{text, Button, Card, IconBadge, SectionLabel, StatusKind, StatusPill};
+use crate::components::{
+    text, Button, ButtonSize, Card, IconBadge, MetaLine, SectionLabel, Separator, StatusKind,
+    StatusPill,
+};
+use crate::data::ShellSnapshot;
 use crate::theme::{
+    heights::ICON_SM,
     radius::RADIUS_SM,
-    spacing::{SP_1, SP_1_5, SP_2, SP_3, SP_4},
+    spacing::{SP_0_5, SP_1_5, SP_2, SP_3, SP_4, SP_8},
     theme,
-    typography::{SIZE_BODY, SIZE_SMALL, WEIGHT_MEDIUM, WEIGHT_REGULAR},
+    typography::WEIGHT_REGULAR,
     ui_font_with, ThemeMode,
 };
 
 pub type OnClick = Rc<dyn Fn(&ClickEvent, &mut Window, &mut App) + 'static>;
 pub type OnSelectRecent = Rc<dyn Fn(&usize, &mut Window, &mut App) + 'static>;
 
-/// Welcome page primary-action button width. Hoisted out of the view
-/// so it's a named token rather than a bare `px(...)` literal — the
-/// value itself is a design constant (see SKILL.md §5 button size
-/// guidance; welcome buttons want to feel "big enough to land on"
-/// without filling the column).
-const WELCOME_BUTTON_W: gpui::Pixels = px(148.0);
+/// Welcome page content measure. The center pane can grow wide, but the
+/// onboarding surface should still read as a deliberate workbench deck,
+/// not a marketing hero stretched edge-to-edge.
+const WELCOME_DECK_MAX_W: gpui::Pixels = px(860.0);
 
-/// Welcome / cover view — 三栏 GPUI 实现，token 全走 SKILL.md。
+/// Primary-action buttons are intentionally wider than a default dialog
+/// button so the launch strip reads like the main command surface of the
+/// center pane.
+const WELCOME_ACTION_BUTTON_W: gpui::Pixels = px(184.0);
+
+/// Welcome / cover view — re-framed as a workbench deck that visually
+/// connects the center pane to the surrounding left / right panels.
 #[derive(IntoElement)]
 pub struct WelcomeView {
     connections: Vec<SshConfig>,
@@ -51,13 +61,14 @@ impl WelcomeView {
 
 impl RenderOnce for WelcomeView {
     fn render(self, _: &mut Window, cx: &mut App) -> impl IntoElement {
-        let t = theme(cx);
+        let t = theme(cx).clone();
         let count = self.connections.len();
         let mode_label: SharedString = if t.mode == ThemeMode::Dark {
             t!("App.Welcome.mode_dark").into()
         } else {
             t!("App.Welcome.mode_light").into()
         };
+        let snapshot = ShellSnapshot::load();
         let WelcomeView {
             connections,
             on_new_ssh,
@@ -65,70 +76,42 @@ impl RenderOnce for WelcomeView {
             on_open_recent,
         } = self;
 
-        let column = div()
+        let deck = div()
             .w_full()
-            .max_w(px(480.0))
+            .max_w(WELCOME_DECK_MAX_W)
             .px(SP_4)
+            .pt(SP_8)
+            .pb(SP_8)
             .flex()
             .flex_col()
-            .items_center()
             .gap(SP_4)
-            .child(IconBadge::accent())
-            .child(SectionLabel::new(t!("App.Welcome.section")).centered())
-            .child(text::h1(t!("App.Welcome.title")).centered())
-            .child(
-                div().w_full().max_w(px(420.0)).child(
-                    text::body(t!("App.Welcome.subtitle"))
-                        .secondary()
-                        .centered(),
-                ),
-            )
+            .child(render_hero_card(
+                snapshot.workspace_path,
+                count,
+                mode_label,
+                on_new_ssh,
+                on_open_terminal,
+            ))
             .child(
                 div()
                     .w_full()
                     .flex()
                     .flex_row()
                     .flex_wrap()
-                    .justify_center()
-                    .gap(SP_1_5)
+                    .items_start()
+                    .gap(SP_4)
+                    .child(div().min_w(px(280.0)).flex_1().child(render_recent_card(
+                        &t,
+                        &connections,
+                        on_open_recent,
+                    )))
                     .child(
-                        Button::primary("welcome-new-ssh", t!("App.Welcome.Actions.new_ssh"))
-                            .width(WELCOME_BUTTON_W)
-                            .on_click(move |ev, win, app| on_new_ssh(ev, win, app)),
-                    )
-                    .child(
-                        Button::secondary(
-                            "welcome-local-term",
-                            t!("App.Welcome.Actions.open_local_terminal"),
-                        )
-                        .width(WELCOME_BUTTON_W)
-                        .on_click(move |ev, win, app| on_open_terminal(ev, win, app)),
+                        div()
+                            .w_full()
+                            .max_w(px(272.0))
+                            .child(render_shell_layout_card(&t)),
                     ),
-            )
-            .child(
-                div()
-                    .w_full()
-                    .flex()
-                    .flex_row()
-                    .flex_wrap()
-                    .justify_center()
-                    .gap(SP_1_5)
-                    .child(StatusPill::new(
-                        format!("gpui {}", env!("CARGO_PKG_VERSION")),
-                        StatusKind::Success,
-                    ))
-                    .child(StatusPill::new(
-                        format!("core {}", pier_core::VERSION),
-                        StatusKind::Success,
-                    ))
-                    .child(StatusPill::new(mode_label, StatusKind::Info)),
             );
-
-        let column = if count > 0 {
-            column.child(render_recent_card(t, &connections, on_open_recent))
-        } else {
-            column
-        };
 
         div()
             .size_full()
@@ -139,11 +122,133 @@ impl RenderOnce for WelcomeView {
                 &t.font_ui_features,
                 WEIGHT_REGULAR,
             ))
-            .flex()
-            .items_center()
-            .justify_center()
-            .child(column)
+            .overflow_y_scrollbar()
+            .child(div().w_full().flex().justify_center().child(deck))
     }
+}
+
+fn render_hero_card(
+    workspace_path: SharedString,
+    connection_count: usize,
+    mode_label: SharedString,
+    on_new_ssh: OnClick,
+    on_open_terminal: OnClick,
+) -> Card {
+    let connection_status = if connection_count > 0 {
+        StatusKind::Success
+    } else {
+        StatusKind::Warning
+    };
+
+    Card::new()
+        .padding(SP_4)
+        .gap(SP_4)
+        .child(
+            div()
+                .w_full()
+                .flex()
+                .flex_row()
+                .flex_wrap()
+                .items_start()
+                .justify_between()
+                .gap(SP_4)
+                .child(
+                    div()
+                        .min_w(px(280.0))
+                        .flex_1()
+                        .flex()
+                        .flex_col()
+                        .gap(SP_2)
+                        .child(
+                            SectionLabel::new(t!("App.Welcome.section"))
+                                .with_icon(IconName::SquareTerminal),
+                        )
+                        .child(
+                            div()
+                                .flex()
+                                .flex_row()
+                                .items_center()
+                                .gap(SP_3)
+                                .child(IconBadge::accent())
+                                .child(text::h1(t!("App.Welcome.title"))),
+                        )
+                        .child(text::body(t!("App.Welcome.subtitle")).secondary())
+                        .child(MetaLine::new(workspace_path).with_icon(IconName::FolderFill)),
+                )
+                .child(
+                    div()
+                        .min_w(px(200.0))
+                        .flex()
+                        .flex_col()
+                        .items_start()
+                        .gap(SP_2)
+                        .child(
+                            SectionLabel::new(t!("App.Welcome.quick_status"))
+                                .with_icon(IconName::ChartPie),
+                        )
+                        .child(
+                            div()
+                                .flex()
+                                .flex_row()
+                                .flex_wrap()
+                                .gap(SP_1_5)
+                                .child(StatusPill::new(
+                                    t!("App.Welcome.Recent.saved_count", count = connection_count),
+                                    connection_status,
+                                ))
+                                .child(StatusPill::new(mode_label, StatusKind::Info))
+                                .child(StatusPill::new(
+                                    format!("gpui {}", env!("CARGO_PKG_VERSION")),
+                                    StatusKind::Success,
+                                ))
+                                .child(StatusPill::new(
+                                    format!("core {}", pier_core::VERSION),
+                                    StatusKind::Success,
+                                )),
+                        ),
+                ),
+        )
+        .child(Separator::horizontal())
+        .child(
+            div()
+                .w_full()
+                .flex()
+                .flex_row()
+                .flex_wrap()
+                .items_center()
+                .justify_between()
+                .gap(SP_3)
+                .child(
+                    div()
+                        .flex()
+                        .flex_row()
+                        .flex_wrap()
+                        .gap(SP_2)
+                        .child(
+                            Button::primary("welcome-new-ssh", t!("App.Welcome.Actions.new_ssh"))
+                                .size(ButtonSize::Md)
+                                .width(WELCOME_ACTION_BUTTON_W)
+                                .leading_icon(IconName::Network)
+                                .on_click(move |ev, win, app| on_new_ssh(ev, win, app)),
+                        )
+                        .child(
+                            Button::secondary(
+                                "welcome-local-term",
+                                t!("App.Welcome.Actions.open_local_terminal"),
+                            )
+                            .size(ButtonSize::Md)
+                            .width(WELCOME_ACTION_BUTTON_W)
+                            .leading_icon(IconName::SquareTerminal)
+                            .on_click(move |ev, win, app| on_open_terminal(ev, win, app)),
+                        ),
+                )
+                .child(
+                    div()
+                        .min_w(px(200.0))
+                        .max_w(px(300.0))
+                        .child(text::caption(t!("App.Welcome.launch_hint")).secondary()),
+                ),
+        )
 }
 
 fn render_recent_card(
@@ -152,22 +257,30 @@ fn render_recent_card(
     on_open_recent: OnSelectRecent,
 ) -> Card {
     let count = connections.len();
-    let header = div().flex().flex_row().items_center().gap(SP_2).child(
-        UiLabel::new(t!("App.Welcome.Recent.title"))
-            .secondary(t!("App.Welcome.Recent.saved_count", count = count))
-            .text_size(SIZE_BODY)
-            .font_weight(WEIGHT_MEDIUM),
-    );
+    let header = div()
+        .w_full()
+        .flex()
+        .flex_row()
+        .items_center()
+        .justify_between()
+        .gap(SP_2)
+        .child(SectionLabel::new(t!("App.Welcome.Recent.title")).with_icon(IconName::Network))
+        .child(text::caption(t!("App.Welcome.Recent.saved_count", count = count)).secondary());
 
-    let mut grid = div().flex().flex_row().flex_wrap().gap(SP_2);
-    for (idx, conn) in connections.iter().take(6).enumerate() {
-        grid = grid.child(connection_tile(t, idx, conn, on_open_recent.clone()));
+    let card = Card::new().padding(SP_3).gap(SP_3).child(header);
+    if connections.is_empty() {
+        return card.child(text::body(t!("App.Welcome.Recent.empty")).secondary());
     }
 
-    Card::new().padding(SP_3).child(header).child(grid)
+    let mut list = div().w_full().flex().flex_col().gap(SP_2);
+    for (idx, conn) in connections.iter().take(5).enumerate() {
+        list = list.child(connection_row(t, idx, conn, on_open_recent.clone()));
+    }
+
+    card.child(list)
 }
 
-fn connection_tile(
+fn connection_row(
     t: &crate::theme::Theme,
     idx: usize,
     conn: &SshConfig,
@@ -178,13 +291,14 @@ fn connection_tile(
     let id: SharedString = format!("welcome-conn-{idx}").into();
     div()
         .id(gpui::ElementId::Name(id))
-        .w(px(208.0))
-        .h(px(54.0))
+        .w_full()
+        .min_h(px(52.0))
         .px(SP_3)
+        .py(SP_2)
         .flex()
         .flex_row()
         .items_center()
-        .gap(SP_2)
+        .gap(SP_3)
         .rounded(RADIUS_SM)
         .bg(t.color.bg_panel)
         .border_1()
@@ -194,39 +308,123 @@ fn connection_tile(
         .on_click(move |_, w, app| on_open_recent(&idx, w, app))
         .child(
             div()
-                .w(px(20.0))
-                .h(px(20.0))
+                .w(px(22.0))
+                .h(px(22.0))
                 .rounded(px(4.0))
                 .bg(t.color.accent_subtle)
                 .flex()
                 .items_center()
                 .justify_center()
                 .child(
-                    div()
-                        .w(px(6.0))
-                        .h(px(6.0))
-                        .rounded(px(3.0))
-                        .bg(t.color.accent),
+                    UiIcon::new(IconName::Network)
+                        .size(ICON_SM)
+                        .text_color(t.color.accent),
                 ),
         )
         .child(
             div()
+                .flex_1()
+                .min_w(px(0.0))
                 .flex()
                 .flex_col()
-                .gap(SP_1)
-                .child(
-                    div()
-                        .text_size(SIZE_BODY)
-                        .font_weight(WEIGHT_MEDIUM)
-                        .text_color(t.color.text_primary)
-                        .child(name),
-                )
-                .child(
-                    div()
-                        .text_size(SIZE_SMALL)
-                        .font_family(t.font_mono.clone())
-                        .text_color(t.color.text_tertiary)
-                        .child(host_line),
-                ),
+                .gap(SP_0_5)
+                .child(text::ui_label(name).truncate())
+                .child(text::mono(host_line).secondary().truncate()),
+        )
+}
+
+fn render_shell_layout_card(t: &crate::theme::Theme) -> Card {
+    Card::new()
+        .padding(SP_3)
+        .gap(SP_3)
+        .child(SectionLabel::new(t!("App.Welcome.Layout.title")).with_icon(IconName::Inspector))
+        .child(text::caption(t!("App.Welcome.Layout.hint")).secondary())
+        .child(
+            div()
+                .w_full()
+                .flex()
+                .flex_col()
+                .gap(SP_2)
+                .child(render_shell_lane(
+                    t,
+                    IconName::FolderFill,
+                    t!("App.Welcome.Layout.left_title"),
+                    t!("App.Welcome.Layout.left_caption"),
+                    false,
+                ))
+                .child(render_shell_lane(
+                    t,
+                    IconName::SquareTerminal,
+                    t!("App.Welcome.Layout.center_title"),
+                    t!("App.Welcome.Layout.center_caption"),
+                    true,
+                ))
+                .child(render_shell_lane(
+                    t,
+                    IconName::Inspector,
+                    t!("App.Welcome.Layout.right_title"),
+                    t!("App.Welcome.Layout.right_caption"),
+                    false,
+                )),
+        )
+}
+
+fn render_shell_lane(
+    t: &crate::theme::Theme,
+    icon: IconName,
+    title: impl Into<SharedString>,
+    caption: impl Into<SharedString>,
+    emphasized: bool,
+) -> impl IntoElement {
+    let title: SharedString = title.into();
+    let caption: SharedString = caption.into();
+    let (bg, border, icon_bg, icon_fg) = if emphasized {
+        (
+            t.color.accent_subtle,
+            t.color.accent_muted,
+            t.color.accent,
+            t.color.text_inverse,
+        )
+    } else {
+        (
+            t.color.bg_panel,
+            t.color.border_subtle,
+            t.color.bg_surface,
+            t.color.accent,
+        )
+    };
+
+    div()
+        .w_full()
+        .p(SP_3)
+        .flex()
+        .flex_row()
+        .items_start()
+        .gap(SP_2)
+        .rounded(RADIUS_SM)
+        .bg(bg)
+        .border_1()
+        .border_color(border)
+        .child(
+            div()
+                .w(px(22.0))
+                .h(px(22.0))
+                .flex_none()
+                .rounded(RADIUS_SM)
+                .bg(icon_bg)
+                .flex()
+                .items_center()
+                .justify_center()
+                .child(UiIcon::new(icon).size(ICON_SM).text_color(icon_fg)),
+        )
+        .child(
+            div()
+                .flex_1()
+                .min_w(px(0.0))
+                .flex()
+                .flex_col()
+                .gap(SP_1_5)
+                .child(text::ui_label(title).truncate())
+                .child(text::caption(caption).secondary()),
         )
 }

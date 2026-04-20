@@ -9,6 +9,7 @@ archived, and the Rust/GPUI experiment on `backup/rust-gpui` is abandoned.
 
 | Concern | File |
 |---|---|
+| **What the product is & which features exist** | [docs/PRODUCT-SPEC.md](docs/PRODUCT-SPEC.md) — only source of truth for panels, tools, default behaviors, non-goals |
 | Overall delivery plan | [docs/ROADMAP.md](docs/ROADMAP.md) |
 | Shell-reset decision & wired Tauri commands | [docs/TAURI-RESET.md](docs/TAURI-RESET.md) |
 | Build / frontend / review rules (short form) | [AGENTS.md](AGENTS.md) |
@@ -124,6 +125,10 @@ Reject a change if any of these are true:
 5. It calls pier-core from React without going through a Tauri command.
 6. It violates one of the SKILL.md non-negotiables (see SKILL.md §1).
 7. It invokes a backend command synchronously inside a render body (Rule 5).
+8. It adds / removes / re-purposes a right-side tool, changes a panel's
+   default safety stance (e.g. DB read-only default), or alters the default
+   `rightTool` for any backend, **without first updating the relevant
+   section in [docs/PRODUCT-SPEC.md](docs/PRODUCT-SPEC.md)**.
 
 ## Build & run
 

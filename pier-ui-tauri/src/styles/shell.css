@@ -537,6 +537,8 @@ html, body, #root {
   transition: background var(--dur-fast) var(--easing);
 }
 .sidebar__file-row:hover { background: var(--bg-hover); }
+.sidebar__file-row--selected,
+.sidebar__file-row--selected:hover { background: var(--bg-selected); color: var(--text-primary); }
 
 .sidebar__entry-icon {
   flex-shrink: 0;
@@ -1236,6 +1238,13 @@ html, body, #root {
   padding: var(--sp-4);
   text-align: center;
 }
+.empty-note--error {
+  color: var(--status-error);
+  text-align: left;
+  font-family: var(--font-mono);
+  white-space: pre-wrap;
+  word-break: break-word;
+}
 
 /* ── Terminal Panel ──────────────────────────────────────────── */
 
@@ -1452,6 +1461,19 @@ html, body, #root {
   padding: var(--sp-2) 0;
   text-transform: uppercase;
   letter-spacing: 0.04em;
+}
+.panel-section__hint {
+  margin-left: auto;
+  font-family: var(--font-mono);
+  font-size: var(--size-small);
+  font-weight: var(--weight-regular);
+  color: var(--text-tertiary);
+  text-transform: none;
+  letter-spacing: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  max-width: 60%;
 }
 
 .form-stack { display: flex; flex-direction: column; gap: var(--sp-2); }

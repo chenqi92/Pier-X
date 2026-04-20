@@ -1,50 +1,66 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import * as cmd from "../lib/commands";
 import { useI18n } from "../i18n/useI18n";
 
-export default function MarkdownPanel() {
+type Props = {
+  filePath?: string;
+};
+
+function basename(p: string): string {
+  if (!p) return "";
+  const i = Math.max(p.lastIndexOf("/"), p.lastIndexOf("\\"));
+  return i >= 0 ? p.slice(i + 1) : p;
+}
+
+export default function MarkdownPanel({ filePath }: Props) {
   const { t } = useI18n();
-  const [source, setSource] = useState("");
   const [html, setHtml] = useState("");
-  const [filePath, setFilePath] = useState("");
+  const [error, setError] = useState("");
+  const [loading, setLoading] = useState(false);
 
-  function renderLive() {
-    if (!source.trim()) { setHtml(""); return; }
-    cmd.markdownRender(source).then(setHtml).catch(() => {});
-  }
-
-  async function renderFile() {
-    if (!filePath.trim()) return;
-    try { setHtml(await cmd.markdownRenderFile(filePath.trim())); }
-    catch (e) { setHtml(`<p style="color:var(--status-error)">${String(e)}</p>`); }
-  }
+  useEffect(() => {
+    const path = filePath?.trim() ?? "";
+    if (!path) {
+      setHtml("");
+      setError("");
+      setLoading(false);
+      return;
+    }
+    let cancelled = false;
+    setLoading(true);
+    setError("");
+    cmd.markdownRenderFile(path)
+      .then((rendered) => {
+        if (cancelled) return;
+        setHtml(rendered);
+        setLoading(false);
+      })
+      .catch((err) => {
+        if (cancelled) return;
+        setHtml("");
+        setError(String(err));
+        setLoading(false);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [filePath]);
 
   return (
     <div className="panel-scroll">
       <section className="panel-section">
-        <div className="panel-section__title"><span>{t("Markdown")}</span></div>
-        <div className="form-stack">
-          <label className="field-stack">
-            <span className="field-label">{t("Load from file")}</span>
-            <div className="branch-row">
-              <input className="field-input" onChange={(e) => setFilePath(e.currentTarget.value)} placeholder="/path/to/README.md" value={filePath} />
-              <button className="mini-button" disabled={!filePath.trim()} onClick={() => void renderFile()} type="button">{t("Load")}</button>
-            </div>
-          </label>
-          <label className="field-stack">
-            <span className="field-label">{t("Or type Markdown")}</span>
-            <textarea className="field-textarea field-textarea--editor" onChange={(e) => setSource(e.currentTarget.value)} placeholder="# Hello" rows={6} value={source} />
-          </label>
-          <button className="mini-button" onClick={renderLive} type="button">{t("Render")}</button>
+        <div className="panel-section__title">
+          <span>{t("Markdown")}</span>
+          {filePath && <span className="panel-section__hint">{basename(filePath)}</span>}
         </div>
-      </section>
-
-      <section className="panel-section">
-        <div className="panel-section__title"><span>{t("Rendered Output")}</span></div>
-        {html ? (
-          <div className="markdown-preview" dangerouslySetInnerHTML={{ __html: html }} />
+        {!filePath ? (
+          <div className="empty-note">{t("Select a Markdown file on the left to preview.")}</div>
+        ) : loading ? (
+          <div className="empty-note">{t("Rendering…")}</div>
+        ) : error ? (
+          <div className="empty-note empty-note--error">{error}</div>
         ) : (
-          <div className="empty-note">{t("Type or load Markdown content.")}</div>
+          <div className="markdown-preview" dangerouslySetInnerHTML={{ __html: html }} />
         )}
       </section>
     </div>

@@ -17,6 +17,7 @@ import ToolStrip from "./ToolStrip";
 type Props = {
   activeTab: TabState | null;
   browserPath: string;
+  selectedMarkdownPath: string;
   onToolChange: (tool: RightTool) => void;
   width?: number;
 };
@@ -38,12 +39,14 @@ function ToolContent({
   tool,
   tab,
   browserPath,
+  markdownPath,
   openTabFirstLabel,
   unknownToolLabel,
 }: {
   tool: RightTool;
   tab: TabState | null;
   browserPath: string;
+  markdownPath: string;
   openTabFirstLabel: string;
   unknownToolLabel: string;
 }) {
@@ -57,16 +60,16 @@ function ToolContent({
     case "log": return tab ? <LogViewerPanel tab={tab} /> : <div className="empty-note">{openTabFirstLabel}</div>;
     case "sftp": return tab ? <SftpPanel tab={tab} /> : <div className="empty-note">{openTabFirstLabel}</div>;
     case "sqlite": return <SqlitePanel />;
-    case "markdown": return <MarkdownPanel />;
+    case "markdown": return <MarkdownPanel filePath={markdownPath} />;
     default: return <div className="empty-note">{unknownToolLabel}</div>;
   }
 }
 
-export default function RightSidebar({ activeTab, browserPath, onToolChange, width }: Props) {
+export default function RightSidebar({ activeTab, browserPath, selectedMarkdownPath, onToolChange, width }: Props) {
   const { t } = useI18n();
   const [expanded, setExpanded] = useState(true);
 
-  const activeTool: RightTool = activeTab?.rightTool ?? "git";
+  const activeTool: RightTool = activeTab?.rightTool ?? "markdown";
   const hasRemoteContext = activeTab?.backend === "ssh";
   const title = TOOL_TITLES[activeTool] ?? activeTool;
   const isGitTool = activeTool === "git";
@@ -77,6 +80,7 @@ export default function RightSidebar({ activeTab, browserPath, onToolChange, wid
       tool={activeTool}
       tab={activeTab}
       browserPath={browserPath}
+      markdownPath={selectedMarkdownPath}
       openTabFirstLabel={openTabFirst}
       unknownToolLabel={unknownTool}
     />

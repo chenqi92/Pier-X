@@ -30,6 +30,8 @@ type Props = {
   onNewConnection: () => void;
   onEditConnection: (index: number) => void;
   onPathChange?: (path: string) => void;
+  onFileSelect?: (entry: FileEntry) => void;
+  selectedFilePath?: string;
   workspaceRoot?: string;
   width?: number;
 };
@@ -60,7 +62,7 @@ function goUp(currentPath: string): string {
   return trimmed.slice(0, slash);
 }
 
-export default function Sidebar({ onOpenLocalTerminal, onConnectSaved, onNewConnection, onEditConnection, onPathChange, workspaceRoot, width }: Props) {
+export default function Sidebar({ onOpenLocalTerminal, onConnectSaved, onNewConnection, onEditConnection, onPathChange, onFileSelect, selectedFilePath, workspaceRoot, width }: Props) {
   const { t } = useI18n();
   const [section, setSection] = useState<0 | 1>(0);
   const [entries, setEntries] = useState<FileEntry[]>([]);
@@ -169,23 +171,29 @@ export default function Sidebar({ onOpenLocalTerminal, onConnectSaved, onNewConn
 
           {/* File list */}
           <div className="sidebar__list">
-            {filteredEntries.map((entry) => (
-              <button
-                key={entry.path}
-                className="sidebar__file-row"
-                onClick={() => { if (entry.kind === "directory") setCurrentPath(entry.path); }}
-                onDoubleClick={() => { if (entry.kind === "directory") onOpenLocalTerminal(entry.path); }}
-                type="button"
-              >
-                {entry.kind === "directory"
-                  ? <Folder size={13} className="sidebar__entry-icon sidebar__entry-icon--dir" />
-                  : <FileText size={13} className="sidebar__entry-icon" />
-                }
-                <span className="sidebar__file-name">{entry.name}</span>
-                {showModified && <span className="sidebar__file-modified">{entry.modified}</span>}
-                {showSize && <span className="sidebar__file-size">{entry.sizeLabel}</span>}
-              </button>
-            ))}
+            {filteredEntries.map((entry) => {
+              const isSelected = entry.kind === "file" && selectedFilePath === entry.path;
+              return (
+                <button
+                  key={entry.path}
+                  className={isSelected ? "sidebar__file-row sidebar__file-row--selected" : "sidebar__file-row"}
+                  onClick={() => {
+                    if (entry.kind === "directory") setCurrentPath(entry.path);
+                    else onFileSelect?.(entry);
+                  }}
+                  onDoubleClick={() => { if (entry.kind === "directory") onOpenLocalTerminal(entry.path); }}
+                  type="button"
+                >
+                  {entry.kind === "directory"
+                    ? <Folder size={13} className="sidebar__entry-icon sidebar__entry-icon--dir" />
+                    : <FileText size={13} className="sidebar__entry-icon" />
+                  }
+                  <span className="sidebar__file-name">{entry.name}</span>
+                  {showModified && <span className="sidebar__file-modified">{entry.modified}</span>}
+                  {showSize && <span className="sidebar__file-size">{entry.sizeLabel}</span>}
+                </button>
+              );
+            })}
             {filteredEntries.length === 0 && (
               <div className="empty-note" style={{ padding: 12 }}>{searchText ? t("No matching files") : t("Empty directory")}</div>
             )}

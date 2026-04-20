@@ -23,6 +23,7 @@ type Props = {
 };
 
 const TOOLS: { tool: RightTool; icon: typeof GitBranch; label: string; remoteOnly?: boolean }[] = [
+  { tool: "markdown", icon: FileText, label: "Markdown" },
   { tool: "git", icon: GitBranch, label: "Git" },
   { tool: "monitor", icon: ActivitySquare, label: "Server Monitor" },
   { tool: "docker", icon: Container, label: "Docker" },
@@ -32,7 +33,6 @@ const TOOLS: { tool: RightTool; icon: typeof GitBranch; label: string; remoteOnl
   { tool: "log", icon: ScrollText, label: "Logs" },
   { tool: "sftp", icon: FolderTree, label: "SFTP", remoteOnly: true },
   { tool: "sqlite", icon: HardDrive, label: "SQLite" },
-  { tool: "markdown", icon: FileText, label: "Markdown" },
 ];
 
 export default function ToolStrip({ activeTool, onSelectTool, hasRemoteContext, expanded, onToggleExpand }: Props) {

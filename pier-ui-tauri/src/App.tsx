@@ -4,7 +4,7 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { I18nContext, makeI18n } from "./i18n/useI18n";
 import * as cmd from "./lib/commands";
-import type { CoreInfo, RightTool, SavedSshConnection } from "./lib/types";
+import type { CoreInfo, FileEntry, RightTool, SavedSshConnection } from "./lib/types";
 import ResizeHandle from "./components/ResizeHandle";
 import SettingsDialog from "./components/SettingsDialog";
 import TerminalPanel from "./panels/TerminalPanel";
@@ -23,9 +23,15 @@ import { useThemeStore as useThemeStoreRef } from "./stores/useThemeStore";
 import "./styles/tokens.css";
 import "./styles/shell.css";
 
+const MARKDOWN_EXTENSIONS = /\.(md|markdown|mdown|mkdn|mkd|mdx)$/i;
+function isMarkdownFile(name: string): boolean {
+  return MARKDOWN_EXTENSIONS.test(name);
+}
+
 function App() {
   const [coreInfo, setCoreInfo] = useState<CoreInfo | null>(null);
   const [browserPath, setBrowserPath] = useState("");
+  const [selectedMarkdownPath, setSelectedMarkdownPath] = useState("");
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [paletteOpen, setPaletteOpen] = useState(false);
   const [newConnOpen, setNewConnOpen] = useState(false);
@@ -148,6 +154,14 @@ function App() {
     }
   }
 
+  function handleFileSelect(entry: FileEntry) {
+    if (!isMarkdownFile(entry.name)) return;
+    setSelectedMarkdownPath(entry.path);
+    if (activeTab && activeTab.rightTool !== "markdown") {
+      useTabStore.getState().setTabRightTool(activeTab.id, "markdown");
+    }
+  }
+
   // ── Command Palette commands ────────────────────────────────
 
   const isMac = navigator.platform.includes("Mac");
@@ -247,6 +261,8 @@ function App() {
             onNewConnection={openNewConnectionDialog}
             onEditConnection={openEditConnectionDialog}
             onPathChange={setBrowserPath}
+            onFileSelect={handleFileSelect}
+            selectedFilePath={selectedMarkdownPath}
             workspaceRoot={coreInfo?.workspaceRoot}
             width={sidebarWidth}
           />
@@ -281,6 +297,7 @@ function App() {
           <RightSidebar
             activeTab={activeTab}
             browserPath={browserPath}
+            selectedMarkdownPath={selectedMarkdownPath}
             onToolChange={handleToolChange}
             width={rightWidth}
           />

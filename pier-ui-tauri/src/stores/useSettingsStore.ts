@@ -32,6 +32,7 @@ type SettingsState = {
 };
 
 export const UI_FONT_OPTIONS = [
+  "IBM Plex Sans",
   "Inter",
   "SF Pro Text",
   "Segoe UI",
@@ -40,6 +41,7 @@ export const UI_FONT_OPTIONS = [
 ];
 
 export const MONO_FONT_OPTIONS = [
+  "IBM Plex Mono",
   "JetBrains Mono",
   "SF Mono",
   "Cascadia Code",
@@ -51,9 +53,9 @@ export const MONO_FONT_OPTIONS = [
 export const useSettingsStore = create<SettingsState>((set) => ({
   locale: "zh",
   performanceOverlay: false,
-  uiFontFamily: "Inter",
+  uiFontFamily: "IBM Plex Sans",
   uiScale: 1.0,
-  monoFontFamily: "JetBrains Mono",
+  monoFontFamily: "IBM Plex Mono",
   terminalFontSize: 13,
   cursorStyle: 0,
   cursorBlink: true,
@@ -64,7 +66,11 @@ export const useSettingsStore = create<SettingsState>((set) => ({
   setPerformanceOverlay: (performanceOverlay) => set({ performanceOverlay }),
   setUiFontFamily: (uiFontFamily) => {
     set({ uiFontFamily });
-    document.documentElement.style.setProperty("--font-ui", `"${uiFontFamily}", system-ui, sans-serif`);
+    document.documentElement.style.setProperty(
+      "--sans",
+      `"${uiFontFamily}", system-ui, -apple-system, "SF Pro Text", "Segoe UI", sans-serif`,
+    );
+    document.documentElement.style.setProperty("--font-ui", `var(--sans)`);
   },
   setUiScale: (uiScale) => {
     set({ uiScale });
@@ -72,7 +78,11 @@ export const useSettingsStore = create<SettingsState>((set) => ({
   },
   setMonoFontFamily: (monoFontFamily) => {
     set({ monoFontFamily });
-    document.documentElement.style.setProperty("--font-mono", `"${monoFontFamily}", monospace`);
+    document.documentElement.style.setProperty(
+      "--mono",
+      `"${monoFontFamily}", ui-monospace, "SF Mono", Consolas, monospace`,
+    );
+    document.documentElement.style.setProperty("--font-mono", `var(--mono)`);
   },
   setTerminalFontSize: (terminalFontSize) => set({ terminalFontSize }),
   setCursorStyle: (cursorStyle) => set({ cursorStyle }),

@@ -1,4 +1,6 @@
+import { X } from "lucide-react";
 import { useEffect, useMemo, useState } from "react";
+import IconButton from "../components/IconButton";
 import { useI18n } from "../i18n/useI18n";
 import type { SavedSshConnection } from "../lib/types";
 import { useConnectionStore } from "../stores/useConnectionStore";
@@ -159,7 +161,19 @@ export default function NewConnectionDialog({ open, onClose, onConnect, initialC
     <div className="palette-backdrop" onClick={onClose}>
       <div className="dialog" onClick={(e) => e.stopPropagation()}>
         <div className="dialog__header">
-          <h2 className="dialog__title">{t(isEditing ? "Edit SSH connection" : "New SSH connection")}</h2>
+          <div style={{ display: "flex", alignItems: "flex-start", gap: "var(--sp-2)" }}>
+            <div style={{ flex: 1 }}>
+              <h2 className="dialog__title">
+                {t(isEditing ? "Edit SSH connection" : "New SSH connection")}
+              </h2>
+              <span className="dialog__subtitle">
+                {t("Saved under Servers sidebar.")}
+              </span>
+            </div>
+            <IconButton variant="mini" onClick={onClose} title={t("Close")}>
+              <X size={12} />
+            </IconButton>
+          </div>
         </div>
         <div className="dialog__body">
           <div className="form-stack">
@@ -208,12 +222,12 @@ export default function NewConnectionDialog({ open, onClose, onConnect, initialC
           </div>
         </div>
         <div className="dialog__footer">
-          <button className="mini-button" onClick={onClose} type="button">{t("Cancel")}</button>
-          <button className="mini-button" disabled={!canDirectConnect} onClick={handleConnect} type="button">{t("Connect")}</button>
-          <button className="mini-button" disabled={!canSave} onClick={() => void handleSave()} type="button">
+          <button className="btn is-ghost" onClick={onClose} type="button">{t("Cancel")}</button>
+          <button className="btn" disabled={!canDirectConnect} onClick={handleConnect} type="button">{t("Connect")}</button>
+          <button className="btn" disabled={!canSave} onClick={() => void handleSave()} type="button">
             {t(isEditing ? "Save changes" : "Save")}
           </button>
-          <button className="welcome__btn welcome__btn--primary" disabled={!canSaveAndConnect} onClick={() => void handleSaveAndConnect()} type="button">
+          <button className="btn is-primary" disabled={!canSaveAndConnect} onClick={() => void handleSaveAndConnect()} type="button">
             {isEditing ? t("Save changes & Connect") : `${t("Save")} & ${t("Connect")}`}
           </button>
         </div>

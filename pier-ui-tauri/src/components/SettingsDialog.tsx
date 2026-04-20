@@ -1,6 +1,14 @@
 import { useState } from "react";
+import { X } from "lucide-react";
+import IconButton from "./IconButton";
 import { useI18n } from "../i18n/useI18n";
-import { useThemeStore, TERMINAL_THEMES } from "../stores/useThemeStore";
+import {
+  useThemeStore,
+  TERMINAL_THEMES,
+  type AccentName,
+  type Density,
+} from "../stores/useThemeStore";
+import { useConnectionStore } from "../stores/useConnectionStore";
 import {
   useSettingsStore,
   UI_FONT_OPTIONS,
@@ -13,9 +21,9 @@ type Props = {
   onClose: () => void;
 };
 
-type Page = "General" | "Appearance" | "Terminal";
+type Page = "Appearance" | "Typography" | "Terminal" | "Connections" | "General";
 
-const PAGES: Page[] = ["General", "Appearance", "Terminal"];
+const PAGES: Page[] = ["Appearance", "Typography", "Terminal", "Connections", "General"];
 
 // ── Reusable sub-components ─────────────────────────────────────
 
@@ -23,7 +31,15 @@ function SectionTitle({ children }: { children: React.ReactNode }) {
   return <div className="settings__section-title">{children}</div>;
 }
 
-function SettingRow({ label, description, children }: { label: string; description?: string; children: React.ReactNode }) {
+function SettingRow({
+  label,
+  description,
+  children,
+}: {
+  label: string;
+  description?: string;
+  children: React.ReactNode;
+}) {
   return (
     <div className="settings__row">
       <div className="settings__row-label">
@@ -35,7 +51,15 @@ function SettingRow({ label, description, children }: { label: string; descripti
   );
 }
 
-function SegmentedControl({ options, value, onChange }: { options: { label: string; value: string | number }[]; value: string | number; onChange: (v: string | number) => void }) {
+function SegmentedControl({
+  options,
+  value,
+  onChange,
+}: {
+  options: { label: string; value: string | number }[];
+  value: string | number;
+  onChange: (v: string | number) => void;
+}) {
   return (
     <div className="settings__segmented">
       {options.map((opt) => (
@@ -64,13 +88,44 @@ function Toggle({ checked, onChange }: { checked: boolean; onChange: (v: boolean
   );
 }
 
+const ACCENT_OPTIONS: { name: AccentName; label: string; cls: string }[] = [
+  { name: "blue", label: "Blue", cls: "swatch-blue" },
+  { name: "green", label: "Green", cls: "swatch-green" },
+  { name: "amber", label: "Amber", cls: "swatch-amber" },
+  { name: "violet", label: "Violet", cls: "swatch-violet" },
+  { name: "coral", label: "Coral", cls: "swatch-coral" },
+];
+
+function AccentSwatches({
+  value,
+  onChange,
+}: {
+  value: AccentName;
+  onChange: (accent: AccentName) => void;
+}) {
+  return (
+    <div className="swatches">
+      {ACCENT_OPTIONS.map((opt) => (
+        <button
+          key={opt.name}
+          type="button"
+          title={opt.label}
+          className={`${opt.cls}${value === opt.name ? " is-active" : ""}`}
+          onClick={() => onChange(opt.name)}
+        />
+      ))}
+    </div>
+  );
+}
+
 // ── Main dialog ─────────────────────────────────────────────────
 
 export default function SettingsDialog({ open, onClose }: Props) {
   const { t } = useI18n();
-  const [page, setPage] = useState<Page>("General");
+  const [page, setPage] = useState<Page>("Appearance");
   const theme = useThemeStore();
   const settings = useSettingsStore();
+  const { connections, remove } = useConnectionStore();
 
   if (!open) return null;
 
@@ -79,12 +134,20 @@ export default function SettingsDialog({ open, onClose }: Props) {
       <div className="dialog dialog--settings" onClick={(e) => e.stopPropagation()}>
         {/* Header */}
         <div className="dialog__header">
-          <h2 className="dialog__title">{t("Settings")}</h2>
-          <span className="dialog__subtitle">{t("Adjust appearance, terminal behavior, and saved connections.")}</span>
+          <div style={{ display: "flex", alignItems: "flex-start", gap: "var(--sp-2)" }}>
+            <div style={{ flex: 1 }}>
+              <h2 className="dialog__title">{t("Settings")}</h2>
+              <span className="dialog__subtitle">
+                {t("Adjust appearance, terminal behavior, and saved connections.")}
+              </span>
+            </div>
+            <IconButton variant="mini" onClick={onClose} title={t("Close")}>
+              <X size={12} />
+            </IconButton>
+          </div>
         </div>
 
         <div className="dialog__settings-body">
-          {/* Left nav */}
           <nav className="dialog__nav">
             {PAGES.map((p) => (
               <button
@@ -98,41 +161,51 @@ export default function SettingsDialog({ open, onClose }: Props) {
             ))}
           </nav>
 
-          {/* Content */}
           <div className="dialog__content">
-            {/* ── General ──────────────────────────────────── */}
-            {page === "General" && (
+            {/* ── Appearance ───────────────────────────────── */}
+            {page === "Appearance" && (
               <div className="settings__page">
                 <SectionTitle>{t("Theme")}</SectionTitle>
-                <SettingRow label={t("Follow system")} description={t("Automatically match the operating system appearance.")}>
-                  <Toggle checked={theme.mode === "system"} onChange={(on) => theme.setMode(on ? "system" : (theme.resolvedDark ? "dark" : "light"))} />
-                </SettingRow>
-                <SettingRow label={t("Color scheme")} description={t("Choose between dark and light mode.")}>
+                <SettingRow
+                  label={t("Color scheme")}
+                  description={t("Dark is the native medium; light is a faithful mirror.")}
+                >
                   <SegmentedControl
-                    options={[{ label: t("Dark"), value: "dark" }, { label: t("Light"), value: "light" }]}
-                    value={theme.mode === "system" ? (theme.resolvedDark ? "dark" : "light") : theme.mode}
-                    onChange={(v) => theme.setMode(v as "dark" | "light")}
+                    options={[
+                      { label: t("Dark"), value: "dark" },
+                      { label: t("Light"), value: "light" },
+                      { label: t("System"), value: "system" },
+                    ]}
+                    value={theme.mode}
+                    onChange={(v) => theme.setMode(v as "dark" | "light" | "system")}
                   />
                 </SettingRow>
 
-                <SectionTitle>{t("Language")}</SectionTitle>
-                <SettingRow label={t("Interface language")} description={t("Changes apply immediately to all UI text.")}>
-                  <SegmentedControl
-                    options={[{ label: "English", value: "en" }, { label: "简体中文", value: "zh" }]}
-                    value={settings.locale}
-                    onChange={(v) => settings.setLocale(v as Locale)}
-                  />
+                <SettingRow
+                  label={t("Accent")}
+                  description={t("One chromatic accent — applies everywhere.")}
+                >
+                  <AccentSwatches value={theme.accent} onChange={theme.setAccent} />
                 </SettingRow>
 
-                <SectionTitle>{t("Developer")}</SectionTitle>
-                <SettingRow label={t("Performance overlay")} description={t("Show FPS and memory usage in the status bar.")}>
-                  <Toggle checked={settings.performanceOverlay} onChange={settings.setPerformanceOverlay} />
+                <SettingRow
+                  label={t("Density")}
+                  description={t("Compact is the IDE default; Comfortable adds 2–4px of air.")}
+                >
+                  <SegmentedControl
+                    options={[
+                      { label: t("Compact"), value: "compact" },
+                      { label: t("Comfortable"), value: "comfortable" },
+                    ]}
+                    value={theme.density}
+                    onChange={(v) => theme.setDensity(v as Density)}
+                  />
                 </SettingRow>
               </div>
             )}
 
-            {/* ── Appearance ───────────────────────────────── */}
-            {page === "Appearance" && (
+            {/* ── Typography ───────────────────────────────── */}
+            {page === "Typography" && (
               <div className="settings__page">
                 <SectionTitle>{t("Typography")}</SectionTitle>
                 <SettingRow label={t("UI font")} description={t("Primary font for interface elements.")}>
@@ -141,7 +214,11 @@ export default function SettingsDialog({ open, onClose }: Props) {
                     value={settings.uiFontFamily}
                     onChange={(e) => settings.setUiFontFamily(e.currentTarget.value)}
                   >
-                    {UI_FONT_OPTIONS.map((f) => <option key={f} value={f}>{f}</option>)}
+                    {UI_FONT_OPTIONS.map((f) => (
+                      <option key={f} value={f}>
+                        {f}
+                      </option>
+                    ))}
                   </select>
                 </SettingRow>
 
@@ -168,17 +245,23 @@ export default function SettingsDialog({ open, onClose }: Props) {
                     value={settings.monoFontFamily}
                     onChange={(e) => settings.setMonoFontFamily(e.currentTarget.value)}
                   >
-                    {MONO_FONT_OPTIONS.map((f) => <option key={f} value={f}>{f}</option>)}
+                    {MONO_FONT_OPTIONS.map((f) => (
+                      <option key={f} value={f}>
+                        {f}
+                      </option>
+                    ))}
                   </select>
                 </SettingRow>
 
-                {/* Live preview */}
                 <SectionTitle>{t("Preview")}</SectionTitle>
                 <div className="settings__preview-card">
-                  <p style={{ fontFamily: `"${settings.uiFontFamily}", system-ui`, fontSize: `${13 * settings.uiScale}px` }}>
+                  <p style={{ fontFamily: `"${settings.uiFontFamily}", var(--sans)`, fontSize: `${13 * settings.uiScale}px` }}>
                     {t("The quick brown fox jumps over the lazy dog — Bold text")}
                   </p>
-                  <p style={{ fontFamily: `"${settings.monoFontFamily}", monospace`, fontSize: "13px", color: "var(--text-secondary)" }}>
+                  <p
+                    className="mono text-muted"
+                    style={{ fontFamily: `"${settings.monoFontFamily}", var(--mono)`, fontSize: "13px" }}
+                  >
                     {'const result = await query("SELECT * FROM users");'}
                   </p>
                 </div>
@@ -193,7 +276,11 @@ export default function SettingsDialog({ open, onClose }: Props) {
                   {TERMINAL_THEMES.map((th, i) => (
                     <button
                       key={th.name}
-                      className={theme.terminalThemeIndex === i ? "settings__theme-card settings__theme-card--selected" : "settings__theme-card"}
+                      className={
+                        theme.terminalThemeIndex === i
+                          ? "settings__theme-card settings__theme-card--selected"
+                          : "settings__theme-card"
+                      }
                       onClick={() => theme.setTerminalTheme(i)}
                       type="button"
                     >
@@ -215,14 +302,15 @@ export default function SettingsDialog({ open, onClose }: Props) {
                     value={settings.monoFontFamily}
                     onChange={(e) => settings.setMonoFontFamily(e.currentTarget.value)}
                   >
-                    {MONO_FONT_OPTIONS.map((f) => <option key={f} value={f}>{f}</option>)}
+                    {MONO_FONT_OPTIONS.map((f) => (
+                      <option key={f} value={f}>
+                        {f}
+                      </option>
+                    ))}
                   </select>
                 </SettingRow>
 
-                <SettingRow
-                  label={t("Font size")}
-                  description={t("{size}px", { size: settings.terminalFontSize })}
-                >
+                <SettingRow label={t("Font size")} description={t("{size}px", { size: settings.terminalFontSize })}>
                   <input
                     className="settings__slider"
                     type="range"
@@ -246,7 +334,6 @@ export default function SettingsDialog({ open, onClose }: Props) {
                     onChange={(v) => settings.setCursorStyle(v as 0 | 1 | 2)}
                   />
                 </SettingRow>
-
                 <SettingRow label={t("Cursor blink")} description={t("Animate the cursor to attract attention.")}>
                   <Toggle checked={settings.cursorBlink} onChange={settings.setCursorBlink} />
                 </SettingRow>
@@ -279,13 +366,78 @@ export default function SettingsDialog({ open, onClose }: Props) {
               </div>
             )}
 
+            {/* ── Connections ──────────────────────────────── */}
+            {page === "Connections" && (
+              <div className="settings__page">
+                <SectionTitle>
+                  {t("Saved SSH connections")}
+                  <span className="settings__badge">{connections.length}</span>
+                </SectionTitle>
+                {connections.length === 0 ? (
+                  <div className="empty-note">
+                    {t("No saved connections yet. Add one from the Servers sidebar.")}
+                  </div>
+                ) : (
+                  <div className="settings__conn-list">
+                    {connections.map((conn) => (
+                      <div key={`${conn.index}-${conn.name}`} className="settings__conn-card">
+                        <div className="settings__conn-header">
+                          <strong>{conn.name}</strong>
+                          <span className="settings__conn-auth">{conn.authKind}</span>
+                        </div>
+                        <div className="settings__conn-meta">
+                          {conn.user}@{conn.host}:{conn.port}
+                        </div>
+                        <div className="settings__conn-actions">
+                          <button
+                            className="mini-button mini-button--destructive"
+                            onClick={() => void remove(conn.index).catch(() => {})}
+                            type="button"
+                          >
+                            {t("Remove")}
+                          </button>
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                )}
+              </div>
+            )}
+
+            {/* ── General ─────────────────────────────────── */}
+            {page === "General" && (
+              <div className="settings__page">
+                <SectionTitle>{t("Language")}</SectionTitle>
+                <SettingRow label={t("Interface language")} description={t("Changes apply immediately to all UI text.")}>
+                  <SegmentedControl
+                    options={[
+                      { label: "English", value: "en" },
+                      { label: "简体中文", value: "zh" },
+                    ]}
+                    value={settings.locale}
+                    onChange={(v) => settings.setLocale(v as Locale)}
+                  />
+                </SettingRow>
+
+                <SectionTitle>{t("Developer")}</SectionTitle>
+                <SettingRow
+                  label={t("Performance overlay")}
+                  description={t("Show FPS and memory usage in the status bar.")}
+                >
+                  <Toggle
+                    checked={settings.performanceOverlay}
+                    onChange={settings.setPerformanceOverlay}
+                  />
+                </SettingRow>
+              </div>
+            )}
           </div>
         </div>
 
         {/* Footer */}
         <div className="dialog__footer">
-          <button className="welcome__btn welcome__btn--primary" onClick={onClose} type="button">
-            {t("Close")}
+          <button className="btn is-primary" onClick={onClose} type="button">
+            {t("Done")}
           </button>
         </div>
       </div>

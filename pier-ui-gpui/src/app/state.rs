@@ -41,7 +41,7 @@ use crate::app::git_session::{
     run_commit_detail as git_run_commit_detail, run_diff as git_run_diff,
     run_graph as git_run_graph, run_managers as git_run_managers, run_refresh as git_run_refresh,
     CommitMenuState, DiffMode, DiffSelection, GitPendingAction, GitState, GitTab, GraphColumn,
-    GraphFilter, GraphHighlightMode, ManagerTab,
+    GraphFilter, GraphHighlightMode, GraphResizableColumn, ManagerTab,
 };
 use crate::app::layout::{
     DockerTab, RightMode, CENTER_PANEL_MIN_W, LEFT_PANEL_DEFAULT_W, LEFT_PANEL_MAX_W,
@@ -3060,6 +3060,33 @@ impl PierApp {
             crate::theme::update_settings(cx, move |settings| {
                 settings.git_footer_height = h;
             });
+            cx.notify();
+        }
+    }
+
+    pub fn begin_git_graph_column_drag(
+        &mut self,
+        column: GraphResizableColumn,
+        mouse_x: f32,
+        cx: &mut Context<Self>,
+    ) {
+        self.git_state
+            .update(cx, |s, _| s.begin_graph_column_drag(column, mouse_x));
+    }
+
+    pub fn update_git_graph_column_drag(&mut self, mouse_x: f32, cx: &mut Context<Self>) {
+        let changed = self
+            .git_state
+            .update(cx, |s, _| s.update_graph_column_drag(mouse_x));
+        if changed {
+            cx.notify();
+        }
+    }
+
+    pub fn end_git_graph_column_drag(&mut self, cx: &mut Context<Self>) {
+        let was_dragging = self.git_state.read(cx).graph.column_drag.is_some();
+        self.git_state.update(cx, |s, _| s.end_graph_column_drag());
+        if was_dragging {
             cx.notify();
         }
     }

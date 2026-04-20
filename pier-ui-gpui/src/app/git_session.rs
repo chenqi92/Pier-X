@@ -28,11 +28,16 @@ use pier_core::services::git::{
 use pier_core::ssh::SshSession;
 
 /// Commit footer height policy. Matches sibling Pier's 120 px default
-/// and 300 px upper cap, but keeps an 80 px floor because GPUI packs
-/// the editor + action row into one shell.
-pub const GIT_FOOTER_MIN_H: f32 = 80.0;
+/// with a 60..300 px drag range.
+pub const GIT_FOOTER_MIN_H: f32 = 60.0;
 pub const GIT_FOOTER_DEFAULT_H: f32 = 120.0;
 pub const GIT_FOOTER_MAX_H: f32 = 300.0;
+pub const GIT_GRAPH_HASH_COL_DEFAULT_W: f32 = 62.0;
+pub const GIT_GRAPH_HASH_COL_MIN_W: f32 = 44.0;
+pub const GIT_GRAPH_AUTHOR_COL_DEFAULT_W: f32 = 100.0;
+pub const GIT_GRAPH_AUTHOR_COL_MIN_W: f32 = 72.0;
+pub const GIT_GRAPH_DATE_COL_DEFAULT_W: f32 = 100.0;
+pub const GIT_GRAPH_DATE_COL_MIN_W: f32 = 72.0;
 
 /// Clamp an in-session drag result to the supported footer range.
 pub fn clamp_git_footer_height(height: f32) -> f32 {
@@ -48,6 +53,15 @@ pub fn restore_git_footer_height(saved: f32) -> f32 {
     } else {
         GIT_FOOTER_DEFAULT_H
     }
+}
+
+pub fn clamp_graph_column_width(column: GraphResizableColumn, width: f32) -> f32 {
+    let min = match column {
+        GraphResizableColumn::Hash => GIT_GRAPH_HASH_COL_MIN_W,
+        GraphResizableColumn::Author => GIT_GRAPH_AUTHOR_COL_MIN_W,
+        GraphResizableColumn::Date => GIT_GRAPH_DATE_COL_MIN_W,
+    };
+    width.max(min)
 }
 
 /// Where a [`GitState`] points. A local path means "run the `git`
@@ -240,6 +254,27 @@ pub enum GraphDateRange {
 }
 
 impl GraphDateRange {
+    pub fn id(self) -> &'static str {
+        match self {
+            Self::All => "",
+            Self::Today => "today",
+            Self::LastWeek => "last_week",
+            Self::LastMonth => "last_month",
+            Self::LastYear => "last_year",
+        }
+    }
+
+    pub fn from_id(id: &str) -> Option<Self> {
+        match id {
+            "" => Some(Self::All),
+            "today" => Some(Self::Today),
+            "last_week" => Some(Self::LastWeek),
+            "last_month" => Some(Self::LastMonth),
+            "last_year" => Some(Self::LastYear),
+            _ => None,
+        }
+    }
+
     /// Unix timestamp threshold for this range (0 = no filter).
     pub fn after_timestamp(self) -> i64 {
         use std::time::{SystemTime, UNIX_EPOCH};
@@ -265,6 +300,27 @@ pub enum GraphHighlightMode {
     MyCommits,
     MergeCommits,
     CurrentBranch,
+}
+
+impl GraphHighlightMode {
+    pub fn id(self) -> &'static str {
+        match self {
+            Self::None => "",
+            Self::MyCommits => "my_commits",
+            Self::MergeCommits => "merge_commits",
+            Self::CurrentBranch => "current_branch",
+        }
+    }
+
+    pub fn from_id(id: &str) -> Option<Self> {
+        match id {
+            "" => Some(Self::None),
+            "my_commits" => Some(Self::MyCommits),
+            "merge_commits" => Some(Self::MergeCommits),
+            "current_branch" => Some(Self::CurrentBranch),
+            _ => None,
+        }
+    }
 }
 
 /// IDEA-style graph filter — user-tweakable inputs that drive the
@@ -492,6 +548,13 @@ pub enum GraphColumn {
     Date,
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum GraphResizableColumn {
+    Hash,
+    Author,
+    Date,
+}
+
 /// Sub-state: IDEA-style commit graph. Populated by `run_graph`.
 pub struct GraphState {
     /// Rendered rows (node + segments + arrows), bounded by paging.
@@ -534,6 +597,11 @@ pub struct GraphState {
     pub show_hash_col: bool,
     pub show_author_col: bool,
     pub show_date_col: bool,
+    /// Live column widths for the History table, matching sibling
+    /// Pier's draggable hash / author / date columns.
+    pub hash_col_width: f32,
+    pub author_col_width: f32,
+    pub date_col_width: f32,
     /// Zebra stripes on alternate rows.
     pub zebra_stripes: bool,
     /// Stale-result guard for run_graph.
@@ -545,6 +613,8 @@ pub struct GraphState {
     /// view snapshot; resets are driven from
     /// `apply_graph_result` / `set_graph_selected`.
     pub list_state: ListState,
+    /// Active horizontal drag on a graph column handle, if any.
+    pub column_drag: Option<GraphColumnDrag>,
 }
 
 impl GraphState {
@@ -577,9 +647,13 @@ impl GraphState {
             show_hash_col: true,
             show_author_col: true,
             show_date_col: true,
+            hash_col_width: GIT_GRAPH_HASH_COL_DEFAULT_W,
+            author_col_width: GIT_GRAPH_AUTHOR_COL_DEFAULT_W,
+            date_col_width: GIT_GRAPH_DATE_COL_DEFAULT_W,
             zebra_stripes: true,
             nonce: 0,
             list_state: ListState::new(0, ListAlignment::Top, px(200.0)),
+            column_drag: None,
         }
     }
 }
@@ -592,6 +666,13 @@ impl GraphState {
 pub struct FooterDrag {
     pub start_mouse_y: f32,
     pub start_height: f32,
+}
+
+#[derive(Clone, Copy, Debug)]
+pub struct GraphColumnDrag {
+    pub column: GraphResizableColumn,
+    pub start_mouse_x: f32,
+    pub start_width: f32,
 }
 
 /// Open context menu for a graph commit — stores everything the
@@ -919,6 +1000,35 @@ impl GitState {
         self.footer_drag = None;
     }
 
+    pub fn begin_graph_column_drag(&mut self, column: GraphResizableColumn, mouse_x: f32) {
+        let start_width = self.graph_column_width(column);
+        self.graph.column_drag = Some(GraphColumnDrag {
+            column,
+            start_mouse_x: mouse_x,
+            start_width,
+        });
+    }
+
+    pub fn update_graph_column_drag(&mut self, mouse_x: f32) -> bool {
+        let Some(drag) = self.graph.column_drag else {
+            return false;
+        };
+
+        let delta = mouse_x - drag.start_mouse_x;
+        let next = clamp_graph_column_width(drag.column, drag.start_width + delta);
+        let current = self.graph_column_width_mut(drag.column);
+        if (next - *current).abs() <= 0.5 {
+            return false;
+        }
+
+        *current = next;
+        true
+    }
+
+    pub fn end_graph_column_drag(&mut self) {
+        self.graph.column_drag = None;
+    }
+
     pub fn set_diff_mode(&mut self, mode: DiffMode) {
         self.diff_mode = mode;
     }
@@ -941,6 +1051,22 @@ impl GitState {
 
     pub fn set_graph_filter(&mut self, filter: GraphFilter) {
         self.graph.filter = filter;
+    }
+
+    fn graph_column_width(&self, column: GraphResizableColumn) -> f32 {
+        match column {
+            GraphResizableColumn::Hash => self.graph.hash_col_width,
+            GraphResizableColumn::Author => self.graph.author_col_width,
+            GraphResizableColumn::Date => self.graph.date_col_width,
+        }
+    }
+
+    fn graph_column_width_mut(&mut self, column: GraphResizableColumn) -> &mut f32 {
+        match column {
+            GraphResizableColumn::Hash => &mut self.graph.hash_col_width,
+            GraphResizableColumn::Author => &mut self.graph.author_col_width,
+            GraphResizableColumn::Date => &mut self.graph.date_col_width,
+        }
     }
 
     pub fn set_graph_selected(&mut self, hash: Option<String>) {

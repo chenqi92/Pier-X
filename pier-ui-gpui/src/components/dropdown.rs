@@ -18,7 +18,9 @@ use std::rc::Rc;
 use gpui::{
     div, prelude::*, px, App, Corner, ElementId, IntoElement, Pixels, SharedString, Styled, Window,
 };
-use gpui_component::{popover::Popover, Icon as UiIcon, IconName, Selectable};
+use gpui_component::{
+    popover::Popover, scroll::ScrollableElement, Icon as UiIcon, IconName, Selectable,
+};
 
 use crate::theme::{
     heights::{BUTTON_MD_H, BUTTON_SM_H, GLYPH_SM},
@@ -68,6 +70,7 @@ pub struct Dropdown {
     options: Vec<DropdownOption>,
     value: SharedString,
     placeholder: SharedString,
+    leading_icon: Option<IconName>,
     size: DropdownSize,
     width: Option<Pixels>,
     on_change: Option<OnChangeCb>,
@@ -80,6 +83,7 @@ impl Dropdown {
             options: Vec::new(),
             value: SharedString::default(),
             placeholder: SharedString::default(),
+            leading_icon: None,
             size: DropdownSize::Md,
             width: None,
             on_change: None,
@@ -103,6 +107,11 @@ impl Dropdown {
 
     pub fn placeholder(mut self, placeholder: impl Into<SharedString>) -> Self {
         self.placeholder = placeholder.into();
+        self
+    }
+
+    pub fn leading_icon(mut self, icon: IconName) -> Self {
+        self.leading_icon = Some(icon);
         self
     }
 
@@ -133,6 +142,7 @@ impl RenderOnce for Dropdown {
 
         let width = self.width;
         let size = self.size;
+        let leading_icon = self.leading_icon;
         let options = self.options.clone();
         let current_value = self.value.clone();
         let on_change = self.on_change.clone();
@@ -149,6 +159,7 @@ impl RenderOnce for Dropdown {
                 id: self.id,
                 label: display_label,
                 selected: false,
+                leading_icon,
                 size,
                 width,
             })
@@ -175,6 +186,7 @@ pub struct DropdownTrigger {
     id: ElementId,
     label: SharedString,
     selected: bool,
+    leading_icon: Option<IconName>,
     size: DropdownSize,
     width: Option<Pixels>,
 }
@@ -224,7 +236,22 @@ impl RenderOnce for DropdownTrigger {
             .font(ui_font_with(&t.font_ui, &t.font_ui_features, WEIGHT_MEDIUM))
             .cursor_pointer()
             .hover(|s| s.bg(t.color.bg_hover))
-            .child(div().flex_1().min_w(px(0.0)).truncate().child(self.label))
+            .child(
+                div()
+                    .flex_1()
+                    .min_w(px(0.0))
+                    .flex()
+                    .flex_row()
+                    .items_center()
+                    .gap(SP_2)
+                    .children(self.leading_icon.map(|icon| {
+                        UiIcon::new(icon)
+                            .size(GLYPH_SM)
+                            .text_color(t.color.text_tertiary)
+                            .into_any_element()
+                    }))
+                    .child(div().flex_1().min_w(px(0.0)).truncate().child(self.label)),
+            )
             .child(UiIcon::new(IconName::ChevronDown).size(GLYPH_SM));
 
         if let Some(w) = self.width {
@@ -276,6 +303,8 @@ impl RenderOnce for DropdownMenu {
             .flex_col()
             .gap(px(1.0))
             .p(SP_1)
+            .max_h(px(280.0))
+            .overflow_y_scrollbar()
             .rounded(RADIUS_MD)
             .bg(t.color.bg_elevated)
             .border_1()

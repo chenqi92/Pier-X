@@ -305,14 +305,39 @@ impl VtEmulator {
 /// Recognizes: `ssh [-p port] [-i key] [-o opt] [user@]host`
 /// Returns `Some((host, user, port))` or `None`.
 fn parse_ssh_command(line: &str) -> Option<(String, String, u16)> {
-    // Strip shell prompt: find last `$ `, `# `, or `% ` and take everything after
-    let cmd_part = line
-        .rfind("$ ")
-        .or_else(|| line.rfind("# "))
-        .or_else(|| line.rfind("% "))
-        .map(|pos| &line[pos + 2..])
-        .unwrap_or(line)
-        .trim();
+    // Locate the `ssh` command token in the line. Shells end the
+    // prompt differently:
+    //   bash:       "user@host:~$ "
+    //   zsh:        "% "
+    //   root/sh:    "# "
+    //   PowerShell: "PS C:\…> "   (space after `>`)
+    //   cmd.exe:    "C:\…>"       (NO space after `>`)
+    // Rather than enumerate every suffix, scan byte-by-byte for
+    // "ssh" delimited by whitespace / `>` / start-of-line on the
+    // left and whitespace / end-of-line on the right. Take the LAST
+    // such occurrence — prior-line prompt echoes never contain a
+    // bare `ssh` token, so the last match is always the current
+    // command. This keeps macOS bash/zsh working while fixing the
+    // Windows PowerShell / cmd.exe detection.
+    let bytes = line.as_bytes();
+    let mut start: Option<usize> = None;
+    let mut i = 0;
+    while i + 3 <= bytes.len() {
+        if &bytes[i..i + 3] == b"ssh" {
+            let prev_ok = i == 0
+                || matches!(
+                    bytes[i - 1],
+                    b' ' | b'\t' | b'>' | b'\r' | b'\n' | b'|' | b'&' | b';'
+                );
+            let next_ok = i + 3 == bytes.len() || matches!(bytes[i + 3], b' ' | b'\t');
+            if prev_ok && next_ok {
+                start = Some(i);
+            }
+        }
+        i += 1;
+    }
+    let start = start?;
+    let cmd_part = line[start..].trim();
 
     let tokens: Vec<&str> = cmd_part.split_whitespace().collect();
     if tokens.is_empty() || tokens[0] != "ssh" {
@@ -1089,5 +1114,48 @@ mod tests {
         emu.process(b"ABCDEFG");
         assert_eq!(emu.line_text(0), "ABCDE");
         assert_eq!(emu.line_text(1).trim_end_matches(' '), "FG");
+    }
+
+    // ── SSH command detection across shell prompts ────────────────
+    // macOS bash / zsh ship with `$ ` / `% ` suffixes and were the
+    // only cases the original parser recognised; Windows PowerShell
+    // (`> `) and cmd.exe (`>`) were silently dropped, leaving the
+    // right panel stuck in local mode. These tests lock the parser
+    // in for all four shells plus the cmd.exe "no space after `>`"
+    // quirk and the nested-`ssh` false-positive in a cwd like
+    // `~/ssh-tools`.
+    #[test]
+    fn parse_ssh_command_bash_prompt() {
+        let got = parse_ssh_command("user@host:~$ ssh root@1.2.3.4");
+        assert_eq!(got, Some(("1.2.3.4".into(), "root".into(), 22)));
+    }
+
+    #[test]
+    fn parse_ssh_command_zsh_prompt() {
+        // `-p` must appear before the host — the parser breaks on the
+        // first positional, matching ssh(1)'s actual argument grammar.
+        let got = parse_ssh_command("user@host ~ % ssh -p 2222 dev@example.com");
+        assert_eq!(got, Some(("example.com".into(), "dev".into(), 2222)));
+    }
+
+    #[test]
+    fn parse_ssh_command_powershell_prompt() {
+        let got = parse_ssh_command("PS C:\\Users\\cq921> ssh admin@server");
+        assert_eq!(got, Some(("server".into(), "admin".into(), 22)));
+    }
+
+    #[test]
+    fn parse_ssh_command_cmd_exe_prompt_no_space() {
+        let got = parse_ssh_command("C:\\Users\\cq921>ssh box");
+        assert_eq!(got, Some(("box".into(), "root".into(), 22)));
+    }
+
+    #[test]
+    fn parse_ssh_command_ignores_substring_ssh_in_path() {
+        // "ssh" appears inside `ssh-tools` — must not trigger a match.
+        assert_eq!(
+            parse_ssh_command("PS C:\\Users\\cq921\\ssh-tools> ls"),
+            None
+        );
     }
 }

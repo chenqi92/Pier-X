@@ -315,13 +315,13 @@ fn render_mode_body(
     }
 
     panel
-        .child(if matches!(mode, RightMode::Sftp) {
+        .child(if mode_uses_internal_scroller(mode) {
             div()
                 .flex_1()
                 .min_h(px(0.0))
                 .min_w(px(0.0))
                 .overflow_hidden()
-                .child(content)
+                .child(div().size_full().min_w(px(0.0)).child(content))
                 .into_any_element()
         } else {
             div()
@@ -334,6 +334,18 @@ fn render_mode_body(
                 .into_any_element()
         })
         .into_any_element()
+}
+
+fn mode_uses_internal_scroller(mode: RightMode) -> bool {
+    matches!(
+        mode,
+        RightMode::Sftp
+            | RightMode::Git
+            | RightMode::Mysql
+            | RightMode::Postgres
+            | RightMode::Redis
+            | RightMode::Sqlite
+    )
 }
 
 fn mode_uses_shell_header(mode: RightMode) -> bool {

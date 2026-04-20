@@ -17,6 +17,7 @@ use gpui::{
     SharedString, WeakEntity, Window,
 };
 use gpui_component::input::InputState;
+use gpui_component::scroll::ScrollableElement;
 use pier_core::git_graph::GraphRow;
 use pier_core::services::git::{
     BranchEntry, BranchInfo, CommitDetail, CommitInfo, ConfigEntry, FileStatus, GitFileChange,
@@ -26,14 +27,15 @@ use rust_i18n::t;
 
 use crate::app::git_session::{
     clamp_git_footer_height, CommitActionMode, DiffMode, DiffSelection, GitPendingAction, GitState,
-    GitStatus, GitTab, GraphColumn, GraphDateRange, GraphFilter, GraphHighlightMode, ManagerTab,
+    GitStatus, GitTab, GraphColumn, GraphDateRange, GraphFilter, GraphHighlightMode,
+    GraphResizableColumn, ManagerTab,
 };
 use crate::app::PierApp;
 use crate::components::{
     compute_graph_col_width, graph_row_canvas, is_head_row, palette_color, text, Button,
-    ButtonSize, CommitComposer, IconButton, IconButtonSize, IconButtonVariant, InlineInput,
-    InlineInputTone, InspectorSection, Separator, SplitButton, SplitButtonOption, StatusKind,
-    StatusPill, TabItem, Tabs,
+    ButtonSize, CommitComposer, Dropdown, DropdownOption, DropdownSize, IconButton,
+    IconButtonSize, IconButtonVariant, InlineInput, InlineInputTone, InspectorSection,
+    Separator, SplitButton, SplitButtonOption, StatusKind, StatusPill, TabItem, Tabs,
 };
 use crate::theme::{
     heights::{BUTTON_SM_H, ICON_MD, ICON_SM},
@@ -251,14 +253,12 @@ fn tab_layout(
         col = col
             .child(commit_footer_splitter(t, weak.clone()))
             .child(commit_footer(
-                t,
                 &snap.changes,
                 commit_input,
                 weak.clone(),
                 cx,
                 snap.footer_height,
                 snap.commit_action_mode,
-                snap.action_error.clone(),
             ));
     }
 
@@ -267,21 +267,36 @@ fn tab_layout(
     // makes the input / tab bar / graph rows feel laggy — and in
     // some cases, GPUI's input subsystem sees the mouse-up capture
     // and drops the input's pending keystroke state.
-    let dragging = snap.footer_dragging;
+    let footer_dragging = snap.footer_dragging;
+    let graph_dragging = snap.graph.column_dragging;
     let root = col.id("git-panel-root");
-    if !dragging {
+    if !footer_dragging && !graph_dragging {
         return root;
+    }
+
+    if footer_dragging {
+        let move_weak = weak.clone();
+        let up_weak = weak.clone();
+        return root
+            .cursor_row_resize()
+            .on_mouse_move(move |ev, _, cx| {
+                let y = ev.position.y.to_f64() as f32;
+                let _ = move_weak.update(cx, |app, cx| app.update_git_footer_drag(y, cx));
+            })
+            .on_mouse_up(MouseButton::Left, move |_, _, cx| {
+                let _ = up_weak.update(cx, |app, cx| app.end_git_footer_drag(cx));
+            });
     }
 
     let move_weak = weak.clone();
     let up_weak = weak.clone();
-    root.cursor_row_resize()
+    root.cursor_col_resize()
         .on_mouse_move(move |ev, _, cx| {
-            let y = ev.position.y.to_f64() as f32;
-            let _ = move_weak.update(cx, |app, cx| app.update_git_footer_drag(y, cx));
+            let x = ev.position.x.to_f64() as f32;
+            let _ = move_weak.update(cx, |app, cx| app.update_git_graph_column_drag(x, cx));
         })
         .on_mouse_up(MouseButton::Left, move |_, _, cx| {
-            let _ = up_weak.update(cx, |app, cx| app.end_git_footer_drag(cx));
+            let _ = up_weak.update(cx, |app, cx| app.end_git_graph_column_drag(cx));
         })
 }
 
@@ -727,43 +742,38 @@ fn conflicts_tab_body(
         .child(conflicts_manager(t, &snap.managers.conflicts, weak))
 }
 
-/// Sticky commit footer — the Pier-native "always-visible commit
-/// box" that sits below the tab body. Wraps the commit input inside
-/// a single bordered shell that also hosts the stage-all shortcut at
-/// bottom-left and the Commit / Commit & Push split-button at
-/// bottom-right.
+/// Sticky commit footer — the Pier-native resizable commit pane that
+/// sits below the tab body. The bordered editor surface lives above a
+/// detached action row, matching sibling Pier's layout and keeping
+/// the Stage All / Commit controls visually anchored to the bottom.
 fn commit_footer(
-    t: &crate::theme::Theme,
     changes: &[GitFileChange],
     input: gpui::Entity<InputState>,
     weak: WeakEntity<PierApp>,
     cx: &App,
     height: f32,
     mode: CommitActionMode,
-    action_error: Option<SharedString>,
 ) -> impl IntoElement {
-    let has_changes = !changes.is_empty();
+    let has_unstaged = changes.iter().any(|c| !c.staged);
     let staged = changes.iter().any(|c| c.staged);
     let has_message = !input.read(cx).value().trim().is_empty();
     let can_submit = staged && has_message;
     let stage_all_weak = weak.clone();
 
-    // Stage-all lives inside the composer at bottom-left. Keep a
-    // placeholder div when the worktree is clean so the split-button
-    // on the right doesn't jump horizontally.
-    let stage_all_btn: gpui::AnyElement = if has_changes && !staged {
+    // Keep Stage All anchored on the left like sibling Pier. When the
+    // worktree is clean (or everything is already staged) the button
+    // stays in place but disables instead of disappearing.
+    let stage_all_btn: gpui::AnyElement =
         Button::ghost("git-footer-stage-all", t!("App.Git.stage_all"))
             .size(ButtonSize::Sm)
+            .disabled(!has_unstaged)
             .tooltip(t!("App.Git.stage_all"))
             .on_click(move |_, _, cx| {
                 let _ = stage_all_weak.update(cx, |app, cx| {
                     app.schedule_git_action(GitPendingAction::StageAll, cx);
                 });
             })
-            .into_any_element()
-    } else {
-        div().flex_none().into_any_element()
-    };
+            .into_any_element();
 
     // Label + tooltip derive from the currently-selected mode so the
     // primary half of the split-button reads as the action it will
@@ -837,39 +847,17 @@ fn commit_footer(
             });
         });
 
-    // Compact inline feedback — surfaces the most recent action
-    // error right above the composer so users see commit / push
-    // failures without scrolling to the top banner.
-    let feedback_strip: gpui::AnyElement = if let Some(err) = action_error {
-        let dismiss_weak = weak.clone();
-        git_feedback_strip(
-            t,
-            "git-footer-fb",
-            IconName::WarningFill,
-            err,
-            true,
-            move |_, _, cx| {
-                let _ = dismiss_weak.update(cx, |app, cx| app.clear_git_action_error(cx));
-            },
-        )
-        .into_any_element()
-    } else {
-        div().flex_none().into_any_element()
-    };
-
     div()
         .flex_none()
         .w_full()
         .h(px(clamp_git_footer_height(height)))
         .flex()
         .flex_col()
-        .gap(SP_1)
-        .px(SP_3)
-        .py(SP_1_5)
-        .bg(t.color.bg_panel)
-        .child(feedback_strip)
+        .px(SP_2)
+        .pt(SP_1)
+        .pb(SP_1_5)
         .child(
-            div().flex_1().min_h(px(0.0)).child(
+            div().flex_1().min_h(px(0.0)).w_full().child(
                 CommitComposer::new(&input)
                     .bottom_left(stage_all_btn)
                     .bottom_right(split),
@@ -2292,16 +2280,31 @@ fn graph_tab_body(
             .child(detail_el)
             .into_any_element()
     })
-    .w_full()
     .flex_1()
     // `gpui::list` needs a bounded vertical axis to virtualize —
     // `min_h(0)` kicks the flex solver so the list takes exactly
     // the space our flex_1 parent hands it (instead of trying to
     // measure every child up-front and collapsing to 0).
     .min_h(px(0.0))
+    .w_full()
     .h_full();
 
-    col = col.child(list_element);
+    let graph_min_w = graph_content_min_width(col_w, &snap.graph);
+    col = col.child(
+        div()
+            .flex_1()
+            .min_h(px(0.0))
+            .overflow_x_scrollbar()
+            .child(
+                div()
+                    .w_full()
+                    .min_w(px(graph_min_w))
+                    .h_full()
+                    .flex()
+                    .flex_col()
+                    .child(list_element),
+            ),
+    );
 
     // Load-more / all-loaded footer.
     if snap.graph.has_more {
@@ -2363,16 +2366,36 @@ fn graph_toolbar(
     search_input: gpui::Entity<InputState>,
     weak: WeakEntity<PierApp>,
 ) -> gpui::Div {
-    let mut row = div()
+    let mut toolbar = div()
+        .w_full()
+        .flex()
+        .flex_col()
+        .gap(SP_1)
+        .px(SP_3)
+        .py(SP_1_5)
+        .bg(t.color.bg_panel);
+
+    let mut top_row = div()
         .w_full()
         .flex()
         .flex_row()
         .flex_wrap()
         .items_center()
-        .gap(SP_1)
-        .px(SP_3)
-        .py(SP_1_5)
-        .bg(t.color.bg_panel);
+        .gap(SP_1);
+    let mut middle_row = div()
+        .w_full()
+        .flex()
+        .flex_row()
+        .flex_wrap()
+        .items_center()
+        .gap(SP_1);
+    let mut bottom_row = div()
+        .w_full()
+        .flex()
+        .flex_row()
+        .flex_wrap()
+        .items_center()
+        .gap(SP_1);
 
     // Live search input — Enter triggers a reload through
     // `commit_git_graph_search` (subscribed once at app-boot in
@@ -2423,140 +2446,149 @@ fn graph_toolbar(
                 }),
         );
     }
-    row = row.child(search_row);
+    top_row = top_row.child(search_row);
 
-    // Branch chip
-    let branch_label: SharedString = graph
-        .filter
-        .branch
-        .clone()
-        .map(SharedString::from)
-        .unwrap_or_else(|| t!("App.Git.graph_all_branches").into());
-    let weak_branch_clear = weak.clone();
+    let mut branch_options = Vec::with_capacity(graph.branches.len() + 1);
+    branch_options.push(DropdownOption::new("", t!("App.Git.graph_all_branches")));
+    branch_options.extend(
+        graph
+            .branches
+            .iter()
+            .cloned()
+            .map(|branch| DropdownOption::new(branch.clone(), branch)),
+    );
     let cur_filter_b = graph.filter.clone();
-    row = row.child(filter_chip(
-        t,
-        "git-graph-branch",
-        IconName::GitBranch,
-        branch_label,
-        graph.filter.branch.is_some(),
-        move |_, _, cx| {
-            let next = GraphFilter {
-                branch: None,
-                ..cur_filter_b.clone()
-            };
-            let _ = weak_branch_clear.update(cx, |app, cx| {
-                app.set_git_graph_filter(next.clone(), cx);
-            });
-        },
-    ));
+    let weak_branch = weak.clone();
+    top_row = top_row.child(
+        Dropdown::new("git-graph-branch")
+            .size(DropdownSize::Sm)
+            .width(px(144.0))
+            .leading_icon(IconName::GitBranch)
+            .placeholder(t!("App.Git.graph_all_branches"))
+            .value(graph.filter.branch.clone().unwrap_or_default())
+            .options(branch_options)
+            .on_change(move |value, _, cx| {
+                let next = GraphFilter {
+                    branch: if value.is_empty() {
+                        None
+                    } else {
+                        Some(value.to_string())
+                    },
+                    ..cur_filter_b.clone()
+                };
+                let _ = weak_branch.update(cx, |app, cx| {
+                    app.set_git_graph_filter(next.clone(), cx);
+                });
+            }),
+    );
 
-    // Author chip
-    let user_label: SharedString = graph
-        .filter
-        .author
-        .clone()
-        .map(SharedString::from)
-        .unwrap_or_else(|| t!("App.Git.graph_all_users").into());
-    let weak_user_clear = weak.clone();
+    let mut author_options = Vec::with_capacity(graph.authors.len() + 1);
+    author_options.push(DropdownOption::new("", t!("App.Git.graph_all_users")));
+    author_options.extend(
+        graph
+            .authors
+            .iter()
+            .cloned()
+            .map(|author| DropdownOption::new(author.clone(), author)),
+    );
     let cur_filter_u = graph.filter.clone();
-    row = row.child(filter_chip(
-        t,
-        "git-graph-user",
-        // Phosphor `user-fill` = SF `person.fill`, matching Pier's
-        // graph author chip.
-        IconName::UserFill,
-        user_label,
-        graph.filter.author.is_some(),
-        move |_, _, cx| {
-            let next = GraphFilter {
-                author: None,
-                ..cur_filter_u.clone()
-            };
-            let _ = weak_user_clear.update(cx, |app, cx| {
-                app.set_git_graph_filter(next.clone(), cx);
-            });
-        },
-    ));
+    let weak_user = weak.clone();
+    top_row = top_row.child(
+        Dropdown::new("git-graph-user")
+            .size(DropdownSize::Sm)
+            .width(px(144.0))
+            .leading_icon(IconName::UserFill)
+            .placeholder(t!("App.Git.graph_all_users"))
+            .value(graph.filter.author.clone().unwrap_or_default())
+            .options(author_options)
+            .on_change(move |value, _, cx| {
+                let next = GraphFilter {
+                    author: if value.is_empty() {
+                        None
+                    } else {
+                        Some(value.to_string())
+                    },
+                    ..cur_filter_u.clone()
+                };
+                let _ = weak_user.update(cx, |app, cx| {
+                    app.set_git_graph_filter(next.clone(), cx);
+                });
+            }),
+    );
 
-    // Date range chip
-    let date_label: SharedString = match graph.filter.date_range {
-        GraphDateRange::All => t!("App.Git.graph_date").into(),
-        GraphDateRange::Today => t!("App.Git.graph_date_today").into(),
-        GraphDateRange::LastWeek => t!("App.Git.graph_date_week").into(),
-        GraphDateRange::LastMonth => t!("App.Git.graph_date_month").into(),
-        GraphDateRange::LastYear => t!("App.Git.graph_date_year").into(),
-    };
-    let weak_date = weak.clone();
+    let date_options = [
+        GraphDateRange::All,
+        GraphDateRange::Today,
+        GraphDateRange::LastWeek,
+        GraphDateRange::LastMonth,
+        GraphDateRange::LastYear,
+    ]
+    .into_iter()
+    .map(|range| DropdownOption::new(range.id(), graph_date_range_label(range)))
+    .collect::<Vec<_>>();
     let cur_filter_d = graph.filter.clone();
-    row = row.child(filter_chip(
-        t,
-        "git-graph-date",
-        IconName::Calendar,
-        date_label,
-        graph.filter.date_range != GraphDateRange::All,
-        move |_, _, cx| {
-            // Cycle through ranges on click.
-            let next_range = match cur_filter_d.date_range {
-                GraphDateRange::All => GraphDateRange::Today,
-                GraphDateRange::Today => GraphDateRange::LastWeek,
-                GraphDateRange::LastWeek => GraphDateRange::LastMonth,
-                GraphDateRange::LastMonth => GraphDateRange::LastYear,
-                GraphDateRange::LastYear => GraphDateRange::All,
-            };
-            let next = GraphFilter {
-                date_range: next_range,
-                ..cur_filter_d.clone()
-            };
-            let _ = weak_date.update(cx, |app, cx| {
-                app.set_git_graph_filter(next.clone(), cx);
-            });
-        },
-    ));
+    let weak_date = weak.clone();
+    top_row = top_row.child(
+        Dropdown::new("git-graph-date")
+            .size(DropdownSize::Sm)
+            .width(px(132.0))
+            .leading_icon(IconName::Calendar)
+            .placeholder(t!("App.Git.graph_date"))
+            .value(graph.filter.date_range.id())
+            .options(date_options)
+            .on_change(move |value, _, cx| {
+                let next = GraphFilter {
+                    date_range: GraphDateRange::from_id(value.as_ref())
+                        .unwrap_or(GraphDateRange::All),
+                    ..cur_filter_d.clone()
+                };
+                let _ = weak_date.update(cx, |app, cx| {
+                    app.set_git_graph_filter(next.clone(), cx);
+                });
+            }),
+    );
 
-    // Path chip
-    let path_active = graph.filter.path_filter.is_some();
-    let path_label: SharedString = if path_active {
-        let path = graph.filter.path_filter.clone().unwrap_or_default();
-        let trimmed: String = path.chars().take(24).collect();
-        SharedString::from(trimmed)
-    } else {
-        t!("App.Git.graph_path").into()
-    };
-    let weak_path = weak.clone();
+    let mut path_options = Vec::with_capacity(graph.files.len() + 1);
+    path_options.push(DropdownOption::new("", t!("App.Git.graph_path")));
+    path_options.extend(
+        graph.files
+            .iter()
+            .cloned()
+            .map(|path| DropdownOption::new(path.clone(), path)),
+    );
     let cur_filter_p = graph.filter.clone();
-    row = row.child(filter_chip(
-        t,
-        "git-graph-path",
-        // Filled folder — the chip is a decorative label, not a
-        // directory-in-a-list, so the heavier glyph reads better.
-        IconName::FolderFill,
-        path_label,
-        path_active,
-        move |_, _, cx| {
-            let next = GraphFilter {
-                path_filter: None,
-                ..cur_filter_p.clone()
-            };
-            let _ = weak_path.update(cx, |app, cx| {
-                app.set_git_graph_filter(next.clone(), cx);
-            });
-        },
-    ));
+    let weak_path = weak.clone();
+    middle_row = middle_row.child(
+        Dropdown::new("git-graph-path")
+            .size(DropdownSize::Sm)
+            .width(px(168.0))
+            .leading_icon(IconName::FolderFill)
+            .placeholder(t!("App.Git.graph_path"))
+            .value(graph.filter.path_filter.clone().unwrap_or_default())
+            .options(path_options)
+            .on_change(move |value, _, cx| {
+                let next = GraphFilter {
+                    path_filter: if value.is_empty() {
+                        None
+                    } else {
+                        Some(value.to_string())
+                    },
+                    ..cur_filter_p.clone()
+                };
+                let _ = weak_path.update(cx, |app, cx| {
+                    app.set_git_graph_filter(next.clone(), cx);
+                });
+            }),
+    );
 
     // Options toggles — first-parent, no-merges, long edges, sort.
     let weak_fp = weak.clone();
     let cur_fp = graph.filter.clone();
-    let fp_label: SharedString = if graph.filter.first_parent_only {
-        t!("App.Git.graph_first_parent").into()
-    } else {
-        t!("App.Git.graph_options").into()
-    };
-    row = row.child(filter_chip(
+    middle_row = middle_row.child(filter_chip(
         t,
         "git-graph-first-parent",
         IconName::ChartPie,
-        fp_label,
+        t!("App.Git.graph_first_parent"),
         graph.filter.first_parent_only,
         move |_, _, cx| {
             let next = GraphFilter {
@@ -2570,7 +2602,7 @@ fn graph_toolbar(
     ));
     let weak_nm = weak.clone();
     let cur_nm = graph.filter.clone();
-    row = row.child(filter_chip(
+    middle_row = middle_row.child(filter_chip(
         t,
         "git-graph-no-merges",
         IconName::Minus,
@@ -2593,7 +2625,7 @@ fn graph_toolbar(
     } else {
         t!("App.Git.graph_collapse_lin").into()
     };
-    row = row.child(filter_chip(
+    middle_row = middle_row.child(filter_chip(
         t,
         "git-graph-long-edges",
         IconName::ChevronsUpDown,
@@ -2616,7 +2648,7 @@ fn graph_toolbar(
     } else {
         t!("App.Git.graph_sort_topo").into()
     };
-    row = row.child(filter_chip(
+    middle_row = middle_row.child(filter_chip(
         t,
         "git-graph-sort",
         IconName::SortDescending,
@@ -2633,39 +2665,38 @@ fn graph_toolbar(
         },
     ));
 
-    row = row.child(div().flex_1().min_w(px(0.0)));
+    middle_row = middle_row.child(div().flex_1().min_w(px(0.0)));
 
-    // Highlight mode cycling chip
-    let hm = graph.highlight_mode;
-    let hm_label: SharedString = match hm {
-        GraphHighlightMode::None => t!("App.Git.graph_highlight_none").into(),
-        GraphHighlightMode::MyCommits => t!("App.Git.graph_highlight_my").into(),
-        GraphHighlightMode::MergeCommits => t!("App.Git.graph_highlight_merge").into(),
-        GraphHighlightMode::CurrentBranch => t!("App.Git.graph_highlight_branch").into(),
-    };
+    let highlight_options = [
+        GraphHighlightMode::None,
+        GraphHighlightMode::MyCommits,
+        GraphHighlightMode::MergeCommits,
+        GraphHighlightMode::CurrentBranch,
+    ]
+    .into_iter()
+    .map(|mode| DropdownOption::new(mode.id(), graph_highlight_label(mode)))
+    .collect::<Vec<_>>();
     let weak_hm = weak.clone();
-    row = row.child(filter_chip(
-        t,
-        "git-graph-highlight",
-        IconName::Eye,
-        hm_label,
-        hm != GraphHighlightMode::None,
-        move |_, _, cx| {
-            let next = match hm {
-                GraphHighlightMode::None => GraphHighlightMode::MyCommits,
-                GraphHighlightMode::MyCommits => GraphHighlightMode::MergeCommits,
-                GraphHighlightMode::MergeCommits => GraphHighlightMode::CurrentBranch,
-                GraphHighlightMode::CurrentBranch => GraphHighlightMode::None,
-            };
-            let _ = weak_hm.update(cx, |app, cx| {
-                app.set_git_graph_highlight(next, cx);
-            });
-        },
-    ));
+    middle_row = middle_row.child(
+        Dropdown::new("git-graph-highlight")
+            .size(DropdownSize::Sm)
+            .width(px(128.0))
+            .leading_icon(IconName::Eye)
+            .placeholder(t!("App.Git.graph_highlight"))
+            .value(graph.highlight_mode.id())
+            .options(highlight_options)
+            .on_change(move |value, _, cx| {
+                let next = GraphHighlightMode::from_id(value.as_ref())
+                    .unwrap_or(GraphHighlightMode::None);
+                let _ = weak_hm.update(cx, |app, cx| {
+                    app.set_git_graph_highlight(next, cx);
+                });
+            }),
+    );
 
     // Zebra toggle
     let weak_zebra = weak.clone();
-    row = row.child(filter_chip(
+    bottom_row = bottom_row.child(filter_chip(
         t,
         "git-graph-zebra",
         // SF `rectangle.split.2x1` — Pier's "alternate row stripes" cue.
@@ -2701,7 +2732,7 @@ fn graph_toolbar(
             GraphColumn::Author => "git-graph-col-author",
             GraphColumn::Date => "git-graph-col-date",
         };
-        row = row.child(filter_chip(
+        bottom_row = bottom_row.child(filter_chip(
             t,
             id,
             IconName::CaseSensitive,
@@ -2713,7 +2744,8 @@ fn graph_toolbar(
         ));
     }
 
-    row
+    toolbar = toolbar.child(top_row).child(middle_row).child(bottom_row);
+    toolbar
 }
 
 fn filter_chip(
@@ -2729,6 +2761,7 @@ fn filter_chip(
     } else {
         (t.color.bg_surface, t.color.text_secondary)
     };
+    let hover_bg = if active { bg } else { t.color.bg_hover };
     div()
         .id(id.into())
         .flex()
@@ -2739,12 +2772,13 @@ fn filter_chip(
         .px(SP_2)
         .rounded(RADIUS_SM)
         .bg(bg)
-        .text_size(SIZE_SMALL)
+        .text_size(SIZE_CAPTION)
+        .font_weight(WEIGHT_MEDIUM)
         .text_color(fg)
         .cursor_pointer()
         .border_1()
         .border_color(t.color.border_subtle)
-        .hover(|s| s.bg(t.color.bg_hover))
+        .hover(move |s| s.bg(hover_bg))
         .child(
             div()
                 .flex_none()
@@ -2831,7 +2865,6 @@ fn graph_row_element(
         .w_full()
         .bg(row_bg)
         .cursor_pointer()
-        .hover(|s| s.bg(t.color.bg_hover))
         .on_click(move |_, _, cx| {
             let h = click_hash.clone();
             let _ = click_weak.update(cx, |app, cx| {
@@ -2852,24 +2885,35 @@ fn graph_row_element(
                 .h(px(22.0))
                 .child(graph_row_canvas(row, t, col_w, dim_factor)),
         );
+    if selected {
+        outer = outer.hover(|s| s.bg(t.color.accent_subtle));
+    } else {
+        outer = outer.hover(|s| s.bg(t.color.bg_hover));
+    }
 
     if graph.show_hash_col {
         outer = outer.child(
             div()
                 .flex_none()
-                .w(px(62.0))
+                .w(px(graph.hash_col_width))
                 .px(SP_1)
+                .truncate()
                 .text_size(SIZE_MONO_SMALL)
                 .font_family(t.font_mono.clone())
                 .text_color(hash_text_color)
                 .child(SharedString::from(row.short_hash.clone())),
         );
+        outer = outer.child(graph_column_resize_handle(
+            t,
+            GraphResizableColumn::Hash,
+            weak.clone(),
+        ));
     }
 
     outer = outer.child(
         div()
             .flex_1()
-            .min_w(px(0.0))
+            .min_w(px(240.0))
             .flex()
             .flex_row()
             .gap(SP_1)
@@ -2894,28 +2938,95 @@ fn graph_row_element(
         outer = outer.child(
             div()
                 .flex_none()
-                .w(px(120.0))
+                .w(px(graph.author_col_width))
                 .px(SP_1)
                 .truncate()
-                .text_size(SIZE_SMALL)
+                .text_size(SIZE_CAPTION)
                 .text_color(t.color.text_tertiary)
                 .child(SharedString::from(row.author.clone())),
         );
+        outer = outer.child(graph_column_resize_handle(
+            t,
+            GraphResizableColumn::Author,
+            weak.clone(),
+        ));
     }
     if graph.show_date_col {
         outer = outer.child(
             div()
                 .flex_none()
-                .w(px(100.0))
+                .w(px(graph.date_col_width))
                 .px(SP_1)
                 .truncate()
-                .text_size(SIZE_SMALL)
+                .text_size(SIZE_CAPTION)
                 .text_color(t.color.text_tertiary)
                 .child(SharedString::from(format_timestamp(row.date_timestamp))),
         );
+        outer = outer.child(graph_column_resize_handle(
+            t,
+            GraphResizableColumn::Date,
+            weak.clone(),
+        ));
     }
 
     outer
+}
+
+fn graph_content_min_width(graph_w: f32, graph: &GraphStateSnapshot) -> f32 {
+    let mut width = graph_w + 320.0;
+    if graph.show_hash_col {
+        width += graph.hash_col_width + 6.0;
+    }
+    if graph.show_author_col {
+        width += graph.author_col_width + 6.0;
+    }
+    if graph.show_date_col {
+        width += graph.date_col_width + 6.0;
+    }
+    width
+}
+
+fn graph_date_range_label(range: GraphDateRange) -> SharedString {
+    match range {
+        GraphDateRange::All => t!("App.Git.graph_date").into(),
+        GraphDateRange::Today => t!("App.Git.graph_date_today").into(),
+        GraphDateRange::LastWeek => t!("App.Git.graph_date_week").into(),
+        GraphDateRange::LastMonth => t!("App.Git.graph_date_month").into(),
+        GraphDateRange::LastYear => t!("App.Git.graph_date_year").into(),
+    }
+}
+
+fn graph_highlight_label(mode: GraphHighlightMode) -> SharedString {
+    match mode {
+        GraphHighlightMode::None => t!("App.Git.graph_highlight_none").into(),
+        GraphHighlightMode::MyCommits => t!("App.Git.graph_highlight_my").into(),
+        GraphHighlightMode::MergeCommits => t!("App.Git.graph_highlight_merge").into(),
+        GraphHighlightMode::CurrentBranch => t!("App.Git.graph_highlight_branch").into(),
+    }
+}
+
+fn graph_column_resize_handle(
+    t: &crate::theme::Theme,
+    column: GraphResizableColumn,
+    weak: WeakEntity<PierApp>,
+) -> impl IntoElement {
+    div()
+        .flex_none()
+        .w(px(6.0))
+        .h_full()
+        .flex()
+        .items_center()
+        .justify_center()
+        .cursor_col_resize()
+        .hover(|s| s.bg(t.color.bg_hover))
+        .child(div().w(px(1.0)).h_full().bg(t.color.border_subtle))
+        .on_mouse_down(MouseButton::Left, move |ev, _, cx| {
+            cx.stop_propagation();
+            let mouse_x = ev.position.x.to_f64() as f32;
+            let _ = weak.update(cx, |app, cx| {
+                app.begin_git_graph_column_drag(column, mouse_x, cx);
+            });
+        })
 }
 
 fn format_timestamp(ts: i64) -> String {
@@ -4350,6 +4461,9 @@ struct GitSnapshot {
 struct GraphStateSnapshot {
     rows: Vec<GraphRow>,
     unpushed: std::collections::HashSet<String>,
+    branches: Vec<String>,
+    authors: Vec<String>,
+    files: Vec<String>,
     filter: GraphFilter,
     has_more: bool,
     loading: bool,
@@ -4358,10 +4472,14 @@ struct GraphStateSnapshot {
     show_hash_col: bool,
     show_author_col: bool,
     show_date_col: bool,
+    hash_col_width: f32,
+    author_col_width: f32,
+    date_col_width: f32,
     zebra_stripes: bool,
     highlight_mode: GraphHighlightMode,
     user_name: String,
     list_state: ListState,
+    column_dragging: bool,
 }
 
 #[derive(Clone)]
@@ -4414,6 +4532,9 @@ impl From<&GitState> for GitSnapshot {
             graph: GraphStateSnapshot {
                 rows: state.graph.rows.clone(),
                 unpushed: state.graph.unpushed.clone(),
+                branches: state.graph.branches.clone(),
+                authors: state.graph.authors.clone(),
+                files: state.graph.files.clone(),
                 filter: state.graph.filter.clone(),
                 has_more: state.graph.has_more,
                 loading: state.graph.loading,
@@ -4422,10 +4543,14 @@ impl From<&GitState> for GitSnapshot {
                 show_hash_col: state.graph.show_hash_col,
                 show_author_col: state.graph.show_author_col,
                 show_date_col: state.graph.show_date_col,
+                hash_col_width: state.graph.hash_col_width,
+                author_col_width: state.graph.author_col_width,
+                date_col_width: state.graph.date_col_width,
                 zebra_stripes: state.graph.zebra_stripes,
                 highlight_mode: state.graph.highlight_mode,
                 user_name: state.managers.user_name.clone(),
                 list_state: state.graph.list_state.clone(),
+                column_dragging: state.graph.column_drag.is_some(),
             },
             commit_detail: CommitDetailSnapshot {
                 detail: state.commit_detail.detail.clone(),

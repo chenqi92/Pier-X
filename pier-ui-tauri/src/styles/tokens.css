@@ -135,12 +135,20 @@
   --accent-subtle: rgba(74, 163, 255, 0.08);
 }
 
-/* ── Accent variants (apply to both themes) ────────────────────── */
-[data-accent="blue"]   { --accent: #4aa3ff; --accent-dim: #1e3a5c; }
-[data-accent="green"]  { --accent: #3dd68c; --accent-dim: #17402c; }
-[data-accent="amber"]  { --accent: #ffb547; --accent-dim: #3e2c14; }
-[data-accent="violet"] { --accent: #b48cff; --accent-dim: #2e2142; }
-[data-accent="coral"]  { --accent: #ff7a59; --accent-dim: #3e1e14; }
+/* ── Accent palette (canonical hex — also used by Settings swatches) ── */
+:root {
+  --accent-blue: #4aa3ff;
+  --accent-green: #3dd68c;
+  --accent-amber: #ffb547;
+  --accent-violet: #b48cff;
+  --accent-coral: #ff7a59;
+}
+
+[data-accent="blue"]   { --accent: var(--accent-blue);   --accent-dim: #1e3a5c; }
+[data-accent="green"]  { --accent: var(--accent-green);  --accent-dim: #17402c; }
+[data-accent="amber"]  { --accent: var(--accent-amber);  --accent-dim: #3e2c14; }
+[data-accent="violet"] { --accent: var(--accent-violet); --accent-dim: #2e2142; }
+[data-accent="coral"]  { --accent: var(--accent-coral);  --accent-dim: #3e1e14; }
 
 [data-theme="light"][data-accent="blue"]   { --accent-dim: #d6e6fa; }
 [data-theme="light"][data-accent="green"]  { --accent-dim: #cdeedb; }

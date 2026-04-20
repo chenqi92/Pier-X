@@ -428,8 +428,8 @@
 }
 .swatches button:hover { transform: scale(1.1); }
 .swatches button.is-active { border-color: var(--ink); }
-.swatch-blue { background: #4aa3ff; }
-.swatch-green { background: #3dd68c; }
-.swatch-amber { background: #ffb547; }
-.swatch-violet { background: #b48cff; }
-.swatch-coral { background: #ff7a59; }
+.swatch-blue { background: var(--accent-blue); }
+.swatch-green { background: var(--accent-green); }
+.swatch-amber { background: var(--accent-amber); }
+.swatch-violet { background: var(--accent-violet); }
+.swatch-coral { background: var(--accent-coral); }

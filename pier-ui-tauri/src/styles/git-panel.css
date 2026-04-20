@@ -51,7 +51,7 @@
   gap: 0;
   padding: 0;
   border-bottom: 1px solid var(--border-subtle);
-  background: rgba(255, 255, 255, 0.012);
+  background: var(--bg-hover);
 }
 
 .git-panel__repo-row,
@@ -73,7 +73,7 @@
   overflow-x: auto;
   overflow-y: hidden;
   white-space: nowrap;
-  background: rgba(255, 255, 255, 0.015);
+  background: var(--bg-hover);
 }
 
 .git-panel__branch-row::-webkit-scrollbar {
@@ -306,7 +306,7 @@
   gap: 2px;
   padding: 3px 8px;
   border-bottom: 1px solid var(--border-subtle);
-  background: rgba(255, 255, 255, 0.016);
+  background: var(--bg-hover);
 }
 
 .git-tab {
@@ -334,7 +334,7 @@
   height: 14px;
   padding: 0 4px;
   border-radius: var(--radius-pill);
-  background: rgba(255, 255, 255, 0.06);
+  background: var(--bg-active);
   color: var(--text-tertiary);
   font-size: 9px;
   line-height: 14px;
@@ -372,7 +372,7 @@
 }
 
 .git-card--inset {
-  background: rgba(255, 255, 255, 0.02);
+  background: var(--bg-hover);
 }
 
 .git-card--fill {
@@ -467,7 +467,7 @@
   width: 28px;
   height: 30px;
   border: none;
-  border-left: 1px solid rgba(255, 255, 255, 0.18);
+  border-left: 1px solid var(--line-3);
   border-radius: 0;
   background: var(--accent);
   color: var(--text-inverse);
@@ -482,7 +482,7 @@
   min-height: 22px;
   padding: 0 6px;
   border-color: var(--border-subtle);
-  background: rgba(255, 255, 255, 0.02);
+  background: var(--bg-hover);
   color: var(--text-secondary);
 }
 
@@ -494,7 +494,7 @@
   min-height: 24px;
   padding: 0 10px;
   border-radius: var(--radius-sm);
-  background: rgba(255, 255, 255, 0.03);
+  background: var(--panel-2);
   color: var(--text-primary);
   cursor: pointer;
   font-size: 11px;
@@ -534,7 +534,7 @@
   width: 28px;
   height: 28px;
   border-radius: var(--radius-sm);
-  background: rgba(255, 255, 255, 0.02);
+  background: var(--bg-hover);
   color: var(--text-secondary);
   cursor: pointer;
 }
@@ -559,7 +559,7 @@
 }
 
 .git-pill--neutral {
-  background: rgba(255, 255, 255, 0.04);
+  background: var(--bg-active);
   border-color: var(--border-subtle);
   color: var(--text-secondary);
 }
@@ -821,7 +821,7 @@
 .git-history-toolbar {
   padding: 3px 8px;
   border-bottom: 1px solid var(--border-subtle);
-  background: rgba(255, 255, 255, 0.014);
+  background: var(--bg-hover);
 }
 
 .git-hero {
@@ -829,14 +829,14 @@
   border-bottom: 1px solid var(--border-subtle);
   border-radius: 0;
   background:
-    linear-gradient(180deg, rgba(53, 116, 240, 0.08), rgba(53, 116, 240, 0)),
-    rgba(255, 255, 255, 0.015);
+    linear-gradient(180deg, var(--accent-subtle), transparent),
+    var(--bg-hover);
 }
 
 .git-hero--warning {
   background:
-    linear-gradient(180deg, rgba(240, 168, 58, 0.12), rgba(240, 168, 58, 0)),
-    rgba(255, 255, 255, 0.02);
+    linear-gradient(180deg, var(--warn-dim), transparent),
+    var(--bg-hover);
 }
 
 .git-hero--compact {
@@ -852,7 +852,7 @@
   gap: var(--sp-2);
   min-height: 24px;
   padding: 3px 12px;
-  background: rgba(255, 255, 255, 0.03);
+  background: var(--panel-2);
   border-bottom: 1px solid var(--border-subtle);
 }
 
@@ -920,7 +920,7 @@
   height: 16px;
   padding: 0 4px;
   border-radius: var(--radius-pill);
-  background: rgba(255, 255, 255, 0.06);
+  background: var(--bg-active);
   color: var(--text-secondary);
   font-size: 10px;
   line-height: 16px;
@@ -981,7 +981,7 @@
 }
 
 .git-status-badge--neutral {
-  background: rgba(255, 255, 255, 0.04);
+  background: var(--bg-active);
   border-color: var(--border-subtle);
   color: var(--text-secondary);
 }
@@ -1022,7 +1022,7 @@
 .git-stash-row,
 .git-parent-row {
   padding: 6px 8px;
-  background: rgba(255, 255, 255, 0.02);
+  background: var(--bg-hover);
   border-color: var(--border-subtle);
 }
 
@@ -1130,7 +1130,7 @@
   padding: 0 6px;
   border-radius: var(--radius-sm);
   border: 1px solid var(--border-subtle);
-  background: rgba(255, 255, 255, 0.03);
+  background: var(--panel-2);
   color: var(--text-secondary);
   font-size: 10px;
   cursor: pointer;
@@ -1266,11 +1266,11 @@
 }
 
 .git-history-entry--zebra {
-  background: rgba(255, 255, 255, 0.018);
+  background: var(--bg-hover);
 }
 
 .git-history-entry--active {
-  background: rgba(53, 116, 240, 0.06);
+  background: var(--accent-subtle);
 }
 
 .git-history-entry--dimmed {
@@ -1500,7 +1500,7 @@
   min-height: 14px;
   padding: 0 4px;
   border-radius: var(--radius-pill);
-  background: rgba(255, 255, 255, 0.05);
+  background: var(--bg-active);
   border: 1px solid var(--border-subtle);
   color: var(--text-secondary);
   font-size: 8px;
@@ -1643,7 +1643,7 @@
 .git-conflict-detail__actions {
   padding: 6px 12px;
   border-bottom: 1px solid var(--border-subtle);
-  background: rgba(255, 255, 255, 0.02);
+  background: var(--bg-hover);
 }
 
 .git-conflict-detail__actions .git-button--compact {
@@ -1660,7 +1660,7 @@
   gap: 8px;
   padding: 8px;
   border-radius: var(--radius-sm);
-  background: rgba(255, 255, 255, 0.025);
+  background: var(--panel-2);
 }
 
 .git-conflict-hunk .git-section-header__title {
@@ -1695,7 +1695,7 @@
 }
 
 .git-manager-row__dot--tag {
-  background: #f59e0b;
+  background: var(--warn);
 }
 
 .git-manager-row__dot--modified {
@@ -1717,7 +1717,7 @@
   min-width: 0;
   border: 1px solid var(--border-subtle);
   border-radius: var(--radius-sm);
-  background: rgba(255, 255, 255, 0.018);
+  background: var(--bg-hover);
   overflow: hidden;
 }
 
@@ -1731,7 +1731,7 @@
 
 .git-conflict-hunk__label {
   padding: var(--sp-1-5) var(--sp-2);
-  background: rgba(255, 255, 255, 0.04);
+  background: var(--bg-active);
   color: var(--text-secondary);
   font-size: var(--size-small);
   font-weight: var(--weight-medium);
@@ -1795,7 +1795,7 @@
   padding: var(--sp-1);
   border: 1px solid var(--border-subtle);
   border-radius: var(--radius-md);
-  background: rgba(255, 255, 255, 0.02);
+  background: var(--bg-hover);
 }
 
 .git-segmented__item {
@@ -1990,7 +1990,7 @@
   align-items: center;
   justify-content: center;
   padding: var(--sp-6);
-  background: rgba(0, 0, 0, 0.34);
+  background: var(--overlay-scrim);
   backdrop-filter: blur(6px);
 }
 
@@ -2002,7 +2002,7 @@
   border: 1px solid var(--border-strong);
   border-radius: var(--radius-lg);
   background:
-    linear-gradient(180deg, rgba(255, 255, 255, 0.035), rgba(255, 255, 255, 0)),
+    linear-gradient(180deg, var(--bg-hover), transparent),
     var(--bg-elevated);
   box-shadow:
     0 24px 56px rgba(0, 0, 0, 0.32),
@@ -2049,7 +2049,7 @@
   border: 1px solid var(--border-strong);
   border-radius: var(--radius-xl);
   background:
-    linear-gradient(180deg, rgba(255, 255, 255, 0.03), rgba(255, 255, 255, 0)),
+    linear-gradient(180deg, var(--bg-hover), transparent),
     var(--bg-elevated);
   box-shadow:
     0 28px 72px rgba(0, 0, 0, 0.34),

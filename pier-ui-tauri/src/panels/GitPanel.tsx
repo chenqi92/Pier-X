@@ -96,12 +96,12 @@ type ChangeFileMenuState = {
 const GRAPH_PALETTE = [
   "var(--status-success)",
   "var(--accent)",
-  "#d97706",
-  "#8b5cf6",
+  "var(--warn)",
+  "var(--info)",
   "var(--status-error)",
-  "#06b6d4",
-  "#eab308",
-  "#ec4899",
+  "var(--accent-hover)",
+  "var(--mod)",
+  "var(--neg)",
 ];
 
 function extractErrorMessage(error: unknown) {
@@ -3088,7 +3088,7 @@ export default function GitPanel({ browserPath }: Props) {
                 </div>
               ))
             ) : (
-              <GitEmptyState accent="#f59e0b" description={t("Create release or checkpoint tags for this repository.")} icon={Tag} title={t("No tags")} />
+              <GitEmptyState accent="var(--warn)" description={t("Create release or checkpoint tags for this repository.")} icon={Tag} title={t("No tags")} />
             )}
           </div>
         </div>

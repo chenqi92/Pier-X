@@ -14,7 +14,7 @@ export default function PreviewTable({ preview, emptyLabel }: Props) {
   }
 
   return (
-    <div className="data-table-wrap">
+    <div className="data-table-wrap ux-selectable">
       <table className="data-table">
         <thead>
           <tr>

@@ -8,7 +8,6 @@ import {
   File as FileIcon,
   FileText,
   Folder,
-  FolderTree,
   HardDrive,
   Home,
   Plus,
@@ -19,14 +18,40 @@ import {
   Upload,
   X,
 } from "lucide-react";
+import { open as openDialog } from "@tauri-apps/plugin-dialog";
+import { listen } from "@tauri-apps/api/event";
 import { Fragment, useEffect, useMemo, useRef, useState } from "react";
+import type { DragEvent as ReactDragEvent } from "react";
 import type { ComponentType } from "react";
 import * as cmd from "../lib/commands";
+import { SFTP_PROGRESS_EVENT, type SftpProgressEvent } from "../lib/commands";
+import { RIGHT_TOOL_META } from "../lib/rightToolMeta";
 import type { SftpBrowseState, SftpEntryView, TabState } from "../lib/types";
 import { useI18n } from "../i18n/useI18n";
 import { localizeError } from "../i18n/localizeMessage";
 import PanelHeader from "../components/PanelHeader";
 import StatusDot from "../components/StatusDot";
+
+/** DataTransfer MIME types for cross-panel drag-drop. The Sidebar
+ *  file list writes `DT_LOCAL_FILE` when the user drags a local file,
+ *  and the SFTP panel writes `DT_SFTP_FILE` when dragging a remote
+ *  entry. Keep these constants in sync with src/shell/Sidebar.tsx. */
+export const DT_LOCAL_FILE = "application/x-pier-localfile";
+export const DT_SFTP_FILE = "application/x-pier-sftpfile";
+
+export type LocalDragPayload = { path: string; name: string; isDir?: boolean };
+export type SftpDragPayload = {
+  path: string;
+  name: string;
+  isDir: boolean;
+  size: number;
+  /** SSH addressing — lets the sidebar's drop handler rebuild the
+   *  cached session identity without fishing in the tab store. */
+  host: string;
+  port: number;
+  user: string;
+  authMode: string;
+};
 
 type Props = { tab: TabState };
 
@@ -42,6 +67,11 @@ type TransferItem = {
   startedAt: number;
   finishedAt?: number;
   error?: string;
+  /** Latest bytes transferred, updated live from `sftp:progress`
+   *  events. Zero until the first chunk arrives. */
+  bytes?: number;
+  /** Total file size in bytes, set on the first progress event. */
+  total?: number;
 };
 
 function joinRemotePath(basePath: string, leaf: string) {
@@ -65,13 +95,6 @@ function localBaseName(path: string) {
   return parts[parts.length - 1] || "";
 }
 
-function remoteBaseName(path: string) {
-  const normalized = String(path || "").replace(/\/+$/, "");
-  if (!normalized || normalized === "/") return "/";
-  const idx = normalized.lastIndexOf("/");
-  return idx < 0 ? normalized : normalized.slice(idx + 1) || "/";
-}
-
 function formatBytes(n: number): string {
   if (!Number.isFinite(n) || n <= 0) return "0 B";
   const units = ["B", "KB", "MB", "GB", "TB"];
@@ -92,19 +115,26 @@ function iconForEntry(entry: SftpEntryView): ComponentType<{ size?: number }> {
   return FileIcon;
 }
 
-/** Render a Unix-seconds timestamp as a compact "3m / 2h / 4d / 6w / 3mo / 2y"
- *  relative label matching the Remix design. Falls back to em-dash if the
- *  server didn't report a modified time. */
-function formatRelativeTime(unixSeconds: number | null | undefined): string {
+/** Render a Unix-seconds timestamp as a concrete local-time string.
+ *  Recent entries (this year) show `MM-DD HH:mm`; older entries roll
+ *  over to `YYYY-MM-DD`. Em-dash fallback if the server didn't report
+ *  a modified time. */
+function formatModifiedTime(unixSeconds: number | null | undefined): string {
   if (!unixSeconds || !Number.isFinite(unixSeconds)) return "—";
-  const diff = Math.max(0, Math.floor(Date.now() / 1000) - unixSeconds);
-  if (diff < 60) return `${diff}s`;
-  if (diff < 3600) return `${Math.floor(diff / 60)}m`;
-  if (diff < 86400) return `${Math.floor(diff / 3600)}h`;
-  if (diff < 604800) return `${Math.floor(diff / 86400)}d`;
-  if (diff < 2592000) return `${Math.floor(diff / 604800)}w`;
-  if (diff < 31536000) return `${Math.floor(diff / 2592000)}mo`;
-  return `${Math.floor(diff / 31536000)}y`;
+  const d = new Date(unixSeconds * 1000);
+  const now = new Date();
+  const pad = (n: number) => (n < 10 ? `0${n}` : `${n}`);
+  const sameYear = d.getFullYear() === now.getFullYear();
+  if (sameYear) {
+    return `${pad(d.getMonth() + 1)}-${pad(d.getDate())} ${pad(d.getHours())}:${pad(d.getMinutes())}`;
+  }
+  return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`;
+}
+
+/** Long date/time used in tooltips. */
+function formatModifiedTooltip(unixSeconds: number | null | undefined): string {
+  if (!unixSeconds || !Number.isFinite(unixSeconds)) return "";
+  return new Date(unixSeconds * 1000).toLocaleString();
 }
 
 export default function SftpPanel({ tab }: Props) {
@@ -123,17 +153,14 @@ export default function SftpPanel({ tab }: Props) {
 
   const [renameOpen, setRenameOpen] = useState(false);
   const [renameTarget, setRenameTarget] = useState("");
-  const [downloadOpen, setDownloadOpen] = useState(false);
-  const [downloadLocalPath, setDownloadLocalPath] = useState("");
   const [mkdirOpen, setMkdirOpen] = useState(false);
   const [mkdirName, setMkdirName] = useState("");
-  const [uploadOpen, setUploadOpen] = useState(false);
-  const [uploadLocalPath, setUploadLocalPath] = useState("");
-  const [uploadRemotePath, setUploadRemotePath] = useState("");
   const [actionBusy, setActionBusy] = useState(false);
 
   const [transfers, setTransfers] = useState<TransferItem[]>([]);
   const transferSeq = useRef(0);
+  const [dropDepth, setDropDepth] = useState(0);
+  const dropHover = dropDepth > 0;
 
   const hasSsh = tab.backend === "ssh" && tab.sshHost.trim() && tab.sshUser.trim();
   const sshRequired = t("SSH connection required.");
@@ -153,7 +180,9 @@ export default function SftpPanel({ tab }: Props) {
   const doneTransfers = transfers.filter((t) => t.status === "done").length;
 
   function pushTransfer(item: Omit<TransferItem, "id" | "startedAt" | "status">): string {
-    const id = `xfer-${++transferSeq.current}`;
+    // Namespace with tab id so progress events from concurrent tabs
+    // can't cross-contaminate each other's transfer queues.
+    const id = `xfer-${tab.id}-${++transferSeq.current}`;
     const entry: TransferItem = { ...item, id, status: "active", startedAt: Date.now() };
     setTransfers((prev) => [entry, ...prev].slice(0, 20));
     return id;
@@ -170,6 +199,43 @@ export default function SftpPanel({ tab }: Props) {
   function clearFinishedTransfers() {
     setTransfers((prev) => prev.filter((t) => t.status === "active"));
   }
+
+  // Subscribe to byte-level progress events from the backend. Each
+  // upload/download command emits `sftp:progress` with its transfer
+  // id on every 64 KiB chunk plus a final `done: true` emit. We
+  // update only entries whose ids belong to this tab (the id is
+  // prefixed with `xfer-${tab.id}-`) so multiple SFTP panels don't
+  // clobber each other's queues.
+  useEffect(() => {
+    const tabIdPrefix = `xfer-${tab.id}-`;
+    let disposed = false;
+    let unlisten: (() => void) | null = null;
+    void listen<SftpProgressEvent>(SFTP_PROGRESS_EVENT, (event) => {
+      const payload = event.payload;
+      if (!payload?.id || !payload.id.startsWith(tabIdPrefix)) return;
+      setTransfers((prev) =>
+        prev.map((t) =>
+          t.id === payload.id
+            ? {
+                ...t,
+                bytes: payload.bytes,
+                total: payload.total,
+              }
+            : t,
+        ),
+      );
+    }).then((dispose) => {
+      if (disposed) {
+        dispose();
+      } else {
+        unlisten = dispose;
+      }
+    });
+    return () => {
+      disposed = true;
+      unlisten?.();
+    };
+  }, [tab.id]);
 
   async function browse(targetPath = path, opts: { pushHistory?: boolean } = {}) {
     if (!hasSsh) {
@@ -199,7 +265,6 @@ export default function SftpPanel({ tab }: Props) {
       setPathDraft(next.currentPath);
       setSelectedPath("");
       setRenameOpen(false);
-      setDownloadOpen(false);
     } catch (e) {
       setState(null);
       setError(formatError(e));
@@ -307,16 +372,22 @@ export default function SftpPanel({ tab }: Props) {
     }
   }
 
-  async function downloadSelected() {
-    if (!hasSsh || !selectedEntry || selectedEntry.isDir || !downloadLocalPath.trim()) return;
-    setActionBusy(true);
-    setError("");
-    setNotice("");
-    const localPath = downloadLocalPath.trim();
+  /** Download a single remote file into `localDir` (an absolute local
+   *  directory). Pushes a transfer queue entry and updates it on
+   *  success/failure. Non-blocking for concurrent download fan-out —
+   *  callers decide whether to await. */
+  async function downloadOne(
+    entry: { path: string; name: string },
+    localDir: string,
+  ): Promise<void> {
+    if (!hasSsh) return;
+    const trimmedDir = localDir.trim().replace(/[\\/]+$/, "");
+    const sep = /^[A-Za-z]:[\\/]|^\\\\/.test(trimmedDir) ? "\\" : "/";
+    const localPath = `${trimmedDir}${sep}${entry.name}`;
     const id = pushTransfer({
       direction: "dn",
-      name: selectedEntry.name,
-      remotePath: selectedEntry.path,
+      name: entry.name,
+      remotePath: entry.path,
       localPath,
     });
     try {
@@ -328,36 +399,211 @@ export default function SftpPanel({ tab }: Props) {
         password: tab.sshPassword,
         keyPath: tab.sshKeyPath,
         savedConnectionIndex: tab.sshSavedConnectionIndex,
-        remotePath: selectedEntry.path,
+        remotePath: entry.path,
         localPath,
+        transferId: id,
       });
       finishTransfer(id, "done");
-      setNotice(t("Downloaded {path}.", { path: selectedEntry.path }));
-      setDownloadOpen(false);
+      setNotice(t("Downloaded {path}.", { path: entry.path }));
     } catch (e) {
       const msg = formatError(e);
       finishTransfer(id, "failed", msg);
       setError(msg);
+    }
+  }
+
+  /** Download the currently-selected file to a user-chosen directory.
+   *  Opens a native folder picker; no-op if the user cancels. */
+  async function downloadSelectedPick() {
+    if (!hasSsh || !selectedEntry || selectedEntry.isDir) return;
+    try {
+      const picked = await openDialog({
+        directory: true,
+        multiple: false,
+        title: t("Select download folder"),
+      });
+      if (!picked || typeof picked !== "string") return;
+      setActionBusy(true);
+      setError("");
+      setNotice("");
+      await downloadOne({ path: selectedEntry.path, name: selectedEntry.name }, picked);
+    } catch (e) {
+      setError(formatError(e));
     } finally {
       setActionBusy(false);
     }
   }
 
-  async function uploadFile() {
-    if (!hasSsh || !uploadLocalPath.trim() || !uploadRemotePath.trim()) return;
+  /** Upload each local file into `remoteDir`. Fan-out is serialized
+   *  to avoid flooding the single cached SSH session; swap to
+   *  `Promise.all` later if pier-core's sftp channel grows concurrent
+   *  transfer support. */
+  async function uploadLocalFiles(localPaths: string[], remoteDir: string): Promise<void> {
+    if (!hasSsh || localPaths.length === 0) return;
     setActionBusy(true);
     setError("");
     setNotice("");
-    const localPath = uploadLocalPath.trim();
-    const remotePath = uploadRemotePath.trim();
+    let okCount = 0;
+    for (const localPath of localPaths) {
+      const baseName = localBaseName(localPath);
+      if (!baseName) continue;
+      const remotePath = joinRemotePath(remoteDir, baseName);
+      const id = pushTransfer({
+        direction: "up",
+        name: baseName,
+        remotePath,
+        localPath,
+      });
+      try {
+        await cmd.sftpUpload({
+          host: tab.sshHost,
+          port: tab.sshPort,
+          user: tab.sshUser,
+          authMode: tab.sshAuthMode,
+          password: tab.sshPassword,
+          keyPath: tab.sshKeyPath,
+          savedConnectionIndex: tab.sshSavedConnectionIndex,
+          localPath,
+          remotePath,
+          transferId: id,
+        });
+        finishTransfer(id, "done");
+        okCount++;
+      } catch (e) {
+        const msg = formatError(e);
+        finishTransfer(id, "failed", msg);
+        setError(msg);
+      }
+    }
+    if (okCount > 0) {
+      setNotice(t("Uploaded {count} file(s).", { count: okCount }));
+      await browse(currentRemotePath);
+    }
+    setActionBusy(false);
+  }
+
+  /** Open a native file picker (multi-select) and upload the chosen
+   *  files into the current remote directory. */
+  async function uploadPick() {
+    if (!hasSsh) return;
+    try {
+      const picked = await openDialog({
+        directory: false,
+        multiple: true,
+        title: t("Select files to upload"),
+      });
+      if (!picked) return;
+      const list = Array.isArray(picked) ? picked : [picked];
+      if (list.length === 0) return;
+      await uploadLocalFiles(list, currentRemotePath);
+    } catch (e) {
+      setError(formatError(e));
+    }
+  }
+
+  // Auto-browse on mount / tab switch so SFTP works without the user
+  // having to click "Browse". The backend reuses the SSH session that
+  // the terminal already authenticated (seeded into the SFTP cache at
+  // terminal-create time), so we don't gate this on credentials being
+  // present in the tab — the cache + keychain resolution handle both
+  // fresh and saved-password connections.
+  useEffect(() => {
+    if (!hasSsh) return;
+    if (state) return;
+    if (busy) return;
+    void browse(path || "/");
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [
+    tab.id,
+    tab.backend,
+    tab.sshHost,
+    tab.sshPort,
+    tab.sshUser,
+    tab.sshAuthMode,
+    tab.terminalSessionId,
+    tab.sshPassword.length > 0,
+    tab.sshSavedConnectionIndex,
+  ]);
+
+  function selectEntry(entry: SftpEntryView) {
+    setSelectedPath(entry.path);
+    setRenameTarget(entry.name);
+    setRenameOpen(false);
+  }
+
+  function openEntry(entry: SftpEntryView) {
+    if (entry.isDir) {
+      void browse(entry.path, { pushHistory: true });
+    } else {
+      selectEntry(entry);
+    }
+  }
+
+  // ── Drag-drop between Sidebar ↔ SFTP ────────────────────────────
+  //
+  // The Sidebar writes `DT_LOCAL_FILE` when dragging a local file; we
+  // read that on drop and upload into `currentRemotePath`. Internal
+  // drags *out* of the SFTP panel (remote→local) set `DT_SFTP_FILE`
+  // which is handled by the Sidebar on its side.
+  function handleListDragEnter(event: ReactDragEvent<HTMLDivElement>) {
+    if (!hasSsh) return;
+    if (!Array.from(event.dataTransfer.types).includes(DT_LOCAL_FILE)) return;
+    event.preventDefault();
+    setDropDepth((d) => d + 1);
+  }
+  function handleListDragOver(event: ReactDragEvent<HTMLDivElement>) {
+    if (!hasSsh) return;
+    if (!Array.from(event.dataTransfer.types).includes(DT_LOCAL_FILE)) return;
+    event.preventDefault();
+    event.dataTransfer.dropEffect = "copy";
+  }
+  function handleListDragLeave(event: ReactDragEvent<HTMLDivElement>) {
+    if (!Array.from(event.dataTransfer.types).includes(DT_LOCAL_FILE)) return;
+    event.preventDefault();
+    setDropDepth((d) => Math.max(0, d - 1));
+  }
+  function handleListDrop(event: ReactDragEvent<HTMLDivElement>) {
+    setDropDepth(0);
+    if (!hasSsh) return;
+    const raw = event.dataTransfer.getData(DT_LOCAL_FILE);
+    if (!raw) return;
+    event.preventDefault();
+    try {
+      const payload = JSON.parse(raw) as LocalDragPayload | LocalDragPayload[];
+      const items = (Array.isArray(payload) ? payload : [payload]).filter(
+        (p): p is LocalDragPayload => !!p && typeof p.path === "string",
+      );
+      if (items.length === 0) return;
+      const files = items.filter((p) => !p.isDir);
+      const dirs = items.filter((p) => p.isDir);
+      if (files.length > 0) {
+        void uploadLocalFiles(files.map((p) => p.path), currentRemotePath);
+      }
+      for (const dir of dirs) {
+        void uploadLocalTree(dir);
+      }
+    } catch {
+      // Malformed payload — silently ignore rather than scare the user.
+    }
+  }
+
+  /** Recursively upload a local directory to the current remote
+   *  directory. Creates a single transfer queue entry for the whole
+   *  folder and lets the backend aggregate byte-level progress. */
+  async function uploadLocalTree(dir: LocalDragPayload) {
+    if (!hasSsh) return;
+    const remotePath = joinRemotePath(currentRemotePath, dir.name);
     const id = pushTransfer({
       direction: "up",
-      name: localBaseName(localPath) || remoteBaseName(remotePath),
+      name: `${dir.name}/`,
       remotePath,
-      localPath,
+      localPath: dir.path,
     });
+    setActionBusy(true);
+    setError("");
+    setNotice("");
     try {
-      await cmd.sftpUpload({
+      await cmd.sftpUploadTree({
         host: tab.sshHost,
         port: tab.sshPort,
         user: tab.sshUser,
@@ -365,14 +611,12 @@ export default function SftpPanel({ tab }: Props) {
         password: tab.sshPassword,
         keyPath: tab.sshKeyPath,
         savedConnectionIndex: tab.sshSavedConnectionIndex,
-        localPath,
+        localPath: dir.path,
         remotePath,
+        transferId: id,
       });
       finishTransfer(id, "done");
-      setNotice(t("Uploaded {path}.", { path: remotePath }));
-      setUploadOpen(false);
-      setUploadLocalPath("");
-      setUploadRemotePath("");
+      setNotice(t("Uploaded folder {path}.", { path: dir.name }));
       await browse(currentRemotePath);
     } catch (e) {
       const msg = formatError(e);
@@ -383,45 +627,22 @@ export default function SftpPanel({ tab }: Props) {
     }
   }
 
-  // Auto-browse on mount / tab switch so SFTP works without the user
-  // having to click "Browse". Password-auth saved tabs still work — the
-  // backend resolves the keychain password via savedConnectionIndex.
-  useEffect(() => {
-    if (!hasSsh) return;
-    if (state) return;
-    if (busy) return;
-    const ready =
-      tab.sshAuthMode !== "password" ||
-      tab.sshPassword.length > 0 ||
-      tab.sshSavedConnectionIndex !== null;
-    if (!ready) return;
-    void browse(path || "/");
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [
-    tab.id,
-    tab.backend,
-    tab.sshHost,
-    tab.sshPort,
-    tab.sshUser,
-    tab.sshAuthMode,
-    tab.sshPassword.length > 0,
-    tab.sshSavedConnectionIndex,
-  ]);
-
-  function selectEntry(entry: SftpEntryView) {
-    setSelectedPath(entry.path);
-    setRenameTarget(entry.name);
-    setDownloadLocalPath(entry.isDir ? "" : localBaseName(entry.path));
-    setRenameOpen(false);
-    setDownloadOpen(false);
-  }
-
-  function openEntry(entry: SftpEntryView) {
-    if (entry.isDir) {
-      void browse(entry.path, { pushHistory: true });
-    } else {
-      selectEntry(entry);
-    }
+  function handleRowDragStart(event: ReactDragEvent<HTMLDivElement>, entry: SftpEntryView) {
+    // Folders ARE draggable now — Sidebar dispatches a recursive
+    // download via `sftp_download_tree`. The payload carries the
+    // `isDir` flag so the receiving side picks the right command.
+    const payload: SftpDragPayload = {
+      path: entry.path,
+      name: entry.name,
+      isDir: entry.isDir,
+      size: entry.size,
+      host: tab.sshHost,
+      port: tab.sshPort,
+      user: tab.sshUser,
+      authMode: tab.sshAuthMode,
+    };
+    event.dataTransfer.effectAllowed = "copy";
+    event.dataTransfer.setData(DT_SFTP_FILE, JSON.stringify(payload));
   }
 
   function crumbPath(index: number): string {
@@ -448,7 +669,7 @@ export default function SftpPanel({ tab }: Props) {
 
   return (
     <>
-      <PanelHeader icon={FolderTree} title={t("SFTP")} meta={currentRemotePath} />
+      <PanelHeader icon={RIGHT_TOOL_META.sftp.icon} title={t("SFTP")} meta={currentRemotePath} />
       <div className="ftp">
         <div className="ftp-host-bar">
           <span className="ftp-host-ic"><Server size={12} /></span>
@@ -548,16 +769,16 @@ export default function SftpPanel({ tab }: Props) {
             className={"lg-ic" + (mkdirOpen ? " on" : "")}
             title={t("New folder")}
             disabled={!hasSsh || !state}
-            onClick={() => { setMkdirOpen((v) => !v); setUploadOpen(false); }}
+            onClick={() => setMkdirOpen((v) => !v)}
           >
             <Plus size={12} />
           </button>
           <button
             type="button"
-            className={"lg-ic" + (uploadOpen ? " on" : "")}
+            className="lg-ic"
             title={t("Upload from local")}
-            disabled={!hasSsh || !state}
-            onClick={() => { setUploadOpen((v) => !v); setMkdirOpen(false); }}
+            disabled={!hasSsh || !state || actionBusy}
+            onClick={() => void uploadPick()}
           >
             <Upload size={12} />
           </button>
@@ -572,73 +793,43 @@ export default function SftpPanel({ tab }: Props) {
           </button>
         </div>
 
-        {(mkdirOpen || uploadOpen) && (
+        {mkdirOpen && (
           <div className="ftp-quickrow">
-            {mkdirOpen && (
-              <>
-                <span className="ftp-quickrow-label mono">{t("New folder")}</span>
-                <input
-                  className="field-input field-input--compact"
-                  value={mkdirName}
-                  onChange={(e) => setMkdirName(e.currentTarget.value)}
-                  placeholder={t("logs")}
-                  autoFocus
-                  onKeyDown={(e) => { if (e.key === "Enter") void createDirectory(); }}
-                />
-                <button
-                  type="button"
-                  className="btn is-primary is-compact"
-                  disabled={!mkdirName.trim() || actionBusy}
-                  onClick={() => void createDirectory()}
-                >
-                  {t("Create")}
-                </button>
-                <button type="button" className="btn is-ghost is-compact" onClick={() => setMkdirOpen(false)}>{t("Cancel")}</button>
-              </>
-            )}
-            {uploadOpen && (
-              <>
-                <span className="ftp-quickrow-label mono">{t("Upload")}</span>
-                <input
-                  className="field-input field-input--compact"
-                  value={uploadLocalPath}
-                  onChange={(e) => {
-                    const nextValue = e.currentTarget.value;
-                    setUploadLocalPath(nextValue);
-                    if (!uploadRemotePath.trim()) {
-                      const baseName = localBaseName(nextValue);
-                      setUploadRemotePath(baseName ? joinRemotePath(currentRemotePath, baseName) : "");
-                    }
-                  }}
-                  placeholder={t("Local path…")}
-                />
-                <input
-                  className="field-input field-input--compact"
-                  value={uploadRemotePath}
-                  onChange={(e) => setUploadRemotePath(e.currentTarget.value)}
-                  placeholder={joinRemotePath(currentRemotePath, "file")}
-                />
-                <button
-                  type="button"
-                  className="btn is-primary is-compact"
-                  disabled={!uploadLocalPath.trim() || !uploadRemotePath.trim() || actionBusy}
-                  onClick={() => void uploadFile()}
-                >
-                  {t("Upload")}
-                </button>
-                <button type="button" className="btn is-ghost is-compact" onClick={() => setUploadOpen(false)}>{t("Cancel")}</button>
-              </>
-            )}
+            <span className="ftp-quickrow-label mono">{t("New folder")}</span>
+            <input
+              className="field-input field-input--compact"
+              value={mkdirName}
+              onChange={(e) => setMkdirName(e.currentTarget.value)}
+              placeholder={t("logs")}
+              autoFocus
+              onKeyDown={(e) => { if (e.key === "Enter") void createDirectory(); }}
+            />
+            <button
+              type="button"
+              className="btn is-primary is-compact"
+              disabled={!mkdirName.trim() || actionBusy}
+              onClick={() => void createDirectory()}
+            >
+              {t("Create")}
+            </button>
+            <button type="button" className="btn is-ghost is-compact" onClick={() => setMkdirOpen(false)}>{t("Cancel")}</button>
           </div>
         )}
 
         <div className="ftp-col-head">
           <span>{t("NAME")}</span>
+          <span className="ftp-perm">{t("PERM")}</span>
           <span className="ftp-size">{t("SIZE")}</span>
-          <span className="ftp-mod">{t("MOD")}</span>
+          <span className="ftp-mod">{t("MODIFIED")}</span>
         </div>
 
-        <div className="ftp-list">
+        <div
+          className={"ftp-list" + (dropHover ? " is-drop" : "")}
+          onDragEnter={handleListDragEnter}
+          onDragOver={handleListDragOver}
+          onDragLeave={handleListDragLeave}
+          onDrop={handleListDrop}
+        >
           {!hasSsh && <div className="lg-note">{sshRequired}</div>}
           {hasSsh && !state && !busy && (
             <div className="lg-note">
@@ -652,9 +843,19 @@ export default function SftpPanel({ tab }: Props) {
             <div
               className="ftp-row dir"
               onClick={() => void browse(remoteDirname(currentRemotePath), { pushHistory: true })}
+              onKeyDown={(e) => {
+                if (e.key === "Enter" || e.key === " ") {
+                  e.preventDefault();
+                  void browse(remoteDirname(currentRemotePath), { pushHistory: true });
+                }
+              }}
+              role="button"
+              tabIndex={0}
+              aria-label={t("Parent directory")}
             >
               <span className="ftp-ic"><ArrowUp size={13} /></span>
               <span className="ftp-name">..</span>
+              <span className="ftp-perm mono">—</span>
               <span className="ftp-size mono">—</span>
               <span className="ftp-mod mono">—</span>
             </div>
@@ -668,12 +869,30 @@ export default function SftpPanel({ tab }: Props) {
                 className={"ftp-row" + (isSel ? " sel" : "") + (entry.isDir ? " dir" : "")}
                 onClick={() => selectEntry(entry)}
                 onDoubleClick={() => openEntry(entry)}
+                onKeyDown={(e) => {
+                  if (e.key === "Enter") {
+                    e.preventDefault();
+                    openEntry(entry);
+                  } else if (e.key === " ") {
+                    e.preventDefault();
+                    selectEntry(entry);
+                  }
+                }}
+                role="button"
+                tabIndex={0}
+                aria-selected={isSel}
+                aria-label={entry.name}
+                draggable
+                onDragStart={(e) => handleRowDragStart(e, entry)}
               >
                 <span className="ftp-ic"><Ic size={13} /></span>
-                <span className="ftp-name">{entry.name}</span>
+                <span className="ftp-name" title={entry.name}>{entry.name}</span>
+                <span className="ftp-perm mono">
+                  {entry.permissions || (entry.isDir ? "drwxr-xr-x" : "-rw-r--r--")}
+                </span>
                 <span className="ftp-size mono">{entry.isDir ? "—" : formatBytes(entry.size)}</span>
-                <span className="ftp-mod mono" title={entry.modified ? new Date(entry.modified * 1000).toLocaleString() : ""}>
-                  {formatRelativeTime(entry.modified)}
+                <span className="ftp-mod mono" title={formatModifiedTooltip(entry.modified)}>
+                  {formatModifiedTime(entry.modified)}
                 </span>
               </div>
             );
@@ -706,16 +925,17 @@ export default function SftpPanel({ tab }: Props) {
                 type="button"
                 className={"lg-ic" + (renameOpen ? " on" : "")}
                 title={t("Rename")}
-                onClick={() => { setRenameOpen((v) => !v); setDownloadOpen(false); }}
+                onClick={() => setRenameOpen((v) => !v)}
               >
                 <Edit size={11} />
               </button>
               {!selectedEntry.isDir && (
                 <button
                   type="button"
-                  className={"lg-ic" + (downloadOpen ? " on" : "")}
+                  className="lg-ic"
                   title={t("Download")}
-                  onClick={() => { setDownloadOpen((v) => !v); setRenameOpen(false); }}
+                  disabled={actionBusy}
+                  onClick={() => void downloadSelectedPick()}
                 >
                   <Download size={11} />
                 </button>
@@ -752,27 +972,6 @@ export default function SftpPanel({ tab }: Props) {
                   {t("Save")}
                 </button>
                 <button type="button" className="btn is-ghost is-compact" onClick={() => setRenameOpen(false)}>{t("Cancel")}</button>
-              </div>
-            )}
-            {downloadOpen && !selectedEntry.isDir && (
-              <div className="ftp-quickrow">
-                <span className="ftp-quickrow-label mono">{t("Download")}</span>
-                <input
-                  className="field-input field-input--compact"
-                  value={downloadLocalPath}
-                  onChange={(e) => setDownloadLocalPath(e.currentTarget.value)}
-                  placeholder={t("C:\\Users\\you\\Downloads\\artifact.log")}
-                  autoFocus
-                />
-                <button
-                  type="button"
-                  className="btn is-primary is-compact"
-                  disabled={!downloadLocalPath.trim() || actionBusy}
-                  onClick={() => void downloadSelected()}
-                >
-                  {t("Save")}
-                </button>
-                <button type="button" className="btn is-ghost is-compact" onClick={() => setDownloadOpen(false)}>{t("Cancel")}</button>
               </div>
             )}
           </div>
@@ -816,6 +1015,14 @@ export default function SftpPanel({ tab }: Props) {
               const destHint = item.direction === "up"
                 ? `→ ${remoteDirname(item.remotePath)}/`
                 : `→ ${item.localPath}`;
+              const bytes = item.bytes ?? 0;
+              const total = item.total ?? 0;
+              const pct = total > 0 ? Math.min(100, Math.floor((bytes / total) * 100)) : null;
+              const bytesLabel = total > 0
+                ? `${formatBytes(bytes)} / ${formatBytes(total)}`
+                : bytes > 0
+                  ? formatBytes(bytes)
+                  : null;
               return (
                 <div
                   key={item.id}
@@ -827,16 +1034,35 @@ export default function SftpPanel({ tab }: Props) {
                       {item.name} <span className="text-muted">{destHint}</span>
                     </div>
                     <div className="ftp-queue-meta mono">
-                      {isActive && <span>{t("transferring…")}</span>}
-                      {isDone && <span className="text-pos">{t("✓ done")}</span>}
+                      {isActive && (
+                        <>
+                          {bytesLabel && <span>{bytesLabel}</span>}
+                          {bytesLabel && <span className="sep">·</span>}
+                          <span>{t("transferring…")}</span>
+                        </>
+                      )}
+                      {isDone && (
+                        <>
+                          {total > 0 && <span>{formatBytes(total)}</span>}
+                          {total > 0 && <span className="sep">·</span>}
+                          <span className="text-pos">{t("✓ done")}</span>
+                        </>
+                      )}
                       {isFailed && <span className="text-neg">{item.error || t("failed")}</span>}
                     </div>
                     {isActive && (
                       <div className="ftp-queue-track">
-                        <div className="ftp-queue-fill ftp-queue-fill--anim" />
+                        {pct != null ? (
+                          <div className="ftp-queue-fill" style={{ width: `${pct}%` }} />
+                        ) : (
+                          <div className="ftp-queue-fill ftp-queue-fill--anim" />
+                        )}
                       </div>
                     )}
                   </div>
+                  {isActive && pct != null && (
+                    <span className="ftp-queue-pct ftp-queue-pct--active mono">{pct}%</span>
+                  )}
                   {isDone && (
                     <span className="ftp-queue-pct mono">
                       <Check size={11} />

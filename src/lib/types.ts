@@ -439,6 +439,27 @@ export type LogEventView = {
   text: string;
 };
 
+// ── Log Source (structured selector state) ─────────────────────
+//
+// The Log panel compiles a LogSource into the shell command that
+// `log_stream_start` runs. File and System modes are the default
+// paths; Custom is a fallback for paste-a-command use cases.
+export type LogSourceMode = "file" | "system" | "custom";
+
+export type LogSource = {
+  mode: LogSourceMode;
+  /** File mode: absolute remote path of the log file. */
+  filePath: string;
+  /** File mode: the directory we last listed (so we can repopulate the dropdown). */
+  fileDir: string;
+  /** System mode: id into LOG_SYSTEM_PRESETS. */
+  systemPresetId: string;
+  /** System mode: optional argument (unit name, container id, …). */
+  systemArg: string;
+  /** Custom mode: raw shell command. */
+  customCommand: string;
+};
+
 export type TunnelInfoView = {
   tunnelId: string;
   localHost: string;
@@ -556,8 +577,25 @@ export type TabState = {
   pgTunnelId: string | null;
   pgTunnelPort: number | null;
   logCommand: string;
+  logSource: LogSource;
   markdownPath: string;
   startupCommand: string;
+  /** Registry mirror prefix for `docker pull`, e.g.
+   *  `"docker.m.daocloud.io"`. Applied only when the image ref does not
+   *  already contain a registry domain. Empty → no rewrite. */
+  dockerRegistryMirror: string;
+  /** Optional `HTTPS_PROXY` value passed as a one-off env var to
+   *  `docker pull`. Does not touch the remote daemon config. */
+  dockerPullProxy: string;
+};
+
+export const DEFAULT_LOG_SOURCE: LogSource = {
+  mode: "system",
+  filePath: "",
+  fileDir: "/var/log",
+  systemPresetId: "syslog",
+  systemArg: "",
+  customCommand: "",
 };
 
 // ── Tab color palette (matches Qt TabBar.qml) ──────────────────

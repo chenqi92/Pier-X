@@ -275,6 +275,8 @@ export const sshConnectionSave = (params: {
   authKind: string;
   password: string;
   keyPath: string;
+  /** Sidebar group label. Empty / missing → default (ungrouped). */
+  group?: string | null;
 }) => invoke<void>("ssh_connection_save", {
   name: params.name,
   host: params.host,
@@ -283,6 +285,7 @@ export const sshConnectionSave = (params: {
   authMode: params.authKind,
   password: params.password || null,
   keyPath: params.keyPath || null,
+  group: params.group && params.group.trim() ? params.group.trim() : null,
 });
 
 export const sshConnectionUpdate = (params: {
@@ -294,6 +297,9 @@ export const sshConnectionUpdate = (params: {
   authKind: string;
   password: string;
   keyPath: string;
+  /** When `undefined`, the backend preserves the existing group.
+   *  Pass `null` or `""` to explicitly ungroup, or a label to reassign. */
+  group?: string | null;
 }) => invoke<void>("ssh_connection_update", {
   index: params.index,
   name: params.name,
@@ -303,6 +309,9 @@ export const sshConnectionUpdate = (params: {
   authMode: params.authKind,
   password: params.password || null,
   keyPath: params.keyPath || null,
+  group: params.group === undefined
+    ? null
+    : params.group && params.group.trim() ? params.group.trim() : "",
 });
 
 export const sshConnectionDelete = (index: number) =>
@@ -472,6 +481,7 @@ export const dockerOverview = (params: {
   password: string;
   keyPath: string;
   all: boolean;
+  savedConnectionIndex?: number | null;
 }) => invoke<DockerOverview>("docker_overview", params);
 
 export const dockerContainerAction = (params: {
@@ -483,6 +493,7 @@ export const dockerContainerAction = (params: {
   keyPath: string;
   containerId: string;
   action: string;
+  savedConnectionIndex?: number | null;
 }) => invoke<string>("docker_container_action", params);
 
 // ── SFTP ────────────────────────────────────────────────────────
@@ -538,6 +549,7 @@ export const dockerInspect = (params: {
   password: string;
   keyPath: string;
   containerId: string;
+  savedConnectionIndex?: number | null;
 }) => invoke<string>("docker_inspect", params);
 
 export const dockerRemoveImage = (params: {
@@ -549,6 +561,7 @@ export const dockerRemoveImage = (params: {
   keyPath: string;
   imageId: string;
   force: boolean;
+  savedConnectionIndex?: number | null;
 }) => invoke<void>("docker_remove_image", params);
 
 export const dockerRemoveVolume = (params: {
@@ -559,6 +572,7 @@ export const dockerRemoveVolume = (params: {
   password: string;
   keyPath: string;
   volumeName: string;
+  savedConnectionIndex?: number | null;
 }) => invoke<void>("docker_remove_volume", params);
 
 export const dockerRemoveNetwork = (params: {
@@ -569,7 +583,120 @@ export const dockerRemoveNetwork = (params: {
   password: string;
   keyPath: string;
   networkName: string;
+  savedConnectionIndex?: number | null;
 }) => invoke<void>("docker_remove_network", params);
+
+export type DockerRunOptions = {
+  image: string;
+  name?: string;
+  /** `[hostPort, containerPort]` pairs; blank host port lets docker pick one. */
+  ports?: [string, string][];
+  /** `[key, value]` pairs. */
+  env?: [string, string][];
+  /** `[hostPath, containerPath]` pairs. */
+  volumes?: [string, string][];
+  /** `""` (none), `"always"`, `"on-failure"`, `"unless-stopped"`. */
+  restart?: string;
+  /** Optional trailing command override. */
+  command?: string;
+};
+
+export const dockerRunContainer = (params: {
+  host: string;
+  port: number;
+  user: string;
+  authMode: string;
+  password: string;
+  keyPath: string;
+  options: DockerRunOptions;
+  savedConnectionIndex?: number | null;
+}) => invoke<string>("docker_run_container", params);
+
+export const dockerPruneVolumes = (params: {
+  host: string;
+  port: number;
+  user: string;
+  authMode: string;
+  password: string;
+  keyPath: string;
+  savedConnectionIndex?: number | null;
+}) => invoke<string>("docker_prune_volumes", params);
+
+export const dockerVolumeFiles = (params: {
+  host: string;
+  port: number;
+  user: string;
+  authMode: string;
+  password: string;
+  keyPath: string;
+  mountpoint: string;
+  savedConnectionIndex?: number | null;
+}) => invoke<string>("docker_volume_files", params);
+
+export type DockerContainerStatsView = {
+  id: string;
+  cpuPerc: string;
+  memUsage: string;
+  memPerc: string;
+};
+
+export type DockerVolumeUsageView = {
+  name: string;
+  size: string;
+  sizeBytes: number;
+  links: number;
+};
+
+/** Slow `docker stats --no-stream` — run it after the base overview
+ *  to keep the first paint snappy. */
+export const dockerStats = (params: {
+  host: string;
+  port: number;
+  user: string;
+  authMode: string;
+  password: string;
+  keyPath: string;
+  savedConnectionIndex?: number | null;
+}) => invoke<DockerContainerStatsView[]>("docker_stats", params);
+
+/** Slow `docker system df -v` — see `dockerStats` comment. */
+export const dockerVolumeUsage = (params: {
+  host: string;
+  port: number;
+  user: string;
+  authMode: string;
+  password: string;
+  keyPath: string;
+  savedConnectionIndex?: number | null;
+}) => invoke<DockerVolumeUsageView[]>("docker_volume_usage", params);
+
+export const dockerPullImage = (params: {
+  host: string;
+  port: number;
+  user: string;
+  authMode: string;
+  password: string;
+  keyPath: string;
+  imageRef: string;
+  /** Optional env overrides (e.g. `[["HTTPS_PROXY", "http://..."]]`)
+   *  applied only to the pull; does not modify the remote daemon. */
+  envPrefix?: [string, string][] | null;
+  savedConnectionIndex?: number | null;
+}) => invoke<string>("docker_pull_image", params);
+
+export const localDockerPullImage = (
+  imageRef: string,
+  envPrefix?: [string, string][] | null,
+) => invoke<string>("local_docker_pull_image", { imageRef, envPrefix: envPrefix ?? null });
+
+export const localDockerRunContainer = (options: DockerRunOptions) =>
+  invoke<string>("local_docker_run_container", { options });
+
+export const localDockerPruneVolumes = () =>
+  invoke<string>("local_docker_prune_volumes");
+
+export const localDockerVolumeFiles = (mountpoint: string) =>
+  invoke<string>("local_docker_volume_files", { mountpoint });
 
 // ── SFTP Extended ───────────────────────────────────────────────
 
@@ -598,6 +725,10 @@ export const sftpDownload = (params: {
   remotePath: string;
   localPath: string;
   savedConnectionIndex?: number | null;
+  /** Opaque id matching the `sftp:progress` events back to a frontend
+   *  transfer queue entry. Omit to skip events and take the
+   *  whole-file fast path on the backend. */
+  transferId?: string | null;
 }) => invoke<void>("sftp_download", params);
 
 export const sftpUpload = (params: {
@@ -605,13 +736,50 @@ export const sftpUpload = (params: {
   localPath: string;
   remotePath: string;
   savedConnectionIndex?: number | null;
+  /** Opaque id for matching `sftp:progress` events — see
+   *  {@link sftpDownload}. */
+  transferId?: string | null;
 }) => invoke<void>("sftp_upload", params);
+
+/** Payload shape of the `sftp:progress` event emitted by the
+ *  upload/download commands. */
+export type SftpProgressEvent = {
+  id: string;
+  bytes: number;
+  total: number;
+  done: boolean;
+  error: string | null;
+};
+
+/** Event name emitted by the Rust side. Re-export so panels can
+ *  subscribe without hard-coding the literal. */
+export const SFTP_PROGRESS_EVENT = "sftp:progress";
+
+/** Recursively upload a local directory to a remote path. Aggregate
+ *  byte progress is emitted under the same `sftp:progress` channel. */
+export const sftpUploadTree = (params: {
+  host: string; port: number; user: string; authMode: string; password: string; keyPath: string;
+  localPath: string;
+  remotePath: string;
+  savedConnectionIndex?: number | null;
+  transferId?: string | null;
+}) => invoke<void>("sftp_upload_tree", params);
+
+/** Recursively download a remote directory to a local path. */
+export const sftpDownloadTree = (params: {
+  host: string; port: number; user: string; authMode: string; password: string; keyPath: string;
+  remotePath: string;
+  localPath: string;
+  savedConnectionIndex?: number | null;
+  transferId?: string | null;
+}) => invoke<void>("sftp_download_tree", params);
 
 // ── Log Stream ──────────────────────────────────────────────────
 
 export const logStreamStart = (params: {
   host: string; port: number; user: string; authMode: string; password: string; keyPath: string;
   command: string;
+  savedConnectionIndex?: number | null;
 }) => invoke<string>("log_stream_start", params);
 
 export const logStreamDrain = (streamId: string) =>

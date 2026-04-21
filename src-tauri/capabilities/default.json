@@ -11,6 +11,7 @@
     "core:window:allow-close",
     "core:window:allow-is-maximized",
     "core:window:allow-set-decorations",
-    "opener:default"
+    "opener:default",
+    "dialog:default"
   ]
 }

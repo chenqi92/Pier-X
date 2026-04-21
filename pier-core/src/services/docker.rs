@@ -240,6 +240,121 @@ pub fn inspect_container_blocking(session: &SshSession, id: &str) -> Result<Stri
 }
 
 // ═══════════════════════════════════════════════════════════
+// Run container (`docker run -d`)
+// ═══════════════════════════════════════════════════════════
+
+/// Form-style input for [`run_container`]. Mirrors what the UI dialog
+/// collects; validation happens here so the Tauri layer stays a thin
+/// wrapper.
+#[allow(missing_docs)]
+#[derive(Clone, Debug, Default, Serialize, Deserialize)]
+pub struct RunContainerOptions {
+    pub image: String,
+    #[serde(default)]
+    pub name: String,
+    /// `("8080", "80")` → `-p 8080:80`. Host port may be empty to let
+    /// docker pick one.
+    #[serde(default)]
+    pub ports: Vec<(String, String)>,
+    /// `("KEY", "value")` → `-e KEY=value`.
+    #[serde(default)]
+    pub env: Vec<(String, String)>,
+    /// `("/host/path", "/container/path")` → `-v /host/path:/container/path`.
+    #[serde(default)]
+    pub volumes: Vec<(String, String)>,
+    /// One of `""` (none), `"always"`, `"on-failure"`, `"unless-stopped"`.
+    #[serde(default)]
+    pub restart: String,
+    /// Optional trailing command override, e.g. `/bin/sh`.
+    #[serde(default)]
+    pub command: String,
+}
+
+/// Build and run a container via `docker run -d`. Returns the new
+/// container id (stdout of `docker run`).
+///
+/// Every user-provided fragment is shell-quoted through [`shell_quote`]
+/// before being concatenated — names, ports, env values, volume paths,
+/// and the trailing command are treated as untrusted strings that must
+/// survive `/bin/sh -c`.
+pub async fn run_container(session: &SshSession, opts: &RunContainerOptions) -> Result<String> {
+    if opts.image.trim().is_empty() {
+        return Err(SshError::InvalidConfig(
+            "docker run: image is required".to_string(),
+        ));
+    }
+
+    let mut parts: Vec<String> = vec!["docker".into(), "run".into(), "-d".into()];
+
+    if !opts.name.trim().is_empty() {
+        parts.push("--name".into());
+        parts.push(shell_quote(opts.name.trim()));
+    }
+
+    if !opts.restart.trim().is_empty() {
+        parts.push("--restart".into());
+        parts.push(shell_quote(opts.restart.trim()));
+    }
+
+    for (host, guest) in &opts.ports {
+        let h = host.trim();
+        let g = guest.trim();
+        if g.is_empty() {
+            continue;
+        }
+        let spec = if h.is_empty() {
+            g.to_string()
+        } else {
+            format!("{h}:{g}")
+        };
+        parts.push("-p".into());
+        parts.push(shell_quote(&spec));
+    }
+
+    for (k, v) in &opts.env {
+        let k = k.trim();
+        if k.is_empty() {
+            continue;
+        }
+        parts.push("-e".into());
+        parts.push(shell_quote(&format!("{k}={v}")));
+    }
+
+    for (host, guest) in &opts.volumes {
+        let h = host.trim();
+        let g = guest.trim();
+        if h.is_empty() || g.is_empty() {
+            continue;
+        }
+        parts.push("-v".into());
+        parts.push(shell_quote(&format!("{h}:{g}")));
+    }
+
+    parts.push(shell_quote(opts.image.trim()));
+
+    if !opts.command.trim().is_empty() {
+        // Pass the command through a shell so users can type `sh -c "..."`
+        // or simple tokens alike; we quote the whole tail as one arg.
+        parts.push(shell_quote(opts.command.trim()));
+    }
+
+    let cmd = parts.join(" ");
+    let (exit, stdout) = session.exec_command(&cmd).await?;
+    if exit != 0 {
+        return Err(SshError::InvalidConfig(format!(
+            "docker run exited {exit}: {}",
+            stdout.lines().next().unwrap_or("").trim()
+        )));
+    }
+    Ok(stdout.trim().to_string())
+}
+
+/// Blocking wrapper for [`run_container`].
+pub fn run_container_blocking(session: &SshSession, opts: &RunContainerOptions) -> Result<String> {
+    crate::ssh::runtime::shared().block_on(run_container(session, opts))
+}
+
+// ═══════════════════════════════════════════════════════════
 // Container stats (CPU / memory snapshot)
 // ═══════════════════════════════════════════════════════════
 
@@ -354,6 +469,54 @@ pub async fn list_images(session: &SshSession) -> Result<Vec<DockerImage>> {
 /// Blocking wrapper.
 pub fn list_images_blocking(session: &SshSession) -> Result<Vec<DockerImage>> {
     crate::ssh::runtime::shared().block_on(list_images(session))
+}
+
+/// Pull an image reference. Returns the stdout of `docker pull` (the
+/// last line usually being `Status: ... for <ref>`).
+///
+/// The `ref` argument is shell-quoted to survive a POSIX shell; callers
+/// should still keep it reasonable (a docker reference, not arbitrary
+/// shell). Optional env-style overrides (e.g. `HTTPS_PROXY=...`) are
+/// prepended to the command so a one-off proxy works without touching
+/// the remote daemon config.
+pub async fn pull_image(
+    session: &SshSession,
+    image_ref: &str,
+    env_prefix: &[(&str, &str)],
+) -> Result<String> {
+    if image_ref.trim().is_empty() {
+        return Err(SshError::InvalidConfig(
+            "docker pull: image reference is required".to_string(),
+        ));
+    }
+    let quoted = shell_quote(image_ref.trim());
+    let prefix = env_prefix
+        .iter()
+        .map(|(k, v)| format!("{}={}", k, shell_quote(v)))
+        .collect::<Vec<_>>()
+        .join(" ");
+    let cmd = if prefix.is_empty() {
+        format!("docker pull {}", quoted)
+    } else {
+        format!("{} docker pull {}", prefix, quoted)
+    };
+    let (exit, stdout) = session.exec_command(&cmd).await?;
+    if exit != 0 {
+        return Err(SshError::InvalidConfig(format!(
+            "docker pull exited {exit}: {}",
+            stdout.lines().last().unwrap_or("").trim()
+        )));
+    }
+    Ok(stdout)
+}
+
+/// Blocking wrapper for [`pull_image`].
+pub fn pull_image_blocking(
+    session: &SshSession,
+    image_ref: &str,
+    env_prefix: &[(&str, &str)],
+) -> Result<String> {
+    crate::ssh::runtime::shared().block_on(pull_image(session, image_ref, env_prefix))
 }
 
 /// Remove an image.
@@ -489,6 +652,40 @@ pub fn parse_volume_df(stdout: &str) -> Vec<VolumeDiskUsage> {
             Vec::new()
         }
     }
+}
+
+/// Remove all dangling (unreferenced) volumes — `docker volume prune -f`.
+pub async fn prune_volumes(session: &SshSession) -> Result<String> {
+    let (exit, stdout) = session.exec_command("docker volume prune -f").await?;
+    if exit != 0 {
+        return Err(SshError::InvalidConfig(format!(
+            "docker volume prune exited {exit}: {}",
+            stdout.lines().next().unwrap_or("").trim()
+        )));
+    }
+    Ok(stdout)
+}
+
+/// Blocking wrapper for [`prune_volumes`].
+pub fn prune_volumes_blocking(session: &SshSession) -> Result<String> {
+    crate::ssh::runtime::shared().block_on(prune_volumes(session))
+}
+
+/// `ls -la` against a volume mountpoint.
+///
+/// We cap the listing with `head -n 200` so a huge volume doesn't blow up
+/// the panel — the UI is a peek, not a replacement for SFTP.
+pub async fn list_volume_files(session: &SshSession, mountpoint: &str) -> Result<String> {
+    // Quote to survive shell expansion; block shell metacharacters upfront.
+    let quoted = shell_quote(mountpoint);
+    let cmd = format!("ls -la --color=never {} 2>&1 | head -n 200", quoted);
+    let (_exit, stdout) = session.exec_command(&cmd).await?;
+    Ok(stdout)
+}
+
+/// Blocking wrapper for [`list_volume_files`].
+pub fn list_volume_files_blocking(session: &SshSession, mountpoint: &str) -> Result<String> {
+    crate::ssh::runtime::shared().block_on(list_volume_files(session, mountpoint))
 }
 
 /// Pull per-volume sizes from the remote via `docker system df -v`.

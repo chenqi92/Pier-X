@@ -1,16 +1,7 @@
 import type { RightTool, TabState } from "../lib/types";
 import { useEffect, useMemo } from "react";
-import {
-  Activity,
-  Container,
-  Database,
-  FileText,
-  FolderTree,
-  GitBranch,
-  Scroll,
-  Zap,
-} from "lucide-react";
 import * as cmd from "../lib/commands";
+import { RIGHT_TOOL_META } from "../lib/rightToolMeta";
 import { useI18n } from "../i18n/useI18n";
 import { mapServiceToTool, useDetectedServicesStore } from "../stores/useDetectedServicesStore";
 import { useStatusStore } from "../stores/useStatusStore";
@@ -42,107 +33,27 @@ type Props = {
   onToggleCollapsed: () => void;
 };
 
-type SplashMeta = {
-  icon: typeof Activity;
-  title: string;
-  subtitle: string;
-  tintVar: string;
-};
-
-const SPLASH_META: Record<
-  "monitor" | "docker" | "mysql" | "postgres" | "redis" | "log" | "sftp",
-  SplashMeta
-> = {
-  monitor: {
-    icon: Activity,
-    title: "Server Monitor",
-    subtitle: "Open a saved server to see live CPU, memory, disks, and top processes.",
-    tintVar: "var(--svc-monitor)",
-  },
-  docker: {
-    icon: Container,
-    title: "Docker",
-    subtitle: "Pick a host to list containers, images, networks, and compose stacks.",
-    tintVar: "var(--svc-docker)",
-  },
-  mysql: {
-    icon: Database,
-    title: "MySQL",
-    subtitle: "Connect through SSH to browse databases, run queries, and edit rows.",
-    tintVar: "var(--svc-mysql)",
-  },
-  postgres: {
-    icon: Database,
-    title: "PostgreSQL",
-    subtitle: "Connect through SSH to explore schemas, tables, and run SQL.",
-    tintVar: "var(--svc-postgres)",
-  },
-  redis: {
-    icon: Zap,
-    title: "Redis",
-    subtitle: "Tunnel into a host to browse keyspaces, inspect values, and tail keys.",
-    tintVar: "var(--svc-redis)",
-  },
-  log: {
-    icon: Scroll,
-    title: "Log Viewer",
-    subtitle: "Stream journal, nginx, or custom log tails from a saved server.",
-    tintVar: "var(--svc-log)",
-  },
-  sftp: {
-    icon: FolderTree,
-    title: "SFTP",
-    subtitle: "Browse a remote filesystem, preview files, and transfer in either direction.",
-    tintVar: "var(--svc-sftp)",
-  },
-};
+type SplashTool = "monitor" | "docker" | "mysql" | "postgres" | "redis" | "log" | "sftp";
 
 function renderSplash(
-  kind: keyof typeof SPLASH_META,
+  kind: SplashTool,
   t: (s: string) => string,
   onConnectSaved: (index: number) => void,
   onNewConnection: () => void,
 ) {
-  const m = SPLASH_META[kind];
+  const m = RIGHT_TOOL_META[kind];
   const Icon = m.icon;
   return (
     <ConnectSplash
       icon={<Icon size={22} strokeWidth={1.6} />}
-      title={t(m.title)}
-      subtitle={t(m.subtitle)}
-      tintVar={m.tintVar}
+      title={t(m.splashTitle ?? m.label)}
+      subtitle={t(m.splashSubtitle ?? "")}
+      tintVar={m.tintVar ?? "var(--accent)"}
       tagLabel={t("SSH")}
       onConnectSaved={onConnectSaved}
       onNewConnection={onNewConnection}
     />
   );
-}
-
-function toolTitle(tool: RightTool, t: (s: string) => string) {
-  switch (tool) {
-    case "git":
-      return t("Git");
-    case "markdown":
-      return t("Markdown");
-    case "monitor":
-      return t("Server Monitor");
-    case "docker":
-      return t("Docker");
-    case "mysql":
-      return t("MySQL");
-    case "postgres":
-      return t("PostgreSQL");
-    case "redis":
-      return t("Redis");
-    case "log":
-      return t("Logs");
-    case "sftp":
-      return t("SFTP");
-    case "sqlite":
-      return t("SQLite");
-    default:
-      return String(tool);
-  }
 }
 
 function ToolContent({
@@ -217,17 +128,6 @@ function rightHeaderMeta(
   return undefined;
 }
 
-function rightHeaderIcon(tool: RightTool) {
-  switch (tool) {
-    case "git":
-      return GitBranch;
-    case "markdown":
-      return FileText;
-    default:
-      return undefined;
-  }
-}
-
 export default function RightSidebar({
   activeTab,
   activeTool,
@@ -249,7 +149,7 @@ export default function RightSidebar({
   const unknownTool = t("Unknown tool.");
   const useOuterShell = activeTool === "git" || activeTool === "markdown";
   const headerMeta = rightHeaderMeta(activeTool, browserPath, selectedMarkdownPath, branch, ahead, behind);
-  const HeaderIcon = rightHeaderIcon(activeTool);
+  const HeaderIcon = useOuterShell ? RIGHT_TOOL_META[activeTool].icon : undefined;
 
   const detectedEntry = useDetectedServicesStore((s) =>
     activeTab ? s.byTab[activeTab.id] : undefined,
@@ -311,7 +211,7 @@ export default function RightSidebar({
               <PanelHeader
                 className="is-right"
                 icon={HeaderIcon}
-                title={toolTitle(activeTool, t)}
+                title={t(RIGHT_TOOL_META[activeTool].label)}
                 meta={headerMeta}
               />
               <div className="panel-body">

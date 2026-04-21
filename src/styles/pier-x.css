@@ -156,7 +156,7 @@ body.is-resizing .app { transition: none; }
   background: transparent;
   border: none;
   color: var(--ink-2);
-  cursor: pointer;
+  cursor: default;
   transition: background var(--dur-fast) var(--easing), color var(--dur-fast) var(--easing);
 }
 .winctl__btn:hover { background: var(--panel-2); color: var(--ink); }
@@ -177,7 +177,7 @@ body.is-resizing .app { transition: none; }
   padding: 4px var(--sp-2);
   font-size: var(--ui-fs);
   border-radius: var(--radius-sm);
-  cursor: pointer;
+  cursor: default;
   font-family: var(--sans);
 }
 .menu-items button:hover { background: var(--panel-2); color: var(--ink); }
@@ -204,7 +204,7 @@ body.is-resizing .app { transition: none; }
   font-size: 11.5px;
   font-weight: var(--weight-medium);
   color: var(--muted);
-  background: transparent; border: none; cursor: pointer;
+  background: transparent; border: none; cursor: default;
   border-radius: var(--radius-sm) var(--radius-sm) 0 0;
   border-bottom: 2px solid transparent;
   display: flex; align-items: center; justify-content: center; gap: 5px;
@@ -246,7 +246,7 @@ body.is-resizing .app { transition: none; }
   color: var(--ink-2);
   font: inherit;
   line-height: 1.5;
-  cursor: pointer;
+  cursor: default;
   max-width: 140px;
   overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
   transition: color var(--dur-fast) var(--easing);
@@ -282,6 +282,11 @@ body.is-resizing .app { transition: none; }
   padding: 4px 0;
   font-size: var(--ui-fs);
   min-height: 0;
+  position: relative;
+}
+.sidebar-list.is-drop {
+  background: color-mix(in srgb, var(--accent) 8%, transparent);
+  box-shadow: inset 0 0 0 2px var(--accent);
 }
 .sidebar-header-row {
   display: flex;
@@ -302,7 +307,7 @@ body.is-resizing .app { transition: none; }
   display: flex; align-items: center; gap: 6px;
   padding: 0 var(--sp-2-5) 0 var(--sp-2);
   height: var(--row-h);
-  cursor: pointer;
+  cursor: default;
   color: var(--ink-2);
   border-left: 2px solid transparent;
 }
@@ -350,7 +355,7 @@ body.is-resizing .app { transition: none; }
 .srv-group-head {
   display: flex; align-items: center; gap: 6px;
   padding: 7px var(--sp-2-5) 6px;
-  cursor: pointer;
+  cursor: default;
   user-select: none;
 }
 .srv-group-head:hover { background: var(--panel-2); }
@@ -385,7 +390,7 @@ body.is-resizing .app { transition: none; }
 .srv-row {
   padding: 7px var(--sp-2-5) 7px var(--sp-2);
   display: flex; align-items: center; gap: var(--sp-2);
-  cursor: pointer;
+  cursor: default;
 }
 .srv-row:hover { background: var(--panel-2); }
 .srv-item.active .srv-row:hover {
@@ -457,7 +462,7 @@ body.is-resizing .app { transition: none; }
   background: var(--panel);
   border: 1px solid var(--line-2);
   border-radius: 10px;
-  cursor: pointer;
+  cursor: default;
   transition: background var(--dur-fast) var(--easing),
               border-color var(--dur-fast) var(--easing);
 }
@@ -504,7 +509,7 @@ body.is-resizing .app { transition: none; }
   border: 1px solid transparent;
   border-bottom: none;
   border-radius: 6px 6px 0 0;
-  cursor: pointer;
+  cursor: default;
   color: var(--ink-2);
   font-size: var(--ui-fs);
   max-width: 240px;
@@ -545,7 +550,7 @@ body.is-resizing .app { transition: none; }
   border-radius: var(--radius-xs);
   border: none; background: transparent;
   color: var(--muted);
-  display: grid; place-items: center; cursor: pointer;
+  display: grid; place-items: center; cursor: default;
   opacity: 0;
   padding: 0;
 }
@@ -561,7 +566,7 @@ body.is-resizing .app { transition: none; }
   background: transparent;
   border: none;
   border-radius: var(--radius-sm);
-  cursor: pointer;
+  cursor: default;
   align-self: center;
   padding: 0;
   flex: none;
@@ -578,7 +583,7 @@ body.is-resizing .app { transition: none; }
   background: transparent;
   border: none;
   border-radius: var(--radius-sm);
-  cursor: pointer;
+  cursor: default;
   align-self: center;
   padding: 0;
   flex: none;
@@ -670,7 +675,7 @@ body.is-resizing .app { transition: none; }
   background: var(--surface);
   border: 1px solid var(--line);
   border-radius: var(--radius-lg);
-  cursor: pointer;
+  cursor: default;
   text-align: left;
   color: var(--ink);
   transition: border-color var(--dur-fast) var(--easing),
@@ -738,7 +743,7 @@ body.is-resizing .app { transition: none; }
   display: flex; align-items: center; gap: var(--sp-2-5);
   padding: 6px var(--sp-2);
   border-radius: 5px;
-  cursor: pointer;
+  cursor: default;
   font-size: var(--ui-fs);
   color: var(--ink);
 }
@@ -899,7 +904,7 @@ body.is-resizing .app { transition: none; }
   display: flex; align-items: center; gap: var(--sp-2-5);
   padding: var(--sp-2) var(--sp-2-5);
   border-radius: var(--radius-md);
-  cursor: pointer;
+  cursor: default;
   font-size: 13px;
   color: var(--ink);
 }
@@ -911,6 +916,12 @@ body.is-resizing .app { transition: none; }
 .cmdp-item .ck { font-family: var(--mono); font-size: 10.5px; color: var(--muted); }
 
 /* ─── Dialog (Settings / New Connection / Diff) ─── */
+.dlg-overlay {
+  position: fixed; inset: 0; z-index: 1000;
+  background: var(--overlay-scrim);
+  backdrop-filter: blur(2px);
+  display: flex; align-items: center; justify-content: center;
+}
 .dlg {
   width: 900px; max-width: 92%;
   max-height: 80vh;
@@ -1013,7 +1024,7 @@ body.is-resizing .app { transition: none; }
   color: var(--ink-2);
   font-size: var(--ui-fs);
   font-family: var(--sans);
-  cursor: pointer;
+  cursor: default;
   text-align: left;
   transition: background var(--dur-fast) var(--easing);
 }
@@ -1106,7 +1117,7 @@ body.is-resizing .app { transition: none; }
   color: var(--ink-2);
   border: 1px solid var(--line-2);
   border-radius: var(--radius-sm);
-  cursor: pointer;
+  cursor: default;
   font-size: var(--ui-fs-sm);
   font-family: var(--sans);
 }
@@ -1123,7 +1134,7 @@ body.is-resizing .app { transition: none; }
   background: var(--panel);
   border: 1px solid var(--line-2);
   border-radius: var(--radius-md);
-  cursor: pointer;
+  cursor: default;
   color: var(--ink-2);
   font-size: var(--ui-fs-sm);
   font-family: var(--sans);
@@ -1169,7 +1180,7 @@ body.is-resizing .app { transition: none; }
   width: 24px; height: 24px;
   border-radius: 50%;
   border: 2px solid transparent;
-  cursor: pointer;
+  cursor: default;
   padding: 0;
   display: grid; place-items: center;
   color: white;
@@ -1231,7 +1242,7 @@ body.is-resizing .app { transition: none; }
   background: transparent;
   border: none;
   color: var(--ink-2);
-  cursor: pointer;
+  cursor: default;
   font-size: 14px;
   display: grid; place-items: center;
 }
@@ -1256,7 +1267,7 @@ body.is-resizing .app { transition: none; }
   border-radius: var(--radius-sm);
   font-family: var(--sans);
   font-size: var(--ui-fs-sm);
-  cursor: pointer;
+  cursor: default;
   display: inline-flex; align-items: center; gap: var(--sp-1);
   transition: background var(--dur-fast) var(--easing),
               border-color var(--dur-fast) var(--easing);
@@ -1361,7 +1372,7 @@ body.is-resizing .app { transition: none; }
   display: flex; align-items: center; gap: var(--sp-2);
   padding: var(--sp-2);
   border-bottom: 1px solid var(--line);
-  cursor: pointer;
+  cursor: default;
 }
 .dlg-conn-row:last-child { border-bottom: none; }
 .dlg-conn-row:hover { background: var(--panel-2); }
@@ -1446,7 +1457,7 @@ body.is-resizing .app { transition: none; }
   border-radius: var(--radius-sm);
   font-family: var(--sans);
   font-size: var(--ui-fs-sm);
-  cursor: pointer;
+  cursor: default;
   outline: none;
   min-width: 160px;
 }
@@ -1550,7 +1561,7 @@ body.is-resizing .app { transition: none; }
   height: 18px;
   border-radius: 9px;
   background: var(--line-2);
-  cursor: pointer;
+  cursor: default;
   flex: none;
   transition: background var(--dur-fast) var(--easing);
 }
@@ -1582,7 +1593,7 @@ body.is-resizing .app { transition: none; }
   align-items: center;
   gap: var(--sp-1-5);
   min-width: 160px;
-  cursor: pointer;
+  cursor: default;
   justify-content: space-between;
 }
 .dlg-sel-box.mono { font-family: var(--mono); }

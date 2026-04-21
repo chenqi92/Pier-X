@@ -1,7 +1,8 @@
-import { Activity, ActivitySquare, Cpu, Database, HardDrive, MemoryStick, PackageSearch, RefreshCw } from "lucide-react";
+import { Activity, Cpu, Database, HardDrive, MemoryStick, PackageSearch, RefreshCw } from "lucide-react";
 import { useEffect, useState } from "react";
 import type { ReactNode } from "react";
 import * as cmd from "../lib/commands";
+import { RIGHT_TOOL_META } from "../lib/rightToolMeta";
 import type { DetectedServiceView, RightTool, ServerSnapshotView, TabState } from "../lib/types";
 import { useI18n } from "../i18n/useI18n";
 import { localizeError } from "../i18n/localizeMessage";
@@ -11,6 +12,8 @@ import StatusDot from "../components/StatusDot";
 import { useTabStore } from "../stores/useTabStore";
 
 type Props = { tab: TabState };
+
+const MONITOR_ICON = RIGHT_TOOL_META.monitor.icon;
 
 function serviceTone(status: string) {
   switch (String(status || "").toLowerCase()) {
@@ -293,12 +296,12 @@ export default function ServerMonitorPanel({ tab }: Props) {
   return (
     <>
       <PanelHeader
-        icon={ActivitySquare}
+        icon={MONITOR_ICON}
         title={t("Server Monitor")}
         meta={headerMeta}
       />
       <DbConnRow
-        icon={ActivitySquare}
+        icon={MONITOR_ICON}
         tint="var(--pos-dim)"
         iconTint="var(--pos)"
         name={connName}

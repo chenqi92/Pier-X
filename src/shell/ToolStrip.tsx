@@ -1,17 +1,9 @@
 import {
-  ActivitySquare,
   ChevronsLeft,
   ChevronsRight,
-  Container,
-  Database,
-  FileText,
-  FolderTree,
-  GitBranch,
-  HardDrive,
-  ScrollText,
-  Zap,
 } from "lucide-react";
 import type { RightTool } from "../lib/types";
+import { RIGHT_TOOL_META, RIGHT_TOOL_ORDER } from "../lib/rightToolMeta";
 import { useI18n } from "../i18n/useI18n";
 import ToolStripItem from "../components/ToolStripItem";
 
@@ -24,24 +16,7 @@ type Props = {
   onToggleExpand: () => void;
 };
 
-const TOOLS: {
-  tool: RightTool;
-  icon: typeof GitBranch;
-  label: string;
-  remoteOnly?: boolean;
-  dividerAfter?: boolean;
-}[] = [
-  { tool: "markdown", icon: FileText, label: "Markdown" },
-  { tool: "git", icon: GitBranch, label: "Git", dividerAfter: true },
-  { tool: "monitor", icon: ActivitySquare, label: "Server Monitor", remoteOnly: true },
-  { tool: "docker", icon: Container, label: "Docker", remoteOnly: true },
-  { tool: "mysql", icon: Database, label: "MySQL", remoteOnly: true },
-  { tool: "postgres", icon: Database, label: "PostgreSQL", remoteOnly: true },
-  { tool: "redis", icon: Zap, label: "Redis", remoteOnly: true },
-  { tool: "log", icon: ScrollText, label: "Logs", remoteOnly: true },
-  { tool: "sftp", icon: FolderTree, label: "SFTP", remoteOnly: true },
-  { tool: "sqlite", icon: HardDrive, label: "SQLite" },
-];
+const TOOLS = RIGHT_TOOL_ORDER.map((tool) => ({ tool, ...RIGHT_TOOL_META[tool] }));
 
 export default function ToolStrip({ activeTool, onSelectTool, hasRemoteContext, detectedTools, expanded, onToggleExpand }: Props) {
   const { t } = useI18n();

@@ -1,7 +1,7 @@
-import { Database } from "lucide-react";
 import { useEffect, useState } from "react";
 import * as cmd from "../lib/commands";
 import { isReadOnlySql, queryResultToTsv } from "../lib/commands";
+import { RIGHT_TOOL_META } from "../lib/rightToolMeta";
 import { closeTunnelSlot, ensureTunnelSlot, syncTunnelState } from "../lib/sshTunnel";
 import type { MysqlBrowserState, QueryExecutionResult, TabState } from "../lib/types";
 import { useI18n } from "../i18n/useI18n";
@@ -14,6 +14,8 @@ import StatusDot from "../components/StatusDot";
 import { useTabStore } from "../stores/useTabStore";
 
 type Props = { tab: TabState };
+
+const MYSQL_ICON = RIGHT_TOOL_META.mysql.icon;
 
 export default function MySqlPanel({ tab }: Props) {
   const { t } = useI18n();
@@ -229,7 +231,7 @@ export default function MySqlPanel({ tab }: Props) {
   return (
     <>
       <PanelHeader
-        icon={Database}
+        icon={MYSQL_ICON}
         title={t("MySQL")}
         meta={
           hasSsh
@@ -245,7 +247,7 @@ export default function MySqlPanel({ tab }: Props) {
         }
       />
       <DbConnRow
-        icon={Database}
+        icon={MYSQL_ICON}
         tint="var(--warn-dim)"
         iconTint="var(--warn)"
         name={connName}

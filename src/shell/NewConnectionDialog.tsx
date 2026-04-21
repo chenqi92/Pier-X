@@ -15,6 +15,7 @@ type ConnectionDraft = {
   user: string;
   authKind: string;
   keyPath: string;
+  group: string;
 };
 
 type Props = {
@@ -43,13 +44,14 @@ function toDraft(connection?: SavedSshConnection | null): ConnectionDraft {
     user: connection?.user ?? "",
     authKind: connection?.authKind ?? "password",
     keyPath: connection?.keyPath ?? "",
+    group: connection?.group ?? "",
   };
 }
 
 export default function NewConnectionDialog({ open, onClose, onConnect, onConnectSaved, initialConnection }: Props) {
   const { t } = useI18n();
   const formatError = (error: unknown) => localizeError(error, t);
-  const { save, update } = useConnectionStore();
+  const { save, update, connections } = useConnectionStore();
   const isEditing = !!initialConnection;
   const initialDraft = useMemo(() => toDraft(initialConnection), [initialConnection]);
   const [name, setName] = useState(initialDraft.name);
@@ -59,8 +61,19 @@ export default function NewConnectionDialog({ open, onClose, onConnect, onConnec
   const [authMode, setAuthMode] = useState<"password" | "agent" | "key">(initialDraft.authKind as "password" | "agent" | "key");
   const [password, setPassword] = useState("");
   const [keyPath, setKeyPath] = useState(initialDraft.keyPath);
+  const [group, setGroup] = useState(initialDraft.group);
   const [error, setError] = useState("");
   const { dialogStyle, handleProps } = useDraggableDialog(open);
+
+  // Unique sorted list of existing group labels, for the datalist autocomplete.
+  const knownGroups = useMemo(() => {
+    const seen = new Set<string>();
+    for (const c of connections) {
+      const g = (c.group ?? "").trim();
+      if (g) seen.add(g);
+    }
+    return Array.from(seen).sort((a, b) => a.localeCompare(b));
+  }, [connections]);
 
   useEffect(() => {
     const next = toDraft(initialConnection);
@@ -71,6 +84,7 @@ export default function NewConnectionDialog({ open, onClose, onConnect, onConnec
     setAuthMode(next.authKind as "password" | "agent" | "key");
     setPassword("");
     setKeyPath(next.keyPath);
+    setGroup(next.group);
     setError("");
   }, [initialConnection, open]);
 
@@ -101,6 +115,7 @@ export default function NewConnectionDialog({ open, onClose, onConnect, onConnec
   const connectionName = name.trim() || `${user.trim()}@${host.trim()}`;
 
   async function persistConnection() {
+    const trimmedGroup = group.trim();
     const params = {
       name: connectionName,
       host: host.trim(),
@@ -109,6 +124,7 @@ export default function NewConnectionDialog({ open, onClose, onConnect, onConnec
       authKind: authMode,
       password: authMode === "password" ? password : "",
       keyPath: authMode === "key" ? keyPath.trim() : "",
+      group: trimmedGroup ? trimmedGroup : null,
     };
 
     if (isEditing && typeof initialDraft.index === "number") {
@@ -203,6 +219,21 @@ export default function NewConnectionDialog({ open, onClose, onConnect, onConnec
             <div className="dlg-row">
               <label className="dlg-row-label">{t("Name")}</label>
               <input className="dlg-input" onChange={(e) => setName(e.currentTarget.value)} placeholder={t("prod-api / staging")} value={name} />
+            </div>
+            <div className="dlg-row">
+              <label className="dlg-row-label">{t("Group")}</label>
+              <input
+                className="dlg-input"
+                list="new-conn-group-list"
+                onChange={(e) => setGroup(e.currentTarget.value)}
+                placeholder={t("Default")}
+                value={group}
+              />
+              {knownGroups.length > 0 && (
+                <datalist id="new-conn-group-list">
+                  {knownGroups.map((g) => <option key={g} value={g} />)}
+                </datalist>
+              )}
             </div>
             <div className="dlg-row">
               <label className="dlg-row-label">{t("Host")}</label>

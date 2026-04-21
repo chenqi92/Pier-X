@@ -549,6 +549,8 @@ export default function TerminalPanel({ tab, isActive }: Props) {
             style={{
               fontFamily: `"${monoFont}", monospace`,
               fontSize: `${terminalFontSize}px`,
+              lineHeight: `${Math.ceil(terminalFontSize * 1.45)}px`,
+              ["--terminal-row-h" as string]: `${Math.ceil(terminalFontSize * 1.45)}px`,
               background: termTheme.bg,
               color: termTheme.fg,
             }}

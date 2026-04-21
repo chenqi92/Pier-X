@@ -18,7 +18,7 @@ export default function QueryResultPanel({ result, error, emptyLabel }: Props) {
   }
 
   return (
-    <div className="data-table-wrap">
+    <div className="data-table-wrap ux-selectable">
       <table className="data-table">
         <thead>
           <tr>

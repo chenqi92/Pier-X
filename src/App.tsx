@@ -3,25 +3,17 @@
 
 import { useCallback, useEffect, useMemo, useState } from "react";
 import {
-  Activity,
-  Container,
-  Database,
-  FileText,
-  FolderTree,
-  GitBranch,
-  HardDrive,
   Moon,
-  ScrollText,
   Server,
   Settings as SettingsIcon,
   SquareTerminal,
   X,
-  Zap,
 } from "lucide-react";
 import { openUrl } from "@tauri-apps/plugin-opener";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import { I18nContext, makeI18n } from "./i18n/useI18n";
 import * as cmd from "./lib/commands";
+import { RIGHT_TOOL_META } from "./lib/rightToolMeta";
 import type { CoreInfo, FileEntry, RightTool, SavedSshConnection } from "./lib/types";
 import ResizeHandle from "./components/ResizeHandle";
 import SettingsDialog from "./components/SettingsDialog";
@@ -271,22 +263,30 @@ function App() {
 
   const isMac = navigator.platform.includes("Mac");
   const mod = isMac ? "\u2318" : "Ctrl+";
+  const panelPaletteItems: Array<{ tool: RightTool; title: string }> = [
+    { tool: "git", title: "Switch to Git" },
+    { tool: "monitor", title: "Switch to Server Monitor" },
+    { tool: "docker", title: "Switch to Docker" },
+    { tool: "mysql", title: "Switch to MySQL" },
+    { tool: "postgres", title: "Switch to PostgreSQL" },
+    { tool: "redis", title: "Switch to Redis" },
+    { tool: "sftp", title: "Switch to SFTP" },
+    { tool: "log", title: "Switch to Log" },
+    { tool: "sqlite", title: "Switch to SQLite" },
+    { tool: "markdown", title: "Switch to Markdown" },
+  ];
 
   const paletteCommands: PaletteCommand[] = useMemo(
     () => [
       { section: i18n.t("Session"), icon: SquareTerminal, title: i18n.t("New local terminal"), shortcut: `${mod}T`, action: () => openLocalTerminal() },
       { section: i18n.t("Session"), icon: Server, title: i18n.t("New SSH connection"), shortcut: `${mod}N`, action: openNewConnectionDialog },
       { section: i18n.t("Session"), icon: X, title: i18n.t("Close tab"), shortcut: `${mod}W`, action: () => { if (activeTabId) closeTab(activeTabId); } },
-      { section: i18n.t("Panels"), icon: GitBranch, title: i18n.t("Switch to Git"), action: () => handleToolChange("git") },
-      { section: i18n.t("Panels"), icon: Activity, title: i18n.t("Switch to Server Monitor"), action: () => handleToolChange("monitor") },
-      { section: i18n.t("Panels"), icon: Container, title: i18n.t("Switch to Docker"), action: () => handleToolChange("docker") },
-      { section: i18n.t("Panels"), icon: Database, title: i18n.t("Switch to MySQL"), action: () => handleToolChange("mysql") },
-      { section: i18n.t("Panels"), icon: Database, title: i18n.t("Switch to PostgreSQL"), action: () => handleToolChange("postgres") },
-      { section: i18n.t("Panels"), icon: Zap, title: i18n.t("Switch to Redis"), action: () => handleToolChange("redis") },
-      { section: i18n.t("Panels"), icon: FolderTree, title: i18n.t("Switch to SFTP"), action: () => handleToolChange("sftp") },
-      { section: i18n.t("Panels"), icon: ScrollText, title: i18n.t("Switch to Log"), action: () => handleToolChange("log") },
-      { section: i18n.t("Panels"), icon: HardDrive, title: i18n.t("Switch to SQLite"), action: () => handleToolChange("sqlite") },
-      { section: i18n.t("Panels"), icon: FileText, title: i18n.t("Switch to Markdown"), action: () => handleToolChange("markdown") },
+      ...panelPaletteItems.map(({ tool, title }) => ({
+        section: i18n.t("Panels"),
+        icon: RIGHT_TOOL_META[tool].icon,
+        title: i18n.t(title),
+        action: () => handleToolChange(tool),
+      })),
       { section: i18n.t("App"), icon: SettingsIcon, title: i18n.t("Settings"), shortcut: `${mod},`, action: () => setSettingsOpen(true) },
       { section: i18n.t("App"), icon: Moon, title: i18n.t("Toggle theme"), action: () => {
         const s = useThemeStoreRef.getState();

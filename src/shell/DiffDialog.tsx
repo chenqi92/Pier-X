@@ -7,6 +7,7 @@ import {
   X,
 } from "lucide-react";
 import { Fragment, useEffect, useMemo, useState } from "react";
+import { createPortal } from "react-dom";
 import type { ReactNode } from "react";
 import IconButton from "../components/IconButton";
 import { useDraggableDialog } from "../components/useDraggableDialog";
@@ -86,8 +87,8 @@ export default function DiffDialog({ open, onClose, files, activeId, onSelectFil
   const addTotal = selected?.additions ?? parsed?.additions ?? 0;
   const delTotal = selected?.deletions ?? parsed?.deletions ?? 0;
 
-  return (
-    <div className="cmdp-overlay" onClick={onClose}>
+  return createPortal(
+    <div className="dlg-overlay" onClick={onClose}>
       <div
         className="dlg dlg--diff"
         style={dialogStyle}
@@ -214,7 +215,8 @@ export default function DiffDialog({ open, onClose, files, activeId, onSelectFil
           {actions}
         </div>
       </div>
-    </div>
+    </div>,
+    document.body,
   );
 }
 

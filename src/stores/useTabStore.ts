@@ -3,6 +3,7 @@ import * as cmd from "../lib/commands";
 import { translate } from "../i18n/useI18n";
 import { useSettingsStore } from "./useSettingsStore";
 import type { RightTool, TabState } from "../lib/types";
+import { DEFAULT_LOG_SOURCE } from "../lib/types";
 
 type TabStore = {
   tabs: TabState[];
@@ -80,8 +81,11 @@ function makeDefaultTab(
     pgTunnelId: partial.pgTunnelId ?? null,
     pgTunnelPort: partial.pgTunnelPort ?? null,
     logCommand: partial.logCommand ?? "",
+    logSource: partial.logSource ?? { ...DEFAULT_LOG_SOURCE },
     markdownPath: partial.markdownPath ?? "",
     startupCommand: partial.startupCommand ?? "",
+    dockerRegistryMirror: partial.dockerRegistryMirror ?? "",
+    dockerPullProxy: partial.dockerPullProxy ?? "",
   };
 }
 

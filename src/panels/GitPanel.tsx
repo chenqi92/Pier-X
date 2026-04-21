@@ -1,10 +1,11 @@
 import {
   ArrowDown,
+  ArrowDownCircle,
   ArrowRight,
   ArrowUp,
+  ArrowUpCircle,
   Check,
   ChevronDown,
-  Download,
   FileText,
   Folder,
   GitBranch,
@@ -19,7 +20,6 @@ import {
   Search,
   Settings2,
   Tag,
-  Upload,
   X,
 } from "lucide-react";
 import type { ComponentType, CSSProperties, MouseEvent as ReactMouseEvent, ReactNode } from "react";
@@ -348,14 +348,17 @@ function GitIconButton({
   icon: Icon,
   active = false,
   className = "",
+  title,
   ...props
 }: React.ButtonHTMLAttributes<HTMLButtonElement> & {
   icon: ComponentType<{ size?: number; className?: string; strokeWidth?: number }>;
   active?: boolean;
 }) {
+  const tooltip = title ?? (props["aria-label"] as string | undefined);
   return (
     <button
       {...props}
+      title={tooltip}
       className={["git-icon-button", active ? "git-icon-button--active" : "", className].filter(Boolean).join(" ")}
       type={props.type ?? "button"}
     >
@@ -483,7 +486,7 @@ function GitDialog({
 
 function GitGraphLane({ row }: { row: GitGraphRowView }) {
   return (
-    <svg className="git-graph-lane" viewBox="0 0 78 24" aria-hidden="true">
+    <svg className="git-graph-lane" viewBox="0 0 74 24" preserveAspectRatio="none" aria-hidden="true">
       {row.segments.map((segment, index) => (
         <line
           key={`${row.hash}-segment-${index}`}
@@ -493,7 +496,7 @@ function GitGraphLane({ row }: { row: GitGraphRowView }) {
           y2={segment.yBottom}
           stroke={graphColor(segment.colorIndex)}
           strokeWidth="1.6"
-          strokeLinecap="round"
+          strokeLinecap="butt"
         />
       ))}
       {row.arrows.map((arrow, index) => {
@@ -652,9 +655,6 @@ export default function GitPanel({ browserPath }: Props) {
   const [commitSignoff, setCommitSignoff] = useState(false);
   const [commitAmend, setCommitAmend] = useState(false);
   const [commitMessage, setCommitMessage] = useState("");
-  const [historyFileDiff, setHistoryFileDiff] = useState("");
-  const [historyFileDiffPath, setHistoryFileDiffPath] = useState("");
-  const [historyFileDiffOpen, setHistoryFileDiffOpen] = useState(false);
   const [commitDiffOpen, setCommitDiffOpen] = useState(false);
   const [commitDiffHash, setCommitDiffHash] = useState("");
   const [commitDiffActivePath, setCommitDiffActivePath] = useState("");
@@ -805,25 +805,23 @@ export default function GitPanel({ browserPath }: Props) {
   }
 
   function openPopoverFromElement(kind: PopoverKind, element: HTMLElement, width: number, data?: unknown) {
-    const panelRect = panelRef.current?.getBoundingClientRect();
     const rect = element.getBoundingClientRect();
-    if (!panelRect) {
-      setPopover({ kind, left: 8, top: 8, width, data });
-      return;
-    }
-    const left = Math.max(8, Math.min(panelRect.width - width - 8, rect.left - panelRect.left));
-    const top = Math.max(8, rect.bottom - panelRect.top + 4);
+    const vw = window.innerWidth;
+    const vh = window.innerHeight;
+    const estHeight = Math.min(vh * 0.82, 720);
+    const preferBelow = rect.bottom + 4 + estHeight <= vh - 8;
+    const left = Math.max(8, Math.min(vw - width - 8, rect.right - width));
+    const top = preferBelow
+      ? rect.bottom + 4
+      : Math.max(8, rect.top - 4 - Math.min(estHeight, rect.top - 8));
     setPopover({ kind, left, top, width, data });
   }
 
   function openPopoverAt(kind: PopoverKind, clientX: number, clientY: number, width: number, data?: unknown) {
-    const panelRect = panelRef.current?.getBoundingClientRect();
-    if (!panelRect) {
-      setPopover({ kind, left: 8, top: 8, width, data });
-      return;
-    }
-    const left = Math.max(8, Math.min(panelRect.width - width - 8, clientX - panelRect.left));
-    const top = Math.max(8, Math.min(panelRect.height - 16, clientY - panelRect.top));
+    const vw = window.innerWidth;
+    const vh = window.innerHeight;
+    const left = Math.max(8, Math.min(vw - width - 8, clientX));
+    const top = Math.max(8, Math.min(vh - 16, clientY));
     setPopover({ kind, left, top, width, data });
   }
 
@@ -975,16 +973,18 @@ export default function GitPanel({ browserPath }: Props) {
     }
   }
 
-  async function loadCommitDetail(hash: string) {
-    if (!gitReady || !hash) return;
+  async function loadCommitDetail(hash: string): Promise<GitCommitDetailView | null> {
+    if (!gitReady || !hash) return null;
     try {
       const detail = await cmd.gitCommitDetail(currentRepoPath, hash);
       setCommitDetail(detail);
       if (graphRows[0]?.hash === detail.hash) {
         setHistoryAmendMessage(detail.message || "");
       }
+      return detail;
     } catch {
       setCommitDetail(null);
+      return null;
     }
   }
 
@@ -1420,193 +1420,6 @@ export default function GitPanel({ browserPath }: Props) {
     }
   }
 
-  function openHistoryComparison(hash: string) {
-    if (!hash) return;
-    setComparisonBaseHash(hash);
-    void cmd
-      .gitComparisonFiles(currentRepoPath, hash)
-      .then((files) => {
-        setComparisonFiles(files);
-        setHistoryCompareDialogOpen(true);
-      })
-      .catch((error) => showBanner(false, extractErrorMessage(error, t)));
-  }
-
-  function renderHistoryInlineDetail(detail: GitCommitDetailView, row: GitGraphRowView) {
-    const refs = refTokens(row.refs);
-    const isHead = historyContextIsHead(row);
-    const parentHash = historyContextParentHash(row);
-    const canUndo = !!(isHead && parentHash);
-    return (
-      <div className="git-history-detail-inline">
-        <div className="git-history-detail-inline__meta">
-          <span className="git-history-detail-inline__hash">{detail.shortHash}</span>
-          <span className="git-history-detail-inline__author">{detail.author}</span>
-          <span className="git-history-detail-inline__date">{detail.date || formatGraphDate(row.dateTimestamp)}</span>
-        </div>
-
-        <div className="git-history-detail-inline__message">{detail.message}</div>
-        {detail.stats ? <div className="git-history-detail-inline__stats">{detail.stats}</div> : null}
-
-        {refs.length ? (
-          <div className="git-history-detail-inline__fact-line">
-            <div className="git-history-detail-inline__fact-label">{t("Refs")}</div>
-            <div className="git-history-detail-inline__refs">
-              {refs.map((token) => (
-                <span key={`${row.hash}-${token}`} className={["git-ref-badge", refBadgeToneClass(token)].join(" ")}>
-                  {token}
-                </span>
-              ))}
-            </div>
-          </div>
-        ) : null}
-
-        <div className="git-history-detail-inline__hash-row">
-          <div className="git-history-detail-inline__hash-label">{t("Commit hash")}</div>
-          <div className="git-history-detail-inline__hash-value" title={detail.hash}>{detail.hash}</div>
-          <GitButton compact onClick={() => void copyText(detail.hash)}>
-            {t("Copy hash")}
-          </GitButton>
-        </div>
-
-        <div className="git-history-detail-inline__actions">
-          <GitButton
-            compact
-            disabled={busy}
-            onClick={() => void runGitAction(() => cmd.gitCheckoutTarget(currentRepoPath, detail.hash))}
-          >
-            {t("Checkout")}
-          </GitButton>
-          <GitButton compact onClick={() => openHistoryComparison(detail.hash)}>
-            {t("Compare with local")}
-          </GitButton>
-          <GitButton compact disabled={!browserUrlForCommit(detail.hash)} onClick={() => void openCommitInBrowser(detail.hash)}>
-            {t("Open in browser")}
-          </GitButton>
-        </div>
-
-        <div className="git-history-detail-inline__actions git-history-detail-inline__actions--secondary">
-          <GitButton
-            compact
-            onClick={() => {
-              setHistoryContextCommit(row);
-              setHistoryBranchDraftName("");
-              setHistoryBranchDialogOpen(true);
-            }}
-          >
-            {t("Branch")}
-          </GitButton>
-          <GitButton
-            compact
-            onClick={() => {
-              setHistoryContextCommit(row);
-              setHistoryTagDraftName("");
-              setHistoryTagDraftMessage("");
-              setHistoryTagDialogOpen(true);
-            }}
-          >
-            {t("Tag")}
-          </GitButton>
-          <GitButton
-            compact
-            onClick={() => {
-              setHistoryContextCommit(row);
-              setHistoryResetMode("mixed");
-              setHistoryResetDialogOpen(true);
-            }}
-          >
-            {t("Reset")}
-          </GitButton>
-        </div>
-
-        <div className="git-history-detail-inline__actions git-history-detail-inline__actions--secondary">
-          <GitButton
-            compact
-            disabled={!canUndo || busy}
-            onClick={() => void runGitAction(() => cmd.gitResetToCommit(currentRepoPath, parentHash, "soft"))}
-          >
-            {t("Undo commit")}
-          </GitButton>
-          <GitButton
-            compact
-            disabled={!isHead || busy}
-            onClick={() => {
-              setHistoryContextCommit(row);
-              setHistoryAmendMessage(detail.message || row.message || "");
-              setHistoryEditDialogOpen(true);
-            }}
-          >
-            {t("Edit message")}
-          </GitButton>
-          <GitButton
-            tone="destructive"
-            compact
-            disabled={busy}
-            onClick={() => {
-              setHistoryContextCommit(row);
-              setHistoryDropDialogOpen(true);
-            }}
-          >
-            {t("Drop")}
-          </GitButton>
-        </div>
-
-        {detail.parentHashes.length ? (
-          <div className="git-history-detail-inline__fact-line git-history-detail-inline__fact-line--stacked">
-            <div className="git-history-detail-inline__fact-label">
-              {detail.parentHashes.length > 1 ? t("Parents") : t("Parent")}
-            </div>
-            <div className="git-history-detail-inline__parents">
-              {detail.parentHashes.map((hash, index) => (
-                <div key={hash} className="git-parent-row">
-                  <span className="git-parent-row__index">{index + 1}</span>
-                  <span className="git-parent-row__hash" title={hash}>{hash}</span>
-                  <span className="git-parent-row__spacer" />
-                  <GitButton compact onClick={() => void copyText(hash)}>
-                    {t("Copy")}
-                  </GitButton>
-                </div>
-              ))}
-            </div>
-          </div>
-        ) : null}
-
-        {detail.changedFiles.length ? (
-          <div className="git-history-detail-inline__files">
-            <div className="git-history-detail-inline__files-title">
-              <span>{`${t("Changed files")} (${detail.changedFiles.length})`}</span>
-              <GitButton compact onClick={() => openCommitMultiDiff(detail)}>
-                {t("Open split view")}
-              </GitButton>
-            </div>
-            <div className="git-changed-file-list">
-              {detail.changedFiles.map((file) => (
-                <button
-                  key={`${detail.hash}-${file.path}`}
-                  className="git-changed-file-row"
-                  onClick={() => {
-                    setHistoryFileDiffOpen(true);
-                    setHistoryFileDiffPath(file.path);
-                    void cmd
-                      .gitCommitFileDiff(currentRepoPath, detail.hash, file.path)
-                      .then((next) => setHistoryFileDiff(next))
-                      .catch((error) => setHistoryFileDiff(extractErrorMessage(error, t)));
-                  }}
-                  type="button"
-                >
-                  <span className="git-changed-file-row__change git-changed-file-row__change--add">{`+${file.additions}`}</span>
-                  <span className="git-changed-file-row__change git-changed-file-row__change--remove">{`-${file.deletions}`}</span>
-                  <span className="git-changed-file-row__path" title={file.path}>{file.path}</span>
-                  <span className="git-changed-file-row__button">{t("Diff")}</span>
-                </button>
-              ))}
-            </div>
-          </div>
-        ) : null}
-      </div>
-    );
-  }
-
   async function ensureCommitDiff(hash: string, filePath: string) {
     setCommitDiffCache((cache) => (filePath in cache ? cache : { ...cache, [filePath]: null }));
     try {
@@ -1795,81 +1608,69 @@ export default function GitPanel({ browserPath }: Props) {
 
         {gitReady ? (
           <section className="git-panel__branch-card">
-            <div className="git-panel__branch-summary">
-              <div className="git-panel__branch-copy">
-                <div className="git-panel__branch-block">
-                  <div className="git-panel__branch-icon">
-                    <GitBranch size={12} />
-                  </div>
-                  <button className="git-panel__branch-pill git-panel__branch-pill--card" onClick={(event) => void openBranchMenu(event)}>
-                    <span>{panelState?.currentBranch || t("Detached")}</span>
-                    <ChevronDown size={10} />
-                  </button>
-                </div>
+            <div className="git-panel__branch-row">
+              <button
+                className="git-panel__branch-pill git-panel__branch-pill--card"
+                onClick={(event) => void openBranchMenu(event)}
+                title={panelState?.currentBranch || t("Detached")}
+              >
+                <GitBranch size={12} />
+                <ChevronDown size={10} />
+                <span className="git-panel__branch-name">{panelState?.currentBranch || t("Detached")}</span>
+              </button>
 
-                {panelState?.trackingBranch || panelState?.aheadCount || panelState?.behindCount ? (
-                  <div className="git-panel__branch-facts">
-                    {panelState?.trackingBranch ? (
-                      <GitPill tone="neutral">
-                        <ArrowRight size={10} />
-                        <span>{panelState.trackingBranch}</span>
-                      </GitPill>
-                    ) : null}
-                    {panelState?.aheadCount ? (
-                      <GitPill tone="info">
-                        <ArrowUp size={10} />
-                        <span>{panelState.aheadCount}</span>
-                      </GitPill>
-                    ) : null}
-                    {panelState?.behindCount ? (
-                      <GitPill tone="warning">
-                        <ArrowDown size={10} />
-                        <span>{panelState.behindCount}</span>
-                      </GitPill>
-                    ) : null}
-                  </div>
-                ) : null}
-              </div>
+              {panelState?.trackingBranch ? (
+                <span className="git-panel__branch-tracking mono" title={panelState.trackingBranch}>
+                  <ArrowRight size={10} />
+                  <span>{panelState.trackingBranch}</span>
+                </span>
+              ) : null}
 
-              <div className="git-panel__branch-primary-actions">
-                <GitButton
-                  compact
-                  disabled={!panelState?.behindCount || busy}
-                  onClick={() => void runGitAction(() => cmd.gitPull(currentRepoPath))}
-                >
-                  <Download size={11} />
-                  <span>{t("Pull")}</span>
-                </GitButton>
-                <GitButton
-                  compact
-                  tone={panelState?.aheadCount ? "primary" : "ghost"}
-                  disabled={!panelState?.aheadCount || busy}
-                  onClick={() => void runGitAction(() => cmd.gitPush(currentRepoPath))}
-                >
-                  <Upload size={11} />
-                  <span>{t("Push")}</span>
-                </GitButton>
+              {panelState?.behindCount ? (
+                <span className="git-panel__branch-count git-panel__branch-count--behind mono" title={t("Behind")}>
+                  <ArrowDown size={10} />
+                  {panelState.behindCount}
+                </span>
+              ) : null}
+              {panelState?.aheadCount ? (
+                <span className="git-panel__branch-count git-panel__branch-count--ahead mono" title={t("Ahead")}>
+                  <ArrowUp size={10} />
+                  {panelState.aheadCount}
+                </span>
+              ) : null}
+
+              <div className="git-panel__branch-spacer" />
+
+              <div className="git-panel__branch-tools">
+                <GitIconButton aria-label={t("Tags")} icon={Tag} onClick={(event) => void openTagManager(event)} />
+                <GitIconButton aria-label={t("Remotes")} icon={Network} onClick={(event) => void openRemoteManager(event)} />
+                <GitIconButton aria-label={t("Submodules")} icon={Layers} onClick={(event) => void openSubmoduleManager(event)} />
+                <GitIconButton aria-label={t("Interactive rebase")} icon={GitMerge} onClick={(event) => void openRebaseManager(event)} />
+                <GitIconButton aria-label={t("Config")} icon={Settings2} onClick={(event) => void openConfigManager(event)} />
                 <GitIconButton
                   aria-label={t("Fetch")}
-                  className="git-panel__branch-action-icon"
                   disabled={busy}
                   icon={RefreshCw}
                   onClick={() => void runGitAction(() => cmd.gitFetchRemote(currentRepoPath, null), { remotes: true })}
                 />
-                <GitIconButton
-                  aria-label={t("Interactive rebase")}
-                  className="git-panel__branch-action-icon"
-                  icon={GitMerge}
-                  onClick={(event) => void openRebaseManager(event)}
-                />
               </div>
-            </div>
 
-            <div className="git-panel__branch-tools">
-              <GitIconButton aria-label={t("Tags")} icon={Tag} onClick={(event) => void openTagManager(event)} />
-              <GitIconButton aria-label={t("Remotes")} icon={Network} onClick={(event) => void openRemoteManager(event)} />
-              <GitIconButton aria-label={t("Submodules")} icon={Layers} onClick={(event) => void openSubmoduleManager(event)} />
-              <GitIconButton aria-label={t("Config")} icon={Settings2} onClick={(event) => void openConfigManager(event)} />
+              <div className="git-panel__branch-divider" />
+
+              <GitIconButton
+                aria-label={t("Pull")}
+                className={panelState?.behindCount ? "git-panel__branch-sync git-panel__branch-sync--active" : "git-panel__branch-sync"}
+                disabled={!panelState?.behindCount || busy}
+                icon={ArrowDownCircle}
+                onClick={() => void runGitAction(() => cmd.gitPull(currentRepoPath))}
+              />
+              <GitIconButton
+                aria-label={t("Push")}
+                className={panelState?.aheadCount ? "git-panel__branch-sync git-panel__branch-sync--active" : "git-panel__branch-sync"}
+                disabled={!panelState?.aheadCount || busy}
+                icon={ArrowUpCircle}
+                onClick={() => void runGitAction(() => cmd.gitPush(currentRepoPath))}
+              />
             </div>
           </section>
         ) : null}
@@ -2238,13 +2039,20 @@ export default function GitPanel({ browserPath }: Props) {
                               ]
                                 .filter(Boolean)
                                 .join(" ")}
-                              onClick={() => setHistorySelectedHash(active ? "" : row.hash)}
+                              onClick={() => setHistorySelectedHash(row.hash)}
+                              onDoubleClick={() => {
+                                setHistorySelectedHash(row.hash);
+                                void loadCommitDetail(row.hash).then((detail) => {
+                                  if (detail) openCommitMultiDiff(detail);
+                                });
+                              }}
                               onContextMenu={(event) => {
                                 event.preventDefault();
                                 setHistoryContextCommit(row);
                                 openPopoverAt("historyCommit", event.clientX, event.clientY, 232, row);
                               }}
                               type="button"
+                              title={`${row.shortHash} · ${row.message}`}
                             >
                               <GitGraphLane row={row} />
                               <div className="git-history-row__content">
@@ -2264,7 +2072,6 @@ export default function GitPanel({ browserPath }: Props) {
                                 {historyShowHash ? <span className="git-history-row__hash">{row.shortHash}</span> : null}
                               </div>
                             </button>
-                            {active && activeCommitDetail ? renderHistoryInlineDetail(activeCommitDetail, row) : null}
                           </div>
                         );
                       })}
@@ -3760,7 +3567,7 @@ export default function GitPanel({ browserPath }: Props) {
       >
         <div className="git-card git-card--inset git-card--fill">
           {blameLines.length ? (
-            <div className="git-blame-list">
+            <div className="git-blame-list ux-selectable">
               {blameLines.map((line) => (
                 <div className="git-blame-row" key={`${line.lineNumber}-${line.hash}-${line.content}`}>
                   <span className="git-blame-row__line">{line.lineNumber}</span>
@@ -3773,24 +3580,6 @@ export default function GitPanel({ browserPath }: Props) {
             </div>
           ) : (
             <GitEmptyState accent="var(--accent)" description={t("Select a file diff and run blame to inspect line ownership.")} icon={FileText} title={t("No blame data")} />
-          )}
-        </div>
-      </GitDialog>
-
-      <GitDialog
-        footer={<GitButton compact onClick={() => setHistoryFileDiffOpen(false)}>{t("Close")}</GitButton>}
-        onClose={() => setHistoryFileDiffOpen(false)}
-        open={historyFileDiffOpen}
-        subtitle={historyFileDiffPath}
-        title={t("Diff")}
-        wide
-        tall
-      >
-        <div className="git-card git-card--inset git-card--fill">
-          {historyFileDiff ? (
-            <GitDiffCode text={historyFileDiff} />
-          ) : (
-            <GitEmptyState accent="var(--accent)" description={t("Select a changed file to inspect its patch.")} icon={FileText} title={t("No diff loaded")} />
           )}
         </div>
       </GitDialog>

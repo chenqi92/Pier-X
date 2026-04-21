@@ -1,7 +1,7 @@
-import { Database } from "lucide-react";
 import { useEffect, useState } from "react";
 import * as cmd from "../lib/commands";
 import { isReadOnlySql, queryResultToTsv } from "../lib/commands";
+import { RIGHT_TOOL_META } from "../lib/rightToolMeta";
 import { closeTunnelSlot, ensureTunnelSlot, syncTunnelState } from "../lib/sshTunnel";
 import type { PostgresBrowserState, QueryExecutionResult, TabState } from "../lib/types";
 import { useI18n } from "../i18n/useI18n";
@@ -14,6 +14,8 @@ import StatusDot from "../components/StatusDot";
 import { useTabStore } from "../stores/useTabStore";
 
 type Props = { tab: TabState };
+
+const POSTGRES_ICON = RIGHT_TOOL_META.postgres.icon;
 
 export default function PostgresPanel({ tab }: Props) {
   const { t } = useI18n();
@@ -232,7 +234,7 @@ export default function PostgresPanel({ tab }: Props) {
   return (
     <>
       <PanelHeader
-        icon={Database}
+        icon={POSTGRES_ICON}
         title={t("PostgreSQL")}
         meta={
           hasSsh
@@ -248,7 +250,7 @@ export default function PostgresPanel({ tab }: Props) {
         }
       />
       <DbConnRow
-        icon={Database}
+        icon={POSTGRES_ICON}
         tint="var(--accent-dim)"
         iconTint="var(--accent)"
         name={connName}

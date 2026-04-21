@@ -37,7 +37,7 @@
 //!   but pier-x's M3d shell doesn't expose a chmod affordance
 //!   yet.
 
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
 use russh_sftp::client::SftpSession;
@@ -270,6 +270,233 @@ impl SftpClient {
         runtime::shared().block_on(self.upload_from(local, remote))
     }
 
+    /// Chunked download with a byte-level progress callback.
+    /// The callback fires once with `(0, total)` at the start and
+    /// after every chunk with `(bytes_written, total)`. Reads 64 KiB
+    /// at a time — russh-sftp's `SSH_FXP_READ` payload limit is
+    /// 255 KiB so we stay well under, and 64 KiB gives progress
+    /// events fine-grained enough for a smooth UI bar.
+    ///
+    /// Use this instead of [`Self::download_to`] when you need
+    /// progress; the old whole-file path stays for simple cases.
+    pub async fn download_to_with_progress<F>(
+        &self,
+        remote: &str,
+        local: &Path,
+        mut on_progress: F,
+    ) -> Result<u64>
+    where
+        F: FnMut(u64, u64) + Send,
+    {
+        use tokio::io::{AsyncReadExt, AsyncWriteExt};
+
+        let mut remote_file = self.inner.open(remote.to_string()).await.map_err(sftp_error)?;
+        let total = remote_file
+            .metadata()
+            .await
+            .map_err(sftp_error)?
+            .size
+            .unwrap_or(0);
+        on_progress(0, total);
+
+        // Make sure the parent directory exists so this mirrors
+        // tokio::fs::write's "create missing path" behaviour for
+        // drop-in callers.
+        if let Some(parent) = local.parent() {
+            if !parent.as_os_str().is_empty() {
+                let _ = tokio::fs::create_dir_all(parent).await;
+            }
+        }
+        let mut local_file = tokio::fs::File::create(local).await.map_err(SshError::Io)?;
+        let mut buf = vec![0u8; 64 * 1024];
+        let mut transferred: u64 = 0;
+        loop {
+            let n = remote_file.read(&mut buf).await.map_err(SshError::Io)?;
+            if n == 0 {
+                break;
+            }
+            local_file
+                .write_all(&buf[..n])
+                .await
+                .map_err(SshError::Io)?;
+            transferred += n as u64;
+            on_progress(transferred, total.max(transferred));
+        }
+        local_file.flush().await.map_err(SshError::Io)?;
+        // Explicit shutdown closes the remote file handle; ignore
+        // errors (some servers send a harmless "already closed").
+        let _ = remote_file.shutdown().await;
+        log::info!(
+            "downloaded {remote} -> {local} ({} bytes)",
+            transferred,
+            local = local.display(),
+        );
+        Ok(transferred)
+    }
+
+    /// Sync wrapper for [`Self::download_to_with_progress`].
+    pub fn download_to_with_progress_blocking<F>(
+        &self,
+        remote: &str,
+        local: &Path,
+        on_progress: F,
+    ) -> Result<u64>
+    where
+        F: FnMut(u64, u64) + Send,
+    {
+        runtime::shared().block_on(self.download_to_with_progress(remote, local, on_progress))
+    }
+
+    /// Chunked upload with a byte-level progress callback. Same
+    /// semantics as [`Self::download_to_with_progress`] but in the
+    /// opposite direction: the local file's size is the `total`,
+    /// and the callback fires after each 64 KiB chunk is written.
+    pub async fn upload_from_with_progress<F>(
+        &self,
+        local: &Path,
+        remote: &str,
+        mut on_progress: F,
+    ) -> Result<u64>
+    where
+        F: FnMut(u64, u64) + Send,
+    {
+        use tokio::io::{AsyncReadExt, AsyncWriteExt};
+
+        let meta = tokio::fs::metadata(local).await.map_err(SshError::Io)?;
+        let total = meta.len();
+        on_progress(0, total);
+
+        let mut local_file = tokio::fs::File::open(local).await.map_err(SshError::Io)?;
+        let mut remote_file = self.inner.create(remote.to_string()).await.map_err(sftp_error)?;
+        let mut buf = vec![0u8; 64 * 1024];
+        let mut transferred: u64 = 0;
+        loop {
+            let n = local_file.read(&mut buf).await.map_err(SshError::Io)?;
+            if n == 0 {
+                break;
+            }
+            remote_file
+                .write_all(&buf[..n])
+                .await
+                .map_err(SshError::Io)?;
+            transferred += n as u64;
+            on_progress(transferred, total.max(transferred));
+        }
+        remote_file.flush().await.map_err(SshError::Io)?;
+        let _ = remote_file.shutdown().await;
+        log::info!(
+            "uploaded {local} -> {remote} ({} bytes)",
+            transferred,
+            local = local.display(),
+        );
+        Ok(transferred)
+    }
+
+    /// Sync wrapper for [`Self::upload_from_with_progress`].
+    pub fn upload_from_with_progress_blocking<F>(
+        &self,
+        local: &Path,
+        remote: &str,
+        on_progress: F,
+    ) -> Result<u64>
+    where
+        F: FnMut(u64, u64) + Send,
+    {
+        runtime::shared().block_on(self.upload_from_with_progress(local, remote, on_progress))
+    }
+
+    /// Recursively upload `local_root` into `remote_root`, preserving
+    /// the directory structure. Computes the total byte size in a
+    /// first pass so `on_progress` can render an accurate bar across
+    /// the whole tree — then streams each file via
+    /// [`Self::upload_from_with_progress_blocking`].
+    ///
+    /// Symlinks are followed (same semantics as `tokio::fs::read`).
+    /// Remote directory creation ignores "already exists" so partial
+    /// re-runs resume cleanly.
+    pub fn upload_tree_blocking<F>(
+        &self,
+        local_root: &Path,
+        remote_root: &str,
+        mut on_progress: F,
+    ) -> Result<u64>
+    where
+        F: FnMut(u64, u64) + Send,
+    {
+        // First pass: enumerate files + dirs, precompute total.
+        let mut files: Vec<(PathBuf, String, u64)> = Vec::new();
+        let mut dirs: Vec<String> = Vec::new();
+        let mut total: u64 = 0;
+        collect_local_tree(local_root, local_root, remote_root, &mut files, &mut dirs, &mut total)?;
+
+        on_progress(0, total);
+
+        // Create the root + interior directories (best-effort: the
+        // server may or may not allow mkdir on an existing dir;
+        // we treat any error as non-fatal for pre-existing paths
+        // and re-raise on file ops).
+        let _ = self.create_dir_blocking(remote_root);
+        for dir in &dirs {
+            let _ = self.create_dir_blocking(dir);
+        }
+
+        let mut transferred: u64 = 0;
+        for (local_path, remote_path, _size) in &files {
+            let bytes = self.upload_from_with_progress_blocking(
+                local_path,
+                remote_path,
+                |file_bytes, _file_total| {
+                    on_progress(transferred + file_bytes, total);
+                },
+            )?;
+            transferred = transferred.saturating_add(bytes);
+            on_progress(transferred, total);
+        }
+        Ok(transferred)
+    }
+
+    /// Recursively download `remote_root` into `local_root`,
+    /// preserving structure. Walks the remote tree, sums the total
+    /// size, then streams each file via
+    /// [`Self::download_to_with_progress_blocking`].
+    pub fn download_tree_blocking<F>(
+        &self,
+        remote_root: &str,
+        local_root: &Path,
+        mut on_progress: F,
+    ) -> Result<u64>
+    where
+        F: FnMut(u64, u64) + Send,
+    {
+        let mut files: Vec<(String, PathBuf, u64)> = Vec::new();
+        let mut total: u64 = 0;
+        runtime::shared().block_on(async {
+            collect_remote_tree(self, remote_root, local_root, &mut files, &mut total).await
+        })?;
+
+        on_progress(0, total);
+        if !local_root.as_os_str().is_empty() {
+            let _ = std::fs::create_dir_all(local_root);
+        }
+
+        let mut transferred: u64 = 0;
+        for (remote_path, local_path, _size) in &files {
+            if let Some(parent) = local_path.parent() {
+                let _ = std::fs::create_dir_all(parent);
+            }
+            let bytes = self.download_to_with_progress_blocking(
+                remote_path,
+                local_path,
+                |file_bytes, _file_total| {
+                    on_progress(transferred + file_bytes, total);
+                },
+            )?;
+            transferred = transferred.saturating_add(bytes);
+            on_progress(transferred, total);
+        }
+        Ok(transferred)
+    }
+
     // ── Directory / entry management ──────────────────────
 
     /// Create a directory at `path`. Non-recursive — parent
@@ -350,6 +577,77 @@ impl SftpClient {
 /// so we format them as strings and route through
 /// `SshError::InvalidConfig` for non-I/O cases and
 /// `SshError::Io` for the rest.
+/// Recursively walk a local directory, collecting files that should
+/// be uploaded and the directories that should be `mkdir`'d on the
+/// remote side. Populates `total` with the sum of file sizes so the
+/// caller can render an accurate progress bar.
+///
+/// `local_root` is the folder the user picked; `current` is what
+/// we're iterating in this recursion step. `remote_root` is the
+/// destination path — remote paths are derived from the relative
+/// portion of each local path.
+fn collect_local_tree(
+    local_root: &Path,
+    current: &Path,
+    remote_root: &str,
+    files: &mut Vec<(PathBuf, String, u64)>,
+    dirs: &mut Vec<String>,
+    total: &mut u64,
+) -> Result<()> {
+    let read = std::fs::read_dir(current).map_err(SshError::Io)?;
+    for entry_result in read {
+        let entry = entry_result.map_err(SshError::Io)?;
+        let path = entry.path();
+        let file_type = entry.file_type().map_err(SshError::Io)?;
+        let rel = path
+            .strip_prefix(local_root)
+            .unwrap_or(&path)
+            .to_string_lossy()
+            .replace('\\', "/");
+        let remote_path = if rel.is_empty() {
+            remote_root.to_string()
+        } else {
+            format!("{}/{}", remote_root.trim_end_matches('/'), rel)
+        };
+        if file_type.is_dir() {
+            dirs.push(remote_path);
+            collect_local_tree(local_root, &path, remote_root, files, dirs, total)?;
+        } else if file_type.is_file() {
+            let size = entry.metadata().map(|m| m.len()).unwrap_or(0);
+            *total = total.saturating_add(size);
+            files.push((path, remote_path, size));
+        }
+    }
+    Ok(())
+}
+
+/// Recursively walk a remote directory, collecting files to download.
+/// `remote_root` is the remote folder the user picked; `local_root`
+/// is the destination local directory. Local paths preserve the
+/// relative tree under `local_root`.
+async fn collect_remote_tree(
+    sftp: &SftpClient,
+    remote_root: &str,
+    local_root: &Path,
+    files: &mut Vec<(String, PathBuf, u64)>,
+    total: &mut u64,
+) -> Result<()> {
+    let mut stack: Vec<(String, PathBuf)> = vec![(remote_root.to_string(), local_root.to_path_buf())];
+    while let Some((remote_dir, local_dir)) = stack.pop() {
+        let entries = sftp.list_dir(&remote_dir).await?;
+        for entry in entries {
+            let target_local = local_dir.join(&entry.name);
+            if entry.is_dir {
+                stack.push((entry.path.clone(), target_local));
+            } else {
+                *total = total.saturating_add(entry.size);
+                files.push((entry.path, target_local, entry.size));
+            }
+        }
+    }
+    Ok(())
+}
+
 fn sftp_error(e: russh_sftp::client::error::Error) -> SshError {
     // Any kind of transport error we treat as ChannelClosed;
     // everything else becomes a stringified config-ish error

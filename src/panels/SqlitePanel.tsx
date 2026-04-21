@@ -1,7 +1,7 @@
-import { HardDrive } from "lucide-react";
 import { useState } from "react";
 import * as cmd from "../lib/commands";
 import { isReadOnlySql, queryResultToTsv } from "../lib/commands";
+import { RIGHT_TOOL_META } from "../lib/rightToolMeta";
 import type { QueryExecutionResult, SqliteBrowserState } from "../lib/types";
 import { useI18n } from "../i18n/useI18n";
 import { localizeError } from "../i18n/localizeMessage";
@@ -70,12 +70,12 @@ export default function SqlitePanel() {
   return (
     <>
       <PanelHeader
-        icon={HardDrive}
+        icon={RIGHT_TOOL_META.sqlite.icon}
         title={t("SQLite")}
         meta={headerMeta}
       />
       <DbConnRow
-        icon={HardDrive}
+        icon={RIGHT_TOOL_META.sqlite.icon}
         tint="var(--panel-2)"
         iconTint="var(--ink-2)"
         name={connName}

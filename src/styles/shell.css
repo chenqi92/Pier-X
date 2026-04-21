@@ -45,29 +45,118 @@ body {
   color: var(--ink);
 }
 
-/* Desktop behavior: content is selectable by default (markdown, SQL,
- * terminal output, diff, table cells …). Chrome (titlebar, tabs, sidebar,
- * toolstrip, status bar, panel headers, dialog heads/nav, buttons) opts
- * out so clicks don't leave accidental text selections on drag. */
-html, body {
-  user-select: text;
-  -webkit-user-select: text;
-}
+/* ── Desktop user-select policy ─────────────────────────────────
+ * Pier-X is a desktop app, not a web page. Chrome is non-selectable
+ * by default so drag/reorder gestures, double-clicks, and keyboard
+ * shortcuts never leave stray text highlights behind. Content
+ * islands — terminal output, markdown preview, query tables, logs,
+ * diffs, inputs — opt back in explicitly via either their semantic
+ * class (.terminal-screen, .lg-body, .dlg-diff-scroll, …) or the
+ * generic .ux-selectable wrapper. Interactive chrome inside a
+ * content island (a button in a markdown preview, the line-number
+ * gutter in a log view) stays non-selectable via .ux-chrome or the
+ * button-family selectors below.
+ *
+ * Key trick: user-select is an inherited property, so we set it on
+ * the island root and descendants pick it up automatically. No `*`
+ * selectors needed — that keeps specificity low so plain selectors
+ * like `button` can still override inside an island.
+ */
 
-.titlebar, .topbar, .tabbar, .sidebar__tabs, .sidebar__file-header,
-.sidebar__col-headers, .tool-strip, .toolstrip, .statusbar, .panel-header,
-.dialog__nav, .dlg-head, .dlg-nav, .dlg-foot,
-.settings__segmented, .w-action .wk,
-button, [role="button"], .btn, .icon-btn, .cmdp-item,
-.resizer, .resize-handle, .sidebar__tab, .tab, .tool-strip__item {
+/* 1. Shell-wide default: chrome. */
+html, body {
   user-select: none;
   -webkit-user-select: none;
 }
 
-/* Inputs always allow text entry / native selection */
+/* 2. Content islands: selectable text is the default here.
+ *    Inheritance carries `text` down to every descendant unless
+ *    a more specific chrome rule (below) reclaims a child. */
+.ux-selectable,
+.terminal-screen,
+.log-viewer,
+.lg-body,
+.diff-viewer,
+.dlg-diff-scroll,
+.markdown-preview,
+.data-table-wrap,
+.dk-table,
+.git-diff-code,
+.preview-list,
+.dk-inspect-pre,
 input, textarea, select, [contenteditable="true"] {
   user-select: text;
   -webkit-user-select: text;
+}
+
+/* 3. Chrome escape: interactive or gutter-like elements stay
+ *    non-selectable even when nested inside a content island.
+ *    A button in a markdown preview should click, not highlight;
+ *    selecting a range of log lines should copy the message text,
+ *    not the line number / timestamp gutter. */
+.ux-chrome,
+button,
+[role="button"],
+.btn,
+.icon-btn,
+.mini-btn,
+.mini-button,
+.lg-ic,
+.dk-ic,
+.dlg-ic-btn,
+.dlg-seg-btn,
+.resizer,
+.resize-handle,
+.tab,
+.sidebar-tab,
+.tool-strip__item,
+.cmdp-item,
+.srv-row,
+.srv-group-head,
+.file-row,
+.ftp-row,
+.lg-n,
+.lg-t,
+.lg-lvl,
+.dlg-diff-ln,
+.dlg-diff-sign {
+  user-select: none;
+  -webkit-user-select: none;
+}
+
+/* ── Desktop cursor policy ──────────────────────────────────────
+ * Native desktop apps (IntelliJ, Figma, Finder, VSCode's chrome)
+ * reserve the pointer (hand) cursor for actual hyperlinks — never
+ * for buttons, tabs, rows, or menu items. Pier-X has no web-style
+ * links, so `cursor: pointer` has no valid target in this codebase.
+ * The vocabulary we use:
+ *
+ *   default     — arrow, everything chrome-like (buttons, tabs, rows)
+ *   text        — I-beam over content islands and inputs
+ *   col-resize  — pane dividers / resize handles
+ *   grab        — explicit drag handles (e.g. .srv-grip)
+ *   grabbing    — during an active drag gesture
+ *   not-allowed — disabled interactive surfaces where the affordance
+ *                 should read "blocked" rather than simply "faded"
+ *
+ * Individual component rules declare `cursor: default` explicitly;
+ * this block only sets the I-beam on content islands so that
+ * selectable text gets a text cursor regardless of container.
+ */
+
+.ux-selectable,
+.terminal-screen,
+.log-viewer,
+.lg-body,
+.diff-viewer,
+.dlg-diff-scroll,
+.markdown-preview,
+.data-table-wrap,
+.dk-table,
+.git-diff-code,
+.preview-list,
+.dk-inspect-pre {
+  cursor: text;
 }
 
 ::selection { background: var(--accent-dim); color: var(--ink); }
@@ -166,7 +255,7 @@ input, textarea, select, [contenteditable="true"] {
   color: var(--ink);
   font-family: var(--sans);
   font-size: var(--ui-fs);
-  cursor: pointer;
+  cursor: default;
   text-align: left;
   transition: background var(--dur-fast) var(--easing);
 }
@@ -270,7 +359,7 @@ input, textarea, select, [contenteditable="true"] {
   padding: var(--sp-1) var(--sp-2);
   font-size: var(--ui-fs);
   border-radius: var(--radius-sm);
-  cursor: pointer;
+  cursor: default;
   font-family: var(--sans);
   -webkit-app-region: no-drag;
 }
@@ -343,7 +432,7 @@ input, textarea, select, [contenteditable="true"] {
   min-width: 120px;
   position: relative;
   margin-bottom: -1px;
-  cursor: pointer;
+  cursor: default;
   flex-shrink: 0;
 }
 .tab + .tab { margin-left: 2px; }
@@ -394,7 +483,7 @@ input, textarea, select, [contenteditable="true"] {
   color: var(--muted);
   display: grid;
   place-items: center;
-  cursor: pointer;
+  cursor: default;
   opacity: 0;
   transition: opacity var(--dur-fast) var(--easing), background var(--dur-fast) var(--easing);
 }
@@ -412,7 +501,7 @@ input, textarea, select, [contenteditable="true"] {
   border: none;
   display: grid;
   place-items: center;
-  cursor: pointer;
+  cursor: default;
   border-radius: var(--radius-sm);
 }
 .tabbar__arrow:hover { color: var(--ink); background: var(--panel-2); }
@@ -428,7 +517,7 @@ input, textarea, select, [contenteditable="true"] {
   border: none;
   display: grid;
   place-items: center;
-  cursor: pointer;
+  cursor: default;
   border-radius: var(--radius-sm);
 }
 .tabbar__add:hover { background: var(--panel-2); color: var(--ink); }
@@ -481,7 +570,7 @@ input, textarea, select, [contenteditable="true"] {
   color: var(--muted);
   background: transparent;
   border: none;
-  cursor: pointer;
+  cursor: default;
   border-radius: var(--radius-sm) var(--radius-sm) 0 0;
   border-bottom: 2px solid transparent;
   display: inline-flex;
@@ -540,7 +629,7 @@ input, textarea, select, [contenteditable="true"] {
   border-radius: var(--radius-xs);
   display: grid;
   place-items: center;
-  cursor: pointer;
+  cursor: default;
   transition: background var(--dur-fast) var(--easing), color var(--dur-fast) var(--easing);
 }
 .sidebar__icon-btn:hover { background: var(--panel-2); color: var(--ink); }
@@ -575,7 +664,7 @@ input, textarea, select, [contenteditable="true"] {
   color: var(--ink-2);
   font-family: var(--sans);
   font-size: var(--ui-fs);
-  cursor: pointer;
+  cursor: default;
   text-align: left;
 }
 .sidebar__places-item:hover { background: var(--panel-2); color: var(--ink); }
@@ -611,7 +700,7 @@ input, textarea, select, [contenteditable="true"] {
   font-family: var(--mono);
   font-size: var(--size-micro);
   padding: 0 var(--sp-0-5);
-  cursor: pointer;
+  cursor: default;
   border-radius: var(--radius-xs);
   white-space: nowrap;
 }
@@ -671,7 +760,7 @@ input, textarea, select, [contenteditable="true"] {
   gap: var(--sp-1-5);
   padding: 0 var(--sp-2) 0 var(--sp-2);
   height: var(--row-h);
-  cursor: pointer;
+  cursor: default;
   color: var(--ink-2);
   background: transparent;
   border: none;
@@ -749,7 +838,7 @@ input, textarea, select, [contenteditable="true"] {
   border: none;
   color: var(--ink);
   font-family: var(--sans);
-  cursor: pointer;
+  cursor: default;
   text-align: left;
   min-width: 0;
 }
@@ -815,7 +904,7 @@ input, textarea, select, [contenteditable="true"] {
   align-items: center;
   gap: var(--sp-1);
   padding: 7px var(--sp-2-5) 6px;
-  cursor: pointer;
+  cursor: default;
   user-select: none;
   background: transparent;
   border: none;
@@ -862,7 +951,7 @@ input, textarea, select, [contenteditable="true"] {
   display: flex;
   align-items: center;
   gap: var(--sp-1);
-  cursor: pointer;
+  cursor: default;
 }
 .srv-row:hover { background: var(--panel-2); }
 .srv-item.active .srv-row:hover {
@@ -1045,7 +1134,7 @@ input, textarea, select, [contenteditable="true"] {
   background: var(--panel);
   border: 1px solid var(--line-2);
   border-radius: var(--radius-pill);
-  cursor: pointer;
+  cursor: default;
   transition: background var(--dur-fast) var(--easing), border-color var(--dur-fast) var(--easing);
 }
 .srv-svc:hover {
@@ -1151,7 +1240,7 @@ input, textarea, select, [contenteditable="true"] {
   color: var(--muted);
   display: grid;
   place-items: center;
-  cursor: pointer;
+  cursor: default;
   position: relative;
   transition: background var(--dur-fast) var(--easing), color var(--dur-fast) var(--easing);
   padding: 0;
@@ -1265,7 +1354,7 @@ input, textarea, select, [contenteditable="true"] {
   background: var(--surface);
   border: 1px solid var(--line);
   border-radius: var(--radius-md);
-  cursor: pointer;
+  cursor: default;
   text-align: left;
   font-family: var(--sans);
   color: var(--ink-2);
@@ -1339,7 +1428,7 @@ input, textarea, select, [contenteditable="true"] {
   gap: var(--sp-2-5);
   padding: var(--sp-1-5) var(--sp-2);
   border-radius: var(--radius-sm);
-  cursor: pointer;
+  cursor: default;
   font-size: var(--size-caption);
   background: none;
   border: none;
@@ -1453,7 +1542,7 @@ input, textarea, select, [contenteditable="true"] {
   gap: var(--sp-2-5);
   padding: var(--sp-2) var(--sp-3);
   border-bottom: 1px solid var(--line);
-  cursor: pointer;
+  cursor: default;
   width: 100%;
   background: transparent;
   color: var(--ink);
@@ -1533,7 +1622,7 @@ input, textarea, select, [contenteditable="true"] {
   border: 1px solid var(--line-2);
   border-radius: var(--radius-md);
   padding: var(--sp-0-5) var(--sp-2) var(--sp-0-5) var(--sp-0-5);
-  cursor: pointer;
+  cursor: default;
   color: var(--ink);
   min-width: 220px;
   font-family: var(--sans);
@@ -1594,7 +1683,7 @@ input, textarea, select, [contenteditable="true"] {
   gap: var(--sp-2-5);
   padding: var(--sp-1-5) var(--sp-2);
   border-radius: var(--radius-sm);
-  cursor: pointer;
+  cursor: default;
 }
 .ins-menu-row:hover { background: var(--panel-2); }
 .ins-menu-row.sel { background: var(--accent-dim); }
@@ -1791,7 +1880,7 @@ input, textarea, select, [contenteditable="true"] {
   min-height: 22px;
   padding: 0 var(--sp-2);
   border-radius: var(--radius-sm);
-  cursor: pointer;
+  cursor: default;
   transition: background var(--dur-fast) var(--easing), color var(--dur-fast) var(--easing), border-color var(--dur-fast) var(--easing);
   white-space: nowrap;
 }
@@ -1831,16 +1920,21 @@ input, textarea, select, [contenteditable="true"] {
 }
 
 .terminal-screen {
-  display: flex;
-  flex-direction: column;
+  display: block;
   height: 100%;
   overflow: hidden;
   font-family: var(--mono);
   font-size: 13px;
-  line-height: 1.45;
+  /* line-height is set inline as integer px via --terminal-row-h. Stacked block
+   * rows use that value for both box height and line-box so every row abuts the
+   * next with no sub-pixel gap — flex-column added WebKit rounding that showed
+   * as visible separators when selection painted across rows. */
+  line-height: calc(13px * 1.45);
 }
 .terminal-row {
-  min-height: calc(13px * 1.45);
+  display: block;
+  height: var(--terminal-row-h, calc(13px * 1.45));
+  line-height: var(--terminal-row-h, calc(13px * 1.45));
   white-space: pre;
   color: var(--ink);
 }
@@ -1994,7 +2088,7 @@ input, textarea, select, [contenteditable="true"] {
   font-size: var(--size-small);
   padding: 2px var(--sp-2);
   border-radius: var(--radius-sm);
-  cursor: pointer;
+  cursor: default;
   transition: background var(--dur-fast) var(--easing);
 }
 .token-button:hover { background: var(--panel-2); }
@@ -2098,7 +2192,7 @@ input, textarea, select, [contenteditable="true"] {
   font-size: var(--size-small);
   padding: 3px var(--sp-2);
   border-radius: var(--radius-sm);
-  cursor: pointer;
+  cursor: default;
 }
 .surface-button:hover { background: var(--panel-2); }
 .surface-button--selected {
@@ -2152,7 +2246,7 @@ input, textarea, select, [contenteditable="true"] {
   color: var(--ink);
   font-family: var(--sans);
   font-size: var(--ui-fs);
-  cursor: pointer;
+  cursor: default;
   text-align: left;
   border-radius: var(--radius-xs);
 }
@@ -2209,7 +2303,6 @@ input, textarea, select, [contenteditable="true"] {
   font-size: var(--size-body);
   line-height: 1.6;
   color: var(--ink-2);
-  user-select: text;
 }
 .markdown-preview h1 {
   margin: 0 0 var(--sp-1);
@@ -2409,7 +2502,7 @@ input, textarea, select, [contenteditable="true"] {
   color: var(--ink);
   font-family: var(--sans);
   font-size: var(--size-body);
-  cursor: pointer;
+  cursor: default;
   text-align: left;
 }
 .palette__item-icon { color: var(--muted); flex: none; }
@@ -2498,7 +2591,7 @@ input, textarea, select, [contenteditable="true"] {
   font-weight: var(--weight-medium);
   padding: var(--sp-1-5) var(--sp-2);
   border-radius: var(--radius-sm);
-  cursor: pointer;
+  cursor: default;
   text-align: left;
 }
 .dialog__nav-item svg { color: var(--muted); flex: none; }
@@ -2626,7 +2719,7 @@ input, textarea, select, [contenteditable="true"] {
   color: var(--muted);
   padding: var(--sp-1) var(--sp-2);
   font-size: var(--size-small);
-  cursor: pointer;
+  cursor: default;
   display: inline-flex;
   align-items: center;
   gap: var(--sp-1);
@@ -2642,7 +2735,7 @@ input, textarea, select, [contenteditable="true"] {
   width: 24px;
   height: 24px;
   border-radius: var(--radius-sm);
-  cursor: pointer;
+  cursor: default;
   display: grid;
   place-items: center;
 }
@@ -2686,7 +2779,7 @@ input, textarea, select, [contenteditable="true"] {
   gap: var(--sp-2);
   padding: var(--sp-1-5) var(--sp-2-5);
   border-bottom: 1px solid var(--line);
-  cursor: pointer;
+  cursor: default;
 }
 .dlg-diff-file:hover { background: var(--panel-2); }
 .dlg-diff-file.sel { background: var(--accent-dim); }
@@ -2954,7 +3047,7 @@ input, textarea, select, [contenteditable="true"] {
   font-size: var(--size-caption);
   font-weight: var(--weight-medium);
   border-radius: var(--radius-sm);
-  cursor: pointer;
+  cursor: default;
   transition: background var(--dur-fast) var(--easing), color var(--dur-fast) var(--easing);
   white-space: nowrap;
 }
@@ -2971,7 +3064,7 @@ input, textarea, select, [contenteditable="true"] {
   border: 1px solid var(--line-2);
   border-radius: var(--radius-pill);
   background: var(--panel);
-  cursor: pointer;
+  cursor: default;
   transition: background var(--dur-fast) var(--easing), border-color var(--dur-fast) var(--easing);
   padding: 0;
 }
@@ -3009,7 +3102,7 @@ input, textarea, select, [contenteditable="true"] {
   background-image: url("data:image/svg+xml,%3Csvg width='10' height='6' viewBox='0 0 10 6' fill='none' xmlns='http://www.w3.org/2000/svg'%3E%3Cpath d='M1 1l4 4 4-4' stroke='%23747D8B' stroke-width='1.5' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E");
   background-repeat: no-repeat;
   background-position: right 8px center;
-  cursor: pointer;
+  cursor: default;
 }
 .settings__select:focus { border-color: var(--accent); }
 
@@ -3020,7 +3113,7 @@ input, textarea, select, [contenteditable="true"] {
   background: var(--line-2);
   border-radius: var(--radius-xs);
   outline: none;
-  cursor: pointer;
+  cursor: default;
 }
 .settings__slider::-webkit-slider-thumb {
   appearance: none;
@@ -3029,7 +3122,7 @@ input, textarea, select, [contenteditable="true"] {
   border-radius: 50%;
   background: var(--accent);
   border: 2px solid var(--surface);
-  cursor: pointer;
+  cursor: default;
 }
 
 .settings__number-input {
@@ -3061,7 +3154,7 @@ input, textarea, select, [contenteditable="true"] {
   border: 2px solid var(--line);
   border-radius: var(--radius-lg);
   overflow: hidden;
-  cursor: pointer;
+  cursor: default;
   background: none;
   transition: border-color var(--dur-fast) var(--easing);
 }
@@ -3140,28 +3233,6 @@ input, textarea, select, [contenteditable="true"] {
   height: 100%;
   background: var(--surface);
 }
-.lg-source {
-  display: flex;
-  align-items: center;
-  gap: var(--sp-2);
-  padding: 7px var(--sp-3);
-  border-bottom: 1px solid var(--line);
-  background: var(--surface-2);
-  font-family: var(--mono);
-  font-size: var(--size-small);
-  color: var(--ink-2);
-  flex: none;
-}
-.lg-source > svg { color: var(--muted); flex: none; }
-.lg-source-cmd {
-  cursor: pointer;
-  color: var(--ink-2);
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-  max-width: 62%;
-}
-.lg-source-cmd:hover { color: var(--ink); }
 .lg-status {
   display: inline-flex;
   align-items: center;
@@ -3171,12 +3242,135 @@ input, textarea, select, [contenteditable="true"] {
   border-radius: var(--radius-pill);
   background: var(--panel-2);
   border: 1px solid var(--line-2);
+  white-space: nowrap;
+  flex: none;
 }
 .lg-status.on {
   color: var(--pos);
   border-color: color-mix(in srgb, var(--pos) 35%, var(--line-2));
 }
 .lg-status.off { color: var(--muted); }
+
+/* ── Log picker rows ────────────────────────────────────────── */
+.lg-picker {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: var(--sp-2);
+  row-gap: 6px;
+  padding: 7px var(--sp-3);
+  background: var(--surface-2);
+  border-bottom: 1px solid var(--line);
+  flex: none;
+  min-height: 38px;
+}
+.lg-picker--sub {
+  background: var(--panel);
+}
+.lg-picker-spacer { flex: 1; min-width: 0; }
+.lg-pick {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-2);
+  min-width: 0;
+  flex: none;
+}
+.lg-pick--grow { flex: 1; min-width: 120px; }
+.lg-pick > label {
+  font-family: var(--mono);
+  font-size: var(--size-micro);
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--muted);
+  flex: none;
+  white-space: nowrap;
+}
+.lg-seg {
+  display: inline-flex;
+  gap: 1px;
+  padding: 2px;
+  background: var(--panel);
+  border: 1px solid var(--line-2);
+  border-radius: var(--radius-xs);
+  flex: none;
+}
+.lg-seg-item {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  height: 20px;
+  padding: 0 7px;
+  border: none;
+  background: transparent;
+  color: var(--muted);
+  font-family: var(--sans);
+  font-size: var(--ui-fs-sm);
+  border-radius: calc(var(--radius-xs) - 1px);
+  cursor: default;
+  white-space: nowrap;
+  flex: none;
+}
+.lg-seg-item:hover { color: var(--ink-2); }
+.lg-seg-item.on {
+  background: var(--accent-dim);
+  color: var(--accent);
+}
+.lg-seg-item svg { flex: none; }
+.lg-seg-item > span { white-space: nowrap; }
+
+.lg-sel {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  height: 22px;
+  padding: 0 6px 0 7px;
+  background: var(--surface);
+  border: 1px solid var(--line-2);
+  border-radius: var(--radius-xs);
+  color: var(--ink-2);
+  font-family: var(--mono);
+  font-size: var(--size-small);
+  position: relative;
+  min-width: 0;
+  flex: 1;
+}
+.lg-sel:focus-within {
+  border-color: color-mix(in srgb, var(--accent) 55%, var(--line-2));
+}
+.lg-sel > svg { color: var(--muted); flex: none; }
+.lg-sel--input input {
+  flex: 1;
+  min-width: 0;
+  background: none;
+  border: none;
+  outline: none;
+  color: var(--ink);
+  font: inherit;
+}
+.lg-sel--input input::placeholder { color: var(--muted); }
+.lg-sel-native {
+  flex: 1;
+  min-width: 0;
+  appearance: none;
+  -webkit-appearance: none;
+  background: transparent;
+  border: none;
+  outline: none;
+  color: var(--ink);
+  font: inherit;
+  padding-right: 12px;
+  cursor: default;
+}
+.lg-sel-native:focus { outline: none; }
+.lg-picker-hint {
+  color: var(--muted);
+  font-size: var(--size-small);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  max-width: 48%;
+  padding: 0 var(--sp-1);
+}
 
 .lg-cmd-editor {
   display: flex;
@@ -3189,7 +3383,8 @@ input, textarea, select, [contenteditable="true"] {
 }
 .lg-cmd-editor textarea { flex: 1; }
 
-.lg-toolbar {
+/* ── Filter toolbar (level chips / search / icon buttons) ──── */
+.lg-filters {
   display: flex;
   align-items: center;
   gap: var(--sp-2);
@@ -3213,8 +3408,10 @@ input, textarea, select, [contenteditable="true"] {
   padding: 0 var(--sp-2) 0 5px;
   height: 22px;
   border-radius: var(--radius-xs);
-  cursor: pointer;
+  cursor: default;
   opacity: 0.55;
+  white-space: nowrap;
+  flex: none;
 }
 .lg-chip-dot {
   width: 6px;
@@ -3278,7 +3475,7 @@ input, textarea, select, [contenteditable="true"] {
   border-radius: 2px;
   display: grid;
   place-items: center;
-  cursor: pointer;
+  cursor: default;
 }
 .lg-x:hover { color: var(--ink); background: var(--panel-2); }
 
@@ -3289,7 +3486,7 @@ input, textarea, select, [contenteditable="true"] {
   width: 22px;
   height: 22px;
   border-radius: var(--radius-xs);
-  cursor: pointer;
+  cursor: default;
   display: grid;
   place-items: center;
   flex: none;
@@ -3369,6 +3566,7 @@ input, textarea, select, [contenteditable="true"] {
   padding-right: var(--sp-2);
   color: var(--dim);
   user-select: none;
+  -webkit-user-select: none;
   font-size: var(--size-micro);
 }
 .lg-t {
@@ -3423,6 +3621,17 @@ input, textarea, select, [contenteditable="true"] {
   flex: none;
 }
 .lg-foot-muted { color: var(--muted); }
+.lg-foot-src {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  color: var(--ink-2);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  max-width: 40%;
+}
+.lg-foot-src svg { color: var(--muted); flex: none; }
 .lg-foot-pin {
   background: transparent;
   border: 1px solid transparent;
@@ -3430,7 +3639,7 @@ input, textarea, select, [contenteditable="true"] {
   display: inline-flex;
   align-items: center;
   gap: 3px;
-  cursor: pointer;
+  cursor: default;
   padding: 2px 6px;
   border-radius: var(--radius-xs);
   font-size: var(--size-micro);
@@ -3453,6 +3662,11 @@ input, textarea, select, [contenteditable="true"] {
   height: 100%;
   min-height: 0;
   background: var(--surface);
+  /* Container queries drive the responsive column hiding below:
+     when the SFTP panel is dragged narrow we drop PERM first, then
+     MOD, then SIZE, always keeping the NAME column. */
+  container-type: inline-size;
+  container-name: ftp-panel;
 }
 .ftp-host-bar {
   display: flex;
@@ -3546,7 +3760,7 @@ input, textarea, select, [contenteditable="true"] {
   color: var(--muted);
   padding: 1px 4px;
   border-radius: 3px;
-  cursor: pointer;
+  cursor: default;
   display: inline-flex;
   align-items: center;
   white-space: nowrap;
@@ -3570,7 +3784,7 @@ input, textarea, select, [contenteditable="true"] {
   width: 18px;
   height: 18px;
   border-radius: 3px;
-  cursor: pointer;
+  cursor: default;
   display: grid;
   place-items: center;
 }
@@ -3600,7 +3814,7 @@ input, textarea, select, [contenteditable="true"] {
 
 .ftp-col-head {
   display: grid;
-  grid-template-columns: 1fr 80px 56px;
+  grid-template-columns: 1fr 110px 70px 92px;
   gap: var(--sp-2-5);
   padding: 6px var(--sp-3) 5px calc(var(--sp-3) + 20px + var(--sp-2-5));
   font-size: 9.5px;
@@ -3611,6 +3825,7 @@ input, textarea, select, [contenteditable="true"] {
   background: var(--surface);
   flex: none;
 }
+.ftp-col-head .ftp-perm { text-align: left; }
 .ftp-col-head .ftp-size { text-align: right; }
 .ftp-col-head .ftp-mod  { text-align: right; }
 
@@ -3619,14 +3834,19 @@ input, textarea, select, [contenteditable="true"] {
   min-height: 0;
   overflow: auto;
   padding: 2px 0;
+  position: relative;
+}
+.ftp-list.is-drop {
+  background: color-mix(in srgb, var(--accent) 10%, var(--surface));
+  box-shadow: inset 0 0 0 2px var(--accent);
 }
 .ftp-row {
   display: grid;
-  grid-template-columns: 20px 1fr 80px 56px;
+  grid-template-columns: 20px 1fr 110px 70px 92px;
   gap: var(--sp-2-5);
   padding: 6px var(--sp-3);
   align-items: center;
-  cursor: pointer;
+  cursor: default;
   position: relative;
   font-size: 12px;
   border-left: 2px solid transparent;
@@ -3654,15 +3874,58 @@ input, textarea, select, [contenteditable="true"] {
   text-overflow: ellipsis;
   min-width: 0;
 }
+.ftp-row .ftp-perm {
+  font-size: var(--size-micro);
+  color: var(--ink-2);
+  white-space: nowrap;
+  overflow: hidden;
+}
 .ftp-row .ftp-size {
   font-size: var(--size-micro);
   color: var(--ink-2);
   text-align: right;
+  white-space: nowrap;
 }
 .ftp-row .ftp-mod {
   font-size: var(--size-micro);
   color: var(--muted);
   text-align: right;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+/* Responsive column hiding — drops PERM first (medium), MOD next
+   (narrow), SIZE last (very narrow). Driven by the .ftp container
+   query so the right-panel width controls it regardless of the
+   window width. */
+@container ftp-panel (max-width: 460px) {
+  .ftp-col-head,
+  .ftp-row {
+    grid-template-columns: 20px 1fr 70px 92px;
+  }
+  .ftp-col-head { padding-left: calc(var(--sp-3) + 20px + var(--sp-2-5)); }
+  .ftp-col-head { grid-template-columns: 1fr 70px 92px; }
+  .ftp-row .ftp-perm,
+  .ftp-col-head .ftp-perm { display: none; }
+}
+@container ftp-panel (max-width: 340px) {
+  .ftp-col-head,
+  .ftp-row {
+    grid-template-columns: 20px 1fr 70px;
+  }
+  .ftp-col-head { grid-template-columns: 1fr 70px; }
+  .ftp-row .ftp-mod,
+  .ftp-col-head .ftp-mod { display: none; }
+}
+@container ftp-panel (max-width: 240px) {
+  .ftp-col-head,
+  .ftp-row {
+    grid-template-columns: 20px 1fr;
+  }
+  .ftp-col-head { grid-template-columns: 1fr; }
+  .ftp-row .ftp-size,
+  .ftp-col-head .ftp-size { display: none; }
 }
 
 .ftp-notice-bar {
@@ -3830,7 +4093,10 @@ input, textarea, select, [contenteditable="true"] {
   display: inline-flex;
   align-items: center;
   font-variant-numeric: tabular-nums;
+  min-width: 32px;
+  justify-content: flex-end;
 }
+.ftp-queue-pct--active { color: var(--accent); }
 .ftp-queue-item.done .ftp-queue-name {
   color: var(--muted);
   text-decoration: line-through;
@@ -3868,7 +4134,7 @@ input, textarea, select, [contenteditable="true"] {
   font-weight: var(--weight-medium);
   padding: 4px var(--sp-2);
   border-radius: var(--radius-xs);
-  cursor: pointer;
+  cursor: default;
   display: flex;
   align-items: center;
   gap: var(--sp-1);
@@ -3901,7 +4167,7 @@ input, textarea, select, [contenteditable="true"] {
   gap: 4px;
   font-size: var(--size-small);
   color: var(--muted);
-  cursor: pointer;
+  cursor: default;
   text-transform: uppercase;
   letter-spacing: 0.06em;
 }
@@ -3912,7 +4178,7 @@ input, textarea, select, [contenteditable="true"] {
   color: var(--ink-2);
   padding: 3px;
   border-radius: var(--radius-xs);
-  cursor: pointer;
+  cursor: default;
   display: grid;
   place-items: center;
   height: 22px;
@@ -3994,7 +4260,7 @@ input, textarea, select, [contenteditable="true"] {
   text-overflow: ellipsis;
 }
 .dk-table tbody tr {
-  cursor: pointer;
+  cursor: default;
   transition: background var(--dur-fast) var(--easing);
 }
 .dk-table tbody tr:hover td { background: var(--panel-2); }
@@ -4021,13 +4287,228 @@ input, textarea, select, [contenteditable="true"] {
   font: inherit;
   letter-spacing: inherit;
   text-transform: inherit;
-  cursor: pointer;
+  cursor: default;
   display: inline-flex;
   align-items: center;
   gap: 2px;
 }
 .dk-sort:hover { color: var(--ink-2); }
 .dk-sort.active { color: var(--ink); }
+
+/* ─── Card-style rows (containers / images / volumes) ─── */
+.dk-card-list {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  padding: var(--sp-1-5) var(--sp-2);
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-1-5);
+}
+.dk-card {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-2);
+  padding: var(--sp-2);
+  border: 1px solid var(--line);
+  border-radius: var(--radius-sm);
+  background: var(--panel);
+  transition: background var(--dur-fast) var(--easing),
+              border-color var(--dur-fast) var(--easing);
+  cursor: pointer;
+}
+.dk-card:hover { background: var(--panel-2); border-color: var(--line-2); }
+.dk-card.selected {
+  background: var(--accent-dim);
+  border-color: color-mix(in srgb, var(--accent) 30%, var(--line-2));
+}
+.dk-card-ic {
+  width: 22px;
+  height: 22px;
+  border-radius: var(--radius-xs);
+  background: var(--panel-2);
+  border: 1px solid var(--line-2);
+  display: grid;
+  place-items: center;
+  flex: none;
+  color: var(--muted);
+}
+.dk-card-ic.is-pos {
+  background: var(--pos-dim);
+  color: var(--pos);
+  border-color: color-mix(in srgb, var(--pos) 30%, transparent);
+}
+.dk-card-ic.is-warn {
+  background: var(--warn-dim);
+  color: var(--warn);
+  border-color: color-mix(in srgb, var(--warn) 30%, transparent);
+}
+.dk-card-ic.is-muted {
+  background: var(--panel-2);
+  color: var(--dim);
+}
+.dk-card-body {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+.dk-card-title {
+  font-size: var(--size-small);
+  color: var(--ink);
+  font-weight: var(--weight-semibold);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.dk-card-sub {
+  font-family: var(--mono);
+  font-size: var(--size-micro);
+  color: var(--muted);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.dk-card-meta {
+  display: inline-flex;
+  gap: var(--sp-1-5);
+  flex: none;
+  font-family: var(--mono);
+  font-size: var(--size-micro);
+  color: var(--ink-2);
+  text-align: right;
+}
+.dk-card-actions {
+  display: inline-flex;
+  align-items: center;
+  gap: 2px;
+  flex: none;
+}
+
+/* Subordinate file listing shown under a selected volume. */
+.dk-vol-files {
+  margin: 0 var(--sp-2) var(--sp-1-5);
+  padding: var(--sp-2);
+  background: var(--bg);
+  border: 1px solid var(--line-2);
+  border-radius: var(--radius-xs);
+  font-family: var(--mono);
+  font-size: var(--size-micro);
+  color: var(--ink-2);
+  max-height: 240px;
+  overflow: auto;
+  white-space: pre;
+}
+.dk-vol-files.is-busy { color: var(--muted); font-style: italic; }
+
+/* Toolbar above a tab body (run, prune, pull). */
+.dk-toolbar {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-1-5);
+  padding: var(--sp-1-5) var(--sp-2);
+  border-bottom: 1px solid var(--line);
+  background: var(--surface);
+  flex: none;
+}
+
+/* Run container dialog form controls. */
+.dlg.dlg--runctr { width: 520px; }
+.run-pair-stack { display: flex; flex-direction: column; gap: var(--sp-1); }
+.run-pair {
+  display: grid;
+  grid-template-columns: 1fr auto 1fr auto;
+  align-items: center;
+  gap: var(--sp-1-5);
+}
+.run-pair-sep {
+  color: var(--muted);
+  font-size: var(--size-small);
+  padding: 0 2px;
+}
+.run-pair-add {
+  background: none;
+  border: none;
+  color: var(--muted);
+  font-size: var(--size-small);
+  padding: 2px 0;
+  display: inline-flex;
+  align-items: center;
+  gap: var(--sp-1);
+  cursor: pointer;
+  align-self: flex-start;
+}
+.run-pair-add:hover { color: var(--ink-2); }
+
+/* Pull input in the Images tab toolbar. */
+.dk-pull {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--sp-1-5);
+  background: var(--panel);
+  border: 1px solid var(--line-2);
+  border-radius: var(--radius-sm);
+  padding: 2px 4px 2px var(--sp-1-5);
+  flex: 1;
+  min-width: 0;
+  color: var(--muted);
+}
+.dk-pull input {
+  flex: 1;
+  background: none;
+  border: none;
+  outline: none;
+  color: var(--ink);
+  font-family: var(--mono);
+  font-size: var(--size-small);
+  min-width: 0;
+}
+.dk-pull input::placeholder { color: var(--muted); }
+.dk-pull .btn.is-compact { padding: 0 var(--sp-2); height: 22px; }
+
+/* Color tones for container action buttons so stop/start/restart are
+   legible at a glance instead of looking like generic triangles. */
+.mini-btn.is-start { color: var(--pos); }
+.mini-btn.is-start:hover { background: var(--pos-dim); color: var(--pos); }
+.mini-btn.is-stop { color: var(--neg); }
+.mini-btn.is-stop:hover { background: var(--neg-dim); color: var(--neg); }
+.mini-btn.is-info { color: var(--info); }
+.mini-btn.is-info:hover { background: var(--accent-dim); color: var(--accent); }
+
+/* Proxy dialog styles. */
+.dlg.dlg--proxy { width: 480px; }
+.dlg-row-hint {
+  color: var(--muted);
+  font-size: var(--size-micro);
+  margin-top: 3px;
+  line-height: 1.4;
+}
+.dlg-chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--sp-1);
+  margin-top: var(--sp-1-5);
+}
+.dlg-chip {
+  background: var(--panel-2);
+  border: 1px solid var(--line-2);
+  color: var(--ink-2);
+  font-family: var(--mono);
+  font-size: var(--size-micro);
+  padding: 2px var(--sp-1-5);
+  border-radius: var(--radius-xs);
+  cursor: pointer;
+  transition: background var(--dur-fast) var(--easing),
+              border-color var(--dur-fast) var(--easing),
+              color var(--dur-fast) var(--easing);
+}
+.dlg-chip:hover { background: var(--elev); color: var(--ink); }
+.dlg-chip.active {
+  background: var(--accent-dim);
+  border-color: color-mix(in srgb, var(--accent) 40%, var(--line-2));
+  color: var(--accent);
+}
 
 .dk-dot {
   display: inline-block;

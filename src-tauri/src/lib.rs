@@ -581,6 +581,33 @@ fn build_ssh_session_from_params(
         .map_err(|e| e.to_string())
 }
 
+/// Build an SSH session for a panel command, preferring the stored
+/// connection record when `saved_index` is set.
+///
+/// This is the same path `terminal_create_ssh_saved` takes — when a
+/// saved connection is in play the stored [`SshConfig`] already carries
+/// the right [`AuthMethod`] (KeychainPassword / PublicKeyFile / Agent
+/// / DirectPassword), so we don't have to reconstruct it from the
+/// param bag. The param fallback remains for ad-hoc connections that
+/// were never saved.
+fn build_ssh_session_saved_or_params(
+    saved_index: Option<usize>,
+    host: &str,
+    port: u16,
+    user: &str,
+    auth_mode: &str,
+    password: &str,
+    key_path: &str,
+) -> Result<SshSession, String> {
+    if let Some(index) = saved_index {
+        if let Ok(config) = open_saved_ssh_config(index) {
+            return SshSession::connect_blocking(&config, HostKeyVerifier::default())
+                .map_err(|e| e.to_string());
+        }
+    }
+    build_ssh_session_from_params(host, port, user, auth_mode, password, key_path)
+}
+
 /// Resolve the effective password for a panel call. If `password` is
 /// empty (the frontend hasn't primed it yet) and `saved_index`
 /// points at a saved connection with a keychain credential, fetch
@@ -1019,6 +1046,24 @@ fn create_ssh_terminal_from_config(
     let shell = format!("ssh:{}@{}:{}", config.user, config.host, config.port);
     let session = SshSession::connect_blocking(&config, HostKeyVerifier::default())
         .map_err(|error| error.to_string())?;
+
+    // Seed the SFTP cache with the freshly-authenticated connection.
+    // `SshSession` is `Arc`-backed (`#[derive(Clone)]`) so the clone
+    // just bumps a refcount; the right-side SFTP panel can then
+    // reuse the live channel instead of re-handshaking (and avoid
+    // the "InvalidConfig" error when the tab has a key/agent auth
+    // or a password that's already been consumed). Key format must
+    // match `sftp_cache_key`.
+    let auth_mode_key = match &config.auth {
+        AuthMethod::Agent => "agent",
+        AuthMethod::PublicKeyFile { .. } => "key",
+        _ => "password",
+    };
+    let cache_key = sftp_cache_key(&config.host, config.port, &config.user, auth_mode_key);
+    if let Ok(mut cache) = state.sftp_sessions.lock() {
+        cache.insert(cache_key, Arc::new(session.clone()));
+    }
+
     let pty = session
         .open_shell_channel_blocking(resolved_cols, resolved_rows)
         .map_err(|error| error.to_string())?;
@@ -1411,6 +1456,7 @@ fn ssh_connection_save(
     auth_mode: String,
     password: Option<String>,
     key_path: Option<String>,
+    group: Option<String>,
 ) -> Result<(), String> {
     let resolved_host = host.trim();
     let resolved_user = user.trim();
@@ -1451,6 +1497,10 @@ fn ssh_connection_save(
             AuthMethod::KeychainPassword { credential_id }
         }
     };
+
+    config.group = group
+        .map(|s| s.trim().to_string())
+        .filter(|s| !s.is_empty());
 
     let mut store = ConnectionStore::load_default().map_err(|error| error.to_string())?;
     store.add(config);
@@ -1499,6 +1549,7 @@ fn ssh_connection_update(
     auth_mode: String,
     password: Option<String>,
     key_path: Option<String>,
+    group: Option<String>,
 ) -> Result<(), String> {
     let resolved_host = host.trim();
     let resolved_user = user.trim();
@@ -1564,6 +1615,18 @@ fn ssh_connection_update(
                 },
             }
         }
+    };
+
+    // Preserve the previous group unless the caller explicitly passed
+    // one. Passing `Some("")` / whitespace clears it; passing `None`
+    // keeps the existing assignment so non-group-aware callers don't
+    // accidentally ungroup rows.
+    config.group = match group {
+        Some(value) => {
+            let trimmed = value.trim();
+            if trimmed.is_empty() { None } else { Some(trimmed.to_string()) }
+        }
+        None => existing.group.clone(),
     };
 
     let new_auth = config.auth.clone();
@@ -2213,8 +2276,45 @@ fn postgres_execute(
 
 // ── Docker ──────────────────────────────────────────────────────────
 
+/// Grab an SSH session for Docker work, preferring the saved-config
+/// path when `saved_index` is set. Reuses the shared session cache so
+/// switching between the Docker / SFTP / monitor panels does not
+/// re-handshake on every call.
+fn get_or_open_docker_ssh_session(
+    state: &tauri::State<'_, AppState>,
+    saved_index: Option<usize>,
+    host: &str,
+    port: u16,
+    user: &str,
+    auth_mode: &str,
+    password: &str,
+    key_path: &str,
+) -> Result<Arc<SshSession>, String> {
+    let key = sftp_cache_key(host, port, user, auth_mode);
+    {
+        let cache = state
+            .sftp_sessions
+            .lock()
+            .map_err(|_| "ssh session cache poisoned".to_string())?;
+        if let Some(existing) = cache.get(&key) {
+            return Ok(Arc::clone(existing));
+        }
+    }
+    let session = build_ssh_session_saved_or_params(
+        saved_index, host, port, user, auth_mode, password, key_path,
+    )?;
+    let arc = Arc::new(session);
+    state
+        .sftp_sessions
+        .lock()
+        .map_err(|_| "ssh session cache poisoned".to_string())?
+        .insert(key, Arc::clone(&arc));
+    Ok(arc)
+}
+
 #[tauri::command]
 fn docker_overview(
+    state: tauri::State<'_, AppState>,
     host: String,
     port: u16,
     user: String,
@@ -2222,43 +2322,37 @@ fn docker_overview(
     password: String,
     key_path: String,
     all: bool,
+    saved_connection_index: Option<usize>,
 ) -> Result<DockerOverview, String> {
-    let session = build_ssh_session_from_params(
-        &host, port, &user, &auth_mode, &password, &key_path,
+    let session = get_or_open_docker_ssh_session(
+        &state, saved_connection_index, &host, port, &user, &auth_mode, &password, &key_path,
     )?;
 
-    // `docker stats` is a soft dependency — older docker builds may not
-    // accept `--no-stream --format`, and permission-constrained remotes
-    // may reject it entirely. Treat failure as "no stats" rather than
-    // failing the whole overview.
-    let stats_by_id: std::collections::HashMap<String, docker::ContainerStat> =
-        docker::list_container_stats_blocking(&session)
-            .unwrap_or_default()
-            .into_iter()
-            .map(|s| (s.id.clone(), s))
-            .collect();
-
+    // Fan out the four cheap listings over the single cached SSH session —
+    // russh multiplexes channels so they all run concurrently. The slow
+    // `docker stats` and `docker system df -v` calls are split out into
+    // `docker_stats` and `docker_volume_usage` so the panel can render
+    // base data in one RTT and enrich in the background.
+    // The four base listings each fire one `docker ... ls` exec — cheap
+    // (~100ms each over SSH). Sequential is fine now that the slow calls
+    // (`docker stats`, `docker system df -v`) are split out into
+    // `docker_stats` / `docker_volume_usage` which the UI fires in the
+    // background without blocking the first paint.
     let containers = docker::list_containers_blocking(&session, all)
         .map_err(|e| e.to_string())?
         .into_iter()
-        .map(|c| {
-            let short_id = c.id.chars().take(12).collect::<String>();
-            let stat = stats_by_id
-                .get(&c.id)
-                .or_else(|| stats_by_id.get(&short_id));
-            DockerContainerView {
-                running: c.is_running(),
-                cpu_perc: stat.map(|s| s.cpu_perc.clone()).unwrap_or_default(),
-                mem_usage: stat.map(|s| s.mem_usage.clone()).unwrap_or_default(),
-                mem_perc: stat.map(|s| s.mem_perc.clone()).unwrap_or_default(),
-                id: c.id,
-                image: c.image,
-                names: c.names,
-                status: c.status,
-                state: c.state,
-                created: c.created,
-                ports: c.ports,
-            }
+        .map(|c| DockerContainerView {
+            running: c.is_running(),
+            cpu_perc: String::new(),
+            mem_usage: String::new(),
+            mem_perc: String::new(),
+            id: c.id,
+            image: c.image,
+            names: c.names,
+            status: c.status,
+            state: c.state,
+            created: c.created,
+            ports: c.ports,
         })
         .collect();
 
@@ -2274,38 +2368,18 @@ fn docker_overview(
         })
         .collect();
 
-    // Per-volume size via `docker system df -v` — graceful degradation
-    // when the server refuses the subcommand (e.g. rootless docker
-    // without the right plugin).
-    let sizes_by_name: std::collections::HashMap<String, docker::VolumeDiskUsage> =
-        docker::list_volume_sizes_blocking(&session)
-            .unwrap_or_default()
-            .into_iter()
-            .map(|v| (v.name.clone(), v))
-            .collect();
-
-    let mut volumes: Vec<DockerVolumeView> = docker::list_volumes_blocking(&session)
+    let volumes: Vec<DockerVolumeView> = docker::list_volumes_blocking(&session)
         .map_err(|e| e.to_string())?
         .into_iter()
-        .map(|v| {
-            let (size, size_bytes, links) = sizes_by_name
-                .get(&v.name)
-                .map(|df| (df.size.clone(), docker::parse_size_to_bytes(&df.size), df.links))
-                .unwrap_or_else(|| (String::new(), 0, -1));
-            DockerVolumeView {
-                name: v.name,
-                driver: v.driver,
-                mountpoint: v.mountpoint,
-                size,
-                size_bytes,
-                links,
-            }
+        .map(|v| DockerVolumeView {
+            name: v.name,
+            driver: v.driver,
+            mountpoint: v.mountpoint,
+            size: String::new(),
+            size_bytes: 0,
+            links: -1,
         })
         .collect();
-
-    // Largest first — matches the user-visible sort the panel renders
-    // by default; the frontend can still re-sort alphabetically etc.
-    volumes.sort_by(|a, b| b.size_bytes.cmp(&a.size_bytes).then(a.name.cmp(&b.name)));
 
     let networks = docker::list_networks_blocking(&session)
         .map_err(|e| e.to_string())?
@@ -2326,6 +2400,77 @@ fn docker_overview(
     })
 }
 
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct DockerContainerStatsView {
+    /// Container id the sample belongs to. UI merges by id / short id.
+    id: String,
+    cpu_perc: String,
+    mem_usage: String,
+    mem_perc: String,
+}
+
+#[tauri::command]
+fn docker_stats(
+    state: tauri::State<'_, AppState>,
+    host: String,
+    port: u16,
+    user: String,
+    auth_mode: String,
+    password: String,
+    key_path: String,
+    saved_connection_index: Option<usize>,
+) -> Result<Vec<DockerContainerStatsView>, String> {
+    let session = get_or_open_docker_ssh_session(
+        &state, saved_connection_index, &host, port, &user, &auth_mode, &password, &key_path,
+    )?;
+    let stats = docker::list_container_stats_blocking(&session).unwrap_or_default();
+    Ok(stats
+        .into_iter()
+        .map(|s| DockerContainerStatsView {
+            id: s.id,
+            cpu_perc: s.cpu_perc,
+            mem_usage: s.mem_usage,
+            mem_perc: s.mem_perc,
+        })
+        .collect())
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct DockerVolumeUsageView {
+    name: String,
+    size: String,
+    size_bytes: u64,
+    links: i64,
+}
+
+#[tauri::command]
+fn docker_volume_usage(
+    state: tauri::State<'_, AppState>,
+    host: String,
+    port: u16,
+    user: String,
+    auth_mode: String,
+    password: String,
+    key_path: String,
+    saved_connection_index: Option<usize>,
+) -> Result<Vec<DockerVolumeUsageView>, String> {
+    let session = get_or_open_docker_ssh_session(
+        &state, saved_connection_index, &host, port, &user, &auth_mode, &password, &key_path,
+    )?;
+    let usages = docker::list_volume_sizes_blocking(&session).unwrap_or_default();
+    Ok(usages
+        .into_iter()
+        .map(|v| DockerVolumeUsageView {
+            size_bytes: docker::parse_size_to_bytes(&v.size),
+            name: v.name,
+            size: v.size,
+            links: v.links,
+        })
+        .collect())
+}
+
 #[tauri::command]
 fn docker_container_action(
     host: String,
@@ -2336,9 +2481,10 @@ fn docker_container_action(
     key_path: String,
     container_id: String,
     action: String,
+    saved_connection_index: Option<usize>,
 ) -> Result<String, String> {
-    let session = build_ssh_session_from_params(
-        &host, port, &user, &auth_mode, &password, &key_path,
+    let session = build_ssh_session_saved_or_params(
+        saved_connection_index, &host, port, &user, &auth_mode, &password, &key_path,
     )?;
 
     match action.as_str() {
@@ -2522,9 +2668,10 @@ fn docker_inspect(
     password: String,
     key_path: String,
     container_id: String,
+    saved_connection_index: Option<usize>,
 ) -> Result<String, String> {
-    let session = build_ssh_session_from_params(
-        &host, port, &user, &auth_mode, &password, &key_path,
+    let session = build_ssh_session_saved_or_params(
+        saved_connection_index, &host, port, &user, &auth_mode, &password, &key_path,
     )?;
     docker::inspect_container_blocking(&session, &container_id)
         .map_err(|e| e.to_string())
@@ -2540,9 +2687,10 @@ fn docker_remove_image(
     key_path: String,
     image_id: String,
     force: bool,
+    saved_connection_index: Option<usize>,
 ) -> Result<(), String> {
-    let session = build_ssh_session_from_params(
-        &host, port, &user, &auth_mode, &password, &key_path,
+    let session = build_ssh_session_saved_or_params(
+        saved_connection_index, &host, port, &user, &auth_mode, &password, &key_path,
     )?;
     docker::remove_image_blocking(&session, &image_id, force)
         .map_err(|e| e.to_string())
@@ -2557,9 +2705,10 @@ fn docker_remove_volume(
     password: String,
     key_path: String,
     volume_name: String,
+    saved_connection_index: Option<usize>,
 ) -> Result<(), String> {
-    let session = build_ssh_session_from_params(
-        &host, port, &user, &auth_mode, &password, &key_path,
+    let session = build_ssh_session_saved_or_params(
+        saved_connection_index, &host, port, &user, &auth_mode, &password, &key_path,
     )?;
     docker::remove_volume_blocking(&session, &volume_name)
         .map_err(|e| e.to_string())
@@ -2574,12 +2723,219 @@ fn docker_remove_network(
     password: String,
     key_path: String,
     network_name: String,
+    saved_connection_index: Option<usize>,
 ) -> Result<(), String> {
-    let session = build_ssh_session_from_params(
-        &host, port, &user, &auth_mode, &password, &key_path,
+    let session = build_ssh_session_saved_or_params(
+        saved_connection_index, &host, port, &user, &auth_mode, &password, &key_path,
     )?;
     docker::remove_network_blocking(&session, &network_name)
         .map_err(|e| e.to_string())
+}
+
+#[derive(serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct DockerRunOptionsView {
+    image: String,
+    #[serde(default)]
+    name: String,
+    #[serde(default)]
+    ports: Vec<(String, String)>,
+    #[serde(default)]
+    env: Vec<(String, String)>,
+    #[serde(default)]
+    volumes: Vec<(String, String)>,
+    #[serde(default)]
+    restart: String,
+    #[serde(default)]
+    command: String,
+}
+
+impl From<DockerRunOptionsView> for docker::RunContainerOptions {
+    fn from(v: DockerRunOptionsView) -> Self {
+        docker::RunContainerOptions {
+            image: v.image,
+            name: v.name,
+            ports: v.ports,
+            env: v.env,
+            volumes: v.volumes,
+            restart: v.restart,
+            command: v.command,
+        }
+    }
+}
+
+#[tauri::command]
+fn docker_run_container(
+    host: String,
+    port: u16,
+    user: String,
+    auth_mode: String,
+    password: String,
+    key_path: String,
+    options: DockerRunOptionsView,
+    saved_connection_index: Option<usize>,
+) -> Result<String, String> {
+    let session = build_ssh_session_saved_or_params(
+        saved_connection_index, &host, port, &user, &auth_mode, &password, &key_path,
+    )?;
+    docker::run_container_blocking(&session, &options.into()).map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+fn docker_prune_volumes(
+    host: String,
+    port: u16,
+    user: String,
+    auth_mode: String,
+    password: String,
+    key_path: String,
+    saved_connection_index: Option<usize>,
+) -> Result<String, String> {
+    let session = build_ssh_session_saved_or_params(
+        saved_connection_index, &host, port, &user, &auth_mode, &password, &key_path,
+    )?;
+    docker::prune_volumes_blocking(&session).map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+fn docker_pull_image(
+    host: String,
+    port: u16,
+    user: String,
+    auth_mode: String,
+    password: String,
+    key_path: String,
+    image_ref: String,
+    // `env_prefix`: optional env overrides (e.g. HTTPS_PROXY) applied only
+    // to this `docker pull`; does not modify the remote daemon config.
+    env_prefix: Option<Vec<(String, String)>>,
+    saved_connection_index: Option<usize>,
+) -> Result<String, String> {
+    let session = build_ssh_session_saved_or_params(
+        saved_connection_index, &host, port, &user, &auth_mode, &password, &key_path,
+    )?;
+    let env = env_prefix.unwrap_or_default();
+    let env_refs: Vec<(&str, &str)> = env.iter().map(|(k, v)| (k.as_str(), v.as_str())).collect();
+    docker::pull_image_blocking(&session, &image_ref, &env_refs).map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+fn local_docker_pull_image(
+    image_ref: String,
+    env_prefix: Option<Vec<(String, String)>>,
+) -> Result<String, String> {
+    if image_ref.trim().is_empty() {
+        return Err("docker pull: image reference is required".into());
+    }
+    let mut cmd = std::process::Command::new("docker");
+    for (k, v) in env_prefix.unwrap_or_default() {
+        cmd.env(k, v);
+    }
+    let output = cmd
+        .args(["pull", image_ref.trim()])
+        .output()
+        .map_err(|e| format!("docker pull failed: {e}"))?;
+    if !output.status.success() {
+        return Err(String::from_utf8_lossy(&output.stderr).to_string());
+    }
+    Ok(String::from_utf8_lossy(&output.stdout).to_string())
+}
+
+#[tauri::command]
+fn docker_volume_files(
+    host: String,
+    port: u16,
+    user: String,
+    auth_mode: String,
+    password: String,
+    key_path: String,
+    mountpoint: String,
+    saved_connection_index: Option<usize>,
+) -> Result<String, String> {
+    let session = build_ssh_session_saved_or_params(
+        saved_connection_index, &host, port, &user, &auth_mode, &password, &key_path,
+    )?;
+    docker::list_volume_files_blocking(&session, &mountpoint).map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+fn local_docker_run_container(options: DockerRunOptionsView) -> Result<String, String> {
+    let opts: docker::RunContainerOptions = options.into();
+    if opts.image.trim().is_empty() {
+        return Err("docker run: image is required".into());
+    }
+    let mut args: Vec<String> = vec!["run".into(), "-d".into()];
+    if !opts.name.trim().is_empty() {
+        args.push("--name".into());
+        args.push(opts.name.trim().into());
+    }
+    if !opts.restart.trim().is_empty() {
+        args.push("--restart".into());
+        args.push(opts.restart.trim().into());
+    }
+    for (h, g) in &opts.ports {
+        let h = h.trim();
+        let g = g.trim();
+        if g.is_empty() { continue; }
+        args.push("-p".into());
+        args.push(if h.is_empty() { g.into() } else { format!("{h}:{g}") });
+    }
+    for (k, v) in &opts.env {
+        if k.trim().is_empty() { continue; }
+        args.push("-e".into());
+        args.push(format!("{}={}", k.trim(), v));
+    }
+    for (h, g) in &opts.volumes {
+        let h = h.trim();
+        let g = g.trim();
+        if h.is_empty() || g.is_empty() { continue; }
+        args.push("-v".into());
+        args.push(format!("{h}:{g}"));
+    }
+    args.push(opts.image.trim().into());
+    if !opts.command.trim().is_empty() {
+        // Local std::process::Command does not go through a shell, so we
+        // split on whitespace; users wanting shell features can use SSH.
+        for tok in opts.command.split_whitespace() {
+            args.push(tok.into());
+        }
+    }
+    let output = std::process::Command::new("docker")
+        .args(&args)
+        .output()
+        .map_err(|e| format!("docker run failed: {e}"))?;
+    if !output.status.success() {
+        return Err(String::from_utf8_lossy(&output.stderr).to_string());
+    }
+    Ok(String::from_utf8_lossy(&output.stdout).trim().to_string())
+}
+
+#[tauri::command]
+fn local_docker_prune_volumes() -> Result<String, String> {
+    let output = std::process::Command::new("docker")
+        .args(["volume", "prune", "-f"])
+        .output()
+        .map_err(|e| format!("docker volume prune failed: {e}"))?;
+    if !output.status.success() {
+        return Err(String::from_utf8_lossy(&output.stderr).to_string());
+    }
+    Ok(String::from_utf8_lossy(&output.stdout).to_string())
+}
+
+#[tauri::command]
+fn local_docker_volume_files(mountpoint: String) -> Result<String, String> {
+    let output = std::process::Command::new("ls")
+        .args(["-la", "--color=never", &mountpoint])
+        .output()
+        .map_err(|e| format!("ls failed: {e}"))?;
+    // `ls` prints to stderr on permission errors; bundle both so the user
+    // sees why a listing is empty.
+    let mut out = String::from_utf8_lossy(&output.stdout).to_string();
+    let err = String::from_utf8_lossy(&output.stderr);
+    if !err.trim().is_empty() {
+        out.push_str(&err);
+    }
+    Ok(out.lines().take(200).collect::<Vec<_>>().join("\n"))
 }
 
 // ── SFTP Extended ───────────────────────────────────────────────
@@ -2647,8 +3003,40 @@ fn sftp_rename(
     sftp.rename_blocking(&from, &to).map_err(|e| e.to_string())
 }
 
+/// Progress update emitted to the frontend for in-flight transfers.
+/// Throttled to one event per ~64 KiB chunk by the chunked
+/// upload/download loops — the frontend's React batching handles the
+/// rest so the transfer queue re-renders at a comfortable rate.
+#[derive(Serialize, Clone)]
+#[serde(rename_all = "camelCase")]
+struct SftpProgressEvent {
+    /// Frontend-assigned transfer id so listeners can match events
+    /// to the queue entry they created when calling the command.
+    id: String,
+    bytes: u64,
+    total: u64,
+    /// True on the final emit (either after the last chunk finishes
+    /// or after a failure). Lets the UI stop animating.
+    done: bool,
+    /// Populated with the error message when the transfer failed.
+    error: Option<String>,
+}
+
+/// Event name the frontend subscribes to. Kept as a constant so the
+/// TypeScript side can import the same string without guessing.
+const SFTP_PROGRESS_EVENT: &str = "sftp:progress";
+
+/// Emit a progress event — best-effort. If the frontend window is
+/// gone, `emit` errors; we swallow because a transfer shouldn't fail
+/// because the panel unmounted.
+fn emit_sftp_progress(app: &tauri::AppHandle, evt: SftpProgressEvent) {
+    use tauri::Emitter;
+    let _ = app.emit(SFTP_PROGRESS_EVENT, evt);
+}
+
 #[tauri::command]
 fn sftp_download(
+    app: tauri::AppHandle,
     state: tauri::State<'_, AppState>,
     host: String,
     port: u16,
@@ -2659,18 +3047,78 @@ fn sftp_download(
     remote_path: String,
     local_path: String,
     saved_connection_index: Option<usize>,
+    transfer_id: Option<String>,
 ) -> Result<(), String> {
     let session = get_or_open_sftp_ssh_session(
         &state, &host, port, &user, &auth_mode, &password, &key_path, saved_connection_index,
     )?;
     let sftp = session.open_sftp_blocking().map_err(|e| e.to_string())?;
     let resolved_local = expand_local_path(&local_path);
-    sftp.download_to_blocking(&remote_path, &resolved_local)
-        .map_err(|e| e.to_string())
+    let id = transfer_id.clone().unwrap_or_default();
+
+    // Fast path: no transfer id means the caller didn't subscribe to
+    // progress, so skip the extra metadata/chunk dance and use the
+    // whole-file download. Same behaviour as before the progress
+    // plumbing landed.
+    if transfer_id.is_none() {
+        return sftp
+            .download_to_blocking(&remote_path, &resolved_local)
+            .map_err(|e| e.to_string());
+    }
+
+    let app_for_cb = app.clone();
+    let id_for_cb = id.clone();
+    let result = sftp.download_to_with_progress_blocking(
+        &remote_path,
+        &resolved_local,
+        move |bytes, total| {
+            emit_sftp_progress(
+                &app_for_cb,
+                SftpProgressEvent {
+                    id: id_for_cb.clone(),
+                    bytes,
+                    total,
+                    done: false,
+                    error: None,
+                },
+            );
+        },
+    );
+
+    match result {
+        Ok(bytes) => {
+            emit_sftp_progress(
+                &app,
+                SftpProgressEvent {
+                    id,
+                    bytes,
+                    total: bytes,
+                    done: true,
+                    error: None,
+                },
+            );
+            Ok(())
+        }
+        Err(e) => {
+            let msg = e.to_string();
+            emit_sftp_progress(
+                &app,
+                SftpProgressEvent {
+                    id,
+                    bytes: 0,
+                    total: 0,
+                    done: true,
+                    error: Some(msg.clone()),
+                },
+            );
+            Err(msg)
+        }
+    }
 }
 
 #[tauri::command]
 fn sftp_upload(
+    app: tauri::AppHandle,
     state: tauri::State<'_, AppState>,
     host: String,
     port: u16,
@@ -2681,14 +3129,225 @@ fn sftp_upload(
     local_path: String,
     remote_path: String,
     saved_connection_index: Option<usize>,
+    transfer_id: Option<String>,
 ) -> Result<(), String> {
     let session = get_or_open_sftp_ssh_session(
         &state, &host, port, &user, &auth_mode, &password, &key_path, saved_connection_index,
     )?;
     let sftp = session.open_sftp_blocking().map_err(|e| e.to_string())?;
     let resolved_local = expand_local_path(&local_path);
-    sftp.upload_from_blocking(&resolved_local, &remote_path)
-        .map_err(|e| e.to_string())
+    let id = transfer_id.clone().unwrap_or_default();
+
+    if transfer_id.is_none() {
+        return sftp
+            .upload_from_blocking(&resolved_local, &remote_path)
+            .map_err(|e| e.to_string());
+    }
+
+    let app_for_cb = app.clone();
+    let id_for_cb = id.clone();
+    let result = sftp.upload_from_with_progress_blocking(
+        &resolved_local,
+        &remote_path,
+        move |bytes, total| {
+            emit_sftp_progress(
+                &app_for_cb,
+                SftpProgressEvent {
+                    id: id_for_cb.clone(),
+                    bytes,
+                    total,
+                    done: false,
+                    error: None,
+                },
+            );
+        },
+    );
+
+    match result {
+        Ok(bytes) => {
+            emit_sftp_progress(
+                &app,
+                SftpProgressEvent {
+                    id,
+                    bytes,
+                    total: bytes,
+                    done: true,
+                    error: None,
+                },
+            );
+            Ok(())
+        }
+        Err(e) => {
+            let msg = e.to_string();
+            emit_sftp_progress(
+                &app,
+                SftpProgressEvent {
+                    id,
+                    bytes: 0,
+                    total: 0,
+                    done: true,
+                    error: Some(msg.clone()),
+                },
+            );
+            Err(msg)
+        }
+    }
+}
+
+/// Upload a local directory recursively into `remote_path`. Emits
+/// aggregate progress via `sftp:progress` (bytes summed across the
+/// whole tree). See [`sftp_upload`] for the event schema — the shape
+/// is identical.
+#[tauri::command]
+fn sftp_upload_tree(
+    app: tauri::AppHandle,
+    state: tauri::State<'_, AppState>,
+    host: String,
+    port: u16,
+    user: String,
+    auth_mode: String,
+    password: String,
+    key_path: String,
+    local_path: String,
+    remote_path: String,
+    saved_connection_index: Option<usize>,
+    transfer_id: Option<String>,
+) -> Result<(), String> {
+    let session = get_or_open_sftp_ssh_session(
+        &state, &host, port, &user, &auth_mode, &password, &key_path, saved_connection_index,
+    )?;
+    let sftp = session.open_sftp_blocking().map_err(|e| e.to_string())?;
+    let resolved_local = expand_local_path(&local_path);
+    let id = transfer_id.clone().unwrap_or_default();
+
+    let app_for_cb = app.clone();
+    let id_for_cb = id.clone();
+    let should_emit = !transfer_id.as_deref().unwrap_or("").is_empty();
+    let result = sftp.upload_tree_blocking(&resolved_local, &remote_path, move |bytes, total| {
+        if should_emit {
+            emit_sftp_progress(
+                &app_for_cb,
+                SftpProgressEvent {
+                    id: id_for_cb.clone(),
+                    bytes,
+                    total,
+                    done: false,
+                    error: None,
+                },
+            );
+        }
+    });
+
+    match result {
+        Ok(bytes) => {
+            if should_emit {
+                emit_sftp_progress(
+                    &app,
+                    SftpProgressEvent {
+                        id,
+                        bytes,
+                        total: bytes,
+                        done: true,
+                        error: None,
+                    },
+                );
+            }
+            Ok(())
+        }
+        Err(e) => {
+            let msg = e.to_string();
+            if should_emit {
+                emit_sftp_progress(
+                    &app,
+                    SftpProgressEvent {
+                        id,
+                        bytes: 0,
+                        total: 0,
+                        done: true,
+                        error: Some(msg.clone()),
+                    },
+                );
+            }
+            Err(msg)
+        }
+    }
+}
+
+/// Download a remote directory recursively to `local_path`. Mirror
+/// image of [`sftp_upload_tree`].
+#[tauri::command]
+fn sftp_download_tree(
+    app: tauri::AppHandle,
+    state: tauri::State<'_, AppState>,
+    host: String,
+    port: u16,
+    user: String,
+    auth_mode: String,
+    password: String,
+    key_path: String,
+    remote_path: String,
+    local_path: String,
+    saved_connection_index: Option<usize>,
+    transfer_id: Option<String>,
+) -> Result<(), String> {
+    let session = get_or_open_sftp_ssh_session(
+        &state, &host, port, &user, &auth_mode, &password, &key_path, saved_connection_index,
+    )?;
+    let sftp = session.open_sftp_blocking().map_err(|e| e.to_string())?;
+    let resolved_local = expand_local_path(&local_path);
+    let id = transfer_id.clone().unwrap_or_default();
+
+    let app_for_cb = app.clone();
+    let id_for_cb = id.clone();
+    let should_emit = !transfer_id.as_deref().unwrap_or("").is_empty();
+    let result = sftp.download_tree_blocking(&remote_path, &resolved_local, move |bytes, total| {
+        if should_emit {
+            emit_sftp_progress(
+                &app_for_cb,
+                SftpProgressEvent {
+                    id: id_for_cb.clone(),
+                    bytes,
+                    total,
+                    done: false,
+                    error: None,
+                },
+            );
+        }
+    });
+
+    match result {
+        Ok(bytes) => {
+            if should_emit {
+                emit_sftp_progress(
+                    &app,
+                    SftpProgressEvent {
+                        id,
+                        bytes,
+                        total: bytes,
+                        done: true,
+                        error: None,
+                    },
+                );
+            }
+            Ok(())
+        }
+        Err(e) => {
+            let msg = e.to_string();
+            if should_emit {
+                emit_sftp_progress(
+                    &app,
+                    SftpProgressEvent {
+                        id,
+                        bytes: 0,
+                        total: 0,
+                        done: true,
+                        error: Some(msg.clone()),
+                    },
+                );
+            }
+            Err(msg)
+        }
+    }
 }
 
 // ── Log Stream ──────────────────────────────────────────────────
@@ -2703,9 +3362,11 @@ fn log_stream_start(
     password: String,
     key_path: String,
     command: String,
+    saved_connection_index: Option<usize>,
 ) -> Result<String, String> {
+    let effective_password = resolve_password_for_auth(&auth_mode, &password, saved_connection_index);
     let session = build_ssh_session_from_params(
-        &host, port, &user, &auth_mode, &password, &key_path,
+        &host, port, &user, &auth_mode, &effective_password, &key_path,
     )?;
     let stream = session
         .spawn_exec_stream_blocking(&command)
@@ -3054,6 +3715,7 @@ pub fn run() {
     tauri::Builder::default()
         .manage(AppState::default())
         .plugin(tauri_plugin_opener::init())
+        .plugin(tauri_plugin_dialog::init())
         .setup(|_app| {
             // On Windows we draw our own caption controls (minimize /
             // maximize / close) in the titlebar — disable the OS chrome
@@ -3177,16 +3839,28 @@ pub fn run() {
             docker_remove_image,
             docker_remove_volume,
             docker_remove_network,
+            docker_run_container,
+            docker_prune_volumes,
+            docker_volume_files,
+            docker_stats,
+            docker_volume_usage,
+            docker_pull_image,
             sftp_mkdir,
             sftp_remove,
             sftp_rename,
             sftp_download,
             sftp_upload,
+            sftp_upload_tree,
+            sftp_download_tree,
             log_stream_start,
             log_stream_drain,
             log_stream_stop,
             local_docker_overview,
             local_docker_action,
+            local_docker_run_container,
+            local_docker_prune_volumes,
+            local_docker_volume_files,
+            local_docker_pull_image,
             local_system_info
         ])
         .run(tauri::generate_context!())

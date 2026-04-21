@@ -91,7 +91,7 @@
   "Saved stashes": "已保存的贮藏",
   "Apply, pop, or drop a snapshot": "应用、弹出或删除一个快照",
   "Branch": "分支",
-  "Branches": "分支管理",
+  "Branches": "分支",
   "Tracking": "跟踪",
   "Detached": "游离头指针",
   "Tags": "标签",
@@ -194,6 +194,7 @@
   "No saved connections": "暂无保存的连接",
   "No matching connections": "没有匹配的连接",
   "Default": "默认",
+  "Group": "分组",
   "New group": "新建分组",
   "New group…": "新建分组…",
   "New group name": "分组名称",
@@ -432,5 +433,10 @@
   "SFTP session": "SFTP 会话",
   "Configure SSH connection to begin.": "请先配置 SSH 连接。",
   "{user}@{host}:{port} · SFTP session": "{user}@{host}:{port} · SFTP 会话",
-  "logs": "logs"
+  "logs": "logs",
+  "Select files to upload": "选择要上传的文件",
+  "Select download folder": "选择下载到的本地目录",
+  "Uploaded {count} file(s).": "已上传 {count} 个文件。",
+  "Parent directory": "上级目录",
+  "Uploaded folder {path}.": "已上传文件夹 {path}。"
 }

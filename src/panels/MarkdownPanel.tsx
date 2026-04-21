@@ -52,7 +52,7 @@ export default function MarkdownPanel({ filePath }: Props) {
         ) : error ? (
           <div className="empty-note empty-note--error">{error}</div>
         ) : (
-          <div className="markdown-preview" dangerouslySetInnerHTML={{ __html: html }} />
+          <div className="markdown-preview ux-selectable" dangerouslySetInnerHTML={{ __html: html }} />
         )}
       </section>
     </div>

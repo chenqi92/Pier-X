@@ -1,7 +1,7 @@
-import { Zap } from "lucide-react";
 import { useEffect, useState } from "react";
 import * as cmd from "../lib/commands";
 import { quoteCommandArg } from "../lib/commands";
+import { RIGHT_TOOL_META } from "../lib/rightToolMeta";
 import { closeTunnelSlot, ensureTunnelSlot, syncTunnelState } from "../lib/sshTunnel";
 import type { RedisBrowserState, RedisCommandResult, TabState } from "../lib/types";
 import { useI18n } from "../i18n/useI18n";
@@ -12,6 +12,8 @@ import StatusDot from "../components/StatusDot";
 import { useTabStore } from "../stores/useTabStore";
 
 type Props = { tab: TabState };
+
+const REDIS_ICON = RIGHT_TOOL_META.redis.icon;
 
 export default function RedisPanel({ tab }: Props) {
   const { t } = useI18n();
@@ -211,7 +213,7 @@ export default function RedisPanel({ tab }: Props) {
   return (
     <>
       <PanelHeader
-        icon={Zap}
+        icon={REDIS_ICON}
         title={t("Redis")}
         meta={t("{name} · db {db}", {
           name: tab.title || host || t("Redis"),
@@ -219,7 +221,7 @@ export default function RedisPanel({ tab }: Props) {
         })}
       />
       <DbConnRow
-        icon={Zap}
+        icon={REDIS_ICON}
         tint="var(--neg-dim)"
         iconTint="var(--neg)"
         name={connName}

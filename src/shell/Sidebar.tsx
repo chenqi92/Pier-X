@@ -1,39 +1,41 @@
 import {
-  Activity,
   ArrowLeft,
   ArrowUp,
   ChevronRight,
-  Container,
-  Database,
   FileText,
   Folder,
   FolderPlus,
   FolderTree,
   GripVertical,
-  HardDrive,
   Home,
   Key,
   Lock,
   Pencil,
   Plus,
   RefreshCw,
-  Scroll,
   Search,
   Server,
   Shield,
   Terminal,
   Trash2,
-  Zap,
 } from "lucide-react";
-import type { ComponentType, DragEvent as ReactDragEvent, KeyboardEvent as ReactKeyboardEvent, SVGProps } from "react";
+import type { DragEvent as ReactDragEvent, KeyboardEvent as ReactKeyboardEvent } from "react";
 import { useEffect, useMemo, useRef, useState } from "react";
 import type { CoreInfo, FileEntry, SavedSshConnection, RightTool } from "../lib/types";
+import { RIGHT_TOOL_META, SERVICE_CHIP_TOOLS, type LucideIcon } from "../lib/rightToolMeta";
 import * as cmd from "../lib/commands";
 import { useI18n } from "../i18n/useI18n";
+import { localizeError } from "../i18n/localizeMessage";
 import { useConnectionStore } from "../stores/useConnectionStore";
 import { useTabStore } from "../stores/useTabStore";
 import { useDetectedServicesStore } from "../stores/useDetectedServicesStore";
 import ContextMenu, { type ContextMenuItem } from "../components/ContextMenu";
+import {
+  DT_LOCAL_FILE,
+  DT_SFTP_FILE,
+  type LocalDragPayload,
+  type SftpDragPayload,
+} from "../panels/SftpPanel";
 
 type Props = {
   onOpenLocalTerminal: (path?: string) => void;
@@ -46,8 +48,6 @@ type Props = {
   workspaceRoot?: string;
 };
 
-type LucideIcon = ComponentType<SVGProps<SVGSVGElement> & { size?: number | string }>;
-
 type ServiceChip = {
   tool: RightTool;
   label: string;
@@ -55,16 +55,12 @@ type ServiceChip = {
   tintVar: string;
 };
 
-const SERVICE_META: Record<string, ServiceChip> = {
-  docker: { tool: "docker", label: "Docker", icon: Container, tintVar: "var(--svc-docker)" },
-  mysql: { tool: "mysql", label: "MySQL", icon: Database, tintVar: "var(--svc-mysql)" },
-  postgres: { tool: "postgres", label: "PostgreSQL", icon: Database, tintVar: "var(--svc-postgres)" },
-  redis: { tool: "redis", label: "Redis", icon: Zap, tintVar: "var(--svc-redis)" },
-  monitor: { tool: "monitor", label: "Server Monitor", icon: Activity, tintVar: "var(--svc-monitor)" },
-  log: { tool: "log", label: "Logs", icon: Scroll, tintVar: "var(--svc-log)" },
-  sftp: { tool: "sftp", label: "SFTP", icon: FolderTree, tintVar: "var(--svc-sftp)" },
-  sqlite: { tool: "sqlite", label: "SQLite", icon: HardDrive, tintVar: "var(--svc-sqlite)" },
-};
+const SERVICE_META: ServiceChip[] = SERVICE_CHIP_TOOLS.map((tool) => ({
+  tool,
+  label: RIGHT_TOOL_META[tool].label,
+  icon: RIGHT_TOOL_META[tool].icon,
+  tintVar: RIGHT_TOOL_META[tool].tintVar ?? "var(--accent)",
+}));
 
 /** Empty string = implicit "default" bucket. */
 type GroupKey = string;
@@ -273,6 +269,127 @@ export default function Sidebar({ onOpenLocalTerminal, onConnectSaved, onNewConn
   const filteredEntries = entries.filter((e) => !searchText.trim() || e.name.toLowerCase().includes(searchText.toLowerCase()));
   const segments = pathSegments(currentPath, homeDir);
 
+  // ── Sidebar ↔ SFTP drag-drop ───────────────────────────────────
+  //
+  // The local file list is both a drag *source* (drop into SFTP
+  // uploads the file) and a drag *target* (drop a remote file from
+  // SFTP downloads into the current local directory). The drop uses
+  // the active SSH tab's credentials — no extra IPC round-trip
+  // needed since the SFTP cache is keyed by addressing, not secrets.
+  const tabs = useTabStore((s) => s.tabs);
+  const activeTabId = useTabStore((s) => s.activeTabId);
+  const [sftpDropDepth, setSftpDropDepth] = useState(0);
+  const sftpDropActive = sftpDropDepth > 0;
+
+  function resolveSshTabForPayload(payload: SftpDragPayload) {
+    // Prefer the active tab if it matches, so the download uses the
+    // same cached session that just populated the SFTP panel.
+    const active = tabs.find((tab) => tab.id === activeTabId);
+    if (
+      active &&
+      active.backend === "ssh" &&
+      active.sshHost === payload.host &&
+      active.sshPort === payload.port &&
+      active.sshUser === payload.user &&
+      active.sshAuthMode === payload.authMode
+    ) {
+      return active;
+    }
+    return tabs.find(
+      (tab) =>
+        tab.backend === "ssh" &&
+        tab.sshHost === payload.host &&
+        tab.sshPort === payload.port &&
+        tab.sshUser === payload.user &&
+        tab.sshAuthMode === payload.authMode,
+    );
+  }
+
+  async function handleSftpDropDownload(payload: SftpDragPayload) {
+    const sshTab = resolveSshTabForPayload(payload);
+    if (!sshTab) return;
+    const dir = currentPath.trim().replace(/[\\/]+$/, "");
+    if (!dir) return;
+    const sep = /^[A-Za-z]:[\\/]|^\\\\/.test(dir) ? "\\" : "/";
+    const localPath = `${dir}${sep}${payload.name}`;
+    try {
+      if (payload.isDir) {
+        await cmd.sftpDownloadTree({
+          host: sshTab.sshHost,
+          port: sshTab.sshPort,
+          user: sshTab.sshUser,
+          authMode: sshTab.sshAuthMode,
+          password: sshTab.sshPassword,
+          keyPath: sshTab.sshKeyPath,
+          savedConnectionIndex: sshTab.sshSavedConnectionIndex,
+          remotePath: payload.path,
+          localPath,
+        });
+      } else {
+        await cmd.sftpDownload({
+          host: sshTab.sshHost,
+          port: sshTab.sshPort,
+          user: sshTab.sshUser,
+          authMode: sshTab.sshAuthMode,
+          password: sshTab.sshPassword,
+          keyPath: sshTab.sshKeyPath,
+          savedConnectionIndex: sshTab.sshSavedConnectionIndex,
+          remotePath: payload.path,
+          localPath,
+        });
+      }
+      // Refresh the file list so the newly-downloaded file shows up.
+      cmd.listDirectory(currentPath).then(setEntries).catch(() => {});
+    } catch (e) {
+      // Swallow — the SFTP panel's own error bar is the right surface
+      // for SFTP errors; the sidebar shouldn't grow its own toast
+      // system just for drop feedback. Log for debugging.
+      console.warn("sftp download from drop failed", localizeError(e, t));
+    }
+  }
+
+  function handleFileListDragEnter(event: ReactDragEvent<HTMLDivElement>) {
+    if (!Array.from(event.dataTransfer.types).includes(DT_SFTP_FILE)) return;
+    event.preventDefault();
+    setSftpDropDepth((d) => d + 1);
+  }
+  function handleFileListDragOver(event: ReactDragEvent<HTMLDivElement>) {
+    if (!Array.from(event.dataTransfer.types).includes(DT_SFTP_FILE)) return;
+    event.preventDefault();
+    event.dataTransfer.dropEffect = "copy";
+  }
+  function handleFileListDragLeave(event: ReactDragEvent<HTMLDivElement>) {
+    if (!Array.from(event.dataTransfer.types).includes(DT_SFTP_FILE)) return;
+    event.preventDefault();
+    setSftpDropDepth((d) => Math.max(0, d - 1));
+  }
+  function handleFileListDrop(event: ReactDragEvent<HTMLDivElement>) {
+    setSftpDropDepth(0);
+    const raw = event.dataTransfer.getData(DT_SFTP_FILE);
+    if (!raw) return;
+    event.preventDefault();
+    try {
+      const payload = JSON.parse(raw) as SftpDragPayload;
+      if (payload.isDir) return;
+      void handleSftpDropDownload(payload);
+    } catch {
+      /* malformed payload */
+    }
+  }
+
+  function handleLocalRowDragStart(event: ReactDragEvent<HTMLDivElement>, entry: FileEntry) {
+    // Both files and directories are draggable. The SFTP panel's
+    // drop handler picks the single-file or recursive tree command
+    // based on `isDir`.
+    const payload: LocalDragPayload = {
+      path: entry.path,
+      name: entry.name,
+      isDir: entry.kind === "directory",
+    };
+    event.dataTransfer.effectAllowed = "copy";
+    event.dataTransfer.setData(DT_LOCAL_FILE, JSON.stringify(payload));
+  }
+
   function pushPath(nextPath: string) {
     const normalized = normalizePath(nextPath);
     if (!normalized || normalized === currentPath) return;
@@ -374,7 +491,13 @@ export default function Sidebar({ onOpenLocalTerminal, onConnectSaved, onNewConn
             />
           </div>
 
-          <div className="sidebar-list">
+          <div
+            className={"sidebar-list" + (sftpDropActive ? " is-drop" : "")}
+            onDragEnter={handleFileListDragEnter}
+            onDragOver={handleFileListDragOver}
+            onDragLeave={handleFileListDragLeave}
+            onDrop={handleFileListDrop}
+          >
             <div className="sidebar-header-row">
               <span className="col-name">{t("NAME")}</span>
               <span className="col-mod">{t("MOD")}</span>
@@ -405,6 +528,8 @@ export default function Sidebar({ onOpenLocalTerminal, onConnectSaved, onNewConn
                   onDoubleClick={() => { if (isDir) onOpenLocalTerminal(entry.path); }}
                   role="button"
                   tabIndex={0}
+                  draggable
+                  onDragStart={(e) => handleLocalRowDragStart(e, entry)}
                 >
                   <span className="fi">{icon}</span>
                   <span className="fname">{entry.name}</span>
@@ -501,7 +626,14 @@ function ServersPane({
 
   const [expanded, setExpanded] = useState<Record<string, boolean>>({});
   const [openRow, setOpenRow] = useState<number | null>(null);
-  const [pendingGroup, setPendingGroup] = useState<string | null>(null);
+  // Pending = user-created placeholder that only lives in this UI
+  // session until the user confirms its name (and, for empty pending
+  // groups, drags a server in). `attachServer` is set when the pending
+  // group was created from a "Move to new group…" action — naming it
+  // commits by reordering that server into the new group.
+  const [pendingGroup, setPendingGroup] = useState<
+    { name: string; editing: boolean; attachServer?: number } | null
+  >(null);
   const [renamingGroup, setRenamingGroup] = useState<GroupKey | null>(null);
   // Drag state — keeps rendering light: we only store what's needed
   // for the drop-indicator, not the whole ghost.
@@ -529,12 +661,13 @@ function ServersPane({
     });
   }, [groups]);
 
-  // Include a fake pending group in the list if it doesn't already
-  // exist — lets the user name it and drag something in.
-  const pendingVisible = pendingGroup && !groups.some((g) => g.key === pendingGroup);
-  const displayGroups: Array<ConnectionGroup & { pending?: boolean }> = pendingVisible
-    ? [...groups, { key: pendingGroup!, servers: [], pending: true }]
-    : groups;
+  // Pending group is rendered separately from `groups` so its
+  // transient state (empty name while editing) doesn't collide with
+  // the real default bucket (key === "").
+  const pendingVisible =
+    pendingGroup !== null &&
+    (pendingGroup.editing ||
+      (pendingGroup.name.length > 0 && !groups.some((g) => g.key === pendingGroup.name)));
 
   const shownCount = groups.reduce((acc, g) => acc + g.servers.length, 0);
 
@@ -585,11 +718,7 @@ function ServersPane({
     items.push({
       label: t("Move to new group…"),
       action: () => {
-        const name = window.prompt(t("New group name"), "");
-        const trimmed = (name ?? "").trim();
-        if (!trimmed) return;
-        const plan = planServerMoveToGroupEnd(connections, conn.index, trimmed);
-        applyReorder(plan.order, plan.groups);
+        setPendingGroup({ name: "", editing: true, attachServer: conn.index });
       },
     });
     setMenu({ x: event.clientX, y: event.clientY, items });
@@ -616,11 +745,7 @@ function ServersPane({
     items.push({
       label: t("New group…"),
       action: () => {
-        const name = window.prompt(t("New group name"), "");
-        const trimmed = (name ?? "").trim();
-        if (!trimmed) return;
-        setPendingGroup(trimmed);
-        setExpanded((prev) => ({ ...prev, [trimmed]: true }));
+        setPendingGroup({ name: "", editing: true });
       },
     });
     setMenu({ x: event.clientX, y: event.clientY, items });
@@ -633,19 +758,44 @@ function ServersPane({
     void onRenameGroup(oldKey, trimmed).catch(() => {});
   };
 
+  // User confirmed a pending group's name. If it was opened via
+  // "Move to new group…", auto-commit by moving that server in.
+  // Otherwise flip the pending row to named-but-empty-and-waiting.
+  const commitPendingName = (name: string) => {
+    const trimmed = name.trim();
+    if (!trimmed) {
+      setPendingGroup(null);
+      return;
+    }
+    const existing = groups.find((g) => g.key === trimmed);
+    if (existing) {
+      // Name collides with a real group → just use that group as the target.
+      if (pendingGroup?.attachServer !== undefined) {
+        const plan = planServerMoveToGroupEnd(connections, pendingGroup.attachServer, trimmed);
+        applyReorder(plan.order, plan.groups);
+      }
+      setPendingGroup(null);
+      setExpanded((prev) => ({ ...prev, [trimmed]: true }));
+      return;
+    }
+    if (pendingGroup?.attachServer !== undefined) {
+      // Auto-commit the pending group by moving the attached server in.
+      const plan = planServerMoveToGroupEnd(connections, pendingGroup.attachServer, trimmed);
+      applyReorder(plan.order, plan.groups);
+      setPendingGroup(null);
+    } else {
+      setPendingGroup({ name: trimmed, editing: false });
+    }
+    setExpanded((prev) => ({ ...prev, [trimmed]: true }));
+  };
+
   return (
     <>
       <div className="sidebar-toolbar">
         <button className="mini-btn" onClick={onNew} title={t("New SSH connection")} type="button"><Plus /></button>
         <button
           className="mini-btn"
-          onClick={() => {
-            const name = window.prompt(t("New group name"), "");
-            const trimmed = (name ?? "").trim();
-            if (!trimmed) return;
-            setPendingGroup(trimmed);
-            setExpanded((prev) => ({ ...prev, [trimmed]: true }));
-          }}
+          onClick={() => setPendingGroup({ name: "", editing: true })}
           title={t("New group")}
           type="button"
         >
@@ -683,10 +833,10 @@ function ServersPane({
           }
         }}
       >
-        {displayGroups.map((g) => {
+        {groups.map((g) => {
           const open = expanded[g.key] ?? true;
           const onlineCount = g.servers.filter((s) => detectionByIndex.get(s.index)?.online).length;
-          const draggable = !g.pending && g.key !== "";
+          const draggable = g.key !== "";
           const isDragging = dragGroup === g.key;
           const dropClass =
             dropTargetGroup && dropTargetGroup.key === g.key
@@ -698,12 +848,11 @@ function ServersPane({
               className={
                 "srv-group" +
                 (open ? " open" : "") +
-                (g.pending ? " pending" : "") +
                 (isDragging ? " dragging" : "") +
                 dropClass
               }
               onDragOver={(e) => {
-                if (!dragServer && !dragGroup) return;
+                if (dragServer === null && dragGroup === null) return;
                 e.preventDefault();
                 if (e.dataTransfer) e.dataTransfer.dropEffect = "move";
               }}
@@ -716,8 +865,6 @@ function ServersPane({
                   e.preventDefault();
                   const plan = planGroupMove(connections, dragGroup, g.key, "before");
                   if (plan) applyReorder(plan.order, plan.groups);
-                  // Commit a pending group if the target matches it.
-                  if (pendingGroup && g.key === pendingGroup) setPendingGroup(null);
                 }
               }}
             >
@@ -750,7 +897,7 @@ function ServersPane({
                   if (renamingGroup === g.key) return;
                   setExpanded({ ...expanded, [g.key]: !open });
                 }}
-                onContextMenu={(e) => openGroupMenu(e, g.key, !!g.pending)}
+                onContextMenu={(e) => openGroupMenu(e, g.key, false)}
                 role="button"
                 tabIndex={0}
               >
@@ -765,12 +912,7 @@ function ServersPane({
                 ) : (
                   <span className="srv-group-name">{groupLabel(g.key)}</span>
                 )}
-                {!g.pending && (
-                  <span className="srv-group-meta">{onlineCount}/{g.servers.length}</span>
-                )}
-                {g.pending && (
-                  <span className="srv-group-meta srv-group-meta--pending">{t("pending")}</span>
-                )}
+                <span className="srv-group-meta">{onlineCount}/{g.servers.length}</span>
               </div>
               {open && g.servers.map((s) => {
                 const det = detectionByIndex.get(s.index);
@@ -834,12 +976,63 @@ function ServersPane({
                   />
                 );
               })}
-              {open && g.pending && g.servers.length === 0 && (
-                <div className="srv-group-empty">{t("Drag a server here")}</div>
-              )}
             </div>
           );
         })}
+        {pendingGroup && pendingVisible && (
+          <div
+            className={"srv-group open pending" + (dropTargetGroup && dropTargetGroup.key === pendingGroup.name ? " drop-into" : "")}
+            onDragOver={(e) => {
+              if (dragServer === null || !pendingGroup.name) return;
+              e.preventDefault();
+              if (e.dataTransfer) e.dataTransfer.dropEffect = "move";
+              setDropTargetGroup({ key: pendingGroup.name, mode: "into" });
+            }}
+            onDrop={(e) => {
+              if (dragServer === null || !pendingGroup.name) return;
+              e.preventDefault();
+              const plan = planServerMoveToGroupEnd(connections, dragServer, pendingGroup.name);
+              applyReorder(plan.order, plan.groups);
+              setPendingGroup(null);
+            }}
+          >
+            <div
+              className="srv-group-head"
+              onContextMenu={(e) => openGroupMenu(e, pendingGroup.name, true)}
+            >
+              <span className="srv-chev"><ChevronRight size={10} /></span>
+              {pendingGroup.editing ? (
+                <GroupRenameInput
+                  initial={pendingGroup.name}
+                  onCancel={() => setPendingGroup(null)}
+                  onCommit={commitPendingName}
+                />
+              ) : (
+                <span
+                  className="srv-group-name"
+                  onClick={() => setPendingGroup({ ...pendingGroup, editing: true })}
+                  title={t("Rename group")}
+                  role="button"
+                  tabIndex={0}
+                >
+                  {pendingGroup.name}
+                </span>
+              )}
+              <button
+                className="mini-btn"
+                onClick={() => setPendingGroup(null)}
+                title={t("Cancel")}
+                type="button"
+                style={{ marginLeft: "auto" }}
+              >
+                <Trash2 />
+              </button>
+            </div>
+            {!pendingGroup.editing && pendingGroup.name && (
+              <div className="srv-group-empty">{t("Drag a server here")}</div>
+            )}
+          </div>
+        )}
         {shownCount === 0 && !pendingVisible && (
           <div className="empty-note" style={{ padding: 12 }}>
             {totalCount === 0 ? t("No saved connections") : t("No matching connections")}
@@ -940,7 +1133,7 @@ function ServerItem({
   const { t } = useI18n();
   const addr = `${conn.user}@${conn.host}${conn.port !== 22 ? `:${conn.port}` : ""}`;
   const chips = detectedTools
-    ? Object.values(SERVICE_META).filter((m) => detectedTools.has(m.tool))
+    ? SERVICE_META.filter((m) => detectedTools.has(m.tool))
     : [];
   const authLabel =
     conn.authKind === "key"
@@ -965,6 +1158,16 @@ function ServerItem({
         onDragStart={onDragStart}
         onDragOver={onDragOverRow}
         onDrop={onDropRow}
+        onKeyDown={(e) => {
+          if (e.key === "Enter" || e.key === " ") {
+            e.preventDefault();
+            onToggle();
+          }
+        }}
+        role="button"
+        tabIndex={0}
+        aria-expanded={isOpen}
+        aria-label={`${conn.display} — ${addr}`}
       >
         <span className="srv-grip" aria-hidden>
           <GripVertical size={10} />

@@ -56,7 +56,23 @@ fi
 cd "$UI_DIR"
 ensure_node_modules
 
-TAURI_CMD=(npm run tauri -- dev)
+PORT_LINES="$(node "$UI_DIR/scripts/resolve-dev-port.mjs")"
+while IFS='=' read -r key value; do
+    if [ -n "$key" ] && [ -n "$value" ]; then
+        export "$key=$value"
+    fi
+done <<< "$PORT_LINES"
+
+if [ -z "${PIER_DEV_URL:-}" ] || [ -z "${PIER_DEV_PORT:-}" ]; then
+    echo "ERROR: failed to resolve a Tauri dev server port" >&2
+    exit 1
+fi
+
+TAURI_DEV_CONFIG="$(mktemp "${TMPDIR:-/tmp}/pier-tauri-dev.XXXXXX.json")"
+trap 'rm -f "$TAURI_DEV_CONFIG"' EXIT
+printf '{\n  "build": {\n    "devUrl": "%s"\n  }\n}\n' "$PIER_DEV_URL" > "$TAURI_DEV_CONFIG"
+
+TAURI_CMD=(npm run tauri -- dev --config "$TAURI_DEV_CONFIG")
 if [ "$BUILD_TYPE" = "Release" ]; then
     TAURI_CMD+=(--release)
 fi
@@ -66,4 +82,5 @@ if [ "$#" -gt 0 ]; then
 fi
 
 echo "==> Launching Pier-X Tauri shell ($BUILD_TYPE)"
-exec "${TAURI_CMD[@]}"
+echo "==> Using Vite dev server: $PIER_DEV_URL"
+"${TAURI_CMD[@]}"

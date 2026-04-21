@@ -87,7 +87,7 @@ export default function DiffDialog({ open, onClose, files, activeId, onSelectFil
   return (
     <div className="cmdp-overlay" onClick={onClose}>
       <div className="dlg dlg--diff" onClick={(e) => e.stopPropagation()}>
-        <div className="dialog__header dialog__header--diff">
+        <div className="dlg-head">
           <span className="dlg-title">
             <FileText size={13} />
             <span className="mono dlg-title__path">{selected?.path ?? ""}</span>
@@ -134,7 +134,7 @@ export default function DiffDialog({ open, onClose, files, activeId, onSelectFil
           </IconButton>
         </div>
 
-        <div className="dialog__body dialog__body--diff">
+        <div className="dlg-body dlg-diff-body">
           {files.length > 1 && (
             <div className="dlg-diff-files">
               <div className="dlg-diff-files-head mono">
@@ -196,7 +196,7 @@ export default function DiffDialog({ open, onClose, files, activeId, onSelectFil
           </div>
         </div>
 
-        <div className="dialog__footer dialog__footer--diff">
+        <div className="dlg-foot">
           <span className="dlg-foot-hint mono">
             {footer ?? (
               <>

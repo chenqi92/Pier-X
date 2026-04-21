@@ -810,6 +810,15 @@
   box-shadow: var(--shadow-dialog);
   display: flex; flex-direction: column;
 }
+.dlg.small,
+.dlg--newconn { width: 520px; }
+.dlg--diff {
+  width: 1120px;
+  max-width: 95%;
+  height: 86vh;
+  max-height: 900px;
+}
+.dlg--settings { width: 820px; height: 600px; max-height: 80vh; }
 .dlg-head {
   display: flex; align-items: center; gap: var(--sp-2-5);
   padding: var(--sp-3) var(--sp-4);
@@ -854,6 +863,16 @@
   display: flex;
   flex: 1;
   min-height: 0;
+  overflow: hidden;
+}
+.dlg-body--form {
+  display: block;
+  padding: var(--sp-4);
+  overflow-y: auto;
+}
+.dlg-body.dlg-diff-body {
+  padding: 0;
+  overflow: hidden;
 }
 .dlg-nav {
   width: 200px;
@@ -1131,13 +1150,14 @@
   transition: background var(--dur-fast) var(--easing),
               border-color var(--dur-fast) var(--easing);
 }
-.gb-btn:hover { background: var(--panel-2); border-color: var(--line-3); }
+.gb-btn:hover:not(:disabled) { background: var(--panel-2); border-color: var(--line-3); }
+.gb-btn:disabled { opacity: 0.45; cursor: default; }
 .gb-btn.primary {
   background: var(--accent);
   color: var(--accent-ink);
   border-color: var(--accent);
 }
-.gb-btn.primary:hover { background: var(--accent-hover); border-color: var(--accent-hover); }
+.gb-btn.primary:hover:not(:disabled) { background: var(--accent-hover); border-color: var(--accent-hover); }
 .gb-btn.icon-only {
   width: 28px; padding: 0; justify-content: center;
 }
@@ -1335,6 +1355,134 @@
   width: 100%;
 }
 .dlg-input-mono:focus { border-color: var(--accent); }
+
+/* ─── Dialog form primitives (NewConnection / Settings Row / Toggle) ─── */
+
+.dlg-form {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-2-5);
+}
+
+.dlg-input {
+  height: 28px;
+  padding: 0 var(--sp-2);
+  background: var(--panel);
+  color: var(--ink);
+  border: 1px solid var(--line-2);
+  border-radius: var(--radius-sm);
+  font-family: var(--sans);
+  font-size: var(--ui-fs-sm);
+  outline: none;
+  width: 100%;
+}
+.dlg-input.mono { font-family: var(--mono); }
+.dlg-input:focus { border-color: var(--accent); }
+
+.dlg-row2 {
+  display: grid;
+  grid-template-columns: 220px 1fr;
+  gap: var(--sp-3);
+  align-items: center;
+  padding: var(--sp-1-5) 0;
+  min-height: 34px;
+}
+.dlg-row2-label {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  font-size: var(--ui-fs);
+  color: var(--ink-2);
+}
+.dlg-row2-hint {
+  font-family: var(--mono);
+  font-size: var(--size-micro);
+  color: var(--muted);
+}
+.dlg-row2-ctrl {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-2);
+  min-width: 0;
+}
+
+.dlg-note {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--sp-1-5);
+  font-size: var(--ui-fs-sm);
+  color: var(--muted);
+  padding: var(--sp-1-5) var(--sp-2);
+  border: 1px solid var(--line-2);
+  border-radius: var(--radius-sm);
+  background: var(--panel);
+}
+.dlg-note svg { color: var(--accent); flex: none; }
+
+.dlg-group-body {
+  display: flex;
+  flex-direction: column;
+}
+
+.dlg-pane-head {
+  display: flex; align-items: flex-start;
+  padding-bottom: var(--sp-3);
+  border-bottom: 1px solid var(--line);
+  margin-bottom: var(--sp-4);
+  gap: var(--sp-3);
+}
+.dlg-pane-head > div:first-child { flex: 1; min-width: 0; }
+
+.dlg-switch {
+  position: relative;
+  width: 32px;
+  height: 18px;
+  border-radius: 9px;
+  background: var(--line-2);
+  cursor: pointer;
+  flex: none;
+  transition: background var(--dur-fast) var(--easing);
+}
+.dlg-switch::after {
+  content: "";
+  position: absolute;
+  top: 2px;
+  left: 2px;
+  width: 14px;
+  height: 14px;
+  border-radius: 50%;
+  background: var(--elev);
+  box-shadow: var(--shadow-popover);
+  transition: transform var(--dur-fast) var(--easing);
+}
+.dlg-switch.on { background: var(--accent); }
+.dlg-switch.on::after { transform: translateX(14px); }
+
+.dlg-sel-box {
+  height: 28px;
+  padding: 0 var(--sp-2);
+  background: var(--panel);
+  color: var(--ink);
+  border: 1px solid var(--line-2);
+  border-radius: var(--radius-sm);
+  font-family: var(--sans);
+  font-size: var(--ui-fs-sm);
+  display: inline-flex;
+  align-items: center;
+  gap: var(--sp-1-5);
+  min-width: 160px;
+  cursor: pointer;
+  justify-content: space-between;
+}
+.dlg-sel-box.mono { font-family: var(--mono); }
+.dlg-sel-box:hover { border-color: var(--line-3); }
+.dlg-sel-box svg { color: var(--muted); }
+
+.dlg-stepper-unit {
+  color: var(--muted);
+  font-size: var(--size-micro);
+  margin-left: 3px;
+}
 
 /* ─── Utility helpers (reflection for `.mono` etc. already in atoms.css) ─── */
 

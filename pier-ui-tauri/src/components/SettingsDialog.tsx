@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { Fragment, useState } from "react";
 import {
   Check,
   FileText,
@@ -166,32 +166,26 @@ export default function SettingsDialog({ open, onClose }: Props) {
     <div className="cmdp-overlay" onClick={onClose}>
       <div className="dlg dlg--settings" onClick={(e) => e.stopPropagation()}>
         {/* Header */}
-        <div className="dialog__header">
-          <div style={{ display: "flex", alignItems: "flex-start", gap: "var(--sp-2)" }}>
-            <div style={{ flex: 1 }}>
-              <h2 className="dialog__title">
-                <SettingsIcon size={13} style={{ marginRight: "var(--sp-1)", verticalAlign: "-2px", color: "var(--accent)" }} />
-                {t("Settings")}
-              </h2>
-              <span className="dialog__subtitle">
-                {t("Adjust appearance, terminal behavior, and saved connections.")}
-              </span>
-            </div>
-            <IconButton variant="mini" onClick={onClose} title={t("Close")}>
-              <X size={12} />
-            </IconButton>
-          </div>
+        <div className="dlg-head">
+          <span className="dlg-title">
+            <SettingsIcon size={13} />
+            {t("Settings")}
+          </span>
+          <div style={{ flex: 1 }} />
+          <IconButton variant="mini" onClick={onClose} title={t("Close")}>
+            <X size={12} />
+          </IconButton>
         </div>
 
-        <div className="dialog__settings-body">
-          <nav className="dialog__nav">
+        <div className="dlg-body">
+          <nav className="dlg-nav">
             {NAV_GROUPS.map((group) => (
-              <div key={group.label} className="dialog__nav-group">
-                <div className="dialog__nav-group-label">{t(group.label)}</div>
+              <Fragment key={group.label}>
+                <div className="dlg-nav-group">{t(group.label)}</div>
                 {group.items.map(({ key, icon: Icon }) => (
                   <button
                     key={key}
-                    className={page === key ? "dialog__nav-item dialog__nav-item--active" : "dialog__nav-item"}
+                    className={"dlg-nav-btn" + (page === key ? " active" : "")}
                     onClick={() => setPage(key)}
                     type="button"
                   >
@@ -199,11 +193,11 @@ export default function SettingsDialog({ open, onClose }: Props) {
                     <span>{t(key)}</span>
                   </button>
                 ))}
-              </div>
+              </Fragment>
             ))}
           </nav>
 
-          <div className="dialog__content">
+          <div className="dlg-pane">
             {/* ── Appearance ───────────────────────────────── */}
             {page === "Appearance" && (
               <div className="settings__page">
@@ -488,13 +482,13 @@ export default function SettingsDialog({ open, onClose }: Props) {
         </div>
 
         {/* Footer */}
-        <div className="dialog__footer">
-          <span className="dialog__footer-hint">
+        <div className="dlg-foot">
+          <span className="dlg-foot-hint">
             <Check size={11} />
             {t("Changes save automatically")}
           </span>
           <div style={{ flex: 1 }} />
-          <button className="btn is-primary" onClick={onClose} type="button">
+          <button className="gb-btn primary" onClick={onClose} type="button">
             {t("Done")}
           </button>
         </div>

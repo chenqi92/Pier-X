@@ -34,10 +34,15 @@ var __generator = (this && this.__generator) || function (thisArg, body) {
         if (op[0] & 5) throw op[1]; return { value: op[0] ? op[1] : void 0, done: true };
     }
 };
+var _a, _b;
 import { defineConfig } from "vite";
 import react from "@vitejs/plugin-react";
 // @ts-expect-error process is a nodejs global
 var host = process.env.TAURI_DEV_HOST;
+// @ts-expect-error process is a nodejs global
+var devPort = Number.parseInt((_a = process.env.PIER_DEV_PORT) !== null && _a !== void 0 ? _a : "45120", 10);
+// @ts-expect-error process is a nodejs global
+var hmrPort = Number.parseInt((_b = process.env.PIER_HMR_PORT) !== null && _b !== void 0 ? _b : String(devPort + 1), 10);
 // https://vite.dev/config/
 export default defineConfig(function () { return __awaiter(void 0, void 0, void 0, function () {
     return __generator(this, function (_a) {
@@ -47,16 +52,16 @@ export default defineConfig(function () { return __awaiter(void 0, void 0, void 
                 //
                 // 1. prevent Vite from obscuring rust errors
                 clearScreen: false,
-                // 2. tauri expects a fixed port, fail if that port is not available
+                // 2. the repo entrypoint picks a free high port and pins Vite to it for Tauri
                 server: {
-                    port: 1420,
+                    port: devPort,
                     strictPort: true,
                     host: host || false,
                     hmr: host
                         ? {
                             protocol: "ws",
                             host: host,
-                            port: 1421,
+                            port: hmrPort,
                         }
                         : undefined,
                     watch: {

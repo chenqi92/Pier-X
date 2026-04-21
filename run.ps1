@@ -72,11 +72,39 @@ if ($BuildDir) {
     Write-Host "==> Using Cargo target dir: $resolvedBuildDir"
 }
 
+$tempConfigPath = $null
 Push-Location $UiDir
 try {
     Ensure-NodeModules
 
-    $tauriArgs = @("run", "tauri", "--", "dev")
+    $portResolver = Join-Path $UiDir "scripts\resolve-dev-port.mjs"
+    $portInfo = @{}
+    $portLines = & node $portResolver
+    if ($LASTEXITCODE -ne 0) {
+        exit $LASTEXITCODE
+    }
+    foreach ($line in $portLines) {
+        if (-not $line) { continue }
+        $key, $value = $line -split "=", 2
+        if ($key -and $value) {
+            $portInfo[$key] = $value
+            [System.Environment]::SetEnvironmentVariable($key, $value)
+        }
+    }
+
+    if (-not $portInfo["PIER_DEV_URL"] -or -not $portInfo["PIER_DEV_PORT"]) {
+        Write-Host "ERROR: failed to resolve a Tauri dev server port" -ForegroundColor Red
+        exit 1
+    }
+
+    $tempConfigSeed = [System.IO.Path]::GetTempFileName()
+    $tempConfigPath = [System.IO.Path]::ChangeExtension($tempConfigSeed, ".json")
+    Move-Item -LiteralPath $tempConfigSeed -Destination $tempConfigPath -Force
+    @{ build = @{ devUrl = $portInfo["PIER_DEV_URL"] } } |
+        ConvertTo-Json -Depth 4 |
+        Set-Content -LiteralPath $tempConfigPath -NoNewline
+
+    $tauriArgs = @("run", "tauri", "--", "dev", "--config", $tempConfigPath)
     if ($BuildType -eq "Release") {
         $tauriArgs += "--release"
     }
@@ -86,8 +114,12 @@ try {
     }
 
     Write-Host "==> Launching Pier-X Tauri shell ($BuildType)"
+    Write-Host "==> Using Vite dev server: $($portInfo["PIER_DEV_URL"])"
     & $NpmCommand @tauriArgs
     if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 } finally {
+    if ($tempConfigPath -and (Test-Path $tempConfigPath)) {
+        Remove-Item -LiteralPath $tempConfigPath -Force
+    }
     Pop-Location
 }

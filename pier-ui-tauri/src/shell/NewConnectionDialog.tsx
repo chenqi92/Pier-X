@@ -180,50 +180,41 @@ export default function NewConnectionDialog({ open, onClose, onConnect, onConnec
   return (
     <div className="cmdp-overlay" onClick={onClose}>
       <div className="dlg dlg--newconn" onClick={(e) => e.stopPropagation()}>
-        <div className="dialog__header">
-          <div style={{ display: "flex", alignItems: "flex-start", gap: "var(--sp-2)" }}>
-            <div style={{ flex: 1 }}>
-              <h2 className="dialog__title">
-                <Server size={13} style={{ marginRight: "var(--sp-1)", verticalAlign: "-2px", color: "var(--accent)" }} />
-                {t(isEditing ? "Edit SSH connection" : "New SSH connection")}
-              </h2>
-              <span className="dialog__subtitle">
-                {t("Saved under Servers sidebar.")}
-              </span>
-            </div>
-            <IconButton variant="mini" onClick={onClose} title={t("Close")}>
-              <X size={12} />
-            </IconButton>
-          </div>
+        <div className="dlg-head">
+          <span className="dlg-title">
+            <Server size={13} />
+            {t(isEditing ? "Edit SSH connection" : "New SSH connection")}
+          </span>
+          <div style={{ flex: 1 }} />
+          <IconButton variant="mini" onClick={onClose} title={t("Close")}>
+            <X size={12} />
+          </IconButton>
         </div>
-        <div className="dialog__body">
-          <div className="form-stack">
-            <label className="field-stack">
-              <span className="field-label">{t("Name")}</span>
-              <input className="field-input" onChange={(e) => setName(e.currentTarget.value)} placeholder="prod-api / staging" value={name} />
-            </label>
-            <div className="field-grid">
-              <label className="field-stack">
-                <span className="field-label">{t("Host")}</span>
-                <input className="field-input" onChange={(e) => setHost(e.currentTarget.value)} placeholder="server.example.com" value={host} />
-              </label>
-              <label className="field-stack">
-                <span className="field-label">{t("Port")}</span>
-                <input className="field-input field-input--narrow" onChange={(e) => setPort(e.currentTarget.value)} value={port} />
-              </label>
+        <div className="dlg-body dlg-body--form">
+          <div className="dlg-form">
+            <div className="dlg-row">
+              <label className="dlg-row-label">{t("Name")}</label>
+              <input className="dlg-input" onChange={(e) => setName(e.currentTarget.value)} placeholder="prod-api / staging" value={name} />
             </div>
-            <label className="field-stack">
-              <span className="field-label">{t("User")}</span>
-              <input className="field-input" onChange={(e) => setUser(e.currentTarget.value)} placeholder="root" value={user} />
-            </label>
-            <div className="field-stack">
-              <span className="field-label">{t("Authentication")}</span>
-              <div className="segmented" role="radiogroup" aria-label={t("Authentication")}>
+            <div className="dlg-row">
+              <label className="dlg-row-label">{t("Host")}</label>
+              <div style={{ display: "grid", gridTemplateColumns: "1fr 88px", gap: "var(--sp-2)" }}>
+                <input className="dlg-input" onChange={(e) => setHost(e.currentTarget.value)} placeholder="server.example.com" value={host} />
+                <input className="dlg-input" onChange={(e) => setPort(e.currentTarget.value)} value={port} placeholder={t("Port")} />
+              </div>
+            </div>
+            <div className="dlg-row">
+              <label className="dlg-row-label">{t("User")}</label>
+              <input className="dlg-input" onChange={(e) => setUser(e.currentTarget.value)} placeholder="root" value={user} />
+            </div>
+            <div className="dlg-row">
+              <label className="dlg-row-label">{t("Authentication")}</label>
+              <div className="dlg-opts" role="radiogroup" aria-label={t("Authentication")}>
                 <button
                   type="button"
                   role="radio"
                   aria-checked={authMode === "password"}
-                  className={authMode === "password" ? "is-active" : undefined}
+                  className={"dlg-opt" + (authMode === "password" ? " active" : "")}
                   onClick={() => setAuthMode("password")}
                 >
                   {t("Password")}
@@ -232,7 +223,7 @@ export default function NewConnectionDialog({ open, onClose, onConnect, onConnec
                   type="button"
                   role="radio"
                   aria-checked={authMode === "key"}
-                  className={authMode === "key" ? "is-active" : undefined}
+                  className={"dlg-opt" + (authMode === "key" ? " active" : "")}
                   onClick={() => setAuthMode("key")}
                 >
                   {t("Key file")}
@@ -241,7 +232,7 @@ export default function NewConnectionDialog({ open, onClose, onConnect, onConnec
                   type="button"
                   role="radio"
                   aria-checked={authMode === "agent"}
-                  className={authMode === "agent" ? "is-active" : undefined}
+                  className={"dlg-opt" + (authMode === "agent" ? " active" : "")}
                   onClick={() => setAuthMode("agent")}
                 >
                   {t("Agent")}
@@ -249,18 +240,18 @@ export default function NewConnectionDialog({ open, onClose, onConnect, onConnec
               </div>
             </div>
             {authMode === "password" && (
-              <label className="field-stack">
-                <span className="field-label">{t("Password")}</span>
-                <input className="field-input" type="password" onChange={(e) => setPassword(e.currentTarget.value)} placeholder={isEditing ? t("Leave blank to keep current password") : ""} value={password} />
-              </label>
+              <div className="dlg-row">
+                <label className="dlg-row-label">{t("Password")}</label>
+                <input className="dlg-input" type="password" onChange={(e) => setPassword(e.currentTarget.value)} placeholder={isEditing ? t("Leave blank to keep current password") : ""} value={password} />
+              </div>
             )}
             {authMode === "key" && (
               <>
-                <label className="field-stack">
-                  <span className="field-label">{t("Private key")}</span>
-                  <input className="field-input mono" onChange={(e) => setKeyPath(e.currentTarget.value)} placeholder="~/.ssh/id_ed25519" value={keyPath} />
-                </label>
-                <div className="inline-hint">
+                <div className="dlg-row">
+                  <label className="dlg-row-label">{t("Private key")}</label>
+                  <input className="dlg-input mono" onChange={(e) => setKeyPath(e.currentTarget.value)} placeholder="~/.ssh/id_ed25519" value={keyPath} />
+                </div>
+                <div className="dlg-note">
                   <Key size={11} />
                   <span>
                     {t("Passphrase will be stored in the system keychain")}
@@ -275,18 +266,19 @@ export default function NewConnectionDialog({ open, onClose, onConnect, onConnec
               </>
             )}
             {authMode === "agent" && (
-              <div className="inline-note">{t("Agent auth uses the system SSH agent.")}</div>
+              <div className="dlg-note">{t("Agent auth uses the system SSH agent.")}</div>
             )}
             {error && <div className="status-note status-note--error">{error}</div>}
           </div>
         </div>
-        <div className="dialog__footer">
-          <button className="btn is-ghost" onClick={onClose} type="button">{t("Cancel")}</button>
-          <button className="btn" disabled={!canDirectConnect} onClick={handleConnect} type="button">{t("Connect")}</button>
-          <button className="btn" disabled={!canSave} onClick={() => void handleSave()} type="button">
+        <div className="dlg-foot">
+          <div style={{ flex: 1 }} />
+          <button className="gb-btn" onClick={onClose} type="button">{t("Cancel")}</button>
+          <button className="gb-btn" disabled={!canDirectConnect} onClick={handleConnect} type="button">{t("Connect")}</button>
+          <button className="gb-btn" disabled={!canSave} onClick={() => void handleSave()} type="button">
             {t(isEditing ? "Save changes" : "Save")}
           </button>
-          <button className="btn is-primary" disabled={!canSaveAndConnect} onClick={() => void handleSaveAndConnect()} type="button">
+          <button className="gb-btn primary" disabled={!canSaveAndConnect} onClick={() => void handleSaveAndConnect()} type="button">
             {isEditing ? t("Save changes & Connect") : `${t("Save")} & ${t("Connect")}`}
           </button>
         </div>

@@ -6,10 +6,11 @@ This file tracks the active Tauri + Rust delivery path only.
 
 ## Current baseline
 
-- Desktop shell: `pier-ui-tauri/` (`Tauri 2 + React + TypeScript`)
-- Runtime glue: `pier-ui-tauri/src-tauri/`
+- Desktop shell: repo root (`Tauri 2 + React + TypeScript`, sources under `src/`)
+- Runtime glue: `src-tauri/`
 - Backend: `pier-core/`
-- Repo entrypoints: `pier-ui-tauri` npm scripts (`npm run tauri dev`, `npm run tauri build`, `npm run bump`)
+- Cargo workspace: root `Cargo.toml` with members `pier-core` and `src-tauri`
+- Repo entrypoints: root-level npm scripts (`npm run tauri dev`, `npm run tauri build`, `npm run bump`)
 - CI: Tauri shell on macOS + Windows, Rust core on macOS + Windows + Linux
 
 ## Shipped
@@ -37,5 +38,5 @@ This file tracks the active Tauri + Rust delivery path only.
 ## Guardrails
 
 - `pier-core` must remain UI-framework-agnostic.
-- `pier-ui-tauri` is the only active desktop shell in the repository.
+- The root-level Tauri shell is the only active desktop shell in the repository.
 - New build or packaging work must extend the Tauri path, not revive archived Qt-era tooling.

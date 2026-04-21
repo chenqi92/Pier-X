@@ -52,17 +52,15 @@ jobs:
         with:
           node-version: '22'
           cache: npm
-          cache-dependency-path: pier-ui-tauri/package-lock.json
+          cache-dependency-path: package-lock.json
 
       - name: Install Rust toolchain
         uses: dtolnay/rust-toolchain@stable
 
       - name: Install frontend dependencies
-        working-directory: pier-ui-tauri
         run: npm ci
 
       - name: Build Tauri bundles
-        working-directory: pier-ui-tauri
         run: npm run tauri -- build --ci
 
       - name: Collect release artifacts
@@ -70,7 +68,7 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          BUNDLE_DIR="pier-ui-tauri/src-tauri/target/release/bundle"
+          BUNDLE_DIR="target/release/bundle"
           mkdir -p dist-assets
           # Tauri emits .deb, .rpm, and .AppImage for Linux bundles.
           find "$BUNDLE_DIR" -type f \

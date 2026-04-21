@@ -20,31 +20,30 @@ wins for code structure.
 
 ## Architecture boundaries
 
-- **Cargo workspace**: two members only — [`pier-core`](pier-core/)
-  (UI-framework-agnostic backend) and
-  [`pier-ui-tauri/src-tauri`](pier-ui-tauri/src-tauri/) (the Tauri runtime
-  glue).
-- **Frontend**: [`pier-ui-tauri/`](pier-ui-tauri/) — Vite + React 19 +
-  TypeScript. State via `zustand`; terminals via `@xterm/xterm`; panels via
-  `react-resizable-panels`; icons from `lucide-react`.
+- **Cargo workspace**: root [`Cargo.toml`](Cargo.toml) with two members —
+  [`pier-core`](pier-core/) (UI-framework-agnostic backend) and
+  [`src-tauri`](src-tauri/) (the Tauri runtime glue).
+- **Frontend**: repo root — Vite + React 19 + TypeScript under
+  [`src/`](src/). State via `zustand`; terminals via `@xterm/xterm`; panels
+  via `react-resizable-panels`; icons from `lucide-react`.
 - `pier-core` **must stay UI-agnostic**. No `tauri`, `gpui`, `qt`, or any UI
   crate dependency. Public API returns plain Rust types.
-- `pier-ui-tauri/src-tauri` **calls `pier-core` directly** as Rust functions
-  and exposes them to the frontend as Tauri commands. React code calls those
-  commands via `@tauri-apps/api`'s `invoke`. The frontend **must not** bypass
-  Tauri to reach pier-core.
+- `src-tauri` **calls `pier-core` directly** as Rust functions and exposes
+  them to the frontend as Tauri commands. React code calls those commands via
+  `@tauri-apps/api`'s `invoke`. The frontend **must not** bypass Tauri to
+  reach pier-core.
 - **Do not reintroduce**: `qt6-*`, `qml`, `cmake`, `qmake`, `corrosion`, any
   C-ABI bridge, or the `pier-ui-gpui` crate. The Qt and GPUI shells are gone
   on purpose — propose a new feature, not a third UI runtime.
 
-## Frontend code rules (`pier-ui-tauri/src/`)
+## Frontend code rules (`src/`)
 
 ### Rule 1 — Design tokens, never literals
 
 Every color, font family, font size, spacing, radius, and shadow used in a
 component or panel **must** reference a CSS custom property defined in
-[`src/styles/tokens.css`](pier-ui-tauri/src/styles/tokens.css) — or a shared
-atom class from [`src/styles/atoms.css`](pier-ui-tauri/src/styles/atoms.css).
+[`src/styles/tokens.css`](src/styles/tokens.css) — or a shared atom class
+from [`src/styles/atoms.css`](src/styles/atoms.css).
 
 **Forbidden in `src/shell/`, `src/panels/`, `src/components/`, and any stylesheet under `src/styles/` other than `tokens.css`:**
 
@@ -75,7 +74,7 @@ If a token is missing, **add it to `tokens.css` first** (dark + light, plus any 
 ### Rule 2 — Module layout
 
 ```
-pier-ui-tauri/src/
+src/
 ├── main.tsx              # entrypoint; mounts <App/>
 ├── App.tsx               # top-level routing / layout shell
 ├── shell/                # chrome: TopBar, Sidebar, StatusBar, TabBar, WelcomeView, dialogs
@@ -105,8 +104,8 @@ that belongs in `pier-core`.
 ### Rule 4 — Tauri IPC is the only bridge
 
 - React components call backend behavior by invoking a Tauri command declared
-  in [`pier-ui-tauri/src-tauri/src/lib.rs`](pier-ui-tauri/src-tauri/src/lib.rs)
-  (or a sibling module like `git_panel.rs`).
+  in [`src-tauri/src/lib.rs`](src-tauri/src/lib.rs) (or a sibling module like
+  `git_panel.rs`).
 - Wrap `invoke` calls in typed helpers under `src/lib/` so panels stay free of
   raw `invoke("...")` strings.
 - New backend capability: add it to `pier-core` first, expose a thin
@@ -142,11 +141,11 @@ Reject a change if any of these are true:
 ## Build & run
 
 ```sh
-cd pier-ui-tauri && npm install     # first-time frontend deps
-cd pier-ui-tauri && npm run tauri dev    # dev: vite + tauri dev
-cd pier-ui-tauri && npm run tauri build  # release: vite build + tauri build
-cargo build -p pier-core            # backend only
-npm --prefix pier-ui-tauri run bump <version>  # sync version across manifests + tag
+npm install                 # first-time frontend deps (run at repo root)
+npm run tauri dev           # dev: vite + tauri dev
+npm run tauri build         # release: vite build + tauri build
+cargo build -p pier-core    # backend only
+npm run bump <version>      # sync version across manifests + tag
 ```
 
 Node + npm and the Rust toolchain are required; no Qt, CMake, or GPUI toolchain

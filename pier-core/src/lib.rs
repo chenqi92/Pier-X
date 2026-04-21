@@ -8,8 +8,7 @@
 //! ## Architectural rule
 //!
 //! `pier-core` MUST NOT depend on any UI types or shell frameworks.
-//! The active repository consumes this crate directly from
-//! `pier-ui-tauri/src-tauri`.
+//! The active repository consumes this crate directly from `src-tauri/`.
 
 #![warn(missing_docs)]
 #![warn(rust_2018_idioms)]

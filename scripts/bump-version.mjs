@@ -15,21 +15,21 @@ import { fileURLToPath } from "node:url";
 import { execSync } from "node:child_process";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
-const repoRoot = resolve(__dirname, "..", "..");
+const repoRoot = resolve(__dirname, "..");
 
 const TARGETS = [
   {
-    path: resolve(repoRoot, "pier-ui-tauri/package.json"),
+    path: resolve(repoRoot, "package.json"),
     kind: "json",
     key: "version",
   },
   {
-    path: resolve(repoRoot, "pier-ui-tauri/src-tauri/tauri.conf.json"),
+    path: resolve(repoRoot, "src-tauri/tauri.conf.json"),
     kind: "json",
     key: "version",
   },
   {
-    path: resolve(repoRoot, "pier-ui-tauri/src-tauri/Cargo.toml"),
+    path: resolve(repoRoot, "src-tauri/Cargo.toml"),
     kind: "cargo",
   },
   {

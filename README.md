@@ -9,12 +9,12 @@ The cross-platform successor to [Pier](https://github.com/chenqi92/Pier) (macOS-
 
 ## Status
 
-The Rust backend lives in `pier-core/`; the desktop shell now lives in `pier-ui-tauri/`. The old Qt shell has been retired from the active build path.
+The Rust backend lives in `pier-core/`; the Tauri runtime glue lives in `src-tauri/`, and the React desktop shell lives at the repo root. The old Qt shell has been retired from the active build path.
 
 See [docs/ROADMAP.md](./docs/ROADMAP.md) for the active delivery plan, and [docs/TAURI-RESET.md](./docs/TAURI-RESET.md) for the shell reset baseline.
 
 - ✅ Rust backend foundation in `pier-core/`
-- ✅ New Tauri desktop shell scaffold in `pier-ui-tauri/`
+- ✅ New Tauri desktop shell scaffold at the repo root (`src/` + `src-tauri/`)
 - ✅ IDE-style three-pane workbench + integrated terminal surface
 - ✅ Real shell session wired through `pier-core::terminal::PierTerminal`
 - ✅ Git overview panel wired through `pier-core::services::git::GitClient`
@@ -47,9 +47,9 @@ See [docs/TAURI-RESET.md](./docs/TAURI-RESET.md) for the migration baseline. The
 
 ```
 ┌────────────────────────────────────────────────────┐
-│           Tauri 2 + React (desktop shell)          │  pier-ui-tauri/
+│           Tauri 2 + React (desktop shell)          │  src/ (repo root)
 ├────────────────────────────────────────────────────┤
-│        Tauri commands / desktop runtime glue       │
+│        Tauri commands / desktop runtime glue       │  src-tauri/
 ├────────────────────────────────────────────────────┤
 │            pier-core (Rust core engine)            │  pier-core/
 ├────────────────────────────────────────────────────┤
@@ -73,7 +73,6 @@ See [docs/TAURI-RESET.md](./docs/TAURI-RESET.md) for the migration baseline. The
 Run the active shell directly:
 
 ```bash
-cd pier-ui-tauri
 npm ci
 npm run tauri -- dev
 ```
@@ -81,7 +80,6 @@ npm run tauri -- dev
 Build the active shell directly:
 
 ```bash
-cd pier-ui-tauri
 npm ci
 npm run tauri -- build --debug
 ```
@@ -91,7 +89,6 @@ npm run tauri -- build --debug
 Tagged releases are driven by the npm `bump` script, which syncs the version across every manifest and creates a matching git tag:
 
 ```bash
-cd pier-ui-tauri
 npm run bump 0.2.0        # explicit
 npm run bump patch        # or minor / major
 git push && git push --tags
@@ -108,10 +105,13 @@ Pushing a `v*.*.*` tag triggers two release workflows:
 
 ```
 Pier-X/
+├── Cargo.toml               # Cargo workspace (members: pier-core, src-tauri)
+├── package.json             # Frontend entrypoint (npm run tauri …)
+├── src/                     # React UI (active desktop shell)
+├── src-tauri/               # Tauri runtime + Rust commands
 ├── pier-core/               # Rust core engine
-├── pier-ui-tauri/           # Active desktop shell rewrite
-│   ├── src/                 # React UI
-│   └── src-tauri/           # Tauri runtime + Rust commands
+├── scripts/
+│   └── bump-version.mjs     # Sync version across manifests + tag
 ├── docs/
 │   ├── ROADMAP.md
 │   └── TAURI-RESET.md

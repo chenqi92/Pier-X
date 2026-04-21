@@ -36,23 +36,21 @@ jobs:
         with:
           node-version: '24'
           cache: npm
-          cache-dependency-path: pier-ui-tauri/package-lock.json
+          cache-dependency-path: package-lock.json
 
       - name: Install Rust toolchain
         uses: dtolnay/rust-toolchain@stable
 
       - name: Install frontend dependencies
-        working-directory: pier-ui-tauri
         run: npm ci
 
       - name: Build Tauri shell (no bundle)
-        working-directory: pier-ui-tauri
         run: npm run tauri -- build --ci --no-bundle
 
       - name: Show build artifacts
         shell: bash
         run: |
-          find pier-ui-tauri/src-tauri/target -maxdepth 4 -type f \
+          find target -maxdepth 4 -type f \
             \( -name 'pier-ui-tauri' -o -name 'pier-ui-tauri.exe' -o -name 'Pier-X' -o -name 'Pier-X.exe' \) \
             -print || true
 
@@ -79,23 +77,19 @@ jobs:
           path: |
             ~/.cargo/registry
             ~/.cargo/git
-            pier-core/target
-          key: ${{ runner.os }}-cargo-${{ hashFiles('pier-core/Cargo.toml') }}
+            target
+          key: ${{ runner.os }}-cargo-${{ hashFiles('Cargo.toml', 'pier-core/Cargo.toml') }}
           restore-keys: |
             ${{ runner.os }}-cargo-
 
       - name: cargo fmt --check
-        working-directory: pier-core
-        run: cargo fmt --all --check
+        run: cargo fmt -p pier-core --check
 
       - name: cargo clippy
-        working-directory: pier-core
-        run: cargo clippy --all-targets -- -D warnings
+        run: cargo clippy -p pier-core --all-targets -- -D warnings
 
       - name: cargo build
-        working-directory: pier-core
-        run: cargo build --release
+        run: cargo build -p pier-core --release
 
       - name: cargo test
-        working-directory: pier-core
-        run: cargo test --release
+        run: cargo test -p pier-core --release

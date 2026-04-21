@@ -20,6 +20,17 @@ target/
 **/*.rs.bk
 **/target/
 
+# Node / frontend
+node_modules/
+dist/
+dist-ssr/
+*.local
+
+# TypeScript incremental build artifacts (tsc --build emits these)
+*.tsbuildinfo
+vite.config.js
+vite.config.d.ts
+
 # IDE / editor
 .vscode/
 .idea/

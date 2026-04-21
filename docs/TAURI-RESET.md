@@ -16,8 +16,8 @@ This reset is a shell replacement, not a visual touch-up:
 
 ## What Landed
 
-- `pier-ui-tauri/` scaffolded with `react-ts`
-- `pier-core` added as a direct Rust dependency in `pier-ui-tauri/src-tauri`
+- Tauri shell scaffolded with `react-ts`, now sitting at the repo root (`src/` + `src-tauri/`)
+- `pier-core` added as a direct Rust dependency in `src-tauri`
 - Tauri commands:
   - `core_info`
   - `list_directory`
@@ -99,13 +99,11 @@ terminal / ssh / git / mysql / sqlite / redis / more
 ## Commands
 
 ```bash
-cd pier-ui-tauri
 npm install
 npm run tauri -- dev
 ```
 
 ```bash
-cd pier-ui-tauri
 npm run tauri -- build --debug
 ```
 
@@ -122,5 +120,5 @@ npm run tauri -- build --debug
 Until parity is reached:
 
 - `pier-core` is the source of truth for backend capability
-- `pier-ui-tauri` is the only active desktop shell
+- The root-level Tauri shell is the only active desktop shell
 - Qt-era plans and comments are historical context only, not the target direction

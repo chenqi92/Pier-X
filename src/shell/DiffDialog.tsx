@@ -9,6 +9,7 @@ import {
 import { Fragment, useEffect, useMemo, useState } from "react";
 import type { ReactNode } from "react";
 import IconButton from "../components/IconButton";
+import { useDraggableDialog } from "../components/useDraggableDialog";
 import { useI18n } from "../i18n/useI18n";
 import {
   pairHunkLines,
@@ -59,6 +60,7 @@ export default function DiffDialog({ open, onClose, files, activeId, onSelectFil
   const [mode, setMode] = useState<"unified" | "split">("split");
   const [wrap, setWrap] = useState(false);
   const [ignoreWS, setIgnoreWS] = useState(false);
+  const { dialogStyle, handleProps } = useDraggableDialog(open);
 
   useEffect(() => {
     if (!open) return;
@@ -86,8 +88,12 @@ export default function DiffDialog({ open, onClose, files, activeId, onSelectFil
 
   return (
     <div className="cmdp-overlay" onClick={onClose}>
-      <div className="dlg dlg--diff" onClick={(e) => e.stopPropagation()}>
-        <div className="dlg-head">
+      <div
+        className="dlg dlg--diff"
+        style={dialogStyle}
+        onClick={(e) => e.stopPropagation()}
+      >
+        <div className="dlg-head" {...handleProps}>
           <span className="dlg-title">
             <FileText size={13} />
             <span className="mono dlg-title__path">{selected?.path ?? ""}</span>

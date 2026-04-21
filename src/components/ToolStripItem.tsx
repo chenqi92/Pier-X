@@ -1,4 +1,5 @@
 import type { ComponentType, SVGProps } from "react";
+import { useI18n } from "../i18n/useI18n";
 
 type LucideIcon = ComponentType<SVGProps<SVGSVGElement> & { size?: number | string }>;
 
@@ -19,10 +20,11 @@ export default function ToolStripItem({
   dim,
   onClick,
 }: Props) {
+  const { t } = useI18n();
   const cls = ["ts-btn", active ? "is-active" : "", dim ? "is-dim" : ""]
     .filter(Boolean)
     .join(" ");
-  const title = dim ? `${label} · not detected on this host` : label;
+  const title = dim ? `${label} · ${t("not detected on this host")}` : label;
   return (
     <button type="button" className={cls} title={title} onClick={onClick}>
       <Icon size={16} />

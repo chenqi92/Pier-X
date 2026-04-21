@@ -5,6 +5,7 @@ import { isReadOnlySql, queryResultToTsv } from "../lib/commands";
 import { closeTunnelSlot, ensureTunnelSlot, syncTunnelState } from "../lib/sshTunnel";
 import type { PostgresBrowserState, QueryExecutionResult, TabState } from "../lib/types";
 import { useI18n } from "../i18n/useI18n";
+import { localizeError } from "../i18n/localizeMessage";
 import DbConnRow from "../components/DbConnRow";
 import PanelHeader from "../components/PanelHeader";
 import PreviewTable from "../components/PreviewTable";
@@ -16,6 +17,7 @@ type Props = { tab: TabState };
 
 export default function PostgresPanel({ tab }: Props) {
   const { t } = useI18n();
+  const formatError = (error: unknown) => localizeError(error, t);
   const updateTab = useTabStore((s) => s.updateTab);
   const [host, setHost] = useState(tab.pgHost);
   const [port, setPort] = useState(String(tab.pgPort));
@@ -125,7 +127,7 @@ export default function PostgresPanel({ tab }: Props) {
     try {
       await ensureConnectionTarget(force);
     } catch (e) {
-      setTunnelError(String(e));
+      setTunnelError(formatError(e));
     } finally {
       setTunnelBusy(false);
     }
@@ -141,7 +143,7 @@ export default function PostgresPanel({ tab }: Props) {
       await closeTunnelSlot(tab, "postgres", updateTab);
       setTunnelNotice(t("Tunnel closed."));
     } catch (e) {
-      setTunnelError(String(e));
+      setTunnelError(formatError(e));
     } finally {
       setTunnelBusy(false);
     }
@@ -177,7 +179,7 @@ export default function PostgresPanel({ tab }: Props) {
       updateTab(tab.id, { pgDatabase: s.databaseName });
     } catch (e) {
       setState(null);
-      setError(String(e));
+      setError(formatError(e));
     } finally {
       setBusy(false);
     }
@@ -205,7 +207,7 @@ export default function PostgresPanel({ tab }: Props) {
       }
     } catch (e) {
       setQueryResult(null);
-      setQueryError(String(e));
+      setQueryError(formatError(e));
     } finally {
       setQueryBusy(false);
     }
@@ -213,7 +215,12 @@ export default function PostgresPanel({ tab }: Props) {
 
   const connName = dbName.trim() || host.trim() || t("PostgreSQL Browser");
   const connSub = host.trim()
-    ? `${user || "?"}@${host}:${port}${hasSsh ? " · ssh tunnel" : ""}`
+    ? t("{user}@{host}:{port}{suffix}", {
+        user: user || "?",
+        host,
+        port,
+        suffix: hasSsh ? ` · ${t("SSH tunnel")}` : "",
+      })
     : t("Not connected");
   const connTag = (
     <>
@@ -226,8 +233,19 @@ export default function PostgresPanel({ tab }: Props) {
     <>
       <PanelHeader
         icon={Database}
-        title="POSTGRESQL"
-        meta={`${dbName.trim() || "postgres"} · ${hasSsh ? `tunnel :${port}` : `${host}:${port}`}`}
+        title={t("PostgreSQL")}
+        meta={
+          hasSsh
+            ? t("{database} · tunnel :{port}", {
+                database: dbName.trim() || t("PostgreSQL"),
+                port,
+              })
+            : t("{database} · {host}:{port}", {
+                database: dbName.trim() || t("PostgreSQL"),
+                host,
+                port,
+              })
+        }
       />
       <DbConnRow
         icon={Database}

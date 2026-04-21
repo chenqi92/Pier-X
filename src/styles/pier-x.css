@@ -9,21 +9,34 @@
  */
 
 /* ─── Stage + App container ──────────────────────────────── */
+/* Stage is a full-bleed mount point — native OS window is the frame.
+ * No padding, no rounded corners, no inner shadow. The old
+ * window-in-viewport look was only for the web-based mockup. */
 .stage {
   position: fixed; inset: 0;
-  display: grid; place-items: center;
-  background: var(--stage-gradient);
-  padding: 28px;
+  background: var(--bg);
+}
+
+/* @property makes the pane-width custom props animatable as <length>.
+ * Without this the browser treats them as opaque strings and transitions
+ * on grid-template-columns won't interpolate their values frame by frame. */
+@property --sidebar-w {
+  syntax: "<length>";
+  inherits: true;
+  initial-value: 244px;
+}
+@property --rightpanel-w {
+  syntax: "<length>";
+  inherits: true;
+  initial-value: 0px;
 }
 
 .app {
-  width: 100%; max-width: 1460px;
-  aspect-ratio: 16 / 10;
-  max-height: calc(100vh - 56px);
+  width: 100%;
+  height: 100vh;
+  max-height: 100vh;
   background: var(--bg);
-  border-radius: var(--radius-xl);
   overflow: hidden;
-  box-shadow: var(--shadow-app);
   display: grid;
   grid-template-rows: var(--titlebar-h) var(--tabbar-h) 1fr var(--statusbar-h);
   grid-template-columns: var(--sidebar-w) 1fr calc(var(--rightpanel-w) + var(--toolstrip-w));
@@ -33,11 +46,18 @@
     "side   center  right"
     "status status  status";
   position: relative;
+  transition:
+    --sidebar-w var(--dur-normal) var(--easing),
+    --rightpanel-w var(--dur-normal) var(--easing);
 }
-.app.no-frame { border-radius: 0; box-shadow: none; }
-.app.is-right-collapsed {
-  grid-template-columns: var(--sidebar-w) 1fr var(--toolstrip-w);
-}
+/* Live drag must feel 1:1 with the cursor, so the grid jumps instantly
+ * while a resize handle is active. ResizeHandle toggles this class on
+ * <body> during mousedown → mouseup. */
+body.is-resizing .app { transition: none; }
+/* No grid-template-columns override on .is-right-collapsed — the column
+ * formula already reduces to `toolstrip-w` when --rightpanel-w hits 0,
+ * and keeping the same template lets the width transition interpolate
+ * instead of snapping. */
 
 /* Draggable dividers */
 .resizer {
@@ -80,19 +100,15 @@
   -webkit-app-region: drag;
   user-select: none;
 }
+/* Caption controls sit flush to the right edge like native Windows. */
+.titlebar:has(.winctl) { padding-right: 0; }
 .titlebar button,
 .titlebar input { -webkit-app-region: no-drag; }
 
-.traffic { display: flex; gap: var(--sp-2); margin-right: var(--sp-2); }
-.tl {
-  width: 12px; height: 12px; border-radius: 50%;
-  border: 0.5px solid rgba(0, 0, 0, 0.15);
-  display: block;
-}
-.tl.r { background: #ff5f57; }
-.tl.y { background: #febc2e; }
-.tl.g { background: #28c840; }
-[data-theme="light"] .tl { border-color: rgba(0, 0, 0, 0.25); }
+/* macOS: reserve space for the native traffic lights that titleBarStyle
+ * "Overlay" renders on the left. Without this the brand would slide under
+ * them. 78px ≈ 3 × 12px buttons + 2 × 8px gaps + ~16px leading inset. */
+.titlebar.is-mac { padding-left: 78px; }
 
 .brand {
   display: flex; align-items: center; gap: var(--sp-2);
@@ -104,11 +120,16 @@
 .brand-mark {
   width: 18px; height: 18px; position: relative;
   border-radius: var(--radius-sm);
-  background: var(--panel-2);
+  overflow: hidden;
   display: grid; place-items: center;
-  border: 1px solid var(--line-3);
+  flex: none;
 }
-.brand-mark svg { width: 12px; height: 12px; color: var(--accent); }
+.brand-mark img {
+  width: 100%; height: 100%;
+  object-fit: cover;
+  display: block;
+  -webkit-user-drag: none;
+}
 .brand em {
   font-style: normal;
   color: var(--muted);
@@ -121,10 +142,33 @@
 .titlebar-spacer { flex: 1; }
 .titlebar-actions { display: flex; align-items: center; gap: var(--sp-1); }
 
+/* Windows / Linux caption controls (mac uses native traffic lights). */
+.winctl {
+  display: flex;
+  align-items: stretch;
+  height: 100%;
+  margin-left: var(--sp-1);
+  -webkit-app-region: no-drag;
+}
+.winctl__btn {
+  width: 44px;
+  display: grid; place-items: center;
+  background: transparent;
+  border: none;
+  color: var(--ink-2);
+  cursor: pointer;
+  transition: background var(--dur-fast) var(--easing), color var(--dur-fast) var(--easing);
+}
+.winctl__btn:hover { background: var(--panel-2); color: var(--ink); }
+.winctl__btn--close:hover { background: #e81123; color: #fff; }
+.winctl__btn:active { background: var(--surface); }
+
 .menu-items {
   display: flex;
   gap: 2px;
   margin-left: var(--sp-3);
+  position: relative;
+  -webkit-app-region: no-drag;
 }
 .menu-items button {
   background: transparent;
@@ -137,6 +181,11 @@
   font-family: var(--sans);
 }
 .menu-items button:hover { background: var(--panel-2); color: var(--ink); }
+.menu-items button.is-open {
+  background: var(--accent-dim);
+  color: var(--ink);
+}
+.titlebar-menu-dropdown { min-width: 220px; }
 
 /* ─── SIDEBAR ─── */
 .sidebar {
@@ -182,13 +231,29 @@
 }
 .sidebar-toolbar .crumb {
   flex: 1;
-  display: flex; align-items: center; gap: 2px;
-  overflow: hidden; white-space: nowrap; text-overflow: ellipsis;
+  display: flex; align-items: center; gap: 3px;
+  overflow: hidden; white-space: nowrap;
   min-width: 0;
 }
-.sidebar-toolbar .crumb span.seg { color: var(--ink-2); }
-.sidebar-toolbar .crumb span.seg.last { color: var(--ink); font-weight: var(--weight-medium); }
-.sidebar-toolbar .crumb span.sep { color: var(--dim); }
+.sidebar-toolbar .crumb .crumb-item {
+  display: inline-flex; align-items: center; gap: 3px;
+  min-width: 0;
+}
+.sidebar-toolbar .crumb .seg {
+  padding: 0;
+  background: transparent;
+  border: none;
+  color: var(--ink-2);
+  font: inherit;
+  line-height: 1.5;
+  cursor: pointer;
+  max-width: 140px;
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+  transition: color var(--dur-fast) var(--easing);
+}
+.sidebar-toolbar .crumb .seg:hover { color: var(--ink); }
+.sidebar-toolbar .crumb .seg.last { color: var(--ink); font-weight: var(--weight-medium); }
+.sidebar-toolbar .crumb .sep { color: var(--dim); }
 
 .sidebar-search {
   padding: 6px var(--sp-2);
@@ -410,10 +475,27 @@
   display: flex; align-items: flex-end;
   background: var(--surface-2);
   border-bottom: 1px solid var(--line);
-  padding: 0 6px;
+  padding: 0 var(--sp-1-5);
   overflow: hidden;
   min-width: 0;
 }
+.tabbar-scroll {
+  display: flex;
+  align-items: flex-end;
+  flex: 1 1 auto;
+  min-width: 0;
+  overflow-x: auto;
+  overflow-y: hidden;
+  scrollbar-width: thin;
+  scrollbar-color: var(--line-2) transparent;
+}
+.tabbar-scroll::-webkit-scrollbar { height: 6px; }
+.tabbar-scroll::-webkit-scrollbar-track { background: transparent; }
+.tabbar-scroll::-webkit-scrollbar-thumb {
+  background: var(--line-2);
+  border-radius: var(--radius-pill);
+}
+.tabbar-scroll::-webkit-scrollbar-thumb:hover { background: var(--muted); }
 .tab {
   display: flex; align-items: center; gap: var(--sp-2);
   height: calc(var(--tabbar-h) - 1px);
@@ -430,6 +512,7 @@
   position: relative;
   margin-bottom: -1px;
   font-family: var(--sans);
+  flex: 0 0 auto;
 }
 .tab + .tab { margin-left: 2px; }
 .tab:hover {
@@ -470,6 +553,22 @@
 .tab.active .tab-close { opacity: 1; }
 .tab .tab-close:hover { background: var(--panel-2); color: var(--ink); }
 .tab .tab-close svg { width: 9px; height: 9px; }
+
+.tabbar-arrow {
+  width: 22px; height: 24px;
+  display: grid; place-items: center;
+  color: var(--muted);
+  background: transparent;
+  border: none;
+  border-radius: var(--radius-sm);
+  cursor: pointer;
+  align-self: center;
+  padding: 0;
+  flex: none;
+}
+.tabbar-arrow:hover:not(:disabled) { background: var(--panel-2); color: var(--ink); }
+.tabbar-arrow:disabled { color: var(--dim); cursor: default; }
+.tabbar-arrow svg { width: 14px; height: 14px; }
 
 .tabbar-new {
   width: 28px; height: 28px;
@@ -630,6 +729,11 @@
   margin: 0 0 var(--sp-2-5);
   font-weight: var(--weight-semibold);
 }
+.welcome-recent-list {
+  max-height: 280px;
+  overflow-y: auto;
+  padding-right: var(--sp-1);
+}
 .recent-row {
   display: flex; align-items: center; gap: var(--sp-2-5);
   padding: 6px var(--sp-2);
@@ -650,7 +754,7 @@
 }
 
 /* ─── RIGHT ZONE ─── */
-.rightzone { background: var(--surface); }
+.rightzone { background: var(--surface); overflow: hidden; }
 .rightpanel {
   flex: 1;
   min-width: 0;
@@ -658,8 +762,15 @@
   border-right: 1px solid var(--line);
   display: flex; flex-direction: column;
   background: var(--surface);
+  /* Clip the panel's contents during the collapse transition; without
+   * this the inner chrome (tables, splash art) would flow over the
+   * toolstrip while the column animates from full width to zero. */
+  overflow: hidden;
 }
-.app.is-right-collapsed .rightpanel { display: none; }
+/* When collapsed, the column is 0px wide so the panel naturally
+ * disappears; we also kill pointer events so stray clicks on the
+ * clipped sliver don't land on hidden controls. */
+.app.is-right-collapsed .rightpanel { pointer-events: none; }
 
 .panel-header.is-right {
   display: flex; align-items: center; gap: var(--sp-2);

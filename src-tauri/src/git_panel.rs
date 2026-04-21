@@ -32,6 +32,8 @@ pub struct GitPanelFile {
     pub file_name: String,
     pub status: String,
     pub staged: bool,
+    pub additions: u32,
+    pub deletions: u32,
 }
 
 #[derive(Serialize)]
@@ -575,7 +577,62 @@ fn map_git_panel_file(change: pier_core::services::git::GitFileChange) -> GitPan
         file_name,
         status: change.status.code().to_string(),
         staged: change.staged,
+        additions: 0,
+        deletions: 0,
     }
+}
+
+fn parse_numstat(output: &str) -> std::collections::HashMap<String, (u32, u32)> {
+    let mut map = std::collections::HashMap::new();
+    for line in output.lines() {
+        let mut parts = line.splitn(3, '\t');
+        let adds = parts.next().unwrap_or("0");
+        let dels = parts.next().unwrap_or("0");
+        let path = match parts.next() {
+            Some(value) => value.trim().to_string(),
+            None => continue,
+        };
+        if path.is_empty() {
+            continue;
+        }
+        let add_count = adds.parse::<u32>().unwrap_or(0);
+        let del_count = dels.parse::<u32>().unwrap_or(0);
+        map.insert(path, (add_count, del_count));
+    }
+    map
+}
+
+fn count_file_lines(repo_path: &Path, rel_path: &str) -> u32 {
+    let full = repo_path.join(rel_path);
+    match fs::read(&full) {
+        Ok(bytes) => {
+            if bytes.is_empty() {
+                return 0;
+            }
+            let mut count = bytes.iter().filter(|b| **b == b'\n').count() as u32;
+            if !bytes.ends_with(b"\n") {
+                count += 1;
+            }
+            count
+        }
+        Err(_) => 0,
+    }
+}
+
+fn annotate_panel_file(
+    repo_path: &Path,
+    mut file: GitPanelFile,
+    staged_map: &std::collections::HashMap<String, (u32, u32)>,
+    unstaged_map: &std::collections::HashMap<String, (u32, u32)>,
+) -> GitPanelFile {
+    let source = if file.staged { staged_map } else { unstaged_map };
+    if let Some((adds, dels)) = source.get(&file.path) {
+        file.additions = *adds;
+        file.deletions = *dels;
+    } else if !file.staged && file.status == "?" {
+        file.additions = count_file_lines(repo_path, &file.path);
+    }
+    file
 }
 
 #[tauri::command]
@@ -589,17 +646,28 @@ pub fn git_panel_state(path: Option<String>) -> Result<GitPanelState, String> {
     let client = open_git_client(path)?;
     let branch = client.branch_info().map_err(|error| error.to_string())?;
     let changes = client.status().map_err(|error| error.to_string())?;
+    let repo_path = client.repo_path().to_path_buf();
+
+    let staged_numstat = run_git_at(&repo_path, &["diff", "--cached", "--numstat"])
+        .map(|out| parse_numstat(&out))
+        .unwrap_or_default();
+    let unstaged_numstat = run_git_at(&repo_path, &["diff", "--numstat"])
+        .map(|out| parse_numstat(&out))
+        .unwrap_or_default();
+
     let staged_files: Vec<GitPanelFile> = changes
         .iter()
         .filter(|change| change.staged)
         .cloned()
         .map(map_git_panel_file)
+        .map(|file| annotate_panel_file(&repo_path, file, &staged_numstat, &unstaged_numstat))
         .collect();
     let unstaged_files: Vec<GitPanelFile> = changes
         .iter()
         .filter(|change| !change.staged)
         .cloned()
         .map(map_git_panel_file)
+        .map(|file| annotate_panel_file(&repo_path, file, &staged_numstat, &unstaged_numstat))
         .collect();
     let conflict_count = unstaged_files.iter().filter(|file| file.status == "U").count();
 
@@ -618,13 +686,26 @@ pub fn git_panel_state(path: Option<String>) -> Result<GitPanelState, String> {
 }
 
 #[tauri::command]
-pub fn git_commit_and_push(path: Option<String>, message: String) -> Result<String, String> {
+pub fn git_commit_and_push(
+    path: Option<String>,
+    message: String,
+    signoff: Option<bool>,
+    amend: Option<bool>,
+) -> Result<String, String> {
     let repo_path = repo_root(path)?;
     let trimmed = message.trim();
     if trimmed.is_empty() {
         return Err(String::from("commit message cannot be empty"));
     }
-    run_git_at(&repo_path, &["commit", "-m", trimmed])?;
+    let mut args: Vec<&str> = vec!["commit"];
+    if signoff.unwrap_or(false) {
+        args.push("--signoff");
+    }
+    if amend.unwrap_or(false) {
+        args.push("--amend");
+    }
+    args.extend_from_slice(&["-m", trimmed]);
+    run_git_at(&repo_path, &args)?;
     run_git_at(&repo_path, &["push"])
 }
 

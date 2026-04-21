@@ -44,6 +44,9 @@ import type {
 
 export const coreInfo = () => invoke<CoreInfo>("core_info");
 
+/** Dev-only: toggle the Tauri webview DevTools. Returns an error in release. */
+export const devToggleDevtools = () => invoke<void>("dev_toggle_devtools");
+
 export const listDirectory = (path?: string) =>
   invoke<FileEntry[]>("list_directory", { path: path ?? null });
 
@@ -76,11 +79,23 @@ export const gitUnstageAll = (path: string | null) =>
 export const gitDiscardPaths = (path: string | null, paths: string[]) =>
   invoke<void>("git_discard_paths", { path, paths });
 
-export const gitCommit = (path: string | null, message: string) =>
-  invoke<string>("git_commit", { path, message });
+export type GitCommitOptions = { signoff?: boolean; amend?: boolean };
 
-export const gitCommitAndPush = (path: string | null, message: string) =>
-  invoke<string>("git_commit_and_push", { path, message });
+export const gitCommit = (path: string | null, message: string, options?: GitCommitOptions) =>
+  invoke<string>("git_commit", {
+    path,
+    message,
+    signoff: options?.signoff ?? false,
+    amend: options?.amend ?? false,
+  });
+
+export const gitCommitAndPush = (path: string | null, message: string, options?: GitCommitOptions) =>
+  invoke<string>("git_commit_and_push", {
+    path,
+    message,
+    signoff: options?.signoff ?? false,
+    amend: options?.amend ?? false,
+  });
 
 export const gitBranchList = (path: string | null) =>
   invoke<string[]>("git_branch_list", { path });
@@ -294,6 +309,25 @@ export const sshConnectionDelete = (index: number) =>
   invoke<void>("ssh_connection_delete", { index });
 
 /**
+ * Atomic reorder + group-reassign of the saved-connections list.
+ * `order[i]` is the old index of the connection that should land
+ * in slot `i`. `groups[i]` is the new group label for that slot;
+ * pass `null` (or an empty string) to ungroup.
+ */
+export const sshConnectionsReorder = (
+  order: number[],
+  groups: Array<string | null>,
+) => invoke<void>("ssh_connections_reorder", { order, groups });
+
+/**
+ * Rename every connection whose group matches `from` to `to`.
+ * `to === null` or empty strips the group (ungroups). Passing an
+ * empty `from` targets connections with no explicit group.
+ */
+export const sshGroupRename = (from: string, to: string | null) =>
+  invoke<void>("ssh_group_rename", { from, to });
+
+/**
  * Resolve the stored password for a saved SSH connection from the OS
  * keychain. Returns an empty string for non-password auth. Use this to
  * prime in-memory state on the frontend so probe/detect/docker/db
@@ -461,6 +495,7 @@ export const sftpBrowse = (params: {
   password: string;
   keyPath: string;
   path?: string | null;
+  savedConnectionIndex?: number | null;
 }) => invoke<SftpBrowseState>("sftp_browse", params);
 
 // ── Markdown ────────────────────────────────────────────────────
@@ -541,30 +576,35 @@ export const dockerRemoveNetwork = (params: {
 export const sftpMkdir = (params: {
   host: string; port: number; user: string; authMode: string; password: string; keyPath: string;
   path: string;
+  savedConnectionIndex?: number | null;
 }) => invoke<void>("sftp_mkdir", params);
 
 export const sftpRemove = (params: {
   host: string; port: number; user: string; authMode: string; password: string; keyPath: string;
   path: string;
   isDir: boolean;
+  savedConnectionIndex?: number | null;
 }) => invoke<void>("sftp_remove", params);
 
 export const sftpRename = (params: {
   host: string; port: number; user: string; authMode: string; password: string; keyPath: string;
   from: string;
   to: string;
+  savedConnectionIndex?: number | null;
 }) => invoke<void>("sftp_rename", params);
 
 export const sftpDownload = (params: {
   host: string; port: number; user: string; authMode: string; password: string; keyPath: string;
   remotePath: string;
   localPath: string;
+  savedConnectionIndex?: number | null;
 }) => invoke<void>("sftp_download", params);
 
 export const sftpUpload = (params: {
   host: string; port: number; user: string; authMode: string; password: string; keyPath: string;
   localPath: string;
   remotePath: string;
+  savedConnectionIndex?: number | null;
 }) => invoke<void>("sftp_upload", params);
 
 // ── Log Stream ──────────────────────────────────────────────────

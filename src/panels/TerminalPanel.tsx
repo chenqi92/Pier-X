@@ -8,6 +8,7 @@ import * as cmd from "../lib/commands";
 import { controlKeyMap } from "../lib/commands";
 import ContextMenu, { type ContextMenuItem } from "../components/ContextMenu";
 import { useI18n } from "../i18n/useI18n";
+import { localizeError } from "../i18n/localizeMessage";
 import type { TabState, TerminalSessionInfo, TerminalSnapshot, TerminalSize } from "../lib/types";
 import { useTabStore } from "../stores/useTabStore";
 import { useSettingsStore } from "../stores/useSettingsStore";
@@ -57,6 +58,7 @@ type Props = {
 
 export default function TerminalPanel({ tab, isActive }: Props) {
   const { t } = useI18n();
+  const formatError = (error: unknown) => localizeError(error, t);
   const updateTab = useTabStore((s) => s.updateTab);
   const terminalFontSize = useSettingsStore((s) => s.terminalFontSize);
   const monoFont = useSettingsStore((s) => s.monoFontFamily);
@@ -81,6 +83,9 @@ export default function TerminalPanel({ tab, isActive }: Props) {
   const startupAppliedRef = useRef<string | null>(null);
   const audioContextRef = useRef<AudioContext | null>(null);
   const bellTimerRef = useRef<number | null>(null);
+  const pendingResizeRef = useRef(false);
+  const latestSizeRef = useRef(terminalSize);
+  latestSizeRef.current = terminalSize;
 
   // Sync session ID to tab store
   useEffect(() => {
@@ -150,7 +155,7 @@ export default function TerminalPanel({ tab, isActive }: Props) {
           setError("");
         }
       } catch (e) {
-        if (!cancelled) setError(String(e));
+        if (!cancelled) setError(formatError(e));
       }
     }
 
@@ -158,14 +163,51 @@ export default function TerminalPanel({ tab, isActive }: Props) {
     return () => { cancelled = true; };
   }, [session, terminalSize.cols, terminalSize.rows, tab.backend, tab.sshHost]);
 
-  // ── Resize session ──────────────────────────────────────────
+  // ── Resize session (trigger-based) ──────────────────────────
+  //
+  // Dragging a resize handle compresses the terminal viewport many
+  // times per frame. Sending SIGWINCH on every tick makes the shell
+  // reflow at intermediate (often min-clamped) widths, and any
+  // content wrapped at that narrower width can't un-wrap when the
+  // viewport grows back — so text appears to vanish after a drag.
+  //
+  // Instead: while a resize handle is actively being dragged
+  // (document.body.is-resizing, set by ResizeHandle), record that a
+  // resize is pending and skip the PTY call. When the drag releases,
+  // the global mouseup listener below fires exactly one SIGWINCH
+  // with the final size.
+  useEffect(() => {
+    if (!session) return;
+    if (document.body.classList.contains("is-resizing")) {
+      pendingResizeRef.current = true;
+      return;
+    }
+    pendingResizeRef.current = false;
+    cmd.terminalResize(session.sessionId, terminalSize.cols, terminalSize.rows).catch((e) =>
+      setError(formatError(e)),
+    );
+  }, [session, terminalSize.cols, terminalSize.rows]);
 
   useEffect(() => {
     if (!session) return;
-    cmd.terminalResize(session.sessionId, terminalSize.cols, terminalSize.rows).catch((e) =>
-      setError(String(e)),
-    );
-  }, [session, terminalSize.cols, terminalSize.rows]);
+    const onMouseUp = () => {
+      if (!pendingResizeRef.current) return;
+      // ResizeHandle clears the is-resizing class in its own mouseup
+      // listener; defer to a microtask so that runs first regardless
+      // of listener registration order.
+      queueMicrotask(() => {
+        if (!pendingResizeRef.current) return;
+        if (document.body.classList.contains("is-resizing")) return;
+        pendingResizeRef.current = false;
+        const size = latestSizeRef.current;
+        cmd.terminalResize(session.sessionId, size.cols, size.rows).catch((e) =>
+          setError(formatError(e)),
+        );
+      });
+    };
+    window.addEventListener("mouseup", onMouseUp);
+    return () => window.removeEventListener("mouseup", onMouseUp);
+  }, [session]);
 
   useEffect(() => {
     setStatusTerminalSize(terminalSize.cols, terminalSize.rows);
@@ -179,7 +221,7 @@ export default function TerminalPanel({ tab, isActive }: Props) {
       return;
     }
     cmd.terminalSetScrollbackLimit(session.sessionId, scrollbackLines).catch((e) =>
-      setError(String(e)),
+      setError(formatError(e)),
     );
   }, [session?.sessionId, scrollbackLines]);
 
@@ -201,7 +243,7 @@ export default function TerminalPanel({ tab, isActive }: Props) {
         updateTab(tab.id, { startupCommand: "" });
       })
       .catch((e) => {
-        setError(String(e));
+        setError(formatError(e));
       });
   }, [session?.sessionId, tab.id, tab.startupCommand]);
 
@@ -226,7 +268,7 @@ export default function TerminalPanel({ tab, isActive }: Props) {
           setError("");
         })
         .catch((e) => {
-          if (!disposed) setError(String(e));
+          if (!disposed) setError(formatError(e));
         })
         .finally(() => { inflight = false; });
     };
@@ -308,7 +350,7 @@ export default function TerminalPanel({ tab, isActive }: Props) {
       await cmd.terminalWrite(session.sessionId, data);
       setScrollbackOffset(0);
     } catch (e) {
-      setError(String(e));
+      setError(formatError(e));
     }
   }
 
@@ -436,7 +478,8 @@ export default function TerminalPanel({ tab, isActive }: Props) {
     await cmd.terminalWrite(session.sessionId, "\x1b[H\x1b[2J\x1b[3J").catch(() => {});
   }
 
-  const surfaceStatus = snapshot?.alive ? t("Live") : session ? t("Exited") : t("Booting");
+  const surfaceLive = snapshot?.alive ?? false;
+  const surfaceStatus = surfaceLive ? t("Live") : session ? t("Exited") : t("Booting");
 
   return (
     <section
@@ -453,7 +496,7 @@ export default function TerminalPanel({ tab, isActive }: Props) {
           </span>
         </div>
         <div className="terminal-panel__meta">
-          <span className={`meta-pill ${surfaceStatus === "Live" ? "meta-pill--success" : ""}`}>
+          <span className={`meta-pill ${surfaceLive ? "meta-pill--success" : ""}`}>
             {surfaceStatus}
           </span>
           <span className="meta-pill">

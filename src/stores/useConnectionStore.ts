@@ -1,6 +1,9 @@
 import { create } from "zustand";
+import { localizeError } from "../i18n/localizeMessage";
+import { translate } from "../i18n/useI18n";
 import type { SavedSshConnection } from "../lib/types";
 import * as cmd from "../lib/commands";
+import { useSettingsStore } from "./useSettingsStore";
 
 type ConnectionStore = {
   connections: SavedSshConnection[];
@@ -27,7 +30,16 @@ type ConnectionStore = {
     keyPath: string;
   }) => Promise<void>;
   remove: (index: number) => Promise<void>;
+  /** Atomic reorder + group-reassign across the whole list. */
+  reorder: (order: number[], groups: Array<string | null>) => Promise<void>;
+  /** Rename a group (to === null strips the group from its members). */
+  renameGroup: (from: string, to: string | null) => Promise<void>;
 };
+
+function localizeStoreError(error: unknown) {
+  const locale = useSettingsStore.getState().locale;
+  return localizeError(error, (key, vars) => translate(locale, key, vars));
+}
 
 export const useConnectionStore = create<ConnectionStore>((set, get) => ({
   connections: [],
@@ -40,7 +52,7 @@ export const useConnectionStore = create<ConnectionStore>((set, get) => ({
       const connections = await cmd.sshConnectionsList();
       set({ connections, loading: false });
     } catch (e) {
-      set({ error: String(e), loading: false });
+      set({ error: localizeStoreError(e), loading: false });
     }
   },
 
@@ -50,7 +62,7 @@ export const useConnectionStore = create<ConnectionStore>((set, get) => ({
       set({ error: "" });
       await get().refresh();
     } catch (e) {
-      set({ error: String(e) });
+      set({ error: localizeStoreError(e) });
       throw e;
     }
   },
@@ -61,7 +73,7 @@ export const useConnectionStore = create<ConnectionStore>((set, get) => ({
       set({ error: "" });
       await get().refresh();
     } catch (e) {
-      set({ error: String(e) });
+      set({ error: localizeStoreError(e) });
       throw e;
     }
   },
@@ -72,7 +84,40 @@ export const useConnectionStore = create<ConnectionStore>((set, get) => ({
       set({ error: "" });
       await get().refresh();
     } catch (e) {
-      set({ error: String(e) });
+      set({ error: localizeStoreError(e) });
+      throw e;
+    }
+  },
+
+  reorder: async (order, groups) => {
+    // Optimistic local update so drag-drop feels snappy; the
+    // refresh() below reconciles indices with the backend.
+    const current = get().connections;
+    const next = order.map((oldIdx, slot) => {
+      const src = current[oldIdx];
+      if (!src) return null;
+      const g = (groups[slot] ?? "").trim();
+      return { ...src, index: slot, group: g ? g : null };
+    }).filter(Boolean) as SavedSshConnection[];
+    if (next.length === current.length) set({ connections: next });
+    try {
+      await cmd.sshConnectionsReorder(order, groups);
+      set({ error: "" });
+      await get().refresh();
+    } catch (e) {
+      set({ error: localizeStoreError(e) });
+      await get().refresh();
+      throw e;
+    }
+  },
+
+  renameGroup: async (from, to) => {
+    try {
+      await cmd.sshGroupRename(from, to);
+      set({ error: "" });
+      await get().refresh();
+    } catch (e) {
+      set({ error: localizeStoreError(e) });
       throw e;
     }
   },

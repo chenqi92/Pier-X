@@ -7,6 +7,7 @@
 //   node scripts/bump-version.mjs major|minor|patch
 //   node scripts/bump-version.mjs <version> --no-git
 //   node scripts/bump-version.mjs <version> --no-tag
+//   node scripts/bump-version.mjs <version> --push     (git push + push --tags)
 //   node scripts/bump-version.mjs <version> --dry-run
 
 import { readFileSync, writeFileSync } from "node:fs";
@@ -46,17 +47,21 @@ function die(msg) {
 }
 
 function parseArgs(argv) {
-  const flags = { noGit: false, noTag: false, dryRun: false };
+  const flags = { noGit: false, noTag: false, dryRun: false, push: false };
   const positional = [];
   for (const a of argv) {
     if (a === "--no-git") flags.noGit = true;
     else if (a === "--no-tag") flags.noTag = true;
     else if (a === "--dry-run") flags.dryRun = true;
+    else if (a === "--push") flags.push = true;
     else if (a.startsWith("--")) die(`unknown flag: ${a}`);
     else positional.push(a);
   }
   if (positional.length !== 1) {
     die("expected one version argument (e.g. 0.2.0, or major|minor|patch)");
+  }
+  if (flags.push && flags.noGit) {
+    die("--push conflicts with --no-git");
   }
   return { arg: positional[0], flags };
 }
@@ -141,8 +146,14 @@ function main() {
   runGit(`git commit -m "chore(release): v${next}"`, flags.dryRun);
   if (!flags.noTag) {
     runGit(`git tag -a v${next} -m "Pier-X v${next}"`, flags.dryRun);
-    console.log(`\nTagged v${next}. Push with:`);
-    console.log(`  git push && git push --tags`);
+    if (flags.push) {
+      runGit(`git push`, flags.dryRun);
+      runGit(`git push origin v${next}`, flags.dryRun);
+      console.log(`\nPushed v${next} to origin.`);
+    } else {
+      console.log(`\nTagged v${next}. Push with:`);
+      console.log(`  git push && git push --tags`);
+    }
   }
 }
 

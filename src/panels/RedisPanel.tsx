@@ -5,6 +5,7 @@ import { quoteCommandArg } from "../lib/commands";
 import { closeTunnelSlot, ensureTunnelSlot, syncTunnelState } from "../lib/sshTunnel";
 import type { RedisBrowserState, RedisCommandResult, TabState } from "../lib/types";
 import { useI18n } from "../i18n/useI18n";
+import { localizeError } from "../i18n/localizeMessage";
 import DbConnRow from "../components/DbConnRow";
 import PanelHeader from "../components/PanelHeader";
 import StatusDot from "../components/StatusDot";
@@ -14,6 +15,7 @@ type Props = { tab: TabState };
 
 export default function RedisPanel({ tab }: Props) {
   const { t } = useI18n();
+  const formatError = (error: unknown) => localizeError(error, t);
   const updateTab = useTabStore((s) => s.updateTab);
   const [host, setHost] = useState(tab.redisHost);
   const [port, setPort] = useState(String(tab.redisPort));
@@ -117,7 +119,7 @@ export default function RedisPanel({ tab }: Props) {
     try {
       await ensureConnectionTarget(force);
     } catch (e) {
-      setTunnelError(String(e));
+      setTunnelError(formatError(e));
     } finally {
       setTunnelBusy(false);
     }
@@ -133,7 +135,7 @@ export default function RedisPanel({ tab }: Props) {
       await closeTunnelSlot(tab, "redis", updateTab);
       setTunnelNotice(t("Tunnel closed."));
     } catch (e) {
-      setTunnelError(String(e));
+      setTunnelError(formatError(e));
     } finally {
       setTunnelBusy(false);
     }
@@ -164,7 +166,7 @@ export default function RedisPanel({ tab }: Props) {
       setKeyName(s.keyName);
     } catch (e) {
       setState(null);
-      setError(String(e));
+      setError(formatError(e));
     } finally {
       setBusy(false);
     }
@@ -184,7 +186,7 @@ export default function RedisPanel({ tab }: Props) {
       setCmdResult(r);
     } catch (e) {
       setCmdResult(null);
-      setCmdError(String(e));
+      setCmdError(formatError(e));
     } finally {
       setCmdBusy(false);
     }
@@ -192,7 +194,12 @@ export default function RedisPanel({ tab }: Props) {
 
   const connName = host.trim() || t("Redis Browser");
   const connSub = host.trim()
-    ? `${host}:${port} · db ${db}${hasSsh ? " · ssh tunnel" : ""}`
+    ? t("{host}:{port} · db {db}{suffix}", {
+        host,
+        port,
+        db,
+        suffix: hasSsh ? ` · ${t("SSH tunnel")}` : "",
+      })
     : t("Not connected");
   const connTag = (
     <>
@@ -205,8 +212,11 @@ export default function RedisPanel({ tab }: Props) {
     <>
       <PanelHeader
         icon={Zap}
-        title="REDIS"
-        meta={`${tab.title || host || "redis"} · db ${db}`}
+        title={t("Redis")}
+        meta={t("{name} · db {db}", {
+          name: tab.title || host || t("Redis"),
+          db,
+        })}
       />
       <DbConnRow
         icon={Zap}

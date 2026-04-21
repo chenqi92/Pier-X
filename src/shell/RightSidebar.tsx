@@ -1,16 +1,19 @@
 import type { RightTool, TabState } from "../lib/types";
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo } from "react";
 import {
   Activity,
   Container,
   Database,
+  FileText,
   FolderTree,
+  GitBranch,
   Scroll,
   Zap,
 } from "lucide-react";
 import * as cmd from "../lib/commands";
 import { useI18n } from "../i18n/useI18n";
 import { mapServiceToTool, useDetectedServicesStore } from "../stores/useDetectedServicesStore";
+import { useStatusStore } from "../stores/useStatusStore";
 import GitPanel from "../panels/GitPanel";
 import MySqlPanel from "../panels/MySqlPanel";
 import PostgresPanel from "../panels/PostgresPanel";
@@ -23,14 +26,20 @@ import MarkdownPanel from "../panels/MarkdownPanel";
 import LogViewerPanel from "../panels/LogViewerPanel";
 import ToolStrip from "./ToolStrip";
 import ConnectSplash from "../components/ConnectSplash";
+import PanelHeader from "../components/PanelHeader";
 
 type Props = {
   activeTab: TabState | null;
+  /** Resolved right tool (falls back to app-level state when no tab is open). */
+  activeTool: RightTool;
   browserPath: string;
   selectedMarkdownPath: string;
   onToolChange: (tool: RightTool) => void;
   onConnectSaved: (index: number) => void;
   onNewConnection: () => void;
+  /** App-owned collapse state so the outer grid can reclaim right-panel width. */
+  collapsed: boolean;
+  onToggleCollapsed: () => void;
 };
 
 type SplashMeta = {
@@ -46,7 +55,7 @@ const SPLASH_META: Record<
 > = {
   monitor: {
     icon: Activity,
-    title: "Server monitor",
+    title: "Server Monitor",
     subtitle: "Open a saved server to see live CPU, memory, disks, and top processes.",
     tintVar: "var(--svc-monitor)",
   },
@@ -76,7 +85,7 @@ const SPLASH_META: Record<
   },
   log: {
     icon: Scroll,
-    title: "Log viewer",
+    title: "Log Viewer",
     subtitle: "Stream journal, nginx, or custom log tails from a saved server.",
     tintVar: "var(--svc-log)",
   },
@@ -102,11 +111,38 @@ function renderSplash(
       title={t(m.title)}
       subtitle={t(m.subtitle)}
       tintVar={m.tintVar}
-      tagLabel="ssh"
+      tagLabel={t("SSH")}
       onConnectSaved={onConnectSaved}
       onNewConnection={onNewConnection}
     />
   );
+}
+
+function toolTitle(tool: RightTool, t: (s: string) => string) {
+  switch (tool) {
+    case "git":
+      return t("Git");
+    case "markdown":
+      return t("Markdown");
+    case "monitor":
+      return t("Server Monitor");
+    case "docker":
+      return t("Docker");
+    case "mysql":
+      return t("MySQL");
+    case "postgres":
+      return t("PostgreSQL");
+    case "redis":
+      return t("Redis");
+    case "log":
+      return t("Logs");
+    case "sftp":
+      return t("SFTP");
+    case "sqlite":
+      return t("SQLite");
+    default:
+      return String(tool);
+  }
 }
 
 function ToolContent({
@@ -155,13 +191,65 @@ function ToolContent({
   }
 }
 
-export default function RightSidebar({ activeTab, browserPath, selectedMarkdownPath, onToolChange, onConnectSaved, onNewConnection }: Props) {
-  const { t } = useI18n();
-  const [expanded, setExpanded] = useState(true);
+function basename(path: string) {
+  if (!path) return "";
+  const index = Math.max(path.lastIndexOf("/"), path.lastIndexOf("\\"));
+  return index >= 0 ? path.slice(index + 1) : path;
+}
 
-  const activeTool: RightTool = activeTab?.rightTool ?? "markdown";
+function rightHeaderMeta(
+  tool: RightTool,
+  browserPath: string,
+  selectedMarkdownPath: string,
+  branch: string | null,
+  ahead: number,
+  behind: number,
+) {
+  if (tool === "markdown") {
+    return selectedMarkdownPath ? basename(selectedMarkdownPath) : undefined;
+  }
+  if (tool === "git" && branch) {
+    return `${branch}${ahead ? ` · ↑${ahead}` : ""}${behind ? ` · ↓${behind}` : ""}`;
+  }
+  if (tool === "git") {
+    return basename(browserPath);
+  }
+  return undefined;
+}
+
+function rightHeaderIcon(tool: RightTool) {
+  switch (tool) {
+    case "git":
+      return GitBranch;
+    case "markdown":
+      return FileText;
+    default:
+      return undefined;
+  }
+}
+
+export default function RightSidebar({
+  activeTab,
+  activeTool,
+  browserPath,
+  selectedMarkdownPath,
+  onToolChange,
+  onConnectSaved,
+  onNewConnection,
+  collapsed,
+  onToggleCollapsed,
+}: Props) {
+  const { t } = useI18n();
+  const expanded = !collapsed;
+  const branch = useStatusStore((s) => s.branch);
+  const ahead = useStatusStore((s) => s.ahead);
+  const behind = useStatusStore((s) => s.behind);
+
   const hasRemoteContext = activeTab?.backend === "ssh";
   const unknownTool = t("Unknown tool.");
+  const useOuterShell = activeTool === "git" || activeTool === "markdown";
+  const headerMeta = rightHeaderMeta(activeTool, browserPath, selectedMarkdownPath, branch, ahead, behind);
+  const HeaderIcon = rightHeaderIcon(activeTool);
 
   const detectedEntry = useDetectedServicesStore((s) =>
     activeTab ? s.byTab[activeTab.id] : undefined,
@@ -218,16 +306,39 @@ export default function RightSidebar({ activeTab, browserPath, selectedMarkdownP
     <div className="rightzone">
       {expanded && (
         <div className="rightpanel">
-          <ToolContent
-            tool={activeTool}
-            tab={activeTab}
-            browserPath={browserPath}
-            markdownPath={selectedMarkdownPath}
-            unknownToolLabel={unknownTool}
-            onConnectSaved={onConnectSaved}
-            onNewConnection={onNewConnection}
-            t={t}
-          />
+          {useOuterShell ? (
+            <>
+              <PanelHeader
+                className="is-right"
+                icon={HeaderIcon}
+                title={toolTitle(activeTool, t)}
+                meta={headerMeta}
+              />
+              <div className="panel-body">
+                <ToolContent
+                  tool={activeTool}
+                  tab={activeTab}
+                  browserPath={browserPath}
+                  markdownPath={selectedMarkdownPath}
+                  unknownToolLabel={unknownTool}
+                  onConnectSaved={onConnectSaved}
+                  onNewConnection={onNewConnection}
+                  t={t}
+                />
+              </div>
+            </>
+          ) : (
+            <ToolContent
+              tool={activeTool}
+              tab={activeTab}
+              browserPath={browserPath}
+              markdownPath={selectedMarkdownPath}
+              unknownToolLabel={unknownTool}
+              onConnectSaved={onConnectSaved}
+              onNewConnection={onNewConnection}
+              t={t}
+            />
+          )}
         </div>
       )}
       <ToolStrip
@@ -236,10 +347,10 @@ export default function RightSidebar({ activeTab, browserPath, selectedMarkdownP
         detectedTools={detectedTools}
         onSelectTool={(tool) => {
           onToolChange(tool);
-          if (!expanded) setExpanded(true);
+          if (collapsed) onToggleCollapsed();
         }}
         expanded={expanded}
-        onToggleExpand={() => setExpanded((p) => !p)}
+        onToggleExpand={onToggleCollapsed}
       />
     </div>
   );

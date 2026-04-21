@@ -28,6 +28,8 @@ export default function ResizeHandle({ direction, size, min, max, onResize, clas
       startSize.current = size;
       document.body.style.cursor = "col-resize";
       document.body.style.userSelect = "none";
+      // Signals the pane-width transition to turn off so drag feels 1:1.
+      document.body.classList.add("is-resizing");
     },
     [size],
   );
@@ -47,6 +49,7 @@ export default function ResizeHandle({ direction, size, min, max, onResize, clas
       dragging.current = false;
       document.body.style.cursor = "";
       document.body.style.userSelect = "";
+      document.body.classList.remove("is-resizing");
     };
 
     document.addEventListener("mousemove", handleMouseMove);

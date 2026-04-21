@@ -240,6 +240,74 @@ pub fn inspect_container_blocking(session: &SshSession, id: &str) -> Result<Stri
 }
 
 // ═══════════════════════════════════════════════════════════
+// Container stats (CPU / memory snapshot)
+// ═══════════════════════════════════════════════════════════
+
+/// One row from `docker stats --no-stream --format '{{json .}}'`.
+///
+/// Every field arrives as a pre-formatted string — docker does not
+/// expose raw bytes/percentages through `docker stats` when a format
+/// template is used, so we keep them as strings and let the UI
+/// decide how to render them.
+#[allow(missing_docs)]
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ContainerStat {
+    /// Short container id, matches [`Container::id`].
+    #[serde(rename(serialize = "id", deserialize = "ID"), alias = "id", default)]
+    pub id: String,
+    /// Container name, matches [`Container::names`].
+    #[serde(
+        rename(serialize = "name", deserialize = "Name"),
+        alias = "name",
+        default
+    )]
+    pub name: String,
+    /// CPU usage as a pre-formatted percentage string, e.g. `"1.23%"`.
+    #[serde(
+        rename(serialize = "cpuPerc", deserialize = "CPUPerc"),
+        alias = "cpuPerc",
+        default
+    )]
+    pub cpu_perc: String,
+    /// Memory usage / limit, e.g. `"48.5MiB / 1.94GiB"`.
+    #[serde(
+        rename(serialize = "memUsage", deserialize = "MemUsage"),
+        alias = "memUsage",
+        default
+    )]
+    pub mem_usage: String,
+    /// Memory usage as a percentage of the container limit, e.g. `"2.44%"`.
+    #[serde(
+        rename(serialize = "memPerc", deserialize = "MemPerc"),
+        alias = "memPerc",
+        default
+    )]
+    pub mem_perc: String,
+}
+
+/// Snapshot of per-container CPU / memory usage from `docker stats`.
+///
+/// Uses `--no-stream` so we get one sample and exit. This is deliberate —
+/// live streaming should flow through [`crate::ssh::ExecStream`], not
+/// this module.
+pub async fn list_container_stats(session: &SshSession) -> Result<Vec<ContainerStat>> {
+    let cmd = "docker stats --no-stream --format '{{json .}}'";
+    let (exit, stdout) = session.exec_command(cmd).await?;
+    if exit != 0 {
+        return Err(SshError::InvalidConfig(format!(
+            "docker stats exited {exit}: {}",
+            stdout.lines().next().unwrap_or("").trim()
+        )));
+    }
+    Ok(parse_ndjson(&stdout))
+}
+
+/// Blocking wrapper for [`list_container_stats`].
+pub fn list_container_stats_blocking(session: &SshSession) -> Result<Vec<ContainerStat>> {
+    crate::ssh::runtime::shared().block_on(list_container_stats(session))
+}
+
+// ═══════════════════════════════════════════════════════════
 // Images
 // ═══════════════════════════════════════════════════════════
 
@@ -356,6 +424,118 @@ pub async fn list_volumes(session: &SshSession) -> Result<Vec<DockerVolume>> {
 /// Blocking wrapper.
 pub fn list_volumes_blocking(session: &SshSession) -> Result<Vec<DockerVolume>> {
     crate::ssh::runtime::shared().block_on(list_volumes(session))
+}
+
+/// Per-volume disk usage from `docker system df -v`.
+///
+/// Docker's own `system df -v` is the correct source for per-volume
+/// size — it accounts for shared layers and reflects what actually
+/// lives under the volume directory. `du -sh` against the mountpoint
+/// would need root on most hosts and would double-count hardlinks.
+#[allow(missing_docs)]
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct VolumeDiskUsage {
+    /// Volume name, matches [`DockerVolume::name`].
+    #[serde(
+        rename(serialize = "name", deserialize = "Name"),
+        alias = "name",
+        default
+    )]
+    pub name: String,
+    /// Pre-formatted size string, e.g. `"1.234GB"` or `"0B"`.
+    #[serde(
+        rename(serialize = "size", deserialize = "Size"),
+        alias = "size",
+        default
+    )]
+    pub size: String,
+    /// Number of containers referencing this volume.
+    #[serde(
+        rename(serialize = "links", deserialize = "Links"),
+        alias = "links",
+        default
+    )]
+    pub links: i64,
+}
+
+/// `docker system df -v` emits a single JSON object that bundles every
+/// category (images / containers / volumes / buildcache). We only care
+/// about `Volumes`; this wrapper exists purely to carve that array out.
+#[derive(Deserialize)]
+struct SystemDfVerbose {
+    #[serde(alias = "Volumes", default)]
+    volumes: Vec<VolumeDiskUsage>,
+}
+
+/// Parser for `docker system df -v --format '{{json .}}'`. Accepts either
+/// the single-object form (current docker) or a first-line JSON with
+/// trailing noise (older docker CLI).
+pub fn parse_volume_df(stdout: &str) -> Vec<VolumeDiskUsage> {
+    let trimmed = stdout.trim();
+    if trimmed.is_empty() {
+        return Vec::new();
+    }
+    match serde_json::from_str::<SystemDfVerbose>(trimmed) {
+        Ok(df) => df.volumes,
+        Err(_) => {
+            // Some docker versions emit one line per section instead of
+            // one big object. Walk lines looking for one that parses.
+            for line in trimmed.lines() {
+                let line = line.trim();
+                if let Ok(df) = serde_json::from_str::<SystemDfVerbose>(line) {
+                    return df.volumes;
+                }
+            }
+            Vec::new()
+        }
+    }
+}
+
+/// Pull per-volume sizes from the remote via `docker system df -v`.
+pub async fn list_volume_sizes(session: &SshSession) -> Result<Vec<VolumeDiskUsage>> {
+    let cmd = "docker system df -v --format '{{json .}}'";
+    let (exit, stdout) = session.exec_command(cmd).await?;
+    if exit != 0 {
+        return Err(SshError::InvalidConfig(format!(
+            "docker system df exited {exit}: {}",
+            stdout.lines().next().unwrap_or("").trim()
+        )));
+    }
+    Ok(parse_volume_df(&stdout))
+}
+
+/// Blocking wrapper for [`list_volume_sizes`].
+pub fn list_volume_sizes_blocking(session: &SshSession) -> Result<Vec<VolumeDiskUsage>> {
+    crate::ssh::runtime::shared().block_on(list_volume_sizes(session))
+}
+
+/// Parse `"1.234GB"` / `"0B"` / `"48.5MiB"` into raw bytes so the UI can
+/// sort by size. Returns `0` on anything unparseable — sort stability is
+/// more important than perfect fidelity when docker's own string is
+/// already lossy.
+pub fn parse_size_to_bytes(s: &str) -> u64 {
+    let s = s.trim();
+    if s.is_empty() {
+        return 0;
+    }
+    let (num_end, unit) = match s.find(|c: char| c.is_ascii_alphabetic()) {
+        Some(i) => (i, s[i..].trim().to_ascii_lowercase()),
+        None => (s.len(), String::new()),
+    };
+    let num: f64 = s[..num_end].trim().parse().unwrap_or(0.0);
+    let mult: f64 = match unit.as_str() {
+        "" | "b" => 1.0,
+        "k" | "kb" => 1_000.0,
+        "ki" | "kib" => 1_024.0,
+        "m" | "mb" => 1_000_000.0,
+        "mi" | "mib" => 1_024.0 * 1_024.0,
+        "g" | "gb" => 1_000_000_000.0,
+        "gi" | "gib" => 1_024.0 * 1_024.0 * 1_024.0,
+        "t" | "tb" => 1_000_000_000_000.0,
+        "ti" | "tib" => 1_024.0_f64.powi(4),
+        _ => 1.0,
+    };
+    (num * mult) as u64
 }
 
 /// Remove a volume.
@@ -624,5 +804,46 @@ not-json-at-all
         let json = serde_json::to_string(&c).unwrap();
         let back: Container = serde_json::from_str(&json).unwrap();
         assert_eq!(c, back);
+    }
+
+    #[test]
+    fn parse_container_stats_happy_path() {
+        let stdout = r#"{"ID":"abc","Name":"cache","CPUPerc":"1.23%","MemUsage":"48.5MiB / 1.94GiB","MemPerc":"2.44%"}
+{"ID":"def","Name":"db","CPUPerc":"0.01%","MemUsage":"220MiB / 2GiB","MemPerc":"11.00%"}
+"#;
+        let stats = parse_ndjson::<ContainerStat>(stdout);
+        assert_eq!(stats.len(), 2);
+        assert_eq!(stats[0].id, "abc");
+        assert_eq!(stats[0].cpu_perc, "1.23%");
+        assert_eq!(stats[0].mem_usage, "48.5MiB / 1.94GiB");
+        assert_eq!(stats[1].name, "db");
+    }
+
+    #[test]
+    fn parse_volume_df_extracts_volumes_array() {
+        let stdout = r#"{"Images":[],"Containers":[],"Volumes":[{"Name":"warehouse_db","Size":"4.2GB","Links":1},{"Name":"redis_data","Size":"186MB","Links":1}],"BuildCache":[]}"#;
+        let volumes = parse_volume_df(stdout);
+        assert_eq!(volumes.len(), 2);
+        assert_eq!(volumes[0].name, "warehouse_db");
+        assert_eq!(volumes[0].size, "4.2GB");
+        assert_eq!(volumes[0].links, 1);
+        assert_eq!(volumes[1].name, "redis_data");
+    }
+
+    #[test]
+    fn parse_volume_df_empty_stdout_returns_empty_vec() {
+        assert!(parse_volume_df("").is_empty());
+        assert!(parse_volume_df("   \n").is_empty());
+    }
+
+    #[test]
+    fn parse_size_to_bytes_covers_common_units() {
+        assert_eq!(parse_size_to_bytes("0B"), 0);
+        assert_eq!(parse_size_to_bytes("186MB"), 186_000_000);
+        assert_eq!(parse_size_to_bytes("186MiB"), 186 * 1024 * 1024);
+        assert_eq!(parse_size_to_bytes("1.5GB"), 1_500_000_000);
+        assert_eq!(parse_size_to_bytes("48.5MiB"), (48.5_f64 * 1024.0 * 1024.0) as u64);
+        assert_eq!(parse_size_to_bytes(""), 0);
+        assert_eq!(parse_size_to_bytes("garbage"), 0);
     }
 }

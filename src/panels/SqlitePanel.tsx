@@ -4,6 +4,7 @@ import * as cmd from "../lib/commands";
 import { isReadOnlySql, queryResultToTsv } from "../lib/commands";
 import type { QueryExecutionResult, SqliteBrowserState } from "../lib/types";
 import { useI18n } from "../i18n/useI18n";
+import { localizeError } from "../i18n/localizeMessage";
 import DbConnRow from "../components/DbConnRow";
 import PanelHeader from "../components/PanelHeader";
 import PreviewTable from "../components/PreviewTable";
@@ -12,6 +13,7 @@ import StatusDot from "../components/StatusDot";
 
 export default function SqlitePanel() {
   const { t } = useI18n();
+  const formatError = (error: unknown) => localizeError(error, t);
   const [path, setPath] = useState("");
   const [tableName, setTableName] = useState("");
   const [sql, setSql] = useState("SELECT name FROM sqlite_master WHERE type='table' ORDER BY name;");
@@ -34,7 +36,7 @@ export default function SqlitePanel() {
     try {
       const s = await cmd.sqliteBrowse(path.trim(), nextTable.trim() || null);
       setState(s); setTableName(s.tableName);
-    } catch (e) { setState(null); setError(String(e)); }
+    } catch (e) { setState(null); setError(formatError(e)); }
     finally { setBusy(false); }
   }
 
@@ -45,7 +47,7 @@ export default function SqlitePanel() {
       setQueryResult(r); setNotice(t("{elapsed} ms", { elapsed: r.elapsedMs }));
       if (needsWrite) { setReadOnly(true); setWriteConfirm(""); }
       void browse(tableName);
-    } catch (e) { setQueryResult(null); setQueryError(String(e)); }
+    } catch (e) { setQueryResult(null); setQueryError(formatError(e)); }
     finally { setQueryBusy(false); }
   }
 
@@ -55,9 +57,9 @@ export default function SqlitePanel() {
   const dbFileName = trimmedPath ? (trimmedPath.split(/[/\\]/).pop() || trimmedPath) : "";
   const headerMeta = dbFileName
     ? state
-      ? `${dbFileName} · ${state.tables.length} tables`
+      ? t("{file} · {count} tables", { file: dbFileName, count: state.tables.length })
       : dbFileName
-    : "no database";
+    : t("No database");
   const connTag = (
     <>
       <StatusDot tone={state ? "pos" : "off"} />
@@ -69,7 +71,7 @@ export default function SqlitePanel() {
     <>
       <PanelHeader
         icon={HardDrive}
-        title="SQLITE"
+        title={t("SQLite")}
         meta={headerMeta}
       />
       <DbConnRow
@@ -86,7 +88,7 @@ export default function SqlitePanel() {
           <label className="field-stack">
             <span className="field-label">{t("Database file")}</span>
             <div className="branch-row">
-              <input className="field-input" onChange={(e) => setPath(e.currentTarget.value)} placeholder="/path/to/app.db" value={path} />
+              <input className="field-input" onChange={(e) => setPath(e.currentTarget.value)} placeholder={t("/path/to/app.db")} value={path} />
               <button className="mini-button" disabled={!canBrowse || busy} onClick={() => void browse()} type="button">{busy ? t("Browsing...") : t("Browse")}</button>
             </div>
           </label>

@@ -37,6 +37,11 @@ pub struct SshConfig {
     /// in M3b+. Ignored by the SSH layer itself.
     #[serde(default)]
     pub tags: Vec<String>,
+    /// Optional group label used by the sidebar to cluster saved
+    /// connections. `None` or empty means the connection lives in
+    /// the implicit "default" group. Ignored by the SSH layer.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub group: Option<String>,
 }
 
 fn default_connect_timeout() -> u64 {
@@ -57,6 +62,7 @@ impl SshConfig {
             },
             connect_timeout_secs: default_connect_timeout(),
             tags: Vec::new(),
+            group: None,
         }
     }
 
@@ -180,6 +186,7 @@ mod tests {
             },
             connect_timeout_secs: 30,
             tags: vec!["prod".into(), "eu-west".into()],
+            group: Some("prod".into()),
         };
         let json = serde_json::to_string(&original).expect("serialize");
         let parsed: SshConfig = serde_json::from_str(&json).expect("deserialize");
@@ -198,6 +205,7 @@ mod tests {
             },
             connect_timeout_secs: 5,
             tags: vec![],
+            group: None,
         };
         let json = serde_json::to_string(&c).expect("serialize");
         let parsed: SshConfig = serde_json::from_str(&json).expect("deserialize");

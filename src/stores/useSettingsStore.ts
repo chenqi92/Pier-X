@@ -53,46 +53,170 @@ export const MONO_FONT_OPTIONS = [
   "monospace",
 ];
 
-export const useSettingsStore = create<SettingsState>((set) => ({
-  locale: "zh",
+const PREFS_KEY = "pierx:settings";
+
+type PersistedSettings = Partial<{
+  locale: Locale;
+  performanceOverlay: boolean;
+  uiFontFamily: string;
+  uiScale: number;
+  monoFontFamily: string;
+  terminalFontSize: number;
+  cursorStyle: 0 | 1 | 2;
+  cursorBlink: boolean;
+  scrollbackLines: number;
+  visualBell: boolean;
+  audioBell: boolean;
+  terminalRowSeparators: boolean;
+}>;
+
+const DEFAULTS = {
+  locale: "zh" as Locale,
   performanceOverlay: false,
   uiFontFamily: "IBM Plex Sans",
   uiScale: 1.0,
   monoFontFamily: "IBM Plex Mono",
   terminalFontSize: 13,
-  cursorStyle: 0,
+  cursorStyle: 0 as 0 | 1 | 2,
   cursorBlink: true,
   scrollbackLines: 10000,
   visualBell: true,
   audioBell: false,
   terminalRowSeparators: false,
-  setLocale: (locale) => set({ locale }),
-  setPerformanceOverlay: (performanceOverlay) => set({ performanceOverlay }),
-  setUiFontFamily: (uiFontFamily) => {
-    set({ uiFontFamily });
-    document.documentElement.style.setProperty(
-      "--sans",
-      `"${uiFontFamily}", system-ui, -apple-system, "SF Pro Text", "Segoe UI", sans-serif`,
-    );
-    document.documentElement.style.setProperty("--font-ui", `var(--sans)`);
-  },
-  setUiScale: (uiScale) => {
-    set({ uiScale });
-    document.documentElement.style.setProperty("font-size", `${13 * uiScale}px`);
-  },
-  setMonoFontFamily: (monoFontFamily) => {
-    set({ monoFontFamily });
-    document.documentElement.style.setProperty(
-      "--mono",
-      `"${monoFontFamily}", ui-monospace, "SF Mono", Consolas, monospace`,
-    );
-    document.documentElement.style.setProperty("--font-mono", `var(--mono)`);
-  },
-  setTerminalFontSize: (terminalFontSize) => set({ terminalFontSize }),
-  setCursorStyle: (cursorStyle) => set({ cursorStyle }),
-  setCursorBlink: (cursorBlink) => set({ cursorBlink }),
-  setScrollbackLines: (scrollbackLines) => set({ scrollbackLines }),
-  setVisualBell: (visualBell) => set({ visualBell }),
-  setAudioBell: (audioBell) => set({ audioBell }),
-  setTerminalRowSeparators: (terminalRowSeparators) => set({ terminalRowSeparators }),
-}));
+};
+
+function loadPrefs(): PersistedSettings {
+  try {
+    const raw = localStorage.getItem(PREFS_KEY);
+    if (!raw) return {};
+    const parsed = JSON.parse(raw) as PersistedSettings;
+    return parsed && typeof parsed === "object" ? parsed : {};
+  } catch {
+    return {};
+  }
+}
+
+function savePrefs(next: PersistedSettings) {
+  try {
+    localStorage.setItem(PREFS_KEY, JSON.stringify(next));
+  } catch {
+    /* swallow quota errors */
+  }
+}
+
+function applyUiFont(family: string) {
+  document.documentElement.style.setProperty(
+    "--sans",
+    `"${family}", system-ui, -apple-system, "SF Pro Text", "Segoe UI", sans-serif`,
+  );
+  document.documentElement.style.setProperty("--font-ui", `var(--sans)`);
+}
+
+function applyMonoFont(family: string) {
+  document.documentElement.style.setProperty(
+    "--mono",
+    `"${family}", ui-monospace, "SF Mono", Consolas, monospace`,
+  );
+  document.documentElement.style.setProperty("--font-mono", `var(--mono)`);
+}
+
+function applyUiScale(scale: number) {
+  document.documentElement.style.setProperty("font-size", `${13 * scale}px`);
+}
+
+export const useSettingsStore = create<SettingsState>((set, get) => {
+  const stored = loadPrefs();
+
+  const initial = {
+    locale: stored.locale ?? DEFAULTS.locale,
+    performanceOverlay: stored.performanceOverlay ?? DEFAULTS.performanceOverlay,
+    uiFontFamily: stored.uiFontFamily ?? DEFAULTS.uiFontFamily,
+    uiScale: stored.uiScale ?? DEFAULTS.uiScale,
+    monoFontFamily: stored.monoFontFamily ?? DEFAULTS.monoFontFamily,
+    terminalFontSize: stored.terminalFontSize ?? DEFAULTS.terminalFontSize,
+    cursorStyle: stored.cursorStyle ?? DEFAULTS.cursorStyle,
+    cursorBlink: stored.cursorBlink ?? DEFAULTS.cursorBlink,
+    scrollbackLines: stored.scrollbackLines ?? DEFAULTS.scrollbackLines,
+    visualBell: stored.visualBell ?? DEFAULTS.visualBell,
+    audioBell: stored.audioBell ?? DEFAULTS.audioBell,
+    terminalRowSeparators:
+      stored.terminalRowSeparators ?? DEFAULTS.terminalRowSeparators,
+  };
+
+  applyUiFont(initial.uiFontFamily);
+  applyMonoFont(initial.monoFontFamily);
+  applyUiScale(initial.uiScale);
+
+  const persist = () => {
+    const s = get();
+    savePrefs({
+      locale: s.locale,
+      performanceOverlay: s.performanceOverlay,
+      uiFontFamily: s.uiFontFamily,
+      uiScale: s.uiScale,
+      monoFontFamily: s.monoFontFamily,
+      terminalFontSize: s.terminalFontSize,
+      cursorStyle: s.cursorStyle,
+      cursorBlink: s.cursorBlink,
+      scrollbackLines: s.scrollbackLines,
+      visualBell: s.visualBell,
+      audioBell: s.audioBell,
+      terminalRowSeparators: s.terminalRowSeparators,
+    });
+  };
+
+  return {
+    ...initial,
+    setLocale: (locale) => {
+      set({ locale });
+      persist();
+    },
+    setPerformanceOverlay: (performanceOverlay) => {
+      set({ performanceOverlay });
+      persist();
+    },
+    setUiFontFamily: (uiFontFamily) => {
+      applyUiFont(uiFontFamily);
+      set({ uiFontFamily });
+      persist();
+    },
+    setUiScale: (uiScale) => {
+      applyUiScale(uiScale);
+      set({ uiScale });
+      persist();
+    },
+    setMonoFontFamily: (monoFontFamily) => {
+      applyMonoFont(monoFontFamily);
+      set({ monoFontFamily });
+      persist();
+    },
+    setTerminalFontSize: (terminalFontSize) => {
+      set({ terminalFontSize });
+      persist();
+    },
+    setCursorStyle: (cursorStyle) => {
+      set({ cursorStyle });
+      persist();
+    },
+    setCursorBlink: (cursorBlink) => {
+      set({ cursorBlink });
+      persist();
+    },
+    setScrollbackLines: (scrollbackLines) => {
+      set({ scrollbackLines });
+      persist();
+    },
+    setVisualBell: (visualBell) => {
+      set({ visualBell });
+      persist();
+    },
+    setAudioBell: (audioBell) => {
+      set({ audioBell });
+      persist();
+    },
+    setTerminalRowSeparators: (terminalRowSeparators) => {
+      set({ terminalRowSeparators });
+      persist();
+    },
+  };
+});

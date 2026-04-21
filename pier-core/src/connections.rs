@@ -202,6 +202,75 @@ impl ConnectionStore {
             None
         }
     }
+
+    /// Atomic reorder + group-reassign: rewrite the connections
+    /// list to the given permutation `order` (each entry is an
+    /// old index) and apply `groups` as the new group labels in
+    /// the same slot. Group order is derived from first-appearance
+    /// in the resulting list, so reordering groups is done by
+    /// arranging all their members contiguously in the desired
+    /// order. Lengths of `order` and `groups` must match and
+    /// `order` must be a permutation of `0..connections.len()`.
+    pub fn reorder_with_groups(
+        &mut self,
+        order: &[usize],
+        groups: &[Option<String>],
+    ) -> Result<(), ConnectionStoreError> {
+        if order.len() != self.connections.len() || groups.len() != order.len() {
+            return Err(ConnectionStoreError::Io(io::Error::new(
+                io::ErrorKind::InvalidInput,
+                "reorder: order / groups length must equal connections length",
+            )));
+        }
+        let mut seen = vec![false; self.connections.len()];
+        for &idx in order {
+            if idx >= self.connections.len() || seen[idx] {
+                return Err(ConnectionStoreError::Io(io::Error::new(
+                    io::ErrorKind::InvalidInput,
+                    "reorder: order must be a permutation",
+                )));
+            }
+            seen[idx] = true;
+        }
+        let old = std::mem::take(&mut self.connections);
+        let mut next: Vec<SshConfig> = Vec::with_capacity(old.len());
+        // Move values out of `old` in the order given. Using `Option`
+        // to track which slots are already taken.
+        let mut old_opt: Vec<Option<SshConfig>> = old.into_iter().map(Some).collect();
+        for (slot, &idx) in order.iter().enumerate() {
+            let mut cfg = old_opt[idx]
+                .take()
+                .expect("permutation guarantees first-take");
+            let new_group = groups[slot]
+                .as_ref()
+                .map(|s| s.trim().to_string())
+                .filter(|s| !s.is_empty());
+            cfg.group = new_group;
+            next.push(cfg);
+        }
+        self.connections = next;
+        Ok(())
+    }
+
+    /// Rename a group: every connection whose `group` equals
+    /// `from` gets its group set to `to` (or `None` if `to` is
+    /// empty). Returns the number of connections updated.
+    pub fn rename_group(&mut self, from: &str, to: Option<&str>) -> usize {
+        let target = to.map(|s| s.trim()).filter(|s| !s.is_empty()).map(String::from);
+        let mut touched = 0usize;
+        for c in self.connections.iter_mut() {
+            let matches = c
+                .group
+                .as_deref()
+                .map(|s| s == from)
+                .unwrap_or_else(|| from.is_empty());
+            if matches {
+                c.group = target.clone();
+                touched += 1;
+            }
+        }
+        touched
+    }
 }
 
 /// Compute the temp-file sibling path used by atomic save.
@@ -351,6 +420,79 @@ mod tests {
             "atomic save left a stray temp file behind: {tmp:?}",
         );
         assert!(path.exists(), "atomic save did not produce final file");
+        let _ = fs::remove_file(&path);
+    }
+
+    #[test]
+    fn reorder_with_groups_permutes_and_assigns_groups() {
+        let mut store = ConnectionStore::new();
+        store.add(make_config("a", "id-a"));
+        store.add(make_config("b", "id-b"));
+        store.add(make_config("c", "id-c"));
+        // Move c to front, b to end, and tag a/c as "prod" while b stays ungrouped.
+        let order = vec![2usize, 0, 1];
+        let groups = vec![
+            Some("prod".to_string()),
+            Some("prod".to_string()),
+            None,
+        ];
+        store.reorder_with_groups(&order, &groups).expect("reorder ok");
+        assert_eq!(store.connections[0].name, "c");
+        assert_eq!(store.connections[1].name, "a");
+        assert_eq!(store.connections[2].name, "b");
+        assert_eq!(store.connections[0].group.as_deref(), Some("prod"));
+        assert_eq!(store.connections[1].group.as_deref(), Some("prod"));
+        assert_eq!(store.connections[2].group, None);
+    }
+
+    #[test]
+    fn reorder_rejects_non_permutation() {
+        let mut store = ConnectionStore::new();
+        store.add(make_config("a", "id-a"));
+        store.add(make_config("b", "id-b"));
+        // Duplicate index is not a valid permutation.
+        let err = store
+            .reorder_with_groups(&[0, 0], &[None, None])
+            .expect_err("duplicate index must be rejected");
+        assert!(format!("{err}").contains("permutation"));
+    }
+
+    #[test]
+    fn rename_group_updates_matching_members_only() {
+        let mut store = ConnectionStore::new();
+        let mut a = make_config("a", "id-a");
+        a.group = Some("old".into());
+        let mut b = make_config("b", "id-b");
+        b.group = Some("old".into());
+        let mut c = make_config("c", "id-c");
+        c.group = Some("keep".into());
+        store.add(a);
+        store.add(b);
+        store.add(c);
+        let touched = store.rename_group("old", Some("new"));
+        assert_eq!(touched, 2);
+        assert_eq!(store.connections[0].group.as_deref(), Some("new"));
+        assert_eq!(store.connections[1].group.as_deref(), Some("new"));
+        assert_eq!(store.connections[2].group.as_deref(), Some("keep"));
+        // Renaming to empty / None strips the group.
+        let touched = store.rename_group("new", None);
+        assert_eq!(touched, 2);
+        assert_eq!(store.connections[0].group, None);
+        assert_eq!(store.connections[1].group, None);
+    }
+
+    #[test]
+    fn group_field_round_trips_through_json() {
+        let path = fresh_tmp("group-rt");
+        let mut store = ConnectionStore::new();
+        let mut a = make_config("a", "id-a");
+        a.group = Some("prod".into());
+        store.add(a);
+        store.add(make_config("b", "id-b")); // group = None
+        store.save_to_path(&path).expect("save");
+        let loaded = ConnectionStore::load_from_path(&path).expect("load");
+        assert_eq!(loaded.connections[0].group.as_deref(), Some("prod"));
+        assert_eq!(loaded.connections[1].group, None);
         let _ = fs::remove_file(&path);
     }
 }

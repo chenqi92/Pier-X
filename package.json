@@ -1,14 +1,24 @@
 {
-  "name": "pier-ui-tauri",
+  "name": "pier-x",
+  "description": "Pier-X — cross-platform terminal / Git / SSH / database management tool",
   "private": true,
   "version": "0.1.0",
   "type": "module",
   "scripts": {
     "dev": "vite",
+    "dev:tauri": "tauri dev",
     "build": "tsc -b && vite build",
+    "build:tauri": "tauri build",
+    "build:debug": "tauri build --debug",
     "preview": "vite preview",
     "tauri": "tauri",
-    "bump": "node scripts/bump-version.mjs"
+    "lint": "tsc --noEmit",
+    "clean": "node -e \"const {rmSync}=require('node:fs');for(const p of ['dist','src-tauri/target','src-tauri/gen/schemas']) try{rmSync(p,{recursive:true,force:true});console.log('removed',p)}catch(e){}\"",
+    "bump": "node scripts/bump-version.mjs",
+    "version:set": "node scripts/bump-version.mjs",
+    "release:patch": "node scripts/bump-version.mjs patch --push",
+    "release:minor": "node scripts/bump-version.mjs minor --push",
+    "release:major": "node scripts/bump-version.mjs major --push"
   },
   "dependencies": {
     "@tauri-apps/api": "^2",

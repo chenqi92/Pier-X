@@ -3,6 +3,7 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import * as cmd from "../lib/commands";
 import type { LogEventView, TabState } from "../lib/types";
 import { useI18n } from "../i18n/useI18n";
+import { localizeError, localizeRuntimeMessage } from "../i18n/localizeMessage";
 import PanelHeader from "../components/PanelHeader";
 import StatusDot from "../components/StatusDot";
 import { useTabStore } from "../stores/useTabStore";
@@ -49,6 +50,7 @@ const LEVELS: { key: LogLevel; label: string }[] = [
 
 export default function LogViewerPanel({ tab }: Props) {
   const { t } = useI18n();
+  const formatError = (error: unknown) => localizeError(error, t);
   const updateTab = useTabStore((s) => s.updateTab);
   const [command, setCommand] = useState(defaultCommand(tab));
   const [streamId, setStreamId] = useState<string | null>(null);
@@ -114,7 +116,7 @@ export default function LogViewerPanel({ tab }: Props) {
       setStreamId(nextId);
       setNotice(t("Streaming remote command."));
     } catch (e) {
-      setError(String(e));
+      setError(formatError(e));
     } finally {
       setBusy(false);
     }
@@ -147,14 +149,14 @@ export default function LogViewerPanel({ tab }: Props) {
             if (terminalEvent.kind === "exit") {
               setNotice(t("Log stream exited with code {code}.", { code: terminalEvent.text }));
             } else {
-              setError(terminalEvent.text || t("Log stream ended with an error."));
+              setError(localizeRuntimeMessage(terminalEvent.text || t("Log stream ended with an error."), t));
             }
             void stopStream(streamId);
           }
         })
         .catch((drainError) => {
           if (disposed) return;
-          setError(String(drainError));
+          setError(formatError(drainError));
           void stopStream(streamId);
         });
     };
@@ -190,9 +192,9 @@ export default function LogViewerPanel({ tab }: Props) {
 
   const streaming = !!streamId;
   const headerMeta = streaming
-    ? `${events.length} lines · streaming`
+    ? t("{count} lines · streaming", { count: events.length })
     : events.length > 0
-      ? `${events.length} lines`
+      ? t("{count} lines", { count: events.length })
       : undefined;
 
   function downloadLog() {
@@ -208,7 +210,7 @@ export default function LogViewerPanel({ tab }: Props) {
 
   return (
     <>
-      <PanelHeader icon={Scroll} title="LOG" meta={headerMeta} />
+      <PanelHeader icon={Scroll} title={t("Logs")} meta={headerMeta} />
       <div className="lg">
         <div className="lg-source">
           <Scroll size={12} />
@@ -251,7 +253,7 @@ export default function LogViewerPanel({ tab }: Props) {
                 onClick={() => setActiveLevels((prev) => ({ ...prev, [lv.key]: !prev[lv.key] }))}
               >
                 <span className="lg-chip-dot" />
-                {lv.label}
+                {t(lv.label)}
                 <span className="lg-chip-n">{counts[lv.key] || 0}</span>
               </button>
             ))}

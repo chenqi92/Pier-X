@@ -18,12 +18,15 @@ import {
   X,
   Zap,
 } from "lucide-react";
+import { openUrl } from "@tauri-apps/plugin-opener";
+import { getCurrentWindow } from "@tauri-apps/api/window";
 import { I18nContext, makeI18n } from "./i18n/useI18n";
 import * as cmd from "./lib/commands";
 import type { CoreInfo, FileEntry, RightTool, SavedSshConnection } from "./lib/types";
 import ResizeHandle from "./components/ResizeHandle";
 import SettingsDialog from "./components/SettingsDialog";
 import Stage from "./components/Stage";
+import type { MenuDef } from "./components/TitlebarMenu";
 import TerminalPanel from "./panels/TerminalPanel";
 import CommandPalette, { type PaletteCommand } from "./shell/CommandPalette";
 import NewConnectionDialog from "./shell/NewConnectionDialog";
@@ -41,10 +44,15 @@ import { useThemeStore as useThemeStoreRef } from "./stores/useThemeStore";
 import "./styles/fonts.css";
 import "./styles/tokens.css";
 import "./styles/atoms.css";
-import "./styles/pier-x.css";
 import "./styles/shell.css";
+import "./styles/pier-x.css";
 
 const MARKDOWN_EXTENSIONS = /\.(md|markdown|mdown|mkdn|mkd|mdx)$/i;
+const PANE_STORAGE_KEY = "pierx:pane-widths";
+const TOOLSTRIP_W = 42;
+const DEFAULT_SIDEBAR_W = 244;
+const DEFAULT_RIGHT_W = 360 + TOOLSTRIP_W;
+
 function isMarkdownFile(name: string): boolean {
   return MARKDOWN_EXTENSIONS.test(name);
 }
@@ -57,13 +65,43 @@ function App() {
   const [paletteOpen, setPaletteOpen] = useState(false);
   const [newConnOpen, setNewConnOpen] = useState(false);
   const [editingConnection, setEditingConnection] = useState<SavedSshConnection | null>(null);
-  const [sidebarWidth, setSidebarWidth] = useState(272);
-  const [rightWidth, setRightWidth] = useState(400);
+  const [sidebarWidth, setSidebarWidth] = useState(() => {
+    try {
+      const stored = JSON.parse(window.localStorage.getItem(PANE_STORAGE_KEY) || "{}") as {
+        sidebar?: number;
+      };
+      return stored.sidebar ?? DEFAULT_SIDEBAR_W;
+    } catch {
+      return DEFAULT_SIDEBAR_W;
+    }
+  });
+  const [rightWidth, setRightWidth] = useState(() => {
+    try {
+      const stored = JSON.parse(window.localStorage.getItem(PANE_STORAGE_KEY) || "{}") as {
+        right?: number;
+      };
+      return stored.right ?? DEFAULT_RIGHT_W;
+    } catch {
+      return DEFAULT_RIGHT_W;
+    }
+  });
+  const [rightCollapsed, setRightCollapsed] = useState(() => {
+    try {
+      const stored = JSON.parse(window.localStorage.getItem(PANE_STORAGE_KEY) || "{}") as {
+        rightCollapsed?: boolean;
+      };
+      return stored.rightCollapsed ?? false;
+    } catch {
+      return false;
+    }
+  });
+  const [fallbackRightTool, setFallbackRightTool] = useState<RightTool>("markdown");
   const { tabs, activeTabId, addTab, closeTab } = useTabStore();
   const locale = useSettingsStore((s) => s.locale);
   const i18n = useMemo(() => makeI18n(locale), [locale]);
 
   const activeTab = tabs.find((t) => t.id === activeTabId) ?? null;
+  const activeRightTool = activeTab?.rightTool ?? fallbackRightTool;
 
   const isDev = import.meta.env.DEV;
 
@@ -72,11 +110,26 @@ function App() {
     cmd.coreInfo()
       .then((info) => {
         setCoreInfo(info);
-        setBrowserPath(info.homeDir || info.workspaceRoot || "");
+        setBrowserPath(info.workspaceRoot || info.homeDir || "");
       })
       .catch(() => {});
     useConnectionStore.getState().refresh();
   }, []);
+
+  useEffect(() => {
+    try {
+      window.localStorage.setItem(
+        PANE_STORAGE_KEY,
+        JSON.stringify({
+          sidebar: sidebarWidth,
+          right: rightWidth,
+          rightCollapsed,
+        }),
+      );
+    } catch {
+      /* ignore persistence errors */
+    }
+  }, [rightWidth, sidebarWidth, rightCollapsed]);
 
   // ── Desktop behaviors ───────────────────────────────────────
   useEffect(() => {
@@ -90,29 +143,40 @@ function App() {
     };
     document.addEventListener("contextmenu", preventCtxMenu);
 
-    // Disable DevTools shortcut in production
-    if (!isDev) {
-      const blockDevTools = (e: KeyboardEvent) => {
-        // Block F12, Ctrl+Shift+I, Cmd+Option+I
-        if (e.key === "F12") { e.preventDefault(); return; }
-        if ((e.ctrlKey || e.metaKey) && e.shiftKey && e.key.toLowerCase() === "i") { e.preventDefault(); return; }
-        if ((e.ctrlKey || e.metaKey) && e.shiftKey && e.key.toLowerCase() === "j") { e.preventDefault(); return; }
-      };
-      document.addEventListener("keydown", blockDevTools);
-      return () => { document.removeEventListener("contextmenu", preventCtxMenu); document.removeEventListener("keydown", blockDevTools); };
-    }
+    // Dev: F12 / Cmd+Opt+I / Ctrl+Shift+I toggles DevTools via Tauri IPC.
+    // Prod: the same combinations are swallowed so they can't reach the
+    // webview's built-in inspector.
+    const onKeyDown = (e: KeyboardEvent) => {
+      const isF12 = e.key === "F12";
+      const isInspect =
+        (e.ctrlKey && e.shiftKey && e.key.toLowerCase() === "i") ||
+        (e.metaKey && e.altKey && e.key.toLowerCase() === "i");
+      const isConsole =
+        (e.ctrlKey && e.shiftKey && e.key.toLowerCase() === "j") ||
+        (e.metaKey && e.altKey && e.key.toLowerCase() === "j");
+      if (!(isF12 || isInspect || isConsole)) return;
+      e.preventDefault();
+      if (isDev) {
+        cmd.devToggleDevtools().catch(() => {});
+      }
+    };
+    document.addEventListener("keydown", onKeyDown);
 
-    return () => document.removeEventListener("contextmenu", preventCtxMenu);
+    return () => {
+      document.removeEventListener("contextmenu", preventCtxMenu);
+      document.removeEventListener("keydown", onKeyDown);
+    };
   }, [isDev]);
 
   // ── Tab creation helpers ────────────────────────────────────
 
   function openLocalTerminal(path?: string) {
+    const targetPath = path ?? browserPath ?? coreInfo?.workspaceRoot ?? coreInfo?.homeDir ?? "";
     const fallbackTitle = i18n.t("Terminal");
     addTab({
       backend: "local",
-      title: path ? path.split(/[\\/]/).pop() || fallbackTitle : fallbackTitle,
-      startupCommand: path ? `cd ${JSON.stringify(path)}` : "",
+      title: targetPath ? targetPath.split(/[\\/]/).pop() || fallbackTitle : fallbackTitle,
+      startupCommand: targetPath ? `cd ${JSON.stringify(targetPath)}` : "",
     });
   }
 
@@ -190,6 +254,8 @@ function App() {
   function handleToolChange(tool: RightTool) {
     if (activeTab) {
       useTabStore.getState().setTabRightTool(activeTab.id, tool);
+    } else {
+      setFallbackRightTool(tool);
     }
   }
 
@@ -229,6 +295,85 @@ function App() {
     ],
     [activeTabId, closeTab, i18n, mod],
   );
+
+  // ── Titlebar menus (Windows / Linux only) ─────────────────────
+  // macOS uses the OS-native global menu bar; on non-mac we render
+  // these directly in the titlebar via TitlebarMenu.
+  const titlebarMenus = useMemo<MenuDef[]>(() => {
+    const focusedIsEditable = () => {
+      const el = document.activeElement as HTMLElement | null;
+      if (!el) return false;
+      const tag = el.tagName;
+      return tag === "INPUT" || tag === "TEXTAREA" || el.isContentEditable;
+    };
+    const exec = (cmdName: "copy" | "cut" | "paste" | "selectAll") => {
+      try {
+        document.execCommand(cmdName);
+      } catch {
+        /* no-op: some webviews disable execCommand('paste') */
+      }
+    };
+    return [
+      {
+        label: i18n.t("File"),
+        items: [
+          { label: i18n.t("New local terminal"), shortcut: "Ctrl+T", action: () => openLocalTerminal() },
+          { label: i18n.t("New SSH connection"), shortcut: "Ctrl+N", action: openNewConnectionDialog },
+          { divider: true },
+          { label: i18n.t("Close tab"), shortcut: "Ctrl+W", disabled: !activeTabId, action: () => { if (activeTabId) closeTab(activeTabId); } },
+          { divider: true },
+          { label: i18n.t("Settings"), shortcut: "Ctrl+,", action: () => setSettingsOpen(true) },
+          { divider: true },
+          { label: i18n.t("Exit"), action: () => { void getCurrentWindow().close(); } },
+        ],
+      },
+      {
+        label: i18n.t("Edit"),
+        items: [
+          { label: i18n.t("Cut"), shortcut: "Ctrl+X", disabled: !focusedIsEditable(), action: () => exec("cut") },
+          { label: i18n.t("Copy"), shortcut: "Ctrl+C", action: () => exec("copy") },
+          { label: i18n.t("Paste"), shortcut: "Ctrl+V", disabled: !focusedIsEditable(), action: () => exec("paste") },
+          { divider: true },
+          { label: i18n.t("Select all"), shortcut: "Ctrl+A", action: () => exec("selectAll") },
+        ],
+      },
+      {
+        label: i18n.t("View"),
+        items: [
+          { label: i18n.t("Command palette"), shortcut: "Ctrl+K", action: () => setPaletteOpen(true) },
+          { divider: true },
+          { label: i18n.t("Toggle theme"), action: () => {
+            const s = useThemeStoreRef.getState();
+            s.setMode(s.resolvedDark ? "light" : "dark");
+          } },
+          { label: rightCollapsed ? i18n.t("Show right panel") : i18n.t("Hide right panel"), action: () => setRightCollapsed((c) => !c) },
+        ],
+      },
+      {
+        label: i18n.t("Session"),
+        items: [
+          { label: i18n.t("New local terminal"), shortcut: "Ctrl+T", action: () => openLocalTerminal() },
+          { label: i18n.t("New SSH connection"), shortcut: "Ctrl+N", action: openNewConnectionDialog },
+          { divider: true },
+          { label: i18n.t("Close tab"), shortcut: "Ctrl+W", disabled: !activeTabId, action: () => { if (activeTabId) closeTab(activeTabId); } },
+        ],
+      },
+      {
+        label: i18n.t("Help"),
+        items: [
+          { label: i18n.t("Keyboard shortcuts"), action: () => setPaletteOpen(true) },
+          { divider: true },
+          { label: i18n.t("Documentation"), action: () => { void openUrl("https://github.com/chenqi92/Pier-X#readme"); } },
+          { label: i18n.t("Report an issue"), action: () => { void openUrl("https://github.com/chenqi92/Pier-X/issues/new"); } },
+          { divider: true },
+          { label: i18n.t("About Pier-X"), action: () => {
+            const v = coreInfo?.version ?? "0.1.0";
+            window.alert(`Pier-X ${v}\n\n${i18n.t("Cross-platform terminal / Git / SSH / database management tool.")}`);
+          } },
+        ],
+      },
+    ];
+  }, [activeTabId, closeTab, coreInfo?.version, i18n, rightCollapsed]);
 
   // ── Keyboard shortcuts ──────────────────────────────────────
 
@@ -281,9 +426,8 @@ function App() {
     return () => window.removeEventListener("keydown", handleGlobalKeyDown);
   }, [handleGlobalKeyDown]);
 
-  const TOOLSTRIP_W = 42;
-  const rightPanelW = Math.max(rightWidth - TOOLSTRIP_W, 0);
-  const isRightCollapsed = rightPanelW === 0;
+  const rightPanelW = rightCollapsed ? 0 : Math.max(rightWidth - TOOLSTRIP_W, 0);
+  const isRightCollapsed = rightCollapsed || rightPanelW === 0;
   const appStyle: React.CSSProperties = {
     ["--sidebar-w" as never]: `${sidebarWidth}px`,
     ["--rightpanel-w" as never]: `${rightPanelW}px`,
@@ -305,6 +449,7 @@ function App() {
             }}
             version={coreInfo?.version}
             onCommandPalette={() => setPaletteOpen(true)}
+            menus={titlebarMenus}
           />
 
           <TabBar onNewTab={openNewTab} />
@@ -344,17 +489,21 @@ function App() {
 
           <RightSidebar
             activeTab={activeTab}
+            activeTool={activeRightTool}
             browserPath={browserPath}
             selectedMarkdownPath={selectedMarkdownPath}
             onToolChange={handleToolChange}
             onConnectSaved={openSshSaved}
             onNewConnection={openNewConnectionDialog}
+            collapsed={rightCollapsed}
+            onToggleCollapsed={() => setRightCollapsed((c) => !c)}
           />
 
           <StatusBar
             version={coreInfo?.version}
             coreInfo={coreInfo?.profile}
             activeTab={activeTab}
+            activeTool={activeRightTool}
           />
 
           <ResizeHandle

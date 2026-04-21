@@ -51,7 +51,7 @@ jobs:
         shell: bash
         run: |
           find target -maxdepth 4 -type f \
-            \( -name 'pier-ui-tauri' -o -name 'pier-ui-tauri.exe' -o -name 'Pier-X' -o -name 'Pier-X.exe' \) \
+            \( -name 'pierx' -o -name 'pierx.exe' -o -name 'Pier-X' -o -name 'Pier-X.exe' \) \
             -print || true
 
   rust-core:

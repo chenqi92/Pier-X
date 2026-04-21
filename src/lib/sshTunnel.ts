@@ -1,4 +1,6 @@
 import * as cmd from "./commands";
+import { translate } from "../i18n/useI18n";
+import { useSettingsStore } from "../stores/useSettingsStore";
 import type { TabState, TunnelInfoView } from "./types";
 
 type TunnelSlot = "mysql" | "postgres" | "redis";
@@ -21,6 +23,10 @@ const tunnelFields = {
 
 function normalizedRemoteHost(remoteHost: string) {
   return remoteHost.trim() || "127.0.0.1";
+}
+
+function message(key: string) {
+  return translate(useSettingsStore.getState().locale, key);
 }
 
 function getTunnelId(tab: TabState, slot: TunnelSlot) {
@@ -94,13 +100,13 @@ export async function ensureTunnelSlot(params: {
   } = params;
 
   if (tab.backend !== "ssh") {
-    throw new Error("SSH connection required.");
+    throw new Error(message("SSH connection required."));
   }
   if (!tab.sshHost.trim() || !tab.sshUser.trim()) {
-    throw new Error("SSH host and user must not be empty.");
+    throw new Error(message("SSH host and user must not be empty."));
   }
   if (!Number.isFinite(remotePort) || remotePort <= 0) {
-    throw new Error("Tunnel remote port must not be empty.");
+    throw new Error(message("Tunnel remote port must not be empty."));
   }
 
   const resolvedRemoteHost = normalizedRemoteHost(remoteHost);

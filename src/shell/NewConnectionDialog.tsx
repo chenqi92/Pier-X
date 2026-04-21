@@ -1,7 +1,9 @@
 import { Key, Server, X } from "lucide-react";
 import { useEffect, useMemo, useState } from "react";
 import IconButton from "../components/IconButton";
+import { useDraggableDialog } from "../components/useDraggableDialog";
 import { useI18n } from "../i18n/useI18n";
+import { localizeError } from "../i18n/localizeMessage";
 import type { SavedSshConnection } from "../lib/types";
 import { useConnectionStore } from "../stores/useConnectionStore";
 
@@ -46,6 +48,7 @@ function toDraft(connection?: SavedSshConnection | null): ConnectionDraft {
 
 export default function NewConnectionDialog({ open, onClose, onConnect, onConnectSaved, initialConnection }: Props) {
   const { t } = useI18n();
+  const formatError = (error: unknown) => localizeError(error, t);
   const { save, update } = useConnectionStore();
   const isEditing = !!initialConnection;
   const initialDraft = useMemo(() => toDraft(initialConnection), [initialConnection]);
@@ -57,6 +60,7 @@ export default function NewConnectionDialog({ open, onClose, onConnect, onConnec
   const [password, setPassword] = useState("");
   const [keyPath, setKeyPath] = useState(initialDraft.keyPath);
   const [error, setError] = useState("");
+  const { dialogStyle, handleProps } = useDraggableDialog(open);
 
   useEffect(() => {
     const next = toDraft(initialConnection);
@@ -124,7 +128,7 @@ export default function NewConnectionDialog({ open, onClose, onConnect, onConnec
       await persistConnection();
       onClose();
     } catch (e) {
-      setError(String(e));
+      setError(formatError(e));
     }
   }
 
@@ -152,7 +156,7 @@ export default function NewConnectionDialog({ open, onClose, onConnect, onConnec
       }
       onClose();
     } catch (e) {
-      setError(String(e));
+      setError(formatError(e));
     }
   }
 
@@ -179,8 +183,12 @@ export default function NewConnectionDialog({ open, onClose, onConnect, onConnec
 
   return (
     <div className="cmdp-overlay" onClick={onClose}>
-      <div className="dlg dlg--newconn" onClick={(e) => e.stopPropagation()}>
-        <div className="dlg-head">
+      <div
+        className="dlg dlg--newconn"
+        style={dialogStyle}
+        onClick={(e) => e.stopPropagation()}
+      >
+        <div className="dlg-head" {...handleProps}>
           <span className="dlg-title">
             <Server size={13} />
             {t(isEditing ? "Edit SSH connection" : "New SSH connection")}
@@ -194,18 +202,18 @@ export default function NewConnectionDialog({ open, onClose, onConnect, onConnec
           <div className="dlg-form">
             <div className="dlg-row">
               <label className="dlg-row-label">{t("Name")}</label>
-              <input className="dlg-input" onChange={(e) => setName(e.currentTarget.value)} placeholder="prod-api / staging" value={name} />
+              <input className="dlg-input" onChange={(e) => setName(e.currentTarget.value)} placeholder={t("prod-api / staging")} value={name} />
             </div>
             <div className="dlg-row">
               <label className="dlg-row-label">{t("Host")}</label>
               <div style={{ display: "grid", gridTemplateColumns: "1fr 88px", gap: "var(--sp-2)" }}>
-                <input className="dlg-input" onChange={(e) => setHost(e.currentTarget.value)} placeholder="server.example.com" value={host} />
+                <input className="dlg-input" onChange={(e) => setHost(e.currentTarget.value)} placeholder={t("server.example.com")} value={host} />
                 <input className="dlg-input" onChange={(e) => setPort(e.currentTarget.value)} value={port} placeholder={t("Port")} />
               </div>
             </div>
             <div className="dlg-row">
               <label className="dlg-row-label">{t("User")}</label>
-              <input className="dlg-input" onChange={(e) => setUser(e.currentTarget.value)} placeholder="root" value={user} />
+              <input className="dlg-input" onChange={(e) => setUser(e.currentTarget.value)} placeholder={t("root")} value={user} />
             </div>
             <div className="dlg-row">
               <label className="dlg-row-label">{t("Authentication")}</label>
@@ -249,7 +257,7 @@ export default function NewConnectionDialog({ open, onClose, onConnect, onConnec
               <>
                 <div className="dlg-row">
                   <label className="dlg-row-label">{t("Private key")}</label>
-                  <input className="dlg-input mono" onChange={(e) => setKeyPath(e.currentTarget.value)} placeholder="~/.ssh/id_ed25519" value={keyPath} />
+                  <input className="dlg-input mono" onChange={(e) => setKeyPath(e.currentTarget.value)} placeholder={t("~/.ssh/id_ed25519")} value={keyPath} />
                 </div>
                 <div className="dlg-note">
                   <Key size={11} />

@@ -1,9 +1,11 @@
 import { useEffect, useRef, type MouseEvent as ReactMouseEvent } from "react";
 import { isTauri } from "@tauri-apps/api/core";
 import { getCurrentWindow } from "@tauri-apps/api/window";
-import { Anchor, Command, Moon, Plus, Settings, Sun } from "lucide-react";
+import { Command, Moon, Plus, Settings, Sun } from "lucide-react";
 import { useI18n } from "../i18n/useI18n";
 import { useThemeStore } from "../stores/useThemeStore";
+import TitlebarMenu, { type MenuDef } from "../components/TitlebarMenu";
+import WindowControls from "../components/WindowControls";
 
 type Props = {
   onNewTab: () => void;
@@ -11,6 +13,8 @@ type Props = {
   onToggleTheme: () => void;
   onCommandPalette?: () => void;
   version?: string;
+  /** App-menu definitions. Rendered on Windows/Linux; hidden on macOS. */
+  menus?: MenuDef[];
 };
 
 const IS_MAC = navigator.platform.includes("Mac");
@@ -29,6 +33,7 @@ export default function TopBar({
   onToggleTheme,
   onCommandPalette,
   version,
+  menus,
 }: Props) {
   const { t } = useI18n();
   const { resolvedDark, mode } = useThemeStore();
@@ -80,35 +85,28 @@ export default function TopBar({
 
   return (
     <header
-      className="titlebar"
+      className={`titlebar${IS_MAC ? " is-mac" : ""}`}
       data-tauri-drag-region
       onDoubleClick={handleDoubleClick}
       onMouseDown={handleMouseDown}
     >
-      {IS_MAC && (
-        <div className="traffic">
-          <span className="tl r" />
-          <span className="tl y" />
-          <span className="tl g" />
-        </div>
-      )}
-
+      {/* macOS: titleBarStyle="Overlay" already renders the native traffic
+       * lights; drawing our own on top caused a double-circle overlap. We
+       * just reserve left padding via the `.is-mac` modifier below. */}
       <div className="brand">
         <span className="brand-mark">
-          <Anchor size={11} />
+          <img src="/pier-icon.png" alt="" width={18} height={18} draggable={false} />
         </span>
         <span>
           Pier-X {version ? <em>{version}</em> : null}
         </span>
       </div>
 
-      <div className="menu-items">
-        <button>{t("File")}</button>
-        <button>{t("Edit")}</button>
-        <button>{t("View")}</button>
-        <button>{t("Session")}</button>
-        <button>{t("Help")}</button>
-      </div>
+      {/* macOS uses the native global menu bar at the top of the screen;
+       * on Windows/Linux there is no such bar so we draw our own. */}
+      {!IS_MAC && menus && menus.length > 0 ? (
+        <TitlebarMenu menus={menus} />
+      ) : null}
 
       <div className="titlebar-spacer" data-tauri-drag-region />
 
@@ -132,6 +130,10 @@ export default function TopBar({
           <Settings size={14} />
         </button>
       </div>
+
+      {/* macOS gets its caption controls from the OS (traffic lights on
+       * the left); Windows/Linux get our own min/max/close on the right. */}
+      {!IS_MAC ? <WindowControls /> : null}
     </header>
   );
 }

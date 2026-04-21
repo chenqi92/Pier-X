@@ -62,6 +62,8 @@ export type GitPanelFile = {
   fileName: string;
   status: string;
   staged: boolean;
+  additions: number;
+  deletions: number;
 };
 
 export type GitPanelState = {
@@ -226,6 +228,9 @@ export type SavedSshConnection = {
   user: string;
   authKind: "password" | "agent" | "key";
   keyPath: string;
+  /** Explicit sidebar group label. Missing / empty means the
+   *  connection lives in the implicit "default" bucket. */
+  group?: string | null;
 };
 
 // ── Data Previews ───────────────────────────────────────────────
@@ -344,6 +349,12 @@ export type DockerContainerView = {
   created: string;
   ports: string;
   running: boolean;
+  /** Pre-formatted CPU percent from `docker stats`, e.g. "1.23%". Empty when unavailable. */
+  cpuPerc: string;
+  /** Pre-formatted memory usage, e.g. "48.5MiB / 1.94GiB". Empty when unavailable. */
+  memUsage: string;
+  /** Memory percent of the container limit, e.g. "2.44%". Empty when unavailable. */
+  memPerc: string;
 };
 
 export type DockerImageView = {
@@ -358,6 +369,12 @@ export type DockerVolumeView = {
   name: string;
   driver: string;
   mountpoint: string;
+  /** Pre-formatted volume size from `docker system df -v`, e.g. "4.2GB". Empty when unavailable. */
+  size: string;
+  /** Raw byte count for sort-by-size. `0` when unknown. */
+  sizeBytes: number;
+  /** Number of containers referencing this volume. `-1` when unknown. */
+  links: number;
 };
 
 export type DockerNetworkView = {
@@ -382,6 +399,8 @@ export type SftpEntryView = {
   isDir: boolean;
   size: number;
   permissions: string;
+  /** Last-modified timestamp (Unix seconds) if the server reported one. */
+  modified: number | null;
 };
 
 export type SftpBrowseState = {

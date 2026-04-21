@@ -1,5 +1,7 @@
 import { create } from "zustand";
 import * as cmd from "../lib/commands";
+import { translate } from "../i18n/useI18n";
+import { useSettingsStore } from "./useSettingsStore";
 import type { RightTool, TabState } from "../lib/types";
 
 type TabStore = {
@@ -8,6 +10,8 @@ type TabStore = {
   addTab: (partial: Partial<TabState> & { backend: TabState["backend"] }) => string;
   closeTab: (id: string) => void;
   closeOtherTabs: (id: string) => void;
+  closeTabsToLeft: (id: string) => void;
+  closeTabsToRight: (id: string) => void;
   setActiveTab: (id: string) => void;
   updateTab: (id: string, patch: Partial<TabState>) => void;
   moveTab: (fromIndex: number, toIndex: number) => void;
@@ -39,9 +43,12 @@ function closeTabTunnels(tab: TabState | undefined) {
 function makeDefaultTab(
   partial: Partial<TabState> & { backend: TabState["backend"] },
 ): TabState {
+  const locale = useSettingsStore.getState().locale;
   return {
     id: genId(),
-    title: partial.title ?? (partial.backend === "local" ? "Terminal" : "SSH"),
+    title:
+      partial.title ??
+      translate(locale, partial.backend === "local" ? "Terminal" : "SSH"),
     tabColor: partial.tabColor ?? -1,
     backend: partial.backend,
     sshHost: partial.sshHost ?? "",
@@ -114,6 +121,26 @@ export const useTabStore = create<TabStore>((set, get) => ({
       tabs: s.tabs.filter((t) => t.id === id),
       activeTabId: id,
     }));
+  },
+
+  closeTabsToLeft: (id) => {
+    const { tabs, activeTabId } = get();
+    const idx = tabs.findIndex((t) => t.id === id);
+    if (idx <= 0) return;
+    tabs.slice(0, idx).forEach(closeTabTunnels);
+    const next = tabs.slice(idx);
+    const keepActive = next.some((t) => t.id === activeTabId);
+    set({ tabs: next, activeTabId: keepActive ? activeTabId : id });
+  },
+
+  closeTabsToRight: (id) => {
+    const { tabs, activeTabId } = get();
+    const idx = tabs.findIndex((t) => t.id === id);
+    if (idx < 0 || idx === tabs.length - 1) return;
+    tabs.slice(idx + 1).forEach(closeTabTunnels);
+    const next = tabs.slice(0, idx + 1);
+    const keepActive = next.some((t) => t.id === activeTabId);
+    set({ tabs: next, activeTabId: keepActive ? activeTabId : id });
   },
 
   setActiveTab: (id) => set({ activeTabId: id }),

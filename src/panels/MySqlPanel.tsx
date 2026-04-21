@@ -5,6 +5,7 @@ import { isReadOnlySql, queryResultToTsv } from "../lib/commands";
 import { closeTunnelSlot, ensureTunnelSlot, syncTunnelState } from "../lib/sshTunnel";
 import type { MysqlBrowserState, QueryExecutionResult, TabState } from "../lib/types";
 import { useI18n } from "../i18n/useI18n";
+import { localizeError } from "../i18n/localizeMessage";
 import DbConnRow from "../components/DbConnRow";
 import PanelHeader from "../components/PanelHeader";
 import PreviewTable from "../components/PreviewTable";
@@ -16,6 +17,7 @@ type Props = { tab: TabState };
 
 export default function MySqlPanel({ tab }: Props) {
   const { t } = useI18n();
+  const formatError = (error: unknown) => localizeError(error, t);
   const updateTab = useTabStore((s) => s.updateTab);
   const [host, setHost] = useState(tab.mysqlHost);
   const [port, setPort] = useState(String(tab.mysqlPort));
@@ -124,7 +126,7 @@ export default function MySqlPanel({ tab }: Props) {
     try {
       await ensureConnectionTarget(force);
     } catch (e) {
-      setTunnelError(String(e));
+      setTunnelError(formatError(e));
     } finally {
       setTunnelBusy(false);
     }
@@ -140,7 +142,7 @@ export default function MySqlPanel({ tab }: Props) {
       await closeTunnelSlot(tab, "mysql", updateTab);
       setTunnelNotice(t("Tunnel closed."));
     } catch (e) {
-      setTunnelError(String(e));
+      setTunnelError(formatError(e));
     } finally {
       setTunnelBusy(false);
     }
@@ -174,7 +176,7 @@ export default function MySqlPanel({ tab }: Props) {
       updateTab(tab.id, { mysqlDatabase: s.databaseName });
     } catch (e) {
       setState(null);
-      setError(String(e));
+      setError(formatError(e));
     } finally {
       setBusy(false);
     }
@@ -202,7 +204,7 @@ export default function MySqlPanel({ tab }: Props) {
       }
     } catch (e) {
       setQueryResult(null);
-      setQueryError(String(e));
+      setQueryError(formatError(e));
     } finally {
       setQueryBusy(false);
     }
@@ -210,7 +212,12 @@ export default function MySqlPanel({ tab }: Props) {
 
   const connName = dbName.trim() || host.trim() || t("MySQL Browser");
   const connSub = host.trim()
-    ? `${user || "?"}@${host}:${port}${hasSsh ? " · ssh tunnel" : ""}`
+    ? t("{user}@{host}:{port}{suffix}", {
+        user: user || "?",
+        host,
+        port,
+        suffix: hasSsh ? ` · ${t("SSH tunnel")}` : "",
+      })
     : t("Not connected");
   const connTag = (
     <>
@@ -223,8 +230,19 @@ export default function MySqlPanel({ tab }: Props) {
     <>
       <PanelHeader
         icon={Database}
-        title="MYSQL"
-        meta={`${dbName.trim() || "mysql"} · ${hasSsh ? `tunnel :${port}` : `${host}:${port}`}`}
+        title={t("MySQL")}
+        meta={
+          hasSsh
+            ? t("{database} · tunnel :{port}", {
+                database: dbName.trim() || t("MySQL"),
+                port,
+              })
+            : t("{database} · {host}:{port}", {
+                database: dbName.trim() || t("MySQL"),
+                host,
+                port,
+              })
+        }
       />
       <DbConnRow
         icon={Database}

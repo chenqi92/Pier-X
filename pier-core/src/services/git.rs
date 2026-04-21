@@ -446,10 +446,23 @@ impl GitClient {
 
     /// Create a commit with the given message.
     pub fn commit(&self, message: &str) -> Result<String, GitError> {
+        self.commit_with(message, false, false)
+    }
+
+    /// Create a commit with the given message and optional flags.
+    pub fn commit_with(&self, message: &str, signoff: bool, amend: bool) -> Result<String, GitError> {
         if message.is_empty() {
             return Err(GitError::Command("commit message cannot be empty".into()));
         }
-        self.git(&["commit", "-m", message])
+        let mut args: Vec<&str> = vec!["commit"];
+        if signoff {
+            args.push("--signoff");
+        }
+        if amend {
+            args.push("--amend");
+        }
+        args.extend_from_slice(&["-m", message]);
+        self.git(&args)
     }
 
     // ── Remote ───────────────────────────────────────────

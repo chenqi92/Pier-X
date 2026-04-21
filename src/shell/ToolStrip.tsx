@@ -33,12 +33,12 @@ const TOOLS: {
 }[] = [
   { tool: "markdown", icon: FileText, label: "Markdown" },
   { tool: "git", icon: GitBranch, label: "Git", dividerAfter: true },
-  { tool: "monitor", icon: ActivitySquare, label: "Server Monitor" },
-  { tool: "docker", icon: Container, label: "Docker" },
-  { tool: "mysql", icon: Database, label: "MySQL" },
-  { tool: "postgres", icon: Database, label: "PostgreSQL" },
-  { tool: "redis", icon: Zap, label: "Redis" },
-  { tool: "log", icon: ScrollText, label: "Logs" },
+  { tool: "monitor", icon: ActivitySquare, label: "Server Monitor", remoteOnly: true },
+  { tool: "docker", icon: Container, label: "Docker", remoteOnly: true },
+  { tool: "mysql", icon: Database, label: "MySQL", remoteOnly: true },
+  { tool: "postgres", icon: Database, label: "PostgreSQL", remoteOnly: true },
+  { tool: "redis", icon: Zap, label: "Redis", remoteOnly: true },
+  { tool: "log", icon: ScrollText, label: "Logs", remoteOnly: true },
   { tool: "sftp", icon: FolderTree, label: "SFTP", remoteOnly: true },
   { tool: "sqlite", icon: HardDrive, label: "SQLite" },
 ];

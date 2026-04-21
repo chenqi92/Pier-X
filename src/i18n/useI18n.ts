@@ -2,11 +2,15 @@ import { createContext, useContext } from "react";
 import type { Locale } from "../stores/useSettingsStore";
 import en from "./en.json";
 import zh from "./zh.json";
+import { zhExtra } from "./zhExtra";
 
 type Dictionary = Record<string, string>;
 type TranslationVars = Record<string, string | number | null | undefined>;
 
-const dictionaries: Record<Locale, Dictionary> = { en, zh };
+const dictionaries: Record<Locale, Dictionary> = {
+  en,
+  zh: { ...zh, ...zhExtra },
+};
 
 export type I18nValue = {
   t: (key: string, vars?: TranslationVars) => string;
@@ -26,10 +30,14 @@ function interpolate(template: string, vars?: TranslationVars) {
   });
 }
 
-export function makeI18n(locale: Locale): I18nValue {
+export function translate(locale: Locale, key: string, vars?: TranslationVars) {
   const dict = dictionaries[locale] ?? {};
+  return interpolate(dict[key] || key, vars);
+}
+
+export function makeI18n(locale: Locale): I18nValue {
   return {
-    t: (key: string, vars?: TranslationVars) => interpolate(dict[key] || key, vars),
+    t: (key: string, vars?: TranslationVars) => translate(locale, key, vars),
     locale,
   };
 }

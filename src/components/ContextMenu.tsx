@@ -1,7 +1,13 @@
 import { useEffect, useRef } from "react";
 
 export type ContextMenuItem =
-  | { label: string; action: () => void; disabled?: boolean; shortcut?: string }
+  | {
+      label: string;
+      action: () => void;
+      disabled?: boolean;
+      shortcut?: string;
+      iconColor?: string;
+    }
   | { divider: true };
 
 type Props = {
@@ -47,7 +53,15 @@ export default function ContextMenu({ x, y, items, onClose }: Props) {
             onClick={() => { item.action(); onClose(); }}
             type="button"
           >
-            <span>{item.label}</span>
+            <span className="ctx-menu__label">
+              {item.iconColor !== undefined && (
+                <span
+                  className="ctx-menu__swatch"
+                  style={{ background: item.iconColor || "transparent" }}
+                />
+              )}
+              {item.label}
+            </span>
             {item.shortcut && <span className="ctx-menu__shortcut">{item.shortcut}</span>}
           </button>
         ),

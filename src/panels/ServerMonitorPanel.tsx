@@ -4,6 +4,7 @@ import type { ReactNode } from "react";
 import * as cmd from "../lib/commands";
 import type { DetectedServiceView, RightTool, ServerSnapshotView, TabState } from "../lib/types";
 import { useI18n } from "../i18n/useI18n";
+import { localizeError } from "../i18n/localizeMessage";
 import DbConnRow from "../components/DbConnRow";
 import PanelHeader from "../components/PanelHeader";
 import StatusDot from "../components/StatusDot";
@@ -104,6 +105,7 @@ function formatTimestamp(ts: number): string {
 
 export default function ServerMonitorPanel({ tab }: Props) {
   const { t } = useI18n();
+  const formatError = (error: unknown) => localizeError(error, t);
   const updateTab = useTabStore((s) => s.updateTab);
   const setTabRightTool = useTabStore((s) => s.setTabRightTool);
   const [snap, setSnap] = useState<ServerSnapshotView | null>(null);
@@ -142,7 +144,7 @@ export default function ServerMonitorPanel({ tab }: Props) {
       setLastProbed(Date.now());
     } catch (e) {
       setSnap(null);
-      setError(String(e));
+      setError(formatError(e));
     } finally {
       setBusy(false);
     }
@@ -171,7 +173,7 @@ export default function ServerMonitorPanel({ tab }: Props) {
       }
     } catch (e) {
       setServices([]);
-      setServicesError(String(e));
+      setServicesError(formatError(e));
     } finally {
       setServicesBusy(false);
     }
@@ -264,7 +266,7 @@ export default function ServerMonitorPanel({ tab }: Props) {
   const headerMeta = hasSsh
     ? `${tab.sshHost} · :${tab.sshPort}`
     : isLocal
-      ? "local"
+      ? t("local")
       : "—";
   const connName = hasSsh
     ? `${tab.sshUser}@${tab.sshHost}`
@@ -272,7 +274,7 @@ export default function ServerMonitorPanel({ tab }: Props) {
       ? t("Local Host")
       : t("Server Monitor");
   const connSub = hasSsh
-    ? `port ${tab.sshPort}`
+    ? t("Port {port}", { port: tab.sshPort })
     : isLocal
       ? t("Local probe")
       : t("Not connected");
@@ -292,7 +294,7 @@ export default function ServerMonitorPanel({ tab }: Props) {
     <>
       <PanelHeader
         icon={ActivitySquare}
-        title="SERVER MONITOR"
+        title={t("Server Monitor")}
         meta={headerMeta}
       />
       <DbConnRow
@@ -315,7 +317,7 @@ export default function ServerMonitorPanel({ tab }: Props) {
             <div className="mon-host-meta mono">
               {headerMeta}
               {snap.load1 >= 0 ? (
-                <> · load {snap.load1.toFixed(2)} / {snap.load5.toFixed(2)} / {snap.load15.toFixed(2)}</>
+                <> · {t("load")} {snap.load1.toFixed(2)} / {snap.load5.toFixed(2)} / {snap.load15.toFixed(2)}</>
               ) : null}
             </div>
           </div>

@@ -21,28 +21,30 @@ function greetingFor(hour: number): string {
   return "good evening";
 }
 
-function formatDateLine(now: Date): string {
-  const weekday = now.toLocaleDateString(undefined, { weekday: "long" });
-  const month = now.toLocaleDateString(undefined, { month: "long" });
-  const day = now.getDate();
+function formatDateLine(now: Date, locale: string): string {
+  const dateText = new Intl.DateTimeFormat(locale, {
+    weekday: "long",
+    month: "long",
+    day: "numeric",
+  }).format(now);
   const hh = String(now.getHours()).padStart(2, "0");
   const mm = String(now.getMinutes()).padStart(2, "0");
-  return `${weekday.toLowerCase()}, ${month.toLowerCase()} ${day} · ${hh}:${mm}`;
+  return `${dateText} · ${hh}:${mm}`;
 }
 
-function relativeTime(ts: number): string {
+function relativeTime(ts: number, locale: string): string {
   const delta = Math.max(0, Date.now() - ts);
   const m = Math.floor(delta / 60000);
-  if (m < 1) return "just now";
-  if (m < 60) return `${m}m ago`;
+  const rtf = new Intl.RelativeTimeFormat(locale, { numeric: "auto" });
+  if (m < 1) return rtf.format(0, "minute");
+  if (m < 60) return rtf.format(-m, "minute");
   const h = Math.floor(m / 60);
-  if (h < 24) return `${h}h ago`;
+  if (h < 24) return rtf.format(-h, "hour");
   const d = Math.floor(h / 24);
-  if (d < 2) return "yesterday";
-  if (d < 7) return `${d}d ago`;
+  if (d < 7) return rtf.format(-d, "day");
   const w = Math.floor(d / 7);
-  if (w < 5) return `${w}w ago`;
-  return new Date(ts).toLocaleDateString(undefined, { month: "short", day: "numeric" });
+  if (w < 5) return rtf.format(-w, "week");
+  return new Intl.DateTimeFormat(locale, { month: "short", day: "numeric" }).format(new Date(ts));
 }
 
 export default function WelcomeView({
@@ -54,7 +56,7 @@ export default function WelcomeView({
   version,
   workspaceRoot,
 }: Props) {
-  const { t } = useI18n();
+  const { t, locale } = useI18n();
   const { connections } = useConnectionStore();
   const recents = useRecentConnectionsStore((s) => s.recents);
   const [now, setNow] = useState(() => new Date());
@@ -66,16 +68,17 @@ export default function WelcomeView({
 
   const isMac = navigator.platform.includes("Mac");
   const mod = isMac ? "⌘" : "Ctrl+";
-  const greeting = greetingFor(now.getHours());
-  const dateLine = formatDateLine(now);
-  const user = "you";
+  const localeTag = locale === "zh" ? "zh-CN" : "en-US";
+  const greeting = t(greetingFor(now.getHours()));
+  const dateLine = formatDateLine(now, localeTag);
+  const user = t("friend");
   const subtitle = `pier-x · ${version ? `${version} · ` : ""}${dateLine}`;
 
   const recentList = connections
     .map((c) => ({ conn: c, ts: recents[c.index] ?? 0 }))
     .filter((r) => r.ts > 0)
     .sort((a, b) => b.ts - a.ts)
-    .slice(0, 5);
+    .slice(0, 12);
 
   const shellLabel = workspaceRoot
     ? `zsh · ${workspaceRoot.split(/[/\\]/).pop() || "~"}`
@@ -127,36 +130,40 @@ export default function WelcomeView({
         {recentList.length > 0 ? (
           <div className="welcome-recent">
             <h4>{t("Recent connections")}</h4>
-            {recentList.map(({ conn, ts }) => (
-              <button
-                key={conn.index}
-                className="recent-row"
-                onClick={() => onConnectSaved(conn.index)}
-                type="button"
-              >
-                <Server size={13} />
-                <span className="rname">{conn.name || `${conn.user}@${conn.host}`}</span>
-                <span className="raddr">{conn.user}@{conn.host}{conn.port !== 22 ? `:${conn.port}` : ""}</span>
-                <span className="rdate">{relativeTime(ts)}</span>
-              </button>
-            ))}
+            <div className="welcome-recent-list">
+              {recentList.map(({ conn, ts }) => (
+                <button
+                  key={conn.index}
+                  className="recent-row"
+                  onClick={() => onConnectSaved(conn.index)}
+                  type="button"
+                >
+                  <Server size={13} />
+                  <span className="rname">{conn.name || `${conn.user}@${conn.host}`}</span>
+                  <span className="raddr">{conn.user}@{conn.host}{conn.port !== 22 ? `:${conn.port}` : ""}</span>
+                  <span className="rdate">{relativeTime(ts, localeTag)}</span>
+                </button>
+              ))}
+            </div>
           </div>
         ) : connections.length > 0 ? (
           <div className="welcome-recent">
             <h4>{t("Saved servers")}</h4>
-            {connections.slice(0, 5).map((conn) => (
-              <button
-                key={conn.index}
-                className="recent-row"
-                onClick={() => onConnectSaved(conn.index)}
-                type="button"
-              >
-                <Server size={13} />
-                <span className="rname">{conn.name || `${conn.user}@${conn.host}`}</span>
-                <span className="raddr">{conn.user}@{conn.host}{conn.port !== 22 ? `:${conn.port}` : ""}</span>
-                <span className="rdate">—</span>
-              </button>
-            ))}
+            <div className="welcome-recent-list">
+              {connections.slice(0, 12).map((conn) => (
+                <button
+                  key={conn.index}
+                  className="recent-row"
+                  onClick={() => onConnectSaved(conn.index)}
+                  type="button"
+                >
+                  <Server size={13} />
+                  <span className="rname">{conn.name || `${conn.user}@${conn.host}`}</span>
+                  <span className="raddr">{conn.user}@{conn.host}{conn.port !== 22 ? `:${conn.port}` : ""}</span>
+                  <span className="rdate">—</span>
+                </button>
+              ))}
+            </div>
           </div>
         ) : null}
       </div>

@@ -11,6 +11,7 @@ import {
 } from "lucide-react";
 import type { ComponentType, SVGProps } from "react";
 import IconButton from "./IconButton";
+import { useDraggableDialog } from "./useDraggableDialog";
 import { useI18n } from "../i18n/useI18n";
 import {
   useThemeStore,
@@ -57,6 +58,17 @@ const NAV_GROUPS: NavGroup[] = [
     items: [{ key: "General", icon: Keyboard }],
   },
 ];
+
+function authKindLabel(authKind: string, t: (key: string) => string) {
+  switch (authKind) {
+    case "key":
+      return t("Key file");
+    case "agent":
+      return t("Agent");
+    default:
+      return t("Password");
+  }
+}
 
 // ── Reusable sub-components ─────────────────────────────────────
 
@@ -136,13 +148,14 @@ function AccentSwatches({
   value: AccentName;
   onChange: (accent: AccentName) => void;
 }) {
+  const { t } = useI18n();
   return (
     <div className="swatches">
       {ACCENT_OPTIONS.map((opt) => (
         <button
           key={opt.name}
           type="button"
-          title={opt.label}
+          title={t(opt.label)}
           className={`${opt.cls}${value === opt.name ? " is-active" : ""}`}
           onClick={() => onChange(opt.name)}
         />
@@ -159,14 +172,19 @@ export default function SettingsDialog({ open, onClose }: Props) {
   const theme = useThemeStore();
   const settings = useSettingsStore();
   const { connections, remove } = useConnectionStore();
+  const { dialogStyle, handleProps } = useDraggableDialog(open);
 
   if (!open) return null;
 
   return (
     <div className="cmdp-overlay" onClick={onClose}>
-      <div className="dlg dlg--settings" onClick={(e) => e.stopPropagation()}>
+      <div
+        className="dlg dlg--settings"
+        style={dialogStyle}
+        onClick={(e) => e.stopPropagation()}
+      >
         {/* Header */}
-        <div className="dlg-head">
+        <div className="dlg-head" {...handleProps}>
           <span className="dlg-title">
             <SettingsIcon size={13} />
             {t("Settings")}
@@ -324,9 +342,9 @@ export default function SettingsDialog({ open, onClose }: Props) {
                         <span style={{ color: th.ansi[2] }}>~</span>
                         <span style={{ color: th.ansi[4] }}> $ </span>
                         <span style={{ color: th.fg }}>echo </span>
-                        <span style={{ color: th.ansi[3] }}>"hello"</span>
+                        <span style={{ color: th.ansi[3] }}>"{t("hello")}"</span>
                       </div>
-                      <span className="settings__theme-name">{th.name}</span>
+                      <span className="settings__theme-name">{t(th.name)}</span>
                     </button>
                   ))}
                 </div>
@@ -430,7 +448,7 @@ export default function SettingsDialog({ open, onClose }: Props) {
                       <div key={`${conn.index}-${conn.name}`} className="settings__conn-card">
                         <div className="settings__conn-header">
                           <strong>{conn.name}</strong>
-                          <span className="settings__conn-auth">{conn.authKind}</span>
+                          <span className="settings__conn-auth">{authKindLabel(conn.authKind, t)}</span>
                         </div>
                         <div className="settings__conn-meta">
                           {conn.user}@{conn.host}:{conn.port}
@@ -458,8 +476,8 @@ export default function SettingsDialog({ open, onClose }: Props) {
                 <SettingRow label={t("Interface language")} description={t("Changes apply immediately to all UI text.")}>
                   <SegmentedControl
                     options={[
-                      { label: "English", value: "en" },
-                      { label: "简体中文", value: "zh" },
+                      { label: t("English"), value: "en" },
+                      { label: t("Simplified Chinese"), value: "zh" },
                     ]}
                     value={settings.locale}
                     onChange={(v) => settings.setLocale(v as Locale)}

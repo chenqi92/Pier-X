@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from "react";
 import { CircleDot, GitBranch, Terminal } from "lucide-react";
-import type { TabState } from "../lib/types";
+import type { RightTool, TabState } from "../lib/types";
 import { useI18n } from "../i18n/useI18n";
 import { useSettingsStore } from "../stores/useSettingsStore";
 import { useStatusStore } from "../stores/useStatusStore";
@@ -9,29 +9,14 @@ type Props = {
   version?: string;
   coreInfo?: string;
   activeTab?: TabState | null;
+  activeTool?: RightTool;
 };
 
-function backendLabel(tab: TabState | null | undefined): string {
-  if (!tab) return "local · zsh";
-  switch (tab.backend) {
-    case "ssh":
-      return "ssh · russh";
-    case "sftp":
-      return "sftp · russh";
-    case "markdown":
-      return "markdown preview";
-    default:
-      return "local · zsh";
-  }
+function rightToolLabel(activeTool: RightTool | undefined, tab: TabState | null | undefined): string {
+  return (activeTool ?? tab?.rightTool ?? "markdown").toUpperCase();
 }
 
-function rightToolLabel(tab: TabState | null | undefined): string {
-  const tool = tab?.rightTool;
-  if (!tool) return "GIT";
-  return tool.toUpperCase();
-}
-
-export default function StatusBar({ version, coreInfo, activeTab }: Props) {
+export default function StatusBar({ version, coreInfo, activeTab, activeTool }: Props) {
   const { t } = useI18n();
   const showPerf = useSettingsStore((s) => s.performanceOverlay);
   const branch = useStatusStore((s) => s.branch);
@@ -63,6 +48,15 @@ export default function StatusBar({ version, coreInfo, activeTab }: Props) {
 
   const perfTone = fps >= 50 ? "pos" : fps >= 30 ? "accent" : "warn";
   const branchLabel = branch ?? t("no repo");
+  const backendLabel = !activeTab
+    ? t("local · zsh")
+    : activeTab.backend === "ssh"
+      ? t("ssh · russh")
+      : activeTab.backend === "sftp"
+        ? t("sftp · russh")
+        : activeTab.backend === "markdown"
+          ? t("markdown preview")
+          : t("local · zsh");
   const sizeLabel =
     terminalCols != null && terminalRows != null
       ? `${terminalCols} × ${terminalRows}`
@@ -79,7 +73,7 @@ export default function StatusBar({ version, coreInfo, activeTab }: Props) {
       </span>
       <span className="sb-item">
         <Terminal size={10} />
-        <span>{backendLabel(activeTab)}</span>
+        <span>{backendLabel}</span>
       </span>
       {sizeLabel ? (
         <span className="sb-item text-muted">{sizeLabel}</span>
@@ -91,12 +85,12 @@ export default function StatusBar({ version, coreInfo, activeTab }: Props) {
         </span>
       )}
       <span className="sb-item">
-        <span>PANEL · {rightToolLabel(activeTab)}</span>
+        <span>{t("PANEL")} · {rightToolLabel(activeTool, activeTab)}</span>
       </span>
       <span className="sb-item">UTF-8</span>
       <span className="sb-item pos">
         <CircleDot size={10} />
-        READY
+        {t("Ready")}
       </span>
       {version ? (
         <span className="sb-item text-muted">

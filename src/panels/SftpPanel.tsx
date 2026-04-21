@@ -2,6 +2,7 @@ import {
   ArrowLeft,
   ArrowRight,
   ArrowUp,
+  Check,
   Download,
   Edit,
   File as FileIcon,
@@ -18,15 +19,30 @@ import {
   Upload,
   X,
 } from "lucide-react";
-import { Fragment, useMemo, useState } from "react";
+import { Fragment, useEffect, useMemo, useRef, useState } from "react";
 import type { ComponentType } from "react";
 import * as cmd from "../lib/commands";
 import type { SftpBrowseState, SftpEntryView, TabState } from "../lib/types";
 import { useI18n } from "../i18n/useI18n";
+import { localizeError } from "../i18n/localizeMessage";
 import PanelHeader from "../components/PanelHeader";
 import StatusDot from "../components/StatusDot";
 
 type Props = { tab: TabState };
+
+type TransferDirection = "up" | "dn";
+type TransferStatus = "active" | "done" | "failed";
+type TransferItem = {
+  id: string;
+  direction: TransferDirection;
+  name: string;
+  remotePath: string;
+  localPath: string;
+  status: TransferStatus;
+  startedAt: number;
+  finishedAt?: number;
+  error?: string;
+};
 
 function joinRemotePath(basePath: string, leaf: string) {
   const cleanLeaf = leaf.trim().replace(/^\/+/, "");
@@ -49,6 +65,13 @@ function localBaseName(path: string) {
   return parts[parts.length - 1] || "";
 }
 
+function remoteBaseName(path: string) {
+  const normalized = String(path || "").replace(/\/+$/, "");
+  if (!normalized || normalized === "/") return "/";
+  const idx = normalized.lastIndexOf("/");
+  return idx < 0 ? normalized : normalized.slice(idx + 1) || "/";
+}
+
 function formatBytes(n: number): string {
   if (!Number.isFinite(n) || n <= 0) return "0 B";
   const units = ["B", "KB", "MB", "GB", "TB"];
@@ -69,8 +92,24 @@ function iconForEntry(entry: SftpEntryView): ComponentType<{ size?: number }> {
   return FileIcon;
 }
 
+/** Render a Unix-seconds timestamp as a compact "3m / 2h / 4d / 6w / 3mo / 2y"
+ *  relative label matching the Remix design. Falls back to em-dash if the
+ *  server didn't report a modified time. */
+function formatRelativeTime(unixSeconds: number | null | undefined): string {
+  if (!unixSeconds || !Number.isFinite(unixSeconds)) return "—";
+  const diff = Math.max(0, Math.floor(Date.now() / 1000) - unixSeconds);
+  if (diff < 60) return `${diff}s`;
+  if (diff < 3600) return `${Math.floor(diff / 60)}m`;
+  if (diff < 86400) return `${Math.floor(diff / 3600)}h`;
+  if (diff < 604800) return `${Math.floor(diff / 86400)}d`;
+  if (diff < 2592000) return `${Math.floor(diff / 604800)}w`;
+  if (diff < 31536000) return `${Math.floor(diff / 2592000)}mo`;
+  return `${Math.floor(diff / 31536000)}y`;
+}
+
 export default function SftpPanel({ tab }: Props) {
   const { t } = useI18n();
+  const formatError = (error: unknown) => localizeError(error, t);
   const [state, setState] = useState<SftpBrowseState | null>(null);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
@@ -93,6 +132,9 @@ export default function SftpPanel({ tab }: Props) {
   const [uploadRemotePath, setUploadRemotePath] = useState("");
   const [actionBusy, setActionBusy] = useState(false);
 
+  const [transfers, setTransfers] = useState<TransferItem[]>([]);
+  const transferSeq = useRef(0);
+
   const hasSsh = tab.backend === "ssh" && tab.sshHost.trim() && tab.sshUser.trim();
   const sshRequired = t("SSH connection required.");
   const selectedEntry = useMemo(
@@ -106,6 +148,28 @@ export default function SftpPanel({ tab }: Props) {
     const segs = currentRemotePath.split("/").filter(Boolean);
     return ["/", ...segs];
   }, [currentRemotePath]);
+
+  const activeTransfers = transfers.filter((t) => t.status === "active").length;
+  const doneTransfers = transfers.filter((t) => t.status === "done").length;
+
+  function pushTransfer(item: Omit<TransferItem, "id" | "startedAt" | "status">): string {
+    const id = `xfer-${++transferSeq.current}`;
+    const entry: TransferItem = { ...item, id, status: "active", startedAt: Date.now() };
+    setTransfers((prev) => [entry, ...prev].slice(0, 20));
+    return id;
+  }
+
+  function finishTransfer(id: string, status: TransferStatus, errorMsg?: string) {
+    setTransfers((prev) =>
+      prev.map((t) =>
+        t.id === id ? { ...t, status, finishedAt: Date.now(), error: errorMsg } : t,
+      ),
+    );
+  }
+
+  function clearFinishedTransfers() {
+    setTransfers((prev) => prev.filter((t) => t.status === "active"));
+  }
 
   async function browse(targetPath = path, opts: { pushHistory?: boolean } = {}) {
     if (!hasSsh) {
@@ -123,6 +187,7 @@ export default function SftpPanel({ tab }: Props) {
         authMode: tab.sshAuthMode,
         password: tab.sshPassword,
         keyPath: tab.sshKeyPath,
+        savedConnectionIndex: tab.sshSavedConnectionIndex,
         path: targetPath,
       });
       if (opts.pushHistory && state?.currentPath && state.currentPath !== next.currentPath) {
@@ -137,7 +202,7 @@ export default function SftpPanel({ tab }: Props) {
       setDownloadOpen(false);
     } catch (e) {
       setState(null);
-      setError(String(e));
+      setError(formatError(e));
     } finally {
       setBusy(false);
     }
@@ -173,6 +238,7 @@ export default function SftpPanel({ tab }: Props) {
         authMode: tab.sshAuthMode,
         password: tab.sshPassword,
         keyPath: tab.sshKeyPath,
+        savedConnectionIndex: tab.sshSavedConnectionIndex,
         path: targetPath,
       });
       setMkdirName("");
@@ -180,7 +246,7 @@ export default function SftpPanel({ tab }: Props) {
       setNotice(t("Created directory {path}.", { path: targetPath }));
       await browse(currentRemotePath);
     } catch (e) {
-      setError(String(e));
+      setError(formatError(e));
     } finally {
       setActionBusy(false);
     }
@@ -200,6 +266,7 @@ export default function SftpPanel({ tab }: Props) {
         authMode: tab.sshAuthMode,
         password: tab.sshPassword,
         keyPath: tab.sshKeyPath,
+        savedConnectionIndex: tab.sshSavedConnectionIndex,
         from: selectedEntry.path,
         to: nextPath,
       });
@@ -208,7 +275,7 @@ export default function SftpPanel({ tab }: Props) {
       await browse(currentRemotePath);
       setSelectedPath(nextPath);
     } catch (e) {
-      setError(String(e));
+      setError(formatError(e));
     } finally {
       setActionBusy(false);
     }
@@ -227,13 +294,14 @@ export default function SftpPanel({ tab }: Props) {
         authMode: tab.sshAuthMode,
         password: tab.sshPassword,
         keyPath: tab.sshKeyPath,
+        savedConnectionIndex: tab.sshSavedConnectionIndex,
         path: selectedEntry.path,
         isDir: selectedEntry.isDir,
       });
       setNotice(t("Removed {path}.", { path: selectedEntry.path }));
       await browse(currentRemotePath);
     } catch (e) {
-      setError(String(e));
+      setError(formatError(e));
     } finally {
       setActionBusy(false);
     }
@@ -244,6 +312,13 @@ export default function SftpPanel({ tab }: Props) {
     setActionBusy(true);
     setError("");
     setNotice("");
+    const localPath = downloadLocalPath.trim();
+    const id = pushTransfer({
+      direction: "dn",
+      name: selectedEntry.name,
+      remotePath: selectedEntry.path,
+      localPath,
+    });
     try {
       await cmd.sftpDownload({
         host: tab.sshHost,
@@ -252,13 +327,17 @@ export default function SftpPanel({ tab }: Props) {
         authMode: tab.sshAuthMode,
         password: tab.sshPassword,
         keyPath: tab.sshKeyPath,
+        savedConnectionIndex: tab.sshSavedConnectionIndex,
         remotePath: selectedEntry.path,
-        localPath: downloadLocalPath.trim(),
+        localPath,
       });
+      finishTransfer(id, "done");
       setNotice(t("Downloaded {path}.", { path: selectedEntry.path }));
       setDownloadOpen(false);
     } catch (e) {
-      setError(String(e));
+      const msg = formatError(e);
+      finishTransfer(id, "failed", msg);
+      setError(msg);
     } finally {
       setActionBusy(false);
     }
@@ -269,6 +348,14 @@ export default function SftpPanel({ tab }: Props) {
     setActionBusy(true);
     setError("");
     setNotice("");
+    const localPath = uploadLocalPath.trim();
+    const remotePath = uploadRemotePath.trim();
+    const id = pushTransfer({
+      direction: "up",
+      name: localBaseName(localPath) || remoteBaseName(remotePath),
+      remotePath,
+      localPath,
+    });
     try {
       await cmd.sftpUpload({
         host: tab.sshHost,
@@ -277,20 +364,49 @@ export default function SftpPanel({ tab }: Props) {
         authMode: tab.sshAuthMode,
         password: tab.sshPassword,
         keyPath: tab.sshKeyPath,
-        localPath: uploadLocalPath.trim(),
-        remotePath: uploadRemotePath.trim(),
+        savedConnectionIndex: tab.sshSavedConnectionIndex,
+        localPath,
+        remotePath,
       });
-      setNotice(t("Uploaded {path}.", { path: uploadRemotePath.trim() }));
+      finishTransfer(id, "done");
+      setNotice(t("Uploaded {path}.", { path: remotePath }));
       setUploadOpen(false);
       setUploadLocalPath("");
       setUploadRemotePath("");
       await browse(currentRemotePath);
     } catch (e) {
-      setError(String(e));
+      const msg = formatError(e);
+      finishTransfer(id, "failed", msg);
+      setError(msg);
     } finally {
       setActionBusy(false);
     }
   }
+
+  // Auto-browse on mount / tab switch so SFTP works without the user
+  // having to click "Browse". Password-auth saved tabs still work — the
+  // backend resolves the keychain password via savedConnectionIndex.
+  useEffect(() => {
+    if (!hasSsh) return;
+    if (state) return;
+    if (busy) return;
+    const ready =
+      tab.sshAuthMode !== "password" ||
+      tab.sshPassword.length > 0 ||
+      tab.sshSavedConnectionIndex !== null;
+    if (!ready) return;
+    void browse(path || "/");
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [
+    tab.id,
+    tab.backend,
+    tab.sshHost,
+    tab.sshPort,
+    tab.sshUser,
+    tab.sshAuthMode,
+    tab.sshPassword.length > 0,
+    tab.sshSavedConnectionIndex,
+  ]);
 
   function selectEntry(entry: SftpEntryView) {
     setSelectedPath(entry.path);
@@ -321,14 +437,18 @@ export default function SftpPanel({ tab }: Props) {
   }
 
   const totalItems = state?.entries.length ?? 0;
-  const hostName = hasSsh ? tab.sshHost : t("Not connected");
+  const hostName = hasSsh ? `${tab.sshUser}@${tab.sshHost}` : t("Not connected");
   const hostSub = hasSsh
-    ? `${tab.sshUser}@${tab.sshHost}:${tab.sshPort} · SFTP`
+    ? t("{user}@{host}:{port} · SFTP session", {
+        user: tab.sshUser,
+        host: tab.sshHost,
+        port: tab.sshPort,
+      })
     : t("Configure SSH connection to begin.");
 
   return (
     <>
-      <PanelHeader icon={FolderTree} title="SFTP" meta={currentRemotePath} />
+      <PanelHeader icon={FolderTree} title={t("SFTP")} meta={currentRemotePath} />
       <div className="ftp">
         <div className="ftp-host-bar">
           <span className="ftp-host-ic"><Server size={12} /></span>
@@ -386,7 +506,10 @@ export default function SftpPanel({ tab }: Props) {
               }}
             />
           ) : (
-            <div className="ftp-crumb2 mono" onClick={() => { setPathDraft(currentRemotePath); setEditingPath(true); }}>
+            <div
+              className="ftp-crumb mono"
+              onClick={() => { setPathDraft(currentRemotePath); setEditingPath(true); }}
+            >
               {crumbSegments.map((s, i) => {
                 const isLast = i === crumbSegments.length - 1;
                 return (
@@ -402,7 +525,7 @@ export default function SftpPanel({ tab }: Props) {
                       {s === "/" ? <Home size={11} /> : s}
                     </span>
                     {!isLast && i !== 0 && <span className="sep">/</span>}
-                    {i === 0 && crumbSegments.length > 1 && <span className="sep" />}
+                    {i === 0 && crumbSegments.length > 1 && <span className="sep">/</span>}
                   </Fragment>
                 );
               })}
@@ -509,13 +632,10 @@ export default function SftpPanel({ tab }: Props) {
           </div>
         )}
 
-        <div className="ftp-col-head2">
-          <span />
+        <div className="ftp-col-head">
           <span>{t("NAME")}</span>
-          <span>{t("PERM")}</span>
-          <span>{t("OWNER")}</span>
-          <span className="ta-r">{t("SIZE")}</span>
-          <span className="ta-r">{t("MODIFIED")}</span>
+          <span className="ftp-size">{t("SIZE")}</span>
+          <span className="ftp-mod">{t("MOD")}</span>
         </div>
 
         <div className="ftp-list">
@@ -530,13 +650,11 @@ export default function SftpPanel({ tab }: Props) {
           {busy && <div className="lg-note">{t("Browsing...")}</div>}
           {state && currentRemotePath !== "/" && (
             <div
-              className="ftp-row2 dir"
+              className="ftp-row dir"
               onClick={() => void browse(remoteDirname(currentRemotePath), { pushHistory: true })}
             >
               <span className="ftp-ic"><ArrowUp size={13} /></span>
               <span className="ftp-name">..</span>
-              <span className="ftp-perm mono">drwxr-xr-x</span>
-              <span className="ftp-owner mono">—</span>
               <span className="ftp-size mono">—</span>
               <span className="ftp-mod mono">—</span>
             </div>
@@ -547,16 +665,16 @@ export default function SftpPanel({ tab }: Props) {
             return (
               <div
                 key={entry.path}
-                className={"ftp-row2" + (isSel ? " sel" : "") + (entry.isDir ? " dir" : "")}
+                className={"ftp-row" + (isSel ? " sel" : "") + (entry.isDir ? " dir" : "")}
                 onClick={() => selectEntry(entry)}
                 onDoubleClick={() => openEntry(entry)}
               >
                 <span className="ftp-ic"><Ic size={13} /></span>
                 <span className="ftp-name">{entry.name}</span>
-                <span className="ftp-perm mono">{entry.permissions || (entry.isDir ? "drwxr-xr-x" : "-rw-r--r--")}</span>
-                <span className="ftp-owner mono">—</span>
                 <span className="ftp-size mono">{entry.isDir ? "—" : formatBytes(entry.size)}</span>
-                <span className="ftp-mod mono">—</span>
+                <span className="ftp-mod mono" title={entry.modified ? new Date(entry.modified * 1000).toLocaleString() : ""}>
+                  {formatRelativeTime(entry.modified)}
+                </span>
               </div>
             );
           })}
@@ -579,7 +697,10 @@ export default function SftpPanel({ tab }: Props) {
                 })()}
               </span>
               <span className="ftp-inspector-name">{selectedEntry.name}</span>
-              <span className="ftp-inspector-meta">{selectedEntry.path}</span>
+              <span className="ftp-inspector-meta">
+                {selectedEntry.permissions || (selectedEntry.isDir ? "drwxr-xr-x" : "-rw-r--r--")}
+                {!selectedEntry.isDir ? ` · ${formatBytes(selectedEntry.size)}` : ""}
+              </span>
               <div style={{ flex: 1 }} />
               <button
                 type="button"
@@ -666,6 +787,66 @@ export default function SftpPanel({ tab }: Props) {
             {selectedEntry ? ` · ${t("1 selected")}` : ""}
           </span>
         </div>
+
+        {transfers.length > 0 && (
+          <div className="ftp-queue">
+            <div className="ftp-queue-head">
+              <span className="ftp-queue-title">
+                <Upload size={10} /> {t("TRANSFERS")}
+              </span>
+              <span className="ftp-queue-count mono">
+                {t("{active} active · {done} done", { active: activeTransfers, done: doneTransfers })}
+              </span>
+              {doneTransfers > 0 && (
+                <button
+                  type="button"
+                  className="lg-ic"
+                  title={t("Clear completed")}
+                  onClick={clearFinishedTransfers}
+                >
+                  <X size={11} />
+                </button>
+              )}
+            </div>
+            {transfers.map((item) => {
+              const isActive = item.status === "active";
+              const isDone = item.status === "done";
+              const isFailed = item.status === "failed";
+              const arrow = item.direction === "up" ? <ArrowRight size={10} /> : <ArrowLeft size={10} />;
+              const destHint = item.direction === "up"
+                ? `→ ${remoteDirname(item.remotePath)}/`
+                : `→ ${item.localPath}`;
+              return (
+                <div
+                  key={item.id}
+                  className={"ftp-queue-item" + (isDone ? " done" : "") + (isFailed ? " failed" : "")}
+                >
+                  <span className={"ftp-queue-dir " + item.direction}>{arrow}</span>
+                  <div className="ftp-queue-body">
+                    <div className="ftp-queue-name mono">
+                      {item.name} <span className="text-muted">{destHint}</span>
+                    </div>
+                    <div className="ftp-queue-meta mono">
+                      {isActive && <span>{t("transferring…")}</span>}
+                      {isDone && <span className="text-pos">{t("✓ done")}</span>}
+                      {isFailed && <span className="text-neg">{item.error || t("failed")}</span>}
+                    </div>
+                    {isActive && (
+                      <div className="ftp-queue-track">
+                        <div className="ftp-queue-fill ftp-queue-fill--anim" />
+                      </div>
+                    )}
+                  </div>
+                  {isDone && (
+                    <span className="ftp-queue-pct mono">
+                      <Check size={11} />
+                    </span>
+                  )}
+                </div>
+              );
+            })}
+          </div>
+        )}
       </div>
     </>
   );

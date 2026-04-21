@@ -1,21 +1,15 @@
-import { FileText } from "lucide-react";
 import { useEffect, useState } from "react";
-import PanelHeader from "../components/PanelHeader";
 import * as cmd from "../lib/commands";
 import { useI18n } from "../i18n/useI18n";
+import { localizeError } from "../i18n/localizeMessage";
 
 type Props = {
   filePath?: string;
 };
 
-function basename(p: string): string {
-  if (!p) return "";
-  const i = Math.max(p.lastIndexOf("/"), p.lastIndexOf("\\"));
-  return i >= 0 ? p.slice(i + 1) : p;
-}
-
 export default function MarkdownPanel({ filePath }: Props) {
   const { t } = useI18n();
+  const formatError = (error: unknown) => localizeError(error, t);
   const [html, setHtml] = useState("");
   const [error, setError] = useState("");
   const [loading, setLoading] = useState(false);
@@ -40,7 +34,7 @@ export default function MarkdownPanel({ filePath }: Props) {
       .catch((err) => {
         if (cancelled) return;
         setHtml("");
-        setError(String(err));
+        setError(formatError(err));
         setLoading(false);
       });
     return () => {
@@ -49,25 +43,18 @@ export default function MarkdownPanel({ filePath }: Props) {
   }, [filePath]);
 
   return (
-    <>
-      <PanelHeader
-        icon={FileText}
-        title="MARKDOWN"
-        meta={filePath ? basename(filePath) : undefined}
-      />
-      <div className="panel-scroll">
-        <section className="panel-section">
-          {!filePath ? (
-            <div className="empty-note">{t("Select a Markdown file on the left to preview.")}</div>
-          ) : loading ? (
-            <div className="empty-note">{t("Rendering…")}</div>
-          ) : error ? (
-            <div className="empty-note empty-note--error">{error}</div>
-          ) : (
-            <div className="markdown-preview" dangerouslySetInnerHTML={{ __html: html }} />
-          )}
-        </section>
-      </div>
-    </>
+    <div className="panel-scroll">
+      <section className="panel-section">
+        {!filePath ? (
+          <div className="empty-note">{t("Select a Markdown file on the left to preview.")}</div>
+        ) : loading ? (
+          <div className="empty-note">{t("Rendering…")}</div>
+        ) : error ? (
+          <div className="empty-note empty-note--error">{error}</div>
+        ) : (
+          <div className="markdown-preview" dangerouslySetInnerHTML={{ __html: html }} />
+        )}
+      </section>
+    </div>
   );
 }

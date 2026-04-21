@@ -1,138 +1,153 @@
 # Pier-X — Code Rules for Claude
 
-Pier-X is a cross-platform terminal / Git / SSH / database management tool, aiming for an IntelliJ-grade IDE experience on macOS and Windows. The stack is **pure Rust + GPUI**: no Tauri, no Qt, no npm, no web runtime.
+Pier-X is a cross-platform terminal / Git / SSH / database management tool,
+aiming for an IntelliJ-grade IDE experience on macOS and Windows. The stack is
+**Rust backend + Tauri 2 + React + TypeScript**: the previous Qt/QML shell is
+archived, and the Rust/GPUI experiment on `backup/rust-gpui` is abandoned.
 
 ## Authoritative sources
 
 | Concern | File |
 |---|---|
+| **What the product is & which features exist** | [docs/PRODUCT-SPEC.md](docs/PRODUCT-SPEC.md) — only source of truth for panels, tools, default behaviors, non-goals |
 | Overall delivery plan | [docs/ROADMAP.md](docs/ROADMAP.md) |
-| Architecture reset decision | [docs/GPUI-RESET.md](docs/GPUI-RESET.md) |
+| Shell-reset decision & wired Tauri commands | [docs/TAURI-RESET.md](docs/TAURI-RESET.md) |
+| Build / frontend / review rules (short form) | [AGENTS.md](AGENTS.md) |
 | **Visual design tokens & rules** | [.agents/skills/pier-design-system/SKILL.md](.agents/skills/pier-design-system/SKILL.md) — only source of truth for colors, typography, spacing, radius, shadow |
 
-When SKILL.md and this file overlap, SKILL.md wins for visual values; this file wins for Rust code structure.
+When SKILL.md and this file overlap, SKILL.md wins for visual values; this file
+wins for code structure.
 
 ## Architecture boundaries
 
-- **Cargo workspace**: two members only — [`pier-core`](pier-core/) (UI-framework-agnostic backend) and [`pier-ui-gpui`](pier-ui-gpui/) (the only desktop shell).
-- `pier-core` **must stay UI-agnostic**. No `gpui` dependency. No UI state. Public API returns plain Rust types.
-- `pier-ui-gpui` **calls `pier-core` directly** as Rust functions. Any proposal to add an IPC layer, a scripting runtime, or a second UI framework is a regression — reject it.
-- **Do not reintroduce**: `tauri`, `@tauri-apps/*`, any `npm` / `pnpm` / `vite` / TypeScript toolchain, `qt6-*`, `cmake`, `qmake`, `.qrc`/`.pro`/`CMakeLists.txt`, any cross-language bridge.
+- **Cargo workspace**: two members only — [`pier-core`](pier-core/)
+  (UI-framework-agnostic backend) and
+  [`pier-ui-tauri/src-tauri`](pier-ui-tauri/src-tauri/) (the Tauri runtime
+  glue).
+- **Frontend**: [`pier-ui-tauri/`](pier-ui-tauri/) — Vite + React 19 +
+  TypeScript. State via `zustand`; terminals via `@xterm/xterm`; panels via
+  `react-resizable-panels`; icons from `lucide-react`.
+- `pier-core` **must stay UI-agnostic**. No `tauri`, `gpui`, `qt`, or any UI
+  crate dependency. Public API returns plain Rust types.
+- `pier-ui-tauri/src-tauri` **calls `pier-core` directly** as Rust functions
+  and exposes them to the frontend as Tauri commands. React code calls those
+  commands via `@tauri-apps/api`'s `invoke`. The frontend **must not** bypass
+  Tauri to reach pier-core.
+- **Do not reintroduce**: `qt6-*`, `qml`, `cmake`, `qmake`, `corrosion`, any
+  C-ABI bridge, or the `pier-ui-gpui` crate. The Qt and GPUI shells are gone
+  on purpose — propose a new feature, not a third UI runtime.
 
-## Rust code rules (`pier-ui-gpui`)
+## Frontend code rules (`pier-ui-tauri/src/`)
 
-### Rule 1 — Theme tokens, never literals
+### Rule 1 — Design tokens, never literals
 
-Every color, font family, font size, spacing, radius, and shadow used in a view or a component **must** come from the `crate::theme` module.
+Every color, font family, font size, spacing, radius, and shadow used in a
+component or panel **must** reference a CSS custom property defined in
+[`src/styles/tokens.css`](pier-ui-tauri/src/styles/tokens.css) — or a shared
+atom class from [`src/styles/atoms.css`](pier-ui-tauri/src/styles/atoms.css).
 
-**Forbidden in `src/views/` and `src/app/`:**
+**Forbidden in `src/shell/`, `src/panels/`, `src/components/`, and any stylesheet under `src/styles/` other than `tokens.css`:**
 
-- `gpui::rgb(0x...)`, `gpui::rgba(...)`, any `Rgba`/`Hsla` literal
-- `gpui::px(<numeric literal>)` — even `px(4.)` is banned; use `spacing::SP_1`
-- Hardcoded font family strings like `"Inter"`, `"JetBrains Mono"`
-- Hardcoded font weights (use `typography::WEIGHT_MEDIUM` / `WEIGHT_EMPHASIS`; the number 700/bold is banned per SKILL.md §3.3)
+- Hex / rgb / rgba / hsl color literals in `.css` or inline styles
+  (`color: "#0e1116"`, `background: rgba(...)`, etc.)
+- Hardcoded pixel values for spacing, radius, or typography when a token exists
+  (use `--sp-X` / `--radius-X` / `--size-X` / `--ui-fs*`)
+- Hardcoded font family strings like `"IBM Plex Sans"`, `"Inter"`, `"JetBrains Mono"`
+- Bypassing `IconButton` / `.btn` / `PanelHeader` / `DbConnRow` / `StatusDot` / `Badge` to roll your own button or panel chrome
 
-**Allowed everywhere:**
+**Allowed:**
 
-- `theme(cx).color.*` for colors
-- `spacing::SP_0..SP_12` for sizes and gaps
-- `radius::RADIUS_XS..RADIUS_PILL` for corners
-- `typography::SIZE_*` + `typography::WEIGHT_*` for text
-- `shadow::*` builders for elevation
+- Backgrounds: `var(--bg)` / `var(--surface)` / `var(--surface-2)` / `var(--panel)` / `var(--panel-2)` / `var(--elev)`
+- Text: `var(--ink)` / `var(--ink-2)` / `var(--muted)` / `var(--dim)`
+- Borders: `var(--line)` / `var(--line-2)` / `var(--line-3)`
+- Accent: `var(--accent)` / `var(--accent-dim)` / `var(--accent-subtle)` / `var(--accent-hover)` / `var(--accent-ink)`
+- Status: `var(--pos)` / `var(--neg)` / `var(--warn)` / `var(--info)` + their `-dim` variants
+- Diff: `var(--add)` / `var(--del)` / `var(--mod)`
+- Spacing/radius: `var(--sp-0..sp-12)` / `var(--radius-xs..radius-pill)`
+- Typography: `var(--size-display..size-small)` / `var(--ui-fs)` / `var(--ui-fs-sm)` / `var(--ui-fs-lg)` / `var(--size-micro)`
+- Font families: `var(--sans)` / `var(--mono)` / `var(--serif)`
+- Elevation/scrim: `var(--shadow-app)` / `var(--shadow-popover)` / `var(--shadow-dialog)` / `var(--stage-gradient)` / `var(--overlay-scrim)`
 
-Components in `src/components/` **may** use literals, but only when translating a SKILL.md-defined constant (e.g. `StatusPill` hard-codes its 18px height because that is the token for pill height). Document the SKILL.md section in a one-line comment when you do this.
+Legacy aliases (`--text-primary`, `--bg-canvas`, `--border-subtle`, `--font-ui`, etc.) remain for transitional code but new code should use the primary names above. See [`.agents/skills/pier-design-system/SKILL.md`](.agents/skills/pier-design-system/SKILL.md) §8 for the shared-atom catalog.
 
-### Rule 2 — Custom components must be encapsulated
+If a token is missing, **add it to `tokens.css` first** (dark + light, plus any accent variants), then consume it. Do not "just this once" inline a raw value.
 
-**Any new UI atom is a `struct` in `src/components/` implementing `RenderOnce` (via `#[derive(IntoElement)]`)**. Views compose components; views do not create new atoms.
-
-**Forbidden in views:**
-
-```rust
-// ❌ — creating a new visual atom inline
-div().bg(t.color.bg_surface).border_1().border_color(t.color.border_subtle).rounded(RADIUS_MD).p(SP_4).child(...)
-```
-
-**Required in views:**
-
-```rust
-// ✅ — compose an existing component
-Card::new().padding(SP_4).child(...)
-```
-
-If the existing component set (`Button`, `Card`, `StatusPill`, `SectionLabel`, `IconBadge`, `NavItem`, `Separator`, `text::{display,h1,h2,h3,body,caption,mono}`) cannot express what you need, **add a new component in `src/components/` first** — with a proper name, variant enum, and builder methods — then use it from the view. Do not "just this once" inline a new atom.
-
-### Rule 3 — Variants as enums, not new types
-
-A button with a different look is `Button { variant: ButtonVariant::Ghost, ... }`, not a separate `GhostButton` struct. One struct per component family; visual variants are enum values.
-
-### Rule 4 — Builder style, stable IDs
-
-Components use chainable builders (`Button::primary(id, label).width(px(148.)).on_click(cb)`). Every interactive component takes an `ElementId` as its first argument; the ID must be a descriptive string literal (`"welcome-new-ssh"`), not a counter.
-
-### Rule 5 — Module layout
+### Rule 2 — Module layout
 
 ```
-pier-ui-gpui/src/
-├── main.rs              # minimal: Application::new(), theme::init, font load, window open
-├── app/                 # PierApp state, Route enum, root Render impl
-├── theme/               # colors / typography / spacing / radius / shadow (the only place literals live)
-├── components/          # ONE file per component family (button.rs, card.rs, …)
-├── views/               # one file per full-screen view (welcome.rs, workbench.rs)
-└── data/                # pure data loaders (ShellSnapshot, etc.) — no UI code
+pier-ui-tauri/src/
+├── main.tsx              # entrypoint; mounts <App/>
+├── App.tsx               # top-level routing / layout shell
+├── shell/                # chrome: TopBar, Sidebar, StatusBar, TabBar, WelcomeView, dialogs
+├── panels/               # one file per tool panel (Git, Terminal, Sftp, MySql, …)
+├── components/           # reusable UI atoms (ContextMenu, PreviewTable, ResizeHandle, …)
+├── stores/               # zustand stores — UI state, never business logic
+├── lib/                  # Tauri-command wrappers, pure helpers
+├── i18n/                 # locale resources
+└── styles/               # tokens.css (single source of truth) + shell.css + scoped css
 ```
 
-When adding a module, follow this split. Do not put view logic in `main.rs` or component logic in views.
+When adding code, follow this split:
 
-### Rule 6 — Render is paint-only
+- A new tool surface → a file in `src/panels/`.
+- A new piece of shell chrome → a file in `src/shell/`.
+- A reusable atom used by ≥2 panels → a file in `src/components/`.
+- Shared layout / chrome styling → `src/styles/shell.css` (or a new scoped
+  sheet), not inline across panels.
 
-`Render::render` and `RenderOnce::render` bodies **must not perform IO**.
-This includes:
+### Rule 3 — State in stores, not in panels
 
-- Filesystem reads (`std::fs::*`, `read_dir`, `metadata`, anything that
-  hits a syscall)
-- Network calls (HTTP, SSH connect, DB connect)
-- OS keychain reads (`pier_core::credentials::get`)
-- Process spawns
-- Any `*_blocking()` API from pier-core
+Cross-panel state (connections, active tab, selected host, pending diffs)
+lives in a `zustand` store under `src/stores/`. Panels subscribe to slices
+they need. Keep stores focused on UI state; don't put business logic there —
+that belongs in `pier-core`.
 
-GPUI re-renders entities on every state change. A 5 ms `read_dir` repeated
-30 times during a render call costs 150 ms — felt as obvious lag. A
-1 second `connect_blocking` freezes the UI for 1 second.
+### Rule 4 — Tauri IPC is the only bridge
 
-**Pattern**: cache the data in `PierApp` (or an entity it owns), populate it
-from a click / event / startup handler, and have `render` read the cache
-only. Examples in tree:
+- React components call backend behavior by invoking a Tauri command declared
+  in [`pier-ui-tauri/src-tauri/src/lib.rs`](pier-ui-tauri/src-tauri/src/lib.rs)
+  (or a sibling module like `git_panel.rs`).
+- Wrap `invoke` calls in typed helpers under `src/lib/` so panels stay free of
+  raw `invoke("...")` strings.
+- New backend capability: add it to `pier-core` first, expose a thin
+  command in `src-tauri`, then a typed wrapper in `src/lib/`, then consume it
+  from the panel. Do not grow `src-tauri` into a business-logic layer.
 
-- `PierApp::file_tree_root_entries` + `file_tree_children` cache, populated
-  by `toggle_dir` / `cd_up` (file_tree.rs renders from cache)
-- `SshSessionState::entries` cache, populated by `set_right_mode(Sftp)`
-  (sftp_browser.rs renders from cache)
+### Rule 5 — Render is paint-only
 
-If the data genuinely needs fresh-on-display, push the IO behind a
-background task (`cx.background_executor().spawn(...)` + `weak.update`)
-and render a placeholder while it's in flight.
+React render paths (component bodies, `useMemo` deps, JSX children) **must
+not** call `invoke` synchronously or block on IO. Load data in `useEffect` /
+event handlers, store it in a zustand store or local state, and render from
+the cache. Tauri commands that can be slow (SSH connect, DB connect,
+directory walks) must stream/return via awaited calls off the render path.
 
 ## Review gate
 
 Reject a change if any of these are true:
 
-1. It adds a color/size/font literal in `views/` or `app/`.
-2. It inlines a new visual atom instead of adding a component in `src/components/`.
-3. It reintroduces Tauri / Qt / npm / cmake in any form.
-4. It adds a `pier-core` dependency on `gpui` or any UI crate.
-5. It violates one of the five SKILL.md non-negotiables (see SKILL.md §1).
-6. It calls a `_blocking` / `read_dir` / `credentials::get` / network /
-   process-spawn API from inside a `render` body (Rule 6).
+1. It adds a color/size/font literal in `shell/`, `panels/`, or `components/`
+   instead of a `tokens.css` var.
+2. It inlines a new visual atom in a panel instead of adding a component in
+   `src/components/`.
+3. It reintroduces Qt / QML / CMake / Corrosion / `pier-ui-gpui` in any form.
+4. It adds a `pier-core` dependency on `tauri`, `gpui`, or any UI crate.
+5. It calls pier-core from React without going through a Tauri command.
+6. It violates one of the SKILL.md non-negotiables (see SKILL.md §1).
+7. It invokes a backend command synchronously inside a render body (Rule 5).
+8. It adds / removes / re-purposes a right-side tool, changes a panel's
+   default safety stance (e.g. DB read-only default), or alters the default
+   `rightTool` for any backend, **without first updating the relevant
+   section in [docs/PRODUCT-SPEC.md](docs/PRODUCT-SPEC.md)**.
 
 ## Build & run
 
 ```sh
-./run.sh                            # debug run (macOS opens bundled .app for the real dock icon)
-./build.sh                          # release build
-./scripts/bundle-macos.sh           # build → wrap in Pier-X.app for proper dock icon
-cargo build -p pier-ui-gpui
-cargo build -p pier-core
+./run.sh                            # dev: vite + tauri dev
+./build.sh                          # release: vite build + tauri build
+cargo build -p pier-core            # backend only
+cd pier-ui-tauri && npm install     # first-time frontend deps
 ```
 
-No other toolchains are required. If a step asks you to install Node, Qt, or CMake, it is wrong.
+Windows equivalents: `run.ps1` / `build.ps1`. Node + npm and the Rust toolchain
+are required; no Qt, CMake, or GPUI toolchain is needed. If a step asks you to
+install Qt or to run `cargo build -p pier-ui-gpui`, it is out of date.

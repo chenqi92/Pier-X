@@ -1482,6 +1482,10 @@
   color: var(--text-secondary);
   font-size: 9px;
   font-weight: var(--weight-medium);
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--sp-2);
 }
 
 .git-history-row__refs {

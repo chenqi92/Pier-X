@@ -14,20 +14,16 @@ import {
 import type { RightTool } from "../lib/types";
 import { useI18n } from "../i18n/useI18n";
 import ToolStripItem from "../components/ToolStripItem";
-import IconButton from "../components/IconButton";
 
 type Props = {
   activeTool: RightTool;
   onSelectTool: (tool: RightTool) => void;
   hasRemoteContext: boolean;
+  detectedTools?: ReadonlySet<RightTool>;
   expanded: boolean;
   onToggleExpand: () => void;
 };
 
-/**
- * Tool order matches the Remix reference (`pier-x (Remix)/src/app.jsx:3-15`):
- * always-on (Markdown, Git) · divider · remote tools · SFTP (ssh only).
- */
 const TOOLS: {
   tool: RightTool;
   icon: typeof GitBranch;
@@ -47,14 +43,15 @@ const TOOLS: {
   { tool: "sqlite", icon: HardDrive, label: "SQLite" },
 ];
 
-export default function ToolStrip({ activeTool, onSelectTool, hasRemoteContext, expanded, onToggleExpand }: Props) {
+export default function ToolStrip({ activeTool, onSelectTool, hasRemoteContext, detectedTools, expanded, onToggleExpand }: Props) {
   const { t } = useI18n();
 
   return (
-    <div className="tool-strip">
+    <div className="toolstrip">
       {TOOLS.map((entry) => {
         const isActive = activeTool === entry.tool;
         const dim = entry.remoteOnly && !hasRemoteContext;
+        const detected = detectedTools?.has(entry.tool) ?? false;
         return (
           <div key={entry.tool} style={{ display: "contents" }}>
             <ToolStripItem
@@ -62,23 +59,25 @@ export default function ToolStrip({ activeTool, onSelectTool, hasRemoteContext, 
               label={t(entry.label)}
               active={isActive}
               dim={dim}
+              detected={detected}
               onClick={() => {
                 if (dim) return;
                 onSelectTool(entry.tool);
               }}
             />
-            {entry.dividerAfter && <div className="tool-strip__divider" />}
+            {entry.dividerAfter && <div className="ts-divider" />}
           </div>
         );
       })}
-      <div className="tool-strip__spacer" />
-      <IconButton
-        variant="tool"
+      <div className="toolstrip-spacer" />
+      <button
+        type="button"
+        className="ts-btn"
         onClick={onToggleExpand}
         title={expanded ? t("Collapse") : t("Expand")}
       >
         {expanded ? <ChevronsRight size={16} /> : <ChevronsLeft size={16} />}
-      </IconButton>
+      </button>
     </div>
   );
 }

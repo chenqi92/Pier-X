@@ -52,6 +52,12 @@ export default function SqlitePanel() {
   const trimmedPath = path.trim();
   const connName = trimmedPath || t("SQLite Browser");
   const connSub = trimmedPath ? trimmedPath : t("Not connected");
+  const dbFileName = trimmedPath ? (trimmedPath.split(/[/\\]/).pop() || trimmedPath) : "";
+  const headerMeta = dbFileName
+    ? state
+      ? `${dbFileName} · ${state.tables.length} tables`
+      : dbFileName
+    : "no database";
   const connTag = (
     <>
       <StatusDot tone={state ? "pos" : "off"} />
@@ -64,7 +70,7 @@ export default function SqlitePanel() {
       <PanelHeader
         icon={HardDrive}
         title="SQLITE"
-        meta={trimmedPath || "no database"}
+        meta={headerMeta}
       />
       <DbConnRow
         icon={HardDrive}

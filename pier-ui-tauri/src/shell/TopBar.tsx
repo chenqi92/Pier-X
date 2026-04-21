@@ -2,7 +2,6 @@ import { useEffect, useRef, type MouseEvent as ReactMouseEvent } from "react";
 import { isTauri } from "@tauri-apps/api/core";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import { Anchor, Command, Moon, Plus, Settings, Sun } from "lucide-react";
-import IconButton from "../components/IconButton";
 import { useI18n } from "../i18n/useI18n";
 import { useThemeStore } from "../stores/useThemeStore";
 
@@ -81,42 +80,57 @@ export default function TopBar({
 
   return (
     <header
-      className="topbar"
+      className="titlebar"
       data-tauri-drag-region
       onDoubleClick={handleDoubleClick}
       onMouseDown={handleMouseDown}
     >
-      {IS_MAC && <span className="topbar__traffic-spacer" />}
+      {IS_MAC && (
+        <div className="traffic">
+          <span className="tl r" />
+          <span className="tl y" />
+          <span className="tl g" />
+        </div>
+      )}
 
-      <span className="topbar__brand" data-tauri-drag-region>
-        <span className="topbar__brand-mark">
-          <Anchor size={12} />
+      <div className="brand">
+        <span className="brand-mark">
+          <Anchor size={11} />
         </span>
-        Pier-X
-        {version ? <em>v{version}</em> : null}
-      </span>
+        <span>
+          Pier-X {version ? <em>{version}</em> : null}
+        </span>
+      </div>
 
-      <div className="topbar__drag" data-tauri-drag-region />
+      <div className="menu-items">
+        <button>{t("File")}</button>
+        <button>{t("Edit")}</button>
+        <button>{t("View")}</button>
+        <button>{t("Session")}</button>
+        <button>{t("Help")}</button>
+      </div>
 
-      <div className="topbar__right">
+      <div className="titlebar-spacer" data-tauri-drag-region />
+
+      <div className="titlebar-actions">
         {onCommandPalette ? (
-          <IconButton
-            variant="icon"
+          <button
+            className="icon-btn"
             onClick={onCommandPalette}
             title={t("Command palette (⌘K)")}
           >
             <Command size={13} />
-          </IconButton>
+          </button>
         ) : null}
-        <IconButton variant="icon" onClick={onNewTab} title={t("New tab")}>
+        <button className="icon-btn" onClick={onNewTab} title={t("New tab")}>
           <Plus size={14} />
-        </IconButton>
-        <IconButton variant="icon" onClick={onToggleTheme} title={themeTitle}>
+        </button>
+        <button className="icon-btn" onClick={onToggleTheme} title={themeTitle}>
           {resolvedDark ? <Sun size={14} /> : <Moon size={14} />}
-        </IconButton>
-        <IconButton variant="icon" onClick={onSettings} title={t("Settings")}>
+        </button>
+        <button className="icon-btn" onClick={onSettings} title={t("Settings")}>
           <Settings size={14} />
-        </IconButton>
+        </button>
       </div>
     </header>
   );

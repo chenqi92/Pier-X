@@ -57,6 +57,7 @@ export default function ResizeHandle({ direction, size, min, max, onResize, clas
     };
   }, [direction, min, max, onResize]);
 
-  const cls = className ? `resize-handle ${className}` : "resize-handle";
+  // Use prototype's `.resizer` class by default; caller may override.
+  const cls = className || "resizer";
   return <div className={cls} onMouseDown={handleMouseDown} />;
 }

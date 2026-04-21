@@ -11,6 +11,7 @@ import { useI18n } from "../i18n/useI18n";
 import type { TabState, TerminalSessionInfo, TerminalSnapshot, TerminalSize } from "../lib/types";
 import { useTabStore } from "../stores/useTabStore";
 import { useSettingsStore } from "../stores/useSettingsStore";
+import { useStatusStore } from "../stores/useStatusStore";
 import { useThemeStore, TERMINAL_THEMES } from "../stores/useThemeStore";
 
 /**
@@ -71,6 +72,7 @@ export default function TerminalPanel({ tab, isActive }: Props) {
   const [snapshot, setSnapshot] = useState<TerminalSnapshot | null>(null);
   const [error, setError] = useState("");
   const [terminalSize, setTerminalSize] = useState<TerminalSize>({ cols: 120, rows: 26 });
+  const setStatusTerminalSize = useStatusStore((s) => s.setTerminalSize);
   const [scrollbackOffset, setScrollbackOffset] = useState(0);
   const [visualBellActive, setVisualBellActive] = useState(false);
   const [ctxMenu, setCtxMenu] = useState<{ x: number; y: number } | null>(null);
@@ -164,6 +166,11 @@ export default function TerminalPanel({ tab, isActive }: Props) {
       setError(String(e)),
     );
   }, [session, terminalSize.cols, terminalSize.rows]);
+
+  useEffect(() => {
+    setStatusTerminalSize(terminalSize.cols, terminalSize.rows);
+    return () => setStatusTerminalSize(null, null);
+  }, [terminalSize.cols, terminalSize.rows, setStatusTerminalSize]);
 
   // ── Apply scrollback settings ───────────────────────────────
 

@@ -206,7 +206,7 @@ export default function RedisPanel({ tab }: Props) {
       <PanelHeader
         icon={Zap}
         title="REDIS"
-        meta={state ? `${host}:${port} · db ${db}` : `${host}:${port}`}
+        meta={`${tab.title || host || "redis"} · db ${db}`}
       />
       <DbConnRow
         icon={Zap}

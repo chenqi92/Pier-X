@@ -1,18 +1,8 @@
-import {
-  Command,
-  FolderTree,
-  GitBranch,
-  Keyboard,
-  Moon,
-  Plus,
-  PlugZap,
-  Settings,
-  SquareTerminal,
-  Sun,
-} from "lucide-react";
+import { Command, Server, Settings, SquareTerminal } from "lucide-react";
+import { useEffect, useState } from "react";
 import { useI18n } from "../i18n/useI18n";
 import { useConnectionStore } from "../stores/useConnectionStore";
-import { useThemeStore } from "../stores/useThemeStore";
+import { useRecentConnectionsStore } from "../stores/useRecentConnectionsStore";
 
 type Props = {
   onOpenLocalTerminal: (path?: string) => void;
@@ -24,6 +14,37 @@ type Props = {
   workspaceRoot?: string;
 };
 
+function greetingFor(hour: number): string {
+  if (hour < 5) return "good evening";
+  if (hour < 12) return "good morning";
+  if (hour < 18) return "good afternoon";
+  return "good evening";
+}
+
+function formatDateLine(now: Date): string {
+  const weekday = now.toLocaleDateString(undefined, { weekday: "long" });
+  const month = now.toLocaleDateString(undefined, { month: "long" });
+  const day = now.getDate();
+  const hh = String(now.getHours()).padStart(2, "0");
+  const mm = String(now.getMinutes()).padStart(2, "0");
+  return `${weekday.toLowerCase()}, ${month.toLowerCase()} ${day} · ${hh}:${mm}`;
+}
+
+function relativeTime(ts: number): string {
+  const delta = Math.max(0, Date.now() - ts);
+  const m = Math.floor(delta / 60000);
+  if (m < 1) return "just now";
+  if (m < 60) return `${m}m ago`;
+  const h = Math.floor(m / 60);
+  if (h < 24) return `${h}h ago`;
+  const d = Math.floor(h / 24);
+  if (d < 2) return "yesterday";
+  if (d < 7) return `${d}d ago`;
+  const w = Math.floor(d / 7);
+  if (w < 5) return `${w}w ago`;
+  return new Date(ts).toLocaleDateString(undefined, { month: "short", day: "numeric" });
+}
+
 export default function WelcomeView({
   onOpenLocalTerminal,
   onNewSsh,
@@ -34,190 +55,110 @@ export default function WelcomeView({
   workspaceRoot,
 }: Props) {
   const { t } = useI18n();
-  const { resolvedDark, setMode } = useThemeStore();
   const { connections } = useConnectionStore();
+  const recents = useRecentConnectionsStore((s) => s.recents);
+  const [now, setNow] = useState(() => new Date());
+
+  useEffect(() => {
+    const id = window.setInterval(() => setNow(new Date()), 30_000);
+    return () => window.clearInterval(id);
+  }, []);
 
   const isMac = navigator.platform.includes("Mac");
-  const mod = isMac ? "\u2318" : "Ctrl+";
+  const mod = isMac ? "⌘" : "Ctrl+";
+  const greeting = greetingFor(now.getHours());
+  const dateLine = formatDateLine(now);
+  const user = "you";
+  const subtitle = `pier-x · ${version ? `${version} · ` : ""}${dateLine}`;
 
-  // Group connections by auth type for visual separation
-  const agentConns = connections.filter((c) => c.authKind === "agent");
-  const keyConns = connections.filter((c) => c.authKind === "key");
-  const pwConns = connections.filter((c) => c.authKind === "password");
+  const recentList = connections
+    .map((c) => ({ conn: c, ts: recents[c.index] ?? 0 }))
+    .filter((r) => r.ts > 0)
+    .sort((a, b) => b.ts - a.ts)
+    .slice(0, 5);
+
+  const shellLabel = workspaceRoot
+    ? `zsh · ${workspaceRoot.split(/[/\\]/).pop() || "~"}`
+    : "zsh · ~/";
 
   return (
     <div className="welcome">
-      <div className="welcome__container">
-        {/* ── Hero (Remix editorial: serif italic) ───────── */}
-        <div className="welcome__hero">
-          <div className="welcome__hero-left">
-            <div>
-              <h1 className="welcome__title">
-                Welcome to <em>Pier-X</em>
-              </h1>
-              <p className="welcome__subtitle">{t("Cross-platform terminal workspace")}</p>
+      <div className="welcome-inner">
+        <h1>
+          {greeting}, <span>{user}</span>.
+        </h1>
+        <p className="wsub">{subtitle}</p>
+
+        <div className="welcome-grid">
+          <button className="w-action" onClick={() => onOpenLocalTerminal()} type="button">
+            <div className="wic"><SquareTerminal size={17} /></div>
+            <div className="wbody">
+              <div className="wt">{t("New local terminal")}</div>
+              <div className="wm">{shellLabel}</div>
             </div>
-          </div>
-          <div className="welcome__pills">
-            {version && <span className="welcome__pill">v{version}</span>}
-            <button className="welcome__pill welcome__pill--btn" onClick={() => setMode(resolvedDark ? "light" : "dark")} type="button">
-              {resolvedDark ? <Moon size={11} /> : <Sun size={11} />}
-              {resolvedDark ? t("Dark") : t("Light")}
-            </button>
-          </div>
+            <div className="wk">{mod}T</div>
+          </button>
+          <button className="w-action" onClick={onNewSsh} type="button">
+            <div className="wic"><Server size={17} /></div>
+            <div className="wbody">
+              <div className="wt">{t("New SSH connection")}</div>
+              <div className="wm">{t("saved or ad-hoc")}</div>
+            </div>
+            <div className="wk">{mod}N</div>
+          </button>
+          <button className="w-action" onClick={onCommandPalette} type="button">
+            <div className="wic"><Command size={17} /></div>
+            <div className="wbody">
+              <div className="wt">{t("Command palette")}</div>
+              <div className="wm">{t("search every action")}</div>
+            </div>
+            <div className="wk">{mod}K</div>
+          </button>
+          <button className="w-action" onClick={onSettings} type="button">
+            <div className="wic"><Settings size={17} /></div>
+            <div className="wbody">
+              <div className="wt">{t("Settings")}</div>
+              <div className="wm">{t("theme, fonts, shortcuts")}</div>
+            </div>
+            <div className="wk">{mod},</div>
+          </button>
         </div>
 
-        {/* ── Quick Actions ─────────────────────────────── */}
-        <section className="welcome__section">
-          <h3 className="welcome__section-title">{t("Start")}</h3>
-          <div className="welcome__action-grid">
-            <button className="welcome__action-card" onClick={() => onOpenLocalTerminal()} type="button">
-              <SquareTerminal size={20} />
-              <div>
-                <strong>{t("Open local terminal")}</strong>
-                <span>{workspaceRoot ? workspaceRoot.split("/").pop() : t("Default shell")}</span>
-              </div>
-              <kbd>{mod}T</kbd>
-            </button>
-            <button className="welcome__action-card" onClick={onNewSsh} type="button">
-              <PlugZap size={20} />
-              <div>
-                <strong>{t("New SSH connection")}</strong>
-                <span>{t("Connect to remote server")}</span>
-              </div>
-              <kbd>{mod}N</kbd>
-            </button>
-            {workspaceRoot && (
-              <button className="welcome__action-card" onClick={() => onOpenLocalTerminal(workspaceRoot)} type="button">
-                <FolderTree size={20} />
-                <div>
-                  <strong>{t("Open workspace")}</strong>
-                  <span>{workspaceRoot}</span>
-                </div>
+        {recentList.length > 0 ? (
+          <div className="welcome-recent">
+            <h4>{t("Recent connections")}</h4>
+            {recentList.map(({ conn, ts }) => (
+              <button
+                key={conn.index}
+                className="recent-row"
+                onClick={() => onConnectSaved(conn.index)}
+                type="button"
+              >
+                <Server size={13} />
+                <span className="rname">{conn.name || `${conn.user}@${conn.host}`}</span>
+                <span className="raddr">{conn.user}@{conn.host}{conn.port !== 22 ? `:${conn.port}` : ""}</span>
+                <span className="rdate">{relativeTime(ts)}</span>
               </button>
-            )}
-            <button className="welcome__action-card" onClick={onCommandPalette} type="button">
-              <Command size={20} />
-              <div>
-                <strong>{t("Command Palette")}</strong>
-                <span>{t("Search actions and commands")}</span>
-              </div>
-              <kbd>{mod}K</kbd>
-            </button>
+            ))}
           </div>
-        </section>
-
-        {/* ── Saved Connections ──────────────────────────── */}
-        {connections.length > 0 && (
-          <section className="welcome__section">
-            <h3 className="welcome__section-title">
-              {t("Servers")}
-              <span className="welcome__count">{connections.length}</span>
-            </h3>
-
-            {agentConns.length > 0 && (
-              <div className="welcome__conn-group">
-                <span className="welcome__conn-group-label">{t("SSH Agent")}</span>
-                <div className="welcome__conn-grid">
-                  {agentConns.map((c) => (
-                    <button key={c.index} className="welcome__conn-card" onClick={() => onConnectSaved(c.index)} type="button">
-                      <div className="welcome__conn-indicator welcome__conn-indicator--agent" />
-                      <div className="welcome__conn-body">
-                        <strong>{c.name}</strong>
-                        <span>{c.user}@{c.host}:{c.port}</span>
-                      </div>
-                    </button>
-                  ))}
-                </div>
-              </div>
-            )}
-
-            {keyConns.length > 0 && (
-              <div className="welcome__conn-group">
-                <span className="welcome__conn-group-label">{t("Key File")}</span>
-                <div className="welcome__conn-grid">
-                  {keyConns.map((c) => (
-                    <button key={c.index} className="welcome__conn-card" onClick={() => onConnectSaved(c.index)} type="button">
-                      <div className="welcome__conn-indicator welcome__conn-indicator--key" />
-                      <div className="welcome__conn-body">
-                        <strong>{c.name}</strong>
-                        <span>{c.user}@{c.host}:{c.port}</span>
-                      </div>
-                    </button>
-                  ))}
-                </div>
-              </div>
-            )}
-
-            {pwConns.length > 0 && (
-              <div className="welcome__conn-group">
-                <span className="welcome__conn-group-label">{t("Password")}</span>
-                <div className="welcome__conn-grid">
-                  {pwConns.map((c) => (
-                    <button key={c.index} className="welcome__conn-card" onClick={() => onConnectSaved(c.index)} type="button">
-                      <div className="welcome__conn-indicator welcome__conn-indicator--password" />
-                      <div className="welcome__conn-body">
-                        <strong>{c.name}</strong>
-                        <span>{c.user}@{c.host}:{c.port}</span>
-                      </div>
-                    </button>
-                  ))}
-                </div>
-              </div>
-            )}
-
-            <button className="welcome__add-conn" onClick={onNewSsh} type="button">
-              <Plus size={14} />
-              <span>{t("New SSH connection")}</span>
-            </button>
-          </section>
-        )}
-
-        {/* ── Empty state when no connections ───────────── */}
-        {connections.length === 0 && (
-          <section className="welcome__section">
-            <div className="welcome__empty-servers">
-              <PlugZap size={28} />
-              <h3>{t("No saved servers")}</h3>
-              <p>{t("Add your first SSH connection to get started with remote tools.")}</p>
-              <button className="welcome__btn welcome__btn--primary" onClick={onNewSsh} type="button">
-                <Plus size={14} />
-                {t("New SSH connection")}
+        ) : connections.length > 0 ? (
+          <div className="welcome-recent">
+            <h4>{t("Saved servers")}</h4>
+            {connections.slice(0, 5).map((conn) => (
+              <button
+                key={conn.index}
+                className="recent-row"
+                onClick={() => onConnectSaved(conn.index)}
+                type="button"
+              >
+                <Server size={13} />
+                <span className="rname">{conn.name || `${conn.user}@${conn.host}`}</span>
+                <span className="raddr">{conn.user}@{conn.host}{conn.port !== 22 ? `:${conn.port}` : ""}</span>
+                <span className="rdate">—</span>
               </button>
-            </div>
-          </section>
-        )}
-
-        {/* ── Shortcuts ─────────────────────────────────── */}
-        <section className="welcome__section">
-          <h3 className="welcome__section-title">
-            <Keyboard size={14} />
-            {t("Keyboard Shortcuts")}
-          </h3>
-          <div className="welcome__shortcuts">
-            <div className="welcome__shortcut"><kbd>{mod}T</kbd><span>{t("New terminal")}</span></div>
-            <div className="welcome__shortcut"><kbd>{mod}N</kbd><span>{t("New SSH")}</span></div>
-            <div className="welcome__shortcut"><kbd>{mod}W</kbd><span>{t("Close tab")}</span></div>
-            <div className="welcome__shortcut"><kbd>{mod}K</kbd><span>{t("Command palette")}</span></div>
-            <div className="welcome__shortcut"><kbd>{mod},</kbd><span>{t("Settings")}</span></div>
-            <div className="welcome__shortcut"><kbd>{mod}{isMac ? "\u21e7" : "Shift+"}G</kbd><span>{t("Git panel")}</span></div>
+            ))}
           </div>
-        </section>
-
-        {/* ── Footer ────────────────────────────────────── */}
-        <footer className="welcome__footer">
-          <button className="welcome__footer-link" onClick={onSettings} type="button">
-            <Settings size={12} />
-            {t("Settings")}
-          </button>
-          <span className="welcome__footer-sep">·</span>
-          <span className="welcome__footer-text">{version ? `v${version}` : ""}</span>
-          <span className="welcome__footer-sep">·</span>
-          <span className="welcome__footer-text">
-            <GitBranch size={11} />
-            {workspaceRoot?.split("/").pop() ?? "—"}
-          </span>
-        </footer>
+        ) : null}
       </div>
     </div>
   );

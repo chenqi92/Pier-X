@@ -1,4 +1,4 @@
-import { X } from "lucide-react";
+import { Key, Server, X } from "lucide-react";
 import { useEffect, useMemo, useState } from "react";
 import IconButton from "../components/IconButton";
 import { useI18n } from "../i18n/useI18n";
@@ -178,12 +178,13 @@ export default function NewConnectionDialog({ open, onClose, onConnect, onConnec
   }
 
   return (
-    <div className="palette-backdrop" onClick={onClose}>
-      <div className="dialog" onClick={(e) => e.stopPropagation()}>
+    <div className="cmdp-overlay" onClick={onClose}>
+      <div className="dlg dlg--newconn" onClick={(e) => e.stopPropagation()}>
         <div className="dialog__header">
           <div style={{ display: "flex", alignItems: "flex-start", gap: "var(--sp-2)" }}>
             <div style={{ flex: 1 }}>
               <h2 className="dialog__title">
+                <Server size={13} style={{ marginRight: "var(--sp-1)", verticalAlign: "-2px", color: "var(--accent)" }} />
                 {t(isEditing ? "Edit SSH connection" : "New SSH connection")}
               </h2>
               <span className="dialog__subtitle">
@@ -215,14 +216,38 @@ export default function NewConnectionDialog({ open, onClose, onConnect, onConnec
               <span className="field-label">{t("User")}</span>
               <input className="field-input" onChange={(e) => setUser(e.currentTarget.value)} placeholder="root" value={user} />
             </label>
-            <label className="field-stack">
-              <span className="field-label">{t("Auth mode")}</span>
-              <select className="field-input field-select" onChange={(e) => setAuthMode(e.currentTarget.value as "password" | "agent" | "key")} value={authMode}>
-                <option value="password">{t("Password")}</option>
-                <option value="agent">{t("SSH Agent")}</option>
-                <option value="key">{t("Key File")}</option>
-              </select>
-            </label>
+            <div className="field-stack">
+              <span className="field-label">{t("Authentication")}</span>
+              <div className="segmented" role="radiogroup" aria-label={t("Authentication")}>
+                <button
+                  type="button"
+                  role="radio"
+                  aria-checked={authMode === "password"}
+                  className={authMode === "password" ? "is-active" : undefined}
+                  onClick={() => setAuthMode("password")}
+                >
+                  {t("Password")}
+                </button>
+                <button
+                  type="button"
+                  role="radio"
+                  aria-checked={authMode === "key"}
+                  className={authMode === "key" ? "is-active" : undefined}
+                  onClick={() => setAuthMode("key")}
+                >
+                  {t("Key file")}
+                </button>
+                <button
+                  type="button"
+                  role="radio"
+                  aria-checked={authMode === "agent"}
+                  className={authMode === "agent" ? "is-active" : undefined}
+                  onClick={() => setAuthMode("agent")}
+                >
+                  {t("Agent")}
+                </button>
+              </div>
+            </div>
             {authMode === "password" && (
               <label className="field-stack">
                 <span className="field-label">{t("Password")}</span>
@@ -230,10 +255,24 @@ export default function NewConnectionDialog({ open, onClose, onConnect, onConnec
               </label>
             )}
             {authMode === "key" && (
-              <label className="field-stack">
-                <span className="field-label">{t("Key File")}</span>
-                <input className="field-input" onChange={(e) => setKeyPath(e.currentTarget.value)} placeholder="~/.ssh/id_ed25519" value={keyPath} />
-              </label>
+              <>
+                <label className="field-stack">
+                  <span className="field-label">{t("Private key")}</span>
+                  <input className="field-input mono" onChange={(e) => setKeyPath(e.currentTarget.value)} placeholder="~/.ssh/id_ed25519" value={keyPath} />
+                </label>
+                <div className="inline-hint">
+                  <Key size={11} />
+                  <span>
+                    {t("Passphrase will be stored in the system keychain")}
+                    {connectionName ? (
+                      <>
+                        {" "}(<span className="mono">{`pier-x.ssh.${connectionName}`}</span>)
+                      </>
+                    ) : null}
+                    .
+                  </span>
+                </div>
+              </>
             )}
             {authMode === "agent" && (
               <div className="inline-note">{t("Agent auth uses the system SSH agent.")}</div>

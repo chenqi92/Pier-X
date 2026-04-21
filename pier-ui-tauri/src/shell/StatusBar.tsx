@@ -3,6 +3,7 @@ import { CircleDot, GitBranch, Terminal } from "lucide-react";
 import type { TabState } from "../lib/types";
 import { useI18n } from "../i18n/useI18n";
 import { useSettingsStore } from "../stores/useSettingsStore";
+import { useStatusStore } from "../stores/useStatusStore";
 
 type Props = {
   version?: string;
@@ -14,7 +15,9 @@ function backendLabel(tab: TabState | null | undefined): string {
   if (!tab) return "local · zsh";
   switch (tab.backend) {
     case "ssh":
-      return `ssh · ${tab.sshHost ?? ""}`;
+      return "ssh · russh";
+    case "sftp":
+      return "sftp · russh";
     case "markdown":
       return "markdown preview";
     default:
@@ -31,6 +34,11 @@ function rightToolLabel(tab: TabState | null | undefined): string {
 export default function StatusBar({ version, coreInfo, activeTab }: Props) {
   const { t } = useI18n();
   const showPerf = useSettingsStore((s) => s.performanceOverlay);
+  const branch = useStatusStore((s) => s.branch);
+  const ahead = useStatusStore((s) => s.ahead);
+  const behind = useStatusStore((s) => s.behind);
+  const terminalCols = useStatusStore((s) => s.terminalCols);
+  const terminalRows = useStatusStore((s) => s.terminalRows);
   const [fps, setFps] = useState(0);
 
   const frameCountRef = useRef(0);
@@ -53,34 +61,45 @@ export default function StatusBar({ version, coreInfo, activeTab }: Props) {
     return () => cancelAnimationFrame(rafId);
   }, [showPerf]);
 
-  const perfTone = fps >= 50 ? "is-pos" : fps >= 30 ? "is-accent" : "is-warn";
+  const perfTone = fps >= 50 ? "pos" : fps >= 30 ? "accent" : "warn";
+  const branchLabel = branch ?? t("no repo");
+  const sizeLabel =
+    terminalCols != null && terminalRows != null
+      ? `${terminalCols} × ${terminalRows}`
+      : null;
 
   return (
     <footer className="statusbar">
-      <span className="statusbar__segment">
+      <span className="sb-item">
         <GitBranch size={10} />
-        <span>{t("Ready")}</span>
+        <span>{branchLabel}</span>
       </span>
-      <span className="statusbar__segment">
+      <span className="sb-item text-muted">
+        {`↑${ahead} ↓${behind}`}
+      </span>
+      <span className="sb-item">
         <Terminal size={10} />
         <span>{backendLabel(activeTab)}</span>
       </span>
-      <span className="statusbar__spacer" />
+      {sizeLabel ? (
+        <span className="sb-item text-muted">{sizeLabel}</span>
+      ) : null}
+      <span className="sb-spacer" />
       {showPerf && (
-        <span className={`statusbar__segment ${perfTone}`}>
+        <span className={`sb-item ${perfTone}`}>
           {t("{fps} FPS", { fps })}
         </span>
       )}
-      <span className="statusbar__segment">
+      <span className="sb-item">
         <span>PANEL · {rightToolLabel(activeTab)}</span>
       </span>
-      <span className="statusbar__segment">UTF-8</span>
-      <span className="statusbar__segment is-pos">
+      <span className="sb-item">UTF-8</span>
+      <span className="sb-item pos">
         <CircleDot size={10} />
         READY
       </span>
       {version ? (
-        <span className="statusbar__segment">
+        <span className="sb-item text-muted">
           Pier-X v{version}
           {coreInfo ? ` · ${coreInfo}` : ""}
         </span>

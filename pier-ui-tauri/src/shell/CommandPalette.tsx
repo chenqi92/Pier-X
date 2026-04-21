@@ -1,12 +1,15 @@
 import { useEffect, useRef, useState } from "react";
 import { Search } from "lucide-react";
-import KeyCap from "../components/KeyCap";
+import type { ComponentType, SVGProps } from "react";
 import { useI18n } from "../i18n/useI18n";
+
+type LucideIcon = ComponentType<SVGProps<SVGSVGElement> & { size?: number | string }>;
 
 export type PaletteCommand = {
   title: string;
   shortcut?: string;
   section?: string;
+  icon?: LucideIcon;
   action: () => void;
 };
 
@@ -59,7 +62,6 @@ export default function CommandPalette({ open, onClose, commands }: Props) {
 
   if (!open) return null;
 
-  // Group filtered commands by section while preserving order
   const grouped: { section: string | undefined; items: PaletteCommand[] }[] = [];
   for (const cmd of filtered) {
     const last = grouped[grouped.length - 1];
@@ -73,58 +75,60 @@ export default function CommandPalette({ open, onClose, commands }: Props) {
   let runningIndex = 0;
 
   return (
-    <div className="palette-backdrop" onClick={onClose}>
+    <div className="cmdp-overlay" onClick={onClose}>
       <div
-        className="palette"
+        className="cmdp"
         onClick={(e) => e.stopPropagation()}
         onKeyDown={handleKeyDown}
       >
-        <div className="palette__input-row">
-          <Search size={16} />
+        <div className="cmdp-input">
+          <Search size={15} />
           <input
             ref={inputRef}
-            className="palette__input"
             onChange={(e) => setQuery(e.currentTarget.value)}
-            placeholder={t("Type a command…")}
+            placeholder={t("Type a command or search…")}
             value={query}
           />
-          <KeyCap>ESC</KeyCap>
+          <kbd>esc</kbd>
         </div>
-        <div className="palette__list">
+        <div className="cmdp-list">
           {filtered.length > 0 ? (
             grouped.map((group, gi) => (
               <div key={`g-${gi}`}>
                 {group.section ? (
-                  <div className="palette__section">{group.section}</div>
+                  <div className="cmdp-section">{group.section}</div>
                 ) : null}
                 {group.items.map((cmd) => {
                   const idx = runningIndex++;
+                  const Icon = cmd.icon;
                   return (
-                    <button
+                    <div
                       key={`${cmd.title}-${idx}`}
                       className={
                         idx === selectedIndex
-                          ? "palette__item palette__item--selected"
-                          : "palette__item"
+                          ? "cmdp-item active"
+                          : "cmdp-item"
                       }
                       onClick={() => {
                         cmd.action();
                         onClose();
                       }}
                       onMouseEnter={() => setSelectedIndex(idx)}
-                      type="button"
+                      role="button"
+                      tabIndex={0}
                     >
-                      <span>{cmd.title}</span>
-                      {cmd.shortcut && (
-                        <KeyCap className="palette__shortcut">{cmd.shortcut}</KeyCap>
-                      )}
-                    </button>
+                      <span className="ci">{Icon ? <Icon size={14} /> : null}</span>
+                      <span className="ct">{cmd.title}</span>
+                      {cmd.shortcut && <span className="ck">{cmd.shortcut}</span>}
+                    </div>
                   );
                 })}
               </div>
             ))
           ) : (
-            <div className="palette__empty">{t("No matching commands")}</div>
+            <div className="cmdp-item" style={{ color: "var(--muted)", cursor: "default" }}>
+              {t("No matching commands")}
+            </div>
           )}
         </div>
       </div>

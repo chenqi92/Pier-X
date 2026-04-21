@@ -224,7 +224,7 @@ export default function MySqlPanel({ tab }: Props) {
       <PanelHeader
         icon={Database}
         title="MYSQL"
-        meta={hasSsh ? `tunnel ${tab.sshHost}:${port}` : `${host}:${port}`}
+        meta={`${dbName.trim() || "mysql"} · ${hasSsh ? `tunnel :${port}` : `${host}:${port}`}`}
       />
       <DbConnRow
         icon={Database}

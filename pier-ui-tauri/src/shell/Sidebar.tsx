@@ -1,28 +1,39 @@
 import {
+  Activity,
   ArrowLeft,
   ChevronRight,
+  Container,
+  Database,
   Download,
   FileText,
   Folder,
   FolderOpen,
   FolderTree,
+  HardDrive,
   Home,
+  Key,
+  Lock,
   Monitor,
   MoreHorizontal,
   Pencil,
   Plus,
   RefreshCw,
+  Scroll,
   Search,
   Server,
-  SquareTerminal,
+  Shield,
   Terminal,
   Trash2,
+  Zap,
 } from "lucide-react";
-import { useEffect, useRef, useState } from "react";
-import type { CoreInfo, FileEntry } from "../lib/types";
+import type { ComponentType, SVGProps } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
+import type { CoreInfo, FileEntry, SavedSshConnection, RightTool } from "../lib/types";
 import * as cmd from "../lib/commands";
 import { useI18n } from "../i18n/useI18n";
 import { useConnectionStore } from "../stores/useConnectionStore";
+import { useTabStore } from "../stores/useTabStore";
+import { useDetectedServicesStore } from "../stores/useDetectedServicesStore";
 
 type Props = {
   onOpenLocalTerminal: (path?: string) => void;
@@ -34,6 +45,56 @@ type Props = {
   selectedFilePath?: string;
   workspaceRoot?: string;
 };
+
+type LucideIcon = ComponentType<SVGProps<SVGSVGElement> & { size?: number | string }>;
+
+type ServiceChip = {
+  tool: RightTool;
+  label: string;
+  icon: LucideIcon;
+  tintVar: string;
+};
+
+const SERVICE_META: Record<string, ServiceChip> = {
+  docker: { tool: "docker", label: "docker", icon: Container, tintVar: "var(--svc-docker)" },
+  mysql: { tool: "mysql", label: "mysql", icon: Database, tintVar: "var(--svc-mysql)" },
+  postgres: { tool: "postgres", label: "postgres", icon: Database, tintVar: "var(--svc-postgres)" },
+  redis: { tool: "redis", label: "redis", icon: Zap, tintVar: "var(--svc-redis)" },
+  monitor: { tool: "monitor", label: "monitor", icon: Activity, tintVar: "var(--svc-monitor)" },
+  log: { tool: "log", label: "log", icon: Scroll, tintVar: "var(--svc-log)" },
+  sftp: { tool: "sftp", label: "sftp", icon: FolderTree, tintVar: "var(--svc-sftp)" },
+  sqlite: { tool: "sqlite", label: "sqlite", icon: HardDrive, tintVar: "var(--svc-sqlite)" },
+};
+
+function splitGroup(name: string): { group: string; display: string } {
+  const slash = name.indexOf("/");
+  if (slash > 0 && slash < name.length - 1) {
+    return { group: name.slice(0, slash).trim() || "default", display: name.slice(slash + 1).trim() };
+  }
+  return { group: "default", display: name };
+}
+
+type ConnectionGroup = {
+  name: string;
+  servers: Array<SavedSshConnection & { display: string }>;
+};
+
+function groupConnections(conns: SavedSshConnection[], query: string): ConnectionGroup[] {
+  const q = query.trim().toLowerCase();
+  const byGroup = new Map<string, ConnectionGroup>();
+  for (const c of conns) {
+    const { group, display } = splitGroup(c.name);
+    if (q) {
+      const hay = (c.name + c.host + c.user).toLowerCase();
+      if (!hay.includes(q)) continue;
+    }
+    const entry = byGroup.get(group);
+    const augmented = { ...c, display };
+    if (entry) entry.servers.push(augmented);
+    else byGroup.set(group, { name: group, servers: [augmented] });
+  }
+  return Array.from(byGroup.values()).sort((a, b) => a.name.localeCompare(b.name));
+}
 
 function pathSegments(path: string, home: string): { name: string; path: string }[] {
   if (!path) return [];
@@ -73,11 +134,9 @@ export default function Sidebar({ onOpenLocalTerminal, onConnectSaved, onNewConn
   const [serverSearch, setServerSearch] = useState("");
   const placesRef = useRef<HTMLDivElement>(null);
 
-  // Init from core_info — home dir is the correct default browse path
   useEffect(() => {
     cmd.coreInfo().then((info: CoreInfo) => {
       setHomeDir(info.homeDir);
-      // Default to home directory, NOT workspace root
       if (!currentPath) setCurrentPath(info.homeDir);
     }).catch(() => {});
   }, []);
@@ -96,37 +155,62 @@ export default function Sidebar({ onOpenLocalTerminal, onConnectSaved, onNewConn
   }, [placesOpen]);
 
   const filteredEntries = entries.filter((e) => !searchText.trim() || e.name.toLowerCase().includes(searchText.toLowerCase()));
-  const filteredConnections = connections.filter((c) => {
-    if (!serverSearch.trim()) return true;
-    const q = serverSearch.toLowerCase();
-    return c.name.toLowerCase().includes(q) || c.host.toLowerCase().includes(q) || c.user.toLowerCase().includes(q);
-  });
-
   const segments = pathSegments(currentPath, homeDir);
-  const folderName = segments.length > 0 ? segments[segments.length - 1].name : t("Files");
-  const showModified = true;
-  const showSize = true;
 
   return (
     <aside className="sidebar">
-      <div className="sidebar__tabs">
-        <button className={section === 0 ? "sidebar__tab sidebar__tab--active" : "sidebar__tab"} onClick={() => setSection(0)} type="button">
+      <div className="sidebar-tabs">
+        <button
+          className={section === 0 ? "sidebar-tab active" : "sidebar-tab"}
+          onClick={() => setSection(0)}
+          type="button"
+        >
           <FolderTree size={12} />{t("Files")}
         </button>
-        <button className={section === 1 ? "sidebar__tab sidebar__tab--active" : "sidebar__tab"} onClick={() => setSection(1)} type="button">
+        <button
+          className={section === 1 ? "sidebar-tab active" : "sidebar-tab"}
+          onClick={() => setSection(1)}
+          type="button"
+        >
           <Server size={12} />{t("Servers")}
         </button>
       </div>
 
       {section === 0 ? (
-        <div className="sidebar__pane">
-          {/* Header */}
-          <div className="sidebar__file-header">
-            <button className="sidebar__icon-btn" disabled={!currentPath || currentPath === "/"} onClick={() => setCurrentPath(goUp(currentPath))} title={t("Up")} type="button"><ArrowLeft size={13} /></button>
-            <Folder size={13} className="sidebar__folder-icon" />
-            <span className="sidebar__folder-name" title={currentPath}>{folderName}</span>
+        <>
+          <div className="sidebar-toolbar">
+            <button
+              className="mini-btn"
+              disabled={!currentPath || currentPath === "/"}
+              onClick={() => setCurrentPath(goUp(currentPath))}
+              title={t("Up")}
+              type="button"
+            >
+              <ArrowLeft />
+            </button>
+            <div className="crumb">
+              {segments.map((seg, i) => (
+                <span key={seg.path} className="crumb-item">
+                  {i > 0 && <span className="sep">/</span>}
+                  <button
+                    className={"seg" + (i === segments.length - 1 ? " last" : "")}
+                    onClick={() => setCurrentPath(seg.path)}
+                    type="button"
+                  >
+                    {seg.name}
+                  </button>
+                </span>
+              ))}
+            </div>
             <div className="sidebar__places-wrap" ref={placesRef}>
-              <button className="sidebar__icon-btn" onClick={() => setPlacesOpen((p) => !p)} title={t("Places")} type="button"><MoreHorizontal size={13} /></button>
+              <button
+                className="mini-btn"
+                onClick={() => setPlacesOpen((p) => !p)}
+                title={t("Places")}
+                type="button"
+              >
+                <MoreHorizontal />
+              </button>
               {placesOpen && (
                 <div className="sidebar__places-menu">
                   <button className="sidebar__places-item" onClick={() => { setCurrentPath(homeDir); setPlacesOpen(false); }} type="button"><Home size={12} />{t("Home")}</button>
@@ -141,111 +225,319 @@ export default function Sidebar({ onOpenLocalTerminal, onConnectSaved, onNewConn
                 </div>
               )}
             </div>
-            <button className="sidebar__icon-btn" onClick={() => { cmd.listDirectory(currentPath).then(setEntries).catch(() => {}); }} title={t("Refresh")} type="button"><RefreshCw size={12} /></button>
+            <button
+              className="mini-btn"
+              onClick={() => { cmd.listDirectory(currentPath).then(setEntries).catch(() => {}); }}
+              title={t("Refresh")}
+              type="button"
+            >
+              <RefreshCw />
+            </button>
           </div>
 
-          {/* Breadcrumb */}
-          <div className="sidebar__breadcrumb">
-            {segments.map((seg, i) => (
-              <span key={seg.path} className="sidebar__breadcrumb-item">
-                {i > 0 && <ChevronRight size={9} className="sidebar__breadcrumb-sep" />}
-                <button className="sidebar__crumb" onClick={() => setCurrentPath(seg.path)} type="button">{seg.name}</button>
-              </span>
-            ))}
+          <div className="sidebar-search">
+            <Search />
+            <input
+              onChange={(e) => setSearchText(e.currentTarget.value)}
+              placeholder={t("Filter files…")}
+              value={searchText}
+            />
           </div>
 
-          {/* Search */}
-          <div className="sidebar__search">
-            <Search size={11} />
-            <input className="sidebar__search-input" onChange={(e) => setSearchText(e.currentTarget.value)} placeholder={t("Search files…")} value={searchText} />
-          </div>
-
-          {/* Column headers — responsive */}
-          <div className="sidebar__col-headers">
-            <span className="sidebar__col-name">{t("Name")}</span>
-            {showModified && <span className="sidebar__col-modified">{t("Modified")}</span>}
-            {showSize && <span className="sidebar__col-size">{t("Size")}</span>}
-          </div>
-
-          {/* File list */}
-          <div className="sidebar__list">
+          <div className="sidebar-list">
+            <div className="sidebar-header-row">
+              <span className="col-name">{t("NAME")}</span>
+              <span className="col-mod">{t("MOD")}</span>
+              <span className="col-size">{t("SIZE")}</span>
+            </div>
             {filteredEntries.map((entry) => {
               const isSelected = entry.kind === "file" && selectedFilePath === entry.path;
+              const isDir = entry.kind === "directory";
+              const isMd = entry.name.toLowerCase().endsWith(".md");
+              const cls =
+                "file-row" +
+                (isDir ? " is-dir" : "") +
+                (isMd ? " is-md" : "") +
+                (isSelected ? " selected" : "");
+              const icon = isDir
+                ? <Folder size={12} />
+                : isMd
+                  ? <FileText size={12} />
+                  : <FileText size={12} />;
               return (
-                <button
+                <div
                   key={entry.path}
-                  className={isSelected ? "sidebar__file-row sidebar__file-row--selected" : "sidebar__file-row"}
+                  className={cls}
                   onClick={() => {
-                    if (entry.kind === "directory") setCurrentPath(entry.path);
+                    if (isDir) setCurrentPath(entry.path);
                     else onFileSelect?.(entry);
                   }}
-                  onDoubleClick={() => { if (entry.kind === "directory") onOpenLocalTerminal(entry.path); }}
-                  type="button"
+                  onDoubleClick={() => { if (isDir) onOpenLocalTerminal(entry.path); }}
+                  role="button"
+                  tabIndex={0}
                 >
-                  {entry.kind === "directory"
-                    ? <Folder size={13} className="sidebar__entry-icon sidebar__entry-icon--dir" />
-                    : <FileText size={13} className="sidebar__entry-icon" />
-                  }
-                  <span className="sidebar__file-name">{entry.name}</span>
-                  {showModified && <span className="sidebar__file-modified">{entry.modified}</span>}
-                  {showSize && <span className="sidebar__file-size">{entry.sizeLabel}</span>}
-                </button>
+                  <span className="fi">{icon}</span>
+                  <span className="fname">{entry.name}</span>
+                  <span className="fmod">{entry.modified}</span>
+                  <span className="fsize">{entry.sizeLabel}</span>
+                </div>
               );
             })}
             {filteredEntries.length === 0 && (
-              <div className="empty-note" style={{ padding: 12 }}>{searchText ? t("No matching files") : t("Empty directory")}</div>
-            )}
-          </div>
-        </div>
-      ) : (
-        <div className="sidebar__pane">
-          <div className="sidebar__pane-header">
-            <span className="sidebar__pane-label">{connections.length} {t("Connections")}</span>
-            <button className="sidebar__icon-btn" onClick={onNewConnection} title={t("New SSH connection")} type="button"><Plus size={13} /></button>
-          </div>
-          <div className="sidebar__search">
-            <Search size={11} />
-            <input className="sidebar__search-input" onChange={(e) => setServerSearch(e.currentTarget.value)} placeholder={t("Search servers…")} value={serverSearch} />
-          </div>
-          <div className="sidebar__list">
-            {filteredConnections.map((conn) => (
-              <div key={`${conn.index}-${conn.name}`} className="sidebar__server-row">
-                <button className="sidebar__server-main" onClick={() => onConnectSaved(conn.index)} type="button">
-                  <SquareTerminal size={13} />
-                  <div className="sidebar__server-info">
-                    <strong>{conn.name}</strong>
-                    <span>{conn.user}@{conn.host}:{conn.port}</span>
-                  </div>
-                  <span className="sidebar__auth-pill">{conn.authKind}</span>
-                </button>
-                <div className="sidebar__server-actions">
-                  <button
-                    className="sidebar__icon-btn"
-                    onClick={() => onEditConnection(conn.index)}
-                    title={t("Edit")}
-                    type="button"
-                  >
-                    <Pencil size={12} />
-                  </button>
-                  <button
-                    className="sidebar__icon-btn"
-                    onClick={() => {
-                      void remove(conn.index).catch(() => {});
-                    }}
-                    title={t("Delete")}
-                    type="button"
-                  >
-                    <Trash2 size={12} />
-                  </button>
-                </div>
+              <div className="empty-note" style={{ padding: 12 }}>
+                {searchText ? t("No matching files") : t("Empty directory")}
               </div>
-            ))}
-            {filteredConnections.length === 0 && (
-              <div className="empty-note" style={{ padding: 12 }}>{connections.length === 0 ? t("No saved connections") : t("No matching connections")}</div>
             )}
           </div>
-        </div>
+        </>
+      ) : (
+        <ServersPane
+          connections={connections}
+          serverSearch={serverSearch}
+          onSearchChange={setServerSearch}
+          onConnect={onConnectSaved}
+          onEdit={onEditConnection}
+          onRemove={(index) => { void remove(index).catch(() => {}); }}
+          onNew={onNewConnection}
+          onRefresh={() => { void refreshConnections(); }}
+        />
       )}
     </aside>
+  );
+}
+
+function ServersPane({
+  connections,
+  serverSearch,
+  onSearchChange,
+  onConnect,
+  onEdit,
+  onRemove,
+  onNew,
+  onRefresh,
+}: {
+  connections: SavedSshConnection[];
+  serverSearch: string;
+  onSearchChange: (s: string) => void;
+  onConnect: (index: number) => void;
+  onEdit: (index: number) => void;
+  onRemove: (index: number) => void;
+  onNew: () => void;
+  onRefresh: () => void;
+}) {
+  const totalCount = connections.length;
+  const { t } = useI18n();
+  const groups = useMemo(() => groupConnections(connections, serverSearch), [connections, serverSearch]);
+
+  const tabs = useTabStore((s) => s.tabs);
+  const byTab = useDetectedServicesStore((s) => s.byTab);
+
+  const detectionByIndex = useMemo(() => {
+    const map = new Map<number, { online: boolean; tools: Set<RightTool> }>();
+    for (const conn of connections) {
+      let tab = tabs.find(
+        (t) => t.backend === "ssh" && t.sshSavedConnectionIndex === conn.index,
+      );
+      if (!tab) {
+        tab = tabs.find(
+          (t) =>
+            t.backend === "ssh" &&
+            t.sshHost === conn.host &&
+            t.sshPort === conn.port &&
+            t.sshUser === conn.user,
+        );
+      }
+      if (!tab) continue;
+      const entry = byTab[tab.id];
+      if (!entry) continue;
+      map.set(conn.index, {
+        online: entry.status === "ready",
+        tools: entry.tools,
+      });
+    }
+    return map;
+  }, [connections, tabs, byTab]);
+
+  const [expanded, setExpanded] = useState<Record<string, boolean>>({});
+  const [openRow, setOpenRow] = useState<number | null>(null);
+
+  useEffect(() => {
+    setExpanded((prev) => {
+      const next = { ...prev };
+      let changed = false;
+      for (const g of groups) {
+        if (next[g.name] === undefined) {
+          next[g.name] = true;
+          changed = true;
+        }
+      }
+      return changed ? next : prev;
+    });
+  }, [groups]);
+
+  const shownCount = groups.reduce((acc, g) => acc + g.servers.length, 0);
+
+  return (
+    <>
+      <div className="sidebar-toolbar">
+        <button className="mini-btn" onClick={onNew} title={t("New SSH connection")} type="button"><Plus /></button>
+        <div className="crumb">
+          <span className="crumb-item">
+            <span className="seg last">{t("SSH connections")}</span>
+          </span>
+          <span className="sep" style={{ marginLeft: 6 }}>·</span>
+          <span className="crumb-item">
+            <span className="seg" style={{ fontFamily: "var(--mono)", fontSize: 10 }}>{totalCount}</span>
+          </span>
+        </div>
+        <button className="mini-btn" onClick={onRefresh} title={t("Refresh")} type="button"><RefreshCw /></button>
+      </div>
+
+      <div className="sidebar-search">
+        <Search />
+        <input
+          onChange={(e) => onSearchChange(e.currentTarget.value)}
+          placeholder={t("Filter connections…")}
+          value={serverSearch}
+        />
+      </div>
+
+      <div className="sidebar-list srv-list">
+        {groups.map((g) => {
+          const open = expanded[g.name] ?? true;
+          const onlineCount = g.servers.filter((s) => detectionByIndex.get(s.index)?.online).length;
+          return (
+            <div key={g.name} className={"srv-group" + (open ? " open" : "")}>
+              <button
+                className="srv-group-head"
+                onClick={() => setExpanded({ ...expanded, [g.name]: !open })}
+                type="button"
+              >
+                <span className="srv-chev"><ChevronRight size={10} /></span>
+                <span className="srv-group-name">{g.name}</span>
+                <span className="srv-group-meta">{onlineCount}/{g.servers.length}</span>
+              </button>
+              {open && g.servers.map((s) => {
+                const det = detectionByIndex.get(s.index);
+                return (
+                  <ServerItem
+                    key={s.index}
+                    conn={s}
+                    isOpen={openRow === s.index}
+                    online={det?.online ?? false}
+                    detectedTools={det?.tools}
+                    onToggle={() => setOpenRow((cur) => (cur === s.index ? null : s.index))}
+                    onConnect={() => onConnect(s.index)}
+                    onEdit={() => onEdit(s.index)}
+                    onRemove={() => onRemove(s.index)}
+                    editLabel={t("Edit")}
+                    deleteLabel={t("Delete")}
+                    connectLabel={t("Connect")}
+                    hintLabel={t("Connect to discover services")}
+                    noneLabel={t("No services detected")}
+                    detectedLabel={t("Detected · click to open")}
+                  />
+                );
+              })}
+            </div>
+          );
+        })}
+        {shownCount === 0 && (
+          <div className="empty-note" style={{ padding: 12 }}>
+            {totalCount === 0 ? t("No saved connections") : t("No matching connections")}
+          </div>
+        )}
+      </div>
+    </>
+  );
+}
+
+function ServerItem({
+  conn,
+  isOpen,
+  online,
+  detectedTools,
+  onToggle,
+  onConnect,
+  onEdit,
+  onRemove,
+  editLabel,
+  deleteLabel,
+  connectLabel,
+  hintLabel,
+  noneLabel,
+  detectedLabel,
+}: {
+  conn: SavedSshConnection & { display: string };
+  isOpen: boolean;
+  online: boolean;
+  detectedTools?: Set<RightTool>;
+  onToggle: () => void;
+  onConnect: () => void;
+  onEdit: () => void;
+  onRemove: () => void;
+  editLabel: string;
+  deleteLabel: string;
+  connectLabel: string;
+  hintLabel: string;
+  noneLabel: string;
+  detectedLabel: string;
+}) {
+  const AuthIcon: LucideIcon = conn.authKind === "key" ? Key : conn.authKind === "agent" ? Shield : Lock;
+  const addr = `${conn.user}@${conn.host}${conn.port !== 22 ? `:${conn.port}` : ""}`;
+  const chips = detectedTools
+    ? Object.values(SERVICE_META).filter((m) => detectedTools.has(m.tool))
+    : [];
+  return (
+    <div className={"srv-item" + (online ? "" : " offline")}>
+      <div className="srv-row" onClick={onToggle}>
+        <span className={"srv-dot " + (online ? "on" : "off")} />
+        <div className="srv-body">
+          <div className="srv-name">{conn.display}</div>
+          <div className="srv-addr">{addr}</div>
+        </div>
+        <span className="srv-auth" title={"auth: " + conn.authKind}>
+          <AuthIcon size={10} />
+        </span>
+        <div className="srv-actions" onClick={(e) => e.stopPropagation()}>
+          <button className="mini-btn" onClick={onConnect} title={connectLabel} type="button">
+            <Terminal />
+          </button>
+          <button className="mini-btn" onClick={onEdit} title={editLabel} type="button">
+            <Pencil />
+          </button>
+          <button className="mini-btn" onClick={onRemove} title={deleteLabel} type="button">
+            <Trash2 />
+          </button>
+        </div>
+      </div>
+      {isOpen && (
+        <div className="srv-svcs">
+          {!online && <div className="srv-svcs-empty">{hintLabel}</div>}
+          {online && chips.length === 0 && <div className="srv-svcs-empty">{noneLabel}</div>}
+          {online && chips.length > 0 && (
+            <>
+              <div className="srv-svcs-label">{detectedLabel}</div>
+              <div className="srv-svcs-row">
+                {chips.map((m) => {
+                  const Ic = m.icon;
+                  return (
+                    <span
+                      key={m.tool}
+                      className="srv-svc"
+                      style={{ ["--svc-tint" as string]: m.tintVar }}
+                      title={m.label}
+                    >
+                      <Ic size={10} />
+                      <span className="svc-name">{m.label}</span>
+                    </span>
+                  );
+                })}
+              </div>
+            </>
+          )}
+        </div>
+      )}
+    </div>
   );
 }

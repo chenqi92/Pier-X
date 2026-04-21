@@ -1,5 +1,6 @@
-import { ActivitySquare, Database, PackageSearch } from "lucide-react";
+import { Activity, ActivitySquare, Cpu, Database, HardDrive, MemoryStick, PackageSearch, RefreshCw } from "lucide-react";
 import { useEffect, useState } from "react";
+import type { ReactNode } from "react";
 import * as cmd from "../lib/commands";
 import type { DetectedServiceView, RightTool, ServerSnapshotView, TabState } from "../lib/types";
 import { useI18n } from "../i18n/useI18n";
@@ -53,6 +54,54 @@ function serviceTool(service: DetectedServiceView): RightTool | null {
   }
 }
 
+type GaugeTone = "accent" | "pos" | "warn";
+
+function Gauge({
+  icon: Icon,
+  label,
+  value,
+  sub,
+  pct,
+  tone = "accent",
+}: {
+  icon: ReactNode;
+  label: string;
+  value: ReactNode;
+  sub: string;
+  pct: number;
+  tone?: GaugeTone;
+}) {
+  const color =
+    tone === "pos" ? "var(--pos)" : tone === "warn" ? "var(--warn)" : "var(--accent)";
+  const clamped = Math.max(0, Math.min(100, pct));
+  return (
+    <div className="mon-gauge">
+      <div className="mon-gauge-label">
+        {Icon}
+        <span>{label}</span>
+      </div>
+      <div className="mon-gauge-value">{value}</div>
+      <div className="mon-gauge-bar">
+        <div className="mon-gauge-fill" style={{ width: `${clamped}%`, background: color }} />
+      </div>
+      <div className="mon-gauge-sub mono">{sub}</div>
+    </div>
+  );
+}
+
+function toneFromPct(pct: number): GaugeTone {
+  if (pct >= 85) return "warn";
+  if (pct >= 50) return "accent";
+  return "pos";
+}
+
+function formatTimestamp(ts: number): string {
+  if (!ts) return "—";
+  const d = new Date(ts);
+  const pad = (n: number) => String(n).padStart(2, "0");
+  return `${pad(d.getHours())}:${pad(d.getMinutes())}:${pad(d.getSeconds())}`;
+}
+
 export default function ServerMonitorPanel({ tab }: Props) {
   const { t } = useI18n();
   const updateTab = useTabStore((s) => s.updateTab);
@@ -64,6 +113,7 @@ export default function ServerMonitorPanel({ tab }: Props) {
   const [servicesBusy, setServicesBusy] = useState(false);
   const [servicesError, setServicesError] = useState("");
   const [servicesNotice, setServicesNotice] = useState("");
+  const [lastProbed, setLastProbed] = useState(0);
 
   const hasSsh = tab.backend === "ssh" && tab.sshHost.trim() && tab.sshUser.trim();
   const isLocal = tab.backend === "local";
@@ -89,6 +139,7 @@ export default function ServerMonitorPanel({ tab }: Props) {
         return;
       }
       setSnap(s);
+      setLastProbed(Date.now());
     } catch (e) {
       setSnap(null);
       setError(String(e));
@@ -211,7 +262,7 @@ export default function ServerMonitorPanel({ tab }: Props) {
   ]);
 
   const headerMeta = hasSsh
-    ? `${tab.sshUser}@${tab.sshHost}:${tab.sshPort}`
+    ? `${tab.sshHost} · :${tab.sshPort}`
     : isLocal
       ? "local"
       : "—";
@@ -232,6 +283,11 @@ export default function ServerMonitorPanel({ tab }: Props) {
     </>
   );
 
+  const memPct = snap && snap.memTotalMb > 0 ? (snap.memUsedMb / snap.memTotalMb) * 100 : 0;
+  const swapPct = snap && snap.swapTotalMb > 0 ? (snap.swapUsedMb / snap.swapTotalMb) * 100 : 0;
+  const cpuPct = snap?.cpuPct ?? 0;
+  const diskPct = snap && snap.diskUsePct >= 0 ? snap.diskUsePct : 0;
+
   return (
     <>
       <PanelHeader
@@ -248,25 +304,88 @@ export default function ServerMonitorPanel({ tab }: Props) {
         tag={connTag}
       />
       <div className="panel-scroll">
-      <section className="panel-section">
-        <div className="form-stack">
-          <button className="mini-button" disabled={!canProbe || busy} onClick={() => void probe()} type="button">{busy ? t("Probing...") : t("Probe Server")}</button>
-          {!canProbe && <div className="inline-note">{t("No connection available.")}</div>}
-          {error && <div className="status-note status-note--error">{error}</div>}
-        </div>
-      </section>
+      {snap ? (
+        <section className="mon">
+          <div className="mon-host">
+            <div className="mon-host-top">
+              <StatusDot tone="pos" />
+              <div className="mon-host-name">{connName}</div>
+              <span className="mono mon-host-uptime">{t("uptime")} {snap.uptime}</span>
+            </div>
+            <div className="mon-host-meta mono">
+              {headerMeta}
+              {snap.load1 >= 0 ? (
+                <> · load {snap.load1.toFixed(2)} / {snap.load5.toFixed(2)} / {snap.load15.toFixed(2)}</>
+              ) : null}
+            </div>
+          </div>
 
-      {snap && (
+          <div className="mon-grid">
+            <Gauge
+              icon={<Cpu size={10} />}
+              label={t("CPU")}
+              value={<>{cpuPct.toFixed(1)}<span className="mon-gauge-unit">%</span></>}
+              sub={snap.load1 >= 0 ? `${t("load")} ${snap.load1.toFixed(2)} · ${snap.load5.toFixed(2)} · ${snap.load15.toFixed(2)}` : "—"}
+              pct={cpuPct}
+              tone={toneFromPct(cpuPct)}
+            />
+            <Gauge
+              icon={<MemoryStick size={10} />}
+              label={t("MEMORY")}
+              value={<>{memPct.toFixed(0)}<span className="mon-gauge-unit">%</span></>}
+              sub={`${(snap.memUsedMb / 1024).toFixed(1)} / ${(snap.memTotalMb / 1024).toFixed(1)} GB`}
+              pct={memPct}
+              tone={toneFromPct(memPct)}
+            />
+            <Gauge
+              icon={<Activity size={10} />}
+              label={t("SWAP")}
+              value={<>{snap.swapTotalMb > 0 ? swapPct.toFixed(0) : "0"}<span className="mon-gauge-unit">%</span></>}
+              sub={snap.swapTotalMb > 0
+                ? `${snap.swapUsedMb.toFixed(0)} / ${snap.swapTotalMb.toFixed(0)} MB`
+                : t("no swap")}
+              pct={swapPct}
+              tone={toneFromPct(swapPct)}
+            />
+            <Gauge
+              icon={<HardDrive size={10} />}
+              label={t("DISK")}
+              value={<>{snap.diskUsePct >= 0 ? snap.diskUsePct.toFixed(0) : "—"}<span className="mon-gauge-unit">%</span></>}
+              sub={`${snap.diskAvail} ${t("free of")} ${snap.diskTotal}`}
+              pct={diskPct}
+              tone={toneFromPct(diskPct)}
+            />
+          </div>
+
+          <div className="mon-actions">
+            <button
+              type="button"
+              className="btn is-ghost is-compact"
+              disabled={!canProbe || busy}
+              onClick={() => void probe()}
+            >
+              <RefreshCw size={11} /> {busy ? t("Probing...") : t("Probe now")}
+            </button>
+            <span className="mono mon-actions-hint">
+              {lastProbed ? `${t("last")}: ${formatTimestamp(lastProbed)}` : t("not yet probed")}
+            </span>
+          </div>
+          {error && <div className="status-note status-note--error">{error}</div>}
+        </section>
+      ) : (
         <section className="panel-section">
-          <div className="panel-section__title"><span>{t("Resources")}</span></div>
-          <ul className="stack-list">
-            <li><span>{t("Uptime")}</span><strong>{snap.uptime}</strong></li>
-            <li><span>{t("CPU")}</span><strong>{snap.cpuPct.toFixed(1)}%</strong></li>
-            <li><span>{t("Load")}</span><strong>{snap.load1.toFixed(2)} / {snap.load5.toFixed(2)} / {snap.load15.toFixed(2)}</strong></li>
-            <li><span>{t("Memory")}</span><strong>{snap.memUsedMb.toFixed(0)} / {snap.memTotalMb.toFixed(0)} MB</strong></li>
-            <li><span>{t("Swap")}</span><strong>{snap.swapUsedMb.toFixed(0)} / {snap.swapTotalMb.toFixed(0)} MB</strong></li>
-            <li><span>{t("Disk")}</span><strong>{snap.diskUsed} / {snap.diskTotal} ({snap.diskUsePct >= 0 ? `${snap.diskUsePct.toFixed(0)}%` : "—"})</strong></li>
-          </ul>
+          <div className="form-stack">
+            <button
+              className="btn is-compact"
+              disabled={!canProbe || busy}
+              onClick={() => void probe()}
+              type="button"
+            >
+              <RefreshCw size={11} /> {busy ? t("Probing...") : t("Probe Server")}
+            </button>
+            {!canProbe && <div className="inline-note">{t("No connection available.")}</div>}
+            {error && <div className="status-note status-note--error">{error}</div>}
+          </div>
         </section>
       )}
 

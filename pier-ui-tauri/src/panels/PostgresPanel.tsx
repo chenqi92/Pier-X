@@ -227,7 +227,7 @@ export default function PostgresPanel({ tab }: Props) {
       <PanelHeader
         icon={Database}
         title="POSTGRESQL"
-        meta={hasSsh ? `tunnel ${tab.sshHost}:${port}` : `${host}:${port}`}
+        meta={`${dbName.trim() || "postgres"} · ${hasSsh ? `tunnel :${port}` : `${host}:${port}`}`}
       />
       <DbConnRow
         icon={Database}

@@ -28,6 +28,7 @@ import { startTransition, useDeferredValue, useEffect, useMemo, useRef, useState
 import { openUrl } from "@tauri-apps/plugin-opener";
 import * as cmd from "../lib/commands";
 import PanelHeader from "../components/PanelHeader";
+import DiffDialog, { type DiffFileInput } from "../shell/DiffDialog";
 import "../styles/git-panel.css";
 import type {
   GitBlameLineView,
@@ -47,6 +48,7 @@ import type {
   GitTagView,
 } from "../lib/types";
 import { useI18n } from "../i18n/useI18n";
+import { useStatusStore } from "../stores/useStatusStore";
 
 type Props = { browserPath: string };
 
@@ -550,6 +552,8 @@ export default function GitPanel({ browserPath }: Props) {
   const panelRef = useRef<HTMLDivElement>(null);
 
   const [panelState, setPanelState] = useState<GitPanelState | null>(null);
+  const setGitStatus = useStatusStore((s) => s.setGitStatus);
+  const clearGitStatus = useStatusStore((s) => s.clearGitStatus);
   const [gitReady, setGitReady] = useState(false);
   const [gitError, setGitError] = useState("");
   const [busy, setBusy] = useState(false);
@@ -641,6 +645,10 @@ export default function GitPanel({ browserPath }: Props) {
   const [historyFileDiff, setHistoryFileDiff] = useState("");
   const [historyFileDiffPath, setHistoryFileDiffPath] = useState("");
   const [historyFileDiffOpen, setHistoryFileDiffOpen] = useState(false);
+  const [commitDiffOpen, setCommitDiffOpen] = useState(false);
+  const [commitDiffHash, setCommitDiffHash] = useState("");
+  const [commitDiffActivePath, setCommitDiffActivePath] = useState("");
+  const [commitDiffCache, setCommitDiffCache] = useState<Record<string, string | null>>({});
   const [stashMessage, setStashMessage] = useState("");
   const [popover, setPopover] = useState<PopoverState>(null);
 
@@ -1067,6 +1075,19 @@ export default function GitPanel({ browserPath }: Props) {
   }, [panelState]);
 
   useEffect(() => {
+    if (panelState) {
+      setGitStatus(
+        panelState.currentBranch || null,
+        panelState.aheadCount ?? 0,
+        panelState.behindCount ?? 0,
+      );
+    } else {
+      clearGitStatus();
+    }
+    return () => clearGitStatus();
+  }, [panelState, setGitStatus, clearGitStatus]);
+
+  useEffect(() => {
     if (!diffTarget) {
       setDiffText("");
       return;
@@ -1485,7 +1506,10 @@ export default function GitPanel({ browserPath }: Props) {
         {detail.changedFiles.length ? (
           <div className="git-history-detail-inline__files">
             <div className="git-history-detail-inline__files-title">
-              {`${t("Changed files")} (${detail.changedFiles.length})`}
+              <span>{`${t("Changed files")} (${detail.changedFiles.length})`}</span>
+              <GitButton compact onClick={() => openCommitMultiDiff(detail)}>
+                {t("Open split view")}
+              </GitButton>
             </div>
             <div className="git-changed-file-list">
               {detail.changedFiles.map((file) => (
@@ -1513,6 +1537,34 @@ export default function GitPanel({ browserPath }: Props) {
         ) : null}
       </div>
     );
+  }
+
+  async function ensureCommitDiff(hash: string, filePath: string) {
+    setCommitDiffCache((cache) => (filePath in cache ? cache : { ...cache, [filePath]: null }));
+    try {
+      const text = await cmd.gitCommitFileDiff(currentRepoPath, hash, filePath);
+      setCommitDiffCache((cache) => ({ ...cache, [filePath]: text || "" }));
+    } catch (error) {
+      setCommitDiffCache((cache) => ({ ...cache, [filePath]: extractErrorMessage(error) }));
+    }
+  }
+
+  function openCommitMultiDiff(detail: GitCommitDetailView, initialPath?: string) {
+    if (!detail.changedFiles.length) return;
+    setCommitDiffHash(detail.hash);
+    const seed: Record<string, string | null> = {};
+    for (const file of detail.changedFiles) seed[file.path] = null;
+    setCommitDiffCache(seed);
+    const start = initialPath || detail.changedFiles[0].path;
+    setCommitDiffActivePath(start);
+    setCommitDiffOpen(true);
+    void ensureCommitDiff(detail.hash, start);
+  }
+
+  function commitDiffStatus(file: { additions: number; deletions: number }): DiffFileInput["status"] {
+    if (file.deletions === 0 && file.additions > 0) return "added";
+    if (file.additions === 0 && file.deletions > 0) return "deleted";
+    return "modified";
   }
 
   function historyContextParentHash(commit: GitGraphRowView | null) {
@@ -3745,6 +3797,28 @@ export default function GitPanel({ browserPath }: Props) {
           )}
         </div>
       </GitDialog>
+
+      <DiffDialog
+        open={commitDiffOpen}
+        onClose={() => setCommitDiffOpen(false)}
+        files={
+          activeCommitDetail && activeCommitDetail.hash === commitDiffHash
+            ? activeCommitDetail.changedFiles.map((file) => ({
+                id: file.path,
+                path: file.path,
+                status: commitDiffStatus(file),
+                diffText: commitDiffCache[file.path] ?? null,
+                additions: file.additions,
+                deletions: file.deletions,
+              }))
+            : []
+        }
+        activeId={commitDiffActivePath}
+        onSelectFile={(id) => {
+          setCommitDiffActivePath(id);
+          if (commitDiffCache[id] == null) void ensureCommitDiff(commitDiffHash, id);
+        }}
+      />
     </div>
     </>
   );

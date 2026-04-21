@@ -2,6 +2,22 @@
 // Three-pane IDE layout: Sidebar | Center (TabBar + Content) | RightSidebar
 
 import { useCallback, useEffect, useMemo, useState } from "react";
+import {
+  Activity,
+  Container,
+  Database,
+  FileText,
+  FolderTree,
+  GitBranch,
+  HardDrive,
+  Moon,
+  ScrollText,
+  Server,
+  Settings as SettingsIcon,
+  SquareTerminal,
+  X,
+  Zap,
+} from "lucide-react";
 import { I18nContext, makeI18n } from "./i18n/useI18n";
 import * as cmd from "./lib/commands";
 import type { CoreInfo, FileEntry, RightTool, SavedSshConnection } from "./lib/types";
@@ -19,11 +35,13 @@ import WelcomeView from "./shell/WelcomeView";
 import RightSidebar from "./shell/RightSidebar";
 import { useTabStore } from "./stores/useTabStore";
 import { useConnectionStore } from "./stores/useConnectionStore";
+import { useRecentConnectionsStore } from "./stores/useRecentConnectionsStore";
 import { useSettingsStore } from "./stores/useSettingsStore";
 import { useThemeStore as useThemeStoreRef } from "./stores/useThemeStore";
 import "./styles/fonts.css";
 import "./styles/tokens.css";
 import "./styles/atoms.css";
+import "./styles/pier-x.css";
 import "./styles/shell.css";
 
 const MARKDOWN_EXTENSIONS = /\.(md|markdown|mdown|mkdn|mkd|mdx)$/i;
@@ -123,6 +141,7 @@ function App() {
   function openSshSaved(index: number) {
     const conn = useConnectionStore.getState().connections.find((c) => c.index === index);
     if (!conn) return;
+    useRecentConnectionsStore.getState().touch(index);
     // Seed the tab synchronously so the terminal starts launching
     // via terminalCreateSshSaved (backend resolves password itself).
     const tabId = addTab({
@@ -189,25 +208,26 @@ function App() {
 
   const paletteCommands: PaletteCommand[] = useMemo(
     () => [
-      { title: i18n.t("New local terminal"), shortcut: `${mod}T`, action: () => openLocalTerminal() },
-      { title: i18n.t("New SSH connection"), shortcut: `${mod}N`, action: openNewConnectionDialog },
-      { title: i18n.t("Close tab"), shortcut: `${mod}W`, action: () => { if (activeTabId) closeTab(activeTabId); } },
-      { title: i18n.t("Settings"), shortcut: `${mod},`, action: () => setSettingsOpen(true) },
-      { title: i18n.t("Toggle theme"), action: () => {
+      { section: i18n.t("Session"), icon: SquareTerminal, title: i18n.t("New local terminal"), shortcut: `${mod}T`, action: () => openLocalTerminal() },
+      { section: i18n.t("Session"), icon: Server, title: i18n.t("New SSH connection"), shortcut: `${mod}N`, action: openNewConnectionDialog },
+      { section: i18n.t("Session"), icon: X, title: i18n.t("Close tab"), shortcut: `${mod}W`, action: () => { if (activeTabId) closeTab(activeTabId); } },
+      { section: i18n.t("Panels"), icon: GitBranch, title: i18n.t("Switch to Git"), action: () => handleToolChange("git") },
+      { section: i18n.t("Panels"), icon: Activity, title: i18n.t("Switch to Server Monitor"), action: () => handleToolChange("monitor") },
+      { section: i18n.t("Panels"), icon: Container, title: i18n.t("Switch to Docker"), action: () => handleToolChange("docker") },
+      { section: i18n.t("Panels"), icon: Database, title: i18n.t("Switch to MySQL"), action: () => handleToolChange("mysql") },
+      { section: i18n.t("Panels"), icon: Database, title: i18n.t("Switch to PostgreSQL"), action: () => handleToolChange("postgres") },
+      { section: i18n.t("Panels"), icon: Zap, title: i18n.t("Switch to Redis"), action: () => handleToolChange("redis") },
+      { section: i18n.t("Panels"), icon: FolderTree, title: i18n.t("Switch to SFTP"), action: () => handleToolChange("sftp") },
+      { section: i18n.t("Panels"), icon: ScrollText, title: i18n.t("Switch to Log"), action: () => handleToolChange("log") },
+      { section: i18n.t("Panels"), icon: HardDrive, title: i18n.t("Switch to SQLite"), action: () => handleToolChange("sqlite") },
+      { section: i18n.t("Panels"), icon: FileText, title: i18n.t("Switch to Markdown"), action: () => handleToolChange("markdown") },
+      { section: i18n.t("App"), icon: SettingsIcon, title: i18n.t("Settings"), shortcut: `${mod},`, action: () => setSettingsOpen(true) },
+      { section: i18n.t("App"), icon: Moon, title: i18n.t("Toggle theme"), action: () => {
         const s = useThemeStoreRef.getState();
         s.setMode(s.resolvedDark ? "light" : "dark");
       } },
-      { title: i18n.t("Switch to Git"), action: () => handleToolChange("git") },
-      { title: i18n.t("Switch to Docker"), action: () => handleToolChange("docker") },
-      { title: i18n.t("Switch to MySQL"), action: () => handleToolChange("mysql") },
-      { title: i18n.t("Switch to PostgreSQL"), action: () => handleToolChange("postgres") },
-      { title: i18n.t("Switch to Redis"), action: () => handleToolChange("redis") },
-      { title: i18n.t("Switch to SFTP"), action: () => handleToolChange("sftp") },
-      { title: i18n.t("Switch to Server Monitor"), action: () => handleToolChange("monitor") },
-      { title: i18n.t("Switch to SQLite"), action: () => handleToolChange("sqlite") },
-      { title: i18n.t("Switch to Markdown"), action: () => handleToolChange("markdown") },
     ],
-    [activeTabId, closeTab, i18n],
+    [activeTabId, closeTab, i18n, mod],
   );
 
   // ── Keyboard shortcuts ──────────────────────────────────────
@@ -264,7 +284,7 @@ function App() {
   const TOOLSTRIP_W = 42;
   const rightPanelW = Math.max(rightWidth - TOOLSTRIP_W, 0);
   const isRightCollapsed = rightPanelW === 0;
-  const appShellStyle: React.CSSProperties = {
+  const appStyle: React.CSSProperties = {
     ["--sidebar-w" as never]: `${sidebarWidth}px`,
     ["--rightpanel-w" as never]: `${rightPanelW}px`,
   };
@@ -273,8 +293,8 @@ function App() {
     <I18nContext.Provider value={i18n}>
       <Stage>
         <div
-          className={`app-shell${isRightCollapsed ? " is-right-collapsed" : ""}`}
-          style={appShellStyle}
+          className={`app${isRightCollapsed ? " is-right-collapsed" : ""}`}
+          style={appStyle}
         >
           <TopBar
             onNewTab={openNewTab}
@@ -300,28 +320,26 @@ function App() {
             workspaceRoot={coreInfo?.workspaceRoot}
           />
 
-          <div className="workspace__center">
-            <div className="workspace__content">
-              {tabs.length === 0 ? (
-                <WelcomeView
-                  onOpenLocalTerminal={openLocalTerminal}
-                  onNewSsh={openNewConnectionDialog}
-                  onConnectSaved={openSshSaved}
-                  onSettings={() => setSettingsOpen(true)}
-                  onCommandPalette={() => setPaletteOpen(true)}
-                  version={coreInfo?.version}
-                  workspaceRoot={coreInfo?.workspaceRoot}
+          <div className="center">
+            {tabs.length === 0 ? (
+              <WelcomeView
+                onOpenLocalTerminal={openLocalTerminal}
+                onNewSsh={openNewConnectionDialog}
+                onConnectSaved={openSshSaved}
+                onSettings={() => setSettingsOpen(true)}
+                onCommandPalette={() => setPaletteOpen(true)}
+                version={coreInfo?.version}
+                workspaceRoot={coreInfo?.workspaceRoot}
+              />
+            ) : (
+              tabs.map((tab) => (
+                <TerminalPanel
+                  key={tab.id}
+                  tab={tab}
+                  isActive={tab.id === activeTabId}
                 />
-              ) : (
-                tabs.map((tab) => (
-                  <TerminalPanel
-                    key={tab.id}
-                    tab={tab}
-                    isActive={tab.id === activeTabId}
-                  />
-                ))
-              )}
-            </div>
+              ))
+            )}
           </div>
 
           <RightSidebar
@@ -329,6 +347,8 @@ function App() {
             browserPath={browserPath}
             selectedMarkdownPath={selectedMarkdownPath}
             onToolChange={handleToolChange}
+            onConnectSaved={openSshSaved}
+            onNewConnection={openNewConnectionDialog}
           />
 
           <StatusBar
@@ -338,7 +358,7 @@ function App() {
           />
 
           <ResizeHandle
-            className="resize-handle--left"
+            className="resizer is-left"
             direction="left"
             size={sidebarWidth}
             min={180}
@@ -347,7 +367,7 @@ function App() {
           />
           {!isRightCollapsed && (
             <ResizeHandle
-              className="resize-handle--right"
+              className="resizer is-right"
               direction="right"
               size={rightWidth}
               min={TOOLSTRIP_W + 220}
@@ -356,26 +376,26 @@ function App() {
             />
           )}
 
-        {/* Overlays */}
-        <CommandPalette
-          open={paletteOpen}
-          onClose={() => setPaletteOpen(false)}
-          commands={paletteCommands}
-        />
-        <NewConnectionDialog
-          open={newConnOpen}
-          initialConnection={editingConnection}
-          onClose={() => {
-            setNewConnOpen(false);
-            setEditingConnection(null);
-          }}
-          onConnect={openSshTab}
-          onConnectSaved={openSshSaved}
-        />
-        <SettingsDialog
-          open={settingsOpen}
-          onClose={() => setSettingsOpen(false)}
-        />
+          {/* Overlays */}
+          <CommandPalette
+            open={paletteOpen}
+            onClose={() => setPaletteOpen(false)}
+            commands={paletteCommands}
+          />
+          <NewConnectionDialog
+            open={newConnOpen}
+            initialConnection={editingConnection}
+            onClose={() => {
+              setNewConnOpen(false);
+              setEditingConnection(null);
+            }}
+            onConnect={openSshTab}
+            onConnectSaved={openSshSaved}
+          />
+          <SettingsDialog
+            open={settingsOpen}
+            onClose={() => setSettingsOpen(false)}
+          />
         </div>
       </Stage>
     </I18nContext.Provider>

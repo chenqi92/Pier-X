@@ -55,6 +55,16 @@
   --del: #ff5a5f;
   --mod: #ffb547;
 
+  /* ── Service brand tints (sidebar service chips, tool rail) */
+  --svc-docker: #4aa3ff;
+  --svc-mysql: #f29d49;
+  --svc-postgres: #8fb3ff;
+  --svc-redis: #e5484d;
+  --svc-monitor: #3dd68c;
+  --svc-log: #b48cff;
+  --svc-sftp: #8aa0b8;
+  --svc-sqlite: #8aa0b8;
+
   /* ── Legacy aliases (Phase A/B/C compat) ─────────────────── */
   --bg-canvas: var(--bg);
   --bg-chrome: var(--surface);
@@ -226,6 +236,7 @@
   --sp-1: 4px;
   --sp-1-5: 6px;
   --sp-2: 8px;
+  --sp-2-5: 10px;
   --sp-3: 12px;
   --sp-4: 16px;
   --sp-5: 20px;

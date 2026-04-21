@@ -1,5 +1,15 @@
 import { useState } from "react";
-import { X } from "lucide-react";
+import {
+  Check,
+  FileText,
+  Keyboard,
+  Server,
+  Settings as SettingsIcon,
+  Sun,
+  Terminal as TerminalIcon,
+  X,
+} from "lucide-react";
+import type { ComponentType, SVGProps } from "react";
 import IconButton from "./IconButton";
 import { useI18n } from "../i18n/useI18n";
 import {
@@ -23,7 +33,30 @@ type Props = {
 
 type Page = "Appearance" | "Typography" | "Terminal" | "Connections" | "General";
 
-const PAGES: Page[] = ["Appearance", "Typography", "Terminal", "Connections", "General"];
+type NavEntry = {
+  key: Page;
+  icon: ComponentType<SVGProps<SVGSVGElement> & { size?: number | string }>;
+};
+type NavGroup = { label: string; items: NavEntry[] };
+
+const NAV_GROUPS: NavGroup[] = [
+  {
+    label: "General",
+    items: [
+      { key: "Appearance", icon: Sun },
+      { key: "Typography", icon: FileText },
+      { key: "Terminal", icon: TerminalIcon },
+    ],
+  },
+  {
+    label: "Integrations",
+    items: [{ key: "Connections", icon: Server }],
+  },
+  {
+    label: "System",
+    items: [{ key: "General", icon: Keyboard }],
+  },
+];
 
 // ── Reusable sub-components ─────────────────────────────────────
 
@@ -130,13 +163,16 @@ export default function SettingsDialog({ open, onClose }: Props) {
   if (!open) return null;
 
   return (
-    <div className="palette-backdrop" onClick={onClose}>
-      <div className="dialog dialog--settings" onClick={(e) => e.stopPropagation()}>
+    <div className="cmdp-overlay" onClick={onClose}>
+      <div className="dlg dlg--settings" onClick={(e) => e.stopPropagation()}>
         {/* Header */}
         <div className="dialog__header">
           <div style={{ display: "flex", alignItems: "flex-start", gap: "var(--sp-2)" }}>
             <div style={{ flex: 1 }}>
-              <h2 className="dialog__title">{t("Settings")}</h2>
+              <h2 className="dialog__title">
+                <SettingsIcon size={13} style={{ marginRight: "var(--sp-1)", verticalAlign: "-2px", color: "var(--accent)" }} />
+                {t("Settings")}
+              </h2>
               <span className="dialog__subtitle">
                 {t("Adjust appearance, terminal behavior, and saved connections.")}
               </span>
@@ -149,15 +185,21 @@ export default function SettingsDialog({ open, onClose }: Props) {
 
         <div className="dialog__settings-body">
           <nav className="dialog__nav">
-            {PAGES.map((p) => (
-              <button
-                key={p}
-                className={page === p ? "dialog__nav-item dialog__nav-item--active" : "dialog__nav-item"}
-                onClick={() => setPage(p)}
-                type="button"
-              >
-                {t(p)}
-              </button>
+            {NAV_GROUPS.map((group) => (
+              <div key={group.label} className="dialog__nav-group">
+                <div className="dialog__nav-group-label">{t(group.label)}</div>
+                {group.items.map(({ key, icon: Icon }) => (
+                  <button
+                    key={key}
+                    className={page === key ? "dialog__nav-item dialog__nav-item--active" : "dialog__nav-item"}
+                    onClick={() => setPage(key)}
+                    type="button"
+                  >
+                    <Icon size={13} />
+                    <span>{t(key)}</span>
+                  </button>
+                ))}
+              </div>
             ))}
           </nav>
 
@@ -447,6 +489,11 @@ export default function SettingsDialog({ open, onClose }: Props) {
 
         {/* Footer */}
         <div className="dialog__footer">
+          <span className="dialog__footer-hint">
+            <Check size={11} />
+            {t("Changes save automatically")}
+          </span>
+          <div style={{ flex: 1 }} />
           <button className="btn is-primary" onClick={onClose} type="button">
             {t("Done")}
           </button>

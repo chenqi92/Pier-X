@@ -48,3 +48,4 @@ $RECYCLE.BIN/
 # pier-design-system: drop the cloned reference repo
 # (its content has been extracted to extracted/ and synthesized into SKILL.md)
 .claude/skills/pier-design-system/reference/
+pier-x-copy

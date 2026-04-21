@@ -177,7 +177,9 @@ export default function MySqlPanel({ tab }: Props) {
       setTableName(s.tableName);
       updateTab(tab.id, { mysqlDatabase: s.databaseName });
     } catch (e) {
-      setState(null);
+      // Keep the last successful state visible — clearing it here blanks
+      // the whole panel body for a transient error, which feels like a
+      // full remount on every retry.
       setError(formatError(e));
     } finally {
       setBusy(false);

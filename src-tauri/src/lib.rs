@@ -2604,9 +2604,11 @@ fn server_monitor_probe(
     auth_mode: String,
     password: String,
     key_path: String,
+    saved_connection_index: Option<usize>,
 ) -> Result<ServerSnapshotView, String> {
+    let effective_password = resolve_password_for_auth(&auth_mode, &password, saved_connection_index);
     let session = build_ssh_session_from_params(
-        &host, port, &user, &auth_mode, &password, &key_path,
+        &host, port, &user, &auth_mode, &effective_password, &key_path,
     )?;
 
     let snap = server_monitor::probe_blocking(&session)
@@ -2640,9 +2642,11 @@ fn detect_services(
     auth_mode: String,
     password: String,
     key_path: String,
+    saved_connection_index: Option<usize>,
 ) -> Result<Vec<DetectedServiceView>, String> {
+    let effective_password = resolve_password_for_auth(&auth_mode, &password, saved_connection_index);
     let session = build_ssh_session_from_params(
-        &host, port, &user, &auth_mode, &password, &key_path,
+        &host, port, &user, &auth_mode, &effective_password, &key_path,
     )?;
 
     let services = service_detector::detect_all_blocking(&session);

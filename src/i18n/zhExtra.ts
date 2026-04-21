@@ -237,6 +237,7 @@ export const zhExtra: Record<string, string> = {
   "not yet probed": "尚未探测",
   "offline": "离线",
   "One chromatic accent — applies everywhere.": "单一强调色，应用于整个界面。",
+  "Open diff": "查看差异",
   "Open in browser": "在浏览器中打开",
   "Open split view": "打开分栏视图",
   "Operation failed": "操作失败",
@@ -505,29 +506,15 @@ export const zhExtra: Record<string, string> = {
   "Failed to read known_hosts: {detail}": "读取 known_hosts 失败：{detail}",
 
   // ── Docker panel v2 (containers / images / volumes) ────────────
-  "Containers": "容器",
-  "Images": "镜像",
-  "Volumes": "存储卷",
-  "Networks": "网络",
   "MOUNTPOINT": "挂载点",
   "USED BY": "引用数",
-  "SCOPE": "范围",
   "REPOSITORY": "仓库",
   "TAG": "标签",
-  "AGE": "创建时间",
-  "STATUS": "状态",
   "IMAGE": "镜像",
   "CPU/MEM": "CPU/内存",
-  "ID": "ID",
-  "Image": "镜像",
-  "Status": "状态",
   "Ports": "端口",
   "CPU": "CPU",
   "Memory": "内存",
-  "Filter containers…": "筛选容器…",
-  "Filter volumes…": "筛选卷…",
-  "Filter networks…": "筛选网络…",
-  "repo:tag…": "repo:tag…",
   "No containers found.": "未发现容器。",
   "No images found.": "未发现镜像。",
   "No volumes found.": "未发现卷。",
@@ -535,7 +522,6 @@ export const zhExtra: Record<string, string> = {
   "(empty directory)": "（空目录）",
 
   // Toolbar + actions
-  "all": "全部",
   "Run container": "运行容器",
   "Prune unused": "清理未使用",
   "Remove unused volumes": "清理未使用的卷",
@@ -565,7 +551,6 @@ export const zhExtra: Record<string, string> = {
     "当镜像引用没有显式指定 registry 时会自动加前缀（如 `nginx:latest` → `<镜像源>/nginx:latest`）。",
   "Applied only to this tab's `docker pull` as an env var. The remote daemon config is untouched.":
     "仅对当前标签页的 `docker pull` 作为环境变量生效，不修改远端 docker 守护进程配置。",
-  "Clear": "清空",
 
   // Run-container dialog
   "Container name": "容器名称",
@@ -591,12 +576,4 @@ export const zhExtra: Record<string, string> = {
   "Close": "关闭",
 
   // Misc
-  "local": "本地",
-  "remote via SSH": "通过 SSH 远端",
-  "Local Docker socket": "本地 Docker socket",
-  "Not connected": "未连接",
-  "ready": "就绪",
-  "offline": "离线",
-  "{host} · {count} containers": "{host} · {count} 个容器",
-  "No connection available.": "没有可用的连接。",
 };

@@ -167,7 +167,8 @@ export default function RedisPanel({ tab }: Props) {
       setState(s);
       setKeyName(s.keyName);
     } catch (e) {
-      setState(null);
+      // Preserve the previous state so the body doesn't blank during a
+      // transient error — only the error banner updates.
       setError(formatError(e));
     } finally {
       setBusy(false);

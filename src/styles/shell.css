@@ -4599,6 +4599,33 @@ button,
   padding: 10px var(--sp-3);
   text-align: center;
 }
+
+/* Skeleton cards shown while the first fetch is in-flight so the body
+ * doesn't look like "nothing found". Three placeholder rows match the
+ * card-list padding so the layout doesn't jump when real data arrives. */
+.dk-skeleton {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-1-5);
+  padding: var(--sp-1-5) 0;
+}
+.dk-skeleton-row {
+  height: 44px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius-sm);
+  background: linear-gradient(
+    90deg,
+    var(--panel) 0%,
+    var(--panel-2) 50%,
+    var(--panel) 100%
+  );
+  background-size: 200% 100%;
+  animation: dkShimmer 1.4s linear infinite;
+}
+@keyframes dkShimmer {
+  0% { background-position: 200% 0; }
+  100% { background-position: -200% 0; }
+}
 .dk-inspect-pre {
   margin: 0;
   padding: var(--sp-2);

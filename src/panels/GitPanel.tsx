@@ -244,6 +244,21 @@ function formatGraphDate(timestamp: number) {
   return `${year}-${month}-${day} ${hours}:${minutes}`;
 }
 
+function authorInitial(author: string) {
+  const trimmed = String(author || "").trim();
+  if (!trimmed) return "?";
+  const first = trimmed[0];
+  return first.toUpperCase();
+}
+
+function authorColor(author: string) {
+  const value = String(author || "");
+  let hash = 0;
+  for (let i = 0; i < value.length; i += 1) hash = (hash * 31 + value.charCodeAt(i)) | 0;
+  const hue = Math.abs(hash * 37) % 360;
+  return `hsl(${hue} 55% 45%)`;
+}
+
 function statusToneFromCode(code: string): PillTone {
   switch (code) {
     case "A":
@@ -1442,6 +1457,45 @@ export default function GitPanel({ browserPath }: Props) {
     void ensureCommitDiff(detail.hash, start);
   }
 
+  function renderHistoryInlineDetail(detail: GitCommitDetailView) {
+    const subject = detail.message.split("\n", 1)[0] || "";
+    const body = detail.message.slice(subject.length).replace(/^\n+/, "");
+    return (
+      <div className="git-history-inline">
+        <div className="git-history-inline__meta mono">
+          <span className="git-history-inline__hash">{detail.shortHash}</span>
+          <span className="git-history-inline__author">{detail.author}</span>
+          <span className="git-history-inline__date">{detail.date}</span>
+        </div>
+        <div className="git-history-inline__subject">{subject}</div>
+        {body ? <pre className="git-history-inline__body mono">{body}</pre> : null}
+        {detail.changedFiles.length ? (
+          <div className="git-history-inline__files">
+            <div className="git-history-inline__files-head mono">
+              <span>{t("Changed files")}</span>
+              <span className="git-history-inline__files-count">{detail.changedFiles.length}</span>
+            </div>
+            {detail.changedFiles.map((file) => (
+              <button
+                key={`${detail.hash}-${file.path}`}
+                type="button"
+                className="git-history-inline__file"
+                onClick={() => openCommitMultiDiff(detail, file.path)}
+                title={t("Open diff") + " · " + file.path}
+              >
+                <span className="git-history-inline__file-delta mono">
+                  {file.additions > 0 ? <span className="git-file-row__delta-add">+{file.additions}</span> : null}
+                  {file.deletions > 0 ? <span className="git-file-row__delta-del">−{file.deletions}</span> : null}
+                </span>
+                <span className="git-history-inline__file-path mono" title={file.path}>{file.path}</span>
+              </button>
+            ))}
+          </div>
+        ) : null}
+      </div>
+    );
+  }
+
   function commitDiffStatus(file: { additions: number; deletions: number }): DiffFileInput["status"] {
     if (file.deletions === 0 && file.additions > 0) return "added";
     if (file.additions === 0 && file.deletions > 0) return "deleted";
@@ -2039,7 +2093,7 @@ export default function GitPanel({ browserPath }: Props) {
                               ]
                                 .filter(Boolean)
                                 .join(" ")}
-                              onClick={() => setHistorySelectedHash(row.hash)}
+                              onClick={() => setHistorySelectedHash(active ? "" : row.hash)}
                               onDoubleClick={() => {
                                 setHistorySelectedHash(row.hash);
                                 void loadCommitDetail(row.hash).then((detail) => {
@@ -2057,21 +2111,31 @@ export default function GitPanel({ browserPath }: Props) {
                               <GitGraphLane row={row} />
                               <div className="git-history-row__content">
                                 <div className="git-history-row__subject">
-                                  <div className="git-history-row__refs">
-                                    {refs.slice(0, 3).map((token) => (
-                                      <span key={`${row.hash}-${token}`} className={["git-ref-badge", refBadgeToneClass(token)].join(" ")}>
-                                        {token}
-                                      </span>
-                                    ))}
-                                  </div>
+                                  {refs.slice(0, 3).map((token) => (
+                                    <span key={`${row.hash}-${token}`} className={["git-ref-badge", refBadgeToneClass(token)].join(" ")}>
+                                      {token}
+                                    </span>
+                                  ))}
                                   {refs.length > 3 ? <span className="git-history-row__more">{`+${refs.length - 3}`}</span> : null}
                                   <span className="git-history-row__message">{row.message}</span>
                                 </div>
-                                {historyShowAuthor ? <span className="git-history-row__author">{row.author}</span> : null}
-                                {historyShowDate ? <span className="git-history-row__date">{formatGraphDate(row.dateTimestamp)}</span> : null}
-                                {historyShowHash ? <span className="git-history-row__hash">{row.shortHash}</span> : null}
+                                {historyShowAuthor ? (
+                                  <span className="git-history-row__author" title={row.author}>
+                                    <span
+                                      className="git-history-row__avatar"
+                                      style={{ background: authorColor(row.author) }}
+                                      aria-hidden="true"
+                                    >
+                                      {authorInitial(row.author)}
+                                    </span>
+                                    <span className="git-history-row__author-name">{row.author}</span>
+                                  </span>
+                                ) : null}
+                                {historyShowDate ? <span className="git-history-row__date" title={formatGraphDate(row.dateTimestamp)}>{formatGraphDate(row.dateTimestamp)}</span> : null}
+                                {historyShowHash ? <span className="git-history-row__hash" title={row.shortHash}>{row.shortHash}</span> : null}
                               </div>
                             </button>
+                            {active && activeCommitDetail ? renderHistoryInlineDetail(activeCommitDetail) : null}
                           </div>
                         );
                       })}
@@ -3288,8 +3352,6 @@ export default function GitPanel({ browserPath }: Props) {
         open={historyPathDialogOpen}
         subtitle={t("Filter commit graph to specific repository paths")}
         title={t("Tracked files")}
-        wide
-        tall
       >
         <label className="git-search">
           <Search size={12} />

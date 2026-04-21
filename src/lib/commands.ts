@@ -526,6 +526,7 @@ export const serverMonitorProbe = (params: {
   authMode: string;
   password: string;
   keyPath: string;
+  savedConnectionIndex?: number | null;
 }) => invoke<ServerSnapshotView>("server_monitor_probe", params);
 
 // ── Service Detection ───────────────────────────────────────────
@@ -537,6 +538,7 @@ export const detectServices = (params: {
   authMode: string;
   password: string;
   keyPath: string;
+  savedConnectionIndex?: number | null;
 }) => invoke<DetectedServiceView[]>("detect_services", params);
 
 // ── Docker Extended ─────────────────────────────────────────────

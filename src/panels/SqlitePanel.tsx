@@ -36,7 +36,11 @@ export default function SqlitePanel() {
     try {
       const s = await cmd.sqliteBrowse(path.trim(), nextTable.trim() || null);
       setState(s); setTableName(s.tableName);
-    } catch (e) { setState(null); setError(formatError(e)); }
+    } catch (e) {
+      // Keep prior state visible so a transient browse error doesn't
+      // blank the panel body.
+      setError(formatError(e));
+    }
     finally { setBusy(false); }
   }
 

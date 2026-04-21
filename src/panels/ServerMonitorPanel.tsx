@@ -58,7 +58,7 @@ function serviceTool(service: DetectedServiceView): RightTool | null {
   }
 }
 
-type GaugeTone = "accent" | "pos" | "warn";
+type GaugeTone = "accent" | "pos" | "warn" | "off";
 
 function Gauge({
   icon: Icon,
@@ -75,8 +75,14 @@ function Gauge({
   pct: number;
   tone?: GaugeTone;
 }) {
+  // "off" is the placeholder tone used before the first probe lands —
+  // the bar renders empty and the fill color falls back to the muted
+  // palette so the chrome stays visually neutral.
   const color =
-    tone === "pos" ? "var(--pos)" : tone === "warn" ? "var(--warn)" : "var(--accent)";
+    tone === "pos" ? "var(--pos)"
+      : tone === "warn" ? "var(--warn)"
+      : tone === "off" ? "var(--dim)"
+      : "var(--accent)";
   const clamped = Math.max(0, Math.min(100, pct));
   return (
     <div className="mon-gauge">
@@ -137,6 +143,7 @@ export default function ServerMonitorPanel({ tab }: Props) {
               authMode: tab.sshAuthMode,
               password: tab.sshPassword,
               keyPath: tab.sshKeyPath,
+              savedConnectionIndex: tab.sshSavedConnectionIndex,
             })
           : null;
       if (!s) {
@@ -146,7 +153,8 @@ export default function ServerMonitorPanel({ tab }: Props) {
       setSnap(s);
       setLastProbed(Date.now());
     } catch (e) {
-      setSnap(null);
+      // Keep the last good snapshot visible instead of blanking the whole
+      // panel — a transient SSH hiccup shouldn't unmount the gauges.
       setError(formatError(e));
     } finally {
       setBusy(false);
@@ -169,6 +177,7 @@ export default function ServerMonitorPanel({ tab }: Props) {
         authMode: tab.sshAuthMode,
         password: tab.sshPassword,
         keyPath: tab.sshKeyPath,
+        savedConnectionIndex: tab.sshSavedConnectionIndex,
       });
       setServices(next);
       if (next.length === 0) {
@@ -309,90 +318,96 @@ export default function ServerMonitorPanel({ tab }: Props) {
         tag={connTag}
       />
       <div className="panel-scroll">
-      {snap ? (
-        <section className="mon">
-          <div className="mon-host">
-            <div className="mon-host-top">
-              <StatusDot tone="pos" />
-              <div className="mon-host-name">{connName}</div>
-              <span className="mono mon-host-uptime">{t("uptime")} {snap.uptime}</span>
-            </div>
-            <div className="mon-host-meta mono">
-              {headerMeta}
-              {snap.load1 >= 0 ? (
-                <> · {t("load")} {snap.load1.toFixed(2)} / {snap.load5.toFixed(2)} / {snap.load15.toFixed(2)}</>
-              ) : null}
-            </div>
-          </div>
-
-          <div className="mon-grid">
-            <Gauge
-              icon={<Cpu size={10} />}
-              label={t("CPU")}
-              value={<>{cpuPct.toFixed(1)}<span className="mon-gauge-unit">%</span></>}
-              sub={snap.load1 >= 0 ? `${t("load")} ${snap.load1.toFixed(2)} · ${snap.load5.toFixed(2)} · ${snap.load15.toFixed(2)}` : "—"}
-              pct={cpuPct}
-              tone={toneFromPct(cpuPct)}
-            />
-            <Gauge
-              icon={<MemoryStick size={10} />}
-              label={t("MEMORY")}
-              value={<>{memPct.toFixed(0)}<span className="mon-gauge-unit">%</span></>}
-              sub={`${(snap.memUsedMb / 1024).toFixed(1)} / ${(snap.memTotalMb / 1024).toFixed(1)} GB`}
-              pct={memPct}
-              tone={toneFromPct(memPct)}
-            />
-            <Gauge
-              icon={<Activity size={10} />}
-              label={t("SWAP")}
-              value={<>{snap.swapTotalMb > 0 ? swapPct.toFixed(0) : "0"}<span className="mon-gauge-unit">%</span></>}
-              sub={snap.swapTotalMb > 0
-                ? `${snap.swapUsedMb.toFixed(0)} / ${snap.swapTotalMb.toFixed(0)} MB`
-                : t("no swap")}
-              pct={swapPct}
-              tone={toneFromPct(swapPct)}
-            />
-            <Gauge
-              icon={<HardDrive size={10} />}
-              label={t("DISK")}
-              value={<>{snap.diskUsePct >= 0 ? snap.diskUsePct.toFixed(0) : "—"}<span className="mon-gauge-unit">%</span></>}
-              sub={`${snap.diskAvail} ${t("free of")} ${snap.diskTotal}`}
-              pct={diskPct}
-              tone={toneFromPct(diskPct)}
-            />
-          </div>
-
-          <div className="mon-actions">
-            <button
-              type="button"
-              className="btn is-ghost is-compact"
-              disabled={!canProbe || busy}
-              onClick={() => void probe()}
-            >
-              <RefreshCw size={11} /> {busy ? t("Probing...") : t("Probe now")}
-            </button>
-            <span className="mono mon-actions-hint">
-              {lastProbed ? `${t("last")}: ${formatTimestamp(lastProbed)}` : t("not yet probed")}
+      {/*
+        Always-visible monitor section: chrome (host bar + gauges + probe
+        button row) renders immediately so clicking the Monitor tool
+        never flashes a blank panel. When snapshot is null we render
+        placeholder "—" values; the four Gauge shells stay in place and
+        fill in when probe() lands.
+      */}
+      <section className="mon">
+        <div className="mon-host">
+          <div className="mon-host-top">
+            <StatusDot tone={snap ? "pos" : "off"} />
+            <div className="mon-host-name">{connName}</div>
+            <span className="mono mon-host-uptime">
+              {snap ? `${t("uptime")} ${snap.uptime}` : t("not yet probed")}
             </span>
           </div>
-          {error && <div className="status-note status-note--error">{error}</div>}
-        </section>
-      ) : (
-        <section className="panel-section">
-          <div className="form-stack">
-            <button
-              className="btn is-compact"
-              disabled={!canProbe || busy}
-              onClick={() => void probe()}
-              type="button"
-            >
-              <RefreshCw size={11} /> {busy ? t("Probing...") : t("Probe Server")}
-            </button>
-            {!canProbe && <div className="inline-note">{t("No connection available.")}</div>}
-            {error && <div className="status-note status-note--error">{error}</div>}
+          <div className="mon-host-meta mono">
+            {headerMeta}
+            {snap && snap.load1 >= 0 ? (
+              <> · {t("load")} {snap.load1.toFixed(2)} / {snap.load5.toFixed(2)} / {snap.load15.toFixed(2)}</>
+            ) : null}
           </div>
-        </section>
-      )}
+        </div>
+
+        <div className="mon-grid">
+          <Gauge
+            icon={<Cpu size={10} />}
+            label={t("CPU")}
+            value={snap ? <>{cpuPct.toFixed(1)}<span className="mon-gauge-unit">%</span></> : <>—</>}
+            sub={snap && snap.load1 >= 0
+              ? `${t("load")} ${snap.load1.toFixed(2)} · ${snap.load5.toFixed(2)} · ${snap.load15.toFixed(2)}`
+              : "—"}
+            pct={snap ? cpuPct : 0}
+            tone={snap ? toneFromPct(cpuPct) : "off"}
+          />
+          <Gauge
+            icon={<MemoryStick size={10} />}
+            label={t("MEMORY")}
+            value={snap ? <>{memPct.toFixed(0)}<span className="mon-gauge-unit">%</span></> : <>—</>}
+            sub={snap
+              ? `${(snap.memUsedMb / 1024).toFixed(1)} / ${(snap.memTotalMb / 1024).toFixed(1)} GB`
+              : "—"}
+            pct={snap ? memPct : 0}
+            tone={snap ? toneFromPct(memPct) : "off"}
+          />
+          <Gauge
+            icon={<Activity size={10} />}
+            label={t("SWAP")}
+            value={snap
+              ? <>{snap.swapTotalMb > 0 ? swapPct.toFixed(0) : "0"}<span className="mon-gauge-unit">%</span></>
+              : <>—</>}
+            sub={snap
+              ? (snap.swapTotalMb > 0
+                  ? `${snap.swapUsedMb.toFixed(0)} / ${snap.swapTotalMb.toFixed(0)} MB`
+                  : t("no swap"))
+              : "—"}
+            pct={snap ? swapPct : 0}
+            tone={snap ? toneFromPct(swapPct) : "off"}
+          />
+          <Gauge
+            icon={<HardDrive size={10} />}
+            label={t("DISK")}
+            value={snap
+              ? <>{snap.diskUsePct >= 0 ? snap.diskUsePct.toFixed(0) : "—"}<span className="mon-gauge-unit">%</span></>
+              : <>—</>}
+            sub={snap ? `${snap.diskAvail} ${t("free of")} ${snap.diskTotal}` : "—"}
+            pct={snap ? diskPct : 0}
+            tone={snap ? toneFromPct(diskPct) : "off"}
+          />
+        </div>
+
+        <div className="mon-actions">
+          <button
+            type="button"
+            className="btn is-ghost is-compact"
+            disabled={!canProbe || busy}
+            onClick={() => void probe()}
+          >
+            <RefreshCw size={11} /> {busy ? t("Probing...") : snap ? t("Probe now") : t("Probe Server")}
+          </button>
+          <span className="mono mon-actions-hint">
+            {!canProbe
+              ? t("No connection available.")
+              : lastProbed
+                ? `${t("last")}: ${formatTimestamp(lastProbed)}`
+                : t("not yet probed")}
+          </span>
+        </div>
+        {error && <div className="status-note status-note--error">{error}</div>}
+      </section>
 
       {hasSsh && (
         <section className="panel-section">

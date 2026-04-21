@@ -9,7 +9,7 @@ This file tracks the active Tauri + Rust delivery path only.
 - Desktop shell: `pier-ui-tauri/` (`Tauri 2 + React + TypeScript`)
 - Runtime glue: `pier-ui-tauri/src-tauri/`
 - Backend: `pier-core/`
-- Repo entrypoints: `run.ps1`, `run.sh`, `build.ps1`, `build.sh`
+- Repo entrypoints: `pier-ui-tauri` npm scripts (`npm run tauri dev`, `npm run tauri build`, `npm run bump`)
 - CI: Tauri shell on macOS + Windows, Rust core on macOS + Windows + Linux
 
 ## Shipped

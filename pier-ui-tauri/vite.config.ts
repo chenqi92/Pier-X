@@ -3,38 +3,22 @@ import react from "@vitejs/plugin-react";
 
 // @ts-expect-error process is a nodejs global
 const host = process.env.TAURI_DEV_HOST;
-// @ts-expect-error process is a nodejs global
-const devPort = Number.parseInt(process.env.PIER_DEV_PORT ?? "45120", 10);
-// @ts-expect-error process is a nodejs global
-const hmrPort = Number.parseInt(process.env.PIER_HMR_PORT ?? String(devPort + 1), 10);
 
 // https://vite.dev/config/
-export default defineConfig(async () => ({
+export default defineConfig({
   plugins: [react()],
 
-  // Vite options tailored for Tauri development and only applied in `tauri dev` or `tauri build`
-  //
-  // 1. prevent Vite from obscuring rust errors
+  // Tauri expects a fixed dev server host/port (see src-tauri/tauri.conf.json).
   clearScreen: false,
-  // 2. the repo entrypoint picks a free high port and pins Vite to it for Tauri
   server: {
-    port: devPort,
+    port: 45120,
     strictPort: true,
     host: host || "127.0.0.1",
     hmr: host
-      ? {
-          protocol: "ws",
-          host,
-          port: hmrPort,
-        }
-      : {
-          protocol: "ws",
-          host: "127.0.0.1",
-          port: hmrPort,
-        },
+      ? { protocol: "ws", host, port: 45121 }
+      : { protocol: "ws", host: "127.0.0.1", port: 45121 },
     watch: {
-      // 3. tell Vite to ignore watching `src-tauri`
       ignored: ["**/src-tauri/**"],
     },
   },
-}));
+});

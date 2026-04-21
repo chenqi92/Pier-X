@@ -142,12 +142,22 @@ Reject a change if any of these are true:
 ## Build & run
 
 ```sh
-./run.sh                            # dev: vite + tauri dev
-./build.sh                          # release: vite build + tauri build
-cargo build -p pier-core            # backend only
 cd pier-ui-tauri && npm install     # first-time frontend deps
+cd pier-ui-tauri && npm run tauri dev    # dev: vite + tauri dev
+cd pier-ui-tauri && npm run tauri build  # release: vite build + tauri build
+cargo build -p pier-core            # backend only
+npm --prefix pier-ui-tauri run bump <version>  # sync version across manifests + tag
 ```
 
-Windows equivalents: `run.ps1` / `build.ps1`. Node + npm and the Rust toolchain
-are required; no Qt, CMake, or GPUI toolchain is needed. If a step asks you to
-install Qt or to run `cargo build -p pier-ui-gpui`, it is out of date.
+Node + npm and the Rust toolchain are required; no Qt, CMake, or GPUI toolchain
+is needed. If a step asks you to install Qt or to run `cargo build -p
+pier-ui-gpui`, it is out of date.
+
+Releases are tag-driven:
+
+- Push a `v*.*.*` tag → `.github/workflows/release.yml` builds Linux / Windows
+  x64 / Windows ARM64 / macOS universal bundles and publishes them to the
+  GitHub release for that tag.
+- The same tag pushed to a Gitea remote → `.gitea/workflows/release.yml` builds
+  Linux `.deb` / `.rpm` / `.AppImage` bundles and uploads them to the Gitea
+  release via the Gitea API.

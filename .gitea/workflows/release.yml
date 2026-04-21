@@ -1,0 +1,127 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - 'v*.*.*'
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: 'Release tag (e.g. v0.1.0)'
+        required: true
+        type: string
+
+jobs:
+  publish-linux:
+    name: Publish Linux bundles
+    runs-on: ubuntu-22.04
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Determine tag
+        id: tag
+        shell: bash
+        run: |
+          if [ "${GITHUB_EVENT_NAME}" = "workflow_dispatch" ]; then
+            echo "value=${{ inputs.tag }}" >> "$GITHUB_OUTPUT"
+          else
+            echo "value=${GITHUB_REF#refs/tags/}" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Install system dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            libwebkit2gtk-4.1-dev \
+            libgtk-3-dev \
+            libayatana-appindicator3-dev \
+            librsvg2-dev \
+            libsoup-3.0-dev \
+            libjavascriptcoregtk-4.1-dev \
+            patchelf \
+            file \
+            curl \
+            jq
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+          cache-dependency-path: pier-ui-tauri/package-lock.json
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Install frontend dependencies
+        working-directory: pier-ui-tauri
+        run: npm ci
+
+      - name: Build Tauri bundles
+        working-directory: pier-ui-tauri
+        run: npm run tauri -- build --ci
+
+      - name: Collect release artifacts
+        id: collect
+        shell: bash
+        run: |
+          set -euo pipefail
+          BUNDLE_DIR="pier-ui-tauri/src-tauri/target/release/bundle"
+          mkdir -p dist-assets
+          # Tauri emits .deb, .rpm, and .AppImage for Linux bundles.
+          find "$BUNDLE_DIR" -type f \
+            \( -name '*.deb' -o -name '*.rpm' -o -name '*.AppImage' \) \
+            -exec cp {} dist-assets/ \;
+          echo "---- collected ----"
+          ls -lh dist-assets
+
+      - name: Publish to Gitea Release
+        shell: bash
+        env:
+          GITEA_TOKEN: ${{ secrets.GITEA_TOKEN || github.token }}
+          GITEA_SERVER_URL: ${{ github.server_url }}
+          REPO: ${{ github.repository }}
+          TAG: ${{ steps.tag.outputs.value }}
+        run: |
+          set -euo pipefail
+          api="$GITEA_SERVER_URL/api/v1"
+          auth="Authorization: token $GITEA_TOKEN"
+
+          # 1. Find or create the release for this tag.
+          rel="$(curl -sS -H "$auth" "$api/repos/$REPO/releases/tags/$TAG" || true)"
+          rid="$(echo "$rel" | jq -r '.id // empty')"
+          if [ -z "$rid" ]; then
+            prerelease=false
+            case "$TAG" in v0.*) prerelease=true ;; esac
+            body="$(jq -n \
+              --arg tag "$TAG" \
+              --arg name "Pier-X $TAG" \
+              --argjson pre "$prerelease" \
+              '{tag_name:$tag, name:$name, body:"See assets to download this version and install.", draft:false, prerelease:$pre}')"
+            rel="$(curl -sS -X POST -H "$auth" -H "Content-Type: application/json" \
+              -d "$body" "$api/repos/$REPO/releases")"
+            rid="$(echo "$rel" | jq -r '.id')"
+          fi
+          echo "release id: $rid"
+
+          # 2. Upload each asset; replace any asset that already exists
+          #    for this tag so reruns overwrite stale bundles.
+          for f in dist-assets/*; do
+            [ -e "$f" ] || continue
+            name="$(basename "$f")"
+            existing="$(echo "$rel" | jq -r --arg n "$name" '.assets[]? | select(.name==$n) | .id')"
+            if [ -n "$existing" ]; then
+              echo "replacing existing asset $name ($existing)"
+              curl -sS -X DELETE -H "$auth" \
+                "$api/repos/$REPO/releases/$rid/assets/$existing" > /dev/null || true
+            fi
+            echo "uploading $name ..."
+            curl -sS -X POST -H "$auth" \
+              -F "attachment=@$f" \
+              "$api/repos/$REPO/releases/$rid/assets?name=$name" > /dev/null
+          done
+          echo "done."

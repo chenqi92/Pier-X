@@ -86,35 +86,21 @@ npm ci
 npm run tauri -- build --debug
 ```
 
-### Quickstart
+### Release
 
-The repo ships with one-shot scripts that enter `pier-ui-tauri/` for you.
-
-```bash
-# macOS / Linux
-./run.sh
-
-# Windows (PowerShell)
-.\run.ps1
-```
-
-Build only (no launch):
+Tagged releases are driven by the npm `bump` script, which syncs the version across every manifest and creates a matching git tag:
 
 ```bash
-./build.sh        # macOS / Linux
-.\build.ps1       # Windows
+cd pier-ui-tauri
+npm run bump 0.2.0        # explicit
+npm run bump patch        # or minor / major
+git push && git push --tags
 ```
 
-The scripts will install frontend dependencies on demand and then run the matching Tauri command. `run.*` launches `tauri dev`; `build.*` runs `tauri build`.
+Pushing a `v*.*.*` tag triggers two release workflows:
 
-The scripts honour these environment variables:
-
-| Variable | Default | Purpose |
-|---|---|---|
-| `BUILD_TYPE` | `Debug` for `run.*`, `Release` for `build.*` | Maps to `tauri dev` / `tauri build` debug vs release mode |
-| `BUILD_DIR` | Tauri default target dir | When set, exported as `CARGO_TARGET_DIR` |
-| `PIER_UI_DIR` | `pier-ui-tauri` | Override the active shell directory |
-| `NO_BUNDLE` | `0` | When set to `1`, `build.*` adds `--no-bundle` |
+- **GitHub** (`.github/workflows/release.yml`) — builds and publishes Linux, Windows x64, Windows ARM64, and macOS universal Tauri bundles to GitHub Releases.
+- **Gitea** (`.gitea/workflows/release.yml`) — builds Linux `.deb` / `.rpm` / `.AppImage` on an `ubuntu-22.04` Gitea runner and uploads them to the Gitea release via API.
 
 ---
 

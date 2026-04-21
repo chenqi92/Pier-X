@@ -9,10 +9,12 @@ Pier-X now ships on a single active desktop stack:
 ## Build rules
 
 - Do not reintroduce `Qt`, `QML`, `CMake`, `Corrosion`, or C-ABI bridge files into the active build path.
-- Keep the repo-root entrypoints aligned with the active shell:
-  - `run.ps1` / `run.sh`
-  - `build.ps1` / `build.sh`
+- Use the npm scripts inside `pier-ui-tauri/` as the canonical entrypoints:
+  - `npm run tauri dev` — development
+  - `npm run tauri build` — release bundles
+  - `npm run bump <version>` — sync version across manifests and tag
 - Prefer direct Rust crate integration from `pier-ui-tauri/src-tauri` to `pier-core`.
+- Releases are tag-driven via `.github/workflows/release.yml` (GitHub, all desktop OS) and `.gitea/workflows/release.yml` (Gitea, Linux); no wrapper shell scripts at the repo root.
 
 ## Frontend rules
 

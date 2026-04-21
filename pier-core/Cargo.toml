@@ -28,7 +28,7 @@ serde_json = "1"
 keyring = "3"
 
 # Cross-platform paths
-directories = "5"
+directories = "6"
 
 # Terminal emulation — VT100 / ANSI parser (cross-platform, pure Rust)
 vte = "0.15"

@@ -69,7 +69,7 @@ tokio-postgres = "0.7"
 # IDEA-matching topo order, but enriches results with libgit2
 # for ref decorations. Also used by `list_branches()`,
 # `first_parent_chain()`, and `detect_default_branch()`.
-git2 = { version = "0.19", default-features = false }
+git2 = { version = "0.20", default-features = false }
 
 # Markdown → HTML renderer for the local Markdown preview
 # panel (M5e). `pulldown-cmark` is the reference CommonMark

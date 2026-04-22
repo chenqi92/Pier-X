@@ -70,17 +70,33 @@ pub struct ServerSnapshot {
 /// to -1 / empty, so a partial result is better than
 /// an error.
 pub async fn probe(session: &SshSession) -> Result<ServerSnapshot> {
-    // Chain commands with a separator line we can split on.
-    let cmd = "echo '---UPTIME---' && uptime 2>/dev/null && \
-               echo '---FREE---' && (free -m 2>/dev/null || vm_stat 2>/dev/null) && \
-               echo '---DF---' && df -h / 2>/dev/null && \
-               echo '---CPUSTAT---' && head -1 /proc/stat 2>/dev/null";
+    // Chain commands with a separator line we can split on. Each step
+    // is wrapped in `( … || true )` so a missing tool (no `free` on
+    // BusyBox, no `/proc/stat` on macOS, an unmounted `/`) doesn't
+    // short-circuit the rest of the chain — the section just stays
+    // empty and the parser falls back to its `-1` defaults. Without
+    // this the user can see a partial-data snapshot (CPU but no mem,
+    // for example) when one earlier command had a hiccup.
+    //
+    // `LC_ALL=C` forces predictable English output regardless of the
+    // remote's locale (e.g. a server set to zh_CN.UTF-8 would print
+    // `内存:` instead of `Mem:` and the parser would skip the row).
+    let cmd = "LC_ALL=C; export LC_ALL; \
+               echo '---UPTIME---'; (uptime 2>/dev/null || true); \
+               echo '---FREE---'; (free -m 2>/dev/null || vm_stat 2>/dev/null || true); \
+               echo '---DF---'; (df -hP / 2>/dev/null || df -h / 2>/dev/null || true); \
+               echo '---CPUSTAT---'; (head -1 /proc/stat 2>/dev/null || true)";
     let (exit, stdout) = session.exec_command(cmd).await?;
     if exit != 0 && stdout.is_empty() {
         return Err(SshError::InvalidConfig(format!(
             "monitor probe exited {exit} with empty output"
         )));
     }
+    // Some shells / wrappers (`free` aliased to a colorized version,
+    // motd hooks that splice ANSI into the channel) inject escape
+    // sequences. Strip them up front so the line-prefix matchers
+    // below don't miss a `\x1b[1mMem:` styled row.
+    let stdout = strip_ansi(&stdout);
 
     let mut snap = ServerSnapshot {
         load_1: -1.0,
@@ -185,15 +201,23 @@ fn parse_uptime(text: &str, snap: &mut ServerSnapshot) {
 /// ```
 fn parse_free(text: &str, snap: &mut ServerSnapshot) {
     for line in text.lines() {
-        let trimmed = line.trim();
-        if trimmed.starts_with("Mem:") {
+        // Strip whitespace AND any leading non-letter junk a wrapper
+        // might inject (control bytes already removed by `strip_ansi`,
+        // but a stray BOM or `>` from a prompt could still slip in).
+        let trimmed = line
+            .trim_start_matches(|c: char| !c.is_ascii_alphabetic())
+            .trim();
+        // Case-insensitive prefix check against the row label, with
+        // an optional `:` — covers `Mem:`, `mem `, `Memory:` etc.
+        let lower = trimmed.to_ascii_lowercase();
+        if lower.starts_with("mem") {
             let nums = extract_numbers(trimmed);
             if nums.len() >= 3 {
                 snap.mem_total_mb = nums[0];
                 snap.mem_used_mb = nums[1];
                 snap.mem_free_mb = nums[2];
             }
-        } else if trimmed.starts_with("Swap:") {
+        } else if lower.starts_with("swap") {
             let nums = extract_numbers(trimmed);
             if nums.len() >= 2 {
                 snap.swap_total_mb = nums[0];
@@ -203,28 +227,98 @@ fn parse_free(text: &str, snap: &mut ServerSnapshot) {
     }
 }
 
+/// Strip ANSI CSI escape sequences (`\x1b[…<letter>`) from a string.
+/// Used before parsing so a colorized `free` / `df` / motd wrapper
+/// doesn't slide a `\x1b[1m` past our line-prefix matchers. Keeps
+/// other bytes (including UTF-8) untouched.
+fn strip_ansi(text: &str) -> String {
+    let mut out = String::with_capacity(text.len());
+    let bytes = text.as_bytes();
+    let mut i = 0;
+    while i < bytes.len() {
+        if bytes[i] == 0x1b && i + 1 < bytes.len() && bytes[i + 1] == b'[' {
+            // Skip CSI: ESC [ <params> <final letter>
+            i += 2;
+            while i < bytes.len() {
+                let b = bytes[i];
+                i += 1;
+                if (b'@'..=b'~').contains(&b) {
+                    break;
+                }
+            }
+            continue;
+        }
+        // Push the next byte as a UTF-8-safe slice — `text` is &str
+        // so we know byte boundaries align with char boundaries.
+        let ch_end = next_char_boundary(text, i);
+        out.push_str(&text[i..ch_end]);
+        i = ch_end;
+    }
+    out
+}
+
+fn next_char_boundary(text: &str, start: usize) -> usize {
+    let mut end = start + 1;
+    while !text.is_char_boundary(end) && end < text.len() {
+        end += 1;
+    }
+    end.min(text.len())
+}
+
 /// Parse `df -h /` output. Example:
 /// ```text
 /// Filesystem      Size  Used Avail Use% Mounted on
 /// /dev/sda1        50G   23G   25G  48% /
 /// ```
 fn parse_df(text: &str, snap: &mut ServerSnapshot) {
-    for line in text.lines() {
-        let trimmed = line.trim();
-        // Skip the header.
-        if trimmed.starts_with("Filesystem") || trimmed.is_empty() {
+    // df occasionally wraps a long device path onto its own line and
+    // pushes the size/use/mount columns to the next one. Coalesce
+    // any line that has fewer than 5 whitespace-separated tokens
+    // with the following line so we still see a complete row.
+    let mut joined: Vec<String> = Vec::new();
+    let mut buffer = String::new();
+    for raw in text.lines() {
+        let trimmed = raw.trim();
+        if trimmed.is_empty() {
             continue;
         }
-        let parts: Vec<&str> = trimmed.split_whitespace().collect();
-        // df -h format: Filesystem Size Used Avail Use% Mounted
-        if parts.len() >= 5 {
-            snap.disk_total = parts[1].to_string();
-            snap.disk_used = parts[2].to_string();
-            snap.disk_avail = parts[3].to_string();
-            let pct_str = parts[4].trim_end_matches('%');
-            snap.disk_use_pct = pct_str.parse().unwrap_or(-1.0);
-            break; // Only care about root.
+        if !buffer.is_empty() {
+            buffer.push(' ');
         }
+        buffer.push_str(trimmed);
+        if buffer.split_whitespace().count() >= 5 {
+            joined.push(std::mem::take(&mut buffer));
+        }
+    }
+    if !buffer.is_empty() {
+        joined.push(buffer);
+    }
+
+    for line in &joined {
+        // Skip the header row whichever case it's in.
+        let lower = line.to_ascii_lowercase();
+        if lower.starts_with("filesystem") {
+            continue;
+        }
+        let parts: Vec<&str> = line.split_whitespace().collect();
+        if parts.len() < 5 {
+            continue;
+        }
+        // Find the percent-bearing column rather than assuming the
+        // 5th token — `df -hP` and `df -h` both put it before the
+        // mount point, but POSIX has it as the 5th and BSD as the
+        // 4th. Scanning makes both layouts work.
+        let pct_idx = parts.iter().position(|p| p.ends_with('%'));
+        let Some(pct_idx) = pct_idx else { continue };
+        if pct_idx < 3 {
+            continue;
+        }
+        snap.disk_total = parts[pct_idx - 3].to_string();
+        snap.disk_used = parts[pct_idx - 2].to_string();
+        snap.disk_avail = parts[pct_idx - 1].to_string();
+        let pct_str = parts[pct_idx].trim_end_matches('%');
+        snap.disk_use_pct = pct_str.parse().unwrap_or(-1.0);
+        break; // Only care about root (first data line).
     }
 }
 
@@ -369,5 +463,49 @@ Filesystem      Size  Used Avail Use% Mounted on
         };
         parse_free("", &mut snap);
         assert!((snap.mem_total_mb - (-1.0)).abs() < 0.001);
+    }
+
+    #[test]
+    fn parse_free_tolerates_leading_ansi_strip_and_lowercase() {
+        // After `strip_ansi` runs the row label can land in any case
+        // and may carry whitespace from a wrapped column header.
+        // The lenient prefix match should still pick it up.
+        let mut snap = ServerSnapshot {
+            mem_total_mb: -1.0,
+            ..Default::default()
+        };
+        let text = "              total        used        free      shared  buff/cache   available
+mem:           7841        2031        3092         512        2718        5417
+swap:          2047           0        2047";
+        parse_free(text, &mut snap);
+        assert!((snap.mem_total_mb - 7841.0).abs() < 0.1);
+        assert!((snap.mem_used_mb - 2031.0).abs() < 0.1);
+        assert!((snap.swap_total_mb - 2047.0).abs() < 0.1);
+    }
+
+    #[test]
+    fn strip_ansi_removes_csi_sequences() {
+        let s = "\x1b[1mMem:\x1b[0m  100 50 50";
+        let stripped = strip_ansi(s);
+        assert_eq!(stripped, "Mem:  100 50 50");
+    }
+
+    #[test]
+    fn parse_df_handles_wrapped_filesystem_column() {
+        // Long device paths (LVM / encrypted volumes) make df wrap
+        // the first column onto its own line. The coalescing logic
+        // joins it with the size/use/mount row that follows.
+        let mut snap = ServerSnapshot {
+            disk_use_pct: -1.0,
+            ..Default::default()
+        };
+        let text = "Filesystem                                       Size  Used Avail Use% Mounted on
+/dev/mapper/long--volume--name--that--wraps
+                                                  100G   42G   58G  43% /";
+        parse_df(text, &mut snap);
+        assert_eq!(snap.disk_total, "100G");
+        assert_eq!(snap.disk_used, "42G");
+        assert_eq!(snap.disk_avail, "58G");
+        assert!((snap.disk_use_pct - 43.0).abs() < 0.1);
     }
 }

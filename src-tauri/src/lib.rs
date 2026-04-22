@@ -692,6 +692,29 @@ fn build_ssh_session_saved_or_params(
     password: &str,
     key_path: &str,
 ) -> Result<SshSession, String> {
+    // Prefer the explicit param path whenever the caller hands us a
+    // non-empty credential — that's the most recent intent (a
+    // captured terminal password, a freshly typed dialog entry, etc.)
+    // and bypasses the saved-config's KeychainPassword path which
+    // would otherwise blow up with "saved password missing in
+    // keychain" the moment the OS credential store is empty or out
+    // of sync. Without this short-circuit, panels that route through
+    // `build_ssh_session_saved_or_params` (Docker, SFTP, MySQL/PG/
+    // Redis tunnels) regress whenever the keychain is missing even
+    // though Server Monitor — which uses the params path directly —
+    // happily connects.
+    let have_param_credential = match auth_mode {
+        "password" => !password.is_empty(),
+        "key" => !key_path.is_empty(),
+        "agent" => true,
+        _ => false,
+    };
+    if have_param_credential {
+        return build_ssh_session_from_params(
+            host, port, user, auth_mode, password, key_path,
+        );
+    }
+
     if let Some(index) = saved_index {
         if let Ok(config) = open_saved_ssh_config(index) {
             return SshSession::connect_blocking(&config, HostKeyVerifier::default())

@@ -1,5 +1,5 @@
 import { Activity, Cpu, Database, HardDrive, KeyRound, MemoryStick, PackageSearch, RefreshCw } from "lucide-react";
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import type { ReactNode } from "react";
 import * as cmd from "../lib/commands";
 import { RIGHT_TOOL_META } from "../lib/rightToolMeta";
@@ -126,6 +126,11 @@ export default function ServerMonitorPanel({ tab, onEditConnection }: Props) {
   const setTabRightTool = useTabStore((s) => s.setTabRightTool);
   const [snap, setSnap] = useState<ServerSnapshotView | null>(null);
   const [busy, setBusy] = useState(false);
+  // Mirrors `busy` for the polling interval — reading it via ref
+  // means we don't have to put `busy` in the effect's deps and pay
+  // the interval-teardown-on-every-probe cost.
+  const busyRef = useRef(false);
+  busyRef.current = busy;
   const [error, setError] = useState("");
   // Track the missing-keychain condition separately so the recovery
   // button stays available even after a localized error string has
@@ -292,6 +297,12 @@ export default function ServerMonitorPanel({ tab, onEditConnection }: Props) {
   // the component is keyed by tab.id in RightSidebar so this fires on
   // tab switch too. Password-auth saved tabs that haven't primed their
   // password yet will no-op here; user can tap "探测服务器" to retry.
+  // Also installs a 5-second polling interval so the gauges actually
+  // move; without it the panel reads as "frozen" because the backend
+  // probe is one-shot (`server_monitor::probe` runs `uptime + free +
+  // df + /proc/stat` in a single SSH exec call). The poll skips when
+  // a previous probe is still in flight (`busy` guard) so a slow
+  // remote can't pile up overlapping requests.
   useEffect(() => {
     const ready =
       isLocal ||
@@ -304,6 +315,15 @@ export default function ServerMonitorPanel({ tab, onEditConnection }: Props) {
     if (sshTarget) {
       void detect();
     }
+    const interval = window.setInterval(() => {
+      // Re-read busy from the latest closure via a state check —
+      // intentionally letting the JS engine grab the freshest value
+      // since `busy` isn't in the deps (we don't want the interval
+      // teardown/recreate cycle every time it flips).
+      if (busyRef.current) return;
+      void probe();
+    }, 5000);
+    return () => window.clearInterval(interval);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [
     tab.id,

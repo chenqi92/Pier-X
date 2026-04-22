@@ -469,6 +469,10 @@ export const zhExtra: Record<string, string> = {
   "Invalid SSH configuration: {detail}": "SSH 配置无效：{detail}",
   "SSH I/O error: {detail}": "SSH I/O 错误：{detail}",
   "Invalid configuration: {detail}": "配置无效：{detail}",
+  "Saved password is missing from the system keychain. Re-enter the password to recover this connection.":
+    "系统密钥环中找不到该连接的保存密码，请重新输入密码以恢复连接。",
+  "Re-enter password": "重新输入密码",
+  "Keychain lookup failed: {detail}": "密钥环读取失败：{detail}",
   "Unexpected PING reply: {reply}": "意外的 PING 响应：{reply}",
   "Refusing unsafe database identifier: {name}": "拒绝不安全的数据库标识符：{name}",
   "Refusing unsafe table identifier: {name}": "拒绝不安全的数据表标识符：{name}",

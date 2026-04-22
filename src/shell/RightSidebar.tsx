@@ -1,5 +1,5 @@
 import type { RightTool, TabState } from "../lib/types";
-import { useEffect, useMemo } from "react";
+import { useEffect, useMemo, useState } from "react";
 import * as cmd from "../lib/commands";
 import { RIGHT_TOOL_META } from "../lib/rightToolMeta";
 import { useI18n } from "../i18n/useI18n";
@@ -28,6 +28,9 @@ type Props = {
   onToolChange: (tool: RightTool) => void;
   onConnectSaved: (index: number) => void;
   onNewConnection: () => void;
+  /** Open the saved-connection editor — passed down to panels that need
+   *  to recover from a "saved password missing" error. */
+  onEditConnection: (index: number) => void;
   /** App-owned collapse state so the outer grid can reclaim right-panel width. */
   collapsed: boolean;
   onToggleCollapsed: () => void;
@@ -62,8 +65,10 @@ function ToolContent({
   browserPath,
   markdownPath,
   unknownToolLabel,
+  isActive,
   onConnectSaved,
   onNewConnection,
+  onEditConnection,
   t,
 }: {
   tool: RightTool;
@@ -71,16 +76,23 @@ function ToolContent({
   browserPath: string;
   markdownPath: string;
   unknownToolLabel: string;
+  /** True when this slot is the visible right-side tool. Threaded into
+   *  panels that do background polling so hidden (keep-alive) instances
+   *  don't burn IPC. */
+  isActive: boolean;
   onConnectSaved: (index: number) => void;
   onNewConnection: () => void;
+  onEditConnection: (index: number) => void;
   t: (s: string) => string;
 }) {
   const tabKey = tab?.id ?? "no-tab";
   switch (tool) {
     case "git":
-      return <GitPanel key={tabKey} browserPath={browserPath} />;
+      return <GitPanel key={tabKey} browserPath={browserPath} isActive={isActive} />;
     case "monitor":
-      return tab ? <ServerMonitorPanel key={tab.id} tab={tab} /> : renderSplash("monitor", t, onConnectSaved, onNewConnection);
+      return tab
+        ? <ServerMonitorPanel key={tab.id} tab={tab} onEditConnection={onEditConnection} />
+        : renderSplash("monitor", t, onConnectSaved, onNewConnection);
     case "docker":
       return tab ? <DockerPanel key={tab.id} tab={tab} /> : renderSplash("docker", t, onConnectSaved, onNewConnection);
     case "mysql":
@@ -136,6 +148,7 @@ export default function RightSidebar({
   onToolChange,
   onConnectSaved,
   onNewConnection,
+  onEditConnection,
   collapsed,
   onToggleCollapsed,
 }: Props) {
@@ -145,11 +158,34 @@ export default function RightSidebar({
   const ahead = useStatusStore((s) => s.ahead);
   const behind = useStatusStore((s) => s.behind);
 
-  const hasRemoteContext = activeTab?.backend === "ssh";
+  // "Remote context" is true whenever the active tab carries SSH
+  // addressing — either because it's a real SSH tab or because the
+  // user typed `ssh user@host` in a local terminal and we mirrored
+  // the target into the tab state. Both cases should unlock the
+  // remote-only tools in ToolStrip.
+  const hasRemoteContext = !!(
+    activeTab && activeTab.sshHost.trim() && activeTab.sshUser.trim()
+  );
   const unknownTool = t("Unknown tool.");
-  const useOuterShell = activeTool === "git" || activeTool === "markdown";
-  const headerMeta = rightHeaderMeta(activeTool, browserPath, selectedMarkdownPath, branch, ahead, behind);
-  const HeaderIcon = useOuterShell ? RIGHT_TOOL_META[activeTool].icon : undefined;
+
+  // Keep-alive: once a tool has been opened for the current tab, its panel
+  // stays mounted (hidden via CSS) so returning to it is instant — no
+  // re-fetching git_panel_state / docker_overview / DB connects. Visited
+  // resets when the active tab changes so we don't keep panels for stale
+  // tabs alive; tab switches still cost exactly one mount.
+  const tabKey = activeTab?.id ?? "no-tab";
+  const [visited, setVisited] = useState<{ tabKey: string; tools: RightTool[] }>(
+    { tabKey, tools: [activeTool] },
+  );
+  useEffect(() => {
+    setVisited((prev) => {
+      if (prev.tabKey !== tabKey) {
+        return { tabKey, tools: [activeTool] };
+      }
+      if (prev.tools.includes(activeTool)) return prev;
+      return { tabKey, tools: [...prev.tools, activeTool] };
+    });
+  }, [tabKey, activeTool]);
 
   const detectedEntry = useDetectedServicesStore((s) =>
     activeTab ? s.byTab[activeTab.id] : undefined,
@@ -159,9 +195,13 @@ export default function RightSidebar({
   const setError = useDetectedServicesStore((s) => s.setError);
 
   useEffect(() => {
-    if (!activeTab || activeTab.backend !== "ssh") return;
+    // Run detection any time we have an SSH target on the tab — either
+    // because backend === "ssh" or because the user typed `ssh ...` in
+    // a local terminal and we synced the addressing fields. The
+    // store entry guard prevents re-running for already-detected tabs.
+    if (!activeTab) return;
+    if (!activeTab.sshHost.trim() || !activeTab.sshUser.trim()) return;
     if (detectedEntry) return;
-    if (!activeTab.sshHost) return;
     setPending(activeTab.id);
     const tabId = activeTab.id;
     cmd
@@ -182,6 +222,12 @@ export default function RightSidebar({
         setReady(tabId, tools);
       })
       .catch(() => setError(tabId));
+    // sshPassword / sshKeyPath are used inside but must NOT be reactive:
+    // passwords arrive async via sshConnectionResolvePassword and would
+    // otherwise re-trigger detection mid-flight. Detection is keyed on
+    // connection identity (host/port/user/authMode) + the `detectedEntry`
+    // guard, which is the right staleness signal.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [
     activeTab?.id,
     activeTab?.backend,
@@ -189,8 +235,6 @@ export default function RightSidebar({
     activeTab?.sshPort,
     activeTab?.sshUser,
     activeTab?.sshAuthMode,
-    activeTab?.sshPassword,
-    activeTab?.sshKeyPath,
     detectedEntry,
     setPending,
     setReady,
@@ -206,39 +250,64 @@ export default function RightSidebar({
     <div className="rightzone">
       {expanded && (
         <div className="rightpanel">
-          {useOuterShell ? (
-            <>
-              <PanelHeader
-                className="is-right"
-                icon={HeaderIcon}
-                title={t(RIGHT_TOOL_META[activeTool].label)}
-                meta={headerMeta}
-              />
-              <div className="panel-body">
-                <ToolContent
-                  tool={activeTool}
-                  tab={activeTab}
-                  browserPath={browserPath}
-                  markdownPath={selectedMarkdownPath}
-                  unknownToolLabel={unknownTool}
-                  onConnectSaved={onConnectSaved}
-                  onNewConnection={onNewConnection}
-                  t={t}
-                />
+          {visited.tools.map((tool) => {
+            const isActive = tool === activeTool;
+            const useOuterShell = tool === "git" || tool === "markdown";
+            const headerMeta = rightHeaderMeta(
+              tool,
+              browserPath,
+              selectedMarkdownPath,
+              branch,
+              ahead,
+              behind,
+            );
+            const HeaderIcon = useOuterShell ? RIGHT_TOOL_META[tool].icon : undefined;
+            return (
+              <div
+                key={tool}
+                className={"right-tool-slot" + (isActive ? "" : " is-hidden")}
+                aria-hidden={!isActive}
+              >
+                {useOuterShell ? (
+                  <>
+                    <PanelHeader
+                      className="is-right"
+                      icon={HeaderIcon}
+                      title={t(RIGHT_TOOL_META[tool].label)}
+                      meta={headerMeta}
+                    />
+                    <div className="panel-body">
+                      <ToolContent
+                        tool={tool}
+                        tab={activeTab}
+                        browserPath={browserPath}
+                        markdownPath={selectedMarkdownPath}
+                        unknownToolLabel={unknownTool}
+                        isActive={isActive}
+                        onConnectSaved={onConnectSaved}
+                        onNewConnection={onNewConnection}
+                        onEditConnection={onEditConnection}
+                        t={t}
+                      />
+                    </div>
+                  </>
+                ) : (
+                  <ToolContent
+                    tool={tool}
+                    tab={activeTab}
+                    browserPath={browserPath}
+                    markdownPath={selectedMarkdownPath}
+                    unknownToolLabel={unknownTool}
+                    isActive={isActive}
+                    onConnectSaved={onConnectSaved}
+                    onNewConnection={onNewConnection}
+                    onEditConnection={onEditConnection}
+                    t={t}
+                  />
+                )}
               </div>
-            </>
-          ) : (
-            <ToolContent
-              tool={activeTool}
-              tab={activeTab}
-              browserPath={browserPath}
-              markdownPath={selectedMarkdownPath}
-              unknownToolLabel={unknownTool}
-              onConnectSaved={onConnectSaved}
-              onNewConnection={onNewConnection}
-              t={t}
-            />
-          )}
+            );
+          })}
         </div>
       )}
       <ToolStrip

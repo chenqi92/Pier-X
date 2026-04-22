@@ -183,12 +183,33 @@ export default function LogViewerPanel({ tab }: Props) {
   useEffect(() => {
     if (!streamId) return;
 
-    let disposed = false;
+    // Adaptive drain cadence. A busy stream (new bytes on every tick) stays
+    // at 200ms for low latency; an idle stream backs off exponentially to
+    // 2s so we don't burn IPC on silence. Each non-empty drain resets to
+    // the fast tier — the loop keeps feel snappy once logs start flowing.
+    const MIN_MS = 200;
+    const MAX_MS = 2000;
 
-    const drain = () => {
+    let disposed = false;
+    let timerId: number | null = null;
+    let delay = MIN_MS;
+
+    const schedule = () => {
+      if (disposed) return;
+      timerId = window.setTimeout(run, delay);
+    };
+
+    const run = () => {
       cmd.logStreamDrain(streamId)
         .then((batch) => {
-          if (disposed || batch.length === 0) return;
+          if (disposed) return;
+
+          if (batch.length === 0) {
+            delay = Math.min(delay * 2, MAX_MS);
+            schedule();
+            return;
+          }
+          delay = MIN_MS;
 
           const now = clockStamp();
           setEvents((current) => {
@@ -210,7 +231,9 @@ export default function LogViewerPanel({ tab }: Props) {
               setError(localizeRuntimeMessage(terminalEvent.text || t("Log stream ended with an error."), t));
             }
             void stopStream(streamId);
+            return;
           }
+          schedule();
         })
         .catch((drainError) => {
           if (disposed) return;
@@ -219,11 +242,10 @@ export default function LogViewerPanel({ tab }: Props) {
         });
     };
 
-    drain();
-    const intervalId = window.setInterval(drain, 200);
+    run();
     return () => {
       disposed = true;
-      window.clearInterval(intervalId);
+      if (timerId !== null) window.clearTimeout(timerId);
     };
   }, [streamId]);
 

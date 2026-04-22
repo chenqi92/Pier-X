@@ -1,7 +1,42 @@
 import { useEffect, useState } from "react";
 import { getCurrentWindow } from "@tauri-apps/api/window";
-import { Maximize2, Minimize2, Minus, X } from "lucide-react";
 import { useI18n } from "../i18n/useI18n";
+
+const glyphProps = {
+  width: 10,
+  height: 10,
+  viewBox: "0 0 10 10",
+  fill: "none",
+  stroke: "currentColor",
+  strokeWidth: 1,
+  shapeRendering: "crispEdges" as const,
+  "aria-hidden": true,
+};
+
+const MinimizeGlyph = () => (
+  <svg {...glyphProps}>
+    <line x1="0" y1="5" x2="10" y2="5" />
+  </svg>
+);
+
+const MaximizeGlyph = () => (
+  <svg {...glyphProps}>
+    <rect x="0.5" y="0.5" width="9" height="9" />
+  </svg>
+);
+
+const RestoreGlyph = () => (
+  <svg {...glyphProps}>
+    <rect x="0.5" y="2.5" width="7" height="7" />
+    <path d="M2.5 2.5 V0.5 H9.5 V7.5 H7.5" />
+  </svg>
+);
+
+const CloseGlyph = () => (
+  <svg {...glyphProps}>
+    <path d="M0 0 L10 10 M10 0 L0 10" />
+  </svg>
+);
 
 /**
  * Windows / Linux caption controls. macOS uses the OS's native traffic
@@ -35,7 +70,7 @@ export default function WindowControls() {
         title={t("Minimize")}
         onClick={() => void win.minimize().catch(() => {})}
       >
-        <Minus size={14} />
+        <MinimizeGlyph />
       </button>
       <button
         type="button"
@@ -43,7 +78,7 @@ export default function WindowControls() {
         title={maximized ? t("Restore") : t("Maximize")}
         onClick={() => void win.toggleMaximize().catch(() => {})}
       >
-        {maximized ? <Minimize2 size={12} /> : <Maximize2 size={12} />}
+        {maximized ? <RestoreGlyph /> : <MaximizeGlyph />}
       </button>
       <button
         type="button"
@@ -51,7 +86,7 @@ export default function WindowControls() {
         title={t("Close")}
         onClick={() => void win.close().catch(() => {})}
       >
-        <X size={14} />
+        <CloseGlyph />
       </button>
     </div>
   );

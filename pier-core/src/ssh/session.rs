@@ -160,7 +160,7 @@ impl SshSession {
                     Ok(Some(p)) => p,
                     Ok(None) => {
                         return Err(SshError::InvalidConfig(format!(
-                            "no keychain entry for credential_id={credential_id}",
+                            "saved password missing in keychain (credential_id={credential_id})",
                         )));
                     }
                     Err(e) => {

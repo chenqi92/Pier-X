@@ -89,6 +89,22 @@ function localizeRuntimeMessageInternal(message: string, t: Translator, depth: n
       resolve: ([, duration]) => t("SSH connection timed out after {duration}.", { duration }),
     },
     {
+      // Backend (resolve_password_for_auth + ssh::session) emits this
+      // verbatim when the keychain entry behind a saved password
+      // connection is gone. Match it both as a bare message and when
+      // wrapped by `invalid ssh config:` so the friendly recovery hint
+      // surfaces in either case — without the misleading "SSH
+      // configuration invalid" prefix. The panel UI uses
+      // `isMissingKeychainError` to decide whether to show its
+      // "Re-enter password" affordance.
+      pattern: /^(?:invalid ssh config:\s*)?saved password missing in keychain(?: \(credential_id=.+\))?$/i,
+      resolve: () => t("Saved password is missing from the system keychain. Re-enter the password to recover this connection."),
+    },
+    {
+      pattern: /^(?:invalid ssh config:\s*)?keychain lookup failed for [^:]+: (.+)$/i,
+      resolve: ([, detail]) => t("Keychain lookup failed: {detail}", { detail }),
+    },
+    {
       pattern: /^invalid ssh config: (.+)$/i,
       resolve: ([, detail]) => t("Invalid SSH configuration: {detail}", {
         detail: localizeRuntimeMessageInternal(detail, t, depth + 1),
@@ -300,4 +316,25 @@ export function localizeRuntimeMessage(message: string, t: Translator) {
 
 export function localizeError(error: unknown, t: Translator) {
   return localizeRuntimeMessageInternal(getMessage(error), t, 0);
+}
+
+/**
+ * True when the backend error indicates the saved-connection password
+ * cannot be read from the OS keychain. Panels use this to offer a
+ * "re-enter password" recovery flow instead of letting the user stare
+ * at an opaque error.
+ *
+ * Matches both the raw form (from `resolve_password_for_auth`) and the
+ * `invalid ssh config:` wrapped form (from `SshSession::connect`),
+ * unwrapping any `Error invoking tauri command:` envelopes Tauri adds
+ * around invoke rejections.
+ */
+export function isMissingKeychainError(error: unknown): boolean {
+  let value = String(getMessage(error) ?? "").trim();
+  for (let depth = 0; depth < 6; depth++) {
+    const wrapper = value.match(/^(?:Error invoking [^:]+:|failed to invoke command [^:]+:)\s*(.+)$/i);
+    if (!wrapper) break;
+    value = wrapper[1].trim();
+  }
+  return /^(?:invalid ssh config:\s*)?saved password missing in keychain\b/i.test(value);
 }

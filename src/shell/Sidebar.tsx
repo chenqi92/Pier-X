@@ -7,9 +7,11 @@ import {
   FolderPlus,
   FolderTree,
   GripVertical,
+  HardDrive,
   Home,
   Key,
   Lock,
+  Monitor,
   Pencil,
   Plus,
   RefreshCw,
@@ -209,14 +211,51 @@ function planGroupMove(
   return { order, groups };
 }
 
+/** Sentinel for "This PC" / drive-list view. Picked so it can't collide
+ *  with any real filesystem path on any OS. */
+const DRIVES_PATH = "pier:drives";
+
+function isWindowsPath(path: string): boolean {
+  return /^[A-Za-z]:[\\/]?/.test(path) || /^\\\\/.test(path);
+}
+
+/** Separator for joining a path's children — Windows keeps backslashes so
+ *  `list_directory` receives native-shaped paths and the backend's
+ *  `resolve_existing_path` won't silently fall back to cwd. */
+function sepFor(path: string): string {
+  return isWindowsPath(path) ? "\\" : "/";
+}
+
+/** Return the root prefix of a Windows path (e.g. `E:\`, `\\host\share\`)
+ *  or empty string for POSIX paths. Roots always end with a separator so
+ *  `fs::read_dir` on Windows accepts them. */
+function windowsRoot(path: string): string {
+  if (/^[A-Za-z]:/.test(path)) return path.slice(0, 2) + "\\";
+  const unc = path.match(/^\\\\[^\\]+\\[^\\]+/);
+  if (unc) return unc[0] + "\\";
+  return "";
+}
+
 function pathSegments(path: string, home: string): { name: string; path: string }[] {
-  if (!path) return [];
+  if (!path || path === DRIVES_PATH) return [];
   const segments: { name: string; path: string }[] = [];
   if (home && path.startsWith(home)) {
     segments.push({ name: "~", path: home });
+    const sep = sepFor(home);
     const parts = path.slice(home.length).split(/[\\/]+/).filter(Boolean);
-    let acc = home;
-    for (const part of parts) { acc += "/" + part; segments.push({ name: part, path: acc }); }
+    let acc = home.replace(/[\\/]+$/, "");
+    for (const part of parts) { acc += sep + part; segments.push({ name: part, path: acc }); }
+    return segments;
+  }
+  if (isWindowsPath(path)) {
+    const root = windowsRoot(path);
+    // Drive letter ("E:") or UNC head ("\\host\share") as the first crumb,
+    // with the click target being the root path *with* trailing backslash.
+    segments.push({ name: root.replace(/\\$/, ""), path: root });
+    const rest = path.slice(root.length);
+    const parts = rest.split(/[\\/]+/).filter(Boolean);
+    let acc = root.replace(/\\$/, "");
+    for (const part of parts) { acc += "\\" + part; segments.push({ name: part, path: acc }); }
     return segments;
   }
   if (path === "/") return [{ name: "/", path: "/" }];
@@ -228,10 +267,18 @@ function pathSegments(path: string, home: string): { name: string; path: string 
 }
 
 function goUp(currentPath: string): string {
+  if (currentPath === DRIVES_PATH) return DRIVES_PATH;
+  // POSIX root is terminal — no "This PC" above / on non-Windows.
+  if (currentPath === "/") return "/";
   const trimmed = currentPath.replace(/[\\/]+$/, "");
-  if (!trimmed || trimmed === "/") return "/";
+  if (!trimmed) return DRIVES_PATH;
+  // Windows drive root ("E:") → "This PC" (drives view).
+  if (/^[A-Za-z]:$/.test(trimmed)) return DRIVES_PATH;
   const slash = Math.max(trimmed.lastIndexOf("/"), trimmed.lastIndexOf("\\"));
-  if (slash <= 0) return "/";
+  if (slash < 0) return currentPath;
+  // "E:\foo" → "E:\" (keep drive root with trailing separator).
+  if (slash === 2 && /^[A-Za-z]:/.test(trimmed)) return trimmed.slice(0, 2) + "\\";
+  if (slash === 0) return "/";
   return trimmed.slice(0, slash);
 }
 
@@ -241,6 +288,7 @@ export default function Sidebar({ onOpenLocalTerminal, onConnectSaved, onNewConn
   const [entries, setEntries] = useState<FileEntry[]>([]);
   const [currentPath, setCurrentPath] = useState("");
   const [homeDir, setHomeDir] = useState("");
+  const [platform, setPlatform] = useState<CoreInfo["platform"] | "">("");
   const [pathHistory, setPathHistory] = useState<string[]>([]);
   const [historyIndex, setHistoryIndex] = useState(-1);
   const [searchText, setSearchText] = useState("");
@@ -250,7 +298,8 @@ export default function Sidebar({ onOpenLocalTerminal, onConnectSaved, onNewConn
   useEffect(() => {
     cmd.coreInfo().then((info: CoreInfo) => {
       setHomeDir(info.homeDir);
-      const startPath = normalizePath(info.workspaceRoot || info.homeDir);
+      setPlatform(info.platform);
+      const startPath = normalizePath(info.homeDir || info.workspaceRoot);
       if (!currentPath) {
         setCurrentPath(startPath);
         setPathHistory([startPath]);
@@ -259,7 +308,24 @@ export default function Sidebar({ onOpenLocalTerminal, onConnectSaved, onNewConn
     }).catch(() => {});
   }, []);
 
-  useEffect(() => { if (!currentPath) return; cmd.listDirectory(currentPath).then(setEntries).catch(() => setEntries([])); setSearchText(""); }, [currentPath]);
+  useEffect(() => {
+    if (!currentPath) return;
+    // Cancellation guard: without this, switching from homeDir → This PC
+    // while homeDir's listDirectory is still in flight lets the slower
+    // homeDir promise resolve *after* listDrives and overwrite the
+    // drive list with homeDir entries (observed in practice: breadcrumb
+    // says "This PC" but rows are ~/.azure, ~/.bun, …).
+    let cancelled = false;
+    const loader =
+      currentPath === DRIVES_PATH
+        ? cmd.listDrives()
+        : cmd.listDirectory(currentPath);
+    loader
+      .then((next) => { if (!cancelled) setEntries(next); })
+      .catch(() => { if (!cancelled) setEntries([]); });
+    setSearchText("");
+    return () => { cancelled = true; };
+  }, [currentPath]);
   useEffect(() => {
     if (!currentPath) return;
     onPathChange?.(currentPath);
@@ -442,7 +508,7 @@ export default function Sidebar({ onOpenLocalTerminal, onConnectSaved, onNewConn
             </button>
             <button
               className="mini-btn"
-              disabled={!currentPath || currentPath === "/"}
+              disabled={!currentPath || currentPath === "/" || currentPath === DRIVES_PATH}
               onClick={() => pushPath(goUp(currentPath))}
               title={t("Up")}
               type="button"
@@ -458,23 +524,46 @@ export default function Sidebar({ onOpenLocalTerminal, onConnectSaved, onNewConn
             >
               <Home />
             </button>
+            {platform === "windows" && (
+              <button
+                className={"mini-btn" + (currentPath === DRIVES_PATH ? " is-active" : "")}
+                onClick={() => pushPath(DRIVES_PATH)}
+                title={t("This PC")}
+                type="button"
+                aria-pressed={currentPath === DRIVES_PATH}
+              >
+                <Monitor />
+              </button>
+            )}
             <div className="crumb">
-              {segments.map((seg, i) => (
-                <span key={seg.path} className="crumb-item">
-                  {i > 0 && <span className="sep">/</span>}
-                  <button
-                    className={"seg" + (i === segments.length - 1 ? " last" : "")}
-                    onClick={() => pushPath(seg.path)}
-                    type="button"
-                  >
-                    {seg.name}
-                  </button>
+              {currentPath === DRIVES_PATH ? (
+                <span className="crumb-item">
+                  <span className="seg last">{t("This PC")}</span>
                 </span>
-              ))}
+              ) : (
+                segments.map((seg, i) => (
+                  <span key={seg.path} className="crumb-item">
+                    {i > 0 && <span className="sep">/</span>}
+                    <button
+                      className={"seg" + (i === segments.length - 1 ? " last" : "")}
+                      onClick={() => pushPath(seg.path)}
+                      type="button"
+                    >
+                      {seg.name}
+                    </button>
+                  </span>
+                ))
+              )}
             </div>
             <button
               className="mini-btn"
-              onClick={() => { cmd.listDirectory(currentPath).then(setEntries).catch(() => {}); }}
+              onClick={() => {
+                const loader =
+                  currentPath === DRIVES_PATH
+                    ? cmd.listDrives()
+                    : cmd.listDirectory(currentPath);
+                loader.then(setEntries).catch(() => {});
+              }}
               title={t("Refresh")}
               type="button"
             >
@@ -506,16 +595,17 @@ export default function Sidebar({ onOpenLocalTerminal, onConnectSaved, onNewConn
             {filteredEntries.map((entry) => {
               const isSelected = entry.kind === "file" && selectedFilePath === entry.path;
               const isDir = entry.kind === "directory";
+              const isDrive = currentPath === DRIVES_PATH;
               const isMd = entry.name.toLowerCase().endsWith(".md");
               const cls =
                 "file-row" +
                 (isDir ? " is-dir" : "") +
                 (isMd ? " is-md" : "") +
                 (isSelected ? " selected" : "");
-              const icon = isDir
-                ? <Folder size={12} />
-                : isMd
-                  ? <FileText size={12} />
+              const icon = isDrive
+                ? <HardDrive size={12} />
+                : isDir
+                  ? <Folder size={12} />
                   : <FileText size={12} />;
               return (
                 <div
@@ -564,8 +654,16 @@ export default function Sidebar({ onOpenLocalTerminal, onConnectSaved, onNewConn
 }
 
 function normalizePath(path: string): string {
-  const value = String(path || "").trim().replace(/[\\/]+$/, "");
-  return value || "/";
+  const value = String(path || "").trim();
+  if (!value) return "/";
+  if (value === DRIVES_PATH) return DRIVES_PATH;
+  // Windows drive root must keep its trailing separator — "E:" alone
+  // is interpreted as the current directory of drive E, not its root.
+  if (/^[A-Za-z]:[\\/]?$/.test(value)) return value.slice(0, 2) + "\\";
+  // UNC root "\\host\share" has no trailing separator; strip any extras.
+  if (/^\\\\[^\\]+\\[^\\]+[\\/]?$/.test(value)) return value.replace(/[\\/]+$/, "");
+  const stripped = value.replace(/[\\/]+$/, "");
+  return stripped || "/";
 }
 
 function ServersPane({

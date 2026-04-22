@@ -50,6 +50,8 @@ export const devToggleDevtools = () => invoke<void>("dev_toggle_devtools");
 export const listDirectory = (path?: string) =>
   invoke<FileEntry[]>("list_directory", { path: path ?? null });
 
+export const listDrives = () => invoke<FileEntry[]>("list_drives");
+
 // ── Git ─────────────────────────────────────────────────────────
 
 export const gitOverview = (path?: string) =>

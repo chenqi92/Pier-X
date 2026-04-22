@@ -777,6 +777,21 @@ body.is-resizing .app { transition: none; }
  * clipped sliver don't land on hidden controls. */
 .app.is-right-collapsed .rightpanel { pointer-events: none; }
 
+/* Keep-alive slot — each visited right-tool keeps a mounted panel so
+ * ToolStrip clicks don't pay the unmount/remount + re-fetch cost. The
+ * slot mirrors .rightpanel's flex-column layout so inner panels (header
+ * + body, or panels that return their own header as the first child)
+ * continue to size correctly. Stacked siblings inside .rightpanel
+ * collapse to the active one via display:none. */
+.right-tool-slot {
+  flex: 1;
+  min-height: 0;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+}
+.right-tool-slot.is-hidden { display: none; }
+
 .panel-header.is-right {
   display: flex; align-items: center; gap: var(--sp-2);
   padding: 7px var(--sp-3);
@@ -1649,3 +1664,16 @@ body.is-resizing .app { transition: none; }
   background: var(--line-3);
   background-clip: content-box;
 }
+
+/* Status notes that embed an inline recovery action (e.g. the
+ * "Re-enter password" button on monitor / terminal panels when the
+ * keychain entry is missing) need a flex layout so the button sits
+ * neatly at the end of the message instead of breaking onto its own
+ * row with no alignment. */
+.status-note:has(button) {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-2);
+  flex-wrap: wrap;
+}
+

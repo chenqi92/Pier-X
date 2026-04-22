@@ -10,7 +10,7 @@ use pier_core::services::server_monitor;
 use pier_core::services::sqlite::SqliteClient;
 use pier_core::ssh::service_detector;
 use pier_core::ssh::{AuthMethod, ExecStream, HostKeyVerifier, SshConfig, SshSession, Tunnel};
-use pier_core::terminal::{Cell, Color, NotifyFn, PierTerminal};
+use pier_core::terminal::{Cell, Color, NotifyEvent, NotifyFn, PierTerminal};
 use serde::Serialize;
 use std::collections::HashMap;
 use std::ffi::c_void;
@@ -19,6 +19,7 @@ use std::path::PathBuf;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::{SystemTime, UNIX_EPOCH};
+use tauri::Emitter;
 
 mod git_panel;
 use git_panel::*;
@@ -51,8 +52,46 @@ impl Default for AppState {
     }
 }
 
+/// Event emitted to the webview whenever a terminal session has new output
+/// or exits. The frontend listens for this and requests a fresh snapshot —
+/// replaces the old 80ms polling loop.
+const TERMINAL_EVENT: &str = "terminal:event";
+
+/// Coalesce window for "data" notifications: the reader thread can fire
+/// hundreds of times per second for streaming output (e.g. `cat largefile`).
+/// We cap emissions at one per window; the frontend also keeps a slow
+/// safety interval in case a trailing event gets throttled.
+const TERMINAL_EMIT_MIN_MS: u64 = 16;
+
+#[derive(Serialize, Clone)]
+#[serde(rename_all = "camelCase")]
+struct TerminalEventPayload {
+    session_id: String,
+    /// "data" → snapshot dirty, fetch a new one.
+    /// "exit" → child process ended; no more data events will fire.
+    kind: &'static str,
+}
+
+/// State carried across the C-FFI notify boundary. The pointer handed to
+/// `PierTerminal::new` lives inside this `Box`, which `ManagedTerminal`
+/// keeps alive for the session's lifetime — the field declaration order
+/// guarantees `terminal` is dropped (and its reader thread joined)
+/// before we deallocate the context the reader was using.
+struct NotifyContext {
+    app: tauri::AppHandle,
+    session_id: String,
+    /// Millis since UNIX_EPOCH of the last emitted "data" event. Only
+    /// the reader thread mutates it; the atomic is for loose happens-
+    /// before and because we're stingy about Mutex on the hot path.
+    last_emit_ms: AtomicU64,
+}
+
 struct ManagedTerminal {
+    // Drop order: `terminal` drops first, which signals shutdown and joins
+    // the reader thread. Only then is `_notify_ctx` freed — otherwise the
+    // reader could fire the notify callback against a dangling pointer.
     terminal: PierTerminal,
+    _notify_ctx: Box<NotifyContext>,
 }
 
 struct ManagedTunnel {
@@ -430,7 +469,61 @@ struct TerminalSnapshot {
     lines: Vec<TerminalLine>,
 }
 
-extern "C" fn tauri_terminal_notify(_user_data: *mut c_void, _event: u32) {}
+/// Notify callback invoked by PierTerminal's reader thread. Coalesces
+/// "data" events to at most one emission per `TERMINAL_EMIT_MIN_MS`; "exit"
+/// events always pass through so the UI learns the child died. Runs on the
+/// reader thread — must be cheap and non-blocking (Tauri's `emit` just
+/// queues a message).
+extern "C" fn tauri_terminal_notify(user_data: *mut c_void, event: u32) {
+    if user_data.is_null() {
+        return;
+    }
+    // SAFETY: `user_data` points into a Box<NotifyContext> kept alive by
+    // ManagedTerminal for as long as the reader thread runs. We only take
+    // a shared reference — never reconstitute or free the Box here.
+    let ctx = unsafe { &*(user_data as *const NotifyContext) };
+
+    let is_exit = event == NotifyEvent::Exited as u32;
+    if !is_exit {
+        let now_ms = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .map(|d| d.as_millis() as u64)
+            .unwrap_or(0);
+        let last = ctx.last_emit_ms.load(Ordering::Relaxed);
+        if now_ms.saturating_sub(last) < TERMINAL_EMIT_MIN_MS {
+            return;
+        }
+        ctx.last_emit_ms.store(now_ms, Ordering::Relaxed);
+    }
+
+    let _ = ctx.app.emit(
+        TERMINAL_EVENT,
+        TerminalEventPayload {
+            session_id: ctx.session_id.clone(),
+            kind: if is_exit { "exit" } else { "data" },
+        },
+    );
+}
+
+/// Allocate a session id + its notify context. The raw pointer into the
+/// returned Box is stable (Box is pinned) and must be handed to
+/// `PierTerminal::new` as `user_data`; the caller then stores the Box
+/// inside `ManagedTerminal` so it outlives the reader thread.
+fn allocate_notify_context(
+    state: &tauri::State<'_, AppState>,
+    app: tauri::AppHandle,
+) -> (String, Box<NotifyContext>) {
+    let session_id = format!(
+        "term-{}",
+        state.next_terminal_id.fetch_add(1, Ordering::Relaxed) + 1
+    );
+    let ctx = Box::new(NotifyContext {
+        app,
+        session_id: session_id.clone(),
+        last_emit_ms: AtomicU64::new(0),
+    });
+    (session_id, ctx)
+}
 
 fn home_dir() -> PathBuf {
     std::env::var_os(if cfg!(windows) { "USERPROFILE" } else { "HOME" })
@@ -614,29 +707,41 @@ fn build_ssh_session_saved_or_params(
 /// the password directly from the OS keychain. Used by SFTP
 /// commands so a saved password connection works immediately on the
 /// first browse, without waiting for the frontend's async prime.
+///
+/// Returns `Err` only when the saved connection clearly references a
+/// keychain credential that the OS keyring cannot serve (missing
+/// entry or read failure). Caller surfaces that as a friendly
+/// "saved password missing" error rather than letting downstream
+/// `SshConfig::is_valid` fail with the misleading "host, user, port
+/// and auth must all be set" message.
 fn resolve_password_for_auth(
     auth_mode: &str,
     password: &str,
     saved_index: Option<usize>,
-) -> String {
+) -> Result<String, String> {
     if auth_mode != "password" || !password.is_empty() {
-        return password.to_string();
+        return Ok(password.to_string());
     }
     let Some(index) = saved_index else {
-        return password.to_string();
+        return Ok(password.to_string());
     };
     let Ok(store) = ConnectionStore::load_default() else {
-        return password.to_string();
+        return Ok(password.to_string());
     };
     let Some(conn) = store.connections.get(index) else {
-        return password.to_string();
+        return Ok(password.to_string());
     };
     let AuthMethod::KeychainPassword { credential_id } = &conn.auth else {
-        return password.to_string();
+        return Ok(password.to_string());
     };
     match credentials::get(credential_id) {
-        Ok(Some(resolved)) => resolved,
-        _ => password.to_string(),
+        Ok(Some(resolved)) => Ok(resolved),
+        Ok(None) => Err(format!(
+            "saved password missing in keychain (credential_id={credential_id})"
+        )),
+        Err(e) => Err(format!(
+            "keychain lookup failed for {credential_id}: {e}"
+        )),
     }
 }
 
@@ -680,7 +785,7 @@ fn get_or_open_sftp_ssh_session(
         }
     }
 
-    let effective_password = resolve_password_for_auth(auth_mode, password, saved_index);
+    let effective_password = resolve_password_for_auth(auth_mode, password, saved_index)?;
     let session = build_ssh_session_from_params(
         host,
         port,
@@ -1012,20 +1117,24 @@ fn open_saved_ssh_config(index: usize) -> Result<SshConfig, String> {
 
 fn store_terminal_session(
     state: tauri::State<'_, AppState>,
+    session_id: String,
+    notify_ctx: Box<NotifyContext>,
     terminal: PierTerminal,
     shell: String,
     cols: u16,
     rows: u16,
 ) -> Result<TerminalSessionInfo, String> {
-    let session_id = format!(
-        "term-{}",
-        state.next_terminal_id.fetch_add(1, Ordering::Relaxed) + 1
-    );
     let mut sessions = state
         .terminals
         .lock()
         .map_err(|_| String::from("terminal state poisoned"))?;
-    sessions.insert(session_id.clone(), ManagedTerminal { terminal });
+    sessions.insert(
+        session_id.clone(),
+        ManagedTerminal {
+            terminal,
+            _notify_ctx: notify_ctx,
+        },
+    );
 
     Ok(TerminalSessionInfo {
         session_id,
@@ -1037,6 +1146,7 @@ fn store_terminal_session(
 
 fn create_ssh_terminal_from_config(
     state: tauri::State<'_, AppState>,
+    app: tauri::AppHandle,
     config: SshConfig,
     cols: u16,
     rows: u16,
@@ -1064,6 +1174,9 @@ fn create_ssh_terminal_from_config(
         cache.insert(cache_key, Arc::new(session.clone()));
     }
 
+    let (session_id, mut notify_ctx) = allocate_notify_context(&state, app);
+    let user_data = &mut *notify_ctx as *mut NotifyContext as *mut c_void;
+
     let pty = session
         .open_shell_channel_blocking(resolved_cols, resolved_rows)
         .map_err(|error| error.to_string())?;
@@ -1072,11 +1185,19 @@ fn create_ssh_terminal_from_config(
         resolved_cols,
         resolved_rows,
         tauri_terminal_notify as NotifyFn,
-        std::ptr::null_mut(),
+        user_data,
     )
     .map_err(|error| error.to_string())?;
 
-    store_terminal_session(state, terminal, shell, resolved_cols, resolved_rows)
+    store_terminal_session(
+        state,
+        session_id,
+        notify_ctx,
+        terminal,
+        shell,
+        resolved_cols,
+        resolved_rows,
+    )
 }
 
 /// Emit a semantic color tag so the frontend can remap to the user's
@@ -1246,6 +1367,64 @@ fn list_directory(path: Option<String>) -> Result<Vec<FileEntry>, String> {
     });
 
     Ok(entries)
+}
+
+/// Enumerate top-level volumes so the sidebar can render a "This PC"
+/// view above drive roots.
+///
+/// On Windows we call `GetLogicalDrives` (kernel32) — a bitmask of
+/// currently-mounted drives — instead of doing `.exists()` probes per
+/// letter. The probing approach blocked for seconds on disconnected
+/// network drives, stale DVD drives, or non-present floppy (`A:\`),
+/// because `.exists()` issues an `open()` the driver handles
+/// synchronously. The bitmask call returns instantly and only reports
+/// drives the OS actually has mounted.
+///
+/// On other platforms this yields `/` so the frontend can reuse the
+/// same rendering path without special-casing.
+#[tauri::command]
+fn list_drives() -> Vec<FileEntry> {
+    let mut drives: Vec<FileEntry> = Vec::new();
+    #[cfg(windows)]
+    {
+        // kernel32!GetLogicalDrives — bit N set means drive letter
+        // (b'A' + N) is mounted. Returns 0 on failure, which we treat
+        // as "no drives" rather than an error so the UI still renders.
+        #[link(name = "kernel32")]
+        extern "system" {
+            fn GetLogicalDrives() -> u32;
+        }
+        let mask = unsafe { GetLogicalDrives() };
+        for i in 0u8..26 {
+            if mask & (1u32 << i) == 0 {
+                continue;
+            }
+            let letter = b'A' + i;
+            let root = format!("{}:\\", letter as char);
+            drives.push(FileEntry {
+                name: format!("{}:", letter as char),
+                path: root,
+                kind: "directory",
+                size: 0,
+                size_label: String::from("--"),
+                modified: String::new(),
+                modified_ts: 0,
+            });
+        }
+    }
+    #[cfg(not(windows))]
+    {
+        drives.push(FileEntry {
+            name: String::from("/"),
+            path: String::from("/"),
+            kind: "directory",
+            size: 0,
+            size_label: String::from("--"),
+            modified: String::new(),
+            modified_ts: 0,
+        });
+    }
+    drives
 }
 
 #[tauri::command]
@@ -2022,6 +2201,7 @@ fn sqlite_execute(path: String, sql: String) -> Result<QueryExecutionResult, Str
 #[tauri::command]
 fn terminal_create(
     state: tauri::State<'_, AppState>,
+    app: tauri::AppHandle,
     cols: u16,
     rows: u16,
     shell: Option<String>,
@@ -2031,21 +2211,34 @@ fn terminal_create(
     let resolved_shell = shell
         .filter(|candidate| !candidate.trim().is_empty())
         .unwrap_or_else(default_shell);
+
+    let (session_id, mut notify_ctx) = allocate_notify_context(&state, app);
+    let user_data = &mut *notify_ctx as *mut NotifyContext as *mut c_void;
+
     let terminal = PierTerminal::new(
         resolved_cols,
         resolved_rows,
         &resolved_shell,
         tauri_terminal_notify as NotifyFn,
-        std::ptr::null_mut(),
+        user_data,
     )
     .map_err(|error| error.to_string())?;
 
-    store_terminal_session(state, terminal, resolved_shell, resolved_cols, resolved_rows)
+    store_terminal_session(
+        state,
+        session_id,
+        notify_ctx,
+        terminal,
+        resolved_shell,
+        resolved_cols,
+        resolved_rows,
+    )
 }
 
 #[tauri::command]
 fn terminal_create_ssh(
     state: tauri::State<'_, AppState>,
+    app: tauri::AppHandle,
     cols: u16,
     rows: u16,
     host: String,
@@ -2056,18 +2249,19 @@ fn terminal_create_ssh(
     key_path: Option<String>,
 ) -> Result<TerminalSessionInfo, String> {
     let config = build_manual_ssh_config(host, port, user, auth_mode, password, key_path)?;
-    create_ssh_terminal_from_config(state, config, cols, rows)
+    create_ssh_terminal_from_config(state, app, config, cols, rows)
 }
 
 #[tauri::command]
 fn terminal_create_ssh_saved(
     state: tauri::State<'_, AppState>,
+    app: tauri::AppHandle,
     cols: u16,
     rows: u16,
     index: usize,
 ) -> Result<TerminalSessionInfo, String> {
     let config = open_saved_ssh_config(index)?;
-    create_ssh_terminal_from_config(state, config, cols, rows)
+    create_ssh_terminal_from_config(state, app, config, cols, rows)
 }
 
 #[tauri::command]
@@ -2606,7 +2800,8 @@ fn server_monitor_probe(
     key_path: String,
     saved_connection_index: Option<usize>,
 ) -> Result<ServerSnapshotView, String> {
-    let effective_password = resolve_password_for_auth(&auth_mode, &password, saved_connection_index);
+    let effective_password =
+        resolve_password_for_auth(&auth_mode, &password, saved_connection_index)?;
     let session = build_ssh_session_from_params(
         &host, port, &user, &auth_mode, &effective_password, &key_path,
     )?;
@@ -2644,7 +2839,8 @@ fn detect_services(
     key_path: String,
     saved_connection_index: Option<usize>,
 ) -> Result<Vec<DetectedServiceView>, String> {
-    let effective_password = resolve_password_for_auth(&auth_mode, &password, saved_connection_index);
+    let effective_password =
+        resolve_password_for_auth(&auth_mode, &password, saved_connection_index)?;
     let session = build_ssh_session_from_params(
         &host, port, &user, &auth_mode, &effective_password, &key_path,
     )?;
@@ -3368,7 +3564,8 @@ fn log_stream_start(
     command: String,
     saved_connection_index: Option<usize>,
 ) -> Result<String, String> {
-    let effective_password = resolve_password_for_auth(&auth_mode, &password, saved_connection_index);
+    let effective_password =
+        resolve_password_for_auth(&auth_mode, &password, saved_connection_index)?;
     let session = build_ssh_session_from_params(
         &host, port, &user, &auth_mode, &effective_password, &key_path,
     )?;
@@ -3740,6 +3937,7 @@ pub fn run() {
             dev_toggle_devtools,
             core_info,
             list_directory,
+            list_drives,
             git_overview,
             git_panel_state,
             git_init_repo,

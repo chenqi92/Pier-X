@@ -49,6 +49,22 @@ function isMarkdownFile(name: string): boolean {
   return MARKDOWN_EXTENSIONS.test(name);
 }
 
+// Static descriptor list for the right-panel entries in the command
+// palette. Lives at module scope so it isn't re-created on every render;
+// the labels are translated lazily inside `paletteCommands`.
+const PANEL_PALETTE_ITEMS: ReadonlyArray<{ tool: RightTool; title: string }> = [
+  { tool: "git", title: "Switch to Git" },
+  { tool: "monitor", title: "Switch to Server Monitor" },
+  { tool: "docker", title: "Switch to Docker" },
+  { tool: "mysql", title: "Switch to MySQL" },
+  { tool: "postgres", title: "Switch to PostgreSQL" },
+  { tool: "redis", title: "Switch to Redis" },
+  { tool: "sftp", title: "Switch to SFTP" },
+  { tool: "log", title: "Switch to Log" },
+  { tool: "sqlite", title: "Switch to SQLite" },
+  { tool: "markdown", title: "Switch to Markdown" },
+];
+
 function App() {
   const [coreInfo, setCoreInfo] = useState<CoreInfo | null>(null);
   const [browserPath, setBrowserPath] = useState("");
@@ -102,25 +118,32 @@ function App() {
     cmd.coreInfo()
       .then((info) => {
         setCoreInfo(info);
-        setBrowserPath(info.workspaceRoot || info.homeDir || "");
+        setBrowserPath(info.homeDir || info.workspaceRoot || "");
       })
       .catch(() => {});
     useConnectionStore.getState().refresh();
   }, []);
 
+  // Persist pane widths to localStorage — debounced so a single drag
+  // (fires dozens of mousemove → setState events per second) produces at
+  // most one sync IO call. The collapse toggle is a discrete flip, so it
+  // also rides the debounce but at worst waits 250ms to land on disk.
   useEffect(() => {
-    try {
-      window.localStorage.setItem(
-        PANE_STORAGE_KEY,
-        JSON.stringify({
-          sidebar: sidebarWidth,
-          right: rightWidth,
-          rightCollapsed,
-        }),
-      );
-    } catch {
-      /* ignore persistence errors */
-    }
+    const id = window.setTimeout(() => {
+      try {
+        window.localStorage.setItem(
+          PANE_STORAGE_KEY,
+          JSON.stringify({
+            sidebar: sidebarWidth,
+            right: rightWidth,
+            rightCollapsed,
+          }),
+        );
+      } catch {
+        /* ignore persistence errors */
+      }
+    }, 250);
+    return () => window.clearTimeout(id);
   }, [rightWidth, sidebarWidth, rightCollapsed]);
 
   // ── Desktop behaviors ───────────────────────────────────────
@@ -161,127 +184,144 @@ function App() {
   }, [isDev]);
 
   // ── Tab creation helpers ────────────────────────────────────
+  //
+  // These are wrapped in useCallback so memoized consumers (paletteCommands,
+  // titlebarMenus, child panels) capture a stable, up-to-date reference.
+  // Deps list anything the callback reads from render state; internal
+  // store reads use `.getState()` directly and don't need to be deps.
 
-  function openLocalTerminal(path?: string) {
-    const targetPath = path ?? browserPath ?? coreInfo?.workspaceRoot ?? coreInfo?.homeDir ?? "";
-    const fallbackTitle = i18n.t("Terminal");
-    addTab({
-      backend: "local",
-      title: targetPath ? targetPath.split(/[\\/]/).pop() || fallbackTitle : fallbackTitle,
-      startupCommand: targetPath ? `cd ${JSON.stringify(targetPath)}` : "",
-    });
-  }
+  const openLocalTerminal = useCallback(
+    (path?: string) => {
+      // Prefer the explicit arg → sidebar's current path → user home → app cwd.
+      // The sidebar can be parked on the drives sentinel ("pier:drives") or
+      // an empty pre-bootstrap value; those aren't real directories, so skip
+      // them.
+      const candidates = [path, browserPath, coreInfo?.homeDir, coreInfo?.workspaceRoot];
+      const targetPath = candidates.find(
+        (candidate): candidate is string =>
+          typeof candidate === "string" &&
+          candidate.length > 0 &&
+          candidate !== "pier:drives",
+      ) ?? "";
+      const fallbackTitle = i18n.t("Terminal");
+      addTab({
+        backend: "local",
+        title: targetPath ? targetPath.split(/[\\/]/).pop() || fallbackTitle : fallbackTitle,
+        startupCommand: targetPath ? `cd ${JSON.stringify(targetPath)}` : "",
+      });
+    },
+    [addTab, browserPath, coreInfo, i18n],
+  );
 
-  function openSshTab(params: {
-    name: string;
-    host: string;
-    port: number;
-    user: string;
-    authKind: string;
-    password: string;
-    keyPath: string;
-  }) {
-    addTab({
-      backend: "ssh",
-      title: params.name || `${params.user}@${params.host}`,
-      sshHost: params.host,
-      sshPort: params.port,
-      sshUser: params.user,
-      sshAuthMode: params.authKind as "password" | "agent" | "key",
-      sshPassword: params.password,
-      sshKeyPath: params.keyPath,
-      rightTool: "monitor",
-    });
-  }
+  const openSshTab = useCallback(
+    (params: {
+      name: string;
+      host: string;
+      port: number;
+      user: string;
+      authKind: string;
+      password: string;
+      keyPath: string;
+    }) => {
+      addTab({
+        backend: "ssh",
+        title: params.name || `${params.user}@${params.host}`,
+        sshHost: params.host,
+        sshPort: params.port,
+        sshUser: params.user,
+        sshAuthMode: params.authKind as "password" | "agent" | "key",
+        sshPassword: params.password,
+        sshKeyPath: params.keyPath,
+        rightTool: "monitor",
+      });
+    },
+    [addTab],
+  );
 
-  function openSshSaved(index: number) {
-    const conn = useConnectionStore.getState().connections.find((c) => c.index === index);
-    if (!conn) return;
-    useRecentConnectionsStore.getState().touch(index);
-    // Seed the tab synchronously so the terminal starts launching
-    // via terminalCreateSshSaved (backend resolves password itself).
-    const tabId = addTab({
-      backend: "ssh",
-      title: conn.name || `${conn.user}@${conn.host}`,
-      sshHost: conn.host,
-      sshPort: conn.port,
-      sshUser: conn.user,
-      sshAuthMode: conn.authKind,
-      sshKeyPath: conn.keyPath,
-      sshSavedConnectionIndex: conn.index,
-      rightTool: "monitor",
-    });
-    // Prime the in-memory password from the keychain so non-terminal
-    // commands (probe, detect, docker, db) that take an explicit
-    // password parameter work for saved password connections.
-    if (conn.authKind === "password") {
-      cmd
-        .sshConnectionResolvePassword(conn.index)
-        .then((password) => {
-          if (password) {
-            useTabStore.getState().updateTab(tabId, { sshPassword: password });
-          }
-        })
-        .catch(() => {
-          /* fall through — backend terminal will still work via saved-index path */
-        });
-    }
-  }
+  const openSshSaved = useCallback(
+    (index: number) => {
+      const conn = useConnectionStore.getState().connections.find((c) => c.index === index);
+      if (!conn) return;
+      useRecentConnectionsStore.getState().touch(index);
+      // Seed the tab synchronously so the terminal starts launching
+      // via terminalCreateSshSaved (backend resolves password itself).
+      const tabId = addTab({
+        backend: "ssh",
+        title: conn.name || `${conn.user}@${conn.host}`,
+        sshHost: conn.host,
+        sshPort: conn.port,
+        sshUser: conn.user,
+        sshAuthMode: conn.authKind,
+        sshKeyPath: conn.keyPath,
+        sshSavedConnectionIndex: conn.index,
+        rightTool: "monitor",
+      });
+      // Prime the in-memory password from the keychain so non-terminal
+      // commands (probe, detect, docker, db) that take an explicit
+      // password parameter work for saved password connections.
+      if (conn.authKind === "password") {
+        cmd
+          .sshConnectionResolvePassword(conn.index)
+          .then((password) => {
+            if (password) {
+              useTabStore.getState().updateTab(tabId, { sshPassword: password });
+            }
+          })
+          .catch(() => {
+            /* fall through — backend terminal will still work via saved-index path */
+          });
+      }
+    },
+    [addTab],
+  );
 
-  function openNewTab() {
+  const openNewTab = useCallback(() => {
     openLocalTerminal();
-  }
+  }, [openLocalTerminal]);
 
-  function openNewConnectionDialog() {
+  const openNewConnectionDialog = useCallback(() => {
     setEditingConnection(null);
     setNewConnOpen(true);
-  }
+  }, []);
 
-  function openEditConnectionDialog(index: number) {
+  const openEditConnectionDialog = useCallback((index: number) => {
     const connection = useConnectionStore.getState().connections.find((entry) => entry.index === index) ?? null;
     setEditingConnection(connection);
     setNewConnOpen(true);
-  }
+  }, []);
 
-  function handleToolChange(tool: RightTool) {
-    if (activeTab) {
-      useTabStore.getState().setTabRightTool(activeTab.id, tool);
-    } else {
-      setFallbackRightTool(tool);
-    }
-  }
+  const handleToolChange = useCallback(
+    (tool: RightTool) => {
+      if (activeTab) {
+        useTabStore.getState().setTabRightTool(activeTab.id, tool);
+      } else {
+        setFallbackRightTool(tool);
+      }
+    },
+    [activeTab],
+  );
 
-  function handleFileSelect(entry: FileEntry) {
-    if (!isMarkdownFile(entry.name)) return;
-    setSelectedMarkdownPath(entry.path);
-    if (activeTab && activeTab.rightTool !== "markdown") {
-      useTabStore.getState().setTabRightTool(activeTab.id, "markdown");
-    }
-  }
+  const handleFileSelect = useCallback(
+    (entry: FileEntry) => {
+      if (!isMarkdownFile(entry.name)) return;
+      setSelectedMarkdownPath(entry.path);
+      if (activeTab && activeTab.rightTool !== "markdown") {
+        useTabStore.getState().setTabRightTool(activeTab.id, "markdown");
+      }
+    },
+    [activeTab],
+  );
 
   // ── Command Palette commands ────────────────────────────────
 
   const isMac = navigator.platform.includes("Mac");
   const mod = isMac ? "\u2318" : "Ctrl+";
-  const panelPaletteItems: Array<{ tool: RightTool; title: string }> = [
-    { tool: "git", title: "Switch to Git" },
-    { tool: "monitor", title: "Switch to Server Monitor" },
-    { tool: "docker", title: "Switch to Docker" },
-    { tool: "mysql", title: "Switch to MySQL" },
-    { tool: "postgres", title: "Switch to PostgreSQL" },
-    { tool: "redis", title: "Switch to Redis" },
-    { tool: "sftp", title: "Switch to SFTP" },
-    { tool: "log", title: "Switch to Log" },
-    { tool: "sqlite", title: "Switch to SQLite" },
-    { tool: "markdown", title: "Switch to Markdown" },
-  ];
-
   const paletteCommands: PaletteCommand[] = useMemo(
     () => [
       { section: i18n.t("Session"), icon: SquareTerminal, title: i18n.t("New local terminal"), shortcut: `${mod}T`, action: () => openLocalTerminal() },
       { section: i18n.t("Session"), icon: Server, title: i18n.t("New SSH connection"), shortcut: `${mod}N`, action: openNewConnectionDialog },
       { section: i18n.t("Session"), icon: X, title: i18n.t("Close tab"), shortcut: `${mod}W`, action: () => { if (activeTabId) closeTab(activeTabId); } },
-      ...panelPaletteItems.map(({ tool, title }) => ({
+      ...PANEL_PALETTE_ITEMS.map(({ tool, title }) => ({
         section: i18n.t("Panels"),
         icon: RIGHT_TOOL_META[tool].icon,
         title: i18n.t(title),
@@ -293,7 +333,7 @@ function App() {
         s.setMode(s.resolvedDark ? "light" : "dark");
       } },
     ],
-    [activeTabId, closeTab, i18n, mod],
+    [activeTabId, closeTab, i18n, mod, openLocalTerminal, openNewConnectionDialog, handleToolChange],
   );
 
   // ── Titlebar menus (Windows / Linux only) ─────────────────────
@@ -373,7 +413,7 @@ function App() {
         ],
       },
     ];
-  }, [activeTabId, closeTab, coreInfo?.version, i18n, rightCollapsed]);
+  }, [activeTabId, closeTab, coreInfo?.version, i18n, rightCollapsed, openLocalTerminal, openNewConnectionDialog]);
 
   // ── Keyboard shortcuts ──────────────────────────────────────
 
@@ -482,6 +522,7 @@ function App() {
                   key={tab.id}
                   tab={tab}
                   isActive={tab.id === activeTabId}
+                  onEditConnection={openEditConnectionDialog}
                 />
               ))
             )}
@@ -495,6 +536,7 @@ function App() {
             onToolChange={handleToolChange}
             onConnectSaved={openSshSaved}
             onNewConnection={openNewConnectionDialog}
+            onEditConnection={openEditConnectionDialog}
             collapsed={rightCollapsed}
             onToggleCollapsed={() => setRightCollapsed((c) => !c)}
           />

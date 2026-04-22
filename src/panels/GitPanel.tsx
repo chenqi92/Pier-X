@@ -51,7 +51,13 @@ import { translate, useI18n, type I18nValue } from "../i18n/useI18n";
 import { useSettingsStore } from "../stores/useSettingsStore";
 import { useStatusStore } from "../stores/useStatusStore";
 
-type Props = { browserPath: string };
+type Props = {
+  browserPath: string;
+  /** True when this panel is the currently-selected right-side tool AND the
+   *  right column is expanded. Drives background polling so hidden panels
+   *  don't burn IPC on `git_panel_state` every 3s. */
+  isActive?: boolean;
+};
 
 type PanelTab = "changes" | "history" | "branches" | "stash" | "conflicts";
 type PopoverKind =
@@ -573,7 +579,7 @@ function GitMenuItem({
   );
 }
 
-export default function GitPanel({ browserPath }: Props) {
+export default function GitPanel({ browserPath, isActive = true }: Props) {
   const { t } = useI18n();
   const panelRef = useRef<HTMLDivElement>(null);
 
@@ -1071,13 +1077,31 @@ export default function GitPanel({ browserPath }: Props) {
     }
   }
 
+  // Keep-alive refresh. Runs only while this panel is the active right-side
+  // tool AND the window is foregrounded. On becoming active (or on path
+  // change while active) we fetch once immediately so the UI is fresh,
+  // then poll every 3s. Hidden panels sit idle — the RightSidebar keep-
+  // alive means this component stays mounted but costs zero IPC.
   useEffect(() => {
-    void loadPanelState();
-    const timer = window.setInterval(() => {
+    if (!isActive) return undefined;
+    let cancelled = false;
+    const tick = () => {
+      if (cancelled) return;
+      if (typeof document !== "undefined" && document.visibilityState === "hidden") return;
       void loadPanelState();
-    }, 3000);
-    return () => window.clearInterval(timer);
-  }, [browserPath]);
+    };
+    tick();
+    const timer = window.setInterval(tick, 3000);
+    const onVisibility = () => {
+      if (document.visibilityState === "visible") tick();
+    };
+    document.addEventListener("visibilitychange", onVisibility);
+    return () => {
+      cancelled = true;
+      window.clearInterval(timer);
+      document.removeEventListener("visibilitychange", onVisibility);
+    };
+  }, [isActive, browserPath]);
 
   useEffect(() => {
     if (!banner) return undefined;

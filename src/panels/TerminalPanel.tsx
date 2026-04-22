@@ -1,19 +1,22 @@
 // ── Terminal Panel ───────────────────────────────────────────────
-// Per-tab terminal with 80ms snapshot polling, keyboard I/O,
-// scrollback, and session lifecycle management.
+// Per-tab terminal: event-driven snapshot refresh (with a slow safety
+// interval), keyboard I/O, scrollback, and session lifecycle management.
 
-import { SquareTerminal } from "lucide-react";
+import { KeyRound, SquareTerminal } from "lucide-react";
 import { startTransition, useEffect, useRef, useState } from "react";
+import { listen, type UnlistenFn } from "@tauri-apps/api/event";
 import * as cmd from "../lib/commands";
 import { controlKeyMap } from "../lib/commands";
 import ContextMenu, { type ContextMenuItem } from "../components/ContextMenu";
 import { useI18n } from "../i18n/useI18n";
-import { localizeError } from "../i18n/localizeMessage";
+import { isMissingKeychainError, localizeError } from "../i18n/localizeMessage";
 import type { TabState, TerminalSessionInfo, TerminalSnapshot, TerminalSize } from "../lib/types";
 import { useTabStore } from "../stores/useTabStore";
 import { useSettingsStore } from "../stores/useSettingsStore";
 import { useStatusStore } from "../stores/useStatusStore";
 import { useThemeStore, TERMINAL_THEMES } from "../stores/useThemeStore";
+import { parseSshCommand } from "../lib/parseSshCommand";
+import { useConnectionStore } from "../stores/useConnectionStore";
 
 /**
  * Resolve a backend-emitted color tag against the user's selected terminal
@@ -54,9 +57,12 @@ function resolveTerminalColor(tag: string, ansi: string[]): string | undefined {
 type Props = {
   tab: TabState;
   isActive: boolean;
+  /** Open the saved-connection editor when the keychain has lost the
+   *  password for this tab's saved connection. */
+  onEditConnection?: (index: number) => void;
 };
 
-export default function TerminalPanel({ tab, isActive }: Props) {
+export default function TerminalPanel({ tab, isActive, onEditConnection }: Props) {
   const { t } = useI18n();
   const formatError = (error: unknown) => localizeError(error, t);
   const updateTab = useTabStore((s) => s.updateTab);
@@ -73,6 +79,7 @@ export default function TerminalPanel({ tab, isActive }: Props) {
   const [session, setSession] = useState<TerminalSessionInfo | null>(null);
   const [snapshot, setSnapshot] = useState<TerminalSnapshot | null>(null);
   const [error, setError] = useState("");
+  const [needsPasswordRecovery, setNeedsPasswordRecovery] = useState(false);
   const [terminalSize, setTerminalSize] = useState<TerminalSize>({ cols: 120, rows: 26 });
   const setStatusTerminalSize = useStatusStore((s) => s.setTerminalSize);
   const [scrollbackOffset, setScrollbackOffset] = useState(0);
@@ -86,6 +93,18 @@ export default function TerminalPanel({ tab, isActive }: Props) {
   const pendingResizeRef = useRef(false);
   const latestSizeRef = useRef(terminalSize);
   latestSizeRef.current = terminalSize;
+
+  // Mirror of the user's currently-being-typed line so we can
+  // recognize `ssh user@host` and resync the right sidebar to that
+  // target. Reset on Enter / Ctrl+C / Ctrl+U. Tracks visible
+  // characters only — escape sequences for arrow keys, ESC, and
+  // function keys are ignored, so an ssh line that's been edited
+  // mid-stream may be missed but a freshly typed one is captured
+  // accurately. This covers the local-terminal case (`ssh foo@bar`)
+  // as well as nested ssh inside an existing SSH session — both
+  // funnel through `sendInput`, so the same buffer logic catches
+  // both transitions.
+  const commandBufferRef = useRef("");
 
   // Sync session ID to tab store
   useEffect(() => {
@@ -153,9 +172,13 @@ export default function TerminalPanel({ tab, isActive }: Props) {
         if (!cancelled) {
           setSession(next);
           setError("");
+          setNeedsPasswordRecovery(false);
         }
       } catch (e) {
-        if (!cancelled) setError(formatError(e));
+        if (!cancelled) {
+          setError(formatError(e));
+          if (isMissingKeychainError(e)) setNeedsPasswordRecovery(true);
+        }
       }
     }
 
@@ -247,15 +270,26 @@ export default function TerminalPanel({ tab, isActive }: Props) {
       });
   }, [session?.sessionId, tab.id, tab.startupCommand]);
 
-  // ── Snapshot polling (80ms active, paused when hidden) ──────
+  // ── Snapshot refresh (event-driven + slow safety interval) ──
+  //
+  // Backend emits `terminal:event` via PierTerminal's notify callback
+  // whenever output arrives (coalesced to ≤16ms in Rust). We fetch a
+  // fresh snapshot on each event; the `inflight` guard plus `dirty`
+  // bit ensures bursty output still only takes one in-flight IPC at a
+  // time and guarantees a trailing refresh so we don't miss the final
+  // frame. The 1500ms interval is a safety net for dropped events
+  // (tab-background throttling, throttled bursts).
 
   useEffect(() => {
     if (!session) return;
     let disposed = false;
     let inflight = false;
+    let dirty = false;
 
     const refresh = () => {
-      if (inflight) return;
+      if (disposed) return;
+      if (inflight) { dirty = true; return; }
+      dirty = false;
       inflight = true;
       cmd
         .terminalSnapshot(session.sessionId, scrollbackOffset)
@@ -270,14 +304,38 @@ export default function TerminalPanel({ tab, isActive }: Props) {
         .catch((e) => {
           if (!disposed) setError(formatError(e));
         })
-        .finally(() => { inflight = false; });
+        .finally(() => {
+          inflight = false;
+          if (dirty && !disposed) refresh();
+        });
     };
 
     refresh();
-    const interval = isActive ? 80 : 1000;
-    const id = window.setInterval(refresh, interval);
-    return () => { disposed = true; window.clearInterval(id); };
-  }, [session, scrollbackOffset, isActive]);
+
+    // Listen for backend-pushed events. Each TerminalPanel subscribes;
+    // the payload carries `sessionId` so we filter other tabs out.
+    let unlisten: UnlistenFn | undefined;
+    type TerminalEventPayload = { sessionId: string; kind: "data" | "exit" };
+    void listen<TerminalEventPayload>("terminal:event", (event) => {
+      if (disposed) return;
+      if (event.payload.sessionId !== session.sessionId) return;
+      refresh();
+    }).then((u) => {
+      if (disposed) u();
+      else unlisten = u;
+    });
+
+    // Safety interval: catches any event we might miss (backend throttle,
+    // webview backgrounding, burst overflow). 1500ms is much cheaper than
+    // the old 80ms polling but still keeps the UI eventually-consistent.
+    const safety = window.setInterval(refresh, 1500);
+
+    return () => {
+      disposed = true;
+      window.clearInterval(safety);
+      if (unlisten) unlisten();
+    };
+  }, [session, scrollbackOffset]);
 
   // ── Cleanup on unmount ──────────────────────────────────────
 
@@ -344,13 +402,160 @@ export default function TerminalPanel({ tab, isActive }: Props) {
 
   // ── Input handlers ──────────────────────────────────────────
 
+  /**
+   * Update the "currently typing" buffer by interpreting the bytes
+   * we are about to send to the PTY. Only meaningful for line-edit
+   * sequences we can model cheaply: printable text, backspace,
+   * carriage return, Ctrl+U (line kill), Ctrl+C / Ctrl+D (cancel).
+   * Anything else (arrow keys, escape sequences, big paste blobs)
+   * resets the buffer rather than risk drifting out of sync with
+   * what the shell actually has in its prompt.
+   */
+  function updateCommandBuffer(data: string): void {
+    // Bracketed-paste payloads, control sequences, multi-line input —
+    // bail rather than try to model them.
+    if (data.length > 1 && !data.endsWith("\r") && !data.endsWith("\n")) {
+      commandBufferRef.current = "";
+      return;
+    }
+    if (data === "\r" || data === "\n" || data === "\r\n") {
+      // Caller fires the parser separately; here we just clear so the
+      // next prompt starts fresh.
+      commandBufferRef.current = "";
+      return;
+    }
+    if (data === "" || data === "\b") {
+      commandBufferRef.current = commandBufferRef.current.slice(0, -1);
+      return;
+    }
+    if (data === "" /* ^C */ || data === "" /* ^U */ || data === "" /* ESC */) {
+      commandBufferRef.current = "";
+      return;
+    }
+    if (data.charCodeAt(0) < 0x20) {
+      // Other control bytes — could be a Ctrl+something we don't model.
+      // Reset to avoid wrong attribution on the next Enter.
+      commandBufferRef.current = "";
+      return;
+    }
+    if (data.length === 1) {
+      commandBufferRef.current += data;
+    }
+  }
+
+  /**
+   * Apply a freshly parsed `ssh user@host` invocation to this tab so
+   * the right sidebar (Server Monitor, Detected Services, …) reflects
+   * the host the user is connecting to. Matches against saved
+   * connections by host+user+port — when one matches, we set the
+   * saved-connection index so panel commands can resolve the
+   * keychain password automatically.
+   *
+   * For local-backend tabs we update the primary `ssh*` fields
+   * directly: nothing else on the tab is reading them, and panels
+   * pick them up via `effectiveSshTarget`. For SSH-backend tabs
+   * (nested ssh) we instead write to `nestedSshTarget` so the live
+   * PTY session, tab title, and any MySQL/PG/Redis tunnels stay
+   * pinned to the original host while the right panel monitors the
+   * nested target.
+   */
+  function applySshContextFromCommand(line: string): void {
+    const parsed = parseSshCommand(line);
+    if (!parsed) return;
+    const conns = useConnectionStore.getState().connections;
+    const port = parsed.port > 0 ? parsed.port : 22;
+    // Match priority: exact host+user+port → host+user → host alone.
+    const sameHostUser = (c: { host: string; user: string }) =>
+      c.host.trim().toLowerCase() === parsed.host.toLowerCase()
+      && (parsed.user === "" || c.user.trim().toLowerCase() === parsed.user.toLowerCase());
+    const matched =
+      conns.find((c) => sameHostUser(c) && (c.port || 22) === port)
+      ?? conns.find((c) => sameHostUser(c))
+      ?? conns.find((c) => c.host.trim().toLowerCase() === parsed.host.toLowerCase());
+
+    const inferredUser = parsed.user || matched?.user || "";
+    if (!inferredUser) return; // Without a user we can't probe meaningfully.
+
+    const authMode: "password" | "agent" | "key" =
+      matched?.authKind ?? (parsed.identityPath ? "key" : "password");
+    const keyPath = parsed.identityPath || matched?.keyPath || "";
+    const savedConnectionIndex = matched ? matched.index : null;
+
+    if (tab.backend === "local") {
+      updateTab(tab.id, {
+        sshHost: parsed.host,
+        sshPort: port,
+        sshUser: inferredUser,
+        sshAuthMode: authMode,
+        sshKeyPath: keyPath,
+        sshSavedConnectionIndex: savedConnectionIndex,
+        // Don't clobber a stored password — but if we're switching to
+        // a new host we don't have credentials for, blank it so stale
+        // creds from a previous target don't leak into the new probe.
+        sshPassword:
+          savedConnectionIndex === tab.sshSavedConnectionIndex
+            ? tab.sshPassword
+            : "",
+        nestedSshTarget: null,
+        rightTool: "monitor",
+      });
+    } else {
+      // Nested ssh on a real SSH tab — keep primary fields intact so
+      // the original session / tunnels keep working; only overlay
+      // the new target for monitoring.
+      updateTab(tab.id, {
+        nestedSshTarget: {
+          host: parsed.host,
+          user: inferredUser,
+          port,
+          authMode,
+          password: "",
+          keyPath,
+          savedConnectionIndex,
+        },
+        rightTool: "monitor",
+      });
+    }
+
+    // Saved connection: prime the in-memory password (same flow as
+    // openSshSaved). Without this the very first probe / detect for
+    // the new target would be the one to surface "saved password
+    // missing" — we'd rather front-load that and give the recovery
+    // button a chance to render before the user notices.
+    if (matched && matched.authKind === "password") {
+      cmd
+        .sshConnectionResolvePassword(matched.index)
+        .then((password) => {
+          if (!password) return;
+          if (tab.backend === "local") {
+            useTabStore.getState().updateTab(tab.id, { sshPassword: password });
+          } else {
+            const current = useTabStore.getState().tabs.find((t) => t.id === tab.id);
+            if (current?.nestedSshTarget && current.nestedSshTarget.savedConnectionIndex === matched.index) {
+              useTabStore.getState().updateTab(tab.id, {
+                nestedSshTarget: { ...current.nestedSshTarget, password },
+              });
+            }
+          }
+        })
+        .catch(() => {});
+    }
+  }
+
   async function sendInput(data: string) {
     if (!session || !data) return;
+    const isSubmit = data === "\r" || data === "\n" || data === "\r\n";
+    const lineToParse = isSubmit ? commandBufferRef.current.trim() : "";
+    updateCommandBuffer(data);
     try {
       await cmd.terminalWrite(session.sessionId, data);
       setScrollbackOffset(0);
     } catch (e) {
       setError(formatError(e));
+      return;
+    }
+    if (isSubmit && lineToParse) {
+      applySshContextFromCommand(lineToParse);
     }
   }
 
@@ -542,7 +747,25 @@ export default function TerminalPanel({ tab, isActive }: Props) {
         </span>
 
         {error ? (
-          <div className="terminal-placeholder terminal-placeholder--error">{error}</div>
+          <div className="terminal-placeholder terminal-placeholder--error">
+            <span>{error}</span>
+            {needsPasswordRecovery
+              && tab.sshSavedConnectionIndex !== null
+              && onEditConnection && (
+                <button
+                  type="button"
+                  className="mini-button"
+                  onClick={() => {
+                    if (tab.sshSavedConnectionIndex !== null) {
+                      onEditConnection(tab.sshSavedConnectionIndex);
+                    }
+                  }}
+                  style={{ marginLeft: "var(--sp-2)" }}
+                >
+                  <KeyRound size={11} /> {t("Re-enter password")}
+                </button>
+              )}
+          </div>
         ) : snapshot ? (
           <div
             className={rowSeparators ? "terminal-screen terminal-screen--ruled" : "terminal-screen"}

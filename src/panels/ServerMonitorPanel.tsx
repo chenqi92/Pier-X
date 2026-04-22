@@ -1,17 +1,23 @@
-import { Activity, Cpu, Database, HardDrive, MemoryStick, PackageSearch, RefreshCw } from "lucide-react";
+import { Activity, Cpu, Database, HardDrive, KeyRound, MemoryStick, PackageSearch, RefreshCw } from "lucide-react";
 import { useEffect, useState } from "react";
 import type { ReactNode } from "react";
 import * as cmd from "../lib/commands";
 import { RIGHT_TOOL_META } from "../lib/rightToolMeta";
 import type { DetectedServiceView, RightTool, ServerSnapshotView, TabState } from "../lib/types";
+import { effectiveSshTarget } from "../lib/types";
 import { useI18n } from "../i18n/useI18n";
-import { localizeError } from "../i18n/localizeMessage";
+import { isMissingKeychainError, localizeError } from "../i18n/localizeMessage";
 import DbConnRow from "../components/DbConnRow";
 import PanelHeader from "../components/PanelHeader";
 import StatusDot from "../components/StatusDot";
 import { useTabStore } from "../stores/useTabStore";
 
-type Props = { tab: TabState };
+type Props = {
+  tab: TabState;
+  /** Open the saved-connection editor when the keychain has lost the
+   *  password for this tab's saved connection. */
+  onEditConnection?: (index: number) => void;
+};
 
 const MONITOR_ICON = RIGHT_TOOL_META.monitor.icon;
 
@@ -112,7 +118,7 @@ function formatTimestamp(ts: number): string {
   return `${pad(d.getHours())}:${pad(d.getMinutes())}:${pad(d.getSeconds())}`;
 }
 
-export default function ServerMonitorPanel({ tab }: Props) {
+export default function ServerMonitorPanel({ tab, onEditConnection }: Props) {
   const { t } = useI18n();
   const formatError = (error: unknown) => localizeError(error, t);
   const updateTab = useTabStore((s) => s.updateTab);
@@ -120,18 +126,31 @@ export default function ServerMonitorPanel({ tab }: Props) {
   const [snap, setSnap] = useState<ServerSnapshotView | null>(null);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
+  // Track the missing-keychain condition separately so the recovery
+  // button stays available even after a localized error string has
+  // been transformed beyond regex recognition.
+  const [needsPasswordRecovery, setNeedsPasswordRecovery] = useState(false);
   const [services, setServices] = useState<DetectedServiceView[]>([]);
   const [servicesBusy, setServicesBusy] = useState(false);
   const [servicesError, setServicesError] = useState("");
   const [servicesNotice, setServicesNotice] = useState("");
   const [lastProbed, setLastProbed] = useState(0);
 
-  const hasSsh = tab.backend === "ssh" && tab.sshHost.trim() && tab.sshUser.trim();
-  const isLocal = tab.backend === "local";
+  // SSH context is "available" any time the tab has the addressing
+  // bits filled in — even on a local-backend tab where the user just
+  // typed `ssh user@host` and we mirrored the target into the tab
+  // state. That way the right panel can open a separate monitoring
+  // session against the remote without having to convert the local
+  // terminal into an SSH terminal (whose PTY is already running).
+  const hasSsh = !!(tab.sshHost.trim() && tab.sshUser.trim());
+  // Only treat the tab as "local probe" when there is no SSH target
+  // overlay; otherwise the SSH path takes priority.
+  const isLocal = tab.backend === "local" && !hasSsh;
 
   async function probe() {
     setBusy(true);
     setError("");
+    setNeedsPasswordRecovery(false);
     try {
       const s = isLocal
         ? await cmd.localSystemInfo()
@@ -156,6 +175,7 @@ export default function ServerMonitorPanel({ tab }: Props) {
       // Keep the last good snapshot visible instead of blanking the whole
       // panel — a transient SSH hiccup shouldn't unmount the gauges.
       setError(formatError(e));
+      if (isMissingKeychainError(e)) setNeedsPasswordRecovery(true);
     } finally {
       setBusy(false);
     }
@@ -169,6 +189,7 @@ export default function ServerMonitorPanel({ tab }: Props) {
     setServicesBusy(true);
     setServicesError("");
     setServicesNotice("");
+    setNeedsPasswordRecovery(false);
     try {
       const next = await cmd.detectServices({
         host: tab.sshHost,
@@ -186,10 +207,20 @@ export default function ServerMonitorPanel({ tab }: Props) {
     } catch (e) {
       setServices([]);
       setServicesError(formatError(e));
+      if (isMissingKeychainError(e)) setNeedsPasswordRecovery(true);
     } finally {
       setServicesBusy(false);
     }
   }
+
+  const canRecoverPassword =
+    needsPasswordRecovery &&
+    tab.sshSavedConnectionIndex !== null &&
+    !!onEditConnection;
+  const recoverPassword = () => {
+    if (!canRecoverPassword || tab.sshSavedConnectionIndex === null) return;
+    onEditConnection?.(tab.sshSavedConnectionIndex);
+  };
 
   function openService(service: DetectedServiceView) {
     const tool = serviceTool(service);
@@ -406,7 +437,20 @@ export default function ServerMonitorPanel({ tab }: Props) {
                 : t("not yet probed")}
           </span>
         </div>
-        {error && <div className="status-note status-note--error">{error}</div>}
+        {error && (
+          <div className="status-note status-note--error">
+            <span>{error}</span>
+            {canRecoverPassword && (
+              <button
+                type="button"
+                className="mini-button"
+                onClick={recoverPassword}
+              >
+                <KeyRound size={11} /> {t("Re-enter password")}
+              </button>
+            )}
+          </div>
+        )}
       </section>
 
       {hasSsh && (
@@ -420,7 +464,20 @@ export default function ServerMonitorPanel({ tab }: Props) {
             </div>
             <div className="inline-note">{t("Service discovery runs over the active SSH target and can prefill the matching tool.")}</div>
             {servicesNotice && <div className="status-note">{servicesNotice}</div>}
-            {servicesError && <div className="status-note status-note--error">{servicesError}</div>}
+            {servicesError && (
+              <div className="status-note status-note--error">
+                <span>{servicesError}</span>
+                {canRecoverPassword && (
+                  <button
+                    type="button"
+                    className="mini-button"
+                    onClick={recoverPassword}
+                  >
+                    <KeyRound size={11} /> {t("Re-enter password")}
+                  </button>
+                )}
+              </div>
+            )}
           </div>
 
           {services.length > 0 && (

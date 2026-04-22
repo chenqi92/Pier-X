@@ -4467,6 +4467,14 @@ button,
 .dk-pull input::placeholder { color: var(--muted); }
 .dk-pull .btn.is-compact { padding: 0 var(--sp-2); height: 22px; }
 
+/* Active-state tint for toggle-style toolbar buttons (e.g. the sidebar
+   "This PC" button when the Drives view is current). */
+.mini-btn.is-active {
+  background: var(--accent-subtle);
+  color: var(--accent);
+}
+.mini-btn.is-active:hover { background: var(--accent-dim); color: var(--accent); }
+
 /* Color tones for container action buttons so stop/start/restart are
    legible at a glance instead of looking like generic triangles. */
 .mini-btn.is-start { color: var(--pos); }

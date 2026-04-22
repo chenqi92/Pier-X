@@ -31,6 +31,19 @@ import { useI18n } from "../i18n/useI18n";
 import { localizeError } from "../i18n/localizeMessage";
 import PanelHeader from "../components/PanelHeader";
 import StatusDot from "../components/StatusDot";
+import VirtualList from "../components/VirtualList";
+
+/** Row height for virtualized entries, matching `.ftp-row` in shell.css
+ *  (12px font · 6px padding top+bottom · 1px border). Kept in sync
+ *  manually — if that CSS changes, bump this. Mismatches show up as
+ *  rows overlapping or whitespace gaps during scroll. */
+const FTP_ROW_HEIGHT = 26;
+
+/** A single row in the virtualized list, discriminated so the ".." parent
+ *  pseudo-row and real entries share one renderer. */
+type FtpListRow =
+  | { kind: "parent" }
+  | { kind: "entry"; entry: SftpEntryView };
 
 /** DataTransfer MIME types for cross-panel drag-drop. The Sidebar
  *  file list writes `DT_LOCAL_FILE` when the user drags a local file,
@@ -667,6 +680,145 @@ export default function SftpPanel({ tab }: Props) {
       })
     : t("Configure SSH connection to begin.");
 
+  // Build one flat virtualized-list payload: the ".." parent row (if any)
+  // followed by all entries. Memoized because `entries` is the usual
+  // thousands-item case and we don't want to copy the array on every
+  // render. Empty list when we're not connected / haven't browsed yet.
+  const listRows = useMemo<FtpListRow[]>(() => {
+    const rows: FtpListRow[] = [];
+    if (state && currentRemotePath !== "/") rows.push({ kind: "parent" });
+    if (state) {
+      for (const entry of state.entries) rows.push({ kind: "entry", entry });
+    }
+    return rows;
+  }, [state, currentRemotePath]);
+
+  const renderListRow = (row: FtpListRow) => {
+    if (row.kind === "parent") {
+      return (
+        <div
+          key="__parent__"
+          className="ftp-row dir"
+          style={{ height: FTP_ROW_HEIGHT }}
+          onClick={() => void browse(remoteDirname(currentRemotePath), { pushHistory: true })}
+          onKeyDown={(e) => {
+            if (e.key === "Enter" || e.key === " ") {
+              e.preventDefault();
+              void browse(remoteDirname(currentRemotePath), { pushHistory: true });
+            }
+          }}
+          role="button"
+          tabIndex={0}
+          aria-label={t("Parent directory")}
+        >
+          <span className="ftp-ic"><ArrowUp size={13} /></span>
+          <span className="ftp-name">..</span>
+          <span className="ftp-perm mono">—</span>
+          <span className="ftp-size mono">—</span>
+          <span className="ftp-mod mono">—</span>
+        </div>
+      );
+    }
+    const entry = row.entry;
+    const Ic = iconForEntry(entry);
+    const isSel = selectedEntry?.path === entry.path;
+    return (
+      <div
+        key={entry.path}
+        className={"ftp-row" + (isSel ? " sel" : "") + (entry.isDir ? " dir" : "")}
+        style={{ height: FTP_ROW_HEIGHT }}
+        onClick={() => selectEntry(entry)}
+        onDoubleClick={() => openEntry(entry)}
+        onKeyDown={(e) => {
+          if (e.key === "Enter") {
+            e.preventDefault();
+            openEntry(entry);
+          } else if (e.key === " ") {
+            e.preventDefault();
+            selectEntry(entry);
+          }
+        }}
+        role="button"
+        tabIndex={0}
+        aria-selected={isSel}
+        aria-label={entry.name}
+        draggable
+        onDragStart={(e) => handleRowDragStart(e, entry)}
+      >
+        <span className="ftp-ic"><Ic size={13} /></span>
+        <span className="ftp-name" title={entry.name}>{entry.name}</span>
+        <span className="ftp-perm mono">
+          {entry.permissions || (entry.isDir ? "drwxr-xr-x" : "-rw-r--r--")}
+        </span>
+        <span className="ftp-size mono">{entry.isDir ? "—" : formatBytes(entry.size)}</span>
+        <span className="ftp-mod mono" title={formatModifiedTooltip(entry.modified)}>
+          {formatModifiedTime(entry.modified)}
+        </span>
+      </div>
+    );
+  };
+
+  const renderListPane = () => {
+    // Empty / loading states stay non-virtualized — they're single-line
+    // hints, not lists. The virtualized list takes over as soon as we
+    // have entries.
+    if (!hasSsh) {
+      return (
+        <div
+          className={"ftp-list" + (dropHover ? " is-drop" : "")}
+          onDragEnter={handleListDragEnter}
+          onDragOver={handleListDragOver}
+          onDragLeave={handleListDragLeave}
+          onDrop={handleListDrop}
+        >
+          <div className="lg-note">{sshRequired}</div>
+        </div>
+      );
+    }
+    if (!state && !busy) {
+      return (
+        <div
+          className={"ftp-list" + (dropHover ? " is-drop" : "")}
+          onDragEnter={handleListDragEnter}
+          onDragOver={handleListDragOver}
+          onDragLeave={handleListDragLeave}
+          onDrop={handleListDrop}
+        >
+          <div className="lg-note">
+            <button type="button" className="btn is-primary is-compact" onClick={() => void browse(path || "/")}>
+              {t("Browse")}
+            </button>
+          </div>
+        </div>
+      );
+    }
+    if (busy) {
+      return (
+        <div
+          className={"ftp-list" + (dropHover ? " is-drop" : "")}
+          onDragEnter={handleListDragEnter}
+          onDragOver={handleListDragOver}
+          onDragLeave={handleListDragLeave}
+          onDrop={handleListDrop}
+        >
+          <div className="lg-note">{t("Browsing...")}</div>
+        </div>
+      );
+    }
+    return (
+      <VirtualList<FtpListRow>
+        className={"ftp-list" + (dropHover ? " is-drop" : "")}
+        items={listRows}
+        rowHeight={FTP_ROW_HEIGHT}
+        renderRow={renderListRow}
+        onDragEnter={handleListDragEnter}
+        onDragOver={handleListDragOver}
+        onDragLeave={handleListDragLeave}
+        onDrop={handleListDrop}
+      />
+    );
+  };
+
   return (
     <>
       <PanelHeader icon={RIGHT_TOOL_META.sftp.icon} title={t("SFTP")} meta={currentRemotePath} />
@@ -823,81 +975,7 @@ export default function SftpPanel({ tab }: Props) {
           <span className="ftp-mod">{t("MODIFIED")}</span>
         </div>
 
-        <div
-          className={"ftp-list" + (dropHover ? " is-drop" : "")}
-          onDragEnter={handleListDragEnter}
-          onDragOver={handleListDragOver}
-          onDragLeave={handleListDragLeave}
-          onDrop={handleListDrop}
-        >
-          {!hasSsh && <div className="lg-note">{sshRequired}</div>}
-          {hasSsh && !state && !busy && (
-            <div className="lg-note">
-              <button type="button" className="btn is-primary is-compact" onClick={() => void browse(path || "/")}>
-                {t("Browse")}
-              </button>
-            </div>
-          )}
-          {busy && <div className="lg-note">{t("Browsing...")}</div>}
-          {state && currentRemotePath !== "/" && (
-            <div
-              className="ftp-row dir"
-              onClick={() => void browse(remoteDirname(currentRemotePath), { pushHistory: true })}
-              onKeyDown={(e) => {
-                if (e.key === "Enter" || e.key === " ") {
-                  e.preventDefault();
-                  void browse(remoteDirname(currentRemotePath), { pushHistory: true });
-                }
-              }}
-              role="button"
-              tabIndex={0}
-              aria-label={t("Parent directory")}
-            >
-              <span className="ftp-ic"><ArrowUp size={13} /></span>
-              <span className="ftp-name">..</span>
-              <span className="ftp-perm mono">—</span>
-              <span className="ftp-size mono">—</span>
-              <span className="ftp-mod mono">—</span>
-            </div>
-          )}
-          {state?.entries.map((entry) => {
-            const Ic = iconForEntry(entry);
-            const isSel = selectedEntry?.path === entry.path;
-            return (
-              <div
-                key={entry.path}
-                className={"ftp-row" + (isSel ? " sel" : "") + (entry.isDir ? " dir" : "")}
-                onClick={() => selectEntry(entry)}
-                onDoubleClick={() => openEntry(entry)}
-                onKeyDown={(e) => {
-                  if (e.key === "Enter") {
-                    e.preventDefault();
-                    openEntry(entry);
-                  } else if (e.key === " ") {
-                    e.preventDefault();
-                    selectEntry(entry);
-                  }
-                }}
-                role="button"
-                tabIndex={0}
-                aria-selected={isSel}
-                aria-label={entry.name}
-                draggable
-                onDragStart={(e) => handleRowDragStart(e, entry)}
-              >
-                <span className="ftp-ic"><Ic size={13} /></span>
-                <span className="ftp-name" title={entry.name}>{entry.name}</span>
-                <span className="ftp-perm mono">
-                  {entry.permissions || (entry.isDir ? "drwxr-xr-x" : "-rw-r--r--")}
-                </span>
-                <span className="ftp-size mono">{entry.isDir ? "—" : formatBytes(entry.size)}</span>
-                <span className="ftp-mod mono" title={formatModifiedTooltip(entry.modified)}>
-                  {formatModifiedTime(entry.modified)}
-                </span>
-              </div>
-            );
-          })}
-        </div>
+        {renderListPane()}
 
         {(notice || error) && (
           <div className="ftp-notice-bar">

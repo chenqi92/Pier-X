@@ -26,6 +26,17 @@ use serde::{Deserialize, Serialize};
 
 use crate::process_util::configure_background_command;
 
+/// Reject refnames that could be misparsed as CLI flags when
+/// interpolated as positional args to `git`. Narrower than git's
+/// full ref-format rules — git itself already enforces those on
+/// creation; this exists as defense-in-depth for names that
+/// originate from a cloned remote or HEAD file we don't control.
+fn is_safe_refname(name: &str) -> bool {
+    !name.is_empty()
+        && !name.starts_with('-')
+        && !name.contains(|c: char| c.is_ascii_control() || c == ' ')
+}
+
 // ─────────────────────────────────────────────────────────
 // Error
 // ──���──────────────────────────────────────────────────────
@@ -356,14 +367,19 @@ impl GitClient {
             .map(|s| s.trim().to_string())
             .unwrap_or_else(|_| "HEAD".to_string());
 
-        // Tracking branch
-        let tracking = self
-            .git(&["rev-parse", "--abbrev-ref", &format!("{name}@{{upstream}}")])
-            .map(|s| s.trim().to_string())
-            .unwrap_or_default();
+        // Tracking branch. Refname must be interpolated into a
+        // single positional arg, so reject anything that could be
+        // misparsed as a CLI flag before letting it near `git`.
+        let tracking = if is_safe_refname(&name) {
+            self.git(&["rev-parse", "--abbrev-ref", &format!("{name}@{{upstream}}")])
+                .map(|s| s.trim().to_string())
+                .unwrap_or_default()
+        } else {
+            String::new()
+        };
 
         // Ahead/behind
-        let (ahead, behind) = if !tracking.is_empty() {
+        let (ahead, behind) = if !tracking.is_empty() && is_safe_refname(&tracking) {
             self.git(&[
                 "rev-list",
                 "--left-right",

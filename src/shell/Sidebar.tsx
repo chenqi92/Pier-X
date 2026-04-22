@@ -836,7 +836,7 @@ export default function Sidebar({ onOpenLocalTerminal, onConnectSaved, onNewConn
               );
             })}
             {filteredEntries.length === 0 && (
-              <div className="empty-note" style={{ padding: 12 }}>
+              <div className="empty-note" style={{ padding: "var(--sp-3)" }}>
                 {searchText ? t("No matching files") : t("Empty directory")}
               </div>
             )}
@@ -1122,9 +1122,9 @@ function ServersPane({
           <span className="crumb-item">
             <span className="seg last">{t("SSH connections")}</span>
           </span>
-          <span className="sep" style={{ marginLeft: 6 }}>·</span>
+          <span className="sep" style={{ marginLeft: "var(--sp-1-5)" }}>·</span>
           <span className="crumb-item">
-            <span className="seg" style={{ fontFamily: "var(--mono)", fontSize: 10 }}>{totalCount}</span>
+            <span className="seg mono" style={{ fontSize: "var(--size-micro)" }}>{totalCount}</span>
           </span>
         </div>
         <button className="mini-btn" onClick={onRefresh} title={t("Refresh")} type="button"><RefreshCw /></button>
@@ -1351,7 +1351,7 @@ function ServersPane({
           </div>
         )}
         {shownCount === 0 && !pendingVisible && (
-          <div className="empty-note" style={{ padding: 12 }}>
+          <div className="empty-note" style={{ padding: "var(--sp-3)" }}>
             {totalCount === 0 ? t("No saved connections") : t("No matching connections")}
           </div>
         )}

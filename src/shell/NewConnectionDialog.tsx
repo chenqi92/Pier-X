@@ -69,7 +69,21 @@ export default function NewConnectionDialog({ open, onClose, onConnect, onConnec
   const [keyPath, setKeyPath] = useState(initialDraft.keyPath);
   const [group, setGroup] = useState(initialDraft.group);
   const [error, setError] = useState("");
+  // Guards double-submit: `persistConnection` is async and the buttons
+  // previously stayed enabled while the IPC was in flight, so a quick
+  // second click would insert a duplicate saved connection.
+  const [saving, setSaving] = useState(false);
   const { dialogStyle, handleProps } = useDraggableDialog(open);
+
+  // Close on Esc so keyboard users aren't trapped in the dialog.
+  useEffect(() => {
+    if (!open) return;
+    function onKey(e: KeyboardEvent) {
+      if (e.key === "Escape") onClose();
+    }
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [open, onClose]);
 
   // Unique sorted list of existing group labels, for the datalist autocomplete.
   const knownGroups = useMemo(() => {
@@ -144,7 +158,8 @@ export default function NewConnectionDialog({ open, onClose, onConnect, onConnec
   }
 
   async function handleSave() {
-    if (!canSave) return;
+    if (!canSave || saving) return;
+    setSaving(true);
     setError("");
     try {
       await persistConnection();
@@ -167,11 +182,14 @@ export default function NewConnectionDialog({ open, onClose, onConnect, onConnec
       onClose();
     } catch (e) {
       setError(formatError(e));
+    } finally {
+      setSaving(false);
     }
   }
 
   async function handleSaveAndConnect() {
-    if (!canSaveAndConnect) return;
+    if (!canSaveAndConnect || saving) return;
+    setSaving(true);
     setError("");
     const params = {
       name: connectionName,
@@ -195,6 +213,8 @@ export default function NewConnectionDialog({ open, onClose, onConnect, onConnec
       onClose();
     } catch (e) {
       setError(formatError(e));
+    } finally {
+      setSaving(false);
     }
   }
 
@@ -335,11 +355,11 @@ export default function NewConnectionDialog({ open, onClose, onConnect, onConnec
         <div className="dlg-foot">
           <div style={{ flex: 1 }} />
           <button className="gb-btn" onClick={onClose} type="button">{t("Cancel")}</button>
-          <button className="gb-btn" disabled={!canDirectConnect} onClick={handleConnect} type="button">{t("Connect")}</button>
-          <button className="gb-btn" disabled={!canSave} onClick={() => void handleSave()} type="button">
+          <button className="gb-btn" disabled={!canDirectConnect || saving} onClick={handleConnect} type="button">{t("Connect")}</button>
+          <button className="gb-btn" disabled={!canSave || saving} onClick={() => void handleSave()} type="button">
             {t(isEditing ? "Save changes" : "Save")}
           </button>
-          <button className="gb-btn primary" disabled={!canSaveAndConnect} onClick={() => void handleSaveAndConnect()} type="button">
+          <button className="gb-btn primary" disabled={!canSaveAndConnect || saving} onClick={() => void handleSaveAndConnect()} type="button">
             {isEditing ? t("Save changes & Connect") : `${t("Save")} & ${t("Connect")}`}
           </button>
         </div>

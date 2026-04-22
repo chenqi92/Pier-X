@@ -1229,13 +1229,23 @@ export default function GitPanel({ browserPath, isActive = true }: Props) {
     };
     tick();
     const timer = window.setInterval(tick, 3000);
+    // Debounce visibility flips: rapid Cmd-Tab in/out previously
+    // issued one `git_panel_state` IPC per transition; now a 300ms
+    // quiet period collapses the burst into a single fetch.
+    let visTimer: number | null = null;
     const onVisibility = () => {
-      if (document.visibilityState === "visible") tick();
+      if (document.visibilityState !== "visible") return;
+      if (visTimer !== null) window.clearTimeout(visTimer);
+      visTimer = window.setTimeout(() => {
+        visTimer = null;
+        tick();
+      }, 300);
     };
     document.addEventListener("visibilitychange", onVisibility);
     return () => {
       cancelled = true;
       window.clearInterval(timer);
+      if (visTimer !== null) window.clearTimeout(visTimer);
       document.removeEventListener("visibilitychange", onVisibility);
     };
   }, [isActive, browserPath]);

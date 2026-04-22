@@ -321,6 +321,19 @@ export default function TerminalPanel({ tab, isActive, onEditConnection }: Props
     let disposed = false;
     let inflight = false;
     let dirty = false;
+    let safety: number | null = null;
+
+    // The safety timer fires only after 1500ms of quiet — any
+    // event-driven refresh re-arms it, so we no longer get the
+    // double-fetch that happened when an event arrived ~100ms before
+    // a fixed-interval tick.
+    const armSafety = () => {
+      if (safety !== null) window.clearTimeout(safety);
+      safety = window.setTimeout(() => {
+        safety = null;
+        refresh();
+      }, 1500);
+    };
 
     const refresh = () => {
       if (disposed) return;
@@ -342,7 +355,11 @@ export default function TerminalPanel({ tab, isActive, onEditConnection }: Props
         })
         .finally(() => {
           inflight = false;
-          if (dirty && !disposed) refresh();
+          if (dirty && !disposed) {
+            refresh();
+          } else if (!disposed) {
+            armSafety();
+          }
         });
     };
 
@@ -361,14 +378,9 @@ export default function TerminalPanel({ tab, isActive, onEditConnection }: Props
       else unlisten = u;
     });
 
-    // Safety interval: catches any event we might miss (backend throttle,
-    // webview backgrounding, burst overflow). 1500ms is much cheaper than
-    // the old 80ms polling but still keeps the UI eventually-consistent.
-    const safety = window.setInterval(refresh, 1500);
-
     return () => {
       disposed = true;
-      window.clearInterval(safety);
+      if (safety !== null) window.clearTimeout(safety);
       if (unlisten) unlisten();
     };
   }, [session, scrollbackOffset]);

@@ -17,6 +17,10 @@ type Props = {
   /** Open the saved-connection editor when the keychain has lost the
    *  password for this tab's saved connection. */
   onEditConnection?: (index: number) => void;
+  /** True when this panel is the visible right-side tool. When false
+   *  the 5-second polling is suspended so keep-alive instances don't
+   *  burn SSH probes in the background. */
+  isActive?: boolean;
 };
 
 const MONITOR_ICON = RIGHT_TOOL_META.monitor.icon;
@@ -88,7 +92,7 @@ function formatTimestamp(ts: number): string {
   return `${pad(d.getHours())}:${pad(d.getMinutes())}:${pad(d.getSeconds())}`;
 }
 
-export default function ServerMonitorPanel({ tab, onEditConnection }: Props) {
+export default function ServerMonitorPanel({ tab, onEditConnection, isActive = true }: Props) {
   const { t } = useI18n();
   const formatError = (error: unknown) => localizeError(error, t);
   const [snap, setSnap] = useState<ServerSnapshotView | null>(null);
@@ -204,7 +208,11 @@ export default function ServerMonitorPanel({ tab, onEditConnection }: Props) {
       tab.backend === "ssh" && tab.terminalSessionId === null;
     const ready = (isLocal || haveCreds) && !waitingForTerminal;
     if (!ready) return;
+    // Still fire a single probe for hidden panels so the gauges carry
+    // a last-known value when the user comes back — but skip the
+    // recurring 5s poll until the panel is visible again.
     void probe();
+    if (!isActive) return;
     const interval = window.setInterval(() => {
       // Re-read busy from the latest closure via a state check —
       // intentionally letting the JS engine grab the freshest value
@@ -225,6 +233,7 @@ export default function ServerMonitorPanel({ tab, onEditConnection }: Props) {
     sshTarget?.authMode,
     // Re-run once the async password resolution lands:
     (sshTarget?.password.length ?? 0) > 0,
+    isActive,
   ]);
 
   const headerMeta = sshTarget

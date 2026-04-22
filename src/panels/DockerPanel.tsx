@@ -335,8 +335,9 @@ export default function DockerPanel({ tab }: Props) {
     }
   }
 
-  async function removeImage(id: string) {
+  async function removeImage(id: string, label?: string) {
     if (!hasSsh || actionBusy) return;
+    if (!window.confirm(t("Remove image {id}?", { id: label ?? shortId(id) }))) return;
     setActionBusy(true);
     setError("");
     try {
@@ -362,6 +363,7 @@ export default function DockerPanel({ tab }: Props) {
 
   async function removeVolume(name: string) {
     if (!hasSsh || actionBusy) return;
+    if (!window.confirm(t("Remove volume {name}? Any data stored in the volume will be lost.", { name }))) return;
     setActionBusy(true);
     setError("");
     try {
@@ -386,6 +388,7 @@ export default function DockerPanel({ tab }: Props) {
 
   async function removeNetwork(name: string) {
     if (!hasSsh || actionBusy) return;
+    if (!window.confirm(t("Remove network {name}?", { name }))) return;
     setActionBusy(true);
     setError("");
     try {
@@ -985,7 +988,7 @@ export default function DockerPanel({ tab }: Props) {
                             type="button"
                             title={t("Remove")}
                             disabled={actionBusy}
-                            onClick={() => void removeImage(img.id)}
+                            onClick={() => void removeImage(img.id, `${img.repository}:${img.tag}`)}
                           >
                             <Trash2 size={11} />
                           </button>

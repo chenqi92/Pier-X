@@ -12,9 +12,26 @@ import type { CSSProperties, HTMLAttributes, MouseEvent as ReactMouseEvent } fro
 export function useDraggableDialog(open: boolean) {
   const [pos, setPos] = useState<{ x: number; y: number }>({ x: 0, y: 0 });
   const dragRef = useRef<{ startX: number; startY: number; baseX: number; baseY: number } | null>(null);
+  const openerRef = useRef<HTMLElement | null>(null);
 
   useEffect(() => {
     if (!open) setPos({ x: 0, y: 0 });
+  }, [open]);
+
+  // Focus bookkeeping: remember whoever opened the dialog and hand
+  // focus back when it closes, so keyboard users don't lose their
+  // place in the underlying panel.
+  useEffect(() => {
+    if (!open) return;
+    const opener = document.activeElement;
+    openerRef.current = opener instanceof HTMLElement ? opener : null;
+    return () => {
+      const target = openerRef.current;
+      openerRef.current = null;
+      if (target && document.contains(target)) {
+        target.focus({ preventScroll: true });
+      }
+    };
   }, [open]);
 
   const onMouseDown = useCallback((e: ReactMouseEvent<HTMLDivElement>) => {

@@ -46,6 +46,18 @@ export default function RunContainerDialog({ open, busy, defaultImage, onClose, 
     }
   }, [open, defaultImage]);
 
+  // Close on Esc. We skip while a submission is in flight so the user
+  // can't accidentally dismiss the dialog mid-`docker run` and lose
+  // track of whether the container got created.
+  useEffect(() => {
+    if (!open) return;
+    function onKey(e: KeyboardEvent) {
+      if (e.key === "Escape" && !busy) onClose();
+    }
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [open, busy, onClose]);
+
   if (!open) return null;
 
   const canRun = image.trim().length > 0 && !busy;

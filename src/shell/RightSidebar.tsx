@@ -93,7 +93,7 @@ function ToolContent({
       return <GitPanel key={tabKey} browserPath={browserPath} isActive={isActive} />;
     case "monitor":
       return tab
-        ? <ServerMonitorPanel key={tab.id} tab={tab} onEditConnection={onEditConnection} />
+        ? <ServerMonitorPanel key={tab.id} tab={tab} isActive={isActive} onEditConnection={onEditConnection} />
         : renderSplash("monitor", t, onConnectSaved, onNewConnection);
     case "docker":
       return tab ? <DockerPanel key={tab.id} tab={tab} /> : renderSplash("docker", t, onConnectSaved, onNewConnection);

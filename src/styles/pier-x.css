@@ -980,6 +980,7 @@ body.is-resizing .app { transition: none; }
 }
 .dlg.small,
 .dlg--newconn { width: 520px; }
+.dlg--new-entry { width: 440px; }
 .dlg--diff {
   width: 1120px;
   max-width: 95%;

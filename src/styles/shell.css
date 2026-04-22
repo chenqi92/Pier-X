@@ -2986,17 +2986,39 @@ button,
   min-height: 18px;
 }
 .dlg-diff-scroll:not(.split) .dlg-diff-line {
+  grid-template-columns: 42px 42px 16px max-content;
+}
+.dlg-diff-scroll.wrap:not(.split) .dlg-diff-line {
   grid-template-columns: 42px 42px 16px 1fr;
 }
-.dlg-diff-scroll.split .dlg-diff-split-row {
+.dlg-diff-scroll.split {
+  flex-direction: column;
+  display: flex;
+  overflow: hidden;
+  padding-bottom: 0;
+}
+.dlg-diff-scroll.split .dlg-diff-split-head { flex: none; position: static; }
+.dlg-diff-split-body {
+  flex: 1;
+  min-height: 0;
   display: grid;
   grid-template-columns: 1fr 1fr;
 }
-.dlg-diff-scroll.split .dlg-diff-line {
-  grid-template-columns: 42px 16px 1fr;
-  border-left: 1px solid transparent;
+.dlg-diff-split-pane {
+  overflow: auto;
+  min-width: 0;
+  min-height: 0;
+  padding-bottom: var(--sp-10);
 }
-.dlg-diff-scroll.split .s-right { border-left: 1px solid var(--line); }
+.dlg-diff-split-pane + .dlg-diff-split-pane {
+  border-left: 1px solid var(--line);
+}
+.dlg-diff-scroll.split .dlg-diff-line {
+  grid-template-columns: 42px 16px max-content;
+}
+.dlg-diff-scroll.split.wrap .dlg-diff-line {
+  grid-template-columns: 42px 16px 1fr;
+}
 
 .dlg-diff-ln {
   color: var(--dim);
@@ -3013,8 +3035,6 @@ button,
 .dlg-diff-code {
   padding-right: var(--sp-3);
   color: var(--ink-2);
-  overflow: hidden;
-  text-overflow: ellipsis;
 }
 
 .dlg-diff-line.u-ctx .dlg-diff-code,
@@ -3591,7 +3611,7 @@ button,
 
 .lg-body {
   flex: 1;
-  overflow-y: auto;
+  overflow: auto;
   padding: var(--sp-1) 0;
   background: var(--bg);
   font-family: var(--mono);
@@ -3610,14 +3630,20 @@ button,
 }
 .lg-line {
   display: grid;
-  grid-template-columns: 44px 72px 58px 1fr;
+  grid-template-columns: 44px 72px 58px auto;
   gap: var(--sp-2);
   align-items: baseline;
   padding: 0 var(--sp-3) 0 0;
   border-left: 2px solid transparent;
   white-space: nowrap;
+  min-width: 100%;
+  width: max-content;
 }
-.lg-body.wrap .lg-line { white-space: normal; }
+.lg-body.wrap .lg-line {
+  white-space: normal;
+  grid-template-columns: 44px 72px 58px 1fr;
+  width: auto;
+}
 .lg-line:hover {
   background: color-mix(in srgb, var(--panel) 60%, transparent);
 }
@@ -3684,8 +3710,6 @@ button,
 .lg-msg {
   color: var(--ink-2);
   font-size: 11.5px;
-  overflow: hidden;
-  text-overflow: ellipsis;
 }
 .lg-body.wrap .lg-msg {
   white-space: pre-wrap;
@@ -4089,6 +4113,27 @@ button,
 .ftp-notice-bar {
   flex: none;
   border-top: 1px solid var(--line);
+}
+
+/* Inline rename input inside a `.ftp-row`. Occupies the same grid
+   cell as `.ftp-name` so the row doesn't reflow when entering edit
+   mode. Height is clamped so virtualization row math stays intact. */
+.ftp-rename-input {
+  min-width: 0;
+  width: 100%;
+  height: 20px;
+  padding: 0 var(--sp-1);
+  margin: 0;
+  font-family: var(--mono);
+  font-size: 12px;
+  color: var(--ink);
+  background: var(--surface);
+  border: 1px solid var(--accent);
+  border-radius: var(--radius-xs);
+  outline: none;
+}
+.ftp-rename-input:focus {
+  box-shadow: 0 0 0 1px var(--accent);
 }
 
 .ftp-inspector {

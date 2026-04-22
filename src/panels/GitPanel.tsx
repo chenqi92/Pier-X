@@ -22,9 +22,9 @@ import {
   Tag,
   X,
 } from "lucide-react";
-import type { ComponentType, CSSProperties, MouseEvent as ReactMouseEvent, ReactNode, UIEvent as ReactUIEvent } from "react";
+import type { ComponentType, CSSProperties, MouseEvent as ReactMouseEvent, MutableRefObject, ReactNode, UIEvent as ReactUIEvent } from "react";
 import { Group as PanelGroup, Panel, Separator as PanelResizeHandle } from "react-resizable-panels";
-import { memo, startTransition, useCallback, useDeferredValue, useEffect, useMemo, useRef, useState } from "react";
+import { memo, startTransition, useCallback, useDeferredValue, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { openUrl } from "@tauri-apps/plugin-opener";
 import { isBrowsableRepoPath } from "../lib/browserPath";
 import * as cmd from "../lib/commands";
@@ -190,6 +190,41 @@ function buildRepoPathTree(paths: string[]) {
 
 function workingFileKey(path: string, staged: boolean) {
   return (staged ? "S|" : "W|") + path;
+}
+
+function gitFileEqual(a: GitPanelState["stagedFiles"][number], b: GitPanelState["stagedFiles"][number]): boolean {
+  return (
+    a.path === b.path &&
+    a.fileName === b.fileName &&
+    a.status === b.status &&
+    a.staged === b.staged &&
+    a.additions === b.additions &&
+    a.deletions === b.deletions
+  );
+}
+
+function panelStateEqual(a: GitPanelState, b: GitPanelState): boolean {
+  if (
+    a.repoPath !== b.repoPath ||
+    a.currentBranch !== b.currentBranch ||
+    a.trackingBranch !== b.trackingBranch ||
+    a.aheadCount !== b.aheadCount ||
+    a.behindCount !== b.behindCount ||
+    a.totalChanges !== b.totalChanges ||
+    a.conflictCount !== b.conflictCount ||
+    a.workingTreeClean !== b.workingTreeClean ||
+    a.stagedFiles.length !== b.stagedFiles.length ||
+    a.unstagedFiles.length !== b.unstagedFiles.length
+  ) {
+    return false;
+  }
+  for (let i = 0; i < a.stagedFiles.length; i++) {
+    if (!gitFileEqual(a.stagedFiles[i], b.stagedFiles[i])) return false;
+  }
+  for (let i = 0; i < a.unstagedFiles.length; i++) {
+    if (!gitFileEqual(a.unstagedFiles[i], b.unstagedFiles[i])) return false;
+  }
+  return true;
 }
 
 function workingDiffStatusFromLetter(code: string): DiffFileInput["status"] {
@@ -507,9 +542,24 @@ function GitDialog({
   );
 }
 
-function GitGraphLane({ row }: { row: GitGraphRowView }) {
+// Graph geometry — matches Pier's IDEA-style renderer.
+const GRAPH_LANE_PX = 14;
+const GRAPH_ROW_H = 24;
+const GRAPH_DOT_R = 3.5;
+const GRAPH_LANE_MIN_W = 56;
+
+function GitGraphLane({ row, isHead, width }: { row: GitGraphRowView; isHead: boolean; width: number }) {
+  const dotColor = graphColor(row.colorIndex);
+  const cx = row.nodeColumn * GRAPH_LANE_PX + GRAPH_LANE_PX / 2 + 4;
+  const cy = GRAPH_ROW_H / 2;
   return (
-    <svg className="git-graph-lane" viewBox="0 0 74 24" preserveAspectRatio="none" aria-hidden="true">
+    <svg
+      className="git-graph-lane"
+      width={width}
+      height={GRAPH_ROW_H}
+      viewBox={`0 0 ${width} ${GRAPH_ROW_H}`}
+      aria-hidden="true"
+    >
       {row.segments.map((segment, index) => (
         <line
           key={`${row.hash}-segment-${index}`}
@@ -518,31 +568,203 @@ function GitGraphLane({ row }: { row: GitGraphRowView }) {
           x2={segment.xBottom}
           y2={segment.yBottom}
           stroke={graphColor(segment.colorIndex)}
-          strokeWidth="1.6"
+          strokeWidth="1.5"
           strokeLinecap="butt"
         />
       ))}
       {row.arrows.map((arrow, index) => {
-        const x = arrow.x;
-        const y = arrow.y;
+        const arrowColor = graphColor(arrow.colorIndex);
+        const armLen = 5;
+        const halfW = 4;
         const points = arrow.isDown
-          ? `${x - 3},${y - 2} ${x + 3},${y - 2} ${x},${y + 3}`
-          : `${x - 3},${y + 2} ${x + 3},${y + 2} ${x},${y - 3}`;
-        return <polygon key={`${row.hash}-arrow-${index}`} points={points} fill={graphColor(arrow.colorIndex)} />;
+          ? `${arrow.x - halfW},${arrow.y - armLen} ${arrow.x},${arrow.y} ${arrow.x + halfW},${arrow.y - armLen}`
+          : `${arrow.x - halfW},${arrow.y + armLen} ${arrow.x},${arrow.y} ${arrow.x + halfW},${arrow.y + armLen}`;
+        return (
+          <polyline
+            key={`${row.hash}-arrow-${index}`}
+            points={points}
+            fill="none"
+            stroke={arrowColor}
+            strokeWidth="2"
+            strokeLinecap="round"
+            strokeLinejoin="round"
+          />
+        );
       })}
-      <circle
-        cx={row.nodeColumn * 12 + 10}
-        cy={12}
-        r="4.2"
-        fill={graphColor(row.colorIndex)}
-        stroke="var(--bg-panel)"
-        strokeWidth="1"
-      />
+      {isHead ? (
+        <circle cx={cx} cy={cy} r={GRAPH_DOT_R + 2} fill="none" stroke={dotColor} strokeWidth="1.5" />
+      ) : null}
+      <circle cx={cx} cy={cy} r={GRAPH_DOT_R} fill={dotColor} />
     </svg>
   );
 }
 
 const HISTORY_PAGE_SIZE = 180;
+
+type GitHistoryVirtualListProps = {
+  rows: GitGraphRowView[];
+  rowHeight: number;
+  selectedIndex: number;
+  detailNode: ReactNode | null;
+  renderRow: (row: GitGraphRowView, index: number) => ReactNode;
+  footer?: ReactNode;
+  overscan?: number;
+  className?: string;
+  style?: CSSProperties;
+  scrollRef?: MutableRefObject<HTMLDivElement | null>;
+  onScroll?: (event: ReactUIEvent<HTMLDivElement>) => void;
+};
+
+// Fixed-height virtualizer that knows about a single inline-expanded row.
+// Rows are rowHeight tall; the selected row reserves an extra measured
+// detailHeight slot directly below it. An optional footer sits at the very
+// bottom. DOM cost scales with viewport, not rows.length.
+function GitHistoryVirtualList({
+  rows,
+  rowHeight,
+  selectedIndex,
+  detailNode,
+  renderRow,
+  footer,
+  overscan = 6,
+  className,
+  style,
+  scrollRef,
+  onScroll,
+}: GitHistoryVirtualListProps) {
+  const scrollerRef = useRef<HTMLDivElement | null>(null);
+  const [scrollTop, setScrollTop] = useState(0);
+  const [viewportHeight, setViewportHeight] = useState(0);
+  const [detailHeight, setDetailHeight] = useState(0);
+  const [footerHeight, setFooterHeight] = useState(0);
+
+  useLayoutEffect(() => {
+    const el = scrollerRef.current;
+    if (!el) return;
+    const update = () => setViewportHeight(el.clientHeight);
+    update();
+    const ro = new ResizeObserver(update);
+    ro.observe(el);
+    return () => ro.disconnect();
+  }, []);
+
+  const detailObserverRef = useRef<ResizeObserver | null>(null);
+  const setDetailRef = useCallback((node: HTMLDivElement | null) => {
+    if (detailObserverRef.current) {
+      detailObserverRef.current.disconnect();
+      detailObserverRef.current = null;
+    }
+    if (!node) {
+      setDetailHeight(0);
+      return;
+    }
+    const measure = () => setDetailHeight(node.getBoundingClientRect().height);
+    measure();
+    const ro = new ResizeObserver(measure);
+    ro.observe(node);
+    detailObserverRef.current = ro;
+  }, []);
+
+  const footerObserverRef = useRef<ResizeObserver | null>(null);
+  const setFooterRef = useCallback((node: HTMLDivElement | null) => {
+    if (footerObserverRef.current) {
+      footerObserverRef.current.disconnect();
+      footerObserverRef.current = null;
+    }
+    if (!node) {
+      setFooterHeight(0);
+      return;
+    }
+    const measure = () => setFooterHeight(node.getBoundingClientRect().height);
+    measure();
+    const ro = new ResizeObserver(measure);
+    ro.observe(node);
+    footerObserverRef.current = ro;
+  }, []);
+
+  const hasDetail =
+    selectedIndex >= 0 && selectedIndex < rows.length && detailNode != null;
+  const effectiveDetailH = hasDetail ? detailHeight : 0;
+  const rowsTotal = rows.length * rowHeight + effectiveDetailH;
+  const totalHeight = rowsTotal + footerHeight;
+
+  const yOfRow = (i: number): number => {
+    if (!hasDetail || i <= selectedIndex) return i * rowHeight;
+    return i * rowHeight + effectiveDetailH;
+  };
+  const rowAtY = (y: number): number => {
+    if (!hasDetail) return Math.floor(y / rowHeight);
+    const b1 = (selectedIndex + 1) * rowHeight;
+    const b2 = b1 + effectiveDetailH;
+    if (y < b1) return Math.floor(y / rowHeight);
+    if (y < b2) return selectedIndex;
+    return selectedIndex + 1 + Math.floor((y - b2) / rowHeight);
+  };
+
+  const firstIdx = Math.max(0, rowAtY(scrollTop) - overscan);
+  const lastIdx = Math.min(
+    rows.length,
+    rowAtY(scrollTop + viewportHeight) + overscan + 1,
+  );
+
+  const setScrollerRef = (node: HTMLDivElement | null) => {
+    scrollerRef.current = node;
+    if (scrollRef) scrollRef.current = node;
+  };
+
+  return (
+    <div
+      ref={setScrollerRef}
+      className={className}
+      style={{ overflow: "auto", position: "relative", ...style }}
+      onScroll={(event) => {
+        setScrollTop(event.currentTarget.scrollTop);
+        onScroll?.(event);
+      }}
+    >
+      <div style={{ height: totalHeight, position: "relative" }}>
+        {rows.slice(firstIdx, lastIdx).map((row, i) => {
+          const idx = firstIdx + i;
+          return (
+            <div
+              key={row.hash}
+              style={{
+                position: "absolute",
+                top: yOfRow(idx),
+                left: 0,
+                right: 0,
+                height: rowHeight,
+              }}
+            >
+              {renderRow(row, idx)}
+            </div>
+          );
+        })}
+        {hasDetail ? (
+          <div
+            ref={setDetailRef}
+            style={{
+              position: "absolute",
+              top: (selectedIndex + 1) * rowHeight,
+              left: 0,
+              right: 0,
+            }}
+          >
+            {detailNode}
+          </div>
+        ) : null}
+        {footer ? (
+          <div
+            ref={setFooterRef}
+            style={{ position: "absolute", top: rowsTotal, left: 0, right: 0 }}
+          >
+            {footer}
+          </div>
+        ) : null}
+      </div>
+    </div>
+  );
+}
 
 type HistoryRowProps = {
   row: GitGraphRowView;
@@ -550,6 +772,8 @@ type HistoryRowProps = {
   dimmed: boolean;
   zebraStripe: boolean;
   refs: string[];
+  isHead: boolean;
+  graphLaneWidth: number;
   authorColorValue: string;
   authorInitialValue: string;
   formattedDate: string;
@@ -557,7 +781,6 @@ type HistoryRowProps = {
   showDate: boolean;
   showHash: boolean;
   titleText: string;
-  detailNode: ReactNode | null;
   onSelect: (hash: string, wasActive: boolean) => void;
   onDoubleClick: (hash: string) => void;
   onContextMenu: (event: ReactMouseEvent<HTMLButtonElement>, row: GitGraphRowView) => void;
@@ -569,6 +792,8 @@ const HistoryRow = memo(function HistoryRow({
   dimmed,
   zebraStripe,
   refs,
+  isHead,
+  graphLaneWidth,
   authorColorValue,
   authorInitialValue,
   formattedDate,
@@ -576,7 +801,6 @@ const HistoryRow = memo(function HistoryRow({
   showDate,
   showHash,
   titleText,
-  detailNode,
   onSelect,
   onDoubleClick,
   onContextMenu,
@@ -606,7 +830,7 @@ const HistoryRow = memo(function HistoryRow({
         type="button"
         title={titleText}
       >
-        <GitGraphLane row={row} />
+        <GitGraphLane row={row} isHead={isHead} width={graphLaneWidth} />
         <div className="git-history-row__content">
           <div className="git-history-row__subject">
             {refs.slice(0, 3).map((token) => (
@@ -633,7 +857,6 @@ const HistoryRow = memo(function HistoryRow({
           {showHash ? <span className="git-history-row__hash" title={row.shortHash}>{row.shortHash}</span> : null}
         </div>
       </button>
-      {detailNode}
     </div>
   );
 });
@@ -969,7 +1192,10 @@ export default function GitPanel({ browserPath, isActive = true }: Props) {
     }
     try {
       const next = await cmd.gitPanelState(browserPath);
-      setPanelState(next);
+      // Keep the same reference when the data is equal so the 3s poll
+      // doesn't cascade into workingDiffCache resets, which would make
+      // the diff dialog flash "Loading…" every tick.
+      setPanelState((prev) => (prev && panelStateEqual(prev, next) ? prev : next));
       setGitReady(true);
       setGitError("");
     } catch (error) {
@@ -1828,6 +2054,7 @@ export default function GitPanel({ browserPath, isActive = true }: Props) {
       string,
       {
         refs: string[];
+        isHead: boolean;
         authorColorValue: string;
         authorInitialValue: string;
         formattedDate: string;
@@ -1851,8 +2078,11 @@ export default function GitPanel({ browserPath, isActive = true }: Props) {
         default:
           dimmed = false;
       }
+      const tokens = refTokens(row.refs);
+      const isHead = tokens.some((token) => token === "HEAD" || token.startsWith("HEAD ->"));
       map.set(row.hash, {
-        refs: refTokens(row.refs),
+        refs: tokens,
+        isHead,
         authorColorValue: authorColor(row.author),
         authorInitialValue: authorInitial(row.author),
         formattedDate: formatGraphDate(row.dateTimestamp),
@@ -1861,6 +2091,27 @@ export default function GitPanel({ browserPath, isActive = true }: Props) {
     }
     return map;
   }, [graphRows, historyHighlightMode, graphMetadata?.gitUserName, panelState?.currentBranch]);
+
+  const graphLaneWidth = useMemo(() => {
+    let maxX = 0;
+    for (const row of graphRows) {
+      const nodeX = row.nodeColumn * GRAPH_LANE_PX + GRAPH_LANE_PX / 2 + 4;
+      if (nodeX > maxX) maxX = nodeX;
+      for (const segment of row.segments) {
+        if (segment.xTop > maxX) maxX = segment.xTop;
+        if (segment.xBottom > maxX) maxX = segment.xBottom;
+      }
+      for (const arrow of row.arrows) {
+        if (arrow.x > maxX) maxX = arrow.x;
+      }
+    }
+    return Math.max(Math.ceil(maxX + GRAPH_LANE_PX / 2), GRAPH_LANE_MIN_W);
+  }, [graphRows]);
+
+  const historySelectedIndex = useMemo(() => {
+    if (!historySelectedHash) return -1;
+    return graphRows.findIndex((row) => row.hash === historySelectedHash);
+  }, [graphRows, historySelectedHash]);
 
   const loadGraphRowsRef = useRef(loadGraphRows);
   loadGraphRowsRef.current = loadGraphRows;
@@ -2329,12 +2580,15 @@ export default function GitPanel({ browserPath, isActive = true }: Props) {
                       {historyShowDate ? <div className="git-history-columns__date">{t("Date")}</div> : null}
                       {historyShowHash ? <div className="git-history-columns__hash">{t("Hash")}</div> : null}
                     </div>
-                    <div
-                      ref={historyListRef}
+                    <GitHistoryVirtualList
                       className="git-history-list"
+                      scrollRef={historyListRef}
                       onScroll={handleHistoryListScroll}
-                    >
-                      {graphRows.map((row, index) => {
+                      rows={graphRows}
+                      rowHeight={GRAPH_ROW_H}
+                      selectedIndex={historySelectedIndex}
+                      detailNode={activeCommitDetail ? renderHistoryInlineDetail(activeCommitDetail) : null}
+                      renderRow={(row, index) => {
                         const active = row.hash === historySelectedHash;
                         const meta = rowMetaByHash.get(row.hash);
                         const refs = meta?.refs ?? [];
@@ -2342,12 +2596,13 @@ export default function GitPanel({ browserPath, isActive = true }: Props) {
                         const zebraStripe = historyShowZebraStripes && index % 2 === 1;
                         return (
                           <HistoryRow
-                            key={row.hash}
                             row={row}
                             active={active}
                             dimmed={dimmed}
                             zebraStripe={zebraStripe}
                             refs={refs}
+                            isHead={meta?.isHead ?? false}
+                            graphLaneWidth={graphLaneWidth}
                             authorColorValue={meta?.authorColorValue ?? ""}
                             authorInitialValue={meta?.authorInitialValue ?? ""}
                             formattedDate={meta?.formattedDate ?? ""}
@@ -2355,20 +2610,20 @@ export default function GitPanel({ browserPath, isActive = true }: Props) {
                             showDate={historyShowDate}
                             showHash={historyShowHash}
                             titleText={`${row.shortHash} · ${row.message}`}
-                            detailNode={active && activeCommitDetail ? renderHistoryInlineDetail(activeCommitDetail) : null}
                             onSelect={handleHistorySelect}
                             onDoubleClick={handleHistoryDoubleClick}
                             onContextMenu={handleHistoryContextMenu}
                           />
                         );
-                      })}
-                      {historyLoadingMore ? (
-                        <div className="git-history-list__loading-more mono">{t("Loading more…")}</div>
-                      ) : null}
-                      {!historyHasMore && graphRows.length > 0 && !historyLoadingMore ? (
-                        <div className="git-history-list__end mono">{t("End of history")}</div>
-                      ) : null}
-                    </div>
+                      }}
+                      footer={
+                        historyLoadingMore ? (
+                          <div className="git-history-list__loading-more mono">{t("Loading more…")}</div>
+                        ) : !historyHasMore && graphRows.length > 0 ? (
+                          <div className="git-history-list__end mono">{t("End of history")}</div>
+                        ) : null
+                      }
+                    />
                   </>
                 ) : (
                   <GitEmptyState

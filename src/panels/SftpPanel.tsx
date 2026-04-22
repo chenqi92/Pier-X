@@ -3,7 +3,6 @@ import {
   ArrowRight,
   ArrowUp,
   Check,
-  Download,
   Edit,
   File as FileIcon,
   FileText,
@@ -14,7 +13,6 @@ import {
   RefreshCw,
   Server,
   Terminal as TerminalIcon,
-  Trash2,
   Upload,
   X,
 } from "lucide-react";
@@ -36,6 +34,7 @@ import VirtualList from "../components/VirtualList";
 import ContextMenu, { type ContextMenuItem } from "../components/ContextMenu";
 import ChmodDialog from "../components/ChmodDialog";
 import SftpEditorDialog from "../components/SftpEditorDialog";
+import SftpNewEntryDialog from "../components/SftpNewEntryDialog";
 import { writeClipboardText } from "../lib/clipboard";
 import { isEditableFilename, MAX_EDITOR_BYTES, modeToSymbolic } from "../lib/sftpEditor";
 
@@ -202,6 +201,14 @@ export default function SftpPanel({ tab }: Props) {
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
   const [notice, setNotice] = useState("");
+  // Auto-dismiss the info notice after a few seconds so it doesn't
+  // linger and cover the list below. Error stays put — the user
+  // should explicitly acknowledge failures.
+  useEffect(() => {
+    if (!notice) return;
+    const timer = window.setTimeout(() => setNotice(""), 3000);
+    return () => window.clearTimeout(timer);
+  }, [notice]);
   const [path, setPath] = useState("/");
   const [selectedPath, setSelectedPath] = useState("");
   const [editingPath, setEditingPath] = useState(false);
@@ -209,10 +216,12 @@ export default function SftpPanel({ tab }: Props) {
   const [history, setHistory] = useState<string[]>([]);
   const [forward, setForward] = useState<string[]>([]);
 
-  const [renameOpen, setRenameOpen] = useState(false);
-  const [renameTarget, setRenameTarget] = useState("");
-  const [mkdirOpen, setMkdirOpen] = useState(false);
-  const [mkdirName, setMkdirName] = useState("");
+  // Inline row rename. The previous implementation lived in a bottom
+  // "inspector" strip; now the filename cell itself flips into an
+  // editable input when the user picks Rename from the right-click
+  // menu (or presses F2).
+  const [renamingPath, setRenamingPath] = useState<string | null>(null);
+  const [renameDraft, setRenameDraft] = useState("");
   const [actionBusy, setActionBusy] = useState(false);
 
   const [transfers, setTransfers] = useState<TransferItem[]>([]);
@@ -231,8 +240,12 @@ export default function SftpPanel({ tab }: Props) {
 
   const [chmodTarget, setChmodTarget] = useState<{ path: string; mode: number | null } | null>(null);
 
-  const [newFileOpen, setNewFileOpen] = useState(false);
-  const [newFileName, setNewFileName] = useState("");
+  // Unified "New entry" dialog — replaces the previous separate
+  // inline quickrows for mkdir and createFile and offers a single
+  // surface with a file/folder radio.
+  const [newEntryOpen, setNewEntryOpen] = useState(false);
+  const [newEntryKind, setNewEntryKind] = useState<"file" | "dir">("file");
+  const [newEntryName, setNewEntryName] = useState("");
 
   const [propsTarget, setPropsTarget] = useState<SftpEntryView | null>(null);
 
@@ -350,7 +363,8 @@ export default function SftpPanel({ tab }: Props) {
       setPath(next.currentPath);
       setPathDraft(next.currentPath);
       setSelectedPath("");
-      setRenameOpen(false);
+      setRenamingPath(null);
+      setRenameDraft("");
     } catch (e) {
       setState(null);
       setError(formatError(e));
@@ -375,20 +389,32 @@ export default function SftpPanel({ tab }: Props) {
     await browse(next);
   }
 
-  async function createDirectory() {
-    if (!hasSsh || !mkdirName.trim()) return;
+  function openNewEntryDialog(kind: "file" | "dir") {
+    setNewEntryKind(kind);
+    setNewEntryName("");
+    setNewEntryOpen(true);
+  }
+
+  /** Create the file or directory the user filled in via the "New…"
+   *  dialog. Routes to `sftp_mkdir` or `sftp_create_file` based on
+   *  `newEntryKind`, then refreshes the listing. */
+  async function submitNewEntry() {
+    const name = newEntryName.trim();
+    if (!hasSsh || !name) return;
+    const targetPath = joinRemotePath(currentRemotePath, name);
     setActionBusy(true);
     setError("");
     setNotice("");
     try {
-      const targetPath = joinRemotePath(currentRemotePath, mkdirName);
-      await cmd.sftpMkdir({
-        ...sshArgs,
-        path: targetPath,
-      });
-      setMkdirName("");
-      setMkdirOpen(false);
-      setNotice(t("Created directory {path}.", { path: targetPath }));
+      if (newEntryKind === "dir") {
+        await cmd.sftpMkdir({ ...sshArgs, path: targetPath });
+        setNotice(t("Created directory {path}.", { path: targetPath }));
+      } else {
+        await cmd.sftpCreateFile({ ...sshArgs, path: targetPath });
+        setNotice(t("Created file {path}.", { path: targetPath }));
+      }
+      setNewEntryOpen(false);
+      setNewEntryName("");
       await browse(currentRemotePath);
     } catch (e) {
       setError(formatError(e));
@@ -397,22 +423,39 @@ export default function SftpPanel({ tab }: Props) {
     }
   }
 
-  async function renameSelected() {
-    if (!hasSsh || !selectedEntry || !renameTarget.trim()) return;
+  function startInlineRename(entry: SftpEntryView) {
+    setRenamingPath(entry.path);
+    setRenameDraft(entry.name);
+  }
+
+  function cancelInlineRename() {
+    setRenamingPath(null);
+    setRenameDraft("");
+  }
+
+  async function commitInlineRename() {
+    if (!hasSsh || !renamingPath) return;
+    const draft = renameDraft.trim();
+    const current = state?.entries.find((e) => e.path === renamingPath);
+    if (!current) {
+      cancelInlineRename();
+      return;
+    }
+    if (!draft || draft === current.name) {
+      cancelInlineRename();
+      return;
+    }
+    const nextPath = joinRemotePath(remoteDirname(current.path), draft);
     setActionBusy(true);
     setError("");
     setNotice("");
     try {
-      const nextPath = joinRemotePath(remoteDirname(selectedEntry.path), renameTarget);
-      await cmd.sftpRename({
-        ...sshArgs,
-        from: selectedEntry.path,
-        to: nextPath,
-      });
-      setNotice(t("Renamed {from} to {to}.", { from: selectedEntry.name, to: renameTarget.trim() }));
-      setRenameOpen(false);
+      await cmd.sftpRename({ ...sshArgs, from: current.path, to: nextPath });
+      setNotice(t("Renamed {from} to {to}.", { from: current.name, to: draft }));
+      setRenamingPath(null);
+      setRenameDraft("");
       await browse(currentRemotePath);
-      setSelectedPath(nextPath);
+      if (selectedPath === current.path) setSelectedPath(nextPath);
     } catch (e) {
       setError(formatError(e));
     } finally {
@@ -420,30 +463,9 @@ export default function SftpPanel({ tab }: Props) {
     }
   }
 
-  async function removeSelected() {
-    if (!hasSsh || !selectedEntry) return;
-    setActionBusy(true);
-    setError("");
-    setNotice("");
-    try {
-      await cmd.sftpRemove({
-        ...sshArgs,
-        path: selectedEntry.path,
-        isDir: selectedEntry.isDir,
-      });
-      setNotice(t("Removed {path}.", { path: selectedEntry.path }));
-      await browse(currentRemotePath);
-    } catch (e) {
-      setError(formatError(e));
-    } finally {
-      setActionBusy(false);
-    }
-  }
-
-  /** Remove an arbitrary entry — used by the context menu which
-   *  doesn't rely on the inspector's `selectedEntry` state. Also
-   *  prompts the user before unlinking to match the "all dangerous
-   *  ops require confirmation" rule from the product spec. */
+  /** Remove an arbitrary entry — used by the context menu. Prompts
+   *  the user before unlinking to match the "all dangerous ops
+   *  require confirmation" rule from the product spec. */
   async function removeEntry(entry: SftpEntryView) {
     if (!hasSsh) return;
     const msg = entry.isDir
@@ -456,27 +478,6 @@ export default function SftpPanel({ tab }: Props) {
     try {
       await cmd.sftpRemove({ ...sshArgs, path: entry.path, isDir: entry.isDir });
       setNotice(t("Removed {path}.", { path: entry.path }));
-      await browse(currentRemotePath);
-    } catch (e) {
-      setError(formatError(e));
-    } finally {
-      setActionBusy(false);
-    }
-  }
-
-  /** Rename an arbitrary entry via a prompt — the inline inspector
-   *  quickrow only targets the currently selected row. */
-  async function renameEntryPrompt(entry: SftpEntryView) {
-    if (!hasSsh) return;
-    const nextName = window.prompt(t("Rename {name} to:", { name: entry.name }), entry.name);
-    if (!nextName || nextName.trim() === entry.name) return;
-    const nextPath = joinRemotePath(remoteDirname(entry.path), nextName.trim());
-    setActionBusy(true);
-    setError("");
-    setNotice("");
-    try {
-      await cmd.sftpRename({ ...sshArgs, from: entry.path, to: nextPath });
-      setNotice(t("Renamed {from} to {to}.", { from: entry.name, to: nextName.trim() }));
       await browse(currentRemotePath);
     } catch (e) {
       setError(formatError(e));
@@ -538,25 +539,6 @@ export default function SftpPanel({ tab }: Props) {
     }
   }
 
-  async function createNewFile() {
-    if (!hasSsh || !newFileName.trim()) return;
-    setActionBusy(true);
-    setError("");
-    setNotice("");
-    try {
-      const targetPath = joinRemotePath(currentRemotePath, newFileName.trim());
-      await cmd.sftpCreateFile({ ...sshArgs, path: targetPath });
-      setNewFileOpen(false);
-      setNewFileName("");
-      setNotice(t("Created file {path}.", { path: targetPath }));
-      await browse(currentRemotePath);
-    } catch (e) {
-      setError(formatError(e));
-    } finally {
-      setActionBusy(false);
-    }
-  }
-
   function openEditorFor(entry: SftpEntryView) {
     if (entry.isDir) {
       void browse(entry.path, { pushHistory: true });
@@ -603,10 +585,13 @@ export default function SftpPanel({ tab }: Props) {
     }
   }
 
-  /** Download the currently-selected file to a user-chosen directory.
-   *  Opens a native folder picker; no-op if the user cancels. */
-  async function downloadSelectedPick() {
-    if (!hasSsh || !selectedEntry || selectedEntry.isDir) return;
+  /** Download `entry` to a user-chosen directory. Opens a native
+   *  folder picker; no-op if the user cancels. Takes the entry
+   *  explicitly so context-menu callers don't need to round-trip
+   *  through `selectedEntry` state (which would be stale for a
+   *  right-click on an unselected row). */
+  async function downloadEntryPick(entry: SftpEntryView) {
+    if (!hasSsh || entry.isDir) return;
     try {
       const picked = await openDialog({
         directory: true,
@@ -617,7 +602,7 @@ export default function SftpPanel({ tab }: Props) {
       setActionBusy(true);
       setError("");
       setNotice("");
-      await downloadOne({ path: selectedEntry.path, name: selectedEntry.name }, picked);
+      await downloadOne({ path: entry.path, name: entry.name }, picked);
     } catch (e) {
       setError(formatError(e));
     } finally {
@@ -712,8 +697,6 @@ export default function SftpPanel({ tab }: Props) {
 
   function selectEntry(entry: SftpEntryView) {
     setSelectedPath(entry.path);
-    setRenameTarget(entry.name);
-    setRenameOpen(false);
   }
 
   function openEntry(entry: SftpEntryView) {
@@ -749,15 +732,12 @@ export default function SftpPanel({ tab }: Props) {
       });
       items.push({
         label: t("Download…"),
-        action: () => {
-          selectEntry(entry);
-          void downloadSelectedPick();
-        },
+        action: () => void downloadEntryPick(entry),
         disabled: actionBusy,
       });
     }
     items.push({ divider: true });
-    items.push({ label: t("Rename…"), action: () => void renameEntryPrompt(entry) });
+    items.push({ label: t("Rename"), action: () => startInlineRename(entry) });
     if (!entry.isDir) {
       items.push({ label: t("Duplicate"), action: () => void duplicateEntry(entry) });
     }
@@ -765,6 +745,9 @@ export default function SftpPanel({ tab }: Props) {
       label: t("Delete"),
       action: () => void removeEntry(entry),
     });
+    items.push({ divider: true });
+    items.push({ label: t("New file…"), action: () => openNewEntryDialog("file") });
+    items.push({ label: t("New folder…"), action: () => openNewEntryDialog("dir") });
     items.push({ divider: true });
     items.push({
       label: t("Change permissions…"),
@@ -781,8 +764,8 @@ export default function SftpPanel({ tab }: Props) {
 
   function buildEmptyContextMenu(): ContextMenuItem[] {
     return [
-      { label: t("New file…"), action: () => { setNewFileName(""); setNewFileOpen(true); } },
-      { label: t("New folder…"), action: () => setMkdirOpen(true) },
+      { label: t("New file…"), action: () => openNewEntryDialog("file") },
+      { label: t("New folder…"), action: () => openNewEntryDialog("dir") },
       { divider: true },
       { label: t("Upload…"), action: () => void uploadPick(), disabled: actionBusy },
       { label: t("Refresh"), action: () => void browse(currentRemotePath) },
@@ -972,32 +955,68 @@ export default function SftpPanel({ tab }: Props) {
     const entry = row.entry;
     const Ic = iconForEntry(entry);
     const isSel = selectedEntry?.path === entry.path;
+    const isRenaming = renamingPath === entry.path;
     return (
       <div
         key={entry.path}
         className={"ftp-row" + (isSel ? " sel" : "") + (entry.isDir ? " dir" : "")}
         style={{ height: FTP_ROW_HEIGHT }}
-        onClick={() => selectEntry(entry)}
-        onDoubleClick={() => openEntry(entry)}
+        onClick={() => { if (!isRenaming) selectEntry(entry); }}
+        onDoubleClick={() => { if (!isRenaming) openEntry(entry); }}
         onContextMenu={(e) => handleRowContextMenu(e, entry)}
         onKeyDown={(e) => {
+          if (isRenaming) return;
           if (e.key === "Enter") {
             e.preventDefault();
             openEntry(entry);
           } else if (e.key === " ") {
             e.preventDefault();
             selectEntry(entry);
+          } else if (e.key === "F2") {
+            e.preventDefault();
+            startInlineRename(entry);
           }
         }}
         role="button"
         tabIndex={0}
         aria-selected={isSel}
         aria-label={entry.name}
-        draggable
+        draggable={!isRenaming}
         onDragStart={(e) => handleRowDragStart(e, entry)}
       >
         <span className="ftp-ic"><Ic size={13} /></span>
-        <span className="ftp-name" title={entry.name}>{entry.name}</span>
+        {isRenaming ? (
+          <input
+            className="ftp-rename-input"
+            value={renameDraft}
+            autoFocus
+            onChange={(e) => setRenameDraft(e.currentTarget.value)}
+            onClick={(e) => e.stopPropagation()}
+            onDoubleClick={(e) => e.stopPropagation()}
+            onKeyDown={(e) => {
+              e.stopPropagation();
+              if (e.key === "Enter") {
+                e.preventDefault();
+                void commitInlineRename();
+              } else if (e.key === "Escape") {
+                e.preventDefault();
+                cancelInlineRename();
+              }
+            }}
+            onBlur={() => void commitInlineRename()}
+            onFocus={(e) => {
+              // Preselect the stem (everything before the last dot) so
+              // the user can retype the name without clobbering the
+              // extension by accident — VS Code / Finder behavior.
+              const v = e.currentTarget.value;
+              const dot = v.lastIndexOf(".");
+              if (dot > 0) e.currentTarget.setSelectionRange(0, dot);
+              else e.currentTarget.select();
+            }}
+          />
+        ) : (
+          <span className="ftp-name" title={entry.name}>{entry.name}</span>
+        )}
         <span className="ftp-perm mono">
           {entry.permissions || (entry.isDir ? "drwxr-xr-x" : "-rw-r--r--")}
         </span>
@@ -1180,10 +1199,10 @@ export default function SftpPanel({ tab }: Props) {
           )}
           <button
             type="button"
-            className={"lg-ic" + (mkdirOpen ? " on" : "")}
-            title={t("New folder")}
+            className="lg-ic"
+            title={t("New file or folder")}
             disabled={!hasSsh || !state}
-            onClick={() => setMkdirOpen((v) => !v)}
+            onClick={() => openNewEntryDialog("file")}
           >
             <Plus size={12} />
           </button>
@@ -1207,52 +1226,6 @@ export default function SftpPanel({ tab }: Props) {
           </button>
         </div>
 
-        {mkdirOpen && (
-          <div className="ftp-quickrow">
-            <span className="ftp-quickrow-label mono">{t("New folder")}</span>
-            <input
-              className="field-input field-input--compact"
-              value={mkdirName}
-              onChange={(e) => setMkdirName(e.currentTarget.value)}
-              placeholder={t("logs")}
-              autoFocus
-              onKeyDown={(e) => { if (e.key === "Enter") void createDirectory(); }}
-            />
-            <button
-              type="button"
-              className="btn is-primary is-compact"
-              disabled={!mkdirName.trim() || actionBusy}
-              onClick={() => void createDirectory()}
-            >
-              {t("Create")}
-            </button>
-            <button type="button" className="btn is-ghost is-compact" onClick={() => setMkdirOpen(false)}>{t("Cancel")}</button>
-          </div>
-        )}
-
-        {newFileOpen && (
-          <div className="ftp-quickrow">
-            <span className="ftp-quickrow-label mono">{t("New file")}</span>
-            <input
-              className="field-input field-input--compact"
-              value={newFileName}
-              onChange={(e) => setNewFileName(e.currentTarget.value)}
-              placeholder={t("config.conf")}
-              autoFocus
-              onKeyDown={(e) => { if (e.key === "Enter") void createNewFile(); }}
-            />
-            <button
-              type="button"
-              className="btn is-primary is-compact"
-              disabled={!newFileName.trim() || actionBusy}
-              onClick={() => void createNewFile()}
-            >
-              {t("Create")}
-            </button>
-            <button type="button" className="btn is-ghost is-compact" onClick={() => setNewFileOpen(false)}>{t("Cancel")}</button>
-          </div>
-        )}
-
         <div className="ftp-col-head">
           <span>{t("NAME")}</span>
           <span className="ftp-perm">{t("PERM")}</span>
@@ -1266,77 +1239,6 @@ export default function SftpPanel({ tab }: Props) {
           <div className="ftp-notice-bar">
             {notice && <div className="lg-note">{notice}</div>}
             {error && <div className="lg-note lg-note--error">{error}</div>}
-          </div>
-        )}
-
-        {selectedEntry && (
-          <div className="ftp-inspector">
-            <div className="ftp-inspector-head mono">
-              <span className={"ftp-ic" + (selectedEntry.isDir ? " dir" : "")}>
-                {(() => {
-                  const Ic = iconForEntry(selectedEntry);
-                  return <Ic size={12} />;
-                })()}
-              </span>
-              <span className="ftp-inspector-name">{selectedEntry.name}</span>
-              <span className="ftp-inspector-meta">
-                {selectedEntry.permissions || (selectedEntry.isDir ? "drwxr-xr-x" : "-rw-r--r--")}
-                {!selectedEntry.isDir ? ` · ${formatBytes(selectedEntry.size)}` : ""}
-              </span>
-              <div style={{ flex: 1 }} />
-              <button
-                type="button"
-                className={"lg-ic" + (renameOpen ? " on" : "")}
-                title={t("Rename")}
-                onClick={() => setRenameOpen((v) => !v)}
-              >
-                <Edit size={11} />
-              </button>
-              {!selectedEntry.isDir && (
-                <button
-                  type="button"
-                  className="lg-ic"
-                  title={t("Download")}
-                  disabled={actionBusy}
-                  onClick={() => void downloadSelectedPick()}
-                >
-                  <Download size={11} />
-                </button>
-              )}
-              <button
-                type="button"
-                className="lg-ic"
-                title={t("Remove")}
-                disabled={actionBusy}
-                onClick={() => void removeSelected()}
-              >
-                <Trash2 size={11} />
-              </button>
-              <button type="button" className="lg-ic" title={t("Close")} onClick={() => setSelectedPath("")}>
-                <X size={11} />
-              </button>
-            </div>
-            {renameOpen && (
-              <div className="ftp-quickrow">
-                <span className="ftp-quickrow-label mono">{t("Rename")}</span>
-                <input
-                  className="field-input field-input--compact"
-                  value={renameTarget}
-                  onChange={(e) => setRenameTarget(e.currentTarget.value)}
-                  autoFocus
-                  onKeyDown={(e) => { if (e.key === "Enter") void renameSelected(); }}
-                />
-                <button
-                  type="button"
-                  className="btn is-primary is-compact"
-                  disabled={!renameTarget.trim() || actionBusy}
-                  onClick={() => void renameSelected()}
-                >
-                  {t("Save")}
-                </button>
-                <button type="button" className="btn is-ghost is-compact" onClick={() => setRenameOpen(false)}>{t("Cancel")}</button>
-              </div>
-            )}
           </div>
         )}
 
@@ -1384,6 +1286,19 @@ export default function SftpPanel({ tab }: Props) {
             onSaved={() => void browse(currentRemotePath)}
           />
         )}
+
+        <SftpNewEntryDialog
+          open={newEntryOpen}
+          kind={newEntryKind}
+          name={newEntryName}
+          parentPath={currentRemotePath}
+          busy={actionBusy}
+          onKindChange={setNewEntryKind}
+          onNameChange={setNewEntryName}
+          onSubmit={() => void submitNewEntry()}
+          onClose={() => setNewEntryOpen(false)}
+        />
+
 
         {propsTarget && (
           <div className="dlg-overlay" onClick={() => setPropsTarget(null)}>

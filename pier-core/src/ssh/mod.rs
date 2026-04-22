@@ -16,7 +16,7 @@
 //! | [`config`]     | Plain-data [`config::SshConfig`] + [`config::AuthMethod`] |
 //! | [`error`]      | [`error::SshError`] enum wrapping russh + I/O errors |
 //! | [`runtime`]    | Process-wide tokio runtime shared by every session |
-//! | [`known_hosts`]| Host key verification — stubbed to accept-all in M3a, swapped for real `~/.ssh/known_hosts` parsing in M3b |
+//! | [`known_hosts`]| Host key verification — parses `~/.ssh/known_hosts` and appends new keys on first connect (OpenSSH `accept-new` / TOFU). `AcceptAllLogFingerprint` stays in the enum for tests. |
 //! | [`session`]    | [`session::SshSession`] — connect, authenticate, open channels |
 //! | [`channel`]    | [`channel::SshChannelPty`] — implements [`crate::terminal::Pty`] against an SSH interactive channel |
 //!

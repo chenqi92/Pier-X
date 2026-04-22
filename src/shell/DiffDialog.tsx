@@ -6,7 +6,7 @@ import {
   FileText,
   X,
 } from "lucide-react";
-import { Fragment, useEffect, useMemo, useState } from "react";
+import { Fragment, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import type { ReactNode } from "react";
 import IconButton from "../components/IconButton";
@@ -242,29 +242,65 @@ function DiffUnified({ hunks, wrap, path }: { hunks: DiffHunk[]; wrap: boolean; 
 }
 
 function DiffSplit({ hunks, wrap, oldPath, newPath }: { hunks: DiffHunk[]; wrap: boolean; oldPath: string; newPath: string }) {
+  const leftRef = useRef<HTMLDivElement | null>(null);
+  const rightRef = useRef<HTMLDivElement | null>(null);
+  const syncingRef = useRef(false);
+
+  const pairedHunks = useMemo(
+    () => hunks.map((h) => ({ header: h.header, pairs: pairHunkLines(h.lines) })),
+    [hunks],
+  );
+
+  const syncFrom = useCallback((source: "left" | "right") => {
+    if (syncingRef.current) return;
+    const src = source === "left" ? leftRef.current : rightRef.current;
+    const dst = source === "left" ? rightRef.current : leftRef.current;
+    if (!src || !dst) return;
+    if (src.scrollTop === dst.scrollTop && src.scrollLeft === dst.scrollLeft) return;
+    syncingRef.current = true;
+    dst.scrollTop = src.scrollTop;
+    dst.scrollLeft = src.scrollLeft;
+    requestAnimationFrame(() => {
+      syncingRef.current = false;
+    });
+  }, []);
+
   return (
     <div className={"dlg-diff-scroll mono split" + (wrap ? " wrap" : "")}>
       <div className="dlg-diff-split-head mono">
         <div><span className="dlg-diff-count--del">−</span> {oldPath}</div>
         <div><span className="dlg-diff-count--add">+</span> {newPath}</div>
       </div>
-      {hunks.map((h, hi) => {
-        const pairs = pairHunkLines(h.lines);
-        return (
-          <Fragment key={hi}>
-            <div className="dlg-diff-hunk-head split mono">
-              <span>{h.header}</span>
-              <span>{h.header}</span>
-            </div>
-            {pairs.map((p, i) => (
-              <div key={i} className="dlg-diff-split-row">
-                <SplitSide side="left" line={p.left} />
-                <SplitSide side="right" line={p.right} />
-              </div>
-            ))}
-          </Fragment>
-        );
-      })}
+      <div className="dlg-diff-split-body">
+        <div
+          className="dlg-diff-split-pane"
+          ref={leftRef}
+          onScroll={() => syncFrom("left")}
+        >
+          {pairedHunks.map((h, hi) => (
+            <Fragment key={hi}>
+              <div className="dlg-diff-hunk-head mono">{h.header}</div>
+              {h.pairs.map((p, i) => (
+                <SplitSide key={i} side="left" line={p.left} />
+              ))}
+            </Fragment>
+          ))}
+        </div>
+        <div
+          className="dlg-diff-split-pane"
+          ref={rightRef}
+          onScroll={() => syncFrom("right")}
+        >
+          {pairedHunks.map((h, hi) => (
+            <Fragment key={hi}>
+              <div className="dlg-diff-hunk-head mono">{h.header}</div>
+              {h.pairs.map((p, i) => (
+                <SplitSide key={i} side="right" line={p.right} />
+              ))}
+            </Fragment>
+          ))}
+        </div>
+      </div>
     </div>
   );
 }

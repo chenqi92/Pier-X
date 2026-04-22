@@ -143,10 +143,9 @@ pub struct GridSnapshot {
 impl PierTerminal {
     /// Spawn a new local shell session.
     ///
-    /// On Unix this goes through [`super::pty::UnixPty::spawn_shell`];
-    /// on Windows it currently uses the pipe-backed
-    /// [`super::pty::WindowsPty::spawn_shell`] transport until the
-    /// ConPTY backend lands.
+    /// On Unix this goes through [`super::pty::UnixPty::spawn_shell`]
+    /// (forkpty); on Windows through
+    /// [`super::pty::WindowsPty::spawn_shell`] (ConPTY).
     ///
     /// `notify` and `user_data` are stored and invoked from the
     /// reader thread on any subsequent event. See [`NotifyFn`] for

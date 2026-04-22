@@ -6,18 +6,17 @@
 //!
 //! * [`pty`] — owns the child process. Exposes a byte-oriented
 //!   `Pty` trait with `read`, `write`, `resize`, and a destructor that
-//!   reaps the child. A `UnixPty` implementation wraps `forkpty(3)` on
-//!   Unix targets; Windows currently uses a pipe-backed shell
-//!   transport and will be upgraded to the Win32 **ConPTY** API
-//!   (`CreatePseudoConsole`) in a later milestone.
+//!   reaps the child. A `UnixPty` wraps `forkpty(3)` on Unix; a
+//!   `WindowsPty` wraps `CreatePseudoConsole` (ConPTY) on Windows.
+//!   Both backends produce the same VT byte stream so the emulator
+//!   above them doesn't know which OS it is running on.
 //!
 //! * [`emulator`] — pure-Rust VT100 state machine, driven by the `vte`
 //!   crate's SAX-style `Perform` trait. Holds a rectangular grid of
 //!   [`emulator::Cell`]s that the shell paints, a cursor position, and
-//!   honours a minimum-viable set of CSI sequences (cursor movement,
-//!   erase in display / in line). Colors and SGR attributes are parsed
-//!   but not yet applied — the plumbing is there for M2b to enable
-//!   without touching this file.
+//!   honours cursor movement, erase-in-display / in-line, plus SGR
+//!   colors (16-color + 256-color + true-color), bold, underline, and
+//!   reverse-video.
 //!
 //! These two layers intentionally do NOT know about each other.
 //! `pty::Pty` produces raw bytes, `emulator::VtEmulator` consumes raw

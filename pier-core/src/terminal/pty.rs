@@ -25,9 +25,10 @@ pub enum TerminalError {
     #[error("terminal I/O: {0}")]
     Io(#[from] io::Error),
 
-    /// This target does not yet have a PTY backend. Currently: Windows.
-    /// M2b lands the ConPTY implementation.
-    #[error("terminal backend not implemented on this platform yet")]
+    /// This target has no PTY backend. Unix uses `forkpty(3)` and
+    /// Windows uses ConPTY; anything else (WASM, other unixes we
+    /// haven't compiled for) falls into this variant.
+    #[error("terminal backend not implemented on this platform")]
     Unsupported,
 }
 

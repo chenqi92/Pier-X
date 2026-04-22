@@ -796,7 +796,7 @@ pub fn git_graph_history(params: GitGraphHistoryParams) -> Result<Vec<GitGraphRo
         &layout_inputs,
         &main_chain,
         &LayoutParams {
-            lane_width: 12.0,
+            lane_width: 14.0,
             row_height: 24.0,
             show_long_edges: params.show_long_edges.unwrap_or(true),
         },
@@ -873,7 +873,16 @@ pub fn git_commit_file_diff(path: Option<String>, hash: String, file_path: Strin
 
     run_git_at(
         &repo_path,
-        &["show", "--stat=0", "--format=medium", commit_hash, "--", relative_path],
+        &[
+            "show",
+            "--format=",
+            "--patch",
+            "-m",
+            "--first-parent",
+            commit_hash,
+            "--",
+            relative_path,
+        ],
     )
 }
 

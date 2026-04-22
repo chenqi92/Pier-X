@@ -302,6 +302,19 @@ export default function Sidebar({ onOpenLocalTerminal, onConnectSaved, onNewConn
   const { connections, refresh: refreshConnections, remove } = useConnectionStore();
   const [serverSearch, setServerSearch] = useState("");
 
+  // Transient error notice. Backend commands for connection / group
+  // mutations used to silently swallow failures (`.catch(() => {})`),
+  // which meant the user saw the UI state revert with no explanation.
+  // This surface shows a localized message for a few seconds so the
+  // failure is visible without needing devtools.
+  const [notice, setNotice] = useState<string | null>(null);
+  useEffect(() => {
+    if (!notice) return;
+    const timer = window.setTimeout(() => setNotice(null), 4000);
+    return () => window.clearTimeout(timer);
+  }, [notice]);
+  const reportError = (e: unknown) => setNotice(localizeError(e, t));
+
   useEffect(() => {
     cmd.coreInfo().then((info: CoreInfo) => {
       setHomeDir(info.homeDir);
@@ -312,7 +325,7 @@ export default function Sidebar({ onOpenLocalTerminal, onConnectSaved, onNewConn
         setPathHistory([startPath]);
         setHistoryIndex(0);
       }
-    }).catch(() => {});
+    }).catch(reportError);
   }, []);
 
   useEffect(() => {
@@ -329,7 +342,11 @@ export default function Sidebar({ onOpenLocalTerminal, onConnectSaved, onNewConn
         : cmd.listDirectory(currentPath);
     loader
       .then((next) => { if (!cancelled) setEntries(next); })
-      .catch(() => { if (!cancelled) setEntries([]); });
+      .catch((e) => {
+        if (cancelled) return;
+        setEntries([]);
+        reportError(e);
+      });
     setSearchText("");
     return () => { cancelled = true; };
   }, [currentPath]);
@@ -412,7 +429,7 @@ export default function Sidebar({ onOpenLocalTerminal, onConnectSaved, onNewConn
         });
       }
       // Refresh the file list so the newly-downloaded file shows up.
-      cmd.listDirectory(currentPath).then(setEntries).catch(() => {});
+      cmd.listDirectory(currentPath).then(setEntries).catch(reportError);
     } catch (e) {
       // Swallow — the SFTP panel's own error bar is the right surface
       // for SFTP errors; the sidebar shouldn't grow its own toast
@@ -484,7 +501,7 @@ export default function Sidebar({ onOpenLocalTerminal, onConnectSaved, onNewConn
       currentPath === DRIVES_PATH
         ? cmd.listDrives()
         : cmd.listDirectory(currentPath);
-    loader.then(setEntries).catch(() => {});
+    loader.then(setEntries).catch(reportError);
   }
 
   function localJoin(dir: string, leaf: string): string {
@@ -664,6 +681,17 @@ export default function Sidebar({ onOpenLocalTerminal, onConnectSaved, onNewConn
         </button>
       </div>
 
+      {notice && (
+        <div
+          className="status-note status-note--error"
+          style={{ padding: "var(--sp-1-5) var(--sp-2)", cursor: "pointer" }}
+          onClick={() => setNotice(null)}
+          title={t("Dismiss")}
+        >
+          {notice}
+        </div>
+      )}
+
       {section === 0 ? (
         <>
           <div className="sidebar-toolbar">
@@ -732,7 +760,7 @@ export default function Sidebar({ onOpenLocalTerminal, onConnectSaved, onNewConn
                   currentPath === DRIVES_PATH
                     ? cmd.listDrives()
                     : cmd.listDirectory(currentPath);
-                loader.then(setEntries).catch(() => {});
+                loader.then(setEntries).catch(reportError);
               }}
               title={t("Refresh")}
               type="button"
@@ -861,11 +889,23 @@ export default function Sidebar({ onOpenLocalTerminal, onConnectSaved, onNewConn
           onSearchChange={setServerSearch}
           onConnect={onConnectSaved}
           onEdit={onEditConnection}
-          onRemove={(index) => { void remove(index).catch(() => {}); }}
+          onRemove={(index) => { void remove(index).catch(reportError); }}
           onNew={onNewConnection}
           onRefresh={() => { void refreshConnections(); }}
-          onReorder={(order, groups) => useConnectionStore.getState().reorder(order, groups)}
-          onRenameGroup={(from, to) => useConnectionStore.getState().renameGroup(from, to)}
+          onReorder={async (order, groups) => {
+            try {
+              await useConnectionStore.getState().reorder(order, groups);
+            } catch (e) {
+              reportError(e);
+            }
+          }}
+          onRenameGroup={async (from, to) => {
+            try {
+              await useConnectionStore.getState().renameGroup(from, to);
+            } catch (e) {
+              reportError(e);
+            }
+          }}
         />
       )}
     </aside>

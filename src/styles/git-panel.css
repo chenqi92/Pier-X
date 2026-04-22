@@ -1477,7 +1477,7 @@
 }
 
 .git-history-columns__graph {
-  width: 56px;
+  width: var(--git-graph-lane-w, 56px);
   flex-shrink: 0;
 }
 
@@ -1562,8 +1562,6 @@
 }
 
 .git-graph-lane {
-  width: 64px;
-  height: 24px;
   display: block;
   flex-shrink: 0;
 }

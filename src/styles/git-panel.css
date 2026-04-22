@@ -869,6 +869,16 @@
   overflow: auto;
 }
 
+.git-history-list__loading-more,
+.git-history-list__end {
+  padding: var(--sp-2) var(--sp-3);
+  text-align: center;
+  color: var(--muted);
+  font-size: var(--size-micro);
+  opacity: 0.72;
+  flex: none;
+}
+
 .git-history-toolbar {
   padding: 8px;
   border: 1px solid var(--border-subtle);

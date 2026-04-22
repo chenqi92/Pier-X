@@ -22,9 +22,9 @@ import {
   Tag,
   X,
 } from "lucide-react";
-import type { ComponentType, CSSProperties, MouseEvent as ReactMouseEvent, ReactNode } from "react";
+import type { ComponentType, CSSProperties, MouseEvent as ReactMouseEvent, ReactNode, UIEvent as ReactUIEvent } from "react";
 import { Group as PanelGroup, Panel, Separator as PanelResizeHandle } from "react-resizable-panels";
-import { startTransition, useDeferredValue, useEffect, useMemo, useRef, useState } from "react";
+import { memo, startTransition, useCallback, useDeferredValue, useEffect, useMemo, useRef, useState } from "react";
 import { openUrl } from "@tauri-apps/plugin-opener";
 import * as cmd from "../lib/commands";
 import { writeClipboardText } from "../lib/clipboard";
@@ -541,6 +541,102 @@ function GitGraphLane({ row }: { row: GitGraphRowView }) {
   );
 }
 
+const HISTORY_PAGE_SIZE = 180;
+
+type HistoryRowProps = {
+  row: GitGraphRowView;
+  active: boolean;
+  dimmed: boolean;
+  zebraStripe: boolean;
+  refs: string[];
+  authorColorValue: string;
+  authorInitialValue: string;
+  formattedDate: string;
+  showAuthor: boolean;
+  showDate: boolean;
+  showHash: boolean;
+  titleText: string;
+  detailNode: ReactNode | null;
+  onSelect: (hash: string, wasActive: boolean) => void;
+  onDoubleClick: (hash: string) => void;
+  onContextMenu: (event: ReactMouseEvent<HTMLButtonElement>, row: GitGraphRowView) => void;
+};
+
+const HistoryRow = memo(function HistoryRow({
+  row,
+  active,
+  dimmed,
+  zebraStripe,
+  refs,
+  authorColorValue,
+  authorInitialValue,
+  formattedDate,
+  showAuthor,
+  showDate,
+  showHash,
+  titleText,
+  detailNode,
+  onSelect,
+  onDoubleClick,
+  onContextMenu,
+}: HistoryRowProps) {
+  return (
+    <div
+      className={[
+        "git-history-entry",
+        active ? "git-history-entry--active" : "",
+        dimmed ? "git-history-entry--dimmed" : "",
+        zebraStripe ? "git-history-entry--zebra" : "",
+      ]
+        .filter(Boolean)
+        .join(" ")}
+    >
+      <button
+        className={[
+          "git-history-row",
+          active ? "git-history-row--active" : "",
+          dimmed ? "git-history-row--dimmed" : "",
+        ]
+          .filter(Boolean)
+          .join(" ")}
+        onClick={() => onSelect(row.hash, active)}
+        onDoubleClick={() => onDoubleClick(row.hash)}
+        onContextMenu={(event) => onContextMenu(event, row)}
+        type="button"
+        title={titleText}
+      >
+        <GitGraphLane row={row} />
+        <div className="git-history-row__content">
+          <div className="git-history-row__subject">
+            {refs.slice(0, 3).map((token) => (
+              <span key={`${row.hash}-${token}`} className={["git-ref-badge", refBadgeToneClass(token)].join(" ")}>
+                {token}
+              </span>
+            ))}
+            {refs.length > 3 ? <span className="git-history-row__more">{`+${refs.length - 3}`}</span> : null}
+            <span className="git-history-row__message">{row.message}</span>
+          </div>
+          {showAuthor ? (
+            <span className="git-history-row__author" title={row.author}>
+              <span
+                className="git-history-row__avatar"
+                style={{ background: authorColorValue }}
+                aria-hidden="true"
+              >
+                {authorInitialValue}
+              </span>
+              <span className="git-history-row__author-name">{row.author}</span>
+            </span>
+          ) : null}
+          {showDate ? <span className="git-history-row__date" title={formattedDate}>{formattedDate}</span> : null}
+          {showHash ? <span className="git-history-row__hash" title={row.shortHash}>{row.shortHash}</span> : null}
+        </div>
+      </button>
+      {detailNode}
+    </div>
+  );
+});
+
 function GitDiffCode({ text }: { text: string }) {
   const lines = text.split("\n");
   return (
@@ -596,6 +692,9 @@ export default function GitPanel({ browserPath, isActive = true }: Props) {
   const [graphMetadata, setGraphMetadata] = useState<GitGraphMetadata | null>(null);
   const [graphRows, setGraphRows] = useState<GitGraphRowView[]>([]);
   const [historyLoading, setHistoryLoading] = useState(false);
+  const [historyLoadingMore, setHistoryLoadingMore] = useState(false);
+  const [historyHasMore, setHistoryHasMore] = useState(false);
+  const historyListRef = useRef<HTMLDivElement | null>(null);
   const [historySearchText, setHistorySearchText] = useState("");
   const [historyBranchFilter, setHistoryBranchFilter] = useState("");
   const [historyAuthorFilter, setHistoryAuthorFilter] = useState("");
@@ -893,14 +992,21 @@ export default function GitPanel({ browserPath, isActive = true }: Props) {
     }
   }
 
-  async function loadGraphRows() {
+  async function loadGraphRows(reset = true) {
     if (!gitReady) return;
-    setHistoryLoading(true);
+    if (reset) {
+      setHistoryLoading(true);
+      setHistoryHasMore(false);
+    } else {
+      if (historyLoadingMore || historyLoading || !historyHasMore) return;
+      setHistoryLoadingMore(true);
+    }
     try {
+      const skip = reset ? 0 : graphRows.length;
       const rows = await cmd.gitGraphHistory({
         path: currentRepoPath,
-        limit: 180,
-        skip: 0,
+        limit: HISTORY_PAGE_SIZE,
+        skip,
         branch: historyBranchFilter || null,
         author: historyAuthorFilter || null,
         searchText: deferredHistorySearch || null,
@@ -911,12 +1017,30 @@ export default function GitPanel({ browserPath, isActive = true }: Props) {
         topoOrder: historySortMode === "topo",
         showLongEdges: historyShowLongEdges,
       });
-      setGraphRows(rows);
+      if (reset) {
+        setGraphRows(rows);
+      } else {
+        setGraphRows((prev) => {
+          if (!rows.length) return prev;
+          const seen = new Set(prev.map((row) => row.hash));
+          const merged = prev.slice();
+          for (const row of rows) {
+            if (!seen.has(row.hash)) merged.push(row);
+          }
+          return merged;
+        });
+      }
+      setHistoryHasMore(rows.length === HISTORY_PAGE_SIZE);
     } catch (error) {
       showBanner(false, extractErrorMessage(error, t));
-      setGraphRows([]);
+      if (reset) setGraphRows([]);
+      setHistoryHasMore(false);
     } finally {
-      setHistoryLoading(false);
+      if (reset) {
+        setHistoryLoading(false);
+      } else {
+        setHistoryLoadingMore(false);
+      }
     }
   }
 
@@ -1119,6 +1243,8 @@ export default function GitPanel({ browserPath, isActive = true }: Props) {
     void loadSubmodules();
   }, [gitReady, currentRepoPath]);
 
+  const historyPathsKey = useMemo(() => historyPaths.join("\n"), [historyPaths]);
+
   useEffect(() => {
     if (!gitReady) return;
     if (selectedTab === "history") {
@@ -1147,7 +1273,7 @@ export default function GitPanel({ browserPath, isActive = true }: Props) {
     historyDateFilter,
     historyFirstParent,
     historyNoMerges,
-    historyPaths.join("\n"),
+    historyPathsKey,
     historySortMode,
     historyShowLongEdges,
   ]);
@@ -1227,7 +1353,9 @@ export default function GitPanel({ browserPath, isActive = true }: Props) {
       setCommitDetail(null);
       return;
     }
-    setHistorySelectedHash((current) => (graphRows.some((row) => row.hash === current) ? current : graphRows[0].hash));
+    setHistorySelectedHash((current) =>
+      current && graphRows.some((row) => row.hash === current) ? current : "",
+    );
   }, [graphRows]);
 
   useEffect(() => {
@@ -1447,19 +1575,6 @@ export default function GitPanel({ browserPath, isActive = true }: Props) {
     });
   }
 
-  function historyRowShouldDim(row: GitGraphRowView) {
-    switch (historyHighlightMode) {
-      case "mine":
-        return !!row.author && row.author !== (graphMetadata?.gitUserName || "");
-      case "merge":
-        return !historyRowIsMerge(row);
-      case "branch":
-        return !row.refs.includes(panelState?.currentBranch || "") && !row.refs.includes("HEAD");
-      default:
-        return false;
-    }
-  }
-
   async function ensureCommitDiff(hash: string, filePath: string) {
     setCommitDiffCache((cache) => (filePath in cache ? cache : { ...cache, [filePath]: null }));
     try {
@@ -1646,6 +1761,94 @@ export default function GitPanel({ browserPath, isActive = true }: Props) {
   }
 
   const workingTreeClean = panelState?.workingTreeClean ?? true;
+
+  const historyHandlersRef = useRef({
+    loadCommitDetail,
+    openCommitMultiDiff,
+    openPopoverAt,
+    setHistoryContextCommit,
+  });
+  historyHandlersRef.current = {
+    loadCommitDetail,
+    openCommitMultiDiff,
+    openPopoverAt,
+    setHistoryContextCommit,
+  };
+
+  const handleHistorySelect = useCallback((hash: string, wasActive: boolean) => {
+    setHistorySelectedHash(wasActive ? "" : hash);
+  }, []);
+
+  const handleHistoryDoubleClick = useCallback((hash: string) => {
+    setHistorySelectedHash(hash);
+    void historyHandlersRef.current.loadCommitDetail(hash).then((detail) => {
+      if (detail) historyHandlersRef.current.openCommitMultiDiff(detail);
+    });
+  }, []);
+
+  const handleHistoryContextMenu = useCallback(
+    (event: ReactMouseEvent<HTMLButtonElement>, row: GitGraphRowView) => {
+      event.preventDefault();
+      historyHandlersRef.current.setHistoryContextCommit(row);
+      historyHandlersRef.current.openPopoverAt(
+        "historyCommit",
+        event.clientX,
+        event.clientY,
+        232,
+        row,
+      );
+    },
+    [],
+  );
+
+  const rowMetaByHash = useMemo(() => {
+    const map = new Map<
+      string,
+      {
+        refs: string[];
+        authorColorValue: string;
+        authorInitialValue: string;
+        formattedDate: string;
+        dimmed: boolean;
+      }
+    >();
+    const myName = graphMetadata?.gitUserName || "";
+    const currentBranch = panelState?.currentBranch || "";
+    for (const row of graphRows) {
+      let dimmed = false;
+      switch (historyHighlightMode) {
+        case "mine":
+          dimmed = !!row.author && row.author !== myName;
+          break;
+        case "merge":
+          dimmed = !historyRowIsMerge(row);
+          break;
+        case "branch":
+          dimmed = !row.refs.includes(currentBranch) && !row.refs.includes("HEAD");
+          break;
+        default:
+          dimmed = false;
+      }
+      map.set(row.hash, {
+        refs: refTokens(row.refs),
+        authorColorValue: authorColor(row.author),
+        authorInitialValue: authorInitial(row.author),
+        formattedDate: formatGraphDate(row.dateTimestamp),
+        dimmed,
+      });
+    }
+    return map;
+  }, [graphRows, historyHighlightMode, graphMetadata?.gitUserName, panelState?.currentBranch]);
+
+  const loadGraphRowsRef = useRef(loadGraphRows);
+  loadGraphRowsRef.current = loadGraphRows;
+
+  const handleHistoryListScroll = useCallback((event: ReactUIEvent<HTMLDivElement>) => {
+    const target = event.currentTarget;
+    if (target.scrollTop + target.clientHeight >= target.scrollHeight - 160) {
+      void loadGraphRowsRef.current(false);
+    }
+  }, []);
 
   if (!browserPath) {
     return <div className="git-panel git-panel--loading">{t("Loading Git panel…")}</div>;
@@ -2089,77 +2292,45 @@ export default function GitPanel({ browserPath, isActive = true }: Props) {
                       {historyShowDate ? <div className="git-history-columns__date">{t("Date")}</div> : null}
                       {historyShowHash ? <div className="git-history-columns__hash">{t("Hash")}</div> : null}
                     </div>
-                    <div className="git-history-list">
+                    <div
+                      ref={historyListRef}
+                      className="git-history-list"
+                      onScroll={handleHistoryListScroll}
+                    >
                       {graphRows.map((row, index) => {
                         const active = row.hash === historySelectedHash;
-                        const dimmed = historyRowShouldDim(row);
-                        const refs = refTokens(row.refs);
+                        const meta = rowMetaByHash.get(row.hash);
+                        const refs = meta?.refs ?? [];
+                        const dimmed = meta?.dimmed ?? false;
+                        const zebraStripe = historyShowZebraStripes && index % 2 === 1;
                         return (
-                          <div
+                          <HistoryRow
                             key={row.hash}
-                            className={[
-                              "git-history-entry",
-                              active ? "git-history-entry--active" : "",
-                              dimmed ? "git-history-entry--dimmed" : "",
-                              historyShowZebraStripes && index % 2 === 1 ? "git-history-entry--zebra" : "",
-                            ]
-                              .filter(Boolean)
-                              .join(" ")}
-                          >
-                            <button
-                              className={[
-                                "git-history-row",
-                                active ? "git-history-row--active" : "",
-                                dimmed ? "git-history-row--dimmed" : "",
-                              ]
-                                .filter(Boolean)
-                                .join(" ")}
-                              onClick={() => setHistorySelectedHash(active ? "" : row.hash)}
-                              onDoubleClick={() => {
-                                setHistorySelectedHash(row.hash);
-                                void loadCommitDetail(row.hash).then((detail) => {
-                                  if (detail) openCommitMultiDiff(detail);
-                                });
-                              }}
-                              onContextMenu={(event) => {
-                                event.preventDefault();
-                                setHistoryContextCommit(row);
-                                openPopoverAt("historyCommit", event.clientX, event.clientY, 232, row);
-                              }}
-                              type="button"
-                              title={`${row.shortHash} · ${row.message}`}
-                            >
-                              <GitGraphLane row={row} />
-                              <div className="git-history-row__content">
-                                <div className="git-history-row__subject">
-                                  {refs.slice(0, 3).map((token) => (
-                                    <span key={`${row.hash}-${token}`} className={["git-ref-badge", refBadgeToneClass(token)].join(" ")}>
-                                      {token}
-                                    </span>
-                                  ))}
-                                  {refs.length > 3 ? <span className="git-history-row__more">{`+${refs.length - 3}`}</span> : null}
-                                  <span className="git-history-row__message">{row.message}</span>
-                                </div>
-                                {historyShowAuthor ? (
-                                  <span className="git-history-row__author" title={row.author}>
-                                    <span
-                                      className="git-history-row__avatar"
-                                      style={{ background: authorColor(row.author) }}
-                                      aria-hidden="true"
-                                    >
-                                      {authorInitial(row.author)}
-                                    </span>
-                                    <span className="git-history-row__author-name">{row.author}</span>
-                                  </span>
-                                ) : null}
-                                {historyShowDate ? <span className="git-history-row__date" title={formatGraphDate(row.dateTimestamp)}>{formatGraphDate(row.dateTimestamp)}</span> : null}
-                                {historyShowHash ? <span className="git-history-row__hash" title={row.shortHash}>{row.shortHash}</span> : null}
-                              </div>
-                            </button>
-                            {active && activeCommitDetail ? renderHistoryInlineDetail(activeCommitDetail) : null}
-                          </div>
+                            row={row}
+                            active={active}
+                            dimmed={dimmed}
+                            zebraStripe={zebraStripe}
+                            refs={refs}
+                            authorColorValue={meta?.authorColorValue ?? ""}
+                            authorInitialValue={meta?.authorInitialValue ?? ""}
+                            formattedDate={meta?.formattedDate ?? ""}
+                            showAuthor={historyShowAuthor}
+                            showDate={historyShowDate}
+                            showHash={historyShowHash}
+                            titleText={`${row.shortHash} · ${row.message}`}
+                            detailNode={active && activeCommitDetail ? renderHistoryInlineDetail(activeCommitDetail) : null}
+                            onSelect={handleHistorySelect}
+                            onDoubleClick={handleHistoryDoubleClick}
+                            onContextMenu={handleHistoryContextMenu}
+                          />
                         );
                       })}
+                      {historyLoadingMore ? (
+                        <div className="git-history-list__loading-more mono">{t("Loading more…")}</div>
+                      ) : null}
+                      {!historyHasMore && graphRows.length > 0 && !historyLoadingMore ? (
+                        <div className="git-history-list__end mono">{t("End of history")}</div>
+                      ) : null}
                     </div>
                   </>
                 ) : (

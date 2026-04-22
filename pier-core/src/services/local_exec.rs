@@ -385,6 +385,7 @@ fn system_metrics_unix() -> Result<LocalMetrics, String> {
         disk_avail,
         disk_use_pct,
         cpu_pct,
+        ..Default::default()
     })
 }
 

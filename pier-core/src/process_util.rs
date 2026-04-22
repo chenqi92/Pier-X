@@ -15,7 +15,9 @@ use std::os::windows::process::CommandExt;
 const CREATE_NO_WINDOW: u32 = 0x0800_0000;
 
 /// Configure a subprocess that should run fully in the background.
-pub fn configure_background_command(command: &mut Command) {
+pub fn configure_background_command(
+    #[cfg_attr(not(target_os = "windows"), allow(unused_variables))] command: &mut Command,
+) {
     #[cfg(target_os = "windows")]
     {
         command.creation_flags(CREATE_NO_WINDOW);

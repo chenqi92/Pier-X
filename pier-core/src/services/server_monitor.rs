@@ -31,6 +31,7 @@ use crate::ssh::SshSession;
 
 /// A single point-in-time resource snapshot.
 #[derive(Clone, Debug, Default, Serialize, Deserialize)]
+#[serde(default)]
 pub struct ServerSnapshot {
     /// System uptime string, e.g. `"up 5 days, 3:42"`.
     pub uptime: String,
@@ -86,10 +87,16 @@ pub struct ServerSnapshot {
 /// truncated; the parser keeps whatever the remote shell prints.
 #[derive(Clone, Debug, Default, Serialize, Deserialize)]
 pub struct ProcessRow {
+    /// PID as printed by `ps` (kept as a string because some shells
+    /// zero-pad or right-align the column).
     pub pid: String,
+    /// Command name (`comm`). May be truncated by the remote `ps`.
     pub command: String,
+    /// CPU usage percentage column, verbatim from `ps` (e.g. `"3.4"`).
     pub cpu_pct: String,
+    /// Memory usage percentage column, verbatim from `ps` (e.g. `"1.2"`).
     pub mem_pct: String,
+    /// Elapsed wall-clock runtime column (`etime`), e.g. `"01:23:45"`.
     pub elapsed: String,
 }
 
@@ -243,7 +250,9 @@ pub fn probe_with_baseline_blocking(
 /// per-second rate.
 #[derive(Clone, Copy, Debug)]
 pub struct NetSample {
+    /// Total bytes received across all non-loopback interfaces.
     pub rx_bytes: u64,
+    /// Total bytes transmitted across all non-loopback interfaces.
     pub tx_bytes: u64,
     /// Local clock (ms since UNIX epoch) the sample was taken at.
     pub captured_at: u64,

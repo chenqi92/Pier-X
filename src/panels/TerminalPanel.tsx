@@ -476,8 +476,13 @@ export default function TerminalPanel({ tab, isActive, onEditConnection }: Props
     const inferredUser = parsed.user || matched?.user || "";
     if (!inferredUser) return; // Without a user we can't probe meaningfully.
 
+    // When no saved connection matches, try the SSH agent rather than
+    // attempting password auth with an empty string — the agent will
+    // either authenticate cleanly or fail with a typed AuthRejected
+    // error, both of which surface a clearer message than the
+    // empty-DirectPassword "host, user, port and auth must all be set".
     const authMode: "password" | "agent" | "key" =
-      matched?.authKind ?? (parsed.identityPath ? "key" : "password");
+      matched?.authKind ?? (parsed.identityPath ? "key" : "agent");
     const keyPath = parsed.identityPath || matched?.keyPath || "";
     const savedConnectionIndex = matched ? matched.index : null;
 

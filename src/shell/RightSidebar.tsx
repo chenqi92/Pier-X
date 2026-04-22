@@ -1,5 +1,6 @@
 import type { RightTool, TabState } from "../lib/types";
-import { useEffect, useMemo, useState } from "react";
+import { effectiveSshTarget } from "../lib/types";
+import { useEffect, useMemo, useRef, useState } from "react";
 import * as cmd from "../lib/commands";
 import { RIGHT_TOOL_META } from "../lib/rightToolMeta";
 import { useI18n } from "../i18n/useI18n";
@@ -159,13 +160,11 @@ export default function RightSidebar({
   const behind = useStatusStore((s) => s.behind);
 
   // "Remote context" is true whenever the active tab carries SSH
-  // addressing — either because it's a real SSH tab or because the
-  // user typed `ssh user@host` in a local terminal and we mirrored
-  // the target into the tab state. Both cases should unlock the
-  // remote-only tools in ToolStrip.
-  const hasRemoteContext = !!(
-    activeTab && activeTab.sshHost.trim() && activeTab.sshUser.trim()
-  );
+  // addressing — either via the primary fields, the local-terminal
+  // mirror after `ssh user@host`, or the nested-ssh overlay set
+  // when `ssh user@host` is typed inside an existing SSH session.
+  const activeSshTarget = activeTab ? effectiveSshTarget(activeTab) : null;
+  const hasRemoteContext = activeSshTarget !== null;
   const unknownTool = t("Unknown tool.");
 
   // Keep-alive: once a tool has been opened for the current tab, its panel
@@ -193,25 +192,44 @@ export default function RightSidebar({
   const setPending = useDetectedServicesStore((s) => s.setPending);
   const setReady = useDetectedServicesStore((s) => s.setReady);
   const setError = useDetectedServicesStore((s) => s.setError);
+  const clearDetectedTab = useDetectedServicesStore((s) => s.clearTab);
+
+  // The detected-services cache is keyed by tabId, but the SSH target
+  // for a tab can change (user typed `ssh user@otherhost` in a local
+  // terminal, or nested ssh on a real ssh tab). Clear the entry when
+  // the target host/user changes so the auto-detect effect below
+  // re-runs against the new host instead of returning stale tools.
+  const targetFingerprint = activeSshTarget
+    ? `${activeSshTarget.user}@${activeSshTarget.host}:${activeSshTarget.port}`
+    : "";
+  const lastFingerprintRef = useRef<{ tabId: string; fp: string } | null>(null);
+  useEffect(() => {
+    if (!activeTab) return;
+    const last = lastFingerprintRef.current;
+    if (last?.tabId === activeTab.id && last.fp === targetFingerprint) return;
+    if (last?.tabId === activeTab.id && last.fp !== targetFingerprint) {
+      clearDetectedTab(activeTab.id);
+    }
+    lastFingerprintRef.current = { tabId: activeTab.id, fp: targetFingerprint };
+  }, [activeTab, targetFingerprint, clearDetectedTab]);
 
   useEffect(() => {
-    // Run detection any time we have an SSH target on the tab — either
-    // because backend === "ssh" or because the user typed `ssh ...` in
-    // a local terminal and we synced the addressing fields. The
-    // store entry guard prevents re-running for already-detected tabs.
-    if (!activeTab) return;
-    if (!activeTab.sshHost.trim() || !activeTab.sshUser.trim()) return;
+    // Run detection any time we have an SSH target on the tab —
+    // primary, local-mirror, or nested overlay. The store-entry
+    // guard prevents re-running for already-detected tabs.
+    if (!activeTab || !activeSshTarget) return;
     if (detectedEntry) return;
     setPending(activeTab.id);
     const tabId = activeTab.id;
     cmd
       .detectServices({
-        host: activeTab.sshHost,
-        port: activeTab.sshPort,
-        user: activeTab.sshUser,
-        authMode: activeTab.sshAuthMode,
-        password: activeTab.sshPassword,
-        keyPath: activeTab.sshKeyPath,
+        host: activeSshTarget.host,
+        port: activeSshTarget.port,
+        user: activeSshTarget.user,
+        authMode: activeSshTarget.authMode,
+        password: activeSshTarget.password,
+        keyPath: activeSshTarget.keyPath,
+        savedConnectionIndex: activeSshTarget.savedConnectionIndex,
       })
       .then((services) => {
         const tools: RightTool[] = [];
@@ -231,10 +249,10 @@ export default function RightSidebar({
   }, [
     activeTab?.id,
     activeTab?.backend,
-    activeTab?.sshHost,
-    activeTab?.sshPort,
-    activeTab?.sshUser,
-    activeTab?.sshAuthMode,
+    activeSshTarget?.host,
+    activeSshTarget?.port,
+    activeSshTarget?.user,
+    activeSshTarget?.authMode,
     detectedEntry,
     setPending,
     setReady,

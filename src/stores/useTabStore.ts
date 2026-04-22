@@ -86,6 +86,7 @@ function makeDefaultTab(
     startupCommand: partial.startupCommand ?? "",
     dockerRegistryMirror: partial.dockerRegistryMirror ?? "",
     dockerPullProxy: partial.dockerPullProxy ?? "",
+    nestedSshTarget: partial.nestedSshTarget ?? null,
   };
 }
 

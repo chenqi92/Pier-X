@@ -137,12 +137,14 @@ export default function ServerMonitorPanel({ tab, onEditConnection }: Props) {
   const [lastProbed, setLastProbed] = useState(0);
 
   // SSH context is "available" any time the tab has the addressing
-  // bits filled in — even on a local-backend tab where the user just
-  // typed `ssh user@host` and we mirrored the target into the tab
-  // state. That way the right panel can open a separate monitoring
-  // session against the remote without having to convert the local
-  // terminal into an SSH terminal (whose PTY is already running).
-  const hasSsh = !!(tab.sshHost.trim() && tab.sshUser.trim());
+  // bits filled in — either via the primary fields (real SSH tab),
+  // mirrored fields (local terminal that ran `ssh user@host`), or
+  // the nested-ssh overlay (`ssh user@host` inside an existing SSH
+  // session). `effectiveSshTarget` collapses all three into one
+  // shape so the probe / detect commands always reach the host the
+  // user thinks they are looking at.
+  const sshTarget = effectiveSshTarget(tab);
+  const hasSsh = sshTarget !== null;
   // Only treat the tab as "local probe" when there is no SSH target
   // overlay; otherwise the SSH path takes priority.
   const isLocal = tab.backend === "local" && !hasSsh;
@@ -154,15 +156,15 @@ export default function ServerMonitorPanel({ tab, onEditConnection }: Props) {
     try {
       const s = isLocal
         ? await cmd.localSystemInfo()
-        : hasSsh
+        : sshTarget
           ? await cmd.serverMonitorProbe({
-              host: tab.sshHost,
-              port: tab.sshPort,
-              user: tab.sshUser,
-              authMode: tab.sshAuthMode,
-              password: tab.sshPassword,
-              keyPath: tab.sshKeyPath,
-              savedConnectionIndex: tab.sshSavedConnectionIndex,
+              host: sshTarget.host,
+              port: sshTarget.port,
+              user: sshTarget.user,
+              authMode: sshTarget.authMode,
+              password: sshTarget.password,
+              keyPath: sshTarget.keyPath,
+              savedConnectionIndex: sshTarget.savedConnectionIndex,
             })
           : null;
       if (!s) {
@@ -182,7 +184,7 @@ export default function ServerMonitorPanel({ tab, onEditConnection }: Props) {
   }
 
   async function detect() {
-    if (!hasSsh) {
+    if (!sshTarget) {
       setServicesError(t("SSH connection required."));
       return;
     }
@@ -192,13 +194,13 @@ export default function ServerMonitorPanel({ tab, onEditConnection }: Props) {
     setNeedsPasswordRecovery(false);
     try {
       const next = await cmd.detectServices({
-        host: tab.sshHost,
-        port: tab.sshPort,
-        user: tab.sshUser,
-        authMode: tab.sshAuthMode,
-        password: tab.sshPassword,
-        keyPath: tab.sshKeyPath,
-        savedConnectionIndex: tab.sshSavedConnectionIndex,
+        host: sshTarget.host,
+        port: sshTarget.port,
+        user: sshTarget.user,
+        authMode: sshTarget.authMode,
+        password: sshTarget.password,
+        keyPath: sshTarget.keyPath,
+        savedConnectionIndex: sshTarget.savedConnectionIndex,
       });
       setServices(next);
       if (next.length === 0) {
@@ -213,13 +215,12 @@ export default function ServerMonitorPanel({ tab, onEditConnection }: Props) {
     }
   }
 
+  const recoverableSavedIndex = sshTarget?.savedConnectionIndex ?? null;
   const canRecoverPassword =
-    needsPasswordRecovery &&
-    tab.sshSavedConnectionIndex !== null &&
-    !!onEditConnection;
+    needsPasswordRecovery && recoverableSavedIndex !== null && !!onEditConnection;
   const recoverPassword = () => {
-    if (!canRecoverPassword || tab.sshSavedConnectionIndex === null) return;
-    onEditConnection?.(tab.sshSavedConnectionIndex);
+    if (!canRecoverPassword || recoverableSavedIndex === null) return;
+    onEditConnection?.(recoverableSavedIndex);
   };
 
   function openService(service: DetectedServiceView) {
@@ -285,39 +286,39 @@ export default function ServerMonitorPanel({ tab, onEditConnection }: Props) {
   useEffect(() => {
     const ready =
       isLocal ||
-      (hasSsh &&
-        (tab.sshAuthMode !== "password" ||
-          tab.sshPassword.length > 0 ||
-          tab.sshSavedConnectionIndex !== null));
+      (sshTarget !== null &&
+        (sshTarget.authMode !== "password" ||
+          sshTarget.password.length > 0 ||
+          sshTarget.savedConnectionIndex !== null));
     if (!ready) return;
     void probe();
-    if (hasSsh) {
+    if (sshTarget) {
       void detect();
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [
     tab.id,
     tab.backend,
-    tab.sshHost,
-    tab.sshPort,
-    tab.sshUser,
-    tab.sshAuthMode,
+    sshTarget?.host,
+    sshTarget?.port,
+    sshTarget?.user,
+    sshTarget?.authMode,
     // Re-run once the async password resolution lands:
-    tab.sshPassword.length > 0,
+    (sshTarget?.password.length ?? 0) > 0,
   ]);
 
-  const headerMeta = hasSsh
-    ? `${tab.sshHost} · :${tab.sshPort}`
+  const headerMeta = sshTarget
+    ? `${sshTarget.host} · :${sshTarget.port}`
     : isLocal
       ? t("local")
       : "—";
-  const connName = hasSsh
-    ? `${tab.sshUser}@${tab.sshHost}`
+  const connName = sshTarget
+    ? `${sshTarget.user}@${sshTarget.host}`
     : isLocal
       ? t("Local Host")
       : t("Server Monitor");
-  const connSub = hasSsh
-    ? t("Port {port}", { port: tab.sshPort })
+  const connSub = sshTarget
+    ? t("Port {port}", { port: sshTarget.port })
     : isLocal
       ? t("Local probe")
       : t("Not connected");
@@ -518,10 +519,10 @@ export default function ServerMonitorPanel({ tab, onEditConnection }: Props) {
         </section>
       )}
 
-      {hasSsh && (
+      {sshTarget && (
         <section className="panel-section">
           <div className="panel-section__title"><Database size={14} /><span>{t("Remote Endpoint")}</span></div>
-          <div className="inline-note">{tab.sshUser}@{tab.sshHost}:{tab.sshPort}</div>
+          <div className="inline-note">{sshTarget.user}@{sshTarget.host}:{sshTarget.port}</div>
         </section>
       )}
     </div>

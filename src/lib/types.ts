@@ -536,6 +536,26 @@ export type RightTool =
 
 // ── Tab Model (matches Qt Main.qml tab schema) ─────────────────
 
+/**
+ * Overlay SSH addressing inferred from the user typing `ssh user@host`
+ * inside an already-SSH tab. Panels that probe a host with a SEPARATE
+ * SSH session (Server Monitor, Detected Services) prefer this over
+ * the tab's primary `ssh*` fields, so the right sidebar reflects the
+ * nested target without disturbing the live PTY / tunnels rooted on
+ * the original host. Cleared when the user starts typing a non-`ssh`
+ * line on the same prompt is *not* attempted — once set, it stays
+ * until explicitly replaced or the tab closes.
+ */
+export type NestedSshTarget = {
+  host: string;
+  user: string;
+  port: number;
+  authMode: "password" | "agent" | "key";
+  password: string;
+  keyPath: string;
+  savedConnectionIndex: number | null;
+};
+
 export type TabState = {
   id: string;
   title: string;
@@ -587,7 +607,34 @@ export type TabState = {
   /** Optional `HTTPS_PROXY` value passed as a one-off env var to
    *  `docker pull`. Does not touch the remote daemon config. */
   dockerPullProxy: string;
+  /** Set when this tab is a real SSH tab and the user typed
+   *  `ssh user@host` inside that session — nested SSH. The right
+   *  sidebar reads this in preference to the primary ssh* fields so
+   *  it can monitor the nested target while leaving the original
+   *  session and any tunnels untouched. `null` on local tabs and on
+   *  SSH tabs that have not seen a nested ssh command. */
+  nestedSshTarget: NestedSshTarget | null;
 };
+
+/**
+ * Resolve the SSH addressing the right-side panels should target
+ * for this tab. Honors a nested-ssh overlay if one is set, otherwise
+ * falls back to the tab's primary ssh* fields. Returns `null` only
+ * when the tab has no usable SSH context at all.
+ */
+export function effectiveSshTarget(tab: TabState): NestedSshTarget | null {
+  if (tab.nestedSshTarget) return tab.nestedSshTarget;
+  if (!tab.sshHost.trim() || !tab.sshUser.trim()) return null;
+  return {
+    host: tab.sshHost,
+    user: tab.sshUser,
+    port: tab.sshPort,
+    authMode: tab.sshAuthMode,
+    password: tab.sshPassword,
+    keyPath: tab.sshKeyPath,
+    savedConnectionIndex: tab.sshSavedConnectionIndex,
+  };
+}
 
 export const DEFAULT_LOG_SOURCE: LogSource = {
   mode: "system",

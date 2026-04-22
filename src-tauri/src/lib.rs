@@ -3644,11 +3644,171 @@ fn log_stream_stop(
 // ── Local System ────────────────────────────────────────────────
 
 #[tauri::command]
-fn local_docker_overview(all: bool) -> Result<DockerOverview, String> {
-    // CPU/MEM snapshot — best-effort. Tab-separated so we avoid a JSON
-    // dependency on this branch; keyed on short id because `docker stats`
-    // prints 12-char ids by default.
-    let stats_by_id: std::collections::HashMap<String, (String, String, String)> =
+async fn local_docker_overview(all: bool) -> Result<DockerOverview, String> {
+    // Base listings only. `docker stats --no-stream` (fixed ~2s sampling
+    // window) and `docker system df -v` (often 1–5s on busy hosts) are
+    // split into `local_docker_stats` / `local_docker_volume_usage` so the
+    // panel can paint the first frame in ~200ms and enrich in the
+    // background — matching the SSH overview/enrich split above.
+    //
+    // The four cheap subprocess calls fan out over the blocking thread
+    // pool via `spawn_blocking` so we pay one process-spawn latency, not
+    // four. The function itself is `async` so Tauri runs it on the async
+    // runtime instead of blocking the main IPC thread.
+    let containers_task = tauri::async_runtime::spawn_blocking(move || -> Result<Vec<DockerContainerView>, String> {
+        let fmt = "{{.ID}}\t{{.Image}}\t{{.Names}}\t{{.Status}}\t{{.State}}\t{{.CreatedAt}}\t{{.Ports}}";
+        let mut cmd = std::process::Command::new("docker");
+        cmd.args(["ps", "--format", fmt]);
+        if all {
+            cmd.arg("-a");
+        }
+        let output = cmd
+            .output()
+            .map_err(|e| format!("docker ps failed: {}", e))?;
+        let stdout = String::from_utf8_lossy(&output.stdout);
+        Ok(stdout
+            .lines()
+            .filter(|l| !l.is_empty())
+            .map(|line| {
+                let parts: Vec<&str> = line.split('\t').collect();
+                let state = parts.get(4).unwrap_or(&"").to_string();
+                DockerContainerView {
+                    cpu_perc: String::new(),
+                    mem_usage: String::new(),
+                    mem_perc: String::new(),
+                    id: parts.first().unwrap_or(&"").to_string(),
+                    image: parts.get(1).unwrap_or(&"").to_string(),
+                    names: parts.get(2).unwrap_or(&"").to_string(),
+                    status: parts.get(3).unwrap_or(&"").to_string(),
+                    running: state == "running",
+                    state,
+                    created: parts.get(5).unwrap_or(&"").to_string(),
+                    ports: parts.get(6).unwrap_or(&"").to_string(),
+                }
+            })
+            .collect())
+    });
+
+    let images_task = tauri::async_runtime::spawn_blocking(|| -> Vec<DockerImageView> {
+        std::process::Command::new("docker")
+            .args([
+                "images",
+                "--format",
+                "{{.ID}}\t{{.Repository}}\t{{.Tag}}\t{{.Size}}\t{{.CreatedAt}}",
+            ])
+            .output()
+            .ok()
+            .map(|o| {
+                String::from_utf8_lossy(&o.stdout)
+                    .lines()
+                    .filter(|l| !l.is_empty())
+                    .map(|line| {
+                        let p: Vec<&str> = line.split('\t').collect();
+                        DockerImageView {
+                            id: p.first().unwrap_or(&"").to_string(),
+                            repository: p.get(1).unwrap_or(&"").to_string(),
+                            tag: p.get(2).unwrap_or(&"").to_string(),
+                            size: p.get(3).unwrap_or(&"").to_string(),
+                            created: p.get(4).unwrap_or(&"").to_string(),
+                        }
+                    })
+                    .collect()
+            })
+            .unwrap_or_default()
+    });
+
+    let volumes_task = tauri::async_runtime::spawn_blocking(|| -> Vec<DockerVolumeView> {
+        // Size / links are populated asynchronously by
+        // `local_docker_volume_usage` so we skip `docker system df -v`
+        // on this path. Client-side sort handles ordering.
+        std::process::Command::new("docker")
+            .args([
+                "volume",
+                "ls",
+                "--format",
+                "{{.Name}}\t{{.Driver}}\t{{.Mountpoint}}",
+            ])
+            .output()
+            .ok()
+            .map(|o| {
+                String::from_utf8_lossy(&o.stdout)
+                    .lines()
+                    .filter(|l| !l.is_empty())
+                    .map(|line| {
+                        let p: Vec<&str> = line.split('\t').collect();
+                        DockerVolumeView {
+                            name: p.first().unwrap_or(&"").to_string(),
+                            driver: p.get(1).unwrap_or(&"").to_string(),
+                            mountpoint: p.get(2).unwrap_or(&"").to_string(),
+                            size: String::new(),
+                            size_bytes: 0,
+                            links: -1,
+                        }
+                    })
+                    .collect()
+            })
+            .unwrap_or_default()
+    });
+
+    let networks_task = tauri::async_runtime::spawn_blocking(|| -> Vec<DockerNetworkView> {
+        std::process::Command::new("docker")
+            .args([
+                "network",
+                "ls",
+                "--format",
+                "{{.ID}}\t{{.Name}}\t{{.Driver}}\t{{.Scope}}",
+            ])
+            .output()
+            .ok()
+            .map(|o| {
+                String::from_utf8_lossy(&o.stdout)
+                    .lines()
+                    .filter(|l| !l.is_empty())
+                    .map(|line| {
+                        let p: Vec<&str> = line.split('\t').collect();
+                        DockerNetworkView {
+                            id: p.first().unwrap_or(&"").to_string(),
+                            name: p.get(1).unwrap_or(&"").to_string(),
+                            driver: p.get(2).unwrap_or(&"").to_string(),
+                            scope: p.get(3).unwrap_or(&"").to_string(),
+                        }
+                    })
+                    .collect()
+            })
+            .unwrap_or_default()
+    });
+
+    // All four tasks were spawned before any await, so they run in
+    // parallel on the blocking pool. Awaiting them sequentially below
+    // is just collection — the wall time is max(task), not sum(task).
+    let containers = containers_task
+        .await
+        .map_err(|e| format!("docker ps join: {}", e))??;
+    let images = images_task
+        .await
+        .map_err(|e| format!("docker images join: {}", e))?;
+    let volumes = volumes_task
+        .await
+        .map_err(|e| format!("docker volume ls join: {}", e))?;
+    let networks = networks_task
+        .await
+        .map_err(|e| format!("docker network ls join: {}", e))?;
+
+    Ok(DockerOverview {
+        containers,
+        images,
+        volumes,
+        networks,
+    })
+}
+
+/// Local-docker counterpart of [`docker_stats`]. Runs
+/// `docker stats --no-stream` against the host daemon and returns one row
+/// per container. Offloaded to the blocking pool because the CLI always
+/// waits for its sampling window before exiting.
+#[tauri::command]
+async fn local_docker_stats() -> Result<Vec<DockerContainerStatsView>, String> {
+    tauri::async_runtime::spawn_blocking(|| {
         std::process::Command::new("docker")
             .args([
                 "stats",
@@ -3665,61 +3825,27 @@ fn local_docker_overview(all: bool) -> Result<DockerOverview, String> {
                     .filter_map(|line| {
                         let p: Vec<&str> = line.split('\t').collect();
                         let id = p.first()?.to_string();
-                        Some((
+                        Some(DockerContainerStatsView {
                             id,
-                            (
-                                p.get(2).unwrap_or(&"").to_string(),
-                                p.get(3).unwrap_or(&"").to_string(),
-                                p.get(4).unwrap_or(&"").to_string(),
-                            ),
-                        ))
+                            cpu_perc: p.get(2).unwrap_or(&"").to_string(),
+                            mem_usage: p.get(3).unwrap_or(&"").to_string(),
+                            mem_perc: p.get(4).unwrap_or(&"").to_string(),
+                        })
                     })
                     .collect()
             })
-            .unwrap_or_default();
+            .unwrap_or_default()
+    })
+    .await
+    .map_err(|e| format!("docker stats join: {}", e))
+}
 
-    let fmt = "{{.ID}}\t{{.Image}}\t{{.Names}}\t{{.Status}}\t{{.State}}\t{{.CreatedAt}}\t{{.Ports}}";
-    let mut cmd = std::process::Command::new("docker");
-    cmd.args(["ps", "--format", fmt]);
-    if all { cmd.arg("-a"); }
-    let output = cmd
-        .output()
-        .map_err(|e| format!("docker ps failed: {}", e))?;
-    let stdout = String::from_utf8_lossy(&output.stdout);
-    let containers: Vec<DockerContainerView> = stdout.lines().filter(|l| !l.is_empty()).map(|line| {
-        let parts: Vec<&str> = line.split('\t').collect();
-        let state = parts.get(4).unwrap_or(&"").to_string();
-        let id = parts.first().unwrap_or(&"").to_string();
-        let short_id: String = id.chars().take(12).collect();
-        let stat = stats_by_id.get(&id).or_else(|| stats_by_id.get(&short_id));
-        DockerContainerView {
-            cpu_perc: stat.map(|s| s.0.clone()).unwrap_or_default(),
-            mem_usage: stat.map(|s| s.1.clone()).unwrap_or_default(),
-            mem_perc: stat.map(|s| s.2.clone()).unwrap_or_default(),
-            id,
-            image: parts.get(1).unwrap_or(&"").to_string(),
-            names: parts.get(2).unwrap_or(&"").to_string(),
-            status: parts.get(3).unwrap_or(&"").to_string(),
-            running: state == "running",
-            state,
-            created: parts.get(5).unwrap_or(&"").to_string(),
-            ports: parts.get(6).unwrap_or(&"").to_string(),
-        }
-    }).collect();
-
-    let img_output = std::process::Command::new("docker")
-        .args(["images", "--format", "{{.ID}}\t{{.Repository}}\t{{.Tag}}\t{{.Size}}\t{{.CreatedAt}}"])
-        .output().ok();
-    let images: Vec<DockerImageView> = img_output.map(|o| {
-        String::from_utf8_lossy(&o.stdout).lines().filter(|l| !l.is_empty()).map(|line| {
-            let p: Vec<&str> = line.split('\t').collect();
-            DockerImageView { id: p.first().unwrap_or(&"").to_string(), repository: p.get(1).unwrap_or(&"").to_string(), tag: p.get(2).unwrap_or(&"").to_string(), size: p.get(3).unwrap_or(&"").to_string(), created: p.get(4).unwrap_or(&"").to_string() }
-        }).collect()
-    }).unwrap_or_default();
-
-    // Per-volume size via `docker system df -v`. Reuse the pier-core
-    // parser so SSH and local paths agree on malformed output.
-    let sizes_by_name: std::collections::HashMap<String, docker::VolumeDiskUsage> =
+/// Local-docker counterpart of [`docker_volume_usage`]. Parses
+/// `docker system df -v` through the shared pier-core parser so SSH and
+/// local paths agree on malformed output.
+#[tauri::command]
+async fn local_docker_volume_usage() -> Result<Vec<DockerVolumeUsageView>, String> {
+    tauri::async_runtime::spawn_blocking(|| {
         std::process::Command::new("docker")
             .args(["system", "df", "-v", "--format", "{{json .}}"])
             .output()
@@ -3727,68 +3853,18 @@ fn local_docker_overview(all: bool) -> Result<DockerOverview, String> {
             .map(|o| {
                 docker::parse_volume_df(&String::from_utf8_lossy(&o.stdout))
                     .into_iter()
-                    .map(|v| (v.name.clone(), v))
+                    .map(|v| DockerVolumeUsageView {
+                        size_bytes: docker::parse_size_to_bytes(&v.size),
+                        name: v.name,
+                        size: v.size,
+                        links: v.links,
+                    })
                     .collect()
             })
-            .unwrap_or_default();
-
-    let mut volumes: Vec<DockerVolumeView> = std::process::Command::new("docker")
-        .args(["volume", "ls", "--format", "{{.Name}}\t{{.Driver}}\t{{.Mountpoint}}"])
-        .output()
-        .ok()
-        .map(|o| {
-            String::from_utf8_lossy(&o.stdout)
-                .lines()
-                .filter(|l| !l.is_empty())
-                .map(|line| {
-                    let p: Vec<&str> = line.split('\t').collect();
-                    let name = p.first().unwrap_or(&"").to_string();
-                    let (size, size_bytes, links) = sizes_by_name
-                        .get(&name)
-                        .map(|df| {
-                            (
-                                df.size.clone(),
-                                docker::parse_size_to_bytes(&df.size),
-                                df.links,
-                            )
-                        })
-                        .unwrap_or_else(|| (String::new(), 0, -1));
-                    DockerVolumeView {
-                        name,
-                        driver: p.get(1).unwrap_or(&"").to_string(),
-                        mountpoint: p.get(2).unwrap_or(&"").to_string(),
-                        size,
-                        size_bytes,
-                        links,
-                    }
-                })
-                .collect()
-        })
-        .unwrap_or_default();
-    volumes.sort_by(|a, b| b.size_bytes.cmp(&a.size_bytes).then(a.name.cmp(&b.name)));
-
-    let networks: Vec<DockerNetworkView> = std::process::Command::new("docker")
-        .args(["network", "ls", "--format", "{{.ID}}\t{{.Name}}\t{{.Driver}}\t{{.Scope}}"])
-        .output()
-        .ok()
-        .map(|o| {
-            String::from_utf8_lossy(&o.stdout)
-                .lines()
-                .filter(|l| !l.is_empty())
-                .map(|line| {
-                    let p: Vec<&str> = line.split('\t').collect();
-                    DockerNetworkView {
-                        id: p.first().unwrap_or(&"").to_string(),
-                        name: p.get(1).unwrap_or(&"").to_string(),
-                        driver: p.get(2).unwrap_or(&"").to_string(),
-                        scope: p.get(3).unwrap_or(&"").to_string(),
-                    }
-                })
-                .collect()
-        })
-        .unwrap_or_default();
-
-    Ok(DockerOverview { containers, images, volumes, networks })
+            .unwrap_or_default()
+    })
+    .await
+    .map_err(|e| format!("docker system df join: {}", e))
 }
 
 #[tauri::command]
@@ -3917,6 +3993,7 @@ pub fn run() {
         .manage(AppState::default())
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_dialog::init())
+        .plugin(tauri_plugin_clipboard_manager::init())
         .setup(|_app| {
             // On Windows we draw our own caption controls (minimize /
             // maximize / close) in the titlebar — disable the OS chrome
@@ -4058,6 +4135,8 @@ pub fn run() {
             log_stream_drain,
             log_stream_stop,
             local_docker_overview,
+            local_docker_stats,
+            local_docker_volume_usage,
             local_docker_action,
             local_docker_run_container,
             local_docker_prune_volumes,

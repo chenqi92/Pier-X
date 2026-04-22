@@ -197,10 +197,18 @@ export default function RightSidebar({
   // The detected-services cache is keyed by tabId, but the SSH target
   // for a tab can change (user typed `ssh user@otherhost` in a local
   // terminal, or nested ssh on a real ssh tab). Clear the entry when
-  // the target host/user changes so the auto-detect effect below
-  // re-runs against the new host instead of returning stale tools.
+  // the target host/user/port changes — and also when credentials
+  // first land, so a detection that failed because we had no
+  // password yet automatically re-runs once the password capture
+  // (in TerminalPanel) populates `sshPassword`.
   const targetFingerprint = activeSshTarget
-    ? `${activeSshTarget.user}@${activeSshTarget.host}:${activeSshTarget.port}`
+    ? [
+        activeSshTarget.user,
+        activeSshTarget.host,
+        activeSshTarget.port,
+        activeSshTarget.authMode,
+        activeSshTarget.password ? "pw" : "no-pw",
+      ].join("|")
     : "";
   const lastFingerprintRef = useRef<{ tabId: string; fp: string } | null>(null);
   useEffect(() => {
@@ -240,11 +248,12 @@ export default function RightSidebar({
         setReady(tabId, tools);
       })
       .catch(() => setError(tabId));
-    // sshPassword / sshKeyPath are used inside but must NOT be reactive:
-    // passwords arrive async via sshConnectionResolvePassword and would
-    // otherwise re-trigger detection mid-flight. Detection is keyed on
-    // connection identity (host/port/user/authMode) + the `detectedEntry`
-    // guard, which is the right staleness signal.
+    // The full password value is intentionally NOT in the deps —
+    // the in-memory secret can come and go via async resolution and
+    // we don't want detection re-firing mid-flight. We DO depend on
+    // its presence (boolean) so the FIRST flip from "no password"
+    // to "password available" triggers a re-detect after the
+    // staleness clear above wipes the prior failure entry.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [
     activeTab?.id,
@@ -253,6 +262,7 @@ export default function RightSidebar({
     activeSshTarget?.port,
     activeSshTarget?.user,
     activeSshTarget?.authMode,
+    (activeSshTarget?.password.length ?? 0) > 0,
     detectedEntry,
     setPending,
     setReady,

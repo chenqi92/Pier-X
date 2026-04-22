@@ -22,6 +22,7 @@ import { useEffect, useMemo, useState } from "react";
 import * as cmd from "../lib/commands";
 import { quoteCommandArg } from "../lib/commands";
 import type { DockerOverview, TabState } from "../lib/types";
+import { effectiveSshTarget } from "../lib/types";
 import { useI18n } from "../i18n/useI18n";
 import { localizeError, localizeRuntimeMessage } from "../i18n/localizeMessage";
 import DbConnRow from "../components/DbConnRow";
@@ -136,9 +137,24 @@ export default function DockerPanel({ tab }: Props) {
   const [pullBusy, setPullBusy] = useState(false);
   const [pullLog, setPullLog] = useState("");
 
-  const hasSsh = tab.backend === "ssh" && tab.sshHost.trim() && tab.sshUser.trim();
-  const isLocal = tab.backend === "local";
+  // SSH context can be inferred from a local terminal where the user
+  // typed `ssh user@host`, or from a nested-ssh overlay on an SSH
+  // tab. `effectiveSshTarget` collapses both with the primary fields.
+  const sshTarget = effectiveSshTarget(tab);
+  const hasSsh = sshTarget !== null;
+  // Treat as "local docker" only when the tab has neither an SSH
+  // backend nor an inferred SSH target.
+  const isLocal = tab.backend === "local" && !hasSsh;
   const canRefresh = isLocal || hasSsh;
+  const sshArgs = {
+    host: sshTarget?.host ?? "",
+    port: sshTarget?.port ?? 22,
+    user: sshTarget?.user ?? "",
+    authMode: sshTarget?.authMode ?? "password",
+    password: sshTarget?.password ?? "",
+    keyPath: sshTarget?.keyPath ?? "",
+    savedConnectionIndex: sshTarget?.savedConnectionIndex ?? null,
+  };
 
   /**
    * Refresh via the store so concurrent callers (StrictMode's double
@@ -156,14 +172,14 @@ export default function DockerPanel({ tab }: Props) {
             ? await cmd.localDockerOverview(showAll)
             : hasSsh
               ? await cmd.dockerOverview({
-                  host: tab.sshHost,
-                  port: tab.sshPort,
-                  user: tab.sshUser,
-                  authMode: tab.sshAuthMode,
-                  password: tab.sshPassword,
-                  keyPath: tab.sshKeyPath,
+                  host: sshArgs.host,
+                  port: sshArgs.port,
+                  user: sshArgs.user,
+                  authMode: sshArgs.authMode,
+                  password: sshArgs.password,
+                  keyPath: sshArgs.keyPath,
                   all: showAll,
-                  savedConnectionIndex: tab.sshSavedConnectionIndex,
+                  savedConnectionIndex: sshArgs.savedConnectionIndex,
                 })
               : null;
           if (!overview) {
@@ -172,20 +188,34 @@ export default function DockerPanel({ tab }: Props) {
           return overview;
         },
         enrich: async () => {
-          // SSH-only: CPU/MEM + volume usage patched into the cached
-          // overview as they arrive. Errors are swallowed; rows keep
-          // their placeholder values.
-          if (!hasSsh) return;
-          const sshParams = {
-            host: tab.sshHost,
-            port: tab.sshPort,
-            user: tab.sshUser,
-            authMode: tab.sshAuthMode,
-            password: tab.sshPassword,
-            keyPath: tab.sshKeyPath,
-            savedConnectionIndex: tab.sshSavedConnectionIndex,
-          };
-          void cmd.dockerStats(sshParams).then((stats) => {
+          // CPU/MEM + volume usage patched into the cached overview as
+          // they arrive. Errors are swallowed; rows keep their
+          // placeholder values.
+          //
+          // Both SSH and local paths take the same slow CLI hits
+          // (`docker stats --no-stream` ~2s sampling window,
+          // `docker system df -v` 1–5s on busy hosts), so both route
+          // through the enrichment phase — the overview fetch stays
+          // snappy regardless of backend.
+          if (!hasSsh && !isLocal) return;
+          const sshParams = hasSsh
+            ? {
+                host: sshArgs.host,
+                port: sshArgs.port,
+                user: sshArgs.user,
+                authMode: sshArgs.authMode,
+                password: sshArgs.password,
+                keyPath: sshArgs.keyPath,
+                savedConnectionIndex: sshArgs.savedConnectionIndex,
+              }
+            : null;
+          const statsPromise = sshParams
+            ? cmd.dockerStats(sshParams)
+            : cmd.localDockerStats();
+          const usagePromise = sshParams
+            ? cmd.dockerVolumeUsage(sshParams)
+            : cmd.localDockerVolumeUsage();
+          void statsPromise.then((stats) => {
             const byId = new Map(stats.map((s) => [s.id, s]));
             dockerMerge(dockerKey, (prev) => ({
               ...prev,
@@ -197,7 +227,7 @@ export default function DockerPanel({ tab }: Props) {
               }),
             }));
           }).catch(() => { /* stats unavailable */ });
-          void cmd.dockerVolumeUsage(sshParams).then((usages) => {
+          void usagePromise.then((usages) => {
             const byName = new Map(usages.map((u) => [u.name, u]));
             dockerMerge(dockerKey, (prev) => {
               const next = prev.volumes.map((v) => {
@@ -250,15 +280,15 @@ export default function DockerPanel({ tab }: Props) {
       const result = isLocal
         ? await cmd.localDockerAction(id, action)
         : await cmd.dockerContainerAction({
-            host: tab.sshHost,
-            port: tab.sshPort,
-            user: tab.sshUser,
-            authMode: tab.sshAuthMode,
-            password: tab.sshPassword,
-            keyPath: tab.sshKeyPath,
+            host: sshArgs.host,
+            port: sshArgs.port,
+            user: sshArgs.user,
+            authMode: sshArgs.authMode,
+            password: sshArgs.password,
+            keyPath: sshArgs.keyPath,
             containerId: id,
             action,
-            savedConnectionIndex: tab.sshSavedConnectionIndex,
+            savedConnectionIndex: sshArgs.savedConnectionIndex,
           });
       setNotice(`${shortId(id)}: ${localizeRuntimeMessage(result, t)}`);
       await refresh(true);
@@ -275,14 +305,14 @@ export default function DockerPanel({ tab }: Props) {
     setError("");
     try {
       const output = await cmd.dockerInspect({
-        host: tab.sshHost,
-        port: tab.sshPort,
-        user: tab.sshUser,
-        authMode: tab.sshAuthMode,
-        password: tab.sshPassword,
-        keyPath: tab.sshKeyPath,
+        host: sshArgs.host,
+        port: sshArgs.port,
+        user: sshArgs.user,
+        authMode: sshArgs.authMode,
+        password: sshArgs.password,
+        keyPath: sshArgs.keyPath,
         containerId: id,
-        savedConnectionIndex: tab.sshSavedConnectionIndex,
+        savedConnectionIndex: sshArgs.savedConnectionIndex,
       });
       setInspectJson(output);
       setNotice(t("Loaded container inspection for {id}.", { id: shortId(id) }));
@@ -299,15 +329,15 @@ export default function DockerPanel({ tab }: Props) {
     setError("");
     try {
       await cmd.dockerRemoveImage({
-        host: tab.sshHost,
-        port: tab.sshPort,
-        user: tab.sshUser,
-        authMode: tab.sshAuthMode,
-        password: tab.sshPassword,
-        keyPath: tab.sshKeyPath,
+        host: sshArgs.host,
+        port: sshArgs.port,
+        user: sshArgs.user,
+        authMode: sshArgs.authMode,
+        password: sshArgs.password,
+        keyPath: sshArgs.keyPath,
         imageId: id,
         force: false,
-        savedConnectionIndex: tab.sshSavedConnectionIndex,
+        savedConnectionIndex: sshArgs.savedConnectionIndex,
       });
       setNotice(t("Removed image {id}.", { id: shortId(id) }));
       await refresh(true);
@@ -324,14 +354,14 @@ export default function DockerPanel({ tab }: Props) {
     setError("");
     try {
       await cmd.dockerRemoveVolume({
-        host: tab.sshHost,
-        port: tab.sshPort,
-        user: tab.sshUser,
-        authMode: tab.sshAuthMode,
-        password: tab.sshPassword,
-        keyPath: tab.sshKeyPath,
+        host: sshArgs.host,
+        port: sshArgs.port,
+        user: sshArgs.user,
+        authMode: sshArgs.authMode,
+        password: sshArgs.password,
+        keyPath: sshArgs.keyPath,
         volumeName: name,
-        savedConnectionIndex: tab.sshSavedConnectionIndex,
+        savedConnectionIndex: sshArgs.savedConnectionIndex,
       });
       setNotice(t("Removed volume {name}.", { name }));
       await refresh(true);
@@ -348,14 +378,14 @@ export default function DockerPanel({ tab }: Props) {
     setError("");
     try {
       await cmd.dockerRemoveNetwork({
-        host: tab.sshHost,
-        port: tab.sshPort,
-        user: tab.sshUser,
-        authMode: tab.sshAuthMode,
-        password: tab.sshPassword,
-        keyPath: tab.sshKeyPath,
+        host: sshArgs.host,
+        port: sshArgs.port,
+        user: sshArgs.user,
+        authMode: sshArgs.authMode,
+        password: sshArgs.password,
+        keyPath: sshArgs.keyPath,
         networkName: name,
-        savedConnectionIndex: tab.sshSavedConnectionIndex,
+        savedConnectionIndex: sshArgs.savedConnectionIndex,
       });
       setNotice(t("Removed network {name}.", { name }));
       await refresh(true);
@@ -402,15 +432,15 @@ export default function DockerPanel({ tab }: Props) {
       const out = isLocal
         ? await cmd.localDockerPullImage(rewritten, pullEnv())
         : await cmd.dockerPullImage({
-            host: tab.sshHost,
-            port: tab.sshPort,
-            user: tab.sshUser,
-            authMode: tab.sshAuthMode,
-            password: tab.sshPassword,
-            keyPath: tab.sshKeyPath,
+            host: sshArgs.host,
+            port: sshArgs.port,
+            user: sshArgs.user,
+            authMode: sshArgs.authMode,
+            password: sshArgs.password,
+            keyPath: sshArgs.keyPath,
             imageRef: rewritten,
             envPrefix: pullEnv(),
-            savedConnectionIndex: tab.sshSavedConnectionIndex,
+            savedConnectionIndex: sshArgs.savedConnectionIndex,
           });
       const lastLine = out.trim().split("\n").pop() ?? "";
       setPullLog(lastLine || t("Pulled {ref}.", { ref: rewritten }));
@@ -432,13 +462,13 @@ export default function DockerPanel({ tab }: Props) {
       const out = isLocal
         ? await cmd.localDockerPruneVolumes()
         : await cmd.dockerPruneVolumes({
-            host: tab.sshHost,
-            port: tab.sshPort,
-            user: tab.sshUser,
-            authMode: tab.sshAuthMode,
-            password: tab.sshPassword,
-            keyPath: tab.sshKeyPath,
-            savedConnectionIndex: tab.sshSavedConnectionIndex,
+            host: sshArgs.host,
+            port: sshArgs.port,
+            user: sshArgs.user,
+            authMode: sshArgs.authMode,
+            password: sshArgs.password,
+            keyPath: sshArgs.keyPath,
+            savedConnectionIndex: sshArgs.savedConnectionIndex,
           });
       setNotice(out.trim().split("\n").pop() || t("Pruned unused volumes."));
       await refresh(true);
@@ -461,14 +491,14 @@ export default function DockerPanel({ tab }: Props) {
       const out = isLocal
         ? await cmd.localDockerVolumeFiles(mountpoint)
         : await cmd.dockerVolumeFiles({
-            host: tab.sshHost,
-            port: tab.sshPort,
-            user: tab.sshUser,
-            authMode: tab.sshAuthMode,
-            password: tab.sshPassword,
-            keyPath: tab.sshKeyPath,
+            host: sshArgs.host,
+            port: sshArgs.port,
+            user: sshArgs.user,
+            authMode: sshArgs.authMode,
+            password: sshArgs.password,
+            keyPath: sshArgs.keyPath,
             mountpoint,
-            savedConnectionIndex: tab.sshSavedConnectionIndex,
+            savedConnectionIndex: sshArgs.savedConnectionIndex,
           });
       dockerSetVolumeFile(dockerKey, name, out || t("(empty directory)"));
     } catch (e) {
@@ -486,14 +516,14 @@ export default function DockerPanel({ tab }: Props) {
       const id = isLocal
         ? await cmd.localDockerRunContainer(options)
         : await cmd.dockerRunContainer({
-            host: tab.sshHost,
-            port: tab.sshPort,
-            user: tab.sshUser,
-            authMode: tab.sshAuthMode,
-            password: tab.sshPassword,
-            keyPath: tab.sshKeyPath,
+            host: sshArgs.host,
+            port: sshArgs.port,
+            user: sshArgs.user,
+            authMode: sshArgs.authMode,
+            password: sshArgs.password,
+            keyPath: sshArgs.keyPath,
             options,
-            savedConnectionIndex: tab.sshSavedConnectionIndex,
+            savedConnectionIndex: sshArgs.savedConnectionIndex,
           });
       setNotice(t("Started container {id}.", { id: id.slice(0, 12) }));
       setRunDialogOpen(false);
@@ -588,12 +618,12 @@ export default function DockerPanel({ tab }: Props) {
     [state, selectedContainer],
   );
 
-  const hostLabel = hasSsh ? tab.sshHost : isLocal ? t("local") : "—";
+  const hostLabel = hasSsh ? sshArgs.host : isLocal ? t("local") : "—";
   const headerMeta = state
     ? t("{host} · {count} containers", { host: hostLabel, count: state.containers.length })
     : hostLabel;
   const hostSub = hasSsh
-    ? `${tab.sshUser}@${tab.sshHost}:${tab.sshPort} · ${t("remote via SSH")}`
+    ? `${sshArgs.user}@${sshArgs.host}:${sshArgs.port} · ${t("remote via SSH")}`
     : isLocal
       ? t("Local Docker socket")
       : t("Not connected");

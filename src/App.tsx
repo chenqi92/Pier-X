@@ -33,6 +33,7 @@ import { useConnectionStore } from "./stores/useConnectionStore";
 import { useRecentConnectionsStore } from "./stores/useRecentConnectionsStore";
 import { useSettingsStore } from "./stores/useSettingsStore";
 import { useThemeStore as useThemeStoreRef } from "./stores/useThemeStore";
+import { useUiActionsStore } from "./stores/useUiActionsStore";
 import "./styles/fonts.css";
 import "./styles/tokens.css";
 import "./styles/atoms.css";
@@ -289,6 +290,18 @@ function App() {
     setEditingConnection(connection);
     setNewConnOpen(true);
   }, []);
+
+  // Subscribe to the global UI-action bus so panels can request the
+  // edit dialog without depending on a `onEditConnection` prop chain
+  // that's easy to forget when adding a new wrapping component.
+  // The seq counter ensures every dispatch fires the effect exactly
+  // once, even if two consecutive requests target the same index.
+  const recoverySeq = useUiActionsStore((s) => s.recoveryRequestSeq);
+  const recoveryIndex = useUiActionsStore((s) => s.recoveryRequestIndex);
+  useEffect(() => {
+    if (recoverySeq === 0 || recoveryIndex === undefined) return;
+    openEditConnectionDialog(recoveryIndex);
+  }, [recoverySeq, recoveryIndex, openEditConnectionDialog]);
 
   const handleToolChange = useCallback(
     (tool: RightTool) => {
@@ -582,6 +595,27 @@ function App() {
             }}
             onConnect={openSshTab}
             onConnectSaved={openSshSaved}
+            onSaved={(savedIndex, password, authKind) => {
+              // Push the freshly-typed credentials into any open tabs
+              // that point at this saved connection. The terminal
+              // session will pick the change up via its create-effect
+              // dep on `tab.sshPassword` and retry connecting — so a
+              // tab that was stuck on the "saved password missing"
+              // error recovers automatically without the user having
+              // to hit Restart.
+              const store = useTabStore.getState();
+              for (const t of store.tabs) {
+                if (t.sshSavedConnectionIndex !== savedIndex) continue;
+                store.updateTab(t.id, {
+                  sshPassword: authKind === "password" ? password : "",
+                  sshAuthMode: authKind as "password" | "agent" | "key",
+                  // Clearing terminalSessionId signals the create
+                  // effect to spin up a fresh session on the next
+                  // tick rather than reuse a dead handle.
+                  terminalSessionId: null,
+                });
+              }
+            }}
           />
           <SettingsDialog
             open={settingsOpen}

@@ -4,6 +4,7 @@ import { quoteCommandArg } from "../lib/commands";
 import { RIGHT_TOOL_META } from "../lib/rightToolMeta";
 import { closeTunnelSlot, ensureTunnelSlot, syncTunnelState } from "../lib/sshTunnel";
 import type { RedisBrowserState, RedisCommandResult, TabState } from "../lib/types";
+import { effectiveSshTarget } from "../lib/types";
 import { useI18n } from "../i18n/useI18n";
 import { localizeError } from "../i18n/localizeMessage";
 import DbConnRow from "../components/DbConnRow";
@@ -35,7 +36,10 @@ export default function RedisPanel({ tab }: Props) {
   const [tunnelError, setTunnelError] = useState("");
   const [tunnelNotice, setTunnelNotice] = useState("");
 
-  const hasSsh = tab.backend === "ssh" && tab.sshHost.trim() && tab.sshUser.trim();
+  // SSH context can be inferred from a local terminal that ran `ssh
+  // user@host` or from a nested-ssh overlay; either way, the tunnel
+  // helper picks up the right addressing via `effectiveSshTarget`.
+  const hasSsh = effectiveSshTarget(tab) !== null;
   const p = Number.parseInt(port, 10);
   const d = Number.parseInt(db, 10);
   const canBrowse = host.trim() && Number.isFinite(p) && p > 0 && Number.isFinite(d);

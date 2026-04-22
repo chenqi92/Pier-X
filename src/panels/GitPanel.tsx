@@ -27,6 +27,7 @@ import { Group as PanelGroup, Panel, Separator as PanelResizeHandle } from "reac
 import { startTransition, useDeferredValue, useEffect, useMemo, useRef, useState } from "react";
 import { openUrl } from "@tauri-apps/plugin-opener";
 import * as cmd from "../lib/commands";
+import { writeClipboardText } from "../lib/clipboard";
 import DiffDialog, { type DiffFileInput } from "../shell/DiffDialog";
 import "../styles/git-panel.css";
 import type {
@@ -1589,12 +1590,8 @@ export default function GitPanel({ browserPath, isActive = true }: Props) {
 
   async function copyText(value: string) {
     if (!value) return;
-    try {
-      await navigator.clipboard.writeText(value);
-      showBanner(true, t("Copied"));
-    } catch {
-      showBanner(false, t("Failed to copy"));
-    }
+    await writeClipboardText(value);
+    showBanner(true, t("Copied"));
   }
 
   function beginRemoteEdit(remote: GitRemoteView) {

@@ -2,6 +2,7 @@ import * as cmd from "./commands";
 import { translate } from "../i18n/useI18n";
 import { useSettingsStore } from "../stores/useSettingsStore";
 import type { TabState, TunnelInfoView } from "./types";
+import { effectiveSshTarget } from "./types";
 
 type TunnelSlot = "mysql" | "postgres" | "redis";
 type UpdateTab = (id: string, patch: Partial<TabState>) => void;
@@ -99,11 +100,13 @@ export async function ensureTunnelSlot(params: {
     force = false,
   } = params;
 
-  if (tab.backend !== "ssh") {
+  // Tunnels can be opened against any SSH context — a real SSH tab,
+  // a local terminal where the user typed `ssh user@host` (we mirror
+  // the addressing onto the tab), or a nested-ssh overlay on top of
+  // a real SSH tab. `effectiveSshTarget` picks whichever one applies.
+  const target = effectiveSshTarget(tab);
+  if (!target) {
     throw new Error(message("SSH connection required."));
-  }
-  if (!tab.sshHost.trim() || !tab.sshUser.trim()) {
-    throw new Error(message("SSH host and user must not be empty."));
   }
   if (!Number.isFinite(remotePort) || remotePort <= 0) {
     throw new Error(message("Tunnel remote port must not be empty."));
@@ -135,12 +138,12 @@ export async function ensureTunnelSlot(params: {
   }
 
   const info = await cmd.sshTunnelOpen({
-    host: tab.sshHost,
-    port: tab.sshPort,
-    user: tab.sshUser,
-    authMode: tab.sshAuthMode,
-    password: tab.sshPassword,
-    keyPath: tab.sshKeyPath,
+    host: target.host,
+    port: target.port,
+    user: target.user,
+    authMode: target.authMode,
+    password: target.password,
+    keyPath: target.keyPath,
     remoteHost: resolvedRemoteHost,
     remotePort,
     localPort: null,

@@ -1,6 +1,7 @@
 import { useState } from "react";
 import * as cmd from "../lib/commands";
 import { isReadOnlySql, queryResultToTsv } from "../lib/commands";
+import { writeClipboardText } from "../lib/clipboard";
 import { RIGHT_TOOL_META } from "../lib/rightToolMeta";
 import type { QueryExecutionResult, SqliteBrowserState } from "../lib/types";
 import { useI18n } from "../i18n/useI18n";
@@ -123,7 +124,7 @@ export default function SqlitePanel() {
           {needsWrite && !readOnly && <input className="field-input" onChange={(e) => setWriteConfirm(e.currentTarget.value)} placeholder={t("Type WRITE to confirm")} value={writeConfirm} />}
           <div className="button-row">
             <button className="mini-button" disabled={!canRun} onClick={() => void runQuery()} type="button">{queryBusy ? t("Running...") : t("Run Query")}</button>
-            {queryResult && <button className="mini-button" onClick={() => { navigator.clipboard.writeText(queryResultToTsv(queryResult)).catch(() => {}); setNotice(t("Copied")); }} type="button">{t("Copy TSV")}</button>}
+            {queryResult && <button className="mini-button" onClick={() => { void writeClipboardText(queryResultToTsv(queryResult)); setNotice(t("Copied")); }} type="button">{t("Copy TSV")}</button>}
           </div>
           {notice && <div className="status-note">{notice}</div>}
         </div>

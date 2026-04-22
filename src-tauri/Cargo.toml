@@ -27,6 +27,12 @@ tauri-build = { version = "2", features = [] }
 tauri = { version = "2", features = ["devtools"] }
 tauri-plugin-opener = "2"
 tauri-plugin-dialog = "2"
+# Native clipboard access — replaces `navigator.clipboard.readText/writeText`
+# so the Chromium webview never raises its "this site wants to read the
+# clipboard" permission prompt. The desktop shell owns the clipboard
+# unconditionally; the prompt would be a UX regression vs. an actual
+# native app.
+tauri-plugin-clipboard-manager = "2"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 pier-core = { path = "../pier-core" }

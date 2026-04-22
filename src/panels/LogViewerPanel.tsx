@@ -25,7 +25,7 @@ import {
   MODES,
 } from "../lib/logSource";
 import type { LogEventView, LogSource, LogSourceMode, SftpEntryView, TabState } from "../lib/types";
-import { DEFAULT_LOG_SOURCE } from "../lib/types";
+import { DEFAULT_LOG_SOURCE, effectiveSshTarget } from "../lib/types";
 import { useI18n } from "../i18n/useI18n";
 import { localizeError, localizeRuntimeMessage } from "../i18n/localizeMessage";
 import PanelHeader from "../components/PanelHeader";
@@ -112,7 +112,19 @@ export default function LogViewerPanel({ tab }: Props) {
   const outputRef = useRef<HTMLDivElement | null>(null);
   const counter = useRef(0);
 
-  const hasSsh = tab.backend === "ssh" && tab.sshHost.trim() && tab.sshUser.trim();
+  // Accept SSH context inferred from a local terminal that ran `ssh
+  // user@host` or from a nested-ssh overlay on top of a real SSH tab.
+  const sshTarget = effectiveSshTarget(tab);
+  const hasSsh = sshTarget !== null;
+  const sshArgs = {
+    host: sshTarget?.host ?? "",
+    port: sshTarget?.port ?? 22,
+    user: sshTarget?.user ?? "",
+    authMode: sshTarget?.authMode ?? "password",
+    password: sshTarget?.password ?? "",
+    keyPath: sshTarget?.keyPath ?? "",
+    savedConnectionIndex: sshTarget?.savedConnectionIndex ?? null,
+  };
 
   useEffect(() => {
     setFileDirDraft(source.fileDir || "/var/log");
@@ -159,14 +171,14 @@ export default function LogViewerPanel({ tab }: Props) {
     }
     try {
       const nextId = await cmd.logStreamStart({
-        host: tab.sshHost,
-        port: tab.sshPort,
-        user: tab.sshUser,
-        authMode: tab.sshAuthMode,
-        password: tab.sshPassword,
-        keyPath: tab.sshKeyPath,
+        host: sshArgs.host,
+        port: sshArgs.port,
+        user: sshArgs.user,
+        authMode: sshArgs.authMode,
+        password: sshArgs.password,
+        keyPath: sshArgs.keyPath,
         command,
-        savedConnectionIndex: tab.sshSavedConnectionIndex,
+        savedConnectionIndex: sshArgs.savedConnectionIndex,
       });
       updateTab(tab.id, { logCommand: command });
       setEvents([]);
@@ -262,14 +274,14 @@ export default function LogViewerPanel({ tab }: Props) {
     setScanError("");
     try {
       const result = await cmd.sftpBrowse({
-        host: tab.sshHost,
-        port: tab.sshPort,
-        user: tab.sshUser,
-        authMode: tab.sshAuthMode,
-        password: tab.sshPassword,
-        keyPath: tab.sshKeyPath,
+        host: sshArgs.host,
+        port: sshArgs.port,
+        user: sshArgs.user,
+        authMode: sshArgs.authMode,
+        password: sshArgs.password,
+        keyPath: sshArgs.keyPath,
         path: dir,
-        savedConnectionIndex: tab.sshSavedConnectionIndex,
+        savedConnectionIndex: sshArgs.savedConnectionIndex,
       });
       const logs = result.entries
         .filter((e) => !e.isDir && isLogLikeFilename(e.name))

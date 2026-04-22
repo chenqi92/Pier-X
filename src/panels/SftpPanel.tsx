@@ -27,6 +27,7 @@ import * as cmd from "../lib/commands";
 import { SFTP_PROGRESS_EVENT, type SftpProgressEvent } from "../lib/commands";
 import { RIGHT_TOOL_META } from "../lib/rightToolMeta";
 import type { SftpBrowseState, SftpEntryView, TabState } from "../lib/types";
+import { effectiveSshTarget } from "../lib/types";
 import { useI18n } from "../i18n/useI18n";
 import { localizeError } from "../i18n/localizeMessage";
 import PanelHeader from "../components/PanelHeader";
@@ -175,7 +176,25 @@ export default function SftpPanel({ tab }: Props) {
   const [dropDepth, setDropDepth] = useState(0);
   const dropHover = dropDepth > 0;
 
-  const hasSsh = tab.backend === "ssh" && tab.sshHost.trim() && tab.sshUser.trim();
+  // SSH context can come from the tab being a real SSH tab, from a
+  // local terminal where the user typed `ssh user@host`, or from a
+  // nested-ssh overlay set on an SSH tab. `effectiveSshTarget`
+  // collapses all three so this panel works in any of those modes.
+  const sshTarget = effectiveSshTarget(tab);
+  const hasSsh = sshTarget !== null;
+  // Spread-friendly version of the SSH addressing for command calls.
+  // Falls back to inert defaults when there's no target — every
+  // call site is gated behind `hasSsh` / `sshTarget` first, so the
+  // empty values never reach the backend.
+  const sshArgs = {
+    host: sshTarget?.host ?? "",
+    port: sshTarget?.port ?? 22,
+    user: sshTarget?.user ?? "",
+    authMode: sshTarget?.authMode ?? "password",
+    password: sshTarget?.password ?? "",
+    keyPath: sshTarget?.keyPath ?? "",
+    savedConnectionIndex: sshTarget?.savedConnectionIndex ?? null,
+  };
   const sshRequired = t("SSH connection required.");
   const selectedEntry = useMemo(
     () => state?.entries.find((entry) => entry.path === selectedPath) ?? null,
@@ -260,13 +279,7 @@ export default function SftpPanel({ tab }: Props) {
     setNotice("");
     try {
       const next = await cmd.sftpBrowse({
-        host: tab.sshHost,
-        port: tab.sshPort,
-        user: tab.sshUser,
-        authMode: tab.sshAuthMode,
-        password: tab.sshPassword,
-        keyPath: tab.sshKeyPath,
-        savedConnectionIndex: tab.sshSavedConnectionIndex,
+        ...sshArgs,
         path: targetPath,
       });
       if (opts.pushHistory && state?.currentPath && state.currentPath !== next.currentPath) {
@@ -310,13 +323,7 @@ export default function SftpPanel({ tab }: Props) {
     try {
       const targetPath = joinRemotePath(currentRemotePath, mkdirName);
       await cmd.sftpMkdir({
-        host: tab.sshHost,
-        port: tab.sshPort,
-        user: tab.sshUser,
-        authMode: tab.sshAuthMode,
-        password: tab.sshPassword,
-        keyPath: tab.sshKeyPath,
-        savedConnectionIndex: tab.sshSavedConnectionIndex,
+        ...sshArgs,
         path: targetPath,
       });
       setMkdirName("");
@@ -338,13 +345,7 @@ export default function SftpPanel({ tab }: Props) {
     try {
       const nextPath = joinRemotePath(remoteDirname(selectedEntry.path), renameTarget);
       await cmd.sftpRename({
-        host: tab.sshHost,
-        port: tab.sshPort,
-        user: tab.sshUser,
-        authMode: tab.sshAuthMode,
-        password: tab.sshPassword,
-        keyPath: tab.sshKeyPath,
-        savedConnectionIndex: tab.sshSavedConnectionIndex,
+        ...sshArgs,
         from: selectedEntry.path,
         to: nextPath,
       });
@@ -366,13 +367,7 @@ export default function SftpPanel({ tab }: Props) {
     setNotice("");
     try {
       await cmd.sftpRemove({
-        host: tab.sshHost,
-        port: tab.sshPort,
-        user: tab.sshUser,
-        authMode: tab.sshAuthMode,
-        password: tab.sshPassword,
-        keyPath: tab.sshKeyPath,
-        savedConnectionIndex: tab.sshSavedConnectionIndex,
+        ...sshArgs,
         path: selectedEntry.path,
         isDir: selectedEntry.isDir,
       });
@@ -405,13 +400,7 @@ export default function SftpPanel({ tab }: Props) {
     });
     try {
       await cmd.sftpDownload({
-        host: tab.sshHost,
-        port: tab.sshPort,
-        user: tab.sshUser,
-        authMode: tab.sshAuthMode,
-        password: tab.sshPassword,
-        keyPath: tab.sshKeyPath,
-        savedConnectionIndex: tab.sshSavedConnectionIndex,
+        ...sshArgs,
         remotePath: entry.path,
         localPath,
         transferId: id,
@@ -469,13 +458,7 @@ export default function SftpPanel({ tab }: Props) {
       });
       try {
         await cmd.sftpUpload({
-          host: tab.sshHost,
-          port: tab.sshPort,
-          user: tab.sshUser,
-          authMode: tab.sshAuthMode,
-          password: tab.sshPassword,
-          keyPath: tab.sshKeyPath,
-          savedConnectionIndex: tab.sshSavedConnectionIndex,
+          ...sshArgs,
           localPath,
           remotePath,
           transferId: id,
@@ -529,13 +512,13 @@ export default function SftpPanel({ tab }: Props) {
   }, [
     tab.id,
     tab.backend,
-    tab.sshHost,
-    tab.sshPort,
-    tab.sshUser,
-    tab.sshAuthMode,
+    sshTarget?.host,
+    sshTarget?.port,
+    sshTarget?.user,
+    sshTarget?.authMode,
     tab.terminalSessionId,
-    tab.sshPassword.length > 0,
-    tab.sshSavedConnectionIndex,
+    (sshTarget?.password.length ?? 0) > 0,
+    sshTarget?.savedConnectionIndex,
   ]);
 
   function selectEntry(entry: SftpEntryView) {
@@ -617,13 +600,7 @@ export default function SftpPanel({ tab }: Props) {
     setNotice("");
     try {
       await cmd.sftpUploadTree({
-        host: tab.sshHost,
-        port: tab.sshPort,
-        user: tab.sshUser,
-        authMode: tab.sshAuthMode,
-        password: tab.sshPassword,
-        keyPath: tab.sshKeyPath,
-        savedConnectionIndex: tab.sshSavedConnectionIndex,
+        ...sshArgs,
         localPath: dir.path,
         remotePath,
         transferId: id,
@@ -649,10 +626,10 @@ export default function SftpPanel({ tab }: Props) {
       name: entry.name,
       isDir: entry.isDir,
       size: entry.size,
-      host: tab.sshHost,
-      port: tab.sshPort,
-      user: tab.sshUser,
-      authMode: tab.sshAuthMode,
+      host: sshArgs.host,
+      port: sshArgs.port,
+      user: sshArgs.user,
+      authMode: sshArgs.authMode,
     };
     event.dataTransfer.effectAllowed = "copy";
     event.dataTransfer.setData(DT_SFTP_FILE, JSON.stringify(payload));
@@ -671,12 +648,14 @@ export default function SftpPanel({ tab }: Props) {
   }
 
   const totalItems = state?.entries.length ?? 0;
-  const hostName = hasSsh ? `${tab.sshUser}@${tab.sshHost}` : t("Not connected");
-  const hostSub = hasSsh
+  const hostName = sshTarget
+    ? `${sshTarget.user}@${sshTarget.host}`
+    : t("Not connected");
+  const hostSub = sshTarget
     ? t("{user}@{host}:{port} · SFTP session", {
-        user: tab.sshUser,
-        host: tab.sshHost,
-        port: tab.sshPort,
+        user: sshTarget.user,
+        host: sshTarget.host,
+        port: sshTarget.port,
       })
     : t("Configure SSH connection to begin.");
 

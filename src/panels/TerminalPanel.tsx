@@ -16,7 +16,9 @@ import { useSettingsStore } from "../stores/useSettingsStore";
 import { useStatusStore } from "../stores/useStatusStore";
 import { useThemeStore, TERMINAL_THEMES } from "../stores/useThemeStore";
 import { parseSshCommand } from "../lib/parseSshCommand";
+import { readClipboardText, writeClipboardText } from "../lib/clipboard";
 import { useConnectionStore } from "../stores/useConnectionStore";
+import { useUiActionsStore } from "../stores/useUiActionsStore";
 
 /**
  * Resolve a backend-emitted color tag against the user's selected terminal
@@ -80,6 +82,7 @@ export default function TerminalPanel({ tab, isActive, onEditConnection }: Props
   const [snapshot, setSnapshot] = useState<TerminalSnapshot | null>(null);
   const [error, setError] = useState("");
   const [needsPasswordRecovery, setNeedsPasswordRecovery] = useState(false);
+  const requestEditConnection = useUiActionsStore((s) => s.requestEditConnection);
   const [terminalSize, setTerminalSize] = useState<TerminalSize>({ cols: 120, rows: 26 });
   const setStatusTerminalSize = useStatusStore((s) => s.setTerminalSize);
   const [scrollbackOffset, setScrollbackOffset] = useState(0);
@@ -105,6 +108,18 @@ export default function TerminalPanel({ tab, isActive, onEditConnection }: Props
   // funnel through `sendInput`, so the same buffer logic catches
   // both transitions.
   const commandBufferRef = useRef("");
+
+  // Single-shot "the next typed line is probably the password ssh is
+  // prompting for" tracker. Armed by `applySshContextFromCommand`
+  // when the user types `ssh user@host` without `-i` and without
+  // matching saved key/agent credentials, since in that case the
+  // local ssh.exe child process is about to ask for a password and
+  // we want to mirror that into `tab.sshPassword` so the right-side
+  // russh session can authenticate the same way without a second
+  // prompt. Cleared after one capture or after the deadline, and
+  // skipped entirely if `tab.sshPassword` is already populated
+  // (e.g. resolved from the keychain).
+  const pendingPasswordCaptureRef = useRef<{ deadline: number } | null>(null);
 
   // Sync session ID to tab store
   useEffect(() => {
@@ -184,7 +199,28 @@ export default function TerminalPanel({ tab, isActive, onEditConnection }: Props
 
     void create();
     return () => { cancelled = true; };
-  }, [session, terminalSize.cols, terminalSize.rows, tab.backend, tab.sshHost]);
+    // `tab.sshPassword` is in the deps so a tab whose first
+    // create() rejected with "saved password missing in keychain"
+    // automatically retries once the user re-enters the password
+    // via the recovery dialog (App.tsx propagates the new password
+    // into matching tabs and nulls `terminalSessionId`, which we
+    // mirror into local `session` state below).
+  }, [session, terminalSize.cols, terminalSize.rows, tab.backend, tab.sshHost, tab.sshPassword]);
+
+  // When App.tsx clears `tab.terminalSessionId` (e.g. as part of
+  // the post-recovery propagation), drop the local session state
+  // so the create-effect above re-runs against the fresh
+  // credentials. Skipped for the steady-state case where the IDs
+  // already match — that just means the session-id sync ran once
+  // after our own creation and there's nothing to do.
+  useEffect(() => {
+    if (tab.terminalSessionId !== null) return;
+    if (!session) return;
+    setSession(null);
+    setSnapshot(null);
+    setError("");
+    setNeedsPasswordRecovery(false);
+  }, [tab.terminalSessionId, session]);
 
   // ── Resize session (trigger-based) ──────────────────────────
   //
@@ -403,43 +439,119 @@ export default function TerminalPanel({ tab, isActive, onEditConnection }: Props
   // ── Input handlers ──────────────────────────────────────────
 
   /**
-   * Update the "currently typing" buffer by interpreting the bytes
-   * we are about to send to the PTY. Only meaningful for line-edit
-   * sequences we can model cheaply: printable text, backspace,
-   * carriage return, Ctrl+U (line kill), Ctrl+C / Ctrl+D (cancel).
-   * Anything else (arrow keys, escape sequences, big paste blobs)
-   * resets the buffer rather than risk drifting out of sync with
-   * what the shell actually has in its prompt.
+   * Walk through the bytes about to be sent to the PTY and keep the
+   * "currently typing" buffer in sync. Returns any complete lines
+   * that just got submitted (Enter pressed, or pasted text with an
+   * embedded newline) so the caller can offer them to the SSH
+   * command parser.
+   *
+   * Models just enough shell line-editing semantics to cover the
+   * common cases: printable bytes append, backspace removes, Enter
+   * completes a line, Ctrl+C / Ctrl+U / Esc clear, and CSI/SS3
+   * escape sequences (arrow keys, function keys) are recognized so
+   * they reset the buffer cleanly instead of polluting it with the
+   * raw `[A` / `OB` payload.
+   *
+   * Heuristic by design — if the user navigates history with arrows
+   * or edits mid-line we may miss an `ssh` command, but we won't
+   * misattribute one. False negatives the user can retry; false
+   * positives would route the right panel to the wrong host.
    */
-  function updateCommandBuffer(data: string): void {
-    // Bracketed-paste payloads, control sequences, multi-line input —
-    // bail rather than try to model them.
-    if (data.length > 1 && !data.endsWith("\r") && !data.endsWith("\n")) {
-      commandBufferRef.current = "";
-      return;
+  function captureCompletedCommands(data: string): string[] {
+    const CR = 13;
+    const LF = 10;
+    const ESC = 27;
+    const BS = 8;
+    const DEL = 127;
+    const ETX = 3;   // Ctrl+C
+    const NAK = 21;  // Ctrl+U
+    const completed: string[] = [];
+    for (let i = 0; i < data.length; i++) {
+      const code = data.charCodeAt(i);
+      if (code === CR || code === LF) {
+        completed.push(commandBufferRef.current);
+        commandBufferRef.current = "";
+        if (code === CR && data.charCodeAt(i + 1) === LF) i += 1;
+        continue;
+      }
+      if (code === ESC) {
+        // Escape sequence: reset the buffer and consume the rest.
+        // Two shapes are emitted by handleKeyDown today:
+        //   CSI: ESC [ <params> <final letter A-Z, a-z, ~>
+        //   SS3: ESC O <letter>
+        commandBufferRef.current = "";
+        const next = data[i + 1];
+        if (next === "[") {
+          i += 1;
+          while (i + 1 < data.length) {
+            i += 1;
+            if (/[A-Za-z~]/.test(data[i])) break;
+          }
+        } else if (next === "O") {
+          i += 2;
+        }
+        continue;
+      }
+      if (code === DEL || code === BS) {
+        commandBufferRef.current = commandBufferRef.current.slice(0, -1);
+        continue;
+      }
+      if (code === ETX || code === NAK) {
+        commandBufferRef.current = "";
+        continue;
+      }
+      if (code < 0x20 || code === 0x7f) {
+        // Other unmodelled control byte — reset to avoid carrying
+        // stale state into the next Enter.
+        commandBufferRef.current = "";
+        continue;
+      }
+      commandBufferRef.current += data[i];
     }
-    if (data === "\r" || data === "\n" || data === "\r\n") {
-      // Caller fires the parser separately; here we just clear so the
-      // next prompt starts fresh.
-      commandBufferRef.current = "";
-      return;
-    }
-    if (data === "" || data === "\b") {
-      commandBufferRef.current = commandBufferRef.current.slice(0, -1);
-      return;
-    }
-    if (data === "" /* ^C */ || data === "" /* ^U */ || data === "" /* ESC */) {
-      commandBufferRef.current = "";
-      return;
-    }
-    if (data.charCodeAt(0) < 0x20) {
-      // Other control bytes — could be a Ctrl+something we don't model.
-      // Reset to avoid wrong attribution on the next Enter.
-      commandBufferRef.current = "";
-      return;
-    }
-    if (data.length === 1) {
-      commandBufferRef.current += data;
+    return completed;
+  }
+
+
+  /**
+   * If the previous Enter was an `ssh user@host` invocation, take
+   * the line the user just submitted and treat it as the password
+   * they typed at the ssh password prompt. Mirroring that into
+   * `tab.sshPassword` lets the right-side russh session
+   * authenticate against the same target without making the user
+   * re-enter the password in our own dialog.
+   *
+   * Best-effort and conservative — if we'd be writing into a slot
+   * that's already populated (saved-keychain resolve raced ahead),
+   * if the line doesn't look password-shaped (whitespace, way too
+   * long), or if the deadline passed, we just clear the
+   * single-shot flag and move on. A wrong capture only costs the
+   * right-side panels one failed authentication, which is no worse
+   * than the previous "saved password missing" surface.
+   */
+  function maybeCapturePasswordFromLine(line: string): void {
+    const pending = pendingPasswordCaptureRef.current;
+    if (!pending) return;
+    pendingPasswordCaptureRef.current = null; // single-shot regardless
+    if (Date.now() > pending.deadline) return;
+
+    const trimmed = line.trim();
+    if (!trimmed) return;
+    if (trimmed.length > 256) return;
+    if (/\s/.test(trimmed)) return;
+
+    // Don't overwrite a working password resolved from the keychain
+    // or set by a previous capture — the user is just running their
+    // first command at the new shell prompt, not re-entering creds.
+    const current = useTabStore.getState().tabs.find((t) => t.id === tab.id);
+    if (!current) return;
+    if (tab.backend === "local") {
+      if (current.sshPassword) return;
+      updateTab(tab.id, { sshPassword: trimmed });
+    } else if (current.nestedSshTarget) {
+      if (current.nestedSshTarget.password) return;
+      updateTab(tab.id, {
+        nestedSshTarget: { ...current.nestedSshTarget, password: trimmed },
+      });
     }
   }
 
@@ -461,7 +573,16 @@ export default function TerminalPanel({ tab, isActive, onEditConnection }: Props
    */
   function applySshContextFromCommand(line: string): void {
     const parsed = parseSshCommand(line);
-    if (!parsed) return;
+    if (!parsed) {
+      // Not an `ssh ...` line — but it might be the password the user
+      // is typing in response to ssh's "password:" prompt. If we
+      // recently saw an ssh command and have no working password yet,
+      // mirror the captured line into the tab so the right-side russh
+      // session can authenticate against the same target the local
+      // ssh.exe is connecting to. One-shot: cleared after each call.
+      maybeCapturePasswordFromLine(line);
+      return;
+    }
     const conns = useConnectionStore.getState().connections;
     const port = parsed.port > 0 ? parsed.port : 22;
     // Match priority: exact host+user+port → host+user → host alone.
@@ -476,15 +597,42 @@ export default function TerminalPanel({ tab, isActive, onEditConnection }: Props
     const inferredUser = parsed.user || matched?.user || "";
     if (!inferredUser) return; // Without a user we can't probe meaningfully.
 
-    // When no saved connection matches, try the SSH agent rather than
-    // attempting password auth with an empty string — the agent will
-    // either authenticate cleanly or fail with a typed AuthRejected
-    // error, both of which surface a clearer message than the
-    // empty-DirectPassword "host, user, port and auth must all be set".
+    // Default to `password` for unmatched / no-`-i` invocations: the
+    // user is typing `ssh user@host` interactively, which means
+    // ssh.exe is about to prompt for a password. We arm the
+    // password-capture sweep below so the next line they type
+    // (silently echoed by the terminal) lands in `tab.sshPassword`
+    // and the right-side russh session can authenticate without a
+    // second prompt. `-i` overrides to key auth, and a saved
+    // connection's auth kind always wins.
     const authMode: "password" | "agent" | "key" =
-      matched?.authKind ?? (parsed.identityPath ? "key" : "agent");
+      matched?.authKind ?? (parsed.identityPath ? "key" : "password");
     const keyPath = parsed.identityPath || matched?.keyPath || "";
     const savedConnectionIndex = matched ? matched.index : null;
+
+    // Arm the one-shot password capture only if we don't expect
+    // credentials to come from elsewhere: no key file, and either no
+    // saved match or a saved match whose auth kind is `password`
+    // (in which case the keychain might still be empty). 60s window
+    // is generous enough for the user to read the welcome banner,
+    // type their password, and hit Enter.
+    const expectsInteractivePassword =
+      !parsed.identityPath
+      && (matched === undefined || matched.authKind === "password");
+    pendingPasswordCaptureRef.current = expectsInteractivePassword
+      ? { deadline: Date.now() + 60_000 }
+      : null;
+
+    // Re-typing the same `ssh user@host` after a disconnect should
+    // keep any previously-resolved/captured password so the right
+    // side reconnects without prompting again. A *different* target
+    // (or a different saved-connection slot) gets a clean slate so
+    // a stale wrong capture doesn't poison the next attempt.
+    const sameTarget =
+      savedConnectionIndex === tab.sshSavedConnectionIndex
+      && tab.sshHost.trim().toLowerCase() === parsed.host.toLowerCase()
+      && tab.sshUser.trim().toLowerCase() === inferredUser.toLowerCase()
+      && tab.sshPort === port;
 
     if (tab.backend === "local") {
       updateTab(tab.id, {
@@ -494,13 +642,7 @@ export default function TerminalPanel({ tab, isActive, onEditConnection }: Props
         sshAuthMode: authMode,
         sshKeyPath: keyPath,
         sshSavedConnectionIndex: savedConnectionIndex,
-        // Don't clobber a stored password — but if we're switching to
-        // a new host we don't have credentials for, blank it so stale
-        // creds from a previous target don't leak into the new probe.
-        sshPassword:
-          savedConnectionIndex === tab.sshSavedConnectionIndex
-            ? tab.sshPassword
-            : "",
+        sshPassword: sameTarget ? tab.sshPassword : "",
         nestedSshTarget: null,
         rightTool: "monitor",
       });
@@ -549,9 +691,10 @@ export default function TerminalPanel({ tab, isActive, onEditConnection }: Props
 
   async function sendInput(data: string) {
     if (!session || !data) return;
-    const isSubmit = data === "\r" || data === "\n" || data === "\r\n";
-    const lineToParse = isSubmit ? commandBufferRef.current.trim() : "";
-    updateCommandBuffer(data);
+    // Capture any complete lines BEFORE writing to the PTY so the
+    // command buffer reflects the post-Enter state. The captured
+    // lines are scanned for `ssh ...` after the write succeeds.
+    const completed = captureCompletedCommands(data);
     try {
       await cmd.terminalWrite(session.sessionId, data);
       setScrollbackOffset(0);
@@ -559,8 +702,9 @@ export default function TerminalPanel({ tab, isActive, onEditConnection }: Props
       setError(formatError(e));
       return;
     }
-    if (isSubmit && lineToParse) {
-      applySshContextFromCommand(lineToParse);
+    for (const line of completed) {
+      const trimmed = line.trim();
+      if (trimmed) applySshContextFromCommand(trimmed);
     }
   }
 
@@ -580,15 +724,15 @@ export default function TerminalPanel({ tab, isActive, onEditConnection }: Props
 
     if (mod && !event.altKey && event.key.toLowerCase() === "v") {
       event.preventDefault();
-      navigator.clipboard.readText().then((text) => {
+      void readClipboardText().then((text) => {
         if (text) void sendInput(text.replace(/\r?\n/g, "\r"));
-      }).catch(() => {});
+      });
       return;
     }
 
     if (mod && !event.altKey && event.key.toLowerCase() === "c" && selText) {
       event.preventDefault();
-      navigator.clipboard.writeText(selText).catch(() => {});
+      void writeClipboardText(selText);
       return;
     }
 
@@ -655,20 +799,18 @@ export default function TerminalPanel({ tab, isActive, onEditConnection }: Props
   async function copySelection() {
     const sel = window.getSelection?.()?.toString() ?? "";
     if (!sel) return;
-    try {
-      await navigator.clipboard.writeText(sel);
-    } catch {
-      /* clipboard blocked — silently skip */
-    }
+    await writeClipboardText(sel);
   }
 
   async function pasteClipboard() {
     if (!session) return;
-    try {
-      const text = await navigator.clipboard.readText();
-      if (text) await cmd.terminalWrite(session.sessionId, text);
-    } catch {
-      /* clipboard blocked */
+    const text = await readClipboardText();
+    if (text) {
+      try {
+        await cmd.terminalWrite(session.sessionId, text);
+      } catch {
+        /* PTY write blocked */
+      }
     }
   }
 
@@ -754,22 +896,26 @@ export default function TerminalPanel({ tab, isActive, onEditConnection }: Props
         {error ? (
           <div className="terminal-placeholder terminal-placeholder--error">
             <span>{error}</span>
-            {needsPasswordRecovery
-              && tab.sshSavedConnectionIndex !== null
-              && onEditConnection && (
-                <button
-                  type="button"
-                  className="mini-button"
-                  onClick={() => {
-                    if (tab.sshSavedConnectionIndex !== null) {
-                      onEditConnection(tab.sshSavedConnectionIndex);
-                    }
-                  }}
-                  style={{ marginLeft: "var(--sp-2)" }}
-                >
-                  <KeyRound size={11} /> {t("Re-enter password")}
-                </button>
-              )}
+            {needsPasswordRecovery && tab.sshSavedConnectionIndex !== null && (
+              <button
+                type="button"
+                className="mini-button"
+                onClick={(event) => {
+                  // Stop propagation so the parent terminal viewport's
+                  // mousedown-focus handler doesn't steal focus before
+                  // the click completes against the button.
+                  event.stopPropagation();
+                  const index = tab.sshSavedConnectionIndex;
+                  if (index === null) return;
+                  requestEditConnection(index);
+                  onEditConnection?.(index);
+                }}
+                onMouseDown={(event) => event.stopPropagation()}
+                style={{ marginLeft: "var(--sp-2)" }}
+              >
+                <KeyRound size={11} /> {t("Re-enter password")}
+              </button>
+            )}
           </div>
         ) : snapshot ? (
           <div

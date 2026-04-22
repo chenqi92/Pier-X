@@ -11,6 +11,7 @@ import DbConnRow from "../components/DbConnRow";
 import PanelHeader from "../components/PanelHeader";
 import StatusDot from "../components/StatusDot";
 import { useTabStore } from "../stores/useTabStore";
+import { useUiActionsStore } from "../stores/useUiActionsStore";
 
 type Props = {
   tab: TabState;
@@ -215,11 +216,19 @@ export default function ServerMonitorPanel({ tab, onEditConnection }: Props) {
     }
   }
 
+  // The recovery button dispatches via the global UI-action bus —
+  // App.tsx subscribes to it and opens the saved-connection editor.
+  // Going through the bus instead of a prop callback keeps the
+  // affordance working no matter which wrapper renders this panel,
+  // since props can be silently dropped if a parent forgets to
+  // forward them.
+  const requestEditConnection = useUiActionsStore((s) => s.requestEditConnection);
   const recoverableSavedIndex = sshTarget?.savedConnectionIndex ?? null;
   const canRecoverPassword =
-    needsPasswordRecovery && recoverableSavedIndex !== null && !!onEditConnection;
+    needsPasswordRecovery && recoverableSavedIndex !== null;
   const recoverPassword = () => {
     if (!canRecoverPassword || recoverableSavedIndex === null) return;
+    requestEditConnection(recoverableSavedIndex);
     onEditConnection?.(recoverableSavedIndex);
   };
 

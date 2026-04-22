@@ -797,6 +797,17 @@ export const logStreamStop = (streamId: string) =>
 export const localDockerOverview = (all: boolean) =>
   invoke<DockerOverview>("local_docker_overview", { all });
 
+/** Slow `docker stats --no-stream` against the local daemon — split off
+ *  from the overview so the panel's first paint doesn't wait ~2s for the
+ *  CLI's sampling window. See {@link dockerStats} for the SSH counterpart. */
+export const localDockerStats = () =>
+  invoke<DockerContainerStatsView[]>("local_docker_stats");
+
+/** Slow `docker system df -v` against the local daemon — split off from
+ *  the overview for the same reason as {@link localDockerStats}. */
+export const localDockerVolumeUsage = () =>
+  invoke<DockerVolumeUsageView[]>("local_docker_volume_usage");
+
 export const localDockerAction = (containerId: string, action: string) =>
   invoke<string>("local_docker_action", { containerId, action });
 

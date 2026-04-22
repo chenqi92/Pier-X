@@ -32,6 +32,12 @@ type Props = {
   }) => void;
   /** Connect using a saved connection index — backend resolves credentials. */
   onConnectSaved?: (index: number) => void;
+  /** Fired after a successful save/edit of a saved connection. Lets the
+   *  caller propagate the freshly-typed password into open tabs that
+   *  reference this saved index, so a stalled terminal session (e.g.
+   *  one that failed because the keychain entry was missing) can
+   *  retry without the user having to manually restart it. */
+  onSaved?: (savedIndex: number, password: string, authKind: string) => void;
   initialConnection?: SavedSshConnection | null;
 };
 
@@ -48,7 +54,7 @@ function toDraft(connection?: SavedSshConnection | null): ConnectionDraft {
   };
 }
 
-export default function NewConnectionDialog({ open, onClose, onConnect, onConnectSaved, initialConnection }: Props) {
+export default function NewConnectionDialog({ open, onClose, onConnect, onConnectSaved, onSaved, initialConnection }: Props) {
   const { t } = useI18n();
   const formatError = (error: unknown) => localizeError(error, t);
   const { save, update, connections } = useConnectionStore();
@@ -142,6 +148,22 @@ export default function NewConnectionDialog({ open, onClose, onConnect, onConnec
     setError("");
     try {
       await persistConnection();
+      // After an edit, hand the freshly-typed password back to the
+      // caller so it can populate any open tabs that reference this
+      // saved-connection index. Skipped for "new" saves (no existing
+      // tabs to update) and when nothing relevant was retyped.
+      if (
+        isEditing
+        && onSaved
+        && typeof initialDraft.index === "number"
+        && (authMode !== "password" || password.length > 0)
+      ) {
+        onSaved(
+          initialDraft.index,
+          authMode === "password" ? password : "",
+          authMode,
+        );
+      }
       onClose();
     } catch (e) {
       setError(formatError(e));

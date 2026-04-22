@@ -4,6 +4,8 @@ import { isReadOnlySql, queryResultToTsv } from "../lib/commands";
 import { RIGHT_TOOL_META } from "../lib/rightToolMeta";
 import { closeTunnelSlot, ensureTunnelSlot, syncTunnelState } from "../lib/sshTunnel";
 import type { PostgresBrowserState, QueryExecutionResult, TabState } from "../lib/types";
+import { effectiveSshTarget } from "../lib/types";
+import { writeClipboardText } from "../lib/clipboard";
 import { useI18n } from "../i18n/useI18n";
 import { localizeError } from "../i18n/localizeMessage";
 import DbConnRow from "../components/DbConnRow";
@@ -42,7 +44,10 @@ export default function PostgresPanel({ tab }: Props) {
   const [tunnelError, setTunnelError] = useState("");
   const [tunnelNotice, setTunnelNotice] = useState("");
 
-  const hasSsh = tab.backend === "ssh" && tab.sshHost.trim() && tab.sshUser.trim();
+  // SSH context can be inferred from a local terminal that ran `ssh
+  // user@host` or from a nested-ssh overlay; either way, the tunnel
+  // helper picks up the right addressing via `effectiveSshTarget`.
+  const hasSsh = effectiveSshTarget(tab) !== null;
   const p = Number.parseInt(port, 10);
   const canBrowse = host.trim() && user.trim() && Number.isFinite(p) && p > 0;
   const needsWrite = sql.trim() && !isReadOnlySql(sql);
@@ -447,7 +452,7 @@ export default function PostgresPanel({ tab }: Props) {
           {needsWrite && !readOnly && <input className="field-input" onChange={(event) => setWriteConfirm(event.currentTarget.value)} placeholder={t("Type WRITE to confirm")} value={writeConfirm} />}
           <div className="button-row">
             <button className="mini-button" disabled={!canRun} onClick={() => void runQuery()} type="button">{queryBusy ? t("Running...") : t("Run Query")}</button>
-            {queryResult && <button className="mini-button" onClick={() => { navigator.clipboard.writeText(queryResultToTsv(queryResult)).catch(() => {}); setNotice(t("Copied TSV")); }} type="button">{t("Copy TSV")}</button>}
+            {queryResult && <button className="mini-button" onClick={() => { void writeClipboardText(queryResultToTsv(queryResult)); setNotice(t("Copied TSV")); }} type="button">{t("Copy TSV")}</button>}
           </div>
           {notice && <div className="status-note">{notice}</div>}
         </div>

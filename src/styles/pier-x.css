@@ -1677,3 +1677,41 @@ body.is-resizing .app { transition: none; }
   flex-wrap: wrap;
 }
 
+/* Recovery button rendered inside the terminal viewport — the
+ * neutral .mini-button chrome reads as a washed-out white pill on
+ * top of the dark terminal background and competes with the red
+ * error text it's paired with. This variant borrows the negative
+ * palette so the button looks like a deliberate inline action
+ * within the error message, not a stray UI control sitting on the
+ * terminal canvas. */
+.terminal-recovery-btn {
+  appearance: none;
+  display: inline-flex;
+  align-items: center;
+  gap: var(--sp-1-5);
+  margin-top: var(--sp-2);
+  padding: 4px var(--sp-3);
+  font-family: var(--sans);
+  font-size: var(--size-small);
+  font-weight: var(--weight-medium);
+  line-height: 1;
+  color: var(--neg);
+  background: color-mix(in srgb, var(--neg-dim, var(--neg)) 18%, transparent);
+  border: 1px solid color-mix(in srgb, var(--neg) 50%, transparent);
+  border-radius: var(--radius-sm);
+  cursor: pointer;
+  transition: background 120ms ease, border-color 120ms ease, color 120ms ease;
+}
+.terminal-recovery-btn:hover {
+  background: color-mix(in srgb, var(--neg) 28%, transparent);
+  border-color: var(--neg);
+  color: color-mix(in srgb, var(--neg) 70%, white);
+}
+.terminal-recovery-btn:focus-visible {
+  outline: 2px solid var(--neg);
+  outline-offset: 2px;
+}
+.terminal-recovery-btn svg {
+  flex-shrink: 0;
+}
+

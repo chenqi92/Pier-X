@@ -18,7 +18,7 @@ import {
   Trash2,
   X,
 } from "lucide-react";
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import * as cmd from "../lib/commands";
 import { quoteCommandArg } from "../lib/commands";
 import type { DockerOverview, TabState } from "../lib/types";
@@ -264,8 +264,20 @@ export default function DockerPanel({ tab }: Props) {
 
   // "Show stopped containers" toggle invalidates the cache so we refetch
   // with the new `all` flag instead of reusing the cached (filtered) data.
+  //
+  // Skips the initial mount — otherwise this effect and the mount effect
+  // above both fire on first render, and `dockerInvalidate` here would
+  // wipe the `inFlight` promise reference the mount fetch set, defeating
+  // the store's coalescing guard. The result would be two concurrent
+  // `local_docker_overview` calls racing against each other on first
+  // open (8 parallel docker subprocesses on Windows Docker Desktop's
+  // named pipe — the original source of the "click Docker, page freezes"
+  // symptom).
+  const prevShowAllRef = useRef(showAll);
   useEffect(() => {
     if (!canRefresh) return;
+    if (prevShowAllRef.current === showAll) return;
+    prevShowAllRef.current = showAll;
     dockerInvalidate(dockerKey);
     void refresh(true);
     // eslint-disable-next-line react-hooks/exhaustive-deps

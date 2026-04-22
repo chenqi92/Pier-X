@@ -4430,16 +4430,19 @@ button,
 .run-pair-add {
   background: none;
   border: none;
-  color: var(--muted);
-  font-size: var(--size-small);
-  padding: 2px 0;
+  color: var(--accent);
+  font-family: var(--sans);
+  font-size: var(--ui-fs-sm);
+  padding: var(--sp-1) 0;
   display: inline-flex;
   align-items: center;
   gap: var(--sp-1);
   cursor: pointer;
   align-self: flex-start;
+  border-radius: var(--radius-xs);
+  transition: color var(--dur-fast) var(--easing);
 }
-.run-pair-add:hover { color: var(--ink-2); }
+.run-pair-add:hover { color: var(--accent-hover); }
 
 /* Pull input in the Images tab toolbar. */
 .dk-pull {
@@ -4484,38 +4487,15 @@ button,
 .mini-btn.is-info { color: var(--info); }
 .mini-btn.is-info:hover { background: var(--accent-dim); color: var(--accent); }
 
-/* Proxy dialog styles. */
+/* Registry / proxy dialog. Consumes system dialog primitives
+   (.dlg-row, .dlg-opts, .dlg-opt, .dlg-input) so the layout matches
+   NewConnectionDialog. The only bespoke piece is the compact hint
+   rendered under each input. */
 .dlg.dlg--proxy { width: 480px; }
 .dlg-row-hint {
   color: var(--muted);
   font-size: var(--size-micro);
-  margin-top: 3px;
-  line-height: 1.4;
-}
-.dlg-chips {
-  display: flex;
-  flex-wrap: wrap;
-  gap: var(--sp-1);
-  margin-top: var(--sp-1-5);
-}
-.dlg-chip {
-  background: var(--panel-2);
-  border: 1px solid var(--line-2);
-  color: var(--ink-2);
-  font-family: var(--mono);
-  font-size: var(--size-micro);
-  padding: 2px var(--sp-1-5);
-  border-radius: var(--radius-xs);
-  cursor: pointer;
-  transition: background var(--dur-fast) var(--easing),
-              border-color var(--dur-fast) var(--easing),
-              color var(--dur-fast) var(--easing);
-}
-.dlg-chip:hover { background: var(--elev); color: var(--ink); }
-.dlg-chip.active {
-  background: var(--accent-dim);
-  border-color: color-mix(in srgb, var(--accent) 40%, var(--line-2));
-  color: var(--accent);
+  line-height: 1.45;
 }
 
 .dk-dot {

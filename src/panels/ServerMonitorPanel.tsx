@@ -304,12 +304,28 @@ export default function ServerMonitorPanel({ tab, onEditConnection }: Props) {
   // a previous probe is still in flight (`busy` guard) so a slow
   // remote can't pile up overlapping requests.
   useEffect(() => {
-    const ready =
-      isLocal ||
-      (sshTarget !== null &&
-        (sshTarget.authMode !== "password" ||
-          sshTarget.password.length > 0 ||
-          sshTarget.savedConnectionIndex !== null));
+    const haveCreds =
+      sshTarget !== null &&
+      (sshTarget.authMode !== "password" ||
+        sshTarget.password.length > 0 ||
+        sshTarget.savedConnectionIndex !== null);
+    // For real SSH-backend tabs, hold off the first probe until the
+    // terminal session is up. The backend's `terminal_create_ssh_*`
+    // call seeds the shared SSH cache as soon as the russh handshake
+    // completes; once we wait for it, the probe (and the 5-second
+    // polling that follows) reuses that cached session instead of
+    // racing the terminal handshake with a parallel one. On the
+    // user's LAN this drops "double-click → usable terminal" from
+    // several seconds (sshd serializing 3+ concurrent password
+    // logins) to roughly one round-trip.
+    //
+    // Local tabs that mirrored an `ssh user@host` invocation have a
+    // local-PTY `terminalSessionId` but the russh session is on the
+    // panel side, so we don't need to wait — the first probe primes
+    // the cache and subsequent ones reuse.
+    const waitingForTerminal =
+      tab.backend === "ssh" && tab.terminalSessionId === null;
+    const ready = (isLocal || haveCreds) && !waitingForTerminal;
     if (!ready) return;
     void probe();
     if (sshTarget) {
@@ -328,6 +344,7 @@ export default function ServerMonitorPanel({ tab, onEditConnection }: Props) {
   }, [
     tab.id,
     tab.backend,
+    tab.terminalSessionId !== null,
     sshTarget?.host,
     sshTarget?.port,
     sshTarget?.user,

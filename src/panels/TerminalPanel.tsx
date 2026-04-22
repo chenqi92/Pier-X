@@ -899,7 +899,13 @@ export default function TerminalPanel({ tab, isActive, onEditConnection }: Props
             {needsPasswordRecovery && tab.sshSavedConnectionIndex !== null && (
               <button
                 type="button"
-                className="mini-button"
+                // Custom class — `.mini-button` styling is tuned for
+                // light/neutral panel chrome and doesn't read well on
+                // the terminal's dark background. The terminal-aware
+                // variant in pier-x.css uses the negative palette
+                // tokens that already match the surrounding error
+                // text so the affordance feels native.
+                className="terminal-recovery-btn"
                 onClick={(event) => {
                   // Stop propagation so the parent terminal viewport's
                   // mousedown-focus handler doesn't steal focus before
@@ -911,9 +917,8 @@ export default function TerminalPanel({ tab, isActive, onEditConnection }: Props
                   onEditConnection?.(index);
                 }}
                 onMouseDown={(event) => event.stopPropagation()}
-                style={{ marginLeft: "var(--sp-2)" }}
               >
-                <KeyRound size={11} /> {t("Re-enter password")}
+                <KeyRound size={12} /> {t("Re-enter password")}
               </button>
             )}
           </div>

@@ -105,7 +105,6 @@ export default function RunContainerDialog({ open, busy, defaultImage, onClose, 
             </div>
 
             <PairGroup
-              icon="🌐"
               label={t("Port mappings")}
               leftPlaceholder={t("Host port")}
               rightPlaceholder={t("Container port")}
@@ -168,6 +167,7 @@ export default function RunContainerDialog({ open, busy, defaultImage, onClose, 
           </div>
         </div>
         <div className="dlg-foot">
+          <div style={{ flex: 1 }} />
           <button type="button" className="gb-btn" onClick={onClose}>{t("Cancel")}</button>
           <button type="button" className="gb-btn primary" disabled={!canRun} onClick={submit}>
             <Container size={11} /> {t("Create & run")}
@@ -189,7 +189,6 @@ function PairGroup({
   setPairs,
   t,
 }: {
-  icon?: string;
   label: string;
   leftPlaceholder: string;
   rightPlaceholder: string;
@@ -201,7 +200,15 @@ function PairGroup({
 }) {
   return (
     <div className="dlg-row">
-      <label className="dlg-row-label">{label}</label>
+      {/* Pair stacks are taller than a single input, so pin the label
+          to the top instead of letting `.dlg-row { align-items: center }`
+          float it to the middle of the stack. */}
+      <label
+        className="dlg-row-label"
+        style={{ alignSelf: "start", paddingTop: "var(--sp-1-5)" }}
+      >
+        {label}
+      </label>
       <div className="run-pair-stack">
         {pairs.map((p, i) => (
           <div key={i} className="run-pair">

@@ -224,9 +224,14 @@ export default function RightSidebar({
   useEffect(() => {
     // Run detection any time we have an SSH target on the tab —
     // primary, local-mirror, or nested overlay. The store-entry
-    // guard prevents re-running for already-detected tabs.
+    // guard prevents re-running for already-detected tabs. For
+    // real SSH-backend tabs we additionally wait for the terminal
+    // session to come up so detect_services hits the cached
+    // russh handle instead of racing the terminal's own handshake
+    // — same reasoning as the gating in ServerMonitorPanel.
     if (!activeTab || !activeSshTarget) return;
     if (detectedEntry) return;
+    if (activeTab.backend === "ssh" && activeTab.terminalSessionId === null) return;
     setPending(activeTab.id);
     const tabId = activeTab.id;
     cmd
@@ -258,6 +263,7 @@ export default function RightSidebar({
   }, [
     activeTab?.id,
     activeTab?.backend,
+    activeTab?.terminalSessionId !== null,
     activeSshTarget?.host,
     activeSshTarget?.port,
     activeSshTarget?.user,

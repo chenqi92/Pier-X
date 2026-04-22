@@ -754,17 +754,21 @@ fn resolve_password_for_auth(
     let Some(conn) = store.connections.get(index) else {
         return Ok(password.to_string());
     };
-    let AuthMethod::KeychainPassword { credential_id } = &conn.auth else {
-        return Ok(password.to_string());
-    };
-    match credentials::get(credential_id) {
-        Ok(Some(resolved)) => Ok(resolved),
-        Ok(None) => Err(format!(
-            "saved password missing in keychain (credential_id={credential_id})"
-        )),
-        Err(e) => Err(format!(
-            "keychain lookup failed for {credential_id}: {e}"
-        )),
+    match &conn.auth {
+        AuthMethod::KeychainPassword { credential_id } => match credentials::get(credential_id) {
+            Ok(Some(resolved)) => Ok(resolved),
+            Ok(None) => Err(format!(
+                "saved password missing in keychain (credential_id={credential_id})"
+            )),
+            Err(e) => Err(format!(
+                "keychain lookup failed for {credential_id}: {e}"
+            )),
+        },
+        // Connection was saved with the keychain-fallback path — the
+        // password lives directly in the on-disk SshConfig, so just
+        // hand it back without touching the keychain at all.
+        AuthMethod::DirectPassword { password } => Ok(password.clone()),
+        _ => Ok(password.to_string()),
     }
 }
 
@@ -1695,8 +1699,22 @@ fn ssh_connection_save(
                 .filter(|value| !value.is_empty())
                 .ok_or_else(|| String::from("SSH password must not be empty."))?;
             let credential_id = make_credential_id(resolved_host, resolved_user);
-            credentials::set(&credential_id, &resolved_password).map_err(|error| error.to_string())?;
-            AuthMethod::KeychainPassword { credential_id }
+            // Probe the keyring with a write+read round-trip. On
+            // backends that silently drop writes (Windows under
+            // certain group policies, Linux without an unlocked
+            // secret-service) we can't trust the credential to be
+            // there on the next launch — fall back to storing the
+            // password in the SshConfig itself as
+            // `DirectPassword`. Less secure (the connections file
+            // is plain-text JSON), but at least the saved
+            // connection actually works.
+            let keychain_ok = credentials::set_and_verify(&credential_id, &resolved_password)
+                .map_err(|error| error.to_string())?;
+            if keychain_ok {
+                AuthMethod::KeychainPassword { credential_id }
+            } else {
+                AuthMethod::DirectPassword { password: resolved_password }
+            }
         }
     };
 
@@ -1737,6 +1755,10 @@ fn ssh_connection_resolve_password(index: usize) -> Result<String, String> {
                 None => Ok(String::new()),
             }
         }
+        // Saved with the keychain-fallback path: hand the password
+        // straight from the SshConfig so the frontend can prime
+        // tab.sshPassword and right-side panels can authenticate.
+        AuthMethod::DirectPassword { password } => Ok(password.clone()),
         _ => Ok(String::new()),
     }
 }
@@ -1799,6 +1821,12 @@ fn ssh_connection_update(
             }
         }
         _ => {
+            // Both old AuthMethods that can carry a saved password
+            // need to be checked: KeychainPassword (the keychain
+            // round-trip succeeded last time) and DirectPassword
+            // (the previous save fell back because the keychain
+            // round-trip failed). Either one can hand us back an
+            // existing credential id to reuse.
             let existing_credential_id = match &old_auth {
                 AuthMethod::KeychainPassword { credential_id } => Some(credential_id.clone()),
                 _ => None,
@@ -1806,14 +1834,35 @@ fn ssh_connection_update(
             match password.map(|value| value.trim().to_string()).filter(|value| !value.is_empty()) {
                 Some(resolved_password) => {
                     let credential_id = existing_credential_id
+                        .clone()
                         .unwrap_or_else(|| make_credential_id(resolved_host, resolved_user));
-                    credentials::set(&credential_id, &resolved_password)
-                        .map_err(|error| error.to_string())?;
-                    AuthMethod::KeychainPassword { credential_id }
+                    let keychain_ok = credentials::set_and_verify(
+                        &credential_id,
+                        &resolved_password,
+                    )
+                    .map_err(|error| error.to_string())?;
+                    if keychain_ok {
+                        AuthMethod::KeychainPassword { credential_id }
+                    } else {
+                        // Keyring backend dropped the write; persist
+                        // the password directly in the SshConfig so
+                        // the saved connection still works on the
+                        // next launch (matches the new-save fallback
+                        // path in `ssh_connection_save`).
+                        AuthMethod::DirectPassword { password: resolved_password }
+                    }
                 }
                 None => match existing_credential_id {
                     Some(credential_id) => AuthMethod::KeychainPassword { credential_id },
-                    None => return Err(String::from("SSH password must not be empty.")),
+                    None => match &old_auth {
+                        // No new password typed and the previous
+                        // save was already DirectPassword — keep it
+                        // as-is rather than rejecting the update.
+                        AuthMethod::DirectPassword { password } => AuthMethod::DirectPassword {
+                            password: password.clone(),
+                        },
+                        _ => return Err(String::from("SSH password must not be empty.")),
+                    },
                 },
             }
         }
@@ -2815,6 +2864,7 @@ fn markdown_render_file(path: String) -> Result<String, String> {
 
 #[tauri::command]
 fn server_monitor_probe(
+    state: tauri::State<'_, AppState>,
     host: String,
     port: u16,
     user: String,
@@ -2823,14 +2873,31 @@ fn server_monitor_probe(
     key_path: String,
     saved_connection_index: Option<usize>,
 ) -> Result<ServerSnapshotView, String> {
-    let effective_password =
-        resolve_password_for_auth(&auth_mode, &password, saved_connection_index)?;
-    let session = build_ssh_session_from_params(
-        &host, port, &user, &auth_mode, &effective_password, &key_path,
-    )?;
-
-    let snap = server_monitor::probe_blocking(&session)
-        .map_err(|e| e.to_string())?;
+    // Reuse the shared SSH session cache so each 5-second poll
+    // doesn't re-handshake. When the terminal for this tab is
+    // already up its session is in the cache and we hit it; on a
+    // local terminal that just typed `ssh user@host`, the first
+    // probe primes the cache and every subsequent poll reuses it.
+    // On `probe_blocking` failure we evict the cache entry and
+    // retry once — covers the case where the cached session
+    // silently went stale (server bounced, idle keepalive timeout).
+    let mut attempt = 0;
+    let snap = loop {
+        let session = get_or_open_sftp_ssh_session(
+            &state, &host, port, &user, &auth_mode, &password, &key_path,
+            saved_connection_index,
+        )?;
+        match server_monitor::probe_blocking(&session) {
+            Ok(snap) => break snap,
+            Err(e) if attempt == 0 => {
+                evict_sftp_session(&state, &host, port, &user, &auth_mode);
+                attempt += 1;
+                let _ = e;
+                continue;
+            }
+            Err(e) => return Err(e.to_string()),
+        }
+    };
 
     Ok(ServerSnapshotView {
         uptime: snap.uptime,
@@ -2854,6 +2921,7 @@ fn server_monitor_probe(
 
 #[tauri::command]
 fn detect_services(
+    state: tauri::State<'_, AppState>,
     host: String,
     port: u16,
     user: String,
@@ -2862,10 +2930,13 @@ fn detect_services(
     key_path: String,
     saved_connection_index: Option<usize>,
 ) -> Result<Vec<DetectedServiceView>, String> {
-    let effective_password =
-        resolve_password_for_auth(&auth_mode, &password, saved_connection_index)?;
-    let session = build_ssh_session_from_params(
-        &host, port, &user, &auth_mode, &effective_password, &key_path,
+    // Same shared-cache strategy as `server_monitor_probe`: reuse
+    // the terminal's russh handle when it's already there, prime
+    // the cache otherwise. The detector runs several `which` /
+    // `--version` probes serially over one SSH session, so a fresh
+    // handshake per call is wasteful on slow links.
+    let session = get_or_open_sftp_ssh_session(
+        &state, &host, port, &user, &auth_mode, &password, &key_path, saved_connection_index,
     )?;
 
     let services = service_detector::detect_all_blocking(&session);

@@ -110,6 +110,12 @@ export default function MySqlPanel({ tab }: Props) {
   // a saved DB credential but we haven't browsed yet, resolve the
   // password from the keyring, open the tunnel, and list tables.
   // Strictly read-only — the read-only safety guard is untouched.
+  //
+  // NOTE: we pass the freshly resolved password as an explicit
+  // argument to `browse()` rather than relying on the `password`
+  // state variable. React hasn't re-rendered yet at this point,
+  // so the closure `browse` captured would still see the empty
+  // string we just set before activation, causing an auth failure.
   useEffect(() => {
     if (autoBrowseAttempted) return;
     if (!hasSsh || !tab.mysqlActiveCredentialId || savedIndex === null) return;
@@ -120,18 +126,21 @@ export default function MySqlPanel({ tab }: Props) {
     let cancelled = false;
     void (async () => {
       try {
-        // If the password isn't already primed in the tab state,
-        // resolve from keyring.
-        if (!tab.mysqlPassword) {
-          const resolved = await cmd.dbCredResolve(savedIndex, tab.mysqlActiveCredentialId!);
+        let effectivePw = tab.mysqlPassword;
+        if (!effectivePw) {
+          const resolved = await cmd.dbCredResolve(
+            savedIndex,
+            tab.mysqlActiveCredentialId!,
+          );
           if (cancelled) return;
-          if (resolved.password) {
-            updateTab(tab.id, { mysqlPassword: resolved.password });
-            setPassword(resolved.password);
+          effectivePw = resolved.password ?? "";
+          if (effectivePw) {
+            updateTab(tab.id, { mysqlPassword: effectivePw });
+            setPassword(effectivePw);
           }
         }
         if (cancelled) return;
-        await browse();
+        await browse(undefined, undefined, effectivePw);
       } catch (e) {
         if (!cancelled) setError(formatError(e));
       }
@@ -214,16 +223,26 @@ export default function MySqlPanel({ tab }: Props) {
     setTunnelError("");
   }
 
-  async function browse(nextDb = dbName, nextTable = tableName) {
+  async function browse(
+    nextDb = dbName,
+    nextTable = tableName,
+    passwordOverride?: string,
+  ) {
     setBusy(true);
     setError("");
+    // `passwordOverride` exists because React state updates are
+    // queued: callers that just `setPassword(...)` still see the
+    // previous closure value here. Passing it explicitly avoids
+    // a silent auth failure on the very first browse after a
+    // keyring-resolved auto-activate.
+    const pw = passwordOverride !== undefined ? passwordOverride : password;
     try {
       const target = await ensureConnectionTarget();
       const s = await cmd.mysqlBrowse({
         host: target.host,
         port: target.port,
         user: user.trim(),
-        password,
+        password: pw,
         database: nextDb.trim() || null,
         table: nextTable.trim() || null,
       });

@@ -1329,6 +1329,15 @@ body.is-resizing .app { transition: none; }
   border-color: var(--accent);
 }
 .gb-btn.primary:hover:not(:disabled) { background: var(--accent-hover); border-color: var(--accent-hover); }
+.gb-btn--destructive {
+  color: var(--neg);
+  border-color: var(--neg-dim);
+}
+.gb-btn--destructive:hover:not(:disabled) {
+  background: var(--neg-dim);
+  border-color: var(--neg);
+  color: var(--neg);
+}
 .gb-btn.icon-only {
   width: 28px; padding: 0; justify-content: center;
 }

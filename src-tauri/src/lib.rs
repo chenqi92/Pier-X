@@ -2905,7 +2905,7 @@ fn get_or_open_docker_ssh_session(
 }
 
 #[tauri::command]
-async fn docker_overview(
+fn docker_overview(
     state: tauri::State<'_, AppState>,
     host: String,
     port: u16,
@@ -3003,7 +3003,7 @@ struct DockerContainerStatsView {
 }
 
 #[tauri::command]
-async fn docker_stats(
+fn docker_stats(
     state: tauri::State<'_, AppState>,
     host: String,
     port: u16,
@@ -3038,7 +3038,7 @@ struct DockerVolumeUsageView {
 }
 
 #[tauri::command]
-async fn docker_volume_usage(
+fn docker_volume_usage(
     state: tauri::State<'_, AppState>,
     host: String,
     port: u16,
@@ -3064,7 +3064,7 @@ async fn docker_volume_usage(
 }
 
 #[tauri::command]
-async fn docker_container_action(
+fn docker_container_action(
     host: String,
     port: u16,
     user: String,
@@ -3410,7 +3410,7 @@ fn db_cred_resolve(
 }
 
 #[tauri::command]
-async fn docker_inspect_db_env(
+fn docker_inspect_db_env(
     host: String,
     port: u16,
     user: String,
@@ -3615,24 +3615,18 @@ fn sqlite_find_in_dir(
         return Err(String::from("directory must not be empty"));
     }
     let depth = max_depth.unwrap_or(2).min(4);
-    // Single-quote-escape `dir` exactly the way sqlite_remote
-    // does the path arg (POSIX-safe), then build a `find` that
-    // emits one `path\tsize\tmtime` row per candidate.
-    let escaped_dir = {
-        let mut out = String::with_capacity(dir.len() + 2);
-        out.push('\'');
-        for ch in dir.chars() {
-            if ch == '\'' {
-                out.push_str("'\\''");
-            } else {
-                out.push(ch);
-            }
-        }
-        out.push('\'');
-        out
-    };
+    let escaped_dir = shell_quote_dir(dir);
+    // GNU `find -printf` is a non-POSIX extension that BSD / busybox
+    // `find` (macOS, Alpine, routers, ...) do not support. To stay
+    // portable we list paths with a plain `find` and then shell out
+    // to `wc -c` / `stat -c|-f` per file — 20-ish sqlite files max,
+    // so the extra process spawns cost <100 ms total.
     let cmd = format!(
-        "find {escaped_dir} -maxdepth {depth} -type f \\( -name '*.db' -o -name '*.sqlite' -o -name '*.sqlite3' \\) -printf '%p\\t%s\\t%T@\\n' 2>/dev/null | head -n 50"
+        "find {escaped_dir} -maxdepth {depth} -type f \\( -name '*.db' -o -name '*.sqlite' -o -name '*.sqlite3' \\) 2>/dev/null | head -n 50 | while IFS= read -r p; do \
+sz=$(wc -c < \"$p\" 2>/dev/null | tr -d ' '); \
+m=$(stat -c '%Y' \"$p\" 2>/dev/null || stat -f '%m' \"$p\" 2>/dev/null); \
+printf '%s\\t%s\\t%s\\n' \"$p\" \"${{sz:-0}}\" \"${{m:-0}}\"; \
+done"
     );
     let rt = pier_core::ssh::runtime::shared();
     let (exit, stdout) = rt
@@ -3654,11 +3648,10 @@ fn sqlite_find_in_dir(
             .next()
             .and_then(|s| s.parse::<u64>().ok())
             .unwrap_or(0);
-        // `%T@` is seconds-since-epoch as a float.
         let modified = parts
             .next()
-            .and_then(|s| s.split('.').next())
-            .and_then(|s| s.parse::<i64>().ok());
+            .and_then(|s| s.parse::<i64>().ok())
+            .filter(|&v| v > 0);
         out.push(RemoteSqliteCandidate {
             path: path.to_string(),
             size_bytes,
@@ -3668,10 +3661,44 @@ fn sqlite_find_in_dir(
     Ok(out)
 }
 
+/// Quote a directory argument for a POSIX shell while preserving
+/// leading-tilde semantics (`~`, `~/foo`, `~user`). Tilde
+/// expansion is a shell feature that only triggers for unquoted
+/// leading `~`, so we leave that segment bare and single-quote
+/// the remainder.
+fn shell_quote_dir(dir: &str) -> String {
+    if dir.starts_with('~') {
+        return match dir.split_once('/') {
+            // `~/foo bar` → `~/'foo bar'` (tilde segment unquoted,
+            // rest single-quoted — shell concatenates both into
+            // one word before tilde-expansion).
+            Some((head, rest)) => format!("{}/{}", head, shell_single_quote(rest)),
+            // `~` alone or `~user` with no trailing path.
+            None => dir.to_string(),
+        };
+    }
+    shell_single_quote(dir)
+}
+
+/// POSIX shell single-quote escape.
+fn shell_single_quote(s: &str) -> String {
+    let mut out = String::with_capacity(s.len() + 2);
+    out.push('\'');
+    for ch in s.chars() {
+        if ch == '\'' {
+            out.push_str("'\\''");
+        } else {
+            out.push(ch);
+        }
+    }
+    out.push('\'');
+    out
+}
+
 // ── Docker Extended ─────────────────────────────────────────────
 
 #[tauri::command]
-async fn docker_inspect(
+fn docker_inspect(
     host: String,
     port: u16,
     user: String,
@@ -3689,7 +3716,7 @@ async fn docker_inspect(
 }
 
 #[tauri::command]
-async fn docker_remove_image(
+fn docker_remove_image(
     host: String,
     port: u16,
     user: String,
@@ -3708,7 +3735,7 @@ async fn docker_remove_image(
 }
 
 #[tauri::command]
-async fn docker_remove_volume(
+fn docker_remove_volume(
     host: String,
     port: u16,
     user: String,
@@ -3726,7 +3753,7 @@ async fn docker_remove_volume(
 }
 
 #[tauri::command]
-async fn docker_remove_network(
+fn docker_remove_network(
     host: String,
     port: u16,
     user: String,
@@ -3776,7 +3803,7 @@ impl From<DockerRunOptionsView> for docker::RunContainerOptions {
 }
 
 #[tauri::command]
-async fn docker_run_container(
+fn docker_run_container(
     host: String,
     port: u16,
     user: String,
@@ -3793,7 +3820,7 @@ async fn docker_run_container(
 }
 
 #[tauri::command]
-async fn docker_prune_volumes(
+fn docker_prune_volumes(
     host: String,
     port: u16,
     user: String,
@@ -3809,7 +3836,7 @@ async fn docker_prune_volumes(
 }
 
 #[tauri::command]
-async fn docker_pull_image(
+fn docker_pull_image(
     host: String,
     port: u16,
     user: String,
@@ -3853,7 +3880,7 @@ async fn local_docker_pull_image(
 }
 
 #[tauri::command]
-async fn docker_volume_files(
+fn docker_volume_files(
     host: String,
     port: u16,
     user: String,

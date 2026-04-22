@@ -406,12 +406,20 @@ pub fn save_db_credential(
         user: input.user,
         database: input.database.filter(|s| !s.is_empty()),
         sqlite_path: input.sqlite_path.filter(|s| !s.is_empty()),
-        password: password_storage,
+        password: password_storage.clone(),
         favorite: input.favorite,
         source: input.source,
     };
     store.connections[connection_index].databases.push(cred.clone());
-    store.save_default()?;
+    // Rollback keyring if the YAML save fails — otherwise we'd
+    // leave an orphan keyring entry that no code path ever reads.
+    if let Err(err) = store.save_default() {
+        if let DbPasswordStorage::Keyring { credential_id } = &password_storage {
+            // Best-effort: a missing entry during cleanup is fine.
+            let _ = credentials::delete(credential_id);
+        }
+        return Err(err.into());
+    }
     Ok(cred)
 }
 
@@ -477,6 +485,7 @@ pub fn update_db_credential(
     // Rotate the password only when explicitly requested.
     // `Some(Some(pw))` sets new, `Some(None)` clears to
     // passwordless, `None` leaves alone.
+    let rotated_password = new_password.is_some();
     if let Some(new) = new_password {
         let existing_id = match &store.connections[connection_index].databases[idx].password {
             DbPasswordStorage::Keyring { credential_id } => Some(credential_id.clone()),
@@ -493,7 +502,18 @@ pub fn update_db_credential(
     }
 
     let result = store.connections[connection_index].databases[idx].clone();
-    store.save_default()?;
+    // Rollback a brand-new keyring entry if the YAML save fails.
+    // We only delete when the rotation created a *new* keyring id
+    // — otherwise we'd wipe a keyring row that the prior saved
+    // state still references.
+    if let Err(err) = store.save_default() {
+        if rotated_password {
+            if let DbPasswordStorage::Keyring { credential_id } = &result.password {
+                let _ = credentials::delete(credential_id);
+            }
+        }
+        return Err(err.into());
+    }
     Ok(result)
 }
 

@@ -108,6 +108,10 @@ export default function PostgresPanel({ tab }: Props) {
   }, [hasSsh, tab.id, tab.pgTunnelId, tab.pgTunnelPort, updateTab, t]);
 
   // Auto-browse on saved SSH tab open with a seeded DB credential.
+  // See the matching note in MySqlPanel.tsx: we pass the resolved
+  // password explicitly because React state updates are queued and
+  // `browse`'s closure would otherwise see the pre-activation empty
+  // string, producing a silent auth failure.
   useEffect(() => {
     if (autoBrowseAttempted) return;
     if (!hasSsh || !tab.pgActiveCredentialId || savedIndex === null) return;
@@ -118,16 +122,21 @@ export default function PostgresPanel({ tab }: Props) {
     let cancelled = false;
     void (async () => {
       try {
-        if (!tab.pgPassword) {
-          const resolved = await cmd.dbCredResolve(savedIndex, tab.pgActiveCredentialId!);
+        let effectivePw = tab.pgPassword;
+        if (!effectivePw) {
+          const resolved = await cmd.dbCredResolve(
+            savedIndex,
+            tab.pgActiveCredentialId!,
+          );
           if (cancelled) return;
-          if (resolved.password) {
-            updateTab(tab.id, { pgPassword: resolved.password });
-            setPassword(resolved.password);
+          effectivePw = resolved.password ?? "";
+          if (effectivePw) {
+            updateTab(tab.id, { pgPassword: effectivePw });
+            setPassword(effectivePw);
           }
         }
         if (cancelled) return;
-        await browse();
+        await browse(undefined, undefined, effectivePw);
       } catch (e) {
         if (!cancelled) setError(formatError(e));
       }
@@ -208,16 +217,23 @@ export default function PostgresPanel({ tab }: Props) {
     setTunnelError("");
   }
 
-  async function browse(nextDb = dbName, nextTable = tableName) {
+  async function browse(
+    nextDb = dbName,
+    nextTable = tableName,
+    passwordOverride?: string,
+  ) {
     setBusy(true);
     setError("");
+    // See MySqlPanel.browse — `passwordOverride` bypasses the
+    // stale-closure trap when the caller just setPassword'd.
+    const pw = passwordOverride !== undefined ? passwordOverride : password;
     try {
       const target = await ensureConnectionTarget();
       const s = await cmd.postgresBrowse({
         host: target.host,
         port: target.port,
         user: user.trim(),
-        password,
+        password: pw,
         database: nextDb.trim() || null,
         schema: schema.trim() || null,
         table: nextTable.trim() || null,

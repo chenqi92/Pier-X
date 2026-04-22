@@ -338,12 +338,21 @@ fn double_quote_ident(s: &str) -> String {
 /// Parse `sqlite3 -json` output. Empty result → empty vec, not
 /// an error — the CLI emits nothing (not `"[]"`) when the query
 /// returns zero rows.
+///
+/// Multi-statement SQL (e.g. `CREATE TABLE t; SELECT * FROM t;`)
+/// makes sqlite3 emit one JSON array per statement, concatenated
+/// back-to-back (`[][{...}]`). We take the **last non-empty**
+/// array, which is the most recent result set — matching the
+/// mental model "run SQL, show me what the final statement
+/// returned". DDL statements in front get their empty arrays
+/// silently dropped.
 fn parse_json_rows(stdout: &str) -> std::result::Result<Vec<BTreeMap<String, String>>, String> {
     let trimmed = stdout.trim();
     if trimmed.is_empty() {
         return Ok(Vec::new());
     }
-    let value: serde_json::Value = serde_json::from_str(trimmed)
+    let target = last_array_slice(trimmed);
+    let value: serde_json::Value = serde_json::from_str(target)
         .map_err(|e| format!("sqlite3 -json returned malformed output: {e}"))?;
     let array = value
         .as_array()
@@ -362,6 +371,63 @@ fn parse_json_rows(stdout: &str) -> std::result::Result<Vec<BTreeMap<String, Str
         out.push(row);
     }
     Ok(out)
+}
+
+/// Pick the substring of the **last** top-level `[...]` array
+/// in the output. Handles the "multi-statement -json" case where
+/// sqlite3 concatenates arrays back-to-back; if there's only
+/// one array this is a no-op. Strings and nested structures
+/// are respected so `[{"s":"]["}]` doesn't fool the splitter.
+///
+/// Algorithm: single forward pass tracking depth, string state,
+/// and escapes. Every time depth returns to zero after an `]`
+/// we record `(start, end)` — the final recorded pair wins.
+fn last_array_slice(stdout: &str) -> &str {
+    let bytes = stdout.as_bytes();
+    let mut start: Option<usize> = None;
+    let mut last_span: Option<(usize, usize)> = None;
+    let mut depth: i32 = 0;
+    let mut in_string = false;
+    let mut escape = false;
+
+    for (i, &b) in bytes.iter().enumerate() {
+        if escape {
+            escape = false;
+            continue;
+        }
+        if in_string {
+            match b {
+                b'\\' => escape = true,
+                b'"' => in_string = false,
+                _ => {}
+            }
+            continue;
+        }
+        match b {
+            b'"' => in_string = true,
+            b'[' => {
+                if depth == 0 {
+                    start = Some(i);
+                }
+                depth += 1;
+            }
+            b'{' => depth += 1,
+            b']' => {
+                depth -= 1;
+                if depth == 0 {
+                    if let Some(s) = start.take() {
+                        last_span = Some((s, i + 1));
+                    }
+                }
+            }
+            b'}' => depth -= 1,
+            _ => {}
+        }
+    }
+    match last_span {
+        Some((s, e)) => &stdout[s..e],
+        None => stdout,
+    }
 }
 
 fn json_value_to_cell(v: &serde_json::Value) -> String {
@@ -387,11 +453,16 @@ fn cap_cell(mut s: String) -> String {
 /// because `serde_json` without the `preserve_order` feature
 /// would alphabetise them. Works on well-formed input only —
 /// callers already validated via `parse_json_rows`.
+///
+/// Receives the full stdout (not pre-sliced) so we can apply
+/// the same "last array wins" rule `parse_json_rows` uses for
+/// multi-statement SQL output.
 fn extract_column_order(stdout: &str) -> Option<Vec<String>> {
     let trimmed = stdout.trim();
     if trimmed.is_empty() {
         return Some(Vec::new());
     }
+    let trimmed = last_array_slice(trimmed);
     let bytes = trimmed.as_bytes();
     // Find the first `{` — start of the first object.
     let obj_start = bytes.iter().position(|&b| b == b'{')?;
@@ -687,6 +758,48 @@ mod tests {
         assert!(!supports_json_mode("3.32.3"));
         assert!(!supports_json_mode("3.7.17"));
         assert!(!supports_json_mode("garbage"));
+    }
+
+    #[test]
+    fn last_array_slice_single_array_is_noop() {
+        let s = r#"[{"a":1}]"#;
+        assert_eq!(last_array_slice(s), s);
+    }
+
+    #[test]
+    fn last_array_slice_picks_last_of_concatenated() {
+        // DDL followed by SELECT: sqlite3 -json emits an empty
+        // array then a rows array.
+        let s = r#"[][{"name":"users"}]"#;
+        assert_eq!(last_array_slice(s), r#"[{"name":"users"}]"#);
+    }
+
+    #[test]
+    fn last_array_slice_honours_quoted_brackets() {
+        // A string value containing `][` must not trick the parser.
+        let s = r#"[{"s":"]["}]"#;
+        assert_eq!(last_array_slice(s), s);
+    }
+
+    #[test]
+    fn last_array_slice_survives_escaped_quotes() {
+        let s = r#"[{"s":"\"value\""}]"#;
+        assert_eq!(last_array_slice(s), s);
+    }
+
+    #[test]
+    fn last_array_slice_three_way_concat() {
+        let s = r#"[][{"a":1}][{"b":2}]"#;
+        assert_eq!(last_array_slice(s), r#"[{"b":2}]"#);
+    }
+
+    #[test]
+    fn parse_json_rows_handles_multistatement_output() {
+        // `CREATE TABLE t; SELECT * FROM t;` shape.
+        let out = r#"[][{"id":1,"name":"Ann"}]"#;
+        let rows = parse_json_rows(out).unwrap();
+        assert_eq!(rows.len(), 1);
+        assert_eq!(rows[0].get("name").map(String::as_str), Some("Ann"));
     }
 
     #[test]

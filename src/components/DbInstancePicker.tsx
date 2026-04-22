@@ -1,5 +1,5 @@
 import { Container, Plus, RefreshCw, Server, Star, Trash2 } from "lucide-react";
-import { useEffect, useMemo } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { useI18n } from "../i18n/useI18n";
 import { localizeError } from "../i18n/localizeMessage";
 import * as cmd from "../lib/commands";
@@ -7,6 +7,7 @@ import type { DbCredential, DbKind, DetectedDbInstance, TabState } from "../lib/
 import { effectiveSshTarget } from "../lib/types";
 import { useConnectionStore } from "../stores/useConnectionStore";
 import { useDetectedServicesStore } from "../stores/useDetectedServicesStore";
+import ConfirmDialog from "./ConfirmDialog";
 
 type DetectedKind = "mysql" | "postgres" | "redis";
 
@@ -60,6 +61,12 @@ export default function DbInstancePicker({
   const setPending = useDetectedServicesStore((s) => s.setDbInstancesPending);
   const setInstances = useDetectedServicesStore((s) => s.setDbInstances);
   const setError = useDetectedServicesStore((s) => s.setDbInstancesError);
+
+  // Pending delete target + error banner state for the themed
+  // ConfirmDialog that replaced the blocking window.confirm /
+  // window.alert calls.
+  const [deleteTarget, setDeleteTarget] = useState<DbCredential | null>(null);
+  const [deleteError, setDeleteError] = useState("");
 
   const detectedForKind = useMemo<DetectedDbInstance[]>(() => {
     const all = instancesEntry?.instances ?? [];
@@ -143,21 +150,16 @@ export default function DbInstancePicker({
     }
   }
 
-  async function handleDelete(cred: DbCredential) {
+  async function performDelete(cred: DbCredential) {
     if (savedIndex === null) return;
-    if (
-      !window.confirm(
-        t("Delete saved credential {label}?", { label: cred.label || cred.id }),
-      )
-    ) {
-      return;
-    }
+    setDeleteError("");
     try {
       await cmd.dbCredDelete(savedIndex, cred.id);
       await refreshConnections();
       onDeleted?.(cred);
+      setDeleteTarget(null);
     } catch (e) {
-      window.alert(formatError(e));
+      setDeleteError(formatError(e));
     }
   }
 
@@ -224,7 +226,7 @@ export default function DbInstancePicker({
                     {selected && (
                       <button
                         className="db-instance-pill__trail"
-                        onClick={() => void handleDelete(cred)}
+                        onClick={() => setDeleteTarget(cred)}
                         title={t("Delete")}
                         type="button"
                       >
@@ -280,7 +282,26 @@ export default function DbInstancePicker({
             <Plus size={11} /> {t("Add connection")}
           </button>
         </div>
+        {deleteError && (
+          <div className="status-note status-note--error">{deleteError}</div>
+        )}
       </div>
+      <ConfirmDialog
+        open={deleteTarget !== null}
+        tone="destructive"
+        title={t("Delete saved credential")}
+        message={t("Delete saved credential {label}? This can't be undone.", {
+          label: deleteTarget?.label || deleteTarget?.id || "",
+        })}
+        confirmLabel={t("Delete")}
+        onCancel={() => {
+          setDeleteTarget(null);
+          setDeleteError("");
+        }}
+        onConfirm={() => {
+          if (deleteTarget) void performDelete(deleteTarget);
+        }}
+      />
     </section>
   );
 }

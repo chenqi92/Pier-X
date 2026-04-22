@@ -258,7 +258,7 @@ impl DbCredential {
             return false;
         }
         match self.kind {
-            DbKind::Sqlite => self.sqlite_path.as_deref().unwrap_or("").trim().len() > 0,
+            DbKind::Sqlite => !self.sqlite_path.as_deref().unwrap_or("").trim().is_empty(),
             _ => !self.host.trim().is_empty() && self.port > 0,
         }
     }

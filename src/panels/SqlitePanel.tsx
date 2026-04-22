@@ -56,10 +56,21 @@ export default function SqlitePanel({ tab }: Props) {
   const [candidates, setCandidates] = useState<RemoteSqliteCandidate[]>([]);
   const [cwdHint, setCwdHint] = useState(""); // directory we scanned
   const [shellCwd, setShellCwd] = useState<string | null>(null);
+  // `scanInput` is the controlled value of the scan-directory
+  // input. It defaults to "" so the first OSC 7 update seeds it
+  // (via the effect below); subsequent `shellCwd` updates don't
+  // overwrite what the user has typed. Reset to empty when tab
+  // changes to re-enable auto-seeding.
+  const [scanInput, setScanInput] = useState("");
+  const [scanInputTouched, setScanInputTouched] = useState(false);
 
-  // Poll the terminal session for OSC 7 CWD updates. Empty
-  // probing interval on purpose — prompt-driven; fires when
-  // the user hits Enter on the shell. Cheap (one lock per tab).
+  // Poll the terminal session for OSC 7 CWD updates. We fire
+  // once on mount to catch an already-reported CWD, then refresh
+  // every 15 s — OSC 7 is prompt-driven (shells emit it on every
+  // new prompt), so a short interval just adds lock contention
+  // for no UX gain. The SqlitePanel only needs it as a scan
+  // default; users who care about precision can type their own
+  // path.
   useEffect(() => {
     if (!hasSsh || !tab?.terminalSessionId) {
       setShellCwd(null);
@@ -78,12 +89,23 @@ export default function SqlitePanel({ tab }: Props) {
         });
     };
     tick();
-    const handle = window.setInterval(tick, 3_000);
+    const handle = window.setInterval(tick, 15_000);
     return () => {
       cancelled = true;
       window.clearInterval(handle);
     };
   }, [hasSsh, tab?.terminalSessionId]);
+
+  // Seed the scan-directory input from the shell CWD the FIRST
+  // time we learn it, and only if the user hasn't typed anything
+  // yet. This avoids clobbering a half-typed path when OSC 7
+  // fires mid-edit.
+  useEffect(() => {
+    if (!scanInputTouched && shellCwd && scanInput !== shellCwd) {
+      setScanInput(shellCwd);
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [shellCwd, scanInputTouched]);
 
   // When SSH context changes, re-probe sqlite3 capability.
   useEffect(() => {
@@ -315,23 +337,23 @@ export default function SqlitePanel({ tab }: Props) {
                     </span>
                     <div className="branch-row">
                       <input
-                        key={shellCwd ?? "home"}
                         className="field-input mono"
-                        defaultValue={shellCwd ?? "~"}
+                        value={scanInput}
                         placeholder={shellCwd ?? "~"}
+                        onChange={(e) => {
+                          setScanInput(e.currentTarget.value);
+                          setScanInputTouched(true);
+                        }}
                         onKeyDown={(e) => {
                           if (e.key === "Enter") {
-                            void scanDir(e.currentTarget.value);
+                            void scanDir(e.currentTarget.value.trim() || "~");
                           }
                         }}
                       />
                       <button
                         className="mini-button"
-                        onClick={(e) => {
-                          const input =
-                            (e.currentTarget.previousElementSibling as HTMLInputElement | null) ??
-                            null;
-                          void scanDir(input?.value ?? shellCwd ?? "~");
+                        onClick={() => {
+                          void scanDir(scanInput.trim() || shellCwd || "~");
                         }}
                         type="button"
                       >

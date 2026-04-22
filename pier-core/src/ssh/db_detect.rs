@@ -332,7 +332,7 @@ fn classify_image(image: &str) -> Option<ImageKind> {
     let tail = image.rsplit('/').next().unwrap_or(image);
     // … drop the :tag / @digest suffix …
     let name = tail
-        .split_once(|c| c == ':' || c == '@')
+        .split_once([':', '@'])
         .map(|(n, _)| n)
         .unwrap_or(tail)
         .to_ascii_lowercase();

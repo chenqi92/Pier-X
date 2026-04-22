@@ -2931,6 +2931,15 @@ button,
   line-height: 1.55;
   padding-bottom: var(--sp-10);
 }
+/* One-column grid so every row stretches to the widest row's width.
+ * Without this, `grid-template-columns: ... max-content` on each row
+ * makes short rows narrower than long ones, so add/del backgrounds
+ * truncate when scrolled horizontally. */
+.dlg-diff-scroll:not(.split) {
+  display: grid;
+  grid-template-columns: minmax(100%, max-content);
+  grid-auto-rows: min-content;
+}
 .dlg-diff-scroll.wrap .dlg-diff-code { white-space: pre-wrap; word-break: break-word; }
 
 .dlg-diff-hunk-bar {
@@ -3005,6 +3014,9 @@ button,
   grid-template-columns: 1fr 1fr;
 }
 .dlg-diff-split-pane {
+  display: grid;
+  grid-template-columns: minmax(100%, max-content);
+  grid-auto-rows: min-content;
   overflow: auto;
   min-width: 0;
   min-height: 0;

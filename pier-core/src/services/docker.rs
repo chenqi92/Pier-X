@@ -239,6 +239,72 @@ pub fn inspect_container_blocking(session: &SshSession, id: &str) -> Result<Stri
     crate::ssh::runtime::shared().block_on(inspect_container(session, id))
 }
 
+/// DB-relevant env vars extracted from a `docker inspect`
+/// response. Only the fields the standard upstream images
+/// ship are surfaced; unknown images return all-None.
+#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq)]
+pub struct DbContainerEnv {
+    /// Default MySQL/MariaDB database (`MYSQL_DATABASE`).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub mysql_database: Option<String>,
+    /// Non-root MySQL user (`MYSQL_USER`).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub mysql_user: Option<String>,
+    /// PostgreSQL default DB (`POSTGRES_DB`).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub postgres_db: Option<String>,
+    /// PostgreSQL user (`POSTGRES_USER`).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub postgres_user: Option<String>,
+}
+
+/// Inspect a container and pull out DB-relevant env vars.
+/// Returns empty struct when the container has none of the
+/// known keys (e.g. an image we don't recognise).
+pub async fn inspect_db_env(session: &SshSession, id: &str) -> Result<DbContainerEnv> {
+    let raw = inspect_container(session, id).await?;
+    Ok(parse_db_env_from_inspect(&raw))
+}
+
+/// Blocking wrapper for [`inspect_db_env`].
+pub fn inspect_db_env_blocking(session: &SshSession, id: &str) -> Result<DbContainerEnv> {
+    crate::ssh::runtime::shared().block_on(inspect_db_env(session, id))
+}
+
+/// Parse the raw `docker inspect` JSON array for the keys we
+/// care about. Public for unit testing.
+pub fn parse_db_env_from_inspect(stdout: &str) -> DbContainerEnv {
+    let Ok(parsed) = serde_json::from_str::<serde_json::Value>(stdout) else {
+        return DbContainerEnv::default();
+    };
+    let Some(env_array) = parsed
+        .get(0)
+        .and_then(|entry| entry.get("Config"))
+        .and_then(|cfg| cfg.get("Env"))
+        .and_then(|env| env.as_array())
+    else {
+        return DbContainerEnv::default();
+    };
+    let mut out = DbContainerEnv::default();
+    for entry in env_array {
+        let Some(s) = entry.as_str() else { continue };
+        let Some((key, value)) = s.split_once('=') else {
+            continue;
+        };
+        if value.is_empty() {
+            continue;
+        }
+        match key {
+            "MYSQL_DATABASE" => out.mysql_database = Some(value.to_string()),
+            "MYSQL_USER" => out.mysql_user = Some(value.to_string()),
+            "POSTGRES_DB" => out.postgres_db = Some(value.to_string()),
+            "POSTGRES_USER" => out.postgres_user = Some(value.to_string()),
+            _ => {}
+        }
+    }
+    out
+}
+
 // ═══════════════════════════════════════════════════════════
 // Run container (`docker run -d`)
 // ═══════════════════════════════════════════════════════════
@@ -945,6 +1011,59 @@ not-json-at-all
     fn parse_ps_lines_empty_stdout_returns_empty_vec() {
         assert!(parse_ps_lines("").is_empty());
         assert!(parse_ps_lines("   \n\n").is_empty());
+    }
+
+    #[test]
+    fn parse_db_env_extracts_mysql_and_postgres_keys() {
+        let inspect = r#"[
+          {
+            "Config": {
+              "Env": [
+                "PATH=/usr/local/sbin",
+                "MYSQL_DATABASE=shop",
+                "MYSQL_USER=deploy",
+                "POSTGRES_DB=app",
+                "POSTGRES_USER=postgres"
+              ]
+            }
+          }
+        ]"#;
+        let env = parse_db_env_from_inspect(inspect);
+        assert_eq!(env.mysql_database.as_deref(), Some("shop"));
+        assert_eq!(env.mysql_user.as_deref(), Some("deploy"));
+        assert_eq!(env.postgres_db.as_deref(), Some("app"));
+        assert_eq!(env.postgres_user.as_deref(), Some("postgres"));
+    }
+
+    #[test]
+    fn parse_db_env_handles_missing_env_gracefully() {
+        let inspect = r#"[{"Config":{}}]"#;
+        let env = parse_db_env_from_inspect(inspect);
+        assert_eq!(env, DbContainerEnv::default());
+    }
+
+    #[test]
+    fn parse_db_env_skips_unknown_keys_and_empty_values() {
+        let inspect = r#"[
+          {
+            "Config": {
+              "Env": [
+                "UNRELATED=x",
+                "MYSQL_DATABASE=",
+                "POSTGRES_DB=app"
+              ]
+            }
+          }
+        ]"#;
+        let env = parse_db_env_from_inspect(inspect);
+        assert_eq!(env.mysql_database, None);
+        assert_eq!(env.postgres_db.as_deref(), Some("app"));
+    }
+
+    #[test]
+    fn parse_db_env_tolerates_malformed_json() {
+        assert_eq!(parse_db_env_from_inspect(""), DbContainerEnv::default());
+        assert_eq!(parse_db_env_from_inspect("not json"), DbContainerEnv::default());
     }
 
     #[test]

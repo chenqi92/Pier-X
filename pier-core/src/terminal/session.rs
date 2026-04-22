@@ -403,6 +403,23 @@ impl PierTerminal {
         }
     }
 
+    /// Last-known current working directory reported by the
+    /// shell via OSC 7. Returns `None` when the shell hasn't
+    /// emitted the sequence yet (e.g. bash without a
+    /// `PROMPT_COMMAND` hook, or before the first prompt).
+    /// Non-destructive — reading doesn't clear the value.
+    pub fn current_cwd(&self) -> Option<String> {
+        let guard = match self.inner.lock() {
+            Ok(g) => g,
+            Err(poisoned) => poisoned.into_inner(),
+        };
+        if guard.emu.cwd.is_empty() {
+            None
+        } else {
+            Some(guard.emu.cwd.clone())
+        }
+    }
+
     /// Check whether a bell character was received since the last read.
     /// Clears the pending flag after reading.
     pub fn take_bell_pending(&self) -> bool {

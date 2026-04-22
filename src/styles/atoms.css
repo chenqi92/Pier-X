@@ -233,6 +233,122 @@
   padding: 2px var(--sp-2) 2px var(--sp-1-5);
 }
 
+/* ─── DB instance picker ───────────────────────────────────
+   Pill-bar at the top of each DB panel, showing saved +
+   detected credentials for the active SSH profile. Saved
+   pills are solid; detected pills are dashed to signal
+   "preview — click to save". */
+.db-instance-picker {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-1-5);
+}
+.db-instance-row {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-2);
+  min-height: 22px;
+}
+.db-instance-row--actions { justify-content: flex-start; }
+.db-instance-row__label {
+  flex: none;
+  width: 64px;
+  font-family: var(--mono);
+  font-size: var(--size-micro);
+  color: var(--muted);
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+.db-instance-row__pills {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--sp-1);
+}
+.db-instance-row__empty {
+  font-size: var(--size-micro);
+  color: var(--dim);
+}
+.db-instance-pill {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--sp-1);
+  background: var(--panel);
+  border: 1px solid var(--line);
+  color: var(--ink-2);
+  border-radius: var(--radius-pill);
+  font-family: var(--mono);
+  font-size: var(--size-small);
+  padding: 0;
+  overflow: hidden;
+  transition: border-color 80ms ease, background 80ms ease;
+}
+.db-instance-pill__body {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--sp-1);
+  background: transparent;
+  border: 0;
+  color: inherit;
+  font: inherit;
+  padding: 2px var(--sp-2);
+  cursor: pointer;
+}
+.db-instance-pill__body svg { width: 11px; height: 11px; flex: none; }
+.db-instance-pill__name { color: var(--ink); }
+.db-instance-pill__port { color: var(--muted); }
+.db-instance-pill__trail {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  background: transparent;
+  border: 0;
+  border-left: 1px solid var(--line);
+  color: var(--muted);
+  padding: 2px var(--sp-1-5);
+  cursor: pointer;
+}
+.db-instance-pill__trail:hover { color: var(--neg); background: var(--neg-dim); }
+
+.db-instance-pill--saved {
+  background: var(--panel);
+  border-color: var(--line-2);
+}
+.db-instance-pill--saved:hover { border-color: var(--line-3); }
+.db-instance-pill--saved.db-instance-pill--selected {
+  border-color: var(--accent);
+  background: var(--accent-subtle);
+}
+.db-instance-pill--saved.db-instance-pill--selected .db-instance-pill__name {
+  color: var(--accent-ink);
+}
+
+.db-instance-pill--detected {
+  background: transparent;
+  border-style: dashed;
+  border-color: var(--line-2);
+  cursor: pointer;
+  padding: 2px var(--sp-2);
+}
+.db-instance-pill--detected:hover {
+  border-color: var(--accent);
+  color: var(--ink);
+}
+.db-instance-pill--detected svg { width: 11px; height: 11px; flex: none; }
+
+.mini-button--ghost {
+  background: transparent;
+  border-color: transparent;
+  padding: 0 var(--sp-1-5);
+  gap: var(--sp-1);
+}
+.mini-button--ghost:hover {
+  background: var(--panel-2);
+  border-color: var(--line-2);
+}
+.mini-button--ghost svg { width: 11px; height: 11px; }
+
 /* ─── Status dots / badges ───────────────────────────────── */
 .gb-dot {
   display: inline-block;

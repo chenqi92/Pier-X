@@ -60,7 +60,9 @@ use std::path::{Path, PathBuf};
 
 use serde::{Deserialize, Serialize};
 
+use crate::credentials;
 use crate::paths;
+use crate::ssh::config::{DbCredential, DbCredentialSource, DbKind, DbPasswordStorage};
 use crate::ssh::SshConfig;
 
 /// Current on-disk schema version. Bumped on any breaking
@@ -270,6 +272,316 @@ impl ConnectionStore {
             }
         }
         touched
+    }
+}
+
+/// Input shape for [`save_db_credential`] — the caller fills
+/// everything except `id` (assigned here) and `password`
+/// (supplied separately so it never rides in a `Deserialize`
+/// surface). `password` of `None` means "no password"
+/// (passwordless) and maps to [`DbPasswordStorage::None`].
+#[derive(Debug, Clone)]
+pub struct NewDbCredential {
+    /// Which panel it belongs to.
+    pub kind: DbKind,
+    /// User-facing label.
+    pub label: String,
+    /// Remote-side host (unused for SQLite).
+    pub host: String,
+    /// Remote-side port (unused for SQLite).
+    pub port: u16,
+    /// DB user (empty for Redis/Sqlite).
+    pub user: String,
+    /// Default database / schema / Redis DB index.
+    pub database: Option<String>,
+    /// Absolute remote path when `kind == Sqlite`.
+    pub sqlite_path: Option<String>,
+    /// Mark as the favourite for its kind on this profile.
+    pub favorite: bool,
+    /// Where the credential came from (detection / manual).
+    pub source: DbCredentialSource,
+}
+
+/// Patch for [`update_db_credential`]. Every field is
+/// optional — only supplied fields are applied.
+#[derive(Debug, Clone, Default)]
+pub struct DbCredentialPatch {
+    /// Renames the credential in the UI picker.
+    pub label: Option<String>,
+    /// Change the host we dial on the remote side.
+    pub host: Option<String>,
+    /// Change the remote port.
+    pub port: Option<u16>,
+    /// Change the DB user.
+    pub user: Option<String>,
+    /// Change the default database (wrap a `Some("")` to clear).
+    pub database: Option<Option<String>>,
+    /// Change the remote SQLite path.
+    pub sqlite_path: Option<Option<String>>,
+    /// Flip the favourite bit.
+    pub favorite: Option<bool>,
+}
+
+/// Resolved credential ready to connect with. The `password`
+/// is populated when the stored variant is `Keyring` or
+/// `Direct`; `None` means passwordless.
+#[derive(Debug, Clone)]
+pub struct ResolvedDbCredential {
+    /// Persisted credential metadata.
+    pub credential: DbCredential,
+    /// Password in memory. Never logged. Caller must drop it
+    /// as soon as the connection attempt completes.
+    pub password: Option<String>,
+}
+
+/// Errors specific to the DB credential helpers.
+#[derive(Debug, thiserror::Error)]
+pub enum DbCredentialError {
+    /// Connection index out of range.
+    #[error("ssh connection index {0} out of range")]
+    ConnectionIndex(usize),
+    /// Credential id not found on that connection.
+    #[error("db credential id {0} not found on connection")]
+    NotFound(String),
+    /// Persistence failed.
+    #[error("connection store error: {0}")]
+    Store(#[from] ConnectionStoreError),
+    /// OS keyring failed (other than "silently dropped" which
+    /// falls back to `Direct`).
+    #[error("credential store error: {0}")]
+    Credential(#[from] credentials::CredentialError),
+}
+
+/// Generate a fresh credential id. Uses high-resolution clock
+/// mixed with a monotonic counter so collisions across threads
+/// are astronomically unlikely without pulling in `uuid`.
+fn make_db_cred_id() -> String {
+    use std::sync::atomic::{AtomicU64, Ordering};
+    use std::time::{SystemTime, UNIX_EPOCH};
+    static COUNTER: AtomicU64 = AtomicU64::new(0);
+    let nanos = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|d| d.as_nanos() as u64)
+        .unwrap_or(0);
+    let n = COUNTER.fetch_add(1, Ordering::Relaxed);
+    format!("pier-x.db.{nanos:x}{n:x}")
+}
+
+/// Append a new DB credential to `connection_index`'s profile
+/// and persist the store. `password` of `Some("")` is treated
+/// as "no password"; `None` also means passwordless. When a
+/// real password is supplied, storage falls back to `Direct`
+/// if the OS keyring silently drops the write (see
+/// [`credentials::set_and_verify`]).
+pub fn save_db_credential(
+    connection_index: usize,
+    input: NewDbCredential,
+    password: Option<String>,
+) -> Result<DbCredential, DbCredentialError> {
+    let mut store = ConnectionStore::load_default()?;
+    if connection_index >= store.connections.len() {
+        return Err(DbCredentialError::ConnectionIndex(connection_index));
+    }
+    let id = make_db_cred_id();
+    let password_storage = store_password(&id, password)?;
+
+    // Favourite is per (connection, kind): clear existing
+    // favourite bits for this kind before writing the new one.
+    if input.favorite {
+        for other in store.connections[connection_index]
+            .databases
+            .iter_mut()
+            .filter(|c| c.kind == input.kind)
+        {
+            other.favorite = false;
+        }
+    }
+
+    let cred = DbCredential {
+        id: id.clone(),
+        kind: input.kind,
+        label: input.label,
+        host: input.host,
+        port: input.port,
+        user: input.user,
+        database: input.database.filter(|s| !s.is_empty()),
+        sqlite_path: input.sqlite_path.filter(|s| !s.is_empty()),
+        password: password_storage,
+        favorite: input.favorite,
+        source: input.source,
+    };
+    store.connections[connection_index].databases.push(cred.clone());
+    store.save_default()?;
+    Ok(cred)
+}
+
+/// Mutate an existing credential in-place. Unknown fields in
+/// the patch are left alone.
+pub fn update_db_credential(
+    connection_index: usize,
+    credential_id: &str,
+    patch: DbCredentialPatch,
+    new_password: Option<Option<String>>,
+) -> Result<DbCredential, DbCredentialError> {
+    let mut store = ConnectionStore::load_default()?;
+    if connection_index >= store.connections.len() {
+        return Err(DbCredentialError::ConnectionIndex(connection_index));
+    }
+    let idx = store.connections[connection_index]
+        .databases
+        .iter()
+        .position(|c| c.id == credential_id)
+        .ok_or_else(|| DbCredentialError::NotFound(credential_id.to_string()))?;
+
+    // Apply patch to a mutable reference.
+    {
+        let c = &mut store.connections[connection_index].databases[idx];
+        if let Some(v) = patch.label {
+            c.label = v;
+        }
+        if let Some(v) = patch.host {
+            c.host = v;
+        }
+        if let Some(v) = patch.port {
+            c.port = v;
+        }
+        if let Some(v) = patch.user {
+            c.user = v;
+        }
+        if let Some(v) = patch.database {
+            c.database = v.filter(|s| !s.is_empty());
+        }
+        if let Some(v) = patch.sqlite_path {
+            c.sqlite_path = v.filter(|s| !s.is_empty());
+        }
+    }
+
+    // If the favourite bit flips on, clear others of the same kind.
+    if let Some(fav) = patch.favorite {
+        let kind = store.connections[connection_index].databases[idx].kind;
+        if fav {
+            for (i, other) in store.connections[connection_index]
+                .databases
+                .iter_mut()
+                .enumerate()
+            {
+                if other.kind == kind {
+                    other.favorite = i == idx;
+                }
+            }
+        } else {
+            store.connections[connection_index].databases[idx].favorite = false;
+        }
+    }
+
+    // Rotate the password only when explicitly requested.
+    // `Some(Some(pw))` sets new, `Some(None)` clears to
+    // passwordless, `None` leaves alone.
+    if let Some(new) = new_password {
+        let existing_id = match &store.connections[connection_index].databases[idx].password {
+            DbPasswordStorage::Keyring { credential_id } => Some(credential_id.clone()),
+            _ => None,
+        };
+        if let Some(prev_id) = &existing_id {
+            // Best-effort delete; a missing entry is fine.
+            let _ = credentials::delete(prev_id);
+        }
+        let storage_id = existing_id
+            .unwrap_or_else(|| store.connections[connection_index].databases[idx].id.clone());
+        let storage = store_password(&storage_id, new)?;
+        store.connections[connection_index].databases[idx].password = storage;
+    }
+
+    let result = store.connections[connection_index].databases[idx].clone();
+    store.save_default()?;
+    Ok(result)
+}
+
+/// Remove a credential and drop its keyring entry if any.
+pub fn delete_db_credential(
+    connection_index: usize,
+    credential_id: &str,
+) -> Result<(), DbCredentialError> {
+    let mut store = ConnectionStore::load_default()?;
+    if connection_index >= store.connections.len() {
+        return Err(DbCredentialError::ConnectionIndex(connection_index));
+    }
+    let databases = &mut store.connections[connection_index].databases;
+    let idx = databases
+        .iter()
+        .position(|c| c.id == credential_id)
+        .ok_or_else(|| DbCredentialError::NotFound(credential_id.to_string()))?;
+    let removed = databases.remove(idx);
+    if let DbPasswordStorage::Keyring { credential_id } = &removed.password {
+        // Best-effort; a missing keyring entry is fine.
+        let _ = credentials::delete(credential_id);
+    }
+    store.save_default()?;
+    Ok(())
+}
+
+/// Load a credential plus its password (resolved from keyring
+/// when applicable).
+pub fn resolve_db_credential(
+    connection_index: usize,
+    credential_id: &str,
+) -> Result<ResolvedDbCredential, DbCredentialError> {
+    let store = ConnectionStore::load_default()?;
+    let conn = store
+        .connections
+        .get(connection_index)
+        .ok_or(DbCredentialError::ConnectionIndex(connection_index))?;
+    let cred = conn
+        .databases
+        .iter()
+        .find(|c| c.id == credential_id)
+        .cloned()
+        .ok_or_else(|| DbCredentialError::NotFound(credential_id.to_string()))?;
+
+    let password = match &cred.password {
+        DbPasswordStorage::Keyring { credential_id } => credentials::get(credential_id)?,
+        DbPasswordStorage::Direct { password } => {
+            // `Direct` is `#[serde(skip)]`, so a freshly loaded
+            // store always has an empty string here — the
+            // in-memory Direct plaintext can only live as long
+            // as the process that set it.
+            if password.is_empty() {
+                None
+            } else {
+                Some(password.clone())
+            }
+        }
+        DbPasswordStorage::None => None,
+    };
+    Ok(ResolvedDbCredential {
+        credential: cred,
+        password,
+    })
+}
+
+/// Lower `password` into a [`DbPasswordStorage`] variant.
+/// `None` / `Some("")` maps to `None`. Real passwords try
+/// keyring first; fall back to `Direct` on silent-drop.
+fn store_password(
+    cred_id: &str,
+    password: Option<String>,
+) -> Result<DbPasswordStorage, DbCredentialError> {
+    let Some(pw) = password.filter(|s| !s.is_empty()) else {
+        return Ok(DbPasswordStorage::None);
+    };
+    // Try keyring. `set_and_verify` returns `Ok(false)` when
+    // the backend silently dropped the write.
+    match credentials::set_and_verify(cred_id, &pw) {
+        Ok(true) => Ok(DbPasswordStorage::Keyring {
+            credential_id: cred_id.to_string(),
+        }),
+        Ok(false) => {
+            log::warn!(
+                "keyring unavailable for db credential {cred_id}, using in-memory Direct fallback"
+            );
+            Ok(DbPasswordStorage::Direct { password: pw })
+        }
+        Err(e) => Err(DbCredentialError::Credential(e)),
     }
 }
 

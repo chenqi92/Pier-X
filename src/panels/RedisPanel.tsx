@@ -3,11 +3,18 @@ import * as cmd from "../lib/commands";
 import { quoteCommandArg } from "../lib/commands";
 import { RIGHT_TOOL_META } from "../lib/rightToolMeta";
 import { closeTunnelSlot, ensureTunnelSlot, syncTunnelState } from "../lib/sshTunnel";
-import type { RedisBrowserState, RedisCommandResult, TabState } from "../lib/types";
+import type {
+  DetectedDbInstance,
+  RedisBrowserState,
+  RedisCommandResult,
+  TabState,
+} from "../lib/types";
 import { effectiveSshTarget } from "../lib/types";
 import { useI18n } from "../i18n/useI18n";
 import { localizeError } from "../i18n/localizeMessage";
+import DbAddCredentialDialog from "../components/DbAddCredentialDialog";
 import DbConnRow from "../components/DbConnRow";
+import DbInstancePicker from "../components/DbInstancePicker";
 import PanelHeader from "../components/PanelHeader";
 import StatusDot from "../components/StatusDot";
 import { useTabStore } from "../stores/useTabStore";
@@ -35,11 +42,16 @@ export default function RedisPanel({ tab }: Props) {
   const [tunnelBusy, setTunnelBusy] = useState(false);
   const [tunnelError, setTunnelError] = useState("");
   const [tunnelNotice, setTunnelNotice] = useState("");
+  const [addOpen, setAddOpen] = useState(false);
+  const [adopting, setAdopting] = useState<DetectedDbInstance | null>(null);
+  const [autoBrowseAttempted, setAutoBrowseAttempted] = useState(false);
 
   // SSH context can be inferred from a local terminal that ran `ssh
   // user@host` or from a nested-ssh overlay; either way, the tunnel
   // helper picks up the right addressing via `effectiveSshTarget`.
   const hasSsh = effectiveSshTarget(tab) !== null;
+  const sshTarget = effectiveSshTarget(tab);
+  const savedIndex = sshTarget?.savedConnectionIndex ?? null;
   const p = Number.parseInt(port, 10);
   const d = Number.parseInt(db, 10);
   const canBrowse = host.trim() && Number.isFinite(p) && p > 0 && Number.isFinite(d);
@@ -78,6 +90,33 @@ export default function RedisPanel({ tab }: Props) {
       cancelled = true;
     };
   }, [hasSsh, tab.id, tab.redisTunnelId, tab.redisTunnelPort, updateTab, t]);
+
+  // Auto-browse on saved SSH tab open with a seeded DB credential.
+  useEffect(() => {
+    if (autoBrowseAttempted) return;
+    if (!hasSsh || !tab.redisActiveCredentialId || savedIndex === null) return;
+    if (state) return;
+    if (!tab.redisHost.trim()) return;
+
+    setAutoBrowseAttempted(true);
+    let cancelled = false;
+    void (async () => {
+      try {
+        // Redis has no user but may have a password — resolve and
+        // inject it via the AUTH command if present. For Phase 1
+        // we just run `browse` without AUTH since the panel
+        // doesn't have a password field wired up yet.
+        if (cancelled) return;
+        await browse();
+      } catch (e) {
+        if (!cancelled) setError(formatError(e));
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [tab.redisActiveCredentialId, savedIndex, hasSsh]);
 
   function persistPort(nextPort: string) {
     const parsed = Number.parseInt(nextPort, 10);
@@ -234,6 +273,62 @@ export default function RedisPanel({ tab }: Props) {
         tag={connTag}
       />
       <div className="panel-scroll">
+      <DbInstancePicker
+        tab={tab}
+        kind="redis"
+        onActivate={(cred) => {
+          setError("");
+          setState(null);
+          setAutoBrowseAttempted(false);
+          setHost(cred.host);
+          setPort(String(cred.port));
+          setDb(cred.database ?? "0");
+          updateTab(tab.id, {
+            redisActiveCredentialId: cred.id,
+            redisHost: cred.host,
+            redisPort: cred.port,
+            redisDb: cred.database ? Number.parseInt(cred.database, 10) || 0 : 0,
+            redisTunnelId: null,
+            redisTunnelPort: null,
+          });
+        }}
+        onAdopt={(det) => {
+          setAdopting(det);
+          setAddOpen(true);
+        }}
+        onAddNew={() => {
+          setAdopting(null);
+          setAddOpen(true);
+        }}
+        onDeleted={(cred) => {
+          if (tab.redisActiveCredentialId === cred.id) {
+            updateTab(tab.id, { redisActiveCredentialId: null });
+          }
+        }}
+      />
+      <DbAddCredentialDialog
+        open={addOpen}
+        onClose={() => setAddOpen(false)}
+        kind="redis"
+        savedConnectionIndex={savedIndex}
+        adopting={adopting}
+        tab={tab}
+        onSaved={(cred) => {
+          setAutoBrowseAttempted(false);
+          setState(null);
+          setHost(cred.host);
+          setPort(String(cred.port));
+          setDb(cred.database ?? "0");
+          updateTab(tab.id, {
+            redisActiveCredentialId: cred.id,
+            redisHost: cred.host,
+            redisPort: cred.port,
+            redisDb: cred.database ? Number.parseInt(cred.database, 10) || 0 : 0,
+            redisTunnelId: null,
+            redisTunnelPort: null,
+          });
+        }}
+      />
       <section className="panel-section">
         <div className="form-stack">
           <div className="field-grid">

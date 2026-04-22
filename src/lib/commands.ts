@@ -4,6 +4,11 @@
 import { invoke } from "@tauri-apps/api/core";
 import type {
   CoreInfo,
+  DbCredential,
+  DbCredentialInput,
+  DbCredentialPatch,
+  DbCredentialResolved,
+  DbDetectionReport,
   DetectedServiceView,
   DockerOverview,
   GitBlameLineView,
@@ -555,6 +560,127 @@ export const detectServices = (params: {
   keyPath: string;
   savedConnectionIndex?: number | null;
 }) => invoke<DetectedServiceView[]>("detect_services", params);
+
+// ── DB Instance Detection + Credential CRUD ────────────────────
+
+export const dbDetect = (params: {
+  host: string;
+  port: number;
+  user: string;
+  authMode: string;
+  password: string;
+  keyPath: string;
+  savedConnectionIndex?: number | null;
+}) => invoke<DbDetectionReport>("db_detect", params);
+
+export const dbCredSave = (
+  savedConnectionIndex: number,
+  credential: DbCredentialInput,
+  password: string | null,
+) =>
+  invoke<DbCredential>("db_cred_save", {
+    savedConnectionIndex,
+    credential,
+    password,
+  });
+
+export const dbCredUpdate = (
+  savedConnectionIndex: number,
+  credentialId: string,
+  patch: DbCredentialPatch,
+  /** `undefined` = don't touch password, `null` = clear to
+   *  passwordless, string = set new password. */
+  newPassword?: string | null,
+) =>
+  invoke<DbCredential>("db_cred_update", {
+    savedConnectionIndex,
+    credentialId,
+    patch,
+    newPassword: newPassword === undefined ? undefined : newPassword,
+  });
+
+export const dbCredDelete = (savedConnectionIndex: number, credentialId: string) =>
+  invoke<void>("db_cred_delete", { savedConnectionIndex, credentialId });
+
+export const dbCredResolve = (savedConnectionIndex: number, credentialId: string) =>
+  invoke<DbCredentialResolved>("db_cred_resolve", {
+    savedConnectionIndex,
+    credentialId,
+  });
+
+export type DockerDbEnv = {
+  mysqlDatabase: string | null;
+  mysqlUser: string | null;
+  postgresDb: string | null;
+  postgresUser: string | null;
+};
+
+/** Pull the DB-relevant env vars (`MYSQL_DATABASE`, `POSTGRES_USER`,
+ *  …) out of a container's `docker inspect`. Used by the Add
+ *  dialog to pre-fill form fields when the user adopts a docker
+ *  instance. Missing keys → `null`. */
+export const dockerInspectDbEnv = (params: {
+  host: string;
+  port: number;
+  user: string;
+  authMode: string;
+  password: string;
+  keyPath: string;
+  containerId: string;
+  savedConnectionIndex?: number | null;
+}) => invoke<DockerDbEnv>("docker_inspect_db_env", params);
+
+// ── Remote SQLite ───────────────────────────────────────────────
+
+export type RemoteSqliteCapability = {
+  installed: boolean;
+  version: string | null;
+  supportsJson: boolean;
+};
+
+export type RemoteSqliteCandidate = {
+  path: string;
+  sizeBytes: number;
+  modified: number | null;
+};
+
+type SshParams = {
+  host: string;
+  port: number;
+  user: string;
+  authMode: string;
+  password: string;
+  keyPath: string;
+  savedConnectionIndex?: number | null;
+};
+
+export const sqliteRemoteCapable = (params: SshParams) =>
+  invoke<RemoteSqliteCapability>("sqlite_remote_capable", params);
+
+export const sqliteBrowseRemote = (
+  params: SshParams & { dbPath: string; table?: string | null },
+) =>
+  invoke<SqliteBrowserState>("sqlite_browse_remote", {
+    ...params,
+    table: params.table ?? null,
+  });
+
+export const sqliteExecuteRemote = (params: SshParams & { dbPath: string; sql: string }) =>
+  invoke<QueryExecutionResult>("sqlite_execute_remote", params);
+
+export const sqliteFindInDir = (
+  params: SshParams & { directory: string; maxDepth?: number | null },
+) =>
+  invoke<RemoteSqliteCandidate[]>("sqlite_find_in_dir", {
+    ...params,
+    maxDepth: params.maxDepth ?? null,
+  });
+
+/** Last-known shell working directory, if the remote shell has
+ *  emitted an OSC 7 sequence (most distros' default bash/zsh
+ *  do). Returns null before the first prompt fires. */
+export const terminalCurrentCwd = (sessionId: string) =>
+  invoke<string | null>("terminal_current_cwd", { sessionId });
 
 // ── Docker Extended ─────────────────────────────────────────────
 

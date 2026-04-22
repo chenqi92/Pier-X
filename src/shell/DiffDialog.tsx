@@ -62,6 +62,8 @@ export default function DiffDialog({ open, onClose, files, activeId, onSelectFil
   const [wrap, setWrap] = useState(false);
   const [ignoreWS, setIgnoreWS] = useState(false);
   const { dialogStyle, handleProps } = useDraggableDialog(open);
+  const diffPaneRef = useRef<HTMLDivElement | null>(null);
+  const [changeCursor, setChangeCursor] = useState(-1);
 
   useEffect(() => {
     if (!open) return;
@@ -82,10 +84,56 @@ export default function DiffDialog({ open, onClose, files, activeId, onSelectFil
     return parseUnifiedDiff(selected.diffText);
   }, [selected?.diffText]);
 
+  // Annotate the first line of each contiguous add/del block with an
+  // ordinal `changeIndex`. The Prev/Next-change buttons use these as
+  // scroll targets via `[data-change="N"]`.
+  const annotated = useMemo<{ hunks: DiffHunk[]; count: number }>(() => {
+    if (!parsed) return { hunks: [], count: 0 };
+    let count = 0;
+    const hunks: DiffHunk[] = parsed.hunks.map((h) => {
+      let prevIsChange = false;
+      const lines = h.lines.map((l) => {
+        const isChange = l.kind === "add" || l.kind === "del";
+        const next: DiffLine =
+          isChange && !prevIsChange ? { ...l, changeIndex: count++ } : l;
+        prevIsChange = isChange;
+        return next;
+      });
+      return { header: h.header, lines };
+    });
+    return { hunks, count };
+  }, [parsed]);
+
+  // Reset the navigation cursor whenever the selected file changes.
+  useEffect(() => {
+    setChangeCursor(-1);
+  }, [selected?.id]);
+
+  const jumpToChange = useCallback(
+    (delta: number) => {
+      if (annotated.count === 0) return;
+      const next =
+        changeCursor < 0
+          ? delta > 0
+            ? 0
+            : annotated.count - 1
+          : (changeCursor + delta + annotated.count) % annotated.count;
+      setChangeCursor(next);
+      const root = diffPaneRef.current;
+      if (!root) return;
+      const el = root.querySelector(`[data-change="${next}"]`);
+      if (el instanceof HTMLElement) {
+        el.scrollIntoView({ block: "center", behavior: "smooth" });
+      }
+    },
+    [annotated.count, changeCursor],
+  );
+
   if (!open) return null;
 
   const addTotal = selected?.additions ?? parsed?.additions ?? 0;
   const delTotal = selected?.deletions ?? parsed?.deletions ?? 0;
+  const hasChanges = annotated.count > 0;
 
   return createPortal(
     <div className="dlg-overlay" onClick={onClose}>
@@ -128,10 +176,22 @@ export default function DiffDialog({ open, onClose, files, activeId, onSelectFil
             >
               <span className="mono dlg-ic-btn__label">WS</span>
             </button>
-            <button type="button" className="dlg-ic-btn" title={t("Previous change")}>
+            <button
+              type="button"
+              className="dlg-ic-btn"
+              title={t("Previous change")}
+              onClick={() => jumpToChange(-1)}
+              disabled={!hasChanges}
+            >
               <ArrowUp size={11} />
             </button>
-            <button type="button" className="dlg-ic-btn" title={t("Next change")}>
+            <button
+              type="button"
+              className="dlg-ic-btn"
+              title={t("Next change")}
+              onClick={() => jumpToChange(1)}
+              disabled={!hasChanges}
+            >
               <ArrowDown size={11} />
             </button>
           </div>
@@ -173,7 +233,7 @@ export default function DiffDialog({ open, onClose, files, activeId, onSelectFil
             </div>
           )}
 
-          <div className="dlg-diff-pane">
+          <div className="dlg-diff-pane" ref={diffPaneRef}>
             {!selected ? (
               <div className="dlg-diff-empty mono">
                 <FileText size={18} />
@@ -196,9 +256,9 @@ export default function DiffDialog({ open, onClose, files, activeId, onSelectFil
                 </div>
               </div>
             ) : mode === "split" ? (
-              <DiffSplit hunks={parsed.hunks} wrap={wrap} oldPath={parsed.oldPath || selected.path} newPath={parsed.newPath || selected.path} />
+              <DiffSplit hunks={annotated.hunks} wrap={wrap} oldPath={parsed.oldPath || selected.path} newPath={parsed.newPath || selected.path} />
             ) : (
-              <DiffUnified hunks={parsed.hunks} wrap={wrap} path={selected.path} />
+              <DiffUnified hunks={annotated.hunks} wrap={wrap} path={selected.path} />
             )}
           </div>
         </div>
@@ -228,7 +288,11 @@ function DiffUnified({ hunks, wrap, path }: { hunks: DiffHunk[]; wrap: boolean; 
         <Fragment key={hi}>
           <div className="dlg-diff-hunk-head mono">{h.header}</div>
           {h.lines.map((l, i) => (
-            <div key={i} className={"dlg-diff-line u-" + l.kind}>
+            <div
+              key={i}
+              className={"dlg-diff-line u-" + l.kind}
+              data-change={l.changeIndex}
+            >
               <span className="dlg-diff-ln">{l.oldLine ?? ""}</span>
               <span className="dlg-diff-ln">{l.newLine ?? ""}</span>
               <span className="dlg-diff-sign">{l.kind === "add" ? "+" : l.kind === "del" ? "−" : " "}</span>
@@ -281,7 +345,12 @@ function DiffSplit({ hunks, wrap, oldPath, newPath }: { hunks: DiffHunk[]; wrap:
             <Fragment key={hi}>
               <div className="dlg-diff-hunk-head mono">{h.header}</div>
               {h.pairs.map((p, i) => (
-                <SplitSide key={i} side="left" line={p.left} />
+                <SplitSide
+                  key={i}
+                  side="left"
+                  line={p.left}
+                  changeIndex={p.left?.changeIndex ?? p.right?.changeIndex}
+                />
               ))}
             </Fragment>
           ))}
@@ -295,7 +364,12 @@ function DiffSplit({ hunks, wrap, oldPath, newPath }: { hunks: DiffHunk[]; wrap:
             <Fragment key={hi}>
               <div className="dlg-diff-hunk-head mono">{h.header}</div>
               {h.pairs.map((p, i) => (
-                <SplitSide key={i} side="right" line={p.right} />
+                <SplitSide
+                  key={i}
+                  side="right"
+                  line={p.right}
+                  changeIndex={p.left?.changeIndex ?? p.right?.changeIndex}
+                />
               ))}
             </Fragment>
           ))}
@@ -305,10 +379,18 @@ function DiffSplit({ hunks, wrap, oldPath, newPath }: { hunks: DiffHunk[]; wrap:
   );
 }
 
-function SplitSide({ side, line }: { side: "left" | "right"; line: DiffLine | null }) {
+function SplitSide({
+  side,
+  line,
+  changeIndex,
+}: {
+  side: "left" | "right";
+  line: DiffLine | null;
+  changeIndex?: number;
+}) {
   if (!line) {
     return (
-      <div className={"dlg-diff-line s-empty s-" + side}>
+      <div className={"dlg-diff-line s-empty s-" + side} data-change={changeIndex}>
         <span className="dlg-diff-ln" />
         <span className="dlg-diff-sign" />
         <span className="dlg-diff-code" />
@@ -317,7 +399,10 @@ function SplitSide({ side, line }: { side: "left" | "right"; line: DiffLine | nu
   }
   const ln = side === "left" ? line.oldLine : line.newLine;
   return (
-    <div className={"dlg-diff-line s-" + line.kind + " s-" + side}>
+    <div
+      className={"dlg-diff-line s-" + line.kind + " s-" + side}
+      data-change={changeIndex}
+    >
       <span className="dlg-diff-ln">{ln ?? ""}</span>
       <span className="dlg-diff-sign">{line.kind === "add" ? "+" : line.kind === "del" ? "−" : " "}</span>
       <span className="dlg-diff-code">{line.text}</span>

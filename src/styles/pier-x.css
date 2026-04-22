@@ -283,6 +283,7 @@ body.is-resizing .app { transition: none; }
   font-size: var(--ui-fs);
   min-height: 0;
   position: relative;
+  scrollbar-gutter: stable;
 }
 .sidebar-list.is-drop {
   background: color-mix(in srgb, var(--accent) 8%, transparent);
@@ -290,14 +291,15 @@ body.is-resizing .app { transition: none; }
 }
 .sidebar-header-row {
   display: flex;
-  padding: 4px var(--sp-2-5) 4px 22px;
+  flex: none;
+  padding: 4px calc(var(--sp-2-5) + 10px) 4px 22px;
   font-size: 10px;
   font-family: var(--mono);
   color: var(--muted);
   text-transform: uppercase;
   letter-spacing: 0.06em;
   border-bottom: 1px solid var(--line);
-  margin-bottom: 2px;
+  background: var(--surface);
 }
 .sidebar-header-row .col-name { flex: 1; }
 .sidebar-header-row .col-mod  { width: 72px; }

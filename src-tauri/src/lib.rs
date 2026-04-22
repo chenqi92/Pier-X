@@ -1,4 +1,6 @@
-use pier_core::connections::ConnectionStore;
+use pier_core::connections::{
+    self, ConnectionStore, DbCredentialPatch, NewDbCredential, ResolvedDbCredential,
+};
 use pier_core::credentials;
 use pier_core::markdown;
 use pier_core::services::docker;
@@ -8,6 +10,9 @@ use pier_core::services::postgres::{PostgresClient, PostgresConfig};
 use pier_core::services::redis::{RedisClient, RedisConfig};
 use pier_core::services::server_monitor;
 use pier_core::services::sqlite::SqliteClient;
+use pier_core::services::sqlite_remote;
+use pier_core::ssh::config::{DbCredential, DbCredentialSource, DbKind};
+use pier_core::ssh::db_detect::{self, DbDetectionReport, DetectedDbInstance};
 use pier_core::ssh::service_detector;
 use pier_core::ssh::{AuthMethod, ExecStream, HostKeyVerifier, SshConfig, SshSession, Tunnel};
 use pier_core::terminal::{Cell, Color, NotifyEvent, NotifyFn, PierTerminal};
@@ -448,6 +453,133 @@ struct SavedSshConnection {
     key_path: String,
     #[serde(skip_serializing_if = "Option::is_none")]
     group: Option<String>,
+    /// DB credentials remembered for this profile. Passwords
+    /// are never sent — only a `has_password` flag, resolved
+    /// lazily via `db_cred_resolve` at connect time.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    databases: Vec<DbCredentialView>,
+}
+
+/// Frontend-safe projection of [`DbCredential`]. Passwords are
+/// NEVER included — only a `has_password` flag. The typed
+/// panel code resolves the actual password via the dedicated
+/// `db_cred_resolve` command right before connecting.
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct DbCredentialView {
+    id: String,
+    kind: &'static str,
+    label: String,
+    host: String,
+    port: u16,
+    user: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    database: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    sqlite_path: Option<String>,
+    has_password: bool,
+    favorite: bool,
+    source: DbCredentialSourceView,
+}
+
+#[derive(Serialize)]
+#[serde(tag = "kind", rename_all = "snake_case")]
+enum DbCredentialSourceView {
+    Manual,
+    Detected { signature: String },
+}
+
+/// Resolved password sidecar for `db_cred_resolve`. The
+/// plaintext is local to the Tauri IPC pipe; nothing here
+/// should be persisted by the caller.
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct DbCredentialResolvedView {
+    credential: DbCredentialView,
+    /// Plaintext password, `None` if passwordless or unresolved.
+    password: Option<String>,
+}
+
+/// Payload for `db_cred_save` and `db_cred_update`.
+#[derive(serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct DbCredentialInput {
+    kind: String,
+    label: String,
+    #[serde(default)]
+    host: String,
+    #[serde(default)]
+    port: u16,
+    #[serde(default)]
+    user: String,
+    #[serde(default)]
+    database: Option<String>,
+    #[serde(default)]
+    sqlite_path: Option<String>,
+    #[serde(default)]
+    favorite: bool,
+    /// Optional signature tying this save to a previous
+    /// detection result. Omit for "manual" entries.
+    #[serde(default)]
+    detection_signature: Option<String>,
+}
+
+#[derive(serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct DbCredentialPatchInput {
+    #[serde(default)]
+    label: Option<String>,
+    #[serde(default)]
+    host: Option<String>,
+    #[serde(default)]
+    port: Option<u16>,
+    #[serde(default)]
+    user: Option<String>,
+    /// `Some(Some(""))` clears the field, `Some(Some("x"))`
+    /// sets it, absent means "don't touch".
+    #[serde(default, deserialize_with = "deserialize_double_option")]
+    database: Option<Option<String>>,
+    #[serde(default, deserialize_with = "deserialize_double_option")]
+    sqlite_path: Option<Option<String>>,
+    #[serde(default)]
+    favorite: Option<bool>,
+}
+
+/// Serde helper — distinguish "field absent" from
+/// "field present but null" so patches can explicitly clear
+/// fields.
+fn deserialize_double_option<'de, T, D>(deserializer: D) -> Result<Option<Option<T>>, D::Error>
+where
+    T: serde::Deserialize<'de>,
+    D: serde::Deserializer<'de>,
+{
+    <Option<T> as serde::Deserialize>::deserialize(deserializer).map(Some)
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct DetectedDbInstanceView {
+    source: String,
+    kind: String,
+    host: String,
+    port: u16,
+    label: String,
+    image: Option<String>,
+    container_id: Option<String>,
+    version: Option<String>,
+    pid: Option<u32>,
+    process_name: Option<String>,
+    signature: String,
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct DbDetectionReportView {
+    instances: Vec<DetectedDbInstanceView>,
+    mysql_cli: bool,
+    psql_cli: bool,
+    redis_cli: bool,
+    sqlite_cli: bool,
 }
 
 #[derive(Serialize)]
@@ -1111,6 +1243,98 @@ fn map_saved_connection(index: usize, config: &SshConfig) -> SavedSshConnection 
             .as_ref()
             .map(|s| s.trim().to_string())
             .filter(|s| !s.is_empty()),
+        databases: config.databases.iter().map(map_db_credential).collect(),
+    }
+}
+
+fn db_kind_str(k: DbKind) -> &'static str {
+    match k {
+        DbKind::Mysql => "mysql",
+        DbKind::Postgres => "postgres",
+        DbKind::Redis => "redis",
+        DbKind::Sqlite => "sqlite",
+    }
+}
+
+fn parse_db_kind(s: &str) -> Result<DbKind, String> {
+    match s.trim().to_ascii_lowercase().as_str() {
+        "mysql" => Ok(DbKind::Mysql),
+        "postgres" | "postgresql" => Ok(DbKind::Postgres),
+        "redis" => Ok(DbKind::Redis),
+        "sqlite" => Ok(DbKind::Sqlite),
+        other => Err(format!("unknown db kind: {other}")),
+    }
+}
+
+fn map_db_credential(c: &DbCredential) -> DbCredentialView {
+    DbCredentialView {
+        id: c.id.clone(),
+        kind: db_kind_str(c.kind),
+        label: c.label.clone(),
+        host: c.host.clone(),
+        port: c.port,
+        user: c.user.clone(),
+        database: c.database.clone(),
+        sqlite_path: c.sqlite_path.clone(),
+        has_password: c.password.is_present(),
+        favorite: c.favorite,
+        source: match &c.source {
+            DbCredentialSource::Manual => DbCredentialSourceView::Manual,
+            DbCredentialSource::Detected { signature } => DbCredentialSourceView::Detected {
+                signature: signature.clone(),
+            },
+        },
+    }
+}
+
+fn map_detected_db_instance(d: DetectedDbInstance) -> DetectedDbInstanceView {
+    let source = match d.source {
+        pier_core::ssh::db_detect::DetectionSource::Docker => "docker",
+        pier_core::ssh::db_detect::DetectionSource::Systemd => "systemd",
+        pier_core::ssh::db_detect::DetectionSource::Direct => "direct",
+    };
+    let kind = match d.kind {
+        pier_core::ssh::db_detect::DetectedDbKind::Mysql => "mysql",
+        pier_core::ssh::db_detect::DetectedDbKind::Postgres => "postgres",
+        pier_core::ssh::db_detect::DetectedDbKind::Redis => "redis",
+    };
+    DetectedDbInstanceView {
+        source: source.to_string(),
+        kind: kind.to_string(),
+        host: d.host,
+        port: d.port,
+        label: d.label,
+        image: d.metadata.image,
+        container_id: d.metadata.container_id,
+        version: d.metadata.version,
+        pid: d.metadata.pid,
+        process_name: d.metadata.process_name,
+        signature: d.signature,
+    }
+}
+
+fn map_db_detection_report(r: DbDetectionReport) -> DbDetectionReportView {
+    DbDetectionReportView {
+        instances: r
+            .instances
+            .into_iter()
+            .map(map_detected_db_instance)
+            .collect(),
+        mysql_cli: r.clis.mysql,
+        psql_cli: r.clis.psql,
+        redis_cli: r.clis.redis_cli,
+        sqlite_cli: r.clis.sqlite3,
+    }
+}
+
+fn map_resolved_credential(r: ResolvedDbCredential) -> DbCredentialResolvedView {
+    let ResolvedDbCredential {
+        credential,
+        password,
+    } = r;
+    DbCredentialResolvedView {
+        credential: map_db_credential(&credential),
+        password,
     }
 }
 
@@ -2504,6 +2728,25 @@ fn terminal_set_scrollback_limit(
     Ok(())
 }
 
+/// Return the last-known shell working directory if OSC 7 has
+/// fired for this session. Returns `None` (null in JS) when
+/// the shell hasn't reported one yet — the SQLite panel then
+/// falls back to `~` for its directory scan.
+#[tauri::command]
+fn terminal_current_cwd(
+    state: tauri::State<'_, AppState>,
+    session_id: String,
+) -> Result<Option<String>, String> {
+    let sessions = state
+        .terminals
+        .lock()
+        .map_err(|_| String::from("terminal state poisoned"))?;
+    let managed = sessions
+        .get(&session_id)
+        .ok_or_else(|| format!("unknown terminal session: {}", session_id))?;
+    Ok(managed.terminal.current_cwd())
+}
+
 #[tauri::command]
 fn terminal_close(state: tauri::State<'_, AppState>, session_id: String) -> Result<(), String> {
     let mut sessions = state
@@ -2662,7 +2905,7 @@ fn get_or_open_docker_ssh_session(
 }
 
 #[tauri::command]
-fn docker_overview(
+async fn docker_overview(
     state: tauri::State<'_, AppState>,
     host: String,
     port: u16,
@@ -2760,7 +3003,7 @@ struct DockerContainerStatsView {
 }
 
 #[tauri::command]
-fn docker_stats(
+async fn docker_stats(
     state: tauri::State<'_, AppState>,
     host: String,
     port: u16,
@@ -2795,7 +3038,7 @@ struct DockerVolumeUsageView {
 }
 
 #[tauri::command]
-fn docker_volume_usage(
+async fn docker_volume_usage(
     state: tauri::State<'_, AppState>,
     host: String,
     port: u16,
@@ -2821,7 +3064,7 @@ fn docker_volume_usage(
 }
 
 #[tauri::command]
-fn docker_container_action(
+async fn docker_container_action(
     host: String,
     port: u16,
     user: String,
@@ -3067,10 +3310,368 @@ fn detect_services(
         .collect())
 }
 
+// ── DB Instance Detection ───────────────────────────────────────
+
+/// Detect reachable DB instances (MySQL / PostgreSQL / Redis)
+/// on the remote host, combining docker + listening-socket
+/// probes. Lightweight: runs all probes concurrently over the
+/// already-open SSH session cache. See
+/// [`pier_core::ssh::db_detect`] for the algorithm.
+#[tauri::command]
+fn db_detect(
+    state: tauri::State<'_, AppState>,
+    host: String,
+    port: u16,
+    user: String,
+    auth_mode: String,
+    password: String,
+    key_path: String,
+    saved_connection_index: Option<usize>,
+) -> Result<DbDetectionReportView, String> {
+    let session = get_or_open_sftp_ssh_session(
+        &state, &host, port, &user, &auth_mode, &password, &key_path, saved_connection_index,
+    )?;
+    let report = db_detect::detect_blocking(&session);
+    Ok(map_db_detection_report(report))
+}
+
+// ── DB Credential CRUD ──────────────────────────────────────────
+
+#[tauri::command]
+fn db_cred_save(
+    saved_connection_index: usize,
+    credential: DbCredentialInput,
+    password: Option<String>,
+) -> Result<DbCredentialView, String> {
+    let kind = parse_db_kind(&credential.kind)?;
+    let source = match credential.detection_signature {
+        Some(sig) if !sig.is_empty() => DbCredentialSource::Detected { signature: sig },
+        _ => DbCredentialSource::Manual,
+    };
+    let input = NewDbCredential {
+        kind,
+        label: credential.label,
+        host: credential.host,
+        port: credential.port,
+        user: credential.user,
+        database: credential.database,
+        sqlite_path: credential.sqlite_path,
+        favorite: credential.favorite,
+        source,
+    };
+    let cred = connections::save_db_credential(saved_connection_index, input, password)
+        .map_err(|e| e.to_string())?;
+    Ok(map_db_credential(&cred))
+}
+
+#[tauri::command]
+fn db_cred_update(
+    saved_connection_index: usize,
+    credential_id: String,
+    patch: DbCredentialPatchInput,
+    new_password: Option<Option<String>>,
+) -> Result<DbCredentialView, String> {
+    let patch = DbCredentialPatch {
+        label: patch.label,
+        host: patch.host,
+        port: patch.port,
+        user: patch.user,
+        database: patch.database,
+        sqlite_path: patch.sqlite_path,
+        favorite: patch.favorite,
+    };
+    let cred = connections::update_db_credential(
+        saved_connection_index,
+        &credential_id,
+        patch,
+        new_password,
+    )
+    .map_err(|e| e.to_string())?;
+    Ok(map_db_credential(&cred))
+}
+
+#[tauri::command]
+fn db_cred_delete(
+    saved_connection_index: usize,
+    credential_id: String,
+) -> Result<(), String> {
+    connections::delete_db_credential(saved_connection_index, &credential_id)
+        .map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+fn db_cred_resolve(
+    saved_connection_index: usize,
+    credential_id: String,
+) -> Result<DbCredentialResolvedView, String> {
+    let resolved = connections::resolve_db_credential(saved_connection_index, &credential_id)
+        .map_err(|e| e.to_string())?;
+    Ok(map_resolved_credential(resolved))
+}
+
+#[tauri::command]
+async fn docker_inspect_db_env(
+    host: String,
+    port: u16,
+    user: String,
+    auth_mode: String,
+    password: String,
+    key_path: String,
+    container_id: String,
+    saved_connection_index: Option<usize>,
+) -> Result<DockerDbEnvView, String> {
+    let session = build_ssh_session_saved_or_params(
+        saved_connection_index, &host, port, &user, &auth_mode, &password, &key_path,
+    )?;
+    let env = docker::inspect_db_env_blocking(&session, &container_id)
+        .map_err(|e| e.to_string())?;
+    Ok(DockerDbEnvView {
+        mysql_database: env.mysql_database,
+        mysql_user: env.mysql_user,
+        postgres_db: env.postgres_db,
+        postgres_user: env.postgres_user,
+    })
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct DockerDbEnvView {
+    mysql_database: Option<String>,
+    mysql_user: Option<String>,
+    postgres_db: Option<String>,
+    postgres_user: Option<String>,
+}
+
+// ── Remote SQLite ───────────────────────────────────────────────
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct RemoteSqliteCapabilityView {
+    installed: bool,
+    version: Option<String>,
+    supports_json: bool,
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct RemoteSqliteBrowserState {
+    path: String,
+    table_name: String,
+    tables: Vec<String>,
+    columns: Vec<SqliteColumnView>,
+    preview: Option<DataPreview>,
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct RemoteSqliteCandidate {
+    path: String,
+    size_bytes: u64,
+    modified: Option<i64>,
+}
+
+#[tauri::command]
+fn sqlite_remote_capable(
+    state: tauri::State<'_, AppState>,
+    host: String,
+    port: u16,
+    user: String,
+    auth_mode: String,
+    password: String,
+    key_path: String,
+    saved_connection_index: Option<usize>,
+) -> Result<RemoteSqliteCapabilityView, String> {
+    let session = get_or_open_sftp_ssh_session(
+        &state, &host, port, &user, &auth_mode, &password, &key_path, saved_connection_index,
+    )?;
+    let cap = sqlite_remote::probe_blocking(&session);
+    Ok(RemoteSqliteCapabilityView {
+        installed: cap.installed,
+        version: cap.version,
+        supports_json: cap.supports_json,
+    })
+}
+
+#[tauri::command]
+fn sqlite_browse_remote(
+    state: tauri::State<'_, AppState>,
+    host: String,
+    port: u16,
+    user: String,
+    auth_mode: String,
+    password: String,
+    key_path: String,
+    saved_connection_index: Option<usize>,
+    db_path: String,
+    table: Option<String>,
+) -> Result<RemoteSqliteBrowserState, String> {
+    let trimmed = db_path.trim();
+    if trimmed.is_empty() {
+        return Err(String::from("remote SQLite path must not be empty"));
+    }
+    let session = get_or_open_sftp_ssh_session(
+        &state, &host, port, &user, &auth_mode, &password, &key_path, saved_connection_index,
+    )?;
+    let tables =
+        sqlite_remote::list_tables_blocking(&session, trimmed).map_err(|e| e.to_string())?;
+    let table_name = choose_active_item(table, &tables);
+    let columns = if table_name.is_empty() {
+        Vec::new()
+    } else {
+        sqlite_remote::table_columns_blocking(&session, trimmed, &table_name)
+            .map_err(|e| e.to_string())?
+            .into_iter()
+            .map(|c| SqliteColumnView {
+                name: c.name,
+                col_type: c.col_type,
+                not_null: c.not_null,
+                primary_key: c.primary_key,
+            })
+            .collect()
+    };
+    let preview = if table_name.is_empty() {
+        None
+    } else {
+        let result = sqlite_remote::preview_table_blocking(&session, trimmed, &table_name, 24)
+            .map_err(|e| e.to_string())?;
+        Some(DataPreview {
+            columns: result.columns,
+            rows: result.rows,
+            truncated: result.truncated,
+        })
+    };
+
+    Ok(RemoteSqliteBrowserState {
+        path: trimmed.to_string(),
+        table_name,
+        tables,
+        columns,
+        preview,
+    })
+}
+
+#[tauri::command]
+fn sqlite_execute_remote(
+    state: tauri::State<'_, AppState>,
+    host: String,
+    port: u16,
+    user: String,
+    auth_mode: String,
+    password: String,
+    key_path: String,
+    saved_connection_index: Option<usize>,
+    db_path: String,
+    sql: String,
+) -> Result<QueryExecutionResult, String> {
+    let trimmed_path = db_path.trim();
+    let trimmed_sql = sql.trim();
+    if trimmed_path.is_empty() {
+        return Err(String::from("remote SQLite path must not be empty"));
+    }
+    if trimmed_sql.is_empty() {
+        return Err(String::from("SQL must not be empty"));
+    }
+    let session = get_or_open_sftp_ssh_session(
+        &state, &host, port, &user, &auth_mode, &password, &key_path, saved_connection_index,
+    )?;
+    let result = sqlite_remote::execute_blocking(&session, trimmed_path, trimmed_sql)
+        .map_err(|e| e.to_string())?;
+    // Mirror the local sqlite_execute shape: a syntax error
+    // inside the CLI becomes an Err rather than a result with
+    // .error. That way the panel's `queryError` path fires.
+    if let Some(err) = result.error {
+        return Err(err);
+    }
+    // `RemoteQueryResult.affected_rows / last_insert_id` are
+    // i64 but the view is u64 — cast with saturation.
+    Ok(QueryExecutionResult {
+        columns: result.columns,
+        rows: result.rows,
+        truncated: result.truncated,
+        affected_rows: result.affected_rows.max(0) as u64,
+        last_insert_id: result.last_insert_id.and_then(|v| u64::try_from(v).ok()),
+        elapsed_ms: result.elapsed_ms,
+    })
+}
+
+#[tauri::command]
+fn sqlite_find_in_dir(
+    state: tauri::State<'_, AppState>,
+    host: String,
+    port: u16,
+    user: String,
+    auth_mode: String,
+    password: String,
+    key_path: String,
+    saved_connection_index: Option<usize>,
+    directory: String,
+    max_depth: Option<u32>,
+) -> Result<Vec<RemoteSqliteCandidate>, String> {
+    let session = get_or_open_sftp_ssh_session(
+        &state, &host, port, &user, &auth_mode, &password, &key_path, saved_connection_index,
+    )?;
+    let dir = directory.trim();
+    if dir.is_empty() {
+        return Err(String::from("directory must not be empty"));
+    }
+    let depth = max_depth.unwrap_or(2).min(4);
+    // Single-quote-escape `dir` exactly the way sqlite_remote
+    // does the path arg (POSIX-safe), then build a `find` that
+    // emits one `path\tsize\tmtime` row per candidate.
+    let escaped_dir = {
+        let mut out = String::with_capacity(dir.len() + 2);
+        out.push('\'');
+        for ch in dir.chars() {
+            if ch == '\'' {
+                out.push_str("'\\''");
+            } else {
+                out.push(ch);
+            }
+        }
+        out.push('\'');
+        out
+    };
+    let cmd = format!(
+        "find {escaped_dir} -maxdepth {depth} -type f \\( -name '*.db' -o -name '*.sqlite' -o -name '*.sqlite3' \\) -printf '%p\\t%s\\t%T@\\n' 2>/dev/null | head -n 50"
+    );
+    let rt = pier_core::ssh::runtime::shared();
+    let (exit, stdout) = rt
+        .block_on(session.exec_command(&cmd))
+        .map_err(|e| e.to_string())?;
+    if exit != 0 && stdout.trim().is_empty() {
+        // non-zero with no output usually means `find` hit a
+        // permission issue; return empty list rather than error.
+        return Ok(Vec::new());
+    }
+    let mut out = Vec::new();
+    for line in stdout.lines() {
+        let mut parts = line.splitn(3, '\t');
+        let Some(path) = parts.next() else { continue };
+        if path.is_empty() {
+            continue;
+        }
+        let size_bytes = parts
+            .next()
+            .and_then(|s| s.parse::<u64>().ok())
+            .unwrap_or(0);
+        // `%T@` is seconds-since-epoch as a float.
+        let modified = parts
+            .next()
+            .and_then(|s| s.split('.').next())
+            .and_then(|s| s.parse::<i64>().ok());
+        out.push(RemoteSqliteCandidate {
+            path: path.to_string(),
+            size_bytes,
+            modified,
+        });
+    }
+    Ok(out)
+}
+
 // ── Docker Extended ─────────────────────────────────────────────
 
 #[tauri::command]
-fn docker_inspect(
+async fn docker_inspect(
     host: String,
     port: u16,
     user: String,
@@ -3088,7 +3689,7 @@ fn docker_inspect(
 }
 
 #[tauri::command]
-fn docker_remove_image(
+async fn docker_remove_image(
     host: String,
     port: u16,
     user: String,
@@ -3107,7 +3708,7 @@ fn docker_remove_image(
 }
 
 #[tauri::command]
-fn docker_remove_volume(
+async fn docker_remove_volume(
     host: String,
     port: u16,
     user: String,
@@ -3125,7 +3726,7 @@ fn docker_remove_volume(
 }
 
 #[tauri::command]
-fn docker_remove_network(
+async fn docker_remove_network(
     host: String,
     port: u16,
     user: String,
@@ -3175,7 +3776,7 @@ impl From<DockerRunOptionsView> for docker::RunContainerOptions {
 }
 
 #[tauri::command]
-fn docker_run_container(
+async fn docker_run_container(
     host: String,
     port: u16,
     user: String,
@@ -3192,7 +3793,7 @@ fn docker_run_container(
 }
 
 #[tauri::command]
-fn docker_prune_volumes(
+async fn docker_prune_volumes(
     host: String,
     port: u16,
     user: String,
@@ -3208,7 +3809,7 @@ fn docker_prune_volumes(
 }
 
 #[tauri::command]
-fn docker_pull_image(
+async fn docker_pull_image(
     host: String,
     port: u16,
     user: String,
@@ -3230,7 +3831,7 @@ fn docker_pull_image(
 }
 
 #[tauri::command]
-fn local_docker_pull_image(
+async fn local_docker_pull_image(
     image_ref: String,
     env_prefix: Option<Vec<(String, String)>>,
 ) -> Result<String, String> {
@@ -3252,7 +3853,7 @@ fn local_docker_pull_image(
 }
 
 #[tauri::command]
-fn docker_volume_files(
+async fn docker_volume_files(
     host: String,
     port: u16,
     user: String,
@@ -3269,7 +3870,7 @@ fn docker_volume_files(
 }
 
 #[tauri::command]
-fn local_docker_run_container(options: DockerRunOptionsView) -> Result<String, String> {
+async fn local_docker_run_container(options: DockerRunOptionsView) -> Result<String, String> {
     let opts: docker::RunContainerOptions = options.into();
     if opts.image.trim().is_empty() {
         return Err("docker run: image is required".into());
@@ -3321,7 +3922,7 @@ fn local_docker_run_container(options: DockerRunOptionsView) -> Result<String, S
 }
 
 #[tauri::command]
-fn local_docker_prune_volumes() -> Result<String, String> {
+async fn local_docker_prune_volumes() -> Result<String, String> {
     let output = std::process::Command::new("docker")
         .args(["volume", "prune", "-f"])
         .output()
@@ -3333,7 +3934,7 @@ fn local_docker_prune_volumes() -> Result<String, String> {
 }
 
 #[tauri::command]
-fn local_docker_volume_files(mountpoint: String) -> Result<String, String> {
+async fn local_docker_volume_files(mountpoint: String) -> Result<String, String> {
     let output = std::process::Command::new("ls")
         .args(["-la", "--color=never", &mountpoint])
         .output()
@@ -4209,7 +4810,7 @@ async fn local_docker_volume_usage() -> Result<Vec<DockerVolumeUsageView>, Strin
 }
 
 #[tauri::command]
-fn local_docker_action(container_id: String, action: String) -> Result<String, String> {
+async fn local_docker_action(container_id: String, action: String) -> Result<String, String> {
     let output = std::process::Command::new("docker")
         .args([&action, &container_id])
         .output()
@@ -4461,6 +5062,7 @@ pub fn run() {
             terminal_resize,
             terminal_snapshot,
             terminal_set_scrollback_limit,
+            terminal_current_cwd,
             terminal_close,
             postgres_browse,
             postgres_execute,
@@ -4471,6 +5073,16 @@ pub fn run() {
             markdown_render_file,
             server_monitor_probe,
             detect_services,
+            db_detect,
+            db_cred_save,
+            db_cred_update,
+            db_cred_delete,
+            db_cred_resolve,
+            docker_inspect_db_env,
+            sqlite_remote_capable,
+            sqlite_browse_remote,
+            sqlite_execute_remote,
+            sqlite_find_in_dir,
             docker_inspect,
             docker_remove_image,
             docker_remove_volume,

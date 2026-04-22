@@ -3,12 +3,19 @@ import * as cmd from "../lib/commands";
 import { isReadOnlySql, queryResultToTsv } from "../lib/commands";
 import { RIGHT_TOOL_META } from "../lib/rightToolMeta";
 import { closeTunnelSlot, ensureTunnelSlot, syncTunnelState } from "../lib/sshTunnel";
-import type { PostgresBrowserState, QueryExecutionResult, TabState } from "../lib/types";
+import type {
+  DetectedDbInstance,
+  PostgresBrowserState,
+  QueryExecutionResult,
+  TabState,
+} from "../lib/types";
 import { effectiveSshTarget } from "../lib/types";
 import { writeClipboardText } from "../lib/clipboard";
 import { useI18n } from "../i18n/useI18n";
 import { localizeError } from "../i18n/localizeMessage";
+import DbAddCredentialDialog from "../components/DbAddCredentialDialog";
 import DbConnRow from "../components/DbConnRow";
+import DbInstancePicker from "../components/DbInstancePicker";
 import PanelHeader from "../components/PanelHeader";
 import PreviewTable from "../components/PreviewTable";
 import QueryResultPanel from "../components/QueryResultPanel";
@@ -43,11 +50,16 @@ export default function PostgresPanel({ tab }: Props) {
   const [tunnelBusy, setTunnelBusy] = useState(false);
   const [tunnelError, setTunnelError] = useState("");
   const [tunnelNotice, setTunnelNotice] = useState("");
+  const [addOpen, setAddOpen] = useState(false);
+  const [adopting, setAdopting] = useState<DetectedDbInstance | null>(null);
+  const [autoBrowseAttempted, setAutoBrowseAttempted] = useState(false);
 
   // SSH context can be inferred from a local terminal that ran `ssh
   // user@host` or from a nested-ssh overlay; either way, the tunnel
   // helper picks up the right addressing via `effectiveSshTarget`.
   const hasSsh = effectiveSshTarget(tab) !== null;
+  const sshTarget = effectiveSshTarget(tab);
+  const savedIndex = sshTarget?.savedConnectionIndex ?? null;
   const p = Number.parseInt(port, 10);
   const canBrowse = host.trim() && user.trim() && Number.isFinite(p) && p > 0;
   const needsWrite = sql.trim() && !isReadOnlySql(sql);
@@ -94,6 +106,37 @@ export default function PostgresPanel({ tab }: Props) {
       cancelled = true;
     };
   }, [hasSsh, tab.id, tab.pgTunnelId, tab.pgTunnelPort, updateTab, t]);
+
+  // Auto-browse on saved SSH tab open with a seeded DB credential.
+  useEffect(() => {
+    if (autoBrowseAttempted) return;
+    if (!hasSsh || !tab.pgActiveCredentialId || savedIndex === null) return;
+    if (state) return;
+    if (!tab.pgHost.trim() || !tab.pgUser.trim()) return;
+
+    setAutoBrowseAttempted(true);
+    let cancelled = false;
+    void (async () => {
+      try {
+        if (!tab.pgPassword) {
+          const resolved = await cmd.dbCredResolve(savedIndex, tab.pgActiveCredentialId!);
+          if (cancelled) return;
+          if (resolved.password) {
+            updateTab(tab.id, { pgPassword: resolved.password });
+            setPassword(resolved.password);
+          }
+        }
+        if (cancelled) return;
+        await browse();
+      } catch (e) {
+        if (!cancelled) setError(formatError(e));
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [tab.pgActiveCredentialId, savedIndex, hasSsh]);
 
   function persistPort(nextPort: string) {
     const parsed = Number.parseInt(nextPort, 10);
@@ -264,6 +307,70 @@ export default function PostgresPanel({ tab }: Props) {
         tag={connTag}
       />
       <div className="panel-scroll">
+      <DbInstancePicker
+        tab={tab}
+        kind="postgres"
+        onActivate={(cred) => {
+          setError("");
+          setState(null);
+          setAutoBrowseAttempted(false);
+          setReadOnly(true);
+          setWriteConfirm("");
+          setHost(cred.host);
+          setPort(String(cred.port));
+          setUser(cred.user);
+          setPassword("");
+          setDbName(cred.database ?? "");
+          updateTab(tab.id, {
+            pgActiveCredentialId: cred.id,
+            pgHost: cred.host,
+            pgPort: cred.port,
+            pgUser: cred.user,
+            pgPassword: "",
+            pgDatabase: cred.database ?? "",
+            pgTunnelId: null,
+            pgTunnelPort: null,
+          });
+        }}
+        onAdopt={(det) => {
+          setAdopting(det);
+          setAddOpen(true);
+        }}
+        onAddNew={() => {
+          setAdopting(null);
+          setAddOpen(true);
+        }}
+        onDeleted={(cred) => {
+          if (tab.pgActiveCredentialId === cred.id) {
+            updateTab(tab.id, { pgActiveCredentialId: null });
+          }
+        }}
+      />
+      <DbAddCredentialDialog
+        open={addOpen}
+        onClose={() => setAddOpen(false)}
+        kind="postgres"
+        savedConnectionIndex={savedIndex}
+        adopting={adopting}
+        tab={tab}
+        onSaved={(cred) => {
+          setAutoBrowseAttempted(false);
+          setState(null);
+          setHost(cred.host);
+          setPort(String(cred.port));
+          setUser(cred.user);
+          setDbName(cred.database ?? "");
+          updateTab(tab.id, {
+            pgActiveCredentialId: cred.id,
+            pgHost: cred.host,
+            pgPort: cred.port,
+            pgUser: cred.user,
+            pgDatabase: cred.database ?? "",
+            pgTunnelId: null,
+            pgTunnelPort: null,
+          });
+        }}
+      />
       <section className="panel-section">
         <div className="form-stack">
           <div className="field-grid">

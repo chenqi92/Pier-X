@@ -946,12 +946,17 @@ export default function DockerPanel({ tab }: Props) {
                   : <div className="dk-empty">{t("No images found.")}</div>
               ) : (
                 filteredImages.map((img) => {
-                  const isSel = img.id === selectedImage;
+                  // Docker returns one row per tag, so a single sha256
+                  // id can appear multiple times (e.g. nginx:latest +
+                  // nginx:1.27 share an id). Key and select on the
+                  // full (id, repo, tag) tuple to keep rows distinct.
+                  const rowKey = `${img.id}|${img.repository}:${img.tag}`;
+                  const isSel = rowKey === selectedImage;
                   return (
                     <div
-                      key={img.id}
+                      key={rowKey}
                       className={"dk-card" + (isSel ? " selected" : "")}
-                      onClick={() => setSelectedImage(img.id)}
+                      onClick={() => setSelectedImage(rowKey)}
                     >
                       <span className="dk-card-ic">
                         <HardDrive size={12} />

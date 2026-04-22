@@ -108,7 +108,7 @@ function ToolContent({
     case "sftp":
       return tab ? <SftpPanel key={tab.id} tab={tab} /> : renderSplash("sftp", t, onConnectSaved, onNewConnection);
     case "sqlite":
-      return <SqlitePanel key={tabKey} />;
+      return <SqlitePanel key={tabKey} tab={tab} />;
     case "markdown":
       return <MarkdownPanel key={markdownPath} filePath={markdownPath} />;
     default:

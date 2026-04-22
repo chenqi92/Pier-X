@@ -3,12 +3,19 @@ import * as cmd from "../lib/commands";
 import { isReadOnlySql, queryResultToTsv } from "../lib/commands";
 import { RIGHT_TOOL_META } from "../lib/rightToolMeta";
 import { closeTunnelSlot, ensureTunnelSlot, syncTunnelState } from "../lib/sshTunnel";
-import type { MysqlBrowserState, QueryExecutionResult, TabState } from "../lib/types";
+import type {
+  DetectedDbInstance,
+  MysqlBrowserState,
+  QueryExecutionResult,
+  TabState,
+} from "../lib/types";
 import { effectiveSshTarget } from "../lib/types";
 import { writeClipboardText } from "../lib/clipboard";
 import { useI18n } from "../i18n/useI18n";
 import { localizeError } from "../i18n/localizeMessage";
+import DbAddCredentialDialog from "../components/DbAddCredentialDialog";
 import DbConnRow from "../components/DbConnRow";
+import DbInstancePicker from "../components/DbInstancePicker";
 import PanelHeader from "../components/PanelHeader";
 import PreviewTable from "../components/PreviewTable";
 import QueryResultPanel from "../components/QueryResultPanel";
@@ -42,11 +49,16 @@ export default function MySqlPanel({ tab }: Props) {
   const [tunnelBusy, setTunnelBusy] = useState(false);
   const [tunnelError, setTunnelError] = useState("");
   const [tunnelNotice, setTunnelNotice] = useState("");
+  const [addOpen, setAddOpen] = useState(false);
+  const [adopting, setAdopting] = useState<DetectedDbInstance | null>(null);
+  const [autoBrowseAttempted, setAutoBrowseAttempted] = useState(false);
 
   // SSH context can be inferred from a local terminal that ran `ssh
   // user@host` or from a nested-ssh overlay; either way, the tunnel
   // helper picks up the right addressing via `effectiveSshTarget`.
   const hasSsh = effectiveSshTarget(tab) !== null;
+  const sshTarget = effectiveSshTarget(tab);
+  const savedIndex = sshTarget?.savedConnectionIndex ?? null;
   const p = Number.parseInt(port, 10);
   const canBrowse = host.trim() && user.trim() && Number.isFinite(p) && p > 0;
   const needsWrite = sql.trim() && !isReadOnlySql(sql);
@@ -93,6 +105,44 @@ export default function MySqlPanel({ tab }: Props) {
       cancelled = true;
     };
   }, [hasSsh, tab.id, tab.mysqlTunnelId, tab.mysqlTunnelPort, updateTab, t]);
+
+  // Auto-browse on saved SSH tab open: if the tab was seeded with
+  // a saved DB credential but we haven't browsed yet, resolve the
+  // password from the keyring, open the tunnel, and list tables.
+  // Strictly read-only — the read-only safety guard is untouched.
+  useEffect(() => {
+    if (autoBrowseAttempted) return;
+    if (!hasSsh || !tab.mysqlActiveCredentialId || savedIndex === null) return;
+    if (state) return; // already browsed
+    if (!tab.mysqlHost.trim() || !tab.mysqlUser.trim()) return;
+
+    setAutoBrowseAttempted(true);
+    let cancelled = false;
+    void (async () => {
+      try {
+        // If the password isn't already primed in the tab state,
+        // resolve from keyring.
+        if (!tab.mysqlPassword) {
+          const resolved = await cmd.dbCredResolve(savedIndex, tab.mysqlActiveCredentialId!);
+          if (cancelled) return;
+          if (resolved.password) {
+            updateTab(tab.id, { mysqlPassword: resolved.password });
+            setPassword(resolved.password);
+          }
+        }
+        if (cancelled) return;
+        await browse();
+      } catch (e) {
+        if (!cancelled) setError(formatError(e));
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+    // Run once per activeCredentialId — `browse` / `formatError`
+    // are stable w.r.t. the inputs we depend on.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [tab.mysqlActiveCredentialId, savedIndex, hasSsh]);
 
   function persistPort(nextPort: string) {
     const parsed = Number.parseInt(nextPort, 10);
@@ -262,6 +312,71 @@ export default function MySqlPanel({ tab }: Props) {
         tag={connTag}
       />
       <div className="panel-scroll">
+      <DbInstancePicker
+        tab={tab}
+        kind="mysql"
+        onActivate={(cred) => {
+          setError("");
+          setState(null);
+          setAutoBrowseAttempted(false);
+          setReadOnly(true);
+          setWriteConfirm("");
+          // Swap flat tab fields so existing browse/run code picks them up.
+          setHost(cred.host);
+          setPort(String(cred.port));
+          setUser(cred.user);
+          setPassword("");
+          setDbName(cred.database ?? "");
+          updateTab(tab.id, {
+            mysqlActiveCredentialId: cred.id,
+            mysqlHost: cred.host,
+            mysqlPort: cred.port,
+            mysqlUser: cred.user,
+            mysqlPassword: "",
+            mysqlDatabase: cred.database ?? "",
+            mysqlTunnelId: null,
+            mysqlTunnelPort: null,
+          });
+        }}
+        onAdopt={(det) => {
+          setAdopting(det);
+          setAddOpen(true);
+        }}
+        onAddNew={() => {
+          setAdopting(null);
+          setAddOpen(true);
+        }}
+        onDeleted={(cred) => {
+          if (tab.mysqlActiveCredentialId === cred.id) {
+            updateTab(tab.id, { mysqlActiveCredentialId: null });
+          }
+        }}
+      />
+      <DbAddCredentialDialog
+        open={addOpen}
+        onClose={() => setAddOpen(false)}
+        kind="mysql"
+        savedConnectionIndex={savedIndex}
+        adopting={adopting}
+        tab={tab}
+        onSaved={(cred) => {
+          setAutoBrowseAttempted(false);
+          setState(null);
+          setHost(cred.host);
+          setPort(String(cred.port));
+          setUser(cred.user);
+          setDbName(cred.database ?? "");
+          updateTab(tab.id, {
+            mysqlActiveCredentialId: cred.id,
+            mysqlHost: cred.host,
+            mysqlPort: cred.port,
+            mysqlUser: cred.user,
+            mysqlDatabase: cred.database ?? "",
+            mysqlTunnelId: null,
+            mysqlTunnelPort: null,
+          });
+        }}
+      />
       <section className="panel-section">
         <div className="form-stack">
           <div className="field-grid">

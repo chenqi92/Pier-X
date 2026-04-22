@@ -231,6 +231,101 @@ export type SavedSshConnection = {
   /** Explicit sidebar group label. Missing / empty means the
    *  connection lives in the implicit "default" bucket. */
   group?: string | null;
+  /** Database credentials remembered for this SSH profile.
+   *  Passwords are NOT included — only a `hasPassword` flag;
+   *  resolve via `dbCredResolve` at connect time. */
+  databases?: DbCredential[];
+};
+
+// ── DB Credentials (persisted with SSH profile) ────────────────
+
+export type DbKind = "mysql" | "postgres" | "redis" | "sqlite";
+
+export type DbCredentialSource =
+  | { kind: "manual" }
+  | { kind: "detected"; signature: string };
+
+export type DbCredential = {
+  id: string;
+  kind: DbKind;
+  label: string;
+  host: string;
+  port: number;
+  user: string;
+  database: string | null;
+  sqlitePath: string | null;
+  /** True when a password is stored (in keyring or runtime
+   *  Direct fallback). Resolve lazily via `dbCredResolve`. */
+  hasPassword: boolean;
+  favorite: boolean;
+  source: DbCredentialSource;
+};
+
+/** Input shape for `db_cred_save` — `password: null` means
+ *  "no password"; omit the password field to default to
+ *  passwordless for Redis/SQLite. */
+export type DbCredentialInput = {
+  kind: DbKind;
+  label: string;
+  host: string;
+  port: number;
+  user: string;
+  database: string | null;
+  sqlitePath: string | null;
+  favorite: boolean;
+  /** Signature of the detection row this was adopted from.
+   *  Empty / omitted → `source: manual`. */
+  detectionSignature?: string | null;
+};
+
+/** Patch for `db_cred_update`. Absent fields are not touched;
+ *  a `{database: null}` or `{sqlitePath: null}` explicitly
+ *  clears the field. */
+export type DbCredentialPatch = {
+  label?: string;
+  host?: string;
+  port?: number;
+  user?: string;
+  database?: string | null;
+  sqlitePath?: string | null;
+  favorite?: boolean;
+};
+
+/** Response from `db_cred_resolve`. Plaintext password is
+ *  scoped to the Tauri IPC pipe — don't persist. */
+export type DbCredentialResolved = {
+  credential: DbCredential;
+  password: string | null;
+};
+
+// ── DB Instance Detection (runtime, not persisted) ─────────────
+
+export type DetectionSource = "systemd" | "docker" | "direct";
+export type DetectedDbKind = "mysql" | "postgres" | "redis";
+
+export type DetectedDbInstance = {
+  source: DetectionSource;
+  kind: DetectedDbKind;
+  host: string;
+  port: number;
+  label: string;
+  image?: string | null;
+  containerId?: string | null;
+  version?: string | null;
+  pid?: number | null;
+  processName?: string | null;
+  /** Stable dedupe key; lines up with `detectionSignature`
+   *  on saved credentials. */
+  signature: string;
+};
+
+export type DbDetectionReport = {
+  instances: DetectedDbInstance[];
+  /** CLI availability on the remote host. */
+  mysqlCli: boolean;
+  psqlCli: boolean;
+  redisCli: boolean;
+  sqliteCli: boolean;
 };
 
 // ── Data Previews ───────────────────────────────────────────────
@@ -616,6 +711,14 @@ export type TabState = {
   pgDatabase: string;
   pgTunnelId: string | null;
   pgTunnelPort: number | null;
+  /** When set, points at a `SavedSshConnection.databases[]`
+   *  entry of the matching kind. Drives the instance picker
+   *  pill-bar selection and the auto-browse effect on saved
+   *  profile open. `null` = "user is filling in manually". */
+  mysqlActiveCredentialId: string | null;
+  pgActiveCredentialId: string | null;
+  redisActiveCredentialId: string | null;
+  sqliteActiveCredentialId: string | null;
   logCommand: string;
   logSource: LogSource;
   markdownPath: string;

@@ -127,6 +127,15 @@ pub struct VtEmulator {
     /// whether to honor clipboard writes from the terminal.
     pub osc52_clipboard: String,
 
+    /// Last-known current working directory reported by the
+    /// shell via OSC 7 (`\x1b]7;file://host/path\x1b\\`). Empty
+    /// until the remote shell's prompt hook fires — typical
+    /// bash / zsh configurations on macOS and many Linux
+    /// distros emit OSC 7 on every prompt redraw. Consumers
+    /// should treat an empty string as "unknown, try a
+    /// fallback" rather than "root".
+    pub cwd: String,
+
     /// SSH command detected in terminal output. Set when the user
     /// presses Enter on a line containing `ssh [user@]host`.
     /// The UI reads these and clears `ssh_command_detected`.
@@ -161,6 +170,7 @@ impl VtEmulator {
             bell_pending: false,
             window_title: String::new(),
             osc52_clipboard: String::new(),
+            cwd: String::new(),
             ssh_command_detected: false,
             ssh_detected_host: String::new(),
             ssh_detected_user: String::new(),
@@ -189,6 +199,7 @@ impl VtEmulator {
             bell_pending: &mut self.bell_pending,
             window_title: &mut self.window_title,
             osc52_clipboard: &mut self.osc52_clipboard,
+            cwd: &mut self.cwd,
             ssh_command_detected: &mut self.ssh_command_detected,
             ssh_detected_host: &mut self.ssh_detected_host,
             ssh_detected_user: &mut self.ssh_detected_user,
@@ -358,6 +369,7 @@ struct Performer<'a> {
     bell_pending: &'a mut bool,
     window_title: &'a mut String,
     osc52_clipboard: &'a mut String,
+    cwd: &'a mut String,
     ssh_command_detected: &'a mut bool,
     ssh_detected_host: &'a mut String,
     ssh_detected_user: &'a mut String,
@@ -483,6 +495,20 @@ impl Perform for Performer<'_> {
                 if params.len() >= 3 {
                     if let Ok(data) = std::str::from_utf8(params[2]) {
                         *self.osc52_clipboard = data.to_string();
+                    }
+                }
+            }
+            // OSC 7 — shell reports current working directory.
+            // Payload is a `file://` URI: `file://hostname/abs/path`.
+            // We extract the path (everything after the third `/`)
+            // and URL-decode percent escapes. Honoured by
+            // default bash/zsh on macOS and common Linux distros.
+            b"7" => {
+                if params.len() >= 2 {
+                    if let Ok(uri) = std::str::from_utf8(params[1]) {
+                        if let Some(path) = extract_osc7_path(uri) {
+                            *self.cwd = path;
+                        }
                     }
                 }
             }
@@ -690,6 +716,53 @@ impl Performer<'_> {
 // ranges that matter in practice.
 // ─────────────────────────────────────────────────────────
 
+/// Extract the path from an OSC 7 `file://host/path` URI and
+/// percent-decode it. Returns `None` if the URI is malformed
+/// or the scheme isn't `file`. Used by [`Performer::osc_dispatch`]
+/// to learn the shell's current working directory.
+fn extract_osc7_path(uri: &str) -> Option<String> {
+    // Strip the `file://` prefix. Some shells emit `file:<path>`
+    // (no host segment) — accept that too.
+    let rest = uri.strip_prefix("file://").or_else(|| uri.strip_prefix("file:"))?;
+    // After `file://`, anything up to the next `/` is the host.
+    // `file:/path` has no host — rest already starts with `/`.
+    let path = if let Some(slash) = rest.find('/') {
+        &rest[slash..]
+    } else if rest.is_empty() {
+        "/"
+    } else {
+        return None;
+    };
+    // Percent-decode. Keep the decoder dependency-free — only
+    // `%XX` hex escapes need handling for filesystem paths.
+    let mut out = String::with_capacity(path.len());
+    let bytes = path.as_bytes();
+    let mut i = 0;
+    while i < bytes.len() {
+        if bytes[i] == b'%' && i + 2 < bytes.len() {
+            let hi = hex_digit(bytes[i + 1]);
+            let lo = hex_digit(bytes[i + 2]);
+            if let (Some(h), Some(l)) = (hi, lo) {
+                out.push((h * 16 + l) as char);
+                i += 3;
+                continue;
+            }
+        }
+        out.push(bytes[i] as char);
+        i += 1;
+    }
+    Some(out)
+}
+
+fn hex_digit(b: u8) -> Option<u8> {
+    match b {
+        b'0'..=b'9' => Some(b - b'0'),
+        b'a'..=b'f' => Some(b - b'a' + 10),
+        b'A'..=b'F' => Some(b - b'A' + 10),
+        _ => None,
+    }
+}
+
 fn is_wide_char(ch: char) -> bool {
     let cp = ch as u32;
     matches!(cp,
@@ -832,5 +905,55 @@ mod tests {
         emu.process(b"ABCDEFG");
         assert_eq!(emu.line_text(0), "ABCDE");
         assert_eq!(emu.line_text(1).trim_end_matches(' '), "FG");
+    }
+
+    #[test]
+    fn osc7_sets_cwd_from_file_uri() {
+        let mut emu = VtEmulator::new(10, 3);
+        // OSC 7 with ST terminator: `\x1b]7;file://host/tmp\x1b\\`
+        emu.process(b"\x1b]7;file://localhost/tmp\x1b\\");
+        assert_eq!(emu.cwd, "/tmp");
+    }
+
+    #[test]
+    fn osc7_bell_terminated_sets_cwd() {
+        let mut emu = VtEmulator::new(10, 3);
+        // Some shells terminate with BEL rather than ST.
+        emu.process(b"\x1b]7;file://h/home/user\x07");
+        assert_eq!(emu.cwd, "/home/user");
+    }
+
+    #[test]
+    fn osc7_percent_decodes_path() {
+        let mut emu = VtEmulator::new(10, 3);
+        emu.process(b"\x1b]7;file://h/var/log/my%20dir\x07");
+        assert_eq!(emu.cwd, "/var/log/my dir");
+    }
+
+    #[test]
+    fn osc7_accepts_no_host_variant() {
+        let mut emu = VtEmulator::new(10, 3);
+        // `file:/path` form (no double-slash). Rare but valid.
+        emu.process(b"\x1b]7;file:/srv/app\x07");
+        assert_eq!(emu.cwd, "/srv/app");
+    }
+
+    #[test]
+    fn osc7_ignores_non_file_scheme() {
+        let mut emu = VtEmulator::new(10, 3);
+        emu.process(b"\x1b]7;http://example.com/x\x07");
+        assert_eq!(emu.cwd, "");
+    }
+
+    #[test]
+    fn extract_osc7_path_handles_standard_input() {
+        assert_eq!(extract_osc7_path("file://host/a/b"), Some("/a/b".into()));
+        assert_eq!(extract_osc7_path("file:///root"), Some("/root".into()));
+        assert_eq!(extract_osc7_path("file:/root"), Some("/root".into()));
+        assert_eq!(
+            extract_osc7_path("file://host/my%20dir/app%3Ddb.sqlite"),
+            Some("/my dir/app=db.sqlite".into()),
+        );
+        assert_eq!(extract_osc7_path("https://foo/bar"), None);
     }
 }

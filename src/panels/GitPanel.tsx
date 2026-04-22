@@ -4,6 +4,7 @@ import {
   ArrowRight,
   ArrowUp,
   ArrowUpCircle,
+  Calendar,
   Check,
   ChevronDown,
   FileText,
@@ -20,6 +21,7 @@ import {
   Search,
   Settings2,
   Tag,
+  User,
   X,
 } from "lucide-react";
 import type { ComponentType, CSSProperties, MouseEvent as ReactMouseEvent, MutableRefObject, ReactNode, UIEvent as ReactUIEvent } from "react";
@@ -61,10 +63,13 @@ type Props = {
   isActive?: boolean;
 };
 
-type PanelTab = "changes" | "history" | "branches" | "stash" | "conflicts";
+type PanelTab = "changes" | "history" | "stash" | "conflicts";
 type PopoverKind =
   | "branchMenu"
   | "historyOptions"
+  | "historyBranchFilter"
+  | "historyAuthorFilter"
+  | "historyDateFilter"
   | "changeFileMenu"
   | "historyCommit"
   | "tagManager"
@@ -626,7 +631,7 @@ function GitHistoryVirtualList({
   detailNode,
   renderRow,
   footer,
-  overscan = 6,
+  overscan = 12,
   className,
   style,
   scrollRef,
@@ -716,7 +721,14 @@ function GitHistoryVirtualList({
     <div
       ref={setScrollerRef}
       className={className}
-      style={{ overflow: "auto", position: "relative", ...style }}
+      style={{
+        overflow: "auto",
+        position: "relative",
+        // Promote the scroll container to its own compositor layer up front
+        // so the first scroll doesn't pay a "layerize on demand" latency hit.
+        willChange: "transform",
+        ...style,
+      }}
       onScroll={(event) => {
         setScrollTop(event.currentTarget.scrollTop);
         onScroll?.(event);
@@ -730,10 +742,15 @@ function GitHistoryVirtualList({
               key={row.hash}
               style={{
                 position: "absolute",
-                top: yOfRow(idx),
+                top: 0,
                 left: 0,
                 right: 0,
                 height: rowHeight,
+                // Use compositor-only transform instead of `top: y` so
+                // scrolling re-uses cached paint layers per row and doesn't
+                // re-lay out the row tree on every frame.
+                transform: `translate3d(0,${yOfRow(idx)}px,0)`,
+                contain: "content",
               }}
             >
               {renderRow(row, idx)}
@@ -745,9 +762,11 @@ function GitHistoryVirtualList({
             ref={setDetailRef}
             style={{
               position: "absolute",
-              top: (selectedIndex + 1) * rowHeight,
+              top: 0,
               left: 0,
               right: 0,
+              transform: `translate3d(0,${(selectedIndex + 1) * rowHeight}px,0)`,
+              contain: "content",
             }}
           >
             {detailNode}
@@ -756,7 +775,13 @@ function GitHistoryVirtualList({
         {footer ? (
           <div
             ref={setFooterRef}
-            style={{ position: "absolute", top: rowsTotal, left: 0, right: 0 }}
+            style={{
+              position: "absolute",
+              top: 0,
+              left: 0,
+              right: 0,
+              transform: `translate3d(0,${rowsTotal}px,0)`,
+            }}
           >
             {footer}
           </div>
@@ -912,6 +937,7 @@ export default function GitPanel({ browserPath, isActive = true }: Props) {
   const [busy, setBusy] = useState(false);
   const [banner, setBanner] = useState<BannerState>(null);
   const [selectedTab, setSelectedTab] = useState<PanelTab>("changes");
+  const [branchManagerDialogOpen, setBranchManagerDialogOpen] = useState(false);
   const [branchMenuBranches, setBranchMenuBranches] = useState<string[]>([]);
   const [graphMetadata, setGraphMetadata] = useState<GitGraphMetadata | null>(null);
   const [graphRows, setGraphRows] = useState<GitGraphRowView[]>([]);
@@ -997,7 +1023,6 @@ export default function GitPanel({ browserPath, isActive = true }: Props) {
   const [diffTarget, setDiffTarget] = useState<DiffTarget>(null);
   const [workingDiffOpen, setWorkingDiffOpen] = useState(false);
   const [workingDiffCache, setWorkingDiffCache] = useState<Record<string, string | null>>({});
-  const [commitSignoff, setCommitSignoff] = useState(false);
   const [commitAmend, setCommitAmend] = useState(false);
   const [commitMessage, setCommitMessage] = useState("");
   const [commitDiffOpen, setCommitDiffOpen] = useState(false);
@@ -1053,16 +1078,10 @@ export default function GitPanel({ browserPath, isActive = true }: Props) {
     () => [
       { key: "changes" as PanelTab, label: t("Changes"), icon: FileText, badge: panelState?.totalChanges ? String(panelState.totalChanges) : "" },
       { key: "history" as PanelTab, label: t("History"), icon: History, badge: "" },
-      {
-        key: "branches" as PanelTab,
-        label: t("Branches"),
-        icon: GitBranch,
-        badge: localBranches.length ? String(localBranches.length) : "",
-      },
       { key: "stash" as PanelTab, label: t("Stash"), icon: HardDrive, badge: stashes.length ? String(stashes.length) : "" },
       { key: "conflicts" as PanelTab, label: t("Conflicts"), icon: Layers, badge: conflicts.length ? String(conflicts.length) : "" },
     ],
-    [panelState?.totalChanges, stashes.length, conflicts.length, localBranches.length, t],
+    [panelState?.totalChanges, stashes.length, conflicts.length, t],
   );
 
   const filteredManagerLocalBranches = useMemo(() => {
@@ -1507,13 +1526,14 @@ export default function GitPanel({ browserPath, isActive = true }: Props) {
     if (selectedTab === "conflicts") {
       void loadConflicts();
     }
-    if (selectedTab === "branches") {
+    if (branchManagerDialogOpen) {
       void loadGraphMetadata();
     }
     return undefined;
   }, [
     gitReady,
     selectedTab,
+    branchManagerDialogOpen,
     currentRepoPath,
     historyBranchFilter,
     historyAuthorFilter,
@@ -1691,6 +1711,16 @@ export default function GitPanel({ browserPath, isActive = true }: Props) {
     return `${historyPaths.length} ${t("paths")}`;
   }
 
+  function historyDateFilterLabel() {
+    switch (historyDateFilter) {
+      case "7d": return t("Last 7 days");
+      case "30d": return t("Last 30 days");
+      case "90d": return t("Last 90 days");
+      case "365d": return t("Last year");
+      default: return t("Date");
+    }
+  }
+
   function historyPathSelectionState(node: RepoPathTreeNode) {
     if (historyPathSelection.includes(node.path)) return "selected";
     if (node.kind === "directory" && historyPathSelection.some((path) => path.startsWith(`${node.path}/`))) {
@@ -1756,11 +1786,10 @@ export default function GitPanel({ browserPath, isActive = true }: Props) {
             >
               {state === "selected" ? <Check size={10} /> : state === "partial" ? <Minus size={10} /> : null}
             </span>
-            <span className="git-path-row__icon">{node.kind === "directory" ? <Folder size={12} /> : <FileText size={12} />}</span>
+            <span className={"git-path-row__icon" + (node.kind === "directory" ? " git-path-row__icon--dir" : "")}>
+              {node.kind === "directory" ? <Folder size={13} /> : <FileText size={12} />}
+            </span>
             <span className="git-path-row__text">{node.name}</span>
-            {node.kind === "directory" && node.children.length ? (
-              <span className="git-path-row__meta">{node.children.length}</span>
-            ) : null}
           </button>
           {node.kind === "directory" && expanded && node.children.length ? renderHistoryPathTree(node.children, depth + 1) : null}
         </div>
@@ -1978,34 +2007,39 @@ export default function GitPanel({ browserPath, isActive = true }: Props) {
     setConfigDraftGlobal(entry.scope === "global");
   }
 
-  async function openBranchMenu(event: ReactMouseEvent<HTMLButtonElement>) {
-    await loadBranchesMenu();
+  // IMPORTANT: open the popover synchronously with the trigger element
+  // BEFORE awaiting any data load. React clears `event.currentTarget` once
+  // the handler returns, so reading it after `await` gives `null` and
+  // `getBoundingClientRect()` throws — the rejection is then swallowed by
+  // the `void openXyz(event)` onClick, making the buttons silently no-op.
+  function openBranchMenu(event: ReactMouseEvent<HTMLButtonElement>) {
     openPopoverFromElement("branchMenu", event.currentTarget, 224);
+    void loadBranchesMenu();
   }
 
-  async function openTagManager(event: ReactMouseEvent<HTMLButtonElement>) {
-    await loadTags();
+  function openTagManager(event: ReactMouseEvent<HTMLButtonElement>) {
     openPopoverFromElement("tagManager", event.currentTarget, 344);
+    void loadTags();
   }
 
-  async function openRemoteManager(event: ReactMouseEvent<HTMLButtonElement>) {
-    await loadRemotes();
+  function openRemoteManager(event: ReactMouseEvent<HTMLButtonElement>) {
     openPopoverFromElement("remoteManager", event.currentTarget, 372);
+    void loadRemotes();
   }
 
-  async function openConfigManager(event: ReactMouseEvent<HTMLButtonElement>) {
-    await loadConfigEntries();
+  function openConfigManager(event: ReactMouseEvent<HTMLButtonElement>) {
     openPopoverFromElement("configManager", event.currentTarget, 372);
+    void loadConfigEntries();
   }
 
-  async function openRebaseManager(event: ReactMouseEvent<HTMLButtonElement>) {
-    await loadRebase();
+  function openRebaseManager(event: ReactMouseEvent<HTMLButtonElement>) {
     openPopoverFromElement("rebaseManager", event.currentTarget, 432);
+    void loadRebase();
   }
 
-  async function openSubmoduleManager(event: ReactMouseEvent<HTMLButtonElement>) {
-    await loadSubmodules();
+  function openSubmoduleManager(event: ReactMouseEvent<HTMLButtonElement>) {
     openPopoverFromElement("submoduleManager", event.currentTarget, 392);
+    void loadSubmodules();
   }
 
   const workingTreeClean = panelState?.workingTreeClean ?? true;
@@ -2118,10 +2152,28 @@ export default function GitPanel({ browserPath, isActive = true }: Props) {
 
   const handleHistoryListScroll = useCallback((event: ReactUIEvent<HTMLDivElement>) => {
     const target = event.currentTarget;
-    if (target.scrollTop + target.clientHeight >= target.scrollHeight - 160) {
+    // Prefetch when the user is still ~2 viewports away from the bottom.
+    // Fires eagerly; loadGraphRows is re-entrant-safe (guards on
+    // historyLoadingMore / historyHasMore), so spurious extra calls during
+    // a fast scroll are dropped.
+    const distanceToBottom = target.scrollHeight - (target.scrollTop + target.clientHeight);
+    if (distanceToBottom < target.clientHeight * 2) {
       void loadGraphRowsRef.current(false);
     }
   }, []);
+
+  // Safety net: if the current rows don't even fill the viewport (e.g. a
+  // narrow filter returned a short first page), auto-load the next page so
+  // the user doesn't get stranded on "End of history" despite there being
+  // more to fetch.
+  useEffect(() => {
+    if (!historyHasMore || historyLoading || historyLoadingMore) return;
+    const el = historyListRef.current;
+    if (!el) return;
+    if (el.scrollHeight < el.clientHeight * 2) {
+      void loadGraphRowsRef.current(false);
+    }
+  }, [graphRows.length, historyHasMore, historyLoading, historyLoadingMore]);
 
   if (!browserPath) {
     return <div className="git-panel git-panel--loading">{t("Loading Git panel…")}</div>;
@@ -2208,6 +2260,12 @@ export default function GitPanel({ browserPath, isActive = true }: Props) {
               <div className="git-panel__branch-spacer" />
 
               <div className="git-panel__branch-tools">
+                <GitIconButton
+                  aria-label={t("Branches")}
+                  icon={GitBranch}
+                  onClick={() => setBranchManagerDialogOpen(true)}
+                  title={t("Branches")}
+                />
                 <GitIconButton aria-label={t("Tags")} icon={Tag} onClick={(event) => void openTagManager(event)} />
                 <GitIconButton aria-label={t("Remotes")} icon={Network} onClick={(event) => void openRemoteManager(event)} />
                 <GitIconButton aria-label={t("Submodules")} icon={Layers} onClick={(event) => void openSubmoduleManager(event)} />
@@ -2429,14 +2487,6 @@ export default function GitPanel({ browserPath, isActive = true }: Props) {
                       <label className="git-commit-check">
                         <input
                           type="checkbox"
-                          checked={commitSignoff}
-                          onChange={(event) => setCommitSignoff(event.currentTarget.checked)}
-                        />
-                        <span>{t("Sign off")}</span>
-                      </label>
-                      <label className="git-commit-check">
-                        <input
-                          type="checkbox"
                           checked={commitAmend}
                           onChange={(event) => setCommitAmend(event.currentTarget.checked)}
                         />
@@ -2448,7 +2498,6 @@ export default function GitPanel({ browserPath, isActive = true }: Props) {
                         onClick={() =>
                           void runGitAction(() =>
                             cmd.gitCommit(currentRepoPath, commitMessage.trim(), {
-                              signoff: commitSignoff,
                               amend: commitAmend,
                             }),
                           ).then(() => {
@@ -2465,7 +2514,6 @@ export default function GitPanel({ browserPath, isActive = true }: Props) {
                         onClick={() =>
                           void runGitAction(() =>
                             cmd.gitCommitAndPush(currentRepoPath, commitMessage.trim(), {
-                              signoff: commitSignoff,
                               amend: commitAmend,
                             }),
                           ).then(() => {
@@ -2490,64 +2538,60 @@ export default function GitPanel({ browserPath, isActive = true }: Props) {
                     <Search size={12} />
                     <input
                       onChange={(event) => setHistorySearchText(event.currentTarget.value)}
-                      placeholder={t("Search commit message or hash")}
+                      placeholder={t("Text or hash")}
                       value={historySearchText}
                     />
                     {historySearchText ? <button onClick={() => setHistorySearchText("")} type="button"><X size={11} /></button> : null}
                   </label>
 
-                  <select
-                    className="git-select git-history__select git-history__select--branch"
-                    onChange={(event) => setHistoryBranchFilter(event.currentTarget.value)}
-                    value={historyBranchFilter}
+                  <button
+                    className={"git-history__filter-chip" + (historyBranchFilter ? " git-history__filter-chip--active" : "")}
+                    onClick={(event) => openPopoverFromElement("historyBranchFilter", event.currentTarget, 248)}
+                    title={historyBranchFilter || t("All branches")}
+                    type="button"
                   >
-                    <option value="">{t("All branches")}</option>
-                    {(graphMetadata?.branches || []).map((branch) => (
-                      <option key={branch} value={branch}>
-                        {branch}
-                      </option>
-                    ))}
-                  </select>
+                    <GitBranch size={12} />
+                    <span className="git-history__filter-label">{historyBranchFilter || t("All branches")}</span>
+                    <ChevronDown size={10} />
+                  </button>
 
-                  <select
-                    className="git-select git-history__select git-history__select--author"
-                    onChange={(event) => setHistoryAuthorFilter(event.currentTarget.value)}
-                    value={historyAuthorFilter}
+                  <button
+                    className={"git-history__filter-chip" + (historyAuthorFilter ? " git-history__filter-chip--active" : "")}
+                    onClick={(event) => openPopoverFromElement("historyAuthorFilter", event.currentTarget, 248)}
+                    title={historyAuthorFilter || t("All authors")}
+                    type="button"
                   >
-                    <option value="">{t("All authors")}</option>
-                    {(graphMetadata?.authors || []).map((author) => (
-                      <option key={author} value={author}>
-                        {author}
-                      </option>
-                    ))}
-                  </select>
+                    <User size={12} />
+                    <span className="git-history__filter-label">{historyAuthorFilter || t("User")}</span>
+                    <ChevronDown size={10} />
+                  </button>
 
-                  <select
-                    className="git-select git-history__select git-history__select--date"
-                    onChange={(event) => setHistoryDateFilter(event.currentTarget.value)}
-                    value={historyDateFilter}
+                  <button
+                    className={"git-history__filter-chip" + (historyDateFilter !== "all" ? " git-history__filter-chip--active" : "")}
+                    onClick={(event) => openPopoverFromElement("historyDateFilter", event.currentTarget, 200)}
+                    title={t("Date")}
+                    type="button"
                   >
-                    <option value="all">{t("Any time")}</option>
-                    <option value="7d">{t("Last 7 days")}</option>
-                    <option value="30d">{t("Last 30 days")}</option>
-                    <option value="90d">{t("Last 90 days")}</option>
-                    <option value="365d">{t("Last year")}</option>
-                  </select>
+                    <Calendar size={12} />
+                    <span className="git-history__filter-label">{historyDateFilterLabel()}</span>
+                    <ChevronDown size={10} />
+                  </button>
 
-                  <GitButton
-                    compact
-                    className="git-history__path-summary git-history__toolbar-button"
+                  <button
+                    className={"git-history__filter-chip" + (historyPaths.length ? " git-history__filter-chip--active" : "")}
                     onClick={() => {
                       setHistoryPathSelection(historyPaths);
                       setHistoryPathSearchText("");
                       setHistoryPathExpanded(defaultExpandedHistoryPaths(graphMetadata?.repoFiles || [], historyPaths));
                       setHistoryPathDialogOpen(true);
                     }}
+                    title={historyPathSummary()}
+                    type="button"
                   >
-                    <Folder size={11} />
-                    {historyPathSummary()}
+                    <Folder size={12} />
+                    <span className="git-history__filter-label">{historyPathSummary()}</span>
                     <ChevronDown size={10} />
-                  </GitButton>
+                  </button>
 
                   {historyPaths.length ? (
                     <GitIconButton className="git-history__toolbar-icon" aria-label={t("Clear path filter")} icon={X} onClick={() => setHistoryPaths([])} />
@@ -2637,8 +2681,15 @@ export default function GitPanel({ browserPath, isActive = true }: Props) {
             </div>
           ) : null}
 
-          {selectedTab === "branches" ? (
-            <div className="git-branches-view">
+          <GitDialog
+            open={branchManagerDialogOpen}
+            onClose={() => setBranchManagerDialogOpen(false)}
+            title={t("Branches")}
+            subtitle={t("Create, switch, rename, and manage tracking")}
+            wide
+            tall
+          >
+            <div className="git-branches-view git-branches-view--dialog">
               <div className="git-branches-view__header">
                 <GitSectionHeader
                   actions={
@@ -2652,8 +2703,7 @@ export default function GitPanel({ browserPath, isActive = true }: Props) {
                       <GitIconButton aria-label={t("Reload branches")} icon={RefreshCw} onClick={() => void loadGraphMetadata()} />
                     </>
                   }
-                  subtitle={t("Create, switch, rename, and manage tracking")}
-                  title={t("Branches")}
+                  title={t("Local & remote")}
                 />
                 <div className="git-segmented">
                   <button className={branchManagerMode === "local" ? "git-segmented__item git-segmented__item--active" : "git-segmented__item"} onClick={() => setBranchManagerMode("local")} type="button">{t("Local")}</button>
@@ -2865,7 +2915,7 @@ export default function GitPanel({ browserPath, isActive = true }: Props) {
                 )}
               </div>
             </div>
-          ) : null}
+          </GitDialog>
 
           {selectedTab === "stash" ? (
             <div className="git-stash-view">
@@ -3186,6 +3236,66 @@ export default function GitPanel({ browserPath, isActive = true }: Props) {
               }}
             >
               {branch}
+            </GitMenuItem>
+          ))}
+        </div>
+      </GitPopover>
+
+      <GitPopover kind="historyBranchFilter" onClose={() => setPopover(null)} popover={popover}>
+        <div className="git-popover-list git-popover-list--scroll">
+          <GitMenuItem
+            active={!historyBranchFilter}
+            onClick={() => { setHistoryBranchFilter(""); setPopover(null); }}
+          >
+            {t("All branches")}
+          </GitMenuItem>
+          {(graphMetadata?.branches || []).map((branch) => (
+            <GitMenuItem
+              active={historyBranchFilter === branch}
+              key={branch}
+              onClick={() => { setHistoryBranchFilter(branch); setPopover(null); }}
+            >
+              {branch}
+            </GitMenuItem>
+          ))}
+        </div>
+      </GitPopover>
+
+      <GitPopover kind="historyAuthorFilter" onClose={() => setPopover(null)} popover={popover}>
+        <div className="git-popover-list git-popover-list--scroll">
+          <GitMenuItem
+            active={!historyAuthorFilter}
+            onClick={() => { setHistoryAuthorFilter(""); setPopover(null); }}
+          >
+            {t("All authors")}
+          </GitMenuItem>
+          {(graphMetadata?.authors || []).map((author) => (
+            <GitMenuItem
+              active={historyAuthorFilter === author}
+              key={author}
+              onClick={() => { setHistoryAuthorFilter(author); setPopover(null); }}
+            >
+              {author}
+            </GitMenuItem>
+          ))}
+        </div>
+      </GitPopover>
+
+      <GitPopover kind="historyDateFilter" onClose={() => setPopover(null)} popover={popover}>
+        <div className="git-popover-list">
+          {[
+            { value: "all", label: t("Any time") },
+            { value: "7d", label: t("Last 7 days") },
+            { value: "30d", label: t("Last 30 days") },
+            { value: "90d", label: t("Last 90 days") },
+            { value: "365d", label: t("Last year") },
+          ].map((option) => (
+            <GitMenuItem
+              active={historyDateFilter === option.value}
+              key={option.value}
+              onClick={() => { setHistoryDateFilter(option.value); setPopover(null); }}
+            >
+              {option.label}
             </GitMenuItem>
           ))}
         </div>

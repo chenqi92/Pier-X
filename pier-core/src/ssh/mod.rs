@@ -49,6 +49,7 @@
 
 pub mod channel;
 pub mod config;
+pub mod db_detect;
 pub mod error;
 pub mod exec_stream;
 pub mod known_hosts;
@@ -59,7 +60,13 @@ pub mod sftp;
 pub mod tunnel;
 
 pub use channel::SshChannelPty;
-pub use config::{AuthMethod, SshConfig};
+pub use config::{
+    AuthMethod, DbCredential, DbCredentialSource, DbKind, DbPasswordStorage, SshConfig,
+};
+pub use db_detect::{
+    detect as db_detect, detect_blocking as db_detect_blocking, DbDetectionReport,
+    DetectedDbInstance, DetectedDbKind, DetectedDbMetadata, DetectionSource, RemoteClis,
+};
 pub use error::SshError;
 pub use exec_stream::{ExecEvent, ExecStream, EXIT_UNKNOWN};
 pub use known_hosts::HostKeyVerifier;

@@ -134,11 +134,16 @@ pub fn graph_log(
     let mut cmd = Command::new("git");
     cmd.current_dir(repo_path);
     cmd.arg("log");
-    if filter.topo_order {
-        cmd.arg("--topo-order");
-    } else {
-        cmd.arg("--date-order");
-    }
+    // Pass BOTH flags, like Pier does. `--topo-order --date-order` keeps
+    // commits on the same chain contiguous (topological) while ordering
+    // parallel chains by date — which is what IDEA's layout expects. Using
+    // just one of them produces a different commit sequence, and the lane
+    // assignment in `compute_graph_layout` is sensitive to that sequence,
+    // so the rendered lines diverge from Pier's reference output.
+    // (`filter.topo_order` is kept in the struct for callers but is no
+    // longer used to exclude the other flag.)
+    cmd.arg("--topo-order");
+    cmd.arg("--date-order");
     cmd.args([&format!("--format={format_str}")]);
     configure_background_command(&mut cmd);
 

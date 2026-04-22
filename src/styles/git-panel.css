@@ -1387,42 +1387,57 @@
 .git-history__filters {
   display: flex;
   align-items: center;
-  flex-wrap: wrap;
+  flex-wrap: nowrap;
   gap: 6px;
+  overflow-x: auto;
+  overflow-y: hidden;
+  /* Hide the horizontal scrollbar — the row still scrolls via trackpad
+   * / shift-wheel, but the chrome is cleaner. */
+  scrollbar-width: none;
+}
+
+.git-history__filters::-webkit-scrollbar {
+  display: none;
+  height: 0;
+  width: 0;
 }
 
 .git-history__search {
-  flex: 1 1 176px;
-  min-width: 0;
+  flex: 0 1 150px;
+  min-width: 110px;
 }
 
-.git-history__select {
+.git-history__filter-chip {
   flex: 0 0 auto;
-}
-
-.git-history__select--branch {
-  width: 118px;
-}
-
-.git-history__select--author {
-  width: 108px;
-}
-
-.git-history__select--date {
-  width: 96px;
-}
-
-.git-history__path-summary {
   display: inline-flex;
   align-items: center;
   gap: 4px;
+  height: 24px;
+  padding: 0 8px;
+  background: transparent;
+  border: none;
+  border-radius: var(--radius-sm);
+  color: var(--ink-2);
+  font-size: var(--size-small);
+  cursor: pointer;
+  white-space: nowrap;
   max-width: 180px;
 }
 
-.git-history__toolbar-button {
-  min-height: 24px;
-  padding: 0 8px;
-  font-size: 10px;
+.git-history__filter-chip:hover {
+  background: var(--surface);
+}
+
+.git-history__filter-chip--active {
+  color: var(--accent);
+}
+
+.git-history__filter-label {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  min-width: 0;
+  max-width: 140px;
 }
 
 .git-history__toolbar-icon {
@@ -2245,6 +2260,11 @@
   font-family: var(--font-mono);
 }
 
+.git-popover-list--scroll {
+  max-height: 280px;
+  overflow-y: auto;
+}
+
 .git-manager,
 .git-popover-list,
 .git-popover-section {
@@ -2395,9 +2415,13 @@
 }
 
 .git-path-row__icon {
-  width: 12px;
-  height: 12px;
+  width: 14px;
+  height: 14px;
   color: var(--text-secondary);
+}
+
+.git-path-row__icon--dir {
+  color: var(--accent);
 }
 
 .git-path-row__meta {
@@ -2623,21 +2647,7 @@
   white-space: nowrap;
 }
 
-@media (max-width: 1440px) {
-  .git-history__filters {
-    grid-template-columns: minmax(0, 1fr) repeat(3, minmax(0, 1fr));
-  }
-
-  .git-history__path-summary {
-    max-width: none;
-  }
-}
-
 @media (max-width: 1080px) {
-  .git-history__filters {
-    grid-template-columns: repeat(2, minmax(0, 1fr));
-  }
-
   .git-panel__toolbar {
     flex-wrap: wrap;
   }

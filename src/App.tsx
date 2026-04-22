@@ -243,6 +243,22 @@ function App() {
       const conn = useConnectionStore.getState().connections.find((c) => c.index === index);
       if (!conn) return;
       useRecentConnectionsStore.getState().touch(index);
+
+      // Seed per-kind DB credentials from the saved profile.
+      // Pick the favourite when one exists, else leave the
+      // picker to the user. The auto-browse effect on each DB
+      // panel will call `dbCredResolve` to pull the password
+      // from the keyring right before the first browse.
+      const dbs = conn.databases ?? [];
+      const pickFav = (kind: string) => {
+        const same = dbs.filter((d) => d.kind === kind);
+        if (same.length === 0) return null;
+        return same.find((d) => d.favorite) ?? (same.length === 1 ? same[0] : null);
+      };
+      const fMysql = pickFav("mysql");
+      const fPg = pickFav("postgres");
+      const fRedis = pickFav("redis");
+
       // Seed the tab synchronously so the terminal starts launching
       // via terminalCreateSshSaved (backend resolves password itself).
       const tabId = addTab({
@@ -255,6 +271,27 @@ function App() {
         sshKeyPath: conn.keyPath,
         sshSavedConnectionIndex: conn.index,
         rightTool: "monitor",
+        ...(fMysql && {
+          mysqlActiveCredentialId: fMysql.id,
+          mysqlHost: fMysql.host || "127.0.0.1",
+          mysqlPort: fMysql.port || 3306,
+          mysqlUser: fMysql.user,
+          mysqlDatabase: fMysql.database ?? "",
+          // Password stays empty — resolved lazily at browse time.
+        }),
+        ...(fPg && {
+          pgActiveCredentialId: fPg.id,
+          pgHost: fPg.host || "127.0.0.1",
+          pgPort: fPg.port || 5432,
+          pgUser: fPg.user,
+          pgDatabase: fPg.database ?? "",
+        }),
+        ...(fRedis && {
+          redisActiveCredentialId: fRedis.id,
+          redisHost: fRedis.host || "127.0.0.1",
+          redisPort: fRedis.port || 6379,
+          redisDb: fRedis.database ? Number.parseInt(fRedis.database, 10) || 0 : 0,
+        }),
       });
       // Prime the in-memory password from the keychain so non-terminal
       // commands (probe, detect, docker, db) that take an explicit

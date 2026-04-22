@@ -42,6 +42,12 @@ pub struct SshConfig {
     /// the implicit "default" group. Ignored by the SSH layer.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub group: Option<String>,
+    /// Database connections remembered for this SSH profile.
+    /// Passwords live in the OS keyring via `DbPasswordStorage`.
+    /// Ignored by the SSH layer — consumed by the right-side DB
+    /// panels to seed forms and auto-open tunnels.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub databases: Vec<DbCredential>,
 }
 
 fn default_connect_timeout() -> u64 {
@@ -63,6 +69,7 @@ impl SshConfig {
             connect_timeout_secs: default_connect_timeout(),
             tags: Vec::new(),
             group: None,
+            databases: Vec::new(),
         }
     }
 
@@ -133,6 +140,130 @@ impl AuthMethod {
     }
 }
 
+/// Kind of database a [`DbCredential`] refers to. Maps 1:1 with
+/// the four right-side DB panels.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum DbKind {
+    /// MySQL / MariaDB / Percona (3306).
+    Mysql,
+    /// PostgreSQL / TimescaleDB / Citus (5432).
+    Postgres,
+    /// Redis / Valkey / KeyDB (6379).
+    Redis,
+    /// Local or remote SQLite `.db` file.
+    Sqlite,
+}
+
+/// How the password for a DB credential is stored.
+///
+/// `Keyring` is the normal case. `Direct` is an opt-in fallback
+/// used when the OS keyring is unavailable (same shape as
+/// [`AuthMethod::DirectPassword`]); the field is `#[serde(skip)]`
+/// so it never touches disk. `None` is used for Redis (no AUTH
+/// configured) and SQLite (passwordless).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(tag = "kind", rename_all = "snake_case")]
+pub enum DbPasswordStorage {
+    /// Password stored in the OS keychain under `credential_id`.
+    Keyring {
+        /// Opaque key used by [`crate::credentials`].
+        credential_id: String,
+    },
+    /// Password kept in-memory only, never persisted.
+    Direct {
+        /// Runtime-only plaintext. Serde-skipped to prevent disk leaks.
+        #[serde(skip)]
+        password: String,
+    },
+    /// Passwordless authentication (Redis with no AUTH, SQLite).
+    None,
+}
+
+impl DbPasswordStorage {
+    /// True if a password is present (keyring ref or runtime
+    /// plaintext). Used by the frontend via `hasPassword`.
+    pub fn is_present(&self) -> bool {
+        match self {
+            Self::Keyring { credential_id } => !credential_id.is_empty(),
+            Self::Direct { password } => !password.is_empty(),
+            Self::None => false,
+        }
+    }
+}
+
+/// Whether a credential was typed by the user or pre-filled from
+/// an auto-detected instance.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(tag = "kind", rename_all = "snake_case")]
+pub enum DbCredentialSource {
+    /// User typed all the fields.
+    Manual,
+    /// Started from a detection result; `signature` is the
+    /// stable dedupe key emitted by `db_detect`.
+    Detected {
+        /// Stable signature (e.g. `docker://<containerId>:<hostPort>`).
+        signature: String,
+    },
+}
+
+/// A single remembered database target, attached to an SSH
+/// profile. Enough fields to re-open a tunnel and browse without
+/// any user typing; passwords resolved lazily at connect time.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct DbCredential {
+    /// Stable id — shaped `pier-x.db.<uuid>`. Also used as the
+    /// keyring key when `password` is `Keyring`.
+    pub id: String,
+    /// Which panel (mysql / postgres / redis / sqlite).
+    pub kind: DbKind,
+    /// User-facing label (e.g. "prod-main", "legacy-5.7").
+    pub label: String,
+    /// Remote-side host. Typically `127.0.0.1` because the tunnel
+    /// forwards a remote-loopback port. For `Sqlite` this is unused.
+    #[serde(default)]
+    pub host: String,
+    /// Remote-side port. Unused for `Sqlite`.
+    #[serde(default)]
+    pub port: u16,
+    /// DB user. Empty for Redis/Sqlite.
+    #[serde(default)]
+    pub user: String,
+    /// Default database / schema / Redis DB index.
+    #[serde(default)]
+    pub database: Option<String>,
+    /// Absolute remote path when `kind == Sqlite`, else `None`.
+    #[serde(default)]
+    pub sqlite_path: Option<String>,
+    /// Password storage strategy for this credential.
+    pub password: DbPasswordStorage,
+    /// When multiple credentials of the same kind exist on one
+    /// profile, the favorite seeds the tab on open.
+    #[serde(default)]
+    pub favorite: bool,
+    /// Whether the user typed this or adopted it from detection.
+    #[serde(default = "default_db_cred_source_manual")]
+    pub source: DbCredentialSource,
+}
+
+fn default_db_cred_source_manual() -> DbCredentialSource {
+    DbCredentialSource::Manual
+}
+
+impl DbCredential {
+    /// Whether the credential has enough fields set to attempt
+    /// a connection (panel uses this to enable auto-browse).
+    pub fn is_valid(&self) -> bool {
+        if self.id.trim().is_empty() {
+            return false;
+        }
+        match self.kind {
+            DbKind::Sqlite => self.sqlite_path.as_deref().unwrap_or("").trim().len() > 0,
+            _ => !self.host.trim().is_empty() && self.port > 0,
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -187,10 +318,131 @@ mod tests {
             connect_timeout_secs: 30,
             tags: vec!["prod".into(), "eu-west".into()],
             group: Some("prod".into()),
+            databases: Vec::new(),
         };
         let json = serde_json::to_string(&original).expect("serialize");
         let parsed: SshConfig = serde_json::from_str(&json).expect("deserialize");
         assert_eq!(parsed, original);
+    }
+
+    #[test]
+    fn db_credential_keyring_round_trips() {
+        // Keyring storage roundtrips cleanly and only exposes
+        // the opaque credential_id — never a password.
+        let original = DbCredential {
+            id: "pier-x.db.abc".into(),
+            kind: DbKind::Mysql,
+            label: "prod-main".into(),
+            host: "127.0.0.1".into(),
+            port: 3306,
+            user: "root".into(),
+            database: Some("shop".into()),
+            sqlite_path: None,
+            password: DbPasswordStorage::Keyring {
+                credential_id: "pier-x.db.abc".into(),
+            },
+            favorite: true,
+            source: DbCredentialSource::Manual,
+        };
+        let json = serde_json::to_string(&original).expect("serialize");
+        let parsed: DbCredential = serde_json::from_str(&json).expect("deserialize");
+        assert_eq!(parsed, original);
+        // A password literal must never appear anywhere in the
+        // serialized form.
+        assert!(!json.contains("\"password\":\""));
+    }
+
+    #[test]
+    fn db_credential_direct_password_is_not_serialized() {
+        // `DbPasswordStorage::Direct::password` is `#[serde(skip)]`
+        // so the runtime-only plaintext never reaches disk.
+        let original = DbCredential {
+            id: "pier-x.db.x".into(),
+            kind: DbKind::Redis,
+            label: "local".into(),
+            host: "127.0.0.1".into(),
+            port: 6379,
+            user: String::new(),
+            database: Some("0".into()),
+            sqlite_path: None,
+            password: DbPasswordStorage::Direct {
+                password: "hunter2".into(),
+            },
+            favorite: false,
+            source: DbCredentialSource::Manual,
+        };
+        let json = serde_json::to_string(&original).expect("serialize");
+        assert!(!json.contains("hunter2"), "serialized JSON leaked password: {json}");
+        let parsed: DbCredential = serde_json::from_str(&json).expect("deserialize");
+        // Password is skipped on serialize, so the parsed side
+        // comes back as empty plaintext.
+        match parsed.password {
+            DbPasswordStorage::Direct { password } => assert_eq!(password, ""),
+            other => panic!("expected Direct, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn db_credential_sqlite_uses_path_not_port() {
+        let c = DbCredential {
+            id: "pier-x.db.s".into(),
+            kind: DbKind::Sqlite,
+            label: "app.db".into(),
+            host: String::new(),
+            port: 0,
+            user: String::new(),
+            database: None,
+            sqlite_path: Some("/srv/app.db".into()),
+            password: DbPasswordStorage::None,
+            favorite: false,
+            source: DbCredentialSource::Detected {
+                signature: "file:///srv/app.db".into(),
+            },
+        };
+        assert!(c.is_valid(), "sqlite credential with path must be valid");
+        let mut bad = c.clone();
+        bad.sqlite_path = None;
+        assert!(!bad.is_valid(), "sqlite credential without path must be invalid");
+    }
+
+    #[test]
+    fn ssh_config_databases_round_trips() {
+        let mut cfg = SshConfig::new("prod", "db.example.com", "deploy");
+        cfg.databases.push(DbCredential {
+            id: "pier-x.db.1".into(),
+            kind: DbKind::Postgres,
+            label: "primary".into(),
+            host: "127.0.0.1".into(),
+            port: 5432,
+            user: "postgres".into(),
+            database: Some("app".into()),
+            sqlite_path: None,
+            password: DbPasswordStorage::Keyring {
+                credential_id: "pier-x.db.1".into(),
+            },
+            favorite: true,
+            source: DbCredentialSource::Manual,
+        });
+        let json = serde_json::to_string(&cfg).expect("serialize");
+        let parsed: SshConfig = serde_json::from_str(&json).expect("deserialize");
+        assert_eq!(parsed, cfg);
+    }
+
+    #[test]
+    fn ssh_config_old_json_without_databases_loads_with_empty_vec() {
+        // Forward-compat: an SshConfig written by an older
+        // pier-x build that predates `databases` must still load
+        // cleanly into the new struct.
+        let old = serde_json::json!({
+            "name": "legacy",
+            "host": "h",
+            "port": 22,
+            "user": "u",
+            "auth": { "kind": "agent" },
+            "connect_timeout_secs": 10,
+        });
+        let parsed: SshConfig = serde_json::from_value(old).expect("backwards-compat load");
+        assert!(parsed.databases.is_empty());
     }
 
     #[test]
@@ -206,6 +458,7 @@ mod tests {
             connect_timeout_secs: 5,
             tags: vec![],
             group: None,
+            databases: Vec::new(),
         };
         let json = serde_json::to_string(&c).expect("serialize");
         let parsed: SshConfig = serde_json::from_str(&json).expect("deserialize");

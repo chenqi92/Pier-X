@@ -736,16 +736,19 @@ pub fn git_graph_history(params: GitGraphHistoryParams) -> Result<Vec<GitGraphRo
         .branch_info()
         .map(|info| info.name)
         .unwrap_or_else(|_| String::from("HEAD"));
-    let branch = params
+    // Only use an explicit branch filter when the user picked one. Falling
+    // back to `current_branch` here silently turned the graph into a
+    // single-lane first-parent view of main for every repo with no
+    // user-set filter — which is why branches never appeared.
+    let explicit_branch = params
         .branch
         .as_deref()
         .map(str::trim)
         .filter(|value| !value.is_empty())
-        .map(String::from)
-        .or_else(|| if current_branch.is_empty() { None } else { Some(current_branch) });
+        .map(String::from);
 
     let filter = GraphFilter {
-        branch: branch.clone(),
+        branch: explicit_branch.clone(),
         author: params
             .author
             .as_deref()
@@ -774,8 +777,13 @@ pub fn git_graph_history(params: GitGraphHistoryParams) -> Result<Vec<GitGraphRo
     let skip = params.skip.unwrap_or(0);
     let commits = git_graph::graph_log(&repo_path, limit, skip, &filter)?;
 
-    let main_ref = branch
-        .filter(|value| !value.trim().is_empty())
+    // Color-0 main chain: prefer the user's selected branch, then the
+    // currently-checked-out branch, then auto-detect (main/master/HEAD).
+    let main_ref = explicit_branch
+        .or_else(|| {
+            let cb = current_branch.trim();
+            if cb.is_empty() || cb == "HEAD" { None } else { Some(cb.to_string()) }
+        })
         .unwrap_or_else(|| git_graph::detect_default_branch(&repo_path).unwrap_or_else(|_| String::from("HEAD")));
     let main_chain: HashSet<String> = git_graph::first_parent_chain(&repo_path, &main_ref, limit)?
         .into_iter()

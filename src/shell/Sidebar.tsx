@@ -18,9 +18,11 @@ import {
   Search,
   Server,
   Shield,
+  Star,
   Terminal,
   Trash2,
 } from "lucide-react";
+import { open as openDialog } from "@tauri-apps/plugin-dialog";
 import type {
   DragEvent as ReactDragEvent,
   KeyboardEvent as ReactKeyboardEvent,
@@ -495,6 +497,56 @@ export default function Sidebar({ onOpenLocalTerminal, onConnectSaved, onNewConn
   const [newLocalName, setNewLocalName] = useState("");
   const [newLocalKind, setNewLocalKind] = useState<"file" | "dir" | null>(null);
 
+  // Quick-access folder dropdown — opens beneath the toolbar star
+  // button. We anchor the ContextMenu to the button's bounding rect
+  // instead of a mouse position so the menu lands in a predictable
+  // place regardless of how the user triggered it.
+  const favBtnRef = useRef<HTMLButtonElement>(null);
+  const [favMenuPos, setFavMenuPos] = useState<{ x: number; y: number } | null>(null);
+
+  function buildFavoriteItems(): ContextMenuItem[] {
+    const items: ContextMenuItem[] = [];
+    if (homeDir) {
+      const sep = sepFor(homeDir);
+      const base = homeDir.replace(/[\\/]+$/, "");
+      const join = (leaf: string) => `${base}${sep}${leaf}`;
+      items.push({ label: t("Home"), action: () => pushPath(homeDir) });
+      items.push({ label: t("Desktop"), action: () => pushPath(join("Desktop")) });
+      items.push({ label: t("Documents"), action: () => pushPath(join("Documents")) });
+      items.push({ label: t("Downloads"), action: () => pushPath(join("Downloads")) });
+      items.push({ label: t("Projects"), action: () => pushPath(join("Projects")) });
+      items.push({ divider: true });
+    }
+    items.push({
+      label: t("Choose folder…"),
+      action: () => {
+        void (async () => {
+          try {
+            const picked = await openDialog({
+              directory: true,
+              multiple: false,
+              title: t("Choose folder"),
+            });
+            if (typeof picked === "string" && picked) pushPath(picked);
+          } catch (e) {
+            reportError(e);
+          }
+        })();
+      },
+    });
+    return items;
+  }
+
+  function toggleFavMenu() {
+    if (favMenuPos) {
+      setFavMenuPos(null);
+      return;
+    }
+    const rect = favBtnRef.current?.getBoundingClientRect();
+    if (!rect) return;
+    setFavMenuPos({ x: rect.left, y: rect.bottom + 4 });
+  }
+
   function refreshLocalEntries() {
     if (!currentPath) return;
     const loader =
@@ -754,6 +806,23 @@ export default function Sidebar({ onOpenLocalTerminal, onConnectSaved, onNewConn
               )}
             </div>
             <button
+              ref={favBtnRef}
+              className={"mini-btn" + (favMenuPos ? " is-active" : "")}
+              onClick={toggleFavMenu}
+              onMouseDown={(e) => {
+                // ContextMenu closes on any document mousedown that
+                // lands outside its ref — including the trigger
+                // button. Swallow the mousedown so re-clicking the
+                // button toggles cleanly instead of close-then-reopen.
+                e.stopPropagation();
+              }}
+              title={t("Common folders")}
+              type="button"
+              aria-expanded={favMenuPos !== null}
+            >
+              <Star />
+            </button>
+            <button
               className="mini-btn"
               onClick={() => {
                 const loader =
@@ -778,6 +847,12 @@ export default function Sidebar({ onOpenLocalTerminal, onConnectSaved, onNewConn
             />
           </div>
 
+          <div className="sidebar-header-row">
+            <span className="col-name">{t("NAME")}</span>
+            <span className="col-mod">{t("MOD")}</span>
+            <span className="col-size">{t("SIZE")}</span>
+          </div>
+
           <div
             className={"sidebar-list" + (sftpDropActive ? " is-drop" : "")}
             onDragEnter={handleFileListDragEnter}
@@ -786,11 +861,6 @@ export default function Sidebar({ onOpenLocalTerminal, onConnectSaved, onNewConn
             onDrop={handleFileListDrop}
             onContextMenu={handleLocalListContextMenu}
           >
-            <div className="sidebar-header-row">
-              <span className="col-name">{t("NAME")}</span>
-              <span className="col-mod">{t("MOD")}</span>
-              <span className="col-size">{t("SIZE")}</span>
-            </div>
             {newLocalKind && currentPath !== DRIVES_PATH && (
               <div className="sidebar-quickrow">
                 <span className="sidebar-quickrow-label">
@@ -879,6 +949,14 @@ export default function Sidebar({ onOpenLocalTerminal, onConnectSaved, onNewConn
                   : buildLocalEmptyMenu()
               }
               onClose={() => setLocalCtxMenu(null)}
+            />
+          )}
+          {favMenuPos && (
+            <ContextMenu
+              x={favMenuPos.x}
+              y={favMenuPos.y}
+              items={buildFavoriteItems()}
+              onClose={() => setFavMenuPos(null)}
             />
           )}
         </>

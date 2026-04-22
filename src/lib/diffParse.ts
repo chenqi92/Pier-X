@@ -9,6 +9,9 @@ export type DiffLine = {
   oldLine: number | null;
   newLine: number | null;
   text: string;
+  /** Ordinal of the change block this line starts, if any. Set by
+   *  consumers that want Prev/Next-change navigation. */
+  changeIndex?: number;
 };
 
 export type DiffHunk = {

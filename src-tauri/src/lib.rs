@@ -37,6 +37,14 @@ struct AppState {
     /// invalidates the cache via explicit eviction (not by changing
     /// the key).
     sftp_sessions: Mutex<HashMap<String, Arc<SshSession>>>,
+    /// Per-target `/proc/net/dev` baselines used by
+    /// `server_monitor_probe` to compute network throughput between
+    /// successive polls. Keyed the same way as `sftp_sessions` so a
+    /// session eviction also lets the network baseline reset
+    /// naturally. Only the most recent sample is kept; the
+    /// `Option` lets the first probe install a baseline without a
+    /// rate, and every subsequent one diff against it.
+    monitor_net_baselines: Mutex<HashMap<String, server_monitor::NetSample>>,
 }
 
 impl Default for AppState {
@@ -48,6 +56,7 @@ impl Default for AppState {
             tunnels: Mutex::new(HashMap::new()),
             log_streams: Mutex::new(HashMap::new()),
             sftp_sessions: Mutex::new(HashMap::new()),
+            monitor_net_baselines: Mutex::new(HashMap::new()),
         }
     }
 }
@@ -380,6 +389,24 @@ struct ServerSnapshotView {
     disk_avail: String,
     disk_use_pct: f64,
     cpu_pct: f64,
+    cpu_count: u32,
+    proc_count: u32,
+    os_label: String,
+    /// Bytes-per-second received across non-loopback interfaces.
+    /// `-1` until two consecutive probes have run.
+    net_rx_bps: f64,
+    net_tx_bps: f64,
+    top_processes: Vec<ProcessRowView>,
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct ProcessRowView {
+    pid: String,
+    command: String,
+    cpu_pct: String,
+    mem_pct: String,
+    elapsed: String,
 }
 
 #[derive(Serialize)]
@@ -2881,14 +2908,31 @@ fn server_monitor_probe(
     // On `probe_blocking` failure we evict the cache entry and
     // retry once — covers the case where the cached session
     // silently went stale (server bounced, idle keepalive timeout).
+    let baseline_key = sftp_cache_key(&host, port, &user, &auth_mode);
     let mut attempt = 0;
     let snap = loop {
         let session = get_or_open_sftp_ssh_session(
             &state, &host, port, &user, &auth_mode, &password, &key_path,
             saved_connection_index,
         )?;
-        match server_monitor::probe_blocking(&session) {
-            Ok(snap) => break snap,
+        // Pull the previous net sample (if any), pass it through the
+        // probe, then save the updated sample back. Holding the
+        // mutex only across the load and store keeps the long
+        // network probe out of the lock.
+        let mut local_baseline = state
+            .monitor_net_baselines
+            .lock()
+            .ok()
+            .and_then(|guard| guard.get(&baseline_key).copied());
+        match server_monitor::probe_with_baseline_blocking(&session, &mut local_baseline) {
+            Ok(snap) => {
+                if let Some(sample) = local_baseline {
+                    if let Ok(mut guard) = state.monitor_net_baselines.lock() {
+                        guard.insert(baseline_key.clone(), sample);
+                    }
+                }
+                break snap;
+            }
             Err(e) if attempt == 0 => {
                 evict_sftp_session(&state, &host, port, &user, &auth_mode);
                 attempt += 1;
@@ -2914,6 +2958,22 @@ fn server_monitor_probe(
         disk_avail: snap.disk_avail,
         disk_use_pct: snap.disk_use_pct,
         cpu_pct: snap.cpu_pct,
+        cpu_count: snap.cpu_count,
+        proc_count: snap.proc_count,
+        os_label: snap.os_label,
+        net_rx_bps: snap.net_rx_bps,
+        net_tx_bps: snap.net_tx_bps,
+        top_processes: snap
+            .top_processes
+            .into_iter()
+            .map(|p| ProcessRowView {
+                pid: p.pid,
+                command: p.command,
+                cpu_pct: p.cpu_pct,
+                mem_pct: p.mem_pct,
+                elapsed: p.elapsed,
+            })
+            .collect(),
     })
 }
 
@@ -4024,6 +4084,12 @@ fn local_system_info() -> Result<ServerSnapshotView, String> {
             swap_total_mb: 0.0, swap_used_mb: 0.0,
             disk_total, disk_used, disk_avail, disk_use_pct,
             cpu_pct: -1.0,
+            cpu_count: 0,
+            proc_count: 0,
+            os_label: String::new(),
+            net_rx_bps: -1.0,
+            net_tx_bps: -1.0,
+            top_processes: Vec::new(),
         })
     }
     #[cfg(not(target_os = "macos"))]
@@ -4058,6 +4124,12 @@ fn local_system_info() -> Result<ServerSnapshotView, String> {
             disk_avail: df_parts.get(3).unwrap_or(&"").to_string(),
             disk_use_pct: df_parts.get(4).unwrap_or(&"0%").trim_end_matches('%').parse::<f64>().unwrap_or(-1.0),
             cpu_pct: -1.0,
+            cpu_count: 0,
+            proc_count: 0,
+            os_label: String::new(),
+            net_rx_bps: -1.0,
+            net_tx_bps: -1.0,
+            top_processes: Vec::new(),
         })
     }
 }

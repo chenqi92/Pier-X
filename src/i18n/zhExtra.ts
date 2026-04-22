@@ -191,6 +191,17 @@ export const zhExtra: Record<string, string> = {
   "markdown preview": "Markdown 预览",
   "Maximize": "最大化",
   "MEMORY": "内存",
+  "NETWORK": "网络",
+  "TOP PROCESSES": "进程占用",
+  "by CPU": "按 CPU 排序",
+  "PID": "PID",
+  "COMMAND": "命令",
+  "CPU%": "CPU%",
+  "MEM%": "内存%",
+  "TIME": "运行时长",
+  "warming up...": "正在预热…",
+  "{count} procs": "{count} 个进程",
+  "(no process data)": "（无进程数据）",
   "Merge": "合并",
   "Merge commits": "合并提交",
   "Minimize": "最小化",
@@ -555,6 +566,18 @@ export const zhExtra: Record<string, string> = {
     "当镜像引用没有显式指定 registry 时会自动加前缀（如 `nginx:latest` → `<镜像源>/nginx:latest`）。",
   "Applied only to this tab's `docker pull` as an env var. The remote daemon config is untouched.":
     "仅对当前标签页的 `docker pull` 作为环境变量生效，不修改远端 docker 守护进程配置。",
+  // RegistryProxyDialog hints — plain-text variants (no backticks/angle
+  // brackets in the visible copy), kept in sync with RegistryProxyDialog.tsx.
+  "Prepended to pulls whose image ref does not already contain a registry (e.g. nginx:latest → <mirror>/nginx:latest).":
+    "当镜像引用没有显式指定 registry 时会自动加前缀（例如 nginx:latest → <镜像源>/nginx:latest）。",
+  "Applied only to this tab's docker pull as an env var. The remote daemon config is untouched.":
+    "仅对当前标签页的 docker pull 作为环境变量生效，不修改远端 docker 守护进程配置。",
+  "Mirror presets": "镜像源预设",
+
+  // GitPanel — empty states tied to the left sidebar's current path.
+  "No directory selected": "未选择目录",
+  "Pick a directory in the left sidebar to see its Git status.":
+    "在左侧选择一个目录以查看其 Git 状态。",
 
   // Run-container dialog
   "Container name": "容器名称",

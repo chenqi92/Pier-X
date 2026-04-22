@@ -1816,6 +1816,89 @@ button,
   font-size: var(--size-micro);
 }
 
+/* System-stats pill strip — vCPU / total RAM / disk / process
+ * count pills shown beneath the gauges. Mirrors the pier-x-copy
+ * reference: small mono-font pills with neutral panel borders. */
+.mon-strip {
+  display: flex;
+  gap: var(--sp-1-5);
+  flex-wrap: wrap;
+}
+.mon-pill {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--sp-1);
+  font-family: var(--mono);
+  font-size: var(--size-micro);
+  color: var(--ink-2);
+  background: var(--panel);
+  border: 1px solid var(--line);
+  padding: 3px var(--sp-2);
+  border-radius: var(--radius-pill);
+  white-space: nowrap;
+}
+.mon-pill svg { color: var(--muted); flex: none; }
+
+/* Top-processes block — bordered card with a header strip and a
+ * compact mono table inside. Sized to sit naturally between the
+ * stats strip and the probe button row. */
+.mon-block {
+  background: var(--panel);
+  border: 1px solid var(--line);
+  border-radius: var(--radius-md);
+  overflow: hidden;
+}
+.mon-block-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: var(--sp-1-5) var(--sp-3);
+  background: var(--surface-2);
+  border-bottom: 1px solid var(--line);
+  font-family: var(--mono);
+  font-size: var(--size-micro);
+  color: var(--muted);
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+}
+.mon-block-meta {
+  font-size: var(--size-micro);
+  color: var(--muted);
+  text-transform: none;
+  letter-spacing: 0;
+}
+.mon-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: var(--size-small);
+}
+.mon-table th {
+  text-align: left;
+  padding: 5px var(--sp-3);
+  font-family: var(--mono);
+  font-size: var(--size-micro);
+  color: var(--muted);
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  border-bottom: 1px solid var(--line);
+  font-weight: var(--weight-medium);
+  background: var(--panel);
+}
+.mon-table td {
+  padding: 4px var(--sp-3);
+  border-bottom: 1px solid var(--line);
+  color: var(--ink);
+}
+.mon-table tr:last-child td { border-bottom: none; }
+.mon-table tr:hover td { background: var(--panel-2); }
+.mon-cell-right { text-align: right; }
+.mon-cell-muted { color: var(--muted); }
+.mon-empty {
+  text-align: center;
+  color: var(--muted);
+  padding: var(--sp-3) var(--sp-3);
+}
+
 /* ── Terminal Panel ──────────────────────────────────────────── */
 
 .terminal-panel {
@@ -3839,6 +3922,81 @@ button,
 .ftp-list.is-drop {
   background: color-mix(in srgb, var(--accent) 10%, var(--surface));
   box-shadow: inset 0 0 0 2px var(--accent);
+}
+/* Refresh path: keep the virtualized list visible but soften it so the
+ * user sees a "reloading" cue without the list vanishing (that was the
+ * old "Browsing..." flicker). The refresh icon's spin — below — is the
+ * primary in-flight signal. */
+.ftp-list.is-loading {
+  opacity: 0.55;
+  transition: opacity var(--dur-fast) var(--easing);
+}
+
+/* First-load skeleton. Rows match `.ftp-row`'s 5-column grid so the
+ * layout is identical to the real list — no jump when data lands.
+ * Per-bar shimmer uses the same gradient-sweep animation as the
+ * Docker `.dk-skeleton-row`. */
+.ftp-skeleton {
+  display: flex;
+  flex-direction: column;
+  padding: 2px 0;
+}
+.ftp-skeleton-row {
+  display: grid;
+  grid-template-columns: 20px 1fr 110px 70px 92px;
+  gap: var(--sp-2-5);
+  padding: 6px var(--sp-3);
+  align-items: center;
+}
+.ftp-sk-bar {
+  display: block;
+  height: 10px;
+  border-radius: var(--radius-xs);
+  background: linear-gradient(
+    90deg,
+    var(--panel) 0%,
+    var(--panel-2) 50%,
+    var(--panel) 100%
+  );
+  background-size: 200% 100%;
+  animation: ftpSkShimmer 1.4s linear infinite;
+}
+.ftp-sk-ic { width: 14px; height: 14px; border-radius: 50%; }
+.ftp-sk-perm { width: 80%; justify-self: start; }
+.ftp-sk-size { width: 60%; justify-self: end; }
+.ftp-sk-mod { width: 70%; justify-self: end; }
+@keyframes ftpSkShimmer {
+  0% { background-position: 200% 0; }
+  100% { background-position: -200% 0; }
+}
+/* Narrower breakpoints mirror the `.ftp-row` container queries below —
+ * when the panel collapses a column, the skeleton must collapse the
+ * same one or the layout will jump when real rows arrive. Thresholds
+ * are kept in sync with the @container blocks further down this file
+ * (460 → PERM, 340 → MOD, 240 → SIZE). */
+@container ftp-panel (max-width: 460px) {
+  .ftp-skeleton-row { grid-template-columns: 20px 1fr 70px 92px; }
+  .ftp-skeleton-row .ftp-sk-perm { display: none; }
+}
+@container ftp-panel (max-width: 340px) {
+  .ftp-skeleton-row { grid-template-columns: 20px 1fr 70px; }
+  .ftp-skeleton-row .ftp-sk-mod { display: none; }
+}
+@container ftp-panel (max-width: 240px) {
+  .ftp-skeleton-row { grid-template-columns: 20px 1fr; }
+  .ftp-skeleton-row .ftp-sk-size { display: none; }
+}
+
+/* Spinner for the refresh icon while a browse is in flight. Scoped
+ * class (not a generic utility) so it only animates the SVG it's
+ * applied to. */
+.ftp-spin {
+  animation: ftpSpin 0.9s linear infinite;
+  transform-origin: 50% 50%;
+}
+@keyframes ftpSpin {
+  from { transform: rotate(0deg); }
+  to { transform: rotate(360deg); }
 }
 .ftp-row {
   display: grid;

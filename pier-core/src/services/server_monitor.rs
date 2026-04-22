@@ -61,6 +61,36 @@ pub struct ServerSnapshot {
     /// CPU usage percentage (0-100) since boot, from /proc/stat.
     /// -1 if unavailable (macOS, containers without /proc).
     pub cpu_pct: f64,
+    /// Logical CPU count from `nproc` / `/proc/cpuinfo`. 0 if
+    /// unavailable.
+    pub cpu_count: u32,
+    /// Total running processes from `ps -e | wc -l` (minus header).
+    /// 0 if unavailable.
+    pub proc_count: u32,
+    /// OS / kernel description, e.g. `"Ubuntu 24.04.1 · 5.15.0-139"`.
+    /// Empty if unavailable.
+    pub os_label: String,
+    /// Bytes-per-second received across all interfaces, computed as
+    /// the delta between two `/proc/net/dev` samples taken roughly
+    /// 1 second apart by the probe. -1 when unavailable (no
+    /// `/proc/net/dev`, or first sample so no rate yet).
+    pub net_rx_bps: f64,
+    /// Bytes-per-second transmitted across all interfaces.
+    pub net_tx_bps: f64,
+    /// Top processes by CPU%. Up to 8 entries, sorted descending.
+    pub top_processes: Vec<ProcessRow>,
+}
+
+/// One row in the "top processes" table. All fields are best-effort —
+/// `ps`'s output column widths vary by distro and `comm` may be
+/// truncated; the parser keeps whatever the remote shell prints.
+#[derive(Clone, Debug, Default, Serialize, Deserialize)]
+pub struct ProcessRow {
+    pub pid: String,
+    pub command: String,
+    pub cpu_pct: String,
+    pub mem_pct: String,
+    pub elapsed: String,
 }
 
 /// Run a combined probe and return a single snapshot.
@@ -70,6 +100,21 @@ pub struct ServerSnapshot {
 /// to -1 / empty, so a partial result is better than
 /// an error.
 pub async fn probe(session: &SshSession) -> Result<ServerSnapshot> {
+    let mut throwaway: Option<NetSample> = None;
+    probe_with_baseline(session, &mut throwaway).await
+}
+
+/// Like [`probe`] but threads a `/proc/net/dev` baseline through the
+/// caller. On entry, `*baseline` (if set) is the previous sample we
+/// took for this target; the probe diffs against it to produce
+/// `snap.net_rx_bps` / `snap.net_tx_bps`. On exit, `*baseline` is
+/// updated to the most recent sample so the next call computes a
+/// rate over the elapsed interval. The first call (with `None`)
+/// leaves the rate fields at `-1`; subsequent calls fill them in.
+pub async fn probe_with_baseline(
+    session: &SshSession,
+    baseline: &mut Option<NetSample>,
+) -> Result<ServerSnapshot> {
     // Chain commands with a separator line we can split on. Each step
     // is wrapped in `( … || true )` so a missing tool (no `free` on
     // BusyBox, no `/proc/stat` on macOS, an unmounted `/`) doesn't
@@ -81,11 +126,27 @@ pub async fn probe(session: &SshSession) -> Result<ServerSnapshot> {
     // `LC_ALL=C` forces predictable English output regardless of the
     // remote's locale (e.g. a server set to zh_CN.UTF-8 would print
     // `内存:` instead of `Mem:` and the parser would skip the row).
+    //
+    // The full set of sections we now collect:
+    //   UPTIME    — `uptime` for system uptime + load averages
+    //   FREE      — `free -m` (or `vm_stat`) for memory + swap
+    //   DF        — `df -hP /` for root filesystem usage
+    //   CPUSTAT   — first line of `/proc/stat` for CPU%
+    //   NPROC     — logical CPU count
+    //   PROCS     — total process count (`ps -e | wc -l` minus header)
+    //   OSREL     — distro / kernel id from `/etc/os-release` + `uname`
+    //   NETDEV    — `cat /proc/net/dev` for network throughput
+    //   TOPPROC   — `ps -eo pid,comm,pcpu,pmem,etime --sort=-pcpu` head
     let cmd = "LC_ALL=C; export LC_ALL; \
                echo '---UPTIME---'; (uptime 2>/dev/null || true); \
                echo '---FREE---'; (free -m 2>/dev/null || vm_stat 2>/dev/null || true); \
                echo '---DF---'; (df -hP / 2>/dev/null || df -h / 2>/dev/null || true); \
-               echo '---CPUSTAT---'; (head -1 /proc/stat 2>/dev/null || true)";
+               echo '---CPUSTAT---'; (head -1 /proc/stat 2>/dev/null || true); \
+               echo '---NPROC---'; (nproc 2>/dev/null || grep -c ^processor /proc/cpuinfo 2>/dev/null || true); \
+               echo '---PROCS---'; (ps -eo pid 2>/dev/null | wc -l 2>/dev/null || true); \
+               echo '---OSREL---'; (cat /etc/os-release 2>/dev/null; uname -sr 2>/dev/null || true); \
+               echo '---NETDEV---'; (cat /proc/net/dev 2>/dev/null || true); \
+               echo '---TOPPROC---'; (ps -eo pid,comm,pcpu,pmem,etime --sort=-pcpu --no-headers 2>/dev/null | head -8 || true)";
     let (exit, stdout) = session.exec_command(cmd).await?;
     if exit != 0 && stdout.is_empty() {
         return Err(SshError::InvalidConfig(format!(
@@ -109,6 +170,8 @@ pub async fn probe(session: &SshSession) -> Result<ServerSnapshot> {
         swap_used_mb: -1.0,
         disk_use_pct: -1.0,
         cpu_pct: -1.0,
+        net_rx_bps: -1.0,
+        net_tx_bps: -1.0,
         ..Default::default()
     };
 
@@ -127,6 +190,36 @@ pub async fn probe(session: &SshSession) -> Result<ServerSnapshot> {
     if let Some(s) = sections.get("CPUSTAT") {
         parse_cpustat(s, &mut snap);
     }
+    if let Some(s) = sections.get("NPROC") {
+        snap.cpu_count = s.lines().next().unwrap_or("").trim().parse().unwrap_or(0);
+    }
+    if let Some(s) = sections.get("PROCS") {
+        // `ps -eo pid | wc -l` includes the column header → subtract 1.
+        let raw: u32 = s.lines().next().unwrap_or("").trim().parse().unwrap_or(0);
+        snap.proc_count = raw.saturating_sub(1);
+    }
+    if let Some(s) = sections.get("OSREL") {
+        snap.os_label = parse_os_label(s);
+    }
+    if let Some(s) = sections.get("NETDEV") {
+        if let Some(now) = parse_netdev_totals(s) {
+            if let Some(prev) = *baseline {
+                let dt = now.captured_at.saturating_sub(prev.captured_at) as f64 / 1000.0;
+                if dt > 0.05 {
+                    snap.net_rx_bps =
+                        (now.rx_bytes.saturating_sub(prev.rx_bytes)) as f64 / dt;
+                    snap.net_tx_bps =
+                        (now.tx_bytes.saturating_sub(prev.tx_bytes)) as f64 / dt;
+                }
+            }
+            // Update the caller's baseline so the next probe can
+            // compute a rate against this sample.
+            *baseline = Some(now);
+        }
+    }
+    if let Some(s) = sections.get("TOPPROC") {
+        snap.top_processes = parse_top_processes(s);
+    }
 
     Ok(snap)
 }
@@ -134,6 +227,135 @@ pub async fn probe(session: &SshSession) -> Result<ServerSnapshot> {
 /// Blocking wrapper for [`probe`].
 pub fn probe_blocking(session: &SshSession) -> Result<ServerSnapshot> {
     crate::ssh::runtime::shared().block_on(probe(session))
+}
+
+/// Blocking wrapper for [`probe_with_baseline`].
+pub fn probe_with_baseline_blocking(
+    session: &SshSession,
+    baseline: &mut Option<NetSample>,
+) -> Result<ServerSnapshot> {
+    crate::ssh::runtime::shared().block_on(probe_with_baseline(session, baseline))
+}
+
+/// One `/proc/net/dev` sample — total rx/tx bytes summed across all
+/// non-loopback interfaces, plus the local timestamp the sample was
+/// captured at. Two samples a few seconds apart let us derive a
+/// per-second rate.
+#[derive(Clone, Copy, Debug)]
+pub struct NetSample {
+    pub rx_bytes: u64,
+    pub tx_bytes: u64,
+    /// Local clock (ms since UNIX epoch) the sample was taken at.
+    pub captured_at: u64,
+}
+
+/// Sum the `rx_bytes` (column 1) and `tx_bytes` (column 9) across
+/// every interface in `/proc/net/dev`, skipping `lo` (loopback) and
+/// any header rows. Returns `None` if no data lines parse — the
+/// caller leaves the network gauge at "unavailable".
+fn parse_netdev_totals(text: &str) -> Option<NetSample> {
+    let mut rx: u64 = 0;
+    let mut tx: u64 = 0;
+    let mut any = false;
+    for line in text.lines() {
+        let trimmed = line.trim();
+        // Header rows have a `|` in them — skip.
+        if trimmed.is_empty() || trimmed.contains('|') {
+            continue;
+        }
+        // Interface name is the column ending in `:`.
+        let Some(colon) = trimmed.find(':') else { continue };
+        let iface = trimmed[..colon].trim();
+        // Skip loopback — local-only traffic isn't useful for the
+        // "is this server seeing real network activity?" question.
+        if iface == "lo" {
+            continue;
+        }
+        let nums: Vec<u64> = trimmed[colon + 1..]
+            .split_whitespace()
+            .filter_map(|t| t.parse::<u64>().ok())
+            .collect();
+        // Columns: rx_bytes rx_packets rx_errs ... tx_bytes tx_packets ...
+        if nums.len() >= 9 {
+            rx = rx.saturating_add(nums[0]);
+            tx = tx.saturating_add(nums[8]);
+            any = true;
+        }
+    }
+    if !any {
+        return None;
+    }
+    let captured_at = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_millis() as u64)
+        .unwrap_or(0);
+    Some(NetSample {
+        rx_bytes: rx,
+        tx_bytes: tx,
+        captured_at,
+    })
+}
+
+/// Build the OS / kernel label shown in the panel header. Combines
+/// `/etc/os-release`'s `PRETTY_NAME` with `uname -sr`. Falls back to
+/// whichever piece is available.
+fn parse_os_label(text: &str) -> String {
+    let mut pretty = String::new();
+    let mut kernel = String::new();
+    for line in text.lines() {
+        let trimmed = line.trim();
+        if let Some(rest) = trimmed.strip_prefix("PRETTY_NAME=") {
+            pretty = rest.trim_matches('"').to_string();
+        } else if !trimmed.is_empty()
+            && !trimmed.contains('=')
+            && kernel.is_empty()
+        {
+            // `uname -sr` output: "Linux 5.15.0-139-generic"
+            kernel = trimmed.to_string();
+        }
+    }
+    match (pretty.is_empty(), kernel.is_empty()) {
+        (false, false) => format!("{pretty} · {kernel}"),
+        (false, true) => pretty,
+        (true, false) => kernel,
+        (true, true) => String::new(),
+    }
+}
+
+/// Parse the `ps -eo pid,comm,pcpu,pmem,etime --sort=-pcpu` output
+/// into structured rows. Lines are space-separated with `comm` (the
+/// 2nd column) potentially containing spaces if the kernel padded it
+/// — we treat it as everything between the PID and the next numeric
+/// token (CPU%).
+fn parse_top_processes(text: &str) -> Vec<ProcessRow> {
+    let mut out: Vec<ProcessRow> = Vec::new();
+    for line in text.lines() {
+        let trimmed = line.trim();
+        if trimmed.is_empty() {
+            continue;
+        }
+        let tokens: Vec<&str> = trimmed.split_whitespace().collect();
+        if tokens.len() < 5 {
+            continue;
+        }
+        // Layout: PID COMMAND CPU% MEM% ETIME — at least 5 tokens,
+        // with COMMAND being everything between PID and CPU%. CPU%
+        // is the third-from-last token, MEM% second-from-last,
+        // ETIME last.
+        let pid = tokens[0].to_string();
+        let elapsed = tokens[tokens.len() - 1].to_string();
+        let mem_pct = tokens[tokens.len() - 2].to_string();
+        let cpu_pct = tokens[tokens.len() - 3].to_string();
+        let command = tokens[1..tokens.len() - 3].join(" ");
+        out.push(ProcessRow {
+            pid,
+            command,
+            cpu_pct,
+            mem_pct,
+            elapsed,
+        });
+    }
+    out
 }
 
 /// Split the combined stdout into named sections.
@@ -438,6 +660,7 @@ Filesystem      Size  Used Avail Use% Mounted on
             disk_avail: "55G".into(),
             disk_use_pct: 42.0,
             cpu_pct: 23.5,
+            ..Default::default()
         };
         let json = serde_json::to_string(&snap).unwrap();
         let back: ServerSnapshot = serde_json::from_str(&json).unwrap();
@@ -488,6 +711,42 @@ swap:          2047           0        2047";
         let s = "\x1b[1mMem:\x1b[0m  100 50 50";
         let stripped = strip_ansi(s);
         assert_eq!(stripped, "Mem:  100 50 50");
+    }
+
+    #[test]
+    fn parse_netdev_skips_loopback_and_sums_other_interfaces() {
+        let text = "Inter-|   Receive                                                |  Transmit
+ face |bytes    packets errs drop fifo frame compressed multicast|bytes    packets errs drop fifo colls carrier compressed
+    lo: 1234567   12345    0    0    0     0          0         0  1234567   12345    0    0    0     0       0          0
+  eth0: 100000     400    0    0    0     0          0        10   50000     200    0    0    0     0       0          0
+  eth1: 200000     500    0    0    0     0          0         5   80000     300    0    0    0     0       0          0";
+        let sample = parse_netdev_totals(text).expect("expected a sample");
+        assert_eq!(sample.rx_bytes, 300_000); // eth0 + eth1, lo skipped
+        assert_eq!(sample.tx_bytes, 130_000);
+    }
+
+    #[test]
+    fn parse_top_processes_extracts_columns() {
+        let text = "  1234 systemd        12.4  0.5 5-12:34:56
+   789 nginx           3.2  1.1   3:42
+   42  postgres        0.0  4.7 14-00:00:00";
+        let rows = parse_top_processes(text);
+        assert_eq!(rows.len(), 3);
+        assert_eq!(rows[0].pid, "1234");
+        assert_eq!(rows[0].command, "systemd");
+        assert_eq!(rows[0].cpu_pct, "12.4");
+        assert_eq!(rows[0].mem_pct, "0.5");
+        assert_eq!(rows[0].elapsed, "5-12:34:56");
+        assert_eq!(rows[1].command, "nginx");
+        assert_eq!(rows[2].pid, "42");
+    }
+
+    #[test]
+    fn parse_os_label_combines_pretty_name_and_kernel() {
+        let text = "PRETTY_NAME=\"Ubuntu 24.04.1 LTS\"\nVERSION=\"24.04.1\"\nLinux 5.15.0-139-generic";
+        let label = parse_os_label(text);
+        assert!(label.contains("Ubuntu 24.04.1 LTS"));
+        assert!(label.contains("5.15.0-139-generic"));
     }
 
     #[test]

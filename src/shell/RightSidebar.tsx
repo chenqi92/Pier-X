@@ -1,5 +1,6 @@
 import type { RightTool, TabState } from "../lib/types";
 import { effectiveSshTarget } from "../lib/types";
+import { isBrowsableRepoPath } from "../lib/browserPath";
 import { useEffect, useMemo, useRef, useState } from "react";
 import * as cmd from "../lib/commands";
 import { RIGHT_TOOL_META } from "../lib/rightToolMeta";
@@ -136,7 +137,10 @@ function rightHeaderMeta(
     return `${branch}${ahead ? ` · ↑${ahead}` : ""}${behind ? ` · ↓${behind}` : ""}`;
   }
   if (tool === "git") {
-    return basename(browserPath);
+    // Suppress the header subtitle on the drives sentinel — otherwise
+    // it reads "pier:drives" literally, which is both ugly and
+    // misleading (there is no directory).
+    return isBrowsableRepoPath(browserPath) ? basename(browserPath) : undefined;
   }
   return undefined;
 }

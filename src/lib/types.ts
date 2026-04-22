@@ -425,6 +425,26 @@ export type ServerSnapshotView = {
   diskAvail: string;
   diskUsePct: number;
   cpuPct: number;
+  /** Logical CPU count from `nproc`. 0 when unavailable. */
+  cpuCount: number;
+  /** Total process count. 0 when unavailable. */
+  procCount: number;
+  /** OS / kernel label, e.g. `"Ubuntu 24.04.1 · 5.15.0-139-generic"`. */
+  osLabel: string;
+  /** Bytes-per-second received across non-loopback interfaces. `-1`
+   *  on the first probe (no baseline yet) or when `/proc/net/dev`
+   *  isn't available. */
+  netRxBps: number;
+  netTxBps: number;
+  topProcesses: ProcessRowView[];
+};
+
+export type ProcessRowView = {
+  pid: string;
+  command: string;
+  cpuPct: string;
+  memPct: string;
+  elapsed: string;
 };
 
 export type DetectedServiceView = {

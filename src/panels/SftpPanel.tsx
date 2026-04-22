@@ -46,6 +46,31 @@ type FtpListRow =
   | { kind: "parent" }
   | { kind: "entry"; entry: SftpEntryView };
 
+/**
+ * First-load placeholder that mimics `.ftp-row` layout so the transition
+ * to the real virtualized list doesn't shift anything. Bar widths are
+ * staggered so the stack doesn't read as identical rows — mirrors the
+ * `DkSkeleton` pattern in the Docker panel.
+ */
+function FtpSkeleton({ rows = 8 }: { rows?: number }) {
+  return (
+    <div className="ftp-skeleton" aria-hidden>
+      {Array.from({ length: rows }, (_, i) => {
+        const nameWidth = 55 + ((i * 13) % 40); // 55..94%
+        return (
+          <div key={i} className="ftp-skeleton-row" style={{ height: FTP_ROW_HEIGHT }}>
+            <span className="ftp-sk-bar ftp-sk-ic" />
+            <span className="ftp-sk-bar ftp-sk-name" style={{ width: `${nameWidth}%` }} />
+            <span className="ftp-sk-bar ftp-sk-perm" />
+            <span className="ftp-sk-bar ftp-sk-size" />
+            <span className="ftp-sk-bar ftp-sk-mod" />
+          </div>
+        );
+      })}
+    </div>
+  );
+}
+
 /** DataTransfer MIME types for cross-panel drag-drop. The Sidebar
  *  file list writes `DT_LOCAL_FILE` when the user drags a local file,
  *  and the SFTP panel writes `DT_SFTP_FILE` when dragging a remote
@@ -771,7 +796,10 @@ export default function SftpPanel({ tab }: Props) {
         </div>
       );
     }
-    if (busy) {
+    // First load: no cached state yet. Show a shimmering skeleton so the
+    // panel doesn't collapse to a single "Browsing..." line and the
+    // layout pre-stamps the row grid before real data arrives.
+    if (busy && !state) {
       return (
         <div
           className={"ftp-list" + (dropHover ? " is-drop" : "")}
@@ -780,13 +808,20 @@ export default function SftpPanel({ tab }: Props) {
           onDragLeave={handleListDragLeave}
           onDrop={handleListDrop}
         >
-          <div className="lg-note">{t("Browsing...")}</div>
+          <FtpSkeleton rows={10} />
         </div>
       );
     }
+    // Refresh path (busy && state): keep the existing virtualized list
+    // visible and dim it slightly instead of wiping it — avoids the
+    // flicker the old "Browsing..." branch caused on every refresh.
+    // The refresh icon's spin state in the toolbar telegraphs "in
+    // flight" so the user still has a loading signal.
     return (
       <VirtualList<FtpListRow>
-        className={"ftp-list" + (dropHover ? " is-drop" : "")}
+        className={
+          "ftp-list" + (dropHover ? " is-drop" : "") + (busy ? " is-loading" : "")
+        }
         items={listRows}
         rowHeight={FTP_ROW_HEIGHT}
         renderRow={renderListRow}
@@ -920,7 +955,7 @@ export default function SftpPanel({ tab }: Props) {
             disabled={!hasSsh || busy}
             onClick={() => void browse(currentRemotePath)}
           >
-            <RefreshCw size={12} />
+            <RefreshCw size={12} className={busy ? "ftp-spin" : ""} />
           </button>
         </div>
 

@@ -26,6 +26,7 @@ import type { ComponentType, CSSProperties, MouseEvent as ReactMouseEvent, React
 import { Group as PanelGroup, Panel, Separator as PanelResizeHandle } from "react-resizable-panels";
 import { memo, startTransition, useCallback, useDeferredValue, useEffect, useMemo, useRef, useState } from "react";
 import { openUrl } from "@tauri-apps/plugin-opener";
+import { isBrowsableRepoPath } from "../lib/browserPath";
 import * as cmd from "../lib/commands";
 import { writeClipboardText } from "../lib/clipboard";
 import DiffDialog, { type DiffFileInput } from "../shell/DiffDialog";
@@ -955,6 +956,17 @@ export default function GitPanel({ browserPath, isActive = true }: Props) {
   }
 
   async function loadPanelState() {
+    // Sidebar is on the drives sentinel ("This PC") or pre-bootstrap —
+    // no real directory to inspect. Clear any stale snapshot from a
+    // previous repo path so the view renders the "pick a directory"
+    // empty state instead of lingering on old commits / branch state.
+    // This also short-circuits the 3s polling tick below.
+    if (!isBrowsableRepoPath(browserPath)) {
+      setPanelState(null);
+      setGitReady(false);
+      setGitError("");
+      return;
+    }
     try {
       const next = await cmd.gitPanelState(browserPath);
       setPanelState(next);
@@ -1852,6 +1864,21 @@ export default function GitPanel({ browserPath, isActive = true }: Props) {
 
   if (!browserPath) {
     return <div className="git-panel git-panel--loading">{t("Loading Git panel…")}</div>;
+  }
+
+  // Sidebar is parked on the drive picker ("This PC"). There's no real
+  // directory to inspect, so show a clear empty state instead of
+  // rendering stale Git data from a previously-visited repo.
+  if (!isBrowsableRepoPath(browserPath)) {
+    return (
+      <div className="git-panel">
+        <GitEmptyState
+          icon={Folder}
+          title={t("No directory selected")}
+          description={t("Pick a directory in the left sidebar to see its Git status.")}
+        />
+      </div>
+    );
   }
 
   return (

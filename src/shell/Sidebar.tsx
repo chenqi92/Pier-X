@@ -24,6 +24,7 @@ import {
 import type { DragEvent as ReactDragEvent, KeyboardEvent as ReactKeyboardEvent } from "react";
 import { useEffect, useMemo, useRef, useState } from "react";
 import type { CoreInfo, FileEntry, SavedSshConnection, RightTool } from "../lib/types";
+import { DRIVES_PATH } from "../lib/browserPath";
 import { RIGHT_TOOL_META, SERVICE_CHIP_TOOLS, type LucideIcon } from "../lib/rightToolMeta";
 import * as cmd from "../lib/commands";
 import { useI18n } from "../i18n/useI18n";
@@ -211,9 +212,11 @@ function planGroupMove(
   return { order, groups };
 }
 
-/** Sentinel for "This PC" / drive-list view. Picked so it can't collide
- *  with any real filesystem path on any OS. */
-const DRIVES_PATH = "pier:drives";
+// `DRIVES_PATH` — the "no real directory, we're on the drive picker"
+// sentinel — is defined in `lib/browserPath.ts` so other surfaces
+// (GitPanel, App.openLocalTerminal) can check it without reaching into
+// the Sidebar. Re-imported below alongside the rest of the sidebar's
+// path helpers.
 
 function isWindowsPath(path: string): boolean {
   return /^[A-Za-z]:[\\/]?/.test(path) || /^\\\\/.test(path);

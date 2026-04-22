@@ -12,6 +12,7 @@ import {
 import { openUrl } from "@tauri-apps/plugin-opener";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import { I18nContext, makeI18n } from "./i18n/useI18n";
+import { isBrowsableRepoPath } from "./lib/browserPath";
 import * as cmd from "./lib/commands";
 import { RIGHT_TOOL_META } from "./lib/rightToolMeta";
 import type { CoreInfo, FileEntry, RightTool, SavedSshConnection } from "./lib/types";
@@ -194,15 +195,13 @@ function App() {
   const openLocalTerminal = useCallback(
     (path?: string) => {
       // Prefer the explicit arg → sidebar's current path → user home → app cwd.
-      // The sidebar can be parked on the drives sentinel ("pier:drives") or
+      // The sidebar can be parked on the drives sentinel (DRIVES_PATH) or
       // an empty pre-bootstrap value; those aren't real directories, so skip
-      // them.
+      // them via `isBrowsableRepoPath`.
       const candidates = [path, browserPath, coreInfo?.homeDir, coreInfo?.workspaceRoot];
       const targetPath = candidates.find(
         (candidate): candidate is string =>
-          typeof candidate === "string" &&
-          candidate.length > 0 &&
-          candidate !== "pier:drives",
+          typeof candidate === "string" && isBrowsableRepoPath(candidate),
       ) ?? "";
       const fallbackTitle = i18n.t("Terminal");
       addTab({

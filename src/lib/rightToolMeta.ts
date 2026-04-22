@@ -1,6 +1,5 @@
 import {
   ChartNoAxesCombined,
-  Container,
   Database,
   FileText,
   FolderSync,
@@ -11,6 +10,7 @@ import {
   TableProperties,
 } from "lucide-react";
 import type { ComponentType, SVGProps } from "react";
+import DockerIcon from "../components/icons/DockerIcon";
 import type { RightTool } from "./types";
 
 export type LucideIcon = ComponentType<SVGProps<SVGSVGElement> & { size?: number | string }>;
@@ -25,27 +25,32 @@ export type RightToolMeta = {
   splashSubtitle?: string;
 };
 
+// Remote-tool ordering after the divider: monitor first (broad server
+// vitals apply to every host), then sftp (filesystem access is the
+// most-used lever on any box), then docker, then the database stack,
+// then log tail, with sqlite at the tail since it's not remote-only.
+// Markdown + git stay above the divider as local-workspace tools.
 export const RIGHT_TOOL_ORDER: RightTool[] = [
   "markdown",
   "git",
   "monitor",
+  "sftp",
   "docker",
   "mysql",
   "postgres",
   "redis",
   "log",
-  "sftp",
   "sqlite",
 ];
 
 export const SERVICE_CHIP_TOOLS: RightTool[] = [
+  "monitor",
+  "sftp",
   "docker",
   "mysql",
   "postgres",
   "redis",
-  "monitor",
   "log",
-  "sftp",
   "sqlite",
 ];
 
@@ -69,7 +74,7 @@ export const RIGHT_TOOL_META: Record<RightTool, RightToolMeta> = {
   },
   docker: {
     label: "Docker",
-    icon: Container,
+    icon: DockerIcon,
     remoteOnly: true,
     tintVar: "var(--svc-docker)",
     splashTitle: "Docker",

@@ -208,11 +208,11 @@ export default function ServerMonitorPanel({ tab, onEditConnection, isActive = t
       tab.backend === "ssh" && tab.terminalSessionId === null;
     const ready = (isLocal || haveCreds) && !waitingForTerminal;
     if (!ready) return;
-    // Still fire a single probe for hidden panels so the gauges carry
-    // a last-known value when the user comes back — but skip the
-    // recurring 5s poll until the panel is visible again.
-    void probe();
+    // Hidden keep-alive panels must be quiet. Otherwise switching from
+    // Monitor to another heavy tool (Docker in particular) fires one
+    // extra monitor probe right as the new tool is doing its first load.
     if (!isActive) return;
+    void probe();
     const interval = window.setInterval(() => {
       // Re-read busy from the latest closure via a state check —
       // intentionally letting the JS engine grab the freshest value

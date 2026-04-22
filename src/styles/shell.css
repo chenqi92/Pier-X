@@ -4855,3 +4855,36 @@ button,
   place-items: center;
   flex: none;
 }
+
+/* Container log streaming dialog — opened from the Docker panel's Logs
+ * button. Shares the common .dlg chrome, adds a dedicated scrolling body
+ * so the log viewport fills available height instead of the default
+ * form-style layout. */
+.dlg.dlg--logs { width: 960px; height: 72vh; max-height: 820px; }
+.dlg-logs-body {
+  flex: 1;
+  min-height: 0;
+  overflow: auto;
+  padding: var(--sp-2) var(--sp-3);
+  background: var(--panel-2);
+  font-size: var(--ui-fs-sm);
+  color: var(--ink-2);
+  line-height: 1.45;
+}
+.dlg-logs-body.wrap { white-space: pre-wrap; word-break: break-word; }
+.dlg-logs-body:not(.wrap) { white-space: pre; }
+.dlg-logs-line {
+  display: grid;
+  grid-template-columns: 48px 1fr;
+  gap: var(--sp-2);
+  padding: 1px 0;
+}
+.dlg-logs-line.is-err { color: var(--neg); }
+.dlg-logs-n {
+  color: var(--dim);
+  text-align: right;
+  user-select: none;
+  font-size: var(--size-micro);
+  padding-top: 2px;
+}
+.dlg-logs-msg { white-space: inherit; }

@@ -1,7 +1,3 @@
-import {
-  ChevronsLeft,
-  ChevronsRight,
-} from "lucide-react";
 import type { RightTool } from "../lib/types";
 import { RIGHT_TOOL_META, RIGHT_TOOL_ORDER } from "../lib/rightToolMeta";
 import { useI18n } from "../i18n/useI18n";
@@ -12,13 +8,11 @@ type Props = {
   onSelectTool: (tool: RightTool) => void;
   hasRemoteContext: boolean;
   detectedTools?: ReadonlySet<RightTool>;
-  expanded: boolean;
-  onToggleExpand: () => void;
 };
 
 const TOOLS = RIGHT_TOOL_ORDER.map((tool) => ({ tool, ...RIGHT_TOOL_META[tool] }));
 
-export default function ToolStrip({ activeTool, onSelectTool, hasRemoteContext, detectedTools, expanded, onToggleExpand }: Props) {
+export default function ToolStrip({ activeTool, onSelectTool, hasRemoteContext, detectedTools }: Props) {
   const { t } = useI18n();
 
   return (
@@ -45,14 +39,6 @@ export default function ToolStrip({ activeTool, onSelectTool, hasRemoteContext, 
         );
       })}
       <div className="toolstrip-spacer" />
-      <button
-        type="button"
-        className="ts-btn"
-        onClick={onToggleExpand}
-        title={expanded ? t("Collapse") : t("Expand")}
-      >
-        {expanded ? <ChevronsRight size={16} /> : <ChevronsLeft size={16} />}
-      </button>
     </div>
   );
 }

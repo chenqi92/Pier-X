@@ -10,7 +10,10 @@ import type {
   DbCredentialResolved,
   DbDetectionReport,
   DetectedServiceView,
+  DockerImageView,
+  DockerNetworkView,
   DockerOverview,
+  DockerVolumeView,
   GitBlameLineView,
   FileEntry,
   GitCommitDetailView,
@@ -376,7 +379,13 @@ export const sshTunnelOpen = (params: {
   remoteHost: string;
   remotePort: number;
   localPort?: number | null;
-}) => invoke<TunnelInfoView>("ssh_tunnel_open", { ...params, localPort: params.localPort ?? null });
+  savedConnectionIndex?: number | null;
+}) =>
+  invoke<TunnelInfoView>("ssh_tunnel_open", {
+    ...params,
+    localPort: params.localPort ?? null,
+    savedConnectionIndex: params.savedConnectionIndex ?? null,
+  });
 
 export const sshTunnelInfo = (tunnelId: string) =>
   invoke<TunnelInfoView>("ssh_tunnel_info", { tunnelId });
@@ -503,6 +512,36 @@ export const dockerOverview = (params: {
   all: boolean;
   savedConnectionIndex?: number | null;
 }) => invoke<DockerOverview>("docker_overview", params);
+
+export const dockerImages = (params: {
+  host: string;
+  port: number;
+  user: string;
+  authMode: string;
+  password: string;
+  keyPath: string;
+  savedConnectionIndex?: number | null;
+}) => invoke<DockerImageView[]>("docker_images", params);
+
+export const dockerVolumes = (params: {
+  host: string;
+  port: number;
+  user: string;
+  authMode: string;
+  password: string;
+  keyPath: string;
+  savedConnectionIndex?: number | null;
+}) => invoke<DockerVolumeView[]>("docker_volumes", params);
+
+export const dockerNetworks = (params: {
+  host: string;
+  port: number;
+  user: string;
+  authMode: string;
+  password: string;
+  keyPath: string;
+  savedConnectionIndex?: number | null;
+}) => invoke<DockerNetworkView[]>("docker_networks", params);
 
 export const dockerContainerAction = (params: {
   host: string;
@@ -976,6 +1015,15 @@ export const logStreamStop = (streamId: string) =>
 
 export const localDockerOverview = (all: boolean) =>
   invoke<DockerOverview>("local_docker_overview", { all });
+
+export const localDockerImages = () =>
+  invoke<DockerImageView[]>("local_docker_images");
+
+export const localDockerVolumes = () =>
+  invoke<DockerVolumeView[]>("local_docker_volumes");
+
+export const localDockerNetworks = () =>
+  invoke<DockerNetworkView[]>("local_docker_networks");
 
 /** Slow `docker stats --no-stream` against the local daemon — split off
  *  from the overview so the panel's first paint doesn't wait ~2s for the

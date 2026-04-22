@@ -20,7 +20,6 @@ import {
 } from "lucide-react";
 import { useEffect, useMemo, useRef, useState } from "react";
 import * as cmd from "../lib/commands";
-import { quoteCommandArg } from "../lib/commands";
 import type { DockerOverview, TabState } from "../lib/types";
 import { effectiveSshTarget } from "../lib/types";
 import { useI18n } from "../i18n/useI18n";
@@ -28,9 +27,10 @@ import { localizeError, localizeRuntimeMessage } from "../i18n/localizeMessage";
 import DbConnRow from "../components/DbConnRow";
 import PanelHeader from "../components/PanelHeader";
 import StatusDot from "../components/StatusDot";
+import ContainerLogsDialog from "../shell/ContainerLogsDialog";
 import RegistryProxyDialog from "../shell/RegistryProxyDialog";
 import RunContainerDialog from "../shell/RunContainerDialog";
-import { dockerKeyForTab, useDockerStore } from "../stores/useDockerStore";
+import { dockerKeyForTab, useDockerStore, type DockerSection } from "../stores/useDockerStore";
 import { useTabStore } from "../stores/useTabStore";
 
 type Props = { tab: TabState };
@@ -93,7 +93,6 @@ export default function DockerPanel({ tab }: Props) {
   const { t } = useI18n();
   const formatError = (error: unknown) => localizeError(error, t);
   const updateTab = useTabStore((s) => s.updateTab);
-  const setTabRightTool = useTabStore((s) => s.setTabRightTool);
   // ── Store-backed cache ─────────────────────────────────────────
   // Overview, volume-file listings, and last-fetched time persist across
   // panel remounts (tool switching + StrictMode). The panel becomes a
@@ -102,9 +101,9 @@ export default function DockerPanel({ tab }: Props) {
   const dockerKey = dockerKeyForTab(tab);
   const snapshot = useDockerStore((s) => s.snapshots[dockerKey]);
   const dockerRefresh = useDockerStore((s) => s.refresh);
+  const dockerLoadSection = useDockerStore((s) => s.loadSection);
   const dockerMerge = useDockerStore((s) => s.mergeOverview);
   const dockerSetVolumeFile = useDockerStore((s) => s.setVolumeFile);
-  const dockerInvalidate = useDockerStore((s) => s.invalidate);
   const dockerSetError = useDockerStore((s) => s.setError);
   /** Write an error message onto the current snapshot — replaces the old
    *  `setError(string)` local-state setter so action handlers keep working
@@ -115,6 +114,7 @@ export default function DockerPanel({ tab }: Props) {
   const busy = !!snapshot?.inFlight && !snapshot?.overview;
   const [showAll, setShowAll] = useState(true);
   const [activeTab, setActiveTab] = useState<DkTab>("containers");
+  const activeSectionBusy = !!snapshot?.sectionInFlight?.[activeTab];
   const [actionBusy, setActionBusy] = useState(false);
   const [notice, setNotice] = useState("");
   const [inspectJson, setInspectJson] = useState("");
@@ -133,9 +133,14 @@ export default function DockerPanel({ tab }: Props) {
   const [runDialogOpen, setRunDialogOpen] = useState(false);
   const [runDefaultImage, setRunDefaultImage] = useState("");
   const [proxyDialogOpen, setProxyDialogOpen] = useState(false);
+  const [logsDialog, setLogsDialog] = useState<{ id: string; name: string } | null>(null);
   const [pullRef, setPullRef] = useState("");
   const [pullBusy, setPullBusy] = useState(false);
   const [pullLog, setPullLog] = useState("");
+  const [statsBusy, setStatsBusy] = useState(false);
+  const [volumeUsageBusy, setVolumeUsageBusy] = useState(false);
+  const statsAttemptKeyRef = useRef("");
+  const volumeUsageAttemptKeyRef = useRef("");
 
   // SSH context can be inferred from a local terminal where the user
   // typed `ssh user@host`, or from a nested-ssh overlay on an SSH
@@ -156,14 +161,25 @@ export default function DockerPanel({ tab }: Props) {
     savedConnectionIndex: sshTarget?.savedConnectionIndex ?? null,
   };
 
+  const sshParams = {
+    host: sshArgs.host,
+    port: sshArgs.port,
+    user: sshArgs.user,
+    authMode: sshArgs.authMode,
+    password: sshArgs.password,
+    keyPath: sshArgs.keyPath,
+    savedConnectionIndex: sshArgs.savedConnectionIndex,
+  };
+
   /**
    * Refresh via the store so concurrent callers (StrictMode's double
-   * mount, user clicks, background enrichment) coalesce into one fetch.
-   * `force = true` bypasses the staleness check — used by the refresh
-   * button and the `showAll` toggle.
+   * mount, user clicks) coalesce into one fetch. This path intentionally
+   * loads containers only; the other Docker tabs fetch their own data
+   * when opened.
    */
   async function refresh(force = false) {
     setNotice("");
+    if (force) statsAttemptKeyRef.current = "";
     await dockerRefresh(
       dockerKey,
       {
@@ -187,63 +203,97 @@ export default function DockerPanel({ tab }: Props) {
           }
           return overview;
         },
-        enrich: async () => {
-          // CPU/MEM + volume usage patched into the cached overview as
-          // they arrive. Errors are swallowed; rows keep their
-          // placeholder values.
-          //
-          // Both SSH and local paths take the same slow CLI hits
-          // (`docker stats --no-stream` ~2s sampling window,
-          // `docker system df -v` 1–5s on busy hosts), so both route
-          // through the enrichment phase — the overview fetch stays
-          // snappy regardless of backend.
-          if (!hasSsh && !isLocal) return;
-          const sshParams = hasSsh
-            ? {
-                host: sshArgs.host,
-                port: sshArgs.port,
-                user: sshArgs.user,
-                authMode: sshArgs.authMode,
-                password: sshArgs.password,
-                keyPath: sshArgs.keyPath,
-                savedConnectionIndex: sshArgs.savedConnectionIndex,
-              }
-            : null;
-          const statsPromise = sshParams
-            ? cmd.dockerStats(sshParams)
-            : cmd.localDockerStats();
-          const usagePromise = sshParams
-            ? cmd.dockerVolumeUsage(sshParams)
-            : cmd.localDockerVolumeUsage();
-          void statsPromise.then((stats) => {
-            const byId = new Map(stats.map((s) => [s.id, s]));
-            dockerMerge(dockerKey, (prev) => ({
-              ...prev,
-              containers: prev.containers.map((c) => {
-                const s = byId.get(c.id) ?? byId.get(c.id.slice(0, 12));
-                return s
-                  ? { ...c, cpuPerc: s.cpuPerc, memUsage: s.memUsage, memPerc: s.memPerc }
-                  : c;
-              }),
-            }));
-          }).catch(() => { /* stats unavailable */ });
-          void usagePromise.then((usages) => {
-            const byName = new Map(usages.map((u) => [u.name, u]));
-            dockerMerge(dockerKey, (prev) => {
-              const next = prev.volumes.map((v) => {
-                const u = byName.get(v.name);
-                return u
-                  ? { ...v, size: u.size, sizeBytes: u.sizeBytes, links: u.links }
-                  : v;
-              });
-              next.sort((a, b) => b.sizeBytes - a.sizeBytes || a.name.localeCompare(b.name));
-              return { ...prev, volumes: next };
-            });
-          }).catch(() => { /* system df unavailable */ });
-        },
+        loaded: ["containers"],
       },
       force,
     ).catch(() => { /* error stored on snapshot */ });
+  }
+
+  async function loadDockerSection(section: DockerSection, force = false) {
+    if (!canRefresh || section === "containers") return;
+    if (force && section === "volumes") volumeUsageAttemptKeyRef.current = "";
+    await dockerLoadSection(
+      dockerKey,
+      section,
+      async () => {
+        if (section === "images") {
+          const images = isLocal
+            ? await cmd.localDockerImages()
+            : hasSsh
+              ? await cmd.dockerImages(sshParams)
+              : [];
+          return { images };
+        }
+        if (section === "volumes") {
+          const volumes = isLocal
+            ? await cmd.localDockerVolumes()
+            : hasSsh
+              ? await cmd.dockerVolumes(sshParams)
+              : [];
+          return { volumes };
+        }
+        const networks = isLocal
+          ? await cmd.localDockerNetworks()
+          : hasSsh
+            ? await cmd.dockerNetworks(sshParams)
+            : [];
+        return { networks };
+      },
+      force,
+    ).catch(() => { /* error stored on snapshot */ });
+  }
+
+  async function refreshActiveTab(force = true) {
+    if (activeTab === "containers") {
+      await refresh(force);
+    } else {
+      await loadDockerSection(activeTab, force);
+    }
+  }
+
+  async function fetchContainerStats() {
+    if (statsBusy || (!hasSsh && !isLocal)) return;
+    setStatsBusy(true);
+    try {
+      const stats = hasSsh ? await cmd.dockerStats(sshParams) : await cmd.localDockerStats();
+      const byId = new Map(stats.map((s) => [s.id, s]));
+      dockerMerge(dockerKey, (prev) => ({
+        ...prev,
+        containers: prev.containers.map((c) => {
+          const s = byId.get(c.id) ?? byId.get(c.id.slice(0, 12));
+          return s
+            ? { ...c, cpuPerc: s.cpuPerc, memUsage: s.memUsage, memPerc: s.memPerc }
+            : c;
+        }),
+      }));
+    } catch {
+      // stats unavailable
+    } finally {
+      setStatsBusy(false);
+    }
+  }
+
+  async function fetchVolumeUsage() {
+    if (volumeUsageBusy || (!hasSsh && !isLocal)) return;
+    setVolumeUsageBusy(true);
+    try {
+      const usages = hasSsh ? await cmd.dockerVolumeUsage(sshParams) : await cmd.localDockerVolumeUsage();
+      const byName = new Map(usages.map((u) => [u.name, u]));
+      dockerMerge(dockerKey, (prev) => {
+        const next = prev.volumes.map((v) => {
+          const u = byName.get(v.name);
+          return u
+            ? { ...v, size: u.size, sizeBytes: u.sizeBytes, links: u.links }
+            : v;
+        });
+        next.sort((a, b) => b.sizeBytes - a.sizeBytes || a.name.localeCompare(b.name));
+        return { ...prev, volumes: next };
+      });
+    } catch {
+      // system df unavailable
+    } finally {
+      setVolumeUsageBusy(false);
+    }
   }
 
   // On mount (or when the remote changes): render from cache immediately
@@ -255,6 +305,44 @@ export default function DockerPanel({ tab }: Props) {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [dockerKey, canRefresh]);
 
+  useEffect(() => {
+    if (!canRefresh || activeTab === "containers") return;
+    void loadDockerSection(activeTab, false);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [activeTab, dockerKey, canRefresh]);
+
+  useEffect(() => {
+    if (!canRefresh || activeTab !== "containers" || statsBusy) return;
+    if (!(snapshot?.loaded?.containers ?? false)) return;
+    const containers = state?.containers ?? [];
+    if (!containers.length) return;
+    if (containers.some((c) => c.cpuPerc || c.memUsage)) return;
+    const key = `${dockerKey}:${containers.map((c) => `${c.id}:${c.status}`).join("|")}`;
+    if (statsAttemptKeyRef.current === key) return;
+    statsAttemptKeyRef.current = key;
+    const timer = window.setTimeout(() => {
+      void fetchContainerStats();
+    }, 600);
+    return () => window.clearTimeout(timer);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [activeTab, dockerKey, canRefresh, snapshot?.loaded?.containers, state?.containers, statsBusy]);
+
+  useEffect(() => {
+    if (!canRefresh || activeTab !== "volumes" || volumeUsageBusy) return;
+    if (!(snapshot?.loaded?.volumes ?? false)) return;
+    const volumes = state?.volumes ?? [];
+    if (!volumes.length) return;
+    if (volumes.some((v) => v.size || v.links >= 0)) return;
+    const key = `${dockerKey}:${volumes.map((v) => v.name).join("|")}`;
+    if (volumeUsageAttemptKeyRef.current === key) return;
+    volumeUsageAttemptKeyRef.current = key;
+    const timer = window.setTimeout(() => {
+      void fetchVolumeUsage();
+    }, 300);
+    return () => window.clearTimeout(timer);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [activeTab, dockerKey, canRefresh, snapshot?.loaded?.volumes, state?.volumes, volumeUsageBusy]);
+
   // Default-select the first container once data is available.
   useEffect(() => {
     if (!selectedContainer && state?.containers.length) {
@@ -262,23 +350,17 @@ export default function DockerPanel({ tab }: Props) {
     }
   }, [state, selectedContainer]);
 
-  // "Show stopped containers" toggle invalidates the cache so we refetch
-  // with the new `all` flag instead of reusing the cached (filtered) data.
+  // "Show stopped containers" forces a containers-only refresh with the
+  // new `all` flag. Other Docker tabs stay cached; their data is
+  // independent of this container filter.
   //
   // Skips the initial mount — otherwise this effect and the mount effect
-  // above both fire on first render, and `dockerInvalidate` here would
-  // wipe the `inFlight` promise reference the mount fetch set, defeating
-  // the store's coalescing guard. The result would be two concurrent
-  // `local_docker_overview` calls racing against each other on first
-  // open (8 parallel docker subprocesses on Windows Docker Desktop's
-  // named pipe — the original source of the "click Docker, page freezes"
-  // symptom).
+  // above both fire on first render.
   const prevShowAllRef = useRef(showAll);
   useEffect(() => {
     if (!canRefresh) return;
     if (prevShowAllRef.current === showAll) return;
     prevShowAllRef.current = showAll;
-    dockerInvalidate(dockerKey);
     void refresh(true);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [showAll]);
@@ -353,7 +435,7 @@ export default function DockerPanel({ tab }: Props) {
         savedConnectionIndex: sshArgs.savedConnectionIndex,
       });
       setNotice(t("Removed image {id}.", { id: shortId(id) }));
-      await refresh(true);
+      await loadDockerSection("images", true);
     } catch (e) {
       setError(formatError(e));
     } finally {
@@ -378,7 +460,7 @@ export default function DockerPanel({ tab }: Props) {
         savedConnectionIndex: sshArgs.savedConnectionIndex,
       });
       setNotice(t("Removed volume {name}.", { name }));
-      await refresh(true);
+      await loadDockerSection("volumes", true);
     } catch (e) {
       setError(formatError(e));
     } finally {
@@ -403,7 +485,7 @@ export default function DockerPanel({ tab }: Props) {
         savedConnectionIndex: sshArgs.savedConnectionIndex,
       });
       setNotice(t("Removed network {name}.", { name }));
-      await refresh(true);
+      await loadDockerSection("networks", true);
     } catch (e) {
       setError(formatError(e));
     } finally {
@@ -460,7 +542,7 @@ export default function DockerPanel({ tab }: Props) {
       const lastLine = out.trim().split("\n").pop() ?? "";
       setPullLog(lastLine || t("Pulled {ref}.", { ref: rewritten }));
       setNotice(t("Pulled {ref}.", { ref: rewritten }));
-      await refresh(true);
+      await loadDockerSection("images", true);
     } catch (e) {
       setPullLog("");
       setError(formatError(e));
@@ -486,7 +568,7 @@ export default function DockerPanel({ tab }: Props) {
             savedConnectionIndex: sshArgs.savedConnectionIndex,
           });
       setNotice(out.trim().split("\n").pop() || t("Pruned unused volumes."));
-      await refresh(true);
+      await loadDockerSection("volumes", true);
     } catch (e) {
       setError(formatError(e));
     } finally {
@@ -567,16 +649,8 @@ export default function DockerPanel({ tab }: Props) {
   }
 
   function openContainerLogs(id: string) {
-    updateTab(tab.id, {
-      logCommand: `docker logs -f ${quoteCommandArg(id)}`,
-      logSource: {
-        ...tab.logSource,
-        mode: "system",
-        systemPresetId: "docker-container",
-        systemArg: id,
-      },
-    });
-    setTabRightTool(tab.id, "log");
+    const ctr = state?.containers.find((c) => c.id === id);
+    setLogsDialog({ id, name: ctr?.names || id.slice(0, 12) });
   }
 
   const filteredContainers = useMemo(() => {
@@ -649,6 +723,8 @@ export default function DockerPanel({ tab }: Props) {
     volumes: state?.volumes.length ?? 0,
     networks: state?.networks.length ?? 0,
   };
+  const tabLoaded = (section: DkTab) => snapshot?.loaded?.[section] ?? false;
+  const tabBusy = (section: DkTab) => !!snapshot?.sectionInFlight?.[section];
 
   return (
     <>
@@ -677,7 +753,7 @@ export default function DockerPanel({ tab }: Props) {
               onClick={() => setActiveTab(k)}
             >
               {t(k.charAt(0).toUpperCase() + k.slice(1))}
-              {state ? <span className="dk-tab-count">{tabCounts[k]}</span> : null}
+              {state && tabLoaded(k) ? <span className="dk-tab-count">{tabCounts[k]}</span> : null}
             </button>
           ))}
         </div>
@@ -708,7 +784,7 @@ export default function DockerPanel({ tab }: Props) {
               </button>
             )}
           </div>
-          <button className="dk-ic" type="button" title={t("Refresh")} disabled={!canRefresh || busy} onClick={() => void refresh(true)}>
+          <button className="dk-ic" type="button" title={t("Refresh")} disabled={!canRefresh || busy || activeSectionBusy} onClick={() => void refreshActiveTab(true)}>
             <RefreshCw size={11} />
           </button>
         </div>
@@ -739,7 +815,7 @@ export default function DockerPanel({ tab }: Props) {
             </div>
             <div className="dk-card-list">
               {filteredContainers.length === 0 ? (
-                busy && !state
+                busy && !tabLoaded("containers")
                   ? <DkSkeleton rows={3} />
                   : <div className="dk-empty">{t("No containers found.")}</div>
               ) : (
@@ -933,7 +1009,7 @@ export default function DockerPanel({ tab }: Props) {
                 <Settings2 size={11} />
               </button>
               <span className="mono text-muted" style={{ fontSize: "var(--size-micro)" }}>
-                {t("{count} total", { count: state?.images.length ?? 0 })}
+                {tabLoaded("images") ? t("{count} total", { count: state?.images.length ?? 0 }) : ""}
               </span>
             </div>
             {pullLog && (
@@ -941,7 +1017,7 @@ export default function DockerPanel({ tab }: Props) {
             )}
             <div className="dk-card-list">
               {filteredImages.length === 0 ? (
-                busy && !state
+                !tabLoaded("images") || tabBusy("images")
                   ? <DkSkeleton rows={3} />
                   : <div className="dk-empty">{t("No images found.")}</div>
               ) : (
@@ -1038,7 +1114,7 @@ export default function DockerPanel({ tab }: Props) {
             </div>
             <div className="dk-card-list">
               {filteredVolumes.length === 0 ? (
-                busy && !state
+                !tabLoaded("volumes") || tabBusy("volumes")
                   ? <DkSkeleton rows={3} />
                   : <div className="dk-empty">{t("No volumes found.")}</div>
               ) : (
@@ -1130,6 +1206,14 @@ export default function DockerPanel({ tab }: Props) {
           }}
         />
 
+        <ContainerLogsDialog
+          open={logsDialog !== null}
+          tab={tab}
+          containerId={logsDialog?.id ?? ""}
+          containerName={logsDialog?.name}
+          onClose={() => setLogsDialog(null)}
+        />
+
         {activeTab === "networks" && (
           <div className="dk-body">
             <div className="dk-scroll">
@@ -1147,7 +1231,7 @@ export default function DockerPanel({ tab }: Props) {
                   {filteredNetworks.length === 0 ? (
                     <tr>
                       <td colSpan={5} className="dk-empty">
-                        {busy && !state ? t("Loading...") : t("No networks found.")}
+                        {!tabLoaded("networks") || tabBusy("networks") ? t("Loading...") : t("No networks found.")}
                       </td>
                     </tr>
                   ) : (

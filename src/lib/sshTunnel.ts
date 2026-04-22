@@ -147,6 +147,7 @@ export async function ensureTunnelSlot(params: {
     remoteHost: resolvedRemoteHost,
     remotePort,
     localPort: null,
+    savedConnectionIndex: target.savedConnectionIndex,
   });
   updateTab(tab.id, tunnelPatch(slot, info));
   return info;

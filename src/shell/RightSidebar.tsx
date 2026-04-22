@@ -356,8 +356,6 @@ export default function RightSidebar({
           onToolChange(tool);
           if (collapsed) onToggleCollapsed();
         }}
-        expanded={expanded}
-        onToggleExpand={onToggleCollapsed}
       />
     </div>
   );

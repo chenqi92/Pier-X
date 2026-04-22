@@ -883,54 +883,6 @@ fn build_ssh_session_saved_or_params(
     build_ssh_session_from_params(host, port, user, auth_mode, password, key_path)
 }
 
-/// Resolve the effective password for a panel call. If `password` is
-/// empty (the frontend hasn't primed it yet) and `saved_index`
-/// points at a saved connection with a keychain credential, fetch
-/// the password directly from the OS keychain. Used by SFTP
-/// commands so a saved password connection works immediately on the
-/// first browse, without waiting for the frontend's async prime.
-///
-/// Returns `Err` only when the saved connection clearly references a
-/// keychain credential that the OS keyring cannot serve (missing
-/// entry or read failure). Caller surfaces that as a friendly
-/// "saved password missing" error rather than letting downstream
-/// `SshConfig::is_valid` fail with the misleading "host, user, port
-/// and auth must all be set" message.
-fn resolve_password_for_auth(
-    auth_mode: &str,
-    password: &str,
-    saved_index: Option<usize>,
-) -> Result<String, String> {
-    if auth_mode != "password" || !password.is_empty() {
-        return Ok(password.to_string());
-    }
-    let Some(index) = saved_index else {
-        return Ok(password.to_string());
-    };
-    let Ok(store) = ConnectionStore::load_default() else {
-        return Ok(password.to_string());
-    };
-    let Some(conn) = store.connections.get(index) else {
-        return Ok(password.to_string());
-    };
-    match &conn.auth {
-        AuthMethod::KeychainPassword { credential_id } => match credentials::get(credential_id) {
-            Ok(Some(resolved)) => Ok(resolved),
-            Ok(None) => Err(format!(
-                "saved password missing in keychain (credential_id={credential_id})"
-            )),
-            Err(e) => Err(format!(
-                "keychain lookup failed for {credential_id}: {e}"
-            )),
-        },
-        // Connection was saved with the keychain-fallback path — the
-        // password lives directly in the on-disk SshConfig, so just
-        // hand it back without touching the keychain at all.
-        AuthMethod::DirectPassword { password } => Ok(password.clone()),
-        _ => Ok(password.to_string()),
-    }
-}
-
 /// Stable key for the SSH session cache. Only the addressing bits,
 /// not the secret — rotating a password requires explicit
 /// eviction, not a cache miss via key change.
@@ -944,12 +896,22 @@ fn sftp_cache_key(host: &str, port: u16, user: &str, auth_mode: &str) -> String 
     )
 }
 
-/// Get a cached SSH session for SFTP work, opening one (and caching
-/// it) if none exists. Falls back to resolving the password from the
-/// keychain when `saved_index` is set and no password was passed in.
-/// On any failure — cached session is dead, password can't be
-/// resolved, handshake fails — returns a descriptive error.
-fn get_or_open_sftp_ssh_session(
+/// Shared entry point for every panel command that needs an SSH
+/// session against a remote host. Returns a cached session when one
+/// exists for `(auth_mode, user, host, port)` — which, crucially,
+/// includes the handle seeded by `create_ssh_terminal_from_config`
+/// whenever the user opens a saved SSH connection tab. This is what
+/// wires "all right-panel tools reuse the terminal's SSH channel"
+/// into a single place: the Docker, SFTP, monitor, log, and DB
+/// panels all route through here and share one russh handshake per
+/// target.
+///
+/// Falls back to `build_ssh_session_saved_or_params` so the path
+/// that actually opens a connection honors the saved-config short-
+/// circuit (keychain-resolved passwords, key files, agent auth)
+/// while still preferring an explicitly-passed credential when the
+/// frontend has one in-memory.
+fn get_or_open_ssh_session(
     state: &tauri::State<'_, AppState>,
     host: &str,
     port: u16,
@@ -971,14 +933,8 @@ fn get_or_open_sftp_ssh_session(
         }
     }
 
-    let effective_password = resolve_password_for_auth(auth_mode, password, saved_index)?;
-    let session = build_ssh_session_from_params(
-        host,
-        port,
-        user,
-        auth_mode,
-        &effective_password,
-        key_path,
+    let session = build_ssh_session_saved_or_params(
+        saved_index, host, port, user, auth_mode, password, key_path,
     )?;
     let arc = Arc::new(session);
 
@@ -990,13 +946,56 @@ fn get_or_open_sftp_ssh_session(
     Ok(arc)
 }
 
-/// Drop the cached session for a tab's fingerprint. Called when an
-/// SFTP operation fails in a way that suggests the underlying SSH
-/// connection has died, so the next call opens a fresh one.
-fn evict_sftp_session(state: &tauri::State<'_, AppState>, host: &str, port: u16, user: &str, auth_mode: &str) {
+/// Drop the cached session for a target. Called when a panel op
+/// fails in a way that suggests the underlying connection has died
+/// (server bounced, idle-timed-out keepalive) so the next call
+/// opens a fresh one. Paired with `run_with_session_retry` to give
+/// panel commands one automatic recovery without surfacing the
+/// transient error to the user.
+fn evict_ssh_session(state: &tauri::State<'_, AppState>, host: &str, port: u16, user: &str, auth_mode: &str) {
     let key = sftp_cache_key(host, port, user, auth_mode);
     if let Ok(mut cache) = state.sftp_sessions.lock() {
         cache.remove(&key);
+    }
+}
+
+/// Run `op` against the cached session. On a first-attempt failure
+/// that looks like a dead session (any `Err(_)`), evict the cache
+/// entry and try again with a fresh session. The second failure
+/// bubbles up unchanged.
+///
+/// Covers the common case where russh silently drops a session
+/// (server-side idle timeout, network hiccup) and the UI would
+/// otherwise show a one-shot error until the next full reconnect.
+fn run_with_session_retry<T, F>(
+    state: &tauri::State<'_, AppState>,
+    host: &str,
+    port: u16,
+    user: &str,
+    auth_mode: &str,
+    password: &str,
+    key_path: &str,
+    saved_index: Option<usize>,
+    mut op: F,
+) -> Result<T, String>
+where
+    F: FnMut(&SshSession) -> Result<T, String>,
+{
+    let mut attempt = 0;
+    loop {
+        let session = get_or_open_ssh_session(
+            state, host, port, user, auth_mode, password, key_path, saved_index,
+        )?;
+        match op(&session) {
+            Ok(v) => return Ok(v),
+            Err(e) if attempt == 0 => {
+                evict_ssh_session(state, host, port, user, auth_mode);
+                attempt += 1;
+                let _ = e;
+                continue;
+            }
+            Err(e) => return Err(e),
+        }
     }
 }
 
@@ -2243,6 +2242,7 @@ fn ssh_tunnel_open(
     remote_host: String,
     remote_port: u16,
     local_port: Option<u16>,
+    saved_connection_index: Option<usize>,
 ) -> Result<TunnelInfoView, String> {
     let resolved_remote_host = if remote_host.trim().is_empty() {
         String::from("127.0.0.1")
@@ -2253,12 +2253,16 @@ fn ssh_tunnel_open(
         return Err(String::from("Tunnel remote port must not be empty."));
     }
 
-    let session = build_ssh_session_from_params(
-        &host, port, &user, &auth_mode, &password, &key_path,
+    // Reuse the cached SSH session (seeded by the terminal) so a DB
+    // panel opening its first tunnel doesn't re-handshake.
+    let tunnel = run_with_session_retry(
+        &state, &host, port, &user, &auth_mode, &password, &key_path, saved_connection_index,
+        |session| {
+            session
+                .open_local_forward_blocking(local_port.unwrap_or(0), &resolved_remote_host, remote_port)
+                .map_err(|error| error.to_string())
+        },
     )?;
-    let tunnel = session
-        .open_local_forward_blocking(local_port.unwrap_or(0), &resolved_remote_host, remote_port)
-        .map_err(|error| error.to_string())?;
     let managed_tunnel = ManagedTunnel {
         local_port: tunnel.local_port(),
         remote_host: resolved_remote_host,
@@ -2868,42 +2872,6 @@ fn postgres_execute(
 
 // ── Docker ──────────────────────────────────────────────────────────
 
-/// Grab an SSH session for Docker work, preferring the saved-config
-/// path when `saved_index` is set. Reuses the shared session cache so
-/// switching between the Docker / SFTP / monitor panels does not
-/// re-handshake on every call.
-fn get_or_open_docker_ssh_session(
-    state: &tauri::State<'_, AppState>,
-    saved_index: Option<usize>,
-    host: &str,
-    port: u16,
-    user: &str,
-    auth_mode: &str,
-    password: &str,
-    key_path: &str,
-) -> Result<Arc<SshSession>, String> {
-    let key = sftp_cache_key(host, port, user, auth_mode);
-    {
-        let cache = state
-            .sftp_sessions
-            .lock()
-            .map_err(|_| "ssh session cache poisoned".to_string())?;
-        if let Some(existing) = cache.get(&key) {
-            return Ok(Arc::clone(existing));
-        }
-    }
-    let session = build_ssh_session_saved_or_params(
-        saved_index, host, port, user, auth_mode, password, key_path,
-    )?;
-    let arc = Arc::new(session);
-    state
-        .sftp_sessions
-        .lock()
-        .map_err(|_| "ssh session cache poisoned".to_string())?
-        .insert(key, Arc::clone(&arc));
-    Ok(arc)
-}
-
 #[tauri::command]
 fn docker_overview(
     state: tauri::State<'_, AppState>,
@@ -2916,20 +2884,13 @@ fn docker_overview(
     all: bool,
     saved_connection_index: Option<usize>,
 ) -> Result<DockerOverview, String> {
-    let session = get_or_open_docker_ssh_session(
-        &state, saved_connection_index, &host, port, &user, &auth_mode, &password, &key_path,
+    let session = get_or_open_ssh_session(
+        &state, &host, port, &user, &auth_mode, &password, &key_path, saved_connection_index,
     )?;
 
-    // Fan out the four cheap listings over the single cached SSH session —
-    // russh multiplexes channels so they all run concurrently. The slow
-    // `docker stats` and `docker system df -v` calls are split out into
-    // `docker_stats` and `docker_volume_usage` so the panel can render
-    // base data in one RTT and enrich in the background.
-    // The four base listings each fire one `docker ... ls` exec — cheap
-    // (~100ms each over SSH). Sequential is fine now that the slow calls
-    // (`docker stats`, `docker system df -v`) are split out into
-    // `docker_stats` / `docker_volume_usage` which the UI fires in the
-    // background without blocking the first paint.
+    // First-open path: containers only. Images / volumes / networks are
+    // loaded by their own tab-specific commands when the user opens those
+    // Docker tabs, which keeps the initial click to one Docker exec.
     let containers = docker::list_containers_blocking(&session, all)
         .map_err(|e| e.to_string())?
         .into_iter()
@@ -2948,6 +2909,28 @@ fn docker_overview(
         })
         .collect();
 
+    Ok(DockerOverview {
+        containers,
+        images: Vec::new(),
+        volumes: Vec::new(),
+        networks: Vec::new(),
+    })
+}
+
+#[tauri::command]
+fn docker_images(
+    state: tauri::State<'_, AppState>,
+    host: String,
+    port: u16,
+    user: String,
+    auth_mode: String,
+    password: String,
+    key_path: String,
+    saved_connection_index: Option<usize>,
+) -> Result<Vec<DockerImageView>, String> {
+    let session = get_or_open_ssh_session(
+        &state, &host, port, &user, &auth_mode, &password, &key_path, saved_connection_index,
+    )?;
     let images = docker::list_images_blocking(&session)
         .map_err(|e| e.to_string())?
         .into_iter()
@@ -2959,7 +2942,23 @@ fn docker_overview(
             created: i.created,
         })
         .collect();
+    Ok(images)
+}
 
+#[tauri::command]
+fn docker_volumes(
+    state: tauri::State<'_, AppState>,
+    host: String,
+    port: u16,
+    user: String,
+    auth_mode: String,
+    password: String,
+    key_path: String,
+    saved_connection_index: Option<usize>,
+) -> Result<Vec<DockerVolumeView>, String> {
+    let session = get_or_open_ssh_session(
+        &state, &host, port, &user, &auth_mode, &password, &key_path, saved_connection_index,
+    )?;
     let volumes: Vec<DockerVolumeView> = docker::list_volumes_blocking(&session)
         .map_err(|e| e.to_string())?
         .into_iter()
@@ -2972,7 +2971,23 @@ fn docker_overview(
             links: -1,
         })
         .collect();
+    Ok(volumes)
+}
 
+#[tauri::command]
+fn docker_networks(
+    state: tauri::State<'_, AppState>,
+    host: String,
+    port: u16,
+    user: String,
+    auth_mode: String,
+    password: String,
+    key_path: String,
+    saved_connection_index: Option<usize>,
+) -> Result<Vec<DockerNetworkView>, String> {
+    let session = get_or_open_ssh_session(
+        &state, &host, port, &user, &auth_mode, &password, &key_path, saved_connection_index,
+    )?;
     let networks = docker::list_networks_blocking(&session)
         .map_err(|e| e.to_string())?
         .into_iter()
@@ -2983,13 +2998,7 @@ fn docker_overview(
             scope: n.scope,
         })
         .collect();
-
-    Ok(DockerOverview {
-        containers,
-        images,
-        volumes,
-        networks,
-    })
+    Ok(networks)
 }
 
 #[derive(Serialize)]
@@ -3013,8 +3022,8 @@ fn docker_stats(
     key_path: String,
     saved_connection_index: Option<usize>,
 ) -> Result<Vec<DockerContainerStatsView>, String> {
-    let session = get_or_open_docker_ssh_session(
-        &state, saved_connection_index, &host, port, &user, &auth_mode, &password, &key_path,
+    let session = get_or_open_ssh_session(
+        &state, &host, port, &user, &auth_mode, &password, &key_path, saved_connection_index,
     )?;
     let stats = docker::list_container_stats_blocking(&session).unwrap_or_default();
     Ok(stats
@@ -3048,8 +3057,8 @@ fn docker_volume_usage(
     key_path: String,
     saved_connection_index: Option<usize>,
 ) -> Result<Vec<DockerVolumeUsageView>, String> {
-    let session = get_or_open_docker_ssh_session(
-        &state, saved_connection_index, &host, port, &user, &auth_mode, &password, &key_path,
+    let session = get_or_open_ssh_session(
+        &state, &host, port, &user, &auth_mode, &password, &key_path, saved_connection_index,
     )?;
     let usages = docker::list_volume_sizes_blocking(&session).unwrap_or_default();
     Ok(usages
@@ -3065,6 +3074,7 @@ fn docker_volume_usage(
 
 #[tauri::command]
 fn docker_container_action(
+    state: tauri::State<'_, AppState>,
     host: String,
     port: u16,
     user: String,
@@ -3075,25 +3085,24 @@ fn docker_container_action(
     action: String,
     saved_connection_index: Option<usize>,
 ) -> Result<String, String> {
-    let session = build_ssh_session_saved_or_params(
-        saved_connection_index, &host, port, &user, &auth_mode, &password, &key_path,
-    )?;
-
-    match action.as_str() {
-        "start" => docker::start_blocking(&session, &container_id)
-            .map_err(|e| e.to_string())
-            .map(|_| String::from("started")),
-        "stop" => docker::stop_blocking(&session, &container_id)
-            .map_err(|e| e.to_string())
-            .map(|_| String::from("stopped")),
-        "restart" => docker::restart_blocking(&session, &container_id)
-            .map_err(|e| e.to_string())
-            .map(|_| String::from("restarted")),
-        "remove" => docker::remove_blocking(&session, &container_id, false)
-            .map_err(|e| e.to_string())
-            .map(|_| String::from("removed")),
-        _ => Err(format!("unknown docker action: {}", action)),
-    }
+    run_with_session_retry(
+        &state, &host, port, &user, &auth_mode, &password, &key_path, saved_connection_index,
+        |session| match action.as_str() {
+            "start" => docker::start_blocking(session, &container_id)
+                .map_err(|e| e.to_string())
+                .map(|_| String::from("started")),
+            "stop" => docker::stop_blocking(session, &container_id)
+                .map_err(|e| e.to_string())
+                .map(|_| String::from("stopped")),
+            "restart" => docker::restart_blocking(session, &container_id)
+                .map_err(|e| e.to_string())
+                .map(|_| String::from("restarted")),
+            "remove" => docker::remove_blocking(session, &container_id, false)
+                .map_err(|e| e.to_string())
+                .map(|_| String::from("removed")),
+            _ => Err(format!("unknown docker action: {}", action)),
+        },
+    )
 }
 
 // ── SFTP ────────────────────────────────────────────────────────────
@@ -3119,14 +3128,14 @@ fn sftp_browse(
     // and retry once with a freshly-opened session.
     let mut attempt = 0;
     loop {
-        let session = get_or_open_sftp_ssh_session(
+        let session = get_or_open_ssh_session(
             &state, &host, port, &user, &auth_mode, &password, &key_path, saved_connection_index,
         )?;
 
         let sftp = match session.open_sftp_blocking() {
             Ok(s) => s,
             Err(e) if attempt == 0 => {
-                evict_sftp_session(&state, &host, port, &user, &auth_mode);
+                evict_ssh_session(&state, &host, port, &user, &auth_mode);
                 attempt += 1;
                 let _ = e;
                 continue;
@@ -3141,7 +3150,7 @@ fn sftp_browse(
         let raw_entries = match sftp.list_dir_blocking(&canonical) {
             Ok(v) => v,
             Err(e) if attempt == 0 => {
-                evict_sftp_session(&state, &host, port, &user, &auth_mode);
+                evict_ssh_session(&state, &host, port, &user, &auth_mode);
                 attempt += 1;
                 let _ = e;
                 continue;
@@ -3210,7 +3219,7 @@ fn server_monitor_probe(
     let baseline_key = sftp_cache_key(&host, port, &user, &auth_mode);
     let mut attempt = 0;
     let snap = loop {
-        let session = get_or_open_sftp_ssh_session(
+        let session = get_or_open_ssh_session(
             &state, &host, port, &user, &auth_mode, &password, &key_path,
             saved_connection_index,
         )?;
@@ -3233,7 +3242,7 @@ fn server_monitor_probe(
                 break snap;
             }
             Err(e) if attempt == 0 => {
-                evict_sftp_session(&state, &host, port, &user, &auth_mode);
+                evict_ssh_session(&state, &host, port, &user, &auth_mode);
                 attempt += 1;
                 let _ = e;
                 continue;
@@ -3294,7 +3303,7 @@ fn detect_services(
     // the cache otherwise. The detector runs several `which` /
     // `--version` probes serially over one SSH session, so a fresh
     // handshake per call is wasteful on slow links.
-    let session = get_or_open_sftp_ssh_session(
+    let session = get_or_open_ssh_session(
         &state, &host, port, &user, &auth_mode, &password, &key_path, saved_connection_index,
     )?;
 
@@ -3328,7 +3337,7 @@ fn db_detect(
     key_path: String,
     saved_connection_index: Option<usize>,
 ) -> Result<DbDetectionReportView, String> {
-    let session = get_or_open_sftp_ssh_session(
+    let session = get_or_open_ssh_session(
         &state, &host, port, &user, &auth_mode, &password, &key_path, saved_connection_index,
     )?;
     let report = db_detect::detect_blocking(&session);
@@ -3411,6 +3420,7 @@ fn db_cred_resolve(
 
 #[tauri::command]
 fn docker_inspect_db_env(
+    state: tauri::State<'_, AppState>,
     host: String,
     port: u16,
     user: String,
@@ -3420,11 +3430,10 @@ fn docker_inspect_db_env(
     container_id: String,
     saved_connection_index: Option<usize>,
 ) -> Result<DockerDbEnvView, String> {
-    let session = build_ssh_session_saved_or_params(
-        saved_connection_index, &host, port, &user, &auth_mode, &password, &key_path,
+    let env = run_with_session_retry(
+        &state, &host, port, &user, &auth_mode, &password, &key_path, saved_connection_index,
+        |session| docker::inspect_db_env_blocking(session, &container_id).map_err(|e| e.to_string()),
     )?;
-    let env = docker::inspect_db_env_blocking(&session, &container_id)
-        .map_err(|e| e.to_string())?;
     Ok(DockerDbEnvView {
         mysql_database: env.mysql_database,
         mysql_user: env.mysql_user,
@@ -3481,7 +3490,7 @@ fn sqlite_remote_capable(
     key_path: String,
     saved_connection_index: Option<usize>,
 ) -> Result<RemoteSqliteCapabilityView, String> {
-    let session = get_or_open_sftp_ssh_session(
+    let session = get_or_open_ssh_session(
         &state, &host, port, &user, &auth_mode, &password, &key_path, saved_connection_index,
     )?;
     let cap = sqlite_remote::probe_blocking(&session);
@@ -3509,7 +3518,7 @@ fn sqlite_browse_remote(
     if trimmed.is_empty() {
         return Err(String::from("remote SQLite path must not be empty"));
     }
-    let session = get_or_open_sftp_ssh_session(
+    let session = get_or_open_ssh_session(
         &state, &host, port, &user, &auth_mode, &password, &key_path, saved_connection_index,
     )?;
     let tables =
@@ -3571,7 +3580,7 @@ fn sqlite_execute_remote(
     if trimmed_sql.is_empty() {
         return Err(String::from("SQL must not be empty"));
     }
-    let session = get_or_open_sftp_ssh_session(
+    let session = get_or_open_ssh_session(
         &state, &host, port, &user, &auth_mode, &password, &key_path, saved_connection_index,
     )?;
     let result = sqlite_remote::execute_blocking(&session, trimmed_path, trimmed_sql)
@@ -3607,7 +3616,7 @@ fn sqlite_find_in_dir(
     directory: String,
     max_depth: Option<u32>,
 ) -> Result<Vec<RemoteSqliteCandidate>, String> {
-    let session = get_or_open_sftp_ssh_session(
+    let session = get_or_open_ssh_session(
         &state, &host, port, &user, &auth_mode, &password, &key_path, saved_connection_index,
     )?;
     let dir = directory.trim();
@@ -3699,6 +3708,7 @@ fn shell_single_quote(s: &str) -> String {
 
 #[tauri::command]
 fn docker_inspect(
+    state: tauri::State<'_, AppState>,
     host: String,
     port: u16,
     user: String,
@@ -3708,15 +3718,15 @@ fn docker_inspect(
     container_id: String,
     saved_connection_index: Option<usize>,
 ) -> Result<String, String> {
-    let session = build_ssh_session_saved_or_params(
-        saved_connection_index, &host, port, &user, &auth_mode, &password, &key_path,
-    )?;
-    docker::inspect_container_blocking(&session, &container_id)
-        .map_err(|e| e.to_string())
+    run_with_session_retry(
+        &state, &host, port, &user, &auth_mode, &password, &key_path, saved_connection_index,
+        |session| docker::inspect_container_blocking(session, &container_id).map_err(|e| e.to_string()),
+    )
 }
 
 #[tauri::command]
 fn docker_remove_image(
+    state: tauri::State<'_, AppState>,
     host: String,
     port: u16,
     user: String,
@@ -3727,15 +3737,15 @@ fn docker_remove_image(
     force: bool,
     saved_connection_index: Option<usize>,
 ) -> Result<(), String> {
-    let session = build_ssh_session_saved_or_params(
-        saved_connection_index, &host, port, &user, &auth_mode, &password, &key_path,
-    )?;
-    docker::remove_image_blocking(&session, &image_id, force)
-        .map_err(|e| e.to_string())
+    run_with_session_retry(
+        &state, &host, port, &user, &auth_mode, &password, &key_path, saved_connection_index,
+        |session| docker::remove_image_blocking(session, &image_id, force).map_err(|e| e.to_string()),
+    )
 }
 
 #[tauri::command]
 fn docker_remove_volume(
+    state: tauri::State<'_, AppState>,
     host: String,
     port: u16,
     user: String,
@@ -3745,15 +3755,15 @@ fn docker_remove_volume(
     volume_name: String,
     saved_connection_index: Option<usize>,
 ) -> Result<(), String> {
-    let session = build_ssh_session_saved_or_params(
-        saved_connection_index, &host, port, &user, &auth_mode, &password, &key_path,
-    )?;
-    docker::remove_volume_blocking(&session, &volume_name)
-        .map_err(|e| e.to_string())
+    run_with_session_retry(
+        &state, &host, port, &user, &auth_mode, &password, &key_path, saved_connection_index,
+        |session| docker::remove_volume_blocking(session, &volume_name).map_err(|e| e.to_string()),
+    )
 }
 
 #[tauri::command]
 fn docker_remove_network(
+    state: tauri::State<'_, AppState>,
     host: String,
     port: u16,
     user: String,
@@ -3763,11 +3773,10 @@ fn docker_remove_network(
     network_name: String,
     saved_connection_index: Option<usize>,
 ) -> Result<(), String> {
-    let session = build_ssh_session_saved_or_params(
-        saved_connection_index, &host, port, &user, &auth_mode, &password, &key_path,
-    )?;
-    docker::remove_network_blocking(&session, &network_name)
-        .map_err(|e| e.to_string())
+    run_with_session_retry(
+        &state, &host, port, &user, &auth_mode, &password, &key_path, saved_connection_index,
+        |session| docker::remove_network_blocking(session, &network_name).map_err(|e| e.to_string()),
+    )
 }
 
 #[derive(serde::Deserialize)]
@@ -3804,6 +3813,7 @@ impl From<DockerRunOptionsView> for docker::RunContainerOptions {
 
 #[tauri::command]
 fn docker_run_container(
+    state: tauri::State<'_, AppState>,
     host: String,
     port: u16,
     user: String,
@@ -3813,14 +3823,16 @@ fn docker_run_container(
     options: DockerRunOptionsView,
     saved_connection_index: Option<usize>,
 ) -> Result<String, String> {
-    let session = build_ssh_session_saved_or_params(
-        saved_connection_index, &host, port, &user, &auth_mode, &password, &key_path,
-    )?;
-    docker::run_container_blocking(&session, &options.into()).map_err(|e| e.to_string())
+    let opts: docker::RunContainerOptions = options.into();
+    run_with_session_retry(
+        &state, &host, port, &user, &auth_mode, &password, &key_path, saved_connection_index,
+        |session| docker::run_container_blocking(session, &opts).map_err(|e| e.to_string()),
+    )
 }
 
 #[tauri::command]
 fn docker_prune_volumes(
+    state: tauri::State<'_, AppState>,
     host: String,
     port: u16,
     user: String,
@@ -3829,14 +3841,15 @@ fn docker_prune_volumes(
     key_path: String,
     saved_connection_index: Option<usize>,
 ) -> Result<String, String> {
-    let session = build_ssh_session_saved_or_params(
-        saved_connection_index, &host, port, &user, &auth_mode, &password, &key_path,
-    )?;
-    docker::prune_volumes_blocking(&session).map_err(|e| e.to_string())
+    run_with_session_retry(
+        &state, &host, port, &user, &auth_mode, &password, &key_path, saved_connection_index,
+        |session| docker::prune_volumes_blocking(session).map_err(|e| e.to_string()),
+    )
 }
 
 #[tauri::command]
 fn docker_pull_image(
+    state: tauri::State<'_, AppState>,
     host: String,
     port: u16,
     user: String,
@@ -3849,12 +3862,12 @@ fn docker_pull_image(
     env_prefix: Option<Vec<(String, String)>>,
     saved_connection_index: Option<usize>,
 ) -> Result<String, String> {
-    let session = build_ssh_session_saved_or_params(
-        saved_connection_index, &host, port, &user, &auth_mode, &password, &key_path,
-    )?;
     let env = env_prefix.unwrap_or_default();
     let env_refs: Vec<(&str, &str)> = env.iter().map(|(k, v)| (k.as_str(), v.as_str())).collect();
-    docker::pull_image_blocking(&session, &image_ref, &env_refs).map_err(|e| e.to_string())
+    run_with_session_retry(
+        &state, &host, port, &user, &auth_mode, &password, &key_path, saved_connection_index,
+        |session| docker::pull_image_blocking(session, &image_ref, &env_refs).map_err(|e| e.to_string()),
+    )
 }
 
 #[tauri::command]
@@ -3881,6 +3894,7 @@ async fn local_docker_pull_image(
 
 #[tauri::command]
 fn docker_volume_files(
+    state: tauri::State<'_, AppState>,
     host: String,
     port: u16,
     user: String,
@@ -3890,10 +3904,10 @@ fn docker_volume_files(
     mountpoint: String,
     saved_connection_index: Option<usize>,
 ) -> Result<String, String> {
-    let session = build_ssh_session_saved_or_params(
-        saved_connection_index, &host, port, &user, &auth_mode, &password, &key_path,
-    )?;
-    docker::list_volume_files_blocking(&session, &mountpoint).map_err(|e| e.to_string())
+    run_with_session_retry(
+        &state, &host, port, &user, &auth_mode, &password, &key_path, saved_connection_index,
+        |session| docker::list_volume_files_blocking(session, &mountpoint).map_err(|e| e.to_string()),
+    )
 }
 
 #[tauri::command]
@@ -3990,7 +4004,7 @@ fn sftp_mkdir(
     path: String,
     saved_connection_index: Option<usize>,
 ) -> Result<(), String> {
-    let session = get_or_open_sftp_ssh_session(
+    let session = get_or_open_ssh_session(
         &state, &host, port, &user, &auth_mode, &password, &key_path, saved_connection_index,
     )?;
     let sftp = session.open_sftp_blocking().map_err(|e| e.to_string())?;
@@ -4010,7 +4024,7 @@ fn sftp_remove(
     is_dir: bool,
     saved_connection_index: Option<usize>,
 ) -> Result<(), String> {
-    let session = get_or_open_sftp_ssh_session(
+    let session = get_or_open_ssh_session(
         &state, &host, port, &user, &auth_mode, &password, &key_path, saved_connection_index,
     )?;
     let sftp = session.open_sftp_blocking().map_err(|e| e.to_string())?;
@@ -4034,7 +4048,7 @@ fn sftp_rename(
     to: String,
     saved_connection_index: Option<usize>,
 ) -> Result<(), String> {
-    let session = get_or_open_sftp_ssh_session(
+    let session = get_or_open_ssh_session(
         &state, &host, port, &user, &auth_mode, &password, &key_path, saved_connection_index,
     )?;
     let sftp = session.open_sftp_blocking().map_err(|e| e.to_string())?;
@@ -4055,7 +4069,7 @@ fn sftp_chmod(
     mode: u32,
     saved_connection_index: Option<usize>,
 ) -> Result<(), String> {
-    let session = get_or_open_sftp_ssh_session(
+    let session = get_or_open_ssh_session(
         &state, &host, port, &user, &auth_mode, &password, &key_path, saved_connection_index,
     )?;
     let sftp = session.open_sftp_blocking().map_err(|e| e.to_string())?;
@@ -4076,7 +4090,7 @@ fn sftp_create_file(
     path: String,
     saved_connection_index: Option<usize>,
 ) -> Result<(), String> {
-    let session = get_or_open_sftp_ssh_session(
+    let session = get_or_open_ssh_session(
         &state, &host, port, &user, &auth_mode, &password, &key_path, saved_connection_index,
     )?;
     let sftp = session.open_sftp_blocking().map_err(|e| e.to_string())?;
@@ -4123,7 +4137,7 @@ fn sftp_read_text(
     max_bytes: Option<u64>,
     saved_connection_index: Option<usize>,
 ) -> Result<SftpTextFile, String> {
-    let session = get_or_open_sftp_ssh_session(
+    let session = get_or_open_ssh_session(
         &state, &host, port, &user, &auth_mode, &password, &key_path, saved_connection_index,
     )?;
     let sftp = session.open_sftp_blocking().map_err(|e| e.to_string())?;
@@ -4164,7 +4178,7 @@ fn sftp_write_text(
     content: String,
     saved_connection_index: Option<usize>,
 ) -> Result<(), String> {
-    let session = get_or_open_sftp_ssh_session(
+    let session = get_or_open_ssh_session(
         &state, &host, port, &user, &auth_mode, &password, &key_path, saved_connection_index,
     )?;
     let sftp = session.open_sftp_blocking().map_err(|e| e.to_string())?;
@@ -4218,7 +4232,7 @@ fn sftp_download(
     saved_connection_index: Option<usize>,
     transfer_id: Option<String>,
 ) -> Result<(), String> {
-    let session = get_or_open_sftp_ssh_session(
+    let session = get_or_open_ssh_session(
         &state, &host, port, &user, &auth_mode, &password, &key_path, saved_connection_index,
     )?;
     let sftp = session.open_sftp_blocking().map_err(|e| e.to_string())?;
@@ -4300,7 +4314,7 @@ fn sftp_upload(
     saved_connection_index: Option<usize>,
     transfer_id: Option<String>,
 ) -> Result<(), String> {
-    let session = get_or_open_sftp_ssh_session(
+    let session = get_or_open_ssh_session(
         &state, &host, port, &user, &auth_mode, &password, &key_path, saved_connection_index,
     )?;
     let sftp = session.open_sftp_blocking().map_err(|e| e.to_string())?;
@@ -4382,7 +4396,7 @@ fn sftp_upload_tree(
     saved_connection_index: Option<usize>,
     transfer_id: Option<String>,
 ) -> Result<(), String> {
-    let session = get_or_open_sftp_ssh_session(
+    let session = get_or_open_ssh_session(
         &state, &host, port, &user, &auth_mode, &password, &key_path, saved_connection_index,
     )?;
     let sftp = session.open_sftp_blocking().map_err(|e| e.to_string())?;
@@ -4459,7 +4473,7 @@ fn sftp_download_tree(
     saved_connection_index: Option<usize>,
     transfer_id: Option<String>,
 ) -> Result<(), String> {
-    let session = get_or_open_sftp_ssh_session(
+    let session = get_or_open_ssh_session(
         &state, &host, port, &user, &auth_mode, &password, &key_path, saved_connection_index,
     )?;
     let sftp = session.open_sftp_blocking().map_err(|e| e.to_string())?;
@@ -4533,14 +4547,14 @@ fn log_stream_start(
     command: String,
     saved_connection_index: Option<usize>,
 ) -> Result<String, String> {
-    let effective_password =
-        resolve_password_for_auth(&auth_mode, &password, saved_connection_index)?;
-    let session = build_ssh_session_from_params(
-        &host, port, &user, &auth_mode, &effective_password, &key_path,
+    // Reuse the terminal's SSH session (or any previously-cached panel
+    // session) so a new log tail doesn't re-handshake. `ExecStream`
+    // opens its own russh channel on the existing session — cheap
+    // compared to a full connect.
+    let stream = run_with_session_retry(
+        &state, &host, port, &user, &auth_mode, &password, &key_path, saved_connection_index,
+        |session| session.spawn_exec_stream_blocking(&command).map_err(|e| e.to_string()),
     )?;
-    let stream = session
-        .spawn_exec_stream_blocking(&command)
-        .map_err(|e| e.to_string())?;
 
     let id = format!(
         "log-{}",
@@ -4614,17 +4628,9 @@ fn log_stream_stop(
 
 #[tauri::command]
 async fn local_docker_overview(all: bool) -> Result<DockerOverview, String> {
-    // Base listings only. `docker stats --no-stream` (fixed ~2s sampling
-    // window) and `docker system df -v` (often 1–5s on busy hosts) are
-    // split into `local_docker_stats` / `local_docker_volume_usage` so the
-    // panel can paint the first frame in ~200ms and enrich in the
-    // background — matching the SSH overview/enrich split above.
-    //
-    // The four cheap subprocess calls fan out over the blocking thread
-    // pool via `spawn_blocking` so we pay one process-spawn latency, not
-    // four. The function itself is `async` so Tauri runs it on the async
-    // runtime instead of blocking the main IPC thread.
-    let containers_task = tauri::async_runtime::spawn_blocking(move || -> Result<Vec<DockerContainerView>, String> {
+    // First-open path: one local Docker command only. The images,
+    // volumes, and networks tabs load their own listings on demand.
+    let containers = tauri::async_runtime::spawn_blocking(move || -> Result<Vec<DockerContainerView>, String> {
         let fmt = "{{.ID}}\t{{.Image}}\t{{.Names}}\t{{.Status}}\t{{.State}}\t{{.CreatedAt}}\t{{.Ports}}";
         let mut cmd = std::process::Command::new("docker");
         cmd.args(["ps", "--format", fmt]);
@@ -4656,9 +4662,21 @@ async fn local_docker_overview(all: bool) -> Result<DockerOverview, String> {
                 }
             })
             .collect())
-    });
+    })
+    .await
+    .map_err(|e| format!("docker ps join: {}", e))??;
 
-    let images_task = tauri::async_runtime::spawn_blocking(|| -> Vec<DockerImageView> {
+    Ok(DockerOverview {
+        containers,
+        images: Vec::new(),
+        volumes: Vec::new(),
+        networks: Vec::new(),
+    })
+}
+
+#[tauri::command]
+async fn local_docker_images() -> Result<Vec<DockerImageView>, String> {
+    tauri::async_runtime::spawn_blocking(|| {
         std::process::Command::new("docker")
             .args([
                 "images",
@@ -4684,9 +4702,14 @@ async fn local_docker_overview(all: bool) -> Result<DockerOverview, String> {
                     .collect()
             })
             .unwrap_or_default()
-    });
+    })
+    .await
+    .map_err(|e| format!("docker images join: {}", e))
+}
 
-    let volumes_task = tauri::async_runtime::spawn_blocking(|| -> Vec<DockerVolumeView> {
+#[tauri::command]
+async fn local_docker_volumes() -> Result<Vec<DockerVolumeView>, String> {
+    tauri::async_runtime::spawn_blocking(|| {
         // Size / links are populated asynchronously by
         // `local_docker_volume_usage` so we skip `docker system df -v`
         // on this path. Client-side sort handles ordering.
@@ -4717,9 +4740,14 @@ async fn local_docker_overview(all: bool) -> Result<DockerOverview, String> {
                     .collect()
             })
             .unwrap_or_default()
-    });
+    })
+    .await
+    .map_err(|e| format!("docker volume ls join: {}", e))
+}
 
-    let networks_task = tauri::async_runtime::spawn_blocking(|| -> Vec<DockerNetworkView> {
+#[tauri::command]
+async fn local_docker_networks() -> Result<Vec<DockerNetworkView>, String> {
+    tauri::async_runtime::spawn_blocking(|| {
         std::process::Command::new("docker")
             .args([
                 "network",
@@ -4745,30 +4773,9 @@ async fn local_docker_overview(all: bool) -> Result<DockerOverview, String> {
                     .collect()
             })
             .unwrap_or_default()
-    });
-
-    // All four tasks were spawned before any await, so they run in
-    // parallel on the blocking pool. Awaiting them sequentially below
-    // is just collection — the wall time is max(task), not sum(task).
-    let containers = containers_task
-        .await
-        .map_err(|e| format!("docker ps join: {}", e))??;
-    let images = images_task
-        .await
-        .map_err(|e| format!("docker images join: {}", e))?;
-    let volumes = volumes_task
-        .await
-        .map_err(|e| format!("docker volume ls join: {}", e))?;
-    let networks = networks_task
-        .await
-        .map_err(|e| format!("docker network ls join: {}", e))?;
-
-    Ok(DockerOverview {
-        containers,
-        images,
-        volumes,
-        networks,
     })
+    .await
+    .map_err(|e| format!("docker network ls join: {}", e))
 }
 
 /// Local-docker counterpart of [`docker_stats`]. Runs
@@ -5094,6 +5101,9 @@ pub fn run() {
             postgres_browse,
             postgres_execute,
             docker_overview,
+            docker_images,
+            docker_volumes,
+            docker_networks,
             docker_container_action,
             sftp_browse,
             markdown_render,
@@ -5135,6 +5145,9 @@ pub fn run() {
             log_stream_drain,
             log_stream_stop,
             local_docker_overview,
+            local_docker_images,
+            local_docker_volumes,
+            local_docker_networks,
             local_docker_stats,
             local_docker_volume_usage,
             local_docker_action,

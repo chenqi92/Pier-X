@@ -21,7 +21,7 @@ import {
 import { open as openDialog } from "@tauri-apps/plugin-dialog";
 import { listen } from "@tauri-apps/api/event";
 import { Fragment, useEffect, useMemo, useRef, useState } from "react";
-import type { DragEvent as ReactDragEvent } from "react";
+import type { DragEvent as ReactDragEvent, MouseEvent as ReactMouseEvent } from "react";
 import type { ComponentType } from "react";
 import * as cmd from "../lib/commands";
 import { SFTP_PROGRESS_EVENT, type SftpProgressEvent } from "../lib/commands";
@@ -33,6 +33,11 @@ import { localizeError } from "../i18n/localizeMessage";
 import PanelHeader from "../components/PanelHeader";
 import StatusDot from "../components/StatusDot";
 import VirtualList from "../components/VirtualList";
+import ContextMenu, { type ContextMenuItem } from "../components/ContextMenu";
+import ChmodDialog from "../components/ChmodDialog";
+import SftpEditorDialog from "../components/SftpEditorDialog";
+import { writeClipboardText } from "../lib/clipboard";
+import { isEditableFilename, MAX_EDITOR_BYTES, modeToSymbolic } from "../lib/sftpEditor";
 
 /** Row height for virtualized entries, matching `.ftp-row` in shell.css
  *  (12px font · 6px padding top+bottom · 1px border). Kept in sync
@@ -134,6 +139,20 @@ function localBaseName(path: string) {
   return parts[parts.length - 1] || "";
 }
 
+/** Parse an `ls -l` style permission string (e.g. `-rwxr-xr--`) back
+ *  to the octal `u32` the chmod dialog wants as its seed. Returns
+ *  `null` when the input isn't the 10-char symbolic form — callers
+ *  then fall back to 0o644. */
+function parseSymbolicPermissions(s: string | null | undefined): number | null {
+  if (!s || s.length < 10) return null;
+  const core = s.slice(1, 10);
+  let mode = 0;
+  for (let i = 0; i < 9; i++) {
+    if (core[i] !== "-") mode |= 1 << (8 - i);
+  }
+  return mode;
+}
+
 function formatBytes(n: number): string {
   if (!Number.isFinite(n) || n <= 0) return "0 B";
   const units = ["B", "KB", "MB", "GB", "TB"];
@@ -200,6 +219,22 @@ export default function SftpPanel({ tab }: Props) {
   const transferSeq = useRef(0);
   const [dropDepth, setDropDepth] = useState(0);
   const dropHover = dropDepth > 0;
+
+  // ── Context menu + extended actions ────────────────────────────
+  type CtxState =
+    | { kind: "entry"; x: number; y: number; entry: SftpEntryView }
+    | { kind: "empty"; x: number; y: number }
+    | null;
+  const [ctxMenu, setCtxMenu] = useState<CtxState>(null);
+
+  const [editorTarget, setEditorTarget] = useState<{ path: string; name: string } | null>(null);
+
+  const [chmodTarget, setChmodTarget] = useState<{ path: string; mode: number | null } | null>(null);
+
+  const [newFileOpen, setNewFileOpen] = useState(false);
+  const [newFileName, setNewFileName] = useState("");
+
+  const [propsTarget, setPropsTarget] = useState<SftpEntryView | null>(null);
 
   // SSH context can come from the tab being a real SSH tab, from a
   // local terminal where the user typed `ssh user@host`, or from a
@@ -405,6 +440,135 @@ export default function SftpPanel({ tab }: Props) {
     }
   }
 
+  /** Remove an arbitrary entry — used by the context menu which
+   *  doesn't rely on the inspector's `selectedEntry` state. Also
+   *  prompts the user before unlinking to match the "all dangerous
+   *  ops require confirmation" rule from the product spec. */
+  async function removeEntry(entry: SftpEntryView) {
+    if (!hasSsh) return;
+    const msg = entry.isDir
+      ? t("Remove directory {name}? It must be empty.", { name: entry.name })
+      : t("Remove file {name}?", { name: entry.name });
+    if (!window.confirm(msg)) return;
+    setActionBusy(true);
+    setError("");
+    setNotice("");
+    try {
+      await cmd.sftpRemove({ ...sshArgs, path: entry.path, isDir: entry.isDir });
+      setNotice(t("Removed {path}.", { path: entry.path }));
+      await browse(currentRemotePath);
+    } catch (e) {
+      setError(formatError(e));
+    } finally {
+      setActionBusy(false);
+    }
+  }
+
+  /** Rename an arbitrary entry via a prompt — the inline inspector
+   *  quickrow only targets the currently selected row. */
+  async function renameEntryPrompt(entry: SftpEntryView) {
+    if (!hasSsh) return;
+    const nextName = window.prompt(t("Rename {name} to:", { name: entry.name }), entry.name);
+    if (!nextName || nextName.trim() === entry.name) return;
+    const nextPath = joinRemotePath(remoteDirname(entry.path), nextName.trim());
+    setActionBusy(true);
+    setError("");
+    setNotice("");
+    try {
+      await cmd.sftpRename({ ...sshArgs, from: entry.path, to: nextPath });
+      setNotice(t("Renamed {from} to {to}.", { from: entry.name, to: nextName.trim() }));
+      await browse(currentRemotePath);
+    } catch (e) {
+      setError(formatError(e));
+    } finally {
+      setActionBusy(false);
+    }
+  }
+
+  /** Server-side copy via read+write (no atomic `cp` in SFTP). Gated
+   *  on size because the whole file traverses the wire twice. */
+  async function duplicateEntry(entry: SftpEntryView) {
+    if (!hasSsh || entry.isDir) {
+      setError(t("Duplicate only works on files."));
+      return;
+    }
+    if (entry.size > MAX_EDITOR_BYTES) {
+      setError(t("File is too large to duplicate in-place. Download and re-upload instead."));
+      return;
+    }
+    setActionBusy(true);
+    setError("");
+    setNotice("");
+    try {
+      const res = await cmd.sftpReadText({
+        ...sshArgs,
+        path: entry.path,
+        maxBytes: MAX_EDITOR_BYTES,
+      });
+      const baseName = entry.name.replace(/(\.[^./]+)?$/, (ext) => ` (copy)${ext ?? ""}`);
+      const targetPath = joinRemotePath(remoteDirname(entry.path), baseName);
+      await cmd.sftpWriteText({ ...sshArgs, path: targetPath, content: res.content });
+      setNotice(t("Duplicated {from} to {to}.", { from: entry.name, to: baseName }));
+      await browse(currentRemotePath);
+    } catch (e) {
+      setError(formatError(e));
+    } finally {
+      setActionBusy(false);
+    }
+  }
+
+  async function copyEntryPath(entry: SftpEntryView) {
+    await writeClipboardText(entry.path);
+    setNotice(t("Copied path to clipboard."));
+  }
+
+  async function applyChmod(path: string, mode: number) {
+    setActionBusy(true);
+    setError("");
+    setNotice("");
+    try {
+      await cmd.sftpChmod({ ...sshArgs, path, mode });
+      setNotice(t("Permissions changed to {mode}.", { mode: mode.toString(8).padStart(3, "0") }));
+      setChmodTarget(null);
+      await browse(currentRemotePath);
+    } catch (e) {
+      setError(formatError(e));
+    } finally {
+      setActionBusy(false);
+    }
+  }
+
+  async function createNewFile() {
+    if (!hasSsh || !newFileName.trim()) return;
+    setActionBusy(true);
+    setError("");
+    setNotice("");
+    try {
+      const targetPath = joinRemotePath(currentRemotePath, newFileName.trim());
+      await cmd.sftpCreateFile({ ...sshArgs, path: targetPath });
+      setNewFileOpen(false);
+      setNewFileName("");
+      setNotice(t("Created file {path}.", { path: targetPath }));
+      await browse(currentRemotePath);
+    } catch (e) {
+      setError(formatError(e));
+    } finally {
+      setActionBusy(false);
+    }
+  }
+
+  function openEditorFor(entry: SftpEntryView) {
+    if (entry.isDir) {
+      void browse(entry.path, { pushHistory: true });
+      return;
+    }
+    if (entry.size > MAX_EDITOR_BYTES) {
+      setError(t("File is too large to edit inline. Download first."));
+      return;
+    }
+    setEditorTarget({ path: entry.path, name: entry.name });
+  }
+
   /** Download a single remote file into `localDir` (an absolute local
    *  directory). Pushes a transfer queue entry and updates it on
    *  success/failure. Non-blocking for concurrent download fan-out —
@@ -555,9 +719,91 @@ export default function SftpPanel({ tab }: Props) {
   function openEntry(entry: SftpEntryView) {
     if (entry.isDir) {
       void browse(entry.path, { pushHistory: true });
-    } else {
-      selectEntry(entry);
+      return;
     }
+    // Double-click on a text-ish file under the editor size limit →
+    // open the inline editor. Everything else stays "select and let
+    // the inspector show details" so binaries aren't accidentally
+    // opened through a UTF-8 lossy read.
+    if (isEditableFilename(entry.name) && entry.size <= MAX_EDITOR_BYTES) {
+      selectEntry(entry);
+      openEditorFor(entry);
+      return;
+    }
+    selectEntry(entry);
+  }
+
+  function buildEntryContextMenu(entry: SftpEntryView): ContextMenuItem[] {
+    const canEdit = !entry.isDir && isEditableFilename(entry.name) && entry.size <= MAX_EDITOR_BYTES;
+    const items: ContextMenuItem[] = [];
+    if (entry.isDir) {
+      items.push({
+        label: t("Open"),
+        action: () => void browse(entry.path, { pushHistory: true }),
+      });
+    } else {
+      items.push({
+        label: t("Edit"),
+        action: () => openEditorFor(entry),
+        disabled: !canEdit,
+      });
+      items.push({
+        label: t("Download…"),
+        action: () => {
+          selectEntry(entry);
+          void downloadSelectedPick();
+        },
+        disabled: actionBusy,
+      });
+    }
+    items.push({ divider: true });
+    items.push({ label: t("Rename…"), action: () => void renameEntryPrompt(entry) });
+    if (!entry.isDir) {
+      items.push({ label: t("Duplicate"), action: () => void duplicateEntry(entry) });
+    }
+    items.push({
+      label: t("Delete"),
+      action: () => void removeEntry(entry),
+    });
+    items.push({ divider: true });
+    items.push({
+      label: t("Change permissions…"),
+      action: () => setChmodTarget({
+        path: entry.path,
+        mode: parseSymbolicPermissions(entry.permissions),
+      }),
+    });
+    items.push({ label: t("Copy path"), action: () => void copyEntryPath(entry) });
+    items.push({ divider: true });
+    items.push({ label: t("Properties"), action: () => setPropsTarget(entry) });
+    return items;
+  }
+
+  function buildEmptyContextMenu(): ContextMenuItem[] {
+    return [
+      { label: t("New file…"), action: () => { setNewFileName(""); setNewFileOpen(true); } },
+      { label: t("New folder…"), action: () => setMkdirOpen(true) },
+      { divider: true },
+      { label: t("Upload…"), action: () => void uploadPick(), disabled: actionBusy },
+      { label: t("Refresh"), action: () => void browse(currentRemotePath) },
+    ];
+  }
+
+  function handleRowContextMenu(event: ReactMouseEvent<HTMLDivElement>, entry: SftpEntryView) {
+    event.preventDefault();
+    event.stopPropagation();
+    selectEntry(entry);
+    setCtxMenu({ kind: "entry", x: event.clientX, y: event.clientY, entry });
+  }
+
+  function handleEmptyContextMenu(event: ReactMouseEvent<HTMLDivElement>) {
+    // Only fire for clicks on the list background — the per-row
+    // handler stops propagation so this never sees row-level events.
+    const target = event.target as HTMLElement | null;
+    if (target?.closest(".ftp-row")) return;
+    if (!hasSsh) return;
+    event.preventDefault();
+    setCtxMenu({ kind: "empty", x: event.clientX, y: event.clientY });
   }
 
   // ── Drag-drop between Sidebar ↔ SFTP ────────────────────────────
@@ -733,6 +979,7 @@ export default function SftpPanel({ tab }: Props) {
         style={{ height: FTP_ROW_HEIGHT }}
         onClick={() => selectEntry(entry)}
         onDoubleClick={() => openEntry(entry)}
+        onContextMenu={(e) => handleRowContextMenu(e, entry)}
         onKeyDown={(e) => {
           if (e.key === "Enter") {
             e.preventDefault();
@@ -829,6 +1076,7 @@ export default function SftpPanel({ tab }: Props) {
         onDragOver={handleListDragOver}
         onDragLeave={handleListDragLeave}
         onDrop={handleListDrop}
+        onContextMenu={handleEmptyContextMenu}
       />
     );
   };
@@ -982,6 +1230,29 @@ export default function SftpPanel({ tab }: Props) {
           </div>
         )}
 
+        {newFileOpen && (
+          <div className="ftp-quickrow">
+            <span className="ftp-quickrow-label mono">{t("New file")}</span>
+            <input
+              className="field-input field-input--compact"
+              value={newFileName}
+              onChange={(e) => setNewFileName(e.currentTarget.value)}
+              placeholder={t("config.conf")}
+              autoFocus
+              onKeyDown={(e) => { if (e.key === "Enter") void createNewFile(); }}
+            />
+            <button
+              type="button"
+              className="btn is-primary is-compact"
+              disabled={!newFileName.trim() || actionBusy}
+              onClick={() => void createNewFile()}
+            >
+              {t("Create")}
+            </button>
+            <button type="button" className="btn is-ghost is-compact" onClick={() => setNewFileOpen(false)}>{t("Cancel")}</button>
+          </div>
+        )}
+
         <div className="ftp-col-head">
           <span>{t("NAME")}</span>
           <span className="ftp-perm">{t("PERM")}</span>
@@ -1078,6 +1349,92 @@ export default function SftpPanel({ tab }: Props) {
             {selectedEntry ? ` · ${t("1 selected")}` : ""}
           </span>
         </div>
+
+        {ctxMenu && (
+          <ContextMenu
+            x={ctxMenu.x}
+            y={ctxMenu.y}
+            items={
+              ctxMenu.kind === "entry"
+                ? buildEntryContextMenu(ctxMenu.entry)
+                : buildEmptyContextMenu()
+            }
+            onClose={() => setCtxMenu(null)}
+          />
+        )}
+
+        {chmodTarget && (
+          <ChmodDialog
+            open
+            path={chmodTarget.path}
+            initialMode={chmodTarget.mode}
+            onSubmit={(mode) => applyChmod(chmodTarget.path, mode)}
+            onClose={() => setChmodTarget(null)}
+            busy={actionBusy}
+          />
+        )}
+
+        {editorTarget && (
+          <SftpEditorDialog
+            open
+            path={editorTarget.path}
+            name={editorTarget.name}
+            sshArgs={sshArgs}
+            onClose={() => setEditorTarget(null)}
+            onSaved={() => void browse(currentRemotePath)}
+          />
+        )}
+
+        {propsTarget && (
+          <div className="dlg-overlay" onClick={() => setPropsTarget(null)}>
+            <div
+              className="dlg dlg--props"
+              onClick={(e) => e.stopPropagation()}
+            >
+              <div className="dlg-head">
+                <span className="dlg-title">
+                  <FileIcon size={13} />
+                  {t("Properties")}
+                </span>
+                <div style={{ flex: 1 }} />
+                <button type="button" className="lg-ic" onClick={() => setPropsTarget(null)} title={t("Close")}>
+                  <X size={12} />
+                </button>
+              </div>
+              <div className="dlg-body dlg-body--form">
+                <div className="props-grid mono">
+                  <span className="props-key">{t("Name")}</span>
+                  <span className="props-val">{propsTarget.name}</span>
+                  <span className="props-key">{t("Path")}</span>
+                  <span className="props-val" title={propsTarget.path}>{propsTarget.path}</span>
+                  <span className="props-key">{t("Type")}</span>
+                  <span className="props-val">{propsTarget.isDir ? t("Directory") : t("File")}</span>
+                  <span className="props-key">{t("Size")}</span>
+                  <span className="props-val">{propsTarget.isDir ? "—" : formatBytes(propsTarget.size)}</span>
+                  <span className="props-key">{t("Permissions")}</span>
+                  <span className="props-val">
+                    {propsTarget.permissions || (propsTarget.isDir ? "drwxr-xr-x" : "-rw-r--r--")}
+                    {(() => {
+                      const m = parseSymbolicPermissions(propsTarget.permissions);
+                      return m != null ? ` · ${modeToSymbolic(m)} · ${m.toString(8).padStart(3, "0")}` : "";
+                    })()}
+                  </span>
+                  <span className="props-key">{t("Modified")}</span>
+                  <span className="props-val">{formatModifiedTooltip(propsTarget.modified) || "—"}</span>
+                </div>
+                <div className="chmod-actions">
+                  <button
+                    type="button"
+                    className="btn is-ghost is-compact"
+                    onClick={() => setPropsTarget(null)}
+                  >
+                    {t("Close")}
+                  </button>
+                </div>
+              </div>
+            </div>
+          </div>
+        )}
 
         {transfers.length > 0 && (
           <div className="ftp-queue">

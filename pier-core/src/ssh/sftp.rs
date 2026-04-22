@@ -33,14 +33,12 @@
 //!   composes these from the single-step primitives today;
 //!   we'll move them into this module when recursion becomes
 //!   annoying to orchestrate above this layer.
-//! * Permission editing. `set_metadata` exists in russh-sftp
-//!   but pier-x's M3d shell doesn't expose a chmod affordance
-//!   yet.
 
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
 use russh_sftp::client::SftpSession;
+use russh_sftp::protocol::FileAttributes;
 use serde::{Deserialize, Serialize};
 
 use super::error::{Result, SshError};
@@ -553,6 +551,45 @@ impl SftpClient {
     /// Synchronous wrapper for [`Self::rename`].
     pub fn rename_blocking(&self, from: &str, to: &str) -> Result<()> {
         runtime::shared().block_on(self.rename(from, to))
+    }
+
+    /// Set POSIX permission bits on `path`. Only the low 12
+    /// bits (`0o7777`) are preserved — callers pass file-mode
+    /// octal like `0o644`; higher bits that encode the file
+    /// type stay whatever the server already reports.
+    pub async fn set_permissions(&self, path: &str, mode: u32) -> Result<()> {
+        let mut attrs = FileAttributes::empty();
+        attrs.permissions = Some(mode & 0o7777);
+        self.inner
+            .set_metadata(path.to_string(), attrs)
+            .await
+            .map_err(sftp_error)
+    }
+
+    /// Synchronous wrapper for [`Self::set_permissions`].
+    pub fn set_permissions_blocking(&self, path: &str, mode: u32) -> Result<()> {
+        runtime::shared().block_on(self.set_permissions(path, mode))
+    }
+
+    /// Create an empty file at `path`, opening and immediately
+    /// closing the handle. Mirrors `touch` for missing files;
+    /// will truncate an existing file to zero length on servers
+    /// that treat `SSH_FXP_OPEN | CREAT | TRUNC` that way, so
+    /// callers should stat first if they need "fail on exist".
+    pub async fn create_file(&self, path: &str) -> Result<()> {
+        use tokio::io::AsyncWriteExt;
+        let mut file = self
+            .inner
+            .create(path.to_string())
+            .await
+            .map_err(sftp_error)?;
+        let _ = file.shutdown().await;
+        Ok(())
+    }
+
+    /// Synchronous wrapper for [`Self::create_file`].
+    pub fn create_file_blocking(&self, path: &str) -> Result<()> {
+        runtime::shared().block_on(self.create_file(path))
     }
 
     /// Canonicalize a (possibly relative or symlinked) path to

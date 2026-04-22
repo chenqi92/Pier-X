@@ -602,5 +602,62 @@ export const zhExtra: Record<string, string> = {
   "Save": "保存",
   "Close": "关闭",
 
+  // SFTP — context menu & extended actions
+  "Open": "打开",
+  "Edit": "编辑",
+  "Download…": "下载…",
+  "Rename…": "重命名…",
+  "Duplicate": "复制",
+  "Delete": "删除",
+  "Change permissions…": "更改权限…",
+  "Change permissions": "更改权限",
+  "Properties": "属性",
+  "New file…": "新建文件…",
+  "New folder…": "新建文件夹…",
+  "Upload…": "上传…",
+  "config.conf": "config.conf",
+  "Copied path to clipboard.": "已复制路径到剪贴板。",
+  "Permissions changed to {mode}.": "权限已更改为 {mode}。",
+  "Created file {path}.": "已创建文件 {path}。",
+  "Remove file {name}?": "删除文件 {name}？",
+  "Remove directory {name}? It must be empty.": "删除目录 {name}？必须为空目录。",
+  "Rename {name} to:": "将 {name} 重命名为：",
+  "Duplicate only works on files.": "仅文件可复制。",
+  "File is too large to duplicate in-place. Download and re-upload instead.": "文件过大无法就地复制，请先下载再重新上传。",
+  "File is too large to edit inline. Download first.": "文件过大无法内嵌编辑，请先下载。",
+  "Duplicated {from} to {to}.": "已将 {from} 复制为 {to}。",
+
+  // Sidebar local context menu
+  "Open externally": "用默认应用打开",
+  "Reveal in file manager": "在文件管理器中显示",
+  "Remove directory {name}? Contents will be deleted.": "删除目录 {name}？目录内容将一并删除。",
+  "notes.md": "notes.md",
+
+  // SFTP — chmod dialog
+  "Read": "读",
+  "Write": "写",
+  "Owner": "所有者",
+  "Group": "用户组",
+  "Other": "其他",
+  "Octal": "八进制",
+
+  // SFTP — editor dialog
+  "Find / Replace": "查找 / 替换",
+  "Discard unsaved changes?": "放弃未保存的修改？",
+  "Ln {line}, Col {col}": "第 {line} 行，第 {col} 列",
+  "{n} selected": "已选 {n}",
+  "Perm": "权限",
+  "Non-UTF-8 bytes were replaced with U+FFFD. Saving will persist the replacement.": "非 UTF-8 字节已替换为 U+FFFD，保存会写入替换后的内容。",
+  "Loading…": "加载中…",
+  "Unsaved changes": "有未保存的修改",
+
+  // SFTP — properties dialog
+  "Name": "名称",
+  "Type": "类型",
+  "Size": "大小",
+  "Permissions": "权限",
+  "Modified": "修改时间",
+  "Directory": "目录",
+
   // Misc
 };

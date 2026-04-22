@@ -1481,6 +1481,62 @@ fn list_drives() -> Vec<FileEntry> {
     drives
 }
 
+// ── Local file mutation commands ─────────────────────────────────
+//
+// These mirror the SFTP panel's right-click actions for the local
+// sidebar: create / rename / remove / make-dir. Paths travel as
+// strings and are passed through `std::fs` directly — callers on the
+// frontend side are responsible for displaying errors via the
+// localized error bar, same pattern as SFTP.
+
+#[tauri::command]
+fn local_create_file(path: String) -> Result<(), String> {
+    let p = std::path::PathBuf::from(&path);
+    if p.exists() {
+        return Err(format!("{} already exists", p.display()));
+    }
+    std::fs::OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .open(&p)
+        .map(|_| ())
+        .map_err(|e| format!("Failed to create {}: {}", p.display(), e))
+}
+
+#[tauri::command]
+fn local_create_dir(path: String) -> Result<(), String> {
+    let p = std::path::PathBuf::from(&path);
+    if p.exists() {
+        return Err(format!("{} already exists", p.display()));
+    }
+    std::fs::create_dir(&p).map_err(|e| format!("Failed to create {}: {}", p.display(), e))
+}
+
+#[tauri::command]
+fn local_rename(from: String, to: String) -> Result<(), String> {
+    let src = std::path::PathBuf::from(&from);
+    let dst = std::path::PathBuf::from(&to);
+    if !src.exists() {
+        return Err(format!("{} does not exist", src.display()));
+    }
+    if dst.exists() {
+        return Err(format!("{} already exists", dst.display()));
+    }
+    std::fs::rename(&src, &dst).map_err(|e| format!("Failed to rename: {}", e))
+}
+
+#[tauri::command]
+fn local_remove(path: String, is_dir: bool) -> Result<(), String> {
+    let p = std::path::PathBuf::from(&path);
+    if is_dir {
+        // Recursive — same mental model as SFTP's remote remove, which
+        // also deletes directory trees in one call.
+        std::fs::remove_dir_all(&p).map_err(|e| format!("Failed to remove {}: {}", p.display(), e))
+    } else {
+        std::fs::remove_file(&p).map_err(|e| format!("Failed to remove {}: {}", p.display(), e))
+    }
+}
+
 #[tauri::command]
 fn git_overview(path: Option<String>) -> Result<GitOverview, String> {
     let client = open_git_client(path)?;
@@ -3357,6 +3413,137 @@ fn sftp_rename(
     sftp.rename_blocking(&from, &to).map_err(|e| e.to_string())
 }
 
+/// Change POSIX permissions on a remote file or directory.
+#[tauri::command]
+fn sftp_chmod(
+    state: tauri::State<'_, AppState>,
+    host: String,
+    port: u16,
+    user: String,
+    auth_mode: String,
+    password: String,
+    key_path: String,
+    path: String,
+    mode: u32,
+    saved_connection_index: Option<usize>,
+) -> Result<(), String> {
+    let session = get_or_open_sftp_ssh_session(
+        &state, &host, port, &user, &auth_mode, &password, &key_path, saved_connection_index,
+    )?;
+    let sftp = session.open_sftp_blocking().map_err(|e| e.to_string())?;
+    sftp.set_permissions_blocking(&path, mode)
+        .map_err(|e| e.to_string())
+}
+
+/// Create an empty remote file (touch semantic — truncates if exists).
+#[tauri::command]
+fn sftp_create_file(
+    state: tauri::State<'_, AppState>,
+    host: String,
+    port: u16,
+    user: String,
+    auth_mode: String,
+    password: String,
+    key_path: String,
+    path: String,
+    saved_connection_index: Option<usize>,
+) -> Result<(), String> {
+    let session = get_or_open_sftp_ssh_session(
+        &state, &host, port, &user, &auth_mode, &password, &key_path, saved_connection_index,
+    )?;
+    let sftp = session.open_sftp_blocking().map_err(|e| e.to_string())?;
+    sftp.create_file_blocking(&path)
+        .map_err(|e| e.to_string())
+}
+
+/// Metadata + UTF-8 content returned by [`sftp_read_text`]. The
+/// frontend editor dialog uses every field: `permissions` seeds the
+/// chmod dialog, `size` + `modified` show in the status bar, and
+/// `lossy` drives the "non-UTF-8 content" warning banner.
+#[derive(Serialize, Clone)]
+#[serde(rename_all = "camelCase")]
+struct SftpTextFile {
+    path: String,
+    content: String,
+    size: u64,
+    permissions: Option<u32>,
+    modified: Option<u64>,
+    /// True when raw bytes contained invalid UTF-8 sequences that we
+    /// had to replace with U+FFFD. Saving will persist the replaced
+    /// bytes, so the UI warns the user before letting them overwrite.
+    lossy: bool,
+}
+
+/// Hard ceiling for `sftp_read_text`. Keeping the editor confined to
+/// config-sized files avoids loading a multi-GB log into memory when
+/// the user mis-clicks — large files should go through download.
+const SFTP_TEXT_READ_MAX: u64 = 5 * 1024 * 1024;
+
+/// Read a remote file as UTF-8 text for the editor dialog. Rejects
+/// anything larger than `max_bytes` (capped by [`SFTP_TEXT_READ_MAX`])
+/// before pulling bytes across the wire.
+#[tauri::command]
+fn sftp_read_text(
+    state: tauri::State<'_, AppState>,
+    host: String,
+    port: u16,
+    user: String,
+    auth_mode: String,
+    password: String,
+    key_path: String,
+    path: String,
+    max_bytes: Option<u64>,
+    saved_connection_index: Option<usize>,
+) -> Result<SftpTextFile, String> {
+    let session = get_or_open_sftp_ssh_session(
+        &state, &host, port, &user, &auth_mode, &password, &key_path, saved_connection_index,
+    )?;
+    let sftp = session.open_sftp_blocking().map_err(|e| e.to_string())?;
+    let meta = sftp.stat_blocking(&path).map_err(|e| e.to_string())?;
+    let limit = max_bytes.unwrap_or(SFTP_TEXT_READ_MAX).min(SFTP_TEXT_READ_MAX);
+    if meta.size > limit {
+        return Err(format!(
+            "File is {} bytes; editor limit is {} bytes",
+            meta.size, limit
+        ));
+    }
+    let bytes = sftp.read_file_blocking(&path).map_err(|e| e.to_string())?;
+    let raw_len = bytes.len();
+    let text = String::from_utf8_lossy(&bytes).into_owned();
+    let lossy = text.as_bytes().len() != raw_len || text.contains('\u{FFFD}');
+    Ok(SftpTextFile {
+        path,
+        content: text,
+        size: meta.size,
+        permissions: meta.permissions,
+        modified: meta.modified,
+        lossy,
+    })
+}
+
+/// Write UTF-8 text back to a remote file, overwriting. The editor
+/// dialog calls this when the user saves.
+#[tauri::command]
+fn sftp_write_text(
+    state: tauri::State<'_, AppState>,
+    host: String,
+    port: u16,
+    user: String,
+    auth_mode: String,
+    password: String,
+    key_path: String,
+    path: String,
+    content: String,
+    saved_connection_index: Option<usize>,
+) -> Result<(), String> {
+    let session = get_or_open_sftp_ssh_session(
+        &state, &host, port, &user, &auth_mode, &password, &key_path, saved_connection_index,
+    )?;
+    let sftp = session.open_sftp_blocking().map_err(|e| e.to_string())?;
+    sftp.write_file_blocking(&path, content.as_bytes())
+        .map_err(|e| e.to_string())
+}
+
 /// Progress update emitted to the frontend for in-flight transfers.
 /// Throttled to one event per ~64 KiB chunk by the chunked
 /// upload/download loops — the frontend's React batching handles the
@@ -4181,6 +4368,10 @@ pub fn run() {
             core_info,
             list_directory,
             list_drives,
+            local_create_file,
+            local_create_dir,
+            local_rename,
+            local_remove,
             git_overview,
             git_panel_state,
             git_init_repo,
@@ -4293,6 +4484,10 @@ pub fn run() {
             sftp_mkdir,
             sftp_remove,
             sftp_rename,
+            sftp_chmod,
+            sftp_create_file,
+            sftp_read_text,
+            sftp_write_text,
             sftp_download,
             sftp_upload,
             sftp_upload_tree,

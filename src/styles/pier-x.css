@@ -303,6 +303,37 @@ body.is-resizing .app { transition: none; }
 .sidebar-header-row .col-mod  { width: 72px; }
 .sidebar-header-row .col-size { width: 50px; text-align: right; }
 
+.sidebar-quickrow {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-1);
+  padding: 4px var(--sp-2);
+  margin: 2px 0;
+  background: var(--surface-2);
+  border-top: 1px solid var(--line);
+  border-bottom: 1px solid var(--line);
+}
+.sidebar-quickrow-label {
+  font-family: var(--mono);
+  font-size: var(--ui-fs-sm);
+  color: var(--muted);
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+}
+.sidebar-quickrow-input {
+  flex: 1;
+  min-width: 0;
+  font-family: var(--mono);
+  font-size: var(--ui-fs-sm);
+  color: var(--ink);
+  background: var(--panel);
+  border: 1px solid var(--line-2);
+  border-radius: var(--radius-xs);
+  padding: 2px var(--sp-1-5);
+  outline: none;
+}
+.sidebar-quickrow-input:focus { border-color: var(--accent); }
+
 .file-row {
   display: flex; align-items: center; gap: 6px;
   padding: 0 var(--sp-2-5) 0 var(--sp-2);
@@ -1715,3 +1746,190 @@ body.is-resizing .app { transition: none; }
   flex-shrink: 0;
 }
 
+/* ── SFTP extended dialogs ─────────────────────────────────────── */
+/* Permission editor, remote text editor, and properties dialog used
+ * from the SFTP panel context menu. All colors/sizes route through
+ * the token system — see docs/CLAUDE.md Rule 1. */
+
+.dlg--chmod { width: 420px; }
+.dlg--props { width: 480px; }
+.dlg--editor {
+  width: 1080px;
+  max-width: 96%;
+  height: 82vh;
+  max-height: 840px;
+}
+
+.chmod-path {
+  padding: var(--sp-1) var(--sp-2);
+  margin-bottom: var(--sp-3);
+  background: var(--surface-2);
+  border: 1px solid var(--line);
+  border-radius: var(--radius-xs);
+  color: var(--ink-2);
+  font-size: var(--ui-fs-sm);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.chmod-grid {
+  display: grid;
+  grid-template-columns: 96px repeat(3, 1fr);
+  row-gap: var(--sp-1);
+  column-gap: var(--sp-2);
+  margin-bottom: var(--sp-3);
+}
+.chmod-row {
+  display: contents;
+}
+.chmod-row--head > span {
+  font-size: var(--ui-fs-sm);
+  color: var(--muted);
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  text-align: center;
+}
+.chmod-row--head > span:first-child { text-align: left; }
+.chmod-scope {
+  display: flex;
+  align-items: center;
+  font-family: var(--mono);
+  font-size: var(--ui-fs);
+  color: var(--ink);
+}
+.chmod-cell {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: var(--sp-1) 0;
+  background: var(--surface-2);
+  border: 1px solid var(--line);
+  border-radius: var(--radius-xs);
+  cursor: pointer;
+}
+.chmod-cell input[type="checkbox"] {
+  accent-color: var(--accent);
+  cursor: pointer;
+}
+
+.chmod-octal-row {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-2);
+  padding: var(--sp-2) 0;
+  border-top: 1px solid var(--line);
+  border-bottom: 1px solid var(--line);
+  margin-bottom: var(--sp-3);
+}
+.chmod-octal-label {
+  color: var(--muted);
+  font-size: var(--ui-fs-sm);
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  min-width: 72px;
+}
+.chmod-octal-input {
+  width: 80px;
+  text-align: center;
+}
+.chmod-symbolic {
+  color: var(--accent);
+  font-size: var(--ui-fs);
+}
+
+.chmod-actions {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: var(--sp-2);
+}
+
+/* Editor dialog — CodeMirror host + toolbar + status line */
+
+.dlg-body--editor {
+  display: flex;
+  flex-direction: column;
+  flex: 1;
+  min-height: 0;
+  padding: 0;
+  overflow: hidden;
+}
+.editor-path {
+  flex: 1;
+  min-width: 0;
+  color: var(--muted);
+  font-size: var(--ui-fs-sm);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  margin: 0 var(--sp-3);
+}
+.editor-dirty {
+  color: var(--warn);
+  font-size: var(--ui-fs);
+  margin-left: var(--sp-1);
+}
+.editor-warn {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-1-5);
+  padding: var(--sp-1-5) var(--sp-3);
+  background: var(--warn-dim);
+  border-bottom: 1px solid var(--line);
+  color: var(--ink);
+  font-size: var(--ui-fs-sm);
+}
+.editor-warn svg { color: var(--warn); flex-shrink: 0; }
+.editor-loading,
+.editor-error {
+  padding: var(--sp-2) var(--sp-3);
+  color: var(--muted);
+  font-size: var(--ui-fs-sm);
+}
+.editor-error {
+  color: var(--neg);
+  border-bottom: 1px solid var(--line);
+  background: color-mix(in srgb, var(--neg) 12%, transparent);
+}
+.editor-host {
+  flex: 1;
+  min-height: 0;
+  overflow: hidden;
+  background: var(--panel);
+}
+.editor-host .cm-editor { height: 100%; }
+
+.editor-status {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-1-5);
+  padding: var(--sp-1) var(--sp-3);
+  background: var(--surface-2);
+  border-top: 1px solid var(--line);
+  color: var(--ink-2);
+  font-size: var(--ui-fs-sm);
+}
+.editor-status .sep { color: var(--dim); }
+
+/* Properties dialog */
+
+.props-grid {
+  display: grid;
+  grid-template-columns: 120px 1fr;
+  row-gap: var(--sp-1-5);
+  column-gap: var(--sp-3);
+  margin-bottom: var(--sp-3);
+  font-size: var(--ui-fs-sm);
+}
+.props-key {
+  color: var(--muted);
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+}
+.props-val {
+  color: var(--ink);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}

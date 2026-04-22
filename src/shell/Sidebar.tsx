@@ -21,7 +21,11 @@ import {
   Terminal,
   Trash2,
 } from "lucide-react";
-import type { DragEvent as ReactDragEvent, KeyboardEvent as ReactKeyboardEvent } from "react";
+import type {
+  DragEvent as ReactDragEvent,
+  KeyboardEvent as ReactKeyboardEvent,
+  MouseEvent as ReactMouseEvent,
+} from "react";
 import { useEffect, useMemo, useRef, useState } from "react";
 import type { CoreInfo, FileEntry, SavedSshConnection, RightTool } from "../lib/types";
 import { DRIVES_PATH } from "../lib/browserPath";
@@ -459,6 +463,169 @@ export default function Sidebar({ onOpenLocalTerminal, onConnectSaved, onNewConn
     event.dataTransfer.setData(DT_LOCAL_FILE, JSON.stringify(payload));
   }
 
+  // ── Local file context menu + mutations ────────────────────────
+  // Mirror the SFTP panel's right-click surface on the local
+  // sidebar: open / reveal / rename / delete / copy path + empty-
+  // area new-file / new-folder / refresh. Kept inline in this
+  // component because the state (entries, currentPath) is already
+  // local here — lifting to a store would add churn without a
+  // second consumer.
+  type LocalCtxState =
+    | { kind: "entry"; x: number; y: number; entry: FileEntry }
+    | { kind: "empty"; x: number; y: number }
+    | null;
+  const [localCtxMenu, setLocalCtxMenu] = useState<LocalCtxState>(null);
+  const [newLocalName, setNewLocalName] = useState("");
+  const [newLocalKind, setNewLocalKind] = useState<"file" | "dir" | null>(null);
+
+  function refreshLocalEntries() {
+    if (!currentPath) return;
+    const loader =
+      currentPath === DRIVES_PATH
+        ? cmd.listDrives()
+        : cmd.listDirectory(currentPath);
+    loader.then(setEntries).catch(() => {});
+  }
+
+  function localJoin(dir: string, leaf: string): string {
+    const trimmed = dir.replace(/[\\/]+$/, "");
+    const sep = /^[A-Za-z]:[\\/]|^\\\\/.test(trimmed) ? "\\" : "/";
+    return `${trimmed}${sep}${leaf}`;
+  }
+
+  async function openLocalEntry(entry: FileEntry) {
+    // Opener plugin handles files and directories differently on
+    // each OS; for directories we prefer our own pushPath so the
+    // sidebar follows the user in-place.
+    if (entry.kind === "directory") {
+      pushPath(entry.path);
+      return;
+    }
+    try {
+      const { openPath } = await import("@tauri-apps/plugin-opener");
+      await openPath(entry.path);
+    } catch (e) {
+      console.warn("openPath failed", localizeError(e, t));
+    }
+  }
+
+  async function revealLocalEntry(entry: FileEntry) {
+    try {
+      const { revealItemInDir } = await import("@tauri-apps/plugin-opener");
+      await revealItemInDir(entry.path);
+    } catch (e) {
+      console.warn("revealItemInDir failed", localizeError(e, t));
+    }
+  }
+
+  async function renameLocalEntry(entry: FileEntry) {
+    const next = window.prompt(
+      t("Rename {name} to:", { name: entry.name }),
+      entry.name,
+    );
+    if (!next || next.trim() === "" || next.trim() === entry.name) return;
+    const trimmed = next.trim();
+    const parent = entry.path.replace(/[\\/][^\\/]*$/, "");
+    const to = localJoin(parent || currentPath, trimmed);
+    try {
+      await cmd.localRename(entry.path, to);
+      refreshLocalEntries();
+    } catch (e) {
+      window.alert(localizeError(e, t));
+    }
+  }
+
+  async function removeLocalEntry(entry: FileEntry) {
+    const msg = entry.kind === "directory"
+      ? t("Remove directory {name}? Contents will be deleted.", { name: entry.name })
+      : t("Remove file {name}?", { name: entry.name });
+    if (!window.confirm(msg)) return;
+    try {
+      await cmd.localRemove(entry.path, entry.kind === "directory");
+      refreshLocalEntries();
+    } catch (e) {
+      window.alert(localizeError(e, t));
+    }
+  }
+
+  async function copyLocalPath(entry: FileEntry) {
+    const { writeClipboardText } = await import("../lib/clipboard");
+    await writeClipboardText(entry.path);
+  }
+
+  async function commitNewLocal() {
+    const leaf = newLocalName.trim();
+    if (!leaf || !newLocalKind) return;
+    const target = localJoin(currentPath, leaf);
+    try {
+      if (newLocalKind === "file") {
+        await cmd.localCreateFile(target);
+      } else {
+        await cmd.localCreateDir(target);
+      }
+      setNewLocalKind(null);
+      setNewLocalName("");
+      refreshLocalEntries();
+    } catch (e) {
+      window.alert(localizeError(e, t));
+    }
+  }
+
+  function buildLocalEntryMenu(entry: FileEntry): ContextMenuItem[] {
+    const isDir = entry.kind === "directory";
+    const items: ContextMenuItem[] = [];
+    items.push({
+      label: isDir ? t("Open") : t("Open externally"),
+      action: () => void openLocalEntry(entry),
+    });
+    if (!isDir) {
+      items.push({
+        label: t("Reveal in file manager"),
+        action: () => void revealLocalEntry(entry),
+      });
+    }
+    items.push({ divider: true });
+    items.push({ label: t("Rename…"), action: () => void renameLocalEntry(entry) });
+    items.push({ label: t("Delete"), action: () => void removeLocalEntry(entry) });
+    items.push({ divider: true });
+    items.push({ label: t("Copy path"), action: () => void copyLocalPath(entry) });
+    return items;
+  }
+
+  function buildLocalEmptyMenu(): ContextMenuItem[] {
+    const canMutate = !!currentPath && currentPath !== DRIVES_PATH;
+    return [
+      {
+        label: t("New file…"),
+        action: () => { setNewLocalKind("file"); setNewLocalName(""); },
+        disabled: !canMutate,
+      },
+      {
+        label: t("New folder…"),
+        action: () => { setNewLocalKind("dir"); setNewLocalName(""); },
+        disabled: !canMutate,
+      },
+      { divider: true },
+      { label: t("Refresh"), action: refreshLocalEntries },
+    ];
+  }
+
+  function handleLocalRowContextMenu(
+    event: ReactMouseEvent<HTMLDivElement>,
+    entry: FileEntry,
+  ) {
+    event.preventDefault();
+    event.stopPropagation();
+    setLocalCtxMenu({ kind: "entry", x: event.clientX, y: event.clientY, entry });
+  }
+
+  function handleLocalListContextMenu(event: ReactMouseEvent<HTMLDivElement>) {
+    const target = event.target as HTMLElement | null;
+    if (target?.closest(".file-row")) return;
+    event.preventDefault();
+    setLocalCtxMenu({ kind: "empty", x: event.clientX, y: event.clientY });
+  }
+
   function pushPath(nextPath: string) {
     const normalized = normalizePath(nextPath);
     if (!normalized || normalized === currentPath) return;
@@ -589,12 +756,48 @@ export default function Sidebar({ onOpenLocalTerminal, onConnectSaved, onNewConn
             onDragOver={handleFileListDragOver}
             onDragLeave={handleFileListDragLeave}
             onDrop={handleFileListDrop}
+            onContextMenu={handleLocalListContextMenu}
           >
             <div className="sidebar-header-row">
               <span className="col-name">{t("NAME")}</span>
               <span className="col-mod">{t("MOD")}</span>
               <span className="col-size">{t("SIZE")}</span>
             </div>
+            {newLocalKind && currentPath !== DRIVES_PATH && (
+              <div className="sidebar-quickrow">
+                <span className="sidebar-quickrow-label">
+                  {newLocalKind === "file" ? t("New file") : t("New folder")}
+                </span>
+                <input
+                  className="sidebar-quickrow-input"
+                  value={newLocalName}
+                  autoFocus
+                  placeholder={newLocalKind === "file" ? t("notes.md") : t("logs")}
+                  onChange={(e) => setNewLocalName(e.currentTarget.value)}
+                  onKeyDown={(e) => {
+                    if (e.key === "Enter") void commitNewLocal();
+                    if (e.key === "Escape") { setNewLocalKind(null); setNewLocalName(""); }
+                  }}
+                />
+                <button
+                  type="button"
+                  className="mini-btn"
+                  title={t("Create")}
+                  disabled={!newLocalName.trim()}
+                  onClick={() => void commitNewLocal()}
+                >
+                  <Plus />
+                </button>
+                <button
+                  type="button"
+                  className="mini-btn"
+                  title={t("Cancel")}
+                  onClick={() => { setNewLocalKind(null); setNewLocalName(""); }}
+                >
+                  <Trash2 />
+                </button>
+              </div>
+            )}
             {filteredEntries.map((entry) => {
               const isSelected = entry.kind === "file" && selectedFilePath === entry.path;
               const isDir = entry.kind === "directory";
@@ -619,6 +822,7 @@ export default function Sidebar({ onOpenLocalTerminal, onConnectSaved, onNewConn
                     else onFileSelect?.(entry);
                   }}
                   onDoubleClick={() => { if (isDir) onOpenLocalTerminal(entry.path); }}
+                  onContextMenu={isDrive ? undefined : (e) => handleLocalRowContextMenu(e, entry)}
                   role="button"
                   tabIndex={0}
                   draggable
@@ -637,6 +841,18 @@ export default function Sidebar({ onOpenLocalTerminal, onConnectSaved, onNewConn
               </div>
             )}
           </div>
+          {localCtxMenu && (
+            <ContextMenu
+              x={localCtxMenu.x}
+              y={localCtxMenu.y}
+              items={
+                localCtxMenu.kind === "entry"
+                  ? buildLocalEntryMenu(localCtxMenu.entry)
+                  : buildLocalEmptyMenu()
+              }
+              onClose={() => setLocalCtxMenu(null)}
+            />
+          )}
         </>
       ) : (
         <ServersPane

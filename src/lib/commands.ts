@@ -52,6 +52,19 @@ export const listDirectory = (path?: string) =>
 
 export const listDrives = () => invoke<FileEntry[]>("list_drives");
 
+// Local file mutations — mirror the SFTP panel's create/rename/remove
+// actions for the sidebar's local directory view. All paths are
+// absolute OS paths (the sidebar tracks `currentPath` as an absolute
+// string already).
+export const localCreateFile = (path: string) =>
+  invoke<void>("local_create_file", { path });
+export const localCreateDir = (path: string) =>
+  invoke<void>("local_create_dir", { path });
+export const localRename = (from: string, to: string) =>
+  invoke<void>("local_rename", { from, to });
+export const localRemove = (path: string, isDir: boolean) =>
+  invoke<void>("local_remove", { path, isDir });
+
 // ── Git ─────────────────────────────────────────────────────────
 
 export const gitOverview = (path?: string) =>
@@ -723,6 +736,47 @@ export const sftpRename = (params: {
   to: string;
   savedConnectionIndex?: number | null;
 }) => invoke<void>("sftp_rename", params);
+
+export const sftpChmod = (params: {
+  host: string; port: number; user: string; authMode: string; password: string; keyPath: string;
+  path: string;
+  mode: number;
+  savedConnectionIndex?: number | null;
+}) => invoke<void>("sftp_chmod", params);
+
+export const sftpCreateFile = (params: {
+  host: string; port: number; user: string; authMode: string; password: string; keyPath: string;
+  path: string;
+  savedConnectionIndex?: number | null;
+}) => invoke<void>("sftp_create_file", params);
+
+/** Payload returned by {@link sftpReadText} — raw content plus
+ *  metadata the editor dialog renders in its status bar. `lossy`
+ *  is true when the remote file contained invalid UTF-8 that had
+ *  to be replaced with U+FFFD; the UI warns the user before save. */
+export type SftpTextFile = {
+  path: string;
+  content: string;
+  size: number;
+  permissions: number | null;
+  modified: number | null;
+  lossy: boolean;
+};
+
+export const sftpReadText = (params: {
+  host: string; port: number; user: string; authMode: string; password: string; keyPath: string;
+  path: string;
+  /** Upper bound checked before streaming. Backend caps this at 5 MB. */
+  maxBytes?: number | null;
+  savedConnectionIndex?: number | null;
+}) => invoke<SftpTextFile>("sftp_read_text", params);
+
+export const sftpWriteText = (params: {
+  host: string; port: number; user: string; authMode: string; password: string; keyPath: string;
+  path: string;
+  content: string;
+  savedConnectionIndex?: number | null;
+}) => invoke<void>("sftp_write_text", params);
 
 export const sftpDownload = (params: {
   host: string; port: number; user: string; authMode: string; password: string; keyPath: string;

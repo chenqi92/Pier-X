@@ -4,6 +4,7 @@ import {
   useState,
   type CSSProperties,
   type DragEvent as ReactDragEvent,
+  type MouseEvent as ReactMouseEvent,
   type ReactNode,
   type Ref,
 } from "react";
@@ -26,6 +27,10 @@ type Props<T> = {
   onDragOver?: (event: ReactDragEvent<HTMLDivElement>) => void;
   onDragLeave?: (event: ReactDragEvent<HTMLDivElement>) => void;
   onDrop?: (event: ReactDragEvent<HTMLDivElement>) => void;
+  /** Forwarded so callers can mount right-click handlers on the scroll
+   *  container — SftpPanel uses this to open the "empty area" context
+   *  menu when the user right-clicks below the last row. */
+  onContextMenu?: (event: ReactMouseEvent<HTMLDivElement>) => void;
   /** Optional ref to the scroll container for imperative use (scrollTo, etc.). */
   scrollRef?: Ref<HTMLDivElement>;
 };
@@ -55,6 +60,7 @@ export default function VirtualList<T>({
   onDragOver,
   onDragLeave,
   onDrop,
+  onContextMenu,
   scrollRef,
 }: Props<T>) {
   const innerRef = useRef<HTMLDivElement>(null);
@@ -98,6 +104,7 @@ export default function VirtualList<T>({
       onDragOver={onDragOver}
       onDragLeave={onDragLeave}
       onDrop={onDrop}
+      onContextMenu={onContextMenu}
     >
       {topPad > 0 && <div style={{ height: topPad }} aria-hidden />}
       {items.slice(first, last).map((item, i) => renderRow(item, first + i))}

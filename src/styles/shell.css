@@ -268,6 +268,15 @@ button,
   gap: var(--sp-2);
   min-width: 0;
 }
+.ctx-menu__section {
+  padding: var(--sp-1) var(--sp-3) var(--sp-0-5);
+  font-family: var(--mono);
+  font-size: var(--size-micro);
+  font-weight: var(--weight-semibold);
+  color: var(--muted);
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+}
 .ctx-menu__swatch {
   width: 10px;
   height: 10px;
@@ -1893,6 +1902,30 @@ button,
 .mon-table tr:hover td { background: var(--panel-2); }
 .mon-cell-right { text-align: right; }
 .mon-cell-muted { color: var(--muted); }
+.mon-cell-warn { color: var(--warn); }
+/* Disk table is dense: tighten the cell padding so the five columns
+ * fit inside a collapsed right panel without clipping, and let the
+ * mountpoint column truncate with an ellipsis instead of pushing
+ * the numeric columns off-screen. */
+.mon-table--disks { table-layout: fixed; }
+.mon-table--disks th,
+.mon-table--disks td {
+  padding: 4px var(--sp-1-5);
+}
+.mon-table--disks th:first-child,
+.mon-table--disks td:first-child {
+  padding-left: var(--sp-3);
+}
+.mon-table--disks th:last-child,
+.mon-table--disks td:last-child {
+  padding-right: var(--sp-3);
+}
+.mon-cell-trunc {
+  max-width: 0;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
 .mon-empty {
   text-align: center;
   color: var(--muted);

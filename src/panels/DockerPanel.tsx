@@ -577,6 +577,32 @@ export default function DockerPanel({ tab }: Props) {
     }
   }
 
+  async function pruneImages() {
+    if (actionBusy) return;
+    if (!window.confirm(t("Remove all unused images? This runs `docker image prune -a -f`."))) return;
+    setActionBusy(true);
+    setError("");
+    try {
+      const out = isLocal
+        ? await cmd.localDockerPruneImages()
+        : await cmd.dockerPruneImages({
+            host: sshArgs.host,
+            port: sshArgs.port,
+            user: sshArgs.user,
+            authMode: sshArgs.authMode,
+            password: sshArgs.password,
+            keyPath: sshArgs.keyPath,
+            savedConnectionIndex: sshArgs.savedConnectionIndex,
+          });
+      setNotice(out.trim().split("\n").pop() || t("Pruned unused images."));
+      await loadDockerSection("images", true);
+    } catch (e) {
+      setError(formatError(e));
+    } finally {
+      setActionBusy(false);
+    }
+  }
+
   async function toggleVolumeExpand(name: string, mountpoint: string) {
     if (expandedVolume === name) {
       setExpandedVolume("");
@@ -1040,6 +1066,15 @@ export default function DockerPanel({ tab }: Props) {
                 onClick={() => setProxyDialogOpen(true)}
               >
                 <Settings2 size={11} />
+              </button>
+              <button
+                type="button"
+                className="btn is-compact"
+                disabled={actionBusy || (!hasSsh && !isLocal)}
+                onClick={() => void pruneImages()}
+                title={t("Remove all unused images (docker image prune -a)")}
+              >
+                <Sparkles size={11} /> {t("Prune unused")}
               </button>
               <span className="mono text-muted" style={{ fontSize: "var(--size-micro)" }}>
                 {tabLoaded("images") ? t("{count} total", { count: state?.images.length ?? 0 }) : ""}

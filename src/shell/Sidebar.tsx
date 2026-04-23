@@ -64,6 +64,22 @@ type ServiceChip = {
   tintVar: string;
 };
 
+type FavoritePlace = {
+  label: string;
+  path: string;
+  shortcut?: string;
+};
+
+type FolderVisitRecord = {
+  path: string;
+  count: number;
+  lastVisitedAt: number;
+};
+
+const FOLDER_VISITS_STORAGE_KEY = "pierx:folder-visits";
+const MAX_FOLDER_VISITS = 32;
+const MAX_FREQUENT_FOLDERS = 5;
+
 const SERVICE_META: ServiceChip[] = SERVICE_CHIP_TOOLS.map((tool) => ({
   tool,
   label: RIGHT_TOOL_META[tool].label,
@@ -291,16 +307,157 @@ function goUp(currentPath: string): string {
   return trimmed.slice(0, slash);
 }
 
-export default function Sidebar({ onOpenLocalTerminal, onConnectSaved, onNewConnection, onEditConnection, onPathChange, onFileSelect, selectedFilePath }: Props) {
+function pathFromHome(homeDir: string, leaf: string): string {
+  const base = homeDir.replace(/[\\/]+$/, "");
+  return `${base}${sepFor(homeDir)}${leaf}`;
+}
+
+function samePath(a: string, b: string): boolean {
+  const left = normalizePath(a);
+  const right = normalizePath(b);
+  if (isWindowsPath(left) || isWindowsPath(right)) return left.toLowerCase() === right.toLowerCase();
+  return left === right;
+}
+
+function addFavoritePlace(
+  places: FavoritePlace[],
+  seen: Set<string>,
+  place: FavoritePlace,
+) {
+  const normalized = normalizePath(place.path);
+  const key = isWindowsPath(normalized) ? normalized.toLowerCase() : normalized;
+  if (!normalized || seen.has(key)) return;
+  seen.add(key);
+  places.push({ ...place, path: normalized });
+}
+
+function buildDefaultFavoritePlaces(
+  homeDir: string,
+  workspaceRoot: string,
+  platform: CoreInfo["platform"] | "",
+): FavoritePlace[] {
+  const places: FavoritePlace[] = [];
+  const seen = new Set<string>();
+  if (homeDir) {
+    addFavoritePlace(places, seen, { label: "Home", path: homeDir });
+
+    if (platform === "windows") {
+      addFavoritePlace(places, seen, { label: "Desktop", path: pathFromHome(homeDir, "Desktop") });
+      addFavoritePlace(places, seen, { label: "Documents", path: pathFromHome(homeDir, "Documents") });
+      addFavoritePlace(places, seen, { label: "Downloads", path: pathFromHome(homeDir, "Downloads") });
+      addFavoritePlace(places, seen, { label: "Pictures", path: pathFromHome(homeDir, "Pictures") });
+      addFavoritePlace(places, seen, { label: "Music", path: pathFromHome(homeDir, "Music") });
+      addFavoritePlace(places, seen, { label: "Videos", path: pathFromHome(homeDir, "Videos") });
+      addFavoritePlace(places, seen, { label: "This PC", path: DRIVES_PATH });
+    } else if (platform === "macos") {
+      addFavoritePlace(places, seen, { label: "Desktop", path: pathFromHome(homeDir, "Desktop") });
+      addFavoritePlace(places, seen, { label: "Documents", path: pathFromHome(homeDir, "Documents") });
+      addFavoritePlace(places, seen, { label: "Downloads", path: pathFromHome(homeDir, "Downloads") });
+      addFavoritePlace(places, seen, { label: "Applications", path: "/Applications" });
+      addFavoritePlace(places, seen, { label: "Pictures", path: pathFromHome(homeDir, "Pictures") });
+      addFavoritePlace(places, seen, { label: "Movies", path: pathFromHome(homeDir, "Movies") });
+    } else {
+      addFavoritePlace(places, seen, { label: "Desktop", path: pathFromHome(homeDir, "Desktop") });
+      addFavoritePlace(places, seen, { label: "Documents", path: pathFromHome(homeDir, "Documents") });
+      addFavoritePlace(places, seen, { label: "Downloads", path: pathFromHome(homeDir, "Downloads") });
+      addFavoritePlace(places, seen, { label: "Projects", path: pathFromHome(homeDir, "Projects") });
+    }
+  }
+
+  if (workspaceRoot && (!homeDir || !samePath(workspaceRoot, homeDir))) {
+    addFavoritePlace(places, seen, { label: "Workspace", path: workspaceRoot });
+  }
+
+  return places;
+}
+
+function readFolderVisitRecords(): FolderVisitRecord[] {
+  if (typeof window === "undefined") return [];
+  try {
+    const raw = window.localStorage.getItem(FOLDER_VISITS_STORAGE_KEY);
+    if (!raw) return [];
+    const parsed = JSON.parse(raw) as unknown;
+    if (!parsed || typeof parsed !== "object") return [];
+    return Object.entries(parsed as Record<string, unknown>)
+      .map(([path, value]) => {
+        if (typeof value === "number") {
+          return { path: normalizePath(path), count: value, lastVisitedAt: 0 };
+        }
+        if (!value || typeof value !== "object") return null;
+        const next = value as Partial<FolderVisitRecord>;
+        const count = Number(next.count ?? 0);
+        const lastVisitedAt = Number(next.lastVisitedAt ?? 0);
+        if (!Number.isFinite(count) || count <= 0) return null;
+        return { path: normalizePath(path), count, lastVisitedAt };
+      })
+      .filter((record): record is FolderVisitRecord => !!record && !!record.path)
+      .sort((a, b) => b.count - a.count || b.lastVisitedAt - a.lastVisitedAt)
+      .slice(0, MAX_FOLDER_VISITS);
+  } catch {
+    return [];
+  }
+}
+
+function writeFolderVisitRecords(records: FolderVisitRecord[]) {
+  if (typeof window === "undefined") return;
+  const payload: Record<string, Omit<FolderVisitRecord, "path">> = {};
+  for (const record of records) {
+    payload[record.path] = {
+      count: record.count,
+      lastVisitedAt: record.lastVisitedAt,
+    };
+  }
+  window.localStorage.setItem(FOLDER_VISITS_STORAGE_KEY, JSON.stringify(payload));
+}
+
+function bumpFolderVisit(path: string): FolderVisitRecord[] {
+  const normalized = normalizePath(path);
+  if (!normalized || normalized === DRIVES_PATH) return readFolderVisitRecords();
+  const visits = readFolderVisitRecords();
+  const existing = visits.find((record) => samePath(record.path, normalized));
+  const nextRecord: FolderVisitRecord = {
+    path: normalized,
+    count: (existing?.count ?? 0) + 1,
+    lastVisitedAt: Date.now(),
+  };
+  const next = [
+    nextRecord,
+    ...visits.filter((record) => !samePath(record.path, normalized)),
+  ]
+    .sort((a, b) => b.count - a.count || b.lastVisitedAt - a.lastVisitedAt)
+    .slice(0, MAX_FOLDER_VISITS);
+  writeFolderVisitRecords(next);
+  return next;
+}
+
+function shortPathLabel(path: string, homeDir: string): string {
+  if (path === DRIVES_PATH) return "This PC";
+  const normalized = normalizePath(path);
+  if (homeDir && samePath(normalized, homeDir)) return "~";
+  const homeBase = homeDir.replace(/[\\/]+$/, "");
+  if (homeBase) {
+    const comparablePath = isWindowsPath(normalized) ? normalized.toLowerCase() : normalized;
+    const comparableHome = isWindowsPath(homeBase) ? homeBase.toLowerCase() : homeBase;
+    if (comparablePath.startsWith(`${comparableHome}${sepFor(homeBase)}`)) {
+      return `~${sepFor(homeBase)}${normalized.slice(homeBase.length + 1)}`;
+    }
+  }
+  return normalized;
+}
+
+export default function Sidebar({ onOpenLocalTerminal, onConnectSaved, onNewConnection, onEditConnection, onPathChange, onFileSelect, selectedFilePath, workspaceRoot }: Props) {
   const { t } = useI18n();
   const [section, setSection] = useState<0 | 1>(0);
   const [entries, setEntries] = useState<FileEntry[]>([]);
   const [currentPath, setCurrentPath] = useState("");
   const [homeDir, setHomeDir] = useState("");
   const [platform, setPlatform] = useState<CoreInfo["platform"] | "">("");
+  const [coreWorkspaceRoot, setCoreWorkspaceRoot] = useState("");
   const [pathHistory, setPathHistory] = useState<string[]>([]);
   const [historyIndex, setHistoryIndex] = useState(-1);
   const [searchText, setSearchText] = useState("");
+  const [folderVisits, setFolderVisits] = useState<FolderVisitRecord[]>(readFolderVisitRecords);
+  const pendingVisitRef = useRef<string | null>(null);
   const { connections, refresh: refreshConnections, remove } = useConnectionStore();
   const [serverSearch, setServerSearch] = useState("");
 
@@ -321,6 +478,7 @@ export default function Sidebar({ onOpenLocalTerminal, onConnectSaved, onNewConn
     cmd.coreInfo().then((info: CoreInfo) => {
       setHomeDir(info.homeDir);
       setPlatform(info.platform);
+      setCoreWorkspaceRoot(info.workspaceRoot);
       const startPath = normalizePath(info.homeDir || info.workspaceRoot);
       if (!currentPath) {
         setCurrentPath(startPath);
@@ -343,10 +501,15 @@ export default function Sidebar({ onOpenLocalTerminal, onConnectSaved, onNewConn
         ? cmd.listDrives()
         : cmd.listDirectory(currentPath);
     loader
-      .then((next) => { if (!cancelled) setEntries(next); })
+      .then((next) => {
+        if (cancelled) return;
+        setEntries(next);
+        commitPendingVisit(currentPath);
+      })
       .catch((e) => {
         if (cancelled) return;
         setEntries([]);
+        clearPendingVisit(currentPath);
         reportError(e);
       });
     setSearchText("");
@@ -360,6 +523,25 @@ export default function Sidebar({ onOpenLocalTerminal, onConnectSaved, onNewConn
 
   const filteredEntries = entries.filter((e) => !searchText.trim() || e.name.toLowerCase().includes(searchText.toLowerCase()));
   const segments = pathSegments(currentPath, homeDir);
+  const effectiveWorkspaceRoot = workspaceRoot || coreWorkspaceRoot;
+  const defaultFavoritePlaces = useMemo(
+    () => buildDefaultFavoritePlaces(homeDir, effectiveWorkspaceRoot, platform),
+    [homeDir, effectiveWorkspaceRoot, platform],
+  );
+  const frequentFavoritePlaces = useMemo(() => {
+    const defaultPaths = new Set(
+      defaultFavoritePlaces.map((place) => {
+        const normalized = normalizePath(place.path);
+        return isWindowsPath(normalized) ? normalized.toLowerCase() : normalized;
+      }),
+    );
+    return folderVisits
+      .filter((record) => {
+        const key = isWindowsPath(record.path) ? record.path.toLowerCase() : record.path;
+        return !defaultPaths.has(key) && record.path !== DRIVES_PATH;
+      })
+      .slice(0, MAX_FREQUENT_FOLDERS);
+  }, [defaultFavoritePlaces, folderVisits]);
 
   // ── Sidebar ↔ SFTP drag-drop ───────────────────────────────────
   //
@@ -506,15 +688,26 @@ export default function Sidebar({ onOpenLocalTerminal, onConnectSaved, onNewConn
 
   function buildFavoriteItems(): ContextMenuItem[] {
     const items: ContextMenuItem[] = [];
-    if (homeDir) {
-      const sep = sepFor(homeDir);
-      const base = homeDir.replace(/[\\/]+$/, "");
-      const join = (leaf: string) => `${base}${sep}${leaf}`;
-      items.push({ label: t("Home"), action: () => pushPath(homeDir) });
-      items.push({ label: t("Desktop"), action: () => pushPath(join("Desktop")) });
-      items.push({ label: t("Documents"), action: () => pushPath(join("Documents")) });
-      items.push({ label: t("Downloads"), action: () => pushPath(join("Downloads")) });
-      items.push({ label: t("Projects"), action: () => pushPath(join("Projects")) });
+    if (defaultFavoritePlaces.length > 0) {
+      items.push({ section: t("Recommended folders") });
+      for (const place of defaultFavoritePlaces) {
+        items.push({
+          label: t(place.label),
+          shortcut: place.shortcut ?? (place.path === DRIVES_PATH ? undefined : shortPathLabel(place.path, homeDir)),
+          action: () => pushPath(place.path),
+        });
+      }
+      items.push({ divider: true });
+    }
+    if (frequentFavoritePlaces.length > 0) {
+      items.push({ section: t("Frequent folders") });
+      for (const record of frequentFavoritePlaces) {
+        items.push({
+          label: shortPathLabel(record.path, homeDir),
+          shortcut: `${record.count}x`,
+          action: () => pushPath(record.path),
+        });
+      }
       items.push({ divider: true });
     }
     items.push({
@@ -535,6 +728,21 @@ export default function Sidebar({ onOpenLocalTerminal, onConnectSaved, onNewConn
       },
     });
     return items;
+  }
+
+  function markPendingVisit(path: string) {
+    pendingVisitRef.current = normalizePath(path);
+  }
+
+  function clearPendingVisit(path: string) {
+    if (pendingVisitRef.current === normalizePath(path)) pendingVisitRef.current = null;
+  }
+
+  function commitPendingVisit(path: string) {
+    const normalized = normalizePath(path);
+    if (pendingVisitRef.current !== normalized) return;
+    pendingVisitRef.current = null;
+    setFolderVisits(bumpFolderVisit(normalized));
   }
 
   function toggleFavMenu() {
@@ -700,6 +908,7 @@ export default function Sidebar({ onOpenLocalTerminal, onConnectSaved, onNewConn
     if (!normalized || normalized === currentPath) return;
     const nextHistory = pathHistory.slice(0, historyIndex + 1);
     nextHistory.push(normalized);
+    markPendingVisit(normalized);
     setPathHistory(nextHistory);
     setHistoryIndex(nextHistory.length - 1);
     setCurrentPath(normalized);
@@ -710,6 +919,7 @@ export default function Sidebar({ onOpenLocalTerminal, onConnectSaved, onNewConn
     const nextIndex = historyIndex - 1;
     const nextPath = pathHistory[nextIndex];
     if (!nextPath) return;
+    markPendingVisit(nextPath);
     setHistoryIndex(nextIndex);
     setCurrentPath(nextPath);
   }
@@ -848,6 +1058,7 @@ export default function Sidebar({ onOpenLocalTerminal, onConnectSaved, onNewConn
           </div>
 
           <div className="sidebar-header-row">
+            <span className="col-icon" aria-hidden />
             <span className="col-name">{t("NAME")}</span>
             <span className="col-mod">{t("MOD")}</span>
             <span className="col-size">{t("SIZE")}</span>

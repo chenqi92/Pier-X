@@ -804,6 +804,16 @@ export const dockerPruneVolumes = (params: {
   savedConnectionIndex?: number | null;
 }) => invoke<string>("docker_prune_volumes", params);
 
+export const dockerPruneImages = (params: {
+  host: string;
+  port: number;
+  user: string;
+  authMode: string;
+  password: string;
+  keyPath: string;
+  savedConnectionIndex?: number | null;
+}) => invoke<string>("docker_prune_images", params);
+
 export const dockerVolumeFiles = (params: {
   host: string;
   port: number;
@@ -876,6 +886,9 @@ export const localDockerRunContainer = (options: DockerRunOptions) =>
 
 export const localDockerPruneVolumes = () =>
   invoke<string>("local_docker_prune_volumes");
+
+export const localDockerPruneImages = () =>
+  invoke<string>("local_docker_prune_images");
 
 export const localDockerVolumeFiles = (mountpoint: string) =>
   invoke<string>("local_docker_volume_files", { mountpoint });

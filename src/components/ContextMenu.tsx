@@ -8,6 +8,7 @@ export type ContextMenuItem =
       shortcut?: string;
       iconColor?: string;
     }
+  | { section: string }
   | { divider: true };
 
 type Props = {
@@ -45,6 +46,10 @@ export default function ContextMenu({ x, y, items, onClose }: Props) {
       {items.map((item, i) =>
         "divider" in item ? (
           <div key={`d-${i}`} className="ctx-menu__divider" />
+        ) : "section" in item ? (
+          <div key={`s-${i}-${item.section}`} className="ctx-menu__section">
+            {item.section}
+          </div>
         ) : (
           <button
             key={item.label}

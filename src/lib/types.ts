@@ -532,6 +532,19 @@ export type ServerSnapshotView = {
   netRxBps: number;
   netTxBps: number;
   topProcesses: ProcessRowView[];
+  /** Per-filesystem breakdown from `df -hPT`, with Docker volumes and
+   *  pseudo filesystems (tmpfs / overlay / devtmpfs) filtered out. */
+  disks: DiskEntryView[];
+};
+
+export type DiskEntryView = {
+  filesystem: string;
+  fsType: string;
+  total: string;
+  used: string;
+  avail: string;
+  usePct: number;
+  mountpoint: string;
 };
 
 export type ProcessRowView = {

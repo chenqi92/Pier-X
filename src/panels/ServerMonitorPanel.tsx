@@ -384,6 +384,57 @@ export default function ServerMonitorPanel({ tab, onEditConnection, isActive = t
         </div>
 
         {/*
+          Per-filesystem disk breakdown — populated from `df -hPT`.
+          Pseudo / docker-managed mounts are filtered on the backend
+          so space numbers stay honest (no overlay double-counting).
+        */}
+        <div className="mon-block">
+          <div className="mon-block-head">
+            <span>{t("DISKS")}</span>
+            <span className="mono mon-block-meta">{t("df -h")}</span>
+          </div>
+          <table className="mon-table mon-table--disks">
+            <thead>
+              <tr>
+                <th>{t("MOUNT")}</th>
+                <th style={{ width: 52, textAlign: "right" }}>{t("SIZE")}</th>
+                <th style={{ width: 52, textAlign: "right" }}>{t("USED")}</th>
+                <th style={{ width: 52, textAlign: "right" }}>{t("AVAIL")}</th>
+                <th style={{ width: 44, textAlign: "right" }}>{t("USE%")}</th>
+              </tr>
+            </thead>
+            <tbody>
+              {snap && snap.disks && snap.disks.length > 0 ? (
+                snap.disks.map((disk, i) => {
+                  const pct = disk.usePct >= 0 ? disk.usePct.toFixed(0) : "—";
+                  const toneCls = disk.usePct >= 85
+                    ? "mon-cell-warn"
+                    : disk.usePct >= 50
+                      ? ""
+                      : "mon-cell-muted";
+                  const rowTitle = `${disk.filesystem}${disk.fsType ? ` (${disk.fsType})` : ""} → ${disk.mountpoint}`;
+                  return (
+                    <tr key={`${disk.mountpoint}-${i}`} title={rowTitle}>
+                      <td className="mono mon-cell-trunc">{disk.mountpoint}</td>
+                      <td className="mono mon-cell-right">{disk.total}</td>
+                      <td className="mono mon-cell-right">{disk.used}</td>
+                      <td className="mono mon-cell-right">{disk.avail}</td>
+                      <td className={`mono mon-cell-right ${toneCls}`}>{pct}%</td>
+                    </tr>
+                  );
+                })
+              ) : (
+                <tr>
+                  <td colSpan={5} className="mon-empty mono">
+                    {snap ? t("(no disk data)") : "—"}
+                  </td>
+                </tr>
+              )}
+            </tbody>
+          </table>
+        </div>
+
+        {/*
           Top processes table — populated from `ps -eo
           pid,comm,pcpu,pmem,etime --sort=-pcpu | head -8`. Empty
           tbody renders an "—" placeholder so the block is always

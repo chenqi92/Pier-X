@@ -352,6 +352,8 @@ export default function RightSidebar({
         activeTool={activeTool}
         hasRemoteContext={hasRemoteContext}
         detectedTools={detectedTools}
+        collapsed={collapsed}
+        onToggleCollapsed={onToggleCollapsed}
         onSelectTool={(tool) => {
           onToolChange(tool);
           if (collapsed) onToggleCollapsed();

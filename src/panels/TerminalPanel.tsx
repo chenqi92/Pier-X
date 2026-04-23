@@ -3,7 +3,7 @@
 // interval), keyboard I/O, scrollback, and session lifecycle management.
 
 import { KeyRound, SquareTerminal } from "lucide-react";
-import { startTransition, useEffect, useRef, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { listen, type UnlistenFn } from "@tauri-apps/api/event";
 import * as cmd from "../lib/commands";
 import { controlKeyMap } from "../lib/commands";
@@ -240,6 +240,30 @@ export default function TerminalPanel({ tab, isActive, onEditConnection }: Props
     setNeedsPasswordRecovery(false);
   }, [tab.terminalSessionId, session]);
 
+  // Pull keyboard focus onto the terminal viewport the moment the
+  // session is ready, and again whenever the tab becomes visible.
+  // Without this, creating a fresh local tab leaves focus on the
+  // previous UI element (or nothing at all) — users have to click
+  // the terminal before typing works, which reads as "the app ate
+  // my keystrokes". We keep the existing onMouseDown handler for
+  // the recovery path, but proactive focus on session-ready is the
+  // default interaction a shell should offer.
+  useEffect(() => {
+    if (!session) return;
+    if (!isActive) return;
+    const viewport = viewportRef.current;
+    if (!viewport) return;
+    // Defer to the next paint: the viewport is `display: none` when
+    // the tab isn't active and focus() on a hidden element no-ops.
+    // requestAnimationFrame ensures the layout commit from
+    // `display: flex` has happened before we call focus().
+    const raf = window.requestAnimationFrame(() => {
+      if (document.activeElement === viewport) return;
+      viewport.focus({ preventScroll: true });
+    });
+    return () => window.cancelAnimationFrame(raf);
+  }, [session, isActive]);
+
   // ── Resize session (trigger-based) ──────────────────────────
   //
   // Dragging a resize handle compresses the terminal viewport many
@@ -365,7 +389,12 @@ export default function TerminalPanel({ tab, isActive, onEditConnection }: Props
           if (scrollbackOffset > next.scrollbackLen) {
             setScrollbackOffset(next.scrollbackLen);
           }
-          startTransition(() => setSnapshot(next));
+          // Direct setSnapshot — terminal feedback MUST paint on the
+          // next frame. Wrapping in startTransition let React defer
+          // the update when anything else was in-flight, which
+          // compounded with the old backend throttle to make casual
+          // typing feel seconds-delayed.
+          setSnapshot(next);
           setError("");
         })
         .catch((e) => {

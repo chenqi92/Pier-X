@@ -18,6 +18,7 @@ import {
 } from "lucide-react";
 import { open as openDialog } from "@tauri-apps/plugin-dialog";
 import { listen } from "@tauri-apps/api/event";
+import { getCurrentWebview } from "@tauri-apps/api/webview";
 import { Fragment, useEffect, useMemo, useRef, useState } from "react";
 import type { DragEvent as ReactDragEvent, MouseEvent as ReactMouseEvent } from "react";
 import type { ComponentType } from "react";
@@ -227,7 +228,9 @@ export default function SftpPanel({ tab }: Props) {
   const [transfers, setTransfers] = useState<TransferItem[]>([]);
   const transferSeq = useRef(0);
   const [dropDepth, setDropDepth] = useState(0);
-  const dropHover = dropDepth > 0;
+  const [osDropHover, setOsDropHover] = useState(false);
+  const dropHover = dropDepth > 0 || osDropHover;
+  const panelRef = useRef<HTMLDivElement | null>(null);
 
   // ── Context menu + extended actions ────────────────────────────
   type CtxState =
@@ -341,6 +344,54 @@ export default function SftpPanel({ tab }: Props) {
       unlisten?.();
     };
   }, [tab.id]);
+
+  // OS-level drag-drop: Tauri intercepts file drops from the host
+  // file manager (Finder / Explorer / Nautilus) and delivers absolute
+  // paths via `onDragDropEvent`. We gate by the panel's bounding rect
+  // in device pixels so dropping onto an adjacent panel (Git, Docker)
+  // doesn't trigger an upload here. Only fires when SFTP is active.
+  useEffect(() => {
+    if (!hasSsh) return;
+    let disposed = false;
+    let unlisten: (() => void) | null = null;
+
+    function isOverPanel(px: number, py: number): boolean {
+      const el = panelRef.current;
+      if (!el) return false;
+      const rect = el.getBoundingClientRect();
+      const dpr = window.devicePixelRatio || 1;
+      const x = px / dpr;
+      const y = py / dpr;
+      return x >= rect.left && x <= rect.right && y >= rect.top && y <= rect.bottom;
+    }
+
+    void getCurrentWebview()
+      .onDragDropEvent((event) => {
+        const p = event.payload;
+        if (p.type === "enter" || p.type === "over") {
+          setOsDropHover(isOverPanel(p.position.x, p.position.y));
+        } else if (p.type === "leave") {
+          setOsDropHover(false);
+        } else if (p.type === "drop") {
+          setOsDropHover(false);
+          if (!isOverPanel(p.position.x, p.position.y)) return;
+          const paths = p.paths ?? [];
+          if (paths.length === 0) return;
+          void uploadLocalFiles(paths, currentRemotePath);
+        }
+      })
+      .then((dispose) => {
+        if (disposed) dispose();
+        else unlisten = dispose;
+      });
+
+    return () => {
+      disposed = true;
+      unlisten?.();
+      setOsDropHover(false);
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [hasSsh, currentRemotePath, sshArgs.host, sshArgs.port, sshArgs.user, sshArgs.authMode]);
 
   async function browse(targetPath = path, opts: { pushHistory?: boolean } = {}) {
     if (!hasSsh) {
@@ -1103,7 +1154,7 @@ export default function SftpPanel({ tab }: Props) {
   return (
     <>
       <PanelHeader icon={RIGHT_TOOL_META.sftp.icon} title={t("SFTP")} meta={currentRemotePath} />
-      <div className="ftp">
+      <div className="ftp" ref={panelRef}>
         <div className="ftp-host-bar">
           <span className="ftp-host-ic"><Server size={12} /></span>
           <div className="ftp-host-meta">

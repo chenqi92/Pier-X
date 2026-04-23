@@ -82,6 +82,10 @@ export default function TitlebarMenu({ menus }: Props) {
           {activeMenu.items.map((item, idx) =>
             "divider" in item ? (
               <div key={`d-${idx}`} className="ctx-menu__divider" />
+            ) : "section" in item ? (
+              <div key={`s-${idx}-${item.section}`} className="ctx-menu__section">
+                {item.section}
+              </div>
             ) : (
               <button
                 key={`${item.label}-${idx}`}

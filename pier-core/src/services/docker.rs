@@ -737,6 +737,24 @@ pub fn prune_volumes_blocking(session: &SshSession) -> Result<String> {
     crate::ssh::runtime::shared().block_on(prune_volumes(session))
 }
 
+/// Remove all unused images — `docker image prune -a -f`. `-a` drops
+/// images not referenced by any container (not just dangling layers).
+pub async fn prune_images(session: &SshSession) -> Result<String> {
+    let (exit, stdout) = session.exec_command("docker image prune -a -f").await?;
+    if exit != 0 {
+        return Err(SshError::InvalidConfig(format!(
+            "docker image prune exited {exit}: {}",
+            stdout.lines().next().unwrap_or("").trim()
+        )));
+    }
+    Ok(stdout)
+}
+
+/// Blocking wrapper for [`prune_images`].
+pub fn prune_images_blocking(session: &SshSession) -> Result<String> {
+    crate::ssh::runtime::shared().block_on(prune_images(session))
+}
+
 /// `ls -la` against a volume mountpoint.
 ///
 /// We cap the listing with `head -n 200` so a huge volume doesn't blow up

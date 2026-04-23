@@ -59,6 +59,11 @@ pub struct ServerSnapshot {
     pub disk_avail: String,
     /// Root filesystem use percentage (0-100). -1 if unavailable.
     pub disk_use_pct: f64,
+    /// Per-filesystem breakdown from `df -hPT`. Populated with every
+    /// mounted disk that isn't pseudo (tmpfs / devtmpfs / overlay) or
+    /// docker-managed (`/var/lib/docker/*`, `/snap/*`). The root `/`
+    /// entry is always first when present.
+    pub disks: Vec<DiskEntry>,
     /// CPU usage percentage (0-100) since boot, from /proc/stat.
     /// -1 if unavailable (macOS, containers without /proc).
     pub cpu_pct: f64,
@@ -80,6 +85,27 @@ pub struct ServerSnapshot {
     pub net_tx_bps: f64,
     /// Top processes by CPU%. Up to 8 entries, sorted descending.
     pub top_processes: Vec<ProcessRow>,
+}
+
+/// One mounted filesystem as reported by `df -hPT`. Sizes stay as
+/// their human-readable strings (same form the gauges use); use
+/// [`use_pct`](Self::use_pct) for numeric comparisons.
+#[derive(Clone, Debug, Default, Serialize, Deserialize)]
+pub struct DiskEntry {
+    /// Device or filesystem source (e.g. `/dev/nvme0n1p2`, `tmpfs`).
+    pub filesystem: String,
+    /// FS type reported by `df -T` (e.g. `ext4`, `xfs`).
+    pub fs_type: String,
+    /// Total size (human-readable, e.g. `"50G"`).
+    pub total: String,
+    /// Used space (human-readable).
+    pub used: String,
+    /// Available space (human-readable).
+    pub avail: String,
+    /// Used percentage 0-100. -1 if unparseable.
+    pub use_pct: f64,
+    /// Mount point (e.g. `/`, `/home`).
+    pub mountpoint: String,
 }
 
 /// One row in the "top processes" table. All fields are best-effort —
@@ -147,7 +173,7 @@ pub async fn probe_with_baseline(
     let cmd = "LC_ALL=C; export LC_ALL; \
                echo '---UPTIME---'; (uptime 2>/dev/null || true); \
                echo '---FREE---'; (free -m 2>/dev/null || vm_stat 2>/dev/null || true); \
-               echo '---DF---'; (df -hP / 2>/dev/null || df -h / 2>/dev/null || true); \
+               echo '---DF---'; (df -hPT 2>/dev/null || df -hP / 2>/dev/null || df -h / 2>/dev/null || true); \
                echo '---CPUSTAT---'; (head -1 /proc/stat 2>/dev/null || true); \
                echo '---NPROC---'; (nproc 2>/dev/null || grep -c ^processor /proc/cpuinfo 2>/dev/null || true); \
                echo '---PROCS---'; (ps -eo pid 2>/dev/null | wc -l 2>/dev/null || true); \
@@ -501,13 +527,17 @@ fn next_char_boundary(text: &str, start: usize) -> usize {
 /// Filesystem      Size  Used Avail Use% Mounted on
 /// /dev/sda1        50G   23G   25G  48% /
 /// ```
-fn parse_df(text: &str, snap: &mut ServerSnapshot) {
+pub fn parse_df(text: &str, snap: &mut ServerSnapshot) {
     // df occasionally wraps a long device path onto its own line and
     // pushes the size/use/mount columns to the next one. Coalesce
     // any line that has fewer than 5 whitespace-separated tokens
     // with the following line so we still see a complete row.
     let mut joined: Vec<String> = Vec::new();
     let mut buffer = String::new();
+    // Minimum token count: five columns for `df -hP` (fs, size, used,
+    // avail, use%, mount = 6 — but with row-wrap we only coalesce up
+    // to at least 5 so the "mount point" token is also visible).
+    // `df -hPT` has an extra type column making it seven.
     for raw in text.lines() {
         let trimmed = raw.trim();
         if trimmed.is_empty() {
@@ -517,7 +547,7 @@ fn parse_df(text: &str, snap: &mut ServerSnapshot) {
             buffer.push(' ');
         }
         buffer.push_str(trimmed);
-        if buffer.split_whitespace().count() >= 5 {
+        if buffer.split_whitespace().count() >= 6 {
             joined.push(std::mem::take(&mut buffer));
         }
     }
@@ -525,6 +555,52 @@ fn parse_df(text: &str, snap: &mut ServerSnapshot) {
         joined.push(buffer);
     }
 
+    // Pseudo / container-managed filesystems we intentionally hide
+    // from the per-disk list — the user asked for a "df -h real
+    // disks" view without Docker's overlay volumes muddying the
+    // space read.
+    fn is_ignorable_fs_type(t: &str) -> bool {
+        matches!(
+            t.to_ascii_lowercase().as_str(),
+            "tmpfs"
+                | "devtmpfs"
+                | "squashfs"
+                | "overlay"
+                | "overlay2"
+                | "aufs"
+                | "proc"
+                | "sysfs"
+                | "cgroup"
+                | "cgroup2"
+                | "devpts"
+                | "mqueue"
+                | "pstore"
+                | "securityfs"
+                | "fusectl"
+                | "debugfs"
+                | "tracefs"
+                | "nsfs"
+                | "binfmt_misc"
+                | "autofs"
+                | "ramfs"
+                | "fuse.lxcfs"
+                | "none"
+        )
+    }
+    fn is_ignorable_mount(m: &str) -> bool {
+        m.starts_with("/var/lib/docker")
+            || m.starts_with("/var/lib/containers")
+            || m.starts_with("/var/lib/containerd")
+            || m.starts_with("/run")
+            || m.starts_with("/snap")
+            || m.starts_with("/sys")
+            || m.starts_with("/proc")
+            || m.starts_with("/dev")
+            || m.starts_with("/boot/efi")
+            || m.starts_with("/private/var/vm")
+    }
+
+    let mut root_set = false;
     for line in &joined {
         // Skip the header row whichever case it's in.
         let lower = line.to_ascii_lowercase();
@@ -532,25 +608,107 @@ fn parse_df(text: &str, snap: &mut ServerSnapshot) {
             continue;
         }
         let parts: Vec<&str> = line.split_whitespace().collect();
-        if parts.len() < 5 {
+        if parts.len() < 6 {
             continue;
         }
-        // Find the percent-bearing column rather than assuming the
-        // 5th token — `df -hP` and `df -h` both put it before the
-        // mount point, but POSIX has it as the 5th and BSD as the
-        // 4th. Scanning makes both layouts work.
+        // Find the percent-bearing column rather than assuming a
+        // fixed index — `df -hP`, `df -h`, and `df -hPT` differ by
+        // whether a type column is present, and POSIX puts the
+        // percent at 5 while BSD puts it at 4. Scanning works for
+        // all layouts.
         let pct_idx = parts.iter().position(|p| p.ends_with('%'));
         let Some(pct_idx) = pct_idx else { continue };
         if pct_idx < 3 {
             continue;
         }
-        snap.disk_total = parts[pct_idx - 3].to_string();
-        snap.disk_used = parts[pct_idx - 2].to_string();
-        snap.disk_avail = parts[pct_idx - 1].to_string();
+        let filesystem = parts[0].to_string();
+        // When `df -hPT` is used, the second column is the FS type;
+        // without -T the size column is in slot 1 and we don't know
+        // the type. Detect by checking whether parts[1] parses as a
+        // df-style size (ends in digit or size-suffix letter) — if
+        // it looks like a size, there's no type column.
+        let has_type_col = {
+            let candidate = parts.get(1).copied().unwrap_or("");
+            !(candidate
+                .chars()
+                .next()
+                .map(|c| c.is_ascii_digit())
+                .unwrap_or(true))
+        };
+        let fs_type = if has_type_col {
+            parts[1].to_string()
+        } else {
+            String::new()
+        };
+        let total = parts[pct_idx - 3].to_string();
+        let used = parts[pct_idx - 2].to_string();
+        let avail = parts[pct_idx - 1].to_string();
         let pct_str = parts[pct_idx].trim_end_matches('%');
-        snap.disk_use_pct = pct_str.parse().unwrap_or(-1.0);
-        break; // Only care about root (first data line).
+        let use_pct = pct_str.parse().unwrap_or(-1.0);
+        let mountpoint = parts.get(pct_idx + 1).copied().unwrap_or("").to_string();
+
+        // Always fill the legacy single-disk gauge from the root
+        // filesystem — stays the primary "how full is the server?"
+        // signal, regardless of whether we also show per-disk rows.
+        if !root_set && mountpoint == "/" {
+            snap.disk_total = total.clone();
+            snap.disk_used = used.clone();
+            snap.disk_avail = avail.clone();
+            snap.disk_use_pct = use_pct;
+            root_set = true;
+        }
+
+        let skip =
+            is_ignorable_fs_type(&fs_type) || is_ignorable_mount(&mountpoint) || mountpoint.is_empty();
+        if !skip {
+            snap.disks.push(DiskEntry {
+                filesystem,
+                fs_type,
+                total,
+                used,
+                avail,
+                use_pct,
+                mountpoint,
+            });
+        }
     }
+
+    // Legacy fallback: if the remote only returned a single-FS `df -h /`
+    // row (pct_idx handling above skipped it for missing column count),
+    // try the old five-column parse one more time so the root gauge
+    // still populates.
+    if !root_set {
+        for line in &joined {
+            let lower = line.to_ascii_lowercase();
+            if lower.starts_with("filesystem") {
+                continue;
+            }
+            let parts: Vec<&str> = line.split_whitespace().collect();
+            if parts.len() < 5 {
+                continue;
+            }
+            let pct_idx = parts.iter().position(|p| p.ends_with('%'));
+            let Some(pct_idx) = pct_idx else { continue };
+            if pct_idx < 3 {
+                continue;
+            }
+            snap.disk_total = parts[pct_idx - 3].to_string();
+            snap.disk_used = parts[pct_idx - 2].to_string();
+            snap.disk_avail = parts[pct_idx - 1].to_string();
+            snap.disk_use_pct = parts[pct_idx].trim_end_matches('%').parse().unwrap_or(-1.0);
+            break;
+        }
+    }
+
+    // Root first in the per-disk list, then the rest by mountpoint
+    // for a predictable readout.
+    snap.disks.sort_by(|a, b| {
+        match (a.mountpoint == "/", b.mountpoint == "/") {
+            (true, false) => std::cmp::Ordering::Less,
+            (false, true) => std::cmp::Ordering::Greater,
+            _ => a.mountpoint.cmp(&b.mountpoint),
+        }
+    });
 }
 
 /// Parse `/proc/stat` first line to get overall CPU usage %.

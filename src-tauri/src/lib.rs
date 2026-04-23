@@ -80,12 +80,6 @@ const TERMINAL_EVENT: &str = "terminal:event";
 /// terminal instead of the other way around.
 const TERMINAL_SSH_STATE_EVENT: &str = "terminal:ssh-state";
 
-/// Coalesce window for "data" notifications: the reader thread can fire
-/// hundreds of times per second for streaming output (e.g. `cat largefile`).
-/// We cap emissions at one per window; the frontend also keeps a slow
-/// safety interval in case a trailing event gets throttled.
-const TERMINAL_EMIT_MIN_MS: u64 = 16;
-
 #[derive(Serialize, Clone)]
 #[serde(rename_all = "camelCase")]
 struct TerminalEventPayload {
@@ -123,10 +117,6 @@ struct TerminalSshTargetView {
 struct NotifyContext {
     app: tauri::AppHandle,
     session_id: String,
-    /// Millis since UNIX_EPOCH of the last emitted "data" event. Only
-    /// the reader thread mutates it; the atomic is for loose happens-
-    /// before and because we're stingy about Mutex on the hot path.
-    last_emit_ms: AtomicU64,
 }
 
 struct ManagedTerminal {
@@ -431,6 +421,19 @@ struct ServerSnapshotView {
     net_rx_bps: f64,
     net_tx_bps: f64,
     top_processes: Vec<ProcessRowView>,
+    disks: Vec<DiskEntryView>,
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct DiskEntryView {
+    filesystem: String,
+    fs_type: String,
+    total: String,
+    used: String,
+    avail: String,
+    use_pct: f64,
+    mountpoint: String,
 }
 
 #[derive(Serialize)]
@@ -701,19 +704,17 @@ extern "C" fn tauri_terminal_notify(user_data: *mut c_void, event: u32) {
         return;
     }
 
+    // Every data/exit notification is emitted as it arrives. The
+    // frontend's refresh loop is rate-limited by an `inflight` +
+    // `dirty` pair, so a storm of notifications coalesces into
+    // back-to-back snapshot fetches rather than piling up render
+    // work — which is exactly what a previous millisecond-level
+    // throttle was trying to achieve. The throttle was dropped
+    // because it had no trailing emit: a quick burst of keystrokes
+    // followed by a pause left the last characters invisible until
+    // the frontend's 1.5s safety timer finally swept, producing
+    // the "seconds of lag" users were seeing on casual typing.
     let is_exit = event == NotifyEvent::Exited as u32;
-    if !is_exit {
-        let now_ms = SystemTime::now()
-            .duration_since(UNIX_EPOCH)
-            .map(|d| d.as_millis() as u64)
-            .unwrap_or(0);
-        let last = ctx.last_emit_ms.load(Ordering::Relaxed);
-        if now_ms.saturating_sub(last) < TERMINAL_EMIT_MIN_MS {
-            return;
-        }
-        ctx.last_emit_ms.store(now_ms, Ordering::Relaxed);
-    }
-
     let _ = ctx.app.emit(
         TERMINAL_EVENT,
         TerminalEventPayload {
@@ -738,7 +739,6 @@ fn allocate_notify_context(
     let ctx = Box::new(NotifyContext {
         app,
         session_id: session_id.clone(),
-        last_emit_ms: AtomicU64::new(0),
     });
     (session_id, ctx)
 }
@@ -3341,6 +3341,19 @@ fn server_monitor_probe(
                 elapsed: p.elapsed,
             })
             .collect(),
+        disks: snap
+            .disks
+            .into_iter()
+            .map(|d| DiskEntryView {
+                filesystem: d.filesystem,
+                fs_type: d.fs_type,
+                total: d.total,
+                used: d.used,
+                avail: d.avail,
+                use_pct: d.use_pct,
+                mountpoint: d.mountpoint,
+            })
+            .collect(),
     })
 }
 
@@ -3907,6 +3920,23 @@ fn docker_prune_volumes(
 }
 
 #[tauri::command]
+fn docker_prune_images(
+    state: tauri::State<'_, AppState>,
+    host: String,
+    port: u16,
+    user: String,
+    auth_mode: String,
+    password: String,
+    key_path: String,
+    saved_connection_index: Option<usize>,
+) -> Result<String, String> {
+    run_with_session_retry(
+        &state, &host, port, &user, &auth_mode, &password, &key_path, saved_connection_index,
+        |session| docker::prune_images_blocking(session).map_err(|e| e.to_string()),
+    )
+}
+
+#[tauri::command]
 fn docker_pull_image(
     state: tauri::State<'_, AppState>,
     host: String,
@@ -4027,6 +4057,18 @@ async fn local_docker_prune_volumes() -> Result<String, String> {
         .args(["volume", "prune", "-f"])
         .output()
         .map_err(|e| format!("docker volume prune failed: {e}"))?;
+    if !output.status.success() {
+        return Err(String::from_utf8_lossy(&output.stderr).to_string());
+    }
+    Ok(String::from_utf8_lossy(&output.stdout).to_string())
+}
+
+#[tauri::command]
+async fn local_docker_prune_images() -> Result<String, String> {
+    let output = std::process::Command::new("docker")
+        .args(["image", "prune", "-a", "-f"])
+        .output()
+        .map_err(|e| format!("docker image prune failed: {e}"))?;
     if !output.status.success() {
         return Err(String::from_utf8_lossy(&output.stderr).to_string());
     }
@@ -4940,15 +4982,17 @@ fn local_system_info() -> Result<ServerSnapshotView, String> {
         let page_size = 16384.0_f64; // Apple Silicon default
         let mem_free_mb = free_pages * page_size / (1024.0 * 1024.0);
         let mem_used_mb = mem_total_mb - mem_free_mb;
-        // Disk
-        let df = std::process::Command::new("df").args(["-h", "/"]).output()
+        // Disk — parse the full `df -hT` so the per-mount breakdown
+        // shows up alongside the root-fs gauge.
+        let df_full = std::process::Command::new("df").args(["-hT"]).output()
             .map(|o| String::from_utf8_lossy(&o.stdout).to_string())
             .unwrap_or_default();
-        let df_parts: Vec<&str> = df.lines().nth(1).unwrap_or("").split_whitespace().collect();
-        let disk_total = df_parts.get(1).unwrap_or(&"").to_string();
-        let disk_used = df_parts.get(2).unwrap_or(&"").to_string();
-        let disk_avail = df_parts.get(3).unwrap_or(&"").to_string();
-        let disk_use_pct = df_parts.get(4).unwrap_or(&"0%").trim_end_matches('%').parse::<f64>().unwrap_or(-1.0);
+        let mut df_snap = server_monitor::ServerSnapshot::default();
+        server_monitor::parse_df(&df_full, &mut df_snap);
+        let disk_total = df_snap.disk_total.clone();
+        let disk_used = df_snap.disk_used.clone();
+        let disk_avail = df_snap.disk_avail.clone();
+        let disk_use_pct = if df_snap.disk_use_pct == 0.0 && disk_total.is_empty() { -1.0 } else { df_snap.disk_use_pct };
         // Load
         let load_parts: Vec<f64> = uptime.rsplit("load averages:").next()
             .or_else(|| uptime.rsplit("load average:").next())
@@ -4971,6 +5015,19 @@ fn local_system_info() -> Result<ServerSnapshotView, String> {
             net_rx_bps: -1.0,
             net_tx_bps: -1.0,
             top_processes: Vec::new(),
+            disks: df_snap
+                .disks
+                .into_iter()
+                .map(|d| DiskEntryView {
+                    filesystem: d.filesystem,
+                    fs_type: d.fs_type,
+                    total: d.total,
+                    used: d.used,
+                    avail: d.avail,
+                    use_pct: d.use_pct,
+                    mountpoint: d.mountpoint,
+                })
+                .collect(),
         })
     }
     #[cfg(not(target_os = "macos"))]
@@ -4990,9 +5047,10 @@ fn local_system_info() -> Result<ServerSnapshotView, String> {
         let swap_total_mb = parse_meminfo(&meminfo, "SwapTotal");
         let swap_free = parse_meminfo(&meminfo, "SwapFree");
         let loads: Vec<f64> = loadavg.split_whitespace().take(3).filter_map(|s| s.parse().ok()).collect();
-        let df = std::process::Command::new("df").args(["-h", "/"]).output()
+        let df_full = std::process::Command::new("df").args(["-hPT"]).output()
             .map(|o| String::from_utf8_lossy(&o.stdout).to_string()).unwrap_or_default();
-        let df_parts: Vec<&str> = df.lines().nth(1).unwrap_or("").split_whitespace().collect();
+        let mut df_snap = server_monitor::ServerSnapshot::default();
+        server_monitor::parse_df(&df_full, &mut df_snap);
         Ok(ServerSnapshotView {
             uptime: format!("{:.0}s", uptime.split_whitespace().next().unwrap_or("0").parse::<f64>().unwrap_or(0.0)),
             load_1: *loads.first().unwrap_or(&-1.0),
@@ -5000,10 +5058,10 @@ fn local_system_info() -> Result<ServerSnapshotView, String> {
             load_15: *loads.get(2).unwrap_or(&-1.0),
             mem_total_mb, mem_used_mb: mem_total_mb - mem_free_mb, mem_free_mb,
             swap_total_mb, swap_used_mb: swap_total_mb - swap_free,
-            disk_total: df_parts.get(1).unwrap_or(&"").to_string(),
-            disk_used: df_parts.get(2).unwrap_or(&"").to_string(),
-            disk_avail: df_parts.get(3).unwrap_or(&"").to_string(),
-            disk_use_pct: df_parts.get(4).unwrap_or(&"0%").trim_end_matches('%').parse::<f64>().unwrap_or(-1.0),
+            disk_total: df_snap.disk_total.clone(),
+            disk_used: df_snap.disk_used.clone(),
+            disk_avail: df_snap.disk_avail.clone(),
+            disk_use_pct: if df_snap.disk_use_pct == 0.0 && df_snap.disk_total.is_empty() { -1.0 } else { df_snap.disk_use_pct },
             cpu_pct: -1.0,
             cpu_count: 0,
             proc_count: 0,
@@ -5011,6 +5069,19 @@ fn local_system_info() -> Result<ServerSnapshotView, String> {
             net_rx_bps: -1.0,
             net_tx_bps: -1.0,
             top_processes: Vec::new(),
+            disks: df_snap
+                .disks
+                .into_iter()
+                .map(|d| DiskEntryView {
+                    filesystem: d.filesystem,
+                    fs_type: d.fs_type,
+                    total: d.total,
+                    used: d.used,
+                    avail: d.avail,
+                    use_pct: d.use_pct,
+                    mountpoint: d.mountpoint,
+                })
+                .collect(),
         })
     }
 }
@@ -5185,6 +5256,7 @@ pub fn run() {
             docker_remove_network,
             docker_run_container,
             docker_prune_volumes,
+            docker_prune_images,
             docker_volume_files,
             docker_stats,
             docker_volume_usage,
@@ -5212,6 +5284,7 @@ pub fn run() {
             local_docker_action,
             local_docker_run_container,
             local_docker_prune_volumes,
+            local_docker_prune_images,
             local_docker_volume_files,
             local_docker_pull_image,
             local_system_info

@@ -290,10 +290,15 @@ body.is-resizing .app { transition: none; }
   box-shadow: inset 0 0 0 2px var(--accent);
 }
 .sidebar-header-row {
-  display: flex;
+  --file-row-icon-w: calc(var(--sp-3) + var(--sp-0-5));
+  --file-row-mod-w: calc(var(--sp-8) + var(--sp-10));
+  --file-row-size-w: calc(var(--sp-8) + var(--sp-6));
+  display: grid;
+  grid-template-columns: var(--file-row-icon-w) minmax(0, 1fr) var(--file-row-mod-w) var(--file-row-size-w);
+  column-gap: var(--sp-1-5);
   flex: none;
-  padding: 4px calc(var(--sp-2-5) + 10px) 4px 22px;
-  font-size: 10px;
+  padding: var(--sp-1) var(--sp-2-5) var(--sp-1) var(--sp-2);
+  font-size: var(--size-micro);
   font-family: var(--mono);
   color: var(--muted);
   text-transform: uppercase;
@@ -301,9 +306,16 @@ body.is-resizing .app { transition: none; }
   border-bottom: 1px solid var(--line);
   background: var(--surface);
 }
-.sidebar-header-row .col-name { flex: 1; }
-.sidebar-header-row .col-mod  { width: 72px; }
-.sidebar-header-row .col-size { width: 50px; text-align: right; }
+.sidebar-header-row .col-icon { width: var(--file-row-icon-w); }
+.sidebar-header-row .col-name,
+.sidebar-header-row .col-mod,
+.sidebar-header-row .col-size {
+  min-width: 0;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.sidebar-header-row .col-size { text-align: right; }
 
 .sidebar-quickrow {
   display: flex;
@@ -337,7 +349,13 @@ body.is-resizing .app { transition: none; }
 .sidebar-quickrow-input:focus { border-color: var(--accent); }
 
 .file-row {
-  display: flex; align-items: center; gap: 6px;
+  --file-row-icon-w: calc(var(--sp-3) + var(--sp-0-5));
+  --file-row-mod-w: calc(var(--sp-8) + var(--sp-10));
+  --file-row-size-w: calc(var(--sp-8) + var(--sp-6));
+  display: grid;
+  grid-template-columns: var(--file-row-icon-w) minmax(0, 1fr) var(--file-row-mod-w) var(--file-row-size-w);
+  align-items: center;
+  column-gap: var(--sp-1-5);
   padding: 0 var(--sp-2-5) 0 var(--sp-2);
   height: var(--row-h);
   cursor: default;
@@ -351,30 +369,38 @@ body.is-resizing .app { transition: none; }
   border-left-color: var(--accent);
 }
 .file-row .fi {
-  width: 14px; flex: none;
+  width: var(--file-row-icon-w);
   color: var(--muted);
   display: grid; place-items: center;
 }
 .file-row .fi svg { width: 12px; height: 12px; }
 .file-row .fname {
-  flex: 1;
+  min-width: 0;
   font-size: var(--ui-fs);
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
 }
 .file-row .fmod {
-  width: 72px;
-  font-size: 10.5px;
+  min-width: 0;
+  font-size: var(--size-micro);
   color: var(--muted);
   font-family: var(--mono);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  font-variant-numeric: tabular-nums;
 }
 .file-row .fsize {
-  width: 50px;
-  font-size: 10.5px;
+  min-width: 0;
+  font-size: var(--size-micro);
   color: var(--muted);
   font-family: var(--mono);
   text-align: right;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: clip;
+  font-variant-numeric: tabular-nums;
 }
 .file-row.is-dir .fname { color: var(--ink); font-weight: var(--weight-medium); }
 .file-row.is-dir .fi    { color: var(--accent); }

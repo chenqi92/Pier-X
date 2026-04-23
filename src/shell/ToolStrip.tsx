@@ -1,3 +1,4 @@
+import { PanelRightClose, PanelRightOpen } from "lucide-react";
 import type { RightTool } from "../lib/types";
 import { RIGHT_TOOL_META, RIGHT_TOOL_ORDER } from "../lib/rightToolMeta";
 import { useI18n } from "../i18n/useI18n";
@@ -8,12 +9,22 @@ type Props = {
   onSelectTool: (tool: RightTool) => void;
   hasRemoteContext: boolean;
   detectedTools?: ReadonlySet<RightTool>;
+  collapsed: boolean;
+  onToggleCollapsed: () => void;
 };
 
 const TOOLS = RIGHT_TOOL_ORDER.map((tool) => ({ tool, ...RIGHT_TOOL_META[tool] }));
 
-export default function ToolStrip({ activeTool, onSelectTool, hasRemoteContext, detectedTools }: Props) {
+export default function ToolStrip({
+  activeTool,
+  onSelectTool,
+  hasRemoteContext,
+  detectedTools,
+  collapsed,
+  onToggleCollapsed,
+}: Props) {
   const { t } = useI18n();
+  const collapseTitle = collapsed ? t("Show right panel") : t("Hide right panel");
 
   return (
     <div className="toolstrip">
@@ -39,6 +50,16 @@ export default function ToolStrip({ activeTool, onSelectTool, hasRemoteContext, 
         );
       })}
       <div className="toolstrip-spacer" />
+      <div className="ts-divider" />
+      <button
+        type="button"
+        className="ts-btn"
+        title={collapseTitle}
+        aria-label={collapseTitle}
+        onClick={onToggleCollapsed}
+      >
+        {collapsed ? <PanelRightOpen size={16} /> : <PanelRightClose size={16} />}
+      </button>
     </div>
   );
 }

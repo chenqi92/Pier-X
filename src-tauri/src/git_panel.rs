@@ -691,6 +691,7 @@ pub fn git_commit_and_push(
     message: String,
     signoff: Option<bool>,
     amend: Option<bool>,
+    sign: Option<bool>,
 ) -> Result<String, String> {
     let repo_path = repo_root(path)?;
     let trimmed = message.trim();
@@ -703,6 +704,9 @@ pub fn git_commit_and_push(
     }
     if amend.unwrap_or(false) {
         args.push("--amend");
+    }
+    if sign.unwrap_or(false) {
+        args.push("-S");
     }
     args.extend_from_slice(&["-m", trimmed]);
     run_git_at(&repo_path, &args)?;
@@ -1286,6 +1290,96 @@ pub fn git_amend_head_commit_message(path: Option<String>, hash: String, message
         return Err(String::from("Only the current HEAD commit can be amended."));
     }
     run_git_at(&repo_path, &["commit", "--amend", "-m", new_message])
+}
+
+#[tauri::command]
+pub fn git_revert_commit(
+    path: Option<String>,
+    hash: String,
+    no_commit: Option<bool>,
+) -> Result<String, String> {
+    let repo_path = repo_root(path)?;
+    let commit_hash = hash.trim();
+    if commit_hash.is_empty() {
+        return Err(String::from("commit hash cannot be empty"));
+    }
+    let mut args: Vec<&str> = vec!["revert"];
+    if no_commit.unwrap_or(false) {
+        args.push("--no-commit");
+    } else {
+        // Skip the editor round-trip so the command returns without
+        // blocking. git's default revert message carries the SHA and
+        // is usually what the user wants.
+        args.push("--no-edit");
+    }
+    args.push(commit_hash);
+    run_git_at(&repo_path, &args)
+}
+
+#[tauri::command]
+pub fn git_cherry_pick_commit(
+    path: Option<String>,
+    hash: String,
+    no_commit: Option<bool>,
+) -> Result<String, String> {
+    let repo_path = repo_root(path)?;
+    let commit_hash = hash.trim();
+    if commit_hash.is_empty() {
+        return Err(String::from("commit hash cannot be empty"));
+    }
+    let mut args: Vec<&str> = vec!["cherry-pick"];
+    if no_commit.unwrap_or(false) {
+        args.push("--no-commit");
+    }
+    args.push(commit_hash);
+    run_git_at(&repo_path, &args)
+}
+
+#[derive(serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct GitReflogEntry {
+    pub hash: String,
+    pub short_hash: String,
+    pub ref_name: String,
+    pub subject: String,
+    pub relative_date: String,
+}
+
+#[tauri::command]
+pub fn git_reflog_list(
+    path: Option<String>,
+    limit: Option<usize>,
+) -> Result<Vec<GitReflogEntry>, String> {
+    let repo_path = repo_root(path)?;
+    let count = limit.unwrap_or(100).clamp(1, 1000);
+    // `\x1f` (ASCII unit separator) is the safest delimiter for
+    // git log-style --format output: can't appear in refs, authors,
+    // or subjects. Matches the pattern used in `log()` elsewhere.
+    let sep = "\x1f";
+    let format = format!("--format=%H{sep}%h{sep}%gD{sep}%gs{sep}%cr");
+    let count_arg = format!("-{count}");
+    let output = run_git_at(
+        &repo_path,
+        &["reflog", "--date=relative", count_arg.as_str(), format.as_str()],
+    )?;
+    let mut entries = Vec::new();
+    for line in output.lines() {
+        if line.is_empty() {
+            continue;
+        }
+        let parts: Vec<&str> = line.splitn(5, sep).collect();
+        if parts.len() < 5 {
+            continue;
+        }
+        entries.push(GitReflogEntry {
+            hash: parts[0].to_string(),
+            short_hash: parts[1].to_string(),
+            ref_name: parts[2].to_string(),
+            subject: parts[3].to_string(),
+            relative_date: parts[4].to_string(),
+        });
+    }
+    Ok(entries)
 }
 
 #[tauri::command]

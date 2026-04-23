@@ -12,7 +12,9 @@ import {
   Plus,
   RefreshCw,
   Server,
+  Star,
   Terminal as TerminalIcon,
+  Trash2,
   Upload,
   X,
 } from "lucide-react";
@@ -39,6 +41,17 @@ import DismissibleNote from "../components/DismissibleNote";
 import SftpEditorDialog from "../components/SftpEditorDialog";
 import SftpNewEntryDialog from "../components/SftpNewEntryDialog";
 import { writeClipboardText } from "../lib/clipboard";
+import {
+  hostKey,
+  useSftpBookmarksStore,
+  type SftpBookmark,
+} from "../stores/useSftpBookmarksStore";
+
+// Module-scope constant for "no bookmarks". Kept out of the
+// zustand selector so two consecutive renders get the *same*
+// reference — otherwise getSnapshot sees a new `[]` every time
+// and React flags an infinite update loop.
+const EMPTY_BOOKMARKS: SftpBookmark[] = [];
 import { isEditableFilename, MAX_EDITOR_BYTES, modeToSymbolic } from "../lib/sftpEditor";
 import {
   DT_LOCAL_FILE,
@@ -285,6 +298,23 @@ export default function SftpPanel({ tab }: Props) {
     savedConnectionIndex: sshTarget?.savedConnectionIndex ?? null,
   };
   const sshRequired = t("SSH connection required.");
+  const bookmarkHostKey = hasSsh ? hostKey(sshArgs.user, sshArgs.host, sshArgs.port) : "";
+  // Select the raw store entry (which is a stable reference —
+  // either a persistent array or `undefined`) and fall back to
+  // the module-scope empty constant. Earlier we fabricated `[]`
+  // inside the selector, which zustand's getSnapshot treated as
+  // a fresh value every render and drove an infinite update loop.
+  const bookmarksForHost = useSftpBookmarksStore(
+    (s) => (bookmarkHostKey ? s.bookmarks[bookmarkHostKey] : undefined),
+  );
+  const bookmarks = bookmarksForHost ?? EMPTY_BOOKMARKS;
+  const addBookmark = useSftpBookmarksStore((s) => s.add);
+  const removeBookmark = useSftpBookmarksStore((s) => s.remove);
+  const [bookmarksOpen, setBookmarksOpen] = useState(false);
+  const currentIsBookmarked = useMemo(
+    () => bookmarks.some((b) => b.path === (state?.currentPath || path || "/")),
+    [bookmarks, state?.currentPath, path],
+  );
   const selectedEntry = useMemo(
     () => state?.entries.find((entry) => entry.path === selectedPath) ?? null,
     [state, selectedPath],
@@ -1256,6 +1286,106 @@ export default function SftpPanel({ tab }: Props) {
               </button>
             </div>
           )}
+          <div style={{ position: "relative" }}>
+            <button
+              type="button"
+              className="lg-ic"
+              title={currentIsBookmarked ? t("Remove bookmark") : t("Bookmark this path")}
+              disabled={!hasSsh || !state}
+              onClick={() => setBookmarksOpen((o) => !o)}
+            >
+              {currentIsBookmarked ? (
+                <Star size={12} fill="var(--accent)" color="var(--accent)" />
+              ) : (
+                <Star size={12} />
+              )}
+            </button>
+            {bookmarksOpen && (
+              <div
+                className="cmdp-overlay"
+                style={{ background: "transparent" }}
+                onClick={() => setBookmarksOpen(false)}
+              >
+                <div
+                  className="ftp-bookmarks-pop"
+                  style={{
+                    position: "absolute",
+                    top: 32,
+                    left: 0,
+                    minWidth: 280,
+                    maxWidth: 420,
+                    maxHeight: 360,
+                    overflowY: "auto",
+                    background: "var(--elev)",
+                    border: "1px solid var(--line)",
+                    borderRadius: "var(--radius-sm)",
+                    boxShadow: "var(--shadow-popover)",
+                    padding: "var(--sp-2)",
+                    zIndex: 100,
+                  }}
+                  onClick={(e) => e.stopPropagation()}
+                >
+                  <button
+                    type="button"
+                    className="mini-button"
+                    style={{ width: "100%", justifyContent: "flex-start" }}
+                    disabled={currentIsBookmarked}
+                    onClick={() => {
+                      addBookmark(bookmarkHostKey, { path: currentRemotePath });
+                      setBookmarksOpen(false);
+                    }}
+                  >
+                    <Star size={11} />
+                    {t("Bookmark {path}", { path: currentRemotePath })}
+                  </button>
+                  {bookmarks.length > 0 && (
+                    <div
+                      style={{
+                        marginTop: "var(--sp-2)",
+                        borderTop: "1px solid var(--line)",
+                        paddingTop: "var(--sp-2)",
+                        display: "flex",
+                        flexDirection: "column",
+                        gap: "var(--sp-1)",
+                      }}
+                    >
+                      {bookmarks.map((b) => (
+                        <div key={b.path} style={{ display: "flex", gap: "var(--sp-1)", alignItems: "center" }}>
+                          <button
+                            type="button"
+                            className="mini-button"
+                            style={{ flex: 1, justifyContent: "flex-start", fontFamily: "var(--mono)", overflow: "hidden" }}
+                            title={b.path}
+                            onClick={() => {
+                              setBookmarksOpen(false);
+                              void browse(b.path, { pushHistory: true });
+                            }}
+                          >
+                            <span style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+                              {b.label || b.path}
+                            </span>
+                          </button>
+                          <button
+                            type="button"
+                            className="mini-button mini-button--destructive"
+                            title={t("Remove bookmark")}
+                            onClick={() => removeBookmark(bookmarkHostKey, b.path)}
+                          >
+                            <Trash2 size={11} />
+                          </button>
+                        </div>
+                      ))}
+                    </div>
+                  )}
+                  {bookmarks.length === 0 && (
+                    <div className="empty-note" style={{ marginTop: "var(--sp-2)" }}>
+                      {t("No bookmarks for this host.")}
+                    </div>
+                  )}
+                </div>
+              </div>
+            )}
+          </div>
           <button
             type="button"
             className="lg-ic"

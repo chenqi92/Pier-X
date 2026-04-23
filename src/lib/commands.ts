@@ -102,7 +102,7 @@ export const gitUnstageAll = (path: string | null) =>
 export const gitDiscardPaths = (path: string | null, paths: string[]) =>
   invoke<void>("git_discard_paths", { path, paths });
 
-export type GitCommitOptions = { signoff?: boolean; amend?: boolean };
+export type GitCommitOptions = { signoff?: boolean; amend?: boolean; sign?: boolean };
 
 export const gitCommit = (path: string | null, message: string, options?: GitCommitOptions) =>
   invoke<string>("git_commit", {
@@ -110,6 +110,7 @@ export const gitCommit = (path: string | null, message: string, options?: GitCom
     message,
     signoff: options?.signoff ?? false,
     amend: options?.amend ?? false,
+    sign: options?.sign ?? false,
   });
 
 export const gitCommitAndPush = (path: string | null, message: string, options?: GitCommitOptions) =>
@@ -118,6 +119,7 @@ export const gitCommitAndPush = (path: string | null, message: string, options?:
     message,
     signoff: options?.signoff ?? false,
     amend: options?.amend ?? false,
+    sign: options?.sign ?? false,
   });
 
 export const gitBranchList = (path: string | null) =>
@@ -251,6 +253,23 @@ export const gitAmendHeadCommitMessage = (path: string | null, hash: string, mes
 
 export const gitDropCommit = (path: string | null, hash: string, parentHash?: string | null) =>
   invoke<string>("git_drop_commit", { path, hash, parentHash: parentHash ?? null });
+
+export const gitRevertCommit = (path: string | null, hash: string, noCommit?: boolean) =>
+  invoke<string>("git_revert_commit", { path, hash, noCommit: noCommit ?? false });
+
+export const gitCherryPickCommit = (path: string | null, hash: string, noCommit?: boolean) =>
+  invoke<string>("git_cherry_pick_commit", { path, hash, noCommit: noCommit ?? false });
+
+export type GitReflogEntry = {
+  hash: string;
+  shortHash: string;
+  refName: string;
+  subject: string;
+  relativeDate: string;
+};
+
+export const gitReflogList = (path: string | null, limit?: number) =>
+  invoke<GitReflogEntry[]>("git_reflog_list", { path, limit: limit ?? 100 });
 
 export const gitRebasePlan = (path: string | null, count?: number | null) =>
   invoke<GitRebasePlanView>("git_rebase_plan", { path, count: count ?? null });
@@ -390,8 +409,30 @@ export const sshTunnelOpen = (params: {
 export const sshTunnelInfo = (tunnelId: string) =>
   invoke<TunnelInfoView>("ssh_tunnel_info", { tunnelId });
 
+export const sshTunnelList = () =>
+  invoke<TunnelInfoView[]>("ssh_tunnel_list");
+
 export const sshTunnelClose = (tunnelId: string) =>
   invoke<void>("ssh_tunnel_close", { tunnelId });
+
+export type KnownHostEntry = {
+  line: number;
+  host: string;
+  keyType: string;
+  fingerprint: string;
+  hashed: boolean;
+};
+
+export type KnownHostsListResult = {
+  path: string | null;
+  entries: KnownHostEntry[];
+};
+
+export const sshKnownHostsList = () =>
+  invoke<KnownHostsListResult>("ssh_known_hosts_list");
+
+export const sshKnownHostsRemove = (line: number) =>
+  invoke<void>("ssh_known_hosts_remove", { line });
 
 /**
  * Background pre-warm of the shared SSH session cache for a target.

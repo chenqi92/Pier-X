@@ -19,6 +19,17 @@ type SettingsState = {
   audioBell: boolean;
   /** Show a 1px divider between terminal rows. Default off (iTerm/VSCode style). */
   terminalRowSeparators: boolean;
+  // Git
+  /** When true, pier-x passes `-S` to every `git commit` it runs.
+   *  The actual key is picked by the user's git config
+   *  (`user.signingkey`, `gpg.format`). */
+  gitCommitSigning: boolean;
+  // Network
+  /** When true, pier-x fetches the GitHub "latest release" on app
+   *  start and toasts when a newer version is out. Default OFF to
+   *  preserve the "offline, local" posture from PRODUCT-SPEC §1.1.
+   *  "Check for updates now" is always available regardless. */
+  updateCheckOnStartup: boolean;
   // Setters
   setLocale: (locale: Locale) => void;
   setPerformanceOverlay: (on: boolean) => void;
@@ -32,6 +43,8 @@ type SettingsState = {
   setVisualBell: (on: boolean) => void;
   setAudioBell: (on: boolean) => void;
   setTerminalRowSeparators: (on: boolean) => void;
+  setGitCommitSigning: (on: boolean) => void;
+  setUpdateCheckOnStartup: (on: boolean) => void;
 };
 
 export const UI_FONT_OPTIONS = [
@@ -68,6 +81,8 @@ type PersistedSettings = Partial<{
   visualBell: boolean;
   audioBell: boolean;
   terminalRowSeparators: boolean;
+  gitCommitSigning: boolean;
+  updateCheckOnStartup: boolean;
 }>;
 
 const DEFAULTS = {
@@ -83,6 +98,8 @@ const DEFAULTS = {
   visualBell: true,
   audioBell: false,
   terminalRowSeparators: false,
+  gitCommitSigning: false,
+  updateCheckOnStartup: false,
 };
 
 function loadPrefs(): PersistedSettings {
@@ -141,6 +158,8 @@ export const useSettingsStore = create<SettingsState>((set, get) => {
     audioBell: stored.audioBell ?? DEFAULTS.audioBell,
     terminalRowSeparators:
       stored.terminalRowSeparators ?? DEFAULTS.terminalRowSeparators,
+    gitCommitSigning: stored.gitCommitSigning ?? DEFAULTS.gitCommitSigning,
+    updateCheckOnStartup: stored.updateCheckOnStartup ?? DEFAULTS.updateCheckOnStartup,
   };
 
   applyUiFont(initial.uiFontFamily);
@@ -162,6 +181,8 @@ export const useSettingsStore = create<SettingsState>((set, get) => {
       visualBell: s.visualBell,
       audioBell: s.audioBell,
       terminalRowSeparators: s.terminalRowSeparators,
+      gitCommitSigning: s.gitCommitSigning,
+      updateCheckOnStartup: s.updateCheckOnStartup,
     });
   };
 
@@ -216,6 +237,14 @@ export const useSettingsStore = create<SettingsState>((set, get) => {
     },
     setTerminalRowSeparators: (terminalRowSeparators) => {
       set({ terminalRowSeparators });
+      persist();
+    },
+    setGitCommitSigning: (gitCommitSigning) => {
+      set({ gitCommitSigning });
+      persist();
+    },
+    setUpdateCheckOnStartup: (updateCheckOnStartup) => {
+      set({ updateCheckOnStartup });
       persist();
     },
   };

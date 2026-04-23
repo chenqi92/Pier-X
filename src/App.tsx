@@ -1,9 +1,14 @@
 // ── Pier-X Shell Orchestrator ────────────────────────────────────
 // Three-pane IDE layout: Sidebar | Center (TabBar + Content) | RightSidebar
 
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
+  ArrowDownToLine,
+  ArrowUpFromLine,
+  FileText as FileTextIcon,
   Moon,
+  Plug,
+  RefreshCw,
   Server,
   Settings as SettingsIcon,
   SquareTerminal,
@@ -17,9 +22,13 @@ import { isBrowsableRepoPath } from "./lib/browserPath";
 import * as cmd from "./lib/commands";
 import { RIGHT_TOOL_META } from "./lib/rightToolMeta";
 import type { CoreInfo, FileEntry, RightTool, SavedSshConnection } from "./lib/types";
+import PortForwardDialog from "./components/PortForwardDialog";
 import ResizeHandle from "./components/ResizeHandle";
 import SettingsDialog from "./components/SettingsDialog";
 import Stage from "./components/Stage";
+import TaskTray from "./components/TaskTray";
+import ToastStack from "./components/ToastStack";
+import { withTask } from "./stores/useTaskStore";
 import type { MenuDef } from "./components/TitlebarMenu";
 import TerminalPanel from "./panels/TerminalPanel";
 import CommandPalette, { type PaletteCommand } from "./shell/CommandPalette";
@@ -34,6 +43,13 @@ import { useTabStore } from "./stores/useTabStore";
 import { useConnectionStore } from "./stores/useConnectionStore";
 import { useRecentConnectionsStore } from "./stores/useRecentConnectionsStore";
 import { useSettingsStore } from "./stores/useSettingsStore";
+import {
+  compileProfileStartup,
+  useTerminalProfilesStore,
+  type TerminalProfile,
+} from "./stores/useTerminalProfilesStore";
+import { toast } from "./stores/useToastStore";
+import { checkForUpdates, RELEASES_PAGE } from "./lib/updateCheck";
 import { useThemeStore as useThemeStoreRef } from "./stores/useThemeStore";
 import { useUiActionsStore } from "./stores/useUiActionsStore";
 import "./styles/fonts.css";
@@ -74,6 +90,7 @@ function App() {
   const [selectedMarkdownPath, setSelectedMarkdownPath] = useState("");
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [paletteOpen, setPaletteOpen] = useState(false);
+  const [portForwardOpen, setPortForwardOpen] = useState(false);
   const [newConnOpen, setNewConnOpen] = useState(false);
   const [editingConnection, setEditingConnection] = useState<SavedSshConnection | null>(null);
   const [sidebarWidth, setSidebarWidth] = useState(() => {
@@ -108,6 +125,8 @@ function App() {
   });
   const [fallbackRightTool, setFallbackRightTool] = useState<RightTool>("markdown");
   const { tabs, activeTabId, addTab, closeTab } = useTabStore();
+  const connections = useConnectionStore((s) => s.connections);
+  const profiles = useTerminalProfilesStore((s) => s.profiles);
   const locale = useSettingsStore((s) => s.locale);
   const i18n = useMemo(() => makeI18n(locale), [locale]);
 
@@ -193,6 +212,57 @@ function App() {
   // Deps list anything the callback reads from render state; internal
   // store reads use `.getState()` directly and don't need to be deps.
 
+  // ── Update check ──────────────────────────────────────────
+  //
+  // Pier-X is offline-by-default (PRODUCT-SPEC §1.1). This helper
+  // is the only place that makes an outbound HTTPS call, and it
+  // only fires when the user invokes it manually OR has toggled
+  // "Check on startup" on. On success the result surfaces as a
+  // toast; there is no auto-download and no auto-install.
+  const runUpdateCheck = useCallback(
+    async (mode: "manual" | "startup") => {
+      const version = coreInfo?.version ?? "0.0.0";
+      try {
+        const result = await checkForUpdates(version);
+        if (result.hasUpdate) {
+          toast.success(
+            i18n.t("Pier-X {latest} is available (you're on {current})", {
+              latest: result.latestVersion,
+              current: result.currentVersion,
+            }),
+            8000,
+          );
+          // Also open the release page in the user's browser on
+          // manual invocation. On startup we stay quiet beyond the
+          // toast so we don't steal focus from whatever the user
+          // was about to do.
+          if (mode === "manual") {
+            void openUrl(result.releaseUrl || RELEASES_PAGE).catch(() => {});
+          }
+        } else if (mode === "manual") {
+          toast.info(i18n.t("Pier-X is up to date ({current})", { current: result.currentVersion }));
+        }
+      } catch (error) {
+        if (mode === "manual") {
+          toast.error(i18n.t("Update check failed: {error}", { error: String(error) }));
+        }
+      }
+    },
+    [coreInfo?.version, i18n],
+  );
+
+  // Startup auto-check. Gated on the opt-in toggle; won't fire
+  // until coreInfo has loaded so we have a real version to
+  // compare against. Runs exactly once per app session.
+  const startupCheckRanRef = useRef(false);
+  useEffect(() => {
+    if (startupCheckRanRef.current) return;
+    if (!coreInfo?.version) return;
+    if (!useSettingsStore.getState().updateCheckOnStartup) return;
+    startupCheckRanRef.current = true;
+    void runUpdateCheck("startup");
+  }, [coreInfo?.version, runUpdateCheck]);
+
   const openLocalTerminal = useCallback(
     (path?: string) => {
       // Prefer the explicit arg → sidebar's current path → user home → app cwd.
@@ -212,6 +282,18 @@ function App() {
       });
     },
     [addTab, browserPath, coreInfo, i18n],
+  );
+
+  const openProfileTerminal = useCallback(
+    (profile: TerminalProfile) => {
+      addTab({
+        backend: "local",
+        title: profile.name || i18n.t("Terminal"),
+        tabColor: profile.tabColor ?? -1,
+        startupCommand: compileProfileStartup(profile),
+      });
+    },
+    [addTab, i18n],
   );
 
   const openSshTab = useCallback(
@@ -371,6 +453,64 @@ function App() {
       { section: i18n.t("Session"), icon: SquareTerminal, title: i18n.t("New local terminal"), shortcut: `${mod}T`, action: () => openLocalTerminal() },
       { section: i18n.t("Session"), icon: Server, title: i18n.t("New SSH connection"), shortcut: `${mod}N`, action: openNewConnectionDialog },
       { section: i18n.t("Session"), icon: X, title: i18n.t("Close tab"), shortcut: `${mod}W`, action: () => { if (activeTabId) closeTab(activeTabId); } },
+      ...profiles.map((profile) => ({
+        section: i18n.t("Terminal profiles"),
+        icon: SquareTerminal,
+        title: profile.name,
+        action: () => openProfileTerminal(profile),
+      })),
+      ...connections.map((conn) => ({
+        section: i18n.t("Saved connections"),
+        icon: Plug,
+        title: `${conn.name} (${conn.user}@${conn.host}:${conn.port})`,
+        action: () => openSshSaved(conn.index),
+      })),
+      ...tabs.map((tab) => ({
+        section: i18n.t("Go to tab"),
+        icon: tab.backend === "ssh" ? Server : FileTextIcon,
+        title: tab.title,
+        action: () => useTabStore.getState().setActiveTab(tab.id),
+      })),
+      // Git one-shot actions against the current sidebar path.
+      // Skipped when the sidebar is parked on a non-browsable
+      // placeholder (drives sentinel, empty pre-bootstrap); the
+      // backend would fail anyway, and hiding them avoids palette
+      // noise. Errors (not a repo, no tracking branch, network)
+      // surface as toasts.
+      ...(isBrowsableRepoPath(browserPath)
+        ? [
+            {
+              section: i18n.t("Git"),
+              icon: ArrowDownToLine,
+              title: i18n.t("Git: Pull"),
+              action: () => {
+                void withTask(i18n.t("Git: Pull"), () => cmd.gitPull(browserPath), { detail: browserPath })
+                  .then((r) => toast.success(r.trim() || i18n.t("Pulled")))
+                  .catch((e) => toast.error(String(e)));
+              },
+            },
+            {
+              section: i18n.t("Git"),
+              icon: ArrowUpFromLine,
+              title: i18n.t("Git: Push"),
+              action: () => {
+                void withTask(i18n.t("Git: Push"), () => cmd.gitPush(browserPath), { detail: browserPath })
+                  .then((r) => toast.success(r.trim() || i18n.t("Pushed")))
+                  .catch((e) => toast.error(String(e)));
+              },
+            },
+            {
+              section: i18n.t("Git"),
+              icon: RefreshCw,
+              title: i18n.t("Git: Fetch"),
+              action: () => {
+                void withTask(i18n.t("Git: Fetch"), () => cmd.gitFetchRemote(browserPath, null), { detail: browserPath })
+                  .then((r) => toast.success(r.trim() || i18n.t("Fetched")))
+                  .catch((e) => toast.error(String(e)));
+              },
+            },
+          ]
+        : []),
       ...PANEL_PALETTE_ITEMS.map(({ tool, title }) => ({
         section: i18n.t("Panels"),
         icon: RIGHT_TOOL_META[tool].icon,
@@ -378,12 +518,13 @@ function App() {
         action: () => handleToolChange(tool),
       })),
       { section: i18n.t("App"), icon: SettingsIcon, title: i18n.t("Settings"), shortcut: `${mod},`, action: () => setSettingsOpen(true) },
+      { section: i18n.t("App"), icon: Plug, title: i18n.t("Port forwarding"), action: () => setPortForwardOpen(true) },
       { section: i18n.t("App"), icon: Moon, title: i18n.t("Toggle theme"), action: () => {
         const s = useThemeStoreRef.getState();
         s.setMode(s.resolvedDark ? "light" : "dark");
       } },
     ],
-    [activeTabId, closeTab, i18n, mod, openLocalTerminal, openNewConnectionDialog, handleToolChange],
+    [activeTabId, browserPath, closeTab, connections, i18n, mod, openLocalTerminal, openNewConnectionDialog, openProfileTerminal, openSshSaved, profiles, tabs, handleToolChange],
   );
 
   // ── Titlebar menus (Windows / Linux only) ─────────────────────
@@ -475,6 +616,11 @@ function App() {
             },
           },
           { divider: true },
+          {
+            label: i18n.t("Check for updates"),
+            action: () => { void runUpdateCheck("manual"); },
+          },
+          { divider: true },
           { label: i18n.t("About Pier-X"), action: () => {
             const v = coreInfo?.version ?? "0.1.0";
             window.alert(`Pier-X ${v}\n\n${i18n.t("Cross-platform terminal / Git / SSH / database management tool.")}`);
@@ -482,7 +628,7 @@ function App() {
         ],
       },
     ];
-  }, [activeTabId, closeTab, coreInfo?.version, i18n, rightCollapsed, openLocalTerminal, openNewConnectionDialog]);
+  }, [activeTabId, closeTab, coreInfo?.version, i18n, rightCollapsed, openLocalTerminal, openNewConnectionDialog, runUpdateCheck]);
 
   // ── Keyboard shortcuts ──────────────────────────────────────
 
@@ -526,8 +672,22 @@ function App() {
         handleToolChange("git");
         return;
       }
+      // Cmd+1..9 — Switch to tab by ordinal index.
+      // Reads the latest tabs array via `.getState()` so a
+      // background tab reorder doesn't leave this shortcut pointed
+      // at a stale id.
+      if (mod && !e.shiftKey && !e.altKey && /^[1-9]$/.test(e.key)) {
+        const idx = Number.parseInt(e.key, 10) - 1;
+        const store = useTabStore.getState();
+        const target = store.tabs[idx];
+        if (target) {
+          e.preventDefault();
+          store.setActiveTab(target.id);
+        }
+        return;
+      }
     },
-    [activeTabId],
+    [activeTabId, closeTab, handleToolChange, openLocalTerminal, openNewConnectionDialog],
   );
 
   useEffect(() => {
@@ -580,6 +740,7 @@ function App() {
                 onOpenLocalTerminal={openLocalTerminal}
                 onNewSsh={openNewConnectionDialog}
                 onConnectSaved={openSshSaved}
+                onOpenProfile={openProfileTerminal}
                 onSettings={() => setSettingsOpen(true)}
                 onCommandPalette={() => setPaletteOpen(true)}
                 version={coreInfo?.version}
@@ -676,7 +837,14 @@ function App() {
           <SettingsDialog
             open={settingsOpen}
             onClose={() => setSettingsOpen(false)}
+            onCheckForUpdates={() => { void runUpdateCheck("manual"); }}
           />
+          <PortForwardDialog
+            open={portForwardOpen}
+            onClose={() => setPortForwardOpen(false)}
+          />
+          <TaskTray />
+          <ToastStack />
         </div>
       </Stage>
     </I18nContext.Provider>

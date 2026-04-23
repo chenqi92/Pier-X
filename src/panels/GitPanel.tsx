@@ -30,6 +30,7 @@ import { memo, startTransition, useCallback, useDeferredValue, useEffect, useLay
 import { openUrl } from "@tauri-apps/plugin-opener";
 import { isBrowsableRepoPath } from "../lib/browserPath";
 import * as cmd from "../lib/commands";
+import type { GitReflogEntry } from "../lib/commands";
 import { writeClipboardText } from "../lib/clipboard";
 import DiffDialog, { type DiffFileInput } from "../shell/DiffDialog";
 import "../styles/git-panel.css";
@@ -971,6 +972,10 @@ export default function GitPanel({ browserPath, isActive = true }: Props) {
   const [historyEditDialogOpen, setHistoryEditDialogOpen] = useState(false);
   const [historyDropDialogOpen, setHistoryDropDialogOpen] = useState(false);
   const [historyCompareDialogOpen, setHistoryCompareDialogOpen] = useState(false);
+  const [reflogDialogOpen, setReflogDialogOpen] = useState(false);
+  const [reflogEntries, setReflogEntries] = useState<GitReflogEntry[]>([]);
+  const [reflogLoading, setReflogLoading] = useState(false);
+  const [reflogError, setReflogError] = useState("");
   const [historyBranchDraftName, setHistoryBranchDraftName] = useState("");
   const [historyTagDraftName, setHistoryTagDraftName] = useState("");
   const [historyTagDraftMessage, setHistoryTagDraftMessage] = useState("");
@@ -2499,6 +2504,7 @@ export default function GitPanel({ browserPath, isActive = true }: Props) {
                           void runGitAction(() =>
                             cmd.gitCommit(currentRepoPath, commitMessage.trim(), {
                               amend: commitAmend,
+                              sign: useSettingsStore.getState().gitCommitSigning,
                             }),
                           ).then(() => {
                             setCommitMessage("");
@@ -2515,6 +2521,7 @@ export default function GitPanel({ browserPath, isActive = true }: Props) {
                           void runGitAction(() =>
                             cmd.gitCommitAndPush(currentRepoPath, commitMessage.trim(), {
                               amend: commitAmend,
+                              sign: useSettingsStore.getState().gitCommitSigning,
                             }),
                           ).then(() => {
                             setCommitMessage("");
@@ -3330,6 +3337,29 @@ export default function GitPanel({ browserPath, isActive = true }: Props) {
           <GitMenuItem active={historyShowAuthor} onClick={() => setHistoryShowAuthor((value) => !value)}>{t("Show author column")}</GitMenuItem>
           <GitMenuItem active={historyShowDate} onClick={() => setHistoryShowDate((value) => !value)}>{t("Show date column")}</GitMenuItem>
         </div>
+        <div className="git-popover-divider" />
+        <div className="git-popover-section">
+          <GitMenuItem
+            onClick={() => {
+              setPopover(null);
+              setReflogDialogOpen(true);
+              setReflogLoading(true);
+              setReflogError("");
+              void cmd
+                .gitReflogList(currentRepoPath, 200)
+                .then((entries) => {
+                  setReflogEntries(entries);
+                })
+                .catch((err) => {
+                  setReflogEntries([]);
+                  setReflogError(String(err));
+                })
+                .finally(() => setReflogLoading(false));
+            }}
+          >
+            {t("Show reflog")}
+          </GitMenuItem>
+        </div>
       </GitPopover>
 
       <GitPopover kind="changeFileMenu" onClose={() => setPopover(null)} popover={popover}>
@@ -3502,6 +3532,29 @@ export default function GitPanel({ browserPath, isActive = true }: Props) {
               }}
             >
               {t("Drop commit")}
+            </GitMenuItem>
+            <div className="git-popover-divider" />
+            <GitMenuItem
+              disabled={busy}
+              onClick={() => {
+                const hash = historyContextCommit?.hash || "";
+                setPopover(null);
+                if (!hash) return;
+                void runGitAction(() => cmd.gitRevertCommit(currentRepoPath, hash));
+              }}
+            >
+              {t("Revert commit")}
+            </GitMenuItem>
+            <GitMenuItem
+              disabled={busy}
+              onClick={() => {
+                const hash = historyContextCommit?.hash || "";
+                setPopover(null);
+                if (!hash) return;
+                void runGitAction(() => cmd.gitCherryPickCommit(currentRepoPath, hash));
+              }}
+            >
+              {t("Cherry-pick onto current branch")}
             </GitMenuItem>
           </div>
         ) : null}
@@ -4209,6 +4262,63 @@ export default function GitPanel({ browserPath, isActive = true }: Props) {
               ? t("The current HEAD commit will be removed by resetting to its parent.")
               : t("This non-HEAD commit will be removed using rebase --onto.")}
           </div>
+        </div>
+      </GitDialog>
+
+      <GitDialog
+        footer={<GitButton compact onClick={() => setReflogDialogOpen(false)}>{t("Close")}</GitButton>}
+        onClose={() => setReflogDialogOpen(false)}
+        open={reflogDialogOpen}
+        subtitle={t("Local history of HEAD movements. Use to recover dropped commits.")}
+        title={t("Reflog")}
+      >
+        <div className="git-card git-card--inset">
+          {reflogLoading ? (
+            <GitEmptyState icon={History} title={t("Loading")} description={t("Loading reflog…")} />
+          ) : reflogError ? (
+            <div className="git-banner git-banner--error">
+              <div className="git-banner__dot" />
+              <div className="git-banner__message">{reflogError}</div>
+            </div>
+          ) : reflogEntries.length === 0 ? (
+            <GitEmptyState icon={History} title={t("No reflog entries")} description={t("This repository has no reflog yet.")} />
+          ) : (
+            <div className="git-conn-list" style={{ maxHeight: 420, overflowY: "auto" }}>
+              {reflogEntries.map((entry, idx) => (
+                <div key={`${entry.hash}-${idx}`} className="git-conn-row">
+                  <div style={{ display: "flex", flexDirection: "column", flex: 1, minWidth: 0 }}>
+                    <div style={{ fontFamily: "var(--mono)", fontSize: "var(--ui-fs-sm)", color: "var(--ink-2)" }}>
+                      {entry.shortHash} · {entry.refName}
+                    </div>
+                    <div style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+                      {entry.subject}
+                    </div>
+                    <div style={{ fontSize: "var(--ui-fs-sm)", color: "var(--muted)" }}>{entry.relativeDate}</div>
+                  </div>
+                  <button
+                    className="mini-button"
+                    type="button"
+                    onClick={() => {
+                      void writeClipboardText(entry.hash);
+                    }}
+                  >
+                    {t("Copy hash")}
+                  </button>
+                  <button
+                    className="mini-button mini-button--destructive"
+                    type="button"
+                    disabled={busy}
+                    onClick={() => {
+                      setReflogDialogOpen(false);
+                      void runGitAction(() => cmd.gitResetToCommit(currentRepoPath, entry.hash, "hard"));
+                    }}
+                  >
+                    {t("Reset hard here")}
+                  </button>
+                </div>
+              ))}
+            </div>
+          )}
         </div>
       </GitDialog>
 

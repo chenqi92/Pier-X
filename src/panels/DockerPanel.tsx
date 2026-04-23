@@ -22,8 +22,8 @@ import {
 import { useEffect, useMemo, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import * as cmd from "../lib/commands";
-import type { DockerOverview, TabState } from "../lib/types";
-import { effectiveSshTarget } from "../lib/types";
+import type { DockerContainerView, DockerOverview, TabState } from "../lib/types";
+import { effectiveSshTarget, parseDockerLabels } from "../lib/types";
 import { useI18n } from "../i18n/useI18n";
 import { localizeError, localizeRuntimeMessage } from "../i18n/localizeMessage";
 import DbConnRow from "../components/DbConnRow";
@@ -38,7 +38,7 @@ import { useTabStore } from "../stores/useTabStore";
 
 type Props = { tab: TabState };
 
-type DkTab = "containers" | "images" | "volumes" | "networks";
+type DkTab = "containers" | "images" | "volumes" | "networks" | "projects";
 
 function shortId(id: string): string {
   if (!id) return "";
@@ -117,7 +117,10 @@ export default function DockerPanel({ tab }: Props) {
   const busy = !!snapshot?.inFlight && !snapshot?.overview;
   const [showAll, setShowAll] = useState(true);
   const [activeTab, setActiveTab] = useState<DkTab>("containers");
-  const activeSectionBusy = !!snapshot?.sectionInFlight?.[activeTab];
+  // Projects piggybacks on the containers section for its load
+  // state — it's a derived view, not a separate fetch.
+  const activeSection: DockerSection = activeTab === "projects" ? "containers" : activeTab;
+  const activeSectionBusy = !!snapshot?.sectionInFlight?.[activeSection];
   const [actionBusy, setActionBusy] = useState(false);
   const [notice, setNotice] = useState("");
   const [inspectJson, setInspectJson] = useState("");
@@ -252,7 +255,9 @@ export default function DockerPanel({ tab }: Props) {
   }
 
   async function refreshActiveTab(force = true) {
-    if (activeTab === "containers") {
+    // Projects is a derived view of containers — refreshing it
+    // means refreshing containers.
+    if (activeTab === "containers" || activeTab === "projects") {
       await refresh(force);
     } else {
       await loadDockerSection(activeTab, force);
@@ -314,7 +319,10 @@ export default function DockerPanel({ tab }: Props) {
   }, [dockerKey, canRefresh]);
 
   useEffect(() => {
-    if (!canRefresh || activeTab === "containers") return;
+    if (!canRefresh) return;
+    // `containers` loads via `refresh()` already; `projects` is a
+    // derived view of containers, so both skip the section load.
+    if (activeTab === "containers" || activeTab === "projects") return;
     void loadDockerSection(activeTab, false);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [activeTab, dockerKey, canRefresh]);
@@ -776,14 +784,56 @@ export default function DockerPanel({ tab }: Props) {
       ? t("Local Docker socket")
       : t("Not connected");
 
+  // Group containers by their `com.docker.compose.project` label.
+  // Projects tab is a pure derived view; containers without that
+  // label are omitted. Runs only when containers are loaded so
+  // the tab body doesn't flicker between states.
+  const composeProjects = useMemo(() => {
+    const byProject = new Map<
+      string,
+      {
+        name: string;
+        services: Map<string, DockerContainerView[]>;
+        running: number;
+        total: number;
+      }
+    >();
+    for (const ctr of state?.containers ?? []) {
+      const labels = parseDockerLabels(ctr.labels);
+      const project = labels["com.docker.compose.project"];
+      if (!project) continue;
+      const service = labels["com.docker.compose.service"] || "(no service)";
+      let entry = byProject.get(project);
+      if (!entry) {
+        entry = { name: project, services: new Map(), running: 0, total: 0 };
+        byProject.set(project, entry);
+      }
+      entry.total += 1;
+      if (ctr.running) entry.running += 1;
+      const bucket = entry.services.get(service) ?? [];
+      bucket.push(ctr);
+      entry.services.set(service, bucket);
+    }
+    return Array.from(byProject.values()).sort((a, b) => a.name.localeCompare(b.name));
+  }, [state?.containers]);
+
   const tabCounts: Record<DkTab, number> = {
     containers: state?.containers.length ?? 0,
     images: state?.images.length ?? 0,
     volumes: state?.volumes.length ?? 0,
     networks: state?.networks.length ?? 0,
+    projects: composeProjects.length,
   };
-  const tabLoaded = (section: DkTab) => snapshot?.loaded?.[section] ?? false;
-  const tabBusy = (section: DkTab) => !!snapshot?.sectionInFlight?.[section];
+  // Projects is a derived view of containers — its load state
+  // mirrors the containers section instead of having its own.
+  const tabLoaded = (section: DkTab) => {
+    const key = section === "projects" ? "containers" : section;
+    return snapshot?.loaded?.[key] ?? false;
+  };
+  const tabBusy = (section: DkTab) => {
+    const key = section === "projects" ? "containers" : section;
+    return !!snapshot?.sectionInFlight?.[key];
+  };
 
   return (
     <>
@@ -804,7 +854,7 @@ export default function DockerPanel({ tab }: Props) {
         />
 
         <div className="dk-tabs">
-          {(["containers", "images", "volumes", "networks"] as DkTab[]).map((k) => (
+          {(["containers", "images", "volumes", "networks", "projects"] as DkTab[]).map((k) => (
             <button
               key={k}
               type="button"
@@ -1332,6 +1382,135 @@ export default function DockerPanel({ tab }: Props) {
             </div>
           </div>,
           document.body,
+        )}
+
+        {activeTab === "projects" && (
+          <div className="dk-body">
+            <div className="dk-scroll">
+              {!tabLoaded("projects") || tabBusy("projects") ? (
+                <div className="dk-empty" style={{ padding: "var(--sp-4)" }}>
+                  {t("Loading...")}
+                </div>
+              ) : composeProjects.length === 0 ? (
+                <div className="dk-empty" style={{ padding: "var(--sp-4)" }}>
+                  {t("No Compose projects detected.")}
+                </div>
+              ) : (
+                <div style={{ display: "flex", flexDirection: "column", gap: "var(--sp-2)", padding: "var(--sp-2)" }}>
+                  {composeProjects.map((project) => {
+                    const services = Array.from(project.services.entries()).sort(
+                      (a, b) => a[0].localeCompare(b[0]),
+                    );
+                    return (
+                      <div
+                        key={project.name}
+                        style={{
+                          border: "1px solid var(--line)",
+                          borderRadius: "var(--radius-sm)",
+                          background: "var(--surface-2)",
+                          overflow: "hidden",
+                        }}
+                      >
+                        <div
+                          style={{
+                            display: "flex",
+                            alignItems: "center",
+                            gap: "var(--sp-2)",
+                            padding: "var(--sp-2) var(--sp-3)",
+                            background: "var(--surface)",
+                            borderBottom: "1px solid var(--line)",
+                          }}
+                        >
+                          <Folder size={12} />
+                          <strong style={{ fontFamily: "var(--mono)" }}>{project.name}</strong>
+                          <div style={{ flex: 1 }} />
+                          <span style={{ fontSize: "var(--ui-fs-sm)", color: "var(--muted)" }}>
+                            {t("{running}/{total} running", {
+                              running: project.running,
+                              total: project.total,
+                            })}
+                          </span>
+                        </div>
+                        <table className="dk-table">
+                          <thead>
+                            <tr>
+                              <th style={{ width: 160 }}>{t("Service")}</th>
+                              <th style={{ width: 120 }}>{t("State")}</th>
+                              <th>{t("Container")}</th>
+                              <th>{t("Image")}</th>
+                              <th style={{ width: 110 }} />
+                            </tr>
+                          </thead>
+                          <tbody>
+                            {services.flatMap(([serviceName, ctrs]) =>
+                              ctrs.map((c) => (
+                                <tr
+                                  key={c.id}
+                                  className={c.id === selectedContainer ? "selected" : undefined}
+                                  onClick={() => setSelectedContainer(c.id)}
+                                >
+                                  <td className="mono">{serviceName}</td>
+                                  <td className="mono">
+                                    <StatusDot tone={c.running ? "pos" : "off"} />{" "}
+                                    {c.running ? t("running") : c.state || t("stopped")}
+                                  </td>
+                                  <td className="mono text-muted">{c.names || shortId(c.id)}</td>
+                                  <td className="mono text-muted">{c.image}</td>
+                                  <td style={{ display: "flex", gap: 4, justifyContent: "flex-end" }}>
+                                    {c.running ? (
+                                      <>
+                                        <button
+                                          className="mini-btn"
+                                          type="button"
+                                          title={t("Stop")}
+                                          disabled={actionBusy}
+                                          onClick={(e) => {
+                                            e.stopPropagation();
+                                            void containerAction(c.id, "stop");
+                                          }}
+                                        >
+                                          <Square size={11} />
+                                        </button>
+                                        <button
+                                          className="mini-btn"
+                                          type="button"
+                                          title={t("Restart")}
+                                          disabled={actionBusy}
+                                          onClick={(e) => {
+                                            e.stopPropagation();
+                                            void containerAction(c.id, "restart");
+                                          }}
+                                        >
+                                          <RotateCw size={11} />
+                                        </button>
+                                      </>
+                                    ) : (
+                                      <button
+                                        className="mini-btn"
+                                        type="button"
+                                        title={t("Start")}
+                                        disabled={actionBusy}
+                                        onClick={(e) => {
+                                          e.stopPropagation();
+                                          void containerAction(c.id, "start");
+                                        }}
+                                      >
+                                        <Play size={11} />
+                                      </button>
+                                    )}
+                                  </td>
+                                </tr>
+                              )),
+                            )}
+                          </tbody>
+                        </table>
+                      </div>
+                    );
+                  })}
+                </div>
+              )}
+            </div>
+          </div>
         )}
 
         {activeTab === "networks" && (

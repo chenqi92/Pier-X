@@ -1,14 +1,31 @@
-import { Fragment, useState } from "react";
+import { Fragment, useCallback, useEffect, useState } from "react";
 import {
   Check,
+  Copy,
   FileText,
   Keyboard,
   Server,
   Settings as SettingsIcon,
   Sun,
   Terminal as TerminalIcon,
+  Trash2,
   X,
 } from "lucide-react";
+import * as cmd from "../lib/commands";
+import { writeClipboardText } from "../lib/clipboard";
+import { toast } from "../stores/useToastStore";
+import {
+  useTerminalProfilesStore,
+  type TerminalProfile,
+} from "../stores/useTerminalProfilesStore";
+import { openPath, revealItemInDir } from "@tauri-apps/plugin-opener";
+import {
+  clearLogFile,
+  getLogFilePath,
+  getLogVerbose,
+  readLogTail,
+  setLogVerbose,
+} from "../lib/logger";
 import type { ComponentType, SVGProps } from "react";
 import IconButton from "./IconButton";
 import { useDraggableDialog } from "./useDraggableDialog";
@@ -30,9 +47,10 @@ import type { Locale } from "../stores/useSettingsStore";
 type Props = {
   open: boolean;
   onClose: () => void;
+  onCheckForUpdates?: () => void;
 };
 
-type Page = "Appearance" | "Typography" | "Terminal" | "Connections" | "General";
+type Page = "Appearance" | "Typography" | "Terminal" | "Connections" | "Profiles" | "Diagnostics" | "General";
 
 type NavEntry = {
   key: Page;
@@ -51,11 +69,17 @@ const NAV_GROUPS: NavGroup[] = [
   },
   {
     label: "Integrations",
-    items: [{ key: "Connections", icon: Server }],
+    items: [
+      { key: "Connections", icon: Server },
+      { key: "Profiles", icon: TerminalIcon },
+    ],
   },
   {
     label: "System",
-    items: [{ key: "General", icon: Keyboard }],
+    items: [
+      { key: "Diagnostics", icon: FileText },
+      { key: "General", icon: Keyboard },
+    ],
   },
 ];
 
@@ -164,9 +188,483 @@ function AccentSwatches({
   );
 }
 
+function KnownHostsList() {
+  const { t } = useI18n();
+  const [entries, setEntries] = useState<cmd.KnownHostEntry[]>([]);
+  const [path, setPath] = useState<string | null>(null);
+  const [loading, setLoading] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const [copiedLine, setCopiedLine] = useState<number | null>(null);
+
+  const load = useCallback(async () => {
+    setLoading(true);
+    setError(null);
+    try {
+      const result = await cmd.sshKnownHostsList();
+      setEntries(result.entries);
+      setPath(result.path);
+    } catch (e) {
+      setError(String(e));
+    } finally {
+      setLoading(false);
+    }
+  }, []);
+
+  useEffect(() => {
+    void load();
+  }, [load]);
+
+  const handleRemove = useCallback(
+    async (line: number) => {
+      try {
+        await cmd.sshKnownHostsRemove(line);
+        toast.success(t("Removed host key"));
+        await load();
+      } catch (e) {
+        toast.error(String(e));
+        setError(String(e));
+      }
+    },
+    [load, t],
+  );
+
+  const handleCopyFingerprint = useCallback(async (entry: cmd.KnownHostEntry) => {
+    if (!entry.fingerprint) return;
+    await writeClipboardText(entry.fingerprint);
+    setCopiedLine(entry.line);
+    window.setTimeout(() => setCopiedLine((c) => (c === entry.line ? null : c)), 1500);
+  }, []);
+
+  return (
+    <>
+      <SectionTitle>
+        {t("Known hosts")}
+        <span className="settings__badge">{entries.length}</span>
+      </SectionTitle>
+      {path && (
+        <div className="settings__row-desc" style={{ marginBottom: 8, fontFamily: "var(--mono)" }}>
+          {path}
+        </div>
+      )}
+      {error && <div className="empty-note" style={{ color: "var(--neg)" }}>{error}</div>}
+      {!error && loading && entries.length === 0 && (
+        <div className="empty-note">{t("Loading...")}</div>
+      )}
+      {!error && !loading && entries.length === 0 && (
+        <div className="empty-note">{t("No pinned host keys yet.")}</div>
+      )}
+      {entries.length > 0 && (
+        <div className="settings__conn-list">
+          {entries.map((entry) => (
+            <div key={entry.line} className="settings__conn-card">
+              <div className="settings__conn-header">
+                <strong style={{ fontFamily: "var(--mono)" }}>
+                  {entry.hashed ? t("(hashed)") : entry.host}
+                </strong>
+                <span className="settings__conn-auth">{entry.keyType}</span>
+              </div>
+              <div className="settings__conn-meta" style={{ fontFamily: "var(--mono)" }}>
+                {entry.fingerprint || t("(unparseable)")}
+              </div>
+              <div className="settings__conn-actions">
+                <button
+                  className="mini-button"
+                  disabled={!entry.fingerprint}
+                  onClick={() => void handleCopyFingerprint(entry)}
+                  type="button"
+                >
+                  <Copy size={11} />
+                  {copiedLine === entry.line ? t("Copied") : t("Copy fingerprint")}
+                </button>
+                <button
+                  className="mini-button mini-button--destructive"
+                  onClick={() => void handleRemove(entry.line)}
+                  type="button"
+                >
+                  <Trash2 size={11} />
+                  {t("Remove")}
+                </button>
+              </div>
+            </div>
+          ))}
+        </div>
+      )}
+    </>
+  );
+}
+
+function TerminalProfilesManager() {
+  const { t } = useI18n();
+  const profiles = useTerminalProfilesStore((s) => s.profiles);
+  const addProfile = useTerminalProfilesStore((s) => s.add);
+  const updateProfile = useTerminalProfilesStore((s) => s.update);
+  const removeProfile = useTerminalProfilesStore((s) => s.remove);
+
+  // `null` = no editor open. `"new"` = add form. Any other string
+  // is the id of an existing profile being edited in place.
+  const [editing, setEditing] = useState<string | null>(null);
+  const [draftName, setDraftName] = useState("");
+  const [draftCwd, setDraftCwd] = useState("");
+  const [draftCommand, setDraftCommand] = useState("");
+
+  const startAdd = useCallback(() => {
+    setEditing("new");
+    setDraftName("");
+    setDraftCwd("");
+    setDraftCommand("");
+  }, []);
+
+  const startEdit = useCallback((profile: TerminalProfile) => {
+    setEditing(profile.id);
+    setDraftName(profile.name);
+    setDraftCwd(profile.cwd ?? "");
+    setDraftCommand(profile.startupCommand ?? "");
+  }, []);
+
+  const cancelEdit = useCallback(() => {
+    setEditing(null);
+  }, []);
+
+  const commit = useCallback(() => {
+    const name = draftName.trim();
+    if (!name) return;
+    const payload = {
+      name,
+      cwd: draftCwd.trim() || undefined,
+      startupCommand: draftCommand.trim() || undefined,
+    };
+    if (editing === "new") {
+      addProfile(payload);
+      toast.success(t("Added profile: {name}", { name }));
+    } else if (editing) {
+      updateProfile(editing, payload);
+      toast.success(t("Updated profile: {name}", { name }));
+    }
+    setEditing(null);
+  }, [draftName, draftCwd, draftCommand, editing, addProfile, updateProfile, t]);
+
+  const handleRemove = useCallback(
+    (profile: TerminalProfile) => {
+      removeProfile(profile.id);
+      toast.info(t("Removed profile: {name}", { name: profile.name }));
+      if (editing === profile.id) setEditing(null);
+    },
+    [removeProfile, editing, t],
+  );
+
+  return (
+    <>
+      <SectionTitle>
+        {t("Terminal profiles")}
+        <span className="settings__badge">{profiles.length}</span>
+      </SectionTitle>
+      <div className="settings__row-desc" style={{ marginBottom: 8 }}>
+        {t("Presets for new local terminals: working directory plus optional startup command.")}
+      </div>
+
+      {profiles.length === 0 && editing !== "new" ? (
+        <div className="empty-note">{t("No profiles yet.")}</div>
+      ) : (
+        <div className="settings__conn-list">
+          {profiles.map((p) =>
+            editing === p.id ? (
+              <div key={p.id} className="settings__conn-card">
+                <ProfileEditor
+                  name={draftName}
+                  cwd={draftCwd}
+                  command={draftCommand}
+                  onNameChange={setDraftName}
+                  onCwdChange={setDraftCwd}
+                  onCommandChange={setDraftCommand}
+                  onCancel={cancelEdit}
+                  onCommit={commit}
+                />
+              </div>
+            ) : (
+              <div key={p.id} className="settings__conn-card">
+                <div className="settings__conn-header">
+                  <strong>{p.name}</strong>
+                </div>
+                <div className="settings__conn-meta" style={{ fontFamily: "var(--mono)" }}>
+                  {p.cwd || t("(no cwd)")}
+                  {p.startupCommand ? ` && ${p.startupCommand}` : ""}
+                </div>
+                <div className="settings__conn-actions">
+                  <button className="mini-button" onClick={() => startEdit(p)} type="button">
+                    {t("Edit")}
+                  </button>
+                  <button
+                    className="mini-button mini-button--destructive"
+                    onClick={() => handleRemove(p)}
+                    type="button"
+                  >
+                    <Trash2 size={11} />
+                    {t("Delete")}
+                  </button>
+                </div>
+              </div>
+            ),
+          )}
+        </div>
+      )}
+
+      {editing === "new" ? (
+        <div className="settings__conn-card" style={{ marginTop: 8 }}>
+          <ProfileEditor
+            name={draftName}
+            cwd={draftCwd}
+            command={draftCommand}
+            onNameChange={setDraftName}
+            onCwdChange={setDraftCwd}
+            onCommandChange={setDraftCommand}
+            onCancel={cancelEdit}
+            onCommit={commit}
+          />
+        </div>
+      ) : (
+        <button
+          className="mini-button"
+          style={{ marginTop: 12 }}
+          onClick={startAdd}
+          type="button"
+        >
+          {t("Add profile")}
+        </button>
+      )}
+    </>
+  );
+}
+
+function ProfileEditor({
+  name,
+  cwd,
+  command,
+  onNameChange,
+  onCwdChange,
+  onCommandChange,
+  onCancel,
+  onCommit,
+}: {
+  name: string;
+  cwd: string;
+  command: string;
+  onNameChange: (v: string) => void;
+  onCwdChange: (v: string) => void;
+  onCommandChange: (v: string) => void;
+  onCancel: () => void;
+  onCommit: () => void;
+}) {
+  const { t } = useI18n();
+  return (
+    <div style={{ display: "flex", flexDirection: "column", gap: "var(--sp-2)" }}>
+      <label className="settings__row-label" style={{ display: "flex", flexDirection: "column", gap: 4 }}>
+        <span className="settings__row-name">{t("Name")}</span>
+        <input
+          className="settings__select"
+          value={name}
+          onChange={(e) => onNameChange(e.currentTarget.value)}
+          placeholder={t("e.g. Backend repo")}
+          autoFocus
+        />
+      </label>
+      <label className="settings__row-label" style={{ display: "flex", flexDirection: "column", gap: 4 }}>
+        <span className="settings__row-name">{t("Working directory")}</span>
+        <input
+          className="settings__select"
+          value={cwd}
+          onChange={(e) => onCwdChange(e.currentTarget.value)}
+          placeholder="/Users/you/projects/app"
+          style={{ fontFamily: "var(--mono)" }}
+        />
+      </label>
+      <label className="settings__row-label" style={{ display: "flex", flexDirection: "column", gap: 4 }}>
+        <span className="settings__row-name">{t("Startup command")}</span>
+        <input
+          className="settings__select"
+          value={command}
+          onChange={(e) => onCommandChange(e.currentTarget.value)}
+          placeholder="npm run dev"
+          style={{ fontFamily: "var(--mono)" }}
+        />
+      </label>
+      <div style={{ display: "flex", gap: "var(--sp-2)", justifyContent: "flex-end", marginTop: 4 }}>
+        <button className="mini-button" onClick={onCancel} type="button">
+          {t("Cancel")}
+        </button>
+        <button
+          className="mini-button"
+          onClick={onCommit}
+          type="button"
+          disabled={!name.trim()}
+        >
+          {t("Save")}
+        </button>
+      </div>
+    </div>
+  );
+}
+
+function DiagnosticsPanel() {
+  const { t } = useI18n();
+  const [logPath, setLogPath] = useState<string>("");
+  const [verbose, setVerbose] = useState<boolean>(false);
+  const [tail, setTail] = useState<string>("");
+  const [tailLoading, setTailLoading] = useState<boolean>(false);
+
+  const loadPath = useCallback(async () => {
+    const p = await getLogFilePath();
+    setLogPath(p);
+  }, []);
+
+  const loadVerbose = useCallback(async () => {
+    setVerbose(await getLogVerbose());
+  }, []);
+
+  const loadTail = useCallback(async () => {
+    setTailLoading(true);
+    // Cap at 32 KiB for preview; the full log can still be opened
+    // externally. This keeps the settings dialog responsive even
+    // when the log is multi-megabyte after a long session.
+    const text = await readLogTail(32 * 1024);
+    setTail(text);
+    setTailLoading(false);
+  }, []);
+
+  useEffect(() => {
+    void loadPath();
+    void loadVerbose();
+    void loadTail();
+  }, [loadPath, loadVerbose, loadTail]);
+
+  const handleToggleVerbose = useCallback(
+    async (next: boolean) => {
+      setVerbose(next);
+      await setLogVerbose(next);
+      toast.info(
+        next ? t("Verbose logging enabled") : t("Verbose logging disabled"),
+      );
+    },
+    [t],
+  );
+
+  const handleCopyPath = useCallback(async () => {
+    if (!logPath) return;
+    await writeClipboardText(logPath);
+    toast.success(t("Copied log path"));
+  }, [logPath, t]);
+
+  const handleOpen = useCallback(async () => {
+    if (!logPath) return;
+    try {
+      await openPath(logPath);
+    } catch (e) {
+      toast.error(String(e));
+    }
+  }, [logPath]);
+
+  const handleReveal = useCallback(async () => {
+    if (!logPath) return;
+    try {
+      await revealItemInDir(logPath);
+    } catch (e) {
+      toast.error(String(e));
+    }
+  }, [logPath]);
+
+  const handleClear = useCallback(async () => {
+    if (!logPath) return;
+    if (!window.confirm(t("Truncate the log file to zero bytes?"))) return;
+    try {
+      await clearLogFile();
+      toast.success(t("Log cleared"));
+      await loadTail();
+    } catch (e) {
+      toast.error(String(e));
+    }
+  }, [logPath, loadTail, t]);
+
+  return (
+    <>
+      <SectionTitle>{t("Diagnostics")}</SectionTitle>
+      <div className="settings__row-desc" style={{ marginBottom: 8 }}>
+        {t("Runtime logs for Pier-X itself. Paths, panel errors, and SSH session traces land here.")}
+      </div>
+
+      <SectionTitle>{t("Log file")}</SectionTitle>
+      <div className="settings__conn-card">
+        <div
+          className="settings__conn-meta"
+          style={{ fontFamily: "var(--mono)", wordBreak: "break-all" }}
+        >
+          {logPath || t("(unavailable)")}
+        </div>
+        <div className="settings__conn-actions">
+          <button className="mini-button" onClick={handleCopyPath} disabled={!logPath} type="button">
+            <Copy size={11} />
+            {t("Copy path")}
+          </button>
+          <button className="mini-button" onClick={handleOpen} disabled={!logPath} type="button">
+            {t("Open")}
+          </button>
+          <button className="mini-button" onClick={handleReveal} disabled={!logPath} type="button">
+            {t("Show in folder")}
+          </button>
+          <button
+            className="mini-button mini-button--destructive"
+            onClick={handleClear}
+            disabled={!logPath}
+            type="button"
+          >
+            <Trash2 size={11} />
+            {t("Clear log")}
+          </button>
+        </div>
+      </div>
+
+      <SectionTitle>{t("Verbosity")}</SectionTitle>
+      <SettingRow
+        label={t("Verbose logging")}
+        description={t("Include debug-level events. Turn off to keep the log small.")}
+      >
+        <Toggle checked={verbose} onChange={(v) => void handleToggleVerbose(v)} />
+      </SettingRow>
+
+      <SectionTitle>
+        {t("Recent entries")}
+        <button
+          className="mini-button"
+          style={{ marginLeft: 8 }}
+          onClick={() => void loadTail()}
+          disabled={tailLoading}
+          type="button"
+        >
+          {tailLoading ? t("Loading...") : t("Refresh")}
+        </button>
+      </SectionTitle>
+      <pre
+        style={{
+          maxHeight: 260,
+          overflow: "auto",
+          padding: "var(--sp-2) var(--sp-3)",
+          background: "var(--surface)",
+          border: "1px solid var(--line)",
+          borderRadius: "var(--radius-sm)",
+          fontFamily: "var(--mono)",
+          fontSize: "var(--ui-fs-sm)",
+          color: "var(--ink-2)",
+          whiteSpace: "pre-wrap",
+          wordBreak: "break-word",
+        }}
+      >
+        {tail || (tailLoading ? "" : t("(log is empty)"))}
+      </pre>
+    </>
+  );
+}
+
 // ── Main dialog ─────────────────────────────────────────────────
 
-export default function SettingsDialog({ open, onClose }: Props) {
+export default function SettingsDialog({ open, onClose, onCheckForUpdates }: Props) {
   const { t } = useI18n();
   const [page, setPage] = useState<Page>("Appearance");
   const theme = useThemeStore();
@@ -466,6 +964,21 @@ export default function SettingsDialog({ open, onClose }: Props) {
                     ))}
                   </div>
                 )}
+                <KnownHostsList />
+              </div>
+            )}
+
+            {/* ── Profiles ────────────────────────────────── */}
+            {page === "Profiles" && (
+              <div className="settings__page">
+                <TerminalProfilesManager />
+              </div>
+            )}
+
+            {/* ── Diagnostics ────────────────────────────── */}
+            {page === "Diagnostics" && (
+              <div className="settings__page">
+                <DiagnosticsPanel />
               </div>
             )}
 
@@ -483,6 +996,38 @@ export default function SettingsDialog({ open, onClose }: Props) {
                     onChange={(v) => settings.setLocale(v as Locale)}
                   />
                 </SettingRow>
+
+                <SectionTitle>{t("Git")}</SectionTitle>
+                <SettingRow
+                  label={t("Sign commits")}
+                  description={t("Pass -S to git commit. Key selection follows your git config (user.signingkey, gpg.format).")}
+                >
+                  <Toggle
+                    checked={settings.gitCommitSigning}
+                    onChange={settings.setGitCommitSigning}
+                  />
+                </SettingRow>
+
+                <SectionTitle>{t("Updates")}</SectionTitle>
+                <SettingRow
+                  label={t("Check for updates on startup")}
+                  description={t("Pier-X is offline by default. When on, the app makes a single HTTPS call to GitHub Releases at launch to see if a newer version exists. Never auto-downloads.")}
+                >
+                  <Toggle
+                    checked={settings.updateCheckOnStartup}
+                    onChange={settings.setUpdateCheckOnStartup}
+                  />
+                </SettingRow>
+                {onCheckForUpdates ? (
+                  <SettingRow
+                    label={t("Check now")}
+                    description={t("Check GitHub Releases this one time.")}
+                  >
+                    <button className="mini-button" onClick={onCheckForUpdates} type="button">
+                      {t("Check for updates")}
+                    </button>
+                  </SettingRow>
+                ) : null}
 
                 <SectionTitle>{t("Developer")}</SectionTitle>
                 <SettingRow

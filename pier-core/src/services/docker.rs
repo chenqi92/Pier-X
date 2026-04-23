@@ -116,6 +116,16 @@ pub struct Container {
         default
     )]
     pub ports: String,
+    /// Comma-separated `key=value` label list, e.g.
+    /// `"com.docker.compose.project=myapp,com.docker.compose.service=web"`.
+    /// Empty when the container has no labels or the docker CLI
+    /// is old enough not to emit this field in the JSON row.
+    #[serde(
+        rename(serialize = "labels", deserialize = "Labels"),
+        alias = "labels",
+        default
+    )]
+    pub labels: String,
 }
 
 impl Container {

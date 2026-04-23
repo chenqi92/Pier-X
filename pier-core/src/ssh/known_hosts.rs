@@ -161,7 +161,7 @@ impl Default for HostKeyVerifier {
 
 /// Resolve `~/.ssh/known_hosts` for the current user without
 /// pulling in any OpenSSH-specific dependencies.
-fn default_known_hosts_path() -> Option<PathBuf> {
+pub fn default_known_hosts_path() -> Option<PathBuf> {
     // directories::UserDirs would be cleaner but we already
     // depend on directories for data_dir(); the existing
     // paths module doesn't expose a home-dir helper though,
@@ -182,6 +182,110 @@ fn default_known_hosts_path() -> Option<PathBuf> {
 #[allow(dead_code)]
 pub fn pier_x_known_hosts_path() -> Option<PathBuf> {
     paths::data_dir().map(|d| d.join("known_hosts"))
+}
+
+/// A single parsed `known_hosts` entry. Produced by
+/// [`list_known_hosts`] for display in the Settings UI.
+#[derive(Debug, Clone, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct KnownHostEntry {
+    /// 1-based line number in the file. Used as a stable
+    /// identifier for [`remove_known_host_line`].
+    pub line: usize,
+    /// Raw host prefix from the file. For hashed entries this is
+    /// opaque (`|1|salt|hash`); for plain entries it's the
+    /// comma-separated hostname list.
+    pub host: String,
+    /// SSH key type label (`ssh-ed25519`, `ecdsa-sha2-nistp256`,
+    /// `ssh-rsa`, ...). Empty if the line is malformed.
+    pub key_type: String,
+    /// Human-readable SHA-256 fingerprint (`SHA256:...`). Empty
+    /// when the key can't be decoded.
+    pub fingerprint: String,
+    /// True when the host prefix is OpenSSH-hashed. Hashed
+    /// entries display as "hashed" — the original hostname
+    /// isn't recoverable.
+    pub hashed: bool,
+}
+
+/// Parse an OpenSSH-format known_hosts file and return one entry
+/// per non-comment, non-empty line. Malformed lines are skipped
+/// silently — the canonical OpenSSH tools do the same.
+///
+/// Returns `Ok(Vec::new())` when the file does not exist; callers
+/// generally want to treat "no file" as "no pins" rather than an
+/// error.
+pub fn list_known_hosts(path: &std::path::Path) -> std::io::Result<Vec<KnownHostEntry>> {
+    let contents = match std::fs::read_to_string(path) {
+        Ok(s) => s,
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(Vec::new()),
+        Err(e) => return Err(e),
+    };
+
+    let mut out = Vec::new();
+    for (idx, raw) in contents.lines().enumerate() {
+        let line_no = idx + 1;
+        let trimmed = raw.trim_start();
+        if trimmed.is_empty() || trimmed.starts_with('#') {
+            continue;
+        }
+        // Format: <host>[,host...] <keytype> <base64> [comment]
+        // Fields are whitespace-separated; the comment tail may
+        // contain arbitrary text so we only split on the first
+        // three boundaries.
+        let mut parts = trimmed.splitn(3, char::is_whitespace);
+        let host = match parts.next() {
+            Some(h) => h.to_string(),
+            None => continue,
+        };
+        let key_type = parts.next().unwrap_or("").to_string();
+        let remainder = parts.next().unwrap_or("");
+        // The rest is `<base64> [comment]` — strip the comment
+        // before feeding to russh's parser so it gets a clean
+        // `<keytype> <base64>` line.
+        let base64 = remainder.split_whitespace().next().unwrap_or("");
+        let openssh_line = format!("{key_type} {base64}");
+        let fingerprint = russh::keys::ssh_key::PublicKey::from_openssh(&openssh_line)
+            .map(|k| format!("{}", k.fingerprint(russh::keys::HashAlg::Sha256)))
+            .unwrap_or_default();
+        out.push(KnownHostEntry {
+            line: line_no,
+            hashed: host.starts_with("|1|"),
+            host,
+            key_type,
+            fingerprint,
+        });
+    }
+    Ok(out)
+}
+
+/// Remove the entry on `line_no` (1-based) from a known_hosts
+/// file. Preserves all other lines (including comments and
+/// blank lines) verbatim. Silently succeeds if the file does
+/// not exist or the line is out of range — matches the
+/// "best-effort cleanup" semantics the UI expects.
+pub fn remove_known_host_line(path: &std::path::Path, line_no: usize) -> std::io::Result<()> {
+    let contents = match std::fs::read_to_string(path) {
+        Ok(s) => s,
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(()),
+        Err(e) => return Err(e),
+    };
+    if line_no == 0 {
+        return Ok(());
+    }
+    let mut kept = Vec::with_capacity(contents.lines().count());
+    for (idx, raw) in contents.lines().enumerate() {
+        if idx + 1 == line_no {
+            continue;
+        }
+        kept.push(raw);
+    }
+    let trailing_newline = contents.ends_with('\n');
+    let mut rewritten = kept.join("\n");
+    if trailing_newline && !rewritten.is_empty() {
+        rewritten.push('\n');
+    }
+    std::fs::write(path, rewritten)
 }
 
 /// Errors the verifier can produce. Separate from

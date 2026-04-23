@@ -450,7 +450,31 @@ export type DockerContainerView = {
   memUsage: string;
   /** Memory percent of the container limit, e.g. "2.44%". Empty when unavailable. */
   memPerc: string;
+  /** Raw comma-separated `key=value` label list from `docker ps`.
+   *  Empty when the container has no labels. Parsed by the
+   *  Projects tab to group by `com.docker.compose.project`. */
+  labels?: string;
 };
+
+/**
+ * Parse the comma-separated `key=value` label string that `docker
+ * ps --format '{{.Labels}}'` emits into a map. Returns an empty
+ * map for empty input. Docker escapes `,` inside values as `\,`,
+ * but the 4 compose labels we actually read never contain commas,
+ * so we keep the parser simple: a bare `split(",")`.
+ */
+export function parseDockerLabels(raw: string | undefined | null): Record<string, string> {
+  const out: Record<string, string> = {};
+  if (!raw) return out;
+  for (const segment of raw.split(",")) {
+    const eq = segment.indexOf("=");
+    if (eq <= 0) continue;
+    const key = segment.slice(0, eq).trim();
+    const value = segment.slice(eq + 1).trim();
+    if (key) out[key] = value;
+  }
+  return out;
+}
 
 export type DockerImageView = {
   id: string;

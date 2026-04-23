@@ -3,11 +3,16 @@ import { useEffect, useState } from "react";
 import { useI18n } from "../i18n/useI18n";
 import { useConnectionStore } from "../stores/useConnectionStore";
 import { useRecentConnectionsStore } from "../stores/useRecentConnectionsStore";
+import {
+  useTerminalProfilesStore,
+  type TerminalProfile,
+} from "../stores/useTerminalProfilesStore";
 
 type Props = {
   onOpenLocalTerminal: (path?: string) => void;
   onNewSsh: () => void;
   onConnectSaved: (index: number) => void;
+  onOpenProfile: (profile: TerminalProfile) => void;
   onSettings: () => void;
   onCommandPalette: () => void;
   version?: string;
@@ -51,6 +56,7 @@ export default function WelcomeView({
   onOpenLocalTerminal,
   onNewSsh,
   onConnectSaved,
+  onOpenProfile,
   onSettings,
   onCommandPalette,
   version,
@@ -59,6 +65,7 @@ export default function WelcomeView({
   const { t, locale } = useI18n();
   const { connections } = useConnectionStore();
   const recents = useRecentConnectionsStore((s) => s.recents);
+  const profiles = useTerminalProfilesStore((s) => s.profiles);
   const [now, setNow] = useState(() => new Date());
 
   useEffect(() => {
@@ -126,6 +133,31 @@ export default function WelcomeView({
             <div className="wk">{mod},</div>
           </button>
         </div>
+
+        {profiles.length > 0 ? (
+          <div className="welcome-recent">
+            <h4>{t("Terminal profiles")}</h4>
+            <div className="welcome-recent-list">
+              {profiles.map((profile) => (
+                <button
+                  key={profile.id}
+                  className="recent-row"
+                  onClick={() => onOpenProfile(profile)}
+                  type="button"
+                >
+                  <SquareTerminal size={13} />
+                  <span className="rname">{profile.name}</span>
+                  <span className="raddr">
+                    {profile.cwd || ""}
+                    {profile.cwd && profile.startupCommand ? " · " : ""}
+                    {profile.startupCommand || ""}
+                  </span>
+                  <span className="rdate">—</span>
+                </button>
+              ))}
+            </div>
+          </div>
+        ) : null}
 
         {recentList.length > 0 ? (
           <div className="welcome-recent">

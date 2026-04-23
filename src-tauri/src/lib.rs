@@ -408,6 +408,12 @@ struct DockerContainerView {
     cpu_perc: String,
     mem_usage: String,
     mem_perc: String,
+    /// Raw `docker ps` Labels string: comma-separated `key=value`
+    /// pairs. Empty when the container has no labels or the CLI is
+    /// old enough not to emit this field. Parsed by the frontend
+    /// to extract `com.docker.compose.project` / `.service` etc.
+    #[serde(default)]
+    labels: String,
 }
 
 #[derive(Serialize)]
@@ -2140,10 +2146,16 @@ fn git_commit(
     message: String,
     signoff: Option<bool>,
     amend: Option<bool>,
+    sign: Option<bool>,
 ) -> Result<String, String> {
     let client = open_git_client(path)?;
     client
-        .commit_with(message.trim(), signoff.unwrap_or(false), amend.unwrap_or(false))
+        .commit_with(
+            message.trim(),
+            signoff.unwrap_or(false),
+            amend.unwrap_or(false),
+            sign.unwrap_or(false),
+        )
         .map_err(|error| error.to_string())
 }
 
@@ -2595,6 +2607,23 @@ fn ssh_tunnel_info(
     Ok(build_tunnel_view(tunnel_id, tunnel))
 }
 
+/// Snapshot of every active local port forward. Ordering is not
+/// guaranteed — callers that want a stable display should sort
+/// on the frontend (e.g. by local_port). Tunnels whose accept
+/// loop has died still appear here so the UI can surface them
+/// as "dead" instead of quietly vanishing.
+#[tauri::command]
+fn ssh_tunnel_list(state: tauri::State<'_, AppState>) -> Result<Vec<TunnelInfoView>, String> {
+    let tunnels = state
+        .tunnels
+        .lock()
+        .map_err(|_| String::from("tunnel state poisoned"))?;
+    Ok(tunnels
+        .iter()
+        .map(|(id, t)| build_tunnel_view(id.clone(), t))
+        .collect())
+}
+
 #[tauri::command]
 fn ssh_tunnel_close(
     state: tauri::State<'_, AppState>,
@@ -2608,6 +2637,33 @@ fn ssh_tunnel_close(
         .remove(&tunnel_id)
         .map(|_| ())
         .ok_or_else(|| format!("unknown tunnel: {}", tunnel_id))
+}
+
+#[derive(serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+struct KnownHostsListResult {
+    path: Option<String>,
+    entries: Vec<pier_core::ssh::KnownHostEntry>,
+}
+
+#[tauri::command]
+fn ssh_known_hosts_list() -> Result<KnownHostsListResult, String> {
+    let path = pier_core::ssh::default_known_hosts_path();
+    let entries = match &path {
+        Some(p) => pier_core::ssh::list_known_hosts(p).map_err(|e| e.to_string())?,
+        None => Vec::new(),
+    };
+    Ok(KnownHostsListResult {
+        path: path.map(|p| p.to_string_lossy().to_string()),
+        entries,
+    })
+}
+
+#[tauri::command]
+fn ssh_known_hosts_remove(line: usize) -> Result<(), String> {
+    let path = pier_core::ssh::default_known_hosts_path()
+        .ok_or_else(|| String::from("home directory is not resolvable"))?;
+    pier_core::ssh::remove_known_host_line(&path, line).map_err(|e| e.to_string())
 }
 
 /// Background pre-warm for the shared SSH session cache.
@@ -3278,6 +3334,7 @@ fn docker_overview(
             state: c.state,
             created: c.created,
             ports: c.ports,
+            labels: c.labels,
         })
         .collect();
 
@@ -5242,7 +5299,7 @@ async fn local_docker_overview(all: bool) -> Result<DockerOverview, String> {
     // First-open path: one local Docker command only. The images,
     // volumes, and networks tabs load their own listings on demand.
     let containers = tauri::async_runtime::spawn_blocking(move || -> Result<Vec<DockerContainerView>, String> {
-        let fmt = "{{.ID}}\t{{.Image}}\t{{.Names}}\t{{.Status}}\t{{.State}}\t{{.CreatedAt}}\t{{.Ports}}";
+        let fmt = "{{.ID}}\t{{.Image}}\t{{.Names}}\t{{.Status}}\t{{.State}}\t{{.CreatedAt}}\t{{.Ports}}\t{{.Labels}}";
         let mut cmd = std::process::Command::new("docker");
         cmd.args(["ps", "--format", fmt]);
         if all {
@@ -5270,6 +5327,7 @@ async fn local_docker_overview(all: bool) -> Result<DockerOverview, String> {
                     state,
                     created: parts.get(5).unwrap_or(&"").to_string(),
                     ports: parts.get(6).unwrap_or(&"").to_string(),
+                    labels: parts.get(7).unwrap_or(&"").to_string(),
                 }
             })
             .collect())
@@ -5673,6 +5731,24 @@ fn log_read_tail(max_bytes: Option<u64>) -> Result<String, String> {
     }
 }
 
+/// Truncate the log file to 0 bytes. Harmless if the file has
+/// already been deleted or was never created. The logger keeps its
+/// write handle open — after the truncate, subsequent writes
+/// resume at the (now zero) end-of-file, which may leave a few
+/// stale bytes if a write was in flight during the call. That's a
+/// one-time cosmetic blip, not a corruption risk.
+#[tauri::command]
+fn log_clear() -> Result<(), String> {
+    let Some(path) = pier_core::logging::log_file_path() else {
+        return Ok(());
+    };
+    match std::fs::OpenOptions::new().write(true).truncate(true).open(&path) {
+        Ok(_) => Ok(()),
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(()),
+        Err(e) => Err(e.to_string()),
+    }
+}
+
 /// Toggle the Tauri webview DevTools. Compiled only in debug builds —
 /// the release build ships without the `devtools` feature, so calling
 /// this from a production frontend is a no-op that returns an error.
@@ -5804,6 +5880,9 @@ pub fn run() {
             git_reset_to_commit,
             git_amend_head_commit_message,
             git_drop_commit,
+            git_revert_commit,
+            git_cherry_pick_commit,
+            git_reflog_list,
             git_rebase_plan,
             git_execute_rebase,
             git_abort_rebase,
@@ -5830,7 +5909,10 @@ pub fn run() {
             ssh_group_rename,
             ssh_tunnel_open,
             ssh_tunnel_info,
+            ssh_tunnel_list,
             ssh_tunnel_close,
+            ssh_known_hosts_list,
+            ssh_known_hosts_remove,
             ssh_session_prewarm,
             terminal_create,
             terminal_create_ssh,
@@ -5904,6 +5986,7 @@ pub fn run() {
             log_write,
             log_file_path,
             log_read_tail,
+            log_clear,
             log_set_verbose,
             log_get_verbose
         ])

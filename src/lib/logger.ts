@@ -183,3 +183,24 @@ export async function readLogTail(maxBytes?: number): Promise<string> {
     return String(e);
   }
 }
+
+/** Truncate the log file to 0 bytes. No-op outside Tauri. */
+export async function clearLogFile(): Promise<void> {
+  if (!isRunningInTauri()) return;
+  await invoke<void>("log_clear");
+}
+
+/** Read/set the verbose logging flag. */
+export async function getLogVerbose(): Promise<boolean> {
+  if (!isRunningInTauri()) return false;
+  try {
+    return await invoke<boolean>("log_get_verbose");
+  } catch {
+    return false;
+  }
+}
+
+export async function setLogVerbose(enabled: boolean): Promise<void> {
+  if (!isRunningInTauri()) return;
+  await invoke<void>("log_set_verbose", { enabled });
+}

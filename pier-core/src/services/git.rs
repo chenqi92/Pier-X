@@ -462,11 +462,23 @@ impl GitClient {
 
     /// Create a commit with the given message.
     pub fn commit(&self, message: &str) -> Result<String, GitError> {
-        self.commit_with(message, false, false)
+        self.commit_with(message, false, false, false)
     }
 
     /// Create a commit with the given message and optional flags.
-    pub fn commit_with(&self, message: &str, signoff: bool, amend: bool) -> Result<String, GitError> {
+    ///
+    /// `sign` enables GPG / SSH signing by passing `-S` to `git
+    /// commit`. Which key is actually used is determined by the
+    /// user's git config (`user.signingkey`, `gpg.format`); the
+    /// client does not override those — keeping pier-x's commits
+    /// consistent with whatever the user has already set up.
+    pub fn commit_with(
+        &self,
+        message: &str,
+        signoff: bool,
+        amend: bool,
+        sign: bool,
+    ) -> Result<String, GitError> {
         if message.is_empty() {
             return Err(GitError::Command("commit message cannot be empty".into()));
         }
@@ -476,6 +488,9 @@ impl GitClient {
         }
         if amend {
             args.push("--amend");
+        }
+        if sign {
+            args.push("-S");
         }
         args.extend_from_slice(&["-m", message]);
         self.git(&args)

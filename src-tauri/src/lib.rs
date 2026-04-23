@@ -24,7 +24,7 @@ use std::path::PathBuf;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::{SystemTime, UNIX_EPOCH};
-use tauri::Emitter;
+use tauri::{Emitter, Manager};
 
 mod git_panel;
 use git_panel::*;
@@ -71,6 +71,15 @@ impl Default for AppState {
 /// replaces the old 80ms polling loop.
 const TERMINAL_EVENT: &str = "terminal:event";
 
+/// Event emitted when the SSH-child watcher observes a change in the
+/// set of `ssh` clients running under a local terminal. Payload carries
+/// the innermost live target or `null` to signal "no ssh is currently
+/// running in this terminal". The frontend is the authoritative
+/// subscriber: it updates `tab.sshHost` / `tab.nestedSshTarget` straight
+/// from this event, so the right-side Server Monitor panel follows the
+/// terminal instead of the other way around.
+const TERMINAL_SSH_STATE_EVENT: &str = "terminal:ssh-state";
+
 /// Coalesce window for "data" notifications: the reader thread can fire
 /// hundreds of times per second for streaming output (e.g. `cat largefile`).
 /// We cap emissions at one per window; the frontend also keeps a slow
@@ -84,6 +93,26 @@ struct TerminalEventPayload {
     /// "data" → snapshot dirty, fetch a new one.
     /// "exit" → child process ended; no more data events will fire.
     kind: &'static str,
+}
+
+#[derive(Serialize, Clone)]
+#[serde(rename_all = "camelCase")]
+struct TerminalSshStatePayload {
+    session_id: String,
+    /// `None` when no ssh client is running inside the terminal.
+    target: Option<TerminalSshTargetView>,
+}
+
+#[derive(Serialize, Clone)]
+#[serde(rename_all = "camelCase")]
+struct TerminalSshTargetView {
+    host: String,
+    user: String,
+    port: u16,
+    /// `-i <path>` if the user passed one. Empty string ≈ not set;
+    /// frontend treats empty as "use saved connection's key or
+    /// interactive password".
+    identity_path: String,
 }
 
 /// State carried across the C-FFI notify boundary. The pointer handed to
@@ -641,6 +670,36 @@ extern "C" fn tauri_terminal_notify(user_data: *mut c_void, event: u32) {
     // ManagedTerminal for as long as the reader thread runs. We only take
     // a shared reference — never reconstitute or free the Box here.
     let ctx = unsafe { &*(user_data as *const NotifyContext) };
+
+    // SSH-state transitions use a dedicated event + payload shape so
+    // the frontend can update tab state without reparsing keystrokes.
+    // Already debounced by the watcher (only fires on change), so no
+    // extra throttling is needed here.
+    if event == NotifyEvent::SshStateChanged as u32 {
+        let target = {
+            let state: tauri::State<'_, AppState> = ctx.app.state();
+            let sessions = match state.terminals.lock() {
+                Ok(g) => g,
+                Err(poisoned) => poisoned.into_inner(),
+            };
+            sessions
+                .get(&ctx.session_id)
+                .and_then(|managed| managed.terminal.current_ssh_target())
+        };
+        let _ = ctx.app.emit(
+            TERMINAL_SSH_STATE_EVENT,
+            TerminalSshStatePayload {
+                session_id: ctx.session_id.clone(),
+                target: target.map(|t| TerminalSshTargetView {
+                    host: t.host,
+                    user: t.user,
+                    port: t.port,
+                    identity_path: t.identity_path,
+                }),
+            },
+        );
+        return;
+    }
 
     let is_exit = event == NotifyEvent::Exited as u32;
     if !is_exit {

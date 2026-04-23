@@ -51,6 +51,16 @@ pub trait Pty: Send {
 
     /// Current grid size, as last set by `resize` (or at spawn time).
     fn size(&self) -> (u16, u16);
+
+    /// OS-level process id of the direct child this PTY spawned, if
+    /// the backend can expose one. Used by the SSH watcher to scan
+    /// the descendant tree for an `ssh` client the user may have
+    /// launched inside the terminal. Default `None` so alternate
+    /// backends (remote SSH channel, tests) don't need to lie about
+    /// a pid.
+    fn child_pid(&self) -> Option<u32> {
+        None
+    }
 }
 
 // ─────────────────────────────────────────────────────────
@@ -272,6 +282,14 @@ mod unix {
         fn size(&self) -> (u16, u16) {
             (self.cols, self.rows)
         }
+
+        fn child_pid(&self) -> Option<u32> {
+            if self.child_pid > 0 {
+                Some(self.child_pid as u32)
+            } else {
+                None
+            }
+        }
     }
 
     impl Drop for UnixPty {
@@ -343,6 +361,12 @@ mod windows_impl {
     /// and resize semantics instead of the degraded pipe-only mode.
     pub struct WindowsPty {
         process: Option<OwnedHandle>,
+        /// PID captured from `PROCESS_INFORMATION.dwProcessId` at spawn
+        /// time. We stash it eagerly (instead of calling `GetProcessId`
+        /// on demand) because the SSH watcher polls every second and
+        /// we'd rather not syscall just to re-read a value that never
+        /// changes for the lifetime of this session.
+        child_pid: u32,
         pseudoconsole: Option<PseudoConsole>,
         stdin: Option<File>,
         rx: Receiver<Vec<u8>>,
@@ -439,12 +463,14 @@ mod windows_impl {
             let stdin = unsafe { File::from_raw_handle(input_write_side) };
             let output = unsafe { File::from_raw_handle(output_read_side) };
             let process = unsafe { OwnedHandle::from_raw_handle(process_info.hProcess) };
+            let child_pid = process_info.dwProcessId;
 
             let (tx, rx) = mpsc::channel();
             let reader_threads = vec![spawn_pipe_reader("pier-terminal-conpty", output, tx)];
 
             Ok(Self {
                 process: Some(process),
+                child_pid,
                 pseudoconsole: Some(pseudoconsole),
                 stdin: Some(stdin),
                 rx,
@@ -534,6 +560,13 @@ mod windows_impl {
         }
         fn size(&self) -> (u16, u16) {
             (self.cols, self.rows)
+        }
+        fn child_pid(&self) -> Option<u32> {
+            if self.child_pid > 0 {
+                Some(self.child_pid)
+            } else {
+                None
+            }
         }
     }
 

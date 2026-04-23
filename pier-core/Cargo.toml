@@ -91,6 +91,16 @@ tokio = { version = "1", default-features = false, features = [
     "rt-multi-thread", "time", "net", "sync", "io-util", "macros", "fs",
 ] }
 
+# Cross-platform process inspection for the SSH watcher: the
+# local terminal's child tree is scanned once per second so the
+# right-side Server Monitor panel can follow a `ssh user@host`
+# launched inside the shell (or a nested ssh inside a session).
+# `sysinfo` reads /proc on Linux, libproc on macOS, and the NT
+# APIs on Windows — we disable its disk/network/component probes
+# (we only need processes + their cmdline) to keep the refresh
+# cheap and predictable.
+sysinfo = { version = "0.33", default-features = false, features = ["system"] }
+
 # Unix PTY — forkpty + ioctl wrappers live in libc. Only pulled in on
 # Unix targets; Windows uses the ConPTY-backed implementation below.
 # Once the Unix impl needs safer wrappers the `nix` crate slots in here.

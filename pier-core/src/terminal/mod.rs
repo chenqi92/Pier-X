@@ -31,10 +31,12 @@
 pub mod emulator;
 pub mod pty;
 pub mod session;
+pub mod ssh_watcher;
 
 pub use emulator::{Cell, Color, VtEmulator};
 pub use pty::{Pty, TerminalError};
 pub use session::{GridSnapshot, NotifyEvent, NotifyFn, PierTerminal};
+pub use ssh_watcher::SshChildTarget;
 
 #[cfg(unix)]
 pub use pty::UnixPty;

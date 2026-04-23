@@ -73,6 +73,7 @@ use std::time::Duration;
 
 use super::emulator::{Cell, VtEmulator};
 use super::pty::{Pty, TerminalError};
+use super::ssh_watcher::{self, SshChildTarget};
 
 /// Event kinds that the notify callback reports back to the consumer.
 #[repr(u32)]
@@ -84,6 +85,12 @@ pub enum NotifyEvent {
     /// The child process has exited and the reader thread has stopped.
     /// No further events will fire on this terminal.
     Exited = 1,
+    /// The set of `ssh` clients running under this terminal's PTY
+    /// changed — either a new one was spawned, the target changed
+    /// (nested ssh), or the last one exited. The consumer should
+    /// fetch the new target via [`PierTerminal::current_ssh_target`]
+    /// and update any right-side state bound to this session.
+    SshStateChanged = 2,
 }
 
 /// Function-pointer signature for the notify callback.
@@ -103,6 +110,13 @@ pub type NotifyFn = extern "C" fn(user_data: *mut std::ffi::c_void, event: u32);
 struct Inner {
     pty: Box<dyn Pty>,
     emu: VtEmulator,
+    /// Latest SSH target detected by the child-process watcher, or
+    /// `None` when no `ssh` client is currently alive under this
+    /// terminal's PTY. Updated exclusively by the watcher thread;
+    /// read by [`PierTerminal::current_ssh_target`]. The field lives
+    /// here (rather than in a separate mutex) so a single lock serves
+    /// all shared state the UI might ask about.
+    ssh_child_target: Option<SshChildTarget>,
 }
 
 /// A live terminal session — PTY + emulator + reader thread, all
@@ -117,6 +131,12 @@ pub struct PierTerminal {
     shutdown: Arc<AtomicBool>,
     alive: Arc<AtomicBool>,
     reader: Option<JoinHandle<()>>,
+    /// Background thread that scans the PTY's descendant process
+    /// tree for an `ssh` client once a second. Spawned only when the
+    /// underlying PTY exposes a child pid (local shells do; remote
+    /// SSH-channel PTYs don't — they'd have nothing meaningful to
+    /// scan). `None` when the watcher is disabled for this session.
+    ssh_watcher: Option<JoinHandle<()>>,
     // We keep cols/rows at the struct level for lock-free accessors;
     // the authoritative size is always Inner::pty.size() / emu.cols,
     // but reading those requires taking the lock.
@@ -187,24 +207,51 @@ impl PierTerminal {
         notify: NotifyFn,
         user_data: *mut std::ffi::c_void,
     ) -> Result<Self, TerminalError> {
+        // Capture the child pid before we move the pty into Inner;
+        // once it's behind the mutex we'd need to lock to read it.
+        let child_pid = pty.child_pid();
+
         let emu = VtEmulator::new(cols as usize, rows as usize);
-        let inner = Arc::new(Mutex::new(Inner { pty, emu }));
+        let inner = Arc::new(Mutex::new(Inner {
+            pty,
+            emu,
+            ssh_child_target: None,
+        }));
         let shutdown = Arc::new(AtomicBool::new(false));
         let alive = Arc::new(AtomicBool::new(true));
+        let ssh_failure_kick = Arc::new(AtomicBool::new(false));
 
         let reader = Some(Self::spawn_reader(
             Arc::clone(&inner),
             Arc::clone(&shutdown),
             Arc::clone(&alive),
+            Arc::clone(&ssh_failure_kick),
             notify,
             user_data as usize,
         ));
+
+        // Only local PTYs give us a pid to walk; the SSH-channel Pty
+        // (remote terminal) reports `None` and we skip the watcher —
+        // scanning *this* host's process tree would return nonsense
+        // for a session that's running commands on a remote host.
+        let ssh_watcher = child_pid.map(|pid| {
+            Self::spawn_ssh_watcher(
+                Arc::clone(&inner),
+                Arc::clone(&shutdown),
+                Arc::clone(&alive),
+                Arc::clone(&ssh_failure_kick),
+                pid,
+                notify,
+                user_data as usize,
+            )
+        });
 
         Ok(Self {
             inner,
             shutdown,
             alive,
             reader,
+            ssh_watcher,
             cols,
             rows,
         })
@@ -227,6 +274,7 @@ impl PierTerminal {
         inner: Arc<Mutex<Inner>>,
         shutdown: Arc<AtomicBool>,
         alive: Arc<AtomicBool>,
+        ssh_failure_kick: Arc<AtomicBool>,
         notify: NotifyFn,
         user_data_addr: usize,
     ) -> JoinHandle<()> {
@@ -247,6 +295,9 @@ impl PierTerminal {
 
                     // Lock briefly for the read + feed. This is the
                     // only critical section the reader thread holds.
+                    // The failure-marker scan runs against the raw
+                    // chunk under the same lock — a handful of
+                    // substring passes over ≤64KB is microseconds.
                     let outcome = {
                         let mut guard = match inner.lock() {
                             Ok(g) => g,
@@ -254,6 +305,9 @@ impl PierTerminal {
                         };
                         match guard.pty.read() {
                             Ok(chunk) if !chunk.is_empty() => {
+                                if ssh_watcher::output_indicates_ssh_failure(&chunk) {
+                                    ssh_failure_kick.store(true, Ordering::Relaxed);
+                                }
                                 guard.emu.process(&chunk);
                                 ReadOutcome::Data
                             }
@@ -281,6 +335,125 @@ impl PierTerminal {
                 }
             })
             .expect("spawning reader thread must not fail in practice")
+    }
+
+    /// Spawn the background SSH-child watcher.
+    ///
+    /// The thread owns a single `sysinfo::System` so consecutive
+    /// refreshes reuse the same internal allocations. It polls once
+    /// a second — fast enough that the user perceives the right-side
+    /// panel as "following" the terminal, slow enough that the cost
+    /// is negligible on a busy laptop. The loop exits when the reader
+    /// thread has marked `alive = false` (child shell died) or the
+    /// shutdown flag is set.
+    ///
+    /// On every change to the detected target we write to `Inner` and
+    /// fire `NotifyEvent::SshStateChanged` so the UI layer can emit
+    /// its own event / refetch without polling.
+    fn spawn_ssh_watcher(
+        inner: Arc<Mutex<Inner>>,
+        shutdown: Arc<AtomicBool>,
+        alive: Arc<AtomicBool>,
+        ssh_failure_kick: Arc<AtomicBool>,
+        root_pid: u32,
+        notify: NotifyFn,
+        user_data_addr: usize,
+    ) -> JoinHandle<()> {
+        thread::Builder::new()
+            .name("pier-terminal-ssh-watcher".to_string())
+            .spawn(move || {
+                // Lazy-init the System. The first scan_for_ssh call
+                // populates the full process map; subsequent calls
+                // only diff what changed, which is why we hold onto
+                // it across iterations.
+                let mut system = sysinfo::System::new();
+                let poll_interval = Duration::from_millis(1000);
+                // Shorter interval for the first few seconds so a
+                // just-typed `ssh user@host` feels instant — the
+                // child takes ~50-200ms to actually appear in the
+                // process table after fork/spawn.
+                let fast_interval = Duration::from_millis(250);
+                let fast_scans_remaining_init = 8u32;
+                let mut fast_scans_remaining = fast_scans_remaining_init;
+
+                let user_data = user_data_addr as *mut std::ffi::c_void;
+
+                loop {
+                    if shutdown.load(Ordering::Relaxed) {
+                        break;
+                    }
+                    if !alive.load(Ordering::Relaxed) {
+                        break;
+                    }
+
+                    // Consume the "SSH failure banner seen" kick so
+                    // the next sleep block doesn't treat a stale hit
+                    // as a reason to re-wake; the current iteration
+                    // is already about to scan.
+                    ssh_failure_kick.store(false, Ordering::Relaxed);
+
+                    let new_target = ssh_watcher::scan(&mut system, root_pid);
+
+                    // Minimise the critical section: compute under
+                    // the lock only long enough to compare + swap,
+                    // then release before firing notify.
+                    let changed = {
+                        let mut guard = match inner.lock() {
+                            Ok(g) => g,
+                            Err(poisoned) => poisoned.into_inner(),
+                        };
+                        if guard.ssh_child_target == new_target {
+                            false
+                        } else {
+                            guard.ssh_child_target = new_target.clone();
+                            true
+                        }
+                    };
+
+                    if changed {
+                        (notify)(user_data, NotifyEvent::SshStateChanged as u32);
+                        // After a transition, go back into fast-scan
+                        // mode for a few iterations so the follow-up
+                        // (nested ssh appearing, ssh exiting with a
+                        // "client disconnected" message) propagates
+                        // without waiting a full second.
+                        fast_scans_remaining = fast_scans_remaining_init;
+                    }
+
+                    let sleep_for = if fast_scans_remaining > 0 {
+                        fast_scans_remaining -= 1;
+                        fast_interval
+                    } else {
+                        poll_interval
+                    };
+                    // Break the sleep into small slices so a
+                    // terminal_close / app shutdown doesn't wait up
+                    // to a full second for this thread to notice.
+                    // 50ms slice ≤ natural jitter of a 1s poll, so
+                    // the watcher's cadence stays predictable even
+                    // when the shell is otherwise idle.
+                    //
+                    // Bail out early if the reader thread saw an SSH
+                    // failure banner in the byte stream — `ssh` is
+                    // about to exit, and re-scanning immediately
+                    // propagates "no more ssh" to the UI without
+                    // waiting for the rest of the poll interval.
+                    let slice = Duration::from_millis(50);
+                    let mut remaining = sleep_for;
+                    while remaining > Duration::ZERO {
+                        if shutdown.load(Ordering::Relaxed) {
+                            break;
+                        }
+                        if ssh_failure_kick.load(Ordering::Relaxed) {
+                            break;
+                        }
+                        let step = remaining.min(slice);
+                        thread::sleep(step);
+                        remaining = remaining.saturating_sub(step);
+                    }
+                }
+            })
+            .expect("spawning ssh watcher thread must not fail in practice")
     }
 
     /// Send bytes to the shell (user keystrokes, paste, etc.).
@@ -465,6 +638,22 @@ impl PierTerminal {
         }
     }
 
+    /// Current SSH target, as reported by the child-process watcher.
+    ///
+    /// Returns `None` when no `ssh` client is running in the PTY's
+    /// descendant tree — i.e. the user is sitting at the local
+    /// shell, or the last ssh has exited. Returns `Some(target)` for
+    /// the innermost live ssh (so nested `ssh → ssh` follows the
+    /// inner hop). Non-destructive: reading does not clear state,
+    /// so polling from multiple places is safe.
+    pub fn current_ssh_target(&self) -> Option<SshChildTarget> {
+        let guard = match self.inner.lock() {
+            Ok(g) => g,
+            Err(poisoned) => poisoned.into_inner(),
+        };
+        guard.ssh_child_target.clone()
+    }
+
     /// Check if the emulator detected an `exit`/`logout` command.
     /// Clears the flag after reading.
     pub fn take_ssh_exit_detected(&self) -> bool {
@@ -483,18 +672,24 @@ impl PierTerminal {
 
 impl Drop for PierTerminal {
     fn drop(&mut self) {
-        // 1. Ask the reader thread to stop.
+        // 1. Ask both background threads to stop.
         self.shutdown.store(true, Ordering::Relaxed);
-        // 2. Wait for it to notice — bounded by the `idle` sleep in
-        //    the loop (5ms) plus whatever a pending `pty.read` takes
-        //    to return (pty.read is non-blocking, so this is nearly
-        //    instant).
+        // 2. Join the reader first — its loop wakes every 5ms, so it
+        //    returns almost immediately. Bounded by whatever a pending
+        //    `pty.read` takes (pty.read is non-blocking).
         if let Some(handle) = self.reader.take() {
             let _ = handle.join();
         }
-        // 3. Dropping `inner` happens after the reader joined, so the
-        //    Pty (and its Drop, which reaps the child) runs only on
-        //    this thread — no races with the reader half-reading.
+        // 3. Join the SSH watcher. Worst-case latency is one `sleep`
+        //    interval (≤1s) — it doesn't hold `inner` across the
+        //    sleep, so the main thread is never blocked waiting on
+        //    it to release the mutex.
+        if let Some(handle) = self.ssh_watcher.take() {
+            let _ = handle.join();
+        }
+        // 4. Dropping `inner` happens after both threads joined, so
+        //    the Pty (and its Drop, which reaps the child) runs only
+        //    on this thread — no races with background readers.
     }
 }
 

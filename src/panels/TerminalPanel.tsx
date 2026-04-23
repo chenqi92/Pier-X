@@ -56,6 +56,24 @@ function resolveTerminalColor(tag: string, ansi: string[]): string | undefined {
   return tag;
 }
 
+/** Payload shape for the backend's `terminal:ssh-state` event. Emitted
+ *  whenever the SSH-child watcher sees the set of `ssh` clients in the
+ *  PTY descendant tree change. `target === null` means no ssh is
+ *  currently running under this terminal — the right panel should go
+ *  idle. */
+type TerminalSshStatePayload = {
+  sessionId: string;
+  target: TerminalSshStateTarget | null;
+};
+
+type TerminalSshStateTarget = {
+  host: string;
+  user: string;
+  port: number;
+  /** `-i <path>` from the argv; empty string when absent. */
+  identityPath: string;
+};
+
 type Props = {
   tab: TabState;
   isActive: boolean;
@@ -378,10 +396,27 @@ export default function TerminalPanel({ tab, isActive, onEditConnection }: Props
       else unlisten = u;
     });
 
+    // Subscribe to the SSH-child state event. The backend watcher
+    // polls this terminal's PTY descendant tree once a second and
+    // fires whenever the set of live `ssh` clients changes — nested
+    // ssh in, ssh out, DNS failure reaping the child, all of it.
+    // We're the authoritative source for tab.sshHost / nestedSshTarget
+    // on local-backend tabs; input parsing only arms password capture.
+    let unlistenSshState: UnlistenFn | undefined;
+    void listen<TerminalSshStatePayload>("terminal:ssh-state", (event) => {
+      if (disposed) return;
+      if (event.payload.sessionId !== session.sessionId) return;
+      applySshStateFromWatcher(event.payload.target);
+    }).then((u) => {
+      if (disposed) u();
+      else unlistenSshState = u;
+    });
+
     return () => {
       disposed = true;
       if (safety !== null) window.clearTimeout(safety);
       if (unlisten) unlisten();
+      if (unlistenSshState) unlistenSshState();
     };
   }, [session, scrollbackOffset]);
 
@@ -568,36 +603,149 @@ export default function TerminalPanel({ tab, isActive, onEditConnection }: Props
   }
 
   /**
-   * Apply a freshly parsed `ssh user@host` invocation to this tab so
-   * the right sidebar (Server Monitor, Detected Services, …) reflects
-   * the host the user is connecting to. Matches against saved
-   * connections by host+user+port — when one matches, we set the
-   * saved-connection index so panel commands can resolve the
-   * keychain password automatically.
+   * Apply an SSH state update pushed from the backend watcher.
    *
-   * For local-backend tabs we update the primary `ssh*` fields
-   * directly: nothing else on the tab is reading them, and panels
-   * pick them up via `effectiveSshTarget`. For SSH-backend tabs
-   * (nested ssh) we instead write to `nestedSshTarget` so the live
-   * PTY session, tab title, and any MySQL/PG/Redis tunnels stay
-   * pinned to the original host while the right panel monitors the
-   * nested target.
+   * This is the authoritative path for local-backend tabs: the
+   * backend looks at the PTY's child process tree, finds any live
+   * `ssh` client, extracts its argv, and pushes the target here. If
+   * the user typed a typo that failed, the ssh process exits within
+   * a second and we receive `target: null` — the right panel goes
+   * idle instead of latching onto the dead target. If they retry
+   * with the correct host (whether freshly typed, pasted, or
+   * edited via shell history), the new ssh process is picked up
+   * automatically. Nested ssh inside a still-live session surfaces
+   * as the innermost target.
+   *
+   * SSH-backend tabs (terminal_create_ssh / _saved) never spawn a
+   * local child and the watcher is disabled for them — handling
+   * them here would be a no-op, so we skip. Nested ssh on those
+   * tabs is still driven by the input parser for now.
+   */
+  function applySshStateFromWatcher(target: TerminalSshStateTarget | null): void {
+    if (tab.backend !== "local") return;
+    const current = useTabStore.getState().tabs.find((t) => t.id === tab.id);
+    if (!current) return;
+
+    if (!target) {
+      // No ssh running under this terminal — clear any SSH context
+      // so the right panel drops back to "local" / no connection.
+      // We only touch fields when they're currently populated so we
+      // don't spam zustand with no-op updates while idle.
+      if (
+        current.sshHost
+        || current.sshUser
+        || current.sshPassword
+        || current.sshSavedConnectionIndex !== null
+        || current.nestedSshTarget !== null
+      ) {
+        updateTab(tab.id, {
+          sshHost: "",
+          sshPort: 22,
+          sshUser: "",
+          sshAuthMode: "password",
+          sshKeyPath: "",
+          sshSavedConnectionIndex: null,
+          sshPassword: "",
+          nestedSshTarget: null,
+        });
+      }
+      return;
+    }
+
+    const conns = useConnectionStore.getState().connections;
+    const port = target.port > 0 ? target.port : 22;
+    const hostLc = target.host.trim().toLowerCase();
+    const userLc = target.user.trim().toLowerCase();
+    const sameHostUser = (c: { host: string; user: string }) =>
+      c.host.trim().toLowerCase() === hostLc
+      && (userLc === "" || c.user.trim().toLowerCase() === userLc);
+    const matched =
+      conns.find((c) => sameHostUser(c) && (c.port || 22) === port)
+      ?? conns.find((c) => sameHostUser(c))
+      ?? conns.find((c) => c.host.trim().toLowerCase() === hostLc);
+
+    const authMode: "password" | "agent" | "key" =
+      matched?.authKind ?? (target.identityPath ? "key" : "password");
+    const keyPath = target.identityPath || matched?.keyPath || "";
+    const savedConnectionIndex = matched ? matched.index : null;
+
+    // Preserve an in-flight password (captured from the ssh prompt
+    // or resolved from the keychain) across flaps of the watcher,
+    // but wipe it when the actual target changed — a stale wrong
+    // password would only cause the right-side russh session to
+    // fail loudly.
+    const sameTarget =
+      savedConnectionIndex === current.sshSavedConnectionIndex
+      && current.sshHost.trim().toLowerCase() === hostLc
+      && current.sshUser.trim().toLowerCase() === target.user.toLowerCase()
+      && current.sshPort === port;
+
+    updateTab(tab.id, {
+      sshHost: target.host,
+      sshPort: port,
+      sshUser: target.user,
+      sshAuthMode: authMode,
+      sshKeyPath: keyPath,
+      sshSavedConnectionIndex: savedConnectionIndex,
+      sshPassword: sameTarget ? current.sshPassword : "",
+      nestedSshTarget: null,
+      rightTool: "monitor",
+    });
+
+    // Saved password match — prime the password from the keychain
+    // so the first probe doesn't surface a "saved password missing"
+    // error just to recover immediately.
+    if (matched && matched.authKind === "password") {
+      cmd
+        .sshConnectionResolvePassword(matched.index)
+        .then((password) => {
+          if (!password) return;
+          const latest = useTabStore.getState().tabs.find((t) => t.id === tab.id);
+          if (!latest) return;
+          if (
+            latest.sshSavedConnectionIndex === matched.index
+            && !latest.sshPassword
+          ) {
+            useTabStore.getState().updateTab(tab.id, { sshPassword: password });
+          }
+        })
+        .catch(() => {});
+    }
+  }
+
+  /**
+   * Inspect a freshly-submitted shell line for credentials-relevant
+   * side effects:
+   *
+   * 1. If it's an `ssh user@host` invocation, arm the one-shot
+   *    password-capture window so the next line the user types
+   *    (ssh's silent password prompt response) lands in
+   *    `tab.sshPassword`. The host/user/port themselves are NOT
+   *    written to tab state from here — the backend SSH watcher
+   *    ({@link TERMINAL_SSH_STATE_EVENT}) is the authoritative
+   *    source for "what target is the terminal actually connected
+   *    to right now". Input parsing can't see history-edited or
+   *    copy-pasted commands reliably; the process watcher can.
+   *
+   * 2. If the line is NOT an ssh invocation and we have a pending
+   *    password-capture armed, it probably is the password — mirror
+   *    it into tab state so the right-side russh session can
+   *    authenticate against the same target without a second prompt.
+   *
+   * For SSH-backend tabs (nested ssh), the watcher cannot see inside
+   * a remote shell, so we still fall back to input parsing to set
+   * `nestedSshTarget`. Ideal long-term fix is remote `ps -ef`
+   * polling over the existing session; input parsing remains the
+   * stop-gap there.
    */
   function applySshContextFromCommand(line: string): void {
     const parsed = parseSshCommand(line);
     if (!parsed) {
-      // Not an `ssh ...` line — but it might be the password the user
-      // is typing in response to ssh's "password:" prompt. If we
-      // recently saw an ssh command and have no working password yet,
-      // mirror the captured line into the tab so the right-side russh
-      // session can authenticate against the same target the local
-      // ssh.exe is connecting to. One-shot: cleared after each call.
       maybeCapturePasswordFromLine(line);
       return;
     }
     const conns = useConnectionStore.getState().connections;
     const port = parsed.port > 0 ? parsed.port : 22;
-    // Match priority: exact host+user+port → host+user → host alone.
     const sameHostUser = (c: { host: string; user: string }) =>
       c.host.trim().toLowerCase() === parsed.host.toLowerCase()
       && (parsed.user === "" || c.user.trim().toLowerCase() === parsed.user.toLowerCase());
@@ -607,27 +755,13 @@ export default function TerminalPanel({ tab, isActive, onEditConnection }: Props
       ?? conns.find((c) => c.host.trim().toLowerCase() === parsed.host.toLowerCase());
 
     const inferredUser = parsed.user || matched?.user || "";
-    if (!inferredUser) return; // Without a user we can't probe meaningfully.
+    if (!inferredUser) return;
 
-    // Default to `password` for unmatched / no-`-i` invocations: the
-    // user is typing `ssh user@host` interactively, which means
-    // ssh.exe is about to prompt for a password. We arm the
-    // password-capture sweep below so the next line they type
-    // (silently echoed by the terminal) lands in `tab.sshPassword`
-    // and the right-side russh session can authenticate without a
-    // second prompt. `-i` overrides to key auth, and a saved
-    // connection's auth kind always wins.
-    const authMode: "password" | "agent" | "key" =
-      matched?.authKind ?? (parsed.identityPath ? "key" : "password");
-    const keyPath = parsed.identityPath || matched?.keyPath || "";
-    const savedConnectionIndex = matched ? matched.index : null;
-
-    // Arm the one-shot password capture only if we don't expect
-    // credentials to come from elsewhere: no key file, and either no
-    // saved match or a saved match whose auth kind is `password`
-    // (in which case the keychain might still be empty). 60s window
-    // is generous enough for the user to read the welcome banner,
-    // type their password, and hit Enter.
+    // Arm the one-shot password capture only when the ssh client is
+    // about to prompt interactively: no `-i`, and either no saved
+    // match or a saved match whose auth kind is `password` (so the
+    // keychain might still be empty). 60s window covers banner +
+    // typing + Enter.
     const expectsInteractivePassword =
       !parsed.identityPath
       && (matched === undefined || matched.authKind === "password");
@@ -635,33 +769,17 @@ export default function TerminalPanel({ tab, isActive, onEditConnection }: Props
       ? { deadline: Date.now() + 60_000 }
       : null;
 
-    // Re-typing the same `ssh user@host` after a disconnect should
-    // keep any previously-resolved/captured password so the right
-    // side reconnects without prompting again. A *different* target
-    // (or a different saved-connection slot) gets a clean slate so
-    // a stale wrong capture doesn't poison the next attempt.
-    const sameTarget =
-      savedConnectionIndex === tab.sshSavedConnectionIndex
-      && tab.sshHost.trim().toLowerCase() === parsed.host.toLowerCase()
-      && tab.sshUser.trim().toLowerCase() === inferredUser.toLowerCase()
-      && tab.sshPort === port;
+    // Nested ssh inside a real SSH-backend tab: the backend watcher
+    // on this tab's PTY won't see anything (the PTY is a remote ssh
+    // channel, not a local process), so we still have to update tab
+    // state from the input scan. Local-backend tabs defer entirely
+    // to the watcher event.
+    if (tab.backend === "ssh") {
+      const authMode: "password" | "agent" | "key" =
+        matched?.authKind ?? (parsed.identityPath ? "key" : "password");
+      const keyPath = parsed.identityPath || matched?.keyPath || "";
+      const savedConnectionIndex = matched ? matched.index : null;
 
-    if (tab.backend === "local") {
-      updateTab(tab.id, {
-        sshHost: parsed.host,
-        sshPort: port,
-        sshUser: inferredUser,
-        sshAuthMode: authMode,
-        sshKeyPath: keyPath,
-        sshSavedConnectionIndex: savedConnectionIndex,
-        sshPassword: sameTarget ? tab.sshPassword : "",
-        nestedSshTarget: null,
-        rightTool: "monitor",
-      });
-    } else {
-      // Nested ssh on a real SSH tab — keep primary fields intact so
-      // the original session / tunnels keep working; only overlay
-      // the new target for monitoring.
       updateTab(tab.id, {
         nestedSshTarget: {
           host: parsed.host,
@@ -674,30 +792,21 @@ export default function TerminalPanel({ tab, isActive, onEditConnection }: Props
         },
         rightTool: "monitor",
       });
-    }
 
-    // Saved connection: prime the in-memory password (same flow as
-    // openSshSaved). Without this the very first probe / detect for
-    // the new target would be the one to surface "saved password
-    // missing" — we'd rather front-load that and give the recovery
-    // button a chance to render before the user notices.
-    if (matched && matched.authKind === "password") {
-      cmd
-        .sshConnectionResolvePassword(matched.index)
-        .then((password) => {
-          if (!password) return;
-          if (tab.backend === "local") {
-            useTabStore.getState().updateTab(tab.id, { sshPassword: password });
-          } else {
+      if (matched && matched.authKind === "password") {
+        cmd
+          .sshConnectionResolvePassword(matched.index)
+          .then((password) => {
+            if (!password) return;
             const current = useTabStore.getState().tabs.find((t) => t.id === tab.id);
             if (current?.nestedSshTarget && current.nestedSshTarget.savedConnectionIndex === matched.index) {
               useTabStore.getState().updateTab(tab.id, {
                 nestedSshTarget: { ...current.nestedSshTarget, password },
               });
             }
-          }
-        })
-        .catch(() => {});
+          })
+          .catch(() => {});
+      }
     }
   }
 

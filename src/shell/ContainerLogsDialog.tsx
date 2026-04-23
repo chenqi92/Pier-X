@@ -1,4 +1,4 @@
-import { AlignJustify, Pause, Play, Scroll, Trash2, X } from "lucide-react";
+import { AlignJustify, ArrowDown, ExternalLink, Pause, Play, Scroll, Trash2, X } from "lucide-react";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import IconButton from "../components/IconButton";
@@ -16,6 +16,11 @@ type Props = {
   containerId: string;
   containerName?: string;
   onClose: () => void;
+  /** Switch the right-side tool to the Log panel and stream the
+   *  container's logs there. Shown as an icon button in the header
+   *  so the user can get the same content without a modal blocking
+   *  the rest of the UI. */
+  onOpenInLogPanel?: () => void;
 };
 
 type Line = {
@@ -26,7 +31,7 @@ type Line = {
 
 const MAX_LINES = 2000;
 
-export default function ContainerLogsDialog({ open, tab, containerId, containerName, onClose }: Props) {
+export default function ContainerLogsDialog({ open, tab, containerId, containerName, onClose, onOpenInLogPanel }: Props) {
   const { t } = useI18n();
   const formatError = (e: unknown) => localizeError(e, t);
   const { dialogStyle, handleProps } = useDraggableDialog(open);
@@ -219,6 +224,19 @@ export default function ContainerLogsDialog({ open, tab, containerId, containerN
           >
             <Trash2 size={11} />
           </button>
+          {onOpenInLogPanel && (
+            <button
+              type="button"
+              className="mini-btn"
+              title={t("Open in Log panel")}
+              onClick={() => {
+                onOpenInLogPanel();
+                onClose();
+              }}
+            >
+              <ExternalLink size={11} />
+            </button>
+          )}
           <IconButton variant="mini" onClick={onClose} title={t("Close")}>
             <X size={12} />
           </IconButton>
@@ -268,7 +286,7 @@ export default function ContainerLogsDialog({ open, tab, containerId, containerN
               if (el) el.scrollTop = el.scrollHeight;
             }}
           >
-            ↓ {t("follow")}
+            <ArrowDown size={11} />
           </button>
         </div>
       </div>

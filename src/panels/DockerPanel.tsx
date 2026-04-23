@@ -3,6 +3,7 @@ import {
   ChevronRight,
   Container as ContainerIcon,
   Download,
+  ExternalLink,
   FileText,
   Folder,
   HardDrive,
@@ -653,6 +654,30 @@ export default function DockerPanel({ tab }: Props) {
     setLogsDialog({ id, name: ctr?.names || id.slice(0, 12) });
   }
 
+  // Route the same container-logs stream into the right-side Log panel
+  // instead of a modal dialog. Lets the user keep browsing the rest of
+  // the UI while the stream runs. Reuses the "docker-container" system
+  // preset so LogViewerPanel's existing source pipeline handles it.
+  function openContainerLogsInPanel(id: string) {
+    const current = tab.logSource ?? {
+      mode: "system" as const,
+      filePath: "",
+      fileDir: "",
+      systemPresetId: "docker-container",
+      systemArg: "",
+      customCommand: "",
+    };
+    updateTab(tab.id, {
+      logSource: {
+        ...current,
+        mode: "system",
+        systemPresetId: "docker-container",
+        systemArg: id,
+      },
+    });
+    useTabStore.getState().setTabRightTool(tab.id, "log");
+  }
+
   const filteredContainers = useMemo(() => {
     const n = search.trim().toLowerCase();
     if (!state) return [];
@@ -873,6 +898,10 @@ export default function DockerPanel({ tab }: Props) {
                           onClick={() => openContainerLogs(c.id)}>
                           <Scroll size={11} />
                         </button>
+                        <button className="mini-btn" type="button" title={t("Open in Log panel")}
+                          onClick={() => openContainerLogsInPanel(c.id)}>
+                          <ExternalLink size={11} />
+                        </button>
                       </div>
                     </div>
                   );
@@ -923,6 +952,10 @@ export default function DockerPanel({ tab }: Props) {
                   <button className="mini-btn" type="button" title={t("Logs")}
                     onClick={() => openContainerLogs(selectedCtr.id)}>
                     <Scroll size={11} />
+                  </button>
+                  <button className="mini-btn" type="button" title={t("Open in Log panel")}
+                    onClick={() => openContainerLogsInPanel(selectedCtr.id)}>
+                    <ExternalLink size={11} />
                   </button>
                   {hasSsh && (
                     <button className="mini-btn" type="button" title={t("Inspect")} disabled={actionBusy}
@@ -1212,6 +1245,9 @@ export default function DockerPanel({ tab }: Props) {
           containerId={logsDialog?.id ?? ""}
           containerName={logsDialog?.name}
           onClose={() => setLogsDialog(null)}
+          onOpenInLogPanel={
+            logsDialog ? () => openContainerLogsInPanel(logsDialog.id) : undefined
+          }
         />
 
         {activeTab === "networks" && (

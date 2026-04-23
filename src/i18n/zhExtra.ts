@@ -256,6 +256,7 @@ export const zhExtra: Record<string, string> = {
   "One chromatic accent — applies everywhere.": "单一强调色，应用于整个界面。",
   "Open diff": "查看差异",
   "Open in browser": "在浏览器中打开",
+  "Open in Log panel": "在日志面板中打开",
   "Open split view": "打开分栏视图",
   "Operation failed": "操作失败",
   "Operation finished": "操作完成",

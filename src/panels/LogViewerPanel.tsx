@@ -28,6 +28,7 @@ import type { LogEventView, LogSource, LogSourceMode, SftpEntryView, TabState } 
 import { DEFAULT_LOG_SOURCE, effectiveSshTarget } from "../lib/types";
 import { useI18n } from "../i18n/useI18n";
 import { localizeError, localizeRuntimeMessage } from "../i18n/localizeMessage";
+import DismissibleNote from "../components/DismissibleNote";
 import PanelHeader from "../components/PanelHeader";
 import StatusDot from "../components/StatusDot";
 import { useTabStore } from "../stores/useTabStore";
@@ -569,7 +570,7 @@ export default function LogViewerPanel({ tab }: Props) {
             <div className="lg-note">{t("Pick a source above, then press Start.")}</div>
           )}
           {hasSsh && source.mode === "file" && scanError && (
-            <div className="lg-note">{scanError}</div>
+            <DismissibleNote onDismiss={() => setScanError("")}>{scanError}</DismissibleNote>
           )}
           {hasSsh && compiled && events.length === 0 && !streaming && (
             <div className="lg-note mono">
@@ -577,8 +578,14 @@ export default function LogViewerPanel({ tab }: Props) {
               {compiled}
             </div>
           )}
-          {notice && <div className="lg-note">{notice}</div>}
-          {error && <div className="lg-note lg-note--error">{error}</div>}
+          {notice && (
+            <DismissibleNote onDismiss={() => setNotice("")}>{notice}</DismissibleNote>
+          )}
+          {error && (
+            <DismissibleNote tone="error" onDismiss={() => setError("")}>
+              {error}
+            </DismissibleNote>
+          )}
 
           {filtered.map((e) => (
             <div key={e.idx} className={"lg-line lv-" + e.level}>

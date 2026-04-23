@@ -15,6 +15,7 @@ import { localizeError } from "../i18n/localizeMessage";
 import DbAddCredentialDialog from "../components/DbAddCredentialDialog";
 import DbConnRow from "../components/DbConnRow";
 import DbInstancePicker from "../components/DbInstancePicker";
+import DismissibleNote from "../components/DismissibleNote";
 import PanelHeader from "../components/PanelHeader";
 import StatusDot from "../components/StatusDot";
 import { useTabStore } from "../stores/useTabStore";
@@ -405,15 +406,27 @@ export default function RedisPanel({ tab }: Props) {
                 </button>
               </div>
               <div className="inline-note">{t("Queries will connect through the SSH tunnel.")}</div>
-              {tunnelNotice && <div className="status-note">{tunnelNotice}</div>}
-              {tunnelError && <div className="status-note status-note--error">{tunnelError}</div>}
+              {tunnelNotice && (
+                <DismissibleNote variant="status" onDismiss={() => setTunnelNotice("")}>
+                  {tunnelNotice}
+                </DismissibleNote>
+              )}
+              {tunnelError && (
+                <DismissibleNote variant="status" tone="error" onDismiss={() => setTunnelError("")}>
+                  {tunnelError}
+                </DismissibleNote>
+              )}
             </>
           )}
           <div className="button-row">
             <button className="mini-button" disabled={!canBrowse || busy} onClick={() => void browse()} type="button">{busy ? t("Scanning...") : t("Scan Keys")}</button>
           </div>
           {state && <div className="status-note">{state.pong} · {state.serverVersion || "?"}{state.usedMemory ? ` · ${state.usedMemory}` : ""}</div>}
-          {error && <div className="status-note status-note--error">{error}</div>}
+          {error && (
+            <DismissibleNote variant="status" tone="error" onDismiss={() => setError("")}>
+              {error}
+            </DismissibleNote>
+          )}
         </div>
       </section>
 
@@ -470,7 +483,11 @@ export default function RedisPanel({ tab }: Props) {
       {(cmdResult || cmdError) && (
         <section className="panel-section">
           <div className="panel-section__title"><span>{t("Command Response")}</span></div>
-          {cmdError ? <div className="status-note status-note--error">{cmdError}</div> : cmdResult ? (
+          {cmdError ? (
+            <DismissibleNote variant="status" tone="error" onDismiss={() => setCmdError("")}>
+              {cmdError}
+            </DismissibleNote>
+          ) : cmdResult ? (
             <div className="form-stack">
               <div className="inline-note">{cmdResult.summary} · {cmdResult.elapsedMs} ms</div>
               <div className="preview-list">{cmdResult.lines.map((line, index) => <div className="preview-item" key={index}>{line}</div>)}</div>

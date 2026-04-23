@@ -85,6 +85,13 @@ pub struct ServerSnapshot {
     pub net_tx_bps: f64,
     /// Top processes by CPU%. Up to 8 entries, sorted descending.
     pub top_processes: Vec<ProcessRow>,
+    /// Top processes by memory%. Up to 8 entries, sorted descending.
+    /// A separate probe slice rather than a client-side resort of
+    /// `top_processes` because high-memory workloads (Java heaps,
+    /// databases, browser tabs) frequently sit at ~0% CPU — the
+    /// top-by-CPU set won't contain them, so no client-side
+    /// reshuffle can surface the real memory hogs.
+    pub top_processes_mem: Vec<ProcessRow>,
 }
 
 /// One mounted filesystem as reported by `df -hPT`. Sizes stay as
@@ -179,7 +186,8 @@ pub async fn probe_with_baseline(
                echo '---PROCS---'; (ps -eo pid 2>/dev/null | wc -l 2>/dev/null || true); \
                echo '---OSREL---'; (cat /etc/os-release 2>/dev/null; uname -sr 2>/dev/null || true); \
                echo '---NETDEV---'; (cat /proc/net/dev 2>/dev/null || true); \
-               echo '---TOPPROC---'; (ps -eo pid,comm,pcpu,pmem,etime --sort=-pcpu --no-headers 2>/dev/null | head -8 || true)";
+               echo '---TOPPROC---'; (ps -eo pid,comm,pcpu,pmem,etime --sort=-pcpu --no-headers 2>/dev/null | head -8 || true); \
+               echo '---TOPPROCM---'; (ps -eo pid,comm,pcpu,pmem,etime --sort=-pmem --no-headers 2>/dev/null | head -8 || true)";
     let (exit, stdout) = session.exec_command(cmd).await?;
     if exit != 0 && stdout.is_empty() {
         return Err(SshError::InvalidConfig(format!(
@@ -253,6 +261,9 @@ pub async fn probe_with_baseline(
     if let Some(s) = sections.get("TOPPROC") {
         snap.top_processes = parse_top_processes(s);
     }
+    if let Some(s) = sections.get("TOPPROCM") {
+        snap.top_processes_mem = parse_top_processes(s);
+    }
 
     // Post-parse sanity check: if every rich field is still at its
     // sentinel default, the remote host responded but nothing in the
@@ -276,7 +287,8 @@ pub async fn probe_with_baseline(
         && snap.cpu_count == 0
         && snap.proc_count == 0
         && snap.os_label.is_empty()
-        && snap.top_processes.is_empty();
+        && snap.top_processes.is_empty()
+        && snap.top_processes_mem.is_empty();
     if degraded {
         crate::logging::write_event(
             "WARN",

@@ -1,5 +1,5 @@
 import { Cpu, HardDrive, KeyRound, MemoryStick, Network, RefreshCw } from "lucide-react";
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import type { ReactNode } from "react";
 import * as cmd from "../lib/commands";
 import { RIGHT_TOOL_META } from "../lib/rightToolMeta";
@@ -8,6 +8,7 @@ import { effectiveSshTarget } from "../lib/types";
 import { useI18n } from "../i18n/useI18n";
 import { isMissingKeychainError, localizeError } from "../i18n/localizeMessage";
 import DbConnRow from "../components/DbConnRow";
+import DismissibleNote from "../components/DismissibleNote";
 import PanelHeader from "../components/PanelHeader";
 import StatusDot from "../components/StatusDot";
 import { useUiActionsStore } from "../stores/useUiActionsStore";
@@ -98,6 +99,10 @@ export default function ServerMonitorPanel({ tab, onEditConnection, isActive = t
   const formatError = (error: unknown) => localizeError(error, t);
   const [snap, setSnap] = useState<ServerSnapshotView | null>(null);
   const [busy, setBusy] = useState(false);
+  // Which metric the top-processes table is sorted by. The backend
+  // returns two separate top-8 lists (one per metric) so this flip
+  // is a free render swap, no extra probe fired.
+  const [procSort, setProcSort] = useState<"cpu" | "mem">("cpu");
   // Mirrors `busy` for the polling interval — reading it via ref
   // means we don't have to put `busy` in the effect's deps and pay
   // the interval-teardown-on-every-probe cost.
@@ -289,6 +294,19 @@ export default function ServerMonitorPanel({ tab, onEditConnection, isActive = t
   const rxRate = snap ? formatRate(snap.netRxBps) : null;
   const txRate = snap ? formatRate(snap.netTxBps) : null;
 
+  // Pick the matching list for the active sort. Fall back from
+  // topProcessesMem to topProcesses when the backend didn't emit a
+  // MEM slice (older cached snapshot, or a remote whose `ps` doesn't
+  // accept `--sort=-pmem`) so the user still sees something useful
+  // rather than an empty table.
+  const procRows = useMemo(() => {
+    if (!snap) return [];
+    if (procSort === "mem") {
+      return snap.topProcessesMem.length > 0 ? snap.topProcessesMem : snap.topProcesses;
+    }
+    return snap.topProcesses;
+  }, [snap, procSort]);
+
   return (
     <>
       <PanelHeader
@@ -454,40 +472,65 @@ export default function ServerMonitorPanel({ tab, onEditConnection, isActive = t
         </div>
 
         {/*
-          Top processes table — populated from `ps -eo
-          pid,comm,pcpu,pmem,etime --sort=-pcpu | head -8`. Empty
-          tbody renders an "—" placeholder so the block is always
-          present (matches pier-x-copy's stable layout).
+          Top processes table. Backend runs `ps -eo …` twice per
+          probe — once with `--sort=-pcpu` and once with
+          `--sort=-pmem` — so the MEM toggle surfaces real memory
+          hogs (low-CPU DB/browser heaps) rather than a client-side
+          re-sort of the CPU list.
+
+          Layout is dense by design: the right panel is narrow so
+          `table-layout: fixed` + ellipsis on the COMMAND column
+          keep everything on one row. The `TIME` / etime column
+          used to live here but was always clipped to two digits
+          in practice; the elapsed value is still available via
+          the row tooltip.
         */}
         <div className="mon-block">
           <div className="mon-block-head">
             <span>{t("TOP PROCESSES")}</span>
-            <span className="mono mon-block-meta">{t("by CPU")}</span>
+            <div className="mon-block-meta mon-sort-group mono">
+              <span>{t("Sort:")}</span>
+              <button
+                type="button"
+                className={"dk-sort" + (procSort === "cpu" ? " active" : "")}
+                onClick={() => setProcSort("cpu")}
+              >
+                {t("CPU")}
+              </button>
+              <button
+                type="button"
+                className={"dk-sort" + (procSort === "mem" ? " active" : "")}
+                onClick={() => setProcSort("mem")}
+              >
+                {t("MEM")}
+              </button>
+            </div>
           </div>
-          <table className="mon-table">
+          <table className="mon-table mon-table--procs">
             <thead>
               <tr>
-                <th style={{ width: 60 }}>{t("PID")}</th>
+                <th style={{ width: 54 }}>{t("PID")}</th>
                 <th>{t("COMMAND")}</th>
-                <th style={{ width: 56, textAlign: "right" }}>{t("CPU%")}</th>
-                <th style={{ width: 56, textAlign: "right" }}>{t("MEM%")}</th>
-                <th style={{ width: 80, textAlign: "right" }}>{t("TIME")}</th>
+                <th style={{ width: 48, textAlign: "right" }}>{t("CPU%")}</th>
+                <th style={{ width: 48, textAlign: "right" }}>{t("MEM%")}</th>
               </tr>
             </thead>
             <tbody>
-              {snap && snap.topProcesses.length > 0 ? (
-                snap.topProcesses.map((row, i) => (
-                  <tr key={`${row.pid}-${i}`}>
+              {snap && procRows.length > 0 ? (
+                procRows.map((row, i) => (
+                  <tr
+                    key={`${row.pid}-${i}`}
+                    title={`${row.command} · PID ${row.pid} · ${t("elapsed")} ${row.elapsed}`}
+                  >
                     <td className="mono mon-cell-muted">{row.pid}</td>
-                    <td className="mono">{row.command}</td>
+                    <td className="mono mon-cell-trunc">{row.command}</td>
                     <td className="mono mon-cell-right">{row.cpuPct}</td>
                     <td className="mono mon-cell-right">{row.memPct}</td>
-                    <td className="mono mon-cell-muted mon-cell-right">{row.elapsed}</td>
                   </tr>
                 ))
               ) : (
                 <tr>
-                  <td colSpan={5} className="mon-empty mono">
+                  <td colSpan={4} className="mon-empty mono">
                     {snap ? t("(no process data)") : "—"}
                   </td>
                 </tr>
@@ -514,7 +557,7 @@ export default function ServerMonitorPanel({ tab, onEditConnection, isActive = t
           </span>
         </div>
         {error && (
-          <div className="status-note status-note--error">
+          <DismissibleNote variant="status" tone="error" onDismiss={() => setError("")}>
             <span>{error}</span>
             {canRecoverPassword && (
               <button
@@ -525,7 +568,7 @@ export default function ServerMonitorPanel({ tab, onEditConnection, isActive = t
                 <KeyRound size={11} /> {t("Re-enter password")}
               </button>
             )}
-          </div>
+          </DismissibleNote>
         )}
       </section>
     </div>

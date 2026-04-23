@@ -18,6 +18,22 @@ function formatTriedMethods(raw: string) {
   return normalized || raw;
 }
 
+/** Collapse `"<seg>: <seg>"` → `"<seg>"`. Some SFTP servers return a
+ *  status packet whose status-code name and human message are the same
+ *  string (e.g. `No such file: No such file`), and russh-sftp's Display
+ *  joins them with `": "`. Surface the friendlier, deduplicated form
+ *  instead of the raw doubled text. */
+function collapseRepeatedSegments(value: string): string {
+  const segments = value.split(/:\s+/);
+  const deduped: string[] = [];
+  for (const seg of segments) {
+    if (deduped.length === 0 || deduped[deduped.length - 1] !== seg) {
+      deduped.push(seg);
+    }
+  }
+  return deduped.join(": ");
+}
+
 function localizeRuntimeMessageInternal(message: string, t: Translator, depth: number): string {
   const value = String(message || "").trim();
   if (!value) return "";
@@ -103,6 +119,19 @@ function localizeRuntimeMessageInternal(message: string, t: Translator, depth: n
     {
       pattern: /^(?:invalid ssh config:\s*)?keychain lookup failed for [^:]+: (.+)$/i,
       resolve: ([, detail]) => t("Keychain lookup failed: {detail}", { detail }),
+    },
+    {
+      // SFTP operation failures are emitted by the backend as
+      // `invalid ssh config: sftp: <detail>` because they reuse the
+      // `SshError::InvalidConfig` variant. That prefix is misleading —
+      // the SSH session itself is fine; the SFTP request just failed.
+      // Unwrap to a dedicated SFTP error string and collapse the
+      // `"<status>: <status>"` duplication that russh-sftp's Display
+      // emits when the server's status-code name matches the message.
+      pattern: /^(?:invalid ssh config:\s*)?sftp:\s*(.+)$/i,
+      resolve: ([, detail]) => t("SFTP error: {detail}", {
+        detail: collapseRepeatedSegments(detail.trim()),
+      }),
     },
     {
       pattern: /^invalid ssh config: (.+)$/i,

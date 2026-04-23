@@ -26,6 +26,7 @@ import { effectiveSshTarget } from "../lib/types";
 import { useI18n } from "../i18n/useI18n";
 import { localizeError, localizeRuntimeMessage } from "../i18n/localizeMessage";
 import DbConnRow from "../components/DbConnRow";
+import DismissibleNote from "../components/DismissibleNote";
 import PanelHeader from "../components/PanelHeader";
 import StatusDot from "../components/StatusDot";
 import ContainerLogsDialog from "../shell/ContainerLogsDialog";
@@ -119,6 +120,11 @@ export default function DockerPanel({ tab }: Props) {
   const [actionBusy, setActionBusy] = useState(false);
   const [notice, setNotice] = useState("");
   const [inspectJson, setInspectJson] = useState("");
+  // Container id being displayed in the inspect modal. When non-null
+  // the `<pre>` JSON is rendered inside a dialog over the panel instead
+  // of inline under the container details, so the details pane doesn't
+  // balloon the moment the user asks for inspect output.
+  const [inspectCtrId, setInspectCtrId] = useState<string | null>(null);
   const [search, setSearch] = useState("");
   const [selectedContainer, setSelectedContainer] = useState<string>("");
   const [selectedImage, setSelectedImage] = useState<string>("");
@@ -410,6 +416,7 @@ export default function DockerPanel({ tab }: Props) {
         savedConnectionIndex: sshArgs.savedConnectionIndex,
       });
       setInspectJson(output);
+      setInspectCtrId(id);
       setNotice(t("Loaded container inspection for {id}.", { id: shortId(id) }));
     } catch (e) {
       setError(formatError(e));
@@ -845,8 +852,14 @@ export default function DockerPanel({ tab }: Props) {
             (see <DkSkeleton/>), not at the panel top — a centered banner
             here used to cover the toolbar and felt like a "whole-area"
             loading state. */}
-        {notice && <div className="lg-note">{notice}</div>}
-        {error && <div className="lg-note lg-note--error">{error}</div>}
+        {notice && (
+          <DismissibleNote onDismiss={() => setNotice("")}>{notice}</DismissibleNote>
+        )}
+        {error && (
+          <DismissibleNote tone="error" onDismiss={() => setError("")}>
+            {error}
+          </DismissibleNote>
+        )}
 
         {activeTab === "containers" && (
           <div className="dk-body">
@@ -1027,12 +1040,6 @@ export default function DockerPanel({ tab }: Props) {
                     </>
                   )}
                 </div>
-                {inspectJson && (
-                  <div className="dk-insp-body">
-                    <div className="dk-sub-h">{t("Inspect Output")}</div>
-                    <pre className="dk-inspect-pre mono">{inspectJson}</pre>
-                  </div>
-                )}
               </div>
             )}
           </div>
@@ -1284,6 +1291,46 @@ export default function DockerPanel({ tab }: Props) {
             logsDialog ? () => openContainerLogsInPanel(logsDialog.id) : undefined
           }
         />
+
+        {inspectCtrId && inspectJson && (
+          <div
+            className="dlg-overlay"
+            onClick={() => {
+              setInspectCtrId(null);
+              setInspectJson("");
+            }}
+          >
+            <div
+              className="dlg dlg--inspect"
+              onClick={(e) => e.stopPropagation()}
+            >
+              <div className="dlg-head">
+                <span className="dlg-title">
+                  <FileText size={13} />
+                  {t("Inspect Output")}
+                  <span className="text-muted mono" style={{ marginLeft: "var(--sp-2)" }}>
+                    {shortId(inspectCtrId)}
+                  </span>
+                </span>
+                <div style={{ flex: 1 }} />
+                <button
+                  type="button"
+                  className="mini-btn"
+                  title={t("Close")}
+                  onClick={() => {
+                    setInspectCtrId(null);
+                    setInspectJson("");
+                  }}
+                >
+                  <X size={12} />
+                </button>
+              </div>
+              <div className="dlg-body dlg-body--inspect">
+                <pre className="dk-inspect-pre mono">{inspectJson}</pre>
+              </div>
+            </div>
+          </div>
+        )}
 
         {activeTab === "networks" && (
           <div className="dk-body">

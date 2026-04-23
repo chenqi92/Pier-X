@@ -16,6 +16,7 @@ import { localizeError } from "../i18n/localizeMessage";
 import DbAddCredentialDialog from "../components/DbAddCredentialDialog";
 import DbConnRow from "../components/DbConnRow";
 import DbInstancePicker from "../components/DbInstancePicker";
+import DismissibleNote from "../components/DismissibleNote";
 import PanelHeader from "../components/PanelHeader";
 import PreviewTable from "../components/PreviewTable";
 import QueryResultPanel from "../components/QueryResultPanel";
@@ -490,14 +491,26 @@ export default function PostgresPanel({ tab }: Props) {
                 </button>
               </div>
               <div className="inline-note">{t("Queries will connect through the SSH tunnel.")}</div>
-              {tunnelNotice && <div className="status-note">{tunnelNotice}</div>}
-              {tunnelError && <div className="status-note status-note--error">{tunnelError}</div>}
+              {tunnelNotice && (
+                <DismissibleNote variant="status" onDismiss={() => setTunnelNotice("")}>
+                  {tunnelNotice}
+                </DismissibleNote>
+              )}
+              {tunnelError && (
+                <DismissibleNote variant="status" tone="error" onDismiss={() => setTunnelError("")}>
+                  {tunnelError}
+                </DismissibleNote>
+              )}
             </>
           )}
           <div className="button-row">
             <button className="mini-button" disabled={!canBrowse || busy} onClick={() => void browse()} type="button">{busy ? t("Browsing...") : t("Browse")}</button>
           </div>
-          {error && <div className="status-note status-note--error">{error}</div>}
+          {error && (
+            <DismissibleNote variant="status" tone="error" onDismiss={() => setError("")}>
+              {error}
+            </DismissibleNote>
+          )}
         </div>
       </section>
 

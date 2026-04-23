@@ -930,6 +930,13 @@ body.is-resizing .app { transition: none; }
   display: flex; align-items: flex-start; justify-content: center;
   padding-top: 90px;
 }
+/* Anchored variant: an absolute-positioned dialog inside this overlay
+ * escapes the flex layout anyway, but drop the padding-top so the
+ * scrim is clean and the clickable area covers the whole viewport. */
+.cmdp-overlay--anchored {
+  padding-top: 0;
+  align-items: flex-start;
+}
 .cmdp {
   width: 560px; max-width: 90%;
   background: var(--panel);

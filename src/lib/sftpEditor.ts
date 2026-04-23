@@ -193,8 +193,10 @@ export function buildEditorTheme(): Extension[] {
       ".cm-cursor, .cm-dropCursor": {
         borderLeftColor: "var(--accent)",
       },
-      "&.cm-focused .cm-selectionBackground, .cm-selectionBackground, ::selection":
-        { backgroundColor: "var(--accent-dim)" },
+      ".cm-selectionBackground, ::selection":
+        { backgroundColor: "color-mix(in srgb, var(--accent) 22%, transparent)" },
+      "&.cm-focused .cm-selectionBackground, &.cm-focused ::selection":
+        { backgroundColor: "color-mix(in srgb, var(--accent) 38%, transparent)" },
       ".cm-gutters": {
         backgroundColor: "var(--surface)",
         color: "var(--muted)",
@@ -206,7 +208,7 @@ export function buildEditorTheme(): Extension[] {
         color: "var(--ink)",
       },
       ".cm-activeLine": {
-        backgroundColor: "var(--surface-2)",
+        backgroundColor: "color-mix(in srgb, var(--ink) 5%, transparent)",
       },
       ".cm-lineNumbers .cm-gutterElement": {
         padding: "0 var(--sp-2) 0 var(--sp-3)",
@@ -230,32 +232,84 @@ export function buildEditorTheme(): Extension[] {
       ".cm-panels": {
         backgroundColor: "var(--surface-2)",
         color: "var(--ink)",
+      },
+      ".cm-panels-top": {
+        borderBottom: "1px solid var(--line)",
+      },
+      ".cm-panels-bottom": {
         borderTop: "1px solid var(--line)",
       },
-      ".cm-panels .cm-panel": {
+      ".cm-panel.cm-search": {
+        display: "flex",
+        flexWrap: "wrap",
+        alignItems: "center",
+        gap: "var(--sp-1-5)",
         padding: "var(--sp-1-5) var(--sp-2)",
+        fontFamily: "var(--sans)",
+        fontSize: "var(--ui-fs-sm)",
+      },
+      ".cm-panel.cm-search label": {
+        display: "inline-flex",
+        alignItems: "center",
+        gap: "4px",
+        color: "var(--ink-2)",
+        fontSize: "var(--ui-fs-sm)",
+        userSelect: "none",
+      },
+      ".cm-panel.cm-search label input[type=checkbox]": {
+        accentColor: "var(--accent)",
+        margin: 0,
+      },
+      ".cm-panel.cm-search br": {
+        display: "none",
+      },
+      ".cm-panel.cm-search [name=close]": {
+        position: "absolute",
+        top: "4px",
+        right: "6px",
+        color: "var(--muted)",
+        background: "transparent",
+        border: "none",
+        fontSize: "var(--ui-fs-lg)",
+        cursor: "pointer",
+        padding: "0 6px",
+      },
+      ".cm-panel.cm-search [name=close]:hover": {
+        color: "var(--ink)",
       },
       ".cm-textfield": {
         backgroundColor: "var(--panel)",
         color: "var(--ink)",
         border: "1px solid var(--line-2)",
         borderRadius: "var(--radius-xs)",
-        padding: "2px 6px",
+        padding: "4px 8px",
         fontFamily: "var(--mono)",
         fontSize: "var(--ui-fs-sm)",
+        minWidth: "220px",
+      },
+      ".cm-textfield:focus": {
+        outline: "none",
+        borderColor: "var(--accent)",
+        boxShadow: "0 0 0 2px color-mix(in srgb, var(--accent) 22%, transparent)",
       },
       ".cm-button": {
         backgroundColor: "var(--panel-2)",
         color: "var(--ink)",
         border: "1px solid var(--line-2)",
         borderRadius: "var(--radius-xs)",
-        padding: "2px 8px",
+        padding: "3px 10px",
         fontFamily: "var(--sans)",
         fontSize: "var(--ui-fs-sm)",
+        cursor: "pointer",
+        backgroundImage: "none",
+        textTransform: "none",
       },
       ".cm-button:hover": {
         backgroundColor: "var(--elev)",
         borderColor: "var(--line-3)",
+      },
+      ".cm-button:active": {
+        backgroundColor: "var(--surface-2)",
       },
       ".cm-tooltip": {
         backgroundColor: "var(--elev)",
@@ -305,3 +359,38 @@ export function modeToSymbolic(mode: number): string {
 /** Lucide size="?" acceptor — keeps the typing consistent between
  *  panel rows and dialog toolbars. */
 export type LucideIconProps = { size?: number };
+
+/** CodeMirror phrase keys used by the built-in search panel. The
+ *  dialog feeds translated values through `EditorState.phrases` so
+ *  the panel respects the active locale. Keep the set small — only
+ *  strings we actually want to localize. */
+export const EDITOR_PHRASE_KEYS = [
+  "Find",
+  "Replace",
+  "next",
+  "previous",
+  "all",
+  "match case",
+  "by word",
+  "regexp",
+  "replace",
+  "replace all",
+  "close",
+  "Go to line",
+] as const;
+
+export type EditorPhraseKey = (typeof EDITOR_PHRASE_KEYS)[number];
+
+/** Build a phrase map for the editor from a translation function.
+ *  Keys that translate to themselves are omitted so CM6 falls back
+ *  to its built-in English copy. */
+export function buildEditorPhrases(
+  translate: (key: string) => string,
+): Record<string, string> {
+  const out: Record<string, string> = {};
+  for (const key of EDITOR_PHRASE_KEYS) {
+    const val = translate(key);
+    if (val && val !== key) out[key] = val;
+  }
+  return out;
+}

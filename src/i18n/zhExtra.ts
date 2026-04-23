@@ -206,6 +206,9 @@ export const zhExtra: Record<string, string> = {
   "CPU%": "CPU%",
   "MEM%": "内存%",
   "TIME": "运行时长",
+  "Sort:": "排序：",
+  "MEM": "内存",
+  "elapsed": "运行时长",
   "warming up...": "正在预热…",
   "{count} procs": "{count} 个进程",
   "(no process data)": "（无进程数据）",
@@ -492,6 +495,7 @@ export const zhExtra: Record<string, string> = {
   "SSH host key mismatch for {host}: {fingerprint}": "SSH 主机密钥不匹配：{host} 返回了 {fingerprint}",
   "SSH connection timed out after {duration}.": "SSH 连接在 {duration} 后超时。",
   "Invalid SSH configuration: {detail}": "SSH 配置无效：{detail}",
+  "SFTP error: {detail}": "SFTP 错误：{detail}",
   "SSH I/O error: {detail}": "SSH I/O 错误：{detail}",
   "Invalid configuration: {detail}": "配置无效：{detail}",
   "Saved password is missing from the system keychain. Re-enter the password to recover this connection.":
@@ -636,6 +640,8 @@ export const zhExtra: Record<string, string> = {
   "Copied path to clipboard.": "已复制路径到剪贴板。",
   "Permissions changed to {mode}.": "权限已更改为 {mode}。",
   "Created file {path}.": "已创建文件 {path}。",
+  "Remove file": "删除文件",
+  "Remove directory": "删除目录",
   "Remove file {name}?": "删除文件 {name}？",
   "Remove directory {name}? It must be empty.": "删除目录 {name}？必须为空目录。",
   "Rename {name} to:": "将 {name} 重命名为：",
@@ -667,6 +673,22 @@ export const zhExtra: Record<string, string> = {
   "Non-UTF-8 bytes were replaced with U+FFFD. Saving will persist the replacement.": "非 UTF-8 字节已替换为 U+FFFD，保存会写入替换后的内容。",
   "Loading…": "加载中…",
   "Unsaved changes": "有未保存的修改",
+  // SFTP — editor search panel (CodeMirror phrases);
+  // some common keys ("all" / "close") live earlier in this file.
+  "Find": "查找",
+  "Replace": "替换",
+  "next": "下一个",
+  "previous": "上一个",
+  "match case": "区分大小写",
+  "by word": "全字匹配",
+  "regexp": "正则",
+  "replace": "替换",
+  "replace all": "全部替换",
+  "Go to line": "跳转到行",
+  // SFTP — editor context menu
+  "Cut": "剪切",
+  "Paste": "粘贴",
+  "Select all": "全选",
 
   // SFTP — properties dialog
   "Name": "名称",

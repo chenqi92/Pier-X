@@ -241,7 +241,7 @@ button,
   border-radius: var(--radius-lg);
   box-shadow: var(--shadow-popover);
   padding: var(--sp-1) 0;
-  z-index: 200;
+  z-index: 1200;
   animation: scale-in var(--dur-fast) var(--easing);
 }
 .ctx-menu__item {
@@ -1903,21 +1903,29 @@ button,
 .mon-cell-right { text-align: right; }
 .mon-cell-muted { color: var(--muted); }
 .mon-cell-warn { color: var(--warn); }
-/* Disk table is dense: tighten the cell padding so the five columns
- * fit inside a collapsed right panel without clipping, and let the
- * mountpoint column truncate with an ellipsis instead of pushing
- * the numeric columns off-screen. */
-.mon-table--disks { table-layout: fixed; }
+/* Disk + process tables are dense: tighten the cell padding so the
+ * columns fit inside a collapsed right panel without clipping, and
+ * let the long-text columns (mountpoint, command name) truncate
+ * with an ellipsis instead of pushing the numeric columns off-
+ * screen. Both tables share the same treatment. */
+.mon-table--disks,
+.mon-table--procs { table-layout: fixed; }
 .mon-table--disks th,
-.mon-table--disks td {
+.mon-table--disks td,
+.mon-table--procs th,
+.mon-table--procs td {
   padding: 4px var(--sp-1-5);
 }
 .mon-table--disks th:first-child,
-.mon-table--disks td:first-child {
+.mon-table--disks td:first-child,
+.mon-table--procs th:first-child,
+.mon-table--procs td:first-child {
   padding-left: var(--sp-3);
 }
 .mon-table--disks th:last-child,
-.mon-table--disks td:last-child {
+.mon-table--disks td:last-child,
+.mon-table--procs th:last-child,
+.mon-table--procs td:last-child {
   padding-right: var(--sp-3);
 }
 .mon-cell-trunc {
@@ -1925,6 +1933,19 @@ button,
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
+}
+
+/* Inline sort toggle pair rendered in the `mon-block-head` slot.
+ * Reuses the `.dk-sort` pill from the Docker panel for visual
+ * consistency (same "active" underline treatment). */
+.mon-sort-group {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--sp-1-5);
+  font-size: var(--size-micro);
+  color: var(--muted);
+  text-transform: none;
+  letter-spacing: 0;
 }
 .mon-empty {
   text-align: center;
@@ -3673,6 +3694,38 @@ button,
   background: color-mix(in srgb, var(--neg) 6%, transparent);
   border-left: 2px solid var(--neg);
 }
+.lg-note--dismissible {
+  display: flex;
+  align-items: flex-start;
+  gap: var(--sp-2);
+  padding-right: var(--sp-2);
+}
+.lg-note--dismissible .lg-note-body {
+  flex: 1;
+  min-width: 0;
+  word-break: break-word;
+}
+.lg-note-close {
+  flex: none;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 18px;
+  height: 18px;
+  padding: 0;
+  margin-top: 1px;
+  color: inherit;
+  background: transparent;
+  border: 0;
+  border-radius: var(--radius-xs);
+  cursor: pointer;
+  opacity: 0.7;
+  transition: opacity var(--dur-fast) var(--easing), background var(--dur-fast) var(--easing);
+}
+.lg-note-close:hover {
+  opacity: 1;
+  background: color-mix(in srgb, currentColor 14%, transparent);
+}
 .lg-line {
   display: grid;
   grid-template-columns: 44px 72px 58px auto;
@@ -4875,6 +4928,21 @@ button,
   overflow: auto;
   white-space: pre-wrap;
   word-break: break-word;
+}
+/* Inspect output rendered inside a dialog: let it stretch to the full
+ * dialog body rather than the 240px cap that the inline-under-details
+ * variant used. */
+.dlg--inspect { width: 960px; height: 78vh; }
+.dlg-body--inspect {
+  display: block;
+  flex: 1;
+  min-height: 0;
+  padding: var(--sp-3);
+  overflow: hidden;
+}
+.dlg-body--inspect .dk-inspect-pre {
+  height: 100%;
+  max-height: none;
 }
 
 .dk-img-ic {

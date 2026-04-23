@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState, type MouseEvent as ReactMouseEvent } from "react";
 import {
   AlertTriangle,
   FileText,
@@ -26,8 +26,10 @@ import {
   indentWithTab,
 } from "@codemirror/commands";
 import {
+  search,
   searchKeymap,
   openSearchPanel,
+  closeSearchPanel,
   highlightSelectionMatches,
 } from "@codemirror/search";
 import {
@@ -39,6 +41,7 @@ import {
   syntaxHighlighting,
 } from "@codemirror/language";
 import IconButton from "./IconButton";
+import ContextMenu, { type ContextMenuItem } from "./ContextMenu";
 import { useDraggableDialog } from "./useDraggableDialog";
 import { useI18n } from "../i18n/useI18n";
 import { localizeError } from "../i18n/localizeMessage";
@@ -46,6 +49,7 @@ import * as cmd from "../lib/commands";
 import type { SftpTextFile } from "../lib/commands";
 import {
   MAX_EDITOR_BYTES,
+  buildEditorPhrases,
   buildEditorTheme,
   languageFromFilename,
   languageLabel,
@@ -108,9 +112,12 @@ export default function SftpEditorDialog({
   const [meta, setMeta] = useState<Pick<SftpTextFile, "size" | "permissions" | "modified" | "lossy"> | null>(null);
   const [dirty, setDirty] = useState(false);
   const [cursor, setCursor] = useState<{ line: number; col: number; selLen: number }>({ line: 1, col: 1, selLen: 0 });
+  const [ctxMenu, setCtxMenu] = useState<{ x: number; y: number } | null>(null);
+  const overlayDownRef = useRef(false);
 
   const formatError = (e: unknown) => localizeError(e, t);
   const effectiveName = useMemo(() => name || basename(path), [name, path]);
+  const phrases = useMemo(() => buildEditorPhrases(t), [t]);
 
   // Load file content when the dialog opens or path changes.
   useEffect(() => {
@@ -170,6 +177,7 @@ export default function SftpEditorDialog({
     if (!host) return;
     const lang = languageFromFilename(effectiveName);
     const extensions: Extension[] = [
+      EditorState.phrases.of(phrases),
       lineNumbers(),
       highlightActiveLineGutter(),
       highlightSpecialChars(),
@@ -185,6 +193,7 @@ export default function SftpEditorDialog({
       crosshairCursor(),
       highlightActiveLine(),
       highlightSelectionMatches(),
+      search({ top: true }),
       keymap.of([
         { key: "Mod-s", preventDefault: true, run: () => { void saveRef.current(); return true; } },
         { key: "Mod-f", preventDefault: true, run: openSearchPanel },
@@ -250,6 +259,68 @@ export default function SftpEditorDialog({
     onClose();
   };
 
+  const isSearchOpen = () => {
+    const v = viewRef.current;
+    return !!v && !!v.dom.querySelector(".cm-panel.cm-search");
+  };
+
+  const toggleSearch = () => {
+    const v = viewRef.current;
+    if (!v) return;
+    if (isSearchOpen()) {
+      closeSearchPanel(v);
+      v.focus();
+    } else {
+      v.focus();
+      openSearchPanel(v);
+    }
+  };
+
+  const handleEditorContextMenu = (e: ReactMouseEvent<HTMLDivElement>) => {
+    e.preventDefault();
+    setCtxMenu({ x: e.clientX, y: e.clientY });
+  };
+
+  const buildEditorContextMenu = (): ContextMenuItem[] => {
+    const v = viewRef.current;
+    const hasSelection = !!v && !v.state.selection.main.empty;
+    const copySel = async () => {
+      if (!v) return;
+      const sel = v.state.selection.main;
+      if (sel.empty) return;
+      try { await navigator.clipboard.writeText(v.state.sliceDoc(sel.from, sel.to)); } catch { /* ignore */ }
+    };
+    const cutSel = async () => {
+      if (!v) return;
+      const sel = v.state.selection.main;
+      if (sel.empty) return;
+      try { await navigator.clipboard.writeText(v.state.sliceDoc(sel.from, sel.to)); } catch { /* ignore */ }
+      v.dispatch(v.state.replaceSelection(""));
+      v.focus();
+    };
+    const pasteAt = async () => {
+      if (!v) return;
+      try {
+        const text = await navigator.clipboard.readText();
+        if (text) v.dispatch(v.state.replaceSelection(text));
+      } catch { /* ignore */ }
+      v.focus();
+    };
+    const selectAll = () => {
+      if (!v) return;
+      v.dispatch({ selection: EditorSelection.single(0, v.state.doc.length) });
+      v.focus();
+    };
+    return [
+      { label: t("Cut"), action: () => void cutSel(), disabled: !hasSelection, shortcut: "Ctrl+X" },
+      { label: t("Copy"), action: () => void copySel(), disabled: !hasSelection, shortcut: "Ctrl+C" },
+      { label: t("Paste"), action: () => void pasteAt(), shortcut: "Ctrl+V" },
+      { divider: true },
+      { label: t("Select all"), action: selectAll, shortcut: "Ctrl+A" },
+      { label: t("Find / Replace"), action: () => { if (v) { v.focus(); openSearchPanel(v); } }, shortcut: "Ctrl+F" },
+    ];
+  };
+
   // Escape to close (with dirty prompt). Scoped to the dialog lifecycle.
   useMonoKey((e) => {
     if (!open) return;
@@ -271,7 +342,18 @@ export default function SftpEditorDialog({
     : "—";
 
   return (
-    <div className="dlg-overlay" onClick={requestClose}>
+    <>
+    <div
+      className="dlg-overlay"
+      onMouseDown={(e) => { overlayDownRef.current = e.target === e.currentTarget; }}
+      onClick={(e) => {
+        // Only close when the pointer went down on the overlay itself —
+        // otherwise a drag-to-select ending on the overlay would dismiss
+        // the dialog mid-selection.
+        if (e.target === e.currentTarget && overlayDownRef.current) requestClose();
+        overlayDownRef.current = false;
+      }}
+    >
       <div
         className="dlg dlg--editor"
         style={dialogStyle}
@@ -287,10 +369,7 @@ export default function SftpEditorDialog({
           <div style={{ flex: 1 }} />
           <IconButton
             variant="mini"
-            onClick={() => {
-              const v = viewRef.current;
-              if (v) { v.focus(); openSearchPanel(v); }
-            }}
+            onClick={toggleSearch}
             title={t("Find / Replace")}
           >
             <Search size={12} />
@@ -318,7 +397,7 @@ export default function SftpEditorDialog({
         <div className="dlg-body dlg-body--editor">
           {loading && <div className="editor-loading mono">{t("Loading…")}</div>}
           {error && !loading && <div className="editor-error">{error}</div>}
-          <div ref={hostRef} className="editor-host" />
+          <div ref={hostRef} className="editor-host" onContextMenu={handleEditorContextMenu} />
         </div>
 
         <div className="editor-status mono">
@@ -342,6 +421,15 @@ export default function SftpEditorDialog({
         </div>
       </div>
     </div>
+    {ctxMenu && (
+      <ContextMenu
+        x={ctxMenu.x}
+        y={ctxMenu.y}
+        items={buildEditorContextMenu()}
+        onClose={() => setCtxMenu(null)}
+      />
+    )}
+    </>
   );
 }
 

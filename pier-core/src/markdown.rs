@@ -34,7 +34,7 @@ use std::fs;
 use std::io;
 use std::path::Path;
 
-use pulldown_cmark::{html, CowStr, Event, Options, Parser};
+use pulldown_cmark::{html, Options, Parser};
 
 /// Max file size we'll load for preview. 16 MB is well above
 /// any sane README and protects the UI from pasting a DB
@@ -62,27 +62,17 @@ fn gfm_options() -> Options {
 /// Render CommonMark + GFM-ish markdown to HTML. Never panics,
 /// always returns a string (empty input → empty output).
 ///
-/// Raw HTML embedded in the source is **escaped**, not passed
-/// through: `<script>...</script>` in a .md file becomes
-/// literal `&lt;script&gt;...&lt;/script&gt;` in the output.
-/// pulldown-cmark's default passthrough would let a hostile
-/// markdown file inject arbitrary markup into the preview.
+/// Raw HTML embedded in the source is passed through as markup
+/// so authors can use `<details>`, `<kbd>`, `<br/>` and similar
+/// tags expected in a typical README. The preview only loads
+/// files from the user's own filesystem inside a Tauri webview,
+/// not arbitrary remote content, so the passthrough matches the
+/// behavior of GitHub / VS Code markdown preview.
 pub fn render_html(source: &str) -> String {
-    let parser = Parser::new_ext(source, gfm_options()).map(sanitize_html_events);
+    let parser = Parser::new_ext(source, gfm_options());
     let mut out = String::with_capacity(source.len() + source.len() / 4);
     html::push_html(&mut out, parser);
     out
-}
-
-/// Event filter: replace [`Event::Html`] / [`Event::InlineHtml`]
-/// with [`Event::Text`] containing the same bytes. That makes
-/// pulldown-cmark's HTML renderer emit them through its text
-/// escaper, turning angle brackets into entities.
-fn sanitize_html_events(event: Event<'_>) -> Event<'_> {
-    match event {
-        Event::Html(s) | Event::InlineHtml(s) => Event::Text(CowStr::from(s.into_string())),
-        other => other,
-    }
 }
 
 /// Load a file from disk as UTF-8, returning `Err` on missing,
@@ -187,15 +177,12 @@ mod tests {
     }
 
     #[test]
-    fn escapes_html_in_source_by_default() {
-        // Raw HTML in the source should be treated as literal
-        // text (escaped), not as live markup — this is the
-        // safety rationale for not enabling pulldown-cmark's
-        // HTML passthrough option.
-        let html = render_html("look: <script>alert(1)</script>");
-        assert!(!html.contains("<script>alert(1)</script>"));
-        // Still wraps in a paragraph though.
-        assert!(html.contains("<p>"));
+    fn passes_raw_html_through() {
+        // Raw HTML embedded in markdown is emitted as markup so
+        // common README idioms like <details>/<kbd>/<br/> render.
+        let html = render_html("<details><summary>more</summary>\n\ntext\n\n</details>");
+        assert!(html.contains("<details>"));
+        assert!(html.contains("<summary>more</summary>"));
     }
 
     #[test]

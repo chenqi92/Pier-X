@@ -1,16 +1,16 @@
 import {
   ChartNoAxesCombined,
-  Database,
   FileText,
   FolderSync,
   GitBranch,
-  KeyRound,
-  Logs,
-  Table2,
-  TableProperties,
 } from "lucide-react";
 import type { ComponentType, SVGProps } from "react";
 import DockerIcon from "../components/icons/DockerIcon";
+import LogIcon from "../components/icons/LogIcon";
+import MySqlIcon from "../components/icons/MySqlIcon";
+import PostgresIcon from "../components/icons/PostgresIcon";
+import RedisIcon from "../components/icons/RedisIcon";
+import SqliteIcon from "../components/icons/SqliteIcon";
 import type { RightTool } from "./types";
 
 export type LucideIcon = ComponentType<SVGProps<SVGSVGElement> & { size?: number | string }>;
@@ -27,30 +27,31 @@ export type RightToolMeta = {
 
 // Remote-tool ordering after the divider: monitor first (broad server
 // vitals apply to every host), then sftp (filesystem access is the
-// most-used lever on any box), then docker, then the database stack,
-// then log tail, with sqlite at the tail since it's not remote-only.
+// most-used lever on any box), then log tail (paired with sftp since
+// both deal with files on the host), then docker, then the database
+// stack, with sqlite at the tail since it's not remote-only.
 // Markdown + git stay above the divider as local-workspace tools.
 export const RIGHT_TOOL_ORDER: RightTool[] = [
   "markdown",
   "git",
   "monitor",
   "sftp",
+  "log",
   "docker",
   "mysql",
   "postgres",
   "redis",
-  "log",
   "sqlite",
 ];
 
 export const SERVICE_CHIP_TOOLS: RightTool[] = [
   "monitor",
   "sftp",
+  "log",
   "docker",
   "mysql",
   "postgres",
   "redis",
-  "log",
   "sqlite",
 ];
 
@@ -82,7 +83,7 @@ export const RIGHT_TOOL_META: Record<RightTool, RightToolMeta> = {
   },
   mysql: {
     label: "MySQL",
-    icon: TableProperties,
+    icon: MySqlIcon,
     remoteOnly: true,
     tintVar: "var(--svc-mysql)",
     splashTitle: "MySQL",
@@ -90,7 +91,7 @@ export const RIGHT_TOOL_META: Record<RightTool, RightToolMeta> = {
   },
   postgres: {
     label: "PostgreSQL",
-    icon: Table2,
+    icon: PostgresIcon,
     remoteOnly: true,
     tintVar: "var(--svc-postgres)",
     splashTitle: "PostgreSQL",
@@ -98,7 +99,7 @@ export const RIGHT_TOOL_META: Record<RightTool, RightToolMeta> = {
   },
   redis: {
     label: "Redis",
-    icon: KeyRound,
+    icon: RedisIcon,
     remoteOnly: true,
     tintVar: "var(--svc-redis)",
     splashTitle: "Redis",
@@ -106,7 +107,7 @@ export const RIGHT_TOOL_META: Record<RightTool, RightToolMeta> = {
   },
   log: {
     label: "Logs",
-    icon: Logs,
+    icon: LogIcon,
     remoteOnly: true,
     tintVar: "var(--svc-log)",
     splashTitle: "Log Viewer",
@@ -122,7 +123,7 @@ export const RIGHT_TOOL_META: Record<RightTool, RightToolMeta> = {
   },
   sqlite: {
     label: "SQLite",
-    icon: Database,
+    icon: SqliteIcon,
     tintVar: "var(--svc-sqlite)",
   },
 };

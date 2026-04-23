@@ -23,7 +23,7 @@ use std::fs;
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
-use std::time::{SystemTime, UNIX_EPOCH};
+use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 use tauri::{Emitter, Manager};
 
 mod git_panel;
@@ -42,19 +42,23 @@ struct AppState {
     /// invalidates the cache via explicit eviction (not by changing
     /// the key).
     sftp_sessions: Mutex<HashMap<String, Arc<SshSession>>>,
-    /// Per-target handshake serialisation guard. Before opening a
-    /// brand-new session for a given key, every caller acquires the
-    /// corresponding `Arc<Mutex<()>>` from this map — so at most one
-    /// TCP + SSH handshake is ever in flight per target, even when
-    /// the UI fires off Monitor/SFTP/Docker probes simultaneously.
-    /// Without this, a cold cache + fast effect changes on the
-    /// frontend could fan out into N concurrent handshakes, each
-    /// blocking its own Tauri IPC worker thread for several seconds
-    /// — the direct cause of the "Pier-X (未响应)" window-title hang
-    /// users have been hitting after switching ssh targets quickly.
-    /// Entries are never removed (memory cost is one tiny mutex per
-    /// unique target ever seen in a session, negligible).
-    session_init_mutexes: Mutex<HashMap<String, Arc<Mutex<()>>>>,
+    /// Per-target handshake coordination — a singleflight gate plus
+    /// a short-lived negative cache. Every caller with a cache miss
+    /// acquires the per-key [`HandshakeGuard`] from this map:
+    ///
+    ///   * one thread wins the gate and runs the actual handshake;
+    ///   * waiters on the same key block on the gate, then re-check
+    ///     both the session cache AND the negative-failure cache —
+    ///     so if the winner's handshake rejected, every other waiter
+    ///     returns the same error without running its own attempt.
+    ///     Without the negative cache, N waiters on a broken target
+    ///     each serially re-tried a full connect, turning one slow
+    ///     failure into N × `connect_timeout_secs` of blocked IPC
+    ///     worker threads.
+    ///
+    /// Entries are never removed; memory cost is one guard per
+    /// unique target ever seen during this run (negligible).
+    session_init_guards: Mutex<HashMap<String, Arc<HandshakeGuard>>>,
     /// Per-target `/proc/net/dev` baselines used by
     /// `server_monitor_probe` to compute network throughput between
     /// successive polls. Keyed the same way as `sftp_sessions` so a
@@ -74,11 +78,44 @@ impl Default for AppState {
             tunnels: Mutex::new(HashMap::new()),
             log_streams: Mutex::new(HashMap::new()),
             sftp_sessions: Mutex::new(HashMap::new()),
-            session_init_mutexes: Mutex::new(HashMap::new()),
+            session_init_guards: Mutex::new(HashMap::new()),
             monitor_net_baselines: Mutex::new(HashMap::new()),
         }
     }
 }
+
+/// Singleflight gate + negative cache for handshake attempts against
+/// a single target. Callers with a cache miss pull an Arc of this
+/// from `AppState.session_init_guards` and interact with it before
+/// attempting their own `SshSession::connect_blocking`.
+struct HandshakeGuard {
+    /// Serialises handshake attempts — winner runs the connect,
+    /// losers wait then re-check the cache and negative entry.
+    gate: Mutex<()>,
+    /// Latest failed handshake for this target, if any, plus when it
+    /// happened. Waiters that hit this within the short TTL below
+    /// return the same error without reconnecting; older entries are
+    /// ignored so a transient failure (wifi flap, sshd restart)
+    /// doesn't permanently blackhole a target.
+    last_fail: Mutex<Option<(Instant, String)>>,
+}
+
+impl HandshakeGuard {
+    fn new() -> Self {
+        Self {
+            gate: Mutex::new(()),
+            last_fail: Mutex::new(None),
+        }
+    }
+}
+
+/// How long a recent handshake failure suppresses further attempts
+/// from waiters on the same target. Short enough that a user who
+/// retries a few seconds later actually gets a fresh attempt; long
+/// enough that a storm of waiters all piling in on the same stale
+/// session / wrong-password / unreachable-host failure doesn't each
+/// wait another full `connect_timeout_secs`.
+const HANDSHAKE_NEGATIVE_CACHE: Duration = Duration::from_secs(3);
 
 /// Event emitted to the webview whenever a terminal session has new output
 /// or exits. The frontend listens for this and requests a fresh snapshot —
@@ -444,6 +481,7 @@ struct ServerSnapshotView {
     net_rx_bps: f64,
     net_tx_bps: f64,
     top_processes: Vec<ProcessRowView>,
+    top_processes_mem: Vec<ProcessRowView>,
     disks: Vec<DiskEntryView>,
 }
 
@@ -1033,34 +1071,46 @@ fn get_or_open_ssh_session(
         }
     }
 
-    // Slow path — singleflight. Grab-or-create the per-key init
-    // mutex, release the map lock immediately (don't hold it across
-    // the handshake), then acquire the per-key mutex. Any concurrent
-    // caller for the same target will block here while one of them
-    // does the handshake; when it releases, the losers re-check the
-    // cache and walk away with the Arc the winner inserted.
+    // Slow path — singleflight with a short-lived negative cache.
     //
-    // Critically: we never hold `sftp_sessions.lock()` or
-    // `session_init_mutexes.lock()` across the actual
-    // `SshSession::connect_blocking` call. Holding either would
-    // serialise unrelated targets through a single mutex and turn a
-    // slow handshake into a global IPC-thread stall, which is
-    // exactly the failure mode this change is correcting.
-    let init_mutex = {
+    // Grab-or-create the per-key handshake guard, release the map
+    // lock immediately (never held across I/O), then:
+    //   1. Peek at the negative cache — if we failed recently for
+    //      this target, short-circuit with the same error so waiters
+    //      don't serially re-attempt a broken connect.
+    //   2. Acquire the serialisation gate; only one thread per
+    //      target runs the actual handshake at a time.
+    //   3. Re-check both the session cache and the negative cache
+    //      under the gate: a winner may have just succeeded
+    //      (populated the cache) or failed (populated last_fail).
+    //
+    // We intentionally never hold `sftp_sessions`, `session_init_guards`,
+    // or the guard's inner mutexes across `SshSession::connect_blocking`;
+    // doing so would serialise unrelated targets through one mutex
+    // and promote any slow handshake into a global IPC-thread stall.
+    let guard = {
         let mut map = state
-            .session_init_mutexes
+            .session_init_guards
             .lock()
             .map_err(|_| "session init map poisoned".to_string())?;
         map.entry(key.clone())
-            .or_insert_with(|| Arc::new(Mutex::new(())))
+            .or_insert_with(|| Arc::new(HandshakeGuard::new()))
             .clone()
     };
-    let _init_guard = init_mutex
-        .lock()
-        .map_err(|_| "session init mutex poisoned".to_string())?;
 
-    // Re-check the cache under the init guard — a sibling caller may
-    // have just inserted while we were waiting for the guard.
+    // Pre-gate negative check — avoids even acquiring the gate if
+    // we already know this target is broken.
+    if let Some(err) = recent_handshake_failure(&guard) {
+        return Err(err);
+    }
+
+    let _gate = guard
+        .gate
+        .lock()
+        .map_err(|_| "session init gate poisoned".to_string())?;
+
+    // Post-gate re-check: maybe a winner just finished while we
+    // were waiting.
     {
         let cache = state
             .sftp_sessions
@@ -1070,23 +1120,37 @@ fn get_or_open_ssh_session(
             return Ok(Arc::clone(existing));
         }
     }
+    if let Some(err) = recent_handshake_failure(&guard) {
+        return Err(err);
+    }
 
     pier_core::logging::write_event(
         "INFO",
         "ssh.cache",
         &format!("opening fresh SSH session for {}", key),
     );
-    let session = build_ssh_session_saved_or_params(
+    let session = match build_ssh_session_saved_or_params(
         saved_index, host, port, user, auth_mode, password, key_path,
-    )
-    .map_err(|e| {
-        pier_core::logging::write_event(
-            "ERROR",
-            "ssh.cache",
-            &format!("open failed for {}: {}", key, e),
-        );
-        e
-    })?;
+    ) {
+        Ok(s) => s,
+        Err(e) => {
+            // Populate the negative cache so sibling waiters don't
+            // each spend another full connect timeout.
+            if let Ok(mut slot) = guard.last_fail.lock() {
+                *slot = Some((Instant::now(), e.clone()));
+            }
+            pier_core::logging::write_event(
+                "ERROR",
+                "ssh.cache",
+                &format!("open failed for {}: {}", key, e),
+            );
+            return Err(e);
+        }
+    };
+    // Clear any stale failure entry on success.
+    if let Ok(mut slot) = guard.last_fail.lock() {
+        *slot = None;
+    }
     let arc = Arc::new(session);
 
     state
@@ -1095,6 +1159,20 @@ fn get_or_open_ssh_session(
         .map_err(|_| "ssh session cache poisoned".to_string())?
         .insert(key, Arc::clone(&arc));
     Ok(arc)
+}
+
+/// Peek at the handshake guard's negative-cache slot. Returns the
+/// cached error string only when it's still within
+/// [`HANDSHAKE_NEGATIVE_CACHE`]; older entries are ignored so a
+/// transient network glitch doesn't permanently blackhole a target.
+fn recent_handshake_failure(guard: &HandshakeGuard) -> Option<String> {
+    let slot = guard.last_fail.lock().ok()?;
+    let (at, msg) = slot.as_ref()?;
+    if at.elapsed() <= HANDSHAKE_NEGATIVE_CACHE {
+        Some(msg.clone())
+    } else {
+        None
+    }
 }
 
 /// Drop the cached session for a target. Called when a panel op
@@ -3267,40 +3345,107 @@ fn docker_container_action(
 
 // ── SFTP ────────────────────────────────────────────────────────────
 
-/// Resolve the remote user's `$HOME` over the already-authenticated
-/// session. Preferred shape is `pwd` run inside a login shell (which
-/// both respects the user's shell config AND side-steps
-/// "$HOME expands to a non-existent path" situations like DSM's
-/// `/var/services/homes/<user>: No such file or directory`: the
-/// login shell picks `/` or whatever it actually lands on). Returns
-/// an error if the exec itself fails or the output isn't a plausible
-/// absolute path. Callers treat that as "fall back to `/`".
-fn resolve_remote_home(session: &SshSession) -> Result<String, String> {
-    // Two-stage fallback: login-shell `pwd` first (what the terminal
-    // sees after login), then a raw `echo $HOME` (what ssh declared
-    // the home to be even when it's unreachable). Either is fine —
-    // whichever returns an absolute path wins.
-    let probes = [
-        "sh -lc 'pwd'",
-        "printf %s \"${HOME:-/}\"",
-    ];
-    for cmd in probes {
-        let (exit, stdout) = session
-            .exec_command_blocking(cmd)
-            .map_err(|e| e.to_string())?;
-        if exit != 0 {
-            continue;
-        }
-        let line = stdout
-            .lines()
-            .next()
-            .unwrap_or("")
-            .trim();
-        if line.starts_with('/') && !line.contains('\0') && line.len() < 4096 {
-            return Ok(line.to_string());
+/// Resolve a sensible starting directory for the SFTP panel on the
+/// remote host, using the already-authenticated session.
+///
+/// **Important caveat**: `$HOME` as reported by the server is a
+/// declaration, not a guarantee. DSM in particular hands every user
+/// a `$HOME` of `/var/services/homes/<user>` regardless of whether
+/// that path actually exists — the server will happily tell ssh
+/// "your home is X" and then print
+/// `Could not chdir to home directory X: No such file or directory`
+/// to the login shell. A naive `$HOME` probe would hand the SFTP
+/// panel that dead path and the first `list_dir` would fail.
+///
+/// So instead of trusting `$HOME`, we build an ordered list of
+/// candidate starting directories, and return the first one that
+/// passes a cheap `test -d && test -r` probe. The list is:
+///
+///   1. The login shell's own `pwd` — what the terminal side lands
+///      at after a real login; most robust because if `$HOME` was
+///      invalid the shell already fell back to `/`.
+///   2. `$HOME` as declared by the environment.
+///   3. DSM-specific layout: `/volume<N>/homes/<user>` for N=1..=4,
+///      which is where Synology's Home Service actually places per-
+///      user directories. Probed only when the username looks safe
+///      (ASCII alphanumerics and `._-` only) so we don't inject
+///      weirdness into a shell-exec test.
+///   4. `/volume1` — the most common top-level shared area on DSM.
+///   5. `/` — always listable, last resort.
+///
+/// Not silver-bullet: if a user has no listable directory anywhere
+/// on the host (extremely restrictive ACLs, no Home Service, no
+/// share access), we still hand back `/` and the caller will see
+/// whatever the server lets them see there. The point of this
+/// function is to give a sane default, not to paper over
+/// impossible-to-navigate filesystems.
+fn resolve_remote_home(session: &SshSession, user: &str) -> Result<String, String> {
+    let mut candidates: Vec<String> = Vec::new();
+
+    // Login-shell pwd — belt-and-braces even for servers that didn't
+    // mangle $HOME, because it's exactly what the terminal tab
+    // already shows.
+    if let Ok((exit, stdout)) = session.exec_command_blocking("sh -lc 'pwd' 2>/dev/null") {
+        if exit == 0 {
+            if let Some(p) = sanitise_absolute_path(stdout.lines().next().unwrap_or("")) {
+                candidates.push(p);
+            }
         }
     }
-    Err("could not resolve remote $HOME".into())
+    // Declared $HOME from the non-login environment.
+    if let Ok((exit, stdout)) = session.exec_command_blocking("printf %s \"${HOME:-}\"") {
+        if exit == 0 {
+            if let Some(p) = sanitise_absolute_path(stdout.lines().next().unwrap_or("")) {
+                candidates.push(p);
+            }
+        }
+    }
+    // DSM Home Service layout. Safe-username gate: only ASCII
+    // alphanumerics and the three usual separator characters.
+    if is_safe_shell_username(user) {
+        for n in 1..=4 {
+            candidates.push(format!("/volume{n}/homes/{user}"));
+        }
+    }
+    // Synology shared roots + universal fallback.
+    candidates.push("/volume1".into());
+    candidates.push("/".into());
+
+    // De-duplicate while preserving order: users with a real `$HOME`
+    // matching their `pwd` would otherwise probe the same path twice.
+    let mut seen = std::collections::HashSet::new();
+    candidates.retain(|p| seen.insert(p.clone()));
+
+    // Verify each candidate: directory exists AND is readable by
+    // the current user. Doing this as a single `test` exec avoids a
+    // round-trip per candidate when the first one succeeds.
+    for candidate in &candidates {
+        let quoted = shell_single_quote(candidate);
+        let cmd = format!("test -d {quoted} && test -r {quoted} && printf ok");
+        if let Ok((exit, stdout)) = session.exec_command_blocking(&cmd) {
+            if exit == 0 && stdout.trim() == "ok" {
+                return Ok(candidate.clone());
+            }
+        }
+    }
+    Err("no listable directory found among candidates".into())
+}
+
+fn sanitise_absolute_path(raw: &str) -> Option<String> {
+    let p = raw.trim();
+    if p.starts_with('/') && !p.contains('\0') && p.len() < 4096 {
+        Some(p.to_string())
+    } else {
+        None
+    }
+}
+
+fn is_safe_shell_username(user: &str) -> bool {
+    !user.is_empty()
+        && user.len() <= 64
+        && user
+            .chars()
+            .all(|c| c.is_ascii_alphanumeric() || matches!(c, '.' | '_' | '-'))
 }
 
 
@@ -3354,7 +3499,7 @@ fn sftp_browse(
         // footgun), we fall back to `/`.
         let target_path = match explicit_path.clone() {
             Some(p) => p,
-            None => resolve_remote_home(&session).unwrap_or_else(|_| "/".to_string()),
+            None => resolve_remote_home(&session, &user).unwrap_or_else(|_| "/".to_string()),
         };
 
         let canonical = sftp
@@ -3509,6 +3654,17 @@ fn server_monitor_probe(
         net_tx_bps: snap.net_tx_bps,
         top_processes: snap
             .top_processes
+            .into_iter()
+            .map(|p| ProcessRowView {
+                pid: p.pid,
+                command: p.command,
+                cpu_pct: p.cpu_pct,
+                mem_pct: p.mem_pct,
+                elapsed: p.elapsed,
+            })
+            .collect(),
+        top_processes_mem: snap
+            .top_processes_mem
             .into_iter()
             .map(|p| ProcessRowView {
                 pid: p.pid,
@@ -5192,6 +5348,7 @@ fn local_system_info() -> Result<ServerSnapshotView, String> {
             net_rx_bps: -1.0,
             net_tx_bps: -1.0,
             top_processes: Vec::new(),
+            top_processes_mem: Vec::new(),
             disks: df_snap
                 .disks
                 .into_iter()
@@ -5246,6 +5403,7 @@ fn local_system_info() -> Result<ServerSnapshotView, String> {
             net_rx_bps: -1.0,
             net_tx_bps: -1.0,
             top_processes: Vec::new(),
+            top_processes_mem: Vec::new(),
             disks: df_snap
                 .disks
                 .into_iter()

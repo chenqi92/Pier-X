@@ -13,6 +13,7 @@ import { effectiveSshTarget } from "../lib/types";
 import { useI18n } from "../i18n/useI18n";
 import { localizeError } from "../i18n/localizeMessage";
 import DbConnRow from "../components/DbConnRow";
+import DismissibleNote from "../components/DismissibleNote";
 import PanelHeader from "../components/PanelHeader";
 import PreviewTable from "../components/PreviewTable";
 import QueryResultPanel from "../components/QueryResultPanel";
@@ -420,7 +421,11 @@ export default function SqlitePanel({ tab }: Props) {
                 </button>
               </div>
             </label>
-            {error && <div className="status-note status-note--error">{error}</div>}
+            {error && (
+              <DismissibleNote variant="status" tone="error" onDismiss={() => setError("")}>
+                {error}
+              </DismissibleNote>
+            )}
           </div>
         </section>
 

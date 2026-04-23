@@ -40,6 +40,7 @@ import { useConnectionStore } from "../stores/useConnectionStore";
 import { useTabStore } from "../stores/useTabStore";
 import { useDetectedServicesStore } from "../stores/useDetectedServicesStore";
 import ContextMenu, { type ContextMenuItem } from "../components/ContextMenu";
+import DismissibleNote from "../components/DismissibleNote";
 import {
   DT_LOCAL_FILE,
   DT_SFTP_FILE,
@@ -950,14 +951,9 @@ export default function Sidebar({ onOpenLocalTerminal, onConnectSaved, onNewConn
       </div>
 
       {notice && (
-        <div
-          className="status-note status-note--error"
-          style={{ padding: "var(--sp-1-5) var(--sp-2)", cursor: "pointer" }}
-          onClick={() => setNotice(null)}
-          title={t("Dismiss")}
-        >
+        <DismissibleNote variant="status" tone="error" onDismiss={() => setNotice(null)}>
           {notice}
-        </div>
+        </DismissibleNote>
       )}
 
       {section === 0 ? (

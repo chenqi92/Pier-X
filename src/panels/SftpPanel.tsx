@@ -34,6 +34,8 @@ import StatusDot from "../components/StatusDot";
 import VirtualList from "../components/VirtualList";
 import ContextMenu, { type ContextMenuItem } from "../components/ContextMenu";
 import ChmodDialog from "../components/ChmodDialog";
+import ConfirmDialog from "../components/ConfirmDialog";
+import DismissibleNote from "../components/DismissibleNote";
 import SftpEditorDialog from "../components/SftpEditorDialog";
 import SftpNewEntryDialog from "../components/SftpNewEntryDialog";
 import { writeClipboardText } from "../lib/clipboard";
@@ -251,6 +253,17 @@ export default function SftpPanel({ tab }: Props) {
   const [newEntryName, setNewEntryName] = useState("");
 
   const [propsTarget, setPropsTarget] = useState<SftpEntryView | null>(null);
+
+  // Pending delete target for the themed ConfirmDialog. `window.confirm`
+  // is not available in Tauri's webview (returns undefined), so the
+  // previous `if (!window.confirm(...)) return` guard silently passed
+  // through and deletions fired with no user prompt. Gate the actual
+  // removal on this dialog instead. The anchor carries the click
+  // position so the dialog opens near the cursor rather than jumping
+  // to the viewport center.
+  const [deleteTarget, setDeleteTarget] = useState<
+    { entry: SftpEntryView; anchor?: { x: number; y: number } } | null
+  >(null);
 
   // SSH context can come from the tab being a real SSH tab, from a
   // local terminal where the user typed `ssh user@host`, or from a
@@ -514,15 +527,11 @@ export default function SftpPanel({ tab }: Props) {
     }
   }
 
-  /** Remove an arbitrary entry — used by the context menu. Prompts
-   *  the user before unlinking to match the "all dangerous ops
-   *  require confirmation" rule from the product spec. */
-  async function removeEntry(entry: SftpEntryView) {
+  /** Actually issue the `sftp_remove` — called by the ConfirmDialog
+   *  once the user confirms. The context-menu "Delete" action just
+   *  stages the entry via `setDeleteTarget`. */
+  async function performRemove(entry: SftpEntryView) {
     if (!hasSsh) return;
-    const msg = entry.isDir
-      ? t("Remove directory {name}? It must be empty.", { name: entry.name })
-      : t("Remove file {name}?", { name: entry.name });
-    if (!window.confirm(msg)) return;
     setActionBusy(true);
     setError("");
     setNotice("");
@@ -769,7 +778,10 @@ export default function SftpPanel({ tab }: Props) {
     selectEntry(entry);
   }
 
-  function buildEntryContextMenu(entry: SftpEntryView): ContextMenuItem[] {
+  function buildEntryContextMenu(
+    entry: SftpEntryView,
+    anchor?: { x: number; y: number },
+  ): ContextMenuItem[] {
     const canEdit = !entry.isDir && isEditableFilename(entry.name) && entry.size <= MAX_EDITOR_BYTES;
     const items: ContextMenuItem[] = [];
     if (entry.isDir) {
@@ -796,7 +808,7 @@ export default function SftpPanel({ tab }: Props) {
     }
     items.push({
       label: t("Delete"),
-      action: () => void removeEntry(entry),
+      action: () => setDeleteTarget({ entry, anchor }),
     });
     items.push({ divider: true });
     items.push({ label: t("New file…"), action: () => openNewEntryDialog("file") });
@@ -1286,8 +1298,14 @@ export default function SftpPanel({ tab }: Props) {
 
         {(notice || error) && (
           <div className="ftp-notice-bar">
-            {notice && <div className="lg-note">{notice}</div>}
-            {error && <div className="lg-note lg-note--error">{error}</div>}
+            {notice && (
+              <DismissibleNote onDismiss={() => setNotice("")}>{notice}</DismissibleNote>
+            )}
+            {error && (
+              <DismissibleNote tone="error" onDismiss={() => setError("")}>
+                {error}
+              </DismissibleNote>
+            )}
           </div>
         )}
 
@@ -1307,7 +1325,7 @@ export default function SftpPanel({ tab }: Props) {
             y={ctxMenu.y}
             items={
               ctxMenu.kind === "entry"
-                ? buildEntryContextMenu(ctxMenu.entry)
+                ? buildEntryContextMenu(ctxMenu.entry, { x: ctxMenu.x, y: ctxMenu.y })
                 : buildEmptyContextMenu()
             }
             onClose={() => setCtxMenu(null)}
@@ -1346,6 +1364,29 @@ export default function SftpPanel({ tab }: Props) {
           onNameChange={setNewEntryName}
           onSubmit={() => void submitNewEntry()}
           onClose={() => setNewEntryOpen(false)}
+        />
+
+        <ConfirmDialog
+          open={deleteTarget !== null}
+          tone="destructive"
+          title={deleteTarget?.entry.isDir ? t("Remove directory") : t("Remove file")}
+          message={
+            deleteTarget
+              ? deleteTarget.entry.isDir
+                ? t("Remove directory {name}? It must be empty.", {
+                    name: deleteTarget.entry.name,
+                  })
+                : t("Remove file {name}?", { name: deleteTarget.entry.name })
+              : ""
+          }
+          confirmLabel={t("Delete")}
+          anchor={deleteTarget?.anchor}
+          onCancel={() => setDeleteTarget(null)}
+          onConfirm={() => {
+            const target = deleteTarget;
+            setDeleteTarget(null);
+            if (target) void performRemove(target.entry);
+          }}
         />
 
 

@@ -532,6 +532,11 @@ export type ServerSnapshotView = {
   netRxBps: number;
   netTxBps: number;
   topProcesses: ProcessRowView[];
+  /** Same shape as `topProcesses` but sorted by memory % rather than
+   *  CPU %. Populated independently on the remote rather than
+   *  client-side resorted, so genuine memory hogs (Java heaps, DB
+   *  caches) that sit near 0% CPU still surface. */
+  topProcessesMem: ProcessRowView[];
   /** Per-filesystem breakdown from `df -hPT`, with Docker volumes and
    *  pseudo filesystems (tmpfs / overlay / devtmpfs) filtered out. */
   disks: DiskEntryView[];

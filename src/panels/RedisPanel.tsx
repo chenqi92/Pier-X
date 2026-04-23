@@ -1,3 +1,4 @@
+import { ChevronDown, ChevronRight } from "lucide-react";
 import { useEffect, useState } from "react";
 import * as cmd from "../lib/commands";
 import { quoteCommandArg } from "../lib/commands";
@@ -46,6 +47,9 @@ export default function RedisPanel({ tab }: Props) {
   const [addOpen, setAddOpen] = useState(false);
   const [adopting, setAdopting] = useState<DetectedDbInstance | null>(null);
   const [autoBrowseAttempted, setAutoBrowseAttempted] = useState(false);
+  // Collapsible "Connection details" drawer. See MySqlPanel for the
+  // rationale — closed by default, auto-closes on successful browse.
+  const [formOpen, setFormOpen] = useState(false);
 
   // SSH context can be inferred from a local terminal that ran `ssh
   // user@host` or from a nested-ssh overlay; either way, the tunnel
@@ -70,6 +74,10 @@ export default function RedisPanel({ tab }: Props) {
     const next = String(tab.redisDb);
     setDb((current) => (current === next ? current : next));
   }, [tab.redisDb]);
+
+  useEffect(() => {
+    if (state) setFormOpen(false);
+  }, [state]);
 
   useEffect(() => {
     if (!hasSsh || !tab.redisTunnelId) {
@@ -184,6 +192,21 @@ export default function RedisPanel({ tab }: Props) {
       setTunnelError(formatError(e));
     } finally {
       setTunnelBusy(false);
+    }
+  }
+
+  async function disconnect() {
+    setState(null);
+    setError("");
+    setCmdResult(null);
+    setCmdError("");
+    setFormOpen(false);
+    if (hasSsh && tab.redisTunnelId) {
+      try {
+        await closeTunnelSlot(tab, "redis", updateTab);
+      } catch {
+        /* best-effort */
+      }
     }
   }
 
@@ -330,170 +353,225 @@ export default function RedisPanel({ tab }: Props) {
           });
         }}
       />
-      <section className="panel-section">
-        <div className="form-stack">
-          <div className="field-grid">
-            <label className="field-stack">
-              <span className="field-label">{t("Host")}</span>
-              <input
-                className="field-input"
-                onChange={(event) => {
-                  const nextValue = event.currentTarget.value;
-                  if (hasSsh && tab.redisTunnelId && nextValue !== host) {
-                    void invalidateTunnel();
-                  }
-                  setHost(nextValue);
-                  updateTab(tab.id, { redisHost: nextValue });
-                }}
-                value={host}
-              />
-            </label>
-            <label className="field-stack">
-              <span className="field-label">{t("Port")}</span>
-              <input
-                className="field-input field-input--narrow"
-                onChange={(event) => {
-                  const nextValue = event.currentTarget.value;
-                  if (hasSsh && tab.redisTunnelId && nextValue !== port) {
-                    void invalidateTunnel();
-                  }
-                  setPort(nextValue);
-                  persistPort(nextValue);
-                }}
-                value={port}
-              />
-            </label>
-          </div>
-          <div className="field-grid">
-            <label className="field-stack">
-              <span className="field-label">{t("DB")}</span>
-              <input
-                className="field-input"
-                onChange={(event) => {
-                  const nextValue = event.currentTarget.value;
-                  setDb(nextValue);
-                  persistDb(nextValue);
-                }}
-                value={db}
-              />
-            </label>
-            <label className="field-stack">
-              <span className="field-label">{t("Pattern")}</span>
-              <input className="field-input" onChange={(event) => setPattern(event.currentTarget.value)} value={pattern} />
-            </label>
-          </div>
-          {hasSsh && (
-            <>
-              <div className="data-meta-grid">
-                <div className="meta-chip">
-                  <span>{t("Tunnel remote")}</span>
-                  <strong>{host.trim() || "127.0.0.1"}:{Number.isFinite(p) && p > 0 ? p : "?"}</strong>
-                </div>
-                <div className="meta-chip">
-                  <span>{t("Tunnel local")}</span>
-                  <strong>{tab.redisTunnelPort ? `127.0.0.1:${tab.redisTunnelPort}` : "—"}</strong>
-                </div>
-              </div>
+      {!state && (
+        <section className="panel-section">
+          <div className="form-stack">
+            <div className="status-note">
+              {busy
+                ? t("Connecting...")
+                : tab.redisActiveCredentialId
+                  ? t("Click the instance above to connect.")
+                  : hasSsh
+                    ? t("Select an instance above or configure manually.")
+                    : t("Configure a connection to begin.")}
+            </div>
+            {!busy && !formOpen && (
               <div className="button-row">
-                <button className="mini-button" disabled={!canBrowse || !!tab.redisTunnelId || tunnelBusy} onClick={() => void openTunnel(false)} type="button">
-                  {tunnelBusy ? t("Opening...") : t("Open Tunnel")}
-                </button>
-                <button className="mini-button" disabled={!tab.redisTunnelId || tunnelBusy} onClick={() => void openTunnel(true)} type="button">
-                  {t("Refresh Tunnel")}
-                </button>
-                <button className="mini-button" disabled={!tab.redisTunnelId || tunnelBusy} onClick={() => void closeTunnel()} type="button">
-                  {t("Close Tunnel")}
+                <button className="mini-button" onClick={() => setFormOpen(true)} type="button">
+                  {t("Configure manually")}
                 </button>
               </div>
-              <div className="inline-note">{t("Queries will connect through the SSH tunnel.")}</div>
-              {tunnelNotice && (
-                <DismissibleNote variant="status" onDismiss={() => setTunnelNotice("")}>
-                  {tunnelNotice}
-                </DismissibleNote>
-              )}
-              {tunnelError && (
-                <DismissibleNote variant="status" tone="error" onDismiss={() => setTunnelError("")}>
-                  {tunnelError}
-                </DismissibleNote>
-              )}
-            </>
-          )}
-          <div className="button-row">
-            <button className="mini-button" disabled={!canBrowse || busy} onClick={() => void browse()} type="button">{busy ? t("Scanning...") : t("Scan Keys")}</button>
+            )}
+            {error && (
+              <DismissibleNote variant="status" tone="error" onDismiss={() => setError("")}>
+                {error}
+              </DismissibleNote>
+            )}
           </div>
-          {state && <div className="status-note">{state.pong} · {state.serverVersion || "?"}{state.usedMemory ? ` · ${state.usedMemory}` : ""}</div>}
-          {error && (
-            <DismissibleNote variant="status" tone="error" onDismiss={() => setError("")}>
-              {error}
-            </DismissibleNote>
+        </section>
+      )}
+
+      <section className="panel-section">
+        <div className="panel-section__title">
+          <button
+            className="mini-button mini-button--ghost"
+            onClick={() => setFormOpen((o) => !o)}
+            type="button"
+          >
+            {formOpen ? <ChevronDown size={11} /> : <ChevronRight size={11} />}
+            {t("Connection details")}
+          </button>
+          {state && (
+            <span className="panel-section__hint">
+              <button
+                className="mini-button mini-button--ghost"
+                onClick={() => void disconnect()}
+                type="button"
+              >
+                {t("Disconnect")}
+              </button>
+            </span>
           )}
         </div>
+        {formOpen && (
+          <div className="form-stack">
+            <div className="field-grid">
+              <label className="field-stack">
+                <span className="field-label">{t("Host")}</span>
+                <input
+                  className="field-input"
+                  onChange={(event) => {
+                    const nextValue = event.currentTarget.value;
+                    if (hasSsh && tab.redisTunnelId && nextValue !== host) {
+                      void invalidateTunnel();
+                    }
+                    setHost(nextValue);
+                    updateTab(tab.id, { redisHost: nextValue });
+                  }}
+                  value={host}
+                />
+              </label>
+              <label className="field-stack">
+                <span className="field-label">{t("Port")}</span>
+                <input
+                  className="field-input field-input--narrow"
+                  onChange={(event) => {
+                    const nextValue = event.currentTarget.value;
+                    if (hasSsh && tab.redisTunnelId && nextValue !== port) {
+                      void invalidateTunnel();
+                    }
+                    setPort(nextValue);
+                    persistPort(nextValue);
+                  }}
+                  value={port}
+                />
+              </label>
+            </div>
+            <div className="field-grid">
+              <label className="field-stack">
+                <span className="field-label">{t("DB")}</span>
+                <input
+                  className="field-input"
+                  onChange={(event) => {
+                    const nextValue = event.currentTarget.value;
+                    setDb(nextValue);
+                    persistDb(nextValue);
+                  }}
+                  value={db}
+                />
+              </label>
+              <label className="field-stack">
+                <span className="field-label">{t("Pattern")}</span>
+                <input className="field-input" onChange={(event) => setPattern(event.currentTarget.value)} value={pattern} />
+              </label>
+            </div>
+            {hasSsh && (
+              <>
+                <div className="data-meta-grid">
+                  <div className="meta-chip">
+                    <span>{t("Tunnel remote")}</span>
+                    <strong>{host.trim() || "127.0.0.1"}:{Number.isFinite(p) && p > 0 ? p : "?"}</strong>
+                  </div>
+                  <div className="meta-chip">
+                    <span>{t("Tunnel local")}</span>
+                    <strong>{tab.redisTunnelPort ? `127.0.0.1:${tab.redisTunnelPort}` : "—"}</strong>
+                  </div>
+                </div>
+                <div className="button-row">
+                  <button className="mini-button" disabled={!canBrowse || !!tab.redisTunnelId || tunnelBusy} onClick={() => void openTunnel(false)} type="button">
+                    {tunnelBusy ? t("Opening...") : t("Open Tunnel")}
+                  </button>
+                  <button className="mini-button" disabled={!tab.redisTunnelId || tunnelBusy} onClick={() => void openTunnel(true)} type="button">
+                    {t("Refresh Tunnel")}
+                  </button>
+                  <button className="mini-button" disabled={!tab.redisTunnelId || tunnelBusy} onClick={() => void closeTunnel()} type="button">
+                    {t("Close Tunnel")}
+                  </button>
+                </div>
+                <div className="inline-note">{t("Queries will connect through the SSH tunnel.")}</div>
+                {tunnelNotice && (
+                  <DismissibleNote variant="status" onDismiss={() => setTunnelNotice("")}>
+                    {tunnelNotice}
+                  </DismissibleNote>
+                )}
+                {tunnelError && (
+                  <DismissibleNote variant="status" tone="error" onDismiss={() => setTunnelError("")}>
+                    {tunnelError}
+                  </DismissibleNote>
+                )}
+              </>
+            )}
+            <div className="button-row">
+              <button className="mini-button" disabled={!canBrowse || busy} onClick={() => void browse()} type="button">
+                {busy ? t("Connecting...") : state ? t("Reconnect") : t("Connect")}
+              </button>
+            </div>
+            {state && <div className="status-note">{state.pong} · {state.serverVersion || "?"}{state.usedMemory ? ` · ${state.usedMemory}` : ""}</div>}
+            {state && error && (
+              <DismissibleNote variant="status" tone="error" onDismiss={() => setError("")}>
+                {error}
+              </DismissibleNote>
+            )}
+          </div>
+        )}
       </section>
 
       {state && (
-        <section className="panel-section">
-          <div className="panel-section__title"><span>{t("Keys")}</span></div>
-          <div className="form-stack">
-            <div className="token-list">
-              {state.keys.map((k) => (
-                <button
-                  key={k}
-                  className={state.keyName === k ? "token-button token-button--selected" : "token-button"}
-                  onClick={() => {
-                    setKeyName(k);
-                    setCommand(`TYPE ${quoteCommandArg(k)}`);
-                    void browse(k);
-                  }}
-                  type="button"
-                >
-                  {k}
-                </button>
-              ))}
-            </div>
-            {state.truncated && <div className="inline-note">{t("Truncated")}</div>}
-          </div>
-        </section>
-      )}
-
-      {state?.details && (
-        <section className="panel-section">
-          <div className="panel-section__title"><span>{t("Key Preview")}</span></div>
-          <div className="form-stack">
-            <div className="data-meta-grid">
-              <div className="meta-chip"><span>{t("Key")}</span><strong>{state.details.key}</strong></div>
-              <div className="meta-chip"><span>{t("Type")}</span><strong>{state.details.kind}</strong></div>
-              <div className="meta-chip"><span>{t("Length")}</span><strong>{state.details.length}</strong></div>
-              <div className="meta-chip"><span>{t("TTL")}</span><strong>{state.details.ttlSeconds}</strong></div>
-            </div>
-            <div className="preview-list">{state.details.preview.map((item, index) => <div className="preview-item" key={index}>{item}</div>)}</div>
-          </div>
-        </section>
-      )}
-
-      <section className="panel-section">
-        <div className="panel-section__title"><span>{t("Command Editor")}</span></div>
-        <div className="form-stack">
-          <textarea className="field-textarea field-textarea--editor" onChange={(event) => setCommand(event.currentTarget.value)} rows={4} value={command} />
-          <div className="button-row">
-            <button className="mini-button" disabled={!canBrowse || cmdBusy} onClick={() => void runCommand()} type="button">{cmdBusy ? t("Running...") : t("Run Command")}</button>
-          </div>
-        </div>
-      </section>
-
-      {(cmdResult || cmdError) && (
-        <section className="panel-section">
-          <div className="panel-section__title"><span>{t("Command Response")}</span></div>
-          {cmdError ? (
-            <DismissibleNote variant="status" tone="error" onDismiss={() => setCmdError("")}>
-              {cmdError}
-            </DismissibleNote>
-          ) : cmdResult ? (
+        <>
+          <section className="panel-section">
+            <div className="panel-section__title"><span>{t("Keys")}</span></div>
             <div className="form-stack">
-              <div className="inline-note">{cmdResult.summary} · {cmdResult.elapsedMs} ms</div>
-              <div className="preview-list">{cmdResult.lines.map((line, index) => <div className="preview-item" key={index}>{line}</div>)}</div>
+              <div className="token-list">
+                {state.keys.map((k) => (
+                  <button
+                    key={k}
+                    className={state.keyName === k ? "token-button token-button--selected" : "token-button"}
+                    onClick={() => {
+                      setKeyName(k);
+                      setCommand(`TYPE ${quoteCommandArg(k)}`);
+                      void browse(k);
+                    }}
+                    type="button"
+                  >
+                    {k}
+                  </button>
+                ))}
+              </div>
+              {state.truncated && <div className="inline-note">{t("Truncated")}</div>}
             </div>
-          ) : null}
-        </section>
+          </section>
+
+          {state.details && (
+            <section className="panel-section">
+              <div className="panel-section__title"><span>{t("Key Preview")}</span></div>
+              <div className="form-stack">
+                <div className="data-meta-grid">
+                  <div className="meta-chip"><span>{t("Key")}</span><strong>{state.details.key}</strong></div>
+                  <div className="meta-chip"><span>{t("Type")}</span><strong>{state.details.kind}</strong></div>
+                  <div className="meta-chip"><span>{t("Length")}</span><strong>{state.details.length}</strong></div>
+                  <div className="meta-chip"><span>{t("TTL")}</span><strong>{state.details.ttlSeconds}</strong></div>
+                </div>
+                <div className="preview-list">{state.details.preview.map((item, index) => <div className="preview-item" key={index}>{item}</div>)}</div>
+              </div>
+            </section>
+          )}
+
+          <section className="panel-section">
+            <div className="panel-section__title"><span>{t("Command Editor")}</span></div>
+            <div className="form-stack">
+              <textarea className="field-textarea field-textarea--editor" onChange={(event) => setCommand(event.currentTarget.value)} rows={4} value={command} />
+              <div className="button-row">
+                <button className="mini-button" disabled={!canBrowse || cmdBusy} onClick={() => void runCommand()} type="button">{cmdBusy ? t("Running...") : t("Run Command")}</button>
+              </div>
+            </div>
+          </section>
+
+          {(cmdResult || cmdError) && (
+            <section className="panel-section">
+              <div className="panel-section__title"><span>{t("Command Response")}</span></div>
+              {cmdError ? (
+                <DismissibleNote variant="status" tone="error" onDismiss={() => setCmdError("")}>
+                  {cmdError}
+                </DismissibleNote>
+              ) : cmdResult ? (
+                <div className="form-stack">
+                  <div className="inline-note">{cmdResult.summary} · {cmdResult.elapsedMs} ms</div>
+                  <div className="preview-list">{cmdResult.lines.map((line, index) => <div className="preview-item" key={index}>{line}</div>)}</div>
+                </div>
+              ) : null}
+            </section>
+          )}
+        </>
       )}
     </div>
     </>

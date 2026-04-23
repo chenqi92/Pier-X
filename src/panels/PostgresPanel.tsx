@@ -1,3 +1,4 @@
+import { ChevronDown, ChevronRight } from "lucide-react";
 import { useEffect, useState } from "react";
 import * as cmd from "../lib/commands";
 import { isReadOnlySql, queryResultToTsv } from "../lib/commands";
@@ -16,11 +17,13 @@ import { localizeError } from "../i18n/localizeMessage";
 import DbAddCredentialDialog from "../components/DbAddCredentialDialog";
 import DbConnRow from "../components/DbConnRow";
 import DbInstancePicker from "../components/DbInstancePicker";
+import DbPasswordUpdateDialog from "../components/DbPasswordUpdateDialog";
 import DismissibleNote from "../components/DismissibleNote";
 import PanelHeader from "../components/PanelHeader";
 import PreviewTable from "../components/PreviewTable";
 import QueryResultPanel from "../components/QueryResultPanel";
 import StatusDot from "../components/StatusDot";
+import { isDbAuthError } from "../lib/dbAuthErrors";
 import { useTabStore } from "../stores/useTabStore";
 
 type Props = { tab: TabState };
@@ -54,6 +57,10 @@ export default function PostgresPanel({ tab }: Props) {
   const [addOpen, setAddOpen] = useState(false);
   const [adopting, setAdopting] = useState<DetectedDbInstance | null>(null);
   const [autoBrowseAttempted, setAutoBrowseAttempted] = useState(false);
+  // Collapsible "Connection details" drawer. See MySqlPanel for the
+  // rationale — closed by default, auto-closes on successful browse.
+  const [formOpen, setFormOpen] = useState(false);
+  const [pwUpdateOpen, setPwUpdateOpen] = useState(false);
 
   // SSH context can be inferred from a local terminal that ran `ssh
   // user@host` or from a nested-ssh overlay; either way, the tunnel
@@ -65,6 +72,11 @@ export default function PostgresPanel({ tab }: Props) {
   const canBrowse = host.trim() && user.trim() && Number.isFinite(p) && p > 0;
   const needsWrite = sql.trim() && !isReadOnlySql(sql);
   const canRun = canBrowse && sql.trim() && !queryBusy && (!needsWrite || (!readOnly && writeConfirm.trim().toUpperCase() === "WRITE"));
+  const canUpdatePassword =
+    !!error &&
+    isDbAuthError("postgres", error) &&
+    !!tab.pgActiveCredentialId &&
+    savedIndex !== null;
 
   useEffect(() => {
     setHost((current) => (current === tab.pgHost ? current : tab.pgHost));
@@ -86,6 +98,10 @@ export default function PostgresPanel({ tab }: Props) {
   useEffect(() => {
     setDbName((current) => (current === tab.pgDatabase ? current : tab.pgDatabase));
   }, [tab.pgDatabase]);
+
+  useEffect(() => {
+    if (state) setFormOpen(false);
+  }, [state]);
 
   useEffect(() => {
     if (!hasSsh || !tab.pgTunnelId) {
@@ -206,6 +222,39 @@ export default function PostgresPanel({ tab }: Props) {
       setTunnelError(formatError(e));
     } finally {
       setTunnelBusy(false);
+    }
+  }
+
+  async function handlePasswordUpdated() {
+    if (savedIndex === null || !tab.pgActiveCredentialId) return;
+    setError("");
+    try {
+      const resolved = await cmd.dbCredResolve(
+        savedIndex,
+        tab.pgActiveCredentialId,
+      );
+      const pw = resolved.password ?? "";
+      updateTab(tab.id, { pgPassword: pw });
+      setPassword(pw);
+      await browse(undefined, undefined, pw);
+    } catch (e) {
+      setError(formatError(e));
+    }
+  }
+
+  async function disconnect() {
+    setState(null);
+    setError("");
+    setQueryResult(null);
+    setQueryError("");
+    setNotice("");
+    setFormOpen(false);
+    if (hasSsh && tab.pgTunnelId) {
+      try {
+        await closeTunnelSlot(tab, "postgres", updateTab);
+      } catch {
+        /* best-effort */
+      }
     }
   }
 
@@ -388,216 +437,293 @@ export default function PostgresPanel({ tab }: Props) {
           });
         }}
       />
-      <section className="panel-section">
-        <div className="form-stack">
-          <div className="field-grid">
-            <label className="field-stack">
-              <span className="field-label">{t("Host")}</span>
-              <input
-                className="field-input"
-                onChange={(event) => {
-                  const nextValue = event.currentTarget.value;
-                  if (hasSsh && tab.pgTunnelId && nextValue !== host) {
-                    void invalidateTunnel();
-                  }
-                  setHost(nextValue);
-                  updateTab(tab.id, { pgHost: nextValue });
-                }}
-                value={host}
-              />
-            </label>
-            <label className="field-stack">
-              <span className="field-label">{t("Port")}</span>
-              <input
-                className="field-input field-input--narrow"
-                onChange={(event) => {
-                  const nextValue = event.currentTarget.value;
-                  if (hasSsh && tab.pgTunnelId && nextValue !== port) {
-                    void invalidateTunnel();
-                  }
-                  setPort(nextValue);
-                  persistPort(nextValue);
-                }}
-                value={port}
-              />
-            </label>
-          </div>
-          <div className="field-grid">
-            <label className="field-stack">
-              <span className="field-label">{t("User")}</span>
-              <input
-                className="field-input"
-                onChange={(event) => {
-                  const nextValue = event.currentTarget.value;
-                  setUser(nextValue);
-                  updateTab(tab.id, { pgUser: nextValue });
-                }}
-                value={user}
-              />
-            </label>
-            <label className="field-stack">
-              <span className="field-label">{t("Password")}</span>
-              <input
-                className="field-input"
-                type="password"
-                onChange={(event) => {
-                  const nextValue = event.currentTarget.value;
-                  setPassword(nextValue);
-                  updateTab(tab.id, { pgPassword: nextValue });
-                }}
-                value={password}
-              />
-            </label>
-          </div>
-          <div className="field-grid">
-            <label className="field-stack">
-              <span className="field-label">{t("Database")}</span>
-              <input
-                className="field-input"
-                onChange={(event) => {
-                  const nextValue = event.currentTarget.value;
-                  setDbName(nextValue);
-                  updateTab(tab.id, { pgDatabase: nextValue });
-                }}
-                value={dbName}
-              />
-            </label>
-            <label className="field-stack">
-              <span className="field-label">{t("Schema")}</span>
-              <input className="field-input" onChange={(event) => setSchema(event.currentTarget.value)} value={schema} />
-            </label>
-          </div>
-          {hasSsh && (
-            <>
-              <div className="data-meta-grid">
-                <div className="meta-chip">
-                  <span>{t("Tunnel remote")}</span>
-                  <strong>{host.trim() || "127.0.0.1"}:{Number.isFinite(p) && p > 0 ? p : "?"}</strong>
-                </div>
-                <div className="meta-chip">
-                  <span>{t("Tunnel local")}</span>
-                  <strong>{tab.pgTunnelPort ? `127.0.0.1:${tab.pgTunnelPort}` : "—"}</strong>
-                </div>
-              </div>
-              <div className="button-row">
-                <button className="mini-button" disabled={!canBrowse || !!tab.pgTunnelId || tunnelBusy} onClick={() => void openTunnel(false)} type="button">
-                  {tunnelBusy ? t("Opening...") : t("Open Tunnel")}
-                </button>
-                <button className="mini-button" disabled={!tab.pgTunnelId || tunnelBusy} onClick={() => void openTunnel(true)} type="button">
-                  {t("Refresh Tunnel")}
-                </button>
-                <button className="mini-button" disabled={!tab.pgTunnelId || tunnelBusy} onClick={() => void closeTunnel()} type="button">
-                  {t("Close Tunnel")}
-                </button>
-              </div>
-              <div className="inline-note">{t("Queries will connect through the SSH tunnel.")}</div>
-              {tunnelNotice && (
-                <DismissibleNote variant="status" onDismiss={() => setTunnelNotice("")}>
-                  {tunnelNotice}
-                </DismissibleNote>
-              )}
-              {tunnelError && (
-                <DismissibleNote variant="status" tone="error" onDismiss={() => setTunnelError("")}>
-                  {tunnelError}
-                </DismissibleNote>
-              )}
-            </>
-          )}
-          <div className="button-row">
-            <button className="mini-button" disabled={!canBrowse || busy} onClick={() => void browse()} type="button">{busy ? t("Browsing...") : t("Browse")}</button>
-          </div>
-          {error && (
-            <DismissibleNote variant="status" tone="error" onDismiss={() => setError("")}>
-              {error}
-            </DismissibleNote>
-          )}
-        </div>
-      </section>
-
-      {state && (
+      {!state && (
         <section className="panel-section">
-          <div className="panel-section__title"><span>{t("Tables & Columns")}</span></div>
           <div className="form-stack">
-            <div className="token-list">
-              {state.databases.map((db) => (
-                <button
-                  key={db}
-                  className={state.databaseName === db ? "token-button token-button--selected" : "token-button"}
-                  onClick={() => {
-                    setDbName(db);
-                    updateTab(tab.id, { pgDatabase: db });
-                    void browse(db, "");
-                  }}
-                  type="button"
-                >
-                  {db}
-                </button>
-              ))}
+            <div className="status-note">
+              {busy
+                ? t("Connecting...")
+                : tab.pgActiveCredentialId
+                  ? t("Click the instance above to connect.")
+                  : hasSsh
+                    ? t("Select an instance above or configure manually.")
+                    : t("Configure a connection to begin.")}
             </div>
-            <div className="token-list">
-              {state.tables.map((tbl) => (
-                <button
-                  key={tbl}
-                  className={state.tableName === tbl ? "token-button token-button--selected" : "token-button"}
-                  onClick={() => {
-                    setTableName(tbl);
-                    setSql(`SELECT * FROM "${schema}"."${tbl.replace(/"/g, "\"\"")}" LIMIT 100;`);
-                    void browse(dbName, tbl);
-                  }}
-                  type="button"
-                >
-                  {tbl}
+            {!busy && !formOpen && (
+              <div className="button-row">
+                <button className="mini-button" onClick={() => setFormOpen(true)} type="button">
+                  {t("Configure manually")}
                 </button>
-              ))}
-            </div>
-            {state.columns.length > 0 && (
-              <div className="column-list">
-                {state.columns.map((col) => (
-                  <div className="column-row" key={col.name}>
-                    <div className="column-row__head">
-                      <strong>{col.name}</strong>
-                      <span className="connection-pill">{col.columnType}</span>
-                    </div>
-                    <div className="column-row__meta">
-                      {col.nullable ? t("Nullable") : t("Not null")}
-                      {col.key ? ` · ${col.key}` : ""}
-                    </div>
-                  </div>
-                ))}
               </div>
+            )}
+            {error && (
+              <DismissibleNote variant="status" tone="error" onDismiss={() => setError("")}>
+                <div>{error}</div>
+                {canUpdatePassword && (
+                  <div className="button-row" style={{ marginTop: 6 }}>
+                    <button className="mini-button" onClick={() => setPwUpdateOpen(true)} type="button">
+                      {t("Update password")}
+                    </button>
+                  </div>
+                )}
+              </DismissibleNote>
             )}
           </div>
         </section>
       )}
 
-      {state && (
-        <section className="panel-section">
-          <div className="panel-section__title"><span>{t("Sample Rows")}</span></div>
-          <PreviewTable preview={state.preview} emptyLabel={t("Select a table.")} />
-        </section>
+      <section className="panel-section">
+        <div className="panel-section__title">
+          <button
+            className="mini-button mini-button--ghost"
+            onClick={() => setFormOpen((o) => !o)}
+            type="button"
+          >
+            {formOpen ? <ChevronDown size={11} /> : <ChevronRight size={11} />}
+            {t("Connection details")}
+          </button>
+          {state && (
+            <span className="panel-section__hint">
+              <button
+                className="mini-button mini-button--ghost"
+                onClick={() => void disconnect()}
+                type="button"
+              >
+                {t("Disconnect")}
+              </button>
+            </span>
+          )}
+        </div>
+        {formOpen && (
+          <div className="form-stack">
+            <div className="field-grid">
+              <label className="field-stack">
+                <span className="field-label">{t("Host")}</span>
+                <input
+                  className="field-input"
+                  onChange={(event) => {
+                    const nextValue = event.currentTarget.value;
+                    if (hasSsh && tab.pgTunnelId && nextValue !== host) {
+                      void invalidateTunnel();
+                    }
+                    setHost(nextValue);
+                    updateTab(tab.id, { pgHost: nextValue });
+                  }}
+                  value={host}
+                />
+              </label>
+              <label className="field-stack">
+                <span className="field-label">{t("Port")}</span>
+                <input
+                  className="field-input field-input--narrow"
+                  onChange={(event) => {
+                    const nextValue = event.currentTarget.value;
+                    if (hasSsh && tab.pgTunnelId && nextValue !== port) {
+                      void invalidateTunnel();
+                    }
+                    setPort(nextValue);
+                    persistPort(nextValue);
+                  }}
+                  value={port}
+                />
+              </label>
+            </div>
+            <div className="field-grid">
+              <label className="field-stack">
+                <span className="field-label">{t("User")}</span>
+                <input
+                  className="field-input"
+                  onChange={(event) => {
+                    const nextValue = event.currentTarget.value;
+                    setUser(nextValue);
+                    updateTab(tab.id, { pgUser: nextValue });
+                  }}
+                  value={user}
+                />
+              </label>
+              <label className="field-stack">
+                <span className="field-label">{t("Password")}</span>
+                <input
+                  className="field-input"
+                  type="password"
+                  onChange={(event) => {
+                    const nextValue = event.currentTarget.value;
+                    setPassword(nextValue);
+                    updateTab(tab.id, { pgPassword: nextValue });
+                  }}
+                  value={password}
+                />
+              </label>
+            </div>
+            <div className="field-grid">
+              <label className="field-stack">
+                <span className="field-label">{t("Database")}</span>
+                <input
+                  className="field-input"
+                  onChange={(event) => {
+                    const nextValue = event.currentTarget.value;
+                    setDbName(nextValue);
+                    updateTab(tab.id, { pgDatabase: nextValue });
+                  }}
+                  value={dbName}
+                />
+              </label>
+              <label className="field-stack">
+                <span className="field-label">{t("Schema")}</span>
+                <input className="field-input" onChange={(event) => setSchema(event.currentTarget.value)} value={schema} />
+              </label>
+            </div>
+            {hasSsh && (
+              <>
+                <div className="data-meta-grid">
+                  <div className="meta-chip">
+                    <span>{t("Tunnel remote")}</span>
+                    <strong>{host.trim() || "127.0.0.1"}:{Number.isFinite(p) && p > 0 ? p : "?"}</strong>
+                  </div>
+                  <div className="meta-chip">
+                    <span>{t("Tunnel local")}</span>
+                    <strong>{tab.pgTunnelPort ? `127.0.0.1:${tab.pgTunnelPort}` : "—"}</strong>
+                  </div>
+                </div>
+                <div className="button-row">
+                  <button className="mini-button" disabled={!canBrowse || !!tab.pgTunnelId || tunnelBusy} onClick={() => void openTunnel(false)} type="button">
+                    {tunnelBusy ? t("Opening...") : t("Open Tunnel")}
+                  </button>
+                  <button className="mini-button" disabled={!tab.pgTunnelId || tunnelBusy} onClick={() => void openTunnel(true)} type="button">
+                    {t("Refresh Tunnel")}
+                  </button>
+                  <button className="mini-button" disabled={!tab.pgTunnelId || tunnelBusy} onClick={() => void closeTunnel()} type="button">
+                    {t("Close Tunnel")}
+                  </button>
+                </div>
+                <div className="inline-note">{t("Queries will connect through the SSH tunnel.")}</div>
+                {tunnelNotice && (
+                  <DismissibleNote variant="status" onDismiss={() => setTunnelNotice("")}>
+                    {tunnelNotice}
+                  </DismissibleNote>
+                )}
+                {tunnelError && (
+                  <DismissibleNote variant="status" tone="error" onDismiss={() => setTunnelError("")}>
+                    {tunnelError}
+                  </DismissibleNote>
+                )}
+              </>
+            )}
+            <div className="button-row">
+              <button className="mini-button" disabled={!canBrowse || busy} onClick={() => void browse()} type="button">
+                {busy ? t("Connecting...") : state ? t("Reconnect") : t("Connect")}
+              </button>
+            </div>
+            {state && error && (
+              <DismissibleNote variant="status" tone="error" onDismiss={() => setError("")}>
+                <div>{error}</div>
+                {canUpdatePassword && (
+                  <div className="button-row" style={{ marginTop: 6 }}>
+                    <button className="mini-button" onClick={() => setPwUpdateOpen(true)} type="button">
+                      {t("Update password")}
+                    </button>
+                  </div>
+                )}
+              </DismissibleNote>
+            )}
+          </div>
+        )}
+      </section>
+      {tab.pgActiveCredentialId && savedIndex !== null && (
+        <DbPasswordUpdateDialog
+          open={pwUpdateOpen}
+          onClose={() => setPwUpdateOpen(false)}
+          savedConnectionIndex={savedIndex}
+          credentialId={tab.pgActiveCredentialId}
+          credentialLabel={dbName.trim() || host.trim() || t("PostgreSQL")}
+          onUpdated={() => void handlePasswordUpdated()}
+        />
       )}
 
-      <section className="panel-section">
-        <div className="panel-section__title"><span>{t("Query Editor")}</span></div>
-        <div className="form-stack">
-          <div className="query-guard-row">
-            <span className={readOnly ? "safety-pill safety-pill--locked" : "safety-pill safety-pill--unlocked"}>{readOnly ? t("Read Only") : t("Writes Unlocked")}</span>
-            <button className="mini-button" onClick={() => { setReadOnly((prev) => !prev); setWriteConfirm(""); }} type="button">{readOnly ? t("Unlock Writes") : t("Re-lock Writes")}</button>
-          </div>
-          <textarea className="field-textarea field-textarea--editor" onChange={(event) => setSql(event.currentTarget.value)} rows={4} value={sql} />
-          {needsWrite && !readOnly && <input className="field-input" onChange={(event) => setWriteConfirm(event.currentTarget.value)} placeholder={t("Type WRITE to confirm")} value={writeConfirm} />}
-          <div className="button-row">
-            <button className="mini-button" disabled={!canRun} onClick={() => void runQuery()} type="button">{queryBusy ? t("Running...") : t("Run Query")}</button>
-            {queryResult && <button className="mini-button" onClick={() => { void writeClipboardText(queryResultToTsv(queryResult)); setNotice(t("Copied TSV")); }} type="button">{t("Copy TSV")}</button>}
-          </div>
-          {notice && <div className="status-note">{notice}</div>}
-        </div>
-      </section>
+      {state && (
+        <>
+          <section className="panel-section">
+            <div className="panel-section__title"><span>{t("Tables & Columns")}</span></div>
+            <div className="form-stack">
+              <div className="token-list">
+                {state.databases.map((db) => (
+                  <button
+                    key={db}
+                    className={state.databaseName === db ? "token-button token-button--selected" : "token-button"}
+                    onClick={() => {
+                      setDbName(db);
+                      updateTab(tab.id, { pgDatabase: db });
+                      void browse(db, "");
+                    }}
+                    type="button"
+                  >
+                    {db}
+                  </button>
+                ))}
+              </div>
+              <div className="token-list">
+                {state.tables.map((tbl) => (
+                  <button
+                    key={tbl}
+                    className={state.tableName === tbl ? "token-button token-button--selected" : "token-button"}
+                    onClick={() => {
+                      setTableName(tbl);
+                      setSql(`SELECT * FROM "${schema}"."${tbl.replace(/"/g, "\"\"")}" LIMIT 100;`);
+                      void browse(dbName, tbl);
+                    }}
+                    type="button"
+                  >
+                    {tbl}
+                  </button>
+                ))}
+              </div>
+              {state.columns.length > 0 && (
+                <div className="column-list">
+                  {state.columns.map((col) => (
+                    <div className="column-row" key={col.name}>
+                      <div className="column-row__head">
+                        <strong>{col.name}</strong>
+                        <span className="connection-pill">{col.columnType}</span>
+                      </div>
+                      <div className="column-row__meta">
+                        {col.nullable ? t("Nullable") : t("Not null")}
+                        {col.key ? ` · ${col.key}` : ""}
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              )}
+            </div>
+          </section>
 
-      <section className="panel-section">
-        <div className="panel-section__title"><span>{t("Query Results")}</span></div>
-        <QueryResultPanel result={queryResult} error={queryError} emptyLabel={t("Run a query to see results.")} />
-      </section>
+          <section className="panel-section">
+            <div className="panel-section__title"><span>{t("Sample Rows")}</span></div>
+            <PreviewTable preview={state.preview} emptyLabel={t("Select a table.")} />
+          </section>
+
+          <section className="panel-section">
+            <div className="panel-section__title"><span>{t("Query Editor")}</span></div>
+            <div className="form-stack">
+              <div className="query-guard-row">
+                <span className={readOnly ? "safety-pill safety-pill--locked" : "safety-pill safety-pill--unlocked"}>{readOnly ? t("Read Only") : t("Writes Unlocked")}</span>
+                <button className="mini-button" onClick={() => { setReadOnly((prev) => !prev); setWriteConfirm(""); }} type="button">{readOnly ? t("Unlock Writes") : t("Re-lock Writes")}</button>
+              </div>
+              <textarea className="field-textarea field-textarea--editor" onChange={(event) => setSql(event.currentTarget.value)} rows={4} value={sql} />
+              {needsWrite && !readOnly && <input className="field-input" onChange={(event) => setWriteConfirm(event.currentTarget.value)} placeholder={t("Type WRITE to confirm")} value={writeConfirm} />}
+              <div className="button-row">
+                <button className="mini-button" disabled={!canRun} onClick={() => void runQuery()} type="button">{queryBusy ? t("Running...") : t("Run Query")}</button>
+                {queryResult && <button className="mini-button" onClick={() => { void writeClipboardText(queryResultToTsv(queryResult)); setNotice(t("Copied TSV")); }} type="button">{t("Copy TSV")}</button>}
+              </div>
+              {notice && <div className="status-note">{notice}</div>}
+            </div>
+          </section>
+
+          <section className="panel-section">
+            <div className="panel-section__title"><span>{t("Query Results")}</span></div>
+            <QueryResultPanel result={queryResult} error={queryError} emptyLabel={t("Run a query to see results.")} />
+          </section>
+        </>
+      )}
     </div>
     </>
   );

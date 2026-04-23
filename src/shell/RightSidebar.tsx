@@ -197,6 +197,9 @@ export default function RightSidebar({
   const setReady = useDetectedServicesStore((s) => s.setReady);
   const setError = useDetectedServicesStore((s) => s.setError);
   const clearDetectedTab = useDetectedServicesStore((s) => s.clearTab);
+  const setDbInstancesPending = useDetectedServicesStore((s) => s.setDbInstancesPending);
+  const setDbInstances = useDetectedServicesStore((s) => s.setDbInstances);
+  const setDbInstancesError = useDetectedServicesStore((s) => s.setDbInstancesError);
 
   // The detected-services cache is keyed by tabId, but the SSH target
   // for a tab can change (user typed `ssh user@otherhost` in a local
@@ -277,6 +280,58 @@ export default function RightSidebar({
     setPending,
     setReady,
     setError,
+  ]);
+
+  // Eager DB instance detection alongside service-chip detection.
+  // Same gating — SSH target available, terminal handshake done
+  // for ssh-backend tabs. Pre-populating the store means the first
+  // time a user opens the MySQL / Postgres / Redis picker they see
+  // the candidate list immediately without waiting on a fresh probe.
+  // Re-uses the picker's 60s TTL: already-fresh entries are skipped.
+  useEffect(() => {
+    if (!activeTab || !activeSshTarget) return;
+    if (activeTab.backend === "ssh" && activeTab.terminalSessionId === null) return;
+    const entry = useDetectedServicesStore.getState().instancesByTab[activeTab.id];
+    const fresh = entry?.status === "ready" && Date.now() - entry.at < 60_000;
+    if (fresh || entry?.status === "pending") return;
+    setDbInstancesPending(activeTab.id);
+    const tabId = activeTab.id;
+    cmd
+      .dbDetect({
+        host: activeSshTarget.host,
+        port: activeSshTarget.port,
+        user: activeSshTarget.user,
+        authMode: activeSshTarget.authMode,
+        password: activeSshTarget.password,
+        keyPath: activeSshTarget.keyPath,
+        savedConnectionIndex: activeSshTarget.savedConnectionIndex,
+      })
+      .then((report) => {
+        setDbInstances(tabId, {
+          instances: report.instances,
+          mysqlCli: report.mysqlCli,
+          psqlCli: report.psqlCli,
+          redisCli: report.redisCli,
+          sqliteCli: report.sqliteCli,
+        });
+      })
+      .catch(() => setDbInstancesError(tabId));
+    // Mirrors the dep list of the service-chip effect above —
+    // boolean presence of password, not its value, so mid-flight
+    // re-renders don't re-fire detection.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [
+    activeTab?.id,
+    activeTab?.backend,
+    activeTab?.terminalSessionId !== null,
+    activeSshTarget?.host,
+    activeSshTarget?.port,
+    activeSshTarget?.user,
+    activeSshTarget?.authMode,
+    (activeSshTarget?.password.length ?? 0) > 0,
+    setDbInstancesPending,
+    setDbInstances,
+    setDbInstancesError,
   ]);
 
   const detectedTools = useMemo(

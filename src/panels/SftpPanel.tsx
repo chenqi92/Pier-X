@@ -38,6 +38,15 @@ import SftpEditorDialog from "../components/SftpEditorDialog";
 import SftpNewEntryDialog from "../components/SftpNewEntryDialog";
 import { writeClipboardText } from "../lib/clipboard";
 import { isEditableFilename, MAX_EDITOR_BYTES, modeToSymbolic } from "../lib/sftpEditor";
+import {
+  DT_LOCAL_FILE,
+  DT_SFTP_FILE,
+  hasDragPayload,
+  readDragPayload,
+  writeDragPayload,
+  type LocalDragPayload,
+  type SftpDragPayload,
+} from "../lib/sftpDrag";
 
 /** Row height for virtualized entries, matching `.ftp-row` in shell.css
  *  (12px font · 6px padding top+bottom · 1px border). Kept in sync
@@ -75,27 +84,6 @@ function FtpSkeleton({ rows = 8 }: { rows?: number }) {
     </div>
   );
 }
-
-/** DataTransfer MIME types for cross-panel drag-drop. The Sidebar
- *  file list writes `DT_LOCAL_FILE` when the user drags a local file,
- *  and the SFTP panel writes `DT_SFTP_FILE` when dragging a remote
- *  entry. Keep these constants in sync with src/shell/Sidebar.tsx. */
-export const DT_LOCAL_FILE = "application/x-pier-localfile";
-export const DT_SFTP_FILE = "application/x-pier-sftpfile";
-
-export type LocalDragPayload = { path: string; name: string; isDir?: boolean };
-export type SftpDragPayload = {
-  path: string;
-  name: string;
-  isDir: boolean;
-  size: number;
-  /** SSH addressing — lets the sidebar's drop handler rebuild the
-   *  cached session identity without fishing in the tab store. */
-  host: string;
-  port: number;
-  user: string;
-  authMode: string;
-};
 
 type Props = { tab: TabState };
 
@@ -137,6 +125,12 @@ function localBaseName(path: string) {
   const normalized = String(path || "").replace(/[\\/]+$/, "");
   const parts = normalized.split(/[\\/]/);
   return parts[parts.length - 1] || "";
+}
+
+function joinLocalPath(dir: string, leaf: string): string {
+  const trimmed = dir.trim().replace(/[\\/]+$/, "");
+  const sep = /^[A-Za-z]:($|[\\/])|^\\\\/.test(trimmed) ? "\\" : "/";
+  return `${trimmed}${sep}${leaf}`;
 }
 
 /** Parse an `ls -l` style permission string (e.g. `-rwxr-xr--`) back
@@ -611,9 +605,7 @@ export default function SftpPanel({ tab }: Props) {
     localDir: string,
   ): Promise<void> {
     if (!hasSsh) return;
-    const trimmedDir = localDir.trim().replace(/[\\/]+$/, "");
-    const sep = /^[A-Za-z]:[\\/]|^\\\\/.test(trimmedDir) ? "\\" : "/";
-    const localPath = `${trimmedDir}${sep}${entry.name}`;
+    const localPath = joinLocalPath(localDir, entry.name);
     const id = pushTransfer({
       direction: "dn",
       name: entry.name,
@@ -848,43 +840,38 @@ export default function SftpPanel({ tab }: Props) {
   // which is handled by the Sidebar on its side.
   function handleListDragEnter(event: ReactDragEvent<HTMLDivElement>) {
     if (!hasSsh) return;
-    if (!Array.from(event.dataTransfer.types).includes(DT_LOCAL_FILE)) return;
+    if (!hasDragPayload(event.dataTransfer, DT_LOCAL_FILE)) return;
     event.preventDefault();
     setDropDepth((d) => d + 1);
   }
   function handleListDragOver(event: ReactDragEvent<HTMLDivElement>) {
     if (!hasSsh) return;
-    if (!Array.from(event.dataTransfer.types).includes(DT_LOCAL_FILE)) return;
+    if (!hasDragPayload(event.dataTransfer, DT_LOCAL_FILE)) return;
     event.preventDefault();
     event.dataTransfer.dropEffect = "copy";
   }
   function handleListDragLeave(event: ReactDragEvent<HTMLDivElement>) {
-    if (!Array.from(event.dataTransfer.types).includes(DT_LOCAL_FILE)) return;
+    if (!hasDragPayload(event.dataTransfer, DT_LOCAL_FILE)) return;
     event.preventDefault();
     setDropDepth((d) => Math.max(0, d - 1));
   }
   function handleListDrop(event: ReactDragEvent<HTMLDivElement>) {
     setDropDepth(0);
     if (!hasSsh) return;
-    const raw = event.dataTransfer.getData(DT_LOCAL_FILE);
-    if (!raw) return;
+    const payload = readDragPayload(event.dataTransfer, DT_LOCAL_FILE, "local-file");
+    if (!payload) return;
     event.preventDefault();
-    try {
-      const payload = JSON.parse(raw) as LocalDragPayload | LocalDragPayload[];
-      const items = (Array.isArray(payload) ? payload : [payload]).filter(
-        (p): p is LocalDragPayload => !!p && typeof p.path === "string",
-      );
-      if (items.length === 0) return;
-      const files = items.filter((p) => !p.isDir);
-      const dirs = items.filter((p) => p.isDir);
-      if (files.length > 0) {
-        void uploadLocalFiles(files.map((p) => p.path), currentRemotePath);
-      }
-      for (const dir of dirs) {
-        void uploadLocalTree(dir);
-      }
-    } catch {
-      // Malformed payload — silently ignore rather than scare the user.
+    const items = (Array.isArray(payload) ? payload : [payload]).filter(
+      (p): p is LocalDragPayload => !!p && typeof p.path === "string",
+    );
+    if (items.length === 0) return;
+    const files = items.filter((p) => !p.isDir);
+    const dirs = items.filter((p) => p.isDir);
+    if (files.length > 0) {
+      void uploadLocalFiles(files.map((p) => p.path), currentRemotePath);
+    }
+    for (const dir of dirs) {
+      void uploadLocalTree(dir);
     }
   }
 
@@ -935,9 +922,10 @@ export default function SftpPanel({ tab }: Props) {
       port: sshArgs.port,
       user: sshArgs.user,
       authMode: sshArgs.authMode,
+      sourceTabId: tab.id,
     };
     event.dataTransfer.effectAllowed = "copy";
-    event.dataTransfer.setData(DT_SFTP_FILE, JSON.stringify(payload));
+    writeDragPayload(event.dataTransfer, DT_SFTP_FILE, "sftp-file", payload);
   }
 
   function crumbPath(index: number): string {

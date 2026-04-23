@@ -29,7 +29,8 @@ import type {
   MouseEvent as ReactMouseEvent,
 } from "react";
 import { useEffect, useMemo, useRef, useState } from "react";
-import type { CoreInfo, FileEntry, SavedSshConnection, RightTool } from "../lib/types";
+import { effectiveSshTarget } from "../lib/types";
+import type { CoreInfo, FileEntry, NestedSshTarget, SavedSshConnection, RightTool } from "../lib/types";
 import { DRIVES_PATH } from "../lib/browserPath";
 import { RIGHT_TOOL_META, SERVICE_CHIP_TOOLS, type LucideIcon } from "../lib/rightToolMeta";
 import * as cmd from "../lib/commands";
@@ -42,9 +43,12 @@ import ContextMenu, { type ContextMenuItem } from "../components/ContextMenu";
 import {
   DT_LOCAL_FILE,
   DT_SFTP_FILE,
+  hasDragPayload,
   type LocalDragPayload,
+  readDragPayload,
   type SftpDragPayload,
-} from "../panels/SftpPanel";
+  writeDragPayload,
+} from "../lib/sftpDrag";
 
 type Props = {
   onOpenLocalTerminal: (path?: string) => void;
@@ -547,67 +551,78 @@ export default function Sidebar({ onOpenLocalTerminal, onConnectSaved, onNewConn
   //
   // The local file list is both a drag *source* (drop into SFTP
   // uploads the file) and a drag *target* (drop a remote file from
-  // SFTP downloads into the current local directory). The drop uses
-  // the active SSH tab's credentials — no extra IPC round-trip
-  // needed since the SFTP cache is keyed by addressing, not secrets.
+  // SFTP downloads into the current local directory). The drop
+  // resolves the source tab's effective SSH target, which keeps
+  // primary and nested-SSH sessions on the same path.
   const tabs = useTabStore((s) => s.tabs);
   const activeTabId = useTabStore((s) => s.activeTabId);
   const [sftpDropDepth, setSftpDropDepth] = useState(0);
   const sftpDropActive = sftpDropDepth > 0;
 
-  function resolveSshTabForPayload(payload: SftpDragPayload) {
-    // Prefer the active tab if it matches, so the download uses the
-    // same cached session that just populated the SFTP panel.
-    const active = tabs.find((tab) => tab.id === activeTabId);
-    if (
-      active &&
-      active.backend === "ssh" &&
-      active.sshHost === payload.host &&
-      active.sshPort === payload.port &&
-      active.sshUser === payload.user &&
-      active.sshAuthMode === payload.authMode
-    ) {
-      return active;
-    }
-    return tabs.find(
-      (tab) =>
-        tab.backend === "ssh" &&
-        tab.sshHost === payload.host &&
-        tab.sshPort === payload.port &&
-        tab.sshUser === payload.user &&
-        tab.sshAuthMode === payload.authMode,
+  function sshTargetMatchesPayload(target: NestedSshTarget | null, payload: SftpDragPayload) {
+    return (
+      target !== null &&
+      target.host === payload.host &&
+      target.port === payload.port &&
+      target.user === payload.user &&
+      target.authMode === payload.authMode
     );
   }
 
+  function resolveSshTargetForPayload(payload: SftpDragPayload): NestedSshTarget | null {
+    if (payload.sourceTabId) {
+      const sourceTab = tabs.find((tab) => tab.id === payload.sourceTabId);
+      const sourceTarget = sourceTab ? effectiveSshTarget(sourceTab) : null;
+      if (sshTargetMatchesPayload(sourceTarget, payload)) return sourceTarget;
+    }
+
+    // Prefer the active tab if it matches, so the download uses the
+    // same cached session that just populated the SFTP panel.
+    const active = tabs.find((tab) => tab.id === activeTabId);
+    const activeTarget = active ? effectiveSshTarget(active) : null;
+    if (sshTargetMatchesPayload(activeTarget, payload)) return activeTarget;
+
+    for (const tab of tabs) {
+      const target = effectiveSshTarget(tab);
+      if (sshTargetMatchesPayload(target, payload)) return target;
+    }
+
+    return null;
+  }
+
   async function handleSftpDropDownload(payload: SftpDragPayload) {
-    const sshTab = resolveSshTabForPayload(payload);
-    if (!sshTab) return;
-    const dir = currentPath.trim().replace(/[\\/]+$/, "");
-    if (!dir) return;
-    const sep = /^[A-Za-z]:[\\/]|^\\\\/.test(dir) ? "\\" : "/";
-    const localPath = `${dir}${sep}${payload.name}`;
+    const sshTarget = resolveSshTargetForPayload(payload);
+    if (!sshTarget) {
+      reportError(new Error(t("SSH connection required.")));
+      return;
+    }
+    if (!currentPath || currentPath === DRIVES_PATH) {
+      reportError(new Error(t("Choose a local folder before dropping SFTP files.")));
+      return;
+    }
+    const localPath = localJoin(currentPath, payload.name);
     try {
       if (payload.isDir) {
         await cmd.sftpDownloadTree({
-          host: sshTab.sshHost,
-          port: sshTab.sshPort,
-          user: sshTab.sshUser,
-          authMode: sshTab.sshAuthMode,
-          password: sshTab.sshPassword,
-          keyPath: sshTab.sshKeyPath,
-          savedConnectionIndex: sshTab.sshSavedConnectionIndex,
+          host: sshTarget.host,
+          port: sshTarget.port,
+          user: sshTarget.user,
+          authMode: sshTarget.authMode,
+          password: sshTarget.password,
+          keyPath: sshTarget.keyPath,
+          savedConnectionIndex: sshTarget.savedConnectionIndex,
           remotePath: payload.path,
           localPath,
         });
       } else {
         await cmd.sftpDownload({
-          host: sshTab.sshHost,
-          port: sshTab.sshPort,
-          user: sshTab.sshUser,
-          authMode: sshTab.sshAuthMode,
-          password: sshTab.sshPassword,
-          keyPath: sshTab.sshKeyPath,
-          savedConnectionIndex: sshTab.sshSavedConnectionIndex,
+          host: sshTarget.host,
+          port: sshTarget.port,
+          user: sshTarget.user,
+          authMode: sshTarget.authMode,
+          password: sshTarget.password,
+          keyPath: sshTarget.keyPath,
+          savedConnectionIndex: sshTarget.savedConnectionIndex,
           remotePath: payload.path,
           localPath,
         });
@@ -615,40 +630,31 @@ export default function Sidebar({ onOpenLocalTerminal, onConnectSaved, onNewConn
       // Refresh the file list so the newly-downloaded file shows up.
       cmd.listDirectory(currentPath).then(setEntries).catch(reportError);
     } catch (e) {
-      // Swallow — the SFTP panel's own error bar is the right surface
-      // for SFTP errors; the sidebar shouldn't grow its own toast
-      // system just for drop feedback. Log for debugging.
-      console.warn("sftp download from drop failed", localizeError(e, t));
+      reportError(e);
     }
   }
 
   function handleFileListDragEnter(event: ReactDragEvent<HTMLDivElement>) {
-    if (!Array.from(event.dataTransfer.types).includes(DT_SFTP_FILE)) return;
+    if (!hasDragPayload(event.dataTransfer, DT_SFTP_FILE)) return;
     event.preventDefault();
     setSftpDropDepth((d) => d + 1);
   }
   function handleFileListDragOver(event: ReactDragEvent<HTMLDivElement>) {
-    if (!Array.from(event.dataTransfer.types).includes(DT_SFTP_FILE)) return;
+    if (!hasDragPayload(event.dataTransfer, DT_SFTP_FILE)) return;
     event.preventDefault();
     event.dataTransfer.dropEffect = "copy";
   }
   function handleFileListDragLeave(event: ReactDragEvent<HTMLDivElement>) {
-    if (!Array.from(event.dataTransfer.types).includes(DT_SFTP_FILE)) return;
+    if (!hasDragPayload(event.dataTransfer, DT_SFTP_FILE)) return;
     event.preventDefault();
     setSftpDropDepth((d) => Math.max(0, d - 1));
   }
   function handleFileListDrop(event: ReactDragEvent<HTMLDivElement>) {
     setSftpDropDepth(0);
-    const raw = event.dataTransfer.getData(DT_SFTP_FILE);
-    if (!raw) return;
+    const payload = readDragPayload(event.dataTransfer, DT_SFTP_FILE, "sftp-file");
+    if (!payload) return;
     event.preventDefault();
-    try {
-      const payload = JSON.parse(raw) as SftpDragPayload;
-      if (payload.isDir) return;
-      void handleSftpDropDownload(payload);
-    } catch {
-      /* malformed payload */
-    }
+    void handleSftpDropDownload(payload);
   }
 
   function handleLocalRowDragStart(event: ReactDragEvent<HTMLDivElement>, entry: FileEntry) {
@@ -661,7 +667,7 @@ export default function Sidebar({ onOpenLocalTerminal, onConnectSaved, onNewConn
       isDir: entry.kind === "directory",
     };
     event.dataTransfer.effectAllowed = "copy";
-    event.dataTransfer.setData(DT_LOCAL_FILE, JSON.stringify(payload));
+    writeDragPayload(event.dataTransfer, DT_LOCAL_FILE, "local-file", payload);
   }
 
   // ── Local file context menu + mutations ────────────────────────
@@ -766,7 +772,7 @@ export default function Sidebar({ onOpenLocalTerminal, onConnectSaved, onNewConn
 
   function localJoin(dir: string, leaf: string): string {
     const trimmed = dir.replace(/[\\/]+$/, "");
-    const sep = /^[A-Za-z]:[\\/]|^\\\\/.test(trimmed) ? "\\" : "/";
+    const sep = /^[A-Za-z]:($|[\\/])|^\\\\/.test(trimmed) ? "\\" : "/";
     return `${trimmed}${sep}${leaf}`;
   }
 
@@ -1134,8 +1140,14 @@ export default function Sidebar({ onOpenLocalTerminal, onConnectSaved, onNewConn
                   onContextMenu={isDrive ? undefined : (e) => handleLocalRowContextMenu(e, entry)}
                   role="button"
                   tabIndex={0}
-                  draggable
-                  onDragStart={(e) => handleLocalRowDragStart(e, entry)}
+                  draggable={!isDrive}
+                  onDragStart={(e) => {
+                    if (isDrive) {
+                      e.preventDefault();
+                      return;
+                    }
+                    handleLocalRowDragStart(e, entry);
+                  }}
                 >
                   <span className="fi">{icon}</span>
                   <span className="fname">{entry.name}</span>

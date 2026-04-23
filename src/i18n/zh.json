@@ -198,6 +198,7 @@
   "Frequent folders": "常用目录",
   "Choose folder…": "选择文件夹…",
   "Choose folder": "选择文件夹",
+  "Choose a local folder before dropping SFTP files.": "请先选择一个本地文件夹，再拖放 SFTP 文件。",
   "Open terminal here": "在此打开终端",
   "Refresh": "刷新",
   "Filter files…": "筛选文件…",

@@ -204,10 +204,16 @@ export default function SftpPanel({ tab }: Props) {
     const timer = window.setTimeout(() => setNotice(""), 3000);
     return () => window.clearTimeout(timer);
   }, [notice]);
-  const [path, setPath] = useState("/");
+  // Empty-string sentinel means "ask the backend to resolve a
+  // sensible default" — it'll run `pwd` / `$HOME` on the remote and
+  // return the user's home rather than dropping us at `/`. Once the
+  // first browse lands, this is set to whatever `current_path` came
+  // back (already canonicalised), and every subsequent browse
+  // carries an explicit path.
+  const [path, setPath] = useState("");
   const [selectedPath, setSelectedPath] = useState("");
   const [editingPath, setEditingPath] = useState(false);
-  const [pathDraft, setPathDraft] = useState("/");
+  const [pathDraft, setPathDraft] = useState("");
   const [history, setHistory] = useState<string[]>([]);
   const [forward, setForward] = useState<string[]>([]);
 
@@ -724,7 +730,11 @@ export default function SftpPanel({ tab }: Props) {
     if (!hasSsh) return;
     if (state) return;
     if (busy) return;
-    void browse(path || "/");
+    // Pass the current path (which is "" on the very first browse);
+    // the backend resolves that sentinel to the remote user's $HOME
+    // / login-shell `pwd`. Once we have state, subsequent browses
+    // always carry an explicit path.
+    void browse(path);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [
     tab.id,
@@ -1094,7 +1104,7 @@ export default function SftpPanel({ tab }: Props) {
           onDrop={handleListDrop}
         >
           <div className="lg-note">
-            <button type="button" className="btn is-primary is-compact" onClick={() => void browse(path || "/")}>
+            <button type="button" className="btn is-primary is-compact" onClick={() => void browse(path)}>
               {t("Browse")}
             </button>
           </div>

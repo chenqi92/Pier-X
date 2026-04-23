@@ -91,6 +91,16 @@ pub enum NotifyEvent {
     /// fetch the new target via [`PierTerminal::current_ssh_target`]
     /// and update any right-side state bound to this session.
     SshStateChanged = 2,
+    /// The reader thread saw an OpenSSH password / passphrase prompt
+    /// in the PTY output (matched against the canonical
+    /// `<user>@<host>'s password:` / `Enter passphrase for key`
+    /// shapes). The consumer should arm a one-shot capture: the very
+    /// next Enter-terminated line the user types is the credential
+    /// we want to mirror into the right-side russh session. Firing
+    /// only on the specific OpenSSH shape (not generic "password:")
+    /// keeps remote `sudo` / local `passwd` prompts from triggering
+    /// a capture.
+    SshPasswordPrompt = 3,
 }
 
 /// Function-pointer signature for the notify callback.
@@ -308,8 +318,14 @@ impl PierTerminal {
                                 if ssh_watcher::output_indicates_ssh_failure(&chunk) {
                                     ssh_failure_kick.store(true, Ordering::Relaxed);
                                 }
+                                let saw_password_prompt =
+                                    ssh_watcher::output_indicates_ssh_password_prompt(&chunk);
                                 guard.emu.process(&chunk);
-                                ReadOutcome::Data
+                                if saw_password_prompt {
+                                    ReadOutcome::PasswordPrompt
+                                } else {
+                                    ReadOutcome::Data
+                                }
                             }
                             Ok(_) => ReadOutcome::Idle,
                             Err(_) => ReadOutcome::Done,
@@ -322,6 +338,15 @@ impl PierTerminal {
                             // callback turns around and calls snapshot,
                             // we've already released — no deadlock.
                             (notify)(user_data, NotifyEvent::DataReady as u32);
+                        }
+                        ReadOutcome::PasswordPrompt => {
+                            // Fire the data notification first so the
+                            // prompt text renders in the terminal
+                            // grid, then the prompt event so the UI
+                            // can arm a one-shot capture before the
+                            // user finishes typing.
+                            (notify)(user_data, NotifyEvent::DataReady as u32);
+                            (notify)(user_data, NotifyEvent::SshPasswordPrompt as u32);
                         }
                         ReadOutcome::Idle => {
                             thread::sleep(idle);
@@ -695,6 +720,10 @@ impl Drop for PierTerminal {
 
 enum ReadOutcome {
     Data,
+    /// Same as `Data` but the chunk contained an OpenSSH password /
+    /// passphrase prompt, so the caller should also fire a
+    /// `SshPasswordPrompt` event after the data notification.
+    PasswordPrompt,
     Idle,
     Done,
 }

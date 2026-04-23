@@ -254,6 +254,74 @@ pub async fn probe_with_baseline(
         snap.top_processes = parse_top_processes(s);
     }
 
+    // Post-parse sanity check: if every rich field is still at its
+    // sentinel default, the remote host responded but nothing in the
+    // output matched. Most common cause is a BusyBox / embedded
+    // build (Synology DSM, OpenWRT) that ships neither `free` nor
+    // `/proc/stat` in the expected shapes.
+    //
+    // Two levels of reporting:
+    //   * non-sensitive summary (always on) — counts / booleans
+    //     only, useful for "did the probe parse anything at all".
+    //   * raw output excerpt (verbose-diagnostics gate) — the first
+    //     800 chars of the remote stdout. Contains hostnames,
+    //     `/etc/os-release`, process command names, df mountpoints.
+    //     Nothing password-grade (the probe doesn't read
+    //     `/etc/shadow` or env vars), but still user-identifying, so
+    //     it's gated behind `set_verbose_diagnostics` and stays off
+    //     by default.
+    let degraded = snap.cpu_pct < 0.0
+        && snap.mem_total_mb < 0.0
+        && snap.disk_use_pct < 0.0
+        && snap.cpu_count == 0
+        && snap.proc_count == 0
+        && snap.os_label.is_empty()
+        && snap.top_processes.is_empty();
+    if degraded {
+        crate::logging::write_event(
+            "WARN",
+            "monitor.parse",
+            &format!(
+                "all fields empty after parse (exit={}, stdout_bytes={}); \
+                 enable verbose diagnostics in settings to include the raw excerpt",
+                exit,
+                stdout.len(),
+            ),
+        );
+        // Verbose path: opt-in, tagged so it's obvious in the file.
+        let excerpt: String = stdout.chars().take(800).collect();
+        crate::logging::write_event_verbose(
+            "WARN",
+            "monitor.parse",
+            &format!(
+                "probe stdout excerpt (exit={}, stdout_bytes={}, first 800 chars): {}",
+                exit,
+                stdout.len(),
+                excerpt
+            ),
+        );
+    } else {
+        // Non-sensitive partial-degradation log — just the list of
+        // missing-field names, no remote output, always safe to
+        // record. Helps a user looking at an all-dashes sub-gauge
+        // find a reason (`cpu_pct=-1` → `/proc/stat` was missing).
+        let mut missing: Vec<&str> = Vec::new();
+        if snap.cpu_pct < 0.0 { missing.push("cpu_pct"); }
+        if snap.mem_total_mb < 0.0 { missing.push("mem"); }
+        if snap.disk_use_pct < 0.0 { missing.push("disk"); }
+        if snap.cpu_count == 0 { missing.push("cpu_count"); }
+        if snap.proc_count == 0 { missing.push("proc_count"); }
+        if snap.os_label.is_empty() { missing.push("os_label"); }
+        if snap.top_processes.is_empty() { missing.push("top_processes"); }
+        if !missing.is_empty() {
+            crate::logging::write_event(
+                "DEBUG",
+                "monitor.parse",
+                &format!("partial probe: missing [{}]", missing.join(", ")),
+            );
+        }
+    }
+
     Ok(snap)
 }
 

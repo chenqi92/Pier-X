@@ -11,6 +11,7 @@ import DbConnRow from "../components/DbConnRow";
 import PanelHeader from "../components/PanelHeader";
 import StatusDot from "../components/StatusDot";
 import { useUiActionsStore } from "../stores/useUiActionsStore";
+import { logEvent } from "../lib/logger";
 
 type Props = {
   tab: TabState;
@@ -126,6 +127,13 @@ export default function ServerMonitorPanel({ tab, onEditConnection, isActive = t
     setBusy(true);
     setError("");
     setNeedsPasswordRecovery(false);
+    const started = Date.now();
+    const targetLabel = sshTarget
+      ? `${sshTarget.user}@${sshTarget.host}:${sshTarget.port} (auth=${sshTarget.authMode}, password=${sshTarget.password ? `len${sshTarget.password.length}` : "none"}, savedIdx=${sshTarget.savedConnectionIndex ?? "-"})`
+      : isLocal
+        ? "local"
+        : "no-connection";
+    logEvent("DEBUG", "monitor.panel", `tab=${tab.id} probe start → ${targetLabel}`);
     try {
       const s = isLocal
         ? await cmd.localSystemInfo()
@@ -142,15 +150,26 @@ export default function ServerMonitorPanel({ tab, onEditConnection, isActive = t
           : null;
       if (!s) {
         setError(t("No connection available."));
+        logEvent("WARN", "monitor.panel", `tab=${tab.id} probe → no target`);
         return;
       }
       setSnap(s);
       setLastProbed(Date.now());
+      const elapsed = Date.now() - started;
+      const degraded =
+        s.cpuPct < 0 && s.memTotalMb < 0 && s.diskUsePct < 0 && s.procCount === 0;
+      logEvent(
+        degraded ? "WARN" : "DEBUG",
+        "monitor.panel",
+        `tab=${tab.id} probe ok in ${elapsed}ms${degraded ? " (all fields empty — remote output did not parse)" : ""}`,
+      );
     } catch (e) {
       // Keep the last good snapshot visible instead of blanking the whole
       // panel — a transient SSH hiccup shouldn't unmount the gauges.
-      setError(formatError(e));
+      const msg = formatError(e);
+      setError(msg);
       if (isMissingKeychainError(e)) setNeedsPasswordRecovery(true);
+      logEvent("ERROR", "monitor.panel", `tab=${tab.id} probe failed: ${msg}`);
     } finally {
       setBusy(false);
     }

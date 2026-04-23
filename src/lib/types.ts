@@ -641,7 +641,7 @@ export type TerminalTarget =
       host: string;
       port: number;
       user: string;
-      authMode: "password" | "agent" | "key";
+      authMode: "password" | "agent" | "key" | "auto";
       password?: string;
       keyPath?: string;
     };
@@ -678,7 +678,7 @@ export type NestedSshTarget = {
   host: string;
   user: string;
   port: number;
-  authMode: "password" | "agent" | "key";
+  authMode: "password" | "agent" | "key" | "auto";
   password: string;
   keyPath: string;
   savedConnectionIndex: number | null;
@@ -693,7 +693,7 @@ export type TabState = {
   sshHost: string;
   sshPort: number;
   sshUser: string;
-  sshAuthMode: "password" | "agent" | "key";
+  sshAuthMode: "password" | "agent" | "key" | "auto";
   sshPassword: string;
   sshKeyPath: string;
   /** Index into the saved-connections list. When set, the backend

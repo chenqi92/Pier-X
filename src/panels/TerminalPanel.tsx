@@ -19,6 +19,7 @@ import { parseSshCommand } from "../lib/parseSshCommand";
 import { readClipboardText, writeClipboardText } from "../lib/clipboard";
 import { useConnectionStore } from "../stores/useConnectionStore";
 import { useUiActionsStore } from "../stores/useUiActionsStore";
+import { logEvent } from "../lib/logger";
 
 /**
  * Resolve a backend-emitted color tag against the user's selected terminal
@@ -127,16 +128,23 @@ export default function TerminalPanel({ tab, isActive, onEditConnection }: Props
   // both transitions.
   const commandBufferRef = useRef("");
 
-  // Single-shot "the next typed line is probably the password ssh is
-  // prompting for" tracker. Armed by `applySshContextFromCommand`
-  // when the user types `ssh user@host` without `-i` and without
-  // matching saved key/agent credentials, since in that case the
-  // local ssh.exe child process is about to ask for a password and
-  // we want to mirror that into `tab.sshPassword` so the right-side
-  // russh session can authenticate the same way without a second
-  // prompt. Cleared after one capture or after the deadline, and
-  // skipped entirely if `tab.sshPassword` is already populated
-  // (e.g. resolved from the keychain).
+  // Prompt-anchored capture window. Armed when the backend PTY
+  // reader sees the canonical OpenSSH `<user>@<host>'s password:` /
+  // `Enter passphrase for key` shape in the output stream and fires
+  // `terminal:ssh-password-prompt`. The very next Enter-terminated
+  // line the user types (with echo disabled by ssh, so we only see
+  // it because pier-x forwards raw keystrokes to the PTY) is mirrored
+  // into `tab.sshPassword` for the right-side russh session. After
+  // one capture the window disarms; a second wrong attempt re-fires
+  // the prompt event from the backend, which re-arms us cleanly. The
+  // 60s deadline is a safety net so a stale arm doesn't grab an
+  // unrelated line if the user walked away.
+  //
+  // Fully deterministic compared with the previous keystroke-shape
+  // heuristic: `sudo` prompts, local `passwd`, and post-login
+  // single-word commands (`ls`, `pwd`) can no longer be mistaken for
+  // the ssh password because they don't emit the specific OpenSSH
+  // prompt pattern the backend is matching on.
   const pendingPasswordCaptureRef = useRef<{ deadline: number } | null>(null);
 
   // Sync session ID to tab store
@@ -441,11 +449,31 @@ export default function TerminalPanel({ tab, isActive, onEditConnection }: Props
       else unlistenSshState = u;
     });
 
+    // Subscribe to the one-shot password-prompt event. The PTY
+    // reader fires this when it sees the canonical OpenSSH prompt
+    // shape in the output bytes — which is the only moment at which
+    // "the next typed line is the password" is actually true. Arming
+    // from keystroke parsing was fundamentally heuristic (missed
+    // history-edited / pasted `ssh` lines, and couldn't distinguish
+    // a post-login single-word command from a second password
+    // attempt); arming from the prompt itself is precise.
+    let unlistenSshPrompt: UnlistenFn | undefined;
+    void listen<{ sessionId: string }>("terminal:ssh-password-prompt", (event) => {
+      if (disposed) return;
+      if (event.payload.sessionId !== session.sessionId) return;
+      pendingPasswordCaptureRef.current = { deadline: Date.now() + 60_000 };
+      logEvent("INFO", "ssh.capture", `tab=${tab.id} armed capture on OpenSSH password prompt`);
+    }).then((u) => {
+      if (disposed) u();
+      else unlistenSshPrompt = u;
+    });
+
     return () => {
       disposed = true;
       if (safety !== null) window.clearTimeout(safety);
       if (unlisten) unlisten();
       if (unlistenSshState) unlistenSshState();
+      if (unlistenSshPrompt) unlistenSshPrompt();
     };
   }, [session, scrollbackOffset]);
 
@@ -606,25 +634,46 @@ export default function TerminalPanel({ tab, isActive, onEditConnection }: Props
    */
   function maybeCapturePasswordFromLine(line: string): void {
     const pending = pendingPasswordCaptureRef.current;
-    if (!pending) return;
-    pendingPasswordCaptureRef.current = null; // single-shot regardless
-    if (Date.now() > pending.deadline) return;
+    if (!pending) {
+      return;
+    }
+    if (Date.now() > pending.deadline) {
+      logEvent("DEBUG", "ssh.capture", `tab=${tab.id} capture window expired`);
+      pendingPasswordCaptureRef.current = null;
+      return;
+    }
+
+    // One-shot: disarm immediately. If the remote rejects the
+    // password, the PTY reader will see another OpenSSH prompt and
+    // re-fire `terminal:ssh-password-prompt`, which re-arms us.
+    pendingPasswordCaptureRef.current = null;
 
     const trimmed = line.trim();
+    // Empty Enter at the prompt means the user submitted nothing —
+    // ssh re-prompts, the backend fires the event again, and we'll
+    // arm ourselves fresh.
     if (!trimmed) return;
+    // Pathologically long values are almost certainly not a password;
+    // drop silently.
     if (trimmed.length > 256) return;
-    if (/\s/.test(trimmed)) return;
 
-    // Don't overwrite a working password resolved from the keychain
-    // or set by a previous capture — the user is just running their
-    // first command at the new shell prompt, not re-entering creds.
     const current = useTabStore.getState().tabs.find((t) => t.id === tab.id);
     if (!current) return;
     if (tab.backend === "local") {
-      if (current.sshPassword) return;
+      if (current.sshPassword === trimmed) return;
+      logEvent(
+        "INFO",
+        "ssh.capture",
+        `tab=${tab.id} captured password (len=${trimmed.length}, overwrote=${current.sshPassword ? "yes" : "no"}) for ${current.sshUser}@${current.sshHost}:${current.sshPort}`,
+      );
       updateTab(tab.id, { sshPassword: trimmed });
     } else if (current.nestedSshTarget) {
-      if (current.nestedSshTarget.password) return;
+      if (current.nestedSshTarget.password === trimmed) return;
+      logEvent(
+        "INFO",
+        "ssh.capture",
+        `tab=${tab.id} captured nested password (overwrote=${current.nestedSshTarget.password ? "yes" : "no"}) for ${current.nestedSshTarget.user}@${current.nestedSshTarget.host}:${current.nestedSshTarget.port}`,
+      );
       updateTab(tab.id, {
         nestedSshTarget: { ...current.nestedSshTarget, password: trimmed },
       });
@@ -667,6 +716,11 @@ export default function TerminalPanel({ tab, isActive, onEditConnection }: Props
         || current.sshSavedConnectionIndex !== null
         || current.nestedSshTarget !== null
       ) {
+        logEvent(
+          "INFO",
+          "ssh.watcher",
+          `tab=${tab.id} ssh child exited; clearing cached ${current.sshUser}@${current.sshHost}:${current.sshPort} (had password=${current.sshPassword ? "yes" : "no"})`,
+        );
         updateTab(tab.id, {
           sshHost: "",
           sshPort: 22,
@@ -693,8 +747,22 @@ export default function TerminalPanel({ tab, isActive, onEditConnection }: Props
       ?? conns.find((c) => sameHostUser(c))
       ?? conns.find((c) => c.host.trim().toLowerCase() === hostLc);
 
-    const authMode: "password" | "agent" | "key" =
-      matched?.authKind ?? (target.identityPath ? "key" : "password");
+    // Auth-mode inference order:
+    //   1. A saved connection match wins — the user already decided
+    //      which mode this host uses.
+    //   2. Explicit `-i <keyfile>` on the ssh argv → `key` mode
+    //      against that exact path.
+    //   3. Everything else (including plain `ssh user@host` that
+    //      authenticated via SSH agent or a default `~/.ssh/id_*`
+    //      file) → `auto`. The backend chains agent + conventional
+    //      default identity files so a passwordless key login on the
+    //      terminal side lets the right-side russh session reach the
+    //      same host without us having a credential to carry. The
+    //      old default here was `password`, which guaranteed the
+    //      monitor probe would fail with "SSH auth rejected" the
+    //      moment the user used a public key.
+    const authMode: "password" | "agent" | "key" | "auto" =
+      matched?.authKind ?? (target.identityPath ? "key" : "auto");
     const keyPath = target.identityPath || matched?.keyPath || "";
     const savedConnectionIndex = matched ? matched.index : null;
 
@@ -709,6 +777,11 @@ export default function TerminalPanel({ tab, isActive, onEditConnection }: Props
       && current.sshUser.trim().toLowerCase() === target.user.toLowerCase()
       && current.sshPort === port;
 
+    logEvent(
+      "INFO",
+      "ssh.watcher",
+      `tab=${tab.id} ssh child detected: ${target.user}@${target.host}:${port} authMode=${authMode} savedIdx=${savedConnectionIndex ?? "-"} sameTarget=${sameTarget} passwordRetained=${sameTarget && !!current.sshPassword}`,
+    );
     updateTab(tab.id, {
       sshHost: target.host,
       sshPort: port,
@@ -794,9 +867,20 @@ export default function TerminalPanel({ tab, isActive, onEditConnection }: Props
     const expectsInteractivePassword =
       !parsed.identityPath
       && (matched === undefined || matched.authKind === "password");
-    pendingPasswordCaptureRef.current = expectsInteractivePassword
-      ? { deadline: Date.now() + 60_000 }
-      : null;
+    // NOTE: we no longer arm the capture here. The backend PTY
+    // reader fires `terminal:ssh-password-prompt` when it sees the
+    // actual OpenSSH prompt in the output stream, and the listener
+    // in this component arms the capture one line ahead of the
+    // user's keystrokes. That's more precise than guessing from the
+    // `ssh …` command line — it works for history-edited invocations,
+    // pasted commands, and nested ssh; and it doesn't fire for
+    // remote `sudo` / local `passwd` whose prompt shapes differ.
+    // `expectsInteractivePassword` is retained only to suppress the
+    // capture when we know a saved key/agent is already handling
+    // auth — without a prompt from ssh there's nothing to capture.
+    if (!expectsInteractivePassword) {
+      pendingPasswordCaptureRef.current = null;
+    }
 
     // Nested ssh inside a real SSH-backend tab: the backend watcher
     // on this tab's PTY won't see anything (the PTY is a remote ssh
@@ -804,8 +888,8 @@ export default function TerminalPanel({ tab, isActive, onEditConnection }: Props
     // state from the input scan. Local-backend tabs defer entirely
     // to the watcher event.
     if (tab.backend === "ssh") {
-      const authMode: "password" | "agent" | "key" =
-        matched?.authKind ?? (parsed.identityPath ? "key" : "password");
+      const authMode: "password" | "agent" | "key" | "auto" =
+        matched?.authKind ?? (parsed.identityPath ? "key" : "auto");
       const keyPath = parsed.identityPath || matched?.keyPath || "";
       const savedConnectionIndex = matched ? matched.index : null;
 

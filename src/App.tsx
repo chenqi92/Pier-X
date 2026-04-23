@@ -9,7 +9,8 @@ import {
   SquareTerminal,
   X,
 } from "lucide-react";
-import { openUrl } from "@tauri-apps/plugin-opener";
+import { openUrl, openPath, revealItemInDir } from "@tauri-apps/plugin-opener";
+import { getLogFilePath } from "./lib/logger";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import { I18nContext, makeI18n } from "./i18n/useI18n";
 import { isBrowsableRepoPath } from "./lib/browserPath";
@@ -454,6 +455,25 @@ function App() {
           { divider: true },
           { label: i18n.t("Documentation"), action: () => { void openUrl("https://github.com/chenqi92/Pier-X#readme"); } },
           { label: i18n.t("Report an issue"), action: () => { void openUrl("https://github.com/chenqi92/Pier-X/issues/new"); } },
+          { divider: true },
+          {
+            label: i18n.t("Open log file"),
+            action: () => {
+              void (async () => {
+                const p = await getLogFilePath();
+                if (p) await openPath(p).catch(() => {});
+              })();
+            },
+          },
+          {
+            label: i18n.t("Show log in folder"),
+            action: () => {
+              void (async () => {
+                const p = await getLogFilePath();
+                if (p) await revealItemInDir(p).catch(() => {});
+              })();
+            },
+          },
           { divider: true },
           { label: i18n.t("About Pier-X"), action: () => {
             const v = coreInfo?.version ?? "0.1.0";

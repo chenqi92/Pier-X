@@ -50,6 +50,24 @@ export const TERMINAL_THEMES: TerminalTheme[] = [
   },
 ];
 
+const DEFAULT_DARK_TERMINAL_THEME_INDEX = 0;
+const DEFAULT_LIGHT_TERMINAL_THEME_INDEX = 1;
+
+function clampTerminalThemeIndex(index: number): number {
+  return Math.max(0, Math.min(index, TERMINAL_THEMES.length - 1));
+}
+
+function isDefaultTerminalThemeIndex(index: number): boolean {
+  return (
+    index === DEFAULT_DARK_TERMINAL_THEME_INDEX
+    || index === DEFAULT_LIGHT_TERMINAL_THEME_INDEX
+  );
+}
+
+function defaultTerminalThemeIndexFor(dark: boolean): number {
+  return dark ? DEFAULT_DARK_TERMINAL_THEME_INDEX : DEFAULT_LIGHT_TERMINAL_THEME_INDEX;
+}
+
 type ThemeState = {
   mode: ThemeMode;
   resolvedDark: boolean;
@@ -111,22 +129,17 @@ export const useThemeStore = create<ThemeState>((set, get) => {
   const initialMode: ThemeMode = stored.mode ?? "dark";
   const initialAccent: AccentName = stored.accent ?? "blue";
   const initialDensity: Density = stored.density ?? "compact";
-  const initialTerminalIndex = stored.terminalThemeIndex ?? 0;
   const initialDark = resolveTheme(initialMode);
+  const storedTerminalIndex = clampTerminalThemeIndex(
+    stored.terminalThemeIndex ?? defaultTerminalThemeIndexFor(initialDark),
+  );
+  const initialTerminalIndex = isDefaultTerminalThemeIndex(storedTerminalIndex)
+    ? defaultTerminalThemeIndexFor(initialDark)
+    : storedTerminalIndex;
 
   applyTheme(initialDark);
   applyAccent(initialAccent);
   applyDensity(initialDensity);
-
-  const mql = window.matchMedia("(prefers-color-scheme: dark)");
-  mql.addEventListener("change", () => {
-    const state = useThemeStore.getState();
-    if (state.mode === "system") {
-      const dark = resolveTheme("system");
-      applyTheme(dark);
-      set({ resolvedDark: dark });
-    }
-  });
 
   const persist = () => {
     const s = get();
@@ -138,6 +151,22 @@ export const useThemeStore = create<ThemeState>((set, get) => {
     });
   };
 
+  const mql = window.matchMedia("(prefers-color-scheme: dark)");
+  mql.addEventListener("change", () => {
+    const state = useThemeStore.getState();
+    if (state.mode === "system") {
+      const dark = resolveTheme("system");
+      applyTheme(dark);
+      set({
+        resolvedDark: dark,
+        terminalThemeIndex: isDefaultTerminalThemeIndex(state.terminalThemeIndex)
+          ? defaultTerminalThemeIndexFor(dark)
+          : state.terminalThemeIndex,
+      });
+      persist();
+    }
+  });
+
   return {
     mode: initialMode,
     resolvedDark: initialDark,
@@ -146,8 +175,15 @@ export const useThemeStore = create<ThemeState>((set, get) => {
     terminalThemeIndex: initialTerminalIndex,
     setMode: (mode) => {
       const dark = resolveTheme(mode);
+      const currentTerminalIndex = get().terminalThemeIndex;
       applyTheme(dark);
-      set({ mode, resolvedDark: dark });
+      set({
+        mode,
+        resolvedDark: dark,
+        terminalThemeIndex: isDefaultTerminalThemeIndex(currentTerminalIndex)
+          ? defaultTerminalThemeIndexFor(dark)
+          : currentTerminalIndex,
+      });
       persist();
     },
     setAccent: (accent) => {
@@ -161,7 +197,7 @@ export const useThemeStore = create<ThemeState>((set, get) => {
       persist();
     },
     setTerminalTheme: (index) => {
-      const clamped = Math.max(0, Math.min(index, TERMINAL_THEMES.length - 1));
+      const clamped = clampTerminalThemeIndex(index);
       set({ terminalThemeIndex: clamped });
       persist();
     },

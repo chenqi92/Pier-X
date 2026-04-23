@@ -123,6 +123,20 @@ pub enum AuthMethod {
         /// The password in plaintext.
         password: String,
     },
+    /// Try several credentialless methods in sequence — mirrors what
+    /// OpenSSH's own client does when the user runs plain
+    /// `ssh user@host` without an explicit `-i`: agent first, then
+    /// the conventional default key files in `~/.ssh/`. Used by the
+    /// right-side Server Monitor / SFTP / Docker panels when the
+    /// terminal-side ssh child authenticated without ever showing a
+    /// password prompt (public-key + no saved connection), so that
+    /// we can reach the same host without asking the user for a
+    /// credential we don't have.
+    ///
+    /// Each inner method is tried on a single session; the first
+    /// successful one wins. If everything rejects, the resulting
+    /// `AuthRejected` error lists each method that was attempted.
+    Auto,
 }
 
 impl AuthMethod {
@@ -136,6 +150,7 @@ impl AuthMethod {
             } => !private_key_path.is_empty(),
             Self::Agent => true,
             Self::DirectPassword { password } => !password.is_empty(),
+            Self::Auto => true,
         }
     }
 }

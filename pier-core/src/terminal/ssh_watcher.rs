@@ -82,6 +82,48 @@ pub fn output_indicates_ssh_failure(chunk: &[u8]) -> bool {
         .any(|marker| contains_subsequence(chunk, marker))
 }
 
+/// OpenSSH password-prompt markers. The client prints one of these
+/// right before it disables terminal echo and blocks reading a
+/// password, so seeing any of them in the PTY output stream is an
+/// anchor for "the very next typed line is the password".
+///
+/// We keep the set narrow on purpose: general English matches like
+/// just "password:" would fire for a remote `sudo` prompt, the
+/// Linux `passwd` binary changing a local password, or any
+/// application on the remote side that happens to print the word.
+/// A capture armed against those would grab the user's sudo
+/// password and send it to our right-side russh session — which
+/// would then try to authenticate sshd with the user's sudo creds
+/// (wrong) or worse, store the sudo password in `tab.sshPassword`.
+/// So we only match the canonical OpenSSH prompt shapes:
+///
+///   `<user>@<host>'s password:`          ← local ssh.exe / OpenSSH
+///   `Password for <user>@<host>:`        ← some vendor forks
+///   `<user>@<host>: Password:`           ← PuTTY-alike wrappers
+///   `Enter passphrase for key '...':`    ← key unlock (also captured
+///                                          because the answer is
+///                                          effectively the secret
+///                                          the right-side session
+///                                          needs too)
+///
+/// The `user@host` shape requires a `@` and a `'s password:` tail,
+/// which is specific enough that a remote `sudo` prompt can't
+/// trigger it.
+const SSH_PASSWORD_PROMPT_MARKERS: &[&[u8]] = &[
+    b"'s password:",
+    b"Enter passphrase for key ",
+];
+
+/// Scan a PTY output chunk for an OpenSSH password / passphrase
+/// prompt. Returns true on a match so the caller can fire a
+/// one-shot event telling the frontend "the next typed line is
+/// the password".
+pub fn output_indicates_ssh_password_prompt(chunk: &[u8]) -> bool {
+    SSH_PASSWORD_PROMPT_MARKERS
+        .iter()
+        .any(|marker| contains_subsequence(chunk, marker))
+}
+
 fn contains_subsequence(haystack: &[u8], needle: &[u8]) -> bool {
     if needle.is_empty() || needle.len() > haystack.len() {
         return false;
@@ -480,5 +522,34 @@ mod tests {
     fn output_failure_marker_ignores_unrelated_output() {
         let chunk = b"total 42\r\ndrwxr-xr-x  5 user user 4096 Jan  1 .\r\n";
         assert!(!output_indicates_ssh_failure(chunk));
+    }
+
+    #[test]
+    fn password_prompt_marker_detects_canonical_shape() {
+        let chunk = b"chenqi@192.168.0.174's password: ";
+        assert!(output_indicates_ssh_password_prompt(chunk));
+    }
+
+    #[test]
+    fn password_prompt_marker_detects_passphrase() {
+        let chunk = b"Enter passphrase for key '/home/u/.ssh/id_ed25519': ";
+        assert!(output_indicates_ssh_password_prompt(chunk));
+    }
+
+    #[test]
+    fn password_prompt_marker_ignores_remote_sudo() {
+        // A remote `sudo` prompt must not arm the SSH password
+        // capture — the user's sudo password would otherwise end up
+        // as `tab.sshPassword` and be sent to the right-side russh
+        // session, where it would both fail authentication AND
+        // persist in memory as if it were the ssh login password.
+        let chunk = b"[sudo] password for chenqi: ";
+        assert!(!output_indicates_ssh_password_prompt(chunk));
+    }
+
+    #[test]
+    fn password_prompt_marker_ignores_local_passwd_command() {
+        let chunk = b"Changing password for chenqi.\r\nCurrent password: ";
+        assert!(!output_indicates_ssh_password_prompt(chunk));
     }
 }

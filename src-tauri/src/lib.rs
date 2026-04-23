@@ -42,6 +42,19 @@ struct AppState {
     /// invalidates the cache via explicit eviction (not by changing
     /// the key).
     sftp_sessions: Mutex<HashMap<String, Arc<SshSession>>>,
+    /// Per-target handshake serialisation guard. Before opening a
+    /// brand-new session for a given key, every caller acquires the
+    /// corresponding `Arc<Mutex<()>>` from this map — so at most one
+    /// TCP + SSH handshake is ever in flight per target, even when
+    /// the UI fires off Monitor/SFTP/Docker probes simultaneously.
+    /// Without this, a cold cache + fast effect changes on the
+    /// frontend could fan out into N concurrent handshakes, each
+    /// blocking its own Tauri IPC worker thread for several seconds
+    /// — the direct cause of the "Pier-X (未响应)" window-title hang
+    /// users have been hitting after switching ssh targets quickly.
+    /// Entries are never removed (memory cost is one tiny mutex per
+    /// unique target ever seen in a session, negligible).
+    session_init_mutexes: Mutex<HashMap<String, Arc<Mutex<()>>>>,
     /// Per-target `/proc/net/dev` baselines used by
     /// `server_monitor_probe` to compute network throughput between
     /// successive polls. Keyed the same way as `sftp_sessions` so a
@@ -61,6 +74,7 @@ impl Default for AppState {
             tunnels: Mutex::new(HashMap::new()),
             log_streams: Mutex::new(HashMap::new()),
             sftp_sessions: Mutex::new(HashMap::new()),
+            session_init_mutexes: Mutex::new(HashMap::new()),
             monitor_net_baselines: Mutex::new(HashMap::new()),
         }
     }
@@ -79,6 +93,15 @@ const TERMINAL_EVENT: &str = "terminal:event";
 /// from this event, so the right-side Server Monitor panel follows the
 /// terminal instead of the other way around.
 const TERMINAL_SSH_STATE_EVENT: &str = "terminal:ssh-state";
+
+/// One-shot "the PTY just printed an OpenSSH password prompt" signal,
+/// emitted from the terminal reader thread when it sees the canonical
+/// `<user>@<host>'s password:` / `Enter passphrase for key ...` text.
+/// The frontend listens and arms a single-line capture so the very
+/// next Enter-terminated keystroke stream becomes `tab.sshPassword`
+/// for the right-side russh session — no heuristics, no retry count,
+/// no chance of a post-login `ls` being mistaken for a password.
+const TERMINAL_SSH_PASSWORD_PROMPT_EVENT: &str = "terminal:ssh-password-prompt";
 
 #[derive(Serialize, Clone)]
 #[serde(rename_all = "camelCase")]
@@ -674,6 +697,22 @@ extern "C" fn tauri_terminal_notify(user_data: *mut c_void, event: u32) {
     // a shared reference — never reconstitute or free the Box here.
     let ctx = unsafe { &*(user_data as *const NotifyContext) };
 
+    // Password-prompt signal: a one-shot event so the frontend can
+    // arm a "capture the next typed line" window anchored to an
+    // actual OpenSSH prompt rather than heuristic keystroke parsing.
+    if event == NotifyEvent::SshPasswordPrompt as u32 {
+        #[derive(Serialize, Clone)]
+        #[serde(rename_all = "camelCase")]
+        struct PromptPayload<'a> {
+            session_id: &'a str,
+        }
+        let _ = ctx.app.emit(
+            TERMINAL_SSH_PASSWORD_PROMPT_EVENT,
+            PromptPayload { session_id: &ctx.session_id },
+        );
+        return;
+    }
+
     // SSH-state transitions use a dedicated event + payload shape so
     // the frontend can update tab state without reparsing keystrokes.
     // Already debounced by the watcher (only fires on change), so no
@@ -877,6 +916,7 @@ fn build_ssh_session_from_params(
             passphrase_credential_id: None,
         },
         "agent" => AuthMethod::Agent,
+        "auto" => AuthMethod::Auto,
         _ => AuthMethod::DirectPassword {
             password: password.to_string(),
         },
@@ -924,7 +964,7 @@ fn build_ssh_session_saved_or_params(
     let have_param_credential = match auth_mode {
         "password" => !password.is_empty(),
         "key" => !key_path.is_empty(),
-        "agent" => true,
+        "agent" | "auto" => true,
         _ => false,
     };
     if have_param_credential {
@@ -982,6 +1022,7 @@ fn get_or_open_ssh_session(
 ) -> Result<Arc<SshSession>, String> {
     let key = sftp_cache_key(host, port, user, auth_mode);
 
+    // Fast path: cache hit.
     {
         let cache = state
             .sftp_sessions
@@ -992,9 +1033,60 @@ fn get_or_open_ssh_session(
         }
     }
 
+    // Slow path — singleflight. Grab-or-create the per-key init
+    // mutex, release the map lock immediately (don't hold it across
+    // the handshake), then acquire the per-key mutex. Any concurrent
+    // caller for the same target will block here while one of them
+    // does the handshake; when it releases, the losers re-check the
+    // cache and walk away with the Arc the winner inserted.
+    //
+    // Critically: we never hold `sftp_sessions.lock()` or
+    // `session_init_mutexes.lock()` across the actual
+    // `SshSession::connect_blocking` call. Holding either would
+    // serialise unrelated targets through a single mutex and turn a
+    // slow handshake into a global IPC-thread stall, which is
+    // exactly the failure mode this change is correcting.
+    let init_mutex = {
+        let mut map = state
+            .session_init_mutexes
+            .lock()
+            .map_err(|_| "session init map poisoned".to_string())?;
+        map.entry(key.clone())
+            .or_insert_with(|| Arc::new(Mutex::new(())))
+            .clone()
+    };
+    let _init_guard = init_mutex
+        .lock()
+        .map_err(|_| "session init mutex poisoned".to_string())?;
+
+    // Re-check the cache under the init guard — a sibling caller may
+    // have just inserted while we were waiting for the guard.
+    {
+        let cache = state
+            .sftp_sessions
+            .lock()
+            .map_err(|_| "ssh session cache poisoned".to_string())?;
+        if let Some(existing) = cache.get(&key) {
+            return Ok(Arc::clone(existing));
+        }
+    }
+
+    pier_core::logging::write_event(
+        "INFO",
+        "ssh.cache",
+        &format!("opening fresh SSH session for {}", key),
+    );
     let session = build_ssh_session_saved_or_params(
         saved_index, host, port, user, auth_mode, password, key_path,
-    )?;
+    )
+    .map_err(|e| {
+        pier_core::logging::write_event(
+            "ERROR",
+            "ssh.cache",
+            &format!("open failed for {}: {}", key, e),
+        );
+        e
+    })?;
     let arc = Arc::new(session);
 
     state
@@ -1014,7 +1106,13 @@ fn get_or_open_ssh_session(
 fn evict_ssh_session(state: &tauri::State<'_, AppState>, host: &str, port: u16, user: &str, auth_mode: &str) {
     let key = sftp_cache_key(host, port, user, auth_mode);
     if let Ok(mut cache) = state.sftp_sessions.lock() {
-        cache.remove(&key);
+        if cache.remove(&key).is_some() {
+            pier_core::logging::write_event(
+                "WARN",
+                "ssh.cache",
+                &format!("evicted cached session {}", key),
+            );
+        }
     }
 }
 
@@ -1253,6 +1351,7 @@ fn make_credential_id(host: &str, user: &str) -> String {
 fn auth_kind(auth: &AuthMethod) -> &'static str {
     match auth {
         AuthMethod::Agent => "agent",
+        AuthMethod::Auto => "auto",
         AuthMethod::PublicKeyFile { .. } => "key",
         AuthMethod::KeychainPassword { .. } | AuthMethod::DirectPassword { .. } => "password",
     }
@@ -1419,6 +1518,7 @@ fn build_manual_ssh_config(
     config.port = normalize_ssh_port(port);
     config.auth = match auth_mode.trim() {
         "agent" => AuthMethod::Agent,
+        "auto" => AuthMethod::Auto,
         "key" => {
             let resolved_key_path = key_path
                 .map(|value| value.trim().to_string())
@@ -1502,6 +1602,7 @@ fn create_ssh_terminal_from_config(
     // match `sftp_cache_key`.
     let auth_mode_key = match &config.auth {
         AuthMethod::Agent => "agent",
+        AuthMethod::Auto => "auto",
         AuthMethod::PublicKeyFile { .. } => "key",
         _ => "password",
     };
@@ -3166,6 +3267,43 @@ fn docker_container_action(
 
 // ── SFTP ────────────────────────────────────────────────────────────
 
+/// Resolve the remote user's `$HOME` over the already-authenticated
+/// session. Preferred shape is `pwd` run inside a login shell (which
+/// both respects the user's shell config AND side-steps
+/// "$HOME expands to a non-existent path" situations like DSM's
+/// `/var/services/homes/<user>: No such file or directory`: the
+/// login shell picks `/` or whatever it actually lands on). Returns
+/// an error if the exec itself fails or the output isn't a plausible
+/// absolute path. Callers treat that as "fall back to `/`".
+fn resolve_remote_home(session: &SshSession) -> Result<String, String> {
+    // Two-stage fallback: login-shell `pwd` first (what the terminal
+    // sees after login), then a raw `echo $HOME` (what ssh declared
+    // the home to be even when it's unreachable). Either is fine —
+    // whichever returns an absolute path wins.
+    let probes = [
+        "sh -lc 'pwd'",
+        "printf %s \"${HOME:-/}\"",
+    ];
+    for cmd in probes {
+        let (exit, stdout) = session
+            .exec_command_blocking(cmd)
+            .map_err(|e| e.to_string())?;
+        if exit != 0 {
+            continue;
+        }
+        let line = stdout
+            .lines()
+            .next()
+            .unwrap_or("")
+            .trim();
+        if line.starts_with('/') && !line.contains('\0') && line.len() < 4096 {
+            return Ok(line.to_string());
+        }
+    }
+    Err("could not resolve remote $HOME".into())
+}
+
+
 #[tauri::command]
 fn sftp_browse(
     state: tauri::State<'_, AppState>,
@@ -3178,9 +3316,7 @@ fn sftp_browse(
     path: Option<String>,
     saved_connection_index: Option<usize>,
 ) -> Result<SftpBrowseState, String> {
-    let target_path = path
-        .filter(|p| !p.trim().is_empty())
-        .unwrap_or_else(|| String::from("/"));
+    let explicit_path = path.filter(|p| !p.trim().is_empty());
 
     // Try with the cached session first; if opening an SFTP channel
     // or listing fails (session is stale / server bounced), evict
@@ -3200,6 +3336,25 @@ fn sftp_browse(
                 continue;
             }
             Err(e) => return Err(e.to_string()),
+        };
+
+        // Resolve the effective target path. An explicit caller-
+        // supplied path (breadcrumb click, "Up", path-edit) wins.
+        // Otherwise we probe the user's `$HOME` on the remote — on
+        // Synology and any other multi-user host, `/` is the wrong
+        // starting point (a non-root user typically has no listable
+        // top-level entries besides a handful of system dirs, and
+        // some DSM builds return permission errors on the first
+        // attempt, which used to cascade into an SFTP panel that
+        // looked hung). `$HOME` matches what the terminal would be
+        // sitting at after a fresh login. If the exec fails (e.g.
+        // the login shell is restricted, or the home dir the server
+        // hands out doesn't exist — DSM's
+        // `/var/services/homes/<user>: No such file or directory`
+        // footgun), we fall back to `/`.
+        let target_path = match explicit_path.clone() {
+            Some(p) => p,
+            None => resolve_remote_home(&session).unwrap_or_else(|_| "/".to_string()),
         };
 
         let canonical = sftp
@@ -3281,7 +3436,15 @@ fn server_monitor_probe(
         let session = get_or_open_ssh_session(
             &state, &host, port, &user, &auth_mode, &password, &key_path,
             saved_connection_index,
-        )?;
+        )
+        .map_err(|e| {
+            pier_core::logging::write_event(
+                "ERROR",
+                "monitor.probe",
+                &format!("{}@{}:{} session open failed: {}", user, host, port, e),
+            );
+            e
+        })?;
         // Pull the previous net sample (if any), pass it through the
         // probe, then save the updated sample back. Holding the
         // mutex only across the load and store keeps the long
@@ -3301,12 +3464,26 @@ fn server_monitor_probe(
                 break snap;
             }
             Err(e) if attempt == 0 => {
+                pier_core::logging::write_event(
+                    "WARN",
+                    "monitor.probe",
+                    &format!(
+                        "{}@{}:{} probe attempt 1 failed, evicting + retrying: {}",
+                        user, host, port, e
+                    ),
+                );
                 evict_ssh_session(&state, &host, port, &user, &auth_mode);
                 attempt += 1;
-                let _ = e;
                 continue;
             }
-            Err(e) => return Err(e.to_string()),
+            Err(e) => {
+                pier_core::logging::write_event(
+                    "ERROR",
+                    "monitor.probe",
+                    &format!("{}@{}:{} probe failed after retry: {}", user, host, port, e),
+                );
+                return Err(e.to_string());
+            }
         }
     };
 
@@ -5086,6 +5263,81 @@ fn local_system_info() -> Result<ServerSnapshotView, String> {
     }
 }
 
+/// Append a single line to the shared file logger. Called from the
+/// frontend's console-capture wrapper so browser-side diagnostics land
+/// in the same file Rust-side ones do. Level/source are free-form
+/// strings — we validate neither because the whole point is a dump of
+/// whatever the UI was trying to say.
+#[tauri::command]
+fn log_write(level: String, source: String, message: String) {
+    pier_core::logging::write_event(&level, &source, &message);
+}
+
+/// Toggle the "verbose diagnostics" gate. Off by default. When on,
+/// diagnostic records that contain remote-machine output (hostnames,
+/// `ps` command names, probe stdout excerpts) are written to the log
+/// alongside the normal breadcrumb records. Intended to be wired to
+/// a Settings toggle so a user can opt in when they're about to file
+/// a bug, then turn it back off.
+#[tauri::command]
+fn log_set_verbose(enabled: bool) {
+    pier_core::logging::set_verbose_diagnostics(enabled);
+}
+
+/// Read the current state of the verbose-diagnostics gate — lets a
+/// Settings UI render the toggle in its actual position after restart.
+#[tauri::command]
+fn log_get_verbose() -> bool {
+    pier_core::logging::verbose_diagnostics_enabled()
+}
+
+/// Resolve the absolute path of the active log file so the frontend
+/// can surface it in menus / error dialogs ("send us this file").
+/// Returns an empty string when the logger has not been initialised —
+/// shouldn't happen in practice, but fail soft rather than panic.
+#[tauri::command]
+fn log_file_path() -> String {
+    pier_core::logging::log_file_path()
+        .map(|p| p.to_string_lossy().into_owned())
+        .unwrap_or_default()
+}
+
+/// Slurp the (truncated-per-run) log into a string so the UI can
+/// render it inside a "view log" panel without spawning an external
+/// editor. Caps at 2 MiB — the file is newly created on every run so
+/// exceeding that bound means the user is in the middle of something
+/// noisy and the tail is what they want anyway.
+#[tauri::command]
+fn log_read_tail(max_bytes: Option<u64>) -> Result<String, String> {
+    let Some(path) = pier_core::logging::log_file_path() else {
+        return Ok(String::new());
+    };
+    let cap = max_bytes.unwrap_or(2 * 1024 * 1024);
+    match std::fs::metadata(&path) {
+        Ok(meta) => {
+            let size = meta.len();
+            if size <= cap {
+                std::fs::read_to_string(&path).map_err(|e| e.to_string())
+            } else {
+                use std::io::{Read, Seek, SeekFrom};
+                let mut file = std::fs::File::open(&path).map_err(|e| e.to_string())?;
+                file.seek(SeekFrom::End(-(cap as i64)))
+                    .map_err(|e| e.to_string())?;
+                let mut buf = String::new();
+                file.read_to_string(&mut buf).map_err(|e| e.to_string())?;
+                // Drop any partial first line so the tail always starts
+                // on a timestamp boundary.
+                if let Some(idx) = buf.find('\n') {
+                    Ok(buf[idx + 1..].to_string())
+                } else {
+                    Ok(buf)
+                }
+            }
+        }
+        Err(e) => Err(e.to_string()),
+    }
+}
+
 /// Toggle the Tauri webview DevTools. Compiled only in debug builds —
 /// the release build ships without the `devtools` feature, so calling
 /// this from a production frontend is a no-op that returns an error.
@@ -5112,7 +5364,33 @@ pub fn run() {
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_clipboard_manager::init())
-        .setup(|_app| {
+        .setup(|app| {
+            // Install the shared file logger before we do anything else —
+            // the rest of this hook (and every subsequent command) can
+            // then emit events that survive a crash. Truncates the file
+            // on every run so it never grows unbounded; see
+            // `pier_core::logging::init`.
+            let log_dir = app
+                .path()
+                .app_log_dir()
+                .unwrap_or_else(|_| std::env::temp_dir().join("pier-x").join("logs"));
+            match pier_core::logging::init_under(&log_dir, "pier-x.log") {
+                Ok(p) => {
+                    pier_core::logging::write_event(
+                        "INFO",
+                        "startup",
+                        &format!(
+                            "Pier-X {} starting; log file: {}",
+                            pier_core::VERSION,
+                            p.display(),
+                        ),
+                    );
+                }
+                Err(e) => {
+                    eprintln!("pier-x: log init failed at {}: {}", log_dir.display(), e);
+                }
+            }
+
             // On Windows we draw our own caption controls (minimize /
             // maximize / close) in the titlebar — disable the OS chrome
             // so they don't double up. macOS keeps decorations on to
@@ -5121,8 +5399,7 @@ pub fn run() {
             // proper CSD styling.
             #[cfg(target_os = "windows")]
             {
-                use tauri::Manager;
-                if let Some(window) = _app.get_webview_window("main") {
+                if let Some(window) = app.get_webview_window("main") {
                     let _ = window.set_decorations(false);
                 }
             }
@@ -5287,7 +5564,12 @@ pub fn run() {
             local_docker_prune_images,
             local_docker_volume_files,
             local_docker_pull_image,
-            local_system_info
+            local_system_info,
+            log_write,
+            log_file_path,
+            log_read_tail,
+            log_set_verbose,
+            log_get_verbose
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

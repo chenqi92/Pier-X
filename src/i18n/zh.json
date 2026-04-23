@@ -282,6 +282,8 @@
   "Documentation": "文档",
   "Report an issue": "反馈问题",
   "Keyboard shortcuts": "键盘快捷键",
+  "Open log file": "打开日志文件",
+  "Show log in folder": "在文件夹中查看日志",
   "Show right panel": "显示右侧面板",
   "Hide right panel": "隐藏右侧面板",
   "Switch to Log": "切换到日志",

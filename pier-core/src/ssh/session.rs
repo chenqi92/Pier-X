@@ -187,6 +187,58 @@ impl SshSession {
                 tried.push("agent".to_string());
                 self.try_agent_auth(&config.user).await?;
             }
+            AuthMethod::Auto => {
+                // OpenSSH-style "just try things": agent first, then
+                // each conventional default identity file that
+                // actually exists on disk. We chain attempts on the
+                // SAME session so the cost is one kex + N auth
+                // attempts, not N full handshakes.
+                //
+                // Ordering rationale: agent wins when it's running
+                // (it's what the terminal-side ssh.exe most often
+                // used on Windows via the OpenSSH agent service);
+                // otherwise we fall through to the default key
+                // filenames OpenSSH itself probes in the same order.
+                // Encrypted keys without a keychain passphrase will
+                // fail silently and fall through — the user would
+                // see them prompt in a real `ssh` invocation, which
+                // we can't replicate here.
+                let mut any_success = false;
+                match self.try_agent_auth(&config.user).await {
+                    Ok(()) => {
+                        tried.push("agent".to_string());
+                        any_success = true;
+                    }
+                    Err(e) => {
+                        tried.push(format!("agent ({e})"));
+                    }
+                }
+
+                if !any_success {
+                    for key_path in default_identity_paths() {
+                        if !std::path::Path::new(&key_path).is_file() {
+                            continue;
+                        }
+                        tried.push(format!("publickey ({key_path})"));
+                        match self.try_publickey_auth(&config.user, &key_path, None).await {
+                            Ok(()) => {
+                                any_success = true;
+                                break;
+                            }
+                            Err(e) => {
+                                // Log and keep walking — a missing
+                                // passphrase on one key shouldn't
+                                // block the others.
+                                log::debug!("auto auth: {key_path} rejected: {e}");
+                            }
+                        }
+                    }
+                }
+
+                if !any_success {
+                    return Err(SshError::AuthRejected { tried });
+                }
+            }
         }
 
         // We only reach here if a try_password_auth call returned
@@ -486,6 +538,51 @@ impl SshSession {
     pub(super) fn handle_arc(&self) -> Arc<Handle<ClientHandler>> {
         Arc::clone(&self.handle)
     }
+}
+
+/// Conventional default identity filenames OpenSSH probes when no
+/// `-i` / `IdentityFile` is configured. Order matches `ssh(1)`'s
+/// man page so a user with a mix of key types sees the same
+/// preference as their terminal client. Non-existent paths are
+/// skipped by the caller.
+fn default_identity_paths() -> Vec<String> {
+    let Some(home) = dirs_home() else {
+        return Vec::new();
+    };
+    let base = home.join(".ssh");
+    let names = [
+        "id_ed25519",
+        "id_ecdsa",
+        "id_ecdsa_sk",
+        "id_ed25519_sk",
+        "id_rsa",
+        "id_dsa",
+    ];
+    names
+        .iter()
+        .map(|n| base.join(n).to_string_lossy().into_owned())
+        .collect()
+}
+
+/// Resolve the user's home directory without bringing in a new crate.
+/// `directories` is already a pier-core dep but only exposes
+/// project/data dirs; the `$HOME` / `%USERPROFILE%` fallback below is
+/// the simplest version that works on all three desktop targets.
+fn dirs_home() -> Option<std::path::PathBuf> {
+    #[cfg(windows)]
+    {
+        if let Ok(v) = std::env::var("USERPROFILE") {
+            if !v.is_empty() {
+                return Some(std::path::PathBuf::from(v));
+            }
+        }
+    }
+    if let Ok(v) = std::env::var("HOME") {
+        if !v.is_empty() {
+            return Some(std::path::PathBuf::from(v));
+        }
+    }
+    None
 }
 
 fn map_connect_error(e: russh::Error) -> SshError {

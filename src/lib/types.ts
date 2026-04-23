@@ -713,6 +713,13 @@ export type TabState = {
   redisHost: string;
   redisPort: number;
   redisDb: number;
+  /** Redis 6+ ACL username. Empty string = default user (no
+   *  `AUTH username` prefix). Held in tab state only; the
+   *  canonical copy lives on the saved `DbCredential`. */
+  redisUser: string;
+  /** Redis AUTH secret. Held in memory only — the persisted copy
+   *  lives in the OS keyring via `dbCredResolve`. */
+  redisPassword: string;
   redisTunnelId: string | null;
   redisTunnelPort: number | null;
   mysqlHost: string;

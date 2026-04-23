@@ -14,7 +14,7 @@ use pier_core::services::sqlite_remote;
 use pier_core::ssh::config::{DbCredential, DbCredentialSource, DbKind};
 use pier_core::ssh::db_detect::{self, DbDetectionReport, DetectedDbInstance};
 use pier_core::ssh::service_detector;
-use pier_core::ssh::{AuthMethod, ExecStream, HostKeyVerifier, SshConfig, SshSession, Tunnel};
+use pier_core::ssh::{AuthMethod, ExecStream, HostKeyVerifier, SftpClient, SshConfig, SshSession, Tunnel};
 use pier_core::terminal::{Cell, Color, NotifyEvent, NotifyFn, PierTerminal};
 use serde::Serialize;
 use std::collections::HashMap;
@@ -42,6 +42,21 @@ struct AppState {
     /// invalidates the cache via explicit eviction (not by changing
     /// the key).
     sftp_sessions: Mutex<HashMap<String, Arc<SshSession>>>,
+    /// Cached SFTP subsystem handles, one per SSH session key. Each
+    /// SFTP panel command used to re-issue `request_subsystem("sftp")`
+    /// (two extra round-trips per call); we now open it once per
+    /// session and reuse. `SftpClient` is Arc-backed internally so
+    /// `clone()` is cheap. Entries are invalidated alongside
+    /// `sftp_sessions` via [`evict_ssh_session`] whenever the
+    /// underlying SSH connection dies.
+    sftp_clients: Mutex<HashMap<String, SftpClient>>,
+    /// Resolved remote `$HOME` (or best-candidate starting dir) per
+    /// session, so the ~8-RTT probe in [`resolve_remote_home`] only
+    /// runs on the first browse for a target. Invalidated together
+    /// with the SSH session — a reconnect means we re-probe, since
+    /// the server config (mounts, homedir location) may have
+    /// actually changed.
+    sftp_home_cache: Mutex<HashMap<String, String>>,
     /// Per-target handshake coordination — a singleflight gate plus
     /// a short-lived negative cache. Every caller with a cache miss
     /// acquires the per-key [`HandshakeGuard`] from this map:
@@ -78,6 +93,8 @@ impl Default for AppState {
             tunnels: Mutex::new(HashMap::new()),
             log_streams: Mutex::new(HashMap::new()),
             sftp_sessions: Mutex::new(HashMap::new()),
+            sftp_clients: Mutex::new(HashMap::new()),
+            sftp_home_cache: Mutex::new(HashMap::new()),
             session_init_guards: Mutex::new(HashMap::new()),
             monitor_net_baselines: Mutex::new(HashMap::new()),
         }
@@ -1192,6 +1209,42 @@ fn evict_ssh_session(state: &tauri::State<'_, AppState>, host: &str, port: u16, 
             );
         }
     }
+    // SSH session death implies SFTP subsystem death — a cached
+    // client would just produce a second round-trip failure on the
+    // retry path. Same reasoning for the $HOME cache: on reconnect
+    // the mount layout may have changed, so re-probe.
+    if let Ok(mut cache) = state.sftp_clients.lock() {
+        cache.remove(&key);
+    }
+    if let Ok(mut cache) = state.sftp_home_cache.lock() {
+        cache.remove(&key);
+    }
+}
+
+/// Return the cached SFTP subsystem handle for this target, opening
+/// one against `session` if none is cached. Every SFTP command used
+/// to call `open_sftp_blocking` itself, paying a `request_subsystem`
+/// + `SftpSession::new` round-trip pair on every call; the cache
+/// collapses that to once per SSH session.
+fn get_or_open_sftp_client(
+    state: &tauri::State<'_, AppState>,
+    session: &SshSession,
+    host: &str,
+    port: u16,
+    user: &str,
+    auth_mode: &str,
+) -> Result<SftpClient, String> {
+    let key = sftp_cache_key(host, port, user, auth_mode);
+    if let Ok(cache) = state.sftp_clients.lock() {
+        if let Some(existing) = cache.get(&key) {
+            return Ok(existing.clone());
+        }
+    }
+    let client = session.open_sftp_blocking().map_err(|e| e.to_string())?;
+    if let Ok(mut cache) = state.sftp_clients.lock() {
+        cache.insert(key, client.clone());
+    }
+    Ok(client)
 }
 
 /// Run `op` against the cached session. On a first-attempt failure
@@ -1511,7 +1564,12 @@ fn map_db_credential(c: &DbCredential) -> DbCredentialView {
         user: c.user.clone(),
         database: c.database.clone(),
         sqlite_path: c.sqlite_path.clone(),
-        has_password: c.password.is_present(),
+        // `password_available` consults the process-local plaintext
+        // cache as well, so Direct-variant creds whose serde-skipped
+        // password was lost through a YAML round-trip still report
+        // `hasPassword=true` while the app is running. Matters for
+        // the frontend's "Saved password unavailable" fallback.
+        has_password: pier_core::connections::password_available(c),
         favorite: c.favorite,
         source: match &c.source {
             DbCredentialSource::Manual => DbCredentialSourceView::Manual,
@@ -2552,6 +2610,74 @@ fn ssh_tunnel_close(
         .ok_or_else(|| format!("unknown tunnel: {}", tunnel_id))
 }
 
+/// Background pre-warm for the shared SSH session cache.
+///
+/// Called by the terminal panel the moment it detects a nested ssh
+/// target (user typed `ssh user@host` in a local terminal, or nested
+/// ssh inside an existing SSH tab) for which we have enough auth to
+/// open our own russh session: a saved-connection index, a pubkey /
+/// agent auth, or a password captured from the PTY prompt.
+///
+/// The real ssh the user launched lives in their local shell and has
+/// its own TCP connection we can't reuse. So we open a parallel russh
+/// session in the background and seed `sftp_sessions` under the same
+/// `(auth_mode, user, host, port)` key the panel commands will look
+/// up. By the time the user clicks Docker / SFTP / Monitor / Log /
+/// DB panels, the cache is warm and the panel's first call avoids
+/// the 1-3s handshake cost it would otherwise pay.
+///
+/// Fire-and-forget: returns immediately. Errors during the async
+/// handshake are logged and dropped — this is pure optimization, a
+/// miss just means the panel pays the cost the old way.
+#[tauri::command]
+fn ssh_session_prewarm(
+    app: tauri::AppHandle,
+    host: String,
+    port: u16,
+    user: String,
+    auth_mode: String,
+    password: String,
+    key_path: String,
+    saved_connection_index: Option<usize>,
+) -> Result<(), String> {
+    if host.trim().is_empty() || user.trim().is_empty() {
+        return Ok(());
+    }
+    // Skip if the cache already has this target — cheap lock, no
+    // need to spawn a blocking task just to return early.
+    let key = sftp_cache_key(&host, port, &user, &auth_mode);
+    let state: tauri::State<'_, AppState> = app.state();
+    let already_cached = state
+        .sftp_sessions
+        .lock()
+        .map(|cache| cache.contains_key(&key))
+        .unwrap_or(false);
+    if already_cached {
+        return Ok(());
+    }
+    drop(state);
+    tauri::async_runtime::spawn_blocking(move || {
+        let state: tauri::State<'_, AppState> = app.state();
+        // Errors are intentional no-ops: prewarm is best-effort, and a
+        // failure here just means the next panel call opens its own
+        // session the usual way.
+        let session = match get_or_open_ssh_session(
+            &state, &host, port, &user, &auth_mode, &password, &key_path, saved_connection_index,
+        ) {
+            Ok(s) => s,
+            Err(_) => return,
+        };
+        // Also prewarm the SFTP subsystem and the $HOME probe — the
+        // SFTP panel's first browse would otherwise still pay both
+        // costs (≈ 2 RTT for the subsystem + 1 RTT for the home
+        // probe). With them primed, opening the SFTP panel collapses
+        // to a single `list_dir` round-trip.
+        let _ = get_or_open_sftp_client(&state, &session, &host, port, &user, &auth_mode);
+        let _ = resolve_remote_home_cached(&state, &session, &host, port, &user, &auth_mode);
+    });
+    Ok(())
+}
+
 fn map_stash_entry(entry: StashEntry) -> GitStashEntry {
     GitStashEntry {
         index: entry.index,
@@ -2686,6 +2812,8 @@ fn redis_browse(
     db: i64,
     pattern: Option<String>,
     key: Option<String>,
+    username: Option<String>,
+    password: Option<String>,
 ) -> Result<RedisBrowserState, String> {
     let resolved_host = host.trim();
     if resolved_host.is_empty() {
@@ -2696,6 +2824,8 @@ fn redis_browse(
         host: resolved_host.to_string(),
         port: normalize_redis_port(port),
         db,
+        username: username.filter(|s| !s.is_empty()),
+        password: password.filter(|s| !s.is_empty()),
     })
     .map_err(|error| error.to_string())?;
     let pong = client.ping_blocking().map_err(|error| error.to_string())?;
@@ -2746,6 +2876,8 @@ fn redis_execute(
     port: u16,
     db: i64,
     command: String,
+    username: Option<String>,
+    password: Option<String>,
 ) -> Result<RedisCommandResultView, String> {
     let resolved_host = host.trim();
     if resolved_host.is_empty() {
@@ -2757,6 +2889,8 @@ fn redis_execute(
         host: resolved_host.to_string(),
         port: normalize_redis_port(port),
         db,
+        username: username.filter(|s| !s.is_empty()),
+        password: password.filter(|s| !s.is_empty()),
     })
     .map_err(|error| error.to_string())?;
     let result = client
@@ -3379,56 +3513,83 @@ fn docker_container_action(
 /// whatever the server lets them see there. The point of this
 /// function is to give a sane default, not to paper over
 /// impossible-to-navigate filesystems.
+/// Probe the remote for a sensible default starting directory.
+///
+/// Historically this issued 2–8 separate `exec_command` calls (one
+/// each for `pwd`, `$HOME`, and one `test -d` per Synology volume
+/// candidate). Every `exec_command` opens a fresh SSH channel, so
+/// the cost added up to a very visible hiccup on the first SFTP
+/// browse — especially over transoceanic links where each RTT was
+/// 150–300 ms.
+///
+/// The script below walks the same candidate list inside a single
+/// remote `sh -lc` invocation, `printf`s the first viable path, and
+/// exits. One channel open, one round-trip. The `user` is inlined
+/// because it's already validated by [`is_safe_shell_username`]
+/// (ASCII alphanumerics plus `.`, `_`, `-`) — none of those
+/// characters expand inside double-quoted shell context.
 fn resolve_remote_home(session: &SshSession, user: &str) -> Result<String, String> {
-    let mut candidates: Vec<String> = Vec::new();
+    let volume_block = if is_safe_shell_username(user) {
+        format!("for n in 1 2 3 4; do pick \"/volume$n/homes/{user}\"; done; ")
+    } else {
+        String::new()
+    };
+    // `pick` is a tiny shell function that validates and prints a
+    // candidate; the first match exits the whole script via `exit 0`
+    // so we stop as soon as we find one. `exit 1` at the end makes
+    // the exec return a non-zero status if nothing matched.
+    let script = format!(
+        "sh -lc 'pick(){{ [ -d \"$1\" ] && [ -r \"$1\" ] && printf %s \"$1\" && exit 0; }}; \
+         pick \"$(pwd 2>/dev/null)\"; \
+         pick \"${{HOME:-}}\"; \
+         {volume_block}\
+         pick /volume1; \
+         pick /; \
+         exit 1'"
+    );
 
-    // Login-shell pwd — belt-and-braces even for servers that didn't
-    // mangle $HOME, because it's exactly what the terminal tab
-    // already shows.
-    if let Ok((exit, stdout)) = session.exec_command_blocking("sh -lc 'pwd' 2>/dev/null") {
-        if exit == 0 {
-            if let Some(p) = sanitise_absolute_path(stdout.lines().next().unwrap_or("")) {
-                candidates.push(p);
-            }
-        }
+    match session.exec_command_blocking(&script) {
+        Ok((0, stdout)) => sanitise_absolute_path(&stdout)
+            .ok_or_else(|| "home probe returned invalid path".to_string()),
+        Ok(_) => Err("no listable directory found among candidates".into()),
+        Err(e) => Err(e.to_string()),
     }
-    // Declared $HOME from the non-login environment.
-    if let Ok((exit, stdout)) = session.exec_command_blocking("printf %s \"${HOME:-}\"") {
-        if exit == 0 {
-            if let Some(p) = sanitise_absolute_path(stdout.lines().next().unwrap_or("")) {
-                candidates.push(p);
-            }
-        }
-    }
-    // DSM Home Service layout. Safe-username gate: only ASCII
-    // alphanumerics and the three usual separator characters.
-    if is_safe_shell_username(user) {
-        for n in 1..=4 {
-            candidates.push(format!("/volume{n}/homes/{user}"));
-        }
-    }
-    // Synology shared roots + universal fallback.
-    candidates.push("/volume1".into());
-    candidates.push("/".into());
+}
 
-    // De-duplicate while preserving order: users with a real `$HOME`
-    // matching their `pwd` would otherwise probe the same path twice.
-    let mut seen = std::collections::HashSet::new();
-    candidates.retain(|p| seen.insert(p.clone()));
-
-    // Verify each candidate: directory exists AND is readable by
-    // the current user. Doing this as a single `test` exec avoids a
-    // round-trip per candidate when the first one succeeds.
-    for candidate in &candidates {
-        let quoted = shell_single_quote(candidate);
-        let cmd = format!("test -d {quoted} && test -r {quoted} && printf ok");
-        if let Ok((exit, stdout)) = session.exec_command_blocking(&cmd) {
-            if exit == 0 && stdout.trim() == "ok" {
-                return Ok(candidate.clone());
-            }
+/// Cached wrapper around [`resolve_remote_home`]. The probe is
+/// pure-ish (same host + same login → same answer for the life of
+/// the session), so we only run it once per cached SSH session.
+/// Invalidated when the SSH session is evicted.
+fn resolve_remote_home_cached(
+    state: &tauri::State<'_, AppState>,
+    session: &SshSession,
+    host: &str,
+    port: u16,
+    user: &str,
+    auth_mode: &str,
+) -> Result<String, String> {
+    let key = sftp_cache_key(host, port, user, auth_mode);
+    if let Ok(cache) = state.sftp_home_cache.lock() {
+        if let Some(existing) = cache.get(&key) {
+            return Ok(existing.clone());
         }
     }
-    Err("no listable directory found among candidates".into())
+    let home = resolve_remote_home(session, user)?;
+    if let Ok(mut cache) = state.sftp_home_cache.lock() {
+        cache.insert(key, home.clone());
+    }
+    Ok(home)
+}
+
+/// Cheap check: is `p` already a normalised absolute SFTP path that
+/// we don't need to round-trip `canonicalize` for? The common
+/// sources of `target_path` after the first browse (breadcrumb
+/// click, "Up", cached `$HOME`) all satisfy this.
+fn is_clean_absolute_path(p: &str) -> bool {
+    if !p.starts_with('/') {
+        return false;
+    }
+    !p.split('/').any(|seg| seg == "..")
 }
 
 fn sanitise_absolute_path(raw: &str) -> Option<String> {
@@ -3463,16 +3624,18 @@ fn sftp_browse(
 ) -> Result<SftpBrowseState, String> {
     let explicit_path = path.filter(|p| !p.trim().is_empty());
 
-    // Try with the cached session first; if opening an SFTP channel
-    // or listing fails (session is stale / server bounced), evict
-    // and retry once with a freshly-opened session.
+    // Try with the cached session + cached SFTP subsystem first; if
+    // anything fails (session stale, server bounced, SFTP channel
+    // silently broken), evict and retry once with fresh handles.
     let mut attempt = 0;
     loop {
         let session = get_or_open_ssh_session(
             &state, &host, port, &user, &auth_mode, &password, &key_path, saved_connection_index,
         )?;
 
-        let sftp = match session.open_sftp_blocking() {
+        let sftp = match get_or_open_sftp_client(
+            &state, &session, &host, port, &user, &auth_mode,
+        ) {
             Ok(s) => s,
             Err(e) if attempt == 0 => {
                 evict_ssh_session(&state, &host, port, &user, &auth_mode);
@@ -3480,7 +3643,7 @@ fn sftp_browse(
                 let _ = e;
                 continue;
             }
-            Err(e) => return Err(e.to_string()),
+            Err(e) => return Err(e),
         };
 
         // Resolve the effective target path. An explicit caller-
@@ -3492,23 +3655,37 @@ fn sftp_browse(
         // some DSM builds return permission errors on the first
         // attempt, which used to cascade into an SFTP panel that
         // looked hung). `$HOME` matches what the terminal would be
-        // sitting at after a fresh login. If the exec fails (e.g.
-        // the login shell is restricted, or the home dir the server
-        // hands out doesn't exist — DSM's
-        // `/var/services/homes/<user>: No such file or directory`
-        // footgun), we fall back to `/`.
+        // sitting at after a fresh login. If the probe fails, fall
+        // back to `/`. The probe is cached per-session so only the
+        // first browse pays the cost.
         let target_path = match explicit_path.clone() {
             Some(p) => p,
-            None => resolve_remote_home(&session, &user).unwrap_or_else(|_| "/".to_string()),
+            None => resolve_remote_home_cached(
+                &state, &session, &host, port, &user, &auth_mode,
+            )
+            .unwrap_or_else(|_| "/".to_string()),
         };
 
-        let canonical = sftp
-            .canonicalize_blocking(&target_path)
-            .unwrap_or_else(|_| target_path.clone());
+        // Skip the canonicalize round-trip when the caller already
+        // handed us a normalised absolute path — which is the
+        // overwhelmingly common case (breadcrumb, cached $HOME,
+        // `pwd` output). We only round-trip when the user typed
+        // something with `..` segments.
+        let canonical = if is_clean_absolute_path(&target_path) {
+            target_path.clone()
+        } else {
+            sftp.canonicalize_blocking(&target_path)
+                .unwrap_or_else(|_| target_path.clone())
+        };
 
         let raw_entries = match sftp.list_dir_blocking(&canonical) {
             Ok(v) => v,
             Err(e) if attempt == 0 => {
+                // list_dir failing on a cached SFTP client most often
+                // means the subsystem went stale (server-side idle
+                // timeout, or a dropped SSH connection). Evict both
+                // the SFTP client and the SSH session so the retry
+                // above re-handshakes from scratch.
                 evict_ssh_session(&state, &host, port, &user, &auth_mode);
                 attempt += 1;
                 let _ = e;
@@ -4441,7 +4618,7 @@ fn sftp_mkdir(
     let session = get_or_open_ssh_session(
         &state, &host, port, &user, &auth_mode, &password, &key_path, saved_connection_index,
     )?;
-    let sftp = session.open_sftp_blocking().map_err(|e| e.to_string())?;
+    let sftp = get_or_open_sftp_client(&state, &session, &host, port, &user, &auth_mode)?;
     sftp.create_dir_blocking(&path).map_err(|e| e.to_string())
 }
 
@@ -4461,7 +4638,7 @@ fn sftp_remove(
     let session = get_or_open_ssh_session(
         &state, &host, port, &user, &auth_mode, &password, &key_path, saved_connection_index,
     )?;
-    let sftp = session.open_sftp_blocking().map_err(|e| e.to_string())?;
+    let sftp = get_or_open_sftp_client(&state, &session, &host, port, &user, &auth_mode)?;
     if is_dir {
         sftp.remove_dir_blocking(&path).map_err(|e| e.to_string())
     } else {
@@ -4485,7 +4662,7 @@ fn sftp_rename(
     let session = get_or_open_ssh_session(
         &state, &host, port, &user, &auth_mode, &password, &key_path, saved_connection_index,
     )?;
-    let sftp = session.open_sftp_blocking().map_err(|e| e.to_string())?;
+    let sftp = get_or_open_sftp_client(&state, &session, &host, port, &user, &auth_mode)?;
     sftp.rename_blocking(&from, &to).map_err(|e| e.to_string())
 }
 
@@ -4506,7 +4683,7 @@ fn sftp_chmod(
     let session = get_or_open_ssh_session(
         &state, &host, port, &user, &auth_mode, &password, &key_path, saved_connection_index,
     )?;
-    let sftp = session.open_sftp_blocking().map_err(|e| e.to_string())?;
+    let sftp = get_or_open_sftp_client(&state, &session, &host, port, &user, &auth_mode)?;
     sftp.set_permissions_blocking(&path, mode)
         .map_err(|e| e.to_string())
 }
@@ -4527,7 +4704,7 @@ fn sftp_create_file(
     let session = get_or_open_ssh_session(
         &state, &host, port, &user, &auth_mode, &password, &key_path, saved_connection_index,
     )?;
-    let sftp = session.open_sftp_blocking().map_err(|e| e.to_string())?;
+    let sftp = get_or_open_sftp_client(&state, &session, &host, port, &user, &auth_mode)?;
     sftp.create_file_blocking(&path)
         .map_err(|e| e.to_string())
 }
@@ -4574,7 +4751,7 @@ fn sftp_read_text(
     let session = get_or_open_ssh_session(
         &state, &host, port, &user, &auth_mode, &password, &key_path, saved_connection_index,
     )?;
-    let sftp = session.open_sftp_blocking().map_err(|e| e.to_string())?;
+    let sftp = get_or_open_sftp_client(&state, &session, &host, port, &user, &auth_mode)?;
     let meta = sftp.stat_blocking(&path).map_err(|e| e.to_string())?;
     let limit = max_bytes.unwrap_or(SFTP_TEXT_READ_MAX).min(SFTP_TEXT_READ_MAX);
     if meta.size > limit {
@@ -4615,7 +4792,7 @@ fn sftp_write_text(
     let session = get_or_open_ssh_session(
         &state, &host, port, &user, &auth_mode, &password, &key_path, saved_connection_index,
     )?;
-    let sftp = session.open_sftp_blocking().map_err(|e| e.to_string())?;
+    let sftp = get_or_open_sftp_client(&state, &session, &host, port, &user, &auth_mode)?;
     sftp.write_file_blocking(&path, content.as_bytes())
         .map_err(|e| e.to_string())
 }
@@ -4669,7 +4846,7 @@ fn sftp_download(
     let session = get_or_open_ssh_session(
         &state, &host, port, &user, &auth_mode, &password, &key_path, saved_connection_index,
     )?;
-    let sftp = session.open_sftp_blocking().map_err(|e| e.to_string())?;
+    let sftp = get_or_open_sftp_client(&state, &session, &host, port, &user, &auth_mode)?;
     let resolved_local = expand_local_path(&local_path);
     let id = transfer_id.clone().unwrap_or_default();
 
@@ -4751,7 +4928,7 @@ fn sftp_upload(
     let session = get_or_open_ssh_session(
         &state, &host, port, &user, &auth_mode, &password, &key_path, saved_connection_index,
     )?;
-    let sftp = session.open_sftp_blocking().map_err(|e| e.to_string())?;
+    let sftp = get_or_open_sftp_client(&state, &session, &host, port, &user, &auth_mode)?;
     let resolved_local = expand_local_path(&local_path);
     let id = transfer_id.clone().unwrap_or_default();
 
@@ -4833,7 +5010,7 @@ fn sftp_upload_tree(
     let session = get_or_open_ssh_session(
         &state, &host, port, &user, &auth_mode, &password, &key_path, saved_connection_index,
     )?;
-    let sftp = session.open_sftp_blocking().map_err(|e| e.to_string())?;
+    let sftp = get_or_open_sftp_client(&state, &session, &host, port, &user, &auth_mode)?;
     let resolved_local = expand_local_path(&local_path);
     let id = transfer_id.clone().unwrap_or_default();
 
@@ -4910,7 +5087,7 @@ fn sftp_download_tree(
     let session = get_or_open_ssh_session(
         &state, &host, port, &user, &auth_mode, &password, &key_path, saved_connection_index,
     )?;
-    let sftp = session.open_sftp_blocking().map_err(|e| e.to_string())?;
+    let sftp = get_or_open_sftp_client(&state, &session, &host, port, &user, &auth_mode)?;
     let resolved_local = expand_local_path(&local_path);
     let id = transfer_id.clone().unwrap_or_default();
 
@@ -5654,6 +5831,7 @@ pub fn run() {
             ssh_tunnel_open,
             ssh_tunnel_info,
             ssh_tunnel_close,
+            ssh_session_prewarm,
             terminal_create,
             terminal_create_ssh,
             terminal_create_ssh_saved,

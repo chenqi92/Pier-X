@@ -20,6 +20,7 @@ import {
   X,
 } from "lucide-react";
 import { useEffect, useMemo, useRef, useState } from "react";
+import { createPortal } from "react-dom";
 import * as cmd from "../lib/commands";
 import type { DockerOverview, TabState } from "../lib/types";
 import { effectiveSshTarget } from "../lib/types";
@@ -1292,7 +1293,7 @@ export default function DockerPanel({ tab }: Props) {
           }
         />
 
-        {inspectCtrId && inspectJson && (
+        {inspectCtrId && inspectJson && createPortal(
           <div
             className="dlg-overlay"
             onClick={() => {
@@ -1329,7 +1330,8 @@ export default function DockerPanel({ tab }: Props) {
                 <pre className="dk-inspect-pre mono">{inspectJson}</pre>
               </div>
             </div>
-          </div>
+          </div>,
+          document.body,
         )}
 
         {activeTab === "networks" && (

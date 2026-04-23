@@ -1,5 +1,5 @@
 import { ChevronDown, ChevronRight } from "lucide-react";
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import * as cmd from "../lib/commands";
 import { isReadOnlySql, queryResultToTsv } from "../lib/commands";
 import { RIGHT_TOOL_META } from "../lib/rightToolMeta";
@@ -18,6 +18,7 @@ import DbAddCredentialDialog from "../components/DbAddCredentialDialog";
 import DbConnRow from "../components/DbConnRow";
 import DbInstancePicker from "../components/DbInstancePicker";
 import DbPasswordUpdateDialog from "../components/DbPasswordUpdateDialog";
+import DbTunnelChip from "../components/DbTunnelChip";
 import DismissibleNote from "../components/DismissibleNote";
 import PanelHeader from "../components/PanelHeader";
 import PreviewTable from "../components/PreviewTable";
@@ -52,7 +53,6 @@ export default function MySqlPanel({ tab }: Props) {
   const [notice, setNotice] = useState("");
   const [tunnelBusy, setTunnelBusy] = useState(false);
   const [tunnelError, setTunnelError] = useState("");
-  const [tunnelNotice, setTunnelNotice] = useState("");
   const [addOpen, setAddOpen] = useState(false);
   const [adopting, setAdopting] = useState<DetectedDbInstance | null>(null);
   const [autoBrowseAttempted, setAutoBrowseAttempted] = useState(false);
@@ -63,6 +63,7 @@ export default function MySqlPanel({ tab }: Props) {
   // result view gets the full vertical space.
   const [formOpen, setFormOpen] = useState(false);
   const [pwUpdateOpen, setPwUpdateOpen] = useState(false);
+  const passwordInputRef = useRef<HTMLInputElement | null>(null);
 
   // SSH context can be inferred from a local terminal that ran `ssh
   // user@host` or from a nested-ssh overlay; either way, the tunnel
@@ -105,6 +106,12 @@ export default function MySqlPanel({ tab }: Props) {
     if (state) setFormOpen(false);
   }, [state]);
 
+  // F4 — auto-expand the form on an error so the user can immediately
+  // see / edit the credentials that are probably wrong.
+  useEffect(() => {
+    if (error && !state) setFormOpen(true);
+  }, [error, state]);
+
   useEffect(() => {
     if (!hasSsh || !tab.mysqlTunnelId) {
       return;
@@ -114,17 +121,12 @@ export default function MySqlPanel({ tab }: Props) {
       if (cancelled || !info?.alive) {
         return;
       }
-      setTunnelNotice(
-        t("Tunnel ready on {host}:{port}.", {
-          host: info.localHost,
-          port: info.localPort,
-        }),
-      );
+      setTunnelError("");
     });
     return () => {
       cancelled = true;
     };
-  }, [hasSsh, tab.id, tab.mysqlTunnelId, tab.mysqlTunnelPort, updateTab, t]);
+  }, [hasSsh, tab.id, tab.mysqlTunnelId, tab.mysqlTunnelPort, updateTab]);
 
   // Auto-browse on saved SSH tab open: if the tab was seeded with
   // a saved DB credential but we haven't browsed yet, resolve the
@@ -148,15 +150,43 @@ export default function MySqlPanel({ tab }: Props) {
       try {
         let effectivePw = tab.mysqlPassword;
         if (!effectivePw) {
-          const resolved = await cmd.dbCredResolve(
-            savedIndex,
-            tab.mysqlActiveCredentialId!,
-          );
-          if (cancelled) return;
-          effectivePw = resolved.password ?? "";
-          if (effectivePw) {
-            updateTab(tab.id, { mysqlPassword: effectivePw });
-            setPassword(effectivePw);
+          try {
+            const resolved = await cmd.dbCredResolve(
+              savedIndex,
+              tab.mysqlActiveCredentialId!,
+            );
+            if (cancelled) return;
+            effectivePw = resolved.password ?? "";
+            if (effectivePw) {
+              updateTab(tab.id, { mysqlPassword: effectivePw });
+              setPassword(effectivePw);
+            } else if (resolved.credential.hasPassword) {
+              // Keyring claims a password exists but returned empty.
+              // Don't silently auth with "" — the server will reject
+              // it and surface a misleading "Access denied" that looks
+              // like the user's credentials are wrong.
+              if (!cancelled) {
+                setFormOpen(true);
+                setError(
+                  t(
+                    "Saved password unavailable. Enter it manually or update the keyring.",
+                  ),
+                );
+                setTimeout(() => passwordInputRef.current?.focus(), 0);
+              }
+              return;
+            }
+          } catch {
+            if (!cancelled) {
+              setFormOpen(true);
+              setError(
+                t(
+                  "Saved password unavailable. Enter it manually or update the keyring.",
+                ),
+              );
+              setTimeout(() => passwordInputRef.current?.focus(), 0);
+            }
+            return;
           }
         }
         if (cancelled) return;
@@ -194,23 +224,15 @@ export default function MySqlPanel({ tab }: Props) {
       force: forceTunnel,
     });
     setTunnelError("");
-    setTunnelNotice(
-      t("Tunnel ready on {host}:{port}.", {
-        host: info.localHost,
-        port: info.localPort,
-      }),
-    );
     return { host: info.localHost, port: info.localPort };
   }
 
-  async function openTunnel(force = false) {
-    if (!hasSsh || !canBrowse) {
-      return;
-    }
+  async function rebuildTunnel() {
+    if (!hasSsh || !canBrowse) return;
     setTunnelBusy(true);
     setTunnelError("");
     try {
-      await ensureConnectionTarget(force);
+      await ensureConnectionTarget(true);
     } catch (e) {
       setTunnelError(formatError(e));
     } finally {
@@ -226,7 +248,6 @@ export default function MySqlPanel({ tab }: Props) {
     setTunnelError("");
     try {
       await closeTunnelSlot(tab, "mysql", updateTab);
-      setTunnelNotice(t("Tunnel closed."));
     } catch (e) {
       setTunnelError(formatError(e));
     } finally {
@@ -278,8 +299,17 @@ export default function MySqlPanel({ tab }: Props) {
       return;
     }
     await closeTunnelSlot(tab, "mysql", updateTab);
-    setTunnelNotice("");
     setTunnelError("");
+  }
+
+  function onFormKeyDown(event: React.KeyboardEvent<HTMLDivElement>) {
+    if (event.key === "Enter" && canBrowse && !busy) {
+      const target = event.target as HTMLElement;
+      if (target.tagName !== "TEXTAREA") {
+        event.preventDefault();
+        void browse();
+      }
+    }
   }
 
   async function browse(
@@ -346,6 +376,30 @@ export default function MySqlPanel({ tab }: Props) {
       setQueryBusy(false);
     }
   }
+
+  // Priority-based status banner — connection error trumps tunnel
+  // error (fixing the password is always the right next action when
+  // both fail together).
+  const banner = error ? (
+    <DismissibleNote variant="status" tone="error" onDismiss={() => setError("")}>
+      <div>{error}</div>
+      {canUpdatePassword && (
+        <div className="button-row" style={{ marginTop: 6 }}>
+          <button
+            className="mini-button"
+            onClick={() => setPwUpdateOpen(true)}
+            type="button"
+          >
+            {t("Update password")}
+          </button>
+        </div>
+      )}
+    </DismissibleNote>
+  ) : tunnelError ? (
+    <DismissibleNote variant="status" tone="error" onDismiss={() => setTunnelError("")}>
+      {tunnelError}
+    </DismissibleNote>
+  ) : null;
 
   const connName = dbName.trim() || host.trim() || t("MySQL Browser");
   const connSub = host.trim()
@@ -474,18 +528,7 @@ export default function MySqlPanel({ tab }: Props) {
                 </button>
               </div>
             )}
-            {error && (
-              <DismissibleNote variant="status" tone="error" onDismiss={() => setError("")}>
-                <div>{error}</div>
-                {canUpdatePassword && (
-                  <div className="button-row" style={{ marginTop: 6 }}>
-                    <button className="mini-button" onClick={() => setPwUpdateOpen(true)} type="button">
-                      {t("Update password")}
-                    </button>
-                  </div>
-                )}
-              </DismissibleNote>
-            )}
+            {banner}
           </div>
         </section>
       )}
@@ -500,8 +543,17 @@ export default function MySqlPanel({ tab }: Props) {
             {formOpen ? <ChevronDown size={11} /> : <ChevronRight size={11} />}
             {t("Connection details")}
           </button>
-          {state && (
-            <span className="panel-section__hint">
+          <span className="panel-section__hint" style={{ display: "inline-flex", alignItems: "center", gap: "var(--sp-2)" }}>
+            {hasSsh && (
+              <DbTunnelChip
+                localPort={tab.mysqlTunnelPort}
+                busy={tunnelBusy}
+                hasError={!!tunnelError}
+                onRebuild={() => void rebuildTunnel()}
+                onClose={() => void closeTunnel()}
+              />
+            )}
+            {state && (
               <button
                 className="mini-button mini-button--ghost"
                 onClick={() => void disconnect()}
@@ -509,11 +561,11 @@ export default function MySqlPanel({ tab }: Props) {
               >
                 {t("Disconnect")}
               </button>
-            </span>
-          )}
+            )}
+          </span>
         </div>
         {formOpen && (
-          <div className="form-stack">
+          <div className="form-stack" onKeyDown={onFormKeyDown}>
             <div className="field-grid">
               <label className="field-stack">
                 <span className="field-label">{t("Host")}</span>
@@ -564,6 +616,7 @@ export default function MySqlPanel({ tab }: Props) {
                 <input
                   className="field-input"
                   type="password"
+                  ref={passwordInputRef}
                   onChange={(event) => {
                     const nextValue = event.currentTarget.value;
                     setPassword(nextValue);
@@ -574,58 +627,14 @@ export default function MySqlPanel({ tab }: Props) {
               </label>
             </div>
             {hasSsh && (
-              <>
-                <div className="data-meta-grid">
-                  <div className="meta-chip">
-                    <span>{t("Tunnel remote")}</span>
-                    <strong>{host.trim() || "127.0.0.1"}:{Number.isFinite(p) && p > 0 ? p : "?"}</strong>
-                  </div>
-                  <div className="meta-chip">
-                    <span>{t("Tunnel local")}</span>
-                    <strong>{tab.mysqlTunnelPort ? `127.0.0.1:${tab.mysqlTunnelPort}` : "—"}</strong>
-                  </div>
-                </div>
-                <div className="button-row">
-                  <button className="mini-button" disabled={!canBrowse || !!tab.mysqlTunnelId || tunnelBusy} onClick={() => void openTunnel(false)} type="button">
-                    {tunnelBusy ? t("Opening...") : t("Open Tunnel")}
-                  </button>
-                  <button className="mini-button" disabled={!tab.mysqlTunnelId || tunnelBusy} onClick={() => void openTunnel(true)} type="button">
-                    {t("Refresh Tunnel")}
-                  </button>
-                  <button className="mini-button" disabled={!tab.mysqlTunnelId || tunnelBusy} onClick={() => void closeTunnel()} type="button">
-                    {t("Close Tunnel")}
-                  </button>
-                </div>
-                <div className="inline-note">{t("Queries will connect through the SSH tunnel.")}</div>
-                {tunnelNotice && (
-                  <DismissibleNote variant="status" onDismiss={() => setTunnelNotice("")}>
-                    {tunnelNotice}
-                  </DismissibleNote>
-                )}
-                {tunnelError && (
-                  <DismissibleNote variant="status" tone="error" onDismiss={() => setTunnelError("")}>
-                    {tunnelError}
-                  </DismissibleNote>
-                )}
-              </>
+              <div className="inline-note">{t("Queries will connect through the SSH tunnel.")}</div>
             )}
             <div className="button-row">
               <button className="mini-button" disabled={!canBrowse || busy} onClick={() => void browse()} type="button">
                 {busy ? t("Connecting...") : state ? t("Reconnect") : t("Connect")}
               </button>
             </div>
-            {state && error && (
-              <DismissibleNote variant="status" tone="error" onDismiss={() => setError("")}>
-                <div>{error}</div>
-                {canUpdatePassword && (
-                  <div className="button-row" style={{ marginTop: 6 }}>
-                    <button className="mini-button" onClick={() => setPwUpdateOpen(true)} type="button">
-                      {t("Update password")}
-                    </button>
-                  </div>
-                )}
-              </DismissibleNote>
-            )}
+            {state && banner}
           </div>
         )}
       </section>

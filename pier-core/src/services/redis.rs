@@ -27,12 +27,17 @@
 //! M5a+ — the initial UI just shows the first N matches with a
 //! "reached scan limit" hint.
 //!
+//! ## Auth
+//!
+//! Redis 6+ supports AUTH with an optional ACL username plus a
+//! password. Both live on [`RedisConfig`] as `Option<String>` and
+//! are threaded into [`redis::ConnectionInfo`] explicitly so values
+//! with `@` / `:` / `/` round-trip safely — URL encoding through
+//! `to_url()` would mangle those. Empty string is treated the same
+//! as `None` (no AUTH sent), so the pre-auth flow still works.
+//!
 //! ## Not yet
 //!
-//! * AUTH. The M5a flow is local-forward-only, so the Redis
-//!   server sees connections from `127.0.0.1` and is typically
-//!   configured without a password. M5b will add an auth
-//!   field to [`RedisConfig`] and thread it into `connect`.
 //! * TLS. Same rationale — the SSH tunnel already encrypts.
 //! * Pub/sub and streams. These need a long-lived read side
 //!   and a dedicated tokio task, which doesn't fit the current
@@ -43,7 +48,10 @@ use std::sync::Arc;
 use std::time::Instant;
 
 use redis::aio::ConnectionManager;
-use redis::{AsyncCommands, Client, RedisError as NativeRedisError};
+use redis::{
+    AsyncCommands, Client, ConnectionAddr, IntoConnectionInfo, RedisConnectionInfo,
+    RedisError as NativeRedisError,
+};
 use serde::{Deserialize, Serialize};
 use tokio::sync::Mutex;
 
@@ -70,11 +78,8 @@ pub enum RedisError {
 /// Result alias for redis ops.
 pub type Result<T, E = RedisError> = std::result::Result<T, E>;
 
-/// Connection config for a Redis endpoint. Kept as a struct
-/// (rather than a bare `host`/`port` pair) so future work can
-/// add `username` / `password` / `db_index` without reshaping
-/// every caller.
-#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+/// Connection config for a Redis endpoint.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, Default)]
 pub struct RedisConfig {
     /// Hostname or IP. Usually `"127.0.0.1"` when reached via
     /// an SSH tunnel.
@@ -84,19 +89,47 @@ pub struct RedisConfig {
     /// Logical database index (Redis default is 0). Ignored on
     /// Redis Cluster, which only supports db 0.
     pub db: i64,
+    /// Optional ACL username (Redis 6+). `None` or empty sends
+    /// no `AUTH username` prefix, falling back to password-only
+    /// AUTH against the implicit `default` user.
+    #[serde(default)]
+    pub username: Option<String>,
+    /// Optional AUTH secret. `None` or empty skips AUTH.
+    #[serde(default)]
+    pub password: Option<String>,
 }
 
 impl RedisConfig {
     /// Build a Redis connection URL of the form
-    /// `redis://<host>:<port>/<db>`. The `db` component is
-    /// omitted when 0 so `INFO server` keeps returning the
-    /// default-db view.
+    /// `redis://<host>:<port>/<db>`. Credentials are intentionally
+    /// omitted — `connect` builds a [`ConnectionInfo`] directly so
+    /// special characters in passwords don't need URL encoding.
+    /// Kept public because the old M5a callers (tests, tools) still
+    /// use it for the no-auth case.
     pub fn to_url(&self) -> String {
         if self.db == 0 {
             format!("redis://{}:{}", self.host, self.port)
         } else {
             format!("redis://{}:{}/{}", self.host, self.port, self.db)
         }
+    }
+
+    /// Convert a configured username/password pair into the
+    /// `Option<String>` shape [`RedisConnectionInfo`] expects.
+    /// Empty strings normalize to `None` so the UI can pass ""
+    /// and still produce a password-less connection.
+    fn auth_parts(&self) -> (Option<String>, Option<String>) {
+        let u = self
+            .username
+            .as_ref()
+            .map(|s| s.trim().to_string())
+            .filter(|s| !s.is_empty());
+        let p = self
+            .password
+            .as_ref()
+            .map(|s| s.clone())
+            .filter(|s| !s.is_empty());
+        (u, p)
     }
 }
 
@@ -219,7 +252,24 @@ impl RedisClient {
         if config.port == 0 {
             return Err(RedisError::InvalidConfig("port must be > 0".into()));
         }
-        let client = Client::open(config.to_url())?;
+        let (username, password) = config.auth_parts();
+        // redis 1.2 makes `ConnectionInfo` fields crate-private, so we
+        // must build it through the public builder chain. Start from a
+        // bare `ConnectionAddr`, layer the ACL / password / DB on the
+        // returned `ConnectionInfo`. This path (unlike `from_url`)
+        // preserves the raw password bytes and doesn't require URL
+        // encoding, so `@` / `:` / `/` in secrets work correctly.
+        let mut redis_info = RedisConnectionInfo::default().set_db(config.db);
+        if let Some(u) = username {
+            redis_info = redis_info.set_username(u);
+        }
+        if let Some(p) = password {
+            redis_info = redis_info.set_password(p);
+        }
+        let conn_info = ConnectionAddr::Tcp(config.host.clone(), config.port)
+            .into_connection_info()?
+            .set_redis_settings(redis_info);
+        let client = Client::open(conn_info)?;
         let mut manager = ConnectionManager::new(client).await?;
 
         // Sanity ping. ConnectionManager will have handshaked
@@ -609,6 +659,7 @@ mod tests {
             host: "127.0.0.1".into(),
             port: 16379,
             db: 0,
+            ..RedisConfig::default()
         };
         assert_eq!(cfg.to_url(), "redis://127.0.0.1:16379");
     }
@@ -619,8 +670,47 @@ mod tests {
             host: "127.0.0.1".into(),
             port: 16379,
             db: 3,
+            ..RedisConfig::default()
         };
         assert_eq!(cfg.to_url(), "redis://127.0.0.1:16379/3");
+    }
+
+    #[test]
+    fn auth_parts_normalizes_empty_to_none() {
+        let cfg = RedisConfig {
+            host: "127.0.0.1".into(),
+            port: 6379,
+            db: 0,
+            username: Some(String::new()),
+            password: Some("  ".into()),
+        };
+        let (u, p) = cfg.auth_parts();
+        assert_eq!(u, None);
+        // password isn't trimmed — spaces can be legal — but empty is.
+        assert_eq!(p.as_deref(), Some("  "));
+
+        let cfg = RedisConfig {
+            host: "127.0.0.1".into(),
+            port: 6379,
+            db: 0,
+            username: None,
+            password: Some(String::new()),
+        };
+        assert_eq!(cfg.auth_parts(), (None, None));
+    }
+
+    #[test]
+    fn auth_parts_keeps_ascii_and_nonascii_bytes() {
+        let cfg = RedisConfig {
+            host: "127.0.0.1".into(),
+            port: 6379,
+            db: 0,
+            username: Some("acl-user".into()),
+            password: Some("p@ss:word/slash#hash".into()),
+        };
+        let (u, p) = cfg.auth_parts();
+        assert_eq!(u.as_deref(), Some("acl-user"));
+        assert_eq!(p.as_deref(), Some("p@ss:word/slash#hash"));
     }
 
     #[test]

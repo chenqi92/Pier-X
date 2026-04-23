@@ -393,6 +393,31 @@ export const sshTunnelInfo = (tunnelId: string) =>
 export const sshTunnelClose = (tunnelId: string) =>
   invoke<void>("ssh_tunnel_close", { tunnelId });
 
+/**
+ * Background pre-warm of the shared SSH session cache for a target.
+ *
+ * When the terminal detects a nested-ssh target (user typed
+ * `ssh user@host`) and we have enough credentials to open our own
+ * russh session (saved-connection index, key, agent, or a password
+ * captured from the PTY prompt), call this once so the first panel
+ * click doesn't pay the full SSH handshake latency. Fire-and-forget:
+ * the promise resolves as soon as the backend schedules the work,
+ * not when the connection is actually established.
+ */
+export const sshSessionPrewarm = (params: {
+  host: string;
+  port: number;
+  user: string;
+  authMode: string;
+  password: string;
+  keyPath: string;
+  savedConnectionIndex?: number | null;
+}) =>
+  invoke<void>("ssh_session_prewarm", {
+    ...params,
+    savedConnectionIndex: params.savedConnectionIndex ?? null,
+  });
+
 // ── Terminal ────────────────────────────────────────────────────
 
 export const terminalCreate = (cols: number, rows: number, shell?: string) =>
@@ -470,14 +495,30 @@ export const redisBrowse = (params: {
   db: number;
   pattern: string;
   key?: string | null;
-}) => invoke<RedisBrowserState>("redis_browse", params);
+  /** Redis 6+ ACL username. Empty/null = default user. */
+  username?: string | null;
+  /** AUTH secret. Empty/null = no AUTH. */
+  password?: string | null;
+}) =>
+  invoke<RedisBrowserState>("redis_browse", {
+    ...params,
+    username: params.username ?? null,
+    password: params.password ?? null,
+  });
 
 export const redisExecute = (params: {
   host: string;
   port: number;
   db: number;
   command: string;
-}) => invoke<RedisCommandResult>("redis_execute", params);
+  username?: string | null;
+  password?: string | null;
+}) =>
+  invoke<RedisCommandResult>("redis_execute", {
+    ...params,
+    username: params.username ?? null,
+    password: params.password ?? null,
+  });
 
 // ── PostgreSQL ──────────────────────────────────────────────────
 

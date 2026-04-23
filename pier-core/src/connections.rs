@@ -54,9 +54,11 @@
 //! into an existing file are atomic; the temp file lives in the
 //! same directory so the rename is a single inode swap.
 
+use std::collections::HashMap;
 use std::fs;
 use std::io;
 use std::path::{Path, PathBuf};
+use std::sync::{Mutex, OnceLock};
 
 use serde::{Deserialize, Serialize};
 
@@ -64,6 +66,78 @@ use crate::credentials;
 use crate::paths;
 use crate::ssh::config::{DbCredential, DbCredentialSource, DbKind, DbPasswordStorage};
 use crate::ssh::SshConfig;
+
+/// Process-local plaintext cache for DB credentials whose keyring
+/// write was silently dropped (macOS sandbox, Linux without a
+/// running secret-service daemon, Windows CM group policy, …).
+///
+/// `save_db_credential` writes a plaintext entry here whenever
+/// `store_password` has to fall back to [`DbPasswordStorage::Direct`];
+/// `resolve_db_credential` reads it back before returning, so a DB
+/// panel asking for the password can actually connect.
+///
+/// Without this cache the `Direct` variant effectively forgets the
+/// password as soon as `save_default()` round-trips the entry
+/// through YAML, because [`DbPasswordStorage::Direct::password`] is
+/// `#[serde(skip)]` — and then the panel tries to AUTH with an empty
+/// string, producing the cryptic `NOAUTH` / `Access denied` errors
+/// that look like "wrong credentials" to the user.
+///
+/// The cache is deliberately process-local and in-memory only:
+/// plaintext never touches disk. The user still needs to re-enter
+/// the password on the next launch if the keyring refuses to hold
+/// it, but within one session the Save → Connect path works.
+fn direct_password_cache() -> &'static Mutex<HashMap<String, String>> {
+    static CACHE: OnceLock<Mutex<HashMap<String, String>>> = OnceLock::new();
+    CACHE.get_or_init(|| Mutex::new(HashMap::new()))
+}
+
+fn cache_put(key: &str, value: String) {
+    if let Ok(mut guard) = direct_password_cache().lock() {
+        guard.insert(key.to_string(), value);
+    }
+}
+
+fn cache_get(key: &str) -> Option<String> {
+    direct_password_cache()
+        .lock()
+        .ok()
+        .and_then(|g| g.get(key).cloned())
+}
+
+fn cache_forget(key: &str) {
+    if let Ok(mut guard) = direct_password_cache().lock() {
+        guard.remove(key);
+    }
+}
+
+/// True when a DB credential has, or once had, a stored password.
+///
+/// Preferred over [`DbPasswordStorage::is_present`] in the Tauri
+/// view layer. Semantics differ from `is_present` in one place
+/// that matters:
+///
+/// * For [`DbPasswordStorage::Direct`] this returns `true` based
+///   on the variant tag alone, even when the runtime plaintext
+///   was dropped across a YAML round-trip (the `password` field
+///   is `#[serde(skip)]`). The variant tag is enough to know
+///   "the user saved this credential with a password"; whether
+///   the password is still resolvable in *this* process is a
+///   separate question handled by `resolve_db_credential`.
+///
+/// The frontend uses this to decide whether to show the "Saved
+/// password unavailable — enter it manually" fallback vs. a plain
+/// "no password needed" flow. Returning `false` for a silently-
+/// dropped Direct password would send the panel down the
+/// passwordless branch and surface a cryptic `NOAUTH` from the
+/// server.
+pub fn password_available(cred: &DbCredential) -> bool {
+    match &cred.password {
+        DbPasswordStorage::Keyring { credential_id } => !credential_id.is_empty(),
+        DbPasswordStorage::Direct { .. } => true,
+        DbPasswordStorage::None => false,
+    }
+}
 
 /// Current on-disk schema version. Bumped on any breaking
 /// change to the JSON shape.
@@ -536,6 +610,9 @@ pub fn delete_db_credential(
         // Best-effort; a missing keyring entry is fine.
         let _ = credentials::delete(credential_id);
     }
+    // Drop any in-memory Direct plaintext this credential was
+    // relying on so we don't leak it across re-adds of the same id.
+    cache_forget(&removed.id);
     store.save_default()?;
     Ok(())
 }
@@ -561,14 +638,17 @@ pub fn resolve_db_credential(
     let password = match &cred.password {
         DbPasswordStorage::Keyring { credential_id } => credentials::get(credential_id)?,
         DbPasswordStorage::Direct { password } => {
-            // `Direct` is `#[serde(skip)]`, so a freshly loaded
-            // store always has an empty string here — the
-            // in-memory Direct plaintext can only live as long
-            // as the process that set it.
-            if password.is_empty() {
-                None
-            } else {
+            // `Direct.password` is `#[serde(skip)]`, so a freshly
+            // loaded store always has an empty string here. Fall
+            // back to the process-local plaintext cache that
+            // `store_password` mirrored into when the keyring
+            // silently dropped the write. Without this the panel
+            // would silently send a missing-AUTH request and get
+            // a cryptic `NOAUTH` / `Access denied` from the server.
+            if !password.is_empty() {
                 Some(password.clone())
+            } else {
+                cache_get(&cred.id)
             }
         }
         DbPasswordStorage::None => None,
@@ -587,18 +667,29 @@ fn store_password(
     password: Option<String>,
 ) -> Result<DbPasswordStorage, DbCredentialError> {
     let Some(pw) = password.filter(|s| !s.is_empty()) else {
+        // Caller is rotating to passwordless — make sure any stale
+        // plaintext we had cached for this id is gone too.
+        cache_forget(cred_id);
         return Ok(DbPasswordStorage::None);
     };
     // Try keyring. `set_and_verify` returns `Ok(false)` when
     // the backend silently dropped the write.
     match credentials::set_and_verify(cred_id, &pw) {
-        Ok(true) => Ok(DbPasswordStorage::Keyring {
-            credential_id: cred_id.to_string(),
-        }),
+        Ok(true) => {
+            cache_forget(cred_id);
+            Ok(DbPasswordStorage::Keyring {
+                credential_id: cred_id.to_string(),
+            })
+        }
         Ok(false) => {
             log::warn!(
                 "keyring unavailable for db credential {cred_id}, using in-memory Direct fallback"
             );
+            // Mirror the plaintext into the process-local cache so
+            // that `resolve_db_credential` can return it even after
+            // `save_default()` round-trips the (serde-skipped)
+            // Direct field through YAML.
+            cache_put(cred_id, pw.clone());
             Ok(DbPasswordStorage::Direct { password: pw })
         }
         Err(e) => Err(DbCredentialError::Credential(e)),

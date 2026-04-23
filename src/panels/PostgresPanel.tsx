@@ -1,5 +1,5 @@
 import { ChevronDown, ChevronRight } from "lucide-react";
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import * as cmd from "../lib/commands";
 import { isReadOnlySql, queryResultToTsv } from "../lib/commands";
 import { RIGHT_TOOL_META } from "../lib/rightToolMeta";
@@ -18,6 +18,7 @@ import DbAddCredentialDialog from "../components/DbAddCredentialDialog";
 import DbConnRow from "../components/DbConnRow";
 import DbInstancePicker from "../components/DbInstancePicker";
 import DbPasswordUpdateDialog from "../components/DbPasswordUpdateDialog";
+import DbTunnelChip from "../components/DbTunnelChip";
 import DismissibleNote from "../components/DismissibleNote";
 import PanelHeader from "../components/PanelHeader";
 import PreviewTable from "../components/PreviewTable";
@@ -53,7 +54,6 @@ export default function PostgresPanel({ tab }: Props) {
   const [notice, setNotice] = useState("");
   const [tunnelBusy, setTunnelBusy] = useState(false);
   const [tunnelError, setTunnelError] = useState("");
-  const [tunnelNotice, setTunnelNotice] = useState("");
   const [addOpen, setAddOpen] = useState(false);
   const [adopting, setAdopting] = useState<DetectedDbInstance | null>(null);
   const [autoBrowseAttempted, setAutoBrowseAttempted] = useState(false);
@@ -61,6 +61,7 @@ export default function PostgresPanel({ tab }: Props) {
   // rationale — closed by default, auto-closes on successful browse.
   const [formOpen, setFormOpen] = useState(false);
   const [pwUpdateOpen, setPwUpdateOpen] = useState(false);
+  const passwordInputRef = useRef<HTMLInputElement | null>(null);
 
   // SSH context can be inferred from a local terminal that ran `ssh
   // user@host` or from a nested-ssh overlay; either way, the tunnel
@@ -104,6 +105,10 @@ export default function PostgresPanel({ tab }: Props) {
   }, [state]);
 
   useEffect(() => {
+    if (error && !state) setFormOpen(true);
+  }, [error, state]);
+
+  useEffect(() => {
     if (!hasSsh || !tab.pgTunnelId) {
       return;
     }
@@ -112,17 +117,12 @@ export default function PostgresPanel({ tab }: Props) {
       if (cancelled || !info?.alive) {
         return;
       }
-      setTunnelNotice(
-        t("Tunnel ready on {host}:{port}.", {
-          host: info.localHost,
-          port: info.localPort,
-        }),
-      );
+      setTunnelError("");
     });
     return () => {
       cancelled = true;
     };
-  }, [hasSsh, tab.id, tab.pgTunnelId, tab.pgTunnelPort, updateTab, t]);
+  }, [hasSsh, tab.id, tab.pgTunnelId, tab.pgTunnelPort, updateTab]);
 
   // Auto-browse on saved SSH tab open with a seeded DB credential.
   // See the matching note in MySqlPanel.tsx: we pass the resolved
@@ -141,15 +141,42 @@ export default function PostgresPanel({ tab }: Props) {
       try {
         let effectivePw = tab.pgPassword;
         if (!effectivePw) {
-          const resolved = await cmd.dbCredResolve(
-            savedIndex,
-            tab.pgActiveCredentialId!,
-          );
-          if (cancelled) return;
-          effectivePw = resolved.password ?? "";
-          if (effectivePw) {
-            updateTab(tab.id, { pgPassword: effectivePw });
-            setPassword(effectivePw);
+          try {
+            const resolved = await cmd.dbCredResolve(
+              savedIndex,
+              tab.pgActiveCredentialId!,
+            );
+            if (cancelled) return;
+            effectivePw = resolved.password ?? "";
+            if (effectivePw) {
+              updateTab(tab.id, { pgPassword: effectivePw });
+              setPassword(effectivePw);
+            } else if (resolved.credential.hasPassword) {
+              // See MySqlPanel: keyring claims a password but returned
+              // empty — degrade to manual entry instead of silently
+              // authenticating with "".
+              if (!cancelled) {
+                setFormOpen(true);
+                setError(
+                  t(
+                    "Saved password unavailable. Enter it manually or update the keyring.",
+                  ),
+                );
+                setTimeout(() => passwordInputRef.current?.focus(), 0);
+              }
+              return;
+            }
+          } catch {
+            if (!cancelled) {
+              setFormOpen(true);
+              setError(
+                t(
+                  "Saved password unavailable. Enter it manually or update the keyring.",
+                ),
+              );
+              setTimeout(() => passwordInputRef.current?.focus(), 0);
+            }
+            return;
           }
         }
         if (cancelled) return;
@@ -185,23 +212,15 @@ export default function PostgresPanel({ tab }: Props) {
       force: forceTunnel,
     });
     setTunnelError("");
-    setTunnelNotice(
-      t("Tunnel ready on {host}:{port}.", {
-        host: info.localHost,
-        port: info.localPort,
-      }),
-    );
     return { host: info.localHost, port: info.localPort };
   }
 
-  async function openTunnel(force = false) {
-    if (!hasSsh || !canBrowse) {
-      return;
-    }
+  async function rebuildTunnel() {
+    if (!hasSsh || !canBrowse) return;
     setTunnelBusy(true);
     setTunnelError("");
     try {
-      await ensureConnectionTarget(force);
+      await ensureConnectionTarget(true);
     } catch (e) {
       setTunnelError(formatError(e));
     } finally {
@@ -217,7 +236,6 @@ export default function PostgresPanel({ tab }: Props) {
     setTunnelError("");
     try {
       await closeTunnelSlot(tab, "postgres", updateTab);
-      setTunnelNotice(t("Tunnel closed."));
     } catch (e) {
       setTunnelError(formatError(e));
     } finally {
@@ -263,8 +281,17 @@ export default function PostgresPanel({ tab }: Props) {
       return;
     }
     await closeTunnelSlot(tab, "postgres", updateTab);
-    setTunnelNotice("");
     setTunnelError("");
+  }
+
+  function onFormKeyDown(event: React.KeyboardEvent<HTMLDivElement>) {
+    if (event.key === "Enter" && canBrowse && !busy) {
+      const target = event.target as HTMLElement;
+      if (target.tagName !== "TEXTAREA") {
+        event.preventDefault();
+        void browse();
+      }
+    }
   }
 
   async function browse(
@@ -329,6 +356,27 @@ export default function PostgresPanel({ tab }: Props) {
       setQueryBusy(false);
     }
   }
+
+  const banner = error ? (
+    <DismissibleNote variant="status" tone="error" onDismiss={() => setError("")}>
+      <div>{error}</div>
+      {canUpdatePassword && (
+        <div className="button-row" style={{ marginTop: 6 }}>
+          <button
+            className="mini-button"
+            onClick={() => setPwUpdateOpen(true)}
+            type="button"
+          >
+            {t("Update password")}
+          </button>
+        </div>
+      )}
+    </DismissibleNote>
+  ) : tunnelError ? (
+    <DismissibleNote variant="status" tone="error" onDismiss={() => setTunnelError("")}>
+      {tunnelError}
+    </DismissibleNote>
+  ) : null;
 
   const connName = dbName.trim() || host.trim() || t("PostgreSQL Browser");
   const connSub = host.trim()
@@ -456,18 +504,7 @@ export default function PostgresPanel({ tab }: Props) {
                 </button>
               </div>
             )}
-            {error && (
-              <DismissibleNote variant="status" tone="error" onDismiss={() => setError("")}>
-                <div>{error}</div>
-                {canUpdatePassword && (
-                  <div className="button-row" style={{ marginTop: 6 }}>
-                    <button className="mini-button" onClick={() => setPwUpdateOpen(true)} type="button">
-                      {t("Update password")}
-                    </button>
-                  </div>
-                )}
-              </DismissibleNote>
-            )}
+            {banner}
           </div>
         </section>
       )}
@@ -482,8 +519,17 @@ export default function PostgresPanel({ tab }: Props) {
             {formOpen ? <ChevronDown size={11} /> : <ChevronRight size={11} />}
             {t("Connection details")}
           </button>
-          {state && (
-            <span className="panel-section__hint">
+          <span className="panel-section__hint" style={{ display: "inline-flex", alignItems: "center", gap: "var(--sp-2)" }}>
+            {hasSsh && (
+              <DbTunnelChip
+                localPort={tab.pgTunnelPort}
+                busy={tunnelBusy}
+                hasError={!!tunnelError}
+                onRebuild={() => void rebuildTunnel()}
+                onClose={() => void closeTunnel()}
+              />
+            )}
+            {state && (
               <button
                 className="mini-button mini-button--ghost"
                 onClick={() => void disconnect()}
@@ -491,11 +537,11 @@ export default function PostgresPanel({ tab }: Props) {
               >
                 {t("Disconnect")}
               </button>
-            </span>
-          )}
+            )}
+          </span>
         </div>
         {formOpen && (
-          <div className="form-stack">
+          <div className="form-stack" onKeyDown={onFormKeyDown}>
             <div className="field-grid">
               <label className="field-stack">
                 <span className="field-label">{t("Host")}</span>
@@ -546,6 +592,7 @@ export default function PostgresPanel({ tab }: Props) {
                 <input
                   className="field-input"
                   type="password"
+                  ref={passwordInputRef}
                   onChange={(event) => {
                     const nextValue = event.currentTarget.value;
                     setPassword(nextValue);
@@ -574,58 +621,14 @@ export default function PostgresPanel({ tab }: Props) {
               </label>
             </div>
             {hasSsh && (
-              <>
-                <div className="data-meta-grid">
-                  <div className="meta-chip">
-                    <span>{t("Tunnel remote")}</span>
-                    <strong>{host.trim() || "127.0.0.1"}:{Number.isFinite(p) && p > 0 ? p : "?"}</strong>
-                  </div>
-                  <div className="meta-chip">
-                    <span>{t("Tunnel local")}</span>
-                    <strong>{tab.pgTunnelPort ? `127.0.0.1:${tab.pgTunnelPort}` : "—"}</strong>
-                  </div>
-                </div>
-                <div className="button-row">
-                  <button className="mini-button" disabled={!canBrowse || !!tab.pgTunnelId || tunnelBusy} onClick={() => void openTunnel(false)} type="button">
-                    {tunnelBusy ? t("Opening...") : t("Open Tunnel")}
-                  </button>
-                  <button className="mini-button" disabled={!tab.pgTunnelId || tunnelBusy} onClick={() => void openTunnel(true)} type="button">
-                    {t("Refresh Tunnel")}
-                  </button>
-                  <button className="mini-button" disabled={!tab.pgTunnelId || tunnelBusy} onClick={() => void closeTunnel()} type="button">
-                    {t("Close Tunnel")}
-                  </button>
-                </div>
-                <div className="inline-note">{t("Queries will connect through the SSH tunnel.")}</div>
-                {tunnelNotice && (
-                  <DismissibleNote variant="status" onDismiss={() => setTunnelNotice("")}>
-                    {tunnelNotice}
-                  </DismissibleNote>
-                )}
-                {tunnelError && (
-                  <DismissibleNote variant="status" tone="error" onDismiss={() => setTunnelError("")}>
-                    {tunnelError}
-                  </DismissibleNote>
-                )}
-              </>
+              <div className="inline-note">{t("Queries will connect through the SSH tunnel.")}</div>
             )}
             <div className="button-row">
               <button className="mini-button" disabled={!canBrowse || busy} onClick={() => void browse()} type="button">
                 {busy ? t("Connecting...") : state ? t("Reconnect") : t("Connect")}
               </button>
             </div>
-            {state && error && (
-              <DismissibleNote variant="status" tone="error" onDismiss={() => setError("")}>
-                <div>{error}</div>
-                {canUpdatePassword && (
-                  <div className="button-row" style={{ marginTop: 6 }}>
-                    <button className="mini-button" onClick={() => setPwUpdateOpen(true)} type="button">
-                      {t("Update password")}
-                    </button>
-                  </div>
-                )}
-              </DismissibleNote>
-            )}
+            {state && banner}
           </div>
         )}
       </section>

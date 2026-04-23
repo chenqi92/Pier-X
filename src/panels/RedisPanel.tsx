@@ -1,5 +1,5 @@
 import { ChevronDown, ChevronRight } from "lucide-react";
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import * as cmd from "../lib/commands";
 import { quoteCommandArg } from "../lib/commands";
 import { RIGHT_TOOL_META } from "../lib/rightToolMeta";
@@ -16,9 +16,12 @@ import { localizeError } from "../i18n/localizeMessage";
 import DbAddCredentialDialog from "../components/DbAddCredentialDialog";
 import DbConnRow from "../components/DbConnRow";
 import DbInstancePicker from "../components/DbInstancePicker";
+import DbPasswordUpdateDialog from "../components/DbPasswordUpdateDialog";
+import DbTunnelChip from "../components/DbTunnelChip";
 import DismissibleNote from "../components/DismissibleNote";
 import PanelHeader from "../components/PanelHeader";
 import StatusDot from "../components/StatusDot";
+import { isDbAuthError } from "../lib/dbAuthErrors";
 import { useTabStore } from "../stores/useTabStore";
 
 type Props = { tab: TabState };
@@ -32,6 +35,8 @@ export default function RedisPanel({ tab }: Props) {
   const [host, setHost] = useState(tab.redisHost);
   const [port, setPort] = useState(String(tab.redisPort));
   const [db, setDb] = useState(String(tab.redisDb));
+  const [user, setUser] = useState(tab.redisUser);
+  const [password, setPassword] = useState(tab.redisPassword);
   const [pattern, setPattern] = useState("*");
   const [keyName, setKeyName] = useState("");
   const [command, setCommand] = useState("PING");
@@ -43,23 +48,24 @@ export default function RedisPanel({ tab }: Props) {
   const [cmdError, setCmdError] = useState("");
   const [tunnelBusy, setTunnelBusy] = useState(false);
   const [tunnelError, setTunnelError] = useState("");
-  const [tunnelNotice, setTunnelNotice] = useState("");
   const [addOpen, setAddOpen] = useState(false);
   const [adopting, setAdopting] = useState<DetectedDbInstance | null>(null);
   const [autoBrowseAttempted, setAutoBrowseAttempted] = useState(false);
-  // Collapsible "Connection details" drawer. See MySqlPanel for the
-  // rationale — closed by default, auto-closes on successful browse.
   const [formOpen, setFormOpen] = useState(false);
+  const [pwUpdateOpen, setPwUpdateOpen] = useState(false);
+  const passwordInputRef = useRef<HTMLInputElement | null>(null);
 
-  // SSH context can be inferred from a local terminal that ran `ssh
-  // user@host` or from a nested-ssh overlay; either way, the tunnel
-  // helper picks up the right addressing via `effectiveSshTarget`.
   const hasSsh = effectiveSshTarget(tab) !== null;
   const sshTarget = effectiveSshTarget(tab);
   const savedIndex = sshTarget?.savedConnectionIndex ?? null;
   const p = Number.parseInt(port, 10);
   const d = Number.parseInt(db, 10);
   const canBrowse = host.trim() && Number.isFinite(p) && p > 0 && Number.isFinite(d);
+  const canUpdatePassword =
+    !!error &&
+    isDbAuthError("redis", error) &&
+    !!tab.redisActiveCredentialId &&
+    savedIndex !== null;
 
   useEffect(() => {
     setHost((current) => (current === tab.redisHost ? current : tab.redisHost));
@@ -76,8 +82,23 @@ export default function RedisPanel({ tab }: Props) {
   }, [tab.redisDb]);
 
   useEffect(() => {
+    setUser((current) => (current === tab.redisUser ? current : tab.redisUser));
+  }, [tab.redisUser]);
+
+  useEffect(() => {
+    setPassword((current) => (current === tab.redisPassword ? current : tab.redisPassword));
+  }, [tab.redisPassword]);
+
+  useEffect(() => {
     if (state) setFormOpen(false);
   }, [state]);
+
+  // F4 — auto-expand on error so the user can immediately see / edit
+  // the credentials that are probably wrong, without having to click
+  // "Connection details" first.
+  useEffect(() => {
+    if (error && !state) setFormOpen(true);
+  }, [error, state]);
 
   useEffect(() => {
     if (!hasSsh || !tab.redisTunnelId) {
@@ -88,19 +109,19 @@ export default function RedisPanel({ tab }: Props) {
       if (cancelled || !info?.alive) {
         return;
       }
-      setTunnelNotice(
-        t("Tunnel ready on {host}:{port}.", {
-          host: info.localHost,
-          port: info.localPort,
-        }),
-      );
+      setTunnelError("");
     });
     return () => {
       cancelled = true;
     };
-  }, [hasSsh, tab.id, tab.redisTunnelId, tab.redisTunnelPort, updateTab, t]);
+  }, [hasSsh, tab.id, tab.redisTunnelId, tab.redisTunnelPort, updateTab]);
 
   // Auto-browse on saved SSH tab open with a seeded DB credential.
+  // Mirrors MySqlPanel: resolve the keyring password, then pass it
+  // explicitly to `browse` so the stale-closure doesn't auth with "".
+  // Falls back to "manual input" on keyring failure rather than
+  // silently sending an empty password (which would always look like
+  // "wrong credentials").
   useEffect(() => {
     if (autoBrowseAttempted) return;
     if (!hasSsh || !tab.redisActiveCredentialId || savedIndex === null) return;
@@ -111,12 +132,50 @@ export default function RedisPanel({ tab }: Props) {
     let cancelled = false;
     void (async () => {
       try {
-        // Redis has no user but may have a password — resolve and
-        // inject it via the AUTH command if present. For Phase 1
-        // we just run `browse` without AUTH since the panel
-        // doesn't have a password field wired up yet.
+        let effectivePw = tab.redisPassword;
+        if (!effectivePw) {
+          try {
+            const resolved = await cmd.dbCredResolve(
+              savedIndex,
+              tab.redisActiveCredentialId!,
+            );
+            if (cancelled) return;
+            effectivePw = resolved.password ?? "";
+            if (effectivePw) {
+              updateTab(tab.id, { redisPassword: effectivePw });
+              setPassword(effectivePw);
+            } else if (resolved.credential.hasPassword) {
+              // Credential says it *should* have a password, but the
+              // keyring didn't return one. Don't silently continue —
+              // the next `redis_browse` would fail AUTH and surface
+              // a cryptic "wrongpass" to the user.
+              if (!cancelled) {
+                setFormOpen(true);
+                setError(
+                  t(
+                    "Saved password unavailable. Enter it manually or update the keyring.",
+                  ),
+                );
+                setTimeout(() => passwordInputRef.current?.focus(), 0);
+              }
+              return;
+            }
+          } catch {
+            // keyring access denied / locked — degrade gracefully.
+            if (!cancelled) {
+              setFormOpen(true);
+              setError(
+                t(
+                  "Saved password unavailable. Enter it manually or update the keyring.",
+                ),
+              );
+              setTimeout(() => passwordInputRef.current?.focus(), 0);
+            }
+            return;
+          }
+        }
         if (cancelled) return;
-        await browse();
+        await browse(undefined, effectivePw);
       } catch (e) {
         if (!cancelled) setError(formatError(e));
       }
@@ -155,28 +214,7 @@ export default function RedisPanel({ tab }: Props) {
       force: forceTunnel,
     });
     setTunnelError("");
-    setTunnelNotice(
-      t("Tunnel ready on {host}:{port}.", {
-        host: info.localHost,
-        port: info.localPort,
-      }),
-    );
     return { host: info.localHost, port: info.localPort };
-  }
-
-  async function openTunnel(force = false) {
-    if (!hasSsh || !canBrowse) {
-      return;
-    }
-    setTunnelBusy(true);
-    setTunnelError("");
-    try {
-      await ensureConnectionTarget(force);
-    } catch (e) {
-      setTunnelError(formatError(e));
-    } finally {
-      setTunnelBusy(false);
-    }
   }
 
   async function closeTunnel() {
@@ -187,7 +225,19 @@ export default function RedisPanel({ tab }: Props) {
     setTunnelError("");
     try {
       await closeTunnelSlot(tab, "redis", updateTab);
-      setTunnelNotice(t("Tunnel closed."));
+    } catch (e) {
+      setTunnelError(formatError(e));
+    } finally {
+      setTunnelBusy(false);
+    }
+  }
+
+  async function rebuildTunnel() {
+    if (!hasSsh || !canBrowse) return;
+    setTunnelBusy(true);
+    setTunnelError("");
+    try {
+      await ensureConnectionTarget(true);
     } catch (e) {
       setTunnelError(formatError(e));
     } finally {
@@ -215,13 +265,30 @@ export default function RedisPanel({ tab }: Props) {
       return;
     }
     await closeTunnelSlot(tab, "redis", updateTab);
-    setTunnelNotice("");
     setTunnelError("");
   }
 
-  async function browse(nextKey = keyName) {
+  async function handlePasswordUpdated() {
+    if (savedIndex === null || !tab.redisActiveCredentialId) return;
+    setError("");
+    try {
+      const resolved = await cmd.dbCredResolve(
+        savedIndex,
+        tab.redisActiveCredentialId,
+      );
+      const pw = resolved.password ?? "";
+      updateTab(tab.id, { redisPassword: pw });
+      setPassword(pw);
+      await browse(undefined, pw);
+    } catch (e) {
+      setError(formatError(e));
+    }
+  }
+
+  async function browse(nextKey = keyName, passwordOverride?: string) {
     setBusy(true);
     setError("");
+    const pw = passwordOverride !== undefined ? passwordOverride : password;
     try {
       const target = await ensureConnectionTarget();
       const s = await cmd.redisBrowse({
@@ -230,12 +297,12 @@ export default function RedisPanel({ tab }: Props) {
         db: d,
         pattern: pattern.trim() || "*",
         key: nextKey.trim() || null,
+        username: user.trim() || null,
+        password: pw || null,
       });
       setState(s);
       setKeyName(s.keyName);
     } catch (e) {
-      // Preserve the previous state so the body doesn't blank during a
-      // transient error — only the error banner updates.
       setError(formatError(e));
     } finally {
       setBusy(false);
@@ -252,6 +319,8 @@ export default function RedisPanel({ tab }: Props) {
         port: target.port,
         db: d,
         command,
+        username: user.trim() || null,
+        password: password || null,
       });
       setCmdResult(r);
     } catch (e) {
@@ -259,6 +328,13 @@ export default function RedisPanel({ tab }: Props) {
       setCmdError(formatError(e));
     } finally {
       setCmdBusy(false);
+    }
+  }
+
+  function onFormKeyDown(event: React.KeyboardEvent<HTMLDivElement>) {
+    if (event.key === "Enter" && canBrowse && !busy) {
+      event.preventDefault();
+      void browse();
     }
   }
 
@@ -277,6 +353,30 @@ export default function RedisPanel({ tab }: Props) {
       {state ? `:${port}` : t("offline")}
     </>
   );
+
+  // Priority-based status banner — show at most one. Authoritative
+  // connection errors trump tunnel errors so the user's next action is
+  // the right one (fix password > rebuild tunnel).
+  const banner = error ? (
+    <DismissibleNote variant="status" tone="error" onDismiss={() => setError("")}>
+      <div>{error}</div>
+      {canUpdatePassword && (
+        <div className="button-row" style={{ marginTop: 6 }}>
+          <button
+            className="mini-button"
+            onClick={() => setPwUpdateOpen(true)}
+            type="button"
+          >
+            {t("Update password")}
+          </button>
+        </div>
+      )}
+    </DismissibleNote>
+  ) : tunnelError ? (
+    <DismissibleNote variant="status" tone="error" onDismiss={() => setTunnelError("")}>
+      {tunnelError}
+    </DismissibleNote>
+  ) : null;
 
   return (
     <>
@@ -307,11 +407,15 @@ export default function RedisPanel({ tab }: Props) {
           setHost(cred.host);
           setPort(String(cred.port));
           setDb(cred.database ?? "0");
+          setUser(cred.user);
+          setPassword("");
           updateTab(tab.id, {
             redisActiveCredentialId: cred.id,
             redisHost: cred.host,
             redisPort: cred.port,
             redisDb: cred.database ? Number.parseInt(cred.database, 10) || 0 : 0,
+            redisUser: cred.user,
+            redisPassword: "",
             redisTunnelId: null,
             redisTunnelPort: null,
           });
@@ -343,16 +447,30 @@ export default function RedisPanel({ tab }: Props) {
           setHost(cred.host);
           setPort(String(cred.port));
           setDb(cred.database ?? "0");
+          setUser(cred.user);
+          setPassword("");
           updateTab(tab.id, {
             redisActiveCredentialId: cred.id,
             redisHost: cred.host,
             redisPort: cred.port,
             redisDb: cred.database ? Number.parseInt(cred.database, 10) || 0 : 0,
+            redisUser: cred.user,
+            redisPassword: "",
             redisTunnelId: null,
             redisTunnelPort: null,
           });
         }}
       />
+      {tab.redisActiveCredentialId && savedIndex !== null && (
+        <DbPasswordUpdateDialog
+          open={pwUpdateOpen}
+          onClose={() => setPwUpdateOpen(false)}
+          savedConnectionIndex={savedIndex}
+          credentialId={tab.redisActiveCredentialId}
+          credentialLabel={host.trim() || t("Redis")}
+          onUpdated={() => void handlePasswordUpdated()}
+        />
+      )}
       {!state && (
         <section className="panel-section">
           <div className="form-stack">
@@ -372,11 +490,7 @@ export default function RedisPanel({ tab }: Props) {
                 </button>
               </div>
             )}
-            {error && (
-              <DismissibleNote variant="status" tone="error" onDismiss={() => setError("")}>
-                {error}
-              </DismissibleNote>
-            )}
+            {banner}
           </div>
         </section>
       )}
@@ -391,8 +505,17 @@ export default function RedisPanel({ tab }: Props) {
             {formOpen ? <ChevronDown size={11} /> : <ChevronRight size={11} />}
             {t("Connection details")}
           </button>
-          {state && (
-            <span className="panel-section__hint">
+          <span className="panel-section__hint" style={{ display: "inline-flex", alignItems: "center", gap: "var(--sp-2)" }}>
+            {hasSsh && (
+              <DbTunnelChip
+                localPort={tab.redisTunnelPort}
+                busy={tunnelBusy}
+                hasError={!!tunnelError}
+                onRebuild={() => void rebuildTunnel()}
+                onClose={() => void closeTunnel()}
+              />
+            )}
+            {state && (
               <button
                 className="mini-button mini-button--ghost"
                 onClick={() => void disconnect()}
@@ -400,11 +523,11 @@ export default function RedisPanel({ tab }: Props) {
               >
                 {t("Disconnect")}
               </button>
-            </span>
-          )}
+            )}
+          </span>
         </div>
         {formOpen && (
-          <div className="form-stack">
+          <div className="form-stack" onKeyDown={onFormKeyDown}>
             <div className="field-grid">
               <label className="field-stack">
                 <span className="field-label">{t("Host")}</span>
@@ -439,6 +562,35 @@ export default function RedisPanel({ tab }: Props) {
             </div>
             <div className="field-grid">
               <label className="field-stack">
+                <span className="field-label">{t("User")}</span>
+                <input
+                  className="field-input"
+                  onChange={(event) => {
+                    const nextValue = event.currentTarget.value;
+                    setUser(nextValue);
+                    updateTab(tab.id, { redisUser: nextValue });
+                  }}
+                  placeholder={t("ACL user (optional)")}
+                  value={user}
+                />
+              </label>
+              <label className="field-stack">
+                <span className="field-label">{t("Password")}</span>
+                <input
+                  className="field-input"
+                  type="password"
+                  ref={passwordInputRef}
+                  onChange={(event) => {
+                    const nextValue = event.currentTarget.value;
+                    setPassword(nextValue);
+                    updateTab(tab.id, { redisPassword: nextValue });
+                  }}
+                  value={password}
+                />
+              </label>
+            </div>
+            <div className="field-grid">
+              <label className="field-stack">
                 <span className="field-label">{t("DB")}</span>
                 <input
                   className="field-input"
@@ -455,53 +607,13 @@ export default function RedisPanel({ tab }: Props) {
                 <input className="field-input" onChange={(event) => setPattern(event.currentTarget.value)} value={pattern} />
               </label>
             </div>
-            {hasSsh && (
-              <>
-                <div className="data-meta-grid">
-                  <div className="meta-chip">
-                    <span>{t("Tunnel remote")}</span>
-                    <strong>{host.trim() || "127.0.0.1"}:{Number.isFinite(p) && p > 0 ? p : "?"}</strong>
-                  </div>
-                  <div className="meta-chip">
-                    <span>{t("Tunnel local")}</span>
-                    <strong>{tab.redisTunnelPort ? `127.0.0.1:${tab.redisTunnelPort}` : "—"}</strong>
-                  </div>
-                </div>
-                <div className="button-row">
-                  <button className="mini-button" disabled={!canBrowse || !!tab.redisTunnelId || tunnelBusy} onClick={() => void openTunnel(false)} type="button">
-                    {tunnelBusy ? t("Opening...") : t("Open Tunnel")}
-                  </button>
-                  <button className="mini-button" disabled={!tab.redisTunnelId || tunnelBusy} onClick={() => void openTunnel(true)} type="button">
-                    {t("Refresh Tunnel")}
-                  </button>
-                  <button className="mini-button" disabled={!tab.redisTunnelId || tunnelBusy} onClick={() => void closeTunnel()} type="button">
-                    {t("Close Tunnel")}
-                  </button>
-                </div>
-                <div className="inline-note">{t("Queries will connect through the SSH tunnel.")}</div>
-                {tunnelNotice && (
-                  <DismissibleNote variant="status" onDismiss={() => setTunnelNotice("")}>
-                    {tunnelNotice}
-                  </DismissibleNote>
-                )}
-                {tunnelError && (
-                  <DismissibleNote variant="status" tone="error" onDismiss={() => setTunnelError("")}>
-                    {tunnelError}
-                  </DismissibleNote>
-                )}
-              </>
-            )}
             <div className="button-row">
               <button className="mini-button" disabled={!canBrowse || busy} onClick={() => void browse()} type="button">
                 {busy ? t("Connecting...") : state ? t("Reconnect") : t("Connect")}
               </button>
             </div>
             {state && <div className="status-note">{state.pong} · {state.serverVersion || "?"}{state.usedMemory ? ` · ${state.usedMemory}` : ""}</div>}
-            {state && error && (
-              <DismissibleNote variant="status" tone="error" onDismiss={() => setError("")}>
-                {error}
-              </DismissibleNote>
-            )}
+            {state && banner}
           </div>
         )}
       </section>

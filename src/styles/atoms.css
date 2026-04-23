@@ -337,6 +337,63 @@
 }
 .db-instance-pill--detected svg { width: 11px; height: 11px; flex: none; }
 
+/* ─── DB tunnel chip (replaces the 3-button tunnel row) ───
+   Single status chip that shows the live tunnel port and, on
+   click, reveals a small Rebuild / Stop menu. Non-interactive
+   when no tunnel is open — Connect opens the tunnel as a side
+   effect. */
+.db-tunnel-chip {
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+}
+.db-tunnel-chip__trigger {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--sp-1);
+  background: transparent;
+  border: 0;
+  padding: 0;
+  color: inherit;
+  font: inherit;
+  cursor: default;
+}
+.db-tunnel-chip__trigger:not(:disabled) { cursor: pointer; }
+.db-tunnel-chip__trigger:disabled { opacity: 0.7; }
+.db-tunnel-chip__trigger svg { color: var(--muted); }
+.db-tunnel-chip__menu {
+  position: absolute;
+  top: calc(100% + 4px);
+  right: 0;
+  min-width: 160px;
+  background: var(--elev);
+  border: 1px solid var(--line-2);
+  border-radius: var(--radius-sm);
+  box-shadow: var(--shadow-popover);
+  padding: var(--sp-1);
+  z-index: 50;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+.db-tunnel-chip__item {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--sp-1-5);
+  padding: var(--sp-1) var(--sp-2);
+  background: transparent;
+  border: 0;
+  border-radius: var(--radius-xs);
+  color: var(--ink-2);
+  font-family: var(--sans);
+  font-size: var(--ui-fs-sm);
+  text-align: left;
+  cursor: pointer;
+}
+.db-tunnel-chip__item:hover { background: var(--panel-2); color: var(--ink); }
+.db-tunnel-chip__item--danger { color: var(--neg); }
+.db-tunnel-chip__item--danger:hover { background: var(--neg-dim); color: var(--neg); }
+
 .mini-button--ghost {
   background: transparent;
   border-color: transparent;

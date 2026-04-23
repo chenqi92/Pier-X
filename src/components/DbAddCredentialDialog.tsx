@@ -226,17 +226,19 @@ export default function DbAddCredentialDialog({
                 />
               </div>
             </div>
-            {kind !== "redis" && (
-              <div className="dlg-row">
-                <label className="dlg-row-label">{t("User")}</label>
-                <input
-                  className="dlg-input"
-                  onChange={(e) => setUser(e.currentTarget.value)}
-                  placeholder={DEFAULT_USER[kind]}
-                  value={user}
-                />
-              </div>
-            )}
+            <div className="dlg-row">
+              <label className="dlg-row-label">{t("User")}</label>
+              <input
+                className="dlg-input"
+                onChange={(e) => setUser(e.currentTarget.value)}
+                placeholder={
+                  kind === "redis"
+                    ? t("ACL user (optional)")
+                    : DEFAULT_USER[kind]
+                }
+                value={user}
+              />
+            </div>
             <div className="dlg-row">
               <label className="dlg-row-label">{t("Password")}</label>
               <input

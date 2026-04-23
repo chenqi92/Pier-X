@@ -735,6 +735,14 @@ export default function SftpPanel({ tab }: Props) {
   // terminal-create time), so we don't gate this on credentials being
   // present in the tab — the cache + keychain resolution handle both
   // fresh and saved-password connections.
+  //
+  // Deps are intentionally narrow: only the tab id and whether any
+  // SSH target resolves. Credential-shape changes (password arriving
+  // after a prompt, saved-index swap) used to re-fire this effect
+  // while the first browse was still in flight; the `!state`/`!busy`
+  // guards below made those re-fires no-ops but we still paid the
+  // effect-scheduling cost and risked double calls under React
+  // Strict Mode. The initial browse covers every case we care about.
   useEffect(() => {
     if (!hasSsh) return;
     if (state) return;
@@ -745,17 +753,7 @@ export default function SftpPanel({ tab }: Props) {
     // always carry an explicit path.
     void browse(path);
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [
-    tab.id,
-    tab.backend,
-    sshTarget?.host,
-    sshTarget?.port,
-    sshTarget?.user,
-    sshTarget?.authMode,
-    tab.terminalSessionId,
-    (sshTarget?.password.length ?? 0) > 0,
-    sshTarget?.savedConnectionIndex,
-  ]);
+  }, [tab.id, hasSsh]);
 
   function selectEntry(entry: SftpEntryView) {
     setSelectedPath(entry.path);

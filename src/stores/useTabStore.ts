@@ -64,6 +64,8 @@ function makeDefaultTab(
     redisHost: partial.redisHost ?? "127.0.0.1",
     redisPort: partial.redisPort ?? 6379,
     redisDb: partial.redisDb ?? 0,
+    redisUser: partial.redisUser ?? "",
+    redisPassword: partial.redisPassword ?? "",
     redisTunnelId: partial.redisTunnelId ?? null,
     redisTunnelPort: partial.redisTunnelPort ?? null,
     mysqlHost: partial.mysqlHost ?? "127.0.0.1",

@@ -11,6 +11,7 @@ import ContextMenu, { type ContextMenuItem } from "../components/ContextMenu";
 import { useI18n } from "../i18n/useI18n";
 import { isMissingKeychainError, localizeError } from "../i18n/localizeMessage";
 import type { TabState, TerminalSessionInfo, TerminalSnapshot, TerminalSize } from "../lib/types";
+import { effectiveSshTarget } from "../lib/types";
 import { useTabStore } from "../stores/useTabStore";
 import { useSettingsStore } from "../stores/useSettingsStore";
 import { useStatusStore } from "../stores/useStatusStore";
@@ -153,6 +154,92 @@ export default function TerminalPanel({ tab, isActive, onEditConnection }: Props
       updateTab(tab.id, { terminalSessionId: session.sessionId });
     }
   }, [session?.sessionId]);
+
+  // ── SSH session pre-warm ────────────────────────────────────────
+  // The real ssh the user launched (local `ssh user@host`, or nested
+  // ssh inside an ssh tab) has its own TCP connection that lives in a
+  // subprocess we can't reuse. To keep the "all panels reuse one
+  // session" promise, open a parallel russh connection in the
+  // background the moment we have enough credentials, and seed the
+  // shared `sftp_sessions` cache under the same key the panels look
+  // up. By the time the user clicks Docker / Monitor / Log / DB, the
+  // cache is warm and their first call skips the handshake.
+  //
+  // Fires only when the credential shape actually changes — re-
+  // rendering the tab for an unrelated reason (resize, scroll) does
+  // not retrigger the prewarm.
+  const prewarmFingerprintRef = useRef<string>("");
+  useEffect(() => {
+    const target = effectiveSshTarget(tab);
+    if (!target) {
+      prewarmFingerprintRef.current = "";
+      return;
+    }
+    // For real SSH-backend tabs without a nested overlay, the terminal
+    // creation path already seeded the cache via
+    // `create_ssh_terminal_from_config`. Skip so we don't open a
+    // redundant second russh connection on top of it.
+    if (tab.backend === "ssh" && !tab.nestedSshTarget) return;
+
+    // We need at least one credential path with a chance of succeeding.
+    // `auto` and `agent` self-authenticate via the SSH agent / default
+    // identity files, so they're always worth trying; `key` needs a
+    // path; `password` needs the captured / keychain-resolved secret;
+    // a saved-index alone is enough because the on-disk config carries
+    // its own auth. Skip until one of these holds — otherwise the
+    // prewarm would just fail and waste a handshake.
+    const hasCredential =
+      target.savedConnectionIndex !== null
+      || target.authMode === "agent"
+      || target.authMode === "auto"
+      || (target.authMode === "key" && target.keyPath.length > 0)
+      || (target.authMode === "password" && target.password.length > 0);
+    if (!hasCredential) return;
+
+    const fingerprint = [
+      target.host,
+      target.port,
+      target.user,
+      target.authMode,
+      target.keyPath,
+      target.savedConnectionIndex ?? "",
+      target.password.length > 0 ? "pw" : "no-pw",
+    ].join("|");
+    if (fingerprint === prewarmFingerprintRef.current) return;
+    prewarmFingerprintRef.current = fingerprint;
+
+    cmd
+      .sshSessionPrewarm({
+        host: target.host,
+        port: target.port,
+        user: target.user,
+        authMode: target.authMode,
+        password: target.password,
+        keyPath: target.keyPath,
+        savedConnectionIndex: target.savedConnectionIndex,
+      })
+      .catch(() => {
+        // Backend already swallows errors; this catch guards against
+        // invoke-layer failures (dev reload, missing command) — not
+        // worth surfacing to the user for an optimization path.
+      });
+  }, [
+    tab.backend,
+    tab.nestedSshTarget?.host,
+    tab.nestedSshTarget?.port,
+    tab.nestedSshTarget?.user,
+    tab.nestedSshTarget?.authMode,
+    tab.nestedSshTarget?.keyPath,
+    tab.nestedSshTarget?.savedConnectionIndex,
+    (tab.nestedSshTarget?.password.length ?? 0) > 0,
+    tab.sshHost,
+    tab.sshPort,
+    tab.sshUser,
+    tab.sshAuthMode,
+    tab.sshKeyPath,
+    tab.sshSavedConnectionIndex,
+    (tab.sshPassword?.length ?? 0) > 0,
+  ]);
 
   // ── Measure terminal grid dimensions ────────────────────────
 

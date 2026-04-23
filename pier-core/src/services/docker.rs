@@ -1144,6 +1144,7 @@ not-json-at-all
             state: "running".into(),
             created: "2025-01-01".into(),
             ports: "80/tcp".into(),
+            labels: "com.docker.compose.project=demo".into(),
         };
         let json = serde_json::to_string(&c).unwrap();
         let back: Container = serde_json::from_str(&json).unwrap();

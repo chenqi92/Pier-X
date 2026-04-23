@@ -183,6 +183,14 @@ export type GitSubmoduleView = {
 export type GitConflictHunkView = {
   oursLines: string[];
   theirsLines: string[];
+  /** Common-ancestor lines from the `|||||||` section when the
+   *  user has `merge.conflictStyle=diff3`. Empty when the file
+   *  was generated with the default two-way style. */
+  baseLines: string[];
+  /** True when the `|||||||` marker was present — distinguishes
+   *  "no base recorded" from "base was empty". Drives the
+   *  three-column layout and the "Accept base" action. */
+  hasBase: boolean;
   resolution: string;
 };
 

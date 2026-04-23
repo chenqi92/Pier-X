@@ -3122,14 +3122,64 @@ export default function GitPanel({ browserPath, isActive = true }: Props) {
                               </GitButton>
                             </div>
 
+                            {selectedConflictHunks.length > 0 &&
+                            selectedConflictHunks.every((h) => !h.hasBase) ? (
+                              <div
+                                className="git-inline-note"
+                                style={{
+                                  margin: "var(--sp-2) 0",
+                                  display: "flex",
+                                  alignItems: "center",
+                                  gap: "var(--sp-2)",
+                                }}
+                              >
+                                <span style={{ flex: 1 }}>
+                                  {t("Base column hidden — enable diff3 style to see the common ancestor in future conflicts.")}
+                                </span>
+                                <GitButton
+                                  compact
+                                  onClick={() =>
+                                    void runGitAction(
+                                      () =>
+                                        cmd.gitSetConfigValue(
+                                          currentRepoPath,
+                                          "merge.conflictStyle",
+                                          "diff3",
+                                          false,
+                                        ),
+                                      { config: true, successMessage: t("Enabled diff3 for this repo") },
+                                    )
+                                  }
+                                >
+                                  {t("Enable diff3")}
+                                </GitButton>
+                              </div>
+                            ) : null}
+
                             <div className="git-conflict-hunks">
                               {selectedConflictHunks.map((hunk, index) => (
                                 <div key={`${selectedConflictFile.path}-hunk-${index}`} className="git-card git-card--inset git-conflict-hunk">
                                   <GitSectionHeader
                                     actions={
                                       hunk.resolution ? (
-                                        <GitPill tone={hunk.resolution === "theirs" ? "info" : hunk.resolution === "both" ? "warning" : "success"}>
-                                          {hunk.resolution === "theirs" ? t("Theirs") : hunk.resolution === "both" ? t("Both") : t("Ours")}
+                                        <GitPill
+                                          tone={
+                                            hunk.resolution === "theirs"
+                                              ? "info"
+                                              : hunk.resolution === "both"
+                                                ? "warning"
+                                                : hunk.resolution === "base"
+                                                  ? "info"
+                                                  : "success"
+                                          }
+                                        >
+                                          {hunk.resolution === "theirs"
+                                            ? t("Theirs")
+                                            : hunk.resolution === "both"
+                                              ? t("Both")
+                                              : hunk.resolution === "base"
+                                                ? t("Base")
+                                                : t("Ours")}
                                         </GitPill>
                                       ) : null
                                     }
@@ -3140,7 +3190,13 @@ export default function GitPanel({ browserPath, isActive = true }: Props) {
                                     }
                                     title={`${t("Conflict")} ${index + 1}`}
                                   />
-                                  <div className="git-conflict-hunk__columns">
+                                  <div
+                                    className={
+                                      hunk.hasBase
+                                        ? "git-conflict-hunk__columns git-conflict-hunk__columns--with-base"
+                                        : "git-conflict-hunk__columns"
+                                    }
+                                  >
                                     <div className="git-conflict-hunk__side git-conflict-hunk__side--ours">
                                       <div className="git-conflict-hunk__label">{t("Ours")}</div>
                                       {hunk.oursLines.map((line, lineIndex) => (
@@ -3149,6 +3205,25 @@ export default function GitPanel({ browserPath, isActive = true }: Props) {
                                         </div>
                                       ))}
                                     </div>
+                                    {hunk.hasBase ? (
+                                      <div className="git-conflict-hunk__side git-conflict-hunk__side--base">
+                                        <div className="git-conflict-hunk__label">{t("Base")}</div>
+                                        {hunk.baseLines.length === 0 ? (
+                                          <div className="git-conflict-hunk__line text-muted">
+                                            {t("(no lines in common ancestor)")}
+                                          </div>
+                                        ) : (
+                                          hunk.baseLines.map((line, lineIndex) => (
+                                            <div
+                                              key={`base-${lineIndex}-${line}`}
+                                              className="git-conflict-hunk__line"
+                                            >
+                                              {line || " "}
+                                            </div>
+                                          ))
+                                        )}
+                                      </div>
+                                    ) : null}
                                     <div className="git-conflict-hunk__side git-conflict-hunk__side--theirs">
                                       <div className="git-conflict-hunk__label">{t("Theirs")}</div>
                                       {hunk.theirsLines.map((line, lineIndex) => (
@@ -3201,6 +3276,24 @@ export default function GitPanel({ browserPath, isActive = true }: Props) {
                                     >
                                       {t("Accept both")}
                                     </GitButton>
+                                    {hunk.hasBase ? (
+                                      <GitButton
+                                        compact
+                                        onClick={() =>
+                                          setConflictDrafts((current) => {
+                                            const next = { ...current };
+                                            const items = [
+                                              ...(next[selectedConflictFile.path] || selectedConflictFile.conflicts),
+                                            ];
+                                            items[index] = { ...items[index], resolution: "base" };
+                                            next[selectedConflictFile.path] = items;
+                                            return next;
+                                          })
+                                        }
+                                      >
+                                        {t("Accept base")}
+                                      </GitButton>
+                                    ) : null}
                                   </div>
                                 </div>
                               ))}

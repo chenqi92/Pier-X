@@ -2202,6 +2202,14 @@
   gap: 10px;
 }
 
+.git-conflict-hunk__columns--with-base {
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+}
+
+.git-conflict-hunk__side--base {
+  border-color: color-mix(in srgb, var(--info) 30%, transparent);
+}
+
 .git-conflict-hunk__side {
   min-width: 0;
   border: 1px solid var(--border-subtle);

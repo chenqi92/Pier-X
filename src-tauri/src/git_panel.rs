@@ -168,6 +168,19 @@ pub struct GitSubmoduleView {
 pub struct GitConflictHunkView {
     pub ours_lines: Vec<String>,
     pub theirs_lines: Vec<String>,
+    /// Lines between the `|||||||` and `=======` markers in
+    /// diff3-style conflicts. Empty when the user hasn't set
+    /// `merge.conflictStyle=diff3` — the traditional merge
+    /// style doesn't emit the base section at all.
+    #[serde(default)]
+    pub base_lines: Vec<String>,
+    /// True when this hunk had `|||||||` markers (i.e. the
+    /// base section was parsed). Distinguishes "base was
+    /// empty / identical" from "base wasn't recorded". The UI
+    /// uses this to decide whether to render a third column
+    /// and whether to offer "Accept base" as a resolution.
+    #[serde(default)]
+    pub has_base: bool,
     pub resolution: String,
 }
 
@@ -418,14 +431,34 @@ fn parse_conflict_hunks(content: &str) -> Vec<GitConflictHunkView> {
         }
 
         let mut ours_lines = Vec::new();
+        let mut base_lines = Vec::new();
         let mut theirs_lines = Vec::new();
+        let mut has_base = false;
         index += 1;
 
-        while index < lines.len() && !lines[index].starts_with("=======") {
+        // "Ours" extends until either `|||||||` (diff3 mode) or
+        // `=======` (traditional merge). diff3 inserts the
+        // ancestor section between the two, so we have to probe
+        // for it before falling through to the standard split.
+        while index < lines.len()
+            && !lines[index].starts_with("|||||||")
+            && !lines[index].starts_with("=======")
+        {
             ours_lines.push(lines[index].to_string());
             index += 1;
         }
-        if index < lines.len() {
+
+        if index < lines.len() && lines[index].starts_with("|||||||") {
+            has_base = true;
+            index += 1;
+            while index < lines.len() && !lines[index].starts_with("=======") {
+                base_lines.push(lines[index].to_string());
+                index += 1;
+            }
+        }
+
+        // Skip the `=======` separator.
+        if index < lines.len() && lines[index].starts_with("=======") {
             index += 1;
         }
 
@@ -437,6 +470,8 @@ fn parse_conflict_hunks(content: &str) -> Vec<GitConflictHunkView> {
         hunks.push(GitConflictHunkView {
             ours_lines,
             theirs_lines,
+            base_lines,
+            has_base,
             resolution: String::new(),
         });
 
@@ -470,11 +505,26 @@ fn write_resolved_conflict_file(
         }
 
         let mut ours_lines = Vec::new();
+        let mut base_lines = Vec::new();
         let mut theirs_lines = Vec::new();
         line_index += 1;
-        while line_index < lines.len() && !lines[line_index].starts_with("=======") {
+        // Diff3-aware parse: the ancestor block is optional,
+        // sits between `|||||||` and `=======`, and must be
+        // extracted if present so the `base` resolution mode
+        // has lines to emit.
+        while line_index < lines.len()
+            && !lines[line_index].starts_with("|||||||")
+            && !lines[line_index].starts_with("=======")
+        {
             ours_lines.push(lines[line_index].to_string());
             line_index += 1;
+        }
+        if line_index < lines.len() && lines[line_index].starts_with("|||||||") {
+            line_index += 1;
+            while line_index < lines.len() && !lines[line_index].starts_with("=======") {
+                base_lines.push(lines[line_index].to_string());
+                line_index += 1;
+            }
         }
         if line_index < lines.len() {
             line_index += 1;
@@ -492,6 +542,7 @@ fn write_resolved_conflict_file(
 
         match resolution {
             "theirs" => result.extend(theirs_lines),
+            "base" => result.extend(base_lines),
             "both" => {
                 result.extend(ours_lines);
                 result.extend(theirs_lines);

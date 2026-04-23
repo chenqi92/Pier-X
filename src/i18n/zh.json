@@ -583,5 +583,11 @@
   "Open task tray": "打开任务托盘",
   "{running} running · {total} total": "{running} 运行 · {total} 总计",
   "{total} tasks": "{total} 个任务",
-  "Dismiss": "关闭"
+  "Dismiss": "关闭",
+  "Base": "共同祖先",
+  "Accept base": "接受共同祖先",
+  "(no lines in common ancestor)": "(共同祖先无行)",
+  "Base column hidden — enable diff3 style to see the common ancestor in future conflicts.": "共同祖先栏已隐藏 — 开启 diff3 样式可以在后续冲突中看到共同祖先。",
+  "Enable diff3": "开启 diff3",
+  "Enabled diff3 for this repo": "已为此仓库开启 diff3"
 }

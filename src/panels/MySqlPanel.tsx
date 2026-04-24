@@ -1,366 +1,167 @@
-import { ChevronDown, ChevronRight } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
+
+import DbAddCredentialDialog from "../components/DbAddCredentialDialog";
+import DbPasswordUpdateDialog from "../components/DbPasswordUpdateDialog";
+import DbTunnelChip from "../components/DbTunnelChip";
+import DismissibleNote from "../components/DismissibleNote";
+import DbConnectSplash from "../components/db/DbConnectSplash";
+import DbConnectedShell, { type DbConnectedTab } from "../components/db/DbConnectedShell";
+import type { DbHeaderInstance } from "../components/db/DbHeaderPicker";
+import DbResultGrid from "../components/db/DbResultGrid";
+import DbRowDetail from "../components/db/DbRowDetail";
+import DbSchemaTree, { type DbSchemaDatabase } from "../components/db/DbSchemaTree";
+import DbSqlEditor from "../components/db/DbSqlEditor";
+import DbStubView from "../components/db/DbStubView";
+import type { DbSplashRowData } from "../components/db/DbSplashRow";
+import { inferEnv } from "../components/db/dbTheme";
+import {
+  useDbCredentialFlow,
+  type DbCredentialFieldAdapter,
+} from "../components/db/useDbCredentialFlow";
+import { useI18n } from "../i18n/useI18n";
+import { localizeError } from "../i18n/localizeMessage";
+import { writeClipboardText } from "../lib/clipboard";
 import * as cmd from "../lib/commands";
 import { isReadOnlySql, queryResultToTsv } from "../lib/commands";
-import { RIGHT_TOOL_META } from "../lib/rightToolMeta";
-import { closeTunnelSlot, ensureTunnelSlot, syncTunnelState } from "../lib/sshTunnel";
 import type {
-  DetectedDbInstance,
   MysqlBrowserState,
   QueryExecutionResult,
   TabState,
 } from "../lib/types";
-import { effectiveSshTarget } from "../lib/types";
-import { writeClipboardText } from "../lib/clipboard";
-import { useI18n } from "../i18n/useI18n";
-import { localizeError } from "../i18n/localizeMessage";
-import DbAddCredentialDialog from "../components/DbAddCredentialDialog";
-import DbConnRow from "../components/DbConnRow";
-import DbInstancePicker from "../components/DbInstancePicker";
-import DbPasswordUpdateDialog from "../components/DbPasswordUpdateDialog";
-import DbTunnelChip from "../components/DbTunnelChip";
-import DismissibleNote from "../components/DismissibleNote";
-import PanelHeader from "../components/PanelHeader";
-import PreviewTable from "../components/PreviewTable";
-import QueryResultPanel from "../components/QueryResultPanel";
-import StatusDot from "../components/StatusDot";
-import { isDbAuthError } from "../lib/dbAuthErrors";
 import { useTabStore } from "../stores/useTabStore";
 
 type Props = { tab: TabState };
 
-const MYSQL_ICON = RIGHT_TOOL_META.mysql.icon;
+/** One selected result-grid row + its absolute index in `state.preview.rows`.
+ *  Storing the index alongside the row avoids an `indexOf` lookup (which
+ *  collides on duplicate rows) when rendering the row-detail drawer title. */
+type PinnedRow = { row: string[]; idx: number };
+
+/** MySQL column types whose values should render right-aligned. */
+const NUMERIC_TYPE_RE = /^(tiny|small|medium|big)?int|^decimal|^numeric|^float|^double|^real/i;
+
+/** Field adapter: maps the hook's generic getters/patches to the flat
+ *  `mysql*` slots on `TabState`. */
+const MYSQL_ADAPTER: DbCredentialFieldAdapter = {
+  readHost: (t) => t.mysqlHost,
+  readPort: (t) => t.mysqlPort,
+  readUser: (t) => t.mysqlUser,
+  readPassword: (t) => t.mysqlPassword,
+  readActiveCredId: (t) => t.mysqlActiveCredentialId,
+  readTunnelId: (t) => t.mysqlTunnelId,
+  readTunnelPort: (t) => t.mysqlTunnelPort,
+  patchFromCred: (cred) => ({
+    mysqlActiveCredentialId: cred.id,
+    mysqlHost: cred.host,
+    mysqlPort: cred.port,
+    mysqlUser: cred.user,
+    mysqlPassword: "",
+    mysqlDatabase: cred.database ?? "",
+    mysqlTunnelId: null,
+    mysqlTunnelPort: null,
+  }),
+  patchFromSaved: (cred) => ({
+    mysqlActiveCredentialId: cred.id,
+    mysqlHost: cred.host,
+    mysqlPort: cred.port,
+    mysqlUser: cred.user,
+    mysqlDatabase: cred.database ?? "",
+    mysqlTunnelId: null,
+    mysqlTunnelPort: null,
+  }),
+  patchPassword: (password) => ({ mysqlPassword: password }),
+  patchPasswordAfterRotate: (password) => ({ mysqlPassword: password }),
+};
 
 export default function MySqlPanel({ tab }: Props) {
   const { t } = useI18n();
   const formatError = (error: unknown) => localizeError(error, t);
   const updateTab = useTabStore((s) => s.updateTab);
-  const [host, setHost] = useState(tab.mysqlHost);
-  const [port, setPort] = useState(String(tab.mysqlPort));
-  const [user, setUser] = useState(tab.mysqlUser);
-  const [password, setPassword] = useState(tab.mysqlPassword);
-  const [dbName, setDbName] = useState(tab.mysqlDatabase);
-  const [tableName, setTableName] = useState("");
-  const [sql, setSql] = useState("SHOW TABLES;");
-  const [readOnly, setReadOnly] = useState(true);
-  const [writeConfirm, setWriteConfirm] = useState("");
+
+  // ── Panel-local state (connection + editor + grid) ─────────
   const [state, setState] = useState<MysqlBrowserState | null>(null);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
+  const [sql, setSql] = useState("SHOW TABLES;");
+  const [readOnly, setReadOnly] = useState(true);
+  const [writeConfirm, setWriteConfirm] = useState("");
   const [queryResult, setQueryResult] = useState<QueryExecutionResult | null>(null);
   const [queryBusy, setQueryBusy] = useState(false);
   const [queryError, setQueryError] = useState("");
   const [notice, setNotice] = useState("");
-  const [tunnelBusy, setTunnelBusy] = useState(false);
-  const [tunnelError, setTunnelError] = useState("");
-  const [addOpen, setAddOpen] = useState(false);
-  const [adopting, setAdopting] = useState<DetectedDbInstance | null>(null);
-  const [autoBrowseAttempted, setAutoBrowseAttempted] = useState(false);
-  // Collapsible "Connection details" drawer. Closed by default so a
-  // freshly opened panel shows only the picker + empty-state hint
-  // until the user either clicks a saved/detected pill or asks to
-  // configure manually. Auto-closes on successful browse so the
-  // result view gets the full vertical space.
-  const [formOpen, setFormOpen] = useState(false);
-  const [pwUpdateOpen, setPwUpdateOpen] = useState(false);
+
+  const [connectedTab, setConnectedTab] = useState<DbConnectedTab>("data");
+  const [rowDetail, setRowDetail] = useState<PinnedRow | null>(null);
+
   const passwordInputRef = useRef<HTMLInputElement | null>(null);
 
-  // SSH context can be inferred from a local terminal that ran `ssh
-  // user@host` or from a nested-ssh overlay; either way, the tunnel
-  // helper picks up the right addressing via `effectiveSshTarget`.
-  const hasSsh = effectiveSshTarget(tab) !== null;
-  const sshTarget = effectiveSshTarget(tab);
-  const savedIndex = sshTarget?.savedConnectionIndex ?? null;
-  const p = Number.parseInt(port, 10);
-  const canBrowse = host.trim() && user.trim() && Number.isFinite(p) && p > 0;
-  const needsWrite = sql.trim() && !isReadOnlySql(sql);
-  const canRun = canBrowse && sql.trim() && !queryBusy && (!needsWrite || (!readOnly && writeConfirm.trim().toUpperCase() === "WRITE"));
-  const canUpdatePassword =
-    !!error &&
-    isDbAuthError("mysql", error) &&
-    !!tab.mysqlActiveCredentialId &&
-    savedIndex !== null;
-
-  useEffect(() => {
-    setHost((current) => (current === tab.mysqlHost ? current : tab.mysqlHost));
-  }, [tab.mysqlHost]);
-
-  useEffect(() => {
-    const next = String(tab.mysqlPort);
-    setPort((current) => (current === next ? current : next));
-  }, [tab.mysqlPort]);
-
-  useEffect(() => {
-    setUser((current) => (current === tab.mysqlUser ? current : tab.mysqlUser));
-  }, [tab.mysqlUser]);
-
-  useEffect(() => {
-    setPassword((current) => (current === tab.mysqlPassword ? current : tab.mysqlPassword));
-  }, [tab.mysqlPassword]);
-
-  useEffect(() => {
-    setDbName((current) => (current === tab.mysqlDatabase ? current : tab.mysqlDatabase));
-  }, [tab.mysqlDatabase]);
-
-  useEffect(() => {
-    if (state) setFormOpen(false);
-  }, [state]);
-
-  // F4 — auto-expand the form on an error so the user can immediately
-  // see / edit the credentials that are probably wrong.
-  useEffect(() => {
-    if (error && !state) setFormOpen(true);
-  }, [error, state]);
-
-  useEffect(() => {
-    if (!hasSsh || !tab.mysqlTunnelId) {
-      return;
-    }
-    let cancelled = false;
-    void syncTunnelState(tab, "mysql", updateTab).then((info) => {
-      if (cancelled || !info?.alive) {
-        return;
-      }
-      setTunnelError("");
-    });
-    return () => {
-      cancelled = true;
-    };
-  }, [hasSsh, tab.id, tab.mysqlTunnelId, tab.mysqlTunnelPort, updateTab]);
-
-  // Auto-browse on saved SSH tab open: if the tab was seeded with
-  // a saved DB credential but we haven't browsed yet, resolve the
-  // password from the keyring, open the tunnel, and list tables.
-  // Strictly read-only — the read-only safety guard is untouched.
-  //
-  // NOTE: we pass the freshly resolved password as an explicit
-  // argument to `browse()` rather than relying on the `password`
-  // state variable. React hasn't re-rendered yet at this point,
-  // so the closure `browse` captured would still see the empty
-  // string we just set before activation, causing an auth failure.
-  useEffect(() => {
-    if (autoBrowseAttempted) return;
-    if (!hasSsh || !tab.mysqlActiveCredentialId || savedIndex === null) return;
-    if (state) return; // already browsed
-    if (!tab.mysqlHost.trim() || !tab.mysqlUser.trim()) return;
-
-    setAutoBrowseAttempted(true);
-    let cancelled = false;
-    void (async () => {
-      try {
-        let effectivePw = tab.mysqlPassword;
-        if (!effectivePw) {
-          try {
-            const resolved = await cmd.dbCredResolve(
-              savedIndex,
-              tab.mysqlActiveCredentialId!,
-            );
-            if (cancelled) return;
-            effectivePw = resolved.password ?? "";
-            if (effectivePw) {
-              updateTab(tab.id, { mysqlPassword: effectivePw });
-              setPassword(effectivePw);
-            } else if (resolved.credential.hasPassword) {
-              // Keyring claims a password exists but returned empty.
-              // Don't silently auth with "" — the server will reject
-              // it and surface a misleading "Access denied" that looks
-              // like the user's credentials are wrong.
-              if (!cancelled) {
-                setFormOpen(true);
-                setError(
-                  t(
-                    "Saved password unavailable. Enter it manually or update the keyring.",
-                  ),
-                );
-                setTimeout(() => passwordInputRef.current?.focus(), 0);
-              }
-              return;
-            }
-          } catch {
-            if (!cancelled) {
-              setFormOpen(true);
-              setError(
-                t(
-                  "Saved password unavailable. Enter it manually or update the keyring.",
-                ),
-              );
-              setTimeout(() => passwordInputRef.current?.focus(), 0);
-            }
-            return;
-          }
-        }
-        if (cancelled) return;
-        await browse(undefined, undefined, effectivePw);
-      } catch (e) {
-        if (!cancelled) setError(formatError(e));
-      }
-    })();
-    return () => {
-      cancelled = true;
-    };
-    // Run once per activeCredentialId — `browse` / `formatError`
-    // are stable w.r.t. the inputs we depend on.
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [tab.mysqlActiveCredentialId, savedIndex, hasSsh]);
-
-  function persistPort(nextPort: string) {
-    const parsed = Number.parseInt(nextPort, 10);
-    if (Number.isFinite(parsed) && parsed > 0) {
-      updateTab(tab.id, { mysqlPort: parsed });
-    }
-  }
-
-  async function ensureConnectionTarget(forceTunnel = false) {
-    if (!hasSsh) {
-      return { host: host.trim(), port: p };
-    }
-
-    const info = await ensureTunnelSlot({
-      tab,
-      slot: "mysql",
-      remoteHost: host.trim(),
-      remotePort: p,
-      updateTab,
-      force: forceTunnel,
-    });
-    setTunnelError("");
-    return { host: info.localHost, port: info.localPort };
-  }
-
-  async function rebuildTunnel() {
-    if (!hasSsh || !canBrowse) return;
-    setTunnelBusy(true);
-    setTunnelError("");
-    try {
-      await ensureConnectionTarget(true);
-    } catch (e) {
-      setTunnelError(formatError(e));
-    } finally {
-      setTunnelBusy(false);
-    }
-  }
-
-  async function closeTunnel() {
-    if (!hasSsh || !tab.mysqlTunnelId) {
-      return;
-    }
-    setTunnelBusy(true);
-    setTunnelError("");
-    try {
-      await closeTunnelSlot(tab, "mysql", updateTab);
-    } catch (e) {
-      setTunnelError(formatError(e));
-    } finally {
-      setTunnelBusy(false);
-    }
-  }
-
-  // Called after the user rotates the keyring password via the
-  // in-banner "Update password" action. Pulls the new password out
-  // of the keyring and re-runs browse — if credentials were the
-  // only blocker, the panel transitions straight to connected.
-  async function handlePasswordUpdated() {
-    if (savedIndex === null || !tab.mysqlActiveCredentialId) return;
-    setError("");
-    try {
-      const resolved = await cmd.dbCredResolve(
-        savedIndex,
-        tab.mysqlActiveCredentialId,
-      );
-      const pw = resolved.password ?? "";
-      updateTab(tab.id, { mysqlPassword: pw });
-      setPassword(pw);
-      await browse(undefined, undefined, pw);
-    } catch (e) {
-      setError(formatError(e));
-    }
-  }
-
-  async function disconnect() {
+  /** Clear panel-local state on credential switch / disconnect so a fresh
+   *  cred doesn't inherit the previous panel's preview / query / row detail. */
+  function resetPanel() {
     setState(null);
     setError("");
     setQueryResult(null);
     setQueryError("");
     setNotice("");
-    setFormOpen(false);
-    if (hasSsh && tab.mysqlTunnelId) {
-      // Best-effort cleanup — if the tunnel is already dead or the
-      // SSH session dropped, tab-close / next reconnect handles it.
-      try {
-        await closeTunnelSlot(tab, "mysql", updateTab);
-      } catch {
-        /* swallow */
-      }
-    }
+    setReadOnly(true);
+    setWriteConfirm("");
+    setRowDetail(null);
   }
 
-  async function invalidateTunnel() {
-    if (!hasSsh || !tab.mysqlTunnelId) {
-      return;
-    }
-    await closeTunnelSlot(tab, "mysql", updateTab);
-    setTunnelError("");
-  }
-
-  function onFormKeyDown(event: React.KeyboardEvent<HTMLDivElement>) {
-    if (event.key === "Enter" && canBrowse && !busy) {
-      const target = event.target as HTMLElement;
-      if (target.tagName !== "TEXTAREA") {
-        event.preventDefault();
-        void browse();
-      }
-    }
-  }
-
-  async function browse(
-    nextDb = dbName,
-    nextTable = tableName,
-    passwordOverride?: string,
-  ) {
+  async function browse(passwordOverride?: string, nextTable?: string) {
     setBusy(true);
     setError("");
-    // `passwordOverride` exists because React state updates are
-    // queued: callers that just `setPassword(...)` still see the
-    // previous closure value here. Passing it explicitly avoids
-    // a silent auth failure on the very first browse after a
-    // keyring-resolved auto-activate.
-    const pw = passwordOverride !== undefined ? passwordOverride : password;
     try {
-      const target = await ensureConnectionTarget();
+      const target = await flow.ensureConnectionTarget();
+      const pw = passwordOverride !== undefined ? passwordOverride : tab.mysqlPassword;
       const s = await cmd.mysqlBrowse({
         host: target.host,
         port: target.port,
-        user: user.trim(),
+        user: tab.mysqlUser.trim(),
         password: pw,
-        database: nextDb.trim() || null,
-        table: nextTable.trim() || null,
+        database: tab.mysqlDatabase.trim() || null,
+        table: (nextTable ?? state?.tableName ?? "").trim() || null,
       });
       setState(s);
-      setDbName(s.databaseName);
-      setTableName(s.tableName);
-      updateTab(tab.id, { mysqlDatabase: s.databaseName });
+      // Reset the row-detail pin when the table underneath changes — the
+      // old row index no longer refers to the same row.
+      if (rowDetail && s.tableName !== state?.tableName) setRowDetail(null);
+      if (s.databaseName !== tab.mysqlDatabase) {
+        updateTab(tab.id, { mysqlDatabase: s.databaseName });
+      }
     } catch (e) {
-      // Keep the last successful state visible — clearing it here blanks
-      // the whole panel body for a transient error, which feels like a
-      // full remount on every retry.
       setError(formatError(e));
     } finally {
       setBusy(false);
     }
   }
 
+  const flow = useDbCredentialFlow({
+    tab,
+    kind: "mysql",
+    tunnelSlot: "mysql",
+    adapter: MYSQL_ADAPTER,
+    browse: (pwOverride) => browse(pwOverride),
+    hasLiveState: state !== null,
+    onReset: resetPanel,
+    setError,
+    passwordInputRef,
+    t,
+  });
+
   async function runQuery() {
     setQueryBusy(true);
     setQueryError("");
     setNotice("");
+    const needsWrite = sql.trim() !== "" && !isReadOnlySql(sql);
     try {
-      const target = await ensureConnectionTarget();
+      const target = await flow.ensureConnectionTarget();
       const r = await cmd.mysqlExecute({
         host: target.host,
         port: target.port,
-        user: user.trim(),
-        password,
-        database: dbName.trim() || null,
+        user: tab.mysqlUser.trim(),
+        password: tab.mysqlPassword,
+        database: tab.mysqlDatabase.trim() || null,
         sql,
       });
       setQueryResult(r);
@@ -377,363 +178,341 @@ export default function MySqlPanel({ tab }: Props) {
     }
   }
 
-  // Priority-based status banner — connection error trumps tunnel
-  // error (fixing the password is always the right next action when
-  // both fail together).
+  // ── Derived ────────────────────────────────────────────────
+  const needsWrite = sql.trim() !== "" && !isReadOnlySql(sql);
+  const hostReady = tab.mysqlHost.trim() !== "" && tab.mysqlUser.trim() !== "" && tab.mysqlPort > 0;
+  const canRun =
+    hostReady &&
+    sql.trim() !== "" &&
+    !queryBusy &&
+    (!needsWrite || (!readOnly && writeConfirm.trim().toUpperCase() === "WRITE"));
+
+  // ── Splash rows ────────────────────────────────────────────
+  const viaLabel = flow.sshTarget ? `${flow.sshTarget.user}@${flow.sshTarget.host}` : t("direct · localhost");
+  const viaKind: DbSplashRowData["via"]["kind"] = flow.hasSsh ? "tunnel" : "direct";
+
+  const savedRows: DbSplashRowData[] = flow.savedForKind.map((cred) => ({
+    id: cred.id,
+    name: cred.label || cred.id,
+    env: inferEnv(cred.label),
+    engine: t("MySQL"),
+    addr: `${cred.host}:${cred.port}`,
+    via: { kind: viaKind, label: viaLabel },
+    user: cred.user,
+    authHint: cred.hasPassword ? t("keyring") : undefined,
+    stats: cred.database ? <span>{cred.database}</span> : <span className="sep">—</span>,
+    lastUsed: null,
+    status: "unknown",
+    tintVar: "var(--svc-mysql)",
+    connectLabel: t("Connect"),
+    onConnect: () => flow.activateCredential(cred.id),
+  }));
+
+  const detectedRows: DbSplashRowData[] = flow.detectedForKind.map((det) => ({
+    id: det.signature,
+    name: det.label,
+    env: inferEnv(det.label),
+    engine: det.version ? `MySQL ${det.version}` : t("MySQL"),
+    addr: `${det.host}:${det.port}`,
+    via: {
+      kind: det.source === "docker" ? "local" : "remote",
+      label: det.source === "docker" ? det.image || t("docker container") : det.processName || t("systemd unit"),
+    },
+    stats: <span className="sep">—</span>,
+    lastUsed: null,
+    status: "up",
+    tintVar: "var(--svc-mysql)",
+    connectLabel: t("Adopt & connect"),
+    onConnect: () => {
+      flow.setAdopting(det);
+      flow.setAddOpen(true);
+    },
+  }));
+
+  // ── Connected-state derived data ───────────────────────────
+  const currentCred = tab.mysqlActiveCredentialId
+    ? flow.savedForKind.find((c) => c.id === tab.mysqlActiveCredentialId)
+    : undefined;
+
+  const currentInstance: DbHeaderInstance = {
+    id: currentCred?.id ?? "adhoc",
+    name: currentCred?.label || tab.mysqlDatabase || tab.mysqlHost || t("MySQL"),
+    addr: `${tab.mysqlHost}:${tab.mysqlPort}`,
+    via: flow.hasSsh ? t("SSH tunnel") : t("direct"),
+    status: state ? "up" : "unknown",
+    sub: <>{`${tab.mysqlHost}:${tab.mysqlPort}`}</>,
+  };
+
+  const otherInstances: DbHeaderInstance[] = flow.savedForKind
+    .filter((c) => c.id !== tab.mysqlActiveCredentialId)
+    .map((c) => ({
+      id: c.id,
+      name: c.label || c.id,
+      addr: `${c.host}:${c.port}`,
+      via: c.database ?? "",
+      status: "unknown",
+    }));
+
+  const databases: DbSchemaDatabase[] = state
+    ? state.databases.map((name) => ({
+        name,
+        current: name === state.databaseName,
+        tables:
+          name === state.databaseName
+            ? state.tables.map((tname) => ({ id: `${name}.${tname}`, label: tname }))
+            : [],
+      }))
+    : [];
+
+  const pkColumns = state ? state.columns.filter((c) => c.key === "PRI").map((c) => c.name) : [];
+  const numericColumns = state
+    ? state.columns.filter((c) => NUMERIC_TYPE_RE.test(c.columnType)).map((c) => c.name)
+    : [];
+  const detailColumns = state
+    ? state.columns.map((c) => ({ name: c.name, type: c.columnType, pk: c.key === "PRI" }))
+    : [];
+
+  const headerStats = state
+    ? [
+        { icon: "database" as const, label: t("{count} dbs", { count: state.databases.length }) },
+        { icon: "disk" as const, label: t("{count} tables", { count: state.tables.length }) },
+      ]
+    : [];
+
+  // Reset the auto-browse password focus target when the panel remounts.
+  useEffect(() => {
+    if (error && !state) setTimeout(() => passwordInputRef.current?.focus(), 0);
+  }, [error, state]);
+
+  // ── Banner + dialogs ───────────────────────────────────────
   const banner = error ? (
     <DismissibleNote variant="status" tone="error" onDismiss={() => setError("")}>
       <div>{error}</div>
-      {canUpdatePassword && (
+      {flow.canUpdatePassword(error) && (
         <div className="button-row" style={{ marginTop: 6 }}>
-          <button
-            className="mini-button"
-            onClick={() => setPwUpdateOpen(true)}
-            type="button"
-          >
+          <button className="mini-button" onClick={() => flow.setPwUpdateOpen(true)} type="button">
             {t("Update password")}
           </button>
         </div>
       )}
     </DismissibleNote>
-  ) : tunnelError ? (
-    <DismissibleNote variant="status" tone="error" onDismiss={() => setTunnelError("")}>
-      {tunnelError}
+  ) : flow.tunnelError ? (
+    <DismissibleNote variant="status" tone="error" onDismiss={() => flow.setTunnelError("")}>
+      {flow.tunnelError}
     </DismissibleNote>
   ) : null;
 
-  const connName = dbName.trim() || host.trim() || t("MySQL Browser");
-  const connSub = host.trim()
-    ? t("{user}@{host}:{port}{suffix}", {
-        user: user || "?",
-        host,
-        port,
-        suffix: hasSsh ? ` · ${t("SSH tunnel")}` : "",
-      })
-    : t("Not connected");
-  const connTag = (
+  const dialogs = (
     <>
-      <StatusDot tone={state ? "pos" : "off"} />
-      {state ? `:${port}` : t("offline")}
+      <DbAddCredentialDialog
+        open={flow.addOpen}
+        onClose={() => flow.setAddOpen(false)}
+        kind="mysql"
+        savedConnectionIndex={flow.savedIndex}
+        adopting={flow.adopting}
+        tab={tab}
+        onSaved={flow.handleCredentialAdded}
+      />
+      {tab.mysqlActiveCredentialId && flow.savedIndex !== null && (
+        <DbPasswordUpdateDialog
+          open={flow.pwUpdateOpen}
+          onClose={() => flow.setPwUpdateOpen(false)}
+          savedConnectionIndex={flow.savedIndex}
+          credentialId={tab.mysqlActiveCredentialId}
+          credentialLabel={tab.mysqlDatabase.trim() || tab.mysqlHost.trim() || t("MySQL")}
+          onUpdated={() => void flow.handlePasswordUpdated()}
+        />
+      )}
     </>
   );
 
-  return (
-    <>
-      <PanelHeader
-        icon={MYSQL_ICON}
-        title={t("MySQL")}
-        meta={
-          hasSsh
-            ? t("{database} · tunnel :{port}", {
-                database: dbName.trim() || t("MySQL"),
-                port,
-              })
-            : t("{database} · {host}:{port}", {
-                database: dbName.trim() || t("MySQL"),
-                host,
-                port,
-              })
-        }
-      />
-      <DbConnRow
-        icon={MYSQL_ICON}
-        tint="var(--warn-dim)"
-        iconTint="var(--warn)"
-        name={connName}
-        sub={connSub}
-        tag={connTag}
-      />
-      <div className="panel-scroll">
-      <DbInstancePicker
-        tab={tab}
-        kind="mysql"
-        onActivate={(cred) => {
-          setError("");
-          setState(null);
-          setAutoBrowseAttempted(false);
-          setReadOnly(true);
-          setWriteConfirm("");
-          // Swap flat tab fields so existing browse/run code picks them up.
-          setHost(cred.host);
-          setPort(String(cred.port));
-          setUser(cred.user);
-          setPassword("");
-          setDbName(cred.database ?? "");
-          updateTab(tab.id, {
-            mysqlActiveCredentialId: cred.id,
-            mysqlHost: cred.host,
-            mysqlPort: cred.port,
-            mysqlUser: cred.user,
-            mysqlPassword: "",
-            mysqlDatabase: cred.database ?? "",
-            mysqlTunnelId: null,
-            mysqlTunnelPort: null,
-          });
-        }}
-        onAdopt={(det) => {
-          setAdopting(det);
-          setAddOpen(true);
-        }}
-        onAddNew={() => {
-          setAdopting(null);
-          setAddOpen(true);
-        }}
-        onDeleted={(cred) => {
-          if (tab.mysqlActiveCredentialId === cred.id) {
-            updateTab(tab.id, { mysqlActiveCredentialId: null });
+  if (!state) {
+    return (
+      <>
+        {banner && <div className="db-panel-banner">{banner}</div>}
+        <DbConnectSplash
+          kind="mysql"
+          probeTarget={flow.probeTarget}
+          probeState={flow.probeState}
+          onReprobe={flow.sshTarget ? () => void flow.refreshDetection() : undefined}
+          detected={detectedRows}
+          saved={savedRows}
+          onAddManual={() => {
+            flow.setAdopting(null);
+            flow.setAddOpen(true);
+          }}
+          footerHint={busy ? t("Connecting...") : null}
+          description={
+            flow.hasSsh
+              ? undefined
+              : t("No SSH session on this tab — add a connection manually to connect directly.")
           }
-        }}
-      />
-      <DbAddCredentialDialog
-        open={addOpen}
-        onClose={() => setAddOpen(false)}
-        kind="mysql"
-        savedConnectionIndex={savedIndex}
-        adopting={adopting}
-        tab={tab}
-        onSaved={(cred) => {
-          setAutoBrowseAttempted(false);
-          setState(null);
-          setHost(cred.host);
-          setPort(String(cred.port));
-          setUser(cred.user);
-          setDbName(cred.database ?? "");
-          updateTab(tab.id, {
-            mysqlActiveCredentialId: cred.id,
-            mysqlHost: cred.host,
-            mysqlPort: cred.port,
-            mysqlUser: cred.user,
-            mysqlDatabase: cred.database ?? "",
-            mysqlTunnelId: null,
-            mysqlTunnelPort: null,
-          });
-        }}
-      />
-      {!state && (
-        <section className="panel-section">
-          <div className="form-stack">
-            <div className="status-note">
-              {busy
-                ? t("Connecting...")
-                : tab.mysqlActiveCredentialId
-                  ? t("Click the instance above to connect.")
-                  : hasSsh
-                    ? t("Select an instance above or configure manually.")
-                    : t("Configure a connection to begin.")}
-            </div>
-            {!busy && !formOpen && (
-              <div className="button-row">
-                <button className="mini-button" onClick={() => setFormOpen(true)} type="button">
-                  {t("Configure manually")}
-                </button>
-              </div>
-            )}
-            {banner}
-          </div>
-        </section>
-      )}
+        />
+        {dialogs}
+      </>
+    );
+  }
 
-      <section className="panel-section">
-        <div className="panel-section__title">
-          <button
-            className="mini-button mini-button--ghost"
-            onClick={() => setFormOpen((o) => !o)}
-            type="button"
-          >
-            {formOpen ? <ChevronDown size={11} /> : <ChevronRight size={11} />}
-            {t("Connection details")}
-          </button>
-          <span className="panel-section__hint" style={{ display: "inline-flex", alignItems: "center", gap: "var(--sp-2)" }}>
-            {hasSsh && (
-              <DbTunnelChip
-                localPort={tab.mysqlTunnelPort}
-                busy={tunnelBusy}
-                hasError={!!tunnelError}
-                onRebuild={() => void rebuildTunnel()}
-                onClose={() => void closeTunnel()}
-              />
-            )}
-            {state && (
-              <button
-                className="mini-button mini-button--ghost"
-                onClick={() => void disconnect()}
-                type="button"
-              >
-                {t("Disconnect")}
-              </button>
-            )}
-          </span>
-        </div>
-        {formOpen && (
-          <div className="form-stack" onKeyDown={onFormKeyDown}>
-            <div className="field-grid">
-              <label className="field-stack">
-                <span className="field-label">{t("Host")}</span>
-                <input
-                  className="field-input"
-                  onChange={(event) => {
-                    const nextValue = event.currentTarget.value;
-                    if (hasSsh && tab.mysqlTunnelId && nextValue !== host) {
-                      void invalidateTunnel();
-                    }
-                    setHost(nextValue);
-                    updateTab(tab.id, { mysqlHost: nextValue });
-                  }}
-                  value={host}
-                />
-              </label>
-              <label className="field-stack">
-                <span className="field-label">{t("Port")}</span>
-                <input
-                  className="field-input field-input--narrow"
-                  onChange={(event) => {
-                    const nextValue = event.currentTarget.value;
-                    if (hasSsh && tab.mysqlTunnelId && nextValue !== port) {
-                      void invalidateTunnel();
-                    }
-                    setPort(nextValue);
-                    persistPort(nextValue);
-                  }}
-                  value={port}
-                />
-              </label>
-            </div>
-            <div className="field-grid">
-              <label className="field-stack">
-                <span className="field-label">{t("User")}</span>
-                <input
-                  className="field-input"
-                  onChange={(event) => {
-                    const nextValue = event.currentTarget.value;
-                    setUser(nextValue);
-                    updateTab(tab.id, { mysqlUser: nextValue });
-                  }}
-                  value={user}
-                />
-              </label>
-              <label className="field-stack">
-                <span className="field-label">{t("Password")}</span>
-                <input
-                  className="field-input"
-                  type="password"
-                  ref={passwordInputRef}
-                  onChange={(event) => {
-                    const nextValue = event.currentTarget.value;
-                    setPassword(nextValue);
-                    updateTab(tab.id, { mysqlPassword: nextValue });
-                  }}
-                  value={password}
-                />
-              </label>
-            </div>
-            {hasSsh && (
-              <div className="inline-note">{t("Queries will connect through the SSH tunnel.")}</div>
-            )}
-            <div className="button-row">
-              <button className="mini-button" disabled={!canBrowse || busy} onClick={() => void browse()} type="button">
-                {busy ? t("Connecting...") : state ? t("Reconnect") : t("Connect")}
-              </button>
-            </div>
-            {state && banner}
-          </div>
-        )}
-      </section>
-      {tab.mysqlActiveCredentialId && savedIndex !== null && (
-        <DbPasswordUpdateDialog
-          open={pwUpdateOpen}
-          onClose={() => setPwUpdateOpen(false)}
-          savedConnectionIndex={savedIndex}
-          credentialId={tab.mysqlActiveCredentialId}
-          credentialLabel={dbName.trim() || host.trim() || t("MySQL")}
-          onUpdated={() => void handlePasswordUpdated()}
+  const resultToolbar = (
+    <>
+      {queryResult && (
+        <button
+          type="button"
+          className="btn is-ghost is-compact"
+          onClick={() => {
+            void writeClipboardText(queryResultToTsv(queryResult));
+            setNotice(t("Copied TSV"));
+          }}
+        >
+          {t("Copy TSV")}
+        </button>
+      )}
+      {flow.hasSsh && (
+        <DbTunnelChip
+          localPort={tab.mysqlTunnelPort}
+          busy={flow.tunnelBusy}
+          hasError={!!flow.tunnelError}
+          onRebuild={() => void flow.rebuildTunnel()}
+          onClose={() => void flow.closeTunnel()}
         />
       )}
+    </>
+  );
 
-      {state && (
-        <>
-          <section className="panel-section">
-            <div className="panel-section__title"><span>{t("Tables & Columns")}</span></div>
-            <div className="form-stack">
-              <div className="token-list">
-                {state.databases.map((db) => (
-                  <button
-                    key={db}
-                    className={state.databaseName === db ? "token-button token-button--selected" : "token-button"}
-                    onClick={() => {
-                      setDbName(db);
-                      updateTab(tab.id, { mysqlDatabase: db });
-                      void browse(db, "");
-                    }}
-                    type="button"
-                  >
-                    {db}
-                  </button>
-                ))}
-              </div>
-              <div className="token-list">
-                {state.tables.map((tbl) => (
-                  <button
-                    key={tbl}
-                    className={state.tableName === tbl ? "token-button token-button--selected" : "token-button"}
-                    onClick={() => {
-                      setTableName(tbl);
-                      setSql(`SELECT * FROM \`${tbl}\` LIMIT 100;`);
-                      void browse(dbName, tbl);
-                    }}
-                    type="button"
-                  >
-                    {tbl}
-                  </button>
-                ))}
-              </div>
-              {state.columns.length > 0 && (
-                <div className="column-list">
-                  {state.columns.map((col) => (
-                    <div className="column-row" key={col.name}>
-                      <div className="column-row__head">
-                        <strong>{col.name}</strong>
-                        <span className="connection-pill">{col.columnType}</span>
-                      </div>
-                      <div className="column-row__meta">
-                        {col.nullable ? t("Nullable") : t("Not null")}
-                        {col.key ? ` · ${col.key}` : ""}
-                      </div>
-                    </div>
-                  ))}
-                </div>
-              )}
-            </div>
-          </section>
-
-          <section className="panel-section">
-            <div className="panel-section__title"><span>{t("Sample Rows")}</span></div>
-            <PreviewTable preview={state.preview} emptyLabel={t("Select a table.")} />
-          </section>
-
-          <section className="panel-section">
-            <div className="panel-section__title"><span>{t("Query Editor")}</span></div>
-            <div className="form-stack">
-              <div className="query-guard-row">
-                <span className={readOnly ? "safety-pill safety-pill--locked" : "safety-pill safety-pill--unlocked"}>{readOnly ? t("Read Only") : t("Writes Unlocked")}</span>
-                <button className="mini-button" onClick={() => { setReadOnly((prev) => !prev); setWriteConfirm(""); }} type="button">{readOnly ? t("Unlock Writes") : t("Re-lock Writes")}</button>
-              </div>
-              <textarea className="field-textarea field-textarea--editor" onChange={(event) => setSql(event.currentTarget.value)} rows={4} value={sql} />
-              {needsWrite && !readOnly && <input className="field-input" onChange={(event) => setWriteConfirm(event.currentTarget.value)} placeholder={t("Type WRITE to confirm")} value={writeConfirm} />}
-              <div className="button-row">
-                <button className="mini-button" disabled={!canRun} onClick={() => void runQuery()} type="button">{queryBusy ? t("Running...") : t("Run Query")}</button>
-                {queryResult && <button className="mini-button" onClick={() => { void writeClipboardText(queryResultToTsv(queryResult)); setNotice(t("Copied TSV")); }} type="button">{t("Copy TSV")}</button>}
-              </div>
-              {notice && <div className="status-note">{notice}</div>}
-            </div>
-          </section>
-
-          <section className="panel-section">
-            <div className="panel-section__title"><span>{t("Query Results")}</span></div>
-            <QueryResultPanel result={queryResult} error={queryError} emptyLabel={t("Run a query to see results.")} />
-          </section>
-        </>
+  const dataTab = (
+    <>
+      <DbSqlEditor
+        tabName={state.tableName || t("query")}
+        sql={sql}
+        onChange={setSql}
+        writable={!readOnly}
+        onToggleWrite={() => {
+          setReadOnly((prev) => !prev);
+          setWriteConfirm("");
+        }}
+        needsWriteConfirm={needsWrite}
+        writeConfirm={writeConfirm}
+        onWriteConfirmChange={setWriteConfirm}
+        onRun={() => void runQuery()}
+        canRun={canRun}
+        running={queryBusy}
+      />
+      <DbResultGrid
+        preview={state.preview}
+        pkColumns={pkColumns}
+        numericColumns={numericColumns}
+        toolbar={resultToolbar}
+        onOpenRow={(row) => {
+          const idx = state.preview?.rows.indexOf(row) ?? -1;
+          setRowDetail({ row, idx });
+        }}
+        emptyLabel={
+          state.tableName ? t("Select a row to inspect.") : t("Pick a table from the tree to preview rows.")
+        }
+      />
+      {queryError && (
+        <div className="db-panel-banner">
+          <DismissibleNote variant="status" tone="error" onDismiss={() => setQueryError("")}>
+            {queryError}
+          </DismissibleNote>
+        </div>
       )}
-    </div>
+      {notice && !queryError && <div className="db-panel-notice">{notice}</div>}
+    </>
+  );
+
+  const structureTab =
+    state.columns.length > 0 ? (
+      <div className="db2-stub">
+        <div className="db2-stub-inner" style={{ alignItems: "stretch", maxWidth: 640 }}>
+          <div className="db2-stub-title">{t("Columns")}</div>
+          <table className="rg-table" style={{ background: "var(--panel)", borderRadius: "var(--radius-md)" }}>
+            <thead>
+              <tr>
+                <th><div className="rg-th-body"><span className="rg-th-name">{t("Name")}</span></div></th>
+                <th><div className="rg-th-body"><span className="rg-th-name">{t("Type")}</span></div></th>
+                <th><div className="rg-th-body"><span className="rg-th-name">{t("Null")}</span></div></th>
+                <th><div className="rg-th-body"><span className="rg-th-name">{t("Key")}</span></div></th>
+              </tr>
+            </thead>
+            <tbody>
+              {state.columns.map((col) => (
+                <tr key={col.name} className="rg-row">
+                  <td className="rg-td">{col.name}</td>
+                  <td className="rg-td" style={{ color: "var(--svc-mysql)" }}>{col.columnType}</td>
+                  <td className="rg-td">{col.nullable ? t("YES") : t("NO")}</td>
+                  <td className="rg-td">{col.key || "—"}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+          <div className="db2-stub-sub">
+            {t("Indexes and foreign keys will appear here once the backend exposes them — see docs/BACKEND-GAPS.md.")}
+          </div>
+        </div>
+      </div>
+    ) : (
+      <DbStubView title={t("No table selected")} />
+    );
+
+  return (
+    <>
+      {banner && <div className="db-panel-banner db-panel-banner--snug">{banner}</div>}
+      <DbConnectedShell
+        kind="mysql"
+        current={currentInstance}
+        otherInstances={otherInstances}
+        onSwitchInstance={flow.activateCredential}
+        onAddConnection={() => {
+          flow.setAdopting(null);
+          flow.setAddOpen(true);
+        }}
+        onDisconnect={() => void flow.disconnect()}
+        headerStats={headerStats}
+        tab={connectedTab}
+        onTabChange={setConnectedTab}
+        crumb={{
+          database: state.databaseName || undefined,
+          table: state.tableName || undefined,
+          stat: state.preview ? t("{count} rows", { count: state.preview.rows.length }) : null,
+        }}
+        sidebar={
+          <DbSchemaTree
+            databases={databases}
+            selectedTableId={state.tableName ? `${state.databaseName}.${state.tableName}` : null}
+            onSelectTable={(_db, node) => {
+              const tbl = node.label;
+              setSql(`SELECT * FROM \`${tbl}\` LIMIT 100;`);
+              setRowDetail(null);
+              void browse(undefined, tbl);
+            }}
+            onSelectDatabase={(name) => {
+              updateTab(tab.id, { mysqlDatabase: name });
+              setRowDetail(null);
+              void browse(undefined, "");
+            }}
+          />
+        }
+        dataTab={dataTab}
+        structureTab={structureTab}
+        schemaTab={
+          <DbStubView
+            title={t("Schema overview")}
+            subtitle={t("Per-table engine / size / row-count listing will appear here once the backend exposes it.")}
+          />
+        }
+        drawer={
+          rowDetail && state.preview ? (
+            <DbRowDetail
+              title={state.tableName ? `${state.tableName} · #${rowDetail.idx + 1}` : t("Row detail")}
+              columns={detailColumns}
+              row={rowDetail.row}
+              onClose={() => setRowDetail(null)}
+            />
+          ) : null
+        }
+      />
+      {dialogs}
     </>
   );
 }

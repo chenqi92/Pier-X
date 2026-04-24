@@ -100,6 +100,8 @@ export default function LogViewerPanel({ tab }: Props) {
     debug: false,
   });
   const [follow, setFollow] = useState(true);
+  /** Selected line index — opens the detail pane below the body. */
+  const [selectedIdx, setSelectedIdx] = useState<number | null>(null);
 
   // File-mode draft state: dir input + fetched entries.
   const [fileDirDraft, setFileDirDraft] = useState(source.fileDir || "/var/log");
@@ -588,7 +590,12 @@ export default function LogViewerPanel({ tab }: Props) {
           )}
 
           {filtered.map((e) => (
-            <div key={e.idx} className={"lg-line lv-" + e.level}>
+            <div
+              key={e.idx}
+              className={"lg-line lv-" + e.level + (selectedIdx === e.idx ? " sel" : "")}
+              onClick={() => setSelectedIdx((s) => (s === e.idx ? null : e.idx))}
+              style={{ cursor: "pointer" }}
+            >
               <span className="lg-n">{String(e.idx).padStart(4, " ")}</span>
               <span className="lg-t">{e.ts}</span>
               <span className={"lg-lvl " + e.level}>{e.level.toUpperCase()}</span>
@@ -602,6 +609,45 @@ export default function LogViewerPanel({ tab }: Props) {
             </div>
           )}
         </div>
+
+        {selectedIdx !== null && (() => {
+          const detail = events.find((e) => e.idx === selectedIdx);
+          if (!detail) return null;
+          return (
+            <div className="lg-detail">
+              <div className="lg-detail-head">
+                <span>{t("line {n}", { n: detail.idx })}</span>
+                <span className="lg-detail-spacer" />
+                <button
+                  type="button"
+                  className="mini-button mini-button--ghost"
+                  onClick={() => setSelectedIdx(null)}
+                  title={t("Close")}
+                >
+                  <X size={10} />
+                </button>
+              </div>
+              <div className="lg-detail-body">
+                <span className="lg-detail-k">{t("timestamp")}</span>
+                <span className="lg-detail-v">{detail.ts}</span>
+                <span className="lg-detail-k">{t("level")}</span>
+                <span className={"lg-lvl " + detail.level} style={{ justifySelf: "start" }}>
+                  {detail.level.toUpperCase()}
+                </span>
+                <span className="lg-detail-k">{t("source")}</span>
+                <span className="lg-detail-v">{describeLogSource(source)}</span>
+                <span className="lg-detail-k">{t("message")}</span>
+                <span className="lg-detail-v">{detail.text}</span>
+                {hasSsh && (
+                  <>
+                    <span className="lg-detail-k">{t("host")}</span>
+                    <span className="lg-detail-v">{sshArgs.user}@{sshArgs.host}</span>
+                  </>
+                )}
+              </div>
+            </div>
+          );
+        })()}
 
         <div className="lg-foot">
           <span className="mono lg-foot-src" title={compiled || describeLogSource(source)}>

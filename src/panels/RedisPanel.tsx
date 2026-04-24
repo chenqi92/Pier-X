@@ -1,8 +1,20 @@
-import { ChevronDown, ChevronRight } from "lucide-react";
-import { useEffect, useRef, useState } from "react";
+import { Play, Search, Terminal } from "lucide-react";
+import { useEffect, useMemo, useRef, useState } from "react";
+
+import DbAddCredentialDialog from "../components/DbAddCredentialDialog";
+import DbPasswordUpdateDialog from "../components/DbPasswordUpdateDialog";
+import DbTunnelChip from "../components/DbTunnelChip";
+import DismissibleNote from "../components/DismissibleNote";
+import DbConnectSplash from "../components/db/DbConnectSplash";
+import DbHeaderPicker, { type DbHeaderInstance } from "../components/db/DbHeaderPicker";
+import RedisKeyDetail from "../components/db/RedisKeyDetail";
+import RedisKeyList from "../components/db/RedisKeyList";
+import type { DbSplashRowData } from "../components/db/DbSplashRow";
+import { inferEnv } from "../components/db/dbTheme";
+import { useI18n } from "../i18n/useI18n";
+import { localizeError } from "../i18n/localizeMessage";
 import * as cmd from "../lib/commands";
-import { quoteCommandArg } from "../lib/commands";
-import { RIGHT_TOOL_META } from "../lib/rightToolMeta";
+import { isDbAuthError } from "../lib/dbAuthErrors";
 import { closeTunnelSlot, ensureTunnelSlot, syncTunnelState } from "../lib/sshTunnel";
 import type {
   DetectedDbInstance,
@@ -11,27 +23,18 @@ import type {
   TabState,
 } from "../lib/types";
 import { effectiveSshTarget } from "../lib/types";
-import { useI18n } from "../i18n/useI18n";
-import { localizeError } from "../i18n/localizeMessage";
-import DbAddCredentialDialog from "../components/DbAddCredentialDialog";
-import DbConnRow from "../components/DbConnRow";
-import DbInstancePicker from "../components/DbInstancePicker";
-import DbPasswordUpdateDialog from "../components/DbPasswordUpdateDialog";
-import DbTunnelChip from "../components/DbTunnelChip";
-import DismissibleNote from "../components/DismissibleNote";
-import PanelHeader from "../components/PanelHeader";
-import StatusDot from "../components/StatusDot";
-import { isDbAuthError } from "../lib/dbAuthErrors";
+import { useConnectionStore } from "../stores/useConnectionStore";
+import { useDetectedServicesStore } from "../stores/useDetectedServicesStore";
 import { useTabStore } from "../stores/useTabStore";
 
 type Props = { tab: TabState };
-
-const REDIS_ICON = RIGHT_TOOL_META.redis.icon;
 
 export default function RedisPanel({ tab }: Props) {
   const { t } = useI18n();
   const formatError = (error: unknown) => localizeError(error, t);
   const updateTab = useTabStore((s) => s.updateTab);
+
+  // ── Connection state ────────────────────────────────────────
   const [host, setHost] = useState(tab.redisHost);
   const [port, setPort] = useState(String(tab.redisPort));
   const [db, setDb] = useState(String(tab.redisDb));
@@ -46,15 +49,16 @@ export default function RedisPanel({ tab }: Props) {
   const [cmdResult, setCmdResult] = useState<RedisCommandResult | null>(null);
   const [cmdBusy, setCmdBusy] = useState(false);
   const [cmdError, setCmdError] = useState("");
+  const [cliOpen, setCliOpen] = useState(false);
   const [tunnelBusy, setTunnelBusy] = useState(false);
   const [tunnelError, setTunnelError] = useState("");
   const [addOpen, setAddOpen] = useState(false);
   const [adopting, setAdopting] = useState<DetectedDbInstance | null>(null);
   const [autoBrowseAttempted, setAutoBrowseAttempted] = useState(false);
-  const [formOpen, setFormOpen] = useState(false);
   const [pwUpdateOpen, setPwUpdateOpen] = useState(false);
   const passwordInputRef = useRef<HTMLInputElement | null>(null);
 
+  // ── Derived ────────────────────────────────────────────────
   const hasSsh = effectiveSshTarget(tab) !== null;
   const sshTarget = effectiveSshTarget(tab);
   const savedIndex = sshTarget?.savedConnectionIndex ?? null;
@@ -67,48 +71,53 @@ export default function RedisPanel({ tab }: Props) {
     !!tab.redisActiveCredentialId &&
     savedIndex !== null;
 
+  // ── Splash data ────────────────────────────────────────────
+  const connection = useConnectionStore((s) =>
+    savedIndex !== null ? s.connections.find((c) => c.index === savedIndex) ?? null : null,
+  );
+  const refreshConnections = useConnectionStore((s) => s.refresh);
+  const savedForKind = useMemo(
+    () => (connection?.databases ?? []).filter((c) => c.kind === "redis"),
+    [connection],
+  );
+  const instancesEntry = useDetectedServicesStore((s) => s.instancesByTab[tab.id]);
+  const setPending = useDetectedServicesStore((s) => s.setDbInstancesPending);
+  const setInstances = useDetectedServicesStore((s) => s.setDbInstances);
+  const setDetectionError = useDetectedServicesStore((s) => s.setDbInstancesError);
+  const detectedForKind = useMemo(() => {
+    const all = instancesEntry?.instances ?? [];
+    const adopted = new Set(
+      savedForKind
+        .map((c) => (c.source.kind === "detected" ? c.source.signature : null))
+        .filter((s): s is string => !!s),
+    );
+    return all.filter((d) => d.kind === "redis" && !adopted.has(d.signature));
+  }, [instancesEntry, savedForKind]);
+
+  // ── Sync tab → local ──────────────────────────────────────
   useEffect(() => {
     setHost((current) => (current === tab.redisHost ? current : tab.redisHost));
   }, [tab.redisHost]);
-
   useEffect(() => {
     const next = String(tab.redisPort);
     setPort((current) => (current === next ? current : next));
   }, [tab.redisPort]);
-
   useEffect(() => {
     const next = String(tab.redisDb);
     setDb((current) => (current === next ? current : next));
   }, [tab.redisDb]);
-
   useEffect(() => {
     setUser((current) => (current === tab.redisUser ? current : tab.redisUser));
   }, [tab.redisUser]);
-
   useEffect(() => {
     setPassword((current) => (current === tab.redisPassword ? current : tab.redisPassword));
   }, [tab.redisPassword]);
 
   useEffect(() => {
-    if (state) setFormOpen(false);
-  }, [state]);
-
-  // F4 — auto-expand on error so the user can immediately see / edit
-  // the credentials that are probably wrong, without having to click
-  // "Connection details" first.
-  useEffect(() => {
-    if (error && !state) setFormOpen(true);
-  }, [error, state]);
-
-  useEffect(() => {
-    if (!hasSsh || !tab.redisTunnelId) {
-      return;
-    }
+    if (!hasSsh || !tab.redisTunnelId) return;
     let cancelled = false;
     void syncTunnelState(tab, "redis", updateTab).then((info) => {
-      if (cancelled || !info?.alive) {
-        return;
-      }
+      if (cancelled || !info?.alive) return;
       setTunnelError("");
     });
     return () => {
@@ -116,12 +125,6 @@ export default function RedisPanel({ tab }: Props) {
     };
   }, [hasSsh, tab.id, tab.redisTunnelId, tab.redisTunnelPort, updateTab]);
 
-  // Auto-browse on saved SSH tab open with a seeded DB credential.
-  // Mirrors MySqlPanel: resolve the keyring password, then pass it
-  // explicitly to `browse` so the stale-closure doesn't auth with "".
-  // Falls back to "manual input" on keyring failure rather than
-  // silently sending an empty password (which would always look like
-  // "wrong credentials").
   useEffect(() => {
     if (autoBrowseAttempted) return;
     if (!hasSsh || !tab.redisActiveCredentialId || savedIndex === null) return;
@@ -145,29 +148,18 @@ export default function RedisPanel({ tab }: Props) {
               updateTab(tab.id, { redisPassword: effectivePw });
               setPassword(effectivePw);
             } else if (resolved.credential.hasPassword) {
-              // Credential says it *should* have a password, but the
-              // keyring didn't return one. Don't silently continue —
-              // the next `redis_browse` would fail AUTH and surface
-              // a cryptic "wrongpass" to the user.
               if (!cancelled) {
-                setFormOpen(true);
                 setError(
-                  t(
-                    "Saved password unavailable. Enter it manually or update the keyring.",
-                  ),
+                  t("Saved password unavailable. Enter it manually or update the keyring."),
                 );
                 setTimeout(() => passwordInputRef.current?.focus(), 0);
               }
               return;
             }
           } catch {
-            // keyring access denied / locked — degrade gracefully.
             if (!cancelled) {
-              setFormOpen(true);
               setError(
-                t(
-                  "Saved password unavailable. Enter it manually or update the keyring.",
-                ),
+                t("Saved password unavailable. Enter it manually or update the keyring."),
               );
               setTimeout(() => passwordInputRef.current?.focus(), 0);
             }
@@ -186,25 +178,9 @@ export default function RedisPanel({ tab }: Props) {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [tab.redisActiveCredentialId, savedIndex, hasSsh]);
 
-  function persistPort(nextPort: string) {
-    const parsed = Number.parseInt(nextPort, 10);
-    if (Number.isFinite(parsed) && parsed > 0) {
-      updateTab(tab.id, { redisPort: parsed });
-    }
-  }
-
-  function persistDb(nextDb: string) {
-    const parsed = Number.parseInt(nextDb, 10);
-    if (Number.isFinite(parsed)) {
-      updateTab(tab.id, { redisDb: parsed });
-    }
-  }
-
+  // ── Actions ───────────────────────────────────────────────
   async function ensureConnectionTarget(forceTunnel = false) {
-    if (!hasSsh) {
-      return { host: host.trim(), port: p };
-    }
-
+    if (!hasSsh) return { host: host.trim(), port: p };
     const info = await ensureTunnelSlot({
       tab,
       slot: "redis",
@@ -218,9 +194,7 @@ export default function RedisPanel({ tab }: Props) {
   }
 
   async function closeTunnel() {
-    if (!hasSsh || !tab.redisTunnelId) {
-      return;
-    }
+    if (!hasSsh || !tab.redisTunnelId) return;
     setTunnelBusy(true);
     setTunnelError("");
     try {
@@ -250,7 +224,6 @@ export default function RedisPanel({ tab }: Props) {
     setError("");
     setCmdResult(null);
     setCmdError("");
-    setFormOpen(false);
     if (hasSsh && tab.redisTunnelId) {
       try {
         await closeTunnelSlot(tab, "redis", updateTab);
@@ -260,22 +233,11 @@ export default function RedisPanel({ tab }: Props) {
     }
   }
 
-  async function invalidateTunnel() {
-    if (!hasSsh || !tab.redisTunnelId) {
-      return;
-    }
-    await closeTunnelSlot(tab, "redis", updateTab);
-    setTunnelError("");
-  }
-
   async function handlePasswordUpdated() {
     if (savedIndex === null || !tab.redisActiveCredentialId) return;
     setError("");
     try {
-      const resolved = await cmd.dbCredResolve(
-        savedIndex,
-        tab.redisActiveCredentialId,
-      );
+      const resolved = await cmd.dbCredResolve(savedIndex, tab.redisActiveCredentialId);
       const pw = resolved.password ?? "";
       updateTab(tab.id, { redisPassword: pw });
       setPassword(pw);
@@ -331,42 +293,138 @@ export default function RedisPanel({ tab }: Props) {
     }
   }
 
-  function onFormKeyDown(event: React.KeyboardEvent<HTMLDivElement>) {
-    if (event.key === "Enter" && canBrowse && !busy) {
-      event.preventDefault();
-      void browse();
+  async function refreshDetection() {
+    if (!sshTarget) return;
+    setPending(tab.id);
+    try {
+      const report = await cmd.dbDetect({
+        host: sshTarget.host,
+        port: sshTarget.port,
+        user: sshTarget.user,
+        authMode: sshTarget.authMode,
+        password: sshTarget.password,
+        keyPath: sshTarget.keyPath,
+        savedConnectionIndex: sshTarget.savedConnectionIndex,
+      });
+      setInstances(tab.id, {
+        instances: report.instances,
+        mysqlCli: report.mysqlCli,
+        psqlCli: report.psqlCli,
+        redisCli: report.redisCli,
+        sqliteCli: report.sqliteCli,
+      });
+    } catch {
+      setDetectionError(tab.id);
     }
   }
 
-  const connName = host.trim() || t("Redis Browser");
-  const connSub = host.trim()
-    ? t("{host}:{port} · db {db}{suffix}", {
-        host,
-        port,
-        db,
-        suffix: hasSsh ? ` · ${t("SSH tunnel")}` : "",
-      })
-    : t("Not connected");
-  const connTag = (
-    <>
-      <StatusDot tone={state ? "pos" : "off"} />
-      {state ? `:${port}` : t("offline")}
-    </>
-  );
+  function activateCredential(credId: string) {
+    const cred = savedForKind.find((c) => c.id === credId);
+    if (!cred) return;
+    // Clear every panel-scoped result of the previous instance — error
+    // banners, the CLI response, the key-name focus — so switching to
+    // a fresh cred never inherits stale context.
+    setError("");
+    setState(null);
+    setCmdResult(null);
+    setCmdError("");
+    setKeyName("");
+    setAutoBrowseAttempted(false);
+    setHost(cred.host);
+    setPort(String(cred.port));
+    setUser(cred.user);
+    setPassword("");
+    updateTab(tab.id, {
+      redisActiveCredentialId: cred.id,
+      redisHost: cred.host,
+      redisPort: cred.port,
+      redisUser: cred.user,
+      redisPassword: "",
+      redisTunnelId: null,
+      redisTunnelPort: null,
+    });
+  }
 
-  // Priority-based status banner — show at most one. Authoritative
-  // connection errors trump tunnel errors so the user's next action is
-  // the right one (fix password > rebuild tunnel).
+  // ── Splash rows ───────────────────────────────────────────
+  const viaLabel = sshTarget ? `${sshTarget.user}@${sshTarget.host}` : t("direct · localhost");
+  const viaKind: DbSplashRowData["via"]["kind"] = hasSsh ? "tunnel" : "direct";
+  const probeTarget = sshTarget ? `${sshTarget.user}@${sshTarget.host}` : null;
+  const probeState =
+    instancesEntry?.status === "pending"
+      ? "scanning"
+      : instancesEntry?.status === "error"
+        ? "error"
+        : "idle";
+
+  const savedRows: DbSplashRowData[] = savedForKind.map((cred) => ({
+    id: cred.id,
+    name: cred.label || cred.id,
+    env: inferEnv(cred.label),
+    engine: t("Redis"),
+    addr: `${cred.host}:${cred.port}`,
+    via: { kind: viaKind, label: viaLabel },
+    user: cred.user,
+    authHint: cred.hasPassword ? t("keyring") : undefined,
+    stats: <span className="sep">—</span>,
+    lastUsed: null,
+    status: "unknown",
+    tintVar: "var(--svc-redis)",
+    connectLabel: t("Connect"),
+    onConnect: () => activateCredential(cred.id),
+  }));
+
+  const detectedRows: DbSplashRowData[] = detectedForKind.map((det) => ({
+    id: det.signature,
+    name: det.label,
+    env: inferEnv(det.label),
+    engine: det.version ? `Redis ${det.version}` : t("Redis"),
+    addr: `${det.host}:${det.port}`,
+    via: {
+      kind: det.source === "docker" ? "local" : "remote",
+      label: det.source === "docker" ? det.image || t("docker container") : det.processName || t("systemd unit"),
+    },
+    stats: <span className="sep">—</span>,
+    lastUsed: null,
+    status: "up",
+    tintVar: "var(--svc-redis)",
+    connectLabel: t("Adopt & connect"),
+    onConnect: () => {
+      setAdopting(det);
+      setAddOpen(true);
+    },
+  }));
+
+  // ── Connected-state derived ───────────────────────────────
+  const currentCred = tab.redisActiveCredentialId
+    ? savedForKind.find((c) => c.id === tab.redisActiveCredentialId)
+    : undefined;
+
+  const currentInstance: DbHeaderInstance = {
+    id: currentCred?.id ?? "adhoc",
+    name: currentCred?.label || host || t("Redis"),
+    addr: `${host}:${port}`,
+    via: hasSsh ? t("SSH tunnel") : t("direct"),
+    status: state ? "up" : "unknown",
+    sub: <>{`${host}:${port} · db ${db}`}</>,
+  };
+
+  const otherInstances: DbHeaderInstance[] = savedForKind
+    .filter((c) => c.id !== tab.redisActiveCredentialId)
+    .map((c) => ({
+      id: c.id,
+      name: c.label || c.id,
+      addr: `${c.host}:${c.port}`,
+      via: "",
+      status: "unknown",
+    }));
+
+  // ── Banner / dialogs ──────────────────────────────────────
   const banner = error ? (
     <DismissibleNote variant="status" tone="error" onDismiss={() => setError("")}>
       <div>{error}</div>
       {canUpdatePassword && (
         <div className="button-row" style={{ marginTop: 6 }}>
-          <button
-            className="mini-button"
-            onClick={() => setPwUpdateOpen(true)}
-            type="button"
-          >
+          <button className="mini-button" onClick={() => setPwUpdateOpen(true)} type="button">
             {t("Update password")}
           </button>
         </div>
@@ -378,62 +436,8 @@ export default function RedisPanel({ tab }: Props) {
     </DismissibleNote>
   ) : null;
 
-  return (
+  const dialogs = (
     <>
-      <PanelHeader
-        icon={REDIS_ICON}
-        title={t("Redis")}
-        meta={t("{name} · db {db}", {
-          name: tab.title || host || t("Redis"),
-          db,
-        })}
-      />
-      <DbConnRow
-        icon={REDIS_ICON}
-        tint="var(--neg-dim)"
-        iconTint="var(--neg)"
-        name={connName}
-        sub={connSub}
-        tag={connTag}
-      />
-      <div className="panel-scroll">
-      <DbInstancePicker
-        tab={tab}
-        kind="redis"
-        onActivate={(cred) => {
-          setError("");
-          setState(null);
-          setAutoBrowseAttempted(false);
-          setHost(cred.host);
-          setPort(String(cred.port));
-          setDb(cred.database ?? "0");
-          setUser(cred.user);
-          setPassword("");
-          updateTab(tab.id, {
-            redisActiveCredentialId: cred.id,
-            redisHost: cred.host,
-            redisPort: cred.port,
-            redisDb: cred.database ? Number.parseInt(cred.database, 10) || 0 : 0,
-            redisUser: cred.user,
-            redisPassword: "",
-            redisTunnelId: null,
-            redisTunnelPort: null,
-          });
-        }}
-        onAdopt={(det) => {
-          setAdopting(det);
-          setAddOpen(true);
-        }}
-        onAddNew={() => {
-          setAdopting(null);
-          setAddOpen(true);
-        }}
-        onDeleted={(cred) => {
-          if (tab.redisActiveCredentialId === cred.id) {
-            updateTab(tab.id, { redisActiveCredentialId: null });
-          }
-        }}
-      />
       <DbAddCredentialDialog
         open={addOpen}
         onClose={() => setAddOpen(false)}
@@ -446,19 +450,16 @@ export default function RedisPanel({ tab }: Props) {
           setState(null);
           setHost(cred.host);
           setPort(String(cred.port));
-          setDb(cred.database ?? "0");
           setUser(cred.user);
-          setPassword("");
           updateTab(tab.id, {
             redisActiveCredentialId: cred.id,
             redisHost: cred.host,
             redisPort: cred.port,
-            redisDb: cred.database ? Number.parseInt(cred.database, 10) || 0 : 0,
             redisUser: cred.user,
-            redisPassword: "",
             redisTunnelId: null,
             redisTunnelPort: null,
           });
+          void refreshConnections();
         }}
       />
       {tab.redisActiveCredentialId && savedIndex !== null && (
@@ -471,221 +472,196 @@ export default function RedisPanel({ tab }: Props) {
           onUpdated={() => void handlePasswordUpdated()}
         />
       )}
-      {!state && (
-        <section className="panel-section">
-          <div className="form-stack">
-            <div className="status-note">
-              {busy
-                ? t("Connecting...")
-                : tab.redisActiveCredentialId
-                  ? t("Click the instance above to connect.")
-                  : hasSsh
-                    ? t("Select an instance above or configure manually.")
-                    : t("Configure a connection to begin.")}
-            </div>
-            {!busy && !formOpen && (
-              <div className="button-row">
-                <button className="mini-button" onClick={() => setFormOpen(true)} type="button">
-                  {t("Configure manually")}
-                </button>
-              </div>
-            )}
-            {banner}
-          </div>
-        </section>
-      )}
+    </>
+  );
 
-      <section className="panel-section">
-        <div className="panel-section__title">
-          <button
-            className="mini-button mini-button--ghost"
-            onClick={() => setFormOpen((o) => !o)}
-            type="button"
-          >
-            {formOpen ? <ChevronDown size={11} /> : <ChevronRight size={11} />}
-            {t("Connection details")}
-          </button>
-          <span className="panel-section__hint" style={{ display: "inline-flex", alignItems: "center", gap: "var(--sp-2)" }}>
-            {hasSsh && (
-              <DbTunnelChip
-                localPort={tab.redisTunnelPort}
-                busy={tunnelBusy}
-                hasError={!!tunnelError}
-                onRebuild={() => void rebuildTunnel()}
-                onClose={() => void closeTunnel()}
-              />
-            )}
-            {state && (
-              <button
-                className="mini-button mini-button--ghost"
-                onClick={() => void disconnect()}
-                type="button"
-              >
-                {t("Disconnect")}
-              </button>
-            )}
-          </span>
+  if (!state) {
+    return (
+      <>
+        {banner && <div className="db-panel-banner">{banner}</div>}
+        <DbConnectSplash
+          kind="redis"
+          probeTarget={probeTarget}
+          probeState={probeState}
+          onReprobe={sshTarget ? () => void refreshDetection() : undefined}
+          detected={detectedRows}
+          saved={savedRows}
+          onAddManual={() => {
+            setAdopting(null);
+            setAddOpen(true);
+          }}
+          footerHint={busy ? t("Connecting...") : null}
+          description={
+            hasSsh
+              ? undefined
+              : t("No SSH session on this tab — add a connection manually to connect directly.")
+          }
+        />
+        {dialogs}
+      </>
+    );
+  }
+
+  const headerStats = [
+    {
+      label: (
+        <>
+          <Zap /> {t("{count} keys", { count: state.keys.length })}
+        </>
+      ),
+    },
+    { label: state.usedMemory || "—" },
+    { label: state.serverVersion || t("Redis") },
+  ];
+
+  return (
+    <>
+      {banner && <div className="db-panel-banner db-panel-banner--snug">{banner}</div>}
+      <div className="rds">
+        <div className="rds-head">
+          <DbHeaderPicker
+            kind="redis"
+            current={currentInstance}
+            others={otherInstances}
+            onSwitch={activateCredential}
+            onAdd={() => {
+              setAdopting(null);
+              setAddOpen(true);
+            }}
+            onDisconnect={() => void disconnect()}
+          />
+          <div className="db2-stats">
+            {headerStats.map((s, i) => (
+              <span key={i} className="db2-stat">
+                {s.label}
+              </span>
+            ))}
+          </div>
+          <span className="rds-spacer" />
+          {hasSsh && (
+            <DbTunnelChip
+              localPort={tab.redisTunnelPort}
+              busy={tunnelBusy}
+              hasError={!!tunnelError}
+              onRebuild={() => void rebuildTunnel()}
+              onClose={() => void closeTunnel()}
+            />
+          )}
         </div>
-        {formOpen && (
-          <div className="form-stack" onKeyDown={onFormKeyDown}>
-            <div className="field-grid">
-              <label className="field-stack">
-                <span className="field-label">{t("Host")}</span>
-                <input
-                  className="field-input"
-                  onChange={(event) => {
-                    const nextValue = event.currentTarget.value;
-                    if (hasSsh && tab.redisTunnelId && nextValue !== host) {
-                      void invalidateTunnel();
-                    }
-                    setHost(nextValue);
-                    updateTab(tab.id, { redisHost: nextValue });
-                  }}
-                  value={host}
-                />
-              </label>
-              <label className="field-stack">
-                <span className="field-label">{t("Port")}</span>
-                <input
-                  className="field-input field-input--narrow"
-                  onChange={(event) => {
-                    const nextValue = event.currentTarget.value;
-                    if (hasSsh && tab.redisTunnelId && nextValue !== port) {
-                      void invalidateTunnel();
-                    }
-                    setPort(nextValue);
-                    persistPort(nextValue);
-                  }}
-                  value={port}
-                />
-              </label>
-            </div>
-            <div className="field-grid">
-              <label className="field-stack">
-                <span className="field-label">{t("User")}</span>
-                <input
-                  className="field-input"
-                  onChange={(event) => {
-                    const nextValue = event.currentTarget.value;
-                    setUser(nextValue);
-                    updateTab(tab.id, { redisUser: nextValue });
-                  }}
-                  placeholder={t("ACL user (optional)")}
-                  value={user}
-                />
-              </label>
-              <label className="field-stack">
-                <span className="field-label">{t("Password")}</span>
-                <input
-                  className="field-input"
-                  type="password"
-                  ref={passwordInputRef}
-                  onChange={(event) => {
-                    const nextValue = event.currentTarget.value;
-                    setPassword(nextValue);
-                    updateTab(tab.id, { redisPassword: nextValue });
-                  }}
-                  value={password}
-                />
-              </label>
-            </div>
-            <div className="field-grid">
-              <label className="field-stack">
-                <span className="field-label">{t("DB")}</span>
-                <input
-                  className="field-input"
-                  onChange={(event) => {
-                    const nextValue = event.currentTarget.value;
-                    setDb(nextValue);
-                    persistDb(nextValue);
-                  }}
-                  value={db}
-                />
-              </label>
-              <label className="field-stack">
-                <span className="field-label">{t("Pattern")}</span>
-                <input className="field-input" onChange={(event) => setPattern(event.currentTarget.value)} value={pattern} />
-              </label>
-            </div>
-            <div className="button-row">
-              <button className="mini-button" disabled={!canBrowse || busy} onClick={() => void browse()} type="button">
-                {busy ? t("Connecting...") : state ? t("Reconnect") : t("Connect")}
-              </button>
-            </div>
-            {state && <div className="status-note">{state.pong} · {state.serverVersion || "?"}{state.usedMemory ? ` · ${state.usedMemory}` : ""}</div>}
-            {state && banner}
+
+        <div className="rds-scan">
+          <label>{t("PATTERN")}</label>
+          <input
+            className="rds-input"
+            value={pattern}
+            onChange={(e) => setPattern(e.currentTarget.value)}
+            onKeyDown={(e) => {
+              if (e.key === "Enter") void browse("");
+            }}
+          />
+          <label>{t("DB")}</label>
+          <input
+            className="rds-input rds-input--narrow"
+            value={db}
+            onChange={(e) => setDb(e.currentTarget.value)}
+          />
+          <button
+            type="button"
+            className="btn is-ghost is-compact"
+            disabled={!canBrowse || busy}
+            onClick={() => void browse("")}
+          >
+            <Search size={10} /> {t("Scan")}
+          </button>
+          <span className="rds-spacer" />
+          <button
+            type="button"
+            className={"btn is-ghost is-compact" + (cliOpen ? " active" : "")}
+            onClick={() => setCliOpen((v) => !v)}
+          >
+            <Terminal size={10} /> {t("CLI")}
+          </button>
+        </div>
+
+        {cliOpen && (
+          <div className="rds-scan" style={{ background: "var(--panel)" }}>
+            <label>{t("COMMAND")}</label>
+            <input
+              className="rds-input"
+              style={{ flex: 1, width: "auto" }}
+              value={command}
+              onChange={(e) => setCommand(e.currentTarget.value)}
+              onKeyDown={(e) => {
+                if (e.key === "Enter") void runCommand();
+              }}
+              placeholder="PING"
+            />
+            <button
+              type="button"
+              className="btn is-primary is-compact"
+              disabled={cmdBusy}
+              onClick={() => void runCommand()}
+            >
+              <Play size={10} /> {cmdBusy ? t("Running...") : t("Run")}
+            </button>
           </div>
         )}
-      </section>
 
-      {state && (
-        <>
-          <section className="panel-section">
-            <div className="panel-section__title"><span>{t("Keys")}</span></div>
-            <div className="form-stack">
-              <div className="token-list">
-                {state.keys.map((k) => (
-                  <button
-                    key={k}
-                    className={state.keyName === k ? "token-button token-button--selected" : "token-button"}
-                    onClick={() => {
-                      setKeyName(k);
-                      setCommand(`TYPE ${quoteCommandArg(k)}`);
-                      void browse(k);
-                    }}
-                    type="button"
-                  >
-                    {k}
-                  </button>
-                ))}
-              </div>
-              {state.truncated && <div className="inline-note">{t("Truncated")}</div>}
-            </div>
-          </section>
-
-          {state.details && (
-            <section className="panel-section">
-              <div className="panel-section__title"><span>{t("Key Preview")}</span></div>
-              <div className="form-stack">
-                <div className="data-meta-grid">
-                  <div className="meta-chip"><span>{t("Key")}</span><strong>{state.details.key}</strong></div>
-                  <div className="meta-chip"><span>{t("Type")}</span><strong>{state.details.kind}</strong></div>
-                  <div className="meta-chip"><span>{t("Length")}</span><strong>{state.details.length}</strong></div>
-                  <div className="meta-chip"><span>{t("TTL")}</span><strong>{state.details.ttlSeconds}</strong></div>
+        {cliOpen && (cmdResult || cmdError) && (
+          <div className="rds-cli-out">
+            {cmdError ? (
+              <span className="rds-cli-out-err">{cmdError}</span>
+            ) : cmdResult ? (
+              <>
+                <div className="rds-cli-out-summary">
+                  {cmdResult.summary}
+                  <span className="sep"> · {cmdResult.elapsedMs} ms</span>
                 </div>
-                <div className="preview-list">{state.details.preview.map((item, index) => <div className="preview-item" key={index}>{item}</div>)}</div>
-              </div>
-            </section>
-          )}
+                <pre className="rds-cli-out-lines">{cmdResult.lines.join("\n")}</pre>
+              </>
+            ) : null}
+          </div>
+        )}
 
-          <section className="panel-section">
-            <div className="panel-section__title"><span>{t("Command Editor")}</span></div>
-            <div className="form-stack">
-              <textarea className="field-textarea field-textarea--editor" onChange={(event) => setCommand(event.currentTarget.value)} rows={4} value={command} />
-              <div className="button-row">
-                <button className="mini-button" disabled={!canBrowse || cmdBusy} onClick={() => void runCommand()} type="button">{cmdBusy ? t("Running...") : t("Run Command")}</button>
-              </div>
-            </div>
-          </section>
-
-          {(cmdResult || cmdError) && (
-            <section className="panel-section">
-              <div className="panel-section__title"><span>{t("Command Response")}</span></div>
-              {cmdError ? (
-                <DismissibleNote variant="status" tone="error" onDismiss={() => setCmdError("")}>
-                  {cmdError}
-                </DismissibleNote>
-              ) : cmdResult ? (
-                <div className="form-stack">
-                  <div className="inline-note">{cmdResult.summary} · {cmdResult.elapsedMs} ms</div>
-                  <div className="preview-list">{cmdResult.lines.map((line, index) => <div className="preview-item" key={index}>{line}</div>)}</div>
-                </div>
-              ) : null}
-            </section>
-          )}
-        </>
-      )}
-    </div>
+        <div className="rds-split">
+          <div className="rds-browser">
+            <RedisKeyList
+              keys={state.keys}
+              selected={state.keyName || null}
+              selectedKind={state.details?.kind ?? null}
+              onSelect={(key) => {
+                setKeyName(key);
+                void browse(key);
+              }}
+              truncated={state.truncated}
+            />
+          </div>
+          <div className="rds-detail">
+            <RedisKeyDetail details={state.details} />
+          </div>
+        </div>
+      </div>
+      {dialogs}
     </>
+  );
+}
+
+// Minimal local Zap wrapper so the import stays flat; the icon is
+// tiny enough (10px) that we can't easily share sizing with the
+// larger service glyphs.
+function Zap() {
+  return (
+    <svg
+      width={10}
+      height={10}
+      viewBox="0 0 24 24"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth={2.4}
+      strokeLinecap="round"
+      strokeLinejoin="round"
+    >
+      <polygon points="13 2 3 14 12 14 11 22 21 10 12 10 13 2" />
+    </svg>
   );
 }

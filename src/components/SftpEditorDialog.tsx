@@ -1,16 +1,26 @@
 import { useEffect, useMemo, useRef, useState, type MouseEvent as ReactMouseEvent } from "react";
 import {
   AlertTriangle,
+  AlignJustify,
+  Clock,
+  Copy,
+  Download,
+  Edit,
+  Eye,
   FileText,
+  HardDrive,
+  Key,
+  List,
+  RotateCcw,
   Save,
   Search,
   X,
 } from "lucide-react";
-import { EditorState, EditorSelection, type Extension } from "@codemirror/state";
+import { EditorState, EditorSelection, Compartment, type Extension } from "@codemirror/state";
 import {
   EditorView,
   keymap,
-  lineNumbers,
+  lineNumbers as cmLineNumbers,
   highlightActiveLine,
   highlightActiveLineGutter,
   highlightSpecialChars,
@@ -45,6 +55,7 @@ import ContextMenu, { type ContextMenuItem } from "./ContextMenu";
 import { useDraggableDialog } from "./useDraggableDialog";
 import { useI18n } from "../i18n/useI18n";
 import { localizeError } from "../i18n/localizeMessage";
+import { writeClipboardText } from "../lib/clipboard";
 import * as cmd from "../lib/commands";
 import type { SftpTextFile } from "../lib/commands";
 import {
@@ -79,6 +90,8 @@ type Props = {
   onSaved?: (bytes: number) => void;
 };
 
+type Mode = "view" | "edit";
+
 function basename(path: string): string {
   const i = path.lastIndexOf("/");
   return i < 0 ? path : path.slice(i + 1);
@@ -106,13 +119,24 @@ export default function SftpEditorDialog({
   const baselineRef = useRef<string>("");
   const saveRef = useRef<() => Promise<void>>(async () => {});
 
+  // Compartments let us toggle features at runtime — read-only for the
+  // View mode segment, line-wrap for the toolbar, line-numbers for the
+  // toolbar, without rebuilding the whole EditorState each time.
+  const readOnlyComp = useRef(new Compartment()).current;
+  const wrapComp = useRef(new Compartment()).current;
+  const lineNumsComp = useRef(new Compartment()).current;
+
   const [loading, setLoading] = useState(false);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState("");
   const [meta, setMeta] = useState<Pick<SftpTextFile, "size" | "permissions" | "modified" | "lossy"> | null>(null);
   const [dirty, setDirty] = useState(false);
-  const [cursor, setCursor] = useState<{ line: number; col: number; selLen: number }>({ line: 1, col: 1, selLen: 0 });
+  const [mode, setMode] = useState<Mode>("edit");
+  const [wrap, setWrap] = useState(false);
+  const [showNums, setShowNums] = useState(true);
+  const [cursor, setCursor] = useState<{ line: number; col: number; selLen: number; totalLines: number }>({ line: 1, col: 1, selLen: 0, totalLines: 0 });
   const [ctxMenu, setCtxMenu] = useState<{ x: number; y: number } | null>(null);
+  const [copiedPath, setCopiedPath] = useState(false);
   const overlayDownRef = useRef(false);
 
   const formatError = (e: unknown) => localizeError(e, t);
@@ -127,6 +151,7 @@ export default function SftpEditorDialog({
     setError("");
     setDirty(false);
     setMeta(null);
+    setMode("edit");
     void (async () => {
       try {
         const res = await cmd.sftpReadText({
@@ -142,7 +167,6 @@ export default function SftpEditorDialog({
           modified: res.modified,
           lossy: res.lossy,
         });
-        // Defer to next tick so the host div has mounted.
         setTimeout(() => {
           if (!alive) return;
           mountEditor(res.content);
@@ -161,7 +185,6 @@ export default function SftpEditorDialog({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [open, path]);
 
-  // Dispose on unmount.
   useEffect(() => () => disposeEditor(), []);
 
   function disposeEditor() {
@@ -178,7 +201,7 @@ export default function SftpEditorDialog({
     const lang = languageFromFilename(effectiveName);
     const extensions: Extension[] = [
       EditorState.phrases.of(phrases),
-      lineNumbers(),
+      lineNumsComp.of(showNums ? cmLineNumbers() : []),
       highlightActiveLineGutter(),
       highlightSpecialChars(),
       history(),
@@ -194,6 +217,8 @@ export default function SftpEditorDialog({
       highlightActiveLine(),
       highlightSelectionMatches(),
       search({ top: true }),
+      wrapComp.of(wrap ? EditorView.lineWrapping : []),
+      readOnlyComp.of(EditorState.readOnly.of(false)),
       keymap.of([
         { key: "Mod-s", preventDefault: true, run: () => { void saveRef.current(); return true; } },
         { key: "Mod-f", preventDefault: true, run: openSearchPanel },
@@ -217,6 +242,7 @@ export default function SftpEditorDialog({
             line: line.number,
             col: sel.head - line.from + 1,
             selLen: Math.abs(sel.to - sel.from),
+            totalLines: u.state.doc.lines,
           });
         }
       }),
@@ -226,10 +252,38 @@ export default function SftpEditorDialog({
     const state = EditorState.create({ doc: initial, extensions });
     const view = new EditorView({ state, parent: host });
     viewRef.current = view;
-    // Place cursor at start for consistent initial state.
+    setCursor((c) => ({ ...c, totalLines: state.doc.lines }));
     view.dispatch({ selection: EditorSelection.single(0) });
     view.focus();
   }
+
+  // Toggle compartments when the toolbar state changes.
+  useEffect(() => {
+    const v = viewRef.current;
+    if (!v) return;
+    v.dispatch({
+      effects: wrapComp.reconfigure(wrap ? EditorView.lineWrapping : []),
+    });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [wrap]);
+
+  useEffect(() => {
+    const v = viewRef.current;
+    if (!v) return;
+    v.dispatch({
+      effects: lineNumsComp.reconfigure(showNums ? cmLineNumbers() : []),
+    });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [showNums]);
+
+  useEffect(() => {
+    const v = viewRef.current;
+    if (!v) return;
+    v.dispatch({
+      effects: readOnlyComp.reconfigure(EditorState.readOnly.of(mode === "view")),
+    });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [mode]);
 
   saveRef.current = async () => {
     const view = viewRef.current;
@@ -273,6 +327,39 @@ export default function SftpEditorDialog({
     } else {
       v.focus();
       openSearchPanel(v);
+    }
+  };
+
+  const revert = () => {
+    const v = viewRef.current;
+    if (!v || !dirty) return;
+    v.dispatch({
+      changes: { from: 0, to: v.state.doc.length, insert: baselineRef.current },
+    });
+    v.focus();
+  };
+
+  const copyPath = () => {
+    void writeClipboardText(path);
+    setCopiedPath(true);
+    window.setTimeout(() => setCopiedPath(false), 1200);
+  };
+
+  const download = async () => {
+    const v = viewRef.current;
+    if (!v) return;
+    try {
+      const blob = new Blob([v.state.doc.toString()], { type: "text/plain;charset=utf-8" });
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement("a");
+      a.href = url;
+      a.download = effectiveName || "download.txt";
+      document.body.appendChild(a);
+      a.click();
+      a.remove();
+      window.setTimeout(() => URL.revokeObjectURL(url), 0);
+    } catch {
+      /* ignore — browser may reject download in sandboxed env */
     }
   };
 
@@ -321,11 +408,9 @@ export default function SftpEditorDialog({
     ];
   };
 
-  // Escape to close (with dirty prompt). Scoped to the dialog lifecycle.
   useMonoKey((e) => {
     if (!open) return;
     if (e.key === "Escape") {
-      // Let CM6 search panel eat Escape first — it closes itself.
       const view = viewRef.current;
       if (view && view.dom.querySelector(".cm-panel.cm-search")) return;
       e.preventDefault();
@@ -340,6 +425,9 @@ export default function SftpEditorDialog({
   const permLabel = meta?.permissions != null
     ? (meta.permissions & 0o777).toString(8).padStart(3, "0")
     : "—";
+  const modifiedLabel = meta?.modified
+    ? new Date(meta.modified * 1000).toISOString().replace("T", " ").slice(0, 16)
+    : "—";
 
   return (
     <>
@@ -347,9 +435,6 @@ export default function SftpEditorDialog({
       className="dlg-overlay"
       onMouseDown={(e) => { overlayDownRef.current = e.target === e.currentTarget; }}
       onClick={(e) => {
-        // Only close when the pointer went down on the overlay itself —
-        // otherwise a drag-to-select ending on the overlay would dismiss
-        // the dialog mid-selection.
         if (e.target === e.currentTarget && overlayDownRef.current) requestClose();
         overlayDownRef.current = false;
       }}
@@ -365,26 +450,107 @@ export default function SftpEditorDialog({
             {effectiveName}
             {dirty && <span className="editor-dirty" title={t("Unsaved changes")}>●</span>}
           </span>
+          <span className="editor-head-chips">
+            <span className="editor-chip"><HardDrive size={9} /> {sizeLabel}</span>
+            <span className="editor-chip"><Clock size={9} /> {modifiedLabel}</span>
+            <span className="editor-chip"><Key size={9} /> {permLabel}</span>
+          </span>
           <span className="editor-path mono" title={path}>{path}</span>
-          <div style={{ flex: 1 }} />
-          <IconButton
-            variant="mini"
-            onClick={toggleSearch}
-            title={t("Find / Replace")}
-          >
-            <Search size={12} />
-          </IconButton>
-          <IconButton
-            variant="mini"
-            onClick={() => void saveRef.current()}
-            disabled={!dirty || saving}
-            title={t("Save")}
-          >
-            <Save size={12} />
-          </IconButton>
+          <div className="editor-mode-seg" role="tablist">
+            <button
+              type="button"
+              className={"editor-mode" + (mode === "view" ? " on" : "")}
+              onClick={() => setMode("view")}
+            >
+              <Eye size={10} /> {t("View")}
+            </button>
+            <button
+              type="button"
+              className={"editor-mode" + (mode === "edit" ? " on" : "")}
+              onClick={() => setMode("edit")}
+            >
+              <Edit size={10} /> {t("Edit")}
+            </button>
+          </div>
           <IconButton variant="mini" onClick={requestClose} title={t("Close")}>
             <X size={12} />
           </IconButton>
+        </div>
+
+        <div className="editor-toolbar">
+          <span className="editor-toolbar-stat">
+            <b>{langName}</b>
+          </span>
+          <span className="editor-toolbar-stat">
+            <b>{cursor.totalLines.toLocaleString()}</b> {t("lines")}
+          </span>
+          <span className="editor-toolbar-stat">
+            <b>{sizeLabel}</b>
+          </span>
+          <span className="editor-toolbar-spacer" />
+          <button
+            type="button"
+            className="editor-tool-btn"
+            title={t("Find / Replace")}
+            onClick={toggleSearch}
+          >
+            <Search size={11} />
+          </button>
+          <button
+            type="button"
+            className={"editor-tool-btn" + (wrap ? " on" : "")}
+            title={t("Wrap lines")}
+            onClick={() => setWrap((v) => !v)}
+          >
+            <AlignJustify size={11} />
+          </button>
+          <button
+            type="button"
+            className={"editor-tool-btn" + (showNums ? " on" : "")}
+            title={t("Line numbers")}
+            onClick={() => setShowNums((v) => !v)}
+          >
+            <List size={11} />
+          </button>
+          <span className="editor-toolbar-divider" />
+          <button
+            type="button"
+            className="editor-tool-btn"
+            title={t("Download")}
+            onClick={() => void download()}
+          >
+            <Download size={11} />
+          </button>
+          <button
+            type="button"
+            className={"editor-tool-btn" + (copiedPath ? " on" : "")}
+            title={t("Copy path")}
+            onClick={copyPath}
+          >
+            <Copy size={11} />
+          </button>
+          {mode === "edit" && (
+            <>
+              <span className="editor-toolbar-divider" />
+              <button
+                type="button"
+                className="editor-tool-btn"
+                title={t("Revert")}
+                disabled={!dirty}
+                onClick={revert}
+              >
+                <RotateCcw size={11} />
+              </button>
+              <button
+                type="button"
+                className="btn is-primary is-compact"
+                disabled={!dirty || saving}
+                onClick={() => void saveRef.current()}
+              >
+                <Save size={10} /> {saving ? t("Saving...") : t("Save")}
+              </button>
+            </>
+          )}
         </div>
 
         {meta?.lossy && (
@@ -401,11 +567,9 @@ export default function SftpEditorDialog({
         </div>
 
         <div className="editor-status mono">
-          <span>{langName}</span>
+          <span>{sshArgs.user}@{sshArgs.host}</span>
           <span className="sep">·</span>
-          <span>
-            {t("Ln {line}, Col {col}", { line: cursor.line, col: cursor.col })}
-          </span>
+          <span>{t("Ln {line}, Col {col}", { line: cursor.line, col: cursor.col })}</span>
           {cursor.selLen > 0 && (
             <>
               <span className="sep">·</span>
@@ -413,11 +577,15 @@ export default function SftpEditorDialog({
             </>
           )}
           <div style={{ flex: 1 }} />
-          <span>{sizeLabel}</span>
-          <span className="sep">·</span>
-          <span>{t("Perm")} {permLabel}</span>
-          <span className="sep">·</span>
           <span>UTF-8</span>
+          <span className="sep">·</span>
+          <span>LF</span>
+          <span className="sep">·</span>
+          <span>{langName}</span>
+          <span className="sep">·</span>
+          <span style={{ color: dirty ? "var(--warn)" : "var(--muted)" }}>
+            {dirty ? t("modified") : t("saved")}
+          </span>
         </div>
       </div>
     </div>

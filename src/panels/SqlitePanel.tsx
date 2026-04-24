@@ -1,32 +1,38 @@
+import { FolderSearch, HardDrive, Search } from "lucide-react";
 import { useEffect, useMemo, useState } from "react";
+
+import DismissibleNote from "../components/DismissibleNote";
+import DbConnectSplash from "../components/db/DbConnectSplash";
+import DbConnectedShell, { type DbConnectedTab } from "../components/db/DbConnectedShell";
+import type { DbHeaderInstance } from "../components/db/DbHeaderPicker";
+import DbResultGrid from "../components/db/DbResultGrid";
+import DbRowDetail from "../components/db/DbRowDetail";
+import DbSchemaTree, { type DbSchemaDatabase } from "../components/db/DbSchemaTree";
+import DbSqlEditor from "../components/db/DbSqlEditor";
+import DbStubView from "../components/db/DbStubView";
+import type { DbSplashRowData } from "../components/db/DbSplashRow";
+import { useI18n } from "../i18n/useI18n";
+import { localizeError } from "../i18n/localizeMessage";
+import { writeClipboardText } from "../lib/clipboard";
 import * as cmd from "../lib/commands";
 import { isReadOnlySql, queryResultToTsv } from "../lib/commands";
-import { writeClipboardText } from "../lib/clipboard";
-import { RIGHT_TOOL_META } from "../lib/rightToolMeta";
+import type { RemoteSqliteCandidate } from "../lib/commands";
 import type {
   QueryExecutionResult,
   SqliteBrowserState,
   TabState,
 } from "../lib/types";
-import type { RemoteSqliteCandidate } from "../lib/commands";
 import { effectiveSshTarget } from "../lib/types";
-import { useI18n } from "../i18n/useI18n";
-import { localizeError } from "../i18n/localizeMessage";
-import DbConnRow from "../components/DbConnRow";
-import DismissibleNote from "../components/DismissibleNote";
-import PanelHeader from "../components/PanelHeader";
-import PreviewTable from "../components/PreviewTable";
-import QueryResultPanel from "../components/QueryResultPanel";
-import StatusDot from "../components/StatusDot";
 
 type Props = { tab: TabState | null };
 
-/** Tri-state of the remote sqlite3 probe. */
 type RemoteStatus =
   | { kind: "unknown" }
   | { kind: "local-only" }
   | { kind: "installed"; supportsJson: boolean; version: string | null }
   | { kind: "missing" };
+
+const NUMERIC_TYPE_RE = /^(int|integer|bigint|real|double|numeric|decimal|float)/i;
 
 export default function SqlitePanel({ tab }: Props) {
   const { t } = useI18n();
@@ -50,28 +56,25 @@ export default function SqlitePanel({ tab }: Props) {
   const [queryError, setQueryError] = useState("");
   const [notice, setNotice] = useState("");
 
-  // Remote discovery
+  const [connectedTab, setConnectedTab] = useState<DbConnectedTab>("data");
+  // Store the row alongside its absolute index — indexOf() would
+  // collide on duplicate rows and mis-number the detail drawer title.
+  const [rowDetail, setRowDetail] = useState<{ row: string[]; idx: number } | null>(null);
+
   const [remoteStatus, setRemoteStatus] = useState<RemoteStatus>(
     hasSsh ? { kind: "unknown" } : { kind: "local-only" },
   );
   const [candidates, setCandidates] = useState<RemoteSqliteCandidate[]>([]);
-  const [cwdHint, setCwdHint] = useState(""); // directory we scanned
+  const [cwdHint, setCwdHint] = useState("");
   const [shellCwd, setShellCwd] = useState<string | null>(null);
-  // `scanInput` is the controlled value of the scan-directory
-  // input. It defaults to "" so the first OSC 7 update seeds it
-  // (via the effect below); subsequent `shellCwd` updates don't
-  // overwrite what the user has typed. Reset to empty when tab
-  // changes to re-enable auto-seeding.
   const [scanInput, setScanInput] = useState("");
   const [scanInputTouched, setScanInputTouched] = useState(false);
+  const [manualPath, setManualPath] = useState("");
 
-  // Poll the terminal session for OSC 7 CWD updates. We fire
-  // once on mount to catch an already-reported CWD, then refresh
-  // every 15 s — OSC 7 is prompt-driven (shells emit it on every
-  // new prompt), so a short interval just adds lock contention
-  // for no UX gain. The SqlitePanel only needs it as a scan
-  // default; users who care about precision can type their own
-  // path.
+  const isRemoteMode =
+    hasSsh && remoteStatus.kind === "installed" && remoteStatus.supportsJson;
+
+  // Poll for OSC 7 CWD — same cadence + rationale as before.
   useEffect(() => {
     if (!hasSsh || !tab?.terminalSessionId) {
       setShellCwd(null);
@@ -97,10 +100,6 @@ export default function SqlitePanel({ tab }: Props) {
     };
   }, [hasSsh, tab?.terminalSessionId]);
 
-  // Seed the scan-directory input from the shell CWD the FIRST
-  // time we learn it, and only if the user hasn't typed anything
-  // yet. This avoids clobbering a half-typed path when OSC 7
-  // fires mid-edit.
   useEffect(() => {
     if (!scanInputTouched && shellCwd && scanInput !== shellCwd) {
       setScanInput(shellCwd);
@@ -108,7 +107,6 @@ export default function SqlitePanel({ tab }: Props) {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [shellCwd, scanInputTouched]);
 
-  // When SSH context changes, re-probe sqlite3 capability.
   useEffect(() => {
     if (!hasSsh || !sshTarget) {
       setRemoteStatus({ kind: "local-only" });
@@ -147,19 +145,17 @@ export default function SqlitePanel({ tab }: Props) {
   }, [hasSsh, sshTarget?.host, sshTarget?.port, sshTarget?.user]);
 
   const canBrowse = path.trim().length > 0;
-  const needsWrite = sql.trim() && !isReadOnlySql(sql);
+  const needsWrite = sql.trim() !== "" && !isReadOnlySql(sql);
   const canRun =
     canBrowse &&
-    sql.trim() &&
+    sql.trim() !== "" &&
     !queryBusy &&
     (!needsWrite || (!readOnly && writeConfirm.trim().toUpperCase() === "WRITE"));
 
-  const isRemoteMode =
-    hasSsh && remoteStatus.kind === "installed" && remoteStatus.supportsJson;
-
-  async function browse(nextTable = tableName) {
+  async function browse(nextTable = tableName, explicitPath?: string) {
     setBusy(true);
     setError("");
+    const usePath = (explicitPath ?? path).trim();
     try {
       if (isRemoteMode && sshTarget) {
         const s = await cmd.sqliteBrowseRemote({
@@ -170,19 +166,17 @@ export default function SqlitePanel({ tab }: Props) {
           password: sshTarget.password,
           keyPath: sshTarget.keyPath,
           savedConnectionIndex: sshTarget.savedConnectionIndex,
-          dbPath: path.trim(),
+          dbPath: usePath,
           table: nextTable.trim() || null,
         });
         setState(s);
         setTableName(s.tableName);
       } else {
-        const s = await cmd.sqliteBrowse(path.trim(), nextTable.trim() || null);
+        const s = await cmd.sqliteBrowse(usePath, nextTable.trim() || null);
         setState(s);
         setTableName(s.tableName);
       }
     } catch (e) {
-      // Keep prior state visible so a transient browse error
-      // doesn't blank the panel body.
       setError(formatError(e));
     } finally {
       setBusy(false);
@@ -247,318 +241,341 @@ export default function SqlitePanel({ tab }: Props) {
     }
   }
 
-  const trimmedPath = path.trim();
-  const connName = trimmedPath || t("SQLite Browser");
-  const connSub = trimmedPath
-    ? hasSsh
-      ? `${sshTarget?.user}@${sshTarget?.host}:${trimmedPath}`
-      : trimmedPath
-    : t("Not connected");
-  const dbFileName = trimmedPath
-    ? trimmedPath.split(/[/\\]/).pop() || trimmedPath
-    : "";
-  const headerMeta = dbFileName
-    ? state
-      ? t("{file} · {count} tables", { file: dbFileName, count: state.tables.length })
-      : dbFileName
-    : t("No database");
-  const connTag = (
-    <>
-      <StatusDot tone={state ? "pos" : "off"} />
-      {state ? t("open") : t("offline")}
-    </>
-  );
+  function disconnect() {
+    setState(null);
+    setError("");
+    setQueryResult(null);
+    setQueryError("");
+    setNotice("");
+    setRowDetail(null);
+  }
 
-  const remoteBanner = useMemo(() => {
+  // ── Splash rows (candidates as detected; no saved creds for SQLite yet) ──
+  const probeTarget = sshTarget ? `${sshTarget.user}@${sshTarget.host}` : null;
+  const probeState =
+    remoteStatus.kind === "unknown"
+      ? "scanning"
+      : remoteStatus.kind === "missing"
+        ? "error"
+        : "idle";
+
+  const detectedRows: DbSplashRowData[] = candidates.map((c) => ({
+    id: c.path,
+    name: c.path.split(/[/\\]/).pop() || c.path,
+    env: "unknown",
+    engine: t("SQLite"),
+    addr: c.path,
+    via: { kind: "remote", label: cwdHint || t("remote host") },
+    stats: <span>{formatBytes(c.sizeBytes)}</span>,
+    lastUsed: null,
+    status: "up",
+    tintVar: "var(--svc-sqlite)",
+    connectLabel: t("Open"),
+    onConnect: () => {
+      setPath(c.path);
+      setState(null);
+      setTableName("");
+      void browse("", c.path);
+    },
+  }));
+
+  const remoteBannerContent: string | null = useMemo(() => {
     if (!hasSsh) return null;
     switch (remoteStatus.kind) {
-      case "unknown":
-        return null;
       case "missing":
-        return (
-          <div className="status-note status-note--warn">
-            {t("Remote sqlite3 not found — install `sqlite3` on the server to read remote .db files directly.")}
-          </div>
-        );
+        return t("Remote sqlite3 not found — install `sqlite3` on the server to read remote .db files directly.");
       case "installed":
         if (!remoteStatus.supportsJson) {
-          return (
-            <div className="status-note status-note--warn">
-              {t("Remote sqlite3 is too old for -json mode. Version {version}. Need ≥ 3.33.", {
-                version: remoteStatus.version ?? "?",
-              })}
-            </div>
-          );
+          return t("Remote sqlite3 is too old for -json mode. Version {version}. Need ≥ 3.33.", {
+            version: remoteStatus.version ?? "?",
+          });
         }
-        return (
-          <div className="status-note">
-            {t("Remote SQLite v{version} · reads & writes apply directly on the server", {
-              version: remoteStatus.version ?? "?",
-            })}
-          </div>
-        );
+        return t("Remote SQLite v{version} · reads & writes apply directly on the server", {
+          version: remoteStatus.version ?? "?",
+        });
       default:
         return null;
     }
   }, [hasSsh, remoteStatus, t]);
 
+  const extraBody = (
+    <div className="form-stack">
+      {remoteBannerContent && (
+        <div className="status-note mono">{remoteBannerContent}</div>
+      )}
+      {hasSsh && isRemoteMode && (
+        <div className="form-stack">
+          <label className="field-stack">
+            <span className="field-label">
+              <FolderSearch size={11} /> {t("Scan remote directory")}
+              {shellCwd && (
+                <span className="panel-section__hint" style={{ marginLeft: "var(--sp-1)" }}>
+                  {t("(shell cwd: {cwd})", { cwd: shortPath(shellCwd) })}
+                </span>
+              )}
+            </span>
+            <div className="branch-row">
+              <input
+                className="field-input mono"
+                value={scanInput}
+                placeholder={shellCwd ?? "~"}
+                onChange={(e) => {
+                  setScanInput(e.currentTarget.value);
+                  setScanInputTouched(true);
+                }}
+                onKeyDown={(e) => {
+                  if (e.key === "Enter") {
+                    void scanDir(e.currentTarget.value.trim() || "~");
+                  }
+                }}
+              />
+              <button
+                type="button"
+                className="btn is-ghost is-compact"
+                onClick={() => void scanDir(scanInput.trim() || shellCwd || "~")}
+              >
+                <Search size={10} /> {t("Scan")}
+              </button>
+            </div>
+          </label>
+          {candidates.length === 0 && cwdHint && (
+            <div className="status-note mono">
+              {t("No .db / .sqlite / .sqlite3 files under {dir}", { dir: cwdHint })}
+            </div>
+          )}
+        </div>
+      )}
+      <label className="field-stack">
+        <span className="field-label">
+          <HardDrive size={11} />{" "}
+          {hasSsh ? t("Database file (remote path)") : t("Database file")}
+        </span>
+        <div className="branch-row">
+          <input
+            className="field-input mono"
+            onChange={(e) => setManualPath(e.currentTarget.value)}
+            placeholder={hasSsh ? "/srv/app/db.sqlite3" : "/path/to/app.db"}
+            value={manualPath}
+            onKeyDown={(e) => {
+              if (e.key === "Enter" && manualPath.trim()) {
+                setPath(manualPath.trim());
+                void browse("", manualPath.trim());
+              }
+            }}
+          />
+          <button
+            type="button"
+            className="btn is-primary is-compact"
+            disabled={!manualPath.trim() || busy}
+            onClick={() => {
+              setPath(manualPath.trim());
+              void browse("", manualPath.trim());
+            }}
+          >
+            {busy ? t("Browsing...") : t("Open")}
+          </button>
+        </div>
+      </label>
+      {error && (
+        <DismissibleNote variant="status" tone="error" onDismiss={() => setError("")}>
+          {error}
+        </DismissibleNote>
+      )}
+    </div>
+  );
+
+  if (!state) {
+    return (
+      <DbConnectSplash
+        kind="sqlite"
+        probeTarget={probeTarget}
+        probeState={probeState}
+        onReprobe={undefined}
+        detected={detectedRows}
+        saved={[]}
+        onAddManual={() => {
+          /* The manual-path form lives inline in extraBody. */
+        }}
+        hideAddManual
+        description={
+          hasSsh
+            ? t("Open a database by path, or scan a remote directory for .db / .sqlite files.")
+            : t("Open a local SQLite file by path.")
+        }
+        extraBody={extraBody}
+      />
+    );
+  }
+
+  // ── Connected view ─────────────────────────────────────────
+  const currentInstance: DbHeaderInstance = {
+    id: "sqlite",
+    name: path.split(/[/\\]/).pop() || path || t("SQLite"),
+    addr: path,
+    via: hasSsh ? t("remote read") : t("local"),
+    status: state ? "up" : "unknown",
+    sub: <>{path}</>,
+  };
+
+  const databases: DbSchemaDatabase[] = [
+    {
+      name: path.split(/[/\\]/).pop() || t("database"),
+      current: true,
+      tables: state.tables.map((tname) => ({ id: tname, label: tname })),
+    },
+  ];
+
+  const pkColumns = state.columns.filter((c) => c.primaryKey).map((c) => c.name);
+  const numericColumns = state.columns
+    .filter((c) => NUMERIC_TYPE_RE.test(c.colType))
+    .map((c) => c.name);
+  const detailColumns = state.columns.map((c) => ({
+    name: c.name,
+    type: c.colType,
+    pk: c.primaryKey,
+  }));
+
+  const banner = error ? (
+    <DismissibleNote variant="status" tone="error" onDismiss={() => setError("")}>
+      {error}
+    </DismissibleNote>
+  ) : null;
+
+  const resultToolbar = queryResult ? (
+    <button
+      type="button"
+      className="btn is-ghost is-compact"
+      onClick={() => {
+        void writeClipboardText(queryResultToTsv(queryResult));
+        setNotice(t("Copied TSV"));
+      }}
+    >
+      {t("Copy TSV")}
+    </button>
+  ) : null;
+
+  const dataTab = (
+    <>
+      <DbSqlEditor
+        tabName={tableName || t("query")}
+        sql={sql}
+        onChange={setSql}
+        writable={!readOnly}
+        onToggleWrite={() => {
+          setReadOnly((p) => !p);
+          setWriteConfirm("");
+        }}
+        needsWriteConfirm={Boolean(needsWrite)}
+        writeConfirm={writeConfirm}
+        onWriteConfirmChange={setWriteConfirm}
+        onRun={() => void runQuery()}
+        canRun={canRun}
+        running={queryBusy}
+      />
+      <DbResultGrid
+        preview={state.preview}
+        pkColumns={pkColumns}
+        numericColumns={numericColumns}
+        toolbar={resultToolbar}
+        onOpenRow={(row) => {
+          const idx = state.preview?.rows.indexOf(row) ?? -1;
+          setRowDetail({ row, idx });
+        }}
+        emptyLabel={
+          state.tableName
+            ? t("Select a row to inspect.")
+            : t("Pick a table from the tree to preview rows.")
+        }
+      />
+      {queryError && (
+        <div className="db-panel-banner">
+          <DismissibleNote variant="status" tone="error" onDismiss={() => setQueryError("")}>
+            {queryError}
+          </DismissibleNote>
+        </div>
+      )}
+      {notice && !queryError && <div className="db-panel-notice">{notice}</div>}
+    </>
+  );
+
+  const structureTab =
+    state.columns.length > 0 ? (
+      <div className="db2-stub">
+        <div className="db2-stub-inner" style={{ alignItems: "stretch", maxWidth: 640 }}>
+          <div className="db2-stub-title">{t("Columns")}</div>
+          <table className="rg-table" style={{ background: "var(--panel)", borderRadius: "var(--radius-md)" }}>
+            <thead>
+              <tr>
+                <th><div className="rg-th-body"><span className="rg-th-name">{t("Name")}</span></div></th>
+                <th><div className="rg-th-body"><span className="rg-th-name">{t("Type")}</span></div></th>
+                <th><div className="rg-th-body"><span className="rg-th-name">{t("Null")}</span></div></th>
+                <th><div className="rg-th-body"><span className="rg-th-name">{t("Key")}</span></div></th>
+              </tr>
+            </thead>
+            <tbody>
+              {state.columns.map((col) => (
+                <tr key={col.name} className="rg-row">
+                  <td className="rg-td">{col.name}</td>
+                  <td className="rg-td" style={{ color: "var(--svc-sqlite)" }}>{col.colType}</td>
+                  <td className="rg-td">{col.notNull ? t("NO") : t("YES")}</td>
+                  <td className="rg-td">{col.primaryKey ? t("PK") : "—"}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      </div>
+    ) : (
+      <DbStubView title={t("No table selected")} />
+    );
+
   return (
     <>
-      <PanelHeader
-        icon={RIGHT_TOOL_META.sqlite.icon}
-        title={t("SQLite")}
-        meta={headerMeta}
-      />
-      <DbConnRow
-        icon={RIGHT_TOOL_META.sqlite.icon}
-        tint="var(--panel-2)"
-        iconTint="var(--ink-2)"
-        name={connName}
-        sub={connSub}
-        tag={connTag}
-      />
-      <div className="panel-scroll">
-        <section className="panel-section">
-          <div className="form-stack">
-            {remoteBanner}
-            {hasSsh && isRemoteMode && (
-              <div className="form-stack">
-                <div className="field-grid">
-                  <label className="field-stack">
-                    <span className="field-label">
-                      {t("Scan directory")}
-                      {shellCwd && (
-                        <span
-                          className="panel-section__hint"
-                          style={{ marginLeft: "var(--sp-1)" }}
-                        >
-                          {t("(shell cwd: {cwd})", { cwd: shortPath(shellCwd) })}
-                        </span>
-                      )}
-                    </span>
-                    <div className="branch-row">
-                      <input
-                        className="field-input mono"
-                        value={scanInput}
-                        placeholder={shellCwd ?? "~"}
-                        onChange={(e) => {
-                          setScanInput(e.currentTarget.value);
-                          setScanInputTouched(true);
-                        }}
-                        onKeyDown={(e) => {
-                          if (e.key === "Enter") {
-                            void scanDir(e.currentTarget.value.trim() || "~");
-                          }
-                        }}
-                      />
-                      <button
-                        className="mini-button"
-                        onClick={() => {
-                          void scanDir(scanInput.trim() || shellCwd || "~");
-                        }}
-                        type="button"
-                      >
-                        {t("Scan")}
-                      </button>
-                    </div>
-                  </label>
-                </div>
-                {candidates.length > 0 && (
-                  <div className="token-list">
-                    {candidates.map((c) => (
-                      <button
-                        key={c.path}
-                        className={
-                          path === c.path
-                            ? "token-button token-button--selected"
-                            : "token-button"
-                        }
-                        onClick={() => {
-                          setPath(c.path);
-                          setState(null);
-                          setTableName("");
-                          void browse("");
-                        }}
-                        title={`${formatBytes(c.sizeBytes)}${cwdHint ? ` · ${cwdHint}` : ""}`}
-                        type="button"
-                      >
-                        {shortPath(c.path)}
-                        <span className="db-instance-pill__port">
-                          {" "}
-                          · {formatBytes(c.sizeBytes)}
-                        </span>
-                      </button>
-                    ))}
-                  </div>
-                )}
-                {candidates.length === 0 && cwdHint && (
-                  <div className="status-note mono">
-                    {t("No .db / .sqlite / .sqlite3 files under {dir}", { dir: cwdHint })}
-                  </div>
-                )}
-              </div>
-            )}
-            <label className="field-stack">
-              <span className="field-label">
-                {hasSsh ? t("Database file (remote path)") : t("Database file")}
-              </span>
-              <div className="branch-row">
-                <input
-                  className="field-input"
-                  onChange={(e) => setPath(e.currentTarget.value)}
-                  placeholder={
-                    hasSsh ? t("/srv/app/db.sqlite3") : t("/path/to/app.db")
-                  }
-                  value={path}
-                />
-                <button
-                  className="mini-button"
-                  disabled={!canBrowse || busy}
-                  onClick={() => void browse()}
-                  type="button"
-                >
-                  {busy ? t("Browsing...") : t("Browse")}
-                </button>
-              </div>
-            </label>
-            {error && (
-              <DismissibleNote variant="status" tone="error" onDismiss={() => setError("")}>
-                {error}
-              </DismissibleNote>
-            )}
-          </div>
-        </section>
-
-        {state && (
-          <section className="panel-section">
-            <div className="panel-section__title">
-              <span>{t("Tables & Columns")}</span>
-            </div>
-            <div className="form-stack">
-              <div className="token-list">
-                {state.tables.map((tbl) => (
-                  <button
-                    key={tbl}
-                    className={
-                      state.tableName === tbl
-                        ? "token-button token-button--selected"
-                        : "token-button"
-                    }
-                    onClick={() => {
-                      setTableName(tbl);
-                      setSql(`SELECT * FROM "${tbl.replace(/"/g, '""')}" LIMIT 100;`);
-                      void browse(tbl);
-                    }}
-                    type="button"
-                  >
-                    {tbl}
-                  </button>
-                ))}
-              </div>
-              {state.columns.length > 0 && (
-                <div className="column-list">
-                  {state.columns.map((col) => (
-                    <div className="column-row" key={col.name}>
-                      <div className="column-row__head">
-                        <strong>{col.name}</strong>
-                        <span className="connection-pill">{col.colType}</span>
-                      </div>
-                      <div className="column-row__meta">
-                        {col.notNull ? t("Not null") : t("Nullable")}
-                        {col.primaryKey ? ` · ${t("PK")}` : ""}
-                      </div>
-                    </div>
-                  ))}
-                </div>
-              )}
-            </div>
-          </section>
-        )}
-
-        {state && (
-          <section className="panel-section">
-            <div className="panel-section__title">
-              <span>{t("Sample Rows")}</span>
-            </div>
-            <PreviewTable preview={state.preview} emptyLabel={t("Select a table.")} />
-          </section>
-        )}
-
-        <section className="panel-section">
-          <div className="panel-section__title">
-            <span>{t("Query Editor")}</span>
-          </div>
-          <div className="form-stack">
-            <div className="query-guard-row">
-              <span
-                className={
-                  readOnly ? "safety-pill safety-pill--locked" : "safety-pill safety-pill--unlocked"
-                }
-              >
-                {readOnly ? t("Read Only") : t("Writes Unlocked")}
-              </span>
-              <button
-                className="mini-button"
-                onClick={() => {
-                  setReadOnly((p) => !p);
-                  setWriteConfirm("");
-                }}
-                type="button"
-              >
-                {readOnly ? t("Unlock Writes") : t("Re-lock Writes")}
-              </button>
-            </div>
-            <textarea
-              className="field-textarea field-textarea--editor"
-              onChange={(e) => setSql(e.currentTarget.value)}
-              rows={4}
-              value={sql}
-            />
-            {needsWrite && !readOnly && (
-              <input
-                className="field-input"
-                onChange={(e) => setWriteConfirm(e.currentTarget.value)}
-                placeholder={t("Type WRITE to confirm")}
-                value={writeConfirm}
-              />
-            )}
-            <div className="button-row">
-              <button
-                className="mini-button"
-                disabled={!canRun}
-                onClick={() => void runQuery()}
-                type="button"
-              >
-                {queryBusy ? t("Running...") : t("Run Query")}
-              </button>
-              {queryResult && (
-                <button
-                  className="mini-button"
-                  onClick={() => {
-                    void writeClipboardText(queryResultToTsv(queryResult));
-                    setNotice(t("Copied"));
-                  }}
-                  type="button"
-                >
-                  {t("Copy TSV")}
-                </button>
-              )}
-            </div>
-            {notice && <div className="status-note">{notice}</div>}
-          </div>
-        </section>
-
-        <section className="panel-section">
-          <div className="panel-section__title">
-            <span>{t("Query Results")}</span>
-          </div>
-          <QueryResultPanel
-            result={queryResult}
-            error={queryError}
-            emptyLabel={t("Run a query.")}
+      {banner && <div className="db-panel-banner db-panel-banner--snug">{banner}</div>}
+      <DbConnectedShell
+        kind="sqlite"
+        current={currentInstance}
+        otherInstances={[]}
+        onAddConnection={() => disconnect()}
+        onDisconnect={() => disconnect()}
+        headerStats={[
+          { icon: "database", label: t("{count} tables", { count: state.tables.length }) },
+          { icon: "disk", label: isRemoteMode ? t("remote") : t("local") },
+        ]}
+        tab={connectedTab}
+        onTabChange={setConnectedTab}
+        crumb={{
+          database: path.split(/[/\\]/).pop() || undefined,
+          table: state.tableName || undefined,
+          stat: state.preview ? t("{count} rows", { count: state.preview.rows.length }) : null,
+        }}
+        sidebar={
+          <DbSchemaTree
+            databases={databases}
+            selectedTableId={state.tableName || null}
+            onSelectTable={(_db, node) => {
+              const tbl = node.label;
+              setTableName(tbl);
+              setSql(`SELECT * FROM "${tbl.replace(/"/g, '""')}" LIMIT 100;`);
+              setRowDetail(null);
+              void browse(tbl);
+            }}
           />
-        </section>
-      </div>
+        }
+        dataTab={dataTab}
+        structureTab={structureTab}
+        schemaTab={<DbStubView title={t("Schema overview")} />}
+        drawer={
+          rowDetail && state.preview ? (
+            <DbRowDetail
+              title={state.tableName ? `${state.tableName} · #${rowDetail.idx + 1}` : t("Row detail")}
+              columns={detailColumns}
+              row={rowDetail.row}
+              onClose={() => setRowDetail(null)}
+            />
+          ) : null
+        }
+      />
     </>
   );
 }

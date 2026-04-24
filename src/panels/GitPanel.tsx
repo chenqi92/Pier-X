@@ -553,6 +553,7 @@ const GRAPH_LANE_PX = 14;
 const GRAPH_ROW_H = 24;
 const GRAPH_DOT_R = 3.5;
 const GRAPH_LANE_MIN_W = 56;
+const GIT_STATUS_POLL_MS = 10_000;
 
 function GitGraphLane({ row, isHead, width }: { row: GitGraphRowView; isHead: boolean; width: number }) {
   const dotColor = graphColor(row.colorIndex);
@@ -888,7 +889,10 @@ const HistoryRow = memo(function HistoryRow({
 });
 
 function GitDiffCode({ text }: { text: string }) {
-  const lines = text.split("\n");
+  const allLines = text.split("\n");
+  const limit = 1600;
+  const lines = allLines.slice(0, limit);
+  const truncated = allLines.length > limit;
   return (
     <pre className="git-diff-code">
       {lines.map((line, index) => (
@@ -896,6 +900,11 @@ function GitDiffCode({ text }: { text: string }) {
           {line || " "}
         </div>
       ))}
+      {truncated ? (
+        <div className="git-diff-code__line git-diff-code__line--meta">
+          {`... diff preview truncated at ${limit} lines`}
+        </div>
+      ) : null}
     </pre>
   );
 }
@@ -1036,11 +1045,20 @@ export default function GitPanel({ browserPath, isActive = true }: Props) {
   const [commitDiffCache, setCommitDiffCache] = useState<Record<string, string | null>>({});
   const [stashMessage, setStashMessage] = useState("");
   const [popover, setPopover] = useState<PopoverState>(null);
+  const panelStateRequestRef = useRef<Promise<void> | null>(null);
+  const graphMetadataRequestRef = useRef<Promise<void> | null>(null);
 
   const deferredHistorySearch = useDeferredValue(historySearchText);
   const deferredHistoryPathSearch = useDeferredValue(historyPathSearchText);
   const currentRepoPath = panelState?.repoPath || browserPath;
   const repoName = repoNameFromPath(currentRepoPath);
+  const browserPathRef = useRef(browserPath);
+  const currentRepoPathRef = useRef(currentRepoPath);
+
+  useEffect(() => {
+    browserPathRef.current = browserPath;
+    currentRepoPathRef.current = currentRepoPath;
+  }, [browserPath, currentRepoPath]);
 
   const activeCommitDetail = commitDetail && commitDetail.hash === historySelectedHash ? commitDetail : null;
 
@@ -1203,19 +1221,25 @@ export default function GitPanel({ browserPath, isActive = true }: Props) {
   }
 
   async function loadPanelState() {
+    if (panelStateRequestRef.current) {
+      return panelStateRequestRef.current;
+    }
+    const targetPath = browserPath;
+    const request = (async () => {
     // Sidebar is on the drives sentinel ("This PC") or pre-bootstrap —
     // no real directory to inspect. Clear any stale snapshot from a
     // previous repo path so the view renders the "pick a directory"
     // empty state instead of lingering on old commits / branch state.
     // This also short-circuits the 3s polling tick below.
-    if (!isBrowsableRepoPath(browserPath)) {
+    if (!isBrowsableRepoPath(targetPath)) {
       setPanelState(null);
       setGitReady(false);
       setGitError("");
       return;
     }
     try {
-      const next = await cmd.gitPanelState(browserPath);
+      const next = await cmd.gitPanelState(targetPath);
+      if (browserPathRef.current !== targetPath) return;
       // Keep the same reference when the data is equal so the 3s poll
       // doesn't cascade into workingDiffCache resets, which would make
       // the diff dialog flash "Loading…" every tick.
@@ -1223,19 +1247,44 @@ export default function GitPanel({ browserPath, isActive = true }: Props) {
       setGitReady(true);
       setGitError("");
     } catch (error) {
+      if (browserPathRef.current !== targetPath) return;
       setPanelState(null);
       setGitReady(false);
       setGitError(extractErrorMessage(error, t));
     }
+    })().finally(() => {
+      if (panelStateRequestRef.current === request) {
+        panelStateRequestRef.current = null;
+      }
+    });
+    panelStateRequestRef.current = request;
+    return request;
   }
 
   async function loadGraphMetadata() {
+    if (graphMetadataRequestRef.current) {
+      return graphMetadataRequestRef.current;
+    }
+    const targetPath = currentRepoPath;
+    const request = (async () => {
     if (!gitReady) return;
     try {
-      setGraphMetadata(await cmd.gitGraphMetadata(currentRepoPath));
+      const next = await cmd.gitGraphMetadata(targetPath);
+      if (currentRepoPathRef.current === targetPath) {
+        setGraphMetadata(next);
+      }
     } catch {
-      setGraphMetadata(null);
+      if (currentRepoPathRef.current === targetPath) {
+        setGraphMetadata(null);
+      }
     }
+    })().finally(() => {
+      if (graphMetadataRequestRef.current === request) {
+        graphMetadataRequestRef.current = null;
+      }
+    });
+    graphMetadataRequestRef.current = request;
+    return request;
   }
 
   function historyAfterTimestamp() {
@@ -1467,7 +1516,7 @@ export default function GitPanel({ browserPath, isActive = true }: Props) {
   // Keep-alive refresh. Runs only while this panel is the active right-side
   // tool AND the window is foregrounded. On becoming active (or on path
   // change while active) we fetch once immediately so the UI is fresh,
-  // then poll every 3s. Hidden panels sit idle — the RightSidebar keep-
+  // then poll at a conservative cadence. Hidden panels sit idle — the RightSidebar keep-
   // alive means this component stays mounted but costs zero IPC.
   useEffect(() => {
     if (!isActive) return undefined;
@@ -1478,7 +1527,7 @@ export default function GitPanel({ browserPath, isActive = true }: Props) {
       void loadPanelState();
     };
     tick();
-    const timer = window.setInterval(tick, 3000);
+    const timer = window.setInterval(tick, GIT_STATUS_POLL_MS);
     // Debounce visibility flips: rapid Cmd-Tab in/out previously
     // issued one `git_panel_state` IPC per transition; now a 300ms
     // quiet period collapses the burst into a single fetch.
@@ -1507,19 +1556,36 @@ export default function GitPanel({ browserPath, isActive = true }: Props) {
   }, [banner]);
 
   useEffect(() => {
-    if (!gitReady) return;
-    void loadGraphMetadata();
-    void loadTags();
-    void loadRemotes();
-    void loadConfigEntries();
-    void loadSubmodules();
-  }, [gitReady, currentRepoPath]);
+    graphMetadataRequestRef.current = null;
+    setGraphMetadata(null);
+    setGraphRows([]);
+    setTags([]);
+    setRemotes([]);
+    setConfigEntries([]);
+    setSubmodules([]);
+    setRebasePlan({ inProgress: false, items: [] });
+    setRebaseDraftItems([]);
+    setStashes([]);
+    setConflicts([]);
+    setWorkingDiffCache({});
+    setCommitDiffCache({});
+  }, [currentRepoPath]);
+
+  useEffect(() => {
+    panelStateRequestRef.current = null;
+  }, [browserPath]);
+
+  useEffect(() => {
+    if (!historyPathDialogOpen || !graphMetadata?.repoFiles.length) return;
+    setHistoryPathExpanded(defaultExpandedHistoryPaths(graphMetadata.repoFiles, historyPathSelection));
+  }, [graphMetadata?.repoFiles, historyPathDialogOpen, historyPathSelection]);
 
   const historyPathsKey = useMemo(() => historyPaths.join("\n"), [historyPaths]);
 
   useEffect(() => {
     if (!gitReady) return;
     if (selectedTab === "history") {
+      void loadGraphMetadata();
       const timer = window.setTimeout(() => {
         void loadGraphRows();
       }, 220);
@@ -2047,6 +2113,24 @@ export default function GitPanel({ browserPath, isActive = true }: Props) {
     void loadSubmodules();
   }
 
+  function openHistoryBranchFilter(event: ReactMouseEvent<HTMLButtonElement>) {
+    openPopoverFromElement("historyBranchFilter", event.currentTarget, 248);
+    void loadGraphMetadata();
+  }
+
+  function openHistoryAuthorFilter(event: ReactMouseEvent<HTMLButtonElement>) {
+    openPopoverFromElement("historyAuthorFilter", event.currentTarget, 248);
+    void loadGraphMetadata();
+  }
+
+  function openHistoryPathDialog() {
+    void loadGraphMetadata();
+    setHistoryPathSelection(historyPaths);
+    setHistoryPathSearchText("");
+    setHistoryPathExpanded(defaultExpandedHistoryPaths(graphMetadata?.repoFiles || [], historyPaths));
+    setHistoryPathDialogOpen(true);
+  }
+
   const workingTreeClean = panelState?.workingTreeClean ?? true;
 
   const historyHandlersRef = useRef({
@@ -2553,7 +2637,7 @@ export default function GitPanel({ browserPath, isActive = true }: Props) {
 
                   <button
                     className={"git-history__filter-chip" + (historyBranchFilter ? " git-history__filter-chip--active" : "")}
-                    onClick={(event) => openPopoverFromElement("historyBranchFilter", event.currentTarget, 248)}
+                    onClick={openHistoryBranchFilter}
                     title={historyBranchFilter || t("All branches")}
                     type="button"
                   >
@@ -2564,7 +2648,7 @@ export default function GitPanel({ browserPath, isActive = true }: Props) {
 
                   <button
                     className={"git-history__filter-chip" + (historyAuthorFilter ? " git-history__filter-chip--active" : "")}
-                    onClick={(event) => openPopoverFromElement("historyAuthorFilter", event.currentTarget, 248)}
+                    onClick={openHistoryAuthorFilter}
                     title={historyAuthorFilter || t("All authors")}
                     type="button"
                   >
@@ -2586,12 +2670,7 @@ export default function GitPanel({ browserPath, isActive = true }: Props) {
 
                   <button
                     className={"git-history__filter-chip" + (historyPaths.length ? " git-history__filter-chip--active" : "")}
-                    onClick={() => {
-                      setHistoryPathSelection(historyPaths);
-                      setHistoryPathSearchText("");
-                      setHistoryPathExpanded(defaultExpandedHistoryPaths(graphMetadata?.repoFiles || [], historyPaths));
-                      setHistoryPathDialogOpen(true);
-                    }}
+                    onClick={openHistoryPathDialog}
                     title={historyPathSummary()}
                     type="button"
                   >

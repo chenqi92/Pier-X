@@ -263,7 +263,7 @@ impl GitClient {
     /// staged (index) changes and unstaged (worktree) changes.
     pub fn status(&self) -> Result<Vec<GitFileChange>, GitError> {
         let output = self
-            .git(&["status", "--porcelain=v1", "-uall"])
+            .git(&["status", "--porcelain=v1", "-unormal"])
             .map_err(|e| GitError::Command(e.to_string()))?;
 
         let mut changes = Vec::new();

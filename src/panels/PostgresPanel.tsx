@@ -1,346 +1,163 @@
-import { ChevronDown, ChevronRight } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
+
+import DbAddCredentialDialog from "../components/DbAddCredentialDialog";
+import DbPasswordUpdateDialog from "../components/DbPasswordUpdateDialog";
+import DbTunnelChip from "../components/DbTunnelChip";
+import DismissibleNote from "../components/DismissibleNote";
+import DbConnectSplash from "../components/db/DbConnectSplash";
+import DbConnectedShell, { type DbConnectedTab } from "../components/db/DbConnectedShell";
+import type { DbHeaderInstance } from "../components/db/DbHeaderPicker";
+import DbResultGrid from "../components/db/DbResultGrid";
+import DbRowDetail from "../components/db/DbRowDetail";
+import DbSchemaTree, { type DbSchemaDatabase } from "../components/db/DbSchemaTree";
+import DbSqlEditor from "../components/db/DbSqlEditor";
+import DbStubView from "../components/db/DbStubView";
+import type { DbSplashRowData } from "../components/db/DbSplashRow";
+import { inferEnv } from "../components/db/dbTheme";
+import {
+  useDbCredentialFlow,
+  type DbCredentialFieldAdapter,
+} from "../components/db/useDbCredentialFlow";
+import { useI18n } from "../i18n/useI18n";
+import { localizeError } from "../i18n/localizeMessage";
+import { writeClipboardText } from "../lib/clipboard";
 import * as cmd from "../lib/commands";
 import { isReadOnlySql, queryResultToTsv } from "../lib/commands";
-import { RIGHT_TOOL_META } from "../lib/rightToolMeta";
-import { closeTunnelSlot, ensureTunnelSlot, syncTunnelState } from "../lib/sshTunnel";
 import type {
-  DetectedDbInstance,
   PostgresBrowserState,
   QueryExecutionResult,
   TabState,
 } from "../lib/types";
-import { effectiveSshTarget } from "../lib/types";
-import { writeClipboardText } from "../lib/clipboard";
-import { useI18n } from "../i18n/useI18n";
-import { localizeError } from "../i18n/localizeMessage";
-import DbAddCredentialDialog from "../components/DbAddCredentialDialog";
-import DbConnRow from "../components/DbConnRow";
-import DbInstancePicker from "../components/DbInstancePicker";
-import DbPasswordUpdateDialog from "../components/DbPasswordUpdateDialog";
-import DbTunnelChip from "../components/DbTunnelChip";
-import DismissibleNote from "../components/DismissibleNote";
-import PanelHeader from "../components/PanelHeader";
-import PreviewTable from "../components/PreviewTable";
-import QueryResultPanel from "../components/QueryResultPanel";
-import StatusDot from "../components/StatusDot";
-import { isDbAuthError } from "../lib/dbAuthErrors";
 import { useTabStore } from "../stores/useTabStore";
 
 type Props = { tab: TabState };
 
-const POSTGRES_ICON = RIGHT_TOOL_META.postgres.icon;
+type PinnedRow = { row: string[]; idx: number };
+
+// PostgreSQL numeric types — parallels the MySQL regex in MySqlPanel.
+const NUMERIC_TYPE_RE = /^(smallint|integer|bigint|numeric|decimal|real|double|money|serial|bigserial)/i;
+
+const POSTGRES_ADAPTER: DbCredentialFieldAdapter = {
+  readHost: (t) => t.pgHost,
+  readPort: (t) => t.pgPort,
+  readUser: (t) => t.pgUser,
+  readPassword: (t) => t.pgPassword,
+  readActiveCredId: (t) => t.pgActiveCredentialId,
+  readTunnelId: (t) => t.pgTunnelId,
+  readTunnelPort: (t) => t.pgTunnelPort,
+  patchFromCred: (cred) => ({
+    pgActiveCredentialId: cred.id,
+    pgHost: cred.host,
+    pgPort: cred.port,
+    pgUser: cred.user,
+    pgPassword: "",
+    pgDatabase: cred.database ?? "",
+    pgTunnelId: null,
+    pgTunnelPort: null,
+  }),
+  patchFromSaved: (cred) => ({
+    pgActiveCredentialId: cred.id,
+    pgHost: cred.host,
+    pgPort: cred.port,
+    pgUser: cred.user,
+    pgDatabase: cred.database ?? "",
+    pgTunnelId: null,
+    pgTunnelPort: null,
+  }),
+  patchPassword: (password) => ({ pgPassword: password }),
+  patchPasswordAfterRotate: (password) => ({ pgPassword: password }),
+};
 
 export default function PostgresPanel({ tab }: Props) {
   const { t } = useI18n();
   const formatError = (error: unknown) => localizeError(error, t);
   const updateTab = useTabStore((s) => s.updateTab);
-  const [host, setHost] = useState(tab.pgHost);
-  const [port, setPort] = useState(String(tab.pgPort));
-  const [user, setUser] = useState(tab.pgUser);
-  const [password, setPassword] = useState(tab.pgPassword);
-  const [dbName, setDbName] = useState(tab.pgDatabase);
+
+  // PostgreSQL tracks its own `schema` — the current active schema on
+  // the server. Local-only (mirrors the returned `state.schemaName`).
   const [schema, setSchema] = useState("public");
-  const [tableName, setTableName] = useState("");
-  const [sql, setSql] = useState("SELECT version();");
-  const [readOnly, setReadOnly] = useState(true);
-  const [writeConfirm, setWriteConfirm] = useState("");
+
   const [state, setState] = useState<PostgresBrowserState | null>(null);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
+  const [sql, setSql] = useState("SELECT version();");
+  const [readOnly, setReadOnly] = useState(true);
+  const [writeConfirm, setWriteConfirm] = useState("");
   const [queryResult, setQueryResult] = useState<QueryExecutionResult | null>(null);
   const [queryBusy, setQueryBusy] = useState(false);
   const [queryError, setQueryError] = useState("");
   const [notice, setNotice] = useState("");
-  const [tunnelBusy, setTunnelBusy] = useState(false);
-  const [tunnelError, setTunnelError] = useState("");
-  const [addOpen, setAddOpen] = useState(false);
-  const [adopting, setAdopting] = useState<DetectedDbInstance | null>(null);
-  const [autoBrowseAttempted, setAutoBrowseAttempted] = useState(false);
-  // Collapsible "Connection details" drawer. See MySqlPanel for the
-  // rationale — closed by default, auto-closes on successful browse.
-  const [formOpen, setFormOpen] = useState(false);
-  const [pwUpdateOpen, setPwUpdateOpen] = useState(false);
+
+  const [connectedTab, setConnectedTab] = useState<DbConnectedTab>("data");
+  const [rowDetail, setRowDetail] = useState<PinnedRow | null>(null);
+
   const passwordInputRef = useRef<HTMLInputElement | null>(null);
 
-  // SSH context can be inferred from a local terminal that ran `ssh
-  // user@host` or from a nested-ssh overlay; either way, the tunnel
-  // helper picks up the right addressing via `effectiveSshTarget`.
-  const hasSsh = effectiveSshTarget(tab) !== null;
-  const sshTarget = effectiveSshTarget(tab);
-  const savedIndex = sshTarget?.savedConnectionIndex ?? null;
-  const p = Number.parseInt(port, 10);
-  const canBrowse = host.trim() && user.trim() && Number.isFinite(p) && p > 0;
-  const needsWrite = sql.trim() && !isReadOnlySql(sql);
-  const canRun = canBrowse && sql.trim() && !queryBusy && (!needsWrite || (!readOnly && writeConfirm.trim().toUpperCase() === "WRITE"));
-  const canUpdatePassword =
-    !!error &&
-    isDbAuthError("postgres", error) &&
-    !!tab.pgActiveCredentialId &&
-    savedIndex !== null;
-
-  useEffect(() => {
-    setHost((current) => (current === tab.pgHost ? current : tab.pgHost));
-  }, [tab.pgHost]);
-
-  useEffect(() => {
-    const next = String(tab.pgPort);
-    setPort((current) => (current === next ? current : next));
-  }, [tab.pgPort]);
-
-  useEffect(() => {
-    setUser((current) => (current === tab.pgUser ? current : tab.pgUser));
-  }, [tab.pgUser]);
-
-  useEffect(() => {
-    setPassword((current) => (current === tab.pgPassword ? current : tab.pgPassword));
-  }, [tab.pgPassword]);
-
-  useEffect(() => {
-    setDbName((current) => (current === tab.pgDatabase ? current : tab.pgDatabase));
-  }, [tab.pgDatabase]);
-
-  useEffect(() => {
-    if (state) setFormOpen(false);
-  }, [state]);
-
-  useEffect(() => {
-    if (error && !state) setFormOpen(true);
-  }, [error, state]);
-
-  useEffect(() => {
-    if (!hasSsh || !tab.pgTunnelId) {
-      return;
-    }
-    let cancelled = false;
-    void syncTunnelState(tab, "postgres", updateTab).then((info) => {
-      if (cancelled || !info?.alive) {
-        return;
-      }
-      setTunnelError("");
-    });
-    return () => {
-      cancelled = true;
-    };
-  }, [hasSsh, tab.id, tab.pgTunnelId, tab.pgTunnelPort, updateTab]);
-
-  // Auto-browse on saved SSH tab open with a seeded DB credential.
-  // See the matching note in MySqlPanel.tsx: we pass the resolved
-  // password explicitly because React state updates are queued and
-  // `browse`'s closure would otherwise see the pre-activation empty
-  // string, producing a silent auth failure.
-  useEffect(() => {
-    if (autoBrowseAttempted) return;
-    if (!hasSsh || !tab.pgActiveCredentialId || savedIndex === null) return;
-    if (state) return;
-    if (!tab.pgHost.trim() || !tab.pgUser.trim()) return;
-
-    setAutoBrowseAttempted(true);
-    let cancelled = false;
-    void (async () => {
-      try {
-        let effectivePw = tab.pgPassword;
-        if (!effectivePw) {
-          try {
-            const resolved = await cmd.dbCredResolve(
-              savedIndex,
-              tab.pgActiveCredentialId!,
-            );
-            if (cancelled) return;
-            effectivePw = resolved.password ?? "";
-            if (effectivePw) {
-              updateTab(tab.id, { pgPassword: effectivePw });
-              setPassword(effectivePw);
-            } else if (resolved.credential.hasPassword) {
-              // See MySqlPanel: keyring claims a password but returned
-              // empty — degrade to manual entry instead of silently
-              // authenticating with "".
-              if (!cancelled) {
-                setFormOpen(true);
-                setError(
-                  t(
-                    "Saved password unavailable. Enter it manually or update the keyring.",
-                  ),
-                );
-                setTimeout(() => passwordInputRef.current?.focus(), 0);
-              }
-              return;
-            }
-          } catch {
-            if (!cancelled) {
-              setFormOpen(true);
-              setError(
-                t(
-                  "Saved password unavailable. Enter it manually or update the keyring.",
-                ),
-              );
-              setTimeout(() => passwordInputRef.current?.focus(), 0);
-            }
-            return;
-          }
-        }
-        if (cancelled) return;
-        await browse(undefined, undefined, effectivePw);
-      } catch (e) {
-        if (!cancelled) setError(formatError(e));
-      }
-    })();
-    return () => {
-      cancelled = true;
-    };
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [tab.pgActiveCredentialId, savedIndex, hasSsh]);
-
-  function persistPort(nextPort: string) {
-    const parsed = Number.parseInt(nextPort, 10);
-    if (Number.isFinite(parsed) && parsed > 0) {
-      updateTab(tab.id, { pgPort: parsed });
-    }
-  }
-
-  async function ensureConnectionTarget(forceTunnel = false) {
-    if (!hasSsh) {
-      return { host: host.trim(), port: p };
-    }
-
-    const info = await ensureTunnelSlot({
-      tab,
-      slot: "postgres",
-      remoteHost: host.trim(),
-      remotePort: p,
-      updateTab,
-      force: forceTunnel,
-    });
-    setTunnelError("");
-    return { host: info.localHost, port: info.localPort };
-  }
-
-  async function rebuildTunnel() {
-    if (!hasSsh || !canBrowse) return;
-    setTunnelBusy(true);
-    setTunnelError("");
-    try {
-      await ensureConnectionTarget(true);
-    } catch (e) {
-      setTunnelError(formatError(e));
-    } finally {
-      setTunnelBusy(false);
-    }
-  }
-
-  async function closeTunnel() {
-    if (!hasSsh || !tab.pgTunnelId) {
-      return;
-    }
-    setTunnelBusy(true);
-    setTunnelError("");
-    try {
-      await closeTunnelSlot(tab, "postgres", updateTab);
-    } catch (e) {
-      setTunnelError(formatError(e));
-    } finally {
-      setTunnelBusy(false);
-    }
-  }
-
-  async function handlePasswordUpdated() {
-    if (savedIndex === null || !tab.pgActiveCredentialId) return;
-    setError("");
-    try {
-      const resolved = await cmd.dbCredResolve(
-        savedIndex,
-        tab.pgActiveCredentialId,
-      );
-      const pw = resolved.password ?? "";
-      updateTab(tab.id, { pgPassword: pw });
-      setPassword(pw);
-      await browse(undefined, undefined, pw);
-    } catch (e) {
-      setError(formatError(e));
-    }
-  }
-
-  async function disconnect() {
+  function resetPanel() {
     setState(null);
     setError("");
     setQueryResult(null);
     setQueryError("");
     setNotice("");
-    setFormOpen(false);
-    if (hasSsh && tab.pgTunnelId) {
-      try {
-        await closeTunnelSlot(tab, "postgres", updateTab);
-      } catch {
-        /* best-effort */
-      }
-    }
+    setReadOnly(true);
+    setWriteConfirm("");
+    setRowDetail(null);
   }
 
-  async function invalidateTunnel() {
-    if (!hasSsh || !tab.pgTunnelId) {
-      return;
-    }
-    await closeTunnelSlot(tab, "postgres", updateTab);
-    setTunnelError("");
-  }
-
-  function onFormKeyDown(event: React.KeyboardEvent<HTMLDivElement>) {
-    if (event.key === "Enter" && canBrowse && !busy) {
-      const target = event.target as HTMLElement;
-      if (target.tagName !== "TEXTAREA") {
-        event.preventDefault();
-        void browse();
-      }
-    }
-  }
-
-  async function browse(
-    nextDb = dbName,
-    nextTable = tableName,
-    passwordOverride?: string,
-  ) {
+  async function browse(passwordOverride?: string, nextTable?: string, nextDb?: string, nextSchema?: string) {
     setBusy(true);
     setError("");
-    // See MySqlPanel.browse — `passwordOverride` bypasses the
-    // stale-closure trap when the caller just setPassword'd.
-    const pw = passwordOverride !== undefined ? passwordOverride : password;
     try {
-      const target = await ensureConnectionTarget();
+      const target = await flow.ensureConnectionTarget();
+      const pw = passwordOverride !== undefined ? passwordOverride : tab.pgPassword;
       const s = await cmd.postgresBrowse({
         host: target.host,
         port: target.port,
-        user: user.trim(),
+        user: tab.pgUser.trim(),
         password: pw,
-        database: nextDb.trim() || null,
-        schema: schema.trim() || null,
-        table: nextTable.trim() || null,
+        database: (nextDb ?? tab.pgDatabase).trim() || null,
+        schema: (nextSchema ?? schema).trim() || null,
+        table: (nextTable ?? state?.tableName ?? "").trim() || null,
       });
       setState(s);
-      setDbName(s.databaseName);
       setSchema(s.schemaName);
-      setTableName(s.tableName);
-      updateTab(tab.id, { pgDatabase: s.databaseName });
+      if (rowDetail && s.tableName !== state?.tableName) setRowDetail(null);
+      if (s.databaseName !== tab.pgDatabase) {
+        updateTab(tab.id, { pgDatabase: s.databaseName });
+      }
     } catch (e) {
-      // Preserve the previous state so the body doesn't blank during a
-      // transient error — only the error banner updates.
       setError(formatError(e));
     } finally {
       setBusy(false);
     }
   }
 
+  const flow = useDbCredentialFlow({
+    tab,
+    kind: "postgres",
+    tunnelSlot: "postgres",
+    adapter: POSTGRES_ADAPTER,
+    browse: (pwOverride) => browse(pwOverride),
+    hasLiveState: state !== null,
+    onReset: resetPanel,
+    setError,
+    passwordInputRef,
+    t,
+  });
+
   async function runQuery() {
     setQueryBusy(true);
     setQueryError("");
     setNotice("");
+    const needsWrite = sql.trim() !== "" && !isReadOnlySql(sql);
     try {
-      const target = await ensureConnectionTarget();
+      const target = await flow.ensureConnectionTarget();
       const r = await cmd.postgresExecute({
         host: target.host,
         port: target.port,
-        user: user.trim(),
-        password,
-        database: dbName.trim() || null,
+        user: tab.pgUser.trim(),
+        password: tab.pgPassword,
+        database: tab.pgDatabase.trim() || null,
         sql,
       });
       setQueryResult(r);
@@ -357,377 +174,353 @@ export default function PostgresPanel({ tab }: Props) {
     }
   }
 
+  const needsWrite = sql.trim() !== "" && !isReadOnlySql(sql);
+  const hostReady = tab.pgHost.trim() !== "" && tab.pgUser.trim() !== "" && tab.pgPort > 0;
+  const canRun =
+    hostReady &&
+    sql.trim() !== "" &&
+    !queryBusy &&
+    (!needsWrite || (!readOnly && writeConfirm.trim().toUpperCase() === "WRITE"));
+
+  // ── Splash rows ────────────────────────────────────────────
+  const viaLabel = flow.sshTarget ? `${flow.sshTarget.user}@${flow.sshTarget.host}` : t("direct · localhost");
+  const viaKind: DbSplashRowData["via"]["kind"] = flow.hasSsh ? "tunnel" : "direct";
+
+  const savedRows: DbSplashRowData[] = flow.savedForKind.map((cred) => ({
+    id: cred.id,
+    name: cred.label || cred.id,
+    env: inferEnv(cred.label),
+    engine: t("PostgreSQL"),
+    addr: `${cred.host}:${cred.port}`,
+    via: { kind: viaKind, label: viaLabel },
+    user: cred.user,
+    authHint: cred.hasPassword ? t("keyring") : undefined,
+    stats: cred.database ? <span>{cred.database}</span> : <span className="sep">—</span>,
+    lastUsed: null,
+    status: "unknown",
+    tintVar: "var(--svc-postgres)",
+    connectLabel: t("Connect"),
+    onConnect: () => flow.activateCredential(cred.id),
+  }));
+
+  const detectedRows: DbSplashRowData[] = flow.detectedForKind.map((det) => ({
+    id: det.signature,
+    name: det.label,
+    env: inferEnv(det.label),
+    engine: det.version ? `PostgreSQL ${det.version}` : t("PostgreSQL"),
+    addr: `${det.host}:${det.port}`,
+    via: {
+      kind: det.source === "docker" ? "local" : "remote",
+      label: det.source === "docker" ? det.image || t("docker container") : det.processName || t("systemd unit"),
+    },
+    stats: <span className="sep">—</span>,
+    lastUsed: null,
+    status: "up",
+    tintVar: "var(--svc-postgres)",
+    connectLabel: t("Adopt & connect"),
+    onConnect: () => {
+      flow.setAdopting(det);
+      flow.setAddOpen(true);
+    },
+  }));
+
+  // ── Connected-state derived ───────────────────────────────
+  const currentCred = tab.pgActiveCredentialId
+    ? flow.savedForKind.find((c) => c.id === tab.pgActiveCredentialId)
+    : undefined;
+
+  const currentInstance: DbHeaderInstance = {
+    id: currentCred?.id ?? "adhoc",
+    name: currentCred?.label || tab.pgDatabase || tab.pgHost || t("PostgreSQL"),
+    addr: `${tab.pgHost}:${tab.pgPort}`,
+    via: flow.hasSsh ? t("SSH tunnel") : t("direct"),
+    status: state ? "up" : "unknown",
+    sub: <>{`${tab.pgHost}:${tab.pgPort}`}</>,
+  };
+
+  const otherInstances: DbHeaderInstance[] = flow.savedForKind
+    .filter((c) => c.id !== tab.pgActiveCredentialId)
+    .map((c) => ({
+      id: c.id,
+      name: c.label || c.id,
+      addr: `${c.host}:${c.port}`,
+      via: c.database ?? "",
+      status: "unknown",
+    }));
+
+  // PG tree: `schemas[]` isn't enumerated by the backend yet — we show
+  // only the current (db, schema) and collapse other dbs to stubs.
+  const databases: DbSchemaDatabase[] = state
+    ? state.databases.map((name) => ({
+        name,
+        current: name === state.databaseName,
+        tables:
+          name === state.databaseName
+            ? state.tables.map((tname) => ({
+                id: `${name}.${state.schemaName}.${tname}`,
+                label: tname,
+              }))
+            : [],
+      }))
+    : [];
+
+  const pkColumns = state
+    ? state.columns.filter((c) => c.key === "PRI" || c.key === "PK").map((c) => c.name)
+    : [];
+  const numericColumns = state
+    ? state.columns.filter((c) => NUMERIC_TYPE_RE.test(c.columnType)).map((c) => c.name)
+    : [];
+  const detailColumns = state
+    ? state.columns.map((c) => ({
+        name: c.name,
+        type: c.columnType,
+        pk: c.key === "PRI" || c.key === "PK",
+      }))
+    : [];
+
+  const headerStats = state
+    ? [
+        { icon: "database" as const, label: t("{count} dbs", { count: state.databases.length }) },
+        { icon: "disk" as const, label: t("{count} tables", { count: state.tables.length }) },
+        { icon: "activity" as const, label: state.schemaName || "public" },
+      ]
+    : [];
+
+  useEffect(() => {
+    if (error && !state) setTimeout(() => passwordInputRef.current?.focus(), 0);
+  }, [error, state]);
+
   const banner = error ? (
     <DismissibleNote variant="status" tone="error" onDismiss={() => setError("")}>
       <div>{error}</div>
-      {canUpdatePassword && (
+      {flow.canUpdatePassword(error) && (
         <div className="button-row" style={{ marginTop: 6 }}>
-          <button
-            className="mini-button"
-            onClick={() => setPwUpdateOpen(true)}
-            type="button"
-          >
+          <button className="mini-button" onClick={() => flow.setPwUpdateOpen(true)} type="button">
             {t("Update password")}
           </button>
         </div>
       )}
     </DismissibleNote>
-  ) : tunnelError ? (
-    <DismissibleNote variant="status" tone="error" onDismiss={() => setTunnelError("")}>
-      {tunnelError}
+  ) : flow.tunnelError ? (
+    <DismissibleNote variant="status" tone="error" onDismiss={() => flow.setTunnelError("")}>
+      {flow.tunnelError}
     </DismissibleNote>
   ) : null;
 
-  const connName = dbName.trim() || host.trim() || t("PostgreSQL Browser");
-  const connSub = host.trim()
-    ? t("{user}@{host}:{port}{suffix}", {
-        user: user || "?",
-        host,
-        port,
-        suffix: hasSsh ? ` · ${t("SSH tunnel")}` : "",
-      })
-    : t("Not connected");
-  const connTag = (
+  const dialogs = (
     <>
-      <StatusDot tone={state ? "pos" : "off"} />
-      {state ? `:${port}` : t("offline")}
+      <DbAddCredentialDialog
+        open={flow.addOpen}
+        onClose={() => flow.setAddOpen(false)}
+        kind="postgres"
+        savedConnectionIndex={flow.savedIndex}
+        adopting={flow.adopting}
+        tab={tab}
+        onSaved={flow.handleCredentialAdded}
+      />
+      {tab.pgActiveCredentialId && flow.savedIndex !== null && (
+        <DbPasswordUpdateDialog
+          open={flow.pwUpdateOpen}
+          onClose={() => flow.setPwUpdateOpen(false)}
+          savedConnectionIndex={flow.savedIndex}
+          credentialId={tab.pgActiveCredentialId}
+          credentialLabel={tab.pgDatabase.trim() || tab.pgHost.trim() || t("PostgreSQL")}
+          onUpdated={() => void flow.handlePasswordUpdated()}
+        />
+      )}
     </>
   );
 
-  return (
-    <>
-      <PanelHeader
-        icon={POSTGRES_ICON}
-        title={t("PostgreSQL")}
-        meta={
-          hasSsh
-            ? t("{database} · tunnel :{port}", {
-                database: dbName.trim() || t("PostgreSQL"),
-                port,
-              })
-            : t("{database} · {host}:{port}", {
-                database: dbName.trim() || t("PostgreSQL"),
-                host,
-                port,
-              })
-        }
-      />
-      <DbConnRow
-        icon={POSTGRES_ICON}
-        tint="var(--accent-dim)"
-        iconTint="var(--accent)"
-        name={connName}
-        sub={connSub}
-        tag={connTag}
-      />
-      <div className="panel-scroll">
-      <DbInstancePicker
-        tab={tab}
-        kind="postgres"
-        onActivate={(cred) => {
-          setError("");
-          setState(null);
-          setAutoBrowseAttempted(false);
-          setReadOnly(true);
-          setWriteConfirm("");
-          setHost(cred.host);
-          setPort(String(cred.port));
-          setUser(cred.user);
-          setPassword("");
-          setDbName(cred.database ?? "");
-          updateTab(tab.id, {
-            pgActiveCredentialId: cred.id,
-            pgHost: cred.host,
-            pgPort: cred.port,
-            pgUser: cred.user,
-            pgPassword: "",
-            pgDatabase: cred.database ?? "",
-            pgTunnelId: null,
-            pgTunnelPort: null,
-          });
-        }}
-        onAdopt={(det) => {
-          setAdopting(det);
-          setAddOpen(true);
-        }}
-        onAddNew={() => {
-          setAdopting(null);
-          setAddOpen(true);
-        }}
-        onDeleted={(cred) => {
-          if (tab.pgActiveCredentialId === cred.id) {
-            updateTab(tab.id, { pgActiveCredentialId: null });
+  if (!state) {
+    return (
+      <>
+        {banner && <div className="db-panel-banner">{banner}</div>}
+        <DbConnectSplash
+          kind="postgres"
+          probeTarget={flow.probeTarget}
+          probeState={flow.probeState}
+          onReprobe={flow.sshTarget ? () => void flow.refreshDetection() : undefined}
+          detected={detectedRows}
+          saved={savedRows}
+          onAddManual={() => {
+            flow.setAdopting(null);
+            flow.setAddOpen(true);
+          }}
+          footerHint={busy ? t("Connecting...") : null}
+          description={
+            flow.hasSsh
+              ? undefined
+              : t("No SSH session on this tab — add a connection manually to connect directly.")
           }
-        }}
-      />
-      <DbAddCredentialDialog
-        open={addOpen}
-        onClose={() => setAddOpen(false)}
-        kind="postgres"
-        savedConnectionIndex={savedIndex}
-        adopting={adopting}
-        tab={tab}
-        onSaved={(cred) => {
-          setAutoBrowseAttempted(false);
-          setState(null);
-          setHost(cred.host);
-          setPort(String(cred.port));
-          setUser(cred.user);
-          setDbName(cred.database ?? "");
-          updateTab(tab.id, {
-            pgActiveCredentialId: cred.id,
-            pgHost: cred.host,
-            pgPort: cred.port,
-            pgUser: cred.user,
-            pgDatabase: cred.database ?? "",
-            pgTunnelId: null,
-            pgTunnelPort: null,
-          });
-        }}
-      />
-      {!state && (
-        <section className="panel-section">
-          <div className="form-stack">
-            <div className="status-note">
-              {busy
-                ? t("Connecting...")
-                : tab.pgActiveCredentialId
-                  ? t("Click the instance above to connect.")
-                  : hasSsh
-                    ? t("Select an instance above or configure manually.")
-                    : t("Configure a connection to begin.")}
-            </div>
-            {!busy && !formOpen && (
-              <div className="button-row">
-                <button className="mini-button" onClick={() => setFormOpen(true)} type="button">
-                  {t("Configure manually")}
-                </button>
-              </div>
-            )}
-            {banner}
-          </div>
-        </section>
-      )}
+        />
+        {dialogs}
+      </>
+    );
+  }
 
-      <section className="panel-section">
-        <div className="panel-section__title">
-          <button
-            className="mini-button mini-button--ghost"
-            onClick={() => setFormOpen((o) => !o)}
-            type="button"
-          >
-            {formOpen ? <ChevronDown size={11} /> : <ChevronRight size={11} />}
-            {t("Connection details")}
-          </button>
-          <span className="panel-section__hint" style={{ display: "inline-flex", alignItems: "center", gap: "var(--sp-2)" }}>
-            {hasSsh && (
-              <DbTunnelChip
-                localPort={tab.pgTunnelPort}
-                busy={tunnelBusy}
-                hasError={!!tunnelError}
-                onRebuild={() => void rebuildTunnel()}
-                onClose={() => void closeTunnel()}
-              />
-            )}
-            {state && (
-              <button
-                className="mini-button mini-button--ghost"
-                onClick={() => void disconnect()}
-                type="button"
-              >
-                {t("Disconnect")}
-              </button>
-            )}
-          </span>
-        </div>
-        {formOpen && (
-          <div className="form-stack" onKeyDown={onFormKeyDown}>
-            <div className="field-grid">
-              <label className="field-stack">
-                <span className="field-label">{t("Host")}</span>
-                <input
-                  className="field-input"
-                  onChange={(event) => {
-                    const nextValue = event.currentTarget.value;
-                    if (hasSsh && tab.pgTunnelId && nextValue !== host) {
-                      void invalidateTunnel();
-                    }
-                    setHost(nextValue);
-                    updateTab(tab.id, { pgHost: nextValue });
-                  }}
-                  value={host}
-                />
-              </label>
-              <label className="field-stack">
-                <span className="field-label">{t("Port")}</span>
-                <input
-                  className="field-input field-input--narrow"
-                  onChange={(event) => {
-                    const nextValue = event.currentTarget.value;
-                    if (hasSsh && tab.pgTunnelId && nextValue !== port) {
-                      void invalidateTunnel();
-                    }
-                    setPort(nextValue);
-                    persistPort(nextValue);
-                  }}
-                  value={port}
-                />
-              </label>
-            </div>
-            <div className="field-grid">
-              <label className="field-stack">
-                <span className="field-label">{t("User")}</span>
-                <input
-                  className="field-input"
-                  onChange={(event) => {
-                    const nextValue = event.currentTarget.value;
-                    setUser(nextValue);
-                    updateTab(tab.id, { pgUser: nextValue });
-                  }}
-                  value={user}
-                />
-              </label>
-              <label className="field-stack">
-                <span className="field-label">{t("Password")}</span>
-                <input
-                  className="field-input"
-                  type="password"
-                  ref={passwordInputRef}
-                  onChange={(event) => {
-                    const nextValue = event.currentTarget.value;
-                    setPassword(nextValue);
-                    updateTab(tab.id, { pgPassword: nextValue });
-                  }}
-                  value={password}
-                />
-              </label>
-            </div>
-            <div className="field-grid">
-              <label className="field-stack">
-                <span className="field-label">{t("Database")}</span>
-                <input
-                  className="field-input"
-                  onChange={(event) => {
-                    const nextValue = event.currentTarget.value;
-                    setDbName(nextValue);
-                    updateTab(tab.id, { pgDatabase: nextValue });
-                  }}
-                  value={dbName}
-                />
-              </label>
-              <label className="field-stack">
-                <span className="field-label">{t("Schema")}</span>
-                <input className="field-input" onChange={(event) => setSchema(event.currentTarget.value)} value={schema} />
-              </label>
-            </div>
-            {hasSsh && (
-              <div className="inline-note">{t("Queries will connect through the SSH tunnel.")}</div>
-            )}
-            <div className="button-row">
-              <button className="mini-button" disabled={!canBrowse || busy} onClick={() => void browse()} type="button">
-                {busy ? t("Connecting...") : state ? t("Reconnect") : t("Connect")}
-              </button>
-            </div>
-            {state && banner}
-          </div>
-        )}
-      </section>
-      {tab.pgActiveCredentialId && savedIndex !== null && (
-        <DbPasswordUpdateDialog
-          open={pwUpdateOpen}
-          onClose={() => setPwUpdateOpen(false)}
-          savedConnectionIndex={savedIndex}
-          credentialId={tab.pgActiveCredentialId}
-          credentialLabel={dbName.trim() || host.trim() || t("PostgreSQL")}
-          onUpdated={() => void handlePasswordUpdated()}
+  const resultToolbar = (
+    <>
+      {queryResult && (
+        <button
+          type="button"
+          className="btn is-ghost is-compact"
+          onClick={() => {
+            void writeClipboardText(queryResultToTsv(queryResult));
+            setNotice(t("Copied TSV"));
+          }}
+        >
+          {t("Copy TSV")}
+        </button>
+      )}
+      {flow.hasSsh && (
+        <DbTunnelChip
+          localPort={tab.pgTunnelPort}
+          busy={flow.tunnelBusy}
+          hasError={!!flow.tunnelError}
+          onRebuild={() => void flow.rebuildTunnel()}
+          onClose={() => void flow.closeTunnel()}
         />
       )}
+    </>
+  );
 
-      {state && (
-        <>
-          <section className="panel-section">
-            <div className="panel-section__title"><span>{t("Tables & Columns")}</span></div>
-            <div className="form-stack">
-              <div className="token-list">
-                {state.databases.map((db) => (
-                  <button
-                    key={db}
-                    className={state.databaseName === db ? "token-button token-button--selected" : "token-button"}
-                    onClick={() => {
-                      setDbName(db);
-                      updateTab(tab.id, { pgDatabase: db });
-                      void browse(db, "");
-                    }}
-                    type="button"
-                  >
-                    {db}
-                  </button>
-                ))}
-              </div>
-              <div className="token-list">
-                {state.tables.map((tbl) => (
-                  <button
-                    key={tbl}
-                    className={state.tableName === tbl ? "token-button token-button--selected" : "token-button"}
-                    onClick={() => {
-                      setTableName(tbl);
-                      setSql(`SELECT * FROM "${schema}"."${tbl.replace(/"/g, "\"\"")}" LIMIT 100;`);
-                      void browse(dbName, tbl);
-                    }}
-                    type="button"
-                  >
-                    {tbl}
-                  </button>
-                ))}
-              </div>
-              {state.columns.length > 0 && (
-                <div className="column-list">
-                  {state.columns.map((col) => (
-                    <div className="column-row" key={col.name}>
-                      <div className="column-row__head">
-                        <strong>{col.name}</strong>
-                        <span className="connection-pill">{col.columnType}</span>
-                      </div>
-                      <div className="column-row__meta">
-                        {col.nullable ? t("Nullable") : t("Not null")}
-                        {col.key ? ` · ${col.key}` : ""}
-                      </div>
-                    </div>
-                  ))}
-                </div>
-              )}
-            </div>
-          </section>
-
-          <section className="panel-section">
-            <div className="panel-section__title"><span>{t("Sample Rows")}</span></div>
-            <PreviewTable preview={state.preview} emptyLabel={t("Select a table.")} />
-          </section>
-
-          <section className="panel-section">
-            <div className="panel-section__title"><span>{t("Query Editor")}</span></div>
-            <div className="form-stack">
-              <div className="query-guard-row">
-                <span className={readOnly ? "safety-pill safety-pill--locked" : "safety-pill safety-pill--unlocked"}>{readOnly ? t("Read Only") : t("Writes Unlocked")}</span>
-                <button className="mini-button" onClick={() => { setReadOnly((prev) => !prev); setWriteConfirm(""); }} type="button">{readOnly ? t("Unlock Writes") : t("Re-lock Writes")}</button>
-              </div>
-              <textarea className="field-textarea field-textarea--editor" onChange={(event) => setSql(event.currentTarget.value)} rows={4} value={sql} />
-              {needsWrite && !readOnly && <input className="field-input" onChange={(event) => setWriteConfirm(event.currentTarget.value)} placeholder={t("Type WRITE to confirm")} value={writeConfirm} />}
-              <div className="button-row">
-                <button className="mini-button" disabled={!canRun} onClick={() => void runQuery()} type="button">{queryBusy ? t("Running...") : t("Run Query")}</button>
-                {queryResult && <button className="mini-button" onClick={() => { void writeClipboardText(queryResultToTsv(queryResult)); setNotice(t("Copied TSV")); }} type="button">{t("Copy TSV")}</button>}
-              </div>
-              {notice && <div className="status-note">{notice}</div>}
-            </div>
-          </section>
-
-          <section className="panel-section">
-            <div className="panel-section__title"><span>{t("Query Results")}</span></div>
-            <QueryResultPanel result={queryResult} error={queryError} emptyLabel={t("Run a query to see results.")} />
-          </section>
-        </>
+  const dataTab = (
+    <>
+      <DbSqlEditor
+        tabName={state.tableName || t("query")}
+        sql={sql}
+        onChange={setSql}
+        writable={!readOnly}
+        onToggleWrite={() => {
+          setReadOnly((prev) => !prev);
+          setWriteConfirm("");
+        }}
+        needsWriteConfirm={needsWrite}
+        writeConfirm={writeConfirm}
+        onWriteConfirmChange={setWriteConfirm}
+        onRun={() => void runQuery()}
+        canRun={canRun}
+        running={queryBusy}
+      />
+      <DbResultGrid
+        preview={state.preview}
+        pkColumns={pkColumns}
+        numericColumns={numericColumns}
+        toolbar={resultToolbar}
+        onOpenRow={(row) => {
+          const idx = state.preview?.rows.indexOf(row) ?? -1;
+          setRowDetail({ row, idx });
+        }}
+        emptyLabel={
+          state.tableName ? t("Select a row to inspect.") : t("Pick a table from the tree to preview rows.")
+        }
+      />
+      {queryError && (
+        <div className="db-panel-banner">
+          <DismissibleNote variant="status" tone="error" onDismiss={() => setQueryError("")}>
+            {queryError}
+          </DismissibleNote>
+        </div>
       )}
-    </div>
+      {notice && !queryError && <div className="db-panel-notice">{notice}</div>}
+    </>
+  );
+
+  const structureTab =
+    state.columns.length > 0 ? (
+      <div className="db2-stub">
+        <div className="db2-stub-inner" style={{ alignItems: "stretch", maxWidth: 640 }}>
+          <div className="db2-stub-title">{t("Columns")}</div>
+          <table className="rg-table" style={{ background: "var(--panel)", borderRadius: "var(--radius-md)" }}>
+            <thead>
+              <tr>
+                <th><div className="rg-th-body"><span className="rg-th-name">{t("Name")}</span></div></th>
+                <th><div className="rg-th-body"><span className="rg-th-name">{t("Type")}</span></div></th>
+                <th><div className="rg-th-body"><span className="rg-th-name">{t("Null")}</span></div></th>
+                <th><div className="rg-th-body"><span className="rg-th-name">{t("Key")}</span></div></th>
+              </tr>
+            </thead>
+            <tbody>
+              {state.columns.map((col) => (
+                <tr key={col.name} className="rg-row">
+                  <td className="rg-td">{col.name}</td>
+                  <td className="rg-td" style={{ color: "var(--svc-postgres)" }}>{col.columnType}</td>
+                  <td className="rg-td">{col.nullable ? t("YES") : t("NO")}</td>
+                  <td className="rg-td">{col.key || "—"}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+          <div className="db2-stub-sub">
+            {t("Indexes and foreign keys will appear here once the backend exposes them — see docs/BACKEND-GAPS.md.")}
+          </div>
+        </div>
+      </div>
+    ) : (
+      <DbStubView title={t("No table selected")} />
+    );
+
+  return (
+    <>
+      {banner && <div className="db-panel-banner db-panel-banner--snug">{banner}</div>}
+      <DbConnectedShell
+        kind="postgres"
+        current={currentInstance}
+        otherInstances={otherInstances}
+        onSwitchInstance={flow.activateCredential}
+        onAddConnection={() => {
+          flow.setAdopting(null);
+          flow.setAddOpen(true);
+        }}
+        onDisconnect={() => void flow.disconnect()}
+        headerStats={headerStats}
+        tab={connectedTab}
+        onTabChange={setConnectedTab}
+        crumb={{
+          database: state.databaseName || undefined,
+          schema: state.schemaName || undefined,
+          table: state.tableName || undefined,
+          stat: state.preview ? t("{count} rows", { count: state.preview.rows.length }) : null,
+        }}
+        sidebar={
+          <DbSchemaTree
+            databases={databases}
+            selectedTableId={
+              state.tableName ? `${state.databaseName}.${state.schemaName}.${state.tableName}` : null
+            }
+            onSelectTable={(_db, node) => {
+              const tbl = node.label;
+              setSql(`SELECT * FROM "${state.schemaName}"."${tbl}" LIMIT 100;`);
+              setRowDetail(null);
+              void browse(undefined, tbl);
+            }}
+            onSelectDatabase={(name) => {
+              updateTab(tab.id, { pgDatabase: name });
+              setRowDetail(null);
+              void browse(undefined, "", name);
+            }}
+          />
+        }
+        dataTab={dataTab}
+        structureTab={structureTab}
+        schemaTab={
+          <DbStubView
+            title={t("Schema overview")}
+            subtitle={t("Per-table engine / size / row-count listing will appear here once the backend exposes it.")}
+          />
+        }
+        drawer={
+          rowDetail && state.preview ? (
+            <DbRowDetail
+              title={state.tableName ? `${state.tableName} · #${rowDetail.idx + 1}` : t("Row detail")}
+              columns={detailColumns}
+              row={rowDetail.row}
+              onClose={() => setRowDetail(null)}
+            />
+          ) : null
+        }
+      />
+      {dialogs}
     </>
   );
 }

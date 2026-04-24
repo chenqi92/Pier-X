@@ -57,6 +57,7 @@ import "./styles/tokens.css";
 import "./styles/atoms.css";
 import "./styles/shell.css";
 import "./styles/pier-x.css";
+import "./styles/db-panel.css";
 
 const MARKDOWN_EXTENSIONS = /\.(md|markdown|mdown|mkdn|mkd|mdx)$/i;
 const PANE_STORAGE_KEY = "pierx:pane-widths";

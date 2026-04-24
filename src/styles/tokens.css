@@ -55,6 +55,15 @@
   --del: #ff5a5f;
   --mod: #ffb547;
 
+  /* ── Code syntax accents (SQL editor, log tokenizer, etc.) ── */
+  --syntax-keyword: var(--info);
+  --syntax-func: #c49eff;
+  --syntax-string: var(--pos);
+  --syntax-number: var(--warn);
+  --syntax-op: #56e0c8;
+  --syntax-comment: var(--muted);
+  --syntax-var: #c49eff;
+
   /* ── Service brand tints (sidebar service chips, tool rail) */
   --svc-docker: #4aa3ff;
   --svc-mysql: #f29d49;
@@ -133,6 +142,11 @@
   --pos-dim: #cdeedb;
   --neg-dim: #f9d3d5;
   --warn-dim: #f7e4bf;
+
+  /* ── Code syntax accents (light-theme overrides) ────────── */
+  --syntax-func: #7a4bd4;
+  --syntax-op: #0e9488;
+  --syntax-var: #7a4bd4;
 
   /* ── Legacy aliases ──────────────────────────────────────── */
   --bg-hover: rgba(0, 0, 0, 0.05);

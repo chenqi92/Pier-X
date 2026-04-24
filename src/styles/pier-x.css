@@ -1957,6 +1957,103 @@ body.is-resizing .app { transition: none; }
 }
 .editor-status .sep { color: var(--dim); }
 
+/* ── File viewer / editor dialog chrome (pier-x-copy design) ───── */
+.editor-head-chips {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--sp-1);
+  flex-wrap: wrap;
+  row-gap: var(--sp-0-5);
+  margin-left: var(--sp-2);
+  margin-right: var(--sp-2);
+}
+.editor-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--sp-1);
+  padding: 2px var(--sp-1-5);
+  font-family: var(--mono);
+  font-size: var(--size-small);
+  color: var(--ink-2);
+  background: var(--panel-2);
+  border: 1px solid var(--line-2);
+  border-radius: var(--radius-pill);
+}
+.editor-chip svg { color: var(--muted); flex: none; }
+
+.editor-mode-seg {
+  display: inline-flex;
+  background: var(--panel);
+  border: 1px solid var(--line-2);
+  border-radius: var(--radius-sm);
+  overflow: hidden;
+  margin-right: var(--sp-1-5);
+}
+.editor-mode {
+  background: transparent;
+  border: none;
+  color: var(--muted);
+  padding: 3px var(--sp-2);
+  font-size: var(--size-small);
+  cursor: pointer;
+  display: inline-flex;
+  align-items: center;
+  gap: var(--sp-1);
+  font-family: var(--sans);
+}
+.editor-mode:hover { color: var(--ink); }
+.editor-mode.on { background: var(--accent); color: var(--accent-ink); }
+
+.editor-toolbar {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-1);
+  padding: var(--sp-1) var(--sp-2);
+  background: var(--surface-2);
+  border-bottom: 1px solid var(--line);
+  flex-wrap: wrap;
+  row-gap: var(--sp-1);
+  font-size: var(--size-small);
+}
+.editor-toolbar-stat {
+  font-family: var(--mono);
+  font-size: var(--size-small);
+  color: var(--muted);
+  display: inline-flex;
+  align-items: center;
+  gap: var(--sp-1);
+}
+.editor-toolbar-stat b {
+  color: var(--ink-2);
+  font-weight: var(--weight-medium);
+}
+.editor-toolbar-spacer { flex: 1; }
+.editor-toolbar-divider {
+  width: 1px;
+  height: 16px;
+  background: var(--line-2);
+  margin: 0 var(--sp-1);
+}
+.editor-tool-btn {
+  width: 24px;
+  height: 24px;
+  border-radius: var(--radius-xs);
+  background: transparent;
+  border: 1px solid transparent;
+  color: var(--muted);
+  display: grid;
+  place-items: center;
+  cursor: pointer;
+}
+.editor-tool-btn:hover { background: var(--panel-2); color: var(--ink); }
+.editor-tool-btn.on {
+  background: var(--accent-dim);
+  color: var(--accent);
+  border-color: color-mix(in srgb, var(--accent) 35%, transparent);
+}
+.editor-tool-btn:disabled { opacity: 0.4; cursor: default; }
+.editor-tool-btn:disabled:hover { background: transparent; color: var(--muted); }
+
 /* Properties dialog */
 
 .props-grid {

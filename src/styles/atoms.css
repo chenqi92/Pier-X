@@ -180,6 +180,19 @@
 }
 .panel-header .pactions { display: inline-flex; align-items: center; gap: var(--sp-0-5); }
 
+/* ─── DB panel inline banner (dismissible notes above the shell) ─── */
+.db-panel-banner {
+  padding: var(--sp-2) var(--sp-3);
+}
+.db-panel-banner--snug {
+  padding: var(--sp-2) var(--sp-3) 0;
+}
+.db-panel-notice {
+  padding: var(--sp-1) var(--sp-3);
+  color: var(--muted);
+  font-size: var(--size-small);
+}
+
 /* ─── DB connection row (used by every DB/remote panel) ──── */
 .db-conn-row {
   display: flex;

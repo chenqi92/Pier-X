@@ -3753,6 +3753,10 @@ button,
   background: color-mix(in srgb, var(--neg) 5%, transparent);
 }
 .lg-line.lv-debug { opacity: 0.62; }
+.lg-line.sel {
+  background: var(--accent-dim);
+  border-left-color: var(--accent);
+}
 .lg-line--cursor {
   color: var(--accent);
   opacity: 0.75;
@@ -3811,6 +3815,49 @@ button,
 }
 .lg-body.wrap .lg-msg {
   white-space: pre-wrap;
+  word-break: break-word;
+}
+
+/* Log line detail pane — slide-up drawer inside the panel */
+.lg-detail {
+  flex: none;
+  max-height: 150px;
+  overflow: auto;
+  border-top: 1px solid var(--line);
+  background: var(--surface);
+  display: flex;
+  flex-direction: column;
+}
+.lg-detail-head {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-1-5);
+  padding: var(--sp-1) var(--sp-2-5);
+  background: var(--surface-2);
+  border-bottom: 1px solid var(--line);
+  font-family: var(--mono);
+  font-size: var(--size-small);
+  color: var(--muted);
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+}
+.lg-detail-spacer { flex: 1; }
+.lg-detail-body {
+  padding: var(--sp-1-5) var(--sp-2-5);
+  display: grid;
+  grid-template-columns: 80px 1fr;
+  gap: var(--sp-1) var(--sp-2-5);
+  font-family: var(--mono);
+  font-size: var(--size-small);
+}
+.lg-detail-k {
+  color: var(--muted);
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  font-size: var(--size-small);
+}
+.lg-detail-v {
+  color: var(--ink);
   word-break: break-word;
 }
 

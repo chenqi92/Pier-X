@@ -711,5 +711,140 @@ export const zhExtra: Record<string, string> = {
   "Modified": "修改时间",
   "Directory": "目录",
 
+  // DB panels — new design (pier-x-copy port)
+  "Not connected to a MySQL instance": "尚未连接 MySQL 实例",
+  "Not connected to a PostgreSQL instance": "尚未连接 PostgreSQL 实例",
+  "Not connected to a Redis instance": "尚未连接 Redis 实例",
+  "Not connected to a SQLite database": "尚未打开 SQLite 数据库",
+  "Pier-X probed this host over the SSH session for {daemon}. Pick a detected instance, a saved profile, or add one manually.":
+    "Pier-X 已通过当前 SSH 会话探测 {daemon}。可选择已发现的实例、已保存的配置，或手动添加。",
+  "Open a local database or pick one detected on the remote host.":
+    "打开本地数据库，或选择在远程主机上发现的一个。",
+  "Probe via": "探测来源：",
+  "Scanning via": "正在扫描：",
+  "Probe failed via": "探测失败：",
+  "Re-probe": "重新探测",
+  "ss -tlnp · systemd units · /etc/{daemon}":
+    "ss -tlnp · systemd 单元 · /etc/{daemon}",
+  "Auto-detected on this host": "本机自动发现",
+  "{count} found": "发现 {count} 个",
+  "Saved profiles": "已保存配置",
+  "No saved or detected connections yet.": "暂无已保存或发现的连接。",
+  "Add connection manually…": "手动添加连接…",
+  "Adopt & connect": "采纳并连接",
+  "keyring": "密钥环",
+  "direct": "直连",
+  "direct · localhost": "直连 · 本机",
+  "docker container": "Docker 容器",
+  "systemd unit": "systemd 单元",
+  "No SSH session on this tab — add a connection manually to connect directly.":
+    "当前标签页未启用 SSH 会话 —— 请手动添加连接直连数据库。",
+
+  // DB panels — environment tags
+  "prod": "生产",
+  "stage": "预发",
+  "dev": "开发",
+
+  // DB panels — connected shell
+  "Active connection": "当前连接",
+  "Switch to": "切换到",
+  "Toggle schema tree": "展开/收起结构树",
+  "Data": "数据",
+  "Structure": "结构",
+  "(no table selected)": "（未选择表）",
+  "{count} dbs": "{count} 个库",
+  "{count} tables": "{count} 张表",
+  "{count} rows": "{count} 行",
+
+  // DB panels — schema tree
+  "Filter tables…": "筛选表名…",
+  "current": "当前",
+  "Tables": "表",
+  "No databases.": "暂无数据库。",
+  "No tables in this database.": "当前库暂无表。",
+
+  // DB panels — SQL editor
+  "query": "查询",
+  "Writes unlocked": "写入已解锁",
+  "Read-only": "只读",
+  "DML/DDL will execute.": "将执行 DML / DDL 语句。",
+  "Unlock to run INSERT/UPDATE/DELETE.": "解锁后方可执行 INSERT / UPDATE / DELETE。",
+  "Type WRITE to confirm": "输入 WRITE 以确认",
+  "run": "运行",
+  "Run": "运行",
+  "Running...": "执行中…",
+
+  // DB panels — result grid
+  "rows": "行",
+  "truncated": "已截断",
+  "No rows to show.": "暂无数据。",
+  "Select a row to inspect.": "选择一行以查看详情。",
+  "Pick a table from the tree to preview rows.": "从左侧结构树选择一张表以预览数据。",
+
+  // DB panels — row detail
+  "Row detail": "行详情",
+  "Copy as JSON": "复制为 JSON",
+
+  // DB panels — MySQL structure sub-view
+  "Columns": "列",
+  "Null": "可空",
+  "YES": "是",
+  "NO": "否",
+  "No table selected": "未选择表",
+  "Schema overview": "Schema 概览",
+  "This tab will surface more introspection once the backend exposes it.":
+    "待后端补齐能力后，此处将展示更多元信息。",
+  "Indexes and foreign keys will appear here once the backend exposes them — see docs/BACKEND-GAPS.md.":
+    "索引与外键待后端补齐后展示，详见 docs/BACKEND-GAPS.md。",
+  "Per-table engine / size / row-count listing will appear here once the backend exposes it.":
+    "待后端补齐 information_schema 汇总能力后，此处将展示每张表的引擎、体积与行数。",
+
+  // DB panels — Redis
+  "PATTERN": "匹配模式",
+  "DB": "数据库",
+  "CLI": "CLI",
+  "Select a key to view its value.": "选择一个键以查看其值。",
+  "No keys match this pattern.": "当前模式下未匹配到键。",
+  "Results truncated — refine the pattern or bump the scan limit.":
+    "结果已截断 —— 可缩小匹配模式或提升扫描上限。",
+  "Preview truncated — the value continues beyond what's shown.":
+    "预览已截断 —— 实际值超出此处显示的范围。",
+  "(empty)": "（空）",
+  "persistent": "持久",
+  "{seconds}s": "{seconds} 秒",
+  "TTL": "TTL",
+  "LENGTH": "长度",
+  "ENC": "编码",
+  "FIELD": "字段",
+  "VALUE": "值",
+  "ELEMENT": "元素",
+  "{count} keys": "{count} 个键",
+
+  // DB panels — SQLite
+  "Open a database by path, or scan a remote directory for .db / .sqlite files.":
+    "通过路径打开数据库，或扫描远程目录查找 .db / .sqlite 文件。",
+  "Open a local SQLite file by path.": "通过路径打开本地 SQLite 文件。",
+  "Scan remote directory": "扫描远程目录",
+  "Database file (remote path)": "数据库文件（远程路径）",
+  "remote host": "远程主机",
+  "remote": "远程",
+  "remote read": "远程只读",
+  "Browsing...": "读取中…",
+  "database": "数据库",
+
+  // SFTP file viewer / editor dialog chrome
+  "Line numbers": "行号",
+  "Revert": "撤销更改",
+  "modified": "已修改",
+  "saved": "已保存",
+
+  // Log viewer — line detail pane
+  "line {n}": "第 {n} 行",
+  "timestamp": "时间戳",
+  "level": "级别",
+  "source": "来源",
+  "message": "消息",
+  "host": "主机",
+
   // Misc
 };

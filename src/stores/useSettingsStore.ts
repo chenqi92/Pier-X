@@ -26,6 +26,12 @@ type SettingsState = {
    *  top of bash/zsh. Off by default per PRODUCT-SPEC §4.2.1; remote
    *  SSH and alt-screen apps auto-bypass even when this is on. */
   terminalSmartMode: boolean;
+  /** Persist Smart-Mode autosuggest history to disk so it survives
+   *  app restarts. Off by default per PRODUCT-SPEC §4.2.1 — backend
+   *  filters out lines that look like credentials before writing,
+   *  but the safest stance is opt-in. In-memory ring still works
+   *  for the current session regardless of this setting. */
+  terminalHistoryPersist: boolean;
   // SFTP file editor
   /** Default state of the wrap toggle in the SFTP editor dialog. */
   editorWrapDefault: boolean;
@@ -69,6 +75,7 @@ type SettingsState = {
   setTerminalRowSeparators: (on: boolean) => void;
   setTerminalCopyOnSelect: (on: boolean) => void;
   setTerminalSmartMode: (on: boolean) => void;
+  setTerminalHistoryPersist: (on: boolean) => void;
   setEditorWrapDefault: (on: boolean) => void;
   setEditorLineNumbersDefault: (on: boolean) => void;
   setEditorTabSize: (n: number) => void;
@@ -115,6 +122,7 @@ type PersistedSettings = Partial<{
   terminalRowSeparators: boolean;
   terminalCopyOnSelect: boolean;
   terminalSmartMode: boolean;
+  terminalHistoryPersist: boolean;
   editorWrapDefault: boolean;
   editorLineNumbersDefault: boolean;
   editorTabSize: number;
@@ -140,6 +148,7 @@ const DEFAULTS = {
   terminalRowSeparators: false,
   terminalCopyOnSelect: false,
   terminalSmartMode: false,
+  terminalHistoryPersist: false,
   editorWrapDefault: false,
   editorLineNumbersDefault: true,
   editorTabSize: 2,
@@ -210,6 +219,8 @@ export const useSettingsStore = create<SettingsState>((set, get) => {
       stored.terminalCopyOnSelect ?? DEFAULTS.terminalCopyOnSelect,
     terminalSmartMode:
       stored.terminalSmartMode ?? DEFAULTS.terminalSmartMode,
+    terminalHistoryPersist:
+      stored.terminalHistoryPersist ?? DEFAULTS.terminalHistoryPersist,
     editorWrapDefault: stored.editorWrapDefault ?? DEFAULTS.editorWrapDefault,
     editorLineNumbersDefault:
       stored.editorLineNumbersDefault ?? DEFAULTS.editorLineNumbersDefault,
@@ -245,6 +256,7 @@ export const useSettingsStore = create<SettingsState>((set, get) => {
       terminalRowSeparators: s.terminalRowSeparators,
       terminalCopyOnSelect: s.terminalCopyOnSelect,
       terminalSmartMode: s.terminalSmartMode,
+      terminalHistoryPersist: s.terminalHistoryPersist,
       editorWrapDefault: s.editorWrapDefault,
       editorLineNumbersDefault: s.editorLineNumbersDefault,
       editorTabSize: s.editorTabSize,
@@ -315,6 +327,10 @@ export const useSettingsStore = create<SettingsState>((set, get) => {
     },
     setTerminalSmartMode: (terminalSmartMode) => {
       set({ terminalSmartMode });
+      persist();
+    },
+    setTerminalHistoryPersist: (terminalHistoryPersist) => {
+      set({ terminalHistoryPersist });
       persist();
     },
     setEditorWrapDefault: (editorWrapDefault) => {

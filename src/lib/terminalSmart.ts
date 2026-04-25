@@ -78,3 +78,19 @@ export type ManSynopsis = {
  *  failure) come back as a rejected promise. */
 export const terminalManSynopsis = (command: string) =>
   invoke<ManSynopsis | null>("terminal_man_synopsis", { command });
+
+/** Load `shell`'s persisted history file from disk. Resolves to
+ *  `[]` for both "no file yet" and "no platform data dir"; the
+ *  frontend ring then keeps the in-memory-only behaviour. */
+export const terminalHistoryLoad = (shell: string) =>
+  invoke<string[]>("terminal_history_load", { shell });
+
+/** Append `command` to `shell`'s persisted history file. Backend
+ *  silently drops lines that match the credential-keyword filter,
+ *  so callers can fire-and-forget. */
+export const terminalHistoryPush = (shell: string, command: string) =>
+  invoke<void>("terminal_history_push", { shell, command });
+
+/** Wipe `shell`'s persisted history file. Idempotent. */
+export const terminalHistoryClear = (shell: string) =>
+  invoke<void>("terminal_history_clear", { shell });

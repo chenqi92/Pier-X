@@ -224,6 +224,8 @@ export default function TerminalPanel({ tab, isActive, onEditConnection }: Props
   // that the line was submitted and should land in the ring.
   const historyRing = useTerminalHistoryStore((s) => s.ring);
   const pushHistory = useTerminalHistoryStore((s) => s.push);
+  const hydrateHistory = useTerminalHistoryStore((s) => s.hydrate);
+  const historyPersist = useSettingsStore((s) => s.terminalHistoryPersist);
   const prevAwaitingInputRef = useRef(false);
   // The suggestion suffix itself is computed alongside the other
   // smart-active-derived state below, after `smartActive` exists.
@@ -813,15 +815,40 @@ export default function TerminalPanel({ tab, isActive, onEditConnection }: Props
   // above tear down the rest. We never push on smart-mode disable
   // (rapid toggle would lose the line) — only on the genuine
   // command-submitted transition.
+  //
+  // When `terminalHistoryPersist` is on we also forward the line
+  // to the backend so it lands on disk; the backend itself drops
+  // credential-bearing lines via the keyword filter.
   useEffect(() => {
     const prev = prevAwaitingInputRef.current;
     const curr = snapshot?.awaitingInput === true;
     if (prev && !curr && smartActive) {
       const line = smartLineBufferRef.current;
-      if (line.trim()) pushHistory(line);
+      if (line.trim()) {
+        pushHistory(line, {
+          shell: session?.shell,
+          persist: historyPersist,
+        });
+      }
     }
     prevAwaitingInputRef.current = curr;
-  }, [snapshot?.awaitingInput, smartActive, pushHistory]);
+  }, [
+    snapshot?.awaitingInput,
+    smartActive,
+    pushHistory,
+    session?.shell,
+    historyPersist,
+  ]);
+
+  // History persistence: hydrate the ring with the on-disk file
+  // for this session's shell on first mount. The store dedups so
+  // calling this for every tab open is safe — only the first one
+  // per shell actually issues an invoke.
+  useEffect(() => {
+    if (!session?.shell) return;
+    if (!historyPersist) return;
+    void hydrateHistory(session.shell, historyPersist);
+  }, [session?.shell, historyPersist, hydrateHistory]);
 
   // M4: refilter the open completion popover on every keystroke so
   // the candidate list narrows as the user types more characters.

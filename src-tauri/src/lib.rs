@@ -39,7 +39,8 @@ use ssh_cred_cache::{SshCredCache, TargetKey};
 
 mod terminal_smart;
 use terminal_smart::{
-    terminal_completions, terminal_man_synopsis, terminal_validate_command,
+    terminal_completions, terminal_history_clear, terminal_history_load, terminal_history_push,
+    terminal_man_synopsis, terminal_validate_command,
 };
 
 struct AppState {
@@ -7355,6 +7356,9 @@ pub fn run() {
             terminal_validate_command,
             terminal_completions,
             terminal_man_synopsis,
+            terminal_history_load,
+            terminal_history_push,
+            terminal_history_clear,
             postgres_browse,
             postgres_execute,
             docker_overview,

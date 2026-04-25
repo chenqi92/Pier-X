@@ -1770,6 +1770,15 @@ export default function SettingsDialog({
                     onChange={settings.setTerminalSmartMode}
                   />
                 </SettingRow>
+                <SettingRow
+                  label={t("Persist autosuggest history")}
+                  description={t("Save the autosuggest history to ~/.local/share/pier-x/terminal-history-<shell>.jsonl so it survives app restarts. Lines that look like they hold a token / password are filtered out before disk write; the in-memory ring still has them for the current session.")}
+                >
+                  <Toggle
+                    checked={settings.terminalHistoryPersist}
+                    onChange={settings.setTerminalHistoryPersist}
+                  />
+                </SettingRow>
 
                 <div className="settings__row-desc" style={{ marginTop: "var(--sp-3)" }}>
                   {t("Per-shell args / working dir / env vars are configured per profile in Settings → Profiles.")}

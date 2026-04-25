@@ -9,7 +9,8 @@
 //! `pier-core`. The shapes here just (de)serialise and forward.
 
 use pier_core::terminal::{
-    complete, man_synopsis, validate_command, CommandKind, Completion, ManSynopsis,
+    complete, history_append, history_clear, history_load, man_synopsis, validate_command,
+    CommandKind, Completion, ManSynopsis,
 };
 use serde::Serialize;
 
@@ -80,6 +81,48 @@ pub fn terminal_man_synopsis(command: String) -> Result<Option<ManSynopsis>, Str
     match man_synopsis(&command) {
         Ok(syn) => Ok(Some(syn)),
         Err(ManError::NotFound(_)) => Ok(None),
+        Err(e) => Err(e.to_string()),
+    }
+}
+
+/// Load the persisted command-history ring for `shell` from disk.
+/// Returns `Ok(vec![])` for either "no file yet" or "no usable
+/// data dir on this platform" so the caller fails soft and falls
+/// back to an in-memory-only history.
+#[tauri::command]
+pub fn terminal_history_load(shell: String) -> Result<Vec<String>, String> {
+    use pier_core::terminal::HistoryError;
+    match history_load(&shell) {
+        Ok(v) => Ok(v),
+        Err(HistoryError::NoDataDir) => Ok(Vec::new()),
+        Err(e) => Err(e.to_string()),
+    }
+}
+
+/// Append `command` to `shell`'s persisted history file. Drops the
+/// line silently if it matches the credential-keyword filter (see
+/// `pier_core::terminal::history::is_sensitive`); the in-memory
+/// ring on the frontend still keeps it for the current session.
+#[tauri::command]
+pub fn terminal_history_push(shell: String, command: String) -> Result<(), String> {
+    use pier_core::terminal::HistoryError;
+    match history_append(&shell, &command) {
+        Ok(()) => Ok(()),
+        Err(HistoryError::NoDataDir) => Ok(()),
+        Err(e) => Err(e.to_string()),
+    }
+}
+
+/// Wipe the persisted history file for `shell`. Settings exposes
+/// this through a "Clear history for this shell" button so the
+/// user can purge a leaked entry without having to find the file
+/// on disk.
+#[tauri::command]
+pub fn terminal_history_clear(shell: String) -> Result<(), String> {
+    use pier_core::terminal::HistoryError;
+    match history_clear(&shell) {
+        Ok(()) => Ok(()),
+        Err(HistoryError::NoDataDir) => Ok(()),
         Err(e) => Err(e.to_string()),
     }
 }

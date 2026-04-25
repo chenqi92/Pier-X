@@ -440,12 +440,45 @@ export type PostgresColumnView = {
   extra: string;
 };
 
+/** Per-table enrichment surfaced in the schema tree. Same shape
+ *  as `MysqlTableSummary`; PG always reports `engine: null` and
+ *  `updatedAt: null` because the catalog doesn't track those. */
+export type PostgresTableSummary = {
+  name: string;
+  rowCount: number | null;
+  dataBytes: number | null;
+  indexBytes: number | null;
+  engine: string | null;
+  updatedAt: string | null;
+};
+
+/** Stored function / procedure row in the schema tree.
+ *  `kind` is upper-cased, e.g. `"FUNCTION"` / `"PROCEDURE"`. */
+export type PostgresRoutineSummary = {
+  name: string;
+  kind: string;
+};
+
 export type PostgresBrowserState = {
   databaseName: string;
   databases: string[];
   schemaName: string;
+  /** All user-visible schemas in the active database. The panel
+   *  renders this as a picker the user can switch between
+   *  without changing the SQL connection. Excludes `pg_catalog`,
+   *  `information_schema`, and `pg_toast*`. */
+  schemas: string[];
   tableName: string;
   tables: string[];
+  /** Same names as `tables`, in the same order. Carries row
+   *  count, data / index bytes — engine / updatedAt are always
+   *  null for PG. */
+  tableSummaries: PostgresTableSummary[];
+  /** View names defined in the active schema. Rendered as a
+   *  separate folder in the schema tree. */
+  views: string[];
+  /** Stored functions + procedures in the active schema. */
+  routines: PostgresRoutineSummary[];
   columns: PostgresColumnView[];
   preview: DataPreview | null;
 };

@@ -43,6 +43,17 @@ type Props = { tab: TabState };
 // PostgreSQL numeric types — parallels the MySQL regex in MySqlPanel.
 const NUMERIC_TYPE_RE = /^(smallint|integer|bigint|numeric|decimal|real|double|money|serial|bigserial)/i;
 
+/** Compact human-readable byte formatter for the schema-tree
+ *  tooltip. Inlined per CLAUDE.md "three similar lines beats
+ *  premature abstraction" — same shape as the copies in
+ *  `MySqlPanel`, `SqlitePanel`, `SftpPanel`. */
+function formatBytes(n: number): string {
+  if (n < 1024) return `${n} B`;
+  if (n < 1024 * 1024) return `${(n / 1024).toFixed(1)} KB`;
+  if (n < 1024 * 1024 * 1024) return `${(n / (1024 * 1024)).toFixed(1)} MB`;
+  return `${(n / (1024 * 1024 * 1024)).toFixed(2)} GB`;
+}
+
 const POSTGRES_ADAPTER: DbCredentialFieldAdapter = {
   readHost: (t) => t.pgHost,
   readPort: (t) => t.pgPort,
@@ -272,20 +283,52 @@ function PostgresPanelBody({ tab }: Props) {
       status: "unknown",
     }));
 
-  // PG tree: `schemas[]` isn't enumerated by the backend yet — we show
-  // only the current (db, schema) and collapse other dbs to stubs.
+  // PG tree. Backend now returns `schemas[]` (rendered as a picker
+  // alongside the database picker, not in the tree itself), plus
+  // table / view / routine enrichment per the active schema. Tree
+  // structure stays at "database → table-list" — proper schema
+  // folders inside the tree is a follow-up PR.
   const databases: DbSchemaDatabase[] = state
-    ? state.databases.map((name) => ({
-        name,
-        current: name === state.databaseName,
-        tables:
-          name === state.databaseName
-            ? state.tables.map((tname) => ({
-                id: `${name}.${state.schemaName}.${tname}`,
-                label: tname,
-              }))
-            : [],
-      }))
+    ? state.databases.map((name) => {
+        const isCurrent = name === state.databaseName;
+        if (!isCurrent) {
+          return { name, current: false, tables: [] };
+        }
+        const summaryByName = new Map(
+          state.tableSummaries.map((s) => [s.name, s] as const),
+        );
+        const tables = state.tables.map((tname) => {
+          const meta = summaryByName.get(tname);
+          const tooltipParts: string[] = [];
+          if (typeof meta?.dataBytes === "number") {
+            tooltipParts.push(t("data {n}", { n: formatBytes(meta.dataBytes) }));
+          }
+          if (typeof meta?.indexBytes === "number") {
+            tooltipParts.push(t("idx {n}", { n: formatBytes(meta.indexBytes) }));
+          }
+          return {
+            id: `${name}.${state.schemaName}.${tname}`,
+            label: tname,
+            count: meta?.rowCount ?? null,
+            tooltip: tooltipParts.length > 0 ? tooltipParts.join(" · ") : null,
+          };
+        });
+        const views = state.views.map((vname) => ({
+          id: `${name}.${state.schemaName}.${vname}`,
+          label: vname,
+        }));
+        const routines = state.routines.map((r) => ({
+          id: `${name}.${state.schemaName}.${r.name}`,
+          label: r.name,
+          badge:
+            r.kind.toUpperCase() === "FUNCTION"
+              ? "FN"
+              : r.kind.toUpperCase() === "PROCEDURE"
+                ? "PR"
+                : null,
+        }));
+        return { name, current: true, tables, views, routines };
+      })
     : [];
 
   const pkColumns = state

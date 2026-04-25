@@ -97,6 +97,31 @@ pub struct ColumnInfo {
     pub extra: String,
 }
 
+/// Schema-tree enrichment for one table — mirror of
+/// [`super::mysql::TableSummary`] adapted to PostgreSQL semantics.
+/// `engine` is always `None` for PG (no per-table storage engine);
+/// `updated_at` is also `None` because PG doesn't track per-table
+/// last-update at the catalog level the way MySQL does. We keep
+/// the same field shape for cross-engine UI sharing.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct TableSummary {
+    pub name: String,
+    pub row_count: Option<u64>,
+    pub data_bytes: Option<u64>,
+    pub index_bytes: Option<u64>,
+    pub engine: Option<String>,
+    pub updated_at: Option<String>,
+}
+
+/// One row in the routines folder. `kind` is the upper-cased
+/// `routine_type` from `information_schema.routines` — usually
+/// `"FUNCTION"` or `"PROCEDURE"`.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct RoutineSummary {
+    pub name: String,
+    pub kind: String,
+}
+
 /// One row of query results. Same type as MySQL's.
 pub type ResultRow = Vec<Option<String>>;
 
@@ -333,6 +358,148 @@ impl PostgresClient {
     /// Blocking wrapper for [`Self::list_columns`].
     pub fn list_columns_blocking(&self, schema: &str, table: &str) -> Result<Vec<ColumnInfo>> {
         crate::ssh::runtime::shared().block_on(self.list_columns(schema, table))
+    }
+
+    /// User-visible schemas in the active database. Filters out
+    /// the catalog (`pg_catalog`), `information_schema`, and the
+    /// per-database `pg_toast*` schemas — the panel never wants
+    /// the user to land in those by accident. Returns names in
+    /// alphabetical order.
+    pub async fn list_schemas(&self) -> Result<Vec<String>> {
+        let rows = self
+            .client
+            .query(
+                "SELECT schema_name FROM information_schema.schemata \
+                 WHERE schema_name NOT IN ('pg_catalog', 'information_schema') \
+                   AND schema_name NOT LIKE 'pg_toast%' \
+                   AND schema_name NOT LIKE 'pg_temp_%' \
+                 ORDER BY schema_name",
+                &[],
+            )
+            .await?;
+        Ok(rows.iter().map(|r| r.get::<_, String>(0)).collect())
+    }
+
+    /// Blocking wrapper for [`Self::list_schemas`].
+    pub fn list_schemas_blocking(&self) -> Result<Vec<String>> {
+        crate::ssh::runtime::shared().block_on(self.list_schemas())
+    }
+
+    /// Enriched table list — same set of tables as
+    /// [`Self::list_tables`] but joined with `pg_class` for the
+    /// row-count estimate (`reltuples`) and `pg_total_relation_size`
+    /// / `pg_indexes_size` for on-disk sizing. We expose the same
+    /// `TableSummary` shape as MySQL so the panel can render
+    /// consistent badges + tooltips across engines.
+    ///
+    /// `reltuples` is a planner statistic, not exact — that's
+    /// already how MySQL's `information_schema.tables.table_rows`
+    /// behaves, so the field semantics line up.
+    pub async fn list_tables_meta(&self, schema: &str) -> Result<Vec<TableSummary>> {
+        let schema = if schema.is_empty() { "public" } else { schema };
+        if !super::mysql::is_safe_ident(schema) {
+            return Err(PostgresError::InvalidConfig(format!(
+                "refusing unsafe schema identifier {schema:?}"
+            )));
+        }
+        let rows = self
+            .client
+            .query(
+                "SELECT c.relname,
+                        c.reltuples::bigint,
+                        pg_relation_size(c.oid),
+                        pg_indexes_size(c.oid)
+                 FROM pg_class c
+                 JOIN pg_namespace n ON n.oid = c.relnamespace
+                 WHERE n.nspname = $1 AND c.relkind = 'r'
+                 ORDER BY c.relname",
+                &[&schema],
+            )
+            .await?;
+        Ok(rows
+            .iter()
+            .map(|r| {
+                // tokio_postgres widens int → i64; we cast to u64
+                // for the public type, clamping any negative
+                // edge-case (reltuples is supposed to be ≥ 0).
+                let name: String = r.get(0);
+                let row_i: Option<i64> = r.try_get(1).ok();
+                let data_i: Option<i64> = r.try_get(2).ok();
+                let idx_i: Option<i64> = r.try_get(3).ok();
+                TableSummary {
+                    name,
+                    row_count: row_i.and_then(|n| if n < 0 { None } else { Some(n as u64) }),
+                    data_bytes: data_i.and_then(|n| if n < 0 { None } else { Some(n as u64) }),
+                    index_bytes: idx_i.and_then(|n| if n < 0 { None } else { Some(n as u64) }),
+                    engine: None,
+                    updated_at: None,
+                }
+            })
+            .collect())
+    }
+
+    /// Blocking wrapper for [`Self::list_tables_meta`].
+    pub fn list_tables_meta_blocking(&self, schema: &str) -> Result<Vec<TableSummary>> {
+        crate::ssh::runtime::shared().block_on(self.list_tables_meta(schema))
+    }
+
+    /// View names in `schema`. Pulled from `information_schema.views`
+    /// just like the MySQL counterpart.
+    pub async fn list_views(&self, schema: &str) -> Result<Vec<String>> {
+        let schema = if schema.is_empty() { "public" } else { schema };
+        if !super::mysql::is_safe_ident(schema) {
+            return Err(PostgresError::InvalidConfig(format!(
+                "refusing unsafe schema identifier {schema:?}"
+            )));
+        }
+        let rows = self
+            .client
+            .query(
+                "SELECT table_name FROM information_schema.views \
+                 WHERE table_schema = $1 ORDER BY table_name",
+                &[&schema],
+            )
+            .await?;
+        Ok(rows.iter().map(|r| r.get::<_, String>(0)).collect())
+    }
+
+    /// Blocking wrapper for [`Self::list_views`].
+    pub fn list_views_blocking(&self, schema: &str) -> Result<Vec<String>> {
+        crate::ssh::runtime::shared().block_on(self.list_views(schema))
+    }
+
+    /// Stored functions + procedures in `schema`. PG separates
+    /// `FUNCTION` and `PROCEDURE` in `routine_type`; both go in
+    /// the same folder so the tree behaviour matches MySQL.
+    pub async fn list_routines(&self, schema: &str) -> Result<Vec<RoutineSummary>> {
+        let schema = if schema.is_empty() { "public" } else { schema };
+        if !super::mysql::is_safe_ident(schema) {
+            return Err(PostgresError::InvalidConfig(format!(
+                "refusing unsafe schema identifier {schema:?}"
+            )));
+        }
+        let rows = self
+            .client
+            .query(
+                "SELECT routine_name, routine_type \
+                 FROM information_schema.routines \
+                 WHERE routine_schema = $1 \
+                 ORDER BY routine_name",
+                &[&schema],
+            )
+            .await?;
+        Ok(rows
+            .iter()
+            .map(|r| RoutineSummary {
+                name: r.get::<_, String>(0),
+                kind: r.get::<_, String>(1),
+            })
+            .collect())
+    }
+
+    /// Blocking wrapper for [`Self::list_routines`].
+    pub fn list_routines_blocking(&self, schema: &str) -> Result<Vec<RoutineSummary>> {
+        crate::ssh::runtime::shared().block_on(self.list_routines(schema))
     }
 }
 

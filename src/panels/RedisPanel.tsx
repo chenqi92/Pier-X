@@ -56,6 +56,7 @@ function RedisPanelBody({ tab }: Props) {
   const [command, setCommand] = useState("PING");
   const [state, setState] = useState<RedisBrowserState | null>(null);
   const [busy, setBusy] = useState(false);
+  const [loadMoreBusy, setLoadMoreBusy] = useState(false);
   const [error, setError] = useState("");
   const [cmdResult, setCmdResult] = useState<RedisCommandResult | null>(null);
   const [cmdBusy, setCmdBusy] = useState(false);
@@ -275,6 +276,7 @@ function RedisPanelBody({ tab }: Props) {
         key: nextKey.trim() || null,
         username: user.trim() || null,
         password: pw || null,
+        cursor: null,
       });
       setState(s);
       setKeyName(s.keyName);
@@ -282,6 +284,41 @@ function RedisPanelBody({ tab }: Props) {
       setError(formatError(e));
     } finally {
       setBusy(false);
+    }
+  }
+
+  // Append the next SCAN page using `state.nextCursor` — keeps the
+  // already-fetched keys in place so the user doesn't lose scroll
+  // position on long matches.
+  async function loadMore() {
+    if (!state || state.nextCursor === "0") return;
+    setLoadMoreBusy(true);
+    setError("");
+    try {
+      const target = await ensureConnectionTarget();
+      const s = await cmd.redisBrowse({
+        host: target.host,
+        port: target.port,
+        db: d,
+        pattern: state.pattern,
+        key: state.keyName || null,
+        username: user.trim() || null,
+        password: password || null,
+        cursor: state.nextCursor,
+      });
+      // Merge: keep prior keys, append new ones, dedupe by key name
+      // (SCAN guarantees no duplicates within a cursor walk but a
+      // pattern change races between two concurrent calls).
+      const seen = new Set(state.keys.map((k) => k.key));
+      const appended = s.keys.filter((k) => !seen.has(k.key));
+      setState({
+        ...s,
+        keys: [...state.keys, ...appended],
+      });
+    } catch (e) {
+      setError(formatError(e));
+    } finally {
+      setLoadMoreBusy(false);
     }
   }
 
@@ -534,6 +571,7 @@ function RedisPanelBody({ tab }: Props) {
     },
     { label: state.usedMemory || "—" },
     { label: state.serverVersion || t("Redis") },
+    { label: t("{ms} ms", { ms: state.rttMs }) },
   ];
 
   return (
@@ -655,7 +693,9 @@ function RedisPanelBody({ tab }: Props) {
                 setKeyName(key);
                 void browse(key);
               }}
-              truncated={state.truncated}
+              hasMore={state.nextCursor !== "0"}
+              onLoadMore={() => void loadMore()}
+              loadMoreBusy={loadMoreBusy}
             />
           </div>
           <div className="rds-detail">

@@ -1,27 +1,34 @@
 import { useI18n } from "../../i18n/useI18n";
+import type { RedisKeyEntry } from "../../lib/types";
 import RedisTypeBadge from "./RedisTypeBadge";
 
 type Props = {
-  keys: string[];
-  /** Detailed info for the currently selected key — used to colour the matching row. */
+  keys: RedisKeyEntry[];
+  /** Currently selected key — used to colour the matching row. */
   selected: string | null;
-  /** Type of the selected key (we only know the type of the active selection). */
+  /** Type of the selected key (preferred over the per-row scan kind, since detail inspection is authoritative). */
   selectedKind?: string | null;
   onSelect: (key: string) => void;
-  truncated?: boolean;
+  /** Whether more keys remain on the server — drives the "Load more" button. */
+  hasMore?: boolean;
+  /** Click handler for "Load more". When omitted, the button is hidden. */
+  onLoadMore?: () => void;
+  /** Disabled flag for "Load more" while a request is in flight. */
+  loadMoreBusy?: boolean;
 };
 
 /**
- * Flat key list. A hierarchical (colon-separated) tree would need
- * the backend to expose per-key types in the scan response — see
- * docs/BACKEND-GAPS.md. For the pilot we stick to the list view.
+ * Flat key list. Keys come pre-typed from the backend (TYPE pipeline
+ * after SCAN), so each row carries its own kind / TTL chip.
  */
 export default function RedisKeyList({
   keys,
   selected,
   selectedKind,
   onSelect,
-  truncated,
+  hasMore,
+  onLoadMore,
+  loadMoreBusy,
 }: Props) {
   const { t } = useI18n();
 
@@ -35,27 +42,52 @@ export default function RedisKeyList({
 
   return (
     <div className="rds-keys">
-      {keys.map((key) => {
-        const isSelected = key === selected;
+      {keys.map((entry) => {
+        const isSelected = entry.key === selected;
+        const kind = isSelected && selectedKind ? selectedKind : entry.kind;
         return (
           <button
-            key={key}
+            key={entry.key}
             type="button"
             className={"rds-row" + (isSelected ? " selected" : "")}
-            onClick={() => onSelect(key)}
+            onClick={() => onSelect(entry.key)}
           >
-            <RedisTypeBadge kind={isSelected ? selectedKind : null} />
-            <span className="rds-key">{key}</span>
-            <span className="rds-meta" />
+            <RedisTypeBadge kind={kind} />
+            <span className="rds-key">{entry.key}</span>
+            <span className="rds-meta" title={ttlTitle(entry.ttlSeconds, t)}>
+              {formatTtl(entry.ttlSeconds, t)}
+            </span>
             <span className="rds-meta" />
           </button>
         );
       })}
-      {truncated && (
-        <div className="rds-truncated-note">
-          {t("Results truncated — refine the pattern or bump the scan limit.")}
-        </div>
+      {hasMore && onLoadMore && (
+        <button
+          type="button"
+          className="btn is-ghost is-compact rds-load-more"
+          onClick={onLoadMore}
+          disabled={loadMoreBusy}
+        >
+          {loadMoreBusy ? t("Loading...") : t("Load more")}
+        </button>
       )}
     </div>
   );
+}
+
+type TFn = (key: string, vars?: Record<string, string | number | null | undefined>) => string;
+
+function formatTtl(ttl: number, _t: TFn): string {
+  if (ttl === -1) return "∞";
+  if (ttl < 0) return "—";
+  if (ttl < 60) return `${ttl}s`;
+  if (ttl < 3600) return `${Math.round(ttl / 60)}m`;
+  if (ttl < 86400) return `${Math.round(ttl / 3600)}h`;
+  return `${Math.round(ttl / 86400)}d`;
+}
+
+function ttlTitle(ttl: number, t: TFn): string {
+  if (ttl === -1) return t("No expiry");
+  if (ttl < 0) return t("Unknown TTL");
+  return t("Expires in {seconds}s", { seconds: ttl });
 }

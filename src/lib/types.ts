@@ -411,13 +411,33 @@ export type RedisKeyView = {
   previewTruncated: boolean;
 };
 
+/** Per-row enrichment for the Redis key list. The kind / TTL
+ *  come back in the same scan pipeline so the UI can render
+ *  badges + chips without a second roundtrip per key. */
+export type RedisKeyEntry = {
+  key: string;
+  /** Lower-case redis-cli type name: `string` / `hash` / `list`
+   *  / `set` / `zset` / `stream` / `none`. */
+  kind: string;
+  /** Seconds until expiry. `-1` for no TTL set, `-2` for the
+   *  key not existing anymore (race window between SCAN and
+   *  the TYPE/PTTL probe). */
+  ttlSeconds: number;
+};
+
 export type RedisBrowserState = {
   pong: string;
   pattern: string;
   limit: number;
   truncated: boolean;
   keyName: string;
-  keys: string[];
+  /** Now an array of enriched entries instead of bare strings. */
+  keys: RedisKeyEntry[];
+  /** SCAN cursor for the next page. `"0"` means the scan
+   *  reached end-of-keyspace; otherwise pass back to load more. */
+  nextCursor: string;
+  /** Round-trip time of the SCAN + per-key probe pipeline. */
+  rttMs: number;
   serverVersion: string;
   usedMemory: string;
   details: RedisKeyView | null;

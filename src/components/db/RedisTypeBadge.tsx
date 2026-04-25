@@ -17,7 +17,9 @@ export default function RedisTypeBadge({ kind }: Props) {
             ? "list"
             : normalized === "stream"
               ? "stream"
-              : "unknown";
+              : normalized === "set"
+                ? "set"
+                : "unknown";
   const label =
     variant === "str"
       ? "STR"
@@ -29,6 +31,8 @@ export default function RedisTypeBadge({ kind }: Props) {
             ? "LIST"
             : variant === "stream"
               ? "STREAM"
-              : normalized.slice(0, 5).toUpperCase() || "?";
+              : variant === "set"
+                ? "SET"
+                : normalized.slice(0, 5).toUpperCase() || "?";
   return <span className={`rds-type rds-type--${variant}`}>{label}</span>;
 }

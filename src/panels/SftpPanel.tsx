@@ -1119,6 +1119,16 @@ function SftpPanelBody({ tab }: Props) {
         <span className="ftp-perm mono">
           {entry.permissions || (entry.isDir ? "drwxr-xr-x" : "-rw-r--r--")}
         </span>
+        <span
+          className="ftp-owner mono"
+          title={
+            entry.owner && entry.group && entry.owner !== entry.group
+              ? `${entry.owner}:${entry.group}`
+              : entry.owner || entry.group || ""
+          }
+        >
+          {entry.owner || "—"}
+        </span>
         <span className="ftp-size mono">{entry.isDir ? "—" : formatBytes(entry.size)}</span>
         <span className="ftp-mod mono" title={formatModifiedTooltip(entry.modified)}>
           {formatModifiedTime(entry.modified)}
@@ -1428,6 +1438,7 @@ function SftpPanelBody({ tab }: Props) {
         <div className="ftp-col-head">
           <span>{t("NAME")}</span>
           <span className="ftp-perm">{t("PERM")}</span>
+          <span className="ftp-owner">{t("OWNER")}</span>
           <span className="ftp-size">{t("SIZE")}</span>
           <span className="ftp-mod">{t("MODIFIED")}</span>
         </div>

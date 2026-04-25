@@ -576,6 +576,11 @@ export type SftpEntryView = {
   permissions: string;
   /** Last-modified timestamp (Unix seconds) if the server reported one. */
   modified: number | null;
+  /** Owner display string — named user, falling back to numeric uid.
+   *  Empty when the SFTP server omitted owner info. */
+  owner: string;
+  /** Group display string — named group, falling back to numeric gid. */
+  group: string;
 };
 
 export type SftpBrowseState = {

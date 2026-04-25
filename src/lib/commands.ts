@@ -1189,6 +1189,14 @@ export type SftpTextFile = {
   permissions: number | null;
   modified: number | null;
   lossy: boolean;
+  /** Owner display string — named user, falling back to numeric uid. */
+  owner: string;
+  /** Group display string — named group, falling back to numeric gid. */
+  group: string;
+  /** `lf` / `crlf` / `cr` / `mixed` / `none`. */
+  eol: string;
+  /** `utf-8`, `utf-8-bom`, `utf-16-le`, `utf-16-be`, or `binary`. */
+  encoding: string;
 };
 
 export const sftpReadText = (params: {

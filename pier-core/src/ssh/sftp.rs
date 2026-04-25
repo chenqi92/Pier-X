@@ -67,6 +67,15 @@ pub struct RemoteFileEntry {
     pub modified: Option<u64>,
     /// POSIX permission bits, if the server provided them.
     pub permissions: Option<u32>,
+    /// Owner name from the server's longname response. SFTPv3
+    /// servers may omit this; falls back to a stringified `uid`
+    /// when only the numeric id is known. `None` when neither is
+    /// available (most often for read-only servers running on
+    /// hosts where the SSH user can't enumerate `/etc/passwd`).
+    pub owner: Option<String>,
+    /// Group name (or stringified `gid`). Same fallback rules as
+    /// `owner`.
+    pub group: Option<String>,
 }
 
 /// SFTP session handle. Cheap to clone — the underlying
@@ -129,6 +138,8 @@ impl SftpClient {
 
             let file_type = entry.file_type();
             let metadata = entry.metadata();
+            let owner = pick_owner(metadata.user.as_deref(), metadata.uid);
+            let group = pick_owner(metadata.group.as_deref(), metadata.gid);
             out.push(RemoteFileEntry {
                 name,
                 path: full_path,
@@ -137,6 +148,8 @@ impl SftpClient {
                 size: metadata.size.unwrap_or(0),
                 modified: metadata.mtime.map(|v| v as u64),
                 permissions: metadata.permissions,
+                owner,
+                group,
             });
         }
 
@@ -174,6 +187,8 @@ impl SftpClient {
         // (very old SFTP servers that don't return type info)
         // is treated as "regular file".
         let file_type = metadata.file_type();
+        let owner = pick_owner(metadata.user.as_deref(), metadata.uid);
+        let group = pick_owner(metadata.group.as_deref(), metadata.gid);
         Ok(RemoteFileEntry {
             name,
             path: path.to_string(),
@@ -182,6 +197,8 @@ impl SftpClient {
             size: metadata.size.unwrap_or(0),
             modified: metadata.mtime.map(|v| v as u64),
             permissions: metadata.permissions,
+            owner,
+            group,
         })
     }
 
@@ -701,6 +718,19 @@ async fn collect_remote_tree(
     Ok(())
 }
 
+/// Pick the most useful owner / group display string from the
+/// SFTP attributes. Servers running OpenSSH on Linux typically
+/// fill in the named field; minimal SFTP servers and servers
+/// configured against a stripped `/etc/passwd` only return the
+/// numeric id. We prefer the name; fall back to the numeric id
+/// formatted as a string; otherwise `None`.
+fn pick_owner(name: Option<&str>, id: Option<u32>) -> Option<String> {
+    if let Some(s) = name.filter(|s| !s.is_empty()) {
+        return Some(s.to_string());
+    }
+    id.map(|n| n.to_string())
+}
+
 fn sftp_error(e: russh_sftp::client::error::Error) -> SshError {
     // Any kind of transport error we treat as ChannelClosed;
     // everything else becomes a stringified config-ish error
@@ -727,10 +757,20 @@ mod tests {
             size: 4096,
             modified: Some(1_700_000_000),
             permissions: Some(0o644),
+            owner: Some("deploy".to_string()),
+            group: Some("deploy".to_string()),
         };
         let json = serde_json::to_string(&entry).expect("serialize");
         let back: RemoteFileEntry = serde_json::from_str(&json).expect("deserialize");
         assert_eq!(entry, back);
+    }
+
+    #[test]
+    fn pick_owner_prefers_named_over_numeric() {
+        assert_eq!(pick_owner(Some("alice"), Some(1000)), Some("alice".into()));
+        assert_eq!(pick_owner(None, Some(1000)), Some("1000".into()));
+        assert_eq!(pick_owner(Some(""), Some(0)), Some("0".into()));
+        assert_eq!(pick_owner(None, None), None);
     }
 
     #[test]
@@ -747,6 +787,8 @@ mod tests {
                 size: 1,
                 modified: None,
                 permissions: None,
+                owner: None,
+                group: None,
             },
             RemoteFileEntry {
                 name: "Alpha".into(),
@@ -756,6 +798,8 @@ mod tests {
                 size: 0,
                 modified: None,
                 permissions: None,
+                owner: None,
+                group: None,
             },
             RemoteFileEntry {
                 name: "apple.md".into(),
@@ -765,6 +809,8 @@ mod tests {
                 size: 12,
                 modified: None,
                 permissions: None,
+                owner: None,
+                group: None,
             },
             RemoteFileEntry {
                 name: "beta".into(),
@@ -774,6 +820,8 @@ mod tests {
                 size: 0,
                 modified: None,
                 permissions: None,
+                owner: None,
+                group: None,
             },
         ];
         entries.sort_by(|a, b| {

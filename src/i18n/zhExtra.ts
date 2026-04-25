@@ -868,6 +868,12 @@ export const zhExtra: Record<string, string> = {
   "First page": "首页",
   "Previous page": "上一页",
   "Next page": "下一页",
+  "Rows per page": "每页行数",
+  "page": "页",
+  "Page {n} of {total}": "第 {n} / {total} 页",
+  "Page {n} of ?": "第 {n} 页 / ?",
+  "{shown} of {total} rows": "{shown} / {total} 行",
+  "Next page": "下一页",
   "Last page": "末页",
   "page size": "每页",
 

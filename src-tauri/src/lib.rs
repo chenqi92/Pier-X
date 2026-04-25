@@ -380,6 +380,16 @@ struct MysqlBrowserState {
     tables: Vec<String>,
     columns: Vec<MysqlColumnView>,
     preview: Option<DataPreview>,
+    /// Effective page size used for the preview query — what the
+    /// caller asked for, clamped to `[1, 500]`. The panel echoes
+    /// this back into the next request.
+    page_size: u64,
+    /// Effective offset used for the preview query.
+    page_offset: u64,
+    /// `SELECT COUNT(*)` for the active table, when computable.
+    /// `None` on error or when no table is selected — the panel
+    /// renders `Page N of ?` in that case.
+    total_rows: Option<u64>,
 }
 
 #[derive(Serialize)]
@@ -3196,6 +3206,8 @@ fn mysql_browse(
     password: String,
     database: Option<String>,
     table: Option<String>,
+    offset: Option<u64>,
+    limit: Option<u64>,
 ) -> Result<MysqlBrowserState, String> {
     let resolved_host = host.trim();
     let resolved_user = user.trim();
@@ -3241,6 +3253,14 @@ fn mysql_browse(
             })
             .collect()
     };
+    // Paging: default page size matches the original 24-row preview;
+    // hard upper bound at 500 keeps a single browse hit reasonable.
+    // The frontend `Page N of M` chip relies on `effectivePageSize` /
+    // `totalRows` — both come back in the response so the UI doesn't
+    // have to remember the request shape.
+    let effective_page_size = limit.unwrap_or(24).clamp(1, 500);
+    let effective_offset = offset.unwrap_or(0);
+
     let preview = if database_name.is_empty()
         || table_name.is_empty()
         || !mysql_service::is_safe_ident(&database_name)
@@ -3250,10 +3270,34 @@ fn mysql_browse(
     } else {
         client
             .execute_blocking(&format!(
-                "SELECT * FROM `{database_name}`.`{table_name}` LIMIT 24"
+                "SELECT * FROM `{database_name}`.`{table_name}` \
+                 LIMIT {effective_page_size} OFFSET {effective_offset}"
             ))
             .ok()
             .map(map_mysql_preview)
+    };
+    // `COUNT(*)` is best-effort — on very large tables this scan
+    // can be slow, but the panel's "Page N of M" chip needs the
+    // total. Errors surface as `None` so the UI falls back to a
+    // page-N-of-? indicator.
+    let total_rows: Option<u64> = if database_name.is_empty()
+        || table_name.is_empty()
+        || !mysql_service::is_safe_ident(&database_name)
+        || !mysql_service::is_safe_ident(&table_name)
+    {
+        None
+    } else {
+        client
+            .execute_blocking(&format!(
+                "SELECT COUNT(*) AS total FROM `{database_name}`.`{table_name}`"
+            ))
+            .ok()
+            .and_then(|r| {
+                r.rows
+                    .first()
+                    .and_then(|row| row.first())
+                    .and_then(|v| v.as_ref().and_then(|s| s.parse::<u64>().ok()))
+            })
     };
 
     Ok(MysqlBrowserState {
@@ -3263,6 +3307,9 @@ fn mysql_browse(
         tables,
         columns,
         preview,
+        page_size: effective_page_size,
+        page_offset: effective_offset,
+        total_rows,
     })
 }
 

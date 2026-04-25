@@ -618,7 +618,16 @@ export const mysqlBrowse = (params: {
   password: string;
   database?: string | null;
   table?: string | null;
-}) => invoke<MysqlBrowserState>("mysql_browse", params);
+  /** Row offset for the preview query. Defaults to 0. */
+  offset?: number | null;
+  /** Page size for the preview query. Backend clamps to [1, 500]; default 24. */
+  limit?: number | null;
+}) =>
+  invoke<MysqlBrowserState>("mysql_browse", {
+    ...params,
+    offset: params.offset ?? null,
+    limit: params.limit ?? null,
+  });
 
 export const mysqlExecute = (params: {
   host: string;

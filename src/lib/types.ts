@@ -380,6 +380,13 @@ export type MysqlBrowserState = {
   tables: string[];
   columns: MysqlColumnView[];
   preview: DataPreview | null;
+  /** Effective page size used by the last browse — clamped to 1..500. */
+  pageSize: number;
+  /** Effective row offset used by the last browse. */
+  pageOffset: number;
+  /** SELECT COUNT(*) for the active table; null when COUNT failed
+   *  or no table is selected. */
+  totalRows: number | null;
 };
 
 // ── SQLite ──────────────────────────────────────────────────────

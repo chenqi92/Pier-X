@@ -1,24 +1,70 @@
-import { useCallback, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { SqlHistoryEntry, SqlTab } from "./DbSqlEditor";
 
 /** Maximum number of tabs we keep open. Beyond this the oldest non-active
  *  tab is dropped — a small panel mounted in the right rail can't fit a
  *  long tab strip anyway. */
 const MAX_TABS = 8;
-/** Maximum history entries we retain in panel memory. */
-const MAX_HISTORY = 50;
+/** Maximum history entries we retain. Bumped from 50 to 200 once
+ *  history persists across reloads — a few hundred queries is the
+ *  realistic upper bound for "things I might want to recall". */
+const MAX_HISTORY = 200;
+/** Top-level localStorage namespace for SQL history. Each panel
+ *  passes its own key (e.g. `mysql`, `postgres`) and we persist
+ *  under `pier-x:sql-history:<key>`. */
+const STORAGE_PREFIX = "pier-x:sql-history:";
 
 type UseDbSqlTabsArgs = {
   /** SQL the very first tab opens with. */
   initialSql: string;
   /** Display name for the first tab (e.g. "warehouse"). */
   initialName?: string;
+  /** When provided, history is rehydrated from localStorage on
+   *  mount and persisted on every `pushHistory`. Pass a stable
+   *  per-engine key (e.g. `"mysql"` / `"postgres"`). Omit to
+   *  keep the history in-memory only — same as before. */
+  storageKey?: string;
 };
+
+function readPersistedHistory(storageKey: string | undefined): SqlHistoryEntry[] {
+  if (!storageKey || typeof window === "undefined") return [];
+  try {
+    const raw = window.localStorage.getItem(STORAGE_PREFIX + storageKey);
+    if (!raw) return [];
+    const parsed = JSON.parse(raw) as unknown;
+    if (!Array.isArray(parsed)) return [];
+    // Trust but verify — drop entries that don't look like the
+    // expected shape so we never feed garbage to the editor.
+    return parsed
+      .filter((e): e is SqlHistoryEntry =>
+        !!e && typeof e === "object" && typeof (e as SqlHistoryEntry).sql === "string",
+      )
+      .slice(0, MAX_HISTORY);
+  } catch {
+    return [];
+  }
+}
+
+function writePersistedHistory(storageKey: string | undefined, history: SqlHistoryEntry[]) {
+  if (!storageKey || typeof window === "undefined") return;
+  try {
+    window.localStorage.setItem(
+      STORAGE_PREFIX + storageKey,
+      JSON.stringify(history.slice(0, MAX_HISTORY)),
+    );
+  } catch {
+    // Quota exceeded / private mode etc. — drop silently.
+  }
+}
 
 /** Lightweight tabs + history state for the SQL editor. Keeps the
  *  editor a controlled component while letting panels share one
  *  consistent multi-tab model. */
-export function useDbSqlTabs({ initialSql, initialName = "query" }: UseDbSqlTabsArgs) {
+export function useDbSqlTabs({
+  initialSql,
+  initialName = "query",
+  storageKey,
+}: UseDbSqlTabsArgs) {
   const counter = useRef(1);
   const makeId = useCallback(() => `q${++counter.current}`, []);
 
@@ -26,7 +72,17 @@ export function useDbSqlTabs({ initialSql, initialName = "query" }: UseDbSqlTabs
     { id: "q1", name: initialName, sql: initialSql, dirty: false },
   ]);
   const [activeId, setActiveId] = useState<string>("q1");
-  const [history, setHistory] = useState<SqlHistoryEntry[]>([]);
+  const [history, setHistory] = useState<SqlHistoryEntry[]>(() =>
+    readPersistedHistory(storageKey),
+  );
+
+  // Persist history on every change so a crash / refresh
+  // doesn't lose the most recent queries. The dependency on
+  // `storageKey` rehydrates when the panel switches engines
+  // mid-session (rare but cheap).
+  useEffect(() => {
+    writePersistedHistory(storageKey, history);
+  }, [storageKey, history]);
 
   const activeTab = useMemo(
     () => tabs.find((t) => t.id === activeId) ?? tabs[0],
@@ -101,6 +157,18 @@ export function useDbSqlTabs({ initialSql, initialName = "query" }: UseDbSqlTabs
     replaceActiveSql(entry.sql);
   }, [replaceActiveSql]);
 
+  /** Wipe both in-memory history and any persisted copy. */
+  const clearHistory = useCallback(() => {
+    setHistory([]);
+    if (storageKey && typeof window !== "undefined") {
+      try {
+        window.localStorage.removeItem(STORAGE_PREFIX + storageKey);
+      } catch {
+        /* private mode — best-effort */
+      }
+    }
+  }, [storageKey]);
+
   return {
     tabs,
     activeTabId: activeId,
@@ -115,5 +183,6 @@ export function useDbSqlTabs({ initialSql, initialName = "query" }: UseDbSqlTabs
     markActiveSaved,
     pushHistory,
     loadHistory,
+    clearHistory,
   };
 }

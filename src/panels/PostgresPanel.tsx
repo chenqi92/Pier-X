@@ -105,7 +105,11 @@ function PostgresPanelBody({ tab }: Props) {
 
   const [connectedTab, setConnectedTab] = useState<DbConnectedTab>("data");
 
-  const sqlTabs = useDbSqlTabs({ initialSql: "SELECT version();", initialName: t("query") });
+  const sqlTabs = useDbSqlTabs({
+    initialSql: "SELECT version();",
+    initialName: t("query"),
+    storageKey: "postgres",
+  });
   const sql = sqlTabs.sql;
   const setSql = sqlTabs.setSql;
 

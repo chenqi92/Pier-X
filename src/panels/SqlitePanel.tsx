@@ -64,6 +64,7 @@ function SqlitePanelBody({ tab }: Props) {
   const sqlTabs = useDbSqlTabs({
     initialSql: "SELECT name FROM sqlite_master WHERE type='table' ORDER BY name;",
     initialName: t("query"),
+    storageKey: "sqlite",
   });
   const sql = sqlTabs.sql;
   const setSql = sqlTabs.setSql;

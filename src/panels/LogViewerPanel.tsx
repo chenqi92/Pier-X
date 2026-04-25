@@ -108,6 +108,13 @@ function LogViewerPanelBody({ tab }: Props) {
 
   const outputRef = useRef<HTMLDivElement | null>(null);
   const counter = useRef(0);
+  // Lines/sec EMA — driven from each non-empty drain. We weight the
+  // most recent sample at 30% so spikes show up quickly but fast
+  // enough to settle on idle. `lastDrainAt` is the wall clock of
+  // the previous successful drain; the gap is the EMA's denominator.
+  const lastDrainAt = useRef<number | null>(null);
+  const rateEma = useRef(0);
+  const [linesPerSecond, setLinesPerSecond] = useState(0);
 
   // Accept SSH context inferred from a local terminal that ran `ssh
   // user@host` or from a nested-ssh overlay on top of a real SSH tab.
@@ -180,6 +187,9 @@ function LogViewerPanelBody({ tab }: Props) {
       updateTab(tab.id, { logCommand: command });
       setEvents([]);
       counter.current = 0;
+      rateEma.current = 0;
+      lastDrainAt.current = null;
+      setLinesPerSecond(0);
       setStreamId(nextId);
       setNotice(t("Streaming remote command."));
     } catch (e) {
@@ -216,9 +226,25 @@ function LogViewerPanelBody({ tab }: Props) {
           if (batch.length === 0) {
             delay = Math.min(delay * 2, MAX_MS);
             schedule();
+            // Decay the rate so a quiet stream's chip eventually
+            // drops to zero — otherwise a 10-line burst sticks at
+            // its peak forever.
+            rateEma.current *= 0.7;
+            setLinesPerSecond(rateEma.current);
             return;
           }
           delay = MIN_MS;
+          // Update the lines/sec EMA. `intervalMs` is the wall-clock
+          // gap since the last non-empty drain (or this drain's
+          // interval if this is the first).
+          const drainAt = Date.now();
+          const intervalMs = lastDrainAt.current
+            ? Math.max(50, drainAt - lastDrainAt.current)
+            : delay;
+          lastDrainAt.current = drainAt;
+          const sample = (batch.length * 1000) / intervalMs;
+          rateEma.current = rateEma.current * 0.7 + sample * 0.3;
+          setLinesPerSecond(rateEma.current);
 
           const now = clockStamp();
           setEvents((current) => {
@@ -305,7 +331,14 @@ function LogViewerPanelBody({ tab }: Props) {
   const canStart = hasSsh && compiled.length > 0;
 
   const headerMeta = streaming
-    ? t("{count} lines · streaming", { count: events.length })
+    ? linesPerSecond >= 0.5
+      ? t("{count} lines · {rate} l/s", {
+          count: events.length,
+          rate: linesPerSecond < 10
+            ? linesPerSecond.toFixed(1)
+            : Math.round(linesPerSecond),
+        })
+      : t("{count} lines · streaming", { count: events.length })
     : events.length > 0
       ? t("{count} lines", { count: events.length })
       : undefined;

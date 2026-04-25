@@ -444,6 +444,32 @@ function DockerPanelBody({ tab }: Props) {
     }
   }
 
+  // Service-level fan-out for the Compose Projects tab. Maps the
+  // service name back to its containers via the existing label
+  // grouping and dispatches `containerAction` for each one. Stays
+  // inside the spec — no `docker compose` subprocess and no YAML
+  // — every action is just a plain `docker <verb> <container>`.
+  async function serviceAction(
+    projectName: string,
+    serviceName: string,
+    action: "stop" | "restart" | "start",
+  ) {
+    const project = composeProjects.find((p) => p.name === projectName);
+    if (!project) return;
+    const ctrs = project.services.get(serviceName) ?? [];
+    if (ctrs.length === 0) return;
+    // Sequential, not parallel — Docker's daemon serializes
+    // start/stop on a container anyway, and a sequential walk
+    // makes the optimistic UI flip predictable.
+    for (const c of ctrs) {
+      // Skip no-ops so we don't toggle a "running" container with
+      // a "start" press, etc.
+      if (action === "start" && c.running) continue;
+      if (action === "stop" && !c.running) continue;
+      await containerAction(c.id, action);
+    }
+  }
+
   async function inspectContainer(id: string) {
     if (!hasSsh || actionBusy) return;
     setActionBusy(true);
@@ -1487,14 +1513,80 @@ function DockerPanelBody({ tab }: Props) {
                             </tr>
                           </thead>
                           <tbody>
-                            {services.flatMap(([serviceName, ctrs]) =>
-                              ctrs.map((c) => (
+                            {services.flatMap(([serviceName, ctrs]) => {
+                              // Service-level header row appears when a
+                              // service has multiple replicas. Mirrors the
+                              // design's "Service [N replicas] · M running"
+                              // grouping without leaving the existing flat
+                              // table layout (no compose CLI involved —
+                              // the data is already in `ctrs`).
+                              const replicas = ctrs.length;
+                              const running = ctrs.filter((c) => c.running).length;
+                              const headerRow =
+                                replicas > 1 ? (
+                                  <tr key={`hdr-${project.name}-${serviceName}`} className="dk-service-header">
+                                    <td colSpan={2} className="mono">
+                                      <strong>{serviceName}</strong>
+                                      <span
+                                        className="mono"
+                                        style={{
+                                          marginLeft: "var(--sp-1-5)",
+                                          padding: "0 var(--sp-1)",
+                                          borderRadius: "var(--radius-xs)",
+                                          background: "var(--accent-dim)",
+                                          color: "var(--accent)",
+                                          fontSize: "var(--size-small)",
+                                        }}
+                                      >
+                                        {t("{count} replicas", { count: replicas })}
+                                      </span>
+                                    </td>
+                                    <td colSpan={2} className="mono text-muted">
+                                      {t("{running}/{total} running", { running, total: replicas })}
+                                    </td>
+                                    <td style={{ display: "flex", gap: 4, justifyContent: "flex-end" }}>
+                                      <button
+                                        className="mini-btn"
+                                        type="button"
+                                        title={t("Restart all replicas")}
+                                        disabled={actionBusy}
+                                        onClick={(e) => {
+                                          e.stopPropagation();
+                                          void serviceAction(project.name, serviceName, "restart");
+                                        }}
+                                      >
+                                        <RotateCw size={11} />
+                                      </button>
+                                      <button
+                                        className="mini-btn"
+                                        type="button"
+                                        title={t("Stop all replicas")}
+                                        disabled={actionBusy || running === 0}
+                                        onClick={(e) => {
+                                          e.stopPropagation();
+                                          void serviceAction(project.name, serviceName, "stop");
+                                        }}
+                                      >
+                                        <Square size={11} />
+                                      </button>
+                                    </td>
+                                  </tr>
+                                ) : null;
+                              const containerRows = ctrs.map((c) => (
                                 <tr
                                   key={c.id}
                                   className={c.id === selectedContainer ? "selected" : undefined}
                                   onClick={() => setSelectedContainer(c.id)}
                                 >
-                                  <td className="mono">{serviceName}</td>
+                                  <td className="mono">
+                                    {replicas > 1 ? (
+                                      <span style={{ paddingLeft: "var(--sp-3)", color: "var(--muted)" }}>
+                                        ↳
+                                      </span>
+                                    ) : (
+                                      serviceName
+                                    )}
+                                  </td>
                                   <td className="mono">
                                     <StatusDot tone={c.running ? "pos" : "off"} />{" "}
                                     {c.running ? t("running") : c.state || t("stopped")}
@@ -1545,8 +1637,11 @@ function DockerPanelBody({ tab }: Props) {
                                     )}
                                   </td>
                                 </tr>
-                              )),
-                            )}
+                              ));
+                              return headerRow
+                                ? [headerRow, ...containerRows]
+                                : containerRows;
+                            })}
                           </tbody>
                         </table>
                       </div>

@@ -1048,6 +1048,16 @@
 }
 .rg-td-num { font-variant-numeric: tabular-nums; }
 .rg-td-pk { color: var(--warn); font-weight: var(--weight-semibold); }
+/* JSONish cells (PG JSONB / json / array-as-json) get a subtle
+ * `{}` marker after the value so the user knows hovering will
+ * show the pretty-printed version. Pure-CSS hint, no extra DOM. */
+.rg-td-jsonish::after {
+  content: " {}";
+  color: var(--muted);
+  font-size: var(--size-micro);
+  margin-left: var(--sp-1);
+  opacity: 0.6;
+}
 .rg-td-n {
   width: 48px;
   padding: var(--sp-1) var(--sp-2) !important;

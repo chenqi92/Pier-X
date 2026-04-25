@@ -548,6 +548,30 @@ struct PostgresColumnView {
     extra: String,
 }
 
+/// Per-table enrichment for the PG schema tree. Same shape as
+/// `MysqlTableSummary` so the frontend can share the badge +
+/// tooltip rendering logic. PG leaves `engine` / `updatedAt`
+/// `null` because the PostgreSQL catalog doesn't expose those
+/// the way MySQL's `information_schema.tables` does.
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct PostgresTableSummary {
+    name: String,
+    row_count: Option<u64>,
+    data_bytes: Option<u64>,
+    index_bytes: Option<u64>,
+    engine: Option<String>,
+    updated_at: Option<String>,
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct PostgresRoutineSummary {
+    name: String,
+    /// Upper-cased `routine_type`, e.g. `"FUNCTION"` / `"PROCEDURE"`.
+    kind: String,
+}
+
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
 struct PostgresPoolView {
@@ -564,12 +588,25 @@ struct PostgresBrowserState {
     database_name: String,
     databases: Vec<String>,
     schema_name: String,
-    /// All non-internal schemas in the active database. The panel
+    /// All user-visible schemas in the active database. The panel
     /// renders these as the left-rail picker; the active schema is
-    /// `schema_name`. Empty when no database is selected.
+    /// `schema_name`. Excludes `pg_catalog` / `information_schema`
+    /// / `pg_toast*`. Empty when no database is selected.
     schemas: Vec<String>,
     table_name: String,
+    /// Bare table names in the active schema. Kept as
+    /// `Vec<String>` for selectors that look tables up by name.
     tables: Vec<String>,
+    /// 1:1 enrichment for `tables` — row count / data size /
+    /// index size. `engine` and `updatedAt` are always `null`
+    /// for PG.
+    table_summaries: Vec<PostgresTableSummary>,
+    /// View names defined in the active schema. Rendered in a
+    /// separate folder.
+    views: Vec<String>,
+    /// Stored functions + procedures defined in the active
+    /// schema. The `kind` field discriminates the two.
+    routines: Vec<PostgresRoutineSummary>,
     columns: Vec<PostgresColumnView>,
     preview: Option<DataPreview>,
     /// Connection-pool snapshot for the active database. `(0, 0)`
@@ -4079,18 +4116,61 @@ fn postgres_browse(
     let schema_name = schema
         .filter(|s| !s.trim().is_empty())
         .unwrap_or_else(|| {
+            // Prefer "public" when available, otherwise fall back
+            // to the first user-visible schema. Roles without
+            // permission to see "public" still get a sensible
+            // default instead of a hardcoded miss.
             if schemas.iter().any(|s| s == "public") {
                 String::from("public")
             } else {
-                schemas.first().cloned().unwrap_or_else(|| String::from("public"))
+                schemas
+                    .first()
+                    .cloned()
+                    .unwrap_or_else(|| String::from("public"))
             }
         });
-    let tables = if database_name.is_empty() {
+    // Pull the enriched table list once and derive the bare-name
+    // `tables` array from it — same pattern as the MySQL panel.
+    let table_summaries: Vec<PostgresTableSummary> = if database_name.is_empty() {
         Vec::new()
     } else {
         client
-            .list_tables_blocking(&schema_name)
+            .list_tables_meta_blocking(&schema_name)
             .map_err(|e| e.to_string())?
+            .into_iter()
+            .map(|s| PostgresTableSummary {
+                name: s.name,
+                row_count: s.row_count,
+                data_bytes: s.data_bytes,
+                index_bytes: s.index_bytes,
+                engine: s.engine,
+                updated_at: s.updated_at,
+            })
+            .collect()
+    };
+    let tables: Vec<String> = table_summaries
+        .iter()
+        .map(|s| s.name.clone())
+        .collect();
+    // Views + routines failsoft on permission errors — same logic
+    // as MySQL.
+    let views = if database_name.is_empty() {
+        Vec::new()
+    } else {
+        client.list_views_blocking(&schema_name).unwrap_or_default()
+    };
+    let routines = if database_name.is_empty() {
+        Vec::new()
+    } else {
+        client
+            .list_routines_blocking(&schema_name)
+            .unwrap_or_default()
+            .into_iter()
+            .map(|r| PostgresRoutineSummary {
+                name: r.name,
+                kind: r.kind,
+            })
+            .collect()
     };
     let table_name = choose_active_item(table, &tables);
     let columns = if database_name.is_empty() || table_name.is_empty() {
@@ -4132,6 +4212,9 @@ fn postgres_browse(
         schemas,
         table_name,
         tables,
+        table_summaries,
+        views,
+        routines,
         columns,
         preview,
         pool: PostgresPoolView { active, total },

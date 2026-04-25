@@ -43,6 +43,17 @@ type Props = { tab: TabState };
 // PostgreSQL numeric types — parallels the MySQL regex in MySqlPanel.
 const NUMERIC_TYPE_RE = /^(smallint|integer|bigint|numeric|decimal|real|double|money|serial|bigserial)/i;
 
+/** Compact human-readable byte formatter for the schema-tree
+ *  tooltip. Inlined per CLAUDE.md "three similar lines beats
+ *  premature abstraction" — same shape as the copies in
+ *  `MySqlPanel`, `SqlitePanel`, `SftpPanel`. */
+function formatBytes(n: number): string {
+  if (n < 1024) return `${n} B`;
+  if (n < 1024 * 1024) return `${(n / 1024).toFixed(1)} KB`;
+  if (n < 1024 * 1024 * 1024) return `${(n / (1024 * 1024)).toFixed(1)} MB`;
+  return `${(n / (1024 * 1024 * 1024)).toFixed(2)} GB`;
+}
+
 const POSTGRES_ADAPTER: DbCredentialFieldAdapter = {
   readHost: (t) => t.pgHost,
   readPort: (t) => t.pgPort,
@@ -276,33 +287,58 @@ function PostgresPanelBody({ tab }: Props) {
       status: "unknown",
     }));
 
-  // PG tree: backend now returns `schemas[]` for the active
-  // database. We render each schema as a sub-folder under the
-  // active db; sibling dbs stay collapsed (we don't enumerate
-  // their schemas — would cost a connection per db).
+  // PG tree: backend returns table/view/routine enrichment per
+  // the active schema, plus `schemas[]` for the in-tree schema
+  // picker. Active db gets the full payload; siblings stay
+  // collapsed (we don't enumerate their schemas — would cost a
+  // connection per db).
   const databases: DbSchemaDatabase[] = state
     ? state.databases.map((name) => {
-        if (name !== state.databaseName) {
+        const isCurrent = name === state.databaseName;
+        if (!isCurrent) {
           return { name, current: false, tables: [] };
         }
-        // The active db: build one DbSchemaDatabase per schema so
-        // the tree gets a schema-as-folder shape. The schema's
-        // own tables only populate when it matches `schemaName`
-        // (we have just the active schema's table list).
-        const schemaList = state.schemas.length > 0 ? state.schemas : [state.schemaName || "public"];
-        const tablesByCurrentSchema = state.tables.map((tname) => ({
-          id: `${name}.${state.schemaName}.${tname}`,
-          label: tname,
+        const summaryByName = new Map(
+          state.tableSummaries.map((s) => [s.name, s] as const),
+        );
+        const tables = state.tables.map((tname) => {
+          const meta = summaryByName.get(tname);
+          const tooltipParts: string[] = [];
+          if (typeof meta?.dataBytes === "number") {
+            tooltipParts.push(t("data {n}", { n: formatBytes(meta.dataBytes) }));
+          }
+          if (typeof meta?.indexBytes === "number") {
+            tooltipParts.push(t("idx {n}", { n: formatBytes(meta.indexBytes) }));
+          }
+          return {
+            id: `${name}.${state.schemaName}.${tname}`,
+            label: tname,
+            count: meta?.rowCount ?? null,
+            tooltip: tooltipParts.length > 0 ? tooltipParts.join(" · ") : null,
+          };
+        });
+        const views = state.views.map((vname) => ({
+          id: `${name}.${state.schemaName}.${vname}`,
+          label: vname,
         }));
-        // The schema-tree component takes a flat tables list per
-        // database. We collapse the schemas into a single label
-        // string for the active schema and include only that one's
-        // tables — matches today's UX while exposing schema choice
-        // through the toolbar dropdown below.
+        const routines = state.routines.map((r) => ({
+          id: `${name}.${state.schemaName}.${r.name}`,
+          label: r.name,
+          badge:
+            r.kind.toUpperCase() === "FUNCTION"
+              ? "FN"
+              : r.kind.toUpperCase() === "PROCEDURE"
+                ? "PR"
+                : null,
+        }));
+        const schemaList =
+          state.schemas.length > 0 ? state.schemas : [state.schemaName || "public"];
         return {
           name,
           current: true,
-          tables: tablesByCurrentSchema,
+          tables,
+          views,
+          routines,
           schemas: schemaList,
           activeSchema: state.schemaName,
         };

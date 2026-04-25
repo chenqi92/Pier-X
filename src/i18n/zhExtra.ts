@@ -28,6 +28,7 @@ export const zhExtra: Record<string, string> = {
   "~/.ssh/id_ed25519": "~/.ssh/id_ed25519",
   "{count} lines": "{count} 行",
   "{count} lines · streaming": "{count} 行 · 流式中",
+  "{count} lines · {rate} l/s": "{count} 行 · {rate} 行/秒",
   "{database} · {host}:{port}": "{database} · {host}:{port}",
   "{database} · tunnel :{port}": "{database} · 隧道 :{port}",
   "{file} · {count} tables": "{file} · {count} 张表",

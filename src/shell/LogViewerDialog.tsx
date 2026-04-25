@@ -103,16 +103,41 @@ export default function LogViewerDialog({
     return acc;
   }, [events]);
 
-  // Apply level + source filters
+  // Apply level + source + time-range filters. The `ts` string is
+  // `HH:MM:SS` clock-format set at drain time, so we anchor it to
+  // today's date — close enough for the dialog's "show me last N
+  // minutes" affordance over a live stream. Crossing midnight will
+  // bias the filter slightly until back-fill ships (BACKEND-GAPS).
+  const rangeMs: number | null = useMemo(() => {
+    switch (range) {
+      case "last1m": return 60_000;
+      case "last15m": return 15 * 60_000;
+      case "last1h": return 60 * 60_000;
+      case "last24h": return 24 * 60 * 60_000;
+      default: return null;
+    }
+  }, [range]);
   const filtered = useMemo(() => {
     const sf = sourceFilter.trim().toLowerCase();
+    const cutoff = rangeMs !== null ? Date.now() - rangeMs : null;
+    const today = new Date();
+    today.setHours(0, 0, 0, 0);
+    const dayStart = today.getTime();
     return events.filter((e) => {
       const lvKey = e.level.toUpperCase() as keyof Levels;
       if (!levels[lvKey]) return false;
       if (sf && !e.text.toLowerCase().includes(sf)) return false;
+      if (cutoff !== null) {
+        // Parse `HH:MM:SS` to ms-since-midnight, anchor to today.
+        const [hh, mm, ss] = e.ts.split(":").map((s) => parseInt(s, 10));
+        if (Number.isFinite(hh) && Number.isFinite(mm) && Number.isFinite(ss)) {
+          const eventMs = dayStart + ((hh * 3600 + mm * 60 + ss) * 1000);
+          if (eventMs < cutoff) return false;
+        }
+      }
       return true;
     });
-  }, [events, levels, sourceFilter]);
+  }, [events, levels, sourceFilter, rangeMs]);
 
   // Search hits — count + per-line offsets, with one shared regex
   const searchRegex = useMemo(() => {

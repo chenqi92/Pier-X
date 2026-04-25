@@ -290,26 +290,6 @@ impl PostgresClient {
     /// List schemas in the current database, hiding the internal
     /// `pg_*` and `information_schema` namespaces. Sorted with the
     /// caller's current schema floated to the top — convenient for
-    /// the panel's left-rail picker.
-    pub async fn list_schemas(&self) -> Result<Vec<String>> {
-        let rows = self
-            .client
-            .query(
-                "SELECT schema_name FROM information_schema.schemata \
-                 WHERE schema_name NOT LIKE 'pg\\_%' \
-                   AND schema_name <> 'information_schema' \
-                 ORDER BY schema_name",
-                &[],
-            )
-            .await?;
-        Ok(rows.iter().map(|r| r.get::<_, String>(0)).collect())
-    }
-
-    /// Blocking wrapper for [`Self::list_schemas`].
-    pub fn list_schemas_blocking(&self) -> Result<Vec<String>> {
-        crate::ssh::runtime::shared().block_on(self.list_schemas())
-    }
-
     /// Snapshot of `pg_stat_activity` filtered to the current
     /// database. Returns `(active, total)` — `active` is rows with
     /// `state = 'active'`, `total` is the row count regardless of

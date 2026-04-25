@@ -13,6 +13,7 @@ import PanelHeader from "../components/PanelHeader";
 import StatusDot from "../components/StatusDot";
 import { useUiActionsStore } from "../stores/useUiActionsStore";
 import { logEvent } from "../lib/logger";
+import PanelSkeleton, { useDeferredMount } from "../components/PanelSkeleton";
 
 type Props = {
   tab: TabState;
@@ -94,7 +95,16 @@ function formatTimestamp(ts: number): string {
   return `${pad(d.getHours())}:${pad(d.getMinutes())}:${pad(d.getSeconds())}`;
 }
 
-export default function ServerMonitorPanel({ tab, onEditConnection, isActive = true }: Props) {
+export default function ServerMonitorPanel(props: Props) {
+  const ready = useDeferredMount();
+  return (
+    <div className="panel-stage">
+      {ready ? <ServerMonitorPanelBody {...props} /> : <PanelSkeleton variant="chrome" />}
+    </div>
+  );
+}
+
+function ServerMonitorPanelBody({ tab, onEditConnection, isActive = true }: Props) {
   const { t } = useI18n();
   const formatError = (error: unknown) => localizeError(error, t);
   const [snap, setSnap] = useState<ServerSnapshotView | null>(null);

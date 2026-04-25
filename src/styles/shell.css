@@ -159,7 +159,7 @@ button,
   cursor: text;
 }
 
-::selection { background: var(--accent-dim); color: var(--ink); }
+::selection { background: var(--selection-bg); color: var(--selection-fg); }
 
 /* ── Stage (window-in-viewport frame) ─────────────────────── */
 
@@ -2090,7 +2090,7 @@ button,
 .terminal-screen,
 .terminal-row,
 .terminal-segment { user-select: text; }
-.terminal-screen ::selection { background: var(--accent-dim); color: var(--ink); }
+.terminal-screen ::selection { background: var(--selection-bg); color: var(--selection-fg); }
 
 .terminal-segment { display: inline; }
 .terminal-segment--cursor { background: var(--accent); color: var(--accent-ink); }
@@ -5966,23 +5966,27 @@ button,
  * additions: a port composer toolbar, inline raw `iptables-save`
  * <pre> dumps, per-interface bandwidth sparklines, and the
  * "send-to-terminal" confirmation modal. */
-.fw .fw-composer { gap: var(--sp-2); }
-.fw .fw-port-input {
-  width: 96px;
-  padding: 4px 8px;
+.fw .fw-composer { gap: var(--sp-2); align-items: center; }
+/* Port input + proto select share `--control-height` so they line up
+ * with the Allow / Deny buttons (`.btn.is-compact` is 24px — we lift
+ * those to control-height too via `.fw-composer .btn.is-compact`).
+ * Without explicit height the browser defaults render `<input>` and
+ * `<select>` at slightly different intrinsic heights. */
+.fw .fw-port-input,
+.fw .fw-proto {
+  height: var(--control-height);
+  box-sizing: border-box;
+  line-height: 1;
+  padding: 0 var(--sp-2);
   border: 1px solid var(--line);
   border-radius: var(--radius-sm);
   background: var(--panel);
   color: var(--ink);
   font-size: var(--ui-fs-sm);
 }
-.fw .fw-proto {
-  padding: 4px 8px;
-  border: 1px solid var(--line);
-  border-radius: var(--radius-sm);
-  background: var(--panel);
-  color: var(--ink);
-  font-size: var(--ui-fs-sm);
+.fw .fw-port-input { width: 96px; }
+.fw .fw-composer .btn.is-compact {
+  height: var(--control-height);
 }
 .fw .fw-policies {
   display: flex;
@@ -6043,7 +6047,11 @@ button,
   background: var(--panel-2);
   border-radius: var(--radius-xs);
 }
-.fw .fw-confirm-scrim {
+/* Confirm + custom-rule modals render as siblings of `.fw` (top-level
+ * fragment children of FirewallPanel), so these selectors are
+ * intentionally unscoped — `.fw .fw-confirm-...` would not match.
+ * Class names are unique to the firewall panel to avoid collisions. */
+.fw-confirm-scrim {
   position: fixed;
   inset: 0;
   background: var(--overlay-scrim);
@@ -6052,7 +6060,7 @@ button,
   justify-content: center;
   z-index: 200;
 }
-.fw .fw-confirm {
+.fw-confirm {
   width: 480px;
   max-width: 92vw;
   background: var(--surface);
@@ -6064,12 +6072,12 @@ button,
   flex-direction: column;
   gap: var(--sp-3);
 }
-.fw .fw-confirm-title {
+.fw-confirm-title {
   color: var(--ink);
   font-size: var(--ui-fs-lg);
   font-weight: 600;
 }
-.fw .fw-confirm-body {
+.fw-confirm-body {
   padding: var(--sp-3);
   background: var(--panel-2);
   border: 1px solid var(--line);
@@ -6079,12 +6087,252 @@ button,
   word-break: break-all;
   white-space: pre-wrap;
 }
-.fw .fw-confirm-hint {
+.fw-confirm-hint {
   color: var(--muted);
   font-size: var(--size-micro);
 }
-.fw .fw-confirm-actions {
+.fw-confirm-actions {
   display: flex;
   justify-content: flex-end;
   gap: var(--sp-2);
+}
+/* Rule-composer dialog (renders inside .fw-confirm) — same root, so
+ * its selectors stay unscoped too. */
+.fw-rule-dialog { width: 520px; }
+.fw-rule-form {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: var(--sp-2) var(--sp-3);
+}
+.fw-rule-field {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-1);
+  font-size: var(--size-micro);
+  color: var(--muted);
+}
+.fw-rule-field > span {
+  font-family: var(--mono);
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+.fw-rule-field input,
+.fw-rule-field select {
+  height: var(--control-height);
+  box-sizing: border-box;
+  line-height: 1;
+  padding: 0 var(--sp-2);
+  border: 1px solid var(--line);
+  border-radius: var(--radius-sm);
+  background: var(--panel);
+  color: var(--ink);
+  font-size: var(--ui-fs-sm);
+}
+.fw-rule-field input:disabled {
+  opacity: 0.5;
+}
+
+/* ── Rules tab — chain-grouped cards ──────────────────────────
+ * Each chain (INPUT / OUTPUT / FORWARD) gets one card; the chain
+ * header carries the rule count, then individual rows render the
+ * action badge, a natural-language summary, the raw `-A` body in
+ * mono small text, the hit-count pill, and a delete button. The
+ * raw `iptables-save` <pre> dump still ships under a "Show raw"
+ * toggle for users who want to see what we parsed from. */
+.fw .fw-rules {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-2);
+  padding: var(--sp-2) var(--sp-3);
+}
+.fw .fw-rule-chain {
+  border: 1px solid var(--line);
+  border-radius: var(--radius-sm);
+  background: var(--panel);
+  overflow: hidden;
+}
+.fw .fw-rule-chain-head {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-2);
+  padding: var(--sp-1-5) var(--sp-2);
+  background: var(--panel-2);
+  border-bottom: 1px solid var(--line);
+  font-size: var(--size-micro);
+}
+.fw .fw-rule-row {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-2);
+  padding: var(--sp-1-5) var(--sp-2);
+  border-bottom: 1px solid var(--line);
+}
+.fw .fw-rule-row:last-child { border-bottom: none; }
+.fw .fw-rule-text {
+  flex: 1;
+  min-width: 0;
+}
+.fw .fw-rule-summary {
+  font-size: var(--ui-fs-sm);
+  color: var(--ink);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.fw .fw-rule-raw {
+  font-size: var(--size-micro);
+  color: var(--muted);
+  margin-top: 1px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* (Custom rule composer dialog styles live with the modal block above —
+ * the dialog renders as a sibling of `.fw`, not a descendant.) */
+
+/* ───────────────────────── Shared panel skeleton ─────────────────────────
+ * Used as a paint-first placeholder while a right-side tool panel is
+ * mounting its heavy body or waiting on its first IPC. Variants match
+ * the rough visual weight of each panel family so the swap to real
+ * content does not jump the layout. */
+.panel-sk {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-2);
+  padding: var(--sp-3);
+  width: 100%;
+  height: 100%;
+  box-sizing: border-box;
+}
+.panel-sk-bar {
+  display: block;
+  border-radius: var(--radius-xs);
+  background: linear-gradient(
+    90deg,
+    var(--panel) 0%,
+    var(--panel-2) 50%,
+    var(--panel) 100%
+  );
+  background-size: 200% 100%;
+  animation: panelSkShimmer 1.4s linear infinite;
+}
+@keyframes panelSkShimmer {
+  0% { background-position: 200% 0; }
+  100% { background-position: -200% 0; }
+}
+
+/* rows: list-of-rows look (Git, Log, generic). */
+.panel-sk--rows .panel-sk-row {
+  display: grid;
+  grid-template-columns: 14px 1fr 70px;
+  gap: var(--sp-2);
+  align-items: center;
+  height: 18px;
+}
+.panel-sk--rows .panel-sk-bar.is-icon { width: 14px; height: 14px; border-radius: 50%; }
+.panel-sk--rows .panel-sk-bar.is-name { height: 10px; }
+.panel-sk--rows .panel-sk-bar.is-meta { height: 10px; width: 80%; justify-self: end; }
+
+/* grid: table-like (DB query result placeholder). */
+.panel-sk--grid .panel-sk-head {
+  display: grid;
+  grid-template-columns: repeat(4, 1fr);
+  gap: var(--sp-2);
+  height: 18px;
+  padding-bottom: var(--sp-1-5);
+  border-bottom: 1px solid var(--line);
+}
+.panel-sk--grid .panel-sk-head .panel-sk-bar { height: 10px; }
+.panel-sk--grid .panel-sk-row {
+  display: grid;
+  grid-template-columns: repeat(4, 1fr);
+  gap: var(--sp-2);
+  height: 22px;
+  align-items: center;
+}
+.panel-sk--grid .panel-sk-row .panel-sk-bar { height: 10px; }
+
+/* chrome: top status bar + gauges (Monitor). */
+.panel-sk--chrome .panel-sk-host {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-1-5);
+  padding-bottom: var(--sp-2);
+  border-bottom: 1px solid var(--line);
+}
+.panel-sk--chrome .panel-sk-host .panel-sk-bar.is-title { height: 12px; width: 55%; }
+.panel-sk--chrome .panel-sk-host .panel-sk-bar.is-sub   { height: 10px; width: 75%; }
+.panel-sk--chrome .panel-sk-gauges {
+  display: grid;
+  grid-template-columns: repeat(2, 1fr);
+  gap: var(--sp-2);
+  margin-top: var(--sp-2);
+}
+.panel-sk--chrome .panel-sk-gauges .panel-sk-bar {
+  height: 60px;
+  border-radius: var(--radius-sm);
+}
+
+/* prose: paragraph (Markdown). */
+.panel-sk--prose .panel-sk-bar { height: 10px; }
+.panel-sk--prose .panel-sk-bar.is-title { height: 16px; width: 45%; margin-bottom: var(--sp-2); }
+.panel-sk--prose .panel-sk-bar.is-line  { width: 100%; }
+.panel-sk--prose .panel-sk-bar.is-short { width: 60%; }
+
+/* splash: connection-list look (DB panels before a credential is picked).
+ * One header row + a stack of card-shaped bars matching the DbConnectSplash
+ * layout's saved/detected list. */
+.panel-sk--splash .panel-sk-head {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-1-5);
+  padding-bottom: var(--sp-2);
+  margin-bottom: var(--sp-1);
+  border-bottom: 1px solid var(--line);
+}
+.panel-sk--splash .panel-sk-head .panel-sk-bar.is-title { height: 12px; width: 40%; }
+.panel-sk--splash .panel-sk-head .panel-sk-bar.is-sub   { height: 10px; width: 70%; }
+.panel-sk--splash .panel-sk-card {
+  height: 44px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius-sm);
+  background: linear-gradient(
+    90deg,
+    var(--panel) 0%,
+    var(--panel-2) 50%,
+    var(--panel) 100%
+  );
+  background-size: 200% 100%;
+  animation: panelSkShimmer 1.4s linear infinite;
+}
+
+/* ───────────────────────── Panel stage (skeleton ↔ body swap) ─────────────
+ * Sits between the right-tool-slot and a panel's content. Two purposes:
+ *  1) provide a stable flex column so wrapping the body doesn't break the
+ *     existing layout assumptions of panels that previously rendered
+ *     directly into the slot.
+ *  2) host an entrance animation on the body's first paint so the
+ *     skeleton → real content transition reads as a soft fade rather
+ *     than the prior "everything pops in at once". The animation is
+ *     scoped to *direct children that are NOT a skeleton* so the
+ *     skeleton itself paints instantly (perceived responsiveness wins
+ *     over animating the placeholder). */
+.panel-stage {
+  display: flex;
+  flex-direction: column;
+  flex: 1 1 auto;
+  min-height: 0;
+  width: 100%;
+  height: 100%;
+}
+.panel-stage > :not(.panel-sk) {
+  animation: panelStageEnter var(--dur-normal) var(--easing);
+}
+@keyframes panelStageEnter {
+  from { opacity: 0; transform: translateY(2px); }
+  to   { opacity: 1; transform: none; }
+}
+@media (prefers-reduced-motion: reduce) {
+  .panel-stage > :not(.panel-sk) { animation: none; }
 }

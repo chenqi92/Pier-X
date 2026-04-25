@@ -44,6 +44,7 @@
 }
 .icon-btn:hover { background: var(--panel-2); color: var(--ink); }
 .icon-btn.is-active { background: var(--accent-dim); color: var(--accent); }
+.icon-btn.is-danger:hover { background: var(--neg-dim); color: var(--neg); }
 .icon-btn:disabled { opacity: 0.4; cursor: default; }
 .icon-btn svg { width: var(--icon-md); height: var(--icon-md); }
 
@@ -620,3 +621,193 @@
 .swatch-amber { background: var(--accent-amber); }
 .swatch-violet { background: var(--accent-violet); }
 .swatch-coral { background: var(--accent-coral); }
+
+/* ─── Popover ─────────────────────────────────────────────
+   Anchored floating panel (filter dropdowns, branch picker,
+   row context menus). Companion to the `.dlg` modal in
+   pier-x.css; popovers are smaller, anchored to a trigger
+   element, and dismissed by clicking outside or pressing
+   Escape. Position is computed by the React Popover
+   component; the layer captures outside clicks. */
+.popover-layer {
+  position: fixed;
+  inset: 0;
+  z-index: 260;
+}
+.popover {
+  position: absolute;
+  min-width: 200px;
+  max-height: min(82vh, 720px);
+  overflow: auto;
+  background: var(--elev);
+  border: 1px solid var(--line-2);
+  border-radius: var(--radius-lg);
+  box-shadow: var(--shadow-popover);
+  padding: var(--sp-1-5);
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-0-5);
+}
+.popover-header {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-2);
+  padding: var(--sp-1-5) var(--sp-2) var(--sp-1);
+}
+.popover-header__title {
+  flex: 1;
+  font-family: var(--mono);
+  font-size: var(--size-micro);
+  font-weight: var(--weight-semibold);
+  color: var(--muted);
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.popover-header__sub {
+  font-family: var(--sans);
+  font-size: var(--size-micro);
+  color: var(--dim);
+  font-weight: var(--weight-regular);
+  text-transform: none;
+  letter-spacing: 0;
+  margin-left: var(--sp-2);
+}
+.popover-section {
+  font-family: var(--mono);
+  font-size: var(--size-micro);
+  font-weight: var(--weight-semibold);
+  color: var(--muted);
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  padding: var(--sp-1-5) var(--sp-2) var(--sp-1);
+}
+.popover-search {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-1-5);
+  margin: var(--sp-1) var(--sp-1) var(--sp-1-5);
+  height: 26px;
+  padding: 0 var(--sp-2);
+  background: var(--panel);
+  border: 1px solid var(--line-2);
+  border-radius: var(--radius-sm);
+}
+.popover-search svg { width: 12px; height: 12px; color: var(--muted); flex: none; }
+.popover-search input {
+  flex: 1;
+  min-width: 0;
+  background: transparent;
+  border: none;
+  outline: none;
+  color: var(--ink);
+  font-family: var(--sans);
+  font-size: var(--ui-fs);
+}
+.popover-search:focus-within { border-color: var(--accent); }
+.popover-item {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-2);
+  min-height: var(--row-h);
+  min-width: 0;
+  width: 100%;
+  padding: 0 var(--sp-2);
+  border-radius: var(--radius-sm);
+  background: transparent;
+  border: none;
+  color: var(--ink-2);
+  font-family: var(--sans);
+  font-size: var(--ui-fs);
+  text-align: left;
+  cursor: default;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  transition: background var(--dur-fast) var(--easing);
+}
+.popover-item:hover { background: var(--panel-2); color: var(--ink); }
+/* Default `is-active` (radio-like default action menus) gets a subtle
+   accent text; the heavy filled background is reserved for full-row
+   selection elsewhere. Toggle/radio rows opt in to `--checkable` to
+   replace the background entirely with a right-side check glyph. */
+.popover-item.is-active { color: var(--accent); background: var(--accent-dim); }
+.popover-item--checkable.is-active { background: transparent; color: var(--ink); font-weight: var(--weight-medium); }
+.popover-item--checkable.is-active:hover { background: var(--panel-2); }
+.popover-item.is-destructive { color: var(--neg); }
+.popover-item.is-destructive:hover { background: var(--neg-dim); color: var(--neg); }
+.popover-item:disabled { opacity: 0.45; }
+.popover-item__icon { display: inline-flex; align-items: center; justify-content: center; width: 16px; flex: none; color: var(--muted); }
+.popover-item.is-active .popover-item__icon { color: var(--accent); }
+.popover-item__label { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.popover-item__check {
+  width: 14px;
+  flex: none;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  color: var(--accent);
+}
+.popover-item__hint {
+  font-family: var(--mono);
+  font-size: var(--size-micro);
+  color: var(--muted);
+  flex: none;
+}
+.popover-divider {
+  height: 1px;
+  background: var(--line);
+  margin: var(--sp-1) var(--sp-0-5);
+}
+.popover-empty {
+  padding: var(--sp-3) var(--sp-2);
+  font-size: var(--ui-fs-sm);
+  color: var(--muted);
+  text-align: center;
+}
+
+/* Popover-as-form: a larger, taller popover (e.g. branch manager,
+   path-filter tree) where the body should scroll while header and
+   footer stay pinned. The host `.popover` already provides chrome;
+   this just lays out a vertical column inside. The fixed `height`
+   (vs `max-height`) is critical — without it the column collapses to
+   the natural size of header+footer and the scrollable body shrinks
+   to a single visible row. */
+.git-popover-form {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-2);
+  height: min(70vh, 520px);
+  min-height: 320px;
+}
+
+.git-popover-form__body {
+  flex: 1;
+  min-height: 0;
+  overflow: auto;
+  border: 1px solid var(--line);
+  border-radius: var(--radius-sm);
+  background: var(--surface);
+}
+
+/* Inner scrollable lists inside a popover-form should fill the body —
+   without this the list collapses to its content height and a 3-row
+   list looks like 1 visible row inside a tall blank box. Long lists
+   then scroll within the body rather than pushing it. */
+.git-popover-form__body > .git-manager-list,
+.git-popover-form__body > .git-path-list,
+.git-popover-form__body > .git-manager {
+  height: 100%;
+  min-height: 0;
+}
+
+.git-popover-form__foot {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-1);
+  padding-top: var(--sp-1);
+  border-top: 1px solid var(--line);
+  margin-top: var(--sp-1);
+}

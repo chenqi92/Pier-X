@@ -2,6 +2,7 @@ import { useEffect, useState } from "react";
 import * as cmd from "../lib/commands";
 import { useI18n } from "../i18n/useI18n";
 import { localizeError } from "../i18n/localizeMessage";
+import PanelSkeleton from "../components/PanelSkeleton";
 
 type Props = {
   filePath?: string;
@@ -48,7 +49,7 @@ export default function MarkdownPanel({ filePath }: Props) {
         {!filePath ? (
           <div className="empty-note">{t("Select a Markdown file on the left to preview.")}</div>
         ) : loading ? (
-          <div className="empty-note">{t("Rendering…")}</div>
+          <PanelSkeleton variant="prose" rows={6} />
         ) : error ? (
           <div className="empty-note empty-note--error">{error}</div>
         ) : (

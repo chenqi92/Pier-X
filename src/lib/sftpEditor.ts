@@ -194,9 +194,9 @@ export function buildEditorTheme(): Extension[] {
         borderLeftColor: "var(--accent)",
       },
       ".cm-selectionBackground, ::selection":
-        { backgroundColor: "color-mix(in srgb, var(--accent) 22%, transparent)" },
+        { backgroundColor: "var(--selection-bg)" },
       "&.cm-focused .cm-selectionBackground, &.cm-focused ::selection":
-        { backgroundColor: "color-mix(in srgb, var(--accent) 38%, transparent)" },
+        { backgroundColor: "var(--selection-bg-strong)" },
       ".cm-gutters": {
         backgroundColor: "var(--surface)",
         color: "var(--muted)",

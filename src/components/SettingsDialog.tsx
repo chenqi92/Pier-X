@@ -880,7 +880,10 @@ function PrivacyPanel() {
             <button
               type="button"
               className="mini-button mini-button--ghost"
-              onClick={() => logPath && void openPath(logPath).catch(() => {})}
+              onClick={() => {
+                if (!logPath) return;
+                void openPath(logPath).catch((e) => toast.error(String(e)));
+              }}
               disabled={!logPath}
             >
               {t("Open")}
@@ -888,7 +891,10 @@ function PrivacyPanel() {
             <button
               type="button"
               className="mini-button mini-button--ghost"
-              onClick={() => logPath && void revealItemInDir(logPath).catch(() => {})}
+              onClick={() => {
+                if (!logPath) return;
+                void revealItemInDir(logPath).catch((e) => toast.error(String(e)));
+              }}
               disabled={!logPath}
             >
               {t("Show in folder")}
@@ -990,7 +996,7 @@ function SshKeysPanel() {
               <button
                 type="button"
                 className="mini-button mini-button--ghost"
-                onClick={() => void openPath(k.path).catch(() => {})}
+                onClick={() => void openPath(k.path).catch((e) => toast.error(String(e)))}
                 title={t("Open private key in default editor")}
               >
                 {t("Open")}
@@ -998,7 +1004,7 @@ function SshKeysPanel() {
               <button
                 type="button"
                 className="mini-button mini-button--ghost"
-                onClick={() => void revealItemInDir(k.path).catch(() => {})}
+                onClick={() => void revealItemInDir(k.path).catch((e) => toast.error(String(e)))}
                 title={t("Reveal in folder")}
               >
                 {t("Show")}

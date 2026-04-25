@@ -153,6 +153,12 @@ export function useDbCredentialFlow(opts: UseDbCredentialFlowOpts): DbCredential
   const [adopting, setAdopting] = useState<DetectedDbInstance | null>(null);
   const [pwUpdateOpen, setPwUpdateOpen] = useState(false);
   const autoBrowseAttemptedRef = useRef(false);
+  // Bumped by `activateCredential` so the auto-browse effect re-fires
+  // even when the user re-clicks the credential that's already active
+  // (e.g. retrying after the seeded auto-browse failed). Without this
+  // the effect's identity-only deps would consider the click a no-op
+  // and the user would see no response at all.
+  const [browseTrigger, setBrowseTrigger] = useState(0);
 
   // ── Saved creds + detected instances ────────────────────────
   const connection = useConnectionStore((s) =>
@@ -328,9 +334,10 @@ export function useDbCredentialFlow(opts: UseDbCredentialFlowOpts): DbCredential
       cancelled = true;
     };
     // Intentionally narrow deps — we only want to kick off on
-    // identity changes, not on every `browse` closure rebuild.
+    // identity changes plus the explicit `browseTrigger` bump from
+    // `activateCredential`, not on every `browse` closure rebuild.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [activeCredId, savedIndex, hasSsh]);
+  }, [activeCredId, savedIndex, hasSsh, browseTrigger]);
 
   // ── Credential actions ──────────────────────────────────────
   function activateCredential(credId: string) {
@@ -340,6 +347,11 @@ export function useDbCredentialFlow(opts: UseDbCredentialFlowOpts): DbCredential
     setTunnelError("");
     updateTab(tab.id, adapter.patchFromCred(cred));
     onReset();
+    // Force the auto-browse effect to re-run even if the activated
+    // credential id matches the one already on `tab` (the splash's
+    // "Connect" button on a seeded-but-failed cred would otherwise be
+    // a no-op).
+    setBrowseTrigger((n) => n + 1);
   }
 
   async function disconnect() {
@@ -357,6 +369,9 @@ export function useDbCredentialFlow(opts: UseDbCredentialFlowOpts): DbCredential
     autoBrowseAttemptedRef.current = false;
     updateTab(tab.id, adapter.patchFromSaved(cred));
     onReset();
+    // Mirror activateCredential: even when the saved cred id collides
+    // with whatever was active before, force the auto-browse to fire.
+    setBrowseTrigger((n) => n + 1);
     void refreshConnections();
   }
 

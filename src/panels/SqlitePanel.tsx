@@ -5,11 +5,11 @@ import DismissibleNote from "../components/DismissibleNote";
 import DbConnectSplash from "../components/db/DbConnectSplash";
 import DbConnectedShell, { type DbConnectedTab } from "../components/db/DbConnectedShell";
 import type { DbHeaderInstance } from "../components/db/DbHeaderPicker";
+import DbConfigView, { type DbConfigRow } from "../components/db/DbConfigView";
 import DbResultGrid from "../components/db/DbResultGrid";
-import DbRowDetail from "../components/db/DbRowDetail";
-import DbSchemaTree, { type DbSchemaDatabase } from "../components/db/DbSchemaTree";
+import { type DbSchemaDatabase } from "../components/db/DbSchemaTree";
+import DbStructureView from "../components/db/DbStructureView";
 import DbSqlEditor from "../components/db/DbSqlEditor";
-import DbStubView from "../components/db/DbStubView";
 import type { DbSplashRowData } from "../components/db/DbSplashRow";
 import { useDbSqlTabs } from "../components/db/useDbSqlTabs";
 import {
@@ -30,6 +30,7 @@ import type {
   TabState,
 } from "../lib/types";
 import { effectiveSshTarget } from "../lib/types";
+import PanelSkeleton, { useDeferredMount } from "../components/PanelSkeleton";
 
 type Props = { tab: TabState | null };
 
@@ -41,7 +42,17 @@ type RemoteStatus =
 
 const NUMERIC_TYPE_RE = /^(int|integer|bigint|real|double|numeric|decimal|float)/i;
 
-export default function SqlitePanel({ tab }: Props) {
+export default function SqlitePanel(props: Props) {
+  const ready = useDeferredMount();
+  const variant = props.tab?.sqliteActiveCredentialId ? "grid" : "splash";
+  return (
+    <div className="panel-stage">
+      {ready ? <SqlitePanelBody {...props} /> : <PanelSkeleton variant={variant} rows={8} />}
+    </div>
+  );
+}
+
+function SqlitePanelBody({ tab }: Props) {
   const { t } = useI18n();
   const formatError = (error: unknown) => localizeError(error, t);
 
@@ -65,11 +76,9 @@ export default function SqlitePanel({ tab }: Props) {
   const [queryBusy, setQueryBusy] = useState(false);
   const [queryError, setQueryError] = useState("");
   const [notice, setNotice] = useState("");
+  const [committing, setCommitting] = useState(false);
 
   const [connectedTab, setConnectedTab] = useState<DbConnectedTab>("data");
-  // Store the row alongside its absolute index — indexOf() would
-  // collide on duplicate rows and mis-number the detail drawer title.
-  const [rowDetail, setRowDetail] = useState<{ row: string[]; idx: number } | null>(null);
 
   const [remoteStatus, setRemoteStatus] = useState<RemoteStatus>(
     hasSsh ? { kind: "unknown" } : { kind: "local-only" },
@@ -264,7 +273,6 @@ export default function SqlitePanel({ tab }: Props) {
     setQueryResult(null);
     setQueryError("");
     setNotice("");
-    setRowDetail(null);
   }
 
   // ── Splash rows (candidates as detected; no saved creds for SQLite yet) ──
@@ -446,14 +454,8 @@ export default function SqlitePanel({ tab }: Props) {
   const numericColumns = state.columns
     .filter((c) => NUMERIC_TYPE_RE.test(c.colType))
     .map((c) => c.name);
-  const detailColumns = state.columns.map((c) => ({
-    name: c.name,
-    type: c.colType,
-    pk: c.primaryKey,
-  }));
   const gridColumns = gridColumnsFromSqlite(state.columns);
 
-  const [committing, setCommitting] = useState(false);
   async function commitMutations(mutations: DbMutation[]) {
     if (!state || mutations.length === 0) return;
     const tableRef = qualifyTable("sqlite", { table: state.tableName });
@@ -543,13 +545,9 @@ export default function SqlitePanel({ tab }: Props) {
         pkColumns={pkColumns}
         numericColumns={numericColumns}
         toolbar={resultToolbar}
-        onOpenRow={(row) => {
-          const idx = state.preview?.rows.indexOf(row) ?? -1;
-          setRowDetail({ row, idx });
-        }}
         emptyLabel={
           state.tableName
-            ? t("Select a row to inspect.")
+            ? t("No rows in this table.")
             : t("Pick a table from the tree to preview rows.")
         }
         columnsMeta={gridColumns}
@@ -568,36 +566,17 @@ export default function SqlitePanel({ tab }: Props) {
     </>
   );
 
-  const structureTab =
-    state.columns.length > 0 ? (
-      <div className="db2-stub">
-        <div className="db2-stub-inner" style={{ alignItems: "stretch", maxWidth: 640 }}>
-          <div className="db2-stub-title">{t("Columns")}</div>
-          <table className="rg-table" style={{ background: "var(--panel)", borderRadius: "var(--radius-md)" }}>
-            <thead>
-              <tr>
-                <th><div className="rg-th-body"><span className="rg-th-name">{t("Name")}</span></div></th>
-                <th><div className="rg-th-body"><span className="rg-th-name">{t("Type")}</span></div></th>
-                <th><div className="rg-th-body"><span className="rg-th-name">{t("Null")}</span></div></th>
-                <th><div className="rg-th-body"><span className="rg-th-name">{t("Key")}</span></div></th>
-              </tr>
-            </thead>
-            <tbody>
-              {state.columns.map((col) => (
-                <tr key={col.name} className="rg-row">
-                  <td className="rg-td">{col.name}</td>
-                  <td className="rg-td" style={{ color: "var(--svc-sqlite)" }}>{col.colType}</td>
-                  <td className="rg-td">{col.notNull ? t("NO") : t("YES")}</td>
-                  <td className="rg-td">{col.primaryKey ? t("PK") : "—"}</td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
-        </div>
-      </div>
-    ) : (
-      <DbStubView title={t("No table selected")} />
-    );
+  const structureTab = (
+    <DbStructureView
+      columns={state.columns.map((c) => ({
+        name: c.name,
+        type: c.colType,
+        pk: c.primaryKey,
+        nullable: !c.notNull,
+      }))}
+      typeAccentVar="var(--svc-sqlite)"
+    />
+  );
 
   return (
     <>
@@ -619,34 +598,80 @@ export default function SqlitePanel({ tab }: Props) {
           table: state.tableName || undefined,
           stat: state.preview ? t("{count} rows", { count: state.preview.rows.length }) : null,
         }}
-        sidebar={
-          <DbSchemaTree
-            databases={databases}
-            selectedTableId={state.tableName || null}
-            onSelectTable={(_db, node) => {
-              const tbl = node.label;
-              setTableName(tbl);
-              sqlTabs.replaceActiveSql(
-                `SELECT * FROM "${tbl.replace(/"/g, '""')}" LIMIT 100;`,
-                tbl,
-              );
-              setRowDetail(null);
-              void browse(tbl);
-            }}
-          />
-        }
+        schema={{
+          databases,
+          selectedTableId: state.tableName || null,
+          onSelectTable: (_db, node) => {
+            const tbl = node.label;
+            setTableName(tbl);
+            sqlTabs.replaceActiveSql(
+              `SELECT * FROM "${tbl.replace(/"/g, '""')}" LIMIT 100;`,
+              tbl,
+            );
+            void browse(tbl);
+          },
+        }}
         dataTab={dataTab}
         structureTab={structureTab}
-        schemaTab={<DbStubView title={t("Schema overview")} />}
-        drawer={
-          rowDetail && state.preview ? (
-            <DbRowDetail
-              title={state.tableName ? `${state.tableName} · #${rowDetail.idx + 1}` : t("Row detail")}
-              columns={detailColumns}
-              row={rowDetail.row}
-              onClose={() => setRowDetail(null)}
-            />
-          ) : null
+        schemaTab={
+          <DbConfigView
+            title={t("SQLite pragmas")}
+            note={t("read-only")}
+            load={async () => {
+              const PRAGMAS: { name: string; description: string }[] = [
+                { name: "journal_mode", description: t("Journal mode (delete / wal / memory / …)") },
+                { name: "synchronous", description: t("Sync level on commit (0 / 1 / 2 / 3)") },
+                { name: "foreign_keys", description: t("Enforce foreign keys (0 / 1)") },
+                { name: "page_size", description: t("Page size in bytes") },
+                { name: "cache_size", description: t("Cache size (pages or KiB)") },
+                { name: "encoding", description: t("Database text encoding") },
+                { name: "auto_vacuum", description: t("Auto-vacuum mode (0 / 1 / 2)") },
+                { name: "user_version", description: t("User-defined schema version") },
+                { name: "schema_version", description: t("Internal schema cookie") },
+                { name: "application_id", description: t("Magic application ID") },
+                { name: "temp_store", description: t("Temp store backing (file / memory)") },
+                { name: "wal_autocheckpoint", description: t("WAL auto-checkpoint threshold") },
+              ];
+              const usePath = path.trim();
+              const runOne = async (sql: string): Promise<QueryExecutionResult> => {
+                if (isRemoteMode && sshTarget) {
+                  return cmd.sqliteExecuteRemote({
+                    host: sshTarget.host,
+                    port: sshTarget.port,
+                    user: sshTarget.user,
+                    authMode: sshTarget.authMode,
+                    password: sshTarget.password,
+                    keyPath: sshTarget.keyPath,
+                    savedConnectionIndex: sshTarget.savedConnectionIndex,
+                    dbPath: usePath,
+                    sql,
+                  });
+                }
+                return cmd.sqliteExecute(usePath, sql);
+              };
+              const results = await Promise.all(
+                PRAGMAS.map(async (p): Promise<DbConfigRow> => {
+                  try {
+                    const r = await runOne(`PRAGMA ${p.name};`);
+                    return {
+                      name: p.name,
+                      value: r.rows[0]?.[0] ?? "",
+                      description: p.description,
+                      source: "PRAGMA",
+                    };
+                  } catch {
+                    return {
+                      name: p.name,
+                      value: "?",
+                      description: p.description,
+                      source: "PRAGMA",
+                    };
+                  }
+                }),
+              );
+              return results;
+            }}
+          />
         }
       />
     </>

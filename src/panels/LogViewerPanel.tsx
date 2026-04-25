@@ -29,6 +29,7 @@ import PanelHeader from "../components/PanelHeader";
 import StatusDot from "../components/StatusDot";
 import LogViewerDialog from "../shell/LogViewerDialog";
 import { useTabStore } from "../stores/useTabStore";
+import PanelSkeleton, { useDeferredMount } from "../components/PanelSkeleton";
 
 type Props = { tab: TabState };
 type IconType = ComponentType<SVGProps<SVGSVGElement> & { size?: number | string }>;
@@ -68,7 +69,16 @@ const MODE_ICONS: Record<LogSourceMode, IconType> = {
   custom: TerminalIcon,
 };
 
-export default function LogViewerPanel({ tab }: Props) {
+export default function LogViewerPanel(props: Props) {
+  const ready = useDeferredMount();
+  return (
+    <div className="panel-stage">
+      {ready ? <LogViewerPanelBody {...props} /> : <PanelSkeleton variant="rows" rows={8} />}
+    </div>
+  );
+}
+
+function LogViewerPanelBody({ tab }: Props) {
   const { t } = useI18n();
   const formatError = (error: unknown) => localizeError(error, t);
   const updateTab = useTabStore((s) => s.updateTab);

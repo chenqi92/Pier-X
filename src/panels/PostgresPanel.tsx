@@ -7,11 +7,11 @@ import DismissibleNote from "../components/DismissibleNote";
 import DbConnectSplash from "../components/db/DbConnectSplash";
 import DbConnectedShell, { type DbConnectedTab } from "../components/db/DbConnectedShell";
 import type { DbHeaderInstance } from "../components/db/DbHeaderPicker";
+import DbConfigView, { type DbConfigRow } from "../components/db/DbConfigView";
 import DbResultGrid from "../components/db/DbResultGrid";
-import DbRowDetail from "../components/db/DbRowDetail";
-import DbSchemaTree, { type DbSchemaDatabase } from "../components/db/DbSchemaTree";
+import { type DbSchemaDatabase } from "../components/db/DbSchemaTree";
+import DbStructureView from "../components/db/DbStructureView";
 import DbSqlEditor from "../components/db/DbSqlEditor";
-import DbStubView from "../components/db/DbStubView";
 import type { DbSplashRowData } from "../components/db/DbSplashRow";
 import { inferEnv } from "../components/db/dbTheme";
 import {
@@ -36,10 +36,9 @@ import type {
   TabState,
 } from "../lib/types";
 import { useTabStore } from "../stores/useTabStore";
+import PanelSkeleton, { useDeferredMount } from "../components/PanelSkeleton";
 
 type Props = { tab: TabState };
-
-type PinnedRow = { row: string[]; idx: number };
 
 // PostgreSQL numeric types — parallels the MySQL regex in MySqlPanel.
 const NUMERIC_TYPE_RE = /^(smallint|integer|bigint|numeric|decimal|real|double|money|serial|bigserial)/i;
@@ -75,7 +74,17 @@ const POSTGRES_ADAPTER: DbCredentialFieldAdapter = {
   patchPasswordAfterRotate: (password) => ({ pgPassword: password }),
 };
 
-export default function PostgresPanel({ tab }: Props) {
+export default function PostgresPanel(props: Props) {
+  const ready = useDeferredMount();
+  const variant = props.tab.pgActiveCredentialId ? "grid" : "splash";
+  return (
+    <div className="panel-stage">
+      {ready ? <PostgresPanelBody {...props} /> : <PanelSkeleton variant={variant} rows={8} />}
+    </div>
+  );
+}
+
+function PostgresPanelBody({ tab }: Props) {
   const { t } = useI18n();
   const formatError = (error: unknown) => localizeError(error, t);
   const updateTab = useTabStore((s) => s.updateTab);
@@ -95,7 +104,6 @@ export default function PostgresPanel({ tab }: Props) {
   const [notice, setNotice] = useState("");
 
   const [connectedTab, setConnectedTab] = useState<DbConnectedTab>("data");
-  const [rowDetail, setRowDetail] = useState<PinnedRow | null>(null);
 
   const sqlTabs = useDbSqlTabs({ initialSql: "SELECT version();", initialName: t("query") });
   const sql = sqlTabs.sql;
@@ -111,7 +119,6 @@ export default function PostgresPanel({ tab }: Props) {
     setNotice("");
     setReadOnly(true);
     setWriteConfirm("");
-    setRowDetail(null);
   }
 
   async function browse(passwordOverride?: string, nextTable?: string, nextDb?: string, nextSchema?: string) {
@@ -131,7 +138,6 @@ export default function PostgresPanel({ tab }: Props) {
       });
       setState(s);
       setSchema(s.schemaName);
-      if (rowDetail && s.tableName !== state?.tableName) setRowDetail(null);
       if (s.databaseName !== tab.pgDatabase) {
         updateTab(tab.id, { pgDatabase: s.databaseName });
       }
@@ -287,13 +293,6 @@ export default function PostgresPanel({ tab }: Props) {
     : [];
   const numericColumns = state
     ? state.columns.filter((c) => NUMERIC_TYPE_RE.test(c.columnType)).map((c) => c.name)
-    : [];
-  const detailColumns = state
-    ? state.columns.map((c) => ({
-        name: c.name,
-        type: c.columnType,
-        pk: c.key === "PRI" || c.key === "PK",
-      }))
     : [];
   const gridColumns = state ? gridColumnsFromPostgres(state.columns) : [];
 
@@ -471,12 +470,8 @@ export default function PostgresPanel({ tab }: Props) {
         pkColumns={pkColumns}
         numericColumns={numericColumns}
         toolbar={resultToolbar}
-        onOpenRow={(row) => {
-          const idx = state.preview?.rows.indexOf(row) ?? -1;
-          setRowDetail({ row, idx });
-        }}
         emptyLabel={
-          state.tableName ? t("Select a row to inspect.") : t("Pick a table from the tree to preview rows.")
+          state.tableName ? t("No rows in this table.") : t("Pick a table from the tree to preview rows.")
         }
         columnsMeta={gridColumns}
         writable={!readOnly && state.tableName !== ""}
@@ -494,39 +489,19 @@ export default function PostgresPanel({ tab }: Props) {
     </>
   );
 
-  const structureTab =
-    state.columns.length > 0 ? (
-      <div className="db2-stub">
-        <div className="db2-stub-inner" style={{ alignItems: "stretch", maxWidth: 640 }}>
-          <div className="db2-stub-title">{t("Columns")}</div>
-          <table className="rg-table" style={{ background: "var(--panel)", borderRadius: "var(--radius-md)" }}>
-            <thead>
-              <tr>
-                <th><div className="rg-th-body"><span className="rg-th-name">{t("Name")}</span></div></th>
-                <th><div className="rg-th-body"><span className="rg-th-name">{t("Type")}</span></div></th>
-                <th><div className="rg-th-body"><span className="rg-th-name">{t("Null")}</span></div></th>
-                <th><div className="rg-th-body"><span className="rg-th-name">{t("Key")}</span></div></th>
-              </tr>
-            </thead>
-            <tbody>
-              {state.columns.map((col) => (
-                <tr key={col.name} className="rg-row">
-                  <td className="rg-td">{col.name}</td>
-                  <td className="rg-td" style={{ color: "var(--svc-postgres)" }}>{col.columnType}</td>
-                  <td className="rg-td">{col.nullable ? t("YES") : t("NO")}</td>
-                  <td className="rg-td">{col.key || "—"}</td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
-          <div className="db2-stub-sub">
-            {t("Indexes and foreign keys will appear here once the backend exposes them — see docs/BACKEND-GAPS.md.")}
-          </div>
-        </div>
-      </div>
-    ) : (
-      <DbStubView title={t("No table selected")} />
-    );
+  const structureTab = (
+    <DbStructureView
+      columns={state.columns.map((c) => ({
+        name: c.name,
+        type: c.columnType,
+        pk: c.key === "PRI" || c.key === "PK",
+        nullable: c.nullable,
+        keyHint: c.key && !(c.key === "PRI" || c.key === "PK") ? c.key : undefined,
+      }))}
+      typeAccentVar="var(--svc-postgres)"
+      footnote={t("Indexes and foreign keys will appear here once the backend exposes them — see docs/BACKEND-GAPS.md.")}
+    />
+  );
 
   return (
     <>
@@ -550,42 +525,49 @@ export default function PostgresPanel({ tab }: Props) {
           table: state.tableName || undefined,
           stat: state.preview ? t("{count} rows", { count: state.preview.rows.length }) : null,
         }}
-        sidebar={
-          <DbSchemaTree
-            databases={databases}
-            selectedTableId={
-              state.tableName ? `${state.databaseName}.${state.schemaName}.${state.tableName}` : null
-            }
-            onSelectTable={(_db, node) => {
-              const tbl = node.label;
-              sqlTabs.replaceActiveSql(`SELECT * FROM "${state.schemaName}"."${tbl}" LIMIT 100;`, tbl);
-              setRowDetail(null);
-              void browse(undefined, tbl);
-            }}
-            onSelectDatabase={(name) => {
-              updateTab(tab.id, { pgDatabase: name });
-              setRowDetail(null);
-              void browse(undefined, "", name);
-            }}
-          />
-        }
+        schema={{
+          databases,
+          selectedTableId: state.tableName
+            ? `${state.databaseName}.${state.schemaName}.${state.tableName}`
+            : null,
+          onSelectTable: (_db, node) => {
+            const tbl = node.label;
+            sqlTabs.replaceActiveSql(`SELECT * FROM "${state.schemaName}"."${tbl}" LIMIT 100;`, tbl);
+            void browse(undefined, tbl);
+          },
+          onSelectDatabase: (name) => {
+            updateTab(tab.id, { pgDatabase: name });
+            void browse(undefined, "", name);
+          },
+        }}
         dataTab={dataTab}
         structureTab={structureTab}
         schemaTab={
-          <DbStubView
-            title={t("Schema overview")}
-            subtitle={t("Per-table engine / size / row-count listing will appear here once the backend exposes it.")}
+          <DbConfigView
+            title={t("PostgreSQL settings")}
+            note={t("read-only")}
+            load={async () => {
+              const target = await flow.ensureConnectionTarget();
+              const r = await cmd.postgresExecute({
+                host: target.host,
+                port: target.port,
+                user: tab.pgUser.trim(),
+                password: tab.pgPassword,
+                database: tab.pgDatabase.trim() || null,
+                sql: "SELECT name, setting, unit, short_desc, context FROM pg_settings ORDER BY name",
+              });
+              return r.rows.map((row): DbConfigRow => {
+                const setting = row[1] ?? "";
+                const unit = row[2] ?? "";
+                return {
+                  name: row[0] ?? "",
+                  value: unit ? `${setting} ${unit}` : setting,
+                  description: row[3] ?? "",
+                  source: row[4] ?? "",
+                };
+              });
+            }}
           />
-        }
-        drawer={
-          rowDetail && state.preview ? (
-            <DbRowDetail
-              title={state.tableName ? `${state.tableName} · #${rowDetail.idx + 1}` : t("Row detail")}
-              columns={detailColumns}
-              row={rowDetail.row}
-              onClose={() => setRowDetail(null)}
-            />
-          ) : null
         }
       />
       {dialogs}

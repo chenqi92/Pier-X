@@ -41,6 +41,11 @@
   --accent-ink: #0a1420;
   --accent-dim: #1e3a5c;
 
+  /* ── Selection (text-selection highlight, syntax bleeds through) ── */
+  --selection-bg: color-mix(in srgb, var(--accent) 28%, transparent);
+  --selection-bg-strong: color-mix(in srgb, var(--accent) 44%, transparent);
+  --selection-fg: var(--ink);
+
   /* ── Status ──────────────────────────────────────────────── */
   --pos: #3dd68c;
   --pos-dim: #17402c;
@@ -138,6 +143,10 @@
   /* ── Accent ──────────────────────────────────────────────── */
   --accent-ink: #ffffff;
   --accent-dim: #d6e6fa;
+
+  /* ── Selection (light theme needs higher opacity for visibility) ── */
+  --selection-bg: color-mix(in srgb, var(--accent) 38%, transparent);
+  --selection-bg-strong: color-mix(in srgb, var(--accent) 52%, transparent);
 
   /* ── Status (dim overrides for light backgrounds) ───────── */
   --pos-dim: #cdeedb;

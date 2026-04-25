@@ -40,6 +40,7 @@ import ConfirmDialog from "../components/ConfirmDialog";
 import DismissibleNote from "../components/DismissibleNote";
 import SftpEditorDialog from "../components/SftpEditorDialog";
 import SftpNewEntryDialog from "../components/SftpNewEntryDialog";
+import PanelSkeleton, { useDeferredMount } from "../components/PanelSkeleton";
 import { writeClipboardText } from "../lib/clipboard";
 import {
   hostKey,
@@ -204,7 +205,16 @@ function formatModifiedTooltip(unixSeconds: number | null | undefined): string {
   return new Date(unixSeconds * 1000).toLocaleString();
 }
 
-export default function SftpPanel({ tab }: Props) {
+export default function SftpPanel(props: Props) {
+  const ready = useDeferredMount();
+  return (
+    <div className="panel-stage">
+      {ready ? <SftpPanelBody {...props} /> : <PanelSkeleton variant="rows" rows={10} />}
+    </div>
+  );
+}
+
+function SftpPanelBody({ tab }: Props) {
   const { t } = useI18n();
   const formatError = (error: unknown) => localizeError(error, t);
   const [state, setState] = useState<SftpBrowseState | null>(null);

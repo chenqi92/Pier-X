@@ -35,6 +35,7 @@ import RegistryProxyDialog from "../shell/RegistryProxyDialog";
 import RunContainerDialog from "../shell/RunContainerDialog";
 import { dockerKeyForTab, useDockerStore, type DockerSection } from "../stores/useDockerStore";
 import { useTabStore } from "../stores/useTabStore";
+import PanelSkeleton, { useDeferredMount } from "../components/PanelSkeleton";
 
 type Props = { tab: TabState };
 
@@ -92,7 +93,16 @@ function DkSkeleton({ rows = 3 }: { rows?: number }) {
   );
 }
 
-export default function DockerPanel({ tab }: Props) {
+export default function DockerPanel(props: Props) {
+  const ready = useDeferredMount();
+  return (
+    <div className="panel-stage">
+      {ready ? <DockerPanelBody {...props} /> : <PanelSkeleton variant="rows" rows={6} />}
+    </div>
+  );
+}
+
+function DockerPanelBody({ tab }: Props) {
   const { t } = useI18n();
   const formatError = (error: unknown) => localizeError(error, t);
   const updateTab = useTabStore((s) => s.updateTab);

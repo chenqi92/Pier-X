@@ -7,11 +7,11 @@ import DismissibleNote from "../components/DismissibleNote";
 import DbConnectSplash from "../components/db/DbConnectSplash";
 import DbConnectedShell, { type DbConnectedTab } from "../components/db/DbConnectedShell";
 import type { DbHeaderInstance } from "../components/db/DbHeaderPicker";
+import DbConfigView, { type DbConfigRow } from "../components/db/DbConfigView";
 import DbResultGrid from "../components/db/DbResultGrid";
-import DbRowDetail from "../components/db/DbRowDetail";
-import DbSchemaTree, { type DbSchemaDatabase } from "../components/db/DbSchemaTree";
+import { type DbSchemaDatabase } from "../components/db/DbSchemaTree";
+import DbStructureView from "../components/db/DbStructureView";
 import DbSqlEditor from "../components/db/DbSqlEditor";
-import DbStubView from "../components/db/DbStubView";
 import type { DbSplashRowData } from "../components/db/DbSplashRow";
 import { inferEnv } from "../components/db/dbTheme";
 import {
@@ -36,13 +36,9 @@ import type {
   TabState,
 } from "../lib/types";
 import { useTabStore } from "../stores/useTabStore";
+import PanelSkeleton, { useDeferredMount } from "../components/PanelSkeleton";
 
 type Props = { tab: TabState };
-
-/** One selected result-grid row + its absolute index in `state.preview.rows`.
- *  Storing the index alongside the row avoids an `indexOf` lookup (which
- *  collides on duplicate rows) when rendering the row-detail drawer title. */
-type PinnedRow = { row: string[]; idx: number };
 
 /** MySQL column types whose values should render right-aligned. */
 const NUMERIC_TYPE_RE = /^(tiny|small|medium|big)?int|^decimal|^numeric|^float|^double|^real/i;
@@ -80,7 +76,20 @@ const MYSQL_ADAPTER: DbCredentialFieldAdapter = {
   patchPasswordAfterRotate: (password) => ({ mysqlPassword: password }),
 };
 
-export default function MySqlPanel({ tab }: Props) {
+export default function MySqlPanel(props: Props) {
+  const ready = useDeferredMount();
+  // Splash skeleton when no credential is bound yet (the body will land
+  // on DbConnectSplash); grid skeleton when a credential is already
+  // selected (the body will auto-browse straight into DbConnectedShell).
+  const variant = props.tab.mysqlActiveCredentialId ? "grid" : "splash";
+  return (
+    <div className="panel-stage">
+      {ready ? <MySqlPanelBody {...props} /> : <PanelSkeleton variant={variant} rows={8} />}
+    </div>
+  );
+}
+
+function MySqlPanelBody({ tab }: Props) {
   const { t } = useI18n();
   const formatError = (error: unknown) => localizeError(error, t);
   const updateTab = useTabStore((s) => s.updateTab);
@@ -97,7 +106,6 @@ export default function MySqlPanel({ tab }: Props) {
   const [notice, setNotice] = useState("");
 
   const [connectedTab, setConnectedTab] = useState<DbConnectedTab>("data");
-  const [rowDetail, setRowDetail] = useState<PinnedRow | null>(null);
 
   // SQL editor tabs + run history (panel-local — not persisted across tabs).
   const sqlTabs = useDbSqlTabs({ initialSql: "SHOW TABLES;", initialName: t("query") });
@@ -107,7 +115,7 @@ export default function MySqlPanel({ tab }: Props) {
   const passwordInputRef = useRef<HTMLInputElement | null>(null);
 
   /** Clear panel-local state on credential switch / disconnect so a fresh
-   *  cred doesn't inherit the previous panel's preview / query / row detail. */
+   *  cred doesn't inherit the previous panel's preview / query state. */
   function resetPanel() {
     setState(null);
     setError("");
@@ -116,7 +124,6 @@ export default function MySqlPanel({ tab }: Props) {
     setNotice("");
     setReadOnly(true);
     setWriteConfirm("");
-    setRowDetail(null);
   }
 
   async function browse(passwordOverride?: string, nextTable?: string) {
@@ -134,9 +141,6 @@ export default function MySqlPanel({ tab }: Props) {
         table: (nextTable ?? state?.tableName ?? "").trim() || null,
       });
       setState(s);
-      // Reset the row-detail pin when the table underneath changes — the
-      // old row index no longer refers to the same row.
-      if (rowDetail && s.tableName !== state?.tableName) setRowDetail(null);
       if (s.databaseName !== tab.mysqlDatabase) {
         updateTab(tab.id, { mysqlDatabase: s.databaseName });
       }
@@ -286,9 +290,6 @@ export default function MySqlPanel({ tab }: Props) {
   const pkColumns = state ? state.columns.filter((c) => c.key === "PRI").map((c) => c.name) : [];
   const numericColumns = state
     ? state.columns.filter((c) => NUMERIC_TYPE_RE.test(c.columnType)).map((c) => c.name)
-    : [];
-  const detailColumns = state
-    ? state.columns.map((c) => ({ name: c.name, type: c.columnType, pk: c.key === "PRI" }))
     : [];
   const gridColumns = state ? gridColumnsFromMysql(state.columns) : [];
 
@@ -472,12 +473,8 @@ export default function MySqlPanel({ tab }: Props) {
         pkColumns={pkColumns}
         numericColumns={numericColumns}
         toolbar={resultToolbar}
-        onOpenRow={(row) => {
-          const idx = state.preview?.rows.indexOf(row) ?? -1;
-          setRowDetail({ row, idx });
-        }}
         emptyLabel={
-          state.tableName ? t("Select a row to inspect.") : t("Pick a table from the tree to preview rows.")
+          state.tableName ? t("No rows in this table.") : t("Pick a table from the tree to preview rows.")
         }
         columnsMeta={gridColumns}
         writable={!readOnly && state.tableName !== ""}
@@ -495,39 +492,19 @@ export default function MySqlPanel({ tab }: Props) {
     </>
   );
 
-  const structureTab =
-    state.columns.length > 0 ? (
-      <div className="db2-stub">
-        <div className="db2-stub-inner" style={{ alignItems: "stretch", maxWidth: 640 }}>
-          <div className="db2-stub-title">{t("Columns")}</div>
-          <table className="rg-table" style={{ background: "var(--panel)", borderRadius: "var(--radius-md)" }}>
-            <thead>
-              <tr>
-                <th><div className="rg-th-body"><span className="rg-th-name">{t("Name")}</span></div></th>
-                <th><div className="rg-th-body"><span className="rg-th-name">{t("Type")}</span></div></th>
-                <th><div className="rg-th-body"><span className="rg-th-name">{t("Null")}</span></div></th>
-                <th><div className="rg-th-body"><span className="rg-th-name">{t("Key")}</span></div></th>
-              </tr>
-            </thead>
-            <tbody>
-              {state.columns.map((col) => (
-                <tr key={col.name} className="rg-row">
-                  <td className="rg-td">{col.name}</td>
-                  <td className="rg-td" style={{ color: "var(--svc-mysql)" }}>{col.columnType}</td>
-                  <td className="rg-td">{col.nullable ? t("YES") : t("NO")}</td>
-                  <td className="rg-td">{col.key || "—"}</td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
-          <div className="db2-stub-sub">
-            {t("Indexes and foreign keys will appear here once the backend exposes them — see docs/BACKEND-GAPS.md.")}
-          </div>
-        </div>
-      </div>
-    ) : (
-      <DbStubView title={t("No table selected")} />
-    );
+  const structureTab = (
+    <DbStructureView
+      columns={state.columns.map((c) => ({
+        name: c.name,
+        type: c.columnType,
+        pk: c.key === "PRI",
+        nullable: c.nullable,
+        keyHint: c.key && c.key !== "PRI" ? c.key : undefined,
+      }))}
+      typeAccentVar="var(--svc-mysql)"
+      footnote={t("Indexes and foreign keys will appear here once the backend exposes them — see docs/BACKEND-GAPS.md.")}
+    />
+  );
 
   return (
     <>
@@ -550,40 +527,43 @@ export default function MySqlPanel({ tab }: Props) {
           table: state.tableName || undefined,
           stat: state.preview ? t("{count} rows", { count: state.preview.rows.length }) : null,
         }}
-        sidebar={
-          <DbSchemaTree
-            databases={databases}
-            selectedTableId={state.tableName ? `${state.databaseName}.${state.tableName}` : null}
-            onSelectTable={(_db, node) => {
-              const tbl = node.label;
-              sqlTabs.replaceActiveSql(`SELECT * FROM \`${tbl}\` LIMIT 100;`, tbl);
-              setRowDetail(null);
-              void browse(undefined, tbl);
-            }}
-            onSelectDatabase={(name) => {
-              updateTab(tab.id, { mysqlDatabase: name });
-              setRowDetail(null);
-              void browse(undefined, "");
-            }}
-          />
-        }
+        schema={{
+          databases,
+          selectedTableId: state.tableName ? `${state.databaseName}.${state.tableName}` : null,
+          onSelectTable: (_db, node) => {
+            const tbl = node.label;
+            sqlTabs.replaceActiveSql(`SELECT * FROM \`${tbl}\` LIMIT 100;`, tbl);
+            void browse(undefined, tbl);
+          },
+          onSelectDatabase: (name) => {
+            updateTab(tab.id, { mysqlDatabase: name });
+            void browse(undefined, "");
+          },
+        }}
         dataTab={dataTab}
         structureTab={structureTab}
         schemaTab={
-          <DbStubView
-            title={t("Schema overview")}
-            subtitle={t("Per-table engine / size / row-count listing will appear here once the backend exposes it.")}
+          <DbConfigView
+            title={t("MySQL variables")}
+            note={t("read-only")}
+            load={async () => {
+              const target = await flow.ensureConnectionTarget();
+              const r = await cmd.mysqlExecute({
+                host: target.host,
+                port: target.port,
+                user: tab.mysqlUser.trim(),
+                password: tab.mysqlPassword,
+                database: tab.mysqlDatabase.trim() || null,
+                sql: "SHOW VARIABLES",
+              });
+              return r.rows.map(
+                (row): DbConfigRow => ({
+                  name: row[0] ?? "",
+                  value: row[1] ?? "",
+                }),
+              );
+            }}
           />
-        }
-        drawer={
-          rowDetail && state.preview ? (
-            <DbRowDetail
-              title={state.tableName ? `${state.tableName} · #${rowDetail.idx + 1}` : t("Row detail")}
-              columns={detailColumns}
-              row={rowDetail.row}
-              onClose={() => setRowDetail(null)}
-            />
-          ) : null
         }
       />
       {dialogs}

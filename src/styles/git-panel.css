@@ -144,11 +144,8 @@
 }
 
 .git-panel__branch-pill,
-.git-button,
-.git-icon-button,
 .git-tab,
 .git-segmented__item,
-.git-menu-item,
 .git-file-row,
 .git-changed-file-row,
 .git-conflict-file,
@@ -163,11 +160,8 @@
 }
 
 .git-panel__branch-pill,
-.git-button,
-.git-icon-button,
 .git-tab,
-.git-segmented__item,
-.git-menu-item {
+.git-segmented__item {
   appearance: none;
   border: 1px solid var(--border-default);
   outline: none;
@@ -175,11 +169,8 @@
 }
 
 .git-panel__branch-pill:focus-visible,
-.git-button:focus-visible,
-.git-icon-button:focus-visible,
 .git-tab:focus-visible,
 .git-segmented__item:focus-visible,
-.git-menu-item:focus-visible,
 .git-file-row:focus-visible,
 .git-conflict-file:focus-visible,
 .git-compare-file:focus-visible,
@@ -235,10 +226,7 @@
 }
 
 .git-panel__branch-pill:hover:not(:disabled),
-.git-button:hover:not(:disabled),
-.git-icon-button:hover:not(:disabled),
 .git-tab:hover:not(:disabled),
-.git-menu-item:hover:not(:disabled),
 .git-file-row:hover:not(:disabled),
 .git-changed-file-row:hover:not(:disabled),
 .git-conflict-file:hover:not(:disabled),
@@ -248,10 +236,7 @@
   background: var(--bg-hover);
 }
 
-.git-panel__branch-pill:disabled,
-.git-button:disabled,
-.git-icon-button:disabled,
-.git-menu-item:disabled {
+.git-panel__branch-pill:disabled {
   opacity: 0.48;
   cursor: default;
 }
@@ -263,19 +248,11 @@
   flex: none;
 }
 
-.git-panel__branch-tools .git-icon-button {
-  width: 20px;
-  height: 20px;
-  border-color: transparent;
-  background: transparent;
-  color: var(--text-tertiary);
-  border-radius: var(--radius-sm);
-  padding: 0;
-}
-
-.git-panel__branch-tools .git-icon-button:hover:not(:disabled) {
-  background: var(--bg-hover);
-  color: var(--text-primary);
+/* Tighten the shared `.icon-btn` (26x26) inside the per-branch tool
+   strip so seven actions still fit on one line at narrow panel widths. */
+.git-panel__branch-tools .icon-btn {
+  width: 22px;
+  height: 22px;
 }
 
 .git-tabs {
@@ -435,7 +412,6 @@
 .git-inline-form,
 .git-conflict-detail__actions,
 .git-commit-actions,
-.git-manager-row__actions,
 .git-stash-row__actions {
   display: flex;
   align-items: center;
@@ -445,6 +421,72 @@
 
 .git-inline-form > * {
   min-width: 0;
+}
+
+/* Manager row actions: tight icon-button cluster, hidden until row
+   hover so the row can show full title/subtitle on a single line and
+   only reveal action affordances when the cursor lands on the row. */
+.git-manager-row__actions {
+  display: inline-flex;
+  align-items: center;
+  gap: 1px;
+  flex: none;
+  opacity: 0.55;
+  transition: opacity var(--dur-fast) var(--easing);
+}
+
+.git-manager-row:hover .git-manager-row__actions,
+.git-manager-row:focus-within .git-manager-row__actions {
+  opacity: 1;
+}
+
+.git-manager-row__actions .icon-btn {
+  width: 22px;
+  height: 22px;
+}
+
+/* Unpushed-commits popover row: lets the row grow tall for multi-line
+   commit bodies (both for read view and the textarea editor). */
+.git-unpushed-row {
+  align-items: flex-start;
+  padding: var(--sp-2);
+}
+
+.git-unpushed-row .git-manager-row__meta--accent {
+  margin-top: 1px;
+}
+
+.git-unpushed-row .git-manager-row__title {
+  font-weight: var(--weight-medium);
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
+.git-unpushed-row__body {
+  font-size: var(--ui-fs-sm);
+  line-height: 1.5;
+  color: var(--muted);
+  white-space: pre-wrap;
+  word-break: break-word;
+  margin-top: 2px;
+  max-height: 9em;
+  overflow: auto;
+}
+
+.git-unpushed-row.is-editing {
+  background: color-mix(in srgb, var(--accent) 5%, transparent);
+}
+
+.git-unpushed-row__edit {
+  width: 100%;
+  min-height: 84px;
+  resize: vertical;
+}
+
+.git-unpushed-row__hint {
+  font-size: var(--size-micro);
+  color: var(--muted);
+  margin-top: 4px;
 }
 
 .git-commit-actions {
@@ -482,93 +524,36 @@
   border: 1px solid color-mix(in srgb, var(--accent) 72%, transparent);
 }
 
-.git-commit-actions__pair .git-button--primary {
+/* Commit composer split-button (`Commit ▾`). The primary action and the
+   chevron live in a shared `.git-commit-actions__pair` shell so the
+   border-left between them is unbroken. */
+.git-commit-actions__pair .btn.is-primary {
   min-height: 30px;
   border: none;
   border-radius: 0;
 }
 
-.git-commit-actions__pair .git-icon-button {
+.git-commit-actions__pair .icon-btn {
   width: 28px;
   height: 30px;
   border: none;
-  border-left: 1px solid var(--line-3);
+  border-left: 1px solid var(--accent-hover);
   border-radius: 0;
   background: var(--accent);
-  color: var(--text-inverse);
+  color: var(--accent-ink);
 }
 
-.git-commit-actions__pair .git-icon-button:hover:not(:disabled) {
+.git-commit-actions__pair .icon-btn:hover:not(:disabled) {
   background: var(--accent-hover);
-  color: var(--text-inverse);
+  color: var(--accent-ink);
 }
 
-.git-commit-actions .git-button--compact:not(.git-button--primary) {
-  min-height: 22px;
-  padding: 0 6px;
-  border-color: var(--border-subtle);
-  background: var(--bg-hover);
-  color: var(--text-secondary);
-}
-
-.git-button {
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  gap: var(--sp-1);
-  min-height: 24px;
-  padding: 0 10px;
-  border-radius: var(--radius-sm);
-  background: var(--panel-2);
-  color: var(--text-primary);
-  cursor: default;
-  font-size: 11px;
-  font-weight: var(--weight-medium);
-}
-
-.git-button--compact {
-  min-height: 22px;
-  padding: 0 8px;
-  font-size: 10px;
-}
-
-.git-button--primary {
-  background: var(--accent);
-  border-color: color-mix(in srgb, var(--accent) 72%, transparent);
-  color: var(--text-inverse);
-}
-
-.git-button--primary:hover:not(:disabled) {
-  background: var(--accent-hover);
-}
-
-.git-button--destructive {
-  background: color-mix(in srgb, var(--status-error) 18%, transparent);
-  border-color: color-mix(in srgb, var(--status-error) 38%, transparent);
-  color: color-mix(in srgb, var(--status-error) 94%, white 6%);
-}
-
-.git-button--destructive:hover:not(:disabled) {
-  background: color-mix(in srgb, var(--status-error) 24%, transparent);
-}
-
-.git-icon-button {
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  width: 28px;
-  height: 28px;
-  border-radius: var(--radius-sm);
-  background: var(--bg-hover);
-  color: var(--text-secondary);
-  cursor: default;
-}
-
-.git-icon-button--active {
-  background: var(--accent-muted);
-  border-color: color-mix(in srgb, var(--accent) 38%, transparent);
-  color: var(--accent-hover);
-}
+/* Note: button visuals (.btn / .btn.is-primary / .btn.is-danger /
+   .btn.is-compact / .icon-btn / .icon-btn.is-active) are defined in
+   atoms.css. GitPanel now consumes those classes directly via the
+   GitButton/GitIconButton adapters. The legacy .git-button* and
+   .git-icon-button* selectors were removed on the visual unification
+   pass. */
 
 .git-pill {
   display: inline-flex;
@@ -845,10 +830,58 @@
   gap: var(--sp-3);
 }
 
+/* Branch manager rendered inside a popover (no backdrop). The host
+   `.popover` provides the chrome; we set an explicit height (vs
+   max-height) so the body's flex column has actual space to grow into
+   — without it the list collapses to its content height and the
+   popover looks half-empty even when there are many branches. */
+.git-branches-view--popover {
+  height: min(70vh, 540px);
+  min-height: 320px;
+}
+
+.git-branches-view--popover .git-branches-view__header {
+  padding: 0 0 var(--sp-2);
+  border-bottom: 1px solid var(--line);
+}
+
+.git-branches-view--popover .git-branches-view__body {
+  padding: var(--sp-2) 0 0;
+}
+
 .git-changes {
   gap: 10px;
   padding: 10px;
   overflow: auto;
+}
+
+.git-changes-wrap {
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+  min-height: 0;
+}
+
+.git-changes-group {
+  flex: 1;
+  min-height: 0;
+}
+
+/* Each pane in the vertical PanelGroup must let its inner section
+   stretch and own its own scroll, so the panel header (Staged / Working
+   tree / Commit) stays fixed while the file list scrolls. */
+.git-changes-pane {
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  padding: var(--sp-2);
+}
+
+.git-changes-pane > section {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
 }
 
 .git-history-list,
@@ -1482,13 +1515,60 @@
   overflow: hidden;
 }
 
+/* History column widths are CSS variables on `.git-history-list-surface`
+   so the header, every row, and the column resizers all stay in sync.
+   Defaults below; the React panel persists overrides via localStorage. */
+.git-history-list-surface {
+  --col-author-w: 96px;
+  --col-date-w: 120px;
+  --col-hash-w: 64px;
+  position: relative;
+}
+
+/* Indeterminate progress strip across the top of the history list while
+   a filter change is repopulating rows. The previous rows stay visible
+   so the user keeps their place. */
+.git-history-list-surface.is-reloading::before {
+  content: "";
+  position: absolute;
+  top: 0;
+  left: 0;
+  right: 0;
+  height: 2px;
+  background: linear-gradient(
+    90deg,
+    transparent 0,
+    var(--accent) 40%,
+    var(--accent) 60%,
+    transparent 100%
+  );
+  background-size: 200% 100%;
+  animation: git-history-reload 1.1s linear infinite;
+  z-index: 2;
+  pointer-events: none;
+}
+
+@keyframes git-history-reload {
+  0% { background-position: 200% 0; }
+  100% { background-position: -200% 0; }
+}
+
 .git-history-columns {
-  display: none;
-  color: var(--text-tertiary);
-  font-size: 9px;
-  font-family: var(--font-mono);
+  display: flex;
+  align-items: center;
+  position: relative;
+  height: 22px;
+  padding: 0 10px 0 4px;
+  gap: 8px;
+  color: var(--muted);
+  font-size: var(--size-micro);
+  font-family: var(--mono);
   text-transform: uppercase;
   letter-spacing: 0.06em;
+  border-bottom: 1px solid var(--line);
+  background: var(--surface-2);
+  user-select: none;
+  flex: none;
 }
 
 .git-history-columns__graph {
@@ -1499,6 +1579,9 @@
 .git-history-columns__subject {
   flex: 1;
   min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .git-history-columns__author,
@@ -1506,9 +1589,9 @@
   display: inline-flex;
   align-items: center;
   gap: 4px;
-  width: 72px;
-  flex-shrink: 1;
-  min-width: 22px;
+  width: var(--col-author-w, 96px);
+  flex-shrink: 0;
+  min-width: 0;
   overflow: hidden;
   white-space: nowrap;
 }
@@ -1522,20 +1605,78 @@
 
 .git-history-columns__date,
 .git-history-row__date {
-  width: 100px;
+  width: var(--col-date-w, 120px);
   flex-shrink: 0;
-  text-align: right;
+  text-align: left;
   overflow: hidden;
   white-space: nowrap;
 }
 
 .git-history-columns__hash,
 .git-history-row__hash {
-  width: 54px;
+  width: var(--col-hash-w, 64px);
   flex-shrink: 0;
-  text-align: right;
+  text-align: left;
   overflow: hidden;
   white-space: nowrap;
+}
+
+/* Column resizer — 5px hot zone with a 1px accent guide that brightens
+   on hover/drag. Sits between adjacent header cells. */
+.git-col-resizer {
+  flex: none;
+  width: 5px;
+  height: 22px;
+  margin: 0 -2px;
+  cursor: col-resize;
+  position: relative;
+  background: transparent;
+}
+
+.git-col-resizer::after {
+  content: "";
+  position: absolute;
+  left: 50%;
+  top: 4px;
+  bottom: 4px;
+  width: 1px;
+  background: transparent;
+  transform: translateX(-50%);
+  transition: background var(--dur-fast) var(--easing);
+}
+
+.git-col-resizer:hover::after,
+.git-col-resizer.is-active::after {
+  background: var(--accent);
+}
+
+/* Responsive column collapse: hide Hash → Date → Author as the surface
+   gets narrower. Row classes mirror header classes so they stay in sync. */
+.git-history-list-surface[data-cols="3"] .git-history-columns__hash,
+.git-history-list-surface[data-cols="3"] .git-history-row__hash,
+.git-history-list-surface[data-cols="3"] .git-col-resizer--hash {
+  display: none;
+}
+
+.git-history-list-surface[data-cols="2"] .git-history-columns__hash,
+.git-history-list-surface[data-cols="2"] .git-history-row__hash,
+.git-history-list-surface[data-cols="2"] .git-col-resizer--hash,
+.git-history-list-surface[data-cols="2"] .git-history-columns__date,
+.git-history-list-surface[data-cols="2"] .git-history-row__date,
+.git-history-list-surface[data-cols="2"] .git-col-resizer--date {
+  display: none;
+}
+
+.git-history-list-surface[data-cols="1"] .git-history-columns__hash,
+.git-history-list-surface[data-cols="1"] .git-history-row__hash,
+.git-history-list-surface[data-cols="1"] .git-col-resizer--hash,
+.git-history-list-surface[data-cols="1"] .git-history-columns__date,
+.git-history-list-surface[data-cols="1"] .git-history-row__date,
+.git-history-list-surface[data-cols="1"] .git-col-resizer--date,
+.git-history-list-surface[data-cols="1"] .git-history-columns__author,
+.git-history-list-surface[data-cols="1"] .git-history-row__author,
+.git-history-list-surface[data-cols="1"] .git-col-resizer--author {
+  display: none;
 }
 
 .git-history-entry {
@@ -1649,18 +1790,51 @@
   flex-direction: column;
   gap: var(--sp-1-5);
   padding: var(--sp-2) var(--sp-3);
+  padding-left: calc(var(--sp-3) - 2px);
   background: color-mix(in srgb, var(--accent) 5%, var(--bg-surface));
   border-top: 1px solid color-mix(in srgb, var(--accent) 18%, var(--border-subtle));
   border-bottom: 1px solid color-mix(in srgb, var(--accent) 18%, var(--border-subtle));
+  border-left: 2px solid var(--accent);
+  /* Whole region is selectable so users can grab subject + body in one
+     swipe. Buttons inside re-disable selection so click stays clean. */
+  user-select: text;
+  cursor: text;
+}
+
+.git-history-inline button {
+  user-select: none;
+  cursor: default;
 }
 
 .git-history-inline__meta {
   display: flex;
   align-items: center;
   gap: var(--sp-2);
-  font-size: 10px;
-  color: var(--text-tertiary);
+  font-size: var(--size-micro);
+  color: var(--muted);
   flex-wrap: wrap;
+}
+
+.git-history-inline__spacer {
+  flex: 1;
+}
+
+.git-history-inline__hash-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 1px 6px;
+  border: 1px solid color-mix(in srgb, var(--accent) 32%, transparent);
+  border-radius: var(--radius-sm);
+  background: var(--accent-dim);
+  color: var(--accent);
+  font-family: var(--mono);
+  font-size: var(--size-micro);
+  font-weight: var(--weight-medium);
+}
+
+.git-history-inline__hash-btn:hover {
+  background: color-mix(in srgb, var(--accent) 18%, transparent);
 }
 
 .git-history-inline__hash {
@@ -1669,25 +1843,42 @@
 }
 
 .git-history-inline__author {
-  color: var(--text-secondary);
+  color: var(--ink-2);
+}
+
+.git-history-inline__copy-msg {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 22px;
+  height: 22px;
+  border: none;
+  border-radius: var(--radius-sm);
+  background: transparent;
+  color: var(--muted);
+}
+
+.git-history-inline__copy-msg:hover {
+  background: var(--panel-2);
+  color: var(--ink);
 }
 
 .git-history-inline__subject {
-  font-size: 12px;
+  font-size: var(--ui-fs);
   font-weight: var(--weight-medium);
-  color: var(--text-primary);
+  color: var(--ink);
   overflow-wrap: anywhere;
 }
 
 .git-history-inline__body {
   margin: 0;
   padding: 0;
-  font-size: 10.5px;
-  line-height: 1.5;
-  color: var(--text-secondary);
+  font-size: var(--ui-fs-sm);
+  line-height: 1.55;
+  color: var(--ink-2);
   white-space: pre-wrap;
   overflow-wrap: anywhere;
-  font-family: var(--font-mono);
+  font-family: var(--mono);
 }
 
 .git-history-inline__files {
@@ -1872,10 +2063,10 @@
   padding-top: 0;
 }
 
-.git-history-detail-inline__actions .git-button {
+.git-history-detail-inline__actions .btn {
   min-height: 20px;
   padding: 0 7px;
-  font-size: 10px;
+  font-size: var(--size-micro);
 }
 
 .git-history-detail-inline__files-title {
@@ -2044,16 +2235,23 @@
 }
 
 .git-stash-row {
+  align-items: center;
   justify-content: space-between;
-  min-height: 30px;
-  padding: 7px 10px;
+  gap: var(--sp-3);
+  min-height: 56px;
+  padding: var(--sp-2) var(--sp-3);
   background: transparent;
   border: none;
-  border-bottom: 1px solid var(--border-subtle);
+  border-bottom: 1px solid var(--line);
 }
 
 .git-stash-row:hover {
-  background: var(--bg-hover);
+  background: var(--panel-2);
+}
+
+.git-stash-row:hover .git-stash-row__actions,
+.git-stash-row.is-editing .git-stash-row__actions {
+  opacity: 1;
 }
 
 .git-stash-row:last-child {
@@ -2061,15 +2259,49 @@
 }
 
 .git-stash-row__message {
-  font-size: 11px;
+  display: block;
+  width: 100%;
+  text-align: left;
+  background: transparent;
+  border: 1px dashed transparent;
+  border-radius: var(--radius-sm);
+  padding: 2px var(--sp-1);
+  margin: -2px calc(-1 * var(--sp-1));
+  font-family: var(--sans);
+  font-size: var(--ui-fs);
+  font-weight: var(--weight-medium);
+  color: var(--ink);
+  cursor: text;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
+.git-stash-row:hover .git-stash-row__message {
+  border-color: var(--line);
+}
+
+.git-stash-row__edit {
+  width: 100%;
+  font-family: var(--sans);
+  font-size: var(--ui-fs);
 }
 
 .git-stash-row__meta {
-  font-family: var(--font-mono);
-  font-size: 9px;
+  font-family: var(--mono);
+  font-size: var(--size-micro);
+  color: var(--muted);
+  margin-top: var(--sp-1);
 }
 
-.git-stash-row__actions .git-button--compact {
+.git-stash-row__actions {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--sp-1);
+  opacity: 0.55;
+  transition: opacity var(--dur-fast) var(--easing);
+}
+
+.git-stash-row__actions .btn.is-compact {
   min-height: 22px;
 }
 
@@ -2128,7 +2360,7 @@
   background: transparent;
 }
 
-.git-conflict-detail__actions .git-button--compact {
+.git-conflict-detail__actions .btn.is-compact {
   min-height: 22px;
   padding: 0 8px;
 }
@@ -2254,7 +2486,7 @@
   flex-wrap: wrap;
 }
 
-.git-conflict-hunk__actions .git-button--compact {
+.git-conflict-hunk__actions .btn.is-compact {
   min-height: 22px;
   padding: 0 8px;
 }
@@ -2268,14 +2500,54 @@
   font-family: var(--font-mono);
 }
 
+/* Popover content sub-structure (used inside <GitPopover>). The popover
+   chrome itself comes from .popover in atoms.css; these helpers handle
+   the inner list / sectioning. */
+.git-popover-list {
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+  min-width: 0;
+}
+
 .git-popover-list--scroll {
-  max-height: 280px;
+  max-height: 320px;
   overflow-y: auto;
 }
 
-.git-manager,
-.git-popover-list,
 .git-popover-section {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-0-5);
+  min-width: 0;
+  padding: var(--sp-1-5) 0 var(--sp-1);
+}
+
+.git-popover-section:first-child {
+  padding-top: var(--sp-0-5);
+}
+
+.git-popover-section + .git-popover-section {
+  border-top: 1px solid var(--line);
+}
+
+.git-popover-label {
+  font-family: var(--mono);
+  font-size: var(--size-micro);
+  font-weight: var(--weight-semibold);
+  color: var(--muted);
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  padding: 0 var(--sp-2) var(--sp-1);
+}
+
+.git-popover-divider {
+  height: 1px;
+  background: var(--line);
+  margin: var(--sp-1) 0;
+}
+
+.git-manager {
   display: flex;
   flex-direction: column;
   gap: var(--sp-2);
@@ -2286,10 +2558,9 @@
   padding-right: var(--sp-1);
 }
 
-.git-manager__divider,
-.git-popover-divider {
+.git-manager__divider {
   height: 1px;
-  background: var(--border-subtle);
+  background: var(--line);
 }
 
 .git-manager-row__meta {
@@ -2493,136 +2764,11 @@
   margin-top: var(--sp-1);
 }
 
-.git-popover-layer,
-.git-dialog-layer {
-  position: fixed;
-  inset: 0;
-}
-
-.git-popover-layer {
-  z-index: 260;
-}
-
-.git-dialog-layer {
-  z-index: 280;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  padding: var(--sp-6);
-  background: var(--overlay-scrim);
-  backdrop-filter: blur(6px);
-}
-
-.git-popover {
-  position: absolute;
-  max-height: min(82vh, 720px);
-  overflow: auto;
-  padding: var(--sp-3);
-  border: 1px solid var(--border-strong);
-  border-radius: var(--radius-lg);
-  background:
-    linear-gradient(180deg, var(--bg-hover), transparent),
-    var(--bg-elevated);
-  box-shadow:
-    0 24px 56px rgba(0, 0, 0, 0.32),
-    0 8px 18px rgba(0, 0, 0, 0.18);
-}
-
-.git-popover-label {
-  color: var(--text-tertiary);
-  font-size: 10px;
-  text-transform: uppercase;
-  letter-spacing: 0.04em;
-}
-
-.git-menu-item {
-  display: flex;
-  align-items: center;
-  justify-content: flex-start;
-  width: 100%;
-  min-height: 28px;
-  padding: 0 var(--sp-2);
-  border-radius: var(--radius-sm);
-  background: transparent;
-  color: var(--text-primary);
-  cursor: default;
-  text-align: left;
-  font-size: var(--size-caption);
-}
-
-.git-menu-item--active {
-  background: var(--accent-muted);
-  border-color: color-mix(in srgb, var(--accent) 38%, transparent);
-  color: var(--accent-hover);
-}
-
-.git-menu-item--destructive {
-  color: color-mix(in srgb, var(--status-error) 90%, white 10%);
-}
-
-.git-dialog {
-  width: min(680px, calc(100vw - 48px));
-  max-height: calc(100vh - 48px);
-  display: flex;
-  flex-direction: column;
-  border: 1px solid var(--border-strong);
-  border-radius: var(--radius-xl);
-  background:
-    linear-gradient(180deg, var(--bg-hover), transparent),
-    var(--bg-elevated);
-  box-shadow:
-    0 28px 72px rgba(0, 0, 0, 0.34),
-    0 10px 24px rgba(0, 0, 0, 0.2);
-  overflow: hidden;
-}
-
-.git-dialog--wide {
-  width: min(980px, calc(100vw - 48px));
-}
-
-.git-dialog--tall {
-  height: min(760px, calc(100vh - 48px));
-}
-
-.git-dialog__header,
-.git-dialog__footer {
-  display: flex;
-  align-items: center;
-  gap: var(--sp-2);
-  padding: var(--sp-3);
-  flex-shrink: 0;
-}
-
-.git-dialog__header {
-  justify-content: space-between;
-  border-bottom: 1px solid var(--border-subtle);
-}
-
-.git-dialog__footer {
-  border-top: 1px solid var(--border-subtle);
-}
-
-.git-dialog__title {
-  color: var(--text-primary);
-  font-size: var(--size-h3);
-  font-weight: var(--weight-semibold);
-}
-
-.git-dialog__subtitle {
-  margin-top: var(--sp-0-5);
-  color: var(--text-tertiary);
-  font-size: var(--size-small);
-}
-
-.git-dialog__body {
-  display: flex;
-  flex: 1;
-  min-height: 0;
-  flex-direction: column;
-  gap: var(--sp-3);
-  padding: var(--sp-3);
-  overflow: hidden;
-}
+/* Popover/dialog chrome moved to atoms.css (.popover, .popover-item, ...)
+   and pier-x.css (.dlg, .dlg-head, .dlg-body, .dlg-foot). The legacy
+   .git-popover-*, .git-menu-item-*, .git-dialog-* styles were removed
+   when GitPanel migrated to the shared <Dialog/> and <Popover/>
+   primitives — keep their sub-structure helpers below in sync. */
 
 .git-blame-row {
   display: grid;

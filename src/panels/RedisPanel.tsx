@@ -26,10 +26,21 @@ import { effectiveSshTarget } from "../lib/types";
 import { useConnectionStore } from "../stores/useConnectionStore";
 import { useDetectedServicesStore } from "../stores/useDetectedServicesStore";
 import { useTabStore } from "../stores/useTabStore";
+import PanelSkeleton, { useDeferredMount } from "../components/PanelSkeleton";
 
 type Props = { tab: TabState };
 
-export default function RedisPanel({ tab }: Props) {
+export default function RedisPanel(props: Props) {
+  const ready = useDeferredMount();
+  const variant = props.tab.redisActiveCredentialId ? "grid" : "splash";
+  return (
+    <div className="panel-stage">
+      {ready ? <RedisPanelBody {...props} /> : <PanelSkeleton variant={variant} rows={8} />}
+    </div>
+  );
+}
+
+function RedisPanelBody({ tab }: Props) {
   const { t } = useI18n();
   const formatError = (error: unknown) => localizeError(error, t);
   const updateTab = useTabStore((s) => s.updateTab);
@@ -55,6 +66,9 @@ export default function RedisPanel({ tab }: Props) {
   const [addOpen, setAddOpen] = useState(false);
   const [adopting, setAdopting] = useState<DetectedDbInstance | null>(null);
   const [autoBrowseAttempted, setAutoBrowseAttempted] = useState(false);
+  // See useDbCredentialFlow — bumped from `activateCredential` so the
+  // auto-browse effect re-fires on a re-click of the already-active cred.
+  const [browseTrigger, setBrowseTrigger] = useState(0);
   const [pwUpdateOpen, setPwUpdateOpen] = useState(false);
   const passwordInputRef = useRef<HTMLInputElement | null>(null);
 
@@ -176,7 +190,7 @@ export default function RedisPanel({ tab }: Props) {
       cancelled = true;
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [tab.redisActiveCredentialId, savedIndex, hasSsh]);
+  }, [tab.redisActiveCredentialId, savedIndex, hasSsh, browseTrigger]);
 
   // ── Actions ───────────────────────────────────────────────
   async function ensureConnectionTarget(forceTunnel = false) {
@@ -343,6 +357,10 @@ export default function RedisPanel({ tab }: Props) {
       redisTunnelId: null,
       redisTunnelPort: null,
     });
+    // Re-clicking the already-active cred would otherwise be a no-op:
+    // the identity-only effect deps wouldn't change. Bump the trigger
+    // so the auto-browse re-fires.
+    setBrowseTrigger((n) => n + 1);
   }
 
   // ── Splash rows ───────────────────────────────────────────
@@ -459,6 +477,10 @@ export default function RedisPanel({ tab }: Props) {
             redisTunnelId: null,
             redisTunnelPort: null,
           });
+          // Mirror activateCredential: even when the saved cred id
+          // collides with whatever was active before, force the
+          // auto-browse to fire.
+          setBrowseTrigger((n) => n + 1);
           void refreshConnections();
         }}
       />

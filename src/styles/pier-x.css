@@ -1182,6 +1182,43 @@ body.is-resizing .app { transition: none; }
 }
 .dlg-foot-hint svg { color: var(--pos); }
 
+/* Dialog size variants and modern (sans-titled) head/body — used by the
+   shared <Dialog/> React component. The legacy `.dlg.small` / `.dlg--newconn`
+   modifiers and the mono-uppercase `.dlg-title` remain for the
+   pre-existing dialogs. */
+.dlg--size-sm { width: 480px; max-width: calc(100vw - 48px); }
+.dlg--size-md { width: 640px; max-width: calc(100vw - 48px); }
+.dlg--size-lg { width: 880px; max-width: calc(100vw - 48px); }
+.dlg--size-xl { width: 1120px; max-width: calc(100vw - 48px); }
+.dlg--tall { height: min(760px, calc(100vh - 48px)); }
+
+.dlg-head__copy { display: flex; flex-direction: column; min-width: 0; gap: 2px; }
+.dlg-head__title {
+  font-family: var(--sans);
+  font-size: var(--ui-fs-lg);
+  font-weight: var(--weight-semibold);
+  color: var(--ink);
+  letter-spacing: -0.005em;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.dlg-head__subtitle {
+  font-family: var(--sans);
+  font-size: var(--ui-fs-sm);
+  color: var(--muted);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.dlg-body--plain {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-3);
+  padding: var(--sp-3) var(--sp-4);
+  overflow: auto;
+}
+
 /* Dialog primitives (Group / Row / OptsRow / Toggle) */
 .dlg-group {
   margin-bottom: var(--sp-5);

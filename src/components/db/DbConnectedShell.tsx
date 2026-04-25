@@ -4,9 +4,18 @@ import { useState } from "react";
 
 import { useI18n } from "../../i18n/useI18n";
 import DbHeaderPicker, { type DbHeaderInstance } from "./DbHeaderPicker";
+import DbSchemaTree, { type DbSchemaDatabase, type DbSchemaNode } from "./DbSchemaTree";
+import DbTableBar from "./DbTableBar";
 import type { DbKind } from "../../lib/types";
 
 export type DbConnectedTab = "data" | "structure" | "schema";
+
+export type DbConnectedSchema = {
+  databases: DbSchemaDatabase[];
+  selectedTableId: string | null;
+  onSelectTable: (databaseName: string, node: DbSchemaNode) => void;
+  onSelectDatabase?: (name: string) => void;
+};
 
 type Crumb = {
   database?: string;
@@ -33,20 +42,23 @@ type Props = {
   tab: DbConnectedTab;
   onTabChange: (next: DbConnectedTab) => void;
   crumb: Crumb;
-  sidebar: ReactNode;
+  /** Schema metadata — drives both the left-rail tree (wide) and the
+   *  horizontal chip-bar at the top of the main area (narrow). */
+  schema: DbConnectedSchema;
   /** Main body for the Data tab — typically <DbSqlEditor/> above <DbResultGrid/>. */
   dataTab: ReactNode;
   structureTab?: ReactNode;
   schemaTab?: ReactNode;
-  /** Optional right-side drawer rendered next to the main body. */
-  drawer?: ReactNode;
 };
 
 /**
  * Composed "connected" layout: header (picker + stats + segmented
  * Data/Structure/Schema) on top of a split (schema tree sidebar +
- * main body + optional drawer). The sidebar can be collapsed by the
- * user via the leading icon in the crumb row.
+ * main body). At wide widths the sidebar holds the schema tree; at
+ * narrow widths the sidebar disappears and a horizontal chip-bar
+ * with the same data renders above the breadcrumb in the main area.
+ * The sidebar can also be manually collapsed via the leading icon
+ * in the crumb row.
  */
 export default function DbConnectedShell({
   kind,
@@ -59,11 +71,10 @@ export default function DbConnectedShell({
   tab,
   onTabChange,
   crumb,
-  sidebar,
+  schema,
   dataTab,
   structureTab,
   schemaTab,
-  drawer,
 }: Props) {
   const { t } = useI18n();
   const [sidebarOpen, setSidebarOpen] = useState(true);
@@ -123,12 +134,29 @@ export default function DbConnectedShell({
       </header>
 
       <div className="db2-split">
-        {sidebarOpen && <div className="db2-sidebar">{sidebar}</div>}
+        {sidebarOpen && (
+          <div className="db2-sidebar">
+            <DbSchemaTree
+              databases={schema.databases}
+              selectedTableId={schema.selectedTableId}
+              onSelectTable={schema.onSelectTable}
+              onSelectDatabase={schema.onSelectDatabase}
+            />
+          </div>
+        )}
         <div className="db2-main">
+          <div className="db2-tablebar-host">
+            <DbTableBar
+              databases={schema.databases}
+              selectedTableId={schema.selectedTableId}
+              onSelectTable={schema.onSelectTable}
+              onSelectDatabase={schema.onSelectDatabase}
+            />
+          </div>
           <div className="db2-crumb">
             <button
               type="button"
-              className="mini-button mini-button--ghost"
+              className="mini-button mini-button--ghost db2-crumb__sidebar-toggle"
               onClick={() => setSidebarOpen((v) => !v)}
               title={t("Toggle schema tree")}
             >
@@ -159,7 +187,6 @@ export default function DbConnectedShell({
           {tab === "structure" && structureTab}
           {tab === "schema" && schemaTab}
         </div>
-        {drawer}
       </div>
     </div>
   );

@@ -613,7 +613,8 @@ function App() {
             action: () => {
               void (async () => {
                 const p = await getLogFilePath();
-                if (p) await openPath(p).catch(() => {});
+                if (!p) return;
+                await openPath(p).catch((e) => toast.error(String(e)));
               })();
             },
           },
@@ -622,7 +623,8 @@ function App() {
             action: () => {
               void (async () => {
                 const p = await getLogFilePath();
-                if (p) await revealItemInDir(p).catch(() => {});
+                if (!p) return;
+                await revealItemInDir(p).catch((e) => toast.error(String(e)));
               })();
             },
           },

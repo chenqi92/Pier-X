@@ -27,19 +27,21 @@ export type RightToolMeta = {
 };
 
 // Remote-tool ordering after the divider: monitor first (broad server
-// vitals apply to every host), then sftp (filesystem access is the
-// most-used lever on any box), then log tail (paired with sftp since
-// both deal with files on the host), then docker, then the database
-// stack, with sqlite at the tail since it's not remote-only.
+// vitals apply to every host), then firewall (the security/exposure view
+// pairs naturally with monitor — both are read-mostly host overviews),
+// then sftp (filesystem access is the most-used lever on any box), then
+// log tail (paired with sftp since both deal with files on the host),
+// then docker, then the database stack, with sqlite at the tail since
+// it's not remote-only.
 // Markdown + git stay above the divider as local-workspace tools.
 export const RIGHT_TOOL_ORDER: RightTool[] = [
   "markdown",
   "git",
   "monitor",
+  "firewall",
   "sftp",
   "log",
   "docker",
-  "firewall",
   "mysql",
   "postgres",
   "redis",

@@ -5,6 +5,7 @@ import {
   ArrowUp,
   Check,
   Filter,
+  KeyRound,
   Plus,
   Save,
   Trash2,
@@ -110,7 +111,7 @@ export default function DbResultGrid({
   const numericSet = useMemo(() => new Set(numericColumns ?? []), [numericColumns]);
   const pkSet = useMemo(() => new Set(pkColumns ?? []), [pkColumns]);
 
-  const cols = preview?.columns ?? [];
+  const cols = preview?.columns ?? columnsMeta?.map((c) => c.name) ?? [];
   const editEnabled = writable && !!columnsMeta && pkSet.size > 0 && !!onCommit;
   const insertEnabled = writable && !!columnsMeta && !!onCommit;
 
@@ -293,7 +294,7 @@ export default function DbResultGrid({
     }
   };
 
-  if (!preview) {
+  if (!preview && cols.length === 0) {
     return (
       <div className="rg">
         {toolbar && <div className="rg-toolbar">{toolbar}</div>}
@@ -302,6 +303,7 @@ export default function DbResultGrid({
     );
   }
 
+  const totalRows = preview?.rows.length ?? 0;
   const activeFilterCount = Object.values(filters).filter((v) => v.trim() !== "").length;
 
   return (
@@ -310,12 +312,12 @@ export default function DbResultGrid({
         <span className="rg-stat">
           <b>{filteredSorted.length.toLocaleString()}</b>
           <span className="rg-stat-muted"> {t("rows")}</span>
-          {filteredSorted.length !== preview.rows.length && (
+          {filteredSorted.length !== totalRows && (
             <span className="rg-stat-muted">
-              {" · "}{t("filtered from {total}", { total: preview.rows.length.toLocaleString() })}
+              {" · "}{t("filtered from {total}", { total: totalRows.toLocaleString() })}
             </span>
           )}
-          {preview.truncated && (
+          {preview?.truncated && (
             <span className="rg-stat-muted"> · {t("truncated")}</span>
           )}
         </span>
@@ -367,7 +369,11 @@ export default function DbResultGrid({
                     onClick={() => toggleSort(col)}
                   >
                     <div className="rg-th-body">
-                      {isPk && <span className="rg-pk">{t("PK")}</span>}
+                      {isPk && (
+                        <span className="rg-pk" title={t("Primary key")} aria-label={t("Primary key")}>
+                          <KeyRound size={10} />
+                        </span>
+                      )}
                       <span className="rg-th-name">{col}</span>
                       {sorted && (
                         <span className="rg-th-sort">

@@ -5,12 +5,15 @@ import {
   Filter,
   Globe,
   Plug,
+  Plus,
   RefreshCw,
   Send,
+  SendHorizontal,
   Shield,
   ShieldAlert,
   ShieldCheck,
   Square as Block,
+  Trash2,
   X,
 } from "lucide-react";
 import { useEffect, useMemo, useRef, useState } from "react";
@@ -28,6 +31,7 @@ import DbConnRow from "../components/DbConnRow";
 import DismissibleNote from "../components/DismissibleNote";
 import PanelHeader from "../components/PanelHeader";
 import StatusDot from "../components/StatusDot";
+import PanelSkeleton, { useDeferredMount } from "../components/PanelSkeleton";
 
 type Props = {
   tab: TabState;
@@ -133,6 +137,17 @@ function parseMappings(natDump: string): PortMapping[] {
   return out;
 }
 
+/** Classify a listening socket's bind address to surface its real
+ *  exposure: a `0.0.0.0` mysqld is reachable from the internet, a
+ *  `127.0.0.1` mysqld-X-protocol on the same host isn't. The label
+ *  is the only way users can tell the two apart in the listing. */
+type BindScope = "public" | "loopback" | "lan";
+function bindScope(addr: string): BindScope {
+  if (addr === "0.0.0.0" || addr === "::" || addr === "*") return "public";
+  if (addr === "127.0.0.1" || addr === "::1" || addr.startsWith("127.")) return "loopback";
+  return "lan";
+}
+
 /** Build the right write command for the detected backend. We always
  *  prefix with `sudo` when the SSH user isn't root — the panel sends
  *  it to the terminal where the user can edit and supply a password. */
@@ -174,7 +189,235 @@ function buildBlockPortCmd(
   }
 }
 
-export default function FirewallPanel({ tab, isActive = true }: Props) {
+// ── Rules parser ────────────────────────────────────────────────
+// `iptables-save -c` (what the backend always returns, even on
+// nftables hosts via `iptables-nft-save`) yields lines like:
+//
+//   *filter
+//   :INPUT ACCEPT [123:45678]
+//   :FORWARD DROP [0:0]
+//   [12:840] -A INPUT -i lo -j ACCEPT
+//   [3:180] -A INPUT -p tcp -m tcp --dport 22 -j ACCEPT
+//   [0:0]   -A INPUT -s 192.168.0.0/24 -p tcp --dport 3306 -j ACCEPT
+//   COMMIT
+//
+// We only render `-A` lines as rule rows; chain default policies
+// already live in the `defaultPolicies` map so the `:CHAIN POLICY`
+// header lines are skipped here.
+
+type ParsedRule = {
+  /** Stable id derived from raw line — used by React keys and as
+   *  the basis for the delete command. */
+  id: string;
+  table: string; // "filter" | "nat" | …
+  chain: string; // "INPUT" | "OUTPUT" | "FORWARD" | "DOCKER" | …
+  action: string; // "ACCEPT" | "DROP" | "REJECT" | "LOG" | "DNAT" | "" if -j missing
+  proto?: string; // "tcp" | "udp" | "icmp" | "all"
+  source?: string;
+  destination?: string;
+  dport?: string;
+  sport?: string;
+  iface?: string; // -i
+  outIface?: string; // -o
+  pkts?: number;
+  bytes?: number;
+  /** The original line minus the `[pkts:bytes]` counter prefix —
+   *  reused as the body of `iptables -D` (replace `-A` with `-D`). */
+  body: string;
+};
+
+function parseRules(dump: string): ParsedRule[] {
+  const out: ParsedRule[] = [];
+  let table = "filter";
+  let idx = 0;
+  for (const rawLine of dump.split("\n")) {
+    const line = rawLine.trimEnd();
+    if (!line) continue;
+    if (line.startsWith("*")) {
+      table = line.slice(1).trim();
+      continue;
+    }
+    if (line === "COMMIT" || line.startsWith(":") || line.startsWith("#")) continue;
+
+    let counterPkts: number | undefined;
+    let counterBytes: number | undefined;
+    let body = line;
+    const counter = /^\[(\d+):(\d+)\]\s*/.exec(body);
+    if (counter) {
+      counterPkts = parseInt(counter[1], 10);
+      counterBytes = parseInt(counter[2], 10);
+      body = body.slice(counter[0].length);
+    }
+    if (!body.startsWith("-A ")) continue;
+
+    const chainMatch = /^-A\s+(\S+)/.exec(body);
+    if (!chainMatch) continue;
+    const chain = chainMatch[1];
+
+    const action = /-j\s+(\S+)/.exec(body)?.[1] ?? "";
+    const proto = /(?:^|\s)-p\s+(\S+)/.exec(body)?.[1];
+    const source = /(?:^|\s)-s\s+(\S+)/.exec(body)?.[1];
+    const destination = /(?:^|\s)-d\s+(\S+)/.exec(body)?.[1];
+    const dport = /--dport\s+(\S+)/.exec(body)?.[1];
+    const sport = /--sport\s+(\S+)/.exec(body)?.[1];
+    const iface = /(?:^|\s)-i\s+(\S+)/.exec(body)?.[1];
+    const outIface = /(?:^|\s)-o\s+(\S+)/.exec(body)?.[1];
+
+    out.push({
+      id: `${table}:${idx++}:${body}`,
+      table,
+      chain,
+      action,
+      proto,
+      source,
+      destination,
+      dport,
+      sport,
+      iface,
+      outIface,
+      pkts: counterPkts,
+      bytes: counterBytes,
+      body,
+    });
+  }
+  return out;
+}
+
+/** Render a rule as one short Chinese sentence. The phrasing is
+ *  chosen to be skimmable in the card list — exhaustive detail
+ *  stays in the raw `<details>` underneath. */
+function ruleSummary(r: ParsedRule, t: (s: string, params?: Record<string, string>) => string): string {
+  const parts: string[] = [];
+  const dir = r.chain === "INPUT" ? t("inbound") : r.chain === "OUTPUT" ? t("outbound") : r.chain === "FORWARD" ? t("forwarded") : r.chain;
+  const proto = r.proto && r.proto !== "all" ? r.proto.toUpperCase() : "";
+  const portPart = r.dport ? `${proto || t("port")} ${r.dport}` : proto;
+  const srcPart = r.source ? t("from {src}", { src: r.source }) : "";
+  const dstPart = r.destination ? t("to {dst}", { dst: r.destination }) : "";
+  const ifPart = r.iface ? t("on {iface}", { iface: r.iface }) : r.outIface ? t("via {iface}", { iface: r.outIface }) : "";
+
+  if (portPart) parts.push(portPart);
+  if (srcPart) parts.push(srcPart);
+  if (dstPart) parts.push(dstPart);
+  if (ifPart) parts.push(ifPart);
+  parts.push(dir);
+
+  const condition = parts.filter(Boolean).join(" ");
+  switch (r.action) {
+    case "ACCEPT": return t("Allow {cond}", { cond: condition });
+    case "DROP": return t("Drop {cond}", { cond: condition });
+    case "REJECT": return t("Reject {cond}", { cond: condition });
+    case "LOG": return t("Log {cond}", { cond: condition });
+    case "DNAT": return t("DNAT {cond}", { cond: condition });
+    case "SNAT": return t("SNAT {cond}", { cond: condition });
+    case "MASQUERADE": return t("Masquerade {cond}", { cond: condition });
+    case "RETURN": return t("Return {cond}", { cond: condition });
+    default:
+      return r.action ? `${r.action} ${condition}` : condition;
+  }
+}
+
+function actionTone(action: string): "is-pos" | "is-neg" | "is-warn" | "is-info" | "is-muted" {
+  switch (action) {
+    case "ACCEPT":
+    case "RETURN":
+      return "is-pos";
+    case "DROP":
+      return "is-neg";
+    case "REJECT":
+      return "is-warn";
+    case "LOG":
+    case "DNAT":
+    case "SNAT":
+    case "MASQUERADE":
+      return "is-info";
+    default:
+      return "is-muted";
+  }
+}
+
+/** Convert an `-A CHAIN …` line into the matching `iptables -D`
+ *  delete command. Works on iptables-save output regardless of
+ *  whether the backend is legacy or nft — both accept `-D`. The
+ *  table flag is preserved so a NAT rule isn't accidentally
+ *  searched in the filter table. */
+function buildDeleteRuleCmd(rule: ParsedRule, needsSudo: boolean): string {
+  const sudo = needsSudo ? "sudo " : "";
+  const tableFlag = rule.table && rule.table !== "filter" ? `-t ${rule.table} ` : "";
+  const body = rule.body.replace(/^-A\s+/, "-D ");
+  return `${sudo}iptables ${tableFlag}${body}`;
+}
+
+// ── Custom rule composer ────────────────────────────────────────
+// A single-screen form (not a multi-step wizard — see PRODUCT-SPEC
+// §5.9 "不做规则模板向导") that lets the user pick chain / proto /
+// source / port / action and previews the compiled command before
+// it goes through the same send-to-terminal confirm path.
+
+type CustomRuleDraft = {
+  chain: "INPUT" | "OUTPUT" | "FORWARD";
+  proto: "tcp" | "udp" | "icmp" | "all";
+  source: string;
+  dport: string;
+  action: "ACCEPT" | "DROP" | "REJECT";
+};
+
+function buildCustomRuleCmd(
+  backend: FirewallBackend,
+  draft: CustomRuleDraft,
+  needsSudo: boolean,
+): string {
+  const sudo = needsSudo ? "sudo " : "";
+  const protoFlag = draft.proto !== "all" ? `-p ${draft.proto} ` : "";
+  const sourceFlag = draft.source ? `-s ${draft.source} ` : "";
+  const dportFlag = draft.dport && (draft.proto === "tcp" || draft.proto === "udp")
+    ? `--dport ${draft.dport} ` : "";
+
+  switch (backend) {
+    case "ufw": {
+      // ufw can't express arbitrary chain/source combos; fall back
+      // to a clear `# manual` comment so the user knows to edit.
+      const verb = draft.action === "ACCEPT" ? "allow" : draft.action === "DROP" ? "deny" : "reject";
+      const port = draft.dport ? draft.dport : "";
+      const proto = draft.proto === "tcp" || draft.proto === "udp" ? `/${draft.proto}` : "";
+      const from = draft.source ? ` from ${draft.source}` : "";
+      if (port) return `${sudo}ufw ${verb}${from} to any port ${port}${proto}`;
+      return `${sudo}ufw ${verb}${from}`;
+    }
+    case "firewalld": {
+      // firewalld rich-rule covers source + port + action combos.
+      const family = draft.source && draft.source.includes(":") ? "ipv6" : "ipv4";
+      const src = draft.source ? `source address="${draft.source}" ` : "";
+      const portRule = draft.dport && (draft.proto === "tcp" || draft.proto === "udp")
+        ? `port port="${draft.dport}" protocol="${draft.proto}" ` : "";
+      const verb = draft.action === "ACCEPT" ? "accept" : draft.action === "DROP" ? "drop" : "reject";
+      return `${sudo}firewall-cmd --permanent --add-rich-rule='rule family="${family}" ${src}${portRule}${verb}'`;
+    }
+    case "nftables": {
+      const verb = draft.action === "ACCEPT" ? "accept" : draft.action === "DROP" ? "drop" : "reject";
+      const hookChain = draft.chain.toLowerCase();
+      const src = draft.source ? `ip saddr ${draft.source} ` : "";
+      const proto = draft.proto !== "all" ? `${draft.proto} ` : "";
+      const dport = draft.dport && (draft.proto === "tcp" || draft.proto === "udp")
+        ? `dport ${draft.dport} ` : "";
+      return `${sudo}nft add rule inet filter ${hookChain} ${src}${proto}${dport}${verb}`.replace(/\s+/g, " ").trim();
+    }
+    default: {
+      const target = draft.action;
+      return `${sudo}iptables -A ${draft.chain} ${sourceFlag}${protoFlag}${dportFlag}-j ${target}`.replace(/\s+/g, " ").trim();
+    }
+  }
+}
+
+export default function FirewallPanel(props: Props) {
+  const ready = useDeferredMount();
+  return (
+    <div className="panel-stage">
+      {ready ? <FirewallPanelBody {...props} /> : <PanelSkeleton variant="rows" rows={8} />}
+    </div>
+  );
+}
+
+function FirewallPanelBody({ tab, isActive = true }: Props) {
   const { t } = useI18n();
   const formatError = (error: unknown) => localizeError(error, t);
 
@@ -194,6 +437,18 @@ export default function FirewallPanel({ tab, isActive = true }: Props) {
   // the exact command, edits if they want, and presses Enter themselves
   // in the actual terminal — the panel never executes anything itself.
   const [pendingCmd, setPendingCmd] = useState<{ cmd: string; description: string } | null>(null);
+  // Custom rule composer dialog (only opens when the user clicks
+  // "Add rule" on the Rules tab). Default chain INPUT covers the
+  // common "let me reach this server" case.
+  const [customRuleOpen, setCustomRuleOpen] = useState(false);
+  const [customRule, setCustomRule] = useState<CustomRuleDraft>({
+    chain: "INPUT",
+    proto: "tcp",
+    source: "",
+    dport: "",
+    action: "ACCEPT",
+  });
+  const [showRawRules, setShowRawRules] = useState(false);
 
   const [rates, setRates] = useState<Record<string, { rxBps: number; txBps: number }>>({});
   const [rateHistory, setRateHistory] = useState<Record<string, { rx: number[]; tx: number[] }>>({});
@@ -309,6 +564,27 @@ export default function FirewallPanel({ tab, isActive = true }: Props) {
   }, [snap, search]);
 
   const mappings = useMemo(() => parseMappings(snap?.natV4 ?? ""), [snap?.natV4]);
+
+  // Parse rules once per snapshot. Group by chain so the Rules tab
+  // can render one card per chain with its rules nested inside —
+  // matches PRODUCT-SPEC §5.9 "按链卡片化展示".
+  const rulesV4Parsed = useMemo(() => parseRules(snap?.rulesV4 ?? ""), [snap?.rulesV4]);
+  const rulesV6Parsed = useMemo(() => parseRules(snap?.rulesV6 ?? ""), [snap?.rulesV6]);
+  const rulesByChain = useMemo(() => {
+    const groups = new Map<string, ParsedRule[]>();
+    for (const r of rulesV4Parsed) {
+      // Skip nat-table chains here — they belong in the Mappings tab.
+      if (r.table !== "filter") continue;
+      const key = r.chain;
+      if (!groups.has(key)) groups.set(key, []);
+      groups.get(key)!.push(r);
+    }
+    return groups;
+  }, [rulesV4Parsed]);
+  const customRulePreview = useMemo(
+    () => buildCustomRuleCmd(backend, customRule, needsSudo),
+    [backend, customRule, needsSudo],
+  );
 
   const filteredMappings = useMemo(() => {
     const q = search.trim().toLowerCase();
@@ -467,47 +743,63 @@ export default function FirewallPanel({ tab, isActive = true }: Props) {
                   {snap ? t("No listening sockets visible.") : t("Loading…")}
                 </div>
               ) : (
-                filteredListening.map((p, i) => (
-                  <div key={`${p.proto}-${p.localAddr}-${p.localPort}-${i}`} className="dk-card">
-                    <span className="dk-card-ic is-pos">
-                      <Globe size={12} />
-                    </span>
-                    <div className="dk-card-body">
-                      <div className="dk-card-title mono">
-                        {p.localAddr}:{p.localPort}
-                        <span className="text-muted"> · {p.proto}</span>
+                filteredListening.map((p, i) => {
+                  const scope = bindScope(p.localAddr);
+                  const scopeBadge =
+                    scope === "public"
+                      ? { tone: "is-warn", label: t("Public") }
+                      : scope === "loopback"
+                        ? { tone: "is-muted", label: t("Local only") }
+                        : { tone: "is-info", label: t("LAN") };
+                  return (
+                    <div key={`${p.proto}-${p.localAddr}-${p.localPort}-${i}`} className="dk-card">
+                      <span className="dk-card-ic is-pos">
+                        <Globe size={12} />
+                      </span>
+                      <div className="dk-card-body">
+                        <div className="dk-card-title mono">
+                          {p.localAddr}:{p.localPort}
+                          <span className="text-muted"> · {p.proto}</span>
+                          <span
+                            className={"db-badge " + scopeBadge.tone}
+                            style={{ marginLeft: "var(--sp-1-5)" }}
+                            title={t("Bind address {addr}", { addr: p.localAddr })}
+                          >
+                            {scopeBadge.label}
+                          </span>
+                        </div>
+                        <div className="dk-card-sub mono">
+                          {p.process || t("(unknown — root needed)")}
+                          {p.pid !== null ? ` · pid ${p.pid}` : ""}
+                        </div>
                       </div>
-                      <div className="dk-card-sub mono">
-                        {p.process || t("(unknown — root needed)")}
-                        {p.pid !== null ? ` · pid ${p.pid}` : ""}
+                      <div className="dk-card-actions" onClick={(e) => e.stopPropagation()}>
+                        <button
+                          className="mini-btn is-destructive"
+                          type="button"
+                          title={t("Send block command to terminal")}
+                          disabled={!terminalSessionId}
+                          onClick={() =>
+                            sendToTerminal(
+                              buildBlockPortCmd(
+                                backend,
+                                p.proto.startsWith("udp") ? "udp" : "tcp",
+                                p.localPort,
+                                needsSudo,
+                              ),
+                              t("Block port {port}/{proto}", {
+                                port: String(p.localPort),
+                                proto: p.proto.startsWith("udp") ? "udp" : "tcp",
+                              }),
+                            )
+                          }
+                        >
+                          <SendHorizontal size={10} />
+                        </button>
                       </div>
                     </div>
-                    <div className="dk-card-actions" onClick={(e) => e.stopPropagation()}>
-                      <button
-                        className="mini-btn is-destructive"
-                        type="button"
-                        title={t("Send block command to terminal")}
-                        disabled={!terminalSessionId}
-                        onClick={() =>
-                          sendToTerminal(
-                            buildBlockPortCmd(
-                              backend,
-                              p.proto.startsWith("udp") ? "udp" : "tcp",
-                              p.localPort,
-                              needsSudo,
-                            ),
-                            t("Block port {port}/{proto}", {
-                              port: String(p.localPort),
-                              proto: p.proto.startsWith("udp") ? "udp" : "tcp",
-                            }),
-                          )
-                        }
-                      >
-                        <Block size={10} />
-                      </button>
-                    </div>
-                  </div>
-                ))
+                  );
+                })
               )}
             </div>
           </div>
@@ -515,6 +807,28 @@ export default function FirewallPanel({ tab, isActive = true }: Props) {
 
         {activeTab === "rules" && (
           <div className="dk-body">
+            <div className="dk-toolbar fw-composer">
+              <button
+                type="button"
+                className="btn is-primary is-compact"
+                disabled={!terminalSessionId}
+                onClick={() => setCustomRuleOpen(true)}
+                title={!terminalSessionId ? t("Open the terminal at least once for this tab to enable write actions.") : undefined}
+              >
+                <Plus size={11} /> {t("Add rule")}
+              </button>
+              <div style={{ flex: 1 }} />
+              <button
+                type="button"
+                className="btn is-compact is-ghost"
+                onClick={() => setShowRawRules((v) => !v)}
+              >
+                {showRawRules ? t("Hide raw") : t("Show raw")}
+              </button>
+              <span className="mono text-muted" style={{ fontSize: "var(--size-micro)" }}>
+                {t("{count} rules", { count: rulesV4Parsed.filter((r) => r.table === "filter").length })}
+              </span>
+            </div>
             <div className="fw-policies mono">
               {Object.entries(snap?.defaultPolicies ?? {}).map(([chain, policy]) => (
                 <span
@@ -531,15 +845,99 @@ export default function FirewallPanel({ tab, isActive = true }: Props) {
                 </span>
               )}
             </div>
-            <pre className="fw-pre mono">
-              {snap?.rulesV4 || (snap ? t("(empty — try refreshing as root)") : t("Loading…"))}
-            </pre>
-            {snap?.rulesV6 ? (
+
+            <div className="dk-scroll">
+            {rulesByChain.size === 0 ? (
+              <div className="dk-empty">
+                {snap ? t("No filter rules — only chain default policies apply.") : t("Loading…")}
+              </div>
+            ) : (
+              <div className="fw-rules">
+                {Array.from(rulesByChain.entries()).map(([chain, rules]) => (
+                  <div key={chain} className="fw-rule-chain">
+                    <div className="fw-rule-chain-head mono">
+                      <span className="db-badge is-info">{chain}</span>
+                      <span className="text-muted">
+                        {t("{count} rules", { count: rules.length })}
+                      </span>
+                    </div>
+                    {rules.map((r) => (
+                      <div key={r.id} className="fw-rule-row">
+                        <span className={"db-badge " + actionTone(r.action)} style={{ flex: "none" }}>
+                          {r.action || "—"}
+                        </span>
+                        <div className="fw-rule-text">
+                          <div className="fw-rule-summary">{ruleSummary(r, t)}</div>
+                          <div className="fw-rule-raw mono">{r.body}</div>
+                        </div>
+                        {typeof r.pkts === "number" && r.pkts > 0 && (
+                          <span
+                            className="pill mono"
+                            title={t("{pkts} packets · {bytes} bytes", {
+                              pkts: String(r.pkts),
+                              bytes: String(r.bytes ?? 0),
+                            })}
+                          >
+                            {r.pkts}
+                          </span>
+                        )}
+                        <button
+                          className="mini-btn is-destructive"
+                          type="button"
+                          title={t("Send delete command to terminal")}
+                          disabled={!terminalSessionId}
+                          onClick={() =>
+                            sendToTerminal(
+                              buildDeleteRuleCmd(r, needsSudo),
+                              t("Delete rule on {chain}", { chain: r.chain }),
+                            )
+                          }
+                        >
+                          <Trash2 size={10} />
+                        </button>
+                      </div>
+                    ))}
+                  </div>
+                ))}
+                {rulesV6Parsed.length > 0 && (
+                  <div className="fw-rule-chain">
+                    <div className="fw-rule-chain-head mono">
+                      <span className="db-badge is-muted">{t("IPv6")}</span>
+                      <span className="text-muted">
+                        {t("{count} rules", { count: rulesV6Parsed.length })}
+                      </span>
+                    </div>
+                    {rulesV6Parsed.map((r) => (
+                      <div key={r.id} className="fw-rule-row">
+                        <span className={"db-badge " + actionTone(r.action)} style={{ flex: "none" }}>
+                          {r.action || "—"}
+                        </span>
+                        <div className="fw-rule-text">
+                          <div className="fw-rule-summary">{ruleSummary(r, t)}</div>
+                          <div className="fw-rule-raw mono">{r.body}</div>
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                )}
+              </div>
+            )}
+
+            {showRawRules && (
               <>
-                <div className="fw-section-title mono">{t("IPv6")}</div>
-                <pre className="fw-pre mono">{snap.rulesV6}</pre>
+                <div className="fw-section-title mono">{t("Raw iptables-save")}</div>
+                <pre className="fw-pre mono">
+                  {snap?.rulesV4 || (snap ? t("(empty — try refreshing as root)") : t("Loading…"))}
+                </pre>
+                {snap?.rulesV6 ? (
+                  <>
+                    <div className="fw-section-title mono">{t("IPv6")}</div>
+                    <pre className="fw-pre mono">{snap.rulesV6}</pre>
+                  </>
+                ) : null}
               </>
-            ) : null}
+            )}
+            </div>
           </div>
         )}
 
@@ -629,6 +1027,91 @@ export default function FirewallPanel({ tab, isActive = true }: Props) {
                 type="button"
                 className="btn is-primary is-compact"
                 onClick={() => void confirmSendToTerminal()}
+              >
+                <Send size={11} /> {t("Send to terminal")}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {customRuleOpen && (
+        <div className="fw-confirm-scrim" onClick={() => setCustomRuleOpen(false)}>
+          <div className="fw-confirm fw-rule-dialog" onClick={(e) => e.stopPropagation()}>
+            <div className="fw-confirm-title">{t("Add firewall rule")}</div>
+            <div className="fw-rule-form">
+              <label className="fw-rule-field">
+                <span>{t("Chain")}</span>
+                <select
+                  value={customRule.chain}
+                  onChange={(e) => setCustomRule((d) => ({ ...d, chain: e.currentTarget.value as CustomRuleDraft["chain"] }))}
+                >
+                  <option value="INPUT">INPUT</option>
+                  <option value="OUTPUT">OUTPUT</option>
+                  <option value="FORWARD">FORWARD</option>
+                </select>
+              </label>
+              <label className="fw-rule-field">
+                <span>{t("Protocol")}</span>
+                <select
+                  value={customRule.proto}
+                  onChange={(e) => setCustomRule((d) => ({ ...d, proto: e.currentTarget.value as CustomRuleDraft["proto"] }))}
+                >
+                  <option value="tcp">TCP</option>
+                  <option value="udp">UDP</option>
+                  <option value="icmp">ICMP</option>
+                  <option value="all">{t("All")}</option>
+                </select>
+              </label>
+              <label className="fw-rule-field">
+                <span>{t("Source (optional)")}</span>
+                <input
+                  type="text"
+                  className="mono"
+                  placeholder="e.g. 192.168.0.0/24"
+                  value={customRule.source}
+                  onChange={(e) => setCustomRule((d) => ({ ...d, source: e.currentTarget.value }))}
+                />
+              </label>
+              <label className="fw-rule-field">
+                <span>{t("Destination port (optional)")}</span>
+                <input
+                  type="text"
+                  className="mono"
+                  placeholder="22"
+                  value={customRule.dport}
+                  onChange={(e) => setCustomRule((d) => ({ ...d, dport: e.currentTarget.value }))}
+                  disabled={customRule.proto !== "tcp" && customRule.proto !== "udp"}
+                />
+              </label>
+              <label className="fw-rule-field">
+                <span>{t("Action")}</span>
+                <select
+                  value={customRule.action}
+                  onChange={(e) => setCustomRule((d) => ({ ...d, action: e.currentTarget.value as CustomRuleDraft["action"] }))}
+                >
+                  <option value="ACCEPT">ACCEPT</option>
+                  <option value="DROP">DROP</option>
+                  <option value="REJECT">REJECT</option>
+                </select>
+              </label>
+            </div>
+            <div className="fw-confirm-body mono">{customRulePreview}</div>
+            <div className="fw-confirm-hint">
+              {t("Preview is built from the detected backend ({backend}). The command will be inserted into the terminal — you review and press Enter.", { backend: backendLabel(backend) })}
+            </div>
+            <div className="fw-confirm-actions">
+              <button type="button" className="btn is-compact" onClick={() => setCustomRuleOpen(false)}>
+                {t("Cancel")}
+              </button>
+              <button
+                type="button"
+                className="btn is-primary is-compact"
+                disabled={!terminalSessionId}
+                onClick={() => {
+                  setCustomRuleOpen(false);
+                  sendToTerminal(customRulePreview, t("Custom rule on {chain}", { chain: customRule.chain }));
+                }}
               >
                 <Send size={11} /> {t("Send to terminal")}
               </button>

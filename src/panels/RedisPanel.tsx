@@ -53,6 +53,11 @@ function RedisPanelBody({ tab }: Props) {
   const [password, setPassword] = useState(tab.redisPassword);
   const [pattern, setPattern] = useState("*");
   const [keyName, setKeyName] = useState("");
+  // Tree mode collapses keys by their `:` separator. Keep it
+  // local — small enough that wiring it through useTabStore
+  // would only buy persistence for a value the user rarely
+  // changes during a session.
+  const [treeMode, setTreeMode] = useState(false);
   const [command, setCommand] = useState("PING");
   const [state, setState] = useState<RedisBrowserState | null>(null);
   const [busy, setBusy] = useState(false);
@@ -319,6 +324,71 @@ function RedisPanelBody({ tab }: Props) {
       setError(formatError(e));
     } finally {
       setLoadMoreBusy(false);
+    }
+  }
+
+  // ── Key edit actions ─────────────────────────────────────
+  // Both rename and delete go through their own confirm-guarded
+  // backend command (`RENAMENX` / `DEL`). The panel reloads the
+  // browse on success so the key list updates in place.
+  const [keyActionBusy, setKeyActionBusy] = useState(false);
+
+  async function renameKey(currentKey: string, nextKey: string) {
+    setKeyActionBusy(true);
+    setError("");
+    try {
+      const target = await ensureConnectionTarget();
+      const ok = await cmd.redisRenameKey({
+        host: target.host,
+        port: target.port,
+        db: d,
+        from: currentKey,
+        to: nextKey,
+        username: user.trim() || null,
+        password: password || null,
+      });
+      if (!ok) {
+        setError(t("Cannot rename — a key named {key} already exists.", { key: nextKey }));
+        return;
+      }
+      setKeyName(nextKey);
+      await browse(nextKey);
+    } catch (e) {
+      setError(formatError(e));
+    } finally {
+      setKeyActionBusy(false);
+    }
+  }
+
+  async function deleteKey(key: string) {
+    setKeyActionBusy(true);
+    setError("");
+    try {
+      const target = await ensureConnectionTarget();
+      const existed = await cmd.redisDeleteKey({
+        host: target.host,
+        port: target.port,
+        db: d,
+        key,
+        username: user.trim() || null,
+        password: password || null,
+      });
+      // Clear the active selection so the detail pane returns
+      // to the empty state. Browse picks the next key from the
+      // refreshed list automatically.
+      setKeyName("");
+      await browse("");
+      if (!existed) {
+        // Surface this as a notice rather than an error — the
+        // server agreed with the action; the key just wasn't
+        // there. Reusing the cmdError lane since there's no
+        // dedicated notice slot in the Redis panel.
+        setCmdError(t("Key {key} did not exist.", { key }));
+      }
+    } catch (e) {
+      setError(formatError(e));
+    } finally {
+      setKeyActionBusy(false);
     }
   }
 
@@ -633,6 +703,18 @@ function RedisPanelBody({ tab }: Props) {
           >
             <Search size={10} /> {t("Scan")}
           </button>
+          <button
+            type="button"
+            className={"btn is-ghost is-compact" + (treeMode ? " active" : "")}
+            onClick={() => setTreeMode((v) => !v)}
+            title={
+              treeMode
+                ? t("Showing colon-separated tree; click to flatten")
+                : t("Group keys by colon namespaces")
+            }
+          >
+            {treeMode ? t("Tree") : t("Flat")}
+          </button>
           <span className="rds-spacer" />
           <button
             type="button"
@@ -696,10 +778,16 @@ function RedisPanelBody({ tab }: Props) {
               hasMore={state.nextCursor !== "0"}
               onLoadMore={() => void loadMore()}
               loadMoreBusy={loadMoreBusy}
+              treeMode={treeMode}
             />
           </div>
           <div className="rds-detail">
-            <RedisKeyDetail details={state.details} />
+            <RedisKeyDetail
+              details={state.details}
+              onRename={(from, to) => void renameKey(from, to)}
+              onDelete={(key) => void deleteKey(key)}
+              actionBusy={keyActionBusy}
+            />
           </div>
         </div>
       </div>

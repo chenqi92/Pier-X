@@ -1,4 +1,4 @@
-import { Zap } from "lucide-react";
+import { Edit, Trash2, Zap } from "lucide-react";
 
 import { useI18n } from "../../i18n/useI18n";
 import RedisTypeBadge from "./RedisTypeBadge";
@@ -6,6 +6,16 @@ import type { RedisKeyView } from "../../lib/types";
 
 type Props = {
   details: RedisKeyView | null;
+  /** When provided, the head shows a Rename action that opens a
+   *  prompt with the current key name pre-filled. The handler
+   *  receives the new name and is responsible for the round-
+   *  trip + reload. */
+  onRename?: (currentKey: string, nextKey: string) => void;
+  /** When provided, the head shows a Delete action guarded by a
+   *  confirm() dialog. */
+  onDelete?: (key: string) => void;
+  /** Disabled flag while a Rename / Delete is in flight. */
+  actionBusy?: boolean;
 };
 
 /**
@@ -13,7 +23,7 @@ type Props = {
  * pilot — inline edit / SET / HSET / LPUSH flows are design-only
  * placeholders (see docs/BACKEND-GAPS.md).
  */
-export default function RedisKeyDetail({ details }: Props) {
+export default function RedisKeyDetail({ details, onRename, onDelete, actionBusy }: Props) {
   const { t } = useI18n();
 
   if (!details) {
@@ -41,6 +51,41 @@ export default function RedisKeyDetail({ details }: Props) {
       <div className="rds-detail-head">
         <RedisTypeBadge kind={details.kind} />
         <span className="rds-detail-key">{details.key}</span>
+        <span style={{ flex: 1 }} />
+        {onRename && (
+          <button
+            type="button"
+            className="btn is-ghost is-compact"
+            disabled={actionBusy}
+            onClick={() => {
+              const next = window.prompt(t("Rename key — enter a new name:"), details.key);
+              if (next == null) return;
+              const trimmed = next.trim();
+              if (!trimmed || trimmed === details.key) return;
+              onRename(details.key, trimmed);
+            }}
+            title={t("Rename")}
+          >
+            <Edit size={10} /> {t("Rename")}
+          </button>
+        )}
+        {onDelete && (
+          <button
+            type="button"
+            className="btn is-ghost is-compact is-danger"
+            disabled={actionBusy}
+            onClick={() => {
+              const ok = window.confirm(
+                t("Delete key {key}? This cannot be undone.", { key: details.key }),
+              );
+              if (!ok) return;
+              onDelete(details.key);
+            }}
+            title={t("Delete")}
+          >
+            <Trash2 size={10} /> {t("Delete")}
+          </button>
+        )}
       </div>
       <div className="rds-detail-meta">
         <span>

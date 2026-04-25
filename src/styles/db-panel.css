@@ -2063,6 +2063,22 @@
   align-self: stretch;
   justify-content: center;
 }
+.rds-row--folder {
+  background: var(--panel);
+  color: var(--ink-2);
+  font-weight: var(--weight-medium);
+}
+.rds-row--folder .rds-key {
+  color: var(--ink-2);
+}
+.rds-folder-caret {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 46px;
+  color: var(--muted);
+  flex: none;
+}
 
 .rds-cli-out {
   padding: var(--sp-2) var(--sp-3);

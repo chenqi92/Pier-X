@@ -618,6 +618,24 @@ fn supports_json_mode(version: &str) -> bool {
 pub fn probe_blocking(session: &SshSession) -> RemoteSqliteCapability {
     crate::ssh::runtime::shared().block_on(probe(session))
 }
+/// Best-effort `stat`-style file-size lookup on the remote host.
+/// Tries `stat -c %s` first (GNU coreutils / BusyBox) and falls
+/// back to `stat -f %z` (BSD / macOS). On any failure — missing
+/// `stat`, unreadable file, exotic shell — returns 0. The caller
+/// treats 0 as "size unknown" so the panel hides the chip.
+pub async fn stat_size(session: &SshSession, db_path: &str) -> Result<u64> {
+    let quoted = shell_single_quote(db_path);
+    let cmd = format!("stat -c %s {quoted} 2>/dev/null || stat -f %z {quoted} 2>/dev/null");
+    let (exit, stdout) = session.exec_command(&cmd).await?;
+    if exit != 0 {
+        return Ok(0);
+    }
+    Ok(stdout.trim().parse::<u64>().unwrap_or(0))
+}
+/// Blocking wrapper for [`stat_size`].
+pub fn stat_size_blocking(session: &SshSession, db_path: &str) -> Result<u64> {
+    crate::ssh::runtime::shared().block_on(stat_size(session, db_path))
+}
 /// Blocking wrapper for [`list_tables`].
 pub fn list_tables_blocking(session: &SshSession, db_path: &str) -> Result<Vec<String>> {
     crate::ssh::runtime::shared().block_on(list_tables(session, db_path))

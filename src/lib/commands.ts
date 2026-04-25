@@ -637,6 +637,12 @@ export const sqliteBrowse = (path: string, table?: string | null) =>
 export const sqliteExecute = (path: string, sql: string) =>
   invoke<QueryExecutionResult>("sqlite_execute", { path, sql });
 
+/** Run a script with multiple `;`-separated statements. Each
+ *  statement returns its own [QueryExecutionResult] with
+ *  per-statement timing. */
+export const sqliteExecuteScript = (path: string, sql: string) =>
+  invoke<QueryExecutionResult[]>("sqlite_execute_script", { path, sql });
+
 // ── Redis ───────────────────────────────────────────────────────
 
 export const redisBrowse = (params: {

@@ -1055,6 +1055,9 @@ export const zhExtra: Record<string, string> = {
     "待后端补齐能力后，此处将展示更多元信息。",
   "Indexes and foreign keys will appear here once the backend exposes them — see docs/BACKEND-GAPS.md.":
     "索引与外键待后端补齐后展示，详见 docs/BACKEND-GAPS.md。",
+  "Triggers": "触发器",
+  "{count} statements": "{count} 条语句",
+  "{ms} ms total": "总耗时 {ms} ms",
   "Per-table engine / size / row-count listing will appear here once the backend exposes it.":
     "待后端补齐 information_schema 汇总能力后，此处将展示每张表的引擎、体积与行数。",
 

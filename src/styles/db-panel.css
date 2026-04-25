@@ -1452,6 +1452,67 @@
   flex: none;
 }
 
+/* Indexes + Foreign keys sections under the column grid. They
+ * share the same row shape; tokens / spacing route through the
+ * design system. No literal colours. */
+.db2-structure__section {
+  display: flex;
+  flex-direction: column;
+  border-top: 1px solid var(--line);
+  flex: none;
+}
+.db2-structure__list {
+  display: flex;
+  flex-direction: column;
+}
+.db2-structure__row {
+  display: grid;
+  grid-template-columns: 16px minmax(0, 1fr) minmax(0, 2fr) auto;
+  gap: var(--sp-2);
+  align-items: center;
+  padding: var(--sp-1-5) var(--sp-2-5);
+  border-bottom: 1px solid var(--line);
+  font-family: var(--mono);
+  font-size: var(--ui-fs-sm);
+  color: var(--ink-2);
+}
+.db2-structure__row:last-child { border-bottom: none; }
+.db2-structure__row-icon {
+  color: var(--muted);
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+}
+.db2-structure__row-name {
+  color: var(--ink);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.db2-structure__row-cols {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--sp-1);
+  color: var(--ink-2);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.db2-structure__row-arrow {
+  color: var(--muted);
+  flex: none;
+}
+.db2-structure__row-target {
+  color: var(--accent);
+}
+.db2-structure__row-meta {
+  color: var(--muted);
+  font-size: var(--size-micro);
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  white-space: nowrap;
+}
+
 /* ── Schema tab: server config / variables view ─────────── */
 .db2-config {
   flex: 1;

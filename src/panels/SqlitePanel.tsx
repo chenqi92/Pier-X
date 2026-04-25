@@ -207,6 +207,15 @@ function SqlitePanelBody({ tab }: Props) {
     setQueryError("");
     setNotice("");
     try {
+      // Multi-statement detection: only meaningful for the local
+      // path (the remote SSH-forwarded sqlite3 worker still runs
+      // a single statement at a time). We pick "script mode" when
+      // the trimmed input contains a `;` followed by more
+      // non-whitespace — a single trailing semicolon stays in
+      // single-statement mode.
+      const isScript =
+        !isRemoteMode &&
+        /;[^]*?\S/.test(sql.trim().slice(0, -1));
       let r: QueryExecutionResult;
       if (isRemoteMode && sshTarget) {
         r = await cmd.sqliteExecuteRemote({
@@ -220,11 +229,27 @@ function SqlitePanelBody({ tab }: Props) {
           dbPath: path.trim(),
           sql,
         });
+      } else if (isScript) {
+        const all = await cmd.sqliteExecuteScript(path.trim(), sql);
+        // Pick the last statement that actually returned rows
+        // (most often the user's tail SELECT after a few setup
+        // INSERTs). When every statement is a write, fall back
+        // to the last result so the timing still surfaces.
+        const lastWithRows = [...all].reverse().find((s) => s.rows && s.rows.length > 0);
+        r = lastWithRows ?? all[all.length - 1];
+        const totalMs = all.reduce((acc, s) => acc + (s.elapsedMs ?? 0), 0);
+        setNotice(
+          t("{count} statements", { count: all.length }) +
+            " · " +
+            t("{ms} ms total", { ms: totalMs }),
+        );
       } else {
         r = await cmd.sqliteExecute(path.trim(), sql);
       }
       setQueryResult(r);
-      setNotice(t("{elapsed} ms", { elapsed: r.elapsedMs }));
+      if (!isScript) {
+        setNotice(t("{elapsed} ms", { elapsed: r.elapsedMs }));
+      }
       sqlTabs.pushHistory({
         sql,
         at: t("just now"),
@@ -575,6 +600,17 @@ function SqlitePanelBody({ tab }: Props) {
         nullable: !c.notNull,
       }))}
       typeAccentVar="var(--svc-sqlite)"
+      indexes={(state.indexes ?? []).map((i) => ({
+        name: i.name,
+        columns: i.columns,
+        unique: i.unique,
+        kind: i.origin === "pk" ? "primary key" : i.origin === "u" ? "unique" : "",
+      }))}
+      triggers={(state.triggers ?? []).map((tr) => ({
+        name: tr.name,
+        event: tr.event,
+        sql: tr.sql,
+      }))}
     />
   );
 
@@ -588,8 +624,11 @@ function SqlitePanelBody({ tab }: Props) {
         onAddConnection={() => disconnect()}
         onDisconnect={() => disconnect()}
         headerStats={[
-          { icon: "database", label: t("{count} tables", { count: state.tables.length }) },
-          { icon: "disk", label: isRemoteMode ? t("remote") : t("local") },
+          { icon: "database" as const, label: t("{count} tables", { count: state.tables.length }) },
+          { icon: "disk" as const, label: isRemoteMode ? t("remote") : t("local") },
+          ...(state.fileSize > 0
+            ? [{ icon: "disk" as const, label: formatBytes(state.fileSize) }]
+            : []),
         ]}
         tab={connectedTab}
         onTabChange={setConnectedTab}

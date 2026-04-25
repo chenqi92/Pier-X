@@ -393,12 +393,40 @@ struct SqliteColumnView {
 
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
+struct SqliteIndexView {
+    name: String,
+    unique: bool,
+    /// Origin marker from `PRAGMA index_list`: `c` (CREATE INDEX),
+    /// `u` (UNIQUE constraint), or `pk` (PRIMARY KEY).
+    origin: String,
+    columns: Vec<String>,
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct SqliteTriggerView {
+    name: String,
+    event: String,
+    sql: String,
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
 struct SqliteBrowserState {
     path: String,
     table_name: String,
     tables: Vec<String>,
     columns: Vec<SqliteColumnView>,
     preview: Option<DataPreview>,
+    /// Indexes attached to the active table — empty when no
+    /// table is selected.
+    indexes: Vec<SqliteIndexView>,
+    /// Triggers attached to the active table — empty when no
+    /// table is selected.
+    triggers: Vec<SqliteTriggerView>,
+    /// On-disk size of the SQLite file in bytes; 0 when stat
+    /// fails (the panel treats 0 as "unknown").
+    file_size: u64,
 }
 
 #[derive(Serialize)]
@@ -3291,12 +3319,46 @@ fn sqlite_browse(path: String, table: Option<String>) -> Result<SqliteBrowserSta
             })
             .collect()
     };
+    // Indexes / triggers are best-effort: we never want a corrupt
+    // sqlite_master row or a permission flip on the temp dir to
+    // tank the entire browse — the column grid is the load-bearing
+    // surface.
+    let indexes = if table_name.is_empty() {
+        Vec::new()
+    } else {
+        client
+            .table_indexes(&table_name)
+            .unwrap_or_default()
+            .into_iter()
+            .map(|i| SqliteIndexView {
+                name: i.name,
+                unique: i.unique,
+                origin: i.origin,
+                columns: i.columns,
+            })
+            .collect()
+    };
+    let triggers = if table_name.is_empty() {
+        Vec::new()
+    } else {
+        client
+            .table_triggers(&table_name)
+            .unwrap_or_default()
+            .into_iter()
+            .map(|t| SqliteTriggerView {
+                name: t.name,
+                event: t.event,
+                sql: t.sql,
+            })
+            .collect()
+    };
     let preview = if table_name.is_empty() {
         None
     } else {
         let escaped = table_name.replace('"', "\"\"");
         map_sqlite_preview(client.execute(&format!("SELECT * FROM \"{escaped}\" LIMIT 24;")))
     };
+    let file_size = client.file_size();
 
     Ok(SqliteBrowserState {
         path: resolved_path.to_string(),
@@ -3304,6 +3366,9 @@ fn sqlite_browse(path: String, table: Option<String>) -> Result<SqliteBrowserSta
         tables,
         columns,
         preview,
+        indexes,
+        triggers,
+        file_size,
     })
 }
 
@@ -3456,6 +3521,35 @@ fn sqlite_execute(path: String, sql: String) -> Result<QueryExecutionResult, Str
 
     let client = SqliteClient::open(resolved_path).map_err(|error| error.to_string())?;
     map_sqlite_query_result(client.execute(resolved_sql))
+}
+
+/// Run a multi-statement SQL script against the SQLite file.
+/// Each top-level semicolon-separated statement returns its own
+/// [`QueryExecutionResult`] with per-statement timing — the panel
+/// renders the last result's grid and shows the timings list
+/// above. The first failing statement aborts the run and the
+/// command resolves to `Err(message)` — matching `sqlite_execute`
+/// so the panel's error UI doesn't need a third state.
+#[tauri::command]
+fn sqlite_execute_script(path: String, sql: String) -> Result<Vec<QueryExecutionResult>, String> {
+    let resolved_path = path.trim();
+    let resolved_sql = sql.trim();
+    if resolved_path.is_empty() {
+        return Err(String::from("SQLite database path must not be empty."));
+    }
+    if resolved_sql.is_empty() {
+        return Err(String::from("SQL must not be empty."));
+    }
+    let client = SqliteClient::open(resolved_path).map_err(|error| error.to_string())?;
+    let results = client.execute_script(resolved_sql);
+    let mut out = Vec::with_capacity(results.len());
+    for r in results {
+        match map_sqlite_query_result(r) {
+            Ok(view) => out.push(view),
+            Err(message) => return Err(message),
+        }
+    }
+    Ok(out)
 }
 
 #[tauri::command]
@@ -4809,6 +4903,16 @@ struct RemoteSqliteBrowserState {
     tables: Vec<String>,
     columns: Vec<SqliteColumnView>,
     preview: Option<DataPreview>,
+    /// Remote indexes / triggers are not introspected yet — the
+    /// remote `sqlite3` worker only runs queries, not PRAGMAs that
+    /// require multiple round-trips. The fields exist so the panel
+    /// can render a single `SqliteBrowserState` shape regardless of
+    /// local-vs-remote source.
+    indexes: Vec<SqliteIndexView>,
+    triggers: Vec<SqliteTriggerView>,
+    /// File size from the candidate listing (`sqliteFindInDir`)
+    /// when known; 0 when the panel opened the path manually.
+    file_size: u64,
 }
 
 #[derive(Serialize)]
@@ -4904,12 +5008,20 @@ fn sqlite_browse_remote(
         })
     };
 
+    // Best-effort remote stat — `ls -l` over SSH is one trip per
+    // open. If it fails (no `ls`, exotic shell, etc.) the panel
+    // shows the file size as "unknown" rather than blocking.
+    let file_size = sqlite_remote::stat_size_blocking(&session, trimmed).unwrap_or(0);
+
     Ok(RemoteSqliteBrowserState {
         path: trimmed.to_string(),
         table_name,
         tables,
         columns,
         preview,
+        indexes: Vec::new(),
+        triggers: Vec::new(),
+        file_size,
     })
 }
 
@@ -6883,6 +6995,7 @@ pub fn run() {
             mysql_execute,
             sqlite_browse,
             sqlite_execute,
+            sqlite_execute_script,
             redis_browse,
             redis_execute,
             ssh_connections_list,

@@ -948,6 +948,9 @@ export const zhExtra: Record<string, string> = {
   "Enable Smart Mode": "启用智能模式",
   "Adds fish-style autosuggest, syntax highlighting, Tab completion popover, and man-page assistant on top of bash/zsh. Reopens new terminals only — existing tabs keep their current mode. Auto-disabled inside SSH sessions and full-screen apps like vim/htop.":
     "在 bash/zsh 上叠加 fish 风格的输入建议、语法高亮、Tab 补全弹层与 man page 摘要。仅对新打开的终端生效，已开 tab 保持原模式；SSH 会话与 vim/htop 等全屏应用会自动旁路。",
+  "Persist autosuggest history": "持久化历史",
+  "Save the autosuggest history to ~/.local/share/pier-x/terminal-history-<shell>.jsonl so it survives app restarts. Lines that look like they hold a token / password are filtered out before disk write; the in-memory ring still has them for the current session.":
+    "把 autosuggest 历史保存到 ~/.local/share/pier-x/terminal-history-<shell>.jsonl，重启后继续生效。看起来含 token / 密码的行写盘前过滤丢弃；当前 session 的内存 ring 仍保留它们。",
 
   // Settings · Appearance polish (P1)
   "Spacious": "宽松",

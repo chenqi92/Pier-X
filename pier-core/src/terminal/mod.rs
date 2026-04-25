@@ -30,6 +30,7 @@
 
 pub mod completions;
 pub mod emulator;
+pub mod man;
 pub mod pty;
 pub mod session;
 pub mod smart;
@@ -38,6 +39,7 @@ pub mod validate;
 
 pub use completions::{complete, Completion, CompletionKind};
 pub use emulator::{Cell, Color, VtEmulator};
+pub use man::{man_synopsis, ManError, ManOption, ManSynopsis};
 pub use pty::{Pty, TerminalError};
 pub use session::{GridSnapshot, NotifyEvent, NotifyFn, PierTerminal};
 pub use smart::{inject_init, SmartShellInit};

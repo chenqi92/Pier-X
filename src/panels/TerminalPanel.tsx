@@ -10,7 +10,13 @@ import { controlKeyMap } from "../lib/commands";
 import ContextMenu, { type ContextMenuItem } from "../components/ContextMenu";
 import TerminalSyntaxOverlay from "../components/TerminalSyntaxOverlay";
 import CompletionPopover from "../components/CompletionPopover";
-import { terminalCompletions, type Completion } from "../lib/terminalSmart";
+import ManPagePopover from "../components/ManPagePopover";
+import {
+  terminalCompletions,
+  terminalManSynopsis,
+  type Completion,
+  type ManSynopsis,
+} from "../lib/terminalSmart";
 import {
   useTerminalHistoryStore,
   suggestFromHistory,
@@ -189,6 +195,26 @@ export default function TerminalPanel({ tab, isActive, onEditConnection }: Props
     items: [],
     filtered: [],
     selectedIndex: 0,
+  });
+
+  // M6: man-page popover. Triggered by Ctrl+Shift+M in smart mode.
+  // The popover shows SYNOPSIS / DESCRIPTION / OPTIONS for the
+  // command name at the cursor (or the first word when no clear
+  // cursor word is available). Result + loading + error live in a
+  // single state object so the component re-renders coherently.
+  type ManState = {
+    open: boolean;
+    command: string;
+    data: ManSynopsis | null;
+    loading: boolean;
+    errorMessage: string | null;
+  };
+  const [manState, setManState] = useState<ManState>({
+    open: false,
+    command: "",
+    data: null,
+    loading: false,
+    errorMessage: null,
   });
 
   // M5: autosuggestion. The history ring is global (one across the
@@ -823,7 +849,10 @@ export default function TerminalPanel({ tab, isActive, onEditConnection }: Props
   // off all dismiss the popover so the user is never stranded with
   // a stale list over a TUI.
   useEffect(() => {
-    if (!smartActive) closeCompletion();
+    if (!smartActive) {
+      closeCompletion();
+      closeMan();
+    }
   }, [smartActive]);
 
   // ── Bell handling ───────────────────────────────────────────
@@ -1489,6 +1518,62 @@ export default function TerminalPanel({ tab, isActive, onEditConnection }: Props
   }
 
   /**
+   * M6: extract the command name the user is currently typing.
+   * Returns the first whitespace-delimited word of the mirror
+   * buffer — that's the command position even when the cursor has
+   * moved past the first argument. Empty string when there's
+   * nothing to look up.
+   */
+  function commandAtCursor(): string {
+    const line = smartLineBufferRef.current.trim();
+    if (!line) return "";
+    const space = line.search(/\s/);
+    return space === -1 ? line : line.slice(0, space);
+  }
+
+  function closeMan() {
+    setManState((s) => (s.open ? { ...s, open: false } : s));
+  }
+
+  /**
+   * Ctrl+Shift+M handler. Opens the man popover immediately in a
+   * loading state so it snaps into position even when the backend
+   * spawn takes a few hundred ms; populates with the parsed result
+   * (or an empty / error message) once `terminal_man_synopsis`
+   * resolves.
+   */
+  async function openMan() {
+    const command = commandAtCursor();
+    if (!command) return;
+    setManState({
+      open: true,
+      command,
+      data: null,
+      loading: true,
+      errorMessage: null,
+    });
+    try {
+      const data = await terminalManSynopsis(command);
+      setManState((s) =>
+        s.open && s.command === command
+          ? { ...s, data, loading: false, errorMessage: null }
+          : s,
+      );
+    } catch (e) {
+      setManState((s) =>
+        s.open && s.command === command
+          ? {
+              ...s,
+              loading: false,
+              data: null,
+              errorMessage: formatError(e),
+            }
+          : s,
+      );
+    }
+  }
+
+  /**
    * Tab handler: ask the backend for completion candidates against
    * the current mirror buffer + cursor, then either auto-insert
    * (single match) or open the popover.
@@ -1581,6 +1666,24 @@ export default function TerminalPanel({ tab, isActive, onEditConnection }: Props
     ) {
       event.preventDefault();
       void openCompletion();
+      return;
+    }
+
+    // M6: Ctrl+Shift+M opens the man popover for the command at
+    // cursor. Intercepted here (before the generic Ctrl-letter
+    // path below) so the keystroke never reaches shell readline,
+    // which would otherwise insert a literal carriage return for
+    // Ctrl+M.
+    if (
+      smartActiveRef.current &&
+      event.ctrlKey &&
+      event.shiftKey &&
+      !event.altKey &&
+      !event.metaKey &&
+      event.key.toLowerCase() === "m"
+    ) {
+      event.preventDefault();
+      void openMan();
       return;
     }
 
@@ -1945,6 +2048,16 @@ export default function TerminalPanel({ tab, isActive, onEditConnection }: Props
         }
         onSelect={(item) => insertCompletion(item)}
         onClose={() => closeCompletion()}
+      />
+
+      <ManPagePopover
+        open={manState.open}
+        anchor={cursorAnchorRef.current}
+        command={manState.command}
+        data={manState.data}
+        loading={manState.loading}
+        errorMessage={manState.errorMessage}
+        onClose={() => closeMan()}
       />
     </section>
   );

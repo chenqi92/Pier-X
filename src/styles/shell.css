@@ -2142,6 +2142,70 @@ button,
   flex-direction: column;
   gap: var(--sp-0-5);
 }
+
+/* M6: man-page popover. Reuses the standard `.popover` chrome and
+ * `.popover-section` heading; we only need to lay out the three
+ * SYNOPSIS / DESCRIPTION / OPTIONS bodies and style the per-option
+ * row. All colours route through design tokens so the popover
+ * tracks the active theme automatically. */
+.man-popover__section {
+  display: flex;
+  flex-direction: column;
+  margin-bottom: var(--sp-1);
+}
+.man-popover__section:last-child {
+  margin-bottom: 0;
+}
+.man-popover__section-body {
+  padding: 0 var(--sp-2) var(--sp-1);
+  color: var(--ink-2);
+  font-family: var(--sans);
+  font-size: var(--ui-fs);
+  line-height: 1.45;
+}
+.man-popover__pre {
+  margin: 0;
+  font-family: var(--mono);
+  font-size: var(--ui-fs-sm);
+  white-space: pre-wrap;
+  color: var(--ink);
+}
+.man-popover__paragraph {
+  margin: 0;
+  white-space: pre-wrap;
+}
+.man-popover__placeholder {
+  /* `.popover-section` already styles the heading colour as
+   * `--muted`; reuse that for the empty / loading / error states
+   * so the popover doesn't shout when there's nothing to show. */
+  font-family: var(--sans);
+  font-size: var(--ui-fs);
+  color: var(--muted);
+  text-transform: none;
+  letter-spacing: 0;
+}
+.man-popover__options {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-0-5);
+}
+.man-popover__option-row {
+  display: flex;
+  gap: var(--sp-2);
+  align-items: baseline;
+  padding: var(--sp-0-5) 0;
+}
+.man-popover__option-flag {
+  flex: none;
+  font-family: var(--mono);
+  font-size: var(--ui-fs-sm);
+}
+.man-popover__option-summary {
+  flex: 1;
+  min-width: 0;
+  color: var(--ink-2);
+  font-size: var(--ui-fs);
+}
 .terminal-row {
   display: block;
   height: var(--terminal-row-h, calc(13px * 1.45));

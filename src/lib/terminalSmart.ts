@@ -50,3 +50,31 @@ export const terminalCompletions = (
   cwd: string | null,
 ) =>
   invoke<Completion[]>("terminal_completions", { line, cursor, cwd });
+
+/** A single option flag + its summary parsed from the man / --help
+ *  output. Rendered as one row in the man-popover OPTIONS section. */
+export type ManOption = {
+  flag: string;
+  summary: string;
+};
+
+/** Parsed man-page (or `--help` fallback) summary for one command. */
+export type ManSynopsis = {
+  synopsis: string;
+  description: string;
+  options: ManOption[];
+  /** `"man"` when the data came from `man -P cat <cmd>`,
+   *  `"help"` for the `<cmd> --help` fallback, `""` when neither
+   *  was available. The popover shows this as a small muted hint
+   *  so the user knows whether they're reading the canonical man
+   *  page or a synthesised fallback. */
+  source: string;
+};
+
+/** Look up the man-page summary for `command`. Resolves to `null`
+ *  when neither `man` nor `--help` produced usable text — the
+ *  popover renders an explicit "no documentation" message instead
+ *  of treating that as an error. Genuine errors (invalid name, I/O
+ *  failure) come back as a rejected promise. */
+export const terminalManSynopsis = (command: string) =>
+  invoke<ManSynopsis | null>("terminal_man_synopsis", { command });

@@ -8,7 +8,9 @@
 //! Pure-IPC layer — every business-logic decision belongs in
 //! `pier-core`. The shapes here just (de)serialise and forward.
 
-use pier_core::terminal::{complete, validate_command, Completion, CommandKind};
+use pier_core::terminal::{
+    complete, man_synopsis, validate_command, CommandKind, Completion, ManSynopsis,
+};
 use serde::Serialize;
 
 /// Result of [`terminal_validate_command`].
@@ -63,4 +65,21 @@ pub fn terminal_completions(
 ) -> Vec<Completion> {
     let cwd_path = cwd.as_deref().map(std::path::Path::new);
     complete(&line, cursor, cwd_path)
+}
+
+/// Look up the man-page summary (or `--help` fallback) for `cmd`.
+///
+/// Returns `Ok(None)` for the "no entry / no --help output" case so
+/// the frontend can render an explicit "No documentation found"
+/// message instead of treating it as a hard error. Genuine errors
+/// (invalid name, I/O failure) come back as `Err(String)` and are
+/// surfaced as toasts.
+#[tauri::command]
+pub fn terminal_man_synopsis(command: String) -> Result<Option<ManSynopsis>, String> {
+    use pier_core::terminal::ManError;
+    match man_synopsis(&command) {
+        Ok(syn) => Ok(Some(syn)),
+        Err(ManError::NotFound(_)) => Ok(None),
+        Err(e) => Err(e.to_string()),
+    }
 }

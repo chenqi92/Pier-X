@@ -371,13 +371,49 @@ struct MysqlColumnView {
     extra: String,
 }
 
+/// Per-table enrichment surfaced in the MySQL panel's schema tree.
+/// Mirrors `pier_core::services::mysql::TableSummary` but with a
+/// camelCase serialisation so the frontend doesn't have to remap.
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct MysqlTableSummary {
+    name: String,
+    row_count: Option<u64>,
+    data_bytes: Option<u64>,
+    index_bytes: Option<u64>,
+    engine: Option<String>,
+    updated_at: Option<String>,
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct MysqlRoutineSummary {
+    name: String,
+    /// `"PROCEDURE"` or `"FUNCTION"`.
+    kind: String,
+}
+
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
 struct MysqlBrowserState {
     database_name: String,
     databases: Vec<String>,
     table_name: String,
+    /// Bare table names — kept as an array of strings so the
+    /// existing selectors (`tables.find(name === …)`) keep
+    /// working without a reshape on the frontend.
     tables: Vec<String>,
+    /// Per-table enrichment. Same `name`s as `tables`, in the
+    /// same order, but with the engine / row-count / size /
+    /// last-update extras the panel renders as inline badges
+    /// and tooltip metadata.
+    table_summaries: Vec<MysqlTableSummary>,
+    /// View names defined in the active database. Rendered in a
+    /// separate folder under the database in the schema tree.
+    views: Vec<String>,
+    /// Stored procedures + functions defined in the active
+    /// database. The `kind` field discriminates the two.
+    routines: Vec<MysqlRoutineSummary>,
     columns: Vec<MysqlColumnView>,
     preview: Option<DataPreview>,
 }
@@ -3216,12 +3252,52 @@ fn mysql_browse(
         .list_databases_blocking()
         .map_err(|error| error.to_string())?;
     let database_name = choose_active_item(database, &databases);
-    let tables = if database_name.is_empty() {
+    // Pull the enriched table list once and derive the bare-name
+    // `tables` array from it — saves a second SHOW TABLES round
+    // trip while still giving the schema tree row counts / engine
+    // / sizing in the same call.
+    let table_summaries: Vec<MysqlTableSummary> = if database_name.is_empty() {
         Vec::new()
     } else {
         client
-            .list_tables_blocking(&database_name)
+            .list_tables_meta_blocking(&database_name)
             .map_err(|error| error.to_string())?
+            .into_iter()
+            .map(|s| MysqlTableSummary {
+                name: s.name,
+                row_count: s.row_count,
+                data_bytes: s.data_bytes,
+                index_bytes: s.index_bytes,
+                engine: s.engine,
+                updated_at: s.updated_at,
+            })
+            .collect()
+    };
+    let tables: Vec<String> = table_summaries
+        .iter()
+        .map(|s| s.name.clone())
+        .collect();
+    // Views + routines are pulled per-database too. Failures here
+    // are non-fatal — a permission-restricted user might be unable
+    // to read `information_schema.routines`; we'd rather show a
+    // working tables list than block the whole panel.
+    let views = if database_name.is_empty() {
+        Vec::new()
+    } else {
+        client.list_views_blocking(&database_name).unwrap_or_default()
+    };
+    let routines = if database_name.is_empty() {
+        Vec::new()
+    } else {
+        client
+            .list_routines_blocking(&database_name)
+            .unwrap_or_default()
+            .into_iter()
+            .map(|r| MysqlRoutineSummary {
+                name: r.name,
+                kind: r.kind,
+            })
+            .collect()
     };
     let table_name = choose_active_item(table, &tables);
     let columns = if database_name.is_empty() || table_name.is_empty() {
@@ -3261,6 +3337,9 @@ fn mysql_browse(
         databases,
         table_name,
         tables,
+        table_summaries,
+        views,
+        routines,
         columns,
         preview,
     })

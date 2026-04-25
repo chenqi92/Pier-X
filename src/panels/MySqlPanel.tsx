@@ -43,6 +43,19 @@ type Props = { tab: TabState };
 /** MySQL column types whose values should render right-aligned. */
 const NUMERIC_TYPE_RE = /^(tiny|small|medium|big)?int|^decimal|^numeric|^float|^double|^real/i;
 
+/** Compact human-readable byte formatter for the schema-tree
+ *  tooltip. Same shape as the existing copies in `SqlitePanel`,
+ *  `SftpPanel`, and `SftpEditorDialog` — kept inline rather than
+ *  hoisted to a shared lib because the per-panel needs are
+ *  identical and dragging them through a shared module would be
+ *  premature abstraction. Three similar lines beats a hub. */
+function formatBytes(n: number): string {
+  if (n < 1024) return `${n} B`;
+  if (n < 1024 * 1024) return `${(n / 1024).toFixed(1)} KB`;
+  if (n < 1024 * 1024 * 1024) return `${(n / (1024 * 1024)).toFixed(1)} MB`;
+  return `${(n / (1024 * 1024 * 1024)).toFixed(2)} GB`;
+}
+
 /** Field adapter: maps the hook's generic getters/patches to the flat
  *  `mysql*` slots on `TabState`. */
 const MYSQL_ADAPTER: DbCredentialFieldAdapter = {
@@ -277,14 +290,58 @@ function MySqlPanelBody({ tab }: Props) {
     }));
 
   const databases: DbSchemaDatabase[] = state
-    ? state.databases.map((name) => ({
-        name,
-        current: name === state.databaseName,
-        tables:
-          name === state.databaseName
-            ? state.tables.map((tname) => ({ id: `${name}.${tname}`, label: tname }))
-            : [],
-      }))
+    ? state.databases.map((name) => {
+        const isCurrent = name === state.databaseName;
+        if (!isCurrent) {
+          return { name, current: false, tables: [] };
+        }
+        // Build a `summaryByName` lookup once so the table-list
+        // walk doesn't re-scan `tableSummaries` on each row.
+        const summaryByName = new Map(
+          state.tableSummaries.map((s) => [s.name, s] as const),
+        );
+        const tables = state.tables.map((tname) => {
+          const meta = summaryByName.get(tname);
+          // Tooltip surfaces the metadata that doesn't fit in the
+          // row badge — engine + size + last-update timestamp.
+          // Skip any field MySQL didn't fill in.
+          const tooltipParts: string[] = [];
+          if (meta?.engine) tooltipParts.push(meta.engine);
+          if (typeof meta?.dataBytes === "number") {
+            tooltipParts.push(t("data {n}", { n: formatBytes(meta.dataBytes) }));
+          }
+          if (typeof meta?.indexBytes === "number") {
+            tooltipParts.push(t("idx {n}", { n: formatBytes(meta.indexBytes) }));
+          }
+          if (meta?.updatedAt) {
+            tooltipParts.push(t("updated {n}", { n: meta.updatedAt }));
+          }
+          return {
+            id: `${name}.${tname}`,
+            label: tname,
+            count: meta?.rowCount ?? null,
+            tooltip: tooltipParts.length > 0 ? tooltipParts.join(" · ") : null,
+          };
+        });
+        const views = state.views.map((vname) => ({
+          id: `${name}.${vname}`,
+          label: vname,
+        }));
+        const routines = state.routines.map((r) => ({
+          id: `${name}.${r.name}`,
+          label: r.name,
+          // Two-letter discriminator badge: PR for procedures,
+          // FN for functions. Compact enough to sit alongside
+          // the count column in the same row width.
+          badge:
+            r.kind.toUpperCase() === "FUNCTION"
+              ? "FN"
+              : r.kind.toUpperCase() === "PROCEDURE"
+                ? "PR"
+                : null,
+        }));
+        return { name, current: true, tables, views, routines };
+      })
     : [];
 
   const pkColumns = state ? state.columns.filter((c) => c.key === "PRI").map((c) => c.name) : [];

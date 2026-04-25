@@ -11,6 +11,10 @@ import ContextMenu, { type ContextMenuItem } from "../components/ContextMenu";
 import TerminalSyntaxOverlay from "../components/TerminalSyntaxOverlay";
 import CompletionPopover from "../components/CompletionPopover";
 import { terminalCompletions, type Completion } from "../lib/terminalSmart";
+import {
+  useTerminalHistoryStore,
+  suggestFromHistory,
+} from "../stores/useTerminalHistoryStore";
 import { useI18n } from "../i18n/useI18n";
 import { isMissingKeychainError, localizeError } from "../i18n/localizeMessage";
 import type { TabState, TerminalSessionInfo, TerminalSnapshot, TerminalSize } from "../lib/types";
@@ -186,6 +190,20 @@ export default function TerminalPanel({ tab, isActive, onEditConnection }: Props
     filtered: [],
     selectedIndex: 0,
   });
+
+  // M5: autosuggestion. The history ring is global (one across the
+  // whole app) so a command run in tab A is suggestible from tab B.
+  // We track the previous `awaitingInput` value to detect the
+  // edge-trigger when the shell emits OSC 133;C — that's our signal
+  // that the line was submitted and should land in the ring.
+  const historyRing = useTerminalHistoryStore((s) => s.ring);
+  const pushHistory = useTerminalHistoryStore((s) => s.push);
+  const prevAwaitingInputRef = useRef(false);
+  // The suggestion suffix itself is computed alongside the other
+  // smart-active-derived state below, after `smartActive` exists.
+  // The ref is filled there too; declared up here so event handlers
+  // can read it without a forward-ref dance.
+  const suggestionSuffixRef = useRef("");
 
   // Prompt-anchored capture window. Armed when the backend PTY
   // reader sees the canonical OpenSSH `<user>@<host>'s password:` /
@@ -753,6 +771,31 @@ export default function TerminalPanel({ tab, isActive, onEditConnection }: Props
     smartLineBufferRef.current = "";
     setSmartLineBufferText("");
   }, [smartActive, promptEndKey]);
+
+  // M5: compute the autosuggestion suffix on every render where
+  // smart mode is active. Cheap — `suggestFromHistory` is an O(n)
+  // walk of at most 500 strings.
+  const suggestionSuffix = smartActive
+    ? suggestFromHistory(historyRing, smartLineBufferText)
+    : "";
+  suggestionSuffixRef.current = suggestionSuffix;
+
+  // M5: edge-triggered history capture. When `awaitingInput` flips
+  // from true to false we know the shell just received OSC 133;C,
+  // i.e. the user pressed Enter on the buffered line. Push it into
+  // the ring at that exact moment and let the buffer-clear effect
+  // above tear down the rest. We never push on smart-mode disable
+  // (rapid toggle would lose the line) — only on the genuine
+  // command-submitted transition.
+  useEffect(() => {
+    const prev = prevAwaitingInputRef.current;
+    const curr = snapshot?.awaitingInput === true;
+    if (prev && !curr && smartActive) {
+      const line = smartLineBufferRef.current;
+      if (line.trim()) pushHistory(line);
+    }
+    prevAwaitingInputRef.current = curr;
+  }, [snapshot?.awaitingInput, smartActive, pushHistory]);
 
   // M4: refilter the open completion popover on every keystroke so
   // the candidate list narrows as the user types more characters.
@@ -1541,6 +1584,25 @@ export default function TerminalPanel({ tab, isActive, onEditConnection }: Props
       return;
     }
 
+    // M5: accept the live autosuggestion. ArrowRight matches fish's
+    // accept-suggestion behaviour at end-of-line; Ctrl+E mirrors
+    // zsh-autosuggestions. Both fall through when there's no
+    // suggestion to accept, so the underlying shell readline still
+    // receives them as cursor / end-of-line.
+    if (smartActiveRef.current && suggestionSuffixRef.current) {
+      const isAccept =
+        event.key === "ArrowRight" ||
+        (event.ctrlKey &&
+          !event.altKey &&
+          !event.metaKey &&
+          event.key.toLowerCase() === "e");
+      if (isAccept) {
+        event.preventDefault();
+        void sendInput(suggestionSuffixRef.current);
+        return;
+      }
+    }
+
     if (mod && !event.altKey && event.key.toLowerCase() === "v") {
       event.preventDefault();
       void readClipboardText().then((text) => {
@@ -1789,15 +1851,18 @@ export default function TerminalPanel({ tab, isActive, onEditConnection }: Props
                 })}
               </div>
             ))}
-            {smartActive && snapshot.promptEnd && smartLineBufferText && (
-              <TerminalSyntaxOverlay
-                text={smartLineBufferText}
-                promptEnd={snapshot.promptEnd}
-                charWidth={cellMetrics.charWidth}
-                rowHeight={cellMetrics.rowHeight}
-                bgColor={termTheme.bg}
-              />
-            )}
+            {smartActive &&
+              snapshot.promptEnd &&
+              (smartLineBufferText || suggestionSuffix) && (
+                <TerminalSyntaxOverlay
+                  text={smartLineBufferText}
+                  promptEnd={snapshot.promptEnd}
+                  charWidth={cellMetrics.charWidth}
+                  rowHeight={cellMetrics.rowHeight}
+                  bgColor={termTheme.bg}
+                  suggestionSuffix={suggestionSuffix}
+                />
+              )}
             {smartActive && snapshot.promptEnd && (
               <div
                 ref={cursorAnchorRef}

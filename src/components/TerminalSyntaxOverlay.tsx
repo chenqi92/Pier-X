@@ -59,6 +59,13 @@ type Props = {
    * render with the terminal-segment text below.
    */
   bgColor: string;
+  /**
+   * M5 autosuggestion suffix — the bytes that would be appended if
+   * the user accepted the current history match. Rendered in muted
+   * gray after the tokenized text. Empty string = no suggestion;
+   * the overlay still renders for the typed portion.
+   */
+  suggestionSuffix?: string;
 };
 
 export default function TerminalSyntaxOverlay({
@@ -67,6 +74,7 @@ export default function TerminalSyntaxOverlay({
   charWidth,
   rowHeight,
   bgColor,
+  suggestionSuffix,
 }: Props) {
   const tokens = useMemo<ShellToken[]>(() => tokenize(text), [text]);
 
@@ -90,7 +98,10 @@ export default function TerminalSyntaxOverlay({
     }
   }, [tokens, validateCommand]);
 
-  if (!text || tokens.length === 0) return null;
+  // The overlay still renders when there's a suggestion but no
+  // typed text (e.g. user pressed → on an empty line — rare, but
+  // harmless). When both are empty there's nothing to draw.
+  if ((!text || tokens.length === 0) && !suggestionSuffix) return null;
 
   const [row, col] = promptEnd;
 
@@ -124,6 +135,11 @@ export default function TerminalSyntaxOverlay({
           </span>
         );
       })}
+      {suggestionSuffix ? (
+        <span className="terminal-syntax terminal-syntax--suggestion">
+          {suggestionSuffix}
+        </span>
+      ) : null}
     </div>
   );
 }

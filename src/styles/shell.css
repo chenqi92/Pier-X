@@ -2113,6 +2113,13 @@ button,
 .terminal-syntax--comment { color: var(--muted); font-style: italic; }
 .terminal-syntax--text,
 .terminal-syntax--whitespace { color: inherit; }
+/* M5: autosuggestion suffix — fish-style ghost text shown after the
+ * typed portion. Muted token + extra opacity so the gray reads as
+ * "preview, not real text" against any of the terminal themes. */
+.terminal-syntax--suggestion {
+  color: var(--muted);
+  opacity: 0.6;
+}
 
 /* M4: completion popover hint — appears as muted right-aligned
  * text inside a `.popover-item` row (e.g. resolved binary path

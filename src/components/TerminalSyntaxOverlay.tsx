@@ -1,10 +1,19 @@
 // ── Terminal syntax overlay ───────────────────────────────────────
-// Smart-mode (M2): paints a coloured copy of the in-progress input
-// line on top of the underlying terminal grid. The grid still shows
-// the same characters in the user's terminal-theme fg colour; the
-// overlay sits at z-index 1 with a matching background so the two
-// renderings do not double-print and the overlay's per-token colour
-// wins visually.
+// Smart-mode (M2 + M3): paints a coloured copy of the in-progress
+// input line on top of the underlying terminal grid. The grid still
+// shows the same characters in the user's terminal-theme fg colour;
+// the overlay sits at z-index 1 with a matching background so the
+// two renderings do not double-print and the overlay's per-token
+// colour wins visually.
+//
+// M3 adds typo highlighting: command tokens that resolve to
+// `missing` (not a builtin, not on $PATH) get `--command-missing`
+// instead of `--command`. Validation goes through
+// `useTerminalSmartStore`, which caches results process-wide so a
+// name only crosses the IPC boundary once. While a name is in
+// flight the token stays styled as a normal command — switching to
+// "missing" only after we know it's actually missing avoids a
+// flash-of-typo on every keystroke during typing.
 //
 // Position is computed from the OSC 133;B prompt-end position
 // (`promptEnd`) plus the cell metrics (`charWidth`, `rowHeight`)
@@ -19,8 +28,9 @@
 // the right edge of the grid. The overlay inherits the terminal's
 // font metrics so the spans align with the underlying cells.
 
-import { useMemo } from "react";
+import { useEffect, useMemo } from "react";
 import { tokenize, type ShellToken } from "../lib/shellLexer";
+import { useTerminalSmartStore } from "../stores/useTerminalSmartStore";
 
 type Props = {
   /**
@@ -59,6 +69,27 @@ export default function TerminalSyntaxOverlay({
   bgColor,
 }: Props) {
   const tokens = useMemo<ShellToken[]>(() => tokenize(text), [text]);
+
+  // Subscribe to the validation cache so a resolution arriving from
+  // the backend triggers a re-render of just this overlay. The
+  // selector returns the Map by reference; zustand re-renders when
+  // the reference changes (the store always assigns a new Map on
+  // update, see useTerminalSmartStore.ts).
+  const cache = useTerminalSmartStore((s) => s.cache);
+  const validateCommand = useTerminalSmartStore((s) => s.validateCommand);
+
+  // Side-effect: ensure every command-position token has been
+  // requested. The store deduplicates concurrent requests for the
+  // same name and never re-requests a cached one, so this fires at
+  // most once per unique name.
+  useEffect(() => {
+    for (const tok of tokens) {
+      if (tok.kind === "command" && tok.text) {
+        validateCommand(tok.text);
+      }
+    }
+  }, [tokens, validateCommand]);
+
   if (!text || tokens.length === 0) return null;
 
   const [row, col] = promptEnd;
@@ -77,14 +108,22 @@ export default function TerminalSyntaxOverlay({
         lineHeight: `${rowHeight}px`,
       }}
     >
-      {tokens.map((tok, i) => (
-        <span
-          key={i}
-          className={`terminal-syntax terminal-syntax--${tok.kind}`}
-        >
-          {tok.text}
-        </span>
-      ))}
+      {tokens.map((tok, i) => {
+        // Default class derived from token kind. Command tokens get
+        // a flavour suffix once we know whether they resolve.
+        let cls = `terminal-syntax terminal-syntax--${tok.kind}`;
+        if (tok.kind === "command") {
+          const resolved = cache.get(tok.text);
+          if (resolved && resolved.kind === "missing") {
+            cls = "terminal-syntax terminal-syntax--command-missing";
+          }
+        }
+        return (
+          <span key={i} className={cls}>
+            {tok.text}
+          </span>
+        );
+      })}
     </div>
   );
 }

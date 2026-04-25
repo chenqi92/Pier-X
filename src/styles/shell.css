@@ -2094,6 +2094,16 @@ button,
   display: inline;
 }
 .terminal-syntax--command { color: var(--accent); }
+/* M3: command name not a builtin and not on $PATH — typo. Wavy
+ * underline reinforces the "this isn't a real command" cue without
+ * shouting; the colour token is the same one used for `--neg` chips
+ * and error toasts, so the visual language matches across the app. */
+.terminal-syntax--command-missing {
+  color: var(--neg);
+  text-decoration: underline wavy var(--neg);
+  text-decoration-skip-ink: none;
+  text-underline-offset: 2px;
+}
 .terminal-syntax--option { color: var(--info); }
 .terminal-syntax--string { color: var(--pos); }
 .terminal-syntax--path { color: var(--accent-subtle); }

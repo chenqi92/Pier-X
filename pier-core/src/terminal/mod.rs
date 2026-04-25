@@ -33,12 +33,14 @@ pub mod pty;
 pub mod session;
 pub mod smart;
 pub mod ssh_watcher;
+pub mod validate;
 
 pub use emulator::{Cell, Color, VtEmulator};
 pub use pty::{Pty, TerminalError};
 pub use session::{GridSnapshot, NotifyEvent, NotifyFn, PierTerminal};
 pub use smart::{inject_init, SmartShellInit};
 pub use ssh_watcher::SshChildTarget;
+pub use validate::{validate_command, CommandKind};
 
 #[cfg(unix)]
 pub use pty::UnixPty;

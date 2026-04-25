@@ -107,8 +107,14 @@ function MySqlPanelBody({ tab }: Props) {
 
   const [connectedTab, setConnectedTab] = useState<DbConnectedTab>("data");
 
-  // SQL editor tabs + run history (panel-local — not persisted across tabs).
-  const sqlTabs = useDbSqlTabs({ initialSql: "SHOW TABLES;", initialName: t("query") });
+  // SQL editor tabs + run history. History persists per-engine
+  // via localStorage so a panel reload (or switching tabs and
+  // back) preserves the last 200 queries.
+  const sqlTabs = useDbSqlTabs({
+    initialSql: "SHOW TABLES;",
+    initialName: t("query"),
+    storageKey: "mysql",
+  });
   const sql = sqlTabs.sql;
   const setSql = sqlTabs.setSql;
 
@@ -126,21 +132,40 @@ function MySqlPanelBody({ tab }: Props) {
     setWriteConfirm("");
   }
 
-  async function browse(passwordOverride?: string, nextTable?: string) {
+  // Server-side paging — kept local; switching tables resets offset to 0.
+  const [pageSize, setPageSize] = useState(24);
+  const [pageOffset, setPageOffset] = useState(0);
+
+  async function browse(
+    passwordOverride?: string,
+    nextTable?: string,
+    nextOffset?: number,
+    nextSize?: number,
+  ) {
     setBusy(true);
     setError("");
     try {
       const target = await flow.ensureConnectionTarget();
       const pw = passwordOverride !== undefined ? passwordOverride : tab.mysqlPassword;
+      const tableTarget = (nextTable ?? state?.tableName ?? "").trim() || null;
+      // Switching the active table resets paging — the previous
+      // table's offset doesn't apply.
+      const tableChanged = tableTarget !== (state?.tableName ?? "");
+      const effectiveOffset = nextOffset ?? (tableChanged ? 0 : pageOffset);
+      const effectiveSize = nextSize ?? pageSize;
       const s = await cmd.mysqlBrowse({
         host: target.host,
         port: target.port,
         user: tab.mysqlUser.trim(),
         password: pw,
         database: tab.mysqlDatabase.trim() || null,
-        table: (nextTable ?? state?.tableName ?? "").trim() || null,
+        table: tableTarget,
+        offset: effectiveOffset,
+        limit: effectiveSize,
       });
       setState(s);
+      setPageSize(s.pageSize);
+      setPageOffset(s.pageOffset);
       if (s.databaseName !== tab.mysqlDatabase) {
         updateTab(tab.id, { mysqlDatabase: s.databaseName });
       }
@@ -417,8 +442,77 @@ function MySqlPanelBody({ tab }: Props) {
     );
   }
 
+  // Pager — derived from the live state. Rendered inline next to
+  // the toolbar so the user always has the current page info in
+  // view, plus a row-count summary in the crumb stat.
+  const totalRows = state.totalRows ?? null;
+  const totalPages =
+    totalRows !== null && pageSize > 0
+      ? Math.max(1, Math.ceil(totalRows / pageSize))
+      : null;
+  const currentPage = pageSize > 0 ? Math.floor(pageOffset / pageSize) + 1 : 1;
+  const canPrev = pageOffset > 0 && !busy;
+  const canNext =
+    !busy &&
+    state.tableName !== "" &&
+    (totalRows === null
+      ? // Without a row count, only allow Next when the page came
+        // back full — otherwise we know we're on the last page.
+        (state.preview?.rows.length ?? 0) >= pageSize
+      : pageOffset + pageSize < totalRows);
+
+  const pagerToolbar =
+    state.tableName !== "" ? (
+      <>
+        <button
+          type="button"
+          className="btn is-ghost is-compact"
+          disabled={!canPrev}
+          onClick={() =>
+            void browse(undefined, undefined, Math.max(0, pageOffset - pageSize))
+          }
+          title={t("Previous page")}
+        >
+          ←
+        </button>
+        <span className="mono" style={{ fontSize: "var(--size-small)", color: "var(--muted)" }}>
+          {totalPages !== null
+            ? t("Page {n} of {total}", { n: currentPage, total: totalPages })
+            : t("Page {n} of ?", { n: currentPage })}
+        </span>
+        <button
+          type="button"
+          className="btn is-ghost is-compact"
+          disabled={!canNext}
+          onClick={() => void browse(undefined, undefined, pageOffset + pageSize)}
+          title={t("Next page")}
+        >
+          →
+        </button>
+        <select
+          className="mono"
+          style={{ fontSize: "var(--size-small)" }}
+          value={pageSize}
+          onChange={(e) => {
+            const next = Number.parseInt(e.currentTarget.value, 10);
+            if (Number.isFinite(next) && next > 0) {
+              void browse(undefined, undefined, 0, next);
+            }
+          }}
+          title={t("Rows per page")}
+        >
+          {[24, 50, 100, 200, 500].map((n) => (
+            <option key={n} value={n}>
+              {n}/{t("page")}
+            </option>
+          ))}
+        </select>
+      </>
+    ) : null;
+
   const resultToolbar = (
     <>
+      {pagerToolbar}
       {queryResult && (
         <button
           type="button"
@@ -525,7 +619,14 @@ function MySqlPanelBody({ tab }: Props) {
         crumb={{
           database: state.databaseName || undefined,
           table: state.tableName || undefined,
-          stat: state.preview ? t("{count} rows", { count: state.preview.rows.length }) : null,
+          stat: state.preview
+            ? totalRows !== null
+              ? t("{shown} of {total} rows", {
+                  shown: state.preview.rows.length,
+                  total: totalRows,
+                })
+              : t("{count} rows", { count: state.preview.rows.length })
+            : null,
         }}
         schema={{
           databases,

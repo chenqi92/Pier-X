@@ -845,6 +845,11 @@ export const zhExtra: Record<string, string> = {
   "Filter tables…": "筛选表名…",
   "current": "当前",
   "Tables": "表",
+  "Views": "视图",
+  "Routines": "存储程序",
+  "data {n}": "数据 {n}",
+  "idx {n}": "索引 {n}",
+  "updated {n}": "更新 {n}",
   "No databases.": "暂无数据库。",
   "No tables in this database.": "当前库暂无表。",
 

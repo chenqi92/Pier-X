@@ -579,6 +579,15 @@
 .dbt-row.lvl-3 { padding-left: 42px; color: var(--ink); }
 .dbt-row.group { color: var(--muted); }
 .dbt-row.leaf { color: var(--ink); }
+/* Routine rows (stored procedures / functions) — informational
+ * only in M-1; clicking them is a no-op. We render with the same
+ * leaf shape but suppress the hover background + interactive
+ * cursor so the row reads as "look but don't click". */
+.dbt-row.is-readonly {
+  cursor: default;
+  color: var(--ink-2);
+}
+.dbt-row.is-readonly:hover { background: transparent; }
 .dbt-caret {
   width: 10px;
   height: 10px;

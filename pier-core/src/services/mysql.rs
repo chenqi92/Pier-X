@@ -137,6 +137,37 @@ impl MysqlConfig {
 /// round-trip: `None` → `null`, `Some(s)` → `"s"`.
 pub type ResultRow = Vec<Option<String>>;
 
+/// One row in the schema-tree's tables list. Carries the
+/// `information_schema.tables` enrichment the panel surfaces as
+/// inline badges + tooltip metadata: row count, on-disk size,
+/// engine, last-update timestamp.
+///
+/// `row_count` is `Option<u64>` because InnoDB reports it as a
+/// statistical estimate — for some tables it can be unavailable
+/// (`NULL` in the catalog) until the engine has gathered stats.
+/// We forward the `Option` so the UI can render `—` instead of
+/// `0` when the count is genuinely unknown.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct TableSummary {
+    pub name: String,
+    pub row_count: Option<u64>,
+    pub data_bytes: Option<u64>,
+    pub index_bytes: Option<u64>,
+    pub engine: Option<String>,
+    pub updated_at: Option<String>,
+}
+
+/// One row in the schema-tree's routines folder — covers both
+/// stored procedures and stored functions. `kind` is `"PROCEDURE"`
+/// or `"FUNCTION"` per `information_schema.routines.routine_type`,
+/// so the panel can group them under the same folder with
+/// per-row icons.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct RoutineSummary {
+    pub name: String,
+    pub kind: String,
+}
+
 /// One column from `SHOW COLUMNS`.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ColumnInfo {
@@ -321,6 +352,136 @@ impl MysqlClient {
     /// Blocking wrapper for [`Self::list_tables`].
     pub fn list_tables_blocking(&self, database: &str) -> Result<Vec<String>> {
         crate::ssh::runtime::shared().block_on(self.list_tables(database))
+    }
+
+    /// Enriched table list — same set of tables as
+    /// [`Self::list_tables`] but joined with
+    /// `information_schema.tables` so the UI gets per-table
+    /// engine, row-count estimate, on-disk size, and
+    /// last-update timestamp. The same safety check on the
+    /// database identifier applies.
+    ///
+    /// We query `information_schema.tables` directly (not
+    /// `SHOW TABLE STATUS`) so the parameter binding is
+    /// compatible with mysql_async's `params!` macro — no
+    /// identifier interpolation needed beyond the schema
+    /// itself, which is already guarded.
+    pub async fn list_tables_meta(&self, database: &str) -> Result<Vec<TableSummary>> {
+        if !is_safe_ident(database) {
+            return Err(MysqlError::InvalidConfig(format!(
+                "refusing unsafe database identifier {database:?}"
+            )));
+        }
+        let mut conn = self.pool.get_conn().await?;
+        // `table_type = 'BASE TABLE'` excludes views (which we
+        // surface in their own folder) but includes regular
+        // tables in either InnoDB or MyISAM. `update_time` is
+        // returned as a string to dodge mysql_async's narrower
+        // DATETIME types — we just forward what the server says.
+        let sql = "
+            SELECT table_name, table_rows, data_length, index_length,
+                   engine, CAST(update_time AS CHAR) AS update_time
+              FROM information_schema.tables
+             WHERE table_schema = :schema
+               AND table_type = 'BASE TABLE'
+             ORDER BY table_name
+        ";
+        let rows: Vec<(
+            String,
+            Option<u64>,
+            Option<u64>,
+            Option<u64>,
+            Option<String>,
+            Option<String>,
+        )> = sql
+            .with(mysql_async::params! { "schema" => database })
+            .fetch(&mut conn)
+            .await?;
+        drop(conn);
+        Ok(rows
+            .into_iter()
+            .map(
+                |(name, row_count, data_bytes, index_bytes, engine, updated_at)| {
+                    TableSummary {
+                        name,
+                        row_count,
+                        data_bytes,
+                        index_bytes,
+                        engine,
+                        updated_at,
+                    }
+                },
+            )
+            .collect())
+    }
+
+    /// Blocking wrapper for [`Self::list_tables_meta`].
+    pub fn list_tables_meta_blocking(&self, database: &str) -> Result<Vec<TableSummary>> {
+        crate::ssh::runtime::shared().block_on(self.list_tables_meta(database))
+    }
+
+    /// View names defined in `database`. Mirrors `list_tables`
+    /// but filters `table_type = 'VIEW'` so the panel can put
+    /// them under their own collapsible folder. Returned in
+    /// alphabetical order.
+    pub async fn list_views(&self, database: &str) -> Result<Vec<String>> {
+        if !is_safe_ident(database) {
+            return Err(MysqlError::InvalidConfig(format!(
+                "refusing unsafe database identifier {database:?}"
+            )));
+        }
+        let mut conn = self.pool.get_conn().await?;
+        let sql = "
+            SELECT table_name
+              FROM information_schema.views
+             WHERE table_schema = :schema
+             ORDER BY table_name
+        ";
+        let rows: Vec<String> = sql
+            .with(mysql_async::params! { "schema" => database })
+            .fetch(&mut conn)
+            .await?;
+        drop(conn);
+        Ok(rows)
+    }
+
+    /// Blocking wrapper for [`Self::list_views`].
+    pub fn list_views_blocking(&self, database: &str) -> Result<Vec<String>> {
+        crate::ssh::runtime::shared().block_on(self.list_views(database))
+    }
+
+    /// Stored procedures + stored functions defined in
+    /// `database`. The `kind` field discriminates the two so
+    /// the panel can render a per-row icon ("ƒ" for FUNCTION,
+    /// "λ" for PROCEDURE — the choice is the panel's). Sorted
+    /// by name across both kinds for stable list ordering.
+    pub async fn list_routines(&self, database: &str) -> Result<Vec<RoutineSummary>> {
+        if !is_safe_ident(database) {
+            return Err(MysqlError::InvalidConfig(format!(
+                "refusing unsafe database identifier {database:?}"
+            )));
+        }
+        let mut conn = self.pool.get_conn().await?;
+        let sql = "
+            SELECT routine_name, routine_type
+              FROM information_schema.routines
+             WHERE routine_schema = :schema
+             ORDER BY routine_name
+        ";
+        let rows: Vec<(String, String)> = sql
+            .with(mysql_async::params! { "schema" => database })
+            .fetch(&mut conn)
+            .await?;
+        drop(conn);
+        Ok(rows
+            .into_iter()
+            .map(|(name, kind)| RoutineSummary { name, kind })
+            .collect())
+    }
+
+    /// Blocking wrapper for [`Self::list_routines`].
+    pub fn list_routines_blocking(&self, database: &str) -> Result<Vec<RoutineSummary>> {
+        crate::ssh::runtime::shared().block_on(self.list_routines(database))
     }
 
     /// `SHOW COLUMNS FROM <db>.<table>`.

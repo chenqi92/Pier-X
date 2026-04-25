@@ -373,11 +373,42 @@ export type MysqlColumnView = {
   extra: string;
 };
 
+/** Per-table enrichment surfaced as schema-tree badges + tooltip
+ *  metadata. Each entry pairs 1:1 with an item in
+ *  `MysqlBrowserState.tables` (same order, same `name`).
+ *  `null` fields are forwarded from `information_schema.tables`
+ *  when the engine hasn't gathered stats yet — the UI renders
+ *  them as `—` rather than `0`. */
+export type MysqlTableSummary = {
+  name: string;
+  rowCount: number | null;
+  dataBytes: number | null;
+  indexBytes: number | null;
+  engine: string | null;
+  updatedAt: string | null;
+};
+
+/** Stored procedure / function row in the schema tree.
+ *  `kind` is `"PROCEDURE"` or `"FUNCTION"` per `routine_type`. */
+export type MysqlRoutineSummary = {
+  name: string;
+  kind: string;
+};
+
 export type MysqlBrowserState = {
   databaseName: string;
   databases: string[];
   tableName: string;
   tables: string[];
+  /** Same names as `tables`, in the same order. Carries engine,
+   *  row-count estimate, on-disk size, and last-update timestamp
+   *  for each table. */
+  tableSummaries: MysqlTableSummary[];
+  /** View names defined in the active database. Rendered as a
+   *  separate folder in the schema tree. */
+  views: string[];
+  /** Stored procedures + functions in the active database. */
+  routines: MysqlRoutineSummary[];
   columns: MysqlColumnView[];
   preview: DataPreview | null;
   /** Effective page size used by the last browse — clamped to 1..500. */

@@ -1083,6 +1083,14 @@ export const zhExtra: Record<string, string> = {
   "ELEMENT": "元素",
   "{count} keys": "{count} 个键",
   "{ms} ms": "{ms} ms",
+  "Rename key — enter a new name:": "重命名键 — 输入新名称：",
+  "Cannot rename — a key named {key} already exists.": "无法重命名 — 已存在键 {key}。",
+  "Delete key {key}? This cannot be undone.": "确定删除键 {key}？此操作不可撤销。",
+  "Key {key} did not exist.": "键 {key} 已不存在。",
+  "Tree": "树形",
+  "Flat": "扁平",
+  "Showing colon-separated tree; click to flatten": "正在按冒号分组显示树形结构，点击切换为扁平视图",
+  "Group keys by colon namespaces": "按冒号命名空间分组键",
 
   // DB panels — SQLite
   "Open a database by path, or scan a remote directory for .db / .sqlite files.":

@@ -676,6 +676,41 @@ export const redisExecute = (params: {
     password: params.password ?? null,
   });
 
+/** Confirm-guarded RENAME via `RENAMENX`. Resolves `false` when
+ *  the destination already exists; the caller surfaces that as
+ *  an error. */
+export const redisRenameKey = (params: {
+  host: string;
+  port: number;
+  db: number;
+  from: string;
+  to: string;
+  username?: string | null;
+  password?: string | null;
+}) =>
+  invoke<boolean>("redis_rename_key", {
+    ...params,
+    username: params.username ?? null,
+    password: params.password ?? null,
+  });
+
+/** Confirm-guarded DEL. Resolves `true` when the key existed,
+ *  `false` when it didn't (so the panel can distinguish
+ *  "deleted" from "no-op"). */
+export const redisDeleteKey = (params: {
+  host: string;
+  port: number;
+  db: number;
+  key: string;
+  username?: string | null;
+  password?: string | null;
+}) =>
+  invoke<boolean>("redis_delete_key", {
+    ...params,
+    username: params.username ?? null,
+    password: params.password ?? null,
+  });
+
 // ── PostgreSQL ──────────────────────────────────────────────────
 
 export const postgresBrowse = (params: {

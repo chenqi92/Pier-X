@@ -3452,6 +3452,81 @@ fn redis_execute(
     })
 }
 
+/// Confirm-guarded RENAME. Backed by `RENAMENX` so the call
+/// fails on collision instead of silently overwriting a key.
+/// The panel surfaces the false return as a user-visible error
+/// ("a key with that name already exists") and lets the user
+/// decide whether to retry against an empty target.
+#[tauri::command]
+fn redis_rename_key(
+    host: String,
+    port: u16,
+    db: i64,
+    from: String,
+    to: String,
+    username: Option<String>,
+    password: Option<String>,
+) -> Result<bool, String> {
+    let resolved_host = host.trim();
+    if resolved_host.is_empty() {
+        return Err(String::from("Redis host must not be empty."));
+    }
+    let from_key = from.trim();
+    let to_key = to.trim();
+    if from_key.is_empty() || to_key.is_empty() {
+        return Err(String::from("Both source and destination keys are required."));
+    }
+    if from_key == to_key {
+        return Err(String::from("Source and destination keys must differ."));
+    }
+    let client = RedisClient::connect_blocking(RedisConfig {
+        host: resolved_host.to_string(),
+        port: normalize_redis_port(port),
+        db,
+        username: username.filter(|s| !s.is_empty()),
+        password: password.filter(|s| !s.is_empty()),
+    })
+    .map_err(|error| error.to_string())?;
+    client
+        .rename_nx_blocking(from_key, to_key)
+        .map_err(|error| error.to_string())
+}
+
+/// Confirm-guarded DEL. Returns `true` when the key existed
+/// (so the panel can show "deleted" vs "did not exist" in the
+/// notice). Bulk delete is intentionally not exposed here —
+/// the UI walks one key per confirm to keep destructive blast
+/// radius small.
+#[tauri::command]
+fn redis_delete_key(
+    host: String,
+    port: u16,
+    db: i64,
+    key: String,
+    username: Option<String>,
+    password: Option<String>,
+) -> Result<bool, String> {
+    let resolved_host = host.trim();
+    if resolved_host.is_empty() {
+        return Err(String::from("Redis host must not be empty."));
+    }
+    let key_name = key.trim();
+    if key_name.is_empty() {
+        return Err(String::from("Key name must not be empty."));
+    }
+    let client = RedisClient::connect_blocking(RedisConfig {
+        host: resolved_host.to_string(),
+        port: normalize_redis_port(port),
+        db,
+        username: username.filter(|s| !s.is_empty()),
+        password: password.filter(|s| !s.is_empty()),
+    })
+    .map_err(|error| error.to_string())?;
+    client
+        .del_blocking(key_name)
+        .map_err(|error| error.to_string())
+}
+
 #[tauri::command]
 fn mysql_execute(
     host: String,
@@ -6928,6 +7003,8 @@ pub fn run() {
             sqlite_execute,
             redis_browse,
             redis_execute,
+            redis_rename_key,
+            redis_delete_key,
             ssh_connections_list,
             ssh_connection_save,
             ssh_connection_delete,

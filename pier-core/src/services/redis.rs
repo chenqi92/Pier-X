@@ -675,6 +675,49 @@ impl RedisClient {
     pub fn execute_command_blocking(&self, args: &[String]) -> Result<CommandResult> {
         runtime::shared().block_on(self.execute_command(args))
     }
+
+    /// Atomically rename `from` to `to`. Wraps `RENAMENX` so the
+    /// command fails if `to` already exists — keeps rename safe
+    /// against accidental clobber. The caller can fall back to
+    /// the unsafe `RENAME` via `execute_command` when explicit
+    /// overwrite is intended.
+    pub async fn rename_nx(&self, from: &str, to: &str) -> Result<bool> {
+        if from.is_empty() || to.is_empty() {
+            return Err(RedisError::InvalidConfig(
+                "RENAME arguments must not be empty".into(),
+            ));
+        }
+        let mut conn = self.manager.lock().await;
+        let renamed: i64 = redis::cmd("RENAMENX")
+            .arg(from)
+            .arg(to)
+            .query_async(&mut *conn)
+            .await?;
+        Ok(renamed == 1)
+    }
+
+    /// Blocking wrapper for [`Self::rename_nx`].
+    pub fn rename_nx_blocking(&self, from: &str, to: &str) -> Result<bool> {
+        runtime::shared().block_on(self.rename_nx(from, to))
+    }
+
+    /// Delete a single key. Returns true when the key existed
+    /// (the server returned `1`), false otherwise. Bulk delete
+    /// stays out of scope here — the panel calls this once per
+    /// confirmed selection.
+    pub async fn del(&self, key: &str) -> Result<bool> {
+        if key.is_empty() {
+            return Err(RedisError::InvalidConfig("DEL key must not be empty".into()));
+        }
+        let mut conn = self.manager.lock().await;
+        let removed: i64 = redis::cmd("DEL").arg(key).query_async(&mut *conn).await?;
+        Ok(removed >= 1)
+    }
+
+    /// Blocking wrapper for [`Self::del`].
+    pub fn del_blocking(&self, key: &str) -> Result<bool> {
+        runtime::shared().block_on(self.del(key))
+    }
 }
 
 fn summarize_value(value: &redis::Value) -> String {

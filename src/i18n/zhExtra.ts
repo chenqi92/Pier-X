@@ -145,6 +145,7 @@ export const zhExtra: Record<string, string> = {
   "Enter the new password. Only the keyring entry is touched.": "输入新密码，仅更新 keyring 中的条目。",
   "Execute": "执行",
   "Expand long edges": "展开长连线",
+  "Expires in {seconds}s": "{seconds} 秒后过期",
   "Failed to copy": "复制失败",
   "Fetch all": "抓取全部",
   "Files ready to commit": "准备提交的文件",
@@ -189,6 +190,7 @@ export const zhExtra: Record<string, string> = {
   "Line ownership": "行归属",
   "lines": "行",
   "load": "负载",
+  "Load more": "加载更多",
   "Load recent commits to start an interactive rebase.": "加载最近提交以开始交互式变基。",
   "Loading": "加载中",
   "Loading commit graph…": "正在加载提交图…",
@@ -251,6 +253,7 @@ export const zhExtra: Record<string, string> = {
   "No database": "未选择数据库",
   "No diff loaded": "没有已加载的 diff",
   "No diff output": "没有 diff 输出",
+  "No expiry": "永不过期",
   "No file selected": "未选择文件",
   "No highlight": "无高亮",
   "No history matches": "没有匹配的历史记录",
@@ -500,6 +503,7 @@ export const zhExtra: Record<string, string> = {
   "stopped": "已停止",
   "restarted": "已重启",
   "removed": "已移除",
+  "Unknown TTL": "TTL 未知",
   "Unknown saved SSH connection #{index}.": "未知的已保存 SSH 连接 #{index}。",
   "Unknown tunnel: {id}.": "未知的隧道：{id}。",
   "Unknown terminal session: {id}.": "未知的终端会话：{id}。",
@@ -1078,6 +1082,7 @@ export const zhExtra: Record<string, string> = {
   "VALUE": "值",
   "ELEMENT": "元素",
   "{count} keys": "{count} 个键",
+  "{ms} ms": "{ms} ms",
 
   // DB panels — SQLite
   "Open a database by path, or scan a remote directory for .db / .sqlite files.":

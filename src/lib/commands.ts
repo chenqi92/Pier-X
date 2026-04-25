@@ -649,11 +649,17 @@ export const redisBrowse = (params: {
   username?: string | null;
   /** AUTH secret. Empty/null = no AUTH. */
   password?: string | null;
+  /** SCAN cursor; "0" or null for the first page. */
+  cursor?: string | null;
+  /** Page size; backend caps at 500. */
+  limit?: number | null;
 }) =>
   invoke<RedisBrowserState>("redis_browse", {
     ...params,
     username: params.username ?? null,
     password: params.password ?? null,
+    cursor: params.cursor ?? null,
+    limit: params.limit ?? null,
   });
 
 export const redisExecute = (params: {

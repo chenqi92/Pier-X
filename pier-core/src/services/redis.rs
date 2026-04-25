@@ -359,6 +359,106 @@ impl RedisClient {
         runtime::shared().block_on(self.scan_keys(pattern, limit))
     }
 
+    /// Cursor-driven scan that returns one page of keys with
+    /// per-key TYPE + TTL metadata. Drives the panel's
+    /// load-more flow plus the type-badge / TTL-chip enrichments.
+    ///
+    /// `cursor` is `"0"` to start a fresh scan, otherwise the
+    /// `next_cursor` from the previous page. The method walks
+    /// SCAN until it has either filled `limit` keys or the
+    /// cursor returns `"0"` (end of keyspace) — whichever comes
+    /// first. After that it issues one TYPE + one TTL command
+    /// per collected key, pipelined together so the round-trip
+    /// cost is amortised across the whole batch.
+    pub async fn scan_keys_paged(
+        &self,
+        pattern: &str,
+        cursor: &str,
+        limit: usize,
+    ) -> Result<PagedScanResult> {
+        let effective_limit = limit.clamp(1, DEFAULT_SCAN_LIMIT);
+        let mut conn = self.manager.lock().await;
+
+        let mut current: u64 = cursor.parse().unwrap_or(0);
+        let mut collected: Vec<String> = Vec::with_capacity(effective_limit.min(256));
+        let started = Instant::now();
+
+        loop {
+            let (next, batch): (u64, Vec<String>) = redis::cmd("SCAN")
+                .arg(current)
+                .arg("MATCH")
+                .arg(pattern)
+                .arg("COUNT")
+                .arg(512)
+                .query_async(&mut *conn)
+                .await?;
+            for k in batch {
+                if collected.len() >= effective_limit {
+                    break;
+                }
+                collected.push(k);
+            }
+            current = next;
+            if current == 0 || collected.len() >= effective_limit {
+                break;
+            }
+        }
+
+        // Pipeline TYPE + PTTL for every collected key so the
+        // round trip is one batch instead of `2 * len(keys)`.
+        // PTTL is in milliseconds — convert to seconds for the
+        // public type so the UI doesn't have to.
+        let mut entries: Vec<KeyEntry> = Vec::with_capacity(collected.len());
+        if !collected.is_empty() {
+            let mut pipe = redis::pipe();
+            for k in &collected {
+                pipe.cmd("TYPE").arg(k);
+                pipe.cmd("PTTL").arg(k);
+            }
+            let raw: Vec<redis::Value> = pipe.query_async(&mut *conn).await?;
+            for (i, k) in collected.iter().enumerate() {
+                let kind = match raw.get(i * 2) {
+                    Some(redis::Value::SimpleString(s)) => s.clone(),
+                    Some(redis::Value::BulkString(b)) => {
+                        String::from_utf8_lossy(b).into_owned()
+                    }
+                    Some(redis::Value::Okay) => "ok".to_string(),
+                    _ => String::new(),
+                };
+                let pttl: i64 = match raw.get(i * 2 + 1) {
+                    Some(redis::Value::Int(n)) => *n,
+                    _ => -2,
+                };
+                let ttl_seconds = match pttl {
+                    -1 | -2 => pttl,
+                    ms if ms > 0 => ms / 1000,
+                    _ => -2,
+                };
+                entries.push(KeyEntry {
+                    key: k.clone(),
+                    kind: kind.to_lowercase(),
+                    ttl_seconds,
+                });
+            }
+        }
+
+        Ok(PagedScanResult {
+            next_cursor: current.to_string(),
+            keys: entries,
+            rtt_ms: started.elapsed().as_millis() as u64,
+        })
+    }
+
+    /// Blocking wrapper for [`Self::scan_keys_paged`].
+    pub fn scan_keys_paged_blocking(
+        &self,
+        pattern: &str,
+        cursor: &str,
+        limit: usize,
+    ) -> Result<PagedScanResult> {
+        runtime::shared().block_on(self.scan_keys_paged(pattern, cursor, limit))
+    }
+
     /// Fetch metadata + a bounded preview for a single key.
     ///
     /// Never reads more than [`PREVIEW_ITEMS`] collection
@@ -616,6 +716,40 @@ pub struct ScanResult {
     pub truncated: bool,
     /// Effective limit that was applied.
     pub limit: usize,
+}
+
+/// Per-key metadata returned alongside the scan cursor — kind
+/// + TTL pulled in a pipeline so the panel can show type
+/// badges and remaining-life chips without a second round trip
+/// per key.
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct KeyEntry {
+    pub key: String,
+    /// Lower-case `redis-cli` type name: `string` / `hash` /
+    /// `list` / `set` / `zset` / `stream` / `none` (key was
+    /// deleted between SCAN and TYPE).
+    pub kind: String,
+    /// Seconds until expiry. `-1` for no TTL set, `-2` for the
+    /// key not existing anymore (race window).
+    pub ttl_seconds: i64,
+}
+
+/// Result of a single page of [`RedisClient::scan_keys_paged`]
+/// — drives the panel's load-more pagination + key-list
+/// enrichment.
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct PagedScanResult {
+    /// Next-page cursor. `"0"` when the scan has reached the
+    /// end of the keyspace; pass back to continue otherwise.
+    pub next_cursor: String,
+    /// Up to one batch's worth of keys with metadata. Length is
+    /// roughly `COUNT` (see [`PAGED_SCAN_COUNT`]) — the actual
+    /// number Redis returned for this iteration of SCAN.
+    pub keys: Vec<KeyEntry>,
+    /// Round-trip time for this scan (the SCAN call + the
+    /// pipelined TYPE/TTL probes). Surfaced in the panel header
+    /// as a small "Nms" chip so the user can spot a slow link.
+    pub rtt_ms: u64,
 }
 
 /// Parse a Redis `INFO` payload. Lines starting with `#` are

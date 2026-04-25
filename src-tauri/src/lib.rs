@@ -413,6 +413,20 @@ struct RedisKeyView {
     preview_truncated: bool,
 }
 
+/// Enriched key-list row — name plus per-key kind / TTL pulled
+/// in the same scan pipeline. Lets the panel render the
+/// `STR`/`HASH`/`LIST`/`ZSET`/`STREAM`/`SET` badge + a TTL chip
+/// without a follow-up call per key.
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct RedisKeyEntry {
+    key: String,
+    /// Lower-case redis-cli type name.
+    kind: String,
+    /// Seconds until expiry; `-1` for no TTL, `-2` for missing.
+    ttl_seconds: i64,
+}
+
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
 struct RedisBrowserState {
@@ -421,7 +435,17 @@ struct RedisBrowserState {
     limit: usize,
     truncated: bool,
     key_name: String,
-    keys: Vec<String>,
+    /// Each entry pairs a key with its kind + TTL. Replaces the
+    /// previous bare-name `Vec<String>` so the panel can render
+    /// per-row badges without a second roundtrip per key.
+    keys: Vec<RedisKeyEntry>,
+    /// Next-page cursor returned by `SCAN`. `"0"` means the
+    /// scan reached the end; anything else is the resume token
+    /// the panel should pass on a load-more click.
+    next_cursor: String,
+    /// Round-trip time of the scan + per-key probe pipeline.
+    /// Surfaced as a small chip in the panel header.
+    rtt_ms: u64,
     server_version: String,
     used_memory: String,
     details: Option<RedisKeyView>,
@@ -3314,6 +3338,8 @@ fn redis_browse(
     db: i64,
     pattern: Option<String>,
     key: Option<String>,
+    cursor: Option<String>,
+    limit: Option<usize>,
     username: Option<String>,
     password: Option<String>,
 ) -> Result<RedisBrowserState, String> {
@@ -3340,10 +3366,13 @@ fn redis_browse(
     } else {
         pattern
     };
-    let scan = client
-        .scan_keys_blocking(&effective_pattern, 120)
+    let cursor_in = cursor.unwrap_or_else(|| String::from("0"));
+    let effective_limit = limit.unwrap_or(120).clamp(1, 500);
+    let page = client
+        .scan_keys_paged_blocking(&effective_pattern, &cursor_in, effective_limit)
         .map_err(|error| error.to_string())?;
-    let key_name = choose_active_item(key, &scan.keys);
+    let key_names: Vec<String> = page.keys.iter().map(|e| e.key.clone()).collect();
+    let key_name = choose_active_item(key, &key_names);
     let details = if key_name.is_empty() {
         None
     } else {
@@ -3355,13 +3384,27 @@ fn redis_browse(
     let server_info = client.info_blocking("server").unwrap_or_default();
     let memory_info = client.info_blocking("memory").unwrap_or_default();
 
+    let entries: Vec<RedisKeyEntry> = page
+        .keys
+        .into_iter()
+        .map(|e| RedisKeyEntry {
+            key: e.key,
+            kind: e.kind,
+            ttl_seconds: e.ttl_seconds,
+        })
+        .collect();
+
     Ok(RedisBrowserState {
         pong,
         pattern: effective_pattern,
-        limit: scan.limit,
-        truncated: scan.truncated,
+        limit: effective_limit,
+        // Caller can compare `next_cursor != "0"` to decide
+        // whether more keys exist — drives the "Load more" UI.
+        truncated: page.next_cursor != "0",
         key_name,
-        keys: scan.keys,
+        keys: entries,
+        next_cursor: page.next_cursor,
+        rtt_ms: page.rtt_ms,
         server_version: server_info
             .get("redis_version")
             .or_else(|| server_info.get("valkey_version"))

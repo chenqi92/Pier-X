@@ -448,14 +448,32 @@ struct PostgresColumnView {
 
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
+struct PostgresPoolView {
+    /// `pg_stat_activity` rows whose `state = 'active'` for the
+    /// current database. Zero when the role can't read the view.
+    active: u32,
+    /// Total connections to the current database (any state).
+    total: u32,
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
 struct PostgresBrowserState {
     database_name: String,
     databases: Vec<String>,
     schema_name: String,
+    /// All non-internal schemas in the active database. The panel
+    /// renders these as the left-rail picker; the active schema is
+    /// `schema_name`. Empty when no database is selected.
+    schemas: Vec<String>,
     table_name: String,
     tables: Vec<String>,
     columns: Vec<PostgresColumnView>,
     preview: Option<DataPreview>,
+    /// Connection-pool snapshot for the active database. `(0, 0)`
+    /// when the role lacks `pg_stat_activity` access — the panel
+    /// hides the chip in that case.
+    pool: PostgresPoolView,
 }
 
 #[derive(Serialize)]
@@ -3693,9 +3711,23 @@ fn postgres_browse(
         .list_databases_blocking()
         .map_err(|e| e.to_string())?;
     let database_name = choose_active_item(database, &databases);
+    // Schema list is best-effort — failure to enumerate (e.g. low-
+    // privilege role) shouldn't block the browse, the picker just
+    // shows the active schema only.
+    let schemas = if database_name.is_empty() {
+        Vec::new()
+    } else {
+        client.list_schemas_blocking().unwrap_or_default()
+    };
     let schema_name = schema
         .filter(|s| !s.trim().is_empty())
-        .unwrap_or_else(|| String::from("public"));
+        .unwrap_or_else(|| {
+            if schemas.iter().any(|s| s == "public") {
+                String::from("public")
+            } else {
+                schemas.first().cloned().unwrap_or_else(|| String::from("public"))
+            }
+        });
     let tables = if database_name.is_empty() {
         Vec::new()
     } else {
@@ -3734,14 +3766,18 @@ fn postgres_browse(
             .map(map_postgres_preview)
     };
 
+    let (active, total) = client.pool_status_blocking().unwrap_or((0, 0));
+
     Ok(PostgresBrowserState {
         database_name,
         databases,
         schema_name,
+        schemas,
         table_name,
         tables,
         columns,
         preview,
+        pool: PostgresPoolView { active, total },
     })
 }
 

@@ -1,4 +1,4 @@
-import { ChevronDown, ChevronRight, Database, Search, Table, X } from "lucide-react";
+import { ChevronDown, ChevronRight, Database, FolderTree, Search, Table, X } from "lucide-react";
 import { useMemo, useState } from "react";
 
 import { useI18n } from "../../i18n/useI18n";
@@ -13,6 +13,14 @@ export type DbSchemaDatabase = {
   name: string;
   current: boolean;
   tables: DbSchemaNode[];
+  /** Optional schema list for engines that have a schema layer
+   *  (PostgreSQL). When provided, the tree renders a sibling
+   *  "Schemas" group with `activeSchema` highlighted; clicking
+   *  another schema fires `onSelectSchema`. Engines without
+   *  schemas (MySQL / SQLite) leave both fields undefined. */
+  schemas?: string[];
+  /** Active schema name — only meaningful when `schemas` is set. */
+  activeSchema?: string;
 };
 
 type Props = {
@@ -20,6 +28,9 @@ type Props = {
   selectedTableId: string | null;
   onSelectTable: (databaseName: string, node: DbSchemaNode) => void;
   onSelectDatabase?: (name: string) => void;
+  /** Fired when the user clicks a non-active schema row. The
+   *  panel re-runs `postgresBrowse` with the new schema. */
+  onSelectSchema?: (databaseName: string, schema: string) => void;
 };
 
 /**
@@ -34,6 +45,7 @@ export default function DbSchemaTree({
   selectedTableId,
   onSelectTable,
   onSelectDatabase,
+  onSelectSchema,
 }: Props) {
   const { t } = useI18n();
   const [openDb, setOpenDb] = useState<Record<string, boolean>>(() =>
@@ -103,6 +115,34 @@ export default function DbSchemaTree({
                 {db.current && <span className="dbt-pill">{t("current")}</span>}
               </button>
 
+              {dbOpen && db.current && db.schemas && db.schemas.length > 0 && (
+                <>
+                  <div className="dbt-row lvl-1 group" aria-disabled>
+                    <span className="dbt-caret" />
+                    <FolderTree size={10} />
+                    <span className="dbt-name">{t("Schemas")}</span>
+                    <span className="dbt-count">{db.schemas.length}</span>
+                  </div>
+                  {db.schemas.map((schema) => {
+                    const active = schema === (db.activeSchema || "");
+                    return (
+                      <button
+                        key={schema}
+                        type="button"
+                        className={"dbt-row lvl-2 leaf" + (active ? " sel" : "")}
+                        onClick={() => {
+                          if (!active) onSelectSchema?.(db.name, schema);
+                        }}
+                      >
+                        <span className="dbt-caret" />
+                        <FolderTree size={10} style={{ color: "var(--muted)" }} />
+                        <span className="dbt-name">{schema}</span>
+                        {active && <span className="dbt-pill">{t("current")}</span>}
+                      </button>
+                    );
+                  })}
+                </>
+              )}
               {dbOpen && db.current && (
                 <>
                   <button

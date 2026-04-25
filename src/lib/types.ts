@@ -440,14 +440,25 @@ export type PostgresColumnView = {
   extra: string;
 };
 
+export type PostgresPoolView = {
+  /** `pg_stat_activity` rows with `state = 'active'` for the
+   *  current database. 0 when the role can't read the view. */
+  active: number;
+  /** Total connections to the current database. */
+  total: number;
+};
+
 export type PostgresBrowserState = {
   databaseName: string;
   databases: string[];
   schemaName: string;
+  /** All non-internal schemas in the active database. */
+  schemas: string[];
   tableName: string;
   tables: string[];
   columns: PostgresColumnView[];
   preview: DataPreview | null;
+  pool: PostgresPoolView;
 };
 
 // ── Docker ──────────────────────────────────────────────────────

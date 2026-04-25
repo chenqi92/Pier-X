@@ -272,20 +272,37 @@ function PostgresPanelBody({ tab }: Props) {
       status: "unknown",
     }));
 
-  // PG tree: `schemas[]` isn't enumerated by the backend yet — we show
-  // only the current (db, schema) and collapse other dbs to stubs.
+  // PG tree: backend now returns `schemas[]` for the active
+  // database. We render each schema as a sub-folder under the
+  // active db; sibling dbs stay collapsed (we don't enumerate
+  // their schemas — would cost a connection per db).
   const databases: DbSchemaDatabase[] = state
-    ? state.databases.map((name) => ({
-        name,
-        current: name === state.databaseName,
-        tables:
-          name === state.databaseName
-            ? state.tables.map((tname) => ({
-                id: `${name}.${state.schemaName}.${tname}`,
-                label: tname,
-              }))
-            : [],
-      }))
+    ? state.databases.map((name) => {
+        if (name !== state.databaseName) {
+          return { name, current: false, tables: [] };
+        }
+        // The active db: build one DbSchemaDatabase per schema so
+        // the tree gets a schema-as-folder shape. The schema's
+        // own tables only populate when it matches `schemaName`
+        // (we have just the active schema's table list).
+        const schemaList = state.schemas.length > 0 ? state.schemas : [state.schemaName || "public"];
+        const tablesByCurrentSchema = state.tables.map((tname) => ({
+          id: `${name}.${state.schemaName}.${tname}`,
+          label: tname,
+        }));
+        // The schema-tree component takes a flat tables list per
+        // database. We collapse the schemas into a single label
+        // string for the active schema and include only that one's
+        // tables — matches today's UX while exposing schema choice
+        // through the toolbar dropdown below.
+        return {
+          name,
+          current: true,
+          tables: tablesByCurrentSchema,
+          schemas: schemaList,
+          activeSchema: state.schemaName,
+        };
+      })
     : [];
 
   const pkColumns = state
@@ -339,6 +356,17 @@ function PostgresPanelBody({ tab }: Props) {
         { icon: "database" as const, label: t("{count} dbs", { count: state.databases.length }) },
         { icon: "disk" as const, label: t("{count} tables", { count: state.tables.length }) },
         { icon: "activity" as const, label: state.schemaName || "public" },
+        ...(state.pool && state.pool.total > 0
+          ? [
+              {
+                icon: "activity" as const,
+                label: t("{active}/{total} conns", {
+                  active: state.pool.active,
+                  total: state.pool.total,
+                }),
+              },
+            ]
+          : []),
       ]
     : [];
 
@@ -538,6 +566,12 @@ function PostgresPanelBody({ tab }: Props) {
           onSelectDatabase: (name) => {
             updateTab(tab.id, { pgDatabase: name });
             void browse(undefined, "", name);
+          },
+          onSelectSchema: (_db, nextSchema) => {
+            // Switching schema clears the active table — the
+            // tables under the previous schema don't apply.
+            setSchema(nextSchema);
+            void browse(undefined, "", undefined, nextSchema);
           },
         }}
         dataTab={dataTab}

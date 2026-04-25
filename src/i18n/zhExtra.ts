@@ -1078,6 +1078,8 @@ export const zhExtra: Record<string, string> = {
   "VALUE": "值",
   "ELEMENT": "元素",
   "{count} keys": "{count} 个键",
+  "{active}/{total} conns": "{active}/{total} 连接",
+  "Schemas": "模式",
 
   // DB panels — SQLite
   "Open a database by path, or scan a remote directory for .db / .sqlite files.":

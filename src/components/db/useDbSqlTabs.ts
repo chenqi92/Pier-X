@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import type { SqlHistoryEntry, SqlTab } from "./DbSqlEditor";
+import type { SqlFavoriteEntry, SqlHistoryEntry, SqlTab } from "./DbSqlEditor";
 
 /** Maximum number of tabs we keep open. Beyond this the oldest non-active
  *  tab is dropped — a small panel mounted in the right rail can't fit a
@@ -13,6 +13,12 @@ const MAX_HISTORY = 200;
  *  passes its own key (e.g. `mysql`, `postgres`) and we persist
  *  under `pier-x:sql-history:<key>`. */
 const STORAGE_PREFIX = "pier-x:sql-history:";
+/** Sibling namespace for pinned/saved queries. Kept in a separate
+ *  bucket so clearing history doesn't wipe favorites. */
+const FAVORITES_PREFIX = "pier-x:sql-favorites:";
+/** Soft cap on favorites — far smaller than history because each
+ *  entry is human-curated. */
+const MAX_FAVORITES = 100;
 
 type UseDbSqlTabsArgs = {
   /** SQL the very first tab opens with. */
@@ -57,6 +63,38 @@ function writePersistedHistory(storageKey: string | undefined, history: SqlHisto
   }
 }
 
+function readPersistedFavorites(storageKey: string | undefined): SqlFavoriteEntry[] {
+  if (!storageKey || typeof window === "undefined") return [];
+  try {
+    const raw = window.localStorage.getItem(FAVORITES_PREFIX + storageKey);
+    if (!raw) return [];
+    const parsed = JSON.parse(raw) as unknown;
+    if (!Array.isArray(parsed)) return [];
+    return parsed
+      .filter((e): e is SqlFavoriteEntry =>
+        !!e &&
+        typeof e === "object" &&
+        typeof (e as SqlFavoriteEntry).sql === "string" &&
+        typeof (e as SqlFavoriteEntry).id === "string",
+      )
+      .slice(0, MAX_FAVORITES);
+  } catch {
+    return [];
+  }
+}
+
+function writePersistedFavorites(storageKey: string | undefined, favorites: SqlFavoriteEntry[]) {
+  if (!storageKey || typeof window === "undefined") return;
+  try {
+    window.localStorage.setItem(
+      FAVORITES_PREFIX + storageKey,
+      JSON.stringify(favorites.slice(0, MAX_FAVORITES)),
+    );
+  } catch {
+    // Quota exceeded / private mode — drop silently.
+  }
+}
+
 /** Lightweight tabs + history state for the SQL editor. Keeps the
  *  editor a controlled component while letting panels share one
  *  consistent multi-tab model. */
@@ -75,6 +113,9 @@ export function useDbSqlTabs({
   const [history, setHistory] = useState<SqlHistoryEntry[]>(() =>
     readPersistedHistory(storageKey),
   );
+  const [favorites, setFavorites] = useState<SqlFavoriteEntry[]>(() =>
+    readPersistedFavorites(storageKey),
+  );
 
   // Persist history on every change so a crash / refresh
   // doesn't lose the most recent queries. The dependency on
@@ -83,6 +124,9 @@ export function useDbSqlTabs({
   useEffect(() => {
     writePersistedHistory(storageKey, history);
   }, [storageKey, history]);
+  useEffect(() => {
+    writePersistedFavorites(storageKey, favorites);
+  }, [storageKey, favorites]);
 
   const activeTab = useMemo(
     () => tabs.find((t) => t.id === activeId) ?? tabs[0],
@@ -169,12 +213,61 @@ export function useDbSqlTabs({
     }
   }, [storageKey]);
 
+  /** Pin the currently-active SQL as a favorite. The label
+   *  defaults to a truncated single-line preview of the SQL
+   *  when the caller doesn't supply one. Duplicate-SQL pins
+   *  bubble the existing entry to the top instead of inserting
+   *  a second copy — same shape the history ring uses. */
+  const addFavorite = useCallback(
+    (entry: { sql: string; name?: string }) => {
+      const trimmed = entry.sql.trim();
+      if (!trimmed) return;
+      const fallbackName =
+        entry.name?.trim() ||
+        trimmed.replace(/\s+/g, " ").slice(0, 60) || "query";
+      const id =
+        typeof crypto !== "undefined" && "randomUUID" in crypto
+          ? (crypto as Crypto).randomUUID()
+          : `fav-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+      setFavorites((prev) => {
+        const dup = prev.findIndex((f) => f.sql === trimmed);
+        if (dup >= 0) {
+          // Move to top with a fresh timestamp; preserve user's
+          // existing label.
+          const next = [...prev];
+          const [hit] = next.splice(dup, 1);
+          return [{ ...hit, savedAt: Date.now() }, ...next].slice(0, MAX_FAVORITES);
+        }
+        return [
+          { id, name: fallbackName, sql: trimmed, savedAt: Date.now() },
+          ...prev,
+        ].slice(0, MAX_FAVORITES);
+      });
+    },
+    [],
+  );
+
+  /** Remove a favorite by id. */
+  const removeFavorite = useCallback((id: string) => {
+    setFavorites((prev) => prev.filter((f) => f.id !== id));
+  }, []);
+
+  /** Load a favorite into the active tab — same UX as
+   *  `loadHistory`, just sourced from the pinned list. */
+  const loadFavorite = useCallback(
+    (entry: SqlFavoriteEntry) => {
+      replaceActiveSql(entry.sql, entry.name);
+    },
+    [replaceActiveSql],
+  );
+
   return {
     tabs,
     activeTabId: activeId,
     activeTab,
     sql,
     history,
+    favorites,
     setActiveTabId: setActiveId,
     setSql,
     addTab,
@@ -184,5 +277,8 @@ export function useDbSqlTabs({
     pushHistory,
     loadHistory,
     clearHistory,
+    addFavorite,
+    removeFavorite,
+    loadFavorite,
   };
 }

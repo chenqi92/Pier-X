@@ -26,6 +26,19 @@ export type SqlHistoryEntry = {
   write?: boolean;
 };
 
+/** One pinned/saved query. Persists across reloads in the same
+ *  per-engine localStorage bucket as `SqlHistoryEntry` so a user
+ *  who clears history doesn't lose their favorites. */
+export type SqlFavoriteEntry = {
+  /** Stable id — used as the React key + delete target. */
+  id: string;
+  /** User-supplied label; defaults to a truncated SQL preview. */
+  name: string;
+  sql: string;
+  /** Unix ms when the favorite was added. */
+  savedAt: number;
+};
+
 type Props = {
   /** Single-tab fallback name used when `tabs` isn't supplied. */
   tabName?: string;
@@ -55,6 +68,17 @@ type Props = {
   history?: SqlHistoryEntry[];
   /** Called when a history row is clicked — typically loads it into a tab. */
   onPickHistory?: (entry: SqlHistoryEntry) => void;
+
+  /** When provided, the Favorites button enables and renders the
+   *  side drawer with pinned queries. */
+  favorites?: SqlFavoriteEntry[];
+  /** Pin the currently-active SQL. The editor passes the live SQL
+   *  + active tab name so the panel can call `addFavorite` cleanly. */
+  onAddFavorite?: (sql: string, defaultName: string) => void;
+  /** Remove a pinned query by id. */
+  onRemoveFavorite?: (id: string) => void;
+  /** Load a pinned query into the active tab. */
+  onPickFavorite?: (entry: SqlFavoriteEntry) => void;
 
   /** Optional EXPLAIN handler — when omitted, button hidden. */
   onExplain?: () => void;
@@ -86,12 +110,22 @@ export default function DbSqlEditor({
   onCloseTab,
   history,
   onPickHistory,
+  favorites,
+  onAddFavorite,
+  onRemoveFavorite,
+  onPickFavorite,
   onExplain,
 }: Props) {
   const { t } = useI18n();
   const lines = useMemo(() => sql.split("\n"), [sql]);
   const tokens = useMemo(() => renderSqlTokens(sql), [sql]);
   const [histOpen, setHistOpen] = useState(false);
+  const [favOpen, setFavOpen] = useState(false);
+  const favoritesEnabled = !!favorites && !!onAddFavorite;
+  const activeTabName =
+    tabs?.find((tab) => tab.id === activeTabId)?.name ?? tabName ?? "query";
+  const isCurrentSqlPinned =
+    !!favorites && favorites.some((f) => f.sql.trim() === sql.trim() && sql.trim() !== "");
 
   const isMulti = !!tabs && tabs.length > 0;
 
@@ -155,9 +189,43 @@ export default function DbSqlEditor({
             <History size={11} />
           </button>
         )}
-        <button type="button" className="sq-mini" disabled title={t("Favorites — coming soon")}>
-          <Star size={11} />
-        </button>
+        {favoritesEnabled ? (
+          <>
+            <button
+              type="button"
+              className="sq-mini"
+              disabled={!sql.trim() || isCurrentSqlPinned}
+              onClick={() => onAddFavorite?.(sql, activeTabName)}
+              title={
+                isCurrentSqlPinned
+                  ? t("Already pinned")
+                  : t("Pin this query to favorites")
+              }
+            >
+              <Star
+                size={11}
+                fill={isCurrentSqlPinned ? "currentColor" : "none"}
+              />
+            </button>
+            {favorites && favorites.length > 0 && (
+              <button
+                type="button"
+                className={"sq-mini" + (favOpen ? " on" : "")}
+                onClick={() => setFavOpen((v) => !v)}
+                title={t("Favorites")}
+              >
+                <Star size={11} fill="currentColor" />
+                <span style={{ marginLeft: 2, fontSize: "var(--size-small)" }}>
+                  {favorites.length}
+                </span>
+              </button>
+            )}
+          </>
+        ) : (
+          <button type="button" className="sq-mini" disabled title={t("Favorites — coming soon")}>
+            <Star size={11} />
+          </button>
+        )}
         <button type="button" className="sq-mini" disabled title={t("Format SQL — coming soon")}>
           <Wand2 size={11} />
         </button>
@@ -234,6 +302,66 @@ export default function DbSqlEditor({
                     </div>
                   </div>
                 </button>
+              ))}
+            </div>
+          </div>
+        )}
+        {favOpen && favorites && (
+          <div className="sq-hist">
+            <div className="sq-hist-head">
+              <Star size={10} fill="currentColor" />
+              <span>{t("FAVORITES")}</span>
+              <span className="sq-spacer" />
+              <button
+                type="button"
+                className="mini-button mini-button--ghost"
+                onClick={() => setFavOpen(false)}
+                title={t("Close")}
+              >
+                <X size={10} />
+              </button>
+            </div>
+            <div className="sq-hist-list">
+              {favorites.length === 0 && (
+                <div
+                  className="sq-hist-row"
+                  style={{ color: "var(--muted)", padding: "var(--sp-3)" }}
+                >
+                  {t("No pinned queries yet.")}
+                </div>
+              )}
+              {favorites.map((f) => (
+                <div key={f.id} className="sq-hist-row" style={{ display: "flex", alignItems: "center" }}>
+                  <button
+                    type="button"
+                    className="sq-hist-row"
+                    style={{ flex: 1, border: 0, background: "transparent", padding: 0 }}
+                    onClick={() => onPickFavorite?.(f)}
+                  >
+                    <span className="sq-hist-ic">
+                      <Star size={9} fill="currentColor" />
+                    </span>
+                    <div className="sq-hist-body">
+                      <div className="sq-hist-sql"><b>{f.name}</b></div>
+                      <div className="sq-hist-meta">
+                        <span style={{ color: "var(--muted)" }}>{f.sql}</span>
+                      </div>
+                    </div>
+                  </button>
+                  {onRemoveFavorite && (
+                    <button
+                      type="button"
+                      className="mini-button mini-button--ghost"
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        onRemoveFavorite(f.id);
+                      }}
+                      title={t("Unpin")}
+                    >
+                      <X size={9} />
+                    </button>
+                  )}
+                </div>
               ))}
             </div>
           </div>

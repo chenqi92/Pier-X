@@ -1,4 +1,4 @@
-import { KeyRound } from "lucide-react";
+import { ArrowRight, KeyRound, Link2 } from "lucide-react";
 import type { CSSProperties, ReactNode } from "react";
 
 import { useI18n } from "../../i18n/useI18n";
@@ -20,15 +20,53 @@ export type DbStructureColumn = {
   extra?: string;
 };
 
+/** Index row rendered in the Structure tab's Indexes section.
+ *  `unique` controls the badge tint; `kind` shows up as the
+ *  small uppercase suffix (BTREE / HASH / GIN / …). */
+export type DbStructureIndex = {
+  name: string;
+  columns: string[];
+  unique: boolean;
+  kind: string;
+};
+
+/** Foreign-key row rendered in the Structure tab's Foreign keys
+ *  section. Composite keys pair `columns` with `refColumns` by
+ *  index — the renderer joins them with " · " for display. */
+export type DbStructureForeignKey = {
+  name: string;
+  columns: string[];
+  refSchema: string;
+  refTable: string;
+  refColumns: string[];
+  onUpdate: string;
+  onDelete: string;
+};
+
 type Props = {
   columns: DbStructureColumn[];
   /** Color the type cells with the engine accent (e.g. `var(--svc-mysql)`). */
   typeAccentVar: string;
-  /** Optional footer note explaining what's not yet shown (indexes / FKs). */
+  /** Optional Indexes section. Empty / undefined hides the
+   *  section entirely so older callers (or tables with no
+   *  indexes) don't show an empty header. */
+  indexes?: DbStructureIndex[];
+  /** Optional Foreign keys section. Same omit-when-empty
+   *  semantics as `indexes`. */
+  foreignKeys?: DbStructureForeignKey[];
+  /** Optional footer note. Use it for "this is what we still
+   *  don't show" callouts; the indexes / FK gaps are now
+   *  closed so the note typically goes blank. */
   footnote?: ReactNode;
 };
 
-export default function DbStructureView({ columns, typeAccentVar, footnote }: Props) {
+export default function DbStructureView({
+  columns,
+  typeAccentVar,
+  indexes,
+  foreignKeys,
+  footnote,
+}: Props) {
   const { t } = useI18n();
 
   if (columns.length === 0) {
@@ -111,6 +149,77 @@ export default function DbStructureView({ columns, typeAccentVar, footnote }: Pr
           </tbody>
         </table>
       </div>
+      {indexes && indexes.length > 0 && (
+        <div className="db2-structure__section">
+          <div className="db2-structure__head">
+            <span className="db2-structure__title">{t("Indexes")}</span>
+            <span className="db2-structure__count">{indexes.length}</span>
+          </div>
+          <div className="db2-structure__list">
+            {indexes.map((idx) => (
+              <div key={idx.name} className="db2-structure__row">
+                <span className="db2-structure__row-icon" aria-hidden>
+                  <KeyRound size={11} />
+                </span>
+                <span className="db2-structure__row-name">{idx.name}</span>
+                <span className="db2-structure__row-cols">
+                  {idx.columns.join(", ")}
+                </span>
+                <span className="db2-structure__row-meta">
+                  {idx.unique ? t("UNIQUE") : t("INDEX")}
+                  {idx.kind ? ` · ${idx.kind.toUpperCase()}` : ""}
+                </span>
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
+
+      {foreignKeys && foreignKeys.length > 0 && (
+        <div className="db2-structure__section">
+          <div className="db2-structure__head">
+            <span className="db2-structure__title">{t("Foreign keys")}</span>
+            <span className="db2-structure__count">{foreignKeys.length}</span>
+          </div>
+          <div className="db2-structure__list">
+            {foreignKeys.map((fk) => {
+              const target = fk.refSchema
+                ? `${fk.refSchema}.${fk.refTable}`
+                : fk.refTable;
+              const cascade =
+                fk.onUpdate && fk.onDelete
+                  ? t("ON UPDATE {u} · ON DELETE {d}", {
+                      u: fk.onUpdate,
+                      d: fk.onDelete,
+                    })
+                  : "";
+              return (
+                <div key={fk.name} className="db2-structure__row">
+                  <span className="db2-structure__row-icon" aria-hidden>
+                    <Link2 size={11} />
+                  </span>
+                  <span className="db2-structure__row-name">{fk.name}</span>
+                  <span className="db2-structure__row-cols">
+                    {fk.columns.join(", ")}
+                    <ArrowRight size={9} className="db2-structure__row-arrow" />
+                    <span className="db2-structure__row-target">{target}</span>
+                    {fk.refColumns.length > 0 && (
+                      <>
+                        {" · "}
+                        {fk.refColumns.join(", ")}
+                      </>
+                    )}
+                  </span>
+                  {cascade && (
+                    <span className="db2-structure__row-meta">{cascade}</span>
+                  )}
+                </div>
+              );
+            })}
+          </div>
+        </div>
+      )}
+
       {footnote && <div className="db2-structure__footnote">{footnote}</div>}
     </div>
   );

@@ -373,12 +373,42 @@ export type MysqlColumnView = {
   extra: string;
 };
 
+/** Index summary for the Structure tab. `unique` distinguishes
+ *  unique / primary indexes from regular ones; `kind` is the
+ *  engine-specific access method (BTREE / HASH / FULLTEXT for
+ *  MySQL, btree / hash / gin / gist for PG). */
+export type DbIndexView = {
+  name: string;
+  columns: string[];
+  unique: boolean;
+  kind: string;
+};
+
+/** Foreign-key summary for the Structure tab. Composite FKs come
+ *  back with `columns` and `refColumns` paired by index. Action
+ *  strings are normalised to MySQL spelling for both engines
+ *  (`NO ACTION` / `RESTRICT` / `CASCADE` / `SET NULL` /
+ *  `SET DEFAULT`). */
+export type DbForeignKeyView = {
+  name: string;
+  columns: string[];
+  refSchema: string;
+  refTable: string;
+  refColumns: string[];
+  onUpdate: string;
+  onDelete: string;
+};
+
 export type MysqlBrowserState = {
   databaseName: string;
   databases: string[];
   tableName: string;
   tables: string[];
   columns: MysqlColumnView[];
+  /** Indexes on the active table; empty when no table selected. */
+  indexes: DbIndexView[];
+  /** Outgoing foreign keys on the active table. */
+  foreignKeys: DbForeignKeyView[];
   preview: DataPreview | null;
 };
 
@@ -447,6 +477,10 @@ export type PostgresBrowserState = {
   tableName: string;
   tables: string[];
   columns: PostgresColumnView[];
+  /** Indexes on the active table; empty when no table selected. */
+  indexes: DbIndexView[];
+  /** Outgoing foreign keys on the active table. */
+  foreignKeys: DbForeignKeyView[];
   preview: DataPreview | null;
 };
 

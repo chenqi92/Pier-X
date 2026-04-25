@@ -371,6 +371,32 @@ struct MysqlColumnView {
     extra: String,
 }
 
+/// One index summary surfaced in the Structure tab — same shape
+/// as `pier_core::services::mysql::IndexSummary` but in
+/// camelCase for direct JSON consumption.
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct MysqlIndexView {
+    name: String,
+    columns: Vec<String>,
+    unique: bool,
+    kind: String,
+}
+
+/// One foreign-key summary surfaced in the Structure tab —
+/// same shape as `pier_core::services::mysql::ForeignKey`.
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct MysqlForeignKeyView {
+    name: String,
+    columns: Vec<String>,
+    ref_schema: String,
+    ref_table: String,
+    ref_columns: Vec<String>,
+    on_update: String,
+    on_delete: String,
+}
+
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
 struct MysqlBrowserState {
@@ -379,6 +405,13 @@ struct MysqlBrowserState {
     table_name: String,
     tables: Vec<String>,
     columns: Vec<MysqlColumnView>,
+    /// All indexes on the active table. Empty when no table is
+    /// selected, or when `information_schema.statistics` isn't
+    /// readable for the connected user (failsoft).
+    indexes: Vec<MysqlIndexView>,
+    /// All outgoing foreign keys on the active table. Empty when
+    /// no table is selected.
+    foreign_keys: Vec<MysqlForeignKeyView>,
     preview: Option<DataPreview>,
 }
 
@@ -446,6 +479,30 @@ struct PostgresColumnView {
     extra: String,
 }
 
+/// One index summary for the PG Structure tab. Same shape as
+/// the MySQL view; PG `kind` is the access-method name (`btree`,
+/// `hash`, `gin`, …).
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct PostgresIndexView {
+    name: String,
+    columns: Vec<String>,
+    unique: bool,
+    kind: String,
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct PostgresForeignKeyView {
+    name: String,
+    columns: Vec<String>,
+    ref_schema: String,
+    ref_table: String,
+    ref_columns: Vec<String>,
+    on_update: String,
+    on_delete: String,
+}
+
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
 struct PostgresBrowserState {
@@ -455,6 +512,12 @@ struct PostgresBrowserState {
     table_name: String,
     tables: Vec<String>,
     columns: Vec<PostgresColumnView>,
+    /// All indexes on the active table. Empty when no table is
+    /// selected; failsoft to empty when `pg_index` isn't
+    /// readable for the connected role.
+    indexes: Vec<PostgresIndexView>,
+    /// All outgoing foreign keys on the active table.
+    foreign_keys: Vec<PostgresForeignKeyView>,
     preview: Option<DataPreview>,
 }
 
@@ -3255,6 +3318,40 @@ fn mysql_browse(
             .ok()
             .map(map_mysql_preview)
     };
+    // Index + FK lookups are scoped to the active table. Failsoft
+    // to empty arrays — a permission-restricted user (or an old
+    // server without a populated `referential_constraints`) will
+    // still see the rest of the panel without an error.
+    let (indexes, foreign_keys) = if database_name.is_empty() || table_name.is_empty() {
+        (Vec::new(), Vec::new())
+    } else {
+        let ix = client
+            .list_indexes_blocking(&database_name, &table_name)
+            .unwrap_or_default()
+            .into_iter()
+            .map(|i| MysqlIndexView {
+                name: i.name,
+                columns: i.columns,
+                unique: i.unique,
+                kind: i.kind,
+            })
+            .collect();
+        let fk = client
+            .list_foreign_keys_blocking(&database_name, &table_name)
+            .unwrap_or_default()
+            .into_iter()
+            .map(|f| MysqlForeignKeyView {
+                name: f.name,
+                columns: f.columns,
+                ref_schema: f.ref_schema,
+                ref_table: f.ref_table,
+                ref_columns: f.ref_columns,
+                on_update: f.on_update,
+                on_delete: f.on_delete,
+            })
+            .collect();
+        (ix, fk)
+    };
 
     Ok(MysqlBrowserState {
         database_name,
@@ -3262,6 +3359,8 @@ fn mysql_browse(
         table_name,
         tables,
         columns,
+        indexes,
+        foreign_keys,
         preview,
     })
 }
@@ -3733,6 +3832,38 @@ fn postgres_browse(
             .ok()
             .map(map_postgres_preview)
     };
+    // Index + FK lookups for the active table — failsoft to empty
+    // when the catalog tables aren't readable for the role.
+    let (indexes, foreign_keys) = if database_name.is_empty() || table_name.is_empty() {
+        (Vec::new(), Vec::new())
+    } else {
+        let ix = client
+            .list_indexes_blocking(&schema_name, &table_name)
+            .unwrap_or_default()
+            .into_iter()
+            .map(|i| PostgresIndexView {
+                name: i.name,
+                columns: i.columns,
+                unique: i.unique,
+                kind: i.kind,
+            })
+            .collect();
+        let fk = client
+            .list_foreign_keys_blocking(&schema_name, &table_name)
+            .unwrap_or_default()
+            .into_iter()
+            .map(|f| PostgresForeignKeyView {
+                name: f.name,
+                columns: f.columns,
+                ref_schema: f.ref_schema,
+                ref_table: f.ref_table,
+                ref_columns: f.ref_columns,
+                on_update: f.on_update,
+                on_delete: f.on_delete,
+            })
+            .collect();
+        (ix, fk)
+    };
 
     Ok(PostgresBrowserState {
         database_name,
@@ -3741,6 +3872,8 @@ fn postgres_browse(
         table_name,
         tables,
         columns,
+        indexes,
+        foreign_keys,
         preview,
     })
 }

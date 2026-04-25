@@ -97,6 +97,33 @@ pub struct ColumnInfo {
     pub extra: String,
 }
 
+/// One index defined on a table — same shape as
+/// [`super::mysql::IndexSummary`]. PG's `kind` comes from the
+/// access-method name (`btree`, `hash`, `gin`, `gist`, …).
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct IndexSummary {
+    pub name: String,
+    pub columns: Vec<String>,
+    pub unique: bool,
+    pub kind: String,
+}
+
+/// One foreign-key constraint — same shape as
+/// [`super::mysql::ForeignKey`]. PG stores referential actions
+/// as single chars; we expand to the same `NO ACTION` /
+/// `RESTRICT` / `CASCADE` / `SET NULL` / `SET DEFAULT` spelling
+/// MySQL uses so the panel can render both engines uniformly.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ForeignKey {
+    pub name: String,
+    pub columns: Vec<String>,
+    pub ref_schema: String,
+    pub ref_table: String,
+    pub ref_columns: Vec<String>,
+    pub on_update: String,
+    pub on_delete: String,
+}
+
 /// One row of query results. Same type as MySQL's.
 pub type ResultRow = Vec<Option<String>>;
 
@@ -333,6 +360,186 @@ impl PostgresClient {
     /// Blocking wrapper for [`Self::list_columns`].
     pub fn list_columns_blocking(&self, schema: &str, table: &str) -> Result<Vec<ColumnInfo>> {
         crate::ssh::runtime::shared().block_on(self.list_columns(schema, table))
+    }
+
+    /// All indexes on `<schema>.<table>`. Walks `pg_index` joined
+    /// with `pg_class` (index + table relations), `pg_namespace`
+    /// (schema), `pg_attribute` (column names), and `pg_am` for
+    /// the access method. One row per (index, column); we group
+    /// by index name client-side, the same way the MySQL helper
+    /// does.
+    pub async fn list_indexes(&self, schema: &str, table: &str) -> Result<Vec<IndexSummary>> {
+        let schema = if schema.is_empty() { "public" } else { schema };
+        if !super::mysql::is_safe_ident(schema) {
+            return Err(PostgresError::InvalidConfig(format!(
+                "refusing unsafe schema identifier {schema:?}"
+            )));
+        }
+        if !super::mysql::is_safe_ident(table) {
+            return Err(PostgresError::InvalidConfig(format!(
+                "refusing unsafe table identifier {table:?}"
+            )));
+        }
+        // The PG catalog stores index columns inside `indkey`
+        // (an int2vector). `unnest(indkey)` with `WITH ORDINALITY`
+        // gives us per-column rows preserving order.
+        let rows = self
+            .client
+            .query(
+                "SELECT i.relname AS index_name,
+                        a.attname AS column_name,
+                        ix.indisunique AS is_unique,
+                        am.amname AS kind,
+                        ord
+                   FROM pg_index ix
+                   JOIN pg_class i ON i.oid = ix.indexrelid
+                   JOIN pg_class t ON t.oid = ix.indrelid
+                   JOIN pg_namespace n ON n.oid = t.relnamespace
+                   JOIN pg_am am ON am.oid = i.relam,
+                        unnest(ix.indkey) WITH ORDINALITY AS u(attnum, ord)
+                   JOIN pg_attribute a ON a.attrelid = t.oid AND a.attnum = u.attnum
+                  WHERE n.nspname = $1 AND t.relname = $2
+                  ORDER BY i.relname, ord",
+                &[&schema, &table],
+            )
+            .await?;
+        let mut out: Vec<IndexSummary> = Vec::new();
+        for r in rows {
+            let name: String = r.get(0);
+            let column: String = r.get(1);
+            let unique: bool = r.get(2);
+            let kind: String = r.get(3);
+            match out.last_mut() {
+                Some(last) if last.name == name => {
+                    last.columns.push(column);
+                }
+                _ => {
+                    out.push(IndexSummary {
+                        name,
+                        columns: vec![column],
+                        unique,
+                        kind,
+                    });
+                }
+            }
+        }
+        Ok(out)
+    }
+
+    /// Blocking wrapper for [`Self::list_indexes`].
+    pub fn list_indexes_blocking(
+        &self,
+        schema: &str,
+        table: &str,
+    ) -> Result<Vec<IndexSummary>> {
+        crate::ssh::runtime::shared().block_on(self.list_indexes(schema, table))
+    }
+
+    /// All foreign keys outgoing from `<schema>.<table>`. PG
+    /// stores FKs in `pg_constraint` with `contype = 'f'`; column
+    /// indexes live in `conkey` (local) and `confkey` (foreign),
+    /// referenced relation in `confrelid`. Action chars come
+    /// straight from the catalog; [`map_action`] expands them to
+    /// the MySQL-compatible spelling.
+    pub async fn list_foreign_keys(
+        &self,
+        schema: &str,
+        table: &str,
+    ) -> Result<Vec<ForeignKey>> {
+        let schema = if schema.is_empty() { "public" } else { schema };
+        if !super::mysql::is_safe_ident(schema) {
+            return Err(PostgresError::InvalidConfig(format!(
+                "refusing unsafe schema identifier {schema:?}"
+            )));
+        }
+        if !super::mysql::is_safe_ident(table) {
+            return Err(PostgresError::InvalidConfig(format!(
+                "refusing unsafe table identifier {table:?}"
+            )));
+        }
+        let rows = self
+            .client
+            .query(
+                "SELECT con.conname AS name,
+                        att.attname AS column_name,
+                        fns.nspname AS ref_schema,
+                        fcl.relname AS ref_table,
+                        fatt.attname AS ref_column,
+                        con.confupdtype AS upd,
+                        con.confdeltype AS del,
+                        ord
+                   FROM pg_constraint con
+                   JOIN pg_class cl ON cl.oid = con.conrelid
+                   JOIN pg_namespace ns ON ns.oid = cl.relnamespace
+                   JOIN pg_class fcl ON fcl.oid = con.confrelid
+                   JOIN pg_namespace fns ON fns.oid = fcl.relnamespace,
+                        unnest(con.conkey, con.confkey) WITH ORDINALITY AS u(localcol, refcol, ord)
+                   JOIN pg_attribute att ON att.attrelid = cl.oid AND att.attnum = u.localcol
+                   JOIN pg_attribute fatt ON fatt.attrelid = fcl.oid AND fatt.attnum = u.refcol
+                  WHERE ns.nspname = $1 AND cl.relname = $2 AND con.contype = 'f'
+                  ORDER BY con.conname, ord",
+                &[&schema, &table],
+            )
+            .await?;
+        let mut out: Vec<ForeignKey> = Vec::new();
+        for r in rows {
+            let name: String = r.get(0);
+            let column: String = r.get(1);
+            let ref_schema: String = r.get(2);
+            let ref_table: String = r.get(3);
+            let ref_column: String = r.get(4);
+            // tokio_postgres returns single-char `"char"` columns
+            // as `i8` — read via try_get and decode below.
+            let upd_byte: i8 = r.try_get(5).unwrap_or(b'a' as i8);
+            let del_byte: i8 = r.try_get(6).unwrap_or(b'a' as i8);
+            let on_update = map_action(upd_byte as u8 as char);
+            let on_delete = map_action(del_byte as u8 as char);
+            match out.last_mut() {
+                Some(last) if last.name == name => {
+                    last.columns.push(column);
+                    last.ref_columns.push(ref_column);
+                }
+                _ => {
+                    out.push(ForeignKey {
+                        name,
+                        columns: vec![column],
+                        ref_schema,
+                        ref_table,
+                        ref_columns: vec![ref_column],
+                        on_update,
+                        on_delete,
+                    });
+                }
+            }
+        }
+        Ok(out)
+    }
+
+    /// Blocking wrapper for [`Self::list_foreign_keys`].
+    pub fn list_foreign_keys_blocking(
+        &self,
+        schema: &str,
+        table: &str,
+    ) -> Result<Vec<ForeignKey>> {
+        crate::ssh::runtime::shared().block_on(self.list_foreign_keys(schema, table))
+    }
+}
+
+/// Expand the single-char `confupdtype` / `confdeltype` field
+/// from `pg_constraint` to the same spelling MySQL emits via
+/// `referential_constraints`. Lets the panel render both engines
+/// with one set of strings.
+fn map_action(c: char) -> String {
+    match c {
+        'a' => "NO ACTION".to_string(),
+        'r' => "RESTRICT".to_string(),
+        'c' => "CASCADE".to_string(),
+        'n' => "SET NULL".to_string(),
+        'd' => "SET DEFAULT".to_string(),
+        // Anything else (catalog corruption, future PG version
+        // adding a new code) stays empty so the panel renders a
+        // dash — better than guessing.
+        _ => String::new(),
     }
 }
 

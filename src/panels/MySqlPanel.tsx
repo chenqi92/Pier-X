@@ -502,7 +502,8 @@ function MySqlPanelBody({ tab }: Props) {
         keyHint: c.key && c.key !== "PRI" ? c.key : undefined,
       }))}
       typeAccentVar="var(--svc-mysql)"
-      footnote={t("Indexes and foreign keys will appear here once the backend exposes them — see docs/BACKEND-GAPS.md.")}
+      indexes={state.indexes}
+      foreignKeys={state.foreignKeys}
     />
   );
 

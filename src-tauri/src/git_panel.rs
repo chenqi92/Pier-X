@@ -616,6 +616,52 @@ fn create_sequence_editor_script(todo_path: &Path) -> Result<PathBuf, String> {
     }
 }
 
+/// Sister of `create_sequence_editor_script` for the GIT_EDITOR side.
+/// Writes a shell/cmd shim that copies the supplied static `message`
+/// into whichever file path git invokes the editor with — used by
+/// `git_reword_unpushed_commit` so the rebase pauses for `reword` are
+/// resolved non-interactively with a known message.
+fn create_message_editor_script(message: &str) -> Result<PathBuf, String> {
+    let msg_path = unique_temp_path("pierx-rebase-msg", "txt");
+    fs::write(&msg_path, message)
+        .map_err(|error| format!("Failed to write {}: {}", msg_path.display(), error))?;
+
+    #[cfg(windows)]
+    {
+        let script_path = unique_temp_path("pierx-message-editor", "cmd");
+        let content = format!(
+            "@echo off\r\ncopy /Y \"{}\" \"%~1\" >NUL\r\n",
+            msg_path.display()
+        );
+        fs::write(&script_path, content)
+            .map_err(|error| format!("Failed to write {}: {}", script_path.display(), error))?;
+        Ok(script_path)
+    }
+
+    #[cfg(not(windows))]
+    {
+        let script_path = unique_temp_path("pierx-message-editor", "sh");
+        let content = format!("#!/bin/sh\ncat \"{}\" > \"$1\"\n", msg_path.display());
+        fs::write(&script_path, content)
+            .map_err(|error| format!("Failed to write {}: {}", script_path.display(), error))?;
+        #[cfg(unix)]
+        {
+            let mut permissions = fs::metadata(&script_path)
+                .map_err(|error| format!("Failed to stat {}: {}", script_path.display(), error))?
+                .permissions();
+            permissions.set_mode(0o700);
+            fs::set_permissions(&script_path, permissions).map_err(|error| {
+                format!(
+                    "Failed to set permissions on {}: {}",
+                    script_path.display(),
+                    error
+                )
+            })?;
+        }
+        Ok(script_path)
+    }
+}
+
 fn format_blame_date(timestamp: i64) -> String {
     if timestamp <= 0 {
         return String::new();
@@ -1526,6 +1572,120 @@ pub fn git_amend_head_commit_message(
         return Err(String::from("Only the current HEAD commit can be amended."));
     }
     run_git_at(&repo_path, &["commit", "--amend", "-m", new_message])
+}
+
+/// Reword any unpushed commit. For HEAD this collapses to
+/// `git commit --amend`; for older unpushed commits we drive an
+/// interactive rebase with a pre-baked todo list (`reword <target>` +
+/// `pick <each child>`) and a GIT_EDITOR shim that injects the new
+/// message. Caller is responsible for ensuring the working tree is
+/// clean and that the commit really is local-only (rewriting pushed
+/// history is destructive).
+#[tauri::command]
+pub fn git_reword_unpushed_commit(
+    path: Option<String>,
+    hash: String,
+    message: String,
+) -> Result<String, String> {
+    let repo_path = repo_root(path)?;
+    let target_hash = hash.trim().to_string();
+    let new_message = message.trim().to_string();
+    if target_hash.is_empty() || new_message.is_empty() {
+        return Err(String::from("commit hash and message are required"));
+    }
+
+    let head_hash = run_git_at(&repo_path, &["rev-parse", "HEAD"])?
+        .trim()
+        .to_string();
+    if target_hash == head_hash {
+        return run_git_at(&repo_path, &["commit", "--amend", "-m", &new_message]);
+    }
+
+    // Enumerate commits from target (oldest) to HEAD (newest).
+    let log = run_git_at(
+        &repo_path,
+        &[
+            "rev-list",
+            "--reverse",
+            &format!("{target_hash}^..HEAD"),
+        ],
+    )?;
+    let hashes: Vec<String> = log
+        .lines()
+        .map(str::trim)
+        .filter(|line| !line.is_empty())
+        .map(String::from)
+        .collect();
+    if hashes.is_empty() {
+        return Err(format!(
+            "commit {target_hash} is not reachable from HEAD"
+        ));
+    }
+    if hashes[0] != target_hash {
+        // The list comes back oldest-first, so the first entry must be
+        // the reword target. If it isn't, abort rather than risk
+        // rewording the wrong commit.
+        return Err(String::from(
+            "could not align rebase plan with reword target",
+        ));
+    }
+
+    let mut todo_text = String::new();
+    for (index, full_hash) in hashes.iter().enumerate() {
+        let action = if index == 0 { "reword" } else { "pick" };
+        let subject = run_git_at(&repo_path, &["log", "-1", "--format=%s", full_hash])
+            .unwrap_or_default()
+            .trim()
+            .replace('\n', " ");
+        todo_text.push_str(&format!("{action} {full_hash} {subject}\n"));
+    }
+
+    let todo_path = unique_temp_path("pierx-reword-todo", "txt");
+    fs::write(&todo_path, todo_text)
+        .map_err(|error| format!("Failed to write {}: {}", todo_path.display(), error))?;
+    let seq_script = create_sequence_editor_script(&todo_path)?;
+    let msg_script = create_message_editor_script(&new_message)?;
+
+    // --autostash so a dirty worktree doesn't abort the rebase: git
+    // stashes the dirty changes before replaying commits and pops the
+    // stash back after. Without this flag, users with in-progress
+    // edits silently lose the reword to a "cannot rebase: you have
+    // unstaged changes" error that's easy to miss in the banner.
+    let outcome = run_git_at_with_env(
+        &repo_path,
+        &[
+            "rebase",
+            "-i",
+            "--autostash",
+            &format!("{target_hash}^"),
+        ],
+        &[
+            ("GIT_SEQUENCE_EDITOR", seq_script.display().to_string()),
+            ("GIT_EDITOR", msg_script.display().to_string()),
+        ],
+    )?;
+
+    // Verify the reword actually landed: the new message at the
+    // (oldest unpushed) position should match what the caller asked
+    // for. If git silently kept the original (e.g. the editor shim
+    // didn't fire), surface that as an error so the panel doesn't
+    // claim success when the message is unchanged.
+    let final_msg = run_git_at(
+        &repo_path,
+        &[
+            "log",
+            "-1",
+            "--format=%B",
+            &format!("HEAD~{}", hashes.len() - 1),
+        ],
+    )
+    .unwrap_or_default();
+    if final_msg.trim() != new_message.trim() {
+        return Err(String::from(
+            "rebase finished but the commit message did not change — verify there is no editor override and try again",
+        ));
+    }
+    Ok(outcome)
 }
 
 #[tauri::command]

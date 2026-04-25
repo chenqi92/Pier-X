@@ -239,12 +239,202 @@ impl SshSession {
                     return Err(SshError::AuthRejected { tried });
                 }
             }
+            AuthMethod::AutoChain {
+                explicit_key_path,
+                password,
+                key_passphrase,
+            } => {
+                // Same one-transport-many-attempts shape as Auto, but
+                // adds explicit key / password / keyboard-interactive
+                // legs after the agent + default-keys probe. Intent:
+                // when the watcher saw a plain `ssh user@host` it
+                // can't tell upfront whether the server wants
+                // pubkey, password, or PAM — try every method we
+                // have material for, in OpenSSH-like preference, on
+                // a single SSH session.
+                let mut any_success = false;
+
+                // 1. Agent — wins immediately on the common laptop
+                //    setup (ssh-agent / Pageant holding loaded keys).
+                match self.try_agent_auth(&config.user).await {
+                    Ok(()) => {
+                        tried.push("agent".to_string());
+                        any_success = true;
+                    }
+                    Err(e) => {
+                        tried.push(format!("agent ({e})"));
+                    }
+                }
+
+                // 2. Explicit `-i <path>` from the terminal, if any.
+                //    Try with the captured passphrase first (if we
+                //    have one); ssh's load_secret_key fails fast on
+                //    a wrong passphrase, so the cost is bounded.
+                if !any_success {
+                    if let Some(path) = explicit_key_path
+                        .as_deref()
+                        .filter(|p| !p.is_empty() && std::path::Path::new(p).is_file())
+                    {
+                        tried.push(format!("publickey ({path})"));
+                        match self
+                            .try_publickey_auth_raw(
+                                &config.user,
+                                path,
+                                key_passphrase.as_deref(),
+                            )
+                            .await
+                        {
+                            Ok(()) => {
+                                any_success = true;
+                            }
+                            Err(e) => {
+                                log::debug!("autochain explicit key {path} rejected: {e}");
+                            }
+                        }
+                    }
+                }
+
+                // 3. Conventional default identity files — same set
+                //    OpenSSH probes, in the same order. Skip the one
+                //    we already tried as `explicit_key_path`. The
+                //    passphrase is fed to every attempt; an
+                //    unencrypted key whose loader rejects an
+                //    unsolicited passphrase just falls through to
+                //    the next chain leg. We tolerate the false-
+                //    negative because the alternative (try-without
+                //    then try-with) doubles the work for the common
+                //    case where the user's keys all share one
+                //    passphrase or no passphrase.
+                if !any_success {
+                    let already_tried = explicit_key_path.as_deref().unwrap_or("");
+                    for key_path in default_identity_paths() {
+                        if !std::path::Path::new(&key_path).is_file() {
+                            continue;
+                        }
+                        if key_path == already_tried {
+                            continue;
+                        }
+                        tried.push(format!("publickey ({key_path})"));
+                        match self
+                            .try_publickey_auth_raw(
+                                &config.user,
+                                &key_path,
+                                key_passphrase.as_deref(),
+                            )
+                            .await
+                        {
+                            Ok(()) => {
+                                any_success = true;
+                                break;
+                            }
+                            Err(e) => {
+                                log::debug!("autochain default key {key_path} rejected: {e}");
+                            }
+                        }
+                    }
+                }
+
+                // 4. Password — captured from the OpenSSH prompt the
+                //    user just answered successfully in their `ssh`
+                //    child. Servers configured for plain "password"
+                //    auth land here.
+                if !any_success {
+                    if let Some(pw) = password.as_deref().filter(|s| !s.is_empty()) {
+                        tried.push("password".to_string());
+                        match self.try_password_auth(&config.user, pw).await {
+                            Ok(()) => {
+                                any_success = true;
+                            }
+                            Err(e) => {
+                                log::debug!("autochain password rejected: {e}");
+                            }
+                        }
+                    }
+                }
+
+                // 5. Keyboard-interactive — most PAM-backed servers
+                //    (sshd's default on many distros) advertise this
+                //    method instead of plain "password". Single-prompt
+                //    challenges accept the captured password as the
+                //    response; multi-prompt MFA stacks won't survive
+                //    this leg, but neither would any of the others,
+                //    and chaining costs nothing on the same transport.
+                if !any_success {
+                    if let Some(pw) = password.as_deref().filter(|s| !s.is_empty()) {
+                        tried.push("keyboard-interactive".to_string());
+                        match self
+                            .try_keyboard_interactive_with_password(&config.user, pw)
+                            .await
+                        {
+                            Ok(()) => {
+                                any_success = true;
+                            }
+                            Err(e) => {
+                                log::debug!("autochain keyboard-interactive rejected: {e}");
+                            }
+                        }
+                    }
+                }
+
+                if !any_success {
+                    return Err(SshError::AuthRejected { tried });
+                }
+            }
         }
 
         // We only reach here if a try_password_auth call returned
         // Ok(()) without short-circuiting via the early `return`
         // inside the helper — i.e. authentication succeeded.
         Ok(())
+    }
+
+    /// Attempt keyboard-interactive auth, answering every prompt the
+    /// server sends with `password`. PAM-backed sshd configurations
+    /// typically advertise this method (rather than plain "password")
+    /// for password challenges, and a single-prompt PAM stack is
+    /// indistinguishable from an interactive password from the user's
+    /// perspective — so we hand back the same string they just typed
+    /// at the OpenSSH prompt.
+    ///
+    /// Bounded loop: russh allows the server to send any number of
+    /// `InfoRequest` rounds; we cap at 4 so a misconfigured /
+    /// adversarial server can't pin us in an infinite ping-pong.
+    async fn try_keyboard_interactive_with_password(
+        &mut self,
+        user: &str,
+        password: &str,
+    ) -> Result<()> {
+        use russh::client::KeyboardInteractiveAuthResponse;
+
+        // SAFETY: same invariant as the other `try_*_auth` helpers —
+        // during connect() we are the only Arc holder.
+        let handle = Arc::get_mut(&mut self.handle).expect("unique handle during auth");
+
+        let mut response = handle
+            .authenticate_keyboard_interactive_start(user, None::<String>)
+            .await?;
+
+        for _ in 0..4 {
+            match response {
+                KeyboardInteractiveAuthResponse::Success => return Ok(()),
+                KeyboardInteractiveAuthResponse::Failure { .. } => {
+                    return Err(SshError::AuthRejected {
+                        tried: vec!["keyboard-interactive".to_string()],
+                    });
+                }
+                KeyboardInteractiveAuthResponse::InfoRequest { prompts, .. } => {
+                    let answers: Vec<String> =
+                        prompts.iter().map(|_| password.to_string()).collect();
+                    response = handle
+                        .authenticate_keyboard_interactive_respond(answers)
+                        .await?;
+                }
+            }
+        }
+
+        Err(SshError::AuthRejected {
+            tried: vec!["keyboard-interactive (prompt loop exceeded)".to_string()],
+        })
     }
 
     /// Shared body of both password-based auth methods. Tries the
@@ -364,12 +554,10 @@ impl SshSession {
         private_key_path: &str,
         passphrase_credential_id: Option<&str>,
     ) -> Result<()> {
-        use std::sync::Arc as StdArc;
-
-        // Resolve the passphrase, if any. A missing keychain
-        // entry is treated as a fatal config error rather than
-        // "no passphrase" — if the user told us to look one up
-        // they meant it, and silently falling back to "no
+        // Resolve the passphrase from the keychain, if asked. A
+        // missing keychain entry is treated as a fatal config error
+        // rather than "no passphrase" — if the user told us to look
+        // one up they meant it, and silently falling back to "no
         // passphrase" would surface as a confusing decode error.
         let passphrase: Option<String> = match passphrase_credential_id {
             None => None,
@@ -387,13 +575,32 @@ impl SshSession {
                 }
             },
         };
+        self.try_publickey_auth_raw(user, private_key_path, passphrase.as_deref())
+            .await
+    }
 
-        let key =
-            russh::keys::load_secret_key(private_key_path, passphrase.as_deref()).map_err(|e| {
-                SshError::InvalidConfig(format!(
-                    "failed to load private key {private_key_path}: {e}",
-                ))
-            })?;
+    /// Like [`Self::try_publickey_auth`] but takes the passphrase as
+    /// a literal string instead of a keychain credential ID. Used by
+    /// AutoChain to feed in the passphrase the user just typed at
+    /// the terminal-side ssh prompt — that one isn't in the
+    /// keychain, it's in our process-level credential cache.
+    ///
+    /// `passphrase=None` means "key isn't encrypted" (load_secret_key
+    /// will succeed if so, fail otherwise — same as omitting `-N`
+    /// to ssh-keygen).
+    async fn try_publickey_auth_raw(
+        &mut self,
+        user: &str,
+        private_key_path: &str,
+        passphrase: Option<&str>,
+    ) -> Result<()> {
+        use std::sync::Arc as StdArc;
+
+        let key = russh::keys::load_secret_key(private_key_path, passphrase).map_err(|e| {
+            SshError::InvalidConfig(format!(
+                "failed to load private key {private_key_path}: {e}",
+            ))
+        })?;
 
         let key_with_hash = russh::keys::PrivateKeyWithHashAlg::new(StdArc::new(key), None);
 

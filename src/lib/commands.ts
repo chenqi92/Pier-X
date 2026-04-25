@@ -34,6 +34,7 @@ import type {
   GitStashEntry,
   GitSubmoduleView,
   GitTagView,
+  GitUnpushedCommit,
   MysqlBrowserState,
   PostgresBrowserState,
   QueryExecutionResult,
@@ -245,6 +246,15 @@ export const gitStashPop = (path: string | null, index: string) =>
 export const gitStashDrop = (path: string | null, index: string) =>
   invoke<string>("git_stash_drop", { path, index });
 
+export const gitStashReword = (path: string | null, index: string, message: string) =>
+  invoke<string>("git_stash_reword", { path, index, message });
+
+export const gitUnpushedCommits = (path: string | null) =>
+  invoke<GitUnpushedCommit[]>("git_unpushed_commits", { path });
+
+export const gitRewordUnpushedCommit = (path: string | null, hash: string, message: string) =>
+  invoke<string>("git_reword_unpushed_commit", { path, hash, message });
+
 export const gitTagsList = (path: string | null) =>
   invoke<GitTagView[]>("git_tags_list", { path });
 
@@ -430,6 +440,57 @@ export const sshGroupRename = (from: string, to: string | null) =>
 export const sshConnectionResolvePassword = (index: number) =>
   invoke<string>("ssh_connection_resolve_password", { index });
 
+// ── Process-level SSH credential cache (Stage 3) ──────────────────
+//
+// Mirror credentials the terminal-side ssh just successfully used
+// into a process-wide cache so right-side panels (firewall, monitor,
+// SFTP, Docker, DB tunnels) can reach the same target without
+// re-prompting. Empty values are no-ops on the backend.
+
+export const sshCredCachePutPassword = (params: {
+  host: string;
+  port: number;
+  user: string;
+  password: string;
+}) => invoke<void>("ssh_cred_cache_put_password", params);
+
+export const sshCredCachePutPassphrase = (params: {
+  host: string;
+  port: number;
+  user: string;
+  passphrase: string;
+}) => invoke<void>("ssh_cred_cache_put_passphrase", params);
+
+export const sshCredCacheForget = (params: {
+  host: string;
+  port: number;
+  user: string;
+}) => invoke<void>("ssh_cred_cache_forget", params);
+
+// ── SSH ControlMaster (terminal-side mux) ─────────────────────────
+
+export type SshMuxSettings = {
+  enabled: boolean;
+  persistSeconds: number;
+};
+
+export const sshMuxGetSettings = () =>
+  invoke<SshMuxSettings>("ssh_mux_get_settings");
+
+export const sshMuxSetSettings = (params: {
+  enabled: boolean;
+  persistSeconds: number;
+}) => invoke<void>("ssh_mux_set_settings", params);
+
+export const sshMuxForgetTarget = (params: {
+  host: string;
+  port: number;
+  user: string;
+}) => invoke<void>("ssh_mux_forget_target", params);
+
+export const sshMuxShutdownAll = () =>
+  invoke<number>("ssh_mux_shutdown_all");
+
 export const sshTunnelOpen = (params: {
   host: string;
   port: number;
@@ -503,11 +564,17 @@ export const sshSessionPrewarm = (params: {
 
 // ── Terminal ────────────────────────────────────────────────────
 
-export const terminalCreate = (cols: number, rows: number, shell?: string) =>
+export const terminalCreate = (
+  cols: number,
+  rows: number,
+  shell?: string,
+  smartMode?: boolean,
+) =>
   invoke<TerminalSessionInfo>("terminal_create", {
     cols,
     rows,
     shell: shell ?? null,
+    smartMode: smartMode ?? false,
   });
 
 export const terminalCreateSsh = (params: {

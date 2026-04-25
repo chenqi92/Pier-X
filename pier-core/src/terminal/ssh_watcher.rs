@@ -109,16 +109,48 @@ pub fn output_indicates_ssh_failure(chunk: &[u8]) -> bool {
 /// The `user@host` shape requires a `@` and a `'s password:` tail,
 /// which is specific enough that a remote `sudo` prompt can't
 /// trigger it.
-const SSH_PASSWORD_PROMPT_MARKERS: &[&[u8]] = &[b"'s password:", b"Enter passphrase for key "];
+const SSH_PASSWORD_MARKER: &[u8] = b"'s password:";
+const SSH_PASSPHRASE_MARKER: &[u8] = b"Enter passphrase for key ";
 
-/// Scan a PTY output chunk for an OpenSSH password / passphrase
-/// prompt. Returns true on a match so the caller can fire a
+/// Distinguishes the two kinds of OpenSSH secret prompts. The
+/// frontend cares about the difference: a password belongs in
+/// `tab.sshPassword` and is sent as the SSH server password;
+/// a passphrase belongs in `tab.sshKeyPassphrase` and is fed to
+/// `russh::keys::load_secret_key` to decrypt the private key.
+/// Crossing them wastes connect attempts and confuses the user.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum SshSecretPromptKind {
+    /// `<user>@<host>'s password:` — server-side password auth.
+    Password,
+    /// `Enter passphrase for key '<path>':` — local key decryption.
+    Passphrase,
+}
+
+/// Scan a PTY output chunk for an OpenSSH secret prompt. Returns
+/// `Some(kind)` on a match so the caller can fire the right
 /// one-shot event telling the frontend "the next typed line is
-/// the password".
+/// the password / passphrase".
+///
+/// Passphrase wins when both markers are present in the same
+/// chunk (rare, but possible if the terminal redraw bundles the
+/// prompt with leftover output from a previous attempt). The
+/// passphrase prompt is always more specific.
+pub fn detect_ssh_secret_prompt(chunk: &[u8]) -> Option<SshSecretPromptKind> {
+    if contains_subsequence(chunk, SSH_PASSPHRASE_MARKER) {
+        Some(SshSecretPromptKind::Passphrase)
+    } else if contains_subsequence(chunk, SSH_PASSWORD_MARKER) {
+        Some(SshSecretPromptKind::Password)
+    } else {
+        None
+    }
+}
+
+/// Backward-compatible alias for callers that only need the boolean
+/// "did we see any secret prompt" answer. New code should prefer
+/// [`detect_ssh_secret_prompt`] so the password vs. passphrase
+/// distinction propagates.
 pub fn output_indicates_ssh_password_prompt(chunk: &[u8]) -> bool {
-    SSH_PASSWORD_PROMPT_MARKERS
-        .iter()
-        .any(|marker| contains_subsequence(chunk, marker))
+    detect_ssh_secret_prompt(chunk).is_some()
 }
 
 fn contains_subsequence(haystack: &[u8], needle: &[u8]) -> bool {

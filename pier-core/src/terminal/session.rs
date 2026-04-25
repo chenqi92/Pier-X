@@ -91,16 +91,22 @@ pub enum NotifyEvent {
     /// fetch the new target via [`PierTerminal::current_ssh_target`]
     /// and update any right-side state bound to this session.
     SshStateChanged = 2,
-    /// The reader thread saw an OpenSSH password / passphrase prompt
-    /// in the PTY output (matched against the canonical
-    /// `<user>@<host>'s password:` / `Enter passphrase for key`
-    /// shapes). The consumer should arm a one-shot capture: the very
-    /// next Enter-terminated line the user types is the credential
-    /// we want to mirror into the right-side russh session. Firing
-    /// only on the specific OpenSSH shape (not generic "password:")
-    /// keeps remote `sudo` / local `passwd` prompts from triggering
-    /// a capture.
+    /// The reader thread saw an OpenSSH server password prompt
+    /// (`<user>@<host>'s password:`) in the PTY output. The consumer
+    /// should arm a one-shot capture: the next Enter-terminated line
+    /// the user types is the SERVER password — to be mirrored into
+    /// the right-side russh session as `AuthMethod::DirectPassword`.
+    /// Firing only on the specific OpenSSH shape (not generic
+    /// `password:`) keeps remote `sudo` / local `passwd` prompts
+    /// from triggering a capture.
     SshPasswordPrompt = 3,
+    /// The reader thread saw an OpenSSH key-decryption passphrase
+    /// prompt (`Enter passphrase for key '<path>':`). The captured
+    /// line is a key passphrase, NOT a server password — the
+    /// frontend stores it in a separate slot and the right-side
+    /// russh session uses it via `russh::keys::load_secret_key`.
+    /// Conflating the two costs failed connect attempts.
+    SshPassphrasePrompt = 4,
 }
 
 /// Function-pointer signature for the notify callback.
@@ -407,13 +413,17 @@ impl PierTerminal {
                                 if ssh_watcher::output_indicates_ssh_failure(&chunk) {
                                     ssh_failure_kick.store(true, Ordering::Relaxed);
                                 }
-                                let saw_password_prompt =
-                                    ssh_watcher::output_indicates_ssh_password_prompt(&chunk);
+                                let prompt_kind =
+                                    ssh_watcher::detect_ssh_secret_prompt(&chunk);
                                 guard.emu.process(&chunk);
-                                if saw_password_prompt {
-                                    ReadOutcome::PasswordPrompt
-                                } else {
-                                    ReadOutcome::Data
+                                match prompt_kind {
+                                    Some(ssh_watcher::SshSecretPromptKind::Passphrase) => {
+                                        ReadOutcome::PassphrasePrompt
+                                    }
+                                    Some(ssh_watcher::SshSecretPromptKind::Password) => {
+                                        ReadOutcome::PasswordPrompt
+                                    }
+                                    None => ReadOutcome::Data,
                                 }
                             }
                             Ok(_) => ReadOutcome::Idle,
@@ -436,6 +446,10 @@ impl PierTerminal {
                             // user finishes typing.
                             (notify)(user_data, NotifyEvent::DataReady as u32);
                             (notify)(user_data, NotifyEvent::SshPasswordPrompt as u32);
+                        }
+                        ReadOutcome::PassphrasePrompt => {
+                            (notify)(user_data, NotifyEvent::DataReady as u32);
+                            (notify)(user_data, NotifyEvent::SshPassphrasePrompt as u32);
                         }
                         ReadOutcome::Idle => {
                             thread::sleep(idle);
@@ -833,10 +847,12 @@ impl Drop for PierTerminal {
 
 enum ReadOutcome {
     Data,
-    /// Same as `Data` but the chunk contained an OpenSSH password /
-    /// passphrase prompt, so the caller should also fire a
-    /// `SshPasswordPrompt` event after the data notification.
+    /// Same as `Data` but the chunk contained an OpenSSH server
+    /// password prompt — caller should fire `SshPasswordPrompt`.
     PasswordPrompt,
+    /// Same as `Data` but the chunk contained an OpenSSH key
+    /// passphrase prompt — caller should fire `SshPassphrasePrompt`.
+    PassphrasePrompt,
     Idle,
     Done,
 }

@@ -164,7 +164,9 @@ export default function TerminalPanel({ tab, isActive, onEditConnection }: Props
   // single-word commands (`ls`, `pwd`) can no longer be mistaken for
   // the ssh password because they don't emit the specific OpenSSH
   // prompt pattern the backend is matching on.
-  const pendingPasswordCaptureRef = useRef<{ deadline: number } | null>(null);
+  const pendingPasswordCaptureRef = useRef<
+    { deadline: number; kind: "password" | "passphrase" } | null
+  >(null);
 
   // Sync session ID to tab store
   useEffect(() => {
@@ -603,11 +605,38 @@ export default function TerminalPanel({ tab, isActive, onEditConnection }: Props
     void listen<{ sessionId: string }>("terminal:ssh-password-prompt", (event) => {
       if (disposed) return;
       if (event.payload.sessionId !== session.sessionId) return;
-      pendingPasswordCaptureRef.current = { deadline: Date.now() + 60_000 };
+      pendingPasswordCaptureRef.current = {
+        deadline: Date.now() + 60_000,
+        kind: "password",
+      };
       logEvent("INFO", "ssh.capture", `tab=${tab.id} armed capture on OpenSSH password prompt`);
     }).then((u) => {
       if (disposed) u();
       else unlistenSshPrompt = u;
+    });
+
+    // Separate event for `Enter passphrase for key '<path>':` — the
+    // captured value is a key passphrase, not a server password, so
+    // we route it to a different backend slot. Crossing the two
+    // (passing a passphrase as a server password, or vice versa)
+    // costs the user a wrong auth attempt and surfaces as a
+    // confusing "auth rejected" error on the right side.
+    let unlistenSshPassphrasePrompt: UnlistenFn | undefined;
+    void listen<{ sessionId: string }>("terminal:ssh-passphrase-prompt", (event) => {
+      if (disposed) return;
+      if (event.payload.sessionId !== session.sessionId) return;
+      pendingPasswordCaptureRef.current = {
+        deadline: Date.now() + 60_000,
+        kind: "passphrase",
+      };
+      logEvent(
+        "INFO",
+        "ssh.capture",
+        `tab=${tab.id} armed capture on OpenSSH key passphrase prompt`,
+      );
+    }).then((u) => {
+      if (disposed) u();
+      else unlistenSshPassphrasePrompt = u;
     });
 
     return () => {
@@ -616,6 +645,7 @@ export default function TerminalPanel({ tab, isActive, onEditConnection }: Props
       if (unlisten) unlisten();
       if (unlistenSshState) unlistenSshState();
       if (unlistenSshPrompt) unlistenSshPrompt();
+      if (unlistenSshPassphrasePrompt) unlistenSshPassphrasePrompt();
     };
   }, [session, scrollbackOffset]);
 
@@ -891,6 +921,7 @@ export default function TerminalPanel({ tab, isActive, onEditConnection }: Props
     // One-shot: disarm immediately. If the remote rejects the
     // password, the PTY reader will see another OpenSSH prompt and
     // re-fire `terminal:ssh-password-prompt`, which re-arms us.
+    const captureKind = pending.kind;
     pendingPasswordCaptureRef.current = null;
 
     const trimmed = line.trim();
@@ -904,6 +935,57 @@ export default function TerminalPanel({ tab, isActive, onEditConnection }: Props
 
     const current = useTabStore.getState().tabs.find((t) => t.id === tab.id);
     if (!current) return;
+
+    // Resolve the target this capture belongs to. Local-backend tabs
+    // use the primary ssh* fields; an SSH-backend tab nesting another
+    // ssh uses `nestedSshTarget`. Either way, `host/port/user` is what
+    // we key the process-level credential cache on.
+    const targetHost =
+      tab.backend === "local"
+        ? current.sshHost
+        : current.nestedSshTarget?.host ?? "";
+    const targetPort =
+      tab.backend === "local"
+        ? current.sshPort
+        : current.nestedSshTarget?.port ?? 22;
+    const targetUser =
+      tab.backend === "local"
+        ? current.sshUser
+        : current.nestedSshTarget?.user ?? "";
+
+    if (captureKind === "passphrase") {
+      // Key passphrase — does NOT belong in `tab.sshPassword`. We
+      // sync only to the process-level credential cache; the right-
+      // side russh AutoChain will read it from there when loading
+      // the explicit / default key files.
+      logEvent(
+        "INFO",
+        "ssh.capture",
+        `tab=${tab.id} captured key passphrase (len=${trimmed.length}) for ${targetUser}@${targetHost}:${targetPort}`,
+      );
+      if (targetHost && targetUser) {
+        cmd
+          .sshCredCachePutPassphrase({
+            host: targetHost,
+            port: targetPort,
+            user: targetUser,
+            passphrase: trimmed,
+          })
+          .catch((err) => {
+            logEvent(
+              "WARN",
+              "ssh.capture",
+              `tab=${tab.id} cred-cache passphrase put failed: ${err}`,
+            );
+          });
+      }
+      return;
+    }
+
+    // Server password path — keep the existing tab-state mirror so
+    // panels that already read `tab.sshPassword` keep working,
+    // AND sync to the process-level cache so multi-tab / new-tab
+    // reuse works without re-prompting.
     if (tab.backend === "local") {
       if (current.sshPassword === trimmed) return;
       logEvent(
@@ -922,6 +1004,23 @@ export default function TerminalPanel({ tab, isActive, onEditConnection }: Props
       updateTab(tab.id, {
         nestedSshTarget: { ...current.nestedSshTarget, password: trimmed },
       });
+    }
+
+    if (targetHost && targetUser) {
+      cmd
+        .sshCredCachePutPassword({
+          host: targetHost,
+          port: targetPort,
+          user: targetUser,
+          password: trimmed,
+        })
+        .catch((err) => {
+          logEvent(
+            "WARN",
+            "ssh.capture",
+            `tab=${tab.id} cred-cache password put failed: ${err}`,
+          );
+        });
     }
   }
 

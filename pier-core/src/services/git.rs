@@ -149,6 +149,26 @@ pub struct StashEntry {
     pub relative_date: String,
 }
 
+/// A commit that exists locally but has not been pushed to upstream.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct UnpushedCommit {
+    /// Full SHA.
+    pub hash: String,
+    /// Abbreviated SHA (7 chars).
+    pub short_hash: String,
+    /// First-line subject + remaining body collapsed by git format.
+    pub message: String,
+    /// Author name.
+    pub author: String,
+    /// Relative committer date (e.g. "2 hours ago").
+    pub relative_date: String,
+    /// Whether this commit is the current HEAD; only HEAD commits are
+    /// safe to reword via `git commit --amend` without rewriting child
+    /// history (interactive rebase is required for the rest).
+    pub is_head: bool,
+}
+
 /// A single blame line.
 #[allow(missing_docs)]
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -587,6 +607,76 @@ impl GitClient {
     /// Drop a stash.
     pub fn stash_drop(&self, index: &str) -> Result<String, GitError> {
         self.git(&["stash", "drop", index])
+    }
+
+    /// List commits that exist locally but have not been pushed to the
+    /// upstream tracking branch. Returns an empty list when no upstream
+    /// is configured (so the UI can degrade gracefully) instead of
+    /// erroring. The full raw body (`%B`) is included so callers can
+    /// edit a multi-line commit message; records are NUL-terminated
+    /// because the body itself contains newlines.
+    pub fn unpushed_commits(&self) -> Result<Vec<UnpushedCommit>, GitError> {
+        if self
+            .git(&["rev-parse", "--abbrev-ref", "@{upstream}"])
+            .is_err()
+        {
+            return Ok(Vec::new());
+        }
+        let head = self
+            .git(&["rev-parse", "HEAD"])
+            .unwrap_or_default()
+            .trim()
+            .to_string();
+        // %x1e = ASCII record separator (terminates each commit),
+        // %x1f = ASCII unit separator (between fields). Both are unlikely
+        // to appear in commit content. %B yields the raw body (subject +
+        // blank line + body) which can span many lines.
+        let output = self.git(&[
+            "log",
+            "@{upstream}..HEAD",
+            "--format=%H%x1f%h%x1f%an%x1f%cr%x1f%B%x1e",
+        ])?;
+        let mut commits = Vec::new();
+        for raw in output.split('\x1e') {
+            let line = raw.trim_matches(|c: char| c == '\n' || c == '\r');
+            if line.is_empty() {
+                continue;
+            }
+            let parts: Vec<&str> = line.splitn(5, '\x1f').collect();
+            if parts.len() < 5 {
+                continue;
+            }
+            let hash = parts[0].trim().to_string();
+            let is_head = !head.is_empty() && hash == head;
+            // Strip trailing newlines introduced by %B's body section
+            // and a stray leading newline if the parser consumed the
+            // record-separator's adjacent line break.
+            let message = parts[4].trim_matches(|c: char| c == '\n' || c == '\r').to_string();
+            commits.push(UnpushedCommit {
+                short_hash: parts[1].trim().to_string(),
+                author: parts[2].to_string(),
+                relative_date: parts[3].to_string(),
+                message,
+                is_head,
+                hash,
+            });
+        }
+        Ok(commits)
+    }
+
+    /// Reword a stash message. Git has no native `stash reword`, so we
+    /// resolve the underlying commit hash, drop the existing entry, and
+    /// re-store it with the new message. The reworded entry becomes
+    /// `stash@{0}` regardless of where it sat before — callers should
+    /// reload the list after this call rather than mutating in place.
+    pub fn stash_reword(&self, index: &str, new_message: &str) -> Result<String, GitError> {
+        let hash = self.git(&["rev-parse", index])?;
+        let hash = hash.trim();
+        if hash.is_empty() {
+            return Err(GitError::Command(format!("could not resolve {index}")));
+        }
+        self.git(&["stash", "drop", index])?;
+        self.git(&["stash", "store", "-m", new_message, hash])
     }
 
     // ── Branch operations ────────────────────────────────

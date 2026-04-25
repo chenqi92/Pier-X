@@ -5,7 +5,7 @@ use pier_core::credentials;
 use pier_core::markdown;
 use pier_core::services::docker;
 use pier_core::services::firewall;
-use pier_core::services::git::{CommitInfo, GitClient, StashEntry};
+use pier_core::services::git::{CommitInfo, GitClient, StashEntry, UnpushedCommit};
 use pier_core::services::mysql::{self as mysql_service, MysqlClient, MysqlConfig};
 use pier_core::services::postgres::{PostgresClient, PostgresConfig};
 use pier_core::services::redis::{RedisClient, RedisConfig};
@@ -31,6 +31,11 @@ use tauri::{Emitter, Manager};
 
 mod git_panel;
 use git_panel::*;
+
+mod ssh_mux;
+
+mod ssh_cred_cache;
+use ssh_cred_cache::{SshCredCache, TargetKey};
 
 struct AppState {
     next_terminal_id: AtomicU64,
@@ -85,6 +90,15 @@ struct AppState {
     /// `Option` lets the first probe install a baseline without a
     /// rate, and every subsequent one diff against it.
     monitor_net_baselines: Mutex<HashMap<String, server_monitor::NetSample>>,
+    /// Process-level SSH credential cache: maps `(host, port, user)`
+    /// to whatever password / passphrase / explicit key path the
+    /// terminal-side ssh just successfully used. Right-side panels
+    /// (firewall, monitor, SFTP, Docker, DB tunnels) consult this
+    /// before falling through to the empty-credential AutoChain.
+    ///
+    /// In-memory only; cleared on app exit. See
+    /// [`ssh_cred_cache::SshCredCache`] for the rationale.
+    ssh_cred_cache: SshCredCache,
 }
 
 impl Default for AppState {
@@ -100,6 +114,7 @@ impl Default for AppState {
             sftp_home_cache: Mutex::new(HashMap::new()),
             session_init_guards: Mutex::new(HashMap::new()),
             monitor_net_baselines: Mutex::new(HashMap::new()),
+            ssh_cred_cache: SshCredCache::default(),
         }
     }
 }
@@ -112,12 +127,18 @@ struct HandshakeGuard {
     /// Serialises handshake attempts — winner runs the connect,
     /// losers wait then re-check the cache and negative entry.
     gate: Mutex<()>,
-    /// Latest failed handshake for this target, if any, plus when it
-    /// happened. Waiters that hit this within the short TTL below
-    /// return the same error without reconnecting; older entries are
-    /// ignored so a transient failure (wifi flap, sshd restart)
-    /// doesn't permanently blackhole a target.
-    last_fail: Mutex<Option<(Instant, String)>>,
+    /// Latest failed handshake for this target, if any: when it
+    /// happened, the error string, and a fingerprint of the
+    /// credentials that produced the failure. Waiters that hit this
+    /// within the short TTL below AND with a matching fingerprint
+    /// short-circuit on the same error; mismatched fingerprints
+    /// (e.g. the watcher just captured a password from the OpenSSH
+    /// prompt, so the credential bag changed since the last attempt)
+    /// bypass the negative cache and run a fresh handshake. Older
+    /// entries past the TTL are ignored regardless, so a transient
+    /// failure (wifi flap, sshd restart) doesn't permanently
+    /// blackhole a target.
+    last_fail: Mutex<Option<(Instant, String, u64)>>,
 }
 
 impl HandshakeGuard {
@@ -127,6 +148,34 @@ impl HandshakeGuard {
             last_fail: Mutex::new(None),
         }
     }
+}
+
+/// Stable hash of the credential bag we're about to attempt. Used by
+/// the handshake negative-cache so a previous failure stops gating
+/// the moment any of the inputs changes — most importantly the
+/// transition from "no captured password yet" to "user typed
+/// password into ssh prompt", which is exactly when the right-side
+/// panels need to reconnect even though we just saw `auto:user@host`
+/// fail seconds ago.
+///
+/// Includes `saved_index` so picking a different saved profile also
+/// invalidates a cached failure. Cheap (FxHash via DefaultHasher);
+/// collisions only cost one unnecessary skip of the negative cache,
+/// which is the safe direction.
+fn ssh_credential_fingerprint(
+    auth_mode: &str,
+    password: &str,
+    key_path: &str,
+    saved_index: Option<usize>,
+) -> u64 {
+    use std::collections::hash_map::DefaultHasher;
+    use std::hash::{Hash, Hasher};
+    let mut h = DefaultHasher::new();
+    auth_mode.hash(&mut h);
+    password.hash(&mut h);
+    key_path.hash(&mut h);
+    saved_index.hash(&mut h);
+    h.finish()
 }
 
 /// How long a recent handshake failure suppresses further attempts
@@ -151,14 +200,21 @@ const TERMINAL_EVENT: &str = "terminal:event";
 /// terminal instead of the other way around.
 const TERMINAL_SSH_STATE_EVENT: &str = "terminal:ssh-state";
 
-/// One-shot "the PTY just printed an OpenSSH password prompt" signal,
-/// emitted from the terminal reader thread when it sees the canonical
-/// `<user>@<host>'s password:` / `Enter passphrase for key ...` text.
-/// The frontend listens and arms a single-line capture so the very
-/// next Enter-terminated keystroke stream becomes `tab.sshPassword`
-/// for the right-side russh session — no heuristics, no retry count,
-/// no chance of a post-login `ls` being mistaken for a password.
+/// One-shot "the PTY just printed an OpenSSH server password prompt"
+/// signal, emitted from the terminal reader thread when it sees
+/// `<user>@<host>'s password:`. The frontend arms a single-line
+/// capture so the next Enter-terminated keystroke stream lands in
+/// `tab.sshPassword` (and the process-level credential cache) for
+/// the right-side russh session.
 const TERMINAL_SSH_PASSWORD_PROMPT_EVENT: &str = "terminal:ssh-password-prompt";
+
+/// Sibling of [`TERMINAL_SSH_PASSWORD_PROMPT_EVENT`] but for OpenSSH
+/// key-decryption passphrase prompts (`Enter passphrase for key
+/// '<path>':`). Fires a different event because the captured value
+/// belongs in `tab.sshKeyPassphrase`, not `tab.sshPassword` —
+/// crossing them costs the user a wrong auth attempt and surfaces
+/// as a confusing "auth rejected" error on the right side.
+const TERMINAL_SSH_PASSPHRASE_PROMPT_EVENT: &str = "terminal:ssh-passphrase-prompt";
 
 #[derive(Serialize, Clone)]
 #[serde(rename_all = "camelCase")]
@@ -745,6 +801,21 @@ struct TerminalSnapshot {
     scrollback_len: usize,
     bell_pending: bool,
     lines: Vec<TerminalLine>,
+    /// Smart-mode prompt-end position — `[row, col]` of the most
+    /// recent OSC 133;B emitted by the shell. `null` when smart mode
+    /// is off, the shell hasn't drawn a wrapped prompt yet, or the
+    /// user is scrolled into history.
+    prompt_end: Option<[u16; 2]>,
+    /// `true` when the user is currently inside an editable input
+    /// line (between OSC 133;B and OSC 133;C). The frontend mirror
+    /// buffer should only accept keystrokes while this is set.
+    awaiting_input: bool,
+    /// `true` while a TUI is using the alternate screen (vim,
+    /// htop, less, tmux). The smart-mode UI hides itself.
+    alt_screen: bool,
+    /// `true` while a bracketed-paste sequence is in flight.
+    /// The smart-mode UI pauses completion / autosuggest.
+    bracketed_paste: bool,
 }
 
 /// Notify callback invoked by PierTerminal's reader thread. Coalesces
@@ -995,19 +1066,44 @@ fn build_ssh_session_from_params(
     auth_mode: &str,
     password: &str,
     key_path: &str,
+    key_passphrase: Option<&str>,
 ) -> Result<SshSession, String> {
     let resolved_host = host.trim();
     let resolved_user = user.trim();
     if resolved_host.is_empty() || resolved_user.is_empty() {
         return Err(String::from("SSH host and user must not be empty."));
     }
+    let _ = key_passphrase; // currently only AutoChain consumes it
     let auth = match auth_mode {
         "key" => AuthMethod::PublicKeyFile {
             private_key_path: key_path.to_string(),
             passphrase_credential_id: None,
         },
         "agent" => AuthMethod::Agent,
-        "auto" => AuthMethod::Auto,
+        // The watcher infers `auto` for any plain `ssh user@host`
+        // (no `-i`, no saved profile). We can't tell upfront whether
+        // the server wants pubkey, password, or PAM keyboard-
+        // interactive — so route through AutoChain, which tries
+        // every method we have evidence for on a SINGLE SSH
+        // transport (one TCP/kex, N userauth rounds, OpenSSH-style
+        // preference order). Threading `key_path` and `password`
+        // through means a captured interactive password is no longer
+        // dropped silently the way plain `AuthMethod::Auto` did.
+        "auto" => AuthMethod::AutoChain {
+            explicit_key_path: if key_path.is_empty() {
+                None
+            } else {
+                Some(key_path.to_string())
+            },
+            password: if password.is_empty() {
+                None
+            } else {
+                Some(password.to_string())
+            },
+            key_passphrase: key_passphrase
+                .filter(|p| !p.is_empty())
+                .map(|p| p.to_string()),
+        },
         _ => AuthMethod::DirectPassword {
             password: password.to_string(),
         },
@@ -1039,6 +1135,7 @@ fn build_ssh_session_saved_or_params(
     auth_mode: &str,
     password: &str,
     key_path: &str,
+    key_passphrase: Option<&str>,
 ) -> Result<SshSession, String> {
     // Prefer the explicit param path whenever the caller hands us a
     // non-empty credential — that's the most recent intent (a
@@ -1058,7 +1155,15 @@ fn build_ssh_session_saved_or_params(
         _ => false,
     };
     if have_param_credential {
-        return build_ssh_session_from_params(host, port, user, auth_mode, password, key_path);
+        return build_ssh_session_from_params(
+            host,
+            port,
+            user,
+            auth_mode,
+            password,
+            key_path,
+            key_passphrase,
+        );
     }
 
     if let Some(index) = saved_index {
@@ -1067,7 +1172,15 @@ fn build_ssh_session_saved_or_params(
                 .map_err(|e| e.to_string());
         }
     }
-    build_ssh_session_from_params(host, port, user, auth_mode, password, key_path)
+    build_ssh_session_from_params(
+        host,
+        port,
+        user,
+        auth_mode,
+        password,
+        key_path,
+        key_passphrase,
+    )
 }
 
 /// Stable key for the SSH session cache. Only the addressing bits,
@@ -1108,7 +1221,52 @@ fn get_or_open_ssh_session(
     key_path: &str,
     saved_index: Option<usize>,
 ) -> Result<Arc<SshSession>, String> {
+    // Sweep stale entries opportunistically — keeps the credential
+    // cache from accumulating roamed-to hosts forever. Cheap (one
+    // mutex + retain over a small map).
+    state.ssh_cred_cache.prune_expired();
+
+    // Pull anything we already know about this target from the
+    // process-level credential cache. Frontend-supplied scalars
+    // win when non-empty (the user is in the middle of changing
+    // passwords, etc.); the cache just fills the gaps. This is the
+    // path that fixes "system ssh authenticated with password →
+    // right-side russh panel can't reach the same host because no
+    // password was passed in" — the watcher captured the password
+    // into the cache, and AutoChain now finds it here.
+    let cred_target = TargetKey::new(host, port, user);
+    let (effective_password, effective_key_path, effective_passphrase) = {
+        let cached = state.ssh_cred_cache.get(&cred_target);
+        let pw = if password.is_empty() {
+            cached
+                .as_ref()
+                .and_then(|c| c.password.clone())
+                .unwrap_or_default()
+        } else {
+            password.to_string()
+        };
+        let kp = if key_path.is_empty() {
+            cached
+                .as_ref()
+                .and_then(|c| c.key_path.clone())
+                .unwrap_or_default()
+        } else {
+            key_path.to_string()
+        };
+        let passphrase = cached.and_then(|c| c.key_passphrase);
+        (pw, kp, passphrase)
+    };
+    let password = effective_password.as_str();
+    let key_path = effective_key_path.as_str();
+    let passphrase = effective_passphrase;
+
     let key = sftp_cache_key(host, port, user, auth_mode);
+    // Fingerprint of the credentials we're about to attempt. Compared
+    // against the negative-cache entry so a stale "auth rejected"
+    // failure stops gating the moment any input changes — most
+    // commonly the watcher just captured an interactive password and
+    // the previous `auto + empty` rejection no longer applies.
+    let cred_fp = ssh_credential_fingerprint(auth_mode, password, key_path, saved_index);
 
     // Fast path: cache hit.
     {
@@ -1149,8 +1307,8 @@ fn get_or_open_ssh_session(
     };
 
     // Pre-gate negative check — avoids even acquiring the gate if
-    // we already know this target is broken.
-    if let Some(err) = recent_handshake_failure(&guard) {
+    // we already know this target is broken with these credentials.
+    if let Some(err) = recent_handshake_failure(&guard, cred_fp) {
         return Err(err);
     }
 
@@ -1170,7 +1328,7 @@ fn get_or_open_ssh_session(
             return Ok(Arc::clone(existing));
         }
     }
-    if let Some(err) = recent_handshake_failure(&guard) {
+    if let Some(err) = recent_handshake_failure(&guard, cred_fp) {
         return Err(err);
     }
 
@@ -1187,13 +1345,17 @@ fn get_or_open_ssh_session(
         auth_mode,
         password,
         key_path,
+        passphrase.as_deref(),
     ) {
         Ok(s) => s,
         Err(e) => {
             // Populate the negative cache so sibling waiters don't
-            // each spend another full connect timeout.
+            // each spend another full connect timeout. The
+            // fingerprint stamps which credential bag produced the
+            // failure — when the bag changes (e.g. password just
+            // captured), a fresh handshake gets a fresh shot.
             if let Ok(mut slot) = guard.last_fail.lock() {
-                *slot = Some((Instant::now(), e.clone()));
+                *slot = Some((Instant::now(), e.clone(), cred_fp));
             }
             pier_core::logging::write_event(
                 "ERROR",
@@ -1218,12 +1380,22 @@ fn get_or_open_ssh_session(
 }
 
 /// Peek at the handshake guard's negative-cache slot. Returns the
-/// cached error string only when it's still within
-/// [`HANDSHAKE_NEGATIVE_CACHE`]; older entries are ignored so a
-/// transient network glitch doesn't permanently blackhole a target.
-fn recent_handshake_failure(guard: &HandshakeGuard) -> Option<String> {
+/// cached error string only when:
+///   1. it's still within [`HANDSHAKE_NEGATIVE_CACHE`] (older
+///      entries are ignored so a transient network glitch doesn't
+///      permanently blackhole a target), AND
+///   2. its credential fingerprint matches `current_fp` — i.e. the
+///      caller is about to retry with the SAME credentials that
+///      already failed. A fingerprint mismatch means something
+///      changed (most commonly: the OpenSSH prompt watcher just
+///      captured a password that wasn't there last attempt) and
+///      the previous rejection no longer applies.
+fn recent_handshake_failure(guard: &HandshakeGuard, current_fp: u64) -> Option<String> {
     let slot = guard.last_fail.lock().ok()?;
-    let (at, msg) = slot.as_ref()?;
+    let (at, msg, fp) = slot.as_ref()?;
+    if *fp != current_fp {
+        return None;
+    }
     if at.elapsed() <= HANDSHAKE_NEGATIVE_CACHE {
         Some(msg.clone())
     } else {
@@ -1539,7 +1711,10 @@ fn make_credential_id(host: &str, user: &str) -> String {
 fn auth_kind(auth: &AuthMethod) -> &'static str {
     match auth {
         AuthMethod::Agent => "agent",
-        AuthMethod::Auto => "auto",
+        // AutoChain is just `Auto` plus opportunistic credential
+        // reuse — same external surface from the saved-config /
+        // cache-key perspective, so it stamps as "auto".
+        AuthMethod::Auto | AuthMethod::AutoChain { .. } => "auto",
         AuthMethod::PublicKeyFile { .. } => "key",
         AuthMethod::KeychainPassword { .. } | AuthMethod::DirectPassword { .. } => "password",
     }
@@ -1795,7 +1970,7 @@ fn create_ssh_terminal_from_config(
     // match `sftp_cache_key`.
     let auth_mode_key = match &config.auth {
         AuthMethod::Agent => "agent",
-        AuthMethod::Auto => "auto",
+        AuthMethod::Auto | AuthMethod::AutoChain { .. } => "auto",
         AuthMethod::PublicKeyFile { .. } => "key",
         _ => "password",
     };
@@ -2478,6 +2653,26 @@ fn git_stash_drop(path: Option<String>, index: String) -> Result<String, String>
     let client = open_git_client(path)?;
     client
         .stash_drop(index.trim())
+        .map_err(|error| error.to_string())
+}
+
+#[tauri::command]
+fn git_stash_reword(
+    path: Option<String>,
+    index: String,
+    message: String,
+) -> Result<String, String> {
+    let client = open_git_client(path)?;
+    client
+        .stash_reword(index.trim(), message.trim())
+        .map_err(|error| error.to_string())
+}
+
+#[tauri::command]
+fn git_unpushed_commits(path: Option<String>) -> Result<Vec<UnpushedCommit>, String> {
+    let client = open_git_client(path)?;
+    client
+        .unpushed_commits()
         .map_err(|error| error.to_string())
 }
 
@@ -3265,6 +3460,7 @@ fn terminal_create(
     cols: u16,
     rows: u16,
     shell: Option<String>,
+    smart_mode: Option<bool>,
 ) -> Result<TerminalSessionInfo, String> {
     let resolved_cols = cols.max(40);
     let resolved_rows = rows.max(12);
@@ -3275,10 +3471,27 @@ fn terminal_create(
     let (session_id, mut notify_ctx) = allocate_notify_context(&state, app);
     let user_data = &mut *notify_ctx as *mut NotifyContext as *mut c_void;
 
-    let terminal = PierTerminal::new(
+    // Inject the ssh-mux wrapper into PATH so any `ssh` (or scp /
+    // rsync / git) the user runs in this PTY picks up Pier-X's
+    // ControlMaster config — first connection authenticates, every
+    // subsequent ssh to the same target inside the persist window
+    // is a free ride. The wrapper is a tiny POSIX-shell shim that
+    // exec's /usr/bin/ssh -F <pier-x-ssh-config> "$@".
+    //
+    // No-op when ssh_mux::init failed at startup (e.g. unwritable
+    // cache dir) — `prepended_path` returns the inherited PATH
+    // unchanged in that case, so terminals still come up.
+    let inherited_path =
+        std::env::var("PATH").unwrap_or_else(|_| "/usr/bin:/bin:/usr/sbin:/sbin".to_string());
+    let prefixed_path = ssh_mux::prepended_path(&inherited_path);
+    let extra_env: &[(&str, &str)] = &[("PATH", prefixed_path.as_str())];
+
+    let terminal = PierTerminal::new_with_smart_env(
         resolved_cols,
         resolved_rows,
         &resolved_shell,
+        smart_mode.unwrap_or(false),
+        extra_env,
         tauri_terminal_notify as NotifyFn,
         user_data,
     )
@@ -3389,6 +3602,10 @@ fn terminal_snapshot(
         scrollback_len: managed.terminal.scrollback_len(),
         bell_pending: managed.terminal.take_bell_pending(),
         lines: build_terminal_lines(&snapshot, alive),
+        prompt_end: snapshot.prompt_end.map(|(r, c)| [r, c]),
+        awaiting_input: snapshot.awaiting_input,
+        alt_screen: snapshot.alt_screen,
+        bracketed_paste: snapshot.bracketed_paste,
     })
 }
 
@@ -4269,6 +4486,118 @@ fn firewall_snapshot(
         }
     };
     Ok(snap)
+}
+
+// ── SSH ControlMaster (terminal-side mux) ────────────────────────
+
+/// Frontend mirror of [`ssh_mux::MuxSettings`]. Kept as a separate
+/// type so a future schema change here doesn't ripple through the
+/// internal struct's field naming conventions.
+#[derive(serde::Serialize, serde::Deserialize)]
+struct SshMuxSettingsView {
+    enabled: bool,
+    persist_seconds: u32,
+}
+
+impl From<ssh_mux::MuxSettings> for SshMuxSettingsView {
+    fn from(s: ssh_mux::MuxSettings) -> Self {
+        Self {
+            enabled: s.enabled,
+            persist_seconds: s.persist_seconds,
+        }
+    }
+}
+
+#[tauri::command]
+fn ssh_mux_get_settings() -> SshMuxSettingsView {
+    ssh_mux::settings().into()
+}
+
+#[tauri::command]
+fn ssh_mux_set_settings(enabled: bool, persist_seconds: u32) -> Result<(), String> {
+    // Clamp to a sane band — under 10s the master barely covers a
+    // shell open + close cycle (worse UX than no mux), and over 24h
+    // is just "leak forever". Frontend slider should use the same
+    // bounds so the user never sees a silent clamp.
+    let clamped = persist_seconds.clamp(10, 86_400);
+    ssh_mux::set_settings(ssh_mux::MuxSettings {
+        enabled,
+        persist_seconds: clamped,
+    })
+    .map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+fn ssh_mux_forget_target(host: String, port: u16, user: String) -> Result<(), String> {
+    ssh_mux::forget_target(&host, port, &user).map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+fn ssh_mux_shutdown_all() -> usize {
+    ssh_mux::shutdown_all_masters()
+}
+
+// ── SSH credential cache (process-level, in-memory) ──────────────
+
+/// Mirror a password the terminal-side ssh just successfully used
+/// into the process-level credential cache, so right-side panels
+/// (firewall, monitor, SFTP, Docker, DB) can reach the same target
+/// without re-prompting. Empty `password` is a no-op (we never
+/// cache the empty string — that's how "no credential captured yet"
+/// is represented).
+#[tauri::command]
+fn ssh_cred_cache_put_password(
+    state: tauri::State<'_, AppState>,
+    host: String,
+    port: u16,
+    user: String,
+    password: String,
+) {
+    state
+        .ssh_cred_cache
+        .put_password(TargetKey::new(&host, port, &user), &password);
+}
+
+/// Same shape as [`ssh_cred_cache_put_password`] but writes the key
+/// passphrase slot — the value the user typed at OpenSSH's
+/// `Enter passphrase for key '<path>':` prompt. Kept separate so a
+/// passphrase never gets mistakenly attempted as a server password.
+#[tauri::command]
+fn ssh_cred_cache_put_passphrase(
+    state: tauri::State<'_, AppState>,
+    host: String,
+    port: u16,
+    user: String,
+    passphrase: String,
+) {
+    state
+        .ssh_cred_cache
+        .put_passphrase(TargetKey::new(&host, port, &user), &passphrase);
+}
+
+/// Drop everything we know about `(host, port, user)`. Wired into
+/// the "Forget this connection's credentials" right-click affordance.
+/// Also tears down any live ControlMaster master for the same target
+/// so subsequent ssh re-authenticates from scratch — this is the
+/// user-facing "log out" gesture.
+#[tauri::command]
+fn ssh_cred_cache_forget(
+    state: tauri::State<'_, AppState>,
+    host: String,
+    port: u16,
+    user: String,
+) {
+    state
+        .ssh_cred_cache
+        .forget(&TargetKey::new(&host, port, &user));
+    let _ = ssh_mux::forget_target(&host, port, &user);
+    // Also evict the russh session cache so the next right-side
+    // panel call doesn't keep talking to a connection that
+    // semantically belongs to the now-forgotten credential.
+    evict_ssh_session(&state, &host, port, &user, "auto");
+    evict_ssh_session(&state, &host, port, &user, "password");
+    evict_ssh_session(&state, &host, port, &user, "key");
+    evict_ssh_session(&state, &host, port, &user, "agent");
 }
 
 // ── Service Detection ────────────────────────────────────────────
@@ -6417,6 +6746,35 @@ pub fn run() {
                 }
             }
 
+            // Initialise the ssh-mux wrapper + auto-generated config.
+            // Failure to set this up is non-fatal — the worst case is
+            // we don't get ControlMaster multiplexing for terminal-side
+            // ssh, same behaviour as before this module existed.
+            let cache_dir = app
+                .path()
+                .app_cache_dir()
+                .unwrap_or_else(|_| std::env::temp_dir().join("com.pier-x"));
+            match ssh_mux::init(&cache_dir) {
+                Ok(()) => {
+                    pier_core::logging::write_event(
+                        "INFO",
+                        "ssh.mux",
+                        &format!(
+                            "ssh ControlMaster mux ready; wrapper={:?} settings={:?}",
+                            ssh_mux::wrapper_dir(),
+                            ssh_mux::settings(),
+                        ),
+                    );
+                }
+                Err(e) => {
+                    pier_core::logging::write_event(
+                        "WARN",
+                        "ssh.mux",
+                        &format!("ssh-mux init failed at {}: {}", cache_dir.display(), e),
+                    );
+                }
+            }
+
             // On Windows we draw our own caption controls (minimize /
             // maximize / close) in the titlebar — disable the OS chrome
             // so they don't double up. macOS keeps decorations on to
@@ -6482,6 +6840,8 @@ pub fn run() {
             git_stash_apply,
             git_stash_pop,
             git_stash_drop,
+            git_stash_reword,
+            git_unpushed_commits,
             git_tags_list,
             git_create_tag,
             git_create_tag_at,
@@ -6498,6 +6858,7 @@ pub fn run() {
             git_unset_config_value,
             git_reset_to_commit,
             git_amend_head_commit_message,
+            git_reword_unpushed_commit,
             git_drop_commit,
             git_revert_commit,
             git_cherry_pick_commit,
@@ -6608,8 +6969,46 @@ pub fn run() {
             log_read_tail,
             log_clear,
             log_set_verbose,
-            log_get_verbose
+            log_get_verbose,
+            ssh_mux_get_settings,
+            ssh_mux_set_settings,
+            ssh_mux_forget_target,
+            ssh_mux_shutdown_all,
+            ssh_cred_cache_put_password,
+            ssh_cred_cache_put_passphrase,
+            ssh_cred_cache_forget,
         ])
-        .run(tauri::generate_context!())
-        .expect("error while running tauri application");
+        .build(tauri::generate_context!())
+        .expect("error while building tauri application")
+        .run(|app, event| {
+            // On a real app exit (window closed, Cmd-Q, signal),
+            // walk the ssh-mux socket dir and `ssh -O exit` every
+            // master we left running. Without this they keep the
+            // remote sshd connection open after Pier-X has gone
+            // away — confusing for the user, weird in `ps`, and
+            // semantically wrong (the GUI is the lifecycle anchor
+            // the user expects).
+            //
+            // RunEvent::Exit fires AFTER all windows are gone but
+            // BEFORE the process actually returns from .run(), so
+            // we still have a working tokio context for the
+            // Command::status() calls.
+            if let tauri::RunEvent::Exit = event {
+                let closed = ssh_mux::shutdown_all_masters();
+                pier_core::logging::write_event(
+                    "INFO",
+                    "ssh.mux",
+                    &format!("app exit: closed {} ssh master(s)", closed),
+                );
+                // Wipe the in-memory credential cache too. Belt and
+                // braces: the process is exiting so the heap is
+                // about to die anyway, but `clear()` zeroes
+                // pointers explicitly which makes the intent
+                // auditable and protects against any post-exit
+                // dump path that might otherwise capture them.
+                if let Some(state) = app.try_state::<AppState>() {
+                    state.ssh_cred_cache.clear();
+                }
+            }
+        });
 }

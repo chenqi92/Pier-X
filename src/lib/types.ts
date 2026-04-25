@@ -158,6 +158,15 @@ export type GitConfigEntryView = {
   scope: string;
 };
 
+export type GitUnpushedCommit = {
+  hash: string;
+  shortHash: string;
+  message: string;
+  author: string;
+  relativeDate: string;
+  isHead: boolean;
+};
+
 export type GitRebaseItemView = {
   id: string;
   action: string;
@@ -704,6 +713,21 @@ export type TerminalSnapshot = {
   scrollbackLen: number;
   bellPending: boolean;
   lines: TerminalLine[];
+  /** Smart-mode prompt-end position — `[row, col]` of the latest
+   * OSC 133;B emitted by the shell. `null` when smart mode is off,
+   * the shell hasn't drawn a wrapped prompt yet, or the user is
+   * scrolled into history. The smart-mode UI overlays autosuggest
+   * and syntax-highlight from this cell onward. */
+  promptEnd: [number, number] | null;
+  /** `true` when the user is currently inside an editable input
+   * line (between OSC 133;B and OSC 133;C). The mirror lineBuffer
+   * accepts keystrokes only while this is set. */
+  awaitingInput: boolean;
+  /** `true` while a TUI is using the alternate screen (vim, htop,
+   * less, tmux). The smart-mode UI must hide itself entirely. */
+  altScreen: boolean;
+  /** `true` while a bracketed-paste sequence is in flight. */
+  bracketedPaste: boolean;
 };
 
 export type TerminalSize = {

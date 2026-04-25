@@ -137,6 +137,37 @@ pub enum AuthMethod {
     /// successful one wins. If everything rejects, the resulting
     /// `AuthRejected` error lists each method that was attempted.
     Auto,
+    /// Like [`AuthMethod::Auto`], but additionally consumes any
+    /// credentials we managed to capture from the terminal side.
+    /// Used when the watcher inferred plain `auto` (the user typed
+    /// `ssh user@host` with no saved profile) but we later harvested
+    /// extra signals: a `-i <key>` arg, or the password the user typed
+    /// at the OpenSSH prompt.
+    ///
+    /// Chain order on a single SSH transport (one TCP/kex, N userauth
+    /// rounds): agent → explicit key → conventional default identity
+    /// files → password → keyboard-interactive (with `password` as the
+    /// answer to every prompt — that's what most PAM-backed servers
+    /// actually negotiate, and it matches what the user just typed
+    /// successfully into their `ssh` child). The first method the
+    /// server accepts wins; only if every method we have evidence for
+    /// rejects do we surface `AuthRejected`.
+    AutoChain {
+        /// `-i <path>` from the watcher, if any. Tried after agent
+        /// and before the conventional default identity files. None
+        /// when the user didn't pass `-i`.
+        explicit_key_path: Option<String>,
+        /// Captured from the OpenSSH password prompt, if any. Drives
+        /// both the plain password method and the keyboard-interactive
+        /// fallback.
+        password: Option<String>,
+        /// Captured from an OpenSSH `Enter passphrase for key`
+        /// prompt, if any. Used to decrypt the explicit key and the
+        /// conventional default identity files when they are
+        /// passphrase-protected on disk and the user just entered
+        /// the passphrase in their terminal.
+        key_passphrase: Option<String>,
+    },
 }
 
 impl AuthMethod {
@@ -151,6 +182,9 @@ impl AuthMethod {
             Self::Agent => true,
             Self::DirectPassword { password } => !password.is_empty(),
             Self::Auto => true,
+            // Worst case AutoChain falls back to agent + default
+            // identity files, same surface as Auto.
+            Self::AutoChain { .. } => true,
         }
     }
 }

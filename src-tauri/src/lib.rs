@@ -38,7 +38,7 @@ mod ssh_cred_cache;
 use ssh_cred_cache::{SshCredCache, TargetKey};
 
 mod terminal_smart;
-use terminal_smart::terminal_validate_command;
+use terminal_smart::{terminal_completions, terminal_validate_command};
 
 struct AppState {
     next_terminal_id: AtomicU64,
@@ -6907,6 +6907,7 @@ pub fn run() {
             terminal_current_cwd,
             terminal_close,
             terminal_validate_command,
+            terminal_completions,
             postgres_browse,
             postgres_execute,
             docker_overview,

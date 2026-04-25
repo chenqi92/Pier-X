@@ -9,6 +9,8 @@ import * as cmd from "../lib/commands";
 import { controlKeyMap } from "../lib/commands";
 import ContextMenu, { type ContextMenuItem } from "../components/ContextMenu";
 import TerminalSyntaxOverlay from "../components/TerminalSyntaxOverlay";
+import CompletionPopover from "../components/CompletionPopover";
+import { terminalCompletions, type Completion } from "../lib/terminalSmart";
 import { useI18n } from "../i18n/useI18n";
 import { isMissingKeychainError, localizeError } from "../i18n/localizeMessage";
 import type { TabState, TerminalSessionInfo, TerminalSnapshot, TerminalSize } from "../lib/types";
@@ -163,6 +165,27 @@ export default function TerminalPanel({ tab, isActive, onEditConnection }: Props
     charWidth: number;
     rowHeight: number;
   }>({ charWidth: 7.8, rowHeight: 19 });
+
+  // M4: Tab-completion popover state. `open` flips on the Tab
+  // keypress and off when the user accepts / dismisses / leaves the
+  // smart-active gate. `items` is the full set returned from the
+  // backend; `filtered` is what the popover currently renders after
+  // local prefix filtering as the user keeps typing. The DOM anchor
+  // is kept in a ref because the upstream Popover component takes
+  // an HTMLElement.
+  const cursorAnchorRef = useRef<HTMLDivElement | null>(null);
+  type CompletionState = {
+    open: boolean;
+    items: Completion[];
+    filtered: Completion[];
+    selectedIndex: number;
+  };
+  const [completion, setCompletion] = useState<CompletionState>({
+    open: false,
+    items: [],
+    filtered: [],
+    selectedIndex: 0,
+  });
 
   // Prompt-anchored capture window. Armed when the backend PTY
   // reader sees the canonical OpenSSH `<user>@<host>'s password:` /
@@ -730,6 +753,35 @@ export default function TerminalPanel({ tab, isActive, onEditConnection }: Props
     smartLineBufferRef.current = "";
     setSmartLineBufferText("");
   }, [smartActive, promptEndKey]);
+
+  // M4: refilter the open completion popover on every keystroke so
+  // the candidate list narrows as the user types more characters.
+  // We re-derive the prefix from the live mirror buffer ref rather
+  // than the state mirror to keep filtering in lock-step with what
+  // the user actually typed (the state lags by one render).
+  useEffect(() => {
+    setCompletion((s) => {
+      if (!s.open) return s;
+      const line = smartLineBufferRef.current;
+      const cursor = line.length;
+      const wordStart = findWordStart(line, cursor);
+      const prefix = line.slice(wordStart, cursor);
+      const filtered = s.items.filter((it) => it.value.startsWith(prefix));
+      const selectedIndex =
+        filtered.length === 0
+          ? 0
+          : Math.min(s.selectedIndex, filtered.length - 1);
+      return { ...s, filtered, selectedIndex };
+    });
+  }, [smartLineBufferText]);
+
+  // Close the popover whenever the smart-mode gate flips off — alt
+  // screen, bracketed paste, scroll into history, or smart toggle
+  // off all dismiss the popover so the user is never stranded with
+  // a stale list over a TUI.
+  useEffect(() => {
+    if (!smartActive) closeCompletion();
+  }, [smartActive]);
 
   // ── Bell handling ───────────────────────────────────────────
 
@@ -1340,9 +1392,154 @@ export default function TerminalPanel({ tab, isActive, onEditConnection }: Props
     return sel.toString();
   }
 
+  // ── M4: Tab completion popover ─────────────────────────────────
+
+  /**
+   * Mirror of `pier-core::terminal::completions::find_word_start`.
+   * Walks back from `cursor` while the char is part of a word
+   * (anything not in our small set of operators / whitespace) and
+   * returns the byte offset where the word begins.
+   */
+  function findWordStart(line: string, cursor: number): number {
+    let i = Math.min(cursor, line.length);
+    while (i > 0) {
+      const ch = line[i - 1];
+      if (
+        ch === " " ||
+        ch === "\t" ||
+        ch === "\n" ||
+        ch === "|" ||
+        ch === "&" ||
+        ch === ";" ||
+        ch === ">" ||
+        ch === "<"
+      ) {
+        break;
+      }
+      i -= 1;
+    }
+    return i;
+  }
+
+  function closeCompletion() {
+    setCompletion((s) => (s.open ? { ...s, open: false } : s));
+  }
+
+  /**
+   * Insert the diff between the candidate and the current word at
+   * cursor. The shell's echo of those bytes drives the standard
+   * mirror-buffer update path, so highlight + caret stay in sync
+   * for free. A candidate shorter than the typed prefix is treated
+   * as a no-op for M4 — backspace-and-replace lands in M5+ once we
+   * have richer line-editor semantics.
+   */
+  function insertCompletion(item: Completion) {
+    const line = smartLineBufferRef.current;
+    const cursor = line.length;
+    const wordStart = findWordStart(line, cursor);
+    const currentWord = line.slice(wordStart, cursor);
+    if (item.value.startsWith(currentWord)) {
+      const diff = item.value.slice(currentWord.length);
+      if (diff) void sendInput(diff);
+    }
+    closeCompletion();
+  }
+
+  /**
+   * Tab handler: ask the backend for completion candidates against
+   * the current mirror buffer + cursor, then either auto-insert
+   * (single match) or open the popover.
+   */
+  async function openCompletion() {
+    if (!session) return;
+    const line = smartLineBufferRef.current;
+    const cursor = line.length;
+    let cwd: string | null = null;
+    try {
+      cwd = (await cmd.terminalCurrentCwd(session.sessionId)) ?? null;
+    } catch {
+      cwd = null;
+    }
+    let items: Completion[] = [];
+    try {
+      items = await terminalCompletions(line, cursor, cwd);
+    } catch {
+      return;
+    }
+    if (items.length === 0) return;
+    if (items.length === 1) {
+      insertCompletion(items[0]);
+      return;
+    }
+    setCompletion({
+      open: true,
+      items,
+      filtered: items,
+      selectedIndex: 0,
+    });
+  }
+
   function handleKeyDown(event: React.KeyboardEvent<HTMLDivElement>) {
     const mod = event.ctrlKey || event.metaKey;
     const selText = getSelectionText();
+
+    // M4: completion popover key handling. Highest precedence — we
+    // own arrow / Enter / Tab / Esc while the popover is open, so
+    // those bytes never reach the underlying shell readline (which
+    // would otherwise scroll its history or submit the line).
+    if (completion.open) {
+      if (event.key === "ArrowDown") {
+        event.preventDefault();
+        setCompletion((s) =>
+          s.filtered.length === 0
+            ? s
+            : {
+                ...s,
+                selectedIndex: Math.min(
+                  s.selectedIndex + 1,
+                  s.filtered.length - 1,
+                ),
+              },
+        );
+        return;
+      }
+      if (event.key === "ArrowUp") {
+        event.preventDefault();
+        setCompletion((s) => ({
+          ...s,
+          selectedIndex: Math.max(s.selectedIndex - 1, 0),
+        }));
+        return;
+      }
+      if (event.key === "Escape") {
+        event.preventDefault();
+        closeCompletion();
+        return;
+      }
+      if (event.key === "Enter" || event.key === "Tab") {
+        event.preventDefault();
+        const sel = completion.filtered[completion.selectedIndex];
+        if (sel) insertCompletion(sel);
+        else closeCompletion();
+        return;
+      }
+      // Any other key — fall through to the normal handler so the
+      // user can keep typing and the popover refilters in real time.
+    }
+
+    // M4: Tab in smart mode pops the completion menu. SSH tabs
+    // intentionally fall through to the existing transparent-Tab
+    // path, since smart mode auto-bypasses there.
+    if (
+      smartActiveRef.current &&
+      !completion.open &&
+      event.key === "Tab" &&
+      !event.shiftKey
+    ) {
+      event.preventDefault();
+      void openCompletion();
+      return;
+    }
 
     if (mod && !event.altKey && event.key.toLowerCase() === "v") {
       event.preventDefault();
@@ -1601,6 +1798,27 @@ export default function TerminalPanel({ tab, isActive, onEditConnection }: Props
                 bgColor={termTheme.bg}
               />
             )}
+            {smartActive && snapshot.promptEnd && (
+              <div
+                ref={cursorAnchorRef}
+                aria-hidden
+                style={{
+                  position: "absolute",
+                  // Anchor sits at the cursor cell so Popover can
+                  // place the menu just below the row. Width 0 with
+                  // `pointer-events: none` keeps it invisible to
+                  // text selection and mouse events.
+                  top:
+                    snapshot.promptEnd[0] * cellMetrics.rowHeight,
+                  left:
+                    (snapshot.promptEnd[1] + smartLineBufferText.length) *
+                    cellMetrics.charWidth,
+                  width: 0,
+                  height: cellMetrics.rowHeight,
+                  pointerEvents: "none",
+                }}
+              />
+            )}
           </div>
         ) : (
           <div className="terminal-placeholder">{t("Launching shell...")}</div>
@@ -1651,6 +1869,18 @@ export default function TerminalPanel({ tab, isActive, onEditConnection }: Props
           />
         );
       })()}
+
+      <CompletionPopover
+        open={completion.open}
+        anchor={cursorAnchorRef.current}
+        items={completion.filtered}
+        selectedIndex={completion.selectedIndex}
+        onHighlight={(idx) =>
+          setCompletion((s) => ({ ...s, selectedIndex: idx }))
+        }
+        onSelect={(item) => insertCompletion(item)}
+        onClose={() => closeCompletion()}
+      />
     </section>
   );
 }

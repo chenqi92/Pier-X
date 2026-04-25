@@ -2113,6 +2113,28 @@ button,
 .terminal-syntax--comment { color: var(--muted); font-style: italic; }
 .terminal-syntax--text,
 .terminal-syntax--whitespace { color: inherit; }
+
+/* M4: completion popover hint — appears as muted right-aligned
+ * text inside a `.popover-item` row (e.g. resolved binary path
+ * `/usr/bin/git` next to the `git` candidate). The atom doesn't
+ * provide a "hint" slot, so we extend it here using only design
+ * tokens — no literal colours. */
+.completion-popover-hint {
+  flex: none;
+  max-width: 50%;
+  margin-left: var(--sp-2);
+  color: var(--muted);
+  font-family: var(--mono);
+  font-size: var(--size-micro);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.completion-popover-list {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-0-5);
+}
 .terminal-row {
   display: block;
   height: var(--terminal-row-h, calc(13px * 1.45));

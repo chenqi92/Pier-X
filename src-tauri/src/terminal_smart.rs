@@ -8,7 +8,7 @@
 //! Pure-IPC layer — every business-logic decision belongs in
 //! `pier-core`. The shapes here just (de)serialise and forward.
 
-use pier_core::terminal::{validate_command, CommandKind};
+use pier_core::terminal::{complete, validate_command, Completion, CommandKind};
 use serde::Serialize;
 
 /// Result of [`terminal_validate_command`].
@@ -46,4 +46,21 @@ pub fn terminal_validate_command(name: String) -> CommandValidation {
             path: None,
         },
     }
+}
+
+/// Tab-completion candidates for the input line at `cursor`.
+///
+/// Stateless — the caller passes the shell's last-known cwd (from
+/// `terminal_current_cwd`) so this command doesn't need access to
+/// `AppState`. Returning everything in one shot also keeps the IPC
+/// path simple; the popover filters as the user types without
+/// re-invoking until they hit Tab again.
+#[tauri::command]
+pub fn terminal_completions(
+    line: String,
+    cursor: usize,
+    cwd: Option<String>,
+) -> Vec<Completion> {
+    let cwd_path = cwd.as_deref().map(std::path::Path::new);
+    complete(&line, cursor, cwd_path)
 }

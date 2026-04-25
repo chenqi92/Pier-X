@@ -28,6 +28,7 @@
 //! 2. A future remote-PTY implementation backed by an SSH channel
 //!    drops into the same `Pty` trait and reuses the emulator.
 
+pub mod completions;
 pub mod emulator;
 pub mod pty;
 pub mod session;
@@ -35,6 +36,7 @@ pub mod smart;
 pub mod ssh_watcher;
 pub mod validate;
 
+pub use completions::{complete, Completion, CompletionKind};
 pub use emulator::{Cell, Color, VtEmulator};
 pub use pty::{Pty, TerminalError};
 pub use session::{GridSnapshot, NotifyEvent, NotifyFn, PierTerminal};

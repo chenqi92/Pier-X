@@ -25,6 +25,7 @@ import {
   qualifyTable,
   type DbMutation,
 } from "../components/db/dbColumnRules";
+import { formatSqlText } from "../components/db/sqlFormat";
 import { useI18n } from "../i18n/useI18n";
 import { localizeError } from "../i18n/localizeMessage";
 import { writeClipboardText } from "../lib/clipboard";
@@ -195,6 +196,51 @@ function PostgresPanelBody({ tab }: Props) {
       setQueryError(formatError(e));
     } finally {
       setQueryBusy(false);
+    }
+  }
+
+  /** Run `EXPLAIN <sql>` without mutating the editor. Skips the
+   *  prepend when the user already wrote their own EXPLAIN /
+   *  EXPLAIN ANALYZE. */
+  async function runExplain() {
+    const trimmed = sql.trim();
+    if (!trimmed) return;
+    const explainSql = /^explain\b/i.test(trimmed) ? trimmed : `EXPLAIN ${trimmed}`;
+    setQueryBusy(true);
+    setQueryError("");
+    setNotice("");
+    try {
+      const target = await flow.ensureConnectionTarget();
+      const r = await cmd.postgresExecute({
+        host: target.host,
+        port: target.port,
+        user: tab.pgUser.trim(),
+        password: tab.pgPassword,
+        database: tab.pgDatabase.trim() || null,
+        sql: explainSql,
+      });
+      setQueryResult(r);
+      setNotice(t("EXPLAIN · {elapsed} ms", { elapsed: r.elapsedMs }));
+    } catch (e) {
+      setQueryResult(null);
+      setQueryError(formatError(e));
+    } finally {
+      setQueryBusy(false);
+    }
+  }
+
+  /** Reformat the active editor's SQL via `sql-formatter` with
+   *  the postgresql dialect. Failure leaves the SQL alone. */
+  function formatActiveSql() {
+    const trimmed = sql.trim();
+    if (!trimmed) return;
+    try {
+      const formatted = formatSqlText(sql, "postgresql");
+      if (formatted && formatted !== sql) {
+        setSql(formatted);
+      }
+    } catch (e) {
+      setNotice(t("Format failed: {err}", { err: formatError(e) }));
     }
   }
 
@@ -464,6 +510,8 @@ function PostgresPanelBody({ tab }: Props) {
         onCloseTab={sqlTabs.closeTab}
         history={sqlTabs.history}
         onPickHistory={sqlTabs.loadHistory}
+        onExplain={() => void runExplain()}
+        onFormat={formatActiveSql}
       />
       <DbResultGrid
         preview={state.preview}

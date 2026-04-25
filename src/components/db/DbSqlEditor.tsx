@@ -58,6 +58,13 @@ type Props = {
 
   /** Optional EXPLAIN handler — when omitted, button hidden. */
   onExplain?: () => void;
+
+  /** Optional Format-SQL handler. When provided, the wand button
+   *  in the toolbar is enabled and clicking it asks the parent to
+   *  reformat the active tab's SQL (parent owns dialect choice).
+   *  When omitted, the button shows the existing "coming soon"
+   *  disabled state. */
+  onFormat?: () => void;
 };
 
 /**
@@ -87,6 +94,7 @@ export default function DbSqlEditor({
   history,
   onPickHistory,
   onExplain,
+  onFormat,
 }: Props) {
   const { t } = useI18n();
   const lines = useMemo(() => sql.split("\n"), [sql]);
@@ -158,7 +166,13 @@ export default function DbSqlEditor({
         <button type="button" className="sq-mini" disabled title={t("Favorites — coming soon")}>
           <Star size={11} />
         </button>
-        <button type="button" className="sq-mini" disabled title={t("Format SQL — coming soon")}>
+        <button
+          type="button"
+          className="sq-mini"
+          disabled={!onFormat}
+          onClick={onFormat}
+          title={onFormat ? t("Format SQL") : t("Format SQL — coming soon")}
+        >
           <Wand2 size={11} />
         </button>
       </div>

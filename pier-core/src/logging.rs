@@ -85,7 +85,11 @@ pub fn init(path: PathBuf) -> std::io::Result<PathBuf> {
         log::set_max_level(log::LevelFilter::Info);
     }
 
-    write_line("INFO", "logger", &format!("log initialised at {}", path.display()));
+    write_line(
+        "INFO",
+        "logger",
+        &format!("log initialised at {}", path.display()),
+    );
     Ok(path)
 }
 
@@ -131,7 +135,10 @@ pub fn set_verbose_diagnostics(enabled: bool) {
     write_line(
         "INFO",
         "logger",
-        &format!("verbose diagnostics {}", if enabled { "enabled" } else { "disabled" }),
+        &format!(
+            "verbose diagnostics {}",
+            if enabled { "enabled" } else { "disabled" }
+        ),
     );
 }
 
@@ -201,7 +208,11 @@ fn civil_from_unix(secs: i64) -> (i32, u32, u32, u32, u32, u32) {
 
     // Days since 1970-01-01 → civil date.
     let z = days + 719_468;
-    let era = if z >= 0 { z / 146_097 } else { (z - 146_096) / 146_097 };
+    let era = if z >= 0 {
+        z / 146_097
+    } else {
+        (z - 146_096) / 146_097
+    };
     let doe = (z - era * 146_097) as u32; // [0, 146096]
     let yoe = (doe - doe / 1460 + doe / 36_524 - doe / 146_096) / 365; // [0, 399]
     let y = (yoe as i64 + era * 400) as i64;
@@ -243,7 +254,9 @@ fn is_noisy_target(target: &str) -> bool {
         "h2",
         "reqwest",
     ];
-    NOISY.iter().any(|p| target == *p || target.starts_with(&format!("{}::", p)))
+    NOISY
+        .iter()
+        .any(|p| target == *p || target.starts_with(&format!("{}::", p)))
 }
 
 impl log::Log for GlobalBridge {

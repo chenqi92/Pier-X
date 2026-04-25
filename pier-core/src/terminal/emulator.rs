@@ -723,7 +723,9 @@ impl Performer<'_> {
 fn extract_osc7_path(uri: &str) -> Option<String> {
     // Strip the `file://` prefix. Some shells emit `file:<path>`
     // (no host segment) — accept that too.
-    let rest = uri.strip_prefix("file://").or_else(|| uri.strip_prefix("file:"))?;
+    let rest = uri
+        .strip_prefix("file://")
+        .or_else(|| uri.strip_prefix("file:"))?;
     // After `file://`, anything up to the next `/` is the host.
     // `file:/path` has no host — rest already starts with `/`.
     let path = if let Some(slash) = rest.find('/') {

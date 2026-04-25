@@ -288,7 +288,11 @@ impl SftpClient {
     {
         use tokio::io::{AsyncReadExt, AsyncWriteExt};
 
-        let mut remote_file = self.inner.open(remote.to_string()).await.map_err(sftp_error)?;
+        let mut remote_file = self
+            .inner
+            .open(remote.to_string())
+            .await
+            .map_err(sftp_error)?;
         let total = remote_file
             .metadata()
             .await
@@ -365,7 +369,11 @@ impl SftpClient {
         on_progress(0, total);
 
         let mut local_file = tokio::fs::File::open(local).await.map_err(SshError::Io)?;
-        let mut remote_file = self.inner.create(remote.to_string()).await.map_err(sftp_error)?;
+        let mut remote_file = self
+            .inner
+            .create(remote.to_string())
+            .await
+            .map_err(sftp_error)?;
         let mut buf = vec![0u8; 64 * 1024];
         let mut transferred: u64 = 0;
         loop {
@@ -425,7 +433,14 @@ impl SftpClient {
         let mut files: Vec<(PathBuf, String, u64)> = Vec::new();
         let mut dirs: Vec<String> = Vec::new();
         let mut total: u64 = 0;
-        collect_local_tree(local_root, local_root, remote_root, &mut files, &mut dirs, &mut total)?;
+        collect_local_tree(
+            local_root,
+            local_root,
+            remote_root,
+            &mut files,
+            &mut dirs,
+            &mut total,
+        )?;
 
         on_progress(0, total);
 
@@ -669,7 +684,8 @@ async fn collect_remote_tree(
     files: &mut Vec<(String, PathBuf, u64)>,
     total: &mut u64,
 ) -> Result<()> {
-    let mut stack: Vec<(String, PathBuf)> = vec![(remote_root.to_string(), local_root.to_path_buf())];
+    let mut stack: Vec<(String, PathBuf)> =
+        vec![(remote_root.to_string(), local_root.to_path_buf())];
     while let Some((remote_dir, local_dir)) = stack.pop() {
         let entries = sftp.list_dir(&remote_dir).await?;
         for entry in entries {

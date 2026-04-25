@@ -410,12 +410,18 @@ fn parse_netdev(text: &str) -> Vec<InterfaceCounter> {
         if name == "lo" {
             continue;
         }
-        let rx_bytes = parts.next().and_then(|s| s.parse::<u64>().ok()).unwrap_or(0);
+        let rx_bytes = parts
+            .next()
+            .and_then(|s| s.parse::<u64>().ok())
+            .unwrap_or(0);
         // skip rx_packets, rx_errs, rx_drop, rx_fifo, rx_frame, rx_compressed, rx_multicast (7 fields)
         for _ in 0..7 {
             parts.next();
         }
-        let tx_bytes = parts.next().and_then(|s| s.parse::<u64>().ok()).unwrap_or(0);
+        let tx_bytes = parts
+            .next()
+            .and_then(|s| s.parse::<u64>().ok())
+            .unwrap_or(0);
         out.push(InterfaceCounter {
             iface: name.to_string(),
             rx_bytes,
@@ -451,7 +457,10 @@ mod tests {
     #[test]
     fn parses_addr_port_v4() {
         assert_eq!(split_addr_port("0.0.0.0:22"), ("0.0.0.0".into(), 22));
-        assert_eq!(split_addr_port("127.0.0.1:5432"), ("127.0.0.1".into(), 5432));
+        assert_eq!(
+            split_addr_port("127.0.0.1:5432"),
+            ("127.0.0.1".into(), 5432)
+        );
     }
 
     #[test]

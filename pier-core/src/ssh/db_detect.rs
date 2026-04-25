@@ -338,9 +338,13 @@ fn classify_image(image: &str) -> Option<ImageKind> {
         .to_ascii_lowercase();
 
     match name.as_str() {
-        "mysql" | "mariadb" | "percona" | "percona-server" | "percona-mysql" => Some(ImageKind::Mysql),
+        "mysql" | "mariadb" | "percona" | "percona-server" | "percona-mysql" => {
+            Some(ImageKind::Mysql)
+        }
         "postgres" | "postgresql" | "timescaledb" | "citus" => Some(ImageKind::Postgres),
-        "redis" | "redis-stack" | "redis-stack-server" | "valkey" | "keydb" => Some(ImageKind::Redis),
+        "redis" | "redis-stack" | "redis-stack-server" | "valkey" | "keydb" => {
+            Some(ImageKind::Redis)
+        }
         _ => None,
     }
 }
@@ -580,7 +584,10 @@ mod tests {
         assert_eq!(classify_image("postgres:16"), Some(ImageKind::Postgres));
         assert_eq!(classify_image("redis:7-alpine"), Some(ImageKind::Redis));
         assert_eq!(classify_image("valkey/valkey:8"), Some(ImageKind::Redis));
-        assert_eq!(classify_image("bitnami/postgresql:16"), Some(ImageKind::Postgres));
+        assert_eq!(
+            classify_image("bitnami/postgresql:16"),
+            Some(ImageKind::Postgres)
+        );
         assert_eq!(
             classify_image("docker.m.daocloud.io/library/mysql:8"),
             Some(ImageKind::Mysql),
@@ -609,7 +616,11 @@ mod tests {
     fn parse_port_mappings_keeps_host_bound_tcp_only() {
         let ports = "0.0.0.0:3307->3306/tcp, :::3307->3306/tcp, 5432/tcp";
         let got = parse_port_mappings(ports);
-        assert_eq!(got.len(), 1, "ipv4+ipv6 should dedupe; unbound skipped: {got:?}");
+        assert_eq!(
+            got.len(),
+            1,
+            "ipv4+ipv6 should dedupe; unbound skipped: {got:?}"
+        );
         assert_eq!(got[0].host_port, 3307);
         assert_eq!(got[0].container_port, 3306);
         assert_eq!(got[0].proto, "tcp");
@@ -648,14 +659,20 @@ LISTEN   0      511    *:6379            *:*               users:((\"redis-serve
         let got = parse_listen_lines(stdout);
         // sshd on 22 is not a DB port → skipped.
         assert_eq!(got.len(), 2, "expected mysql + redis, got {got:?}");
-        let mysql = got.iter().find(|i| i.kind == DetectedDbKind::Mysql).unwrap();
+        let mysql = got
+            .iter()
+            .find(|i| i.kind == DetectedDbKind::Mysql)
+            .unwrap();
         assert_eq!(mysql.host, "127.0.0.1");
         assert_eq!(mysql.port, 3306);
         assert_eq!(mysql.metadata.process_name.as_deref(), Some("mysqld"));
         assert_eq!(mysql.metadata.pid, Some(2345));
         assert_eq!(mysql.source, DetectionSource::Systemd);
 
-        let redis = got.iter().find(|i| i.kind == DetectedDbKind::Redis).unwrap();
+        let redis = got
+            .iter()
+            .find(|i| i.kind == DetectedDbKind::Redis)
+            .unwrap();
         assert_eq!(redis.port, 6379);
     }
 
@@ -668,7 +685,10 @@ LISTEN 0 128 0.0.0.0:3307 0.0.0.0:* users:((\"docker-proxy\",pid=4321,fd=4))
         assert_eq!(got.len(), 1);
         assert_eq!(got[0].source, DetectionSource::Docker);
         assert_eq!(got[0].port, 3307);
-        assert_eq!(got[0].metadata.process_name.as_deref(), Some("docker-proxy"));
+        assert_eq!(
+            got[0].metadata.process_name.as_deref(),
+            Some("docker-proxy")
+        );
     }
 
     #[test]
@@ -716,9 +736,15 @@ ESTAB  0 0   127.0.0.1:51234 127.0.0.1:3306 users:((\"mysql\",pid=2,fd=2))
 
     #[test]
     fn split_host_port_parses_ipv4_and_ipv6_forms() {
-        assert_eq!(split_host_port("0.0.0.0:3307"), Some(("0.0.0.0".into(), 3307)));
+        assert_eq!(
+            split_host_port("0.0.0.0:3307"),
+            Some(("0.0.0.0".into(), 3307))
+        );
         assert_eq!(split_host_port("[::1]:5432"), Some(("::1".into(), 5432)));
-        assert_eq!(split_host_port("127.0.0.1:6379"), Some(("127.0.0.1".into(), 6379)));
+        assert_eq!(
+            split_host_port("127.0.0.1:6379"),
+            Some(("127.0.0.1".into(), 6379))
+        );
         assert_eq!(split_host_port("no-port"), None);
     }
 
@@ -736,8 +762,7 @@ ESTAB  0 0   127.0.0.1:51234 127.0.0.1:3306 users:((\"mysql\",pid=2,fd=2))
         assert_eq!(name.as_deref(), Some("mysqld"));
         assert_eq!(pid, Some(99));
 
-        let (name, pid) =
-            extract_process_info("tcp 0 0 0.0.0.0:5432 0.0.0.0:* LISTEN 42/postgres");
+        let (name, pid) = extract_process_info("tcp 0 0 0.0.0.0:5432 0.0.0.0:* LISTEN 42/postgres");
         assert_eq!(name.as_deref(), Some("postgres"));
         assert_eq!(pid, Some(42));
 

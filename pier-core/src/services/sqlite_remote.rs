@@ -597,8 +597,12 @@ fn supports_json_mode(version: &str) -> bool {
     // `-json` dot-command was added in SQLite 3.33.
     let (major, minor) = match version.split('.').take(2).collect::<Vec<_>>()[..] {
         [a, b] => {
-            let Ok(a) = a.parse::<u32>() else { return false };
-            let Ok(b) = b.parse::<u32>() else { return false };
+            let Ok(a) = a.parse::<u32>() else {
+                return false;
+            };
+            let Ok(b) = b.parse::<u32>() else {
+                return false;
+            };
             (a, b)
         }
         _ => return false,
@@ -662,10 +666,7 @@ mod tests {
     fn shell_single_quote_escapes_internal_quotes() {
         // Tom's file → 'Tom'\''s file'
         assert_eq!(shell_single_quote("Tom's"), "'Tom'\\''s'");
-        assert_eq!(
-            shell_single_quote("a'b'c"),
-            "'a'\\''b'\\''c'",
-        );
+        assert_eq!(shell_single_quote("a'b'c"), "'a'\\''b'\\''c'",);
     }
 
     #[test]
@@ -687,7 +688,10 @@ mod tests {
     #[test]
     fn double_quote_ident_escapes_inner_double_quotes() {
         assert_eq!(double_quote_ident("orders"), "\"orders\"");
-        assert_eq!(double_quote_ident("my \"weird\" table"), "\"my \"\"weird\"\" table\"");
+        assert_eq!(
+            double_quote_ident("my \"weird\" table"),
+            "\"my \"\"weird\"\" table\""
+        );
     }
 
     #[test]

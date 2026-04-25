@@ -387,7 +387,10 @@ mod tests {
             source: DbCredentialSource::Manual,
         };
         let json = serde_json::to_string(&original).expect("serialize");
-        assert!(!json.contains("hunter2"), "serialized JSON leaked password: {json}");
+        assert!(
+            !json.contains("hunter2"),
+            "serialized JSON leaked password: {json}"
+        );
         let parsed: DbCredential = serde_json::from_str(&json).expect("deserialize");
         // Password is skipped on serialize, so the parsed side
         // comes back as empty plaintext.
@@ -417,7 +420,10 @@ mod tests {
         assert!(c.is_valid(), "sqlite credential with path must be valid");
         let mut bad = c.clone();
         bad.sqlite_path = None;
-        assert!(!bad.is_valid(), "sqlite credential without path must be invalid");
+        assert!(
+            !bad.is_valid(),
+            "sqlite credential without path must be invalid"
+        );
     }
 
     #[test]

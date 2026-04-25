@@ -247,10 +247,8 @@ pub async fn probe_with_baseline(
             if let Some(prev) = *baseline {
                 let dt = now.captured_at.saturating_sub(prev.captured_at) as f64 / 1000.0;
                 if dt > 0.05 {
-                    snap.net_rx_bps =
-                        (now.rx_bytes.saturating_sub(prev.rx_bytes)) as f64 / dt;
-                    snap.net_tx_bps =
-                        (now.tx_bytes.saturating_sub(prev.tx_bytes)) as f64 / dt;
+                    snap.net_rx_bps = (now.rx_bytes.saturating_sub(prev.rx_bytes)) as f64 / dt;
+                    snap.net_tx_bps = (now.tx_bytes.saturating_sub(prev.tx_bytes)) as f64 / dt;
                 }
             }
             // Update the caller's baseline so the next probe can
@@ -318,13 +316,27 @@ pub async fn probe_with_baseline(
         // record. Helps a user looking at an all-dashes sub-gauge
         // find a reason (`cpu_pct=-1` → `/proc/stat` was missing).
         let mut missing: Vec<&str> = Vec::new();
-        if snap.cpu_pct < 0.0 { missing.push("cpu_pct"); }
-        if snap.mem_total_mb < 0.0 { missing.push("mem"); }
-        if snap.disk_use_pct < 0.0 { missing.push("disk"); }
-        if snap.cpu_count == 0 { missing.push("cpu_count"); }
-        if snap.proc_count == 0 { missing.push("proc_count"); }
-        if snap.os_label.is_empty() { missing.push("os_label"); }
-        if snap.top_processes.is_empty() { missing.push("top_processes"); }
+        if snap.cpu_pct < 0.0 {
+            missing.push("cpu_pct");
+        }
+        if snap.mem_total_mb < 0.0 {
+            missing.push("mem");
+        }
+        if snap.disk_use_pct < 0.0 {
+            missing.push("disk");
+        }
+        if snap.cpu_count == 0 {
+            missing.push("cpu_count");
+        }
+        if snap.proc_count == 0 {
+            missing.push("proc_count");
+        }
+        if snap.os_label.is_empty() {
+            missing.push("os_label");
+        }
+        if snap.top_processes.is_empty() {
+            missing.push("top_processes");
+        }
         if !missing.is_empty() {
             crate::logging::write_event(
                 "DEBUG",
@@ -379,7 +391,9 @@ fn parse_netdev_totals(text: &str) -> Option<NetSample> {
             continue;
         }
         // Interface name is the column ending in `:`.
-        let Some(colon) = trimmed.find(':') else { continue };
+        let Some(colon) = trimmed.find(':') else {
+            continue;
+        };
         let iface = trimmed[..colon].trim();
         // Skip loopback — local-only traffic isn't useful for the
         // "is this server seeing real network activity?" question.
@@ -421,10 +435,7 @@ fn parse_os_label(text: &str) -> String {
         let trimmed = line.trim();
         if let Some(rest) = trimmed.strip_prefix("PRETTY_NAME=") {
             pretty = rest.trim_matches('"').to_string();
-        } else if !trimmed.is_empty()
-            && !trimmed.contains('=')
-            && kernel.is_empty()
-        {
+        } else if !trimmed.is_empty() && !trimmed.contains('=') && kernel.is_empty() {
             // `uname -sr` output: "Linux 5.15.0-139-generic"
             kernel = trimmed.to_string();
         }
@@ -738,8 +749,9 @@ pub fn parse_df(text: &str, snap: &mut ServerSnapshot) {
             root_set = true;
         }
 
-        let skip =
-            is_ignorable_fs_type(&fs_type) || is_ignorable_mount(&mountpoint) || mountpoint.is_empty();
+        let skip = is_ignorable_fs_type(&fs_type)
+            || is_ignorable_mount(&mountpoint)
+            || mountpoint.is_empty();
         if !skip {
             snap.disks.push(DiskEntry {
                 filesystem,
@@ -782,13 +794,12 @@ pub fn parse_df(text: &str, snap: &mut ServerSnapshot) {
 
     // Root first in the per-disk list, then the rest by mountpoint
     // for a predictable readout.
-    snap.disks.sort_by(|a, b| {
-        match (a.mountpoint == "/", b.mountpoint == "/") {
+    snap.disks
+        .sort_by(|a, b| match (a.mountpoint == "/", b.mountpoint == "/") {
             (true, false) => std::cmp::Ordering::Less,
             (false, true) => std::cmp::Ordering::Greater,
             _ => a.mountpoint.cmp(&b.mountpoint),
-        }
-    });
+        });
 }
 
 /// Parse `/proc/stat` first line to get overall CPU usage %.
@@ -990,7 +1001,8 @@ swap:          2047           0        2047";
 
     #[test]
     fn parse_os_label_combines_pretty_name_and_kernel() {
-        let text = "PRETTY_NAME=\"Ubuntu 24.04.1 LTS\"\nVERSION=\"24.04.1\"\nLinux 5.15.0-139-generic";
+        let text =
+            "PRETTY_NAME=\"Ubuntu 24.04.1 LTS\"\nVERSION=\"24.04.1\"\nLinux 5.15.0-139-generic";
         let label = parse_os_label(text);
         assert!(label.contains("Ubuntu 24.04.1 LTS"));
         assert!(label.contains("5.15.0-139-generic"));
@@ -1005,7 +1017,8 @@ swap:          2047           0        2047";
             disk_use_pct: -1.0,
             ..Default::default()
         };
-        let text = "Filesystem                                       Size  Used Avail Use% Mounted on
+        let text =
+            "Filesystem                                       Size  Used Avail Use% Mounted on
 /dev/mapper/long--volume--name--that--wraps
                                                   100G   42G   58G  43% /";
         parse_df(text, &mut snap);

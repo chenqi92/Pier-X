@@ -1091,7 +1091,10 @@ not-json-at-all
     #[test]
     fn parse_db_env_tolerates_malformed_json() {
         assert_eq!(parse_db_env_from_inspect(""), DbContainerEnv::default());
-        assert_eq!(parse_db_env_from_inspect("not json"), DbContainerEnv::default());
+        assert_eq!(
+            parse_db_env_from_inspect("not json"),
+            DbContainerEnv::default()
+        );
     }
 
     #[test]
@@ -1187,7 +1190,10 @@ not-json-at-all
         assert_eq!(parse_size_to_bytes("186MB"), 186_000_000);
         assert_eq!(parse_size_to_bytes("186MiB"), 186 * 1024 * 1024);
         assert_eq!(parse_size_to_bytes("1.5GB"), 1_500_000_000);
-        assert_eq!(parse_size_to_bytes("48.5MiB"), (48.5_f64 * 1024.0 * 1024.0) as u64);
+        assert_eq!(
+            parse_size_to_bytes("48.5MiB"),
+            (48.5_f64 * 1024.0 * 1024.0) as u64
+        );
         assert_eq!(parse_size_to_bytes(""), 0);
         assert_eq!(parse_size_to_bytes("garbage"), 0);
     }

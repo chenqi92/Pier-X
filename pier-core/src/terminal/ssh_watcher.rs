@@ -109,10 +109,7 @@ pub fn output_indicates_ssh_failure(chunk: &[u8]) -> bool {
 /// The `user@host` shape requires a `@` and a `'s password:` tail,
 /// which is specific enough that a remote `sudo` prompt can't
 /// trigger it.
-const SSH_PASSWORD_PROMPT_MARKERS: &[&[u8]] = &[
-    b"'s password:",
-    b"Enter passphrase for key ",
-];
+const SSH_PASSWORD_PROMPT_MARKERS: &[&[u8]] = &[b"'s password:", b"Enter passphrase for key "];
 
 /// Scan a PTY output chunk for an OpenSSH password / passphrase
 /// prompt. Returns true on a match so the caller can fire a
@@ -155,8 +152,7 @@ pub struct SshChildTarget {
 pub fn scan(system: &mut System, root_pid: u32) -> Option<SshChildTarget> {
     // We only care about pid/ppid/cmd — skip environment and exe
     // resolution so Windows doesn't open every process handle.
-    let refresh = ProcessRefreshKind::nothing()
-        .with_cmd(UpdateKind::Always);
+    let refresh = ProcessRefreshKind::nothing().with_cmd(UpdateKind::Always);
     system.refresh_processes_specifics(ProcessesToUpdate::All, true, refresh);
 
     let root = Pid::from_u32(root_pid);
@@ -426,7 +422,12 @@ mod tests {
     #[test]
     fn parses_explicit_port_and_key() {
         let t = parse_ssh_argv(&argv(&[
-            "ssh", "-p", "2222", "-i", "/home/a/.ssh/id", "me@example",
+            "ssh",
+            "-p",
+            "2222",
+            "-i",
+            "/home/a/.ssh/id",
+            "me@example",
         ]))
         .unwrap();
         assert_eq!(t.user, "me");
@@ -446,7 +447,12 @@ mod tests {
     #[test]
     fn parses_dash_o_port_and_user() {
         let t = parse_ssh_argv(&argv(&[
-            "ssh", "-o", "Port=2200", "-o", "User=ops", "bastion",
+            "ssh",
+            "-o",
+            "Port=2200",
+            "-o",
+            "User=ops",
+            "bastion",
         ]))
         .unwrap();
         assert_eq!(t.user, "ops");

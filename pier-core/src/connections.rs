@@ -332,7 +332,10 @@ impl ConnectionStore {
     /// `from` gets its group set to `to` (or `None` if `to` is
     /// empty). Returns the number of connections updated.
     pub fn rename_group(&mut self, from: &str, to: Option<&str>) -> usize {
-        let target = to.map(|s| s.trim()).filter(|s| !s.is_empty()).map(String::from);
+        let target = to
+            .map(|s| s.trim())
+            .filter(|s| !s.is_empty())
+            .map(String::from);
         let mut touched = 0usize;
         for c in self.connections.iter_mut() {
             let matches = c
@@ -484,7 +487,9 @@ pub fn save_db_credential(
         favorite: input.favorite,
         source: input.source,
     };
-    store.connections[connection_index].databases.push(cred.clone());
+    store.connections[connection_index]
+        .databases
+        .push(cred.clone());
     // Rollback keyring if the YAML save fails — otherwise we'd
     // leave an orphan keyring entry that no code path ever reads.
     if let Err(err) = store.save_default() {
@@ -569,8 +574,11 @@ pub fn update_db_credential(
             // Best-effort delete; a missing entry is fine.
             let _ = credentials::delete(prev_id);
         }
-        let storage_id = existing_id
-            .unwrap_or_else(|| store.connections[connection_index].databases[idx].id.clone());
+        let storage_id = existing_id.unwrap_or_else(|| {
+            store.connections[connection_index].databases[idx]
+                .id
+                .clone()
+        });
         let storage = store_password(&storage_id, new)?;
         store.connections[connection_index].databases[idx].password = storage;
     }
@@ -854,12 +862,10 @@ mod tests {
         store.add(make_config("c", "id-c"));
         // Move c to front, b to end, and tag a/c as "prod" while b stays ungrouped.
         let order = vec![2usize, 0, 1];
-        let groups = vec![
-            Some("prod".to_string()),
-            Some("prod".to_string()),
-            None,
-        ];
-        store.reorder_with_groups(&order, &groups).expect("reorder ok");
+        let groups = vec![Some("prod".to_string()), Some("prod".to_string()), None];
+        store
+            .reorder_with_groups(&order, &groups)
+            .expect("reorder ok");
         assert_eq!(store.connections[0].name, "c");
         assert_eq!(store.connections[1].name, "a");
         assert_eq!(store.connections[2].name, "b");

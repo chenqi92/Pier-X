@@ -513,6 +513,19 @@ function MySqlPanelBody({ tab }: Props) {
   const resultToolbar = (
     <>
       {pagerToolbar}
+      {state.tableName && state.browseElapsedMs > 0 && (
+        <span
+          className="mono"
+          style={{
+            fontSize: "var(--size-small)",
+            color: "var(--muted)",
+            padding: "0 var(--sp-1-5)",
+          }}
+          title={t("Wall-clock for the preview SELECT")}
+        >
+          {state.browseElapsedMs} ms
+        </span>
+      )}
       {queryResult && (
         <button
           type="button"

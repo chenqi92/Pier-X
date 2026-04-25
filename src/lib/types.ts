@@ -391,12 +391,31 @@ export type SqliteColumnView = {
   primaryKey: boolean;
 };
 
+export type SqliteIndexView = {
+  name: string;
+  unique: boolean;
+  /** `c` (CREATE INDEX), `u` (UNIQUE constraint), or `pk` (PRIMARY KEY). */
+  origin: string;
+  columns: string[];
+};
+
+export type SqliteTriggerView = {
+  name: string;
+  /** "BEFORE INSERT" / "AFTER UPDATE" / "INSTEAD OF DELETE" / etc. */
+  event: string;
+  sql: string;
+};
+
 export type SqliteBrowserState = {
   path: string;
   tableName: string;
   tables: string[];
   columns: SqliteColumnView[];
   preview: DataPreview | null;
+  indexes: SqliteIndexView[];
+  triggers: SqliteTriggerView[];
+  /** On-disk file size in bytes; 0 means stat failed. */
+  fileSize: number;
 };
 
 // ── Redis ───────────────────────────────────────────────────────

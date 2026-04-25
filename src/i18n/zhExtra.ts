@@ -954,6 +954,7 @@ export const zhExtra: Record<string, string> = {
   "Compact is the IDE default; Spacious adds extra breathing room.":
     "紧凑是 IDE 默认密度;宽松会额外增加呼吸空间。",
   "Bell mode": "铃声模式",
+  "Binary": "二进制",
   "Off": "关闭",
   "Visual": "视觉",
   "Audio": "声音",

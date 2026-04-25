@@ -153,7 +153,10 @@ export default function SftpEditorDialog({
   const [loading, setLoading] = useState(false);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState("");
-  const [meta, setMeta] = useState<Pick<SftpTextFile, "size" | "permissions" | "modified" | "lossy"> | null>(null);
+  const [meta, setMeta] = useState<Pick<
+    SftpTextFile,
+    "size" | "permissions" | "modified" | "lossy" | "owner" | "group" | "eol" | "encoding"
+  > | null>(null);
   const [dirty, setDirty] = useState(false);
   const [mode, setMode] = useState<Mode>("edit");
   const [wrap, setWrap] = useState(editorWrapDefault);
@@ -200,6 +203,10 @@ export default function SftpEditorDialog({
           permissions: res.permissions,
           modified: res.modified,
           lossy: res.lossy,
+          owner: res.owner,
+          group: res.group,
+          eol: res.eol,
+          encoding: res.encoding,
         });
         setTimeout(() => {
           if (!alive) return;
@@ -536,6 +543,49 @@ export default function SftpEditorDialog({
   const modifiedLabel = meta?.modified
     ? new Date(meta.modified * 1000).toISOString().replace("T", " ").slice(0, 16)
     : "—";
+  // Prefer the owner string from the read response (may include
+  // both owner and group in `user:group` form); fall back to the
+  // panel-supplied `ownerLabel` prop so the chip stays useful
+  // before the read settles.
+  const headerOwnerLabel = (() => {
+    const o = meta?.owner ?? "";
+    const g = meta?.group ?? "";
+    if (o && g && o !== g) return `${o}:${g}`;
+    if (o) return o;
+    return ownerLabel;
+  })();
+  const eolLabel = (() => {
+    switch (meta?.eol) {
+      case "lf":
+        return "LF";
+      case "crlf":
+        return "CRLF";
+      case "cr":
+        return "CR";
+      case "mixed":
+        return t("Mixed");
+      case "none":
+        return "—";
+      default:
+        return null;
+    }
+  })();
+  const encodingLabel = (() => {
+    switch (meta?.encoding) {
+      case "utf-8":
+        return "UTF-8";
+      case "utf-8-bom":
+        return "UTF-8 BOM";
+      case "utf-16-le":
+        return "UTF-16 LE";
+      case "utf-16-be":
+        return "UTF-16 BE";
+      case "binary":
+        return t("Binary");
+      default:
+        return null;
+    }
+  })();
 
   return (
     <>
@@ -562,8 +612,8 @@ export default function SftpEditorDialog({
             <span className="editor-chip"><HardDrive size={9} /> {sizeLabel}</span>
             <span className="editor-chip"><Clock size={9} /> {modifiedLabel}</span>
             <span className="editor-chip"><Key size={9} /> {permLabel}</span>
-            {ownerLabel && (
-              <span className="editor-chip"><User size={9} /> {ownerLabel}</span>
+            {headerOwnerLabel && (
+              <span className="editor-chip"><User size={9} /> {headerOwnerLabel}</span>
             )}
           </span>
           <span className="editor-path mono" title={path}>{path}</span>
@@ -800,9 +850,9 @@ export default function SftpEditorDialog({
             </>
           )}
           <span className="editor-status-spacer" />
-          <span>UTF-8</span>
+          <span>{encodingLabel ?? "UTF-8"}</span>
           <span className="sep">·</span>
-          <span>LF</span>
+          <span>{eolLabel ?? "LF"}</span>
           <span className="sep">·</span>
           <span>{langName}</span>
           <span className="sep">·</span>

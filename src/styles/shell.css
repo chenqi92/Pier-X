@@ -5121,7 +5121,7 @@ button,
 
 .ftp-col-head {
   display: grid;
-  grid-template-columns: 1fr 110px 70px 92px;
+  grid-template-columns: 1fr 110px 90px 70px 92px;
   gap: var(--sp-2-5);
   padding: 6px var(--sp-3) 5px calc(var(--sp-3) + 20px + var(--sp-2-5));
   font-size: 9.5px;
@@ -5133,6 +5133,7 @@ button,
   flex: none;
 }
 .ftp-col-head .ftp-perm { text-align: left; }
+.ftp-col-head .ftp-owner { text-align: left; }
 .ftp-col-head .ftp-size { text-align: right; }
 .ftp-col-head .ftp-mod  { text-align: right; }
 
@@ -5224,7 +5225,7 @@ button,
 }
 .ftp-row {
   display: grid;
-  grid-template-columns: 20px 1fr 110px 70px 92px;
+  grid-template-columns: 20px 1fr 110px 90px 70px 92px;
   gap: var(--sp-2-5);
   padding: 6px var(--sp-3);
   align-items: center;
@@ -5262,6 +5263,13 @@ button,
   white-space: nowrap;
   overflow: hidden;
 }
+.ftp-row .ftp-owner {
+  font-size: var(--size-micro);
+  color: var(--muted);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
 .ftp-row .ftp-size {
   font-size: var(--size-micro);
   color: var(--ink-2);
@@ -5281,6 +5289,16 @@ button,
    (narrow), SIZE last (very narrow). Driven by the .ftp container
    query so the right-panel width controls it regardless of the
    window width. */
+@container ftp-panel (max-width: 540px) {
+  .ftp-col-head,
+  .ftp-row {
+    grid-template-columns: 20px 1fr 110px 70px 92px;
+  }
+  .ftp-col-head { padding-left: calc(var(--sp-3) + 20px + var(--sp-2-5)); }
+  .ftp-col-head { grid-template-columns: 1fr 110px 70px 92px; }
+  .ftp-row .ftp-owner,
+  .ftp-col-head .ftp-owner { display: none; }
+}
 @container ftp-panel (max-width: 460px) {
   .ftp-col-head,
   .ftp-row {

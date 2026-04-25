@@ -534,6 +534,13 @@ struct SftpEntryView {
     /// didn't supply it. The frontend renders this as a relative
     /// "3m", "2d" label.
     modified: Option<u64>,
+    /// Owner display string (named user from `/etc/passwd`, falling
+    /// back to the numeric uid). Empty when the server didn't
+    /// report either.
+    owner: String,
+    /// Group display string (named group, falling back to the gid).
+    /// Empty when neither was reported.
+    group: String,
 }
 
 #[derive(Serialize)]
@@ -4280,6 +4287,8 @@ fn sftp_browse(
                     .map(|p| format_posix_permissions(p, entry.is_dir, entry.is_link))
                     .unwrap_or_default(),
                 modified: entry.modified,
+                owner: entry.owner.clone().unwrap_or_default(),
+                group: entry.group.clone().unwrap_or_default(),
                 name: entry.name,
                 path: entry.path,
                 is_dir: entry.is_dir,
@@ -5628,6 +5637,24 @@ struct SftpTextFile {
     /// had to replace with U+FFFD. Saving will persist the replaced
     /// bytes, so the UI warns the user before letting them overwrite.
     lossy: bool,
+    /// Owner display string (named user, falling back to uid).
+    /// Empty when the server omitted owner info.
+    owner: String,
+    /// Group display string (named group, falling back to gid).
+    group: String,
+    /// Detected line ending convention. One of:
+    /// * `"lf"` — Unix-style `\n`
+    /// * `"crlf"` — Windows-style `\r\n`
+    /// * `"cr"` — classic-Mac `\r` only
+    /// * `"mixed"` — multiple kinds present
+    /// * `"none"` — no line endings (single-line or empty file)
+    eol: String,
+    /// Detected encoding label. Currently one of `"utf-8"`,
+    /// `"utf-8-bom"`, `"utf-16-le"`, `"utf-16-be"`, or
+    /// `"binary"` when the file appears to be non-text. The
+    /// content field is always UTF-8 — this is purely a footer
+    /// readout for the editor dialog.
+    encoding: String,
 }
 
 /// Hard ceiling for `sftp_read_text`. Keeping the editor confined to
@@ -5673,9 +5700,19 @@ fn sftp_read_text(
         ));
     }
     let bytes = sftp.read_file_blocking(&path).map_err(|e| e.to_string())?;
-    let raw_len = bytes.len();
-    let text = String::from_utf8_lossy(&bytes).into_owned();
+    let encoding = detect_text_encoding(&bytes);
+    // Strip the BOM before lossy-decoding so it doesn't show up
+    // as a U+FEFF sentinel in the editor. The `encoding` label
+    // stays "utf-8-bom" so the footer can preserve it on save.
+    let decode_slice: &[u8] = if encoding == "utf-8-bom" && bytes.len() >= 3 {
+        &bytes[3..]
+    } else {
+        &bytes
+    };
+    let raw_len = decode_slice.len();
+    let text = String::from_utf8_lossy(decode_slice).into_owned();
     let lossy = text.as_bytes().len() != raw_len || text.contains('\u{FFFD}');
+    let eol = detect_eol(&text);
     Ok(SftpTextFile {
         path,
         content: text,
@@ -5683,7 +5720,87 @@ fn sftp_read_text(
         permissions: meta.permissions,
         modified: meta.modified,
         lossy,
+        owner: meta.owner.clone().unwrap_or_default(),
+        group: meta.group.clone().unwrap_or_default(),
+        eol,
+        encoding,
     })
+}
+
+/// Best-effort encoding sniffer for SFTP-backed text files.
+/// We only need to distinguish a small handful of cases for the
+/// editor footer:
+/// * UTF-8 with BOM (`EF BB BF`) — preserved on save.
+/// * UTF-16 LE / BE (`FF FE` / `FE FF`) — read for display, but
+///   we don't yet round-trip them on save (the user is warned by
+///   the existing `lossy` flag).
+/// * Plain UTF-8 — the common case.
+/// * Binary — anything with NUL bytes in the first 1 KiB.
+///
+/// This is not a full chardet — it's a pragmatic three-byte BOM
+/// check plus a NUL scan. Files without a BOM that are actually
+/// in a legacy single-byte encoding (Latin-1, Shift-JIS, ...)
+/// fall through as "utf-8" and the `lossy` flag flips on if the
+/// bytes don't decode.
+fn detect_text_encoding(bytes: &[u8]) -> String {
+    if bytes.starts_with(&[0xEF, 0xBB, 0xBF]) {
+        return String::from("utf-8-bom");
+    }
+    if bytes.starts_with(&[0xFF, 0xFE]) {
+        return String::from("utf-16-le");
+    }
+    if bytes.starts_with(&[0xFE, 0xFF]) {
+        return String::from("utf-16-be");
+    }
+    let scan_len = bytes.len().min(1024);
+    if bytes[..scan_len].contains(&0u8) {
+        return String::from("binary");
+    }
+    String::from("utf-8")
+}
+
+/// Classify a string's line endings. Walks once and counts
+/// `\r\n`, lone `\n`, and lone `\r`. The dominant kind wins;
+/// ties produce `mixed`.
+fn detect_eol(text: &str) -> String {
+    let mut crlf = 0usize;
+    let mut lf = 0usize;
+    let mut cr = 0usize;
+    let bytes = text.as_bytes();
+    let mut i = 0;
+    while i < bytes.len() {
+        match bytes[i] {
+            b'\r' => {
+                if bytes.get(i + 1) == Some(&b'\n') {
+                    crlf += 1;
+                    i += 2;
+                    continue;
+                }
+                cr += 1;
+            }
+            b'\n' => {
+                lf += 1;
+            }
+            _ => {}
+        }
+        i += 1;
+    }
+    let total = crlf + lf + cr;
+    if total == 0 {
+        return String::from("none");
+    }
+    let max = crlf.max(lf).max(cr);
+    let kinds_at_max = [crlf, lf, cr].iter().filter(|&&n| n == max).count();
+    if kinds_at_max > 1 || (max < total) {
+        return String::from("mixed");
+    }
+    if max == crlf {
+        String::from("crlf")
+    } else if max == lf {
+        String::from("lf")
+    } else {
+        String::from("cr")
+    }
 }
 
 /// Write UTF-8 text back to a remote file, overwriting. The editor

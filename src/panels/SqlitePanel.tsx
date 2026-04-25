@@ -539,6 +539,10 @@ function SqlitePanelBody({ tab }: Props) {
         onCloseTab={sqlTabs.closeTab}
         history={sqlTabs.history}
         onPickHistory={sqlTabs.loadHistory}
+        favorites={sqlTabs.favorites}
+        onAddFavorite={(sql, name) => sqlTabs.addFavorite({ sql, name })}
+        onRemoveFavorite={sqlTabs.removeFavorite}
+        onPickFavorite={sqlTabs.loadFavorite}
       />
       <DbResultGrid
         preview={state.preview}

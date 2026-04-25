@@ -97,6 +97,7 @@ export default function TerminalPanel({ tab, isActive, onEditConnection }: Props
   const audioBell = useSettingsStore((s) => s.audioBell);
   const rowSeparators = useSettingsStore((s) => s.terminalRowSeparators);
   const copyOnSelect = useSettingsStore((s) => s.terminalCopyOnSelect);
+  const smartMode = useSettingsStore((s) => s.terminalSmartMode);
   const termThemeIdx = useThemeStore((s) => s.terminalThemeIndex);
   const termTheme = TERMINAL_THEMES[termThemeIdx] ?? TERMINAL_THEMES[0];
   const [session, setSession] = useState<TerminalSessionInfo | null>(null);
@@ -129,6 +130,22 @@ export default function TerminalPanel({ tab, isActive, onEditConnection }: Props
   // funnel through `sendInput`, so the same buffer logic catches
   // both transitions.
   const commandBufferRef = useRef("");
+
+  // Smart-mode mirror buffer — fish-style autosuggest, syntax-highlight
+  // and Tab popover (M2+) all need a frontend-side view of the line the
+  // user is currently typing. M1 just maintains the buffer; later
+  // milestones layer UI overlays on top. Tracking is gated on:
+  //   * smartMode setting being on (per PRODUCT-SPEC §4.2.1, opt-in)
+  //   * the emulator having seen an OSC 133;B (`promptEnd != null`)
+  //   * `awaitingInput` (between B and C)
+  //   * not in the alt screen (vim/htop) and not mid-bracketed-paste
+  // When any condition flips off, the buffer is cleared so a re-arm
+  // starts from empty. Reads/writes from event handlers go through
+  // `smartActiveRef` so the latest value is visible without a closure
+  // re-bind; render-time consumers use the derived `smartActive`
+  // boolean below.
+  const smartLineBufferRef = useRef("");
+  const smartActiveRef = useRef(false);
 
   // Prompt-anchored capture window. Armed when the backend PTY
   // reader sees the canonical OpenSSH `<user>@<host>'s password:` /
@@ -300,7 +317,17 @@ export default function TerminalPanel({ tab, isActive, onEditConnection }: Props
             });
           }
         } else {
-          next = await cmd.terminalCreate(terminalSize.cols, terminalSize.rows);
+          // Smart mode injects an OSC 133-emitting init script into the
+          // local shell. We only enable it for local PTYs — SSH sessions
+          // can't currently push the rcfile to the remote host, and the
+          // emulator's prompt-zone tracking would silently no-op. Per
+          // PRODUCT-SPEC §4.2.1 this is opt-in via Settings.
+          next = await cmd.terminalCreate(
+            terminalSize.cols,
+            terminalSize.rows,
+            undefined,
+            smartMode,
+          );
         }
         if (!cancelled) {
           setSession(next);
@@ -609,6 +636,42 @@ export default function TerminalPanel({ tab, isActive, onEditConnection }: Props
     };
   }, [session]);
 
+  // ── Smart-mode mirror state ────────────────────────────────
+
+  // True only when every condition for smart-mode tracking is met.
+  // Fed from the latest snapshot, so flipping the alt screen on
+  // (vim entering full-screen) or starting a bracketed paste both
+  // immediately disable the mirror without the user pressing
+  // anything.
+  const smartActive =
+    smartMode &&
+    snapshot?.promptEnd != null &&
+    snapshot?.awaitingInput === true &&
+    snapshot?.altScreen === false &&
+    snapshot?.bracketedPaste === false;
+
+  useEffect(() => {
+    smartActiveRef.current = smartActive;
+    if (!smartActive) {
+      // Disabling the tracker drops whatever was buffered so we
+      // never resurrect stale typing on the next prompt — the
+      // buffer is re-armed empty by the prompt-end effect below
+      // when conditions return to active.
+      smartLineBufferRef.current = "";
+    }
+  }, [smartActive]);
+
+  // Reset the mirror buffer at every fresh prompt-end. Encoding
+  // the position into a string keeps the dep array primitive-only
+  // so React can shallow-compare.
+  const promptEndKey = snapshot?.promptEnd
+    ? `${snapshot.promptEnd[0]},${snapshot.promptEnd[1]}`
+    : "";
+  useEffect(() => {
+    if (!smartActive) return;
+    smartLineBufferRef.current = "";
+  }, [smartActive, promptEndKey]);
+
   // ── Bell handling ───────────────────────────────────────────
 
   useEffect(() => {
@@ -728,6 +791,73 @@ export default function TerminalPanel({ tab, isActive, onEditConnection }: Props
       commandBufferRef.current += data[i];
     }
     return completed;
+  }
+
+  /**
+   * Smart-mode line mirror — applies the same line-edit emulation
+   * as `captureCompletedCommands` to `smartLineBufferRef` so the
+   * frontend keeps a precise view of the line the user is typing
+   * for M2+ overlays (autosuggest, syntax-highlight, Tab popover).
+   *
+   * Only invoked when `smartActiveRef.current` is true at the
+   * moment of the keystroke; the snapshot-driven effect above
+   * resets the buffer on every fresh prompt-end and clears it
+   * when conditions flip off (alt screen, bracketed paste,
+   * command running, smart toggle disabled).
+   */
+  function updateSmartLineBuffer(data: string) {
+    if (!smartActiveRef.current) return;
+    const CR = 13;
+    const LF = 10;
+    const ESC = 27;
+    const BS = 8;
+    const DEL = 127;
+    const ETX = 3;   // Ctrl+C
+    const NAK = 21;  // Ctrl+U
+    for (let i = 0; i < data.length; i++) {
+      const code = data.charCodeAt(i);
+      if (code === CR || code === LF) {
+        // The shell will emit OSC 133;C in response to the actual
+        // submit, which clears `awaiting_input` and the snapshot
+        // effect will reset us. We pre-clear here so a buffered
+        // line doesn't get carried into the moment between the
+        // bytes leaving the keyboard and the C-sentinel arriving.
+        smartLineBufferRef.current = "";
+        if (code === CR && data.charCodeAt(i + 1) === LF) i += 1;
+        continue;
+      }
+      if (code === ESC) {
+        // M1 doesn't model arrow-key navigation inside the mirror —
+        // any escape sequence resets, matching the SSH-capture
+        // buffer's conservative stance. M4+ will need richer
+        // line-editor semantics to cover Ctrl+W, Ctrl+A, etc.
+        smartLineBufferRef.current = "";
+        const next = data[i + 1];
+        if (next === "[") {
+          i += 1;
+          while (i + 1 < data.length) {
+            i += 1;
+            if (/[A-Za-z~]/.test(data[i])) break;
+          }
+        } else if (next === "O") {
+          i += 2;
+        }
+        continue;
+      }
+      if (code === DEL || code === BS) {
+        smartLineBufferRef.current = smartLineBufferRef.current.slice(0, -1);
+        continue;
+      }
+      if (code === ETX || code === NAK) {
+        smartLineBufferRef.current = "";
+        continue;
+      }
+      if (code < 0x20 || code === 0x7f) {
+        smartLineBufferRef.current = "";
+        continue;
+      }
+      smartLineBufferRef.current += data[i];
+    }
   }
 
 
@@ -1044,6 +1174,12 @@ export default function TerminalPanel({ tab, isActive, onEditConnection }: Props
     // command buffer reflects the post-Enter state. The captured
     // lines are scanned for `ssh ...` after the write succeeds.
     const completed = captureCompletedCommands(data);
+    // Mirror the same bytes into the smart-mode line buffer when
+    // tracking is active. Done unconditionally — the helper itself
+    // gates on `smartActiveRef`. M1 has no UI consumer; M2+ will
+    // hand this buffer to the syntax-highlight overlay and Tab
+    // popover.
+    updateSmartLineBuffer(data);
     try {
       await cmd.terminalWrite(session.sessionId, data);
       setScrollbackOffset(0);

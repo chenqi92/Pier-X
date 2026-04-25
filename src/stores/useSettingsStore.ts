@@ -21,6 +21,11 @@ type SettingsState = {
   terminalRowSeparators: boolean;
   /** Auto-copy the selected text to the clipboard (iTerm-style). */
   terminalCopyOnSelect: boolean;
+  /** Enable Pier-X "Smart Mode" — fish-style autosuggest, syntax
+   *  highlighting, Tab completion popover, and man-page assistant on
+   *  top of bash/zsh. Off by default per PRODUCT-SPEC §4.2.1; remote
+   *  SSH and alt-screen apps auto-bypass even when this is on. */
+  terminalSmartMode: boolean;
   // SFTP file editor
   /** Default state of the wrap toggle in the SFTP editor dialog. */
   editorWrapDefault: boolean;
@@ -63,6 +68,7 @@ type SettingsState = {
   setAudioBell: (on: boolean) => void;
   setTerminalRowSeparators: (on: boolean) => void;
   setTerminalCopyOnSelect: (on: boolean) => void;
+  setTerminalSmartMode: (on: boolean) => void;
   setEditorWrapDefault: (on: boolean) => void;
   setEditorLineNumbersDefault: (on: boolean) => void;
   setEditorTabSize: (n: number) => void;
@@ -108,6 +114,7 @@ type PersistedSettings = Partial<{
   audioBell: boolean;
   terminalRowSeparators: boolean;
   terminalCopyOnSelect: boolean;
+  terminalSmartMode: boolean;
   editorWrapDefault: boolean;
   editorLineNumbersDefault: boolean;
   editorTabSize: number;
@@ -132,6 +139,7 @@ const DEFAULTS = {
   audioBell: false,
   terminalRowSeparators: false,
   terminalCopyOnSelect: false,
+  terminalSmartMode: false,
   editorWrapDefault: false,
   editorLineNumbersDefault: true,
   editorTabSize: 2,
@@ -200,6 +208,8 @@ export const useSettingsStore = create<SettingsState>((set, get) => {
       stored.terminalRowSeparators ?? DEFAULTS.terminalRowSeparators,
     terminalCopyOnSelect:
       stored.terminalCopyOnSelect ?? DEFAULTS.terminalCopyOnSelect,
+    terminalSmartMode:
+      stored.terminalSmartMode ?? DEFAULTS.terminalSmartMode,
     editorWrapDefault: stored.editorWrapDefault ?? DEFAULTS.editorWrapDefault,
     editorLineNumbersDefault:
       stored.editorLineNumbersDefault ?? DEFAULTS.editorLineNumbersDefault,
@@ -234,6 +244,7 @@ export const useSettingsStore = create<SettingsState>((set, get) => {
       audioBell: s.audioBell,
       terminalRowSeparators: s.terminalRowSeparators,
       terminalCopyOnSelect: s.terminalCopyOnSelect,
+      terminalSmartMode: s.terminalSmartMode,
       editorWrapDefault: s.editorWrapDefault,
       editorLineNumbersDefault: s.editorLineNumbersDefault,
       editorTabSize: s.editorTabSize,
@@ -300,6 +311,10 @@ export const useSettingsStore = create<SettingsState>((set, get) => {
     },
     setTerminalCopyOnSelect: (terminalCopyOnSelect) => {
       set({ terminalCopyOnSelect });
+      persist();
+    },
+    setTerminalSmartMode: (terminalSmartMode) => {
+      set({ terminalSmartMode });
       persist();
     },
     setEditorWrapDefault: (editorWrapDefault) => {

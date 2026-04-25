@@ -83,6 +83,10 @@ mod unix {
         child_pid: libc::pid_t,
         cols: u16,
         rows: u16,
+        /// Smart-mode init artefacts (temp rcfile / ZDOTDIR), kept
+        /// alive so the temp dir under them is removed only after the
+        /// shell exits. `None` for plain (non-smart) sessions.
+        _smart_init: Option<crate::terminal::smart::SmartShellInit>,
     }
 
     impl UnixPty {
@@ -99,6 +103,20 @@ mod unix {
             rows: u16,
             program: &str,
             args: &[&str],
+        ) -> Result<Self, TerminalError> {
+            Self::spawn_with_env(cols, rows, program, args, &[])
+        }
+
+        /// Like [`Self::spawn`] but applies `extra_env` (KEY, VALUE
+        /// pairs) in the child branch before `execvp`. Used by the
+        /// smart-mode launcher (`smart.rs`) to inject `ZDOTDIR` /
+        /// `PIERX_REAL_ZDOTDIR` without polluting the parent process.
+        pub fn spawn_with_env(
+            cols: u16,
+            rows: u16,
+            program: &str,
+            args: &[&str],
+            extra_env: &[(&str, &str)],
         ) -> Result<Self, TerminalError> {
             let mut master_fd: libc::c_int = 0;
             let mut win_size = libc::winsize {
@@ -143,6 +161,21 @@ mod unix {
                     libc::putenv(term.as_ptr() as *mut _);
                     libc::putenv(lang.as_ptr() as *mut _);
                     libc::putenv(lc_all.as_ptr() as *mut _);
+                }
+
+                // Smart-mode env overrides. Built before execvp; the
+                // CStrings live in this scope which only ends when
+                // execvp replaces the process image — putenv keeps
+                // its pointers valid for that long.
+                let extra_env_strings: Vec<std::ffi::CString> = extra_env
+                    .iter()
+                    .filter_map(|(k, v)| {
+                        std::ffi::CString::new(format!("{}={}", k, v)).ok()
+                    })
+                    .collect();
+                for entry in &extra_env_strings {
+                    // SAFETY: same contract as the TERM/LANG putenvs above.
+                    unsafe { libc::putenv(entry.as_ptr() as *mut _); }
                 }
 
                 // Change to the user's home directory so new shells
@@ -203,12 +236,83 @@ mod unix {
                 child_pid,
                 cols,
                 rows,
+                _smart_init: None,
             })
         }
 
         /// Convenience: spawn a login shell.
         pub fn spawn_shell(cols: u16, rows: u16, shell: &str) -> Result<Self, TerminalError> {
             Self::spawn(cols, rows, shell, &["-l"])
+        }
+
+        /// Like [`Self::spawn_shell`] but applies `extra_env` to the
+        /// child before `execvp`. Used by callers that need to
+        /// inject overrides (e.g. a PATH prefix carrying an `ssh`
+        /// wrapper for ControlMaster) without polluting the parent
+        /// process's environment.
+        pub fn spawn_shell_with_env(
+            cols: u16,
+            rows: u16,
+            shell: &str,
+            extra_env: &[(&str, &str)],
+        ) -> Result<Self, TerminalError> {
+            Self::spawn_with_env(cols, rows, shell, &["-l"], extra_env)
+        }
+
+        /// Spawn an interactive shell with smart-mode init applied.
+        ///
+        /// The caller owns the [`SmartShellInit`]; this method forwards
+        /// `init.args` and `init.env` to `forkpty`/`execvp`, then
+        /// stashes the init in the returned PTY so the temp directory
+        /// it carries is removed only when the PTY (and child shell)
+        /// goes away. If `init.recognised` is false the caller should
+        /// fall back to [`Self::spawn_shell`] instead — there's nothing
+        /// for this method to do.
+        pub fn spawn_shell_smart(
+            cols: u16,
+            rows: u16,
+            shell: &str,
+            init: crate::terminal::smart::SmartShellInit,
+        ) -> Result<Self, TerminalError> {
+            Self::spawn_shell_smart_with_env(cols, rows, shell, init, &[])
+        }
+
+        /// Like [`Self::spawn_shell_smart`] but additionally layers
+        /// `extra_env` on top — `init.env` wins on duplicate keys
+        /// because the smart layer's overrides (ZDOTDIR etc.) are
+        /// authoritative. Used by callers that need to add extras
+        /// (e.g. a PATH prefix for an `ssh` wrapper) without losing
+        /// the smart-mode init.
+        pub fn spawn_shell_smart_with_env(
+            cols: u16,
+            rows: u16,
+            shell: &str,
+            init: crate::terminal::smart::SmartShellInit,
+            extra_env: &[(&str, &str)],
+        ) -> Result<Self, TerminalError> {
+            let args_owned: Vec<&str> = init.args.iter().map(String::as_str).collect();
+            // Merge: extras first, then smart's env overrides any
+            // colliding key. We keep ownership in this Vec so the
+            // &str slice we hand to spawn_with_env is valid for the
+            // duration of the call.
+            let mut merged: Vec<(String, String)> = extra_env
+                .iter()
+                .map(|(k, v)| ((*k).to_string(), (*v).to_string()))
+                .collect();
+            for (k, v) in &init.env {
+                if let Some(slot) = merged.iter_mut().find(|(mk, _)| mk == k) {
+                    slot.1 = v.clone();
+                } else {
+                    merged.push((k.clone(), v.clone()));
+                }
+            }
+            let merged_refs: Vec<(&str, &str)> = merged
+                .iter()
+                .map(|(k, v)| (k.as_str(), v.as_str()))
+                .collect();
+            let mut pty = Self::spawn_with_env(cols, rows, shell, &args_owned, &merged_refs)?;
+            pty._smart_init = Some(init);
+            Ok(pty)
         }
 
         /// The child process id. Exposed for tests and diagnostics.

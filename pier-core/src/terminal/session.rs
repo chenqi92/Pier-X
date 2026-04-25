@@ -168,6 +168,23 @@ pub struct GridSnapshot {
     pub cursor_y: u16,
     /// Cell grid, row-major: `cells[row * cols + col]`.
     pub cells: Vec<Cell>,
+    /// Smart-mode prompt-end position — `(row, col)` of the most
+    /// recent OSC 133;B emitted by the shell. `None` until the first
+    /// wrapped prompt is seen, or after a screen-clear / scroll-off
+    /// invalidates the position. Consumed by the UI to overlay
+    /// autosuggest / syntax-highlight from this cell onward.
+    pub prompt_end: Option<(u16, u16)>,
+    /// `true` between OSC 133;B (user starts typing) and OSC 133;C
+    /// (user pressed Enter). The smart-mode UI activates input
+    /// mirroring only when this is set.
+    pub awaiting_input: bool,
+    /// `true` while the application has switched to the alternate
+    /// screen (vim/htop/less/tmux). The smart-mode UI must hide
+    /// itself entirely while this is set.
+    pub alt_screen: bool,
+    /// `true` while the shell is inside a bracketed-paste sequence.
+    /// The smart-mode UI pauses completion / autosuggest while set.
+    pub bracketed_paste: bool,
 }
 
 impl PierTerminal {
@@ -187,20 +204,92 @@ impl PierTerminal {
         notify: NotifyFn,
         user_data: *mut std::ffi::c_void,
     ) -> Result<Self, TerminalError> {
+        Self::new_with_smart(cols, rows, shell, false, notify, user_data)
+    }
+
+    /// Same as [`Self::new`] but optionally enables smart-mode shell
+    /// integration (see `pier-core::terminal::smart`).
+    ///
+    /// When `smart_mode` is `true` and the requested `shell` is
+    /// recognised by [`super::smart::inject_init`] (today: bash, zsh),
+    /// the shell is launched with a temp `--rcfile` / `ZDOTDIR` that
+    /// wraps the user's PS1 with OSC 133 prompt sentinels. The
+    /// emulator picks those up and exposes `prompt_end` /
+    /// `awaiting_input` on each [`GridSnapshot`] so the UI can overlay
+    /// the smart layer.
+    ///
+    /// When `smart_mode` is `false`, or when the shell is not
+    /// recognised, this falls back to a plain login shell — identical
+    /// behaviour to [`Self::new`].
+    pub fn new_with_smart(
+        cols: u16,
+        rows: u16,
+        shell: &str,
+        smart_mode: bool,
+        notify: NotifyFn,
+        user_data: *mut std::ffi::c_void,
+    ) -> Result<Self, TerminalError> {
+        Self::new_with_smart_env(cols, rows, shell, smart_mode, &[], notify, user_data)
+    }
+
+    /// Same as [`Self::new_with_smart`] but applies `extra_env`
+    /// (KEY, VALUE pairs) to the spawned shell on top of the
+    /// process-inherited environment. The pairs are merged with
+    /// any smart-mode env (`init.env` wins on key collisions, since
+    /// it carries `ZDOTDIR` etc. that the smart layer needs to be
+    /// authoritative about).
+    ///
+    /// On Windows the env extras are currently ignored — ConPTY env
+    /// injection lives in a separate code path we haven't unified
+    /// yet. The terminal still starts; callers that depend on the
+    /// extras (e.g. PATH wrappers for ssh ControlMaster) get a
+    /// silent fallback to "no mux", same as before this method
+    /// existed.
+    pub fn new_with_smart_env(
+        cols: u16,
+        rows: u16,
+        shell: &str,
+        smart_mode: bool,
+        extra_env: &[(&str, &str)],
+        notify: NotifyFn,
+        user_data: *mut std::ffi::c_void,
+    ) -> Result<Self, TerminalError> {
         #[cfg(unix)]
         {
-            let pty: Box<dyn Pty> = Box::new(super::pty::UnixPty::spawn_shell(cols, rows, shell)?);
+            let pty: Box<dyn Pty> = if smart_mode {
+                let init = super::smart::inject_init(shell);
+                if init.recognised {
+                    Box::new(super::pty::UnixPty::spawn_shell_smart_with_env(
+                        cols, rows, shell, init, extra_env,
+                    )?)
+                } else {
+                    Box::new(super::pty::UnixPty::spawn_shell_with_env(
+                        cols, rows, shell, extra_env,
+                    )?)
+                }
+            } else {
+                Box::new(super::pty::UnixPty::spawn_shell_with_env(
+                    cols, rows, shell, extra_env,
+                )?)
+            };
             return Self::with_pty(pty, cols, rows, notify, user_data);
         }
         #[cfg(windows)]
         {
+            // Smart mode + env injection are a no-op on Windows for
+            // M1 — cmd.exe has no OSC 133 support, pwsh would need
+            // PSReadLine integration we haven't validated yet, and
+            // the ConPTY env block is built per-process in a
+            // different module. Fall through to the plain ConPTY
+            // shell either way.
+            let _ = (smart_mode, extra_env);
             let pty: Box<dyn Pty> =
                 Box::new(super::pty::WindowsPty::spawn_shell(cols, rows, shell)?);
             Self::with_pty(pty, cols, rows, notify, user_data)
         }
         #[cfg(not(any(unix, windows)))]
         {
-            let _ = (cols, rows, shell, notify, user_data);
+            let _ = (cols, rows, shell, smart_mode, extra_env, notify, user_data);
             Err(TerminalError::Unsupported)
         }
     }
@@ -531,6 +620,13 @@ impl PierTerminal {
             cursor_x: guard.emu.cursor_x as u16,
             cursor_y: guard.emu.cursor_y as u16,
             cells,
+            prompt_end: guard
+                .emu
+                .last_prompt_end
+                .map(|(r, c)| (r as u16, c as u16)),
+            awaiting_input: guard.emu.awaiting_input,
+            alt_screen: guard.emu.alt_screen,
+            bracketed_paste: guard.emu.bracketed_paste,
         }
     }
 
@@ -571,12 +667,29 @@ impl PierTerminal {
             }
         }
 
+        // Prompt-end / smart-mode flags only make sense for the live
+        // bottom of the grid. When the user has scrolled into history
+        // (`clamped_offset > 0`) the smart layer should be inactive,
+        // so report `None` / `false` rather than a stale position
+        // pointing at the wrong row of the visible viewport.
+        let smart_visible = clamped_offset == 0;
         GridSnapshot {
             cols,
             rows,
             cursor_x: guard.emu.cursor_x as u16,
             cursor_y: guard.emu.cursor_y as u16,
             cells,
+            prompt_end: if smart_visible {
+                guard
+                    .emu
+                    .last_prompt_end
+                    .map(|(r, c)| (r as u16, c as u16))
+            } else {
+                None
+            },
+            awaiting_input: smart_visible && guard.emu.awaiting_input,
+            alt_screen: guard.emu.alt_screen,
+            bracketed_paste: guard.emu.bracketed_paste,
         }
     }
 

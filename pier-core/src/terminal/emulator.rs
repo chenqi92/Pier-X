@@ -150,6 +150,40 @@ pub struct VtEmulator {
     /// Set when `exit` or `logout` is detected — signals that
     /// the user left the current SSH session.
     pub ssh_exit_detected: bool,
+
+    /// `(row, col)` of the most recent OSC 133;B (prompt-end /
+    /// "user input starts here") sequence emitted by a smart-mode
+    /// shell. The smart-mode init script (`smart.rs`) wraps the
+    /// user's PS1 with `\e]133;A\a` and `\e]133;B\a`; the UI uses
+    /// the position of B to overlay autosuggest / syntax-highlight
+    /// on top of the still-being-typed line. `None` until the first
+    /// wrapped prompt is seen.
+    ///
+    /// The position is in grid coordinates and stays valid through
+    /// scrolling: every `scroll_up` shifts it up by one row and
+    /// invalidates it once it falls off the top.
+    pub last_prompt_end: Option<(usize, usize)>,
+
+    /// `true` between OSC 133;B (user starts typing) and the next
+    /// `133;C` (user pressed Enter) or `133;A` (a fresh prompt was
+    /// drawn without an intervening command). The smart-mode UI
+    /// activates the input mirror only when this is `true`.
+    pub awaiting_input: bool,
+
+    /// `true` while the application has switched to the alternate
+    /// screen buffer (DECSET 1049 / 1047 / 47). vim, htop, less,
+    /// tmux all flip this on; the smart-mode UI must immediately
+    /// step out of the way (no overlay, no popover) until the app
+    /// switches back. We don't actually maintain a separate primary
+    /// buffer — we just track the flag so the UI knows to disable
+    /// itself.
+    pub alt_screen: bool,
+
+    /// `true` while the shell is inside a bracketed-paste sequence
+    /// (DECSET 2004). The smart-mode layer pauses completion and
+    /// autosuggest while a paste is in flight so a 1000-line paste
+    /// doesn't fire a thousand lexer passes.
+    pub bracketed_paste: bool,
 }
 
 impl VtEmulator {
@@ -176,6 +210,10 @@ impl VtEmulator {
             ssh_detected_user: String::new(),
             ssh_detected_port: 22,
             ssh_exit_detected: false,
+            last_prompt_end: None,
+            awaiting_input: false,
+            alt_screen: false,
+            bracketed_paste: false,
         }
     }
 
@@ -204,6 +242,10 @@ impl VtEmulator {
             ssh_detected_host: &mut self.ssh_detected_host,
             ssh_detected_user: &mut self.ssh_detected_user,
             ssh_detected_port: &mut self.ssh_detected_port,
+            last_prompt_end: &mut self.last_prompt_end,
+            awaiting_input: &mut self.awaiting_input,
+            alt_screen: &mut self.alt_screen,
+            bracketed_paste: &mut self.bracketed_paste,
         };
         // Remember cursor row before processing to detect line changes
         // after the parser advances.
@@ -247,6 +289,16 @@ impl VtEmulator {
         }
         if self.cursor_y >= rows {
             self.cursor_y = rows - 1;
+        }
+        // The OSC 133;B mark refers to a cell address that may no
+        // longer be inside the new bounds. Drop it rather than risk
+        // a stale pointer into the grid; the next prompt redraw will
+        // emit a fresh marker.
+        if let Some((r, c)) = self.last_prompt_end {
+            if r >= rows || c >= cols {
+                self.last_prompt_end = None;
+                self.awaiting_input = false;
+            }
         }
     }
 
@@ -374,6 +426,10 @@ struct Performer<'a> {
     ssh_detected_host: &'a mut String,
     ssh_detected_user: &'a mut String,
     ssh_detected_port: &'a mut u16,
+    last_prompt_end: &'a mut Option<(usize, usize)>,
+    awaiting_input: &'a mut bool,
+    alt_screen: &'a mut bool,
+    bracketed_paste: &'a mut bool,
 }
 
 impl Performer<'_> {
@@ -387,6 +443,20 @@ impl Performer<'_> {
             self.scrollback.pop_front();
         }
         self.cells.push(vec![Cell::default(); self.cols]);
+
+        // Shift the OSC 133;B prompt-end marker up by one row so the
+        // smart-mode UI keeps tracking the still-being-typed line as it
+        // scrolls. If the marker was already on the top row it falls
+        // off into scrollback and is no longer addressable in the live
+        // grid — drop it.
+        if let Some((row, _col)) = *self.last_prompt_end {
+            if row == 0 {
+                *self.last_prompt_end = None;
+                *self.awaiting_input = false;
+            } else {
+                self.last_prompt_end.as_mut().unwrap().0 = row - 1;
+            }
+        }
     }
 
     /// LF — move to next row, scrolling if at the bottom. Leaves
@@ -512,6 +582,40 @@ impl Perform for Performer<'_> {
                     }
                 }
             }
+            // OSC 133 — prompt-sentinel sequences emitted by smart-mode
+            // shells (see smart.rs). We track the cursor position at
+            // the moment of `B` (prompt-end) so the UI can overlay the
+            // smart layer at the correct cell. `A` (prompt-start) and
+            // `C` (command-start) toggle `awaiting_input` so we know
+            // whether the cursor is currently inside an editable line.
+            // `D` (command-finished) is recorded for symmetry but not
+            // currently consumed.
+            b"133" => {
+                if let Some(kind) = params.get(1).and_then(|p| p.first()) {
+                    match *kind {
+                        b'A' => {
+                            // A new prompt is starting. Any prior B is
+                            // stale; reset until the matching B fires.
+                            *self.last_prompt_end = None;
+                            *self.awaiting_input = false;
+                        }
+                        b'B' => {
+                            *self.last_prompt_end =
+                                Some((*self.cursor_y, *self.cursor_x));
+                            *self.awaiting_input = true;
+                        }
+                        b'C' => {
+                            // User pressed Enter — the line we were
+                            // tracking has been submitted to the shell.
+                            *self.awaiting_input = false;
+                        }
+                        b'D' => {
+                            // Command finished. No-op for M1.
+                        }
+                        _ => {}
+                    }
+                }
+            }
             // OSC 10/11 — default fg/bg color query — silently ignored
             // (responding would require writing back to the PTY, which
             // the emulator doesn't own)
@@ -523,10 +627,29 @@ impl Perform for Performer<'_> {
     fn csi_dispatch(
         &mut self,
         params: &vte::Params,
-        _intermediates: &[u8],
+        intermediates: &[u8],
         _ignore: bool,
         action: char,
     ) {
+        // Private-mode CSI (DECSET / DECRST): `\e[?Nh` / `\e[?Nl`.
+        // We need 1049 / 1047 / 47 to know when an alt-screen TUI is
+        // running, and 2004 to know when bracketed paste is active.
+        // None of the public-CSI handlers below would do anything
+        // useful with these, so route them and return.
+        if intermediates.first() == Some(&b'?') {
+            if action == 'h' || action == 'l' {
+                let set = action == 'h';
+                for param in params.iter() {
+                    let code = param.first().copied().unwrap_or(0);
+                    match code {
+                        47 | 1047 | 1049 => *self.alt_screen = set,
+                        2004 => *self.bracketed_paste = set,
+                        _ => {}
+                    }
+                }
+            }
+            return;
+        }
         // Flatten params into a simple Vec<u16> for the common
         // single-value cases. Multi-value params (SGR specifically)
         // iterate the original structure themselves below.
@@ -945,6 +1068,83 @@ mod tests {
         let mut emu = VtEmulator::new(10, 3);
         emu.process(b"\x1b]7;http://example.com/x\x07");
         assert_eq!(emu.cwd, "");
+    }
+
+    #[test]
+    fn osc133_b_records_prompt_end_at_cursor() {
+        let mut emu = VtEmulator::new(20, 5);
+        // Pretend the shell drew a 4-char prompt "$ X" then emitted
+        // OSC 133;A before the prompt and 133;B at the end of it.
+        emu.process(b"\x1b]133;A\x07$ X \x1b]133;B\x07");
+        assert!(emu.awaiting_input, "B should turn on awaiting_input");
+        let (row, col) = emu.last_prompt_end.expect("B set last_prompt_end");
+        assert_eq!(row, 0);
+        assert_eq!(col, 4); // after "$ X ", four chars in
+    }
+
+    #[test]
+    fn osc133_a_invalidates_previous_b() {
+        let mut emu = VtEmulator::new(20, 5);
+        emu.process(b"\x1b]133;A\x07$ \x1b]133;B\x07");
+        assert!(emu.awaiting_input);
+        // A fresh prompt fires A again — old B is stale.
+        emu.process(b"\r\n\x1b]133;A\x07");
+        assert!(!emu.awaiting_input);
+        assert_eq!(emu.last_prompt_end, None);
+    }
+
+    #[test]
+    fn osc133_c_marks_command_started() {
+        let mut emu = VtEmulator::new(20, 5);
+        emu.process(b"\x1b]133;A\x07$ \x1b]133;B\x07ls\x1b]133;C\x07");
+        assert!(!emu.awaiting_input, "C should clear awaiting_input");
+        // last_prompt_end is still recorded; the UI uses awaiting_input
+        // to decide whether to mirror further keystrokes.
+        assert!(emu.last_prompt_end.is_some());
+    }
+
+    #[test]
+    fn alt_screen_decset_1049_sets_alt_screen_flag() {
+        let mut emu = VtEmulator::new(20, 5);
+        assert!(!emu.alt_screen);
+        emu.process(b"\x1b[?1049h"); // vim entering alt buffer
+        assert!(emu.alt_screen);
+        emu.process(b"\x1b[?1049l"); // vim leaving alt buffer
+        assert!(!emu.alt_screen);
+    }
+
+    #[test]
+    fn bracketed_paste_2004_toggles_flag() {
+        let mut emu = VtEmulator::new(20, 5);
+        emu.process(b"\x1b[?2004h");
+        assert!(emu.bracketed_paste);
+        emu.process(b"\x1b[?2004l");
+        assert!(!emu.bracketed_paste);
+    }
+
+    #[test]
+    fn scrolling_past_prompt_end_invalidates_it() {
+        let mut emu = VtEmulator::new(10, 3);
+        // Place a prompt-end marker on row 0.
+        emu.process(b"\x1b]133;A\x07$ \x1b]133;B\x07");
+        assert_eq!(emu.last_prompt_end, Some((0, 2)));
+        // Scroll the grid by enough to push the marked row off the
+        // top. `\r\n` once moves us to row 1; another to row 2; a
+        // third triggers scroll_up, evicting row 0 into scrollback.
+        emu.process(b"\r\nA\r\nB\r\nC");
+        assert_eq!(emu.last_prompt_end, None);
+        assert!(!emu.awaiting_input);
+    }
+
+    #[test]
+    fn resize_smaller_invalidates_out_of_bounds_prompt_end() {
+        let mut emu = VtEmulator::new(20, 10);
+        // Put the prompt-end at (5, 15).
+        emu.process(b"\x1b[6;16H\x1b]133;A\x07\x1b]133;B\x07");
+        assert!(emu.last_prompt_end.is_some());
+        // Shrink so column 15 is no longer addressable.
+        emu.resize(10, 10);
+        assert_eq!(emu.last_prompt_end, None);
     }
 
     #[test]

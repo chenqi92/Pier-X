@@ -902,6 +902,10 @@ export const zhExtra: Record<string, string> = {
     "选中文本即自动复制到剪贴板(iTerm 风格)。⌘C 始终可用。",
   "Per-shell args / working dir / env vars are configured per profile in Settings → Profiles.":
     "shell 参数 / 工作目录 / 环境变量请在 设置 → 配置文件 中按 profile 维护。",
+  "Smart Mode": "智能模式",
+  "Enable Smart Mode": "启用智能模式",
+  "Adds fish-style autosuggest, syntax highlighting, Tab completion popover, and man-page assistant on top of bash/zsh. Reopens new terminals only — existing tabs keep their current mode. Auto-disabled inside SSH sessions and full-screen apps like vim/htop.":
+    "在 bash/zsh 上叠加 fish 风格的输入建议、语法高亮、Tab 补全弹层与 man page 摘要。仅对新打开的终端生效，已开 tab 保持原模式；SSH 会话与 vim/htop 等全屏应用会自动旁路。",
 
   // Settings · Appearance polish (P1)
   "Spacious": "宽松",

@@ -1754,6 +1754,17 @@ export default function SettingsDialog({
                   />
                 </SettingRow>
 
+                <SectionTitle>{t("Smart Mode")}</SectionTitle>
+                <SettingRow
+                  label={t("Enable Smart Mode")}
+                  description={t("Adds fish-style autosuggest, syntax highlighting, Tab completion popover, and man-page assistant on top of bash/zsh. Reopens new terminals only — existing tabs keep their current mode. Auto-disabled inside SSH sessions and full-screen apps like vim/htop.")}
+                >
+                  <Toggle
+                    checked={settings.terminalSmartMode}
+                    onChange={settings.setTerminalSmartMode}
+                  />
+                </SettingRow>
+
                 <div className="settings__row-desc" style={{ marginTop: "var(--sp-3)" }}>
                   {t("Per-shell args / working dir / env vars are configured per profile in Settings → Profiles.")}
                 </div>

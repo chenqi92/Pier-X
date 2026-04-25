@@ -147,6 +147,18 @@ Pier-X 是一款桌面开发辅助工具，把**终端 / Git / SSH / 数据库 /
 - 键盘：Ctrl 组合、Meta 键、复制选中 / 粘贴剪贴板。右键自定义菜单（复制、粘贴、清屏）。
 - **Tab 级生命周期**：关闭 tab 时销毁 PTY 会话、清理 tunnel。
 
+#### 4.2.1 Smart Mode（fish 风格智能层，opt-in）
+
+Settings → Terminal → "Smart Mode" 开关启用，**默认关闭**。开启后 Pier-X 在 PTY 之上叠一个应用层智能体验，目标对标 fish-shell 的常用功能：语法高亮、命令拼写校验、Tab 补全 popover、autosuggestion、man page 摘要弹层。
+
+- **行边界依赖 OSC 133 prompt sentinel**：Pier-X spawn shell 时通过 `--rcfile` / `ZDOTDIR` / `$PROFILE` 注入临时 init 脚本，让用户原 PS1/PROMPT 被 `\e]133;A\a` … `\e]133;B\a` 包住；emulator 解析这两个序列得到 prompt 边界，前端在 prompt-end 后维护一份镜像 lineBuffer 做高亮与补全。**用户原 prompt 配置（git status、彩色等）不被替换**。
+- **覆盖 shell**：bash、zsh、pwsh 7+；fish 检测到时直接旁路（fish 自带）。
+- **自动旁路**：远程 SSH session（远端 shell 没有注入）、alt-screen 应用（vim/htop/less/tmux，由 `\e[?1049h` 触发）、bracketed paste 期间。状态栏显示 `--muted` 小字提示当前是否激活。
+- **键位影响**：Smart Mode 下前端拦截 Tab、↑、↓、`Ctrl+R`、`Ctrl+W`、`Ctrl+E`、`Ctrl+Shift+M` 用于补全/历史/man，其余按键仍透传给 shell readline；用户可在 Settings 里关 "Use shell-native line editing" 完全交还行编辑给 shell。
+- **不持久化敏感信息**：history ring 默认仅内存；用户 opt-in 才落 `~/.pier-x/terminal-history-<shell>.jsonl`，落盘前过滤掉常见敏感模式（`*PASSWORD*`、`*TOKEN*` 行）。
+- **不改默认 shell**：`default_shell()` 行为不变；Smart Mode 不内置或下载 shell 二进制。
+- **Windows 限制**：M1 起 Windows 默认 `smart_mode=off`，cmd.exe 永不支持，pwsh 5 不支持，pwsh 7+ 视后续测试再决。
+
 ### 4.3 启动命令
 
 打开 tab 时可带 `startupCommand`（例如从"在此处打开终端"进入会自动 `cd <path>`）。

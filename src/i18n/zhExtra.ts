@@ -1078,6 +1078,10 @@ export const zhExtra: Record<string, string> = {
   "VALUE": "值",
   "ELEMENT": "元素",
   "{count} keys": "{count} 个键",
+  "{count} replicas": "{count} 个副本",
+  "{running}/{total} running": "{running}/{total} 运行中",
+  "Restart all replicas": "重启全部副本",
+  "Stop all replicas": "停止全部副本",
 
   // DB panels — SQLite
   "Open a database by path, or scan a remote directory for .db / .sqlite files.":

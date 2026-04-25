@@ -873,9 +873,9 @@ export const zhExtra: Record<string, string> = {
   "Page {n} of {total}": "第 {n} / {total} 页",
   "Page {n} of ?": "第 {n} 页 / ?",
   "{shown} of {total} rows": "{shown} / {total} 行",
-  "Next page": "下一页",
   "Last page": "末页",
   "page size": "每页",
+  "Wall-clock for the preview SELECT": "预览 SELECT 的实际耗时",
 
   // DB panels — row detail
   "Row detail": "行详情",

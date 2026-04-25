@@ -390,6 +390,9 @@ struct MysqlBrowserState {
     /// `None` on error or when no table is selected — the panel
     /// renders `Page N of ?` in that case.
     total_rows: Option<u64>,
+    /// Wall-clock for the preview SELECT only — feeds the grid
+    /// toolbar's "{ms} ms" chip. Zero when no preview ran.
+    browse_elapsed_ms: u64,
 }
 
 #[derive(Serialize)]
@@ -3261,6 +3264,10 @@ fn mysql_browse(
     let effective_page_size = limit.unwrap_or(24).clamp(1, 500);
     let effective_offset = offset.unwrap_or(0);
 
+    // Time the preview query specifically — the panel surfaces
+    // this as a "{ms} ms" chip on the grid toolbar so the user
+    // sees how expensive the page they're flipping through is.
+    let mut browse_elapsed_ms: u64 = 0;
     let preview = if database_name.is_empty()
         || table_name.is_empty()
         || !mysql_service::is_safe_ident(&database_name)
@@ -3268,13 +3275,16 @@ fn mysql_browse(
     {
         None
     } else {
-        client
-            .execute_blocking(&format!(
-                "SELECT * FROM `{database_name}`.`{table_name}` \
-                 LIMIT {effective_page_size} OFFSET {effective_offset}"
-            ))
-            .ok()
-            .map(map_mysql_preview)
+        match client.execute_blocking(&format!(
+            "SELECT * FROM `{database_name}`.`{table_name}` \
+             LIMIT {effective_page_size} OFFSET {effective_offset}"
+        )) {
+            Ok(r) => {
+                browse_elapsed_ms = r.elapsed_ms;
+                Some(map_mysql_preview(r))
+            }
+            Err(_) => None,
+        }
     };
     // `COUNT(*)` is best-effort — on very large tables this scan
     // can be slow, but the panel's "Page N of M" chip needs the
@@ -3310,6 +3320,7 @@ fn mysql_browse(
         page_size: effective_page_size,
         page_offset: effective_offset,
         total_rows,
+        browse_elapsed_ms,
     })
 }
 

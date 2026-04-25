@@ -387,6 +387,9 @@ export type MysqlBrowserState = {
   /** SELECT COUNT(*) for the active table; null when COUNT failed
    *  or no table is selected. */
   totalRows: number | null;
+  /** Wall-clock ms for the preview SELECT only — drives the
+   *  toolbar elapsed-ms chip. Zero when no preview ran. */
+  browseElapsedMs: number;
 };
 
 // ── SQLite ──────────────────────────────────────────────────────

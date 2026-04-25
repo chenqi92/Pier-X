@@ -15,6 +15,10 @@ export type DbConnectedSchema = {
   selectedTableId: string | null;
   onSelectTable: (databaseName: string, node: DbSchemaNode) => void;
   onSelectDatabase?: (name: string) => void;
+  /** PG-only: clicking a non-active schema in the tree fires
+   *  this — the panel re-runs `postgresBrowse` with the new
+   *  schema. MySQL / SQLite leave it undefined. */
+  onSelectSchema?: (databaseName: string, schema: string) => void;
 };
 
 type Crumb = {
@@ -141,6 +145,7 @@ export default function DbConnectedShell({
               selectedTableId={schema.selectedTableId}
               onSelectTable={schema.onSelectTable}
               onSelectDatabase={schema.onSelectDatabase}
+              onSelectSchema={schema.onSelectSchema}
             />
           </div>
         )}

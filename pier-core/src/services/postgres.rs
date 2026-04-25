@@ -262,6 +262,64 @@ impl PostgresClient {
         crate::ssh::runtime::shared().block_on(self.list_databases())
     }
 
+    /// List schemas in the current database, hiding the internal
+    /// `pg_*` and `information_schema` namespaces. Sorted with the
+    /// caller's current schema floated to the top — convenient for
+    /// the panel's left-rail picker.
+    pub async fn list_schemas(&self) -> Result<Vec<String>> {
+        let rows = self
+            .client
+            .query(
+                "SELECT schema_name FROM information_schema.schemata \
+                 WHERE schema_name NOT LIKE 'pg\\_%' \
+                   AND schema_name <> 'information_schema' \
+                 ORDER BY schema_name",
+                &[],
+            )
+            .await?;
+        Ok(rows.iter().map(|r| r.get::<_, String>(0)).collect())
+    }
+
+    /// Blocking wrapper for [`Self::list_schemas`].
+    pub fn list_schemas_blocking(&self) -> Result<Vec<String>> {
+        crate::ssh::runtime::shared().block_on(self.list_schemas())
+    }
+
+    /// Snapshot of `pg_stat_activity` filtered to the current
+    /// database. Returns `(active, total)` — `active` is rows with
+    /// `state = 'active'`, `total` is the row count regardless of
+    /// state. Returns `(0, 0)` on permission errors so the panel's
+    /// chip silently hides instead of shouting.
+    pub async fn pool_status(&self) -> Result<(u32, u32)> {
+        // Fall back gracefully: a low-privilege role may not be
+        // allowed to read other backends. The query uses
+        // `current_database()` so non-superusers see only their
+        // own DB's rows.
+        let row = match self
+            .client
+            .query_one(
+                "SELECT \
+                   COUNT(*)::int4 AS total, \
+                   COUNT(*) FILTER (WHERE state = 'active')::int4 AS active \
+                 FROM pg_stat_activity \
+                 WHERE datname = current_database()",
+                &[],
+            )
+            .await
+        {
+            Ok(r) => r,
+            Err(_) => return Ok((0, 0)),
+        };
+        let total: i32 = row.get("total");
+        let active: i32 = row.get("active");
+        Ok((active.max(0) as u32, total.max(0) as u32))
+    }
+
+    /// Blocking wrapper for [`Self::pool_status`].
+    pub fn pool_status_blocking(&self) -> Result<(u32, u32)> {
+        crate::ssh::runtime::shared().block_on(self.pool_status())
+    }
+
     /// List tables in the given schema (default `public`).
     pub async fn list_tables(&self, schema: &str) -> Result<Vec<String>> {
         let schema = if schema.is_empty() { "public" } else { schema };

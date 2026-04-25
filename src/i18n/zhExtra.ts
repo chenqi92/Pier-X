@@ -1088,6 +1088,8 @@ export const zhExtra: Record<string, string> = {
   "ELEMENT": "元素",
   "{count} keys": "{count} 个键",
   "{ms} ms": "{ms} ms",
+  "{active}/{total} conns": "{active}/{total} 连接",
+  "Schemas": "模式",
   "Rename key — enter a new name:": "重命名键 — 输入新名称：",
   "Cannot rename — a key named {key} already exists.": "无法重命名 — 已存在键 {key}。",
   "Delete key {key}? This cannot be undone.": "确定删除键 {key}？此操作不可撤销。",

@@ -81,6 +81,7 @@ const PANEL_PALETTE_ITEMS: ReadonlyArray<{ tool: RightTool; title: string }> = [
   { tool: "redis", title: "Switch to Redis" },
   { tool: "sftp", title: "Switch to SFTP" },
   { tool: "log", title: "Switch to Log" },
+  { tool: "firewall", title: "Switch to Firewall" },
   { tool: "sqlite", title: "Switch to SQLite" },
   { tool: "markdown", title: "Switch to Markdown" },
 ];
@@ -90,6 +91,12 @@ function App() {
   const [browserPath, setBrowserPath] = useState("");
   const [selectedMarkdownPath, setSelectedMarkdownPath] = useState("");
   const [settingsOpen, setSettingsOpen] = useState(false);
+  /** Optional landing page when the dialog opens — used by the
+   *  "About Pier-X" menu item. Reset on close so subsequent ⌘,
+   *  invocations remember the user's last viewed section. */
+  const [settingsInitialPage, setSettingsInitialPage] = useState<
+    "About" | "Keymap" | undefined
+  >(undefined);
   const [paletteOpen, setPaletteOpen] = useState(false);
   const [portForwardOpen, setPortForwardOpen] = useState(false);
   const [newConnOpen, setNewConnOpen] = useState(false);
@@ -593,7 +600,10 @@ function App() {
       {
         label: i18n.t("Help"),
         items: [
-          { label: i18n.t("Keyboard shortcuts"), action: () => setPaletteOpen(true) },
+          { label: i18n.t("Keyboard shortcuts"), action: () => {
+            setSettingsInitialPage("Keymap");
+            setSettingsOpen(true);
+          } },
           { divider: true },
           { label: i18n.t("Documentation"), action: () => { void openUrl("https://github.com/chenqi92/Pier-X#readme"); } },
           { label: i18n.t("Report an issue"), action: () => { void openUrl("https://github.com/chenqi92/Pier-X/issues/new"); } },
@@ -623,8 +633,8 @@ function App() {
           },
           { divider: true },
           { label: i18n.t("About Pier-X"), action: () => {
-            const v = coreInfo?.version ?? "0.1.0";
-            window.alert(`Pier-X ${v}\n\n${i18n.t("Cross-platform terminal / Git / SSH / database management tool.")}`);
+            setSettingsInitialPage("About");
+            setSettingsOpen(true);
           } },
         ],
       },
@@ -837,8 +847,13 @@ function App() {
           />
           <SettingsDialog
             open={settingsOpen}
-            onClose={() => setSettingsOpen(false)}
+            onClose={() => {
+              setSettingsOpen(false);
+              setSettingsInitialPage(undefined);
+            }}
             onCheckForUpdates={() => { void runUpdateCheck("manual"); }}
+            coreInfo={coreInfo}
+            initialPage={settingsInitialPage}
           />
           <PortForwardDialog
             open={portForwardOpen}

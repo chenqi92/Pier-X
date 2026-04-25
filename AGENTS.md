@@ -1,27 +1,49 @@
 # Pier-X Agent Rules
 
-Pier-X now ships on a single active desktop stack:
+> Short form. The full code rules and architecture boundaries live in [CLAUDE.md](CLAUDE.md).
+> Visual tokens live in [.agents/skills/pier-design-system/SKILL.md](.agents/skills/pier-design-system/SKILL.md).
+> Product behavior lives in [docs/PRODUCT-SPEC.md](docs/PRODUCT-SPEC.md).
 
-- shell: repo root (`Tauri 2 + React + TypeScript`)
+## Stack
+
+Single active desktop stack — no second UI runtime:
+
+- shell: repo root (`Tauri 2 + React 19 + TypeScript`, sources under `src/`)
 - runtime glue: `src-tauri/`
 - backend: `pier-core/`
 
-## Build rules
+## Build
 
-- Do not reintroduce `Qt`, `QML`, `CMake`, `Corrosion`, or C-ABI bridge files into the active build path.
-- Use the npm scripts at the repo root as the canonical entrypoints:
-  - `npm run tauri dev` — development
-  - `npm run tauri build` — release bundles
-  - `npm run bump <version>` — sync version across manifests and tag
-- Prefer direct Rust crate integration from `src-tauri` to `pier-core`.
-- Releases are tag-driven via `.github/workflows/release.yml` (GitHub, all desktop OS) and `.gitea/workflows/release.yml` (Gitea, Linux); no wrapper shell scripts at the repo root.
+Use the npm scripts at the repo root as the canonical entrypoints:
 
-## Frontend rules
+- `npm run tauri dev` — development
+- `npm run tauri build` — release bundles
+- `npm run bump <version>` — sync version across manifests and tag
 
-- Keep shared design tokens in `src/styles/tokens.css`.
-- Put reusable shell primitives in `src/components/` or `src/shell/` before adding panel-local one-off styling.
-- Shared shell layout and chrome changes belong in `src/styles/shell.css` or another shared stylesheet, not scattered inline across panels.
+`pier-core` is consumed by `src-tauri` as a direct Rust dependency. There is no
+C-ABI bridge, no `Qt` / `QML` / `CMake` / `Corrosion`, and no `pier-ui-gpui`
+crate. Releases are tag-driven via `.github/workflows/release.yml` (GitHub, all
+desktop OS) and `.gitea/workflows/release.yml` (Gitea, Linux).
 
-## Review rule
+## Frontend
 
-- Any UI PR should be rejected if it duplicates shared shell styling or revives archived Qt-era build/assets/docs without a clear migration reason.
+- All visual values come from `src/styles/tokens.css` — never inline a color,
+  font, spacing, radius, or shadow literal in `src/shell/` / `src/panels/` /
+  `src/components/` (see CLAUDE.md Rule 1).
+- Reusable shell primitives go in `src/components/` or `src/shell/` before
+  panel-local one-off styling.
+- Shared shell layout / chrome belongs in `src/styles/shell.css` (or a new
+  scoped sheet), not scattered inline.
+
+## Review gate
+
+A change should be rejected if it:
+
+1. Inlines a visual literal instead of using a `tokens.css` var.
+2. Duplicates shared shell styling inside a panel.
+3. Revives `Qt` / `QML` / `CMake` / `Corrosion` / `pier-ui-gpui` build paths.
+4. Adds a UI-crate dependency to `pier-core`.
+5. Calls `pier-core` from React without going through a Tauri command.
+6. Adds / removes / re-purposes a right-side tool, or changes a panel's
+   default safety stance, without first updating
+   [docs/PRODUCT-SPEC.md](docs/PRODUCT-SPEC.md).

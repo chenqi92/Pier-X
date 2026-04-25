@@ -35,6 +35,7 @@
 //! move them across worker boundaries safely.
 
 pub mod docker;
+pub mod firewall;
 pub mod git;
 pub mod local_exec;
 pub mod mysql;

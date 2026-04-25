@@ -10,8 +10,7 @@ archived, and the Rust/GPUI experiment on `backup/rust-gpui` is abandoned.
 | Concern | File |
 |---|---|
 | **What the product is & which features exist** | [docs/PRODUCT-SPEC.md](docs/PRODUCT-SPEC.md) — only source of truth for panels, tools, default behaviors, non-goals |
-| Overall delivery plan | [docs/ROADMAP.md](docs/ROADMAP.md) |
-| Shell-reset decision & wired Tauri commands | [docs/TAURI-RESET.md](docs/TAURI-RESET.md) |
+| Backend design → impl gap tracker | [docs/BACKEND-GAPS.md](docs/BACKEND-GAPS.md) |
 | Build / frontend / review rules (short form) | [AGENTS.md](AGENTS.md) |
 | **Visual design tokens & rules** | [.agents/skills/pier-design-system/SKILL.md](.agents/skills/pier-design-system/SKILL.md) — only source of truth for colors, typography, spacing, radius, shadow |
 

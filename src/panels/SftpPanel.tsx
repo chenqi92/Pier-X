@@ -1477,6 +1477,7 @@ export default function SftpPanel({ tab }: Props) {
             path={editorTarget.path}
             name={editorTarget.name}
             sshArgs={sshArgs}
+            ownerLabel={sshArgs.user}
             onClose={() => setEditorTarget(null)}
             onSaved={() => void browse(currentRemotePath)}
           />

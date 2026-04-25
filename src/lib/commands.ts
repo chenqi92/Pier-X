@@ -14,6 +14,7 @@ import type {
   DockerNetworkView,
   DockerOverview,
   DockerVolumeView,
+  FirewallSnapshotView,
   GitBlameLineView,
   FileEntry,
   GitCommitDetailView,
@@ -52,6 +53,23 @@ import type {
 
 export const coreInfo = () => invoke<CoreInfo>("core_info");
 
+/** Major dependency snapshot — surfaced in Settings → About →
+ *  Components. Backend hardcodes the list; values are static. */
+export type ComponentInfo = { name: string; role: string; version: string };
+export const coreComponentsInfo = () =>
+  invoke<ComponentInfo[]>("core_components_info");
+
+/** One ~/.ssh/id_* private key (paired with its .pub when present).
+ *  Surfaced in Settings → SSH keys. Read-only. */
+export type SshKeyInfo = {
+  path: string;
+  comment: string;
+  kind: string;
+  mode: string;
+  hasPublic: boolean;
+};
+export const sshKeysList = () => invoke<SshKeyInfo[]>("ssh_keys_list");
+
 /** Dev-only: toggle the Tauri webview DevTools. Returns an error in release. */
 export const devToggleDevtools = () => invoke<void>("dev_toggle_devtools");
 
@@ -83,6 +101,30 @@ export const gitPanelState = (path?: string | null) =>
 
 export const gitInitRepo = (path?: string | null) =>
   invoke<string>("git_init_repo", { path: path ?? null });
+
+/** Mirrors `git config --global` keys consumed by the Settings → Git
+ *  page. Backend whitelists exactly these keys — adding a new field
+ *  requires updating both ends. */
+export type GitGlobalConfig = {
+  userName: string;
+  userEmail: string;
+  /** init.defaultBranch */
+  defaultBranch: string;
+  /** gpg.format — "openpgp" | "ssh" | "x509" | "" (off). */
+  signingMethod: string;
+  /** user.signingkey — path or fingerprint depending on method. */
+  signingKey: string;
+  /** commit.gpgsign */
+  signCommits: boolean;
+  /** tag.gpgsign */
+  signTags: boolean;
+};
+
+export const gitGlobalConfigGet = () =>
+  invoke<GitGlobalConfig>("git_global_config_get");
+
+export const gitGlobalConfigSet = (config: GitGlobalConfig) =>
+  invoke<void>("git_global_config_set", { config });
 
 export const gitDiff = (path: string | null, filePath: string, staged: boolean, untracked?: boolean) =>
   invoke<string>("git_diff", { path, filePath, staged, untracked: !!untracked });
@@ -669,6 +711,18 @@ export const serverMonitorProbe = (params: {
   keyPath: string;
   savedConnectionIndex?: number | null;
 }) => invoke<ServerSnapshotView>("server_monitor_probe", params);
+
+// ── Firewall ────────────────────────────────────────────────────
+
+export const firewallSnapshot = (params: {
+  host: string;
+  port: number;
+  user: string;
+  authMode: string;
+  password: string;
+  keyPath: string;
+  savedConnectionIndex?: number | null;
+}) => invoke<FirewallSnapshotView>("firewall_snapshot", params);
 
 // ── Service Detection ───────────────────────────────────────────
 

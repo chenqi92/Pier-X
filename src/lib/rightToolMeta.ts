@@ -3,6 +3,7 @@ import {
   FileText,
   FolderSync,
   GitBranch,
+  Shield,
 } from "lucide-react";
 import type { ComponentType, SVGProps } from "react";
 import DockerIcon from "../components/icons/DockerIcon";
@@ -38,12 +39,17 @@ export const RIGHT_TOOL_ORDER: RightTool[] = [
   "sftp",
   "log",
   "docker",
+  "firewall",
   "mysql",
   "postgres",
   "redis",
   "sqlite",
 ];
 
+// Firewall is intentionally NOT here: it's a universal capability of any
+// Linux host, not a "detected service" — chips here only render when
+// `detectServices` returns a matching name, and firewall has no service
+// daemon to detect. The tool strip button is enough exposure.
 export const SERVICE_CHIP_TOOLS: RightTool[] = [
   "monitor",
   "sftp",
@@ -125,5 +131,13 @@ export const RIGHT_TOOL_META: Record<RightTool, RightToolMeta> = {
     label: "SQLite",
     icon: SqliteIcon,
     tintVar: "var(--svc-sqlite)",
+  },
+  firewall: {
+    label: "Firewall",
+    icon: Shield,
+    remoteOnly: true,
+    tintVar: "var(--svc-firewall)",
+    splashTitle: "Firewall",
+    splashSubtitle: "Open a saved server to view firewall rules, listening ports, and per-interface traffic.",
   },
 };

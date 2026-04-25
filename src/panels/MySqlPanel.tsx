@@ -18,6 +18,13 @@ import {
   useDbCredentialFlow,
   type DbCredentialFieldAdapter,
 } from "../components/db/useDbCredentialFlow";
+import { useDbSqlTabs } from "../components/db/useDbSqlTabs";
+import {
+  gridColumnsFromMysql,
+  mutationToSql,
+  qualifyTable,
+  type DbMutation,
+} from "../components/db/dbColumnRules";
 import { useI18n } from "../i18n/useI18n";
 import { localizeError } from "../i18n/localizeMessage";
 import { writeClipboardText } from "../lib/clipboard";
@@ -82,7 +89,6 @@ export default function MySqlPanel({ tab }: Props) {
   const [state, setState] = useState<MysqlBrowserState | null>(null);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
-  const [sql, setSql] = useState("SHOW TABLES;");
   const [readOnly, setReadOnly] = useState(true);
   const [writeConfirm, setWriteConfirm] = useState("");
   const [queryResult, setQueryResult] = useState<QueryExecutionResult | null>(null);
@@ -92,6 +98,11 @@ export default function MySqlPanel({ tab }: Props) {
 
   const [connectedTab, setConnectedTab] = useState<DbConnectedTab>("data");
   const [rowDetail, setRowDetail] = useState<PinnedRow | null>(null);
+
+  // SQL editor tabs + run history (panel-local — not persisted across tabs).
+  const sqlTabs = useDbSqlTabs({ initialSql: "SHOW TABLES;", initialName: t("query") });
+  const sql = sqlTabs.sql;
+  const setSql = sqlTabs.setSql;
 
   const passwordInputRef = useRef<HTMLInputElement | null>(null);
 
@@ -166,6 +177,14 @@ export default function MySqlPanel({ tab }: Props) {
       });
       setQueryResult(r);
       setNotice(t("{elapsed} ms", { elapsed: r.elapsedMs }));
+      sqlTabs.pushHistory({
+        sql,
+        at: t("just now"),
+        rows: r.rows?.length ?? null,
+        ms: r.elapsedMs,
+        write: needsWrite,
+      });
+      sqlTabs.markActiveSaved();
       if (needsWrite) {
         setReadOnly(true);
         setWriteConfirm("");
@@ -271,6 +290,50 @@ export default function MySqlPanel({ tab }: Props) {
   const detailColumns = state
     ? state.columns.map((c) => ({ name: c.name, type: c.columnType, pk: c.key === "PRI" }))
     : [];
+  const gridColumns = state ? gridColumnsFromMysql(state.columns) : [];
+
+  // Inline-edit commit path. The grid emits abstract mutations; this
+  // function turns them into one MySQL UPDATE/INSERT/DELETE per
+  // mutation and ships them through `mysqlExecute` sequentially. On
+  // partial failure we stop, surface the error, and leave the dirty
+  // state intact so the user can retry.
+  const [committing, setCommitting] = useState(false);
+  async function commitMutations(mutations: DbMutation[]) {
+    if (!state || mutations.length === 0) return;
+    const tableRef = qualifyTable("mysql", {
+      database: state.databaseName,
+      table: state.tableName,
+    });
+    setCommitting(true);
+    setQueryError("");
+    setNotice("");
+    try {
+      const target = await flow.ensureConnectionTarget();
+      let written = 0;
+      for (const mut of mutations) {
+        const sql = mutationToSql(
+          { dialect: "mysql", table: tableRef, columns: gridColumns },
+          mut,
+        );
+        await cmd.mysqlExecute({
+          host: target.host,
+          port: target.port,
+          user: tab.mysqlUser.trim(),
+          password: tab.mysqlPassword,
+          database: tab.mysqlDatabase.trim() || null,
+          sql,
+        });
+        written += 1;
+      }
+      setNotice(t("Committed {n} change(s).", { n: written }));
+      await browse();
+    } catch (e) {
+      setQueryError(formatError(e));
+      throw e;
+    } finally {
+      setCommitting(false);
+    }
+  }
 
   const headerStats = state
     ? [
@@ -396,6 +459,13 @@ export default function MySqlPanel({ tab }: Props) {
         onRun={() => void runQuery()}
         canRun={canRun}
         running={queryBusy}
+        tabs={sqlTabs.tabs}
+        activeTabId={sqlTabs.activeTabId}
+        onActiveTabChange={sqlTabs.setActiveTabId}
+        onAddTab={() => sqlTabs.addTab()}
+        onCloseTab={sqlTabs.closeTab}
+        history={sqlTabs.history}
+        onPickHistory={sqlTabs.loadHistory}
       />
       <DbResultGrid
         preview={state.preview}
@@ -409,6 +479,10 @@ export default function MySqlPanel({ tab }: Props) {
         emptyLabel={
           state.tableName ? t("Select a row to inspect.") : t("Pick a table from the tree to preview rows.")
         }
+        columnsMeta={gridColumns}
+        writable={!readOnly && state.tableName !== ""}
+        onCommit={commitMutations}
+        committing={committing}
       />
       {queryError && (
         <div className="db-panel-banner">
@@ -482,7 +556,7 @@ export default function MySqlPanel({ tab }: Props) {
             selectedTableId={state.tableName ? `${state.databaseName}.${state.tableName}` : null}
             onSelectTable={(_db, node) => {
               const tbl = node.label;
-              setSql(`SELECT * FROM \`${tbl}\` LIMIT 100;`);
+              sqlTabs.replaceActiveSql(`SELECT * FROM \`${tbl}\` LIMIT 100;`, tbl);
               setRowDetail(null);
               void browse(undefined, tbl);
             }}

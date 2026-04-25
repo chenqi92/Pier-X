@@ -1,13 +1,37 @@
-import { FileText, Lock, Play, Unlock } from "lucide-react";
-import { useMemo } from "react";
+import { Activity, Edit, FileText, History, Lock, Play, Plus, Star, Unlock, Wand2, X } from "lucide-react";
+import { useMemo, useState } from "react";
 
 import { useI18n } from "../../i18n/useI18n";
 import { renderSqlTokens } from "./sqlHighlight";
 
-type Props = {
-  /** Current tab/query name. Multi-tab support is planned — see BACKEND-GAPS.md. */
-  tabName?: string;
+/** One open query in the multi-tab editor. */
+export type SqlTab = {
+  id: string;
+  /** Display name (file-tab style). Often a query alias or table name. */
+  name: string;
   sql: string;
+  /** Pulse-dot indicator next to the tab name. */
+  dirty?: boolean;
+};
+
+/** One entry in the right-side history rail. */
+export type SqlHistoryEntry = {
+  /** Snapshot of the SQL that was run. */
+  sql: string;
+  /** Friendly when-string (e.g. "2m ago"). Caller formats. */
+  at: string;
+  rows?: number | null;
+  ms?: number;
+  /** True for INSERT/UPDATE/DELETE/DDL — gets the edit icon and a tint. */
+  write?: boolean;
+};
+
+type Props = {
+  /** Single-tab fallback name used when `tabs` isn't supplied. */
+  tabName?: string;
+  /** Active tab's SQL — always controlled by the parent. */
+  sql: string;
+  /** Patches the *active* tab's SQL. */
   onChange: (next: string) => void;
   writable: boolean;
   onToggleWrite: () => void;
@@ -18,13 +42,30 @@ type Props = {
   onRun: () => void;
   canRun: boolean;
   running: boolean;
+
+  /** When provided, renders the multi-tab strip. The parent owns
+   *  tabs / activeTabId state and handler callbacks. */
+  tabs?: SqlTab[];
+  activeTabId?: string;
+  onActiveTabChange?: (id: string) => void;
+  onAddTab?: () => void;
+  onCloseTab?: (id: string) => void;
+
+  /** When provided, renders the History side panel toggle + drawer. */
+  history?: SqlHistoryEntry[];
+  /** Called when a history row is clicked — typically loads it into a tab. */
+  onPickHistory?: (entry: SqlHistoryEntry) => void;
+
+  /** Optional EXPLAIN handler — when omitted, button hidden. */
+  onExplain?: () => void;
 };
 
 /**
- * SQL editor chrome — single-tab variant for the pilot port. Matches
- * the pier-x-copy visual spec: file-tab style header, gutter with
- * line numbers, transparent textarea over a highlighted `<pre>` so
- * the user types directly on the tokenised output.
+ * SQL editor chrome. Single-tab mode (no `tabs` prop) keeps the
+ * pier-x-copy visual: file-tab style header, gutter with line numbers,
+ * transparent textarea over a highlighted `<pre>`. Multi-tab mode adds
+ * the tab strip with new/close + a History side panel that overlays
+ * the editor body.
  */
 export default function DbSqlEditor({
   tabName,
@@ -38,19 +79,88 @@ export default function DbSqlEditor({
   onRun,
   canRun,
   running,
+  tabs,
+  activeTabId,
+  onActiveTabChange,
+  onAddTab,
+  onCloseTab,
+  history,
+  onPickHistory,
+  onExplain,
 }: Props) {
   const { t } = useI18n();
   const lines = useMemo(() => sql.split("\n"), [sql]);
   const tokens = useMemo(() => renderSqlTokens(sql), [sql]);
+  const [histOpen, setHistOpen] = useState(false);
+
+  const isMulti = !!tabs && tabs.length > 0;
 
   return (
     <div className="sq">
       <div className="sq-tabs">
-        <span className="sq-tab active">
-          <FileText size={10} />
-          <span>{tabName ?? t("query")}</span>
-        </span>
+        {isMulti ? (
+          tabs!.map((tab) => {
+            const active = tab.id === activeTabId;
+            return (
+              <button
+                key={tab.id}
+                type="button"
+                className={"sq-tab" + (active ? " active" : "")}
+                onClick={() => onActiveTabChange?.(tab.id)}
+                title={tab.name}
+              >
+                <FileText size={10} />
+                <span className="sq-tab-name">{tab.name}</span>
+                {tab.dirty && <span className="sq-tab-dot" aria-hidden />}
+                {tabs!.length > 1 && onCloseTab && (
+                  <span
+                    className="sq-tab-x"
+                    role="button"
+                    aria-label={t("Close tab")}
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      onCloseTab(tab.id);
+                    }}
+                  >
+                    <X size={8} />
+                  </span>
+                )}
+              </button>
+            );
+          })
+        ) : (
+          <span className="sq-tab active">
+            <FileText size={10} />
+            <span>{tabName ?? t("query")}</span>
+          </span>
+        )}
+        {isMulti && onAddTab && (
+          <button
+            type="button"
+            className="sq-tab-add"
+            onClick={onAddTab}
+            title={t("New query")}
+          >
+            <Plus size={11} />
+          </button>
+        )}
         <span className="sq-spacer" />
+        {history && history.length > 0 && (
+          <button
+            type="button"
+            className={"sq-mini" + (histOpen ? " on" : "")}
+            onClick={() => setHistOpen((v) => !v)}
+            title={t("History")}
+          >
+            <History size={11} />
+          </button>
+        )}
+        <button type="button" className="sq-mini" disabled title={t("Favorites — coming soon")}>
+          <Star size={11} />
+        </button>
+        <button type="button" className="sq-mini" disabled title={t("Format SQL — coming soon")}>
+          <Wand2 size={11} />
+        </button>
       </div>
 
       <div className="sq-editor-wrap">
@@ -79,6 +189,55 @@ export default function DbSqlEditor({
             }}
           />
         </div>
+        {histOpen && history && (
+          <div className="sq-hist">
+            <div className="sq-hist-head">
+              <History size={10} />
+              <span>{t("HISTORY")}</span>
+              <span className="sq-spacer" />
+              <button
+                type="button"
+                className="mini-button mini-button--ghost"
+                onClick={() => setHistOpen(false)}
+                title={t("Close")}
+              >
+                <X size={10} />
+              </button>
+            </div>
+            <div className="sq-hist-list">
+              {history.map((h, i) => (
+                <button
+                  key={i}
+                  type="button"
+                  className="sq-hist-row"
+                  onClick={() => onPickHistory?.(h)}
+                >
+                  <span className={"sq-hist-ic" + (h.write ? " w" : "")}>
+                    {h.write ? <Edit size={9} /> : <Play size={9} />}
+                  </span>
+                  <div className="sq-hist-body">
+                    <div className="sq-hist-sql">{h.sql}</div>
+                    <div className="sq-hist-meta">
+                      <span>{h.at}</span>
+                      {h.rows != null && (
+                        <>
+                          <span className="sep">·</span>
+                          <span>{t("{rows} rows", { rows: h.rows })}</span>
+                        </>
+                      )}
+                      {typeof h.ms === "number" && (
+                        <>
+                          <span className="sep">·</span>
+                          <span>{h.ms}ms</span>
+                        </>
+                      )}
+                    </div>
+                  </div>
+                </button>
+              ))}
+            </div>
+          </div>
+        )}
       </div>
 
       <div className="sq-foot">
@@ -103,6 +262,17 @@ export default function DbSqlEditor({
         )}
         <span className="sq-spacer" />
         <span className="sq-shortcut">⌘↵ {t("run")}</span>
+        {onExplain && (
+          <button
+            type="button"
+            className="btn is-ghost is-compact"
+            disabled={!canRun}
+            onClick={onExplain}
+            title={t("EXPLAIN selected query")}
+          >
+            <Activity size={10} /> {t("EXPLAIN")}
+          </button>
+        )}
         <button
           type="button"
           className="btn is-primary is-compact"

@@ -599,6 +599,47 @@ export type DetectedServiceView = {
   port: number;
 };
 
+// ── Firewall ────────────────────────────────────────────────────
+
+export type FirewallBackend = "firewalld" | "ufw" | "nftables" | "iptables" | "none";
+
+export type FirewallListeningPort = {
+  proto: string;
+  localAddr: string;
+  localPort: number;
+  state: string;
+  process: string;
+  pid: number | null;
+};
+
+export type FirewallInterfaceCounter = {
+  iface: string;
+  rxBytes: number;
+  txBytes: number;
+};
+
+export type FirewallSnapshotView = {
+  backend: FirewallBackend;
+  backendActive: boolean;
+  /** True when the SSH user is uid 0. The panel uses this to decide
+   *  whether write actions should send `iptables …` or `sudo iptables …`
+   *  to the terminal. */
+  root: boolean;
+  user: string;
+  uname: string;
+  listening: FirewallListeningPort[];
+  interfaces: FirewallInterfaceCounter[];
+  /** Server-side ms-since-epoch at probe time. Two snapshots → byte
+   *  rate by `(b1 - b0) / ((t1 - t0) / 1000)`. */
+  capturedAtMs: number;
+  rulesV4: string;
+  rulesV6: string;
+  natV4: string;
+  /** Built-in chain → policy. Only filter-table chains. */
+  defaultPolicies: Record<string, string>;
+  backendStatus: string;
+};
+
 export type LogEventView = {
   kind: "stdout" | "stderr" | "exit" | "error";
   text: string;
@@ -697,7 +738,8 @@ export type RightTool =
   | "sftp"
   | "sqlite"
   | "postgres"
-  | "markdown";
+  | "markdown"
+  | "firewall";
 
 // ── Tab Model (matches Qt Main.qml tab schema) ─────────────────
 

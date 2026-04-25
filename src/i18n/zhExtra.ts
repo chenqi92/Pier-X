@@ -440,6 +440,8 @@ export const zhExtra: Record<string, string> = {
   "Networks": "网络",
   "Server Monitor": "服务器监控",
   "Log Viewer": "日志查看器",
+  "Firewall": "防火墙",
+  "Open a saved server to view firewall rules, listening ports, and per-interface traffic.": "打开一个已保存服务器以查看防火墙规则、监听端口和接口流量。",
   "Open a saved server to see live CPU, memory, disks, and top processes.": "打开一个已保存服务器以查看实时 CPU、内存、磁盘和高占用进程。",
   "Pick a host to list containers, images, networks, and compose stacks.": "选择一个主机以查看容器、镜像、网络和 Compose 栈。",
   "Connect through SSH to browse databases, run queries, and edit rows.": "通过 SSH 连接以浏览数据库、运行查询并编辑行。",
@@ -569,6 +571,11 @@ export const zhExtra: Record<string, string> = {
 
   // Toolbar + actions
   "Run container": "运行容器",
+  "CPU / Memory": "CPU / 内存",
+  "Sampling…": "采样中…",
+  "Sample CPU and memory for running containers": "采样运行中容器的 CPU 与内存（首次需 1-3 秒）",
+  "Stopping…": "停止中…",
+  "Starting…": "启动中…",
   "Prune unused": "清理未使用",
   "Remove unused volumes": "清理未使用的卷",
   "Pruned unused volumes.": "已清理未使用的卷。",
@@ -586,6 +593,37 @@ export const zhExtra: Record<string, string> = {
   "Collapse": "折叠",
   "Started container {id}.": "已启动容器 {id}。",
   "Loaded container inspection for {id}.": "已加载容器 {id} 的检查结果。",
+
+  // Firewall panel
+  "Switch to Firewall": "切换到 防火墙",
+  "SSH connection required for Firewall.": "防火墙需要 SSH 连接。",
+  "Open the terminal at least once for this tab to enable write actions.": "请先在此标签页打开一次终端，写入操作才会启用。",
+  "This tab has no terminal session — open the terminal once before running firewall actions.": "该标签页没有活跃的终端会话——先打开一次终端再执行防火墙动作。",
+  "Listening": "监听端口",
+  "Rules": "规则",
+  "Mappings": "端口映射",
+  "Traffic": "流量",
+  "Filter by port, process…": "按端口或进程筛选…",
+  "Filter by external or internal port…": "按外部端口或内部端口筛选…",
+  "Port": "端口",
+  "Allow": "开放",
+  "Deny": "拦截",
+  "Open port {port}/{proto}": "开放端口 {port}/{proto}",
+  "Block port {port}/{proto}": "拦截端口 {port}/{proto}",
+  "{count} open": "共 {count} 个",
+  "No listening sockets visible.": "未发现可见的监听套接字。",
+  "(unknown — root needed)": "（未知 — 需 root 权限）",
+  "Send block command to terminal": "把拦截命令送到终端",
+  "Default policy for chain {chain}": "{chain} 链的默认策略",
+  "No default policies — root may be needed to read iptables.": "未读到默认策略——读取 iptables 可能需要 root。",
+  "(empty — try refreshing as root)": "（空 — 试着以 root 身份刷新）",
+  "IPv6": "IPv6",
+  "No DNAT / port mappings detected.": "未检测到 DNAT / 端口映射。",
+  "DOCKER chain rules are auto-managed by the Docker daemon. Edit container port maps via the Docker panel instead of removing them here.": "DOCKER 链由 Docker 守护进程自动维护。请在 Docker 面板里改容器端口映射，不要直接删除这里的规则。",
+  "No interfaces detected.": "未检测到网络接口。",
+  "Sampling /proc/net/dev every 2 s while this tab is visible. Loopback is hidden.": "此标签页可见时每 2 秒采样 /proc/net/dev。已隐藏 loopback。",
+  "Inserted into your terminal — you press Enter to execute. Sudo prompt (if any) handles itself.": "命令已写入终端——由你按回车执行。若有 sudo 密码提示，请在终端里输入。",
+  "Send to terminal": "送入终端",
 
   // Pull / proxy
   "Pull": "拉取",
@@ -780,10 +818,185 @@ export const zhExtra: Record<string, string> = {
   "No rows to show.": "暂无数据。",
   "Select a row to inspect.": "选择一行以查看详情。",
   "Pick a table from the tree to preview rows.": "从左侧结构树选择一张表以预览数据。",
+  "Filter": "筛选",
+  "filtered from {total}": "从 {total} 行筛选",
+  "Page": "第",
+  "of {n}": "/ 共 {n} 页",
+  "rows {from}–{to}": "{from}–{to} 行",
+  "First page": "首页",
+  "Previous page": "上一页",
+  "Next page": "下一页",
+  "Last page": "末页",
+  "page size": "每页",
 
   // DB panels — row detail
   "Row detail": "行详情",
   "Copy as JSON": "复制为 JSON",
+  "Foreign keys": "外键",
+
+  // DB panels — SQL editor multi-tab + history
+  "New query": "新建查询",
+  "HISTORY": "历史",
+  "Favorites — coming soon": "收藏（即将上线）",
+  "Format SQL — coming soon": "格式化 SQL（即将上线）",
+  "EXPLAIN": "解释",
+  "EXPLAIN selected query": "解释当前查询",
+  "{rows} rows": "{rows} 行",
+  "just now": "刚刚",
+
+  // Settings · About → Components table (P2)
+  "Components": "组件",
+  "App runtime": "应用运行时",
+  "SSH client": "SSH 客户端",
+  "Git bindings": "Git 绑定",
+  "Async runtime": "异步运行时",
+  "UI framework": "UI 框架",
+  "Frontend build": "前端构建",
+  "Terminal renderer": "终端渲染",
+  "SFTP file editor": "SFTP 文件编辑器",
+
+  // Settings · Editor pane (P2)
+  "Editor": "编辑器",
+  "Defaults for the in-app file viewer/editor opened from SFTP.":
+    "通过 SFTP 打开的文件查看/编辑器的默认行为。",
+  "Wrap long lines by default": "默认自动换行",
+  "Show line numbers by default": "默认显示行号",
+  "Toggleable per-session in the dialog toolbar.": "可在弹框工具栏按会话切换。",
+  "Tab width": "Tab 宽度",
+  "Number of spaces a Tab character renders as.": "一个 Tab 字符渲染为几个空格。",
+  "On save": "保存时",
+  "Trim trailing whitespace": "清除行尾空白",
+  "Strips spaces and tabs at the end of every line before writing.":
+    "在写盘前去掉每行末尾的空格与 Tab。",
+  "Ensure final newline": "保留末尾换行",
+  "Guarantees the file ends with exactly one trailing \\n.":
+    "保证文件以一个 \\n 结尾。",
+
+  // Settings · SSH keys pane (P2)
+  "SSH keys": "SSH 密钥",
+  "SSH identities": "SSH 密钥",
+  "Read-only list of ~/.ssh/id_* files. Generation and ssh-agent integration are tracked in a follow-up.":
+    "只读列出 ~/.ssh/id_* 文件。生成与 ssh-agent 集成将在后续支持。",
+  "No identities found in ~/.ssh.": "~/.ssh 中未找到密钥。",
+  "unknown": "未知",
+  ".pub present": "存在 .pub",
+  "Open private key in default editor": "用默认编辑器打开私钥",
+  "Reveal in folder": "在文件夹中显示",
+  "Show": "显示",
+
+  // Settings · Privacy pane (P2)
+  "Privacy": "隐私",
+  "Local storage": "本地存储",
+  "Pier-X is offline-first — nothing in this section leaves your device.":
+    "Pier-X 优先离线 — 本段内容均不会离开设备。",
+  "See the Diagnostics page for tail / clear actions on the log.":
+    "可在 Diagnostics 页面对日志进行尾随 / 清空。",
+  "Secret-scan patterns": "敏感信息扫描模式",
+  "One regex per line. Stored locally — flagging is a planned feature; nothing acts on these patterns yet.":
+    "每行一个正则。仅本地保存 — 触发拦截是规划中的功能,目前不会主动告警。",
+
+  // Settings · Terminal extras (P2)
+  "Selection": "选择",
+  "Copy on select": "选中即复制",
+  "Auto-copies the highlighted text to the clipboard (iTerm-style). ⌘C still works regardless.":
+    "选中文本即自动复制到剪贴板(iTerm 风格)。⌘C 始终可用。",
+  "Per-shell args / working dir / env vars are configured per profile in Settings → Profiles.":
+    "shell 参数 / 工作目录 / 环境变量请在 设置 → 配置文件 中按 profile 维护。",
+
+  // Settings · Appearance polish (P1)
+  "Spacious": "宽松",
+  "Compact is the IDE default; Spacious adds extra breathing room.":
+    "紧凑是 IDE 默认密度;宽松会额外增加呼吸空间。",
+  "Bell mode": "铃声模式",
+  "Off": "关闭",
+  "Visual": "视觉",
+  "Audio": "声音",
+  "Visual flashes the terminal border; Audio plays the system bell.":
+    "视觉会闪烁终端边框;声音会播放系统提示音。",
+
+  // Settings · Git page (P1)
+  "Git": "Git",
+  "Identity": "身份",
+  "Stored in ~/.gitconfig under [user] and [init]. Used by every git command Pier-X runs.":
+    "存储在 ~/.gitconfig 的 [user] 和 [init] 段,Pier-X 运行的每个 git 命令都会读取。",
+  "Appears as the commit author.": "作为提交作者显示。",
+  "Appears as the commit author email.": "作为提交作者邮箱显示。",
+  "Name of the initial branch when you `git init` a new repo.": "新建仓库时 `git init` 创建的初始分支名。",
+  "Default branch": "默认分支",
+  "Signing": "签名",
+  "Sets gpg.format. SSH signing requires git 2.34+ and an allowed-signers file.":
+    "设置 gpg.format。SSH 签名需要 git 2.34+ 与 allowed-signers 文件。",
+  "Signing key": "签名密钥",
+  "user.signingkey — fingerprint for GPG, public-key path for SSH.":
+    "user.signingkey — GPG 用指纹,SSH 用公钥路径。",
+  "Sign all commits by default": "默认签名所有提交",
+  "Sets commit.gpgsign — passes -S to every commit.": "设置 commit.gpgsign — 等同每次提交加 -S。",
+  "Sign all tags by default": "默认签名所有标签",
+  "Sets tag.gpgsign — equivalent to git tag -s.": "设置 tag.gpgsign — 等同 git tag -s。",
+  "Reload": "重新加载",
+  "Git config saved.": "Git 配置已保存。",
+
+  // Settings · Keymap pane
+  "Keymap": "键位",
+  "Keyboard shortcuts": "键盘快捷键",
+  "Filter {n} shortcuts…": "筛选 {n} 个快捷键…",
+  "No shortcuts match.": "没有匹配的快捷键。",
+  "Editor & dialogs": "编辑器 / 弹框",
+  "Rebinding is not supported yet — edit src/lib/keybindings.ts to update this list when adding new handlers.":
+    "暂不支持重绑定 — 添加新键位时请同步更新 src/lib/keybindings.ts。",
+  "Switch to tab 1–9": "切换到第 1–9 个标签页",
+  "Save file": "保存文件",
+  "Next match": "下一处匹配",
+  "Previous match": "上一处匹配",
+  "Run query": "运行查询",
+  "Toggle DevTools": "切换 DevTools",
+  "Open DevTools (Console)": "打开 DevTools(Console）",
+
+  // Settings · About pane
+  "About": "关于",
+  "Links": "链接",
+  "GitHub": "GitHub",
+  "Changelog": "更新日志",
+  "One-shot HTTPS call to GitHub Releases. No telemetry, no auto-install.":
+    "一次性请求 GitHub Releases — 不收集遥测,不会自动安装。",
+
+  // Settings · Connections detail panel
+  "Endpoint": "端点",
+  "Method": "方式",
+  "Active port forwards": "活动端口转发",
+  "Tunnels are tracked globally — this list shows every active SSH forward, not only ones owned by this connection.":
+    "隧道全局共享 — 此处列出所有活动转发,并不限于该连接打开的。",
+  "Open new for this connection:": "为此连接新建:",
+  "Local port (auto)": "本地端口(留空自动)",
+  "Close tunnel": "关闭隧道",
+  "Remove this saved connection?": "确定要删除该保存的连接吗?",
+  "Remote port must be a positive integer.": "远端端口必须为正整数。",
+  "Local port must be a positive integer or empty.": "本地端口需为正整数或留空。",
+
+  // DB panels — Add credential dialog test connection
+  "Test connection": "测试连接",
+  "Testing...": "测试中…",
+  "Connected via SSH tunnel.": "通过 SSH 隧道已连接。",
+  "Connected directly.": "直连成功。",
+  "Probes via the tab's SSH session — no port exposure required.":
+    "通过当前 SSH 会话探测 — 无需对外开放端口。",
+  "Probes directly to host:port — only works when the database accepts external clients.":
+    "直连 host:port — 仅在数据库对外开放时可用。",
+  "Port must be a positive integer.": "端口必须为正整数。",
+
+  // DB panels — inline edit / commit
+  "{n} pending writes": "{n} 处待写入",
+  "Insert row": "插入行",
+  "Discard": "丢弃",
+  "Commit {n} changes": "提交 {n} 处变更",
+  "Committing...": "提交中…",
+  "Committed {n} change(s).": "已提交 {n} 处变更。",
+  "Discard insert": "丢弃新增",
+  "Delete row": "删除该行",
+  "Undo delete": "撤销删除",
+  "NEW": "新增",
+  "auto": "自动",
+  "NULL": "NULL",
 
   // DB panels — MySQL structure sub-view
   "Columns": "列",
@@ -837,6 +1050,18 @@ export const zhExtra: Record<string, string> = {
   "Revert": "撤销更改",
   "modified": "已修改",
   "saved": "已保存",
+  "Find (⌘F)": "查找 (⌘F)",
+  "Find & Replace (⌘H)": "查找替换 (⌘H)",
+  "find…": "查找…",
+  "/regex/": "/正则/",
+  "replace with…": "替换为…",
+  "Replace all": "全部替换",
+  "Case sensitive": "区分大小写",
+  "Regex": "正则",
+  "Previous (⇧⏎)": "上一处 (⇧⏎)",
+  "Next (⏎)": "下一处 (⏎)",
+  "Toggle replace": "切换替换",
+  "Close (Esc)": "关闭 (Esc)",
 
   // Log viewer — line detail pane
   "line {n}": "第 {n} 行",
@@ -845,6 +1070,32 @@ export const zhExtra: Record<string, string> = {
   "source": "来源",
   "message": "消息",
   "host": "主机",
+
+  // Log viewer dialog
+  "Open in dialog": "在窗口中打开",
+  "Pop in (Esc)": "收起 (Esc)",
+  "SOURCES": "日志源",
+  "TIME RANGE": "时间范围",
+  "COLUMNS": "列",
+  "CONTEXT": "上下文",
+  "Add log source": "添加日志源",
+  "Custom range": "自定义范围",
+  "Context preview only — coming soon": "上下文预览（即将上线）",
+  "off": "关",
+  "live": "实时",
+  "idle": "空闲",
+  "line #": "行号",
+  "search — regex, fields, messages…": "搜索 — 正则、字段、消息…",
+  "source filter…": "来源筛选…",
+  "Case insensitive": "忽略大小写",
+  "no matches": "无匹配",
+  "no filter": "无筛选",
+  "Follow tail": "跟随尾部",
+  "Clear buffer": "清空缓冲区",
+  "{count} lines buffered": "缓冲了 {count} 行",
+  "streaming · {count} lines": "流式中 · {count} 行",
+  "showing {shown} / {total} lines": "显示 {shown} / {total} 行",
+  "{n} matches": "{n} 处匹配",
 
   // Misc
 };

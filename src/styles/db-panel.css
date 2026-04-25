@@ -698,7 +698,42 @@
   background: var(--accent-dim);
   border-color: color-mix(in srgb, var(--accent) 35%, transparent);
 }
+.sq-mini:disabled {
+  opacity: 0.4;
+  cursor: default;
+}
+.sq-mini:disabled:hover {
+  background: transparent;
+  color: var(--muted);
+}
 .sq-spacer { flex: 1; }
+
+/* Tab strip — name truncates so a panel mounted in the right rail
+   stays readable at narrow widths. */
+.sq-tab-name {
+  max-width: 140px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.sq-tab-add {
+  background: transparent;
+  border: 1px dashed var(--line-2);
+  color: var(--muted);
+  width: 24px;
+  height: 22px;
+  border-radius: var(--radius-xs);
+  cursor: pointer;
+  display: grid;
+  place-items: center;
+  align-self: center;
+  margin-left: var(--sp-1);
+}
+.sq-tab-add:hover {
+  color: var(--accent);
+  border-color: color-mix(in srgb, var(--accent) 50%, var(--line-2));
+  background: var(--accent-dim);
+}
 
 .sq-editor-wrap {
   display: grid;
@@ -754,6 +789,90 @@
   height: 100%;
   white-space: pre-wrap;
   word-break: break-word;
+}
+
+/* History side rail in the editor body (overlay column). */
+.sq-hist {
+  border-left: 1px solid var(--line);
+  background: var(--surface);
+  width: 260px;
+  max-width: 38vw;
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+}
+.sq-hist-head {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-1);
+  padding: var(--sp-1) var(--sp-2);
+  border-bottom: 1px solid var(--line);
+  font-family: var(--mono);
+  font-size: var(--size-micro);
+  letter-spacing: 0.08em;
+  color: var(--muted);
+  text-transform: uppercase;
+  font-weight: var(--weight-bold);
+}
+.sq-hist-list {
+  flex: 1;
+  overflow-y: auto;
+  display: flex;
+  flex-direction: column;
+}
+.sq-hist-row {
+  display: flex;
+  align-items: flex-start;
+  gap: var(--sp-1);
+  padding: var(--sp-1) var(--sp-2);
+  background: transparent;
+  border: none;
+  border-bottom: 1px solid var(--line);
+  text-align: left;
+  cursor: pointer;
+  font-family: var(--sans);
+  color: var(--ink-2);
+}
+.sq-hist-row:hover { background: var(--panel-2); }
+.sq-hist-ic {
+  flex: none;
+  width: 16px;
+  height: 16px;
+  display: grid;
+  place-items: center;
+  border-radius: var(--radius-xs);
+  background: var(--accent-dim);
+  color: var(--accent);
+  margin-top: 2px;
+}
+.sq-hist-ic.w {
+  background: color-mix(in srgb, var(--warn) 18%, transparent);
+  color: var(--warn);
+}
+.sq-hist-body { min-width: 0; flex: 1; }
+.sq-hist-sql {
+  font-family: var(--mono);
+  font-size: var(--size-small);
+  color: var(--ink);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.sq-hist-meta {
+  font-family: var(--mono);
+  font-size: var(--size-micro);
+  color: var(--muted);
+  display: flex;
+  gap: 4px;
+  margin-top: 2px;
+}
+.sq-hist-meta .sep { color: var(--dim); }
+
+@media (max-width: 800px) {
+  .sq-hist { width: 220px; }
+}
+@media (max-width: 640px) {
+  .sq-hist { display: none; }
 }
 .sq-kw { color: var(--syntax-keyword); font-weight: var(--weight-semibold); }
 .sq-fn { color: var(--syntax-func); }
@@ -1014,6 +1133,237 @@
   color: var(--ink);
   word-break: break-word;
   font-family: var(--mono);
+}
+
+/* Foreign-key edges below the field list. */
+.rg-detail-fks .rg-detail-fk-list {
+  display: flex;
+  gap: var(--sp-1);
+  flex-wrap: wrap;
+}
+.rg-fk {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 2px var(--sp-1-5);
+  font-family: var(--mono);
+  font-size: var(--size-small);
+  color: var(--accent);
+  background: var(--accent-dim);
+  border: 1px solid color-mix(in srgb, var(--accent) 35%, transparent);
+  border-radius: var(--radius-pill);
+  cursor: pointer;
+}
+.rg-fk:hover:not(:disabled) {
+  background: color-mix(in srgb, var(--accent) 22%, transparent);
+}
+.rg-fk:disabled { cursor: default; opacity: 0.7; }
+
+/* Pending writes badge in the toolbar. */
+.rg-pending {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 2px var(--sp-1-5);
+  border-radius: var(--radius-pill);
+  background: color-mix(in srgb, var(--warn) 18%, transparent);
+  color: var(--warn);
+  border: 1px solid color-mix(in srgb, var(--warn) 35%, transparent);
+  font-family: var(--mono);
+  font-size: var(--size-small);
+  font-weight: var(--weight-medium);
+}
+.rg-pending svg { color: var(--warn); }
+
+/* Inline cell editor input. */
+.rg-td-editing {
+  padding: 0 !important;
+  background: var(--bg) !important;
+  outline: 2px solid var(--accent);
+  outline-offset: -2px;
+}
+.rg-td-input {
+  width: 100%;
+  height: 100%;
+  background: transparent;
+  border: none;
+  outline: none;
+  color: var(--ink);
+  font-family: var(--mono);
+  font-size: var(--ui-fs);
+  padding: 4px var(--sp-1-5);
+  box-sizing: border-box;
+}
+.rg-td-input-num {
+  text-align: right;
+  font-variant-numeric: tabular-nums;
+}
+
+/* Dirty cell — yellow tint until committed. */
+.rg-td-dirty {
+  background: color-mix(in srgb, var(--warn) 14%, transparent) !important;
+  color: var(--ink);
+  position: relative;
+}
+.rg-td-dirty::after {
+  content: "";
+  position: absolute;
+  top: 4px;
+  right: 4px;
+  width: 5px;
+  height: 5px;
+  border-radius: 50%;
+  background: var(--warn);
+}
+
+/* Pending-insert row — green tint + NEW badge. */
+.rg-row-new td {
+  background: color-mix(in srgb, var(--pos) 10%, transparent) !important;
+}
+.rg-row-new .rg-td-edit {
+  padding: 0;
+}
+.rg-row-new .rg-td-input {
+  padding: 4px var(--sp-1-5);
+}
+.rg-row-badge {
+  display: inline-block;
+  padding: 1px 5px;
+  font-family: var(--mono);
+  font-size: var(--size-micro);
+  font-weight: var(--weight-bold);
+  letter-spacing: 0.06em;
+  background: var(--pos);
+  color: var(--bg);
+  border-radius: var(--radius-xs);
+}
+.rg-row-staged {
+  display: inline-flex;
+  align-items: center;
+  color: var(--pos);
+  margin-left: 4px;
+}
+
+/* Pending-delete row — strikethrough + red tint. */
+.rg-row-deleted td {
+  background: color-mix(in srgb, var(--neg) 12%, transparent) !important;
+  color: var(--muted);
+  text-decoration: line-through;
+  text-decoration-color: var(--neg);
+}
+
+/* Row with ≥1 dirty cell — subtle left bar. */
+.rg-row-dirty td:first-child {
+  box-shadow: inset 2px 0 0 var(--warn);
+}
+
+/* Per-row actions column. */
+.rg-th-acts,
+.rg-td-acts {
+  width: 56px;
+  text-align: right;
+  white-space: nowrap;
+  padding: 0 var(--sp-1) !important;
+}
+.rg-td-acts .mini-button { vertical-align: middle; }
+
+/* Filter row inside the table head — one input per column. */
+.rg-th-sorted { color: var(--accent); }
+.rg-filter-row th {
+  background: var(--surface-2);
+  border-bottom: 1px solid var(--line);
+  padding: 4px var(--sp-1);
+  position: sticky;
+  top: var(--sp-5);
+  z-index: 1;
+}
+.rg-filter-cell {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  background: var(--bg);
+  border: 1px solid var(--line-2);
+  border-radius: var(--radius-xs);
+  padding: 2px 4px;
+}
+.rg-filter-cell:focus-within { border-color: var(--accent); }
+.rg-filter-input {
+  flex: 1;
+  background: transparent;
+  border: none;
+  outline: none;
+  color: var(--ink);
+  font-family: var(--mono);
+  font-size: var(--size-small);
+  min-width: 0;
+  padding: 1px 2px;
+}
+.rg-filter-x {
+  background: transparent;
+  border: none;
+  color: var(--muted);
+  cursor: pointer;
+  display: grid;
+  place-items: center;
+  border-radius: var(--radius-xs);
+}
+.rg-filter-x:hover { color: var(--ink); background: var(--panel-2); }
+.rg-filter-count {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 16px;
+  height: 16px;
+  padding: 0 4px;
+  border-radius: var(--radius-pill);
+  font-family: var(--mono);
+  font-size: var(--size-micro);
+  background: var(--accent);
+  color: var(--accent-ink);
+  margin-left: 4px;
+}
+
+/* Pager — sticky footer below the result grid. */
+.rg-pager {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-1);
+  padding: var(--sp-1) var(--sp-2);
+  background: var(--surface-2);
+  border-top: 1px solid var(--line);
+  flex: none;
+}
+.rg-pager-n {
+  font-family: var(--mono);
+  font-size: var(--size-small);
+  color: var(--ink-2);
+  padding: 0 var(--sp-1);
+}
+.rg-pager-n b { color: var(--ink); font-weight: var(--weight-semibold); }
+.rg-pager-spacer { flex: 1; }
+.rg-pager-size {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  font-family: var(--mono);
+  font-size: var(--size-small);
+}
+.rg-pager-size select {
+  background: var(--bg);
+  border: 1px solid var(--line-2);
+  color: var(--ink);
+  border-radius: var(--radius-xs);
+  font-family: var(--mono);
+  font-size: var(--size-small);
+  padding: 1px var(--sp-1);
+  outline: none;
+  cursor: pointer;
+}
+.rg-pager-size select:focus { border-color: var(--accent); }
+
+/* Compact pager at narrow widths — drop the "rows X–Y" detail. */
+@media (max-width: 700px) {
+  .rg-pager-n .rg-stat-muted:nth-of-type(2) { display: none; }
 }
 
 /* ── Structure / Schema summary placeholders ────────────── */

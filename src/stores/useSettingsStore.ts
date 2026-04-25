@@ -19,6 +19,20 @@ type SettingsState = {
   audioBell: boolean;
   /** Show a 1px divider between terminal rows. Default off (iTerm/VSCode style). */
   terminalRowSeparators: boolean;
+  /** Auto-copy the selected text to the clipboard (iTerm-style). */
+  terminalCopyOnSelect: boolean;
+  // SFTP file editor
+  /** Default state of the wrap toggle in the SFTP editor dialog. */
+  editorWrapDefault: boolean;
+  /** Default state of the line-numbers toggle. */
+  editorLineNumbersDefault: boolean;
+  /** Tab width (in spaces) for the SFTP editor. */
+  editorTabSize: number;
+  /** When saving via the SFTP editor, strip trailing whitespace
+   *  from every line first. */
+  editorTrimTrailingOnSave: boolean;
+  /** When saving, ensure the file ends with exactly one newline. */
+  editorEnsureFinalNewlineOnSave: boolean;
   // Git
   /** When true, pier-x passes `-S` to every `git commit` it runs.
    *  The actual key is picked by the user's git config
@@ -30,6 +44,11 @@ type SettingsState = {
    *  preserve the "offline, local" posture from PRODUCT-SPEC §1.1.
    *  "Check for updates now" is always available regardless. */
   updateCheckOnStartup: boolean;
+  // Privacy / secret scanning
+  /** Custom regex patterns the user wants flagged before a commit
+   *  or paste. One per line. Storage-only for now — enforcement is
+   *  a future feature. */
+  secretScanPatterns: string;
   // Setters
   setLocale: (locale: Locale) => void;
   setPerformanceOverlay: (on: boolean) => void;
@@ -43,8 +62,15 @@ type SettingsState = {
   setVisualBell: (on: boolean) => void;
   setAudioBell: (on: boolean) => void;
   setTerminalRowSeparators: (on: boolean) => void;
+  setTerminalCopyOnSelect: (on: boolean) => void;
+  setEditorWrapDefault: (on: boolean) => void;
+  setEditorLineNumbersDefault: (on: boolean) => void;
+  setEditorTabSize: (n: number) => void;
+  setEditorTrimTrailingOnSave: (on: boolean) => void;
+  setEditorEnsureFinalNewlineOnSave: (on: boolean) => void;
   setGitCommitSigning: (on: boolean) => void;
   setUpdateCheckOnStartup: (on: boolean) => void;
+  setSecretScanPatterns: (patterns: string) => void;
 };
 
 export const UI_FONT_OPTIONS = [
@@ -81,8 +107,15 @@ type PersistedSettings = Partial<{
   visualBell: boolean;
   audioBell: boolean;
   terminalRowSeparators: boolean;
+  terminalCopyOnSelect: boolean;
+  editorWrapDefault: boolean;
+  editorLineNumbersDefault: boolean;
+  editorTabSize: number;
+  editorTrimTrailingOnSave: boolean;
+  editorEnsureFinalNewlineOnSave: boolean;
   gitCommitSigning: boolean;
   updateCheckOnStartup: boolean;
+  secretScanPatterns: string;
 }>;
 
 const DEFAULTS = {
@@ -98,8 +131,15 @@ const DEFAULTS = {
   visualBell: true,
   audioBell: false,
   terminalRowSeparators: false,
+  terminalCopyOnSelect: false,
+  editorWrapDefault: false,
+  editorLineNumbersDefault: true,
+  editorTabSize: 2,
+  editorTrimTrailingOnSave: false,
+  editorEnsureFinalNewlineOnSave: false,
   gitCommitSigning: false,
   updateCheckOnStartup: false,
+  secretScanPatterns: "",
 };
 
 function loadPrefs(): PersistedSettings {
@@ -158,8 +198,20 @@ export const useSettingsStore = create<SettingsState>((set, get) => {
     audioBell: stored.audioBell ?? DEFAULTS.audioBell,
     terminalRowSeparators:
       stored.terminalRowSeparators ?? DEFAULTS.terminalRowSeparators,
+    terminalCopyOnSelect:
+      stored.terminalCopyOnSelect ?? DEFAULTS.terminalCopyOnSelect,
+    editorWrapDefault: stored.editorWrapDefault ?? DEFAULTS.editorWrapDefault,
+    editorLineNumbersDefault:
+      stored.editorLineNumbersDefault ?? DEFAULTS.editorLineNumbersDefault,
+    editorTabSize: stored.editorTabSize ?? DEFAULTS.editorTabSize,
+    editorTrimTrailingOnSave:
+      stored.editorTrimTrailingOnSave ?? DEFAULTS.editorTrimTrailingOnSave,
+    editorEnsureFinalNewlineOnSave:
+      stored.editorEnsureFinalNewlineOnSave ?? DEFAULTS.editorEnsureFinalNewlineOnSave,
     gitCommitSigning: stored.gitCommitSigning ?? DEFAULTS.gitCommitSigning,
     updateCheckOnStartup: stored.updateCheckOnStartup ?? DEFAULTS.updateCheckOnStartup,
+    secretScanPatterns:
+      stored.secretScanPatterns ?? DEFAULTS.secretScanPatterns,
   };
 
   applyUiFont(initial.uiFontFamily);
@@ -181,8 +233,15 @@ export const useSettingsStore = create<SettingsState>((set, get) => {
       visualBell: s.visualBell,
       audioBell: s.audioBell,
       terminalRowSeparators: s.terminalRowSeparators,
+      terminalCopyOnSelect: s.terminalCopyOnSelect,
+      editorWrapDefault: s.editorWrapDefault,
+      editorLineNumbersDefault: s.editorLineNumbersDefault,
+      editorTabSize: s.editorTabSize,
+      editorTrimTrailingOnSave: s.editorTrimTrailingOnSave,
+      editorEnsureFinalNewlineOnSave: s.editorEnsureFinalNewlineOnSave,
       gitCommitSigning: s.gitCommitSigning,
       updateCheckOnStartup: s.updateCheckOnStartup,
+      secretScanPatterns: s.secretScanPatterns,
     });
   };
 
@@ -239,12 +298,40 @@ export const useSettingsStore = create<SettingsState>((set, get) => {
       set({ terminalRowSeparators });
       persist();
     },
+    setTerminalCopyOnSelect: (terminalCopyOnSelect) => {
+      set({ terminalCopyOnSelect });
+      persist();
+    },
+    setEditorWrapDefault: (editorWrapDefault) => {
+      set({ editorWrapDefault });
+      persist();
+    },
+    setEditorLineNumbersDefault: (editorLineNumbersDefault) => {
+      set({ editorLineNumbersDefault });
+      persist();
+    },
+    setEditorTabSize: (editorTabSize) => {
+      set({ editorTabSize: Math.max(1, Math.min(8, Math.round(editorTabSize))) });
+      persist();
+    },
+    setEditorTrimTrailingOnSave: (editorTrimTrailingOnSave) => {
+      set({ editorTrimTrailingOnSave });
+      persist();
+    },
+    setEditorEnsureFinalNewlineOnSave: (editorEnsureFinalNewlineOnSave) => {
+      set({ editorEnsureFinalNewlineOnSave });
+      persist();
+    },
     setGitCommitSigning: (gitCommitSigning) => {
       set({ gitCommitSigning });
       persist();
     },
     setUpdateCheckOnStartup: (updateCheckOnStartup) => {
       set({ updateCheckOnStartup });
+      persist();
+    },
+    setSecretScanPatterns: (secretScanPatterns) => {
+      set({ secretScanPatterns });
       persist();
     },
   };

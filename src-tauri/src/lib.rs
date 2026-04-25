@@ -4,6 +4,7 @@ use pier_core::connections::{
 use pier_core::credentials;
 use pier_core::markdown;
 use pier_core::services::docker;
+use pier_core::services::firewall;
 use pier_core::services::git::{CommitInfo, GitClient, StashEntry};
 use pier_core::services::mysql::{self as mysql_service, MysqlClient, MysqlConfig};
 use pier_core::services::postgres::{PostgresClient, PostgresConfig};
@@ -1881,6 +1882,127 @@ fn core_info() -> CoreInfo {
         default_shell: default_shell(),
         services: vec!["terminal", "ssh", "git", "mysql", "sqlite", "redis"],
     }
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct SshKeyInfo {
+    /// Absolute path to the private key file.
+    path: String,
+    /// First-line comment from the matching `.pub` file
+    /// (e.g. "user@host"); empty if no .pub or unreadable.
+    comment: String,
+    /// Algorithm token from the .pub file (e.g. "ssh-ed25519",
+    /// "ssh-rsa", "ecdsa-sha2-nistp256"); empty if unknown.
+    kind: String,
+    /// Octal mode of the private key file (e.g. "600"); empty when
+    /// permissions can't be read (Windows or transient FS errors).
+    mode: String,
+    /// Whether the matching `<path>.pub` exists on disk.
+    has_public: bool,
+}
+
+/// Read-only inventory of `~/.ssh/id_*` private keys. Surfaced in
+/// Settings → SSH keys. Skips known_hosts, config, agent socket, and
+/// `.pub` files themselves — only paired private keys make the cut.
+/// Generation / agent-load are deferred (security-sensitive
+/// platform-specific work).
+#[tauri::command]
+fn ssh_keys_list() -> Result<Vec<SshKeyInfo>, String> {
+    let ssh_dir = home_dir().join(".ssh");
+    if !ssh_dir.exists() {
+        return Ok(Vec::new());
+    }
+    let mut out = Vec::new();
+    let entries = fs::read_dir(&ssh_dir)
+        .map_err(|e| format!("read ~/.ssh failed: {}", e))?;
+    for entry in entries.flatten() {
+        let path = entry.path();
+        let Some(name) = path.file_name().and_then(|s| s.to_str()) else {
+            continue;
+        };
+        // Match `id_*` private keys. Skip `.pub`, known_hosts, config,
+        // authorized_keys, ssh-agent socket. We intentionally do NOT
+        // broaden to "any private-looking file" because users sometimes
+        // drop misc files in ~/.ssh — false positives in a settings UI
+        // are confusing.
+        if !name.starts_with("id_") {
+            continue;
+        }
+        if name.ends_with(".pub") {
+            continue;
+        }
+        let pub_path = path.with_extension("pub");
+        let has_public = pub_path.exists();
+
+        let mut kind = String::new();
+        let mut comment = String::new();
+        if has_public {
+            if let Ok(text) = fs::read_to_string(&pub_path) {
+                if let Some(first_line) = text.lines().next() {
+                    let mut parts = first_line.split_whitespace();
+                    if let Some(algo) = parts.next() {
+                        kind = algo.to_string();
+                    }
+                    let _b64 = parts.next();
+                    let rest: Vec<&str> = parts.collect();
+                    if !rest.is_empty() {
+                        comment = rest.join(" ");
+                    }
+                }
+            }
+        }
+
+        let mode = {
+            #[cfg(unix)]
+            {
+                use std::os::unix::fs::PermissionsExt;
+                fs::metadata(&path)
+                    .map(|m| format!("{:o}", m.permissions().mode() & 0o777))
+                    .unwrap_or_default()
+            }
+            #[cfg(not(unix))]
+            {
+                String::new()
+            }
+        };
+
+        out.push(SshKeyInfo {
+            path: path.display().to_string(),
+            comment,
+            kind,
+            mode,
+            has_public,
+        });
+    }
+    out.sort_by(|a, b| a.path.cmp(&b.path));
+    Ok(out)
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct ComponentInfo {
+    name: &'static str,
+    role: &'static str,
+    version: &'static str,
+}
+
+/// Static snapshot of major dependencies powering Pier-X. Surfaced
+/// in Settings → About → Components. Update when bumping versions
+/// in `src-tauri/Cargo.toml`, `pier-core/Cargo.toml`, or
+/// `package.json` — there is no auto-derive.
+#[tauri::command]
+fn core_components_info() -> Vec<ComponentInfo> {
+    vec![
+        ComponentInfo { name: "Tauri",       role: "App runtime",       version: "2.x" },
+        ComponentInfo { name: "russh",       role: "SSH client",        version: "0.60" },
+        ComponentInfo { name: "git2",        role: "Git bindings",      version: "0.19" },
+        ComponentInfo { name: "tokio",       role: "Async runtime",     version: "1.x" },
+        ComponentInfo { name: "React",       role: "UI framework",      version: "19.x" },
+        ComponentInfo { name: "Vite",        role: "Frontend build",    version: "7.x" },
+        ComponentInfo { name: "@xterm/xterm", role: "Terminal renderer", version: "6.x" },
+        ComponentInfo { name: "CodeMirror",  role: "SFTP file editor",  version: "6.x" },
+    ]
 }
 
 #[tauri::command]
@@ -3924,6 +4046,44 @@ fn server_monitor_probe(
     })
 }
 
+// ── Firewall ──────────────────────────────────────────────────────
+
+#[tauri::command]
+fn firewall_snapshot(
+    state: tauri::State<'_, AppState>,
+    host: String,
+    port: u16,
+    user: String,
+    auth_mode: String,
+    password: String,
+    key_path: String,
+    saved_connection_index: Option<usize>,
+) -> Result<firewall::FirewallSnapshot, String> {
+    // Same SSH session reuse pattern as `server_monitor_probe` —
+    // every refresh hits the cached russh handle. One full snapshot
+    // is one `exec_command` (the probe script chains via shell), so
+    // amortising the handshake matters when the panel polls on a
+    // 2-second cadence for the Traffic tab.
+    let mut attempt = 0;
+    let snap = loop {
+        let session = get_or_open_ssh_session(
+            &state, &host, port, &user, &auth_mode, &password, &key_path,
+            saved_connection_index,
+        )?;
+        match firewall::snapshot_blocking(&session) {
+            Ok(s) => break s,
+            Err(e) if attempt == 0 => {
+                evict_ssh_session(&state, &host, port, &user, &auth_mode);
+                attempt += 1;
+                let _ = e;
+                continue;
+            }
+            Err(e) => return Err(e.to_string()),
+        }
+    };
+    Ok(snap)
+}
+
 // ── Service Detection ────────────────────────────────────────────
 
 #[tauri::command]
@@ -5819,6 +5979,8 @@ pub fn run() {
         .invoke_handler(tauri::generate_handler![
             dev_toggle_devtools,
             core_info,
+            core_components_info,
+            ssh_keys_list,
             list_directory,
             list_drives,
             local_create_file,
@@ -5828,6 +5990,8 @@ pub fn run() {
             git_overview,
             git_panel_state,
             git_init_repo,
+            git_global_config_get,
+            git_global_config_set,
             git_diff,
             git_stage_paths,
             git_unstage_paths,
@@ -5934,6 +6098,7 @@ pub fn run() {
             markdown_render,
             markdown_render_file,
             server_monitor_probe,
+            firewall_snapshot,
             detect_services,
             db_detect,
             db_cred_save,

@@ -122,6 +122,17 @@ export default function DockerPanel({ tab }: Props) {
   const activeSection: DockerSection = activeTab === "projects" ? "containers" : activeTab;
   const activeSectionBusy = !!snapshot?.sectionInFlight?.[activeSection];
   const [actionBusy, setActionBusy] = useState(false);
+  // Per-container action busy tracker. Container start/stop/restart/remove
+  // run optimistically and only lock the row they target — clicking stop on
+  // one container no longer freezes the buttons on its siblings.
+  const [containerBusyIds, setContainerBusyIds] = useState<Set<string>>(() => new Set());
+  const markContainerBusy = (id: string, busy: boolean) =>
+    setContainerBusyIds((prev) => {
+      const next = new Set(prev);
+      if (busy) next.add(id);
+      else next.delete(id);
+      return next;
+    });
   const [notice, setNotice] = useState("");
   const [inspectJson, setInspectJson] = useState("");
   // Container id being displayed in the inspect modal. When non-null
@@ -150,7 +161,6 @@ export default function DockerPanel({ tab }: Props) {
   const [pullLog, setPullLog] = useState("");
   const [statsBusy, setStatsBusy] = useState(false);
   const [volumeUsageBusy, setVolumeUsageBusy] = useState(false);
-  const statsAttemptKeyRef = useRef("");
   const volumeUsageAttemptKeyRef = useRef("");
 
   // SSH context can be inferred from a local terminal where the user
@@ -190,7 +200,6 @@ export default function DockerPanel({ tab }: Props) {
    */
   async function refresh(force = false) {
     setNotice("");
-    if (force) statsAttemptKeyRef.current = "";
     await dockerRefresh(
       dockerKey,
       {
@@ -327,21 +336,12 @@ export default function DockerPanel({ tab }: Props) {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [activeTab, dockerKey, canRefresh]);
 
-  useEffect(() => {
-    if (!canRefresh || activeTab !== "containers" || statsBusy) return;
-    if (!(snapshot?.loaded?.containers ?? false)) return;
-    const containers = state?.containers ?? [];
-    if (!containers.length) return;
-    if (containers.some((c) => c.cpuPerc || c.memUsage)) return;
-    const key = `${dockerKey}:${containers.map((c) => `${c.id}:${c.status}`).join("|")}`;
-    if (statsAttemptKeyRef.current === key) return;
-    statsAttemptKeyRef.current = key;
-    const timer = window.setTimeout(() => {
-      void fetchContainerStats();
-    }, 600);
-    return () => window.clearTimeout(timer);
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [activeTab, dockerKey, canRefresh, snapshot?.loaded?.containers, state?.containers, statsBusy]);
+  // Note: container CPU/Memory stats are no longer auto-fetched on tab
+  // open. `docker stats --no-stream` is the slowest CLI on the panel
+  // (~1-3s for a moderately busy host) and previously chained 600ms
+  // after the overview, doubling the time the cursor sat as a system
+  // "busy" indicator. Users now explicitly opt in via the "CPU / 内存"
+  // toolbar button (or the panel-level refresh while on Containers).
 
   useEffect(() => {
     if (!canRefresh || activeTab !== "volumes" || volumeUsageBusy) return;
@@ -382,10 +382,33 @@ export default function DockerPanel({ tab }: Props) {
   }, [showAll]);
 
   async function containerAction(id: string, action: string) {
-    if (actionBusy) return;
-    setActionBusy(true);
+    if (containerBusyIds.has(id)) return;
+    markContainerBusy(id, true);
     setNotice("");
     setError("");
+
+    // Optimistic update — flip the row's visible state before the SSH
+    // round-trip so the click feels instant. The background `refresh()`
+    // below reconciles any drift (e.g. a stop that actually failed).
+    dockerMerge(dockerKey, (prev) => {
+      if (action === "remove") {
+        return { ...prev, containers: prev.containers.filter((c) => c.id !== id) };
+      }
+      return {
+        ...prev,
+        containers: prev.containers.map((c) => {
+          if (c.id !== id) return c;
+          if (action === "stop") {
+            return { ...c, running: false, state: "exited", status: t("Stopping…") };
+          }
+          if (action === "start") {
+            return { ...c, running: true, state: "running", status: t("Starting…") };
+          }
+          return c; // restart — keep visible state, status updates on refresh
+        }),
+      };
+    });
+
     try {
       const result = isLocal
         ? await cmd.localDockerAction(id, action)
@@ -401,11 +424,13 @@ export default function DockerPanel({ tab }: Props) {
             savedConnectionIndex: sshArgs.savedConnectionIndex,
           });
       setNotice(`${shortId(id)}: ${localizeRuntimeMessage(result, t)}`);
-      await refresh(true);
     } catch (e) {
       setError(formatError(e));
     } finally {
-      setActionBusy(false);
+      markContainerBusy(id, false);
+      // Reconcile in the background — don't block the UI on a second
+      // SSH round-trip just to confirm what we already showed.
+      void refresh(true);
     }
   }
 
@@ -923,6 +948,16 @@ export default function DockerPanel({ tab }: Props) {
               >
                 <Play size={11} /> {t("Run container")}
               </button>
+              <button
+                type="button"
+                className="btn is-compact"
+                disabled={statsBusy || !state || !(state?.containers.length)}
+                onClick={() => void fetchContainerStats()}
+                title={t("Sample CPU and memory for running containers")}
+              >
+                <RefreshCw size={11} className={statsBusy ? "spin" : ""} />
+                {statsBusy ? t("Sampling…") : t("CPU / Memory")}
+              </button>
               <div style={{ flex: 1 }} />
               <span className="mono text-muted" style={{ fontSize: "var(--size-micro)" }}>
                 {t("{count} total", { count: state?.containers.length ?? 0 })}
@@ -960,12 +995,12 @@ export default function DockerPanel({ tab }: Props) {
                         {c.running ? (
                           <>
                             <button className="mini-btn is-stop" type="button" title={t("Stop")}
-                              disabled={actionBusy}
+                              disabled={containerBusyIds.has(c.id)}
                               onClick={() => void containerAction(c.id, "stop")}>
                               <Square size={10} />
                             </button>
                             <button className="mini-btn is-info" type="button" title={t("Restart")}
-                              disabled={actionBusy}
+                              disabled={containerBusyIds.has(c.id)}
                               onClick={() => void containerAction(c.id, "restart")}>
                               <RotateCw size={11} />
                             </button>
@@ -973,12 +1008,12 @@ export default function DockerPanel({ tab }: Props) {
                         ) : (
                           <>
                             <button className="mini-btn is-start" type="button" title={t("Start")}
-                              disabled={actionBusy}
+                              disabled={containerBusyIds.has(c.id)}
                               onClick={() => void containerAction(c.id, "start")}>
                               <Play size={11} />
                             </button>
                             <button className="mini-btn is-destructive" type="button" title={t("Remove")}
-                              disabled={actionBusy}
+                              disabled={containerBusyIds.has(c.id)}
                               onClick={() => void containerAction(c.id, "remove")}>
                               <Trash2 size={11} />
                             </button>
@@ -1018,22 +1053,22 @@ export default function DockerPanel({ tab }: Props) {
                   <div style={{ flex: 1 }} />
                   {selectedCtr.running ? (
                     <>
-                      <button className="mini-btn is-stop" type="button" title={t("Stop")} disabled={actionBusy}
+                      <button className="mini-btn is-stop" type="button" title={t("Stop")} disabled={containerBusyIds.has(selectedCtr.id)}
                         onClick={() => void containerAction(selectedCtr.id, "stop")}>
                         <Square size={10} />
                       </button>
-                      <button className="mini-btn is-info" type="button" title={t("Restart")} disabled={actionBusy}
+                      <button className="mini-btn is-info" type="button" title={t("Restart")} disabled={containerBusyIds.has(selectedCtr.id)}
                         onClick={() => void containerAction(selectedCtr.id, "restart")}>
                         <RotateCw size={11} />
                       </button>
                     </>
                   ) : (
                     <>
-                      <button className="mini-btn is-start" type="button" title={t("Start")} disabled={actionBusy}
+                      <button className="mini-btn is-start" type="button" title={t("Start")} disabled={containerBusyIds.has(selectedCtr.id)}
                         onClick={() => void containerAction(selectedCtr.id, "start")}>
                         <Play size={11} />
                       </button>
-                      <button className="mini-btn is-destructive" type="button" title={t("Remove")} disabled={actionBusy}
+                      <button className="mini-btn is-destructive" type="button" title={t("Remove")} disabled={containerBusyIds.has(selectedCtr.id)}
                         onClick={() => void containerAction(selectedCtr.id, "remove")}>
                         <Trash2 size={11} />
                       </button>

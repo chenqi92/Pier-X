@@ -1,22 +1,32 @@
-import { Copy, X } from "lucide-react";
+import { ArrowRight, Copy, X } from "lucide-react";
 
 import { useI18n } from "../../i18n/useI18n";
 import { writeClipboardText } from "../../lib/clipboard";
 
 type Column = { name: string; type?: string | null; pk?: boolean };
 
+/** A foreign-key edge displayed in the detail drawer. */
+export type DbRowFk = {
+  /** Display label, e.g. "shipment_items (38)". */
+  label: string;
+  /** Optional click handler — when omitted the link is non-interactive. */
+  onClick?: () => void;
+};
+
 type Props = {
   title: string;
   columns: Column[];
   row: string[];
   onClose: () => void;
+  /** Outbound FK edges to render under the field list. */
+  foreignKeys?: DbRowFk[];
 };
 
 /**
  * Right-drawer row detail. Read-only for the pilot — inline edit and
  * FK navigation are design-only placeholders (docs/BACKEND-GAPS.md).
  */
-export default function DbRowDetail({ title, columns, row, onClose }: Props) {
+export default function DbRowDetail({ title, columns, row, onClose, foreignKeys }: Props) {
   const { t } = useI18n();
 
   const copyJson = () => {
@@ -66,6 +76,25 @@ export default function DbRowDetail({ title, columns, row, onClose }: Props) {
             </div>
           );
         })}
+        {foreignKeys && foreignKeys.length > 0 && (
+          <div className="rg-detail-field rg-detail-fks">
+            <div className="rg-detail-label">{t("Foreign keys")}</div>
+            <div className="rg-detail-fk-list">
+              {foreignKeys.map((fk, i) => (
+                <button
+                  key={i}
+                  type="button"
+                  className="rg-fk"
+                  onClick={fk.onClick}
+                  disabled={!fk.onClick}
+                >
+                  {fk.label}
+                  <ArrowRight size={9} />
+                </button>
+              ))}
+            </div>
+          </div>
+        )}
       </div>
     </aside>
   );

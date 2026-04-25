@@ -1,16 +1,12 @@
 import {
-  AlignJustify,
   ChevronDown,
-  Download,
+  ExternalLink,
   FolderTree,
   Play,
   RefreshCw,
-  Search,
   Server,
   Square,
   Terminal as TerminalIcon,
-  Trash2,
-  X,
 } from "lucide-react";
 import type { ComponentType, SVGProps } from "react";
 import { useEffect, useMemo, useRef, useState } from "react";
@@ -31,6 +27,7 @@ import { localizeError, localizeRuntimeMessage } from "../i18n/localizeMessage";
 import DismissibleNote from "../components/DismissibleNote";
 import PanelHeader from "../components/PanelHeader";
 import StatusDot from "../components/StatusDot";
+import LogViewerDialog from "../shell/LogViewerDialog";
 import { useTabStore } from "../stores/useTabStore";
 
 type Props = { tab: TabState };
@@ -63,13 +60,6 @@ function clockStamp(d: Date = new Date()): string {
   return `${pad(d.getHours())}:${pad(d.getMinutes())}:${pad(d.getSeconds())}`;
 }
 
-const LEVELS: { key: LogLevel; label: string }[] = [
-  { key: "info", label: "INFO" },
-  { key: "warn", label: "WARN" },
-  { key: "error", label: "ERROR" },
-  { key: "debug", label: "DEBUG" },
-];
-
 const LOG_ICON = RIGHT_TOOL_META.log.icon;
 
 const MODE_ICONS: Record<LogSourceMode, IconType> = {
@@ -91,17 +81,11 @@ export default function LogViewerPanel({ tab }: Props) {
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
   const [notice, setNotice] = useState("");
-  const [wrap, setWrap] = useState(false);
-  const [searchText, setSearchText] = useState("");
-  const [activeLevels, setActiveLevels] = useState<Record<LogLevel, boolean>>({
-    info: true,
-    warn: true,
-    error: true,
-    debug: false,
-  });
   const [follow, setFollow] = useState(true);
-  /** Selected line index — opens the detail pane below the body. */
-  const [selectedIdx, setSelectedIdx] = useState<number | null>(null);
+  /** When true, the rich LogViewerDialog renders alongside the inline tail.
+   *  Filters / search / line detail live in the dialog — the panel itself is
+   *  a thin tail viewer. */
+  const [dialogOpen, setDialogOpen] = useState(false);
 
   // File-mode draft state: dir input + fetched entries.
   const [fileDirDraft, setFileDirDraft] = useState(source.fileDir || "/var/log");
@@ -302,20 +286,9 @@ export default function LogViewerPanel({ tab }: Props) {
     }
   }
 
-  const counts = useMemo(() => {
-    const acc: Record<LogLevel, number> = { info: 0, warn: 0, error: 0, debug: 0 };
-    for (const e of events) acc[e.level]++;
-    return acc;
-  }, [events]);
-
-  const filtered = useMemo(() => {
-    const needle = searchText.trim().toLowerCase();
-    return events.filter((e) => {
-      if (!activeLevels[e.level]) return false;
-      if (needle && !e.text.toLowerCase().includes(needle)) return false;
-      return true;
-    });
-  }, [events, activeLevels, searchText]);
+  /** The inline panel always shows the most recent 200 lines unfiltered.
+   *  Heavy filtering / search / line detail live in LogViewerDialog. */
+  const tailEvents = useMemo(() => events.slice(-200), [events]);
 
   const streaming = !!streamId;
   const compiled = compileLogSource(source);
@@ -326,17 +299,6 @@ export default function LogViewerPanel({ tab }: Props) {
     : events.length > 0
       ? t("{count} lines", { count: events.length })
       : undefined;
-
-  function downloadLog() {
-    const lines = events.map((e) => `${e.ts} [${e.level.toUpperCase()}] ${e.text}`).join("\n");
-    const blob = new Blob([lines], { type: "text/plain" });
-    const url = URL.createObjectURL(blob);
-    const a = document.createElement("a");
-    a.href = url;
-    a.download = `pier-log-${Date.now()}.log`;
-    a.click();
-    URL.revokeObjectURL(url);
-  }
 
   const SourceIcon = MODE_ICONS[source.mode];
 
@@ -497,67 +459,29 @@ export default function LogViewerPanel({ tab }: Props) {
           </div>
         )}
 
-        {/* Filter toolbar */}
-        <div className="lg-filters">
-          <div className="lg-levels">
-            {LEVELS.map((lv) => (
-              <button
-                key={lv.key}
-                type="button"
-                className={"lg-chip lv-" + lv.key + (activeLevels[lv.key] ? " on" : "")}
-                onClick={() => setActiveLevels((prev) => ({ ...prev, [lv.key]: !prev[lv.key] }))}
-              >
-                <span className="lg-chip-dot" />
-                {t(lv.label)}
-                <span className="lg-chip-n">{counts[lv.key] || 0}</span>
-              </button>
-            ))}
-          </div>
-
-          <div className="lg-search">
-            <Search size={10} />
-            <input
-              placeholder={t("Filter…")}
-              value={searchText}
-              onChange={(e) => setSearchText(e.currentTarget.value)}
-            />
-            {searchText ? (
-              <button className="lg-x" type="button" onClick={() => setSearchText("")}>
-                <X size={10} />
-              </button>
-            ) : null}
-          </div>
-
+        {/* Slim toolbar — wrap toggle + open-in-dialog button. Filters /
+            search / line detail moved to LogViewerDialog. */}
+        <div className="lg-filters lg-filters--slim">
+          {hasSsh && events.length > 0 && (
+            <span className="lg-counts mono">
+              {t("{count} lines buffered", { count: events.length })}
+            </span>
+          )}
+          <span className="lg-picker-spacer" />
           <button
             type="button"
-            className={"lg-ic" + (wrap ? " on" : "")}
-            title={t("Wrap lines")}
-            onClick={() => setWrap((v) => !v)}
-          >
-            <AlignJustify size={11} />
-          </button>
-          <button
-            type="button"
-            className="lg-ic"
-            title={t("Clear")}
-            onClick={() => setEvents([])}
+            className="btn is-ghost is-compact"
+            onClick={() => setDialogOpen(true)}
             disabled={events.length === 0}
+            title={t("Open in dialog")}
           >
-            <Trash2 size={11} />
-          </button>
-          <button
-            type="button"
-            className="lg-ic"
-            title={t("Download")}
-            onClick={downloadLog}
-            disabled={events.length === 0}
-          >
-            <Download size={11} />
+            <ExternalLink size={11} />
+            {t("Open in dialog")}
           </button>
         </div>
 
         <div
-          className={"lg-body mono" + (wrap ? " wrap" : "")}
+          className={"lg-body mono wrap"}
           ref={outputRef}
           onScroll={(e) => {
             const el = e.currentTarget;
@@ -589,20 +513,15 @@ export default function LogViewerPanel({ tab }: Props) {
             </DismissibleNote>
           )}
 
-          {filtered.map((e) => (
-            <div
-              key={e.idx}
-              className={"lg-line lv-" + e.level + (selectedIdx === e.idx ? " sel" : "")}
-              onClick={() => setSelectedIdx((s) => (s === e.idx ? null : e.idx))}
-              style={{ cursor: "pointer" }}
-            >
+          {tailEvents.map((e) => (
+            <div key={e.idx} className={"lg-line lv-" + e.level}>
               <span className="lg-n">{String(e.idx).padStart(4, " ")}</span>
               <span className="lg-t">{e.ts}</span>
               <span className={"lg-lvl " + e.level}>{e.level.toUpperCase()}</span>
               <span className="lg-msg">{e.kind === "exit" ? t("Process exited with code {code}", { code: e.text }) : e.text}</span>
             </div>
           ))}
-          {streaming && filtered.length > 0 && (
+          {streaming && tailEvents.length > 0 && (
             <div className="lg-line lg-line--cursor">
               <span className="lg-n">{String(counter.current + 1).padStart(4, " ")}</span>
               <span className="lg-cursor" />
@@ -610,55 +529,12 @@ export default function LogViewerPanel({ tab }: Props) {
           )}
         </div>
 
-        {selectedIdx !== null && (() => {
-          const detail = events.find((e) => e.idx === selectedIdx);
-          if (!detail) return null;
-          return (
-            <div className="lg-detail">
-              <div className="lg-detail-head">
-                <span>{t("line {n}", { n: detail.idx })}</span>
-                <span className="lg-detail-spacer" />
-                <button
-                  type="button"
-                  className="mini-button mini-button--ghost"
-                  onClick={() => setSelectedIdx(null)}
-                  title={t("Close")}
-                >
-                  <X size={10} />
-                </button>
-              </div>
-              <div className="lg-detail-body">
-                <span className="lg-detail-k">{t("timestamp")}</span>
-                <span className="lg-detail-v">{detail.ts}</span>
-                <span className="lg-detail-k">{t("level")}</span>
-                <span className={"lg-lvl " + detail.level} style={{ justifySelf: "start" }}>
-                  {detail.level.toUpperCase()}
-                </span>
-                <span className="lg-detail-k">{t("source")}</span>
-                <span className="lg-detail-v">{describeLogSource(source)}</span>
-                <span className="lg-detail-k">{t("message")}</span>
-                <span className="lg-detail-v">{detail.text}</span>
-                {hasSsh && (
-                  <>
-                    <span className="lg-detail-k">{t("host")}</span>
-                    <span className="lg-detail-v">{sshArgs.user}@{sshArgs.host}</span>
-                  </>
-                )}
-              </div>
-            </div>
-          );
-        })()}
-
         <div className="lg-foot">
           <span className="mono lg-foot-src" title={compiled || describeLogSource(source)}>
             <SourceIcon size={10} />
             {describeLogSource(source)}
           </span>
-          <span className="mono">
-            <span className="lg-foot-muted">{t("showing")} </span>{filtered.length}
-            <span className="lg-foot-muted"> / {events.length} {t("lines")}</span>
-          </span>
-          <div style={{ flex: 1 }} />
+          <span className="lg-picker-spacer" />
           <button
             type="button"
             className={"lg-foot-pin mono" + (follow ? " active" : "")}
@@ -672,6 +548,18 @@ export default function LogViewerPanel({ tab }: Props) {
           </button>
         </div>
       </div>
+
+      <LogViewerDialog
+        open={dialogOpen}
+        onClose={() => setDialogOpen(false)}
+        events={events}
+        source={source}
+        hostLabel={hasSsh ? `${sshArgs.user}@${sshArgs.host}` : ""}
+        streaming={streaming}
+        onToggleStreaming={() => (streaming ? void stopStream() : void startStream())}
+        onClear={() => setEvents([])}
+        compiledCommand={compiled}
+      />
     </>
   );
 }

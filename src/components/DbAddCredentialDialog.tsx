@@ -1,4 +1,4 @@
-import { Database, Star, X, Zap } from "lucide-react";
+import { CheckCircle2, Database, Loader2, Plug, Star, XCircle, X, Zap } from "lucide-react";
 import { useEffect, useMemo, useState } from "react";
 import IconButton from "./IconButton";
 import { useDraggableDialog } from "./useDraggableDialog";
@@ -73,6 +73,10 @@ export default function DbAddCredentialDialog({
   const [favorite, setFavorite] = useState(false);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState("");
+  const [testing, setTesting] = useState(false);
+  const [testResult, setTestResult] = useState<
+    { ok: true; via: "ssh-tunnel" | "direct" } | { ok: false; msg: string } | null
+  >(null);
 
   // Reseed when the dialog (re)opens with a different adopting row.
   useEffect(() => {
@@ -85,6 +89,7 @@ export default function DbAddCredentialDialog({
     setDatabase(seed.database);
     setFavorite(false);
     setError("");
+    setTestResult(null);
   }, [open, seed]);
 
   // When adopting a docker container, best-effort fetch the
@@ -148,6 +153,99 @@ export default function DbAddCredentialDialog({
     Number.isFinite(parsedPort) &&
     parsedPort > 0 &&
     !saving;
+
+  /**
+   * Probe-only connection check. When the parent tab carries an SSH
+   * context, opens an EPHEMERAL `ssh -L` tunnel just for this probe,
+   * runs the dialect's `*Browse` command (cheap: SHOW DATABASES /
+   * pg_catalog / PING), then tears the tunnel down. The credential is
+   * not saved, the tab's persistent tunnel slot is not touched, and a
+   * failure here doesn't block save — the user can still keep typed
+   * values.
+   *
+   * Without an SSH context, the probe goes direct to host:port —
+   * useful only when the database actually accepts external clients.
+   */
+  async function testConnection() {
+    setTesting(true);
+    setTestResult(null);
+    try {
+      const portN = Number.parseInt(port, 10);
+      if (!Number.isFinite(portN) || portN <= 0) {
+        throw new Error(t("Port must be a positive integer."));
+      }
+      const remoteHost = host.trim() || "127.0.0.1";
+
+      let liveHost = remoteHost;
+      let livePort = portN;
+      let tunnelId: string | null = null;
+      let via: "ssh-tunnel" | "direct" = "direct";
+
+      const sshTarget = tab ? effectiveSshTarget(tab) : null;
+      if (sshTarget) {
+        const info = await cmd.sshTunnelOpen({
+          host: sshTarget.host,
+          port: sshTarget.port,
+          user: sshTarget.user,
+          authMode: sshTarget.authMode,
+          password: sshTarget.password,
+          keyPath: sshTarget.keyPath,
+          remoteHost,
+          remotePort: portN,
+          localPort: null,
+          savedConnectionIndex: sshTarget.savedConnectionIndex,
+        });
+        liveHost = info.localHost;
+        livePort = info.localPort;
+        tunnelId = info.tunnelId;
+        via = "ssh-tunnel";
+      }
+
+      try {
+        if (kind === "mysql") {
+          await cmd.mysqlBrowse({
+            host: liveHost,
+            port: livePort,
+            user: user.trim(),
+            password,
+            database: database.trim() || null,
+            table: null,
+          });
+        } else if (kind === "postgres") {
+          await cmd.postgresBrowse({
+            host: liveHost,
+            port: livePort,
+            user: user.trim(),
+            password,
+            database: database.trim() || null,
+            schema: null,
+            table: null,
+          });
+        } else {
+          // Redis: PING via redisBrowse with a tiny pattern. The
+          // `database` field on the form is the numeric DB index here.
+          const dbN = database.trim() === "" ? 0 : Number.parseInt(database, 10) || 0;
+          await cmd.redisBrowse({
+            host: liveHost,
+            port: livePort,
+            db: dbN,
+            pattern: "*",
+            key: null,
+            password: password.length > 0 ? password : null,
+          });
+        }
+        setTestResult({ ok: true, via });
+      } finally {
+        if (tunnelId) {
+          await cmd.sshTunnelClose(tunnelId).catch(() => {});
+        }
+      }
+    } catch (e) {
+      setTestResult({ ok: false, msg: formatError(e) });
+    } finally {
+      setTesting(false);
+    }
+  }
 
   async function handleSave() {
     if (savedConnectionIndex === null) return;
@@ -283,6 +381,43 @@ export default function DbAddCredentialDialog({
           </div>
         </div>
         <div className="dlg-foot">
+          <button
+            className="gb-btn"
+            disabled={testing || saving || host.trim() === "" || user.trim() === ""}
+            onClick={() => void testConnection()}
+            type="button"
+            title={
+              tab && effectiveSshTarget(tab)
+                ? t("Probes via the tab's SSH session — no port exposure required.")
+                : t("Probes directly to host:port — only works when the database accepts external clients.")
+            }
+          >
+            {testing ? <Loader2 size={11} className="spin" /> : <Plug size={11} />}
+            {testing ? t("Testing...") : t("Test connection")}
+          </button>
+          {testResult && (
+            <span
+              className={
+                "dlg-test-result " +
+                (testResult.ok ? "dlg-test-result--ok" : "dlg-test-result--err")
+              }
+              title={testResult.ok ? "" : testResult.msg}
+            >
+              {testResult.ok ? (
+                <>
+                  <CheckCircle2 size={11} />
+                  {testResult.via === "ssh-tunnel"
+                    ? t("Connected via SSH tunnel.")
+                    : t("Connected directly.")}
+                </>
+              ) : (
+                <>
+                  <XCircle size={11} />
+                  <span className="dlg-test-result-msg">{testResult.msg}</span>
+                </>
+              )}
+            </span>
+          )}
           <div style={{ flex: 1 }} />
           <button className="gb-btn" onClick={onClose} type="button">
             {t("Cancel")}

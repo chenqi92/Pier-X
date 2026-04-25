@@ -96,6 +96,7 @@ export default function TerminalPanel({ tab, isActive, onEditConnection }: Props
   const visualBell = useSettingsStore((s) => s.visualBell);
   const audioBell = useSettingsStore((s) => s.audioBell);
   const rowSeparators = useSettingsStore((s) => s.terminalRowSeparators);
+  const copyOnSelect = useSettingsStore((s) => s.terminalCopyOnSelect);
   const termThemeIdx = useThemeStore((s) => s.terminalThemeIndex);
   const termTheme = TERMINAL_THEMES[termThemeIdx] ?? TERMINAL_THEMES[0];
   const [session, setSession] = useState<TerminalSessionInfo | null>(null);
@@ -251,9 +252,13 @@ export default function TerminalPanel({ tab, isActive, onEditConnection }: Props
     const recalculate = () => {
       const measureBox = measure.getBoundingClientRect();
       const charWidth = measureBox.width / 10 || 7.8;
-      const charHeight = measureBox.height || 19;
+      // Match the px row height used by the renderer (--terminal-row-h is set
+      // via Math.ceil(fontSize * 1.45) inline). Using the fractional measured
+      // height here would let `rows × ceil_row_h` exceed the viewport, clipping
+      // the bottom of the cursor row under `overflow: hidden`.
+      const rowH = Math.ceil(terminalFontSize * 1.45);
       const cols = Math.max(48, Math.min(220, Math.floor((viewport.clientWidth - 24) / charWidth)));
-      const rows = Math.max(14, Math.min(72, Math.floor((viewport.clientHeight - 20) / charHeight)));
+      const rows = Math.max(14, Math.min(72, Math.floor((viewport.clientHeight - 20) / rowH)));
       setTerminalSize((prev) =>
         prev.cols === cols && prev.rows === rows ? prev : { cols, rows },
       );
@@ -404,6 +409,29 @@ export default function TerminalPanel({ tab, isActive, onEditConnection }: Props
     window.addEventListener("mouseup", onMouseUp);
     return () => window.removeEventListener("mouseup", onMouseUp);
   }, [session]);
+
+  // Copy-on-select (iTerm-style). Listen for mouseup on the viewport
+  // and, if the resulting selection lives inside it and is non-empty,
+  // ship it to the clipboard. Only active when the setting is on so
+  // existing users keep the explicit ⌘C behavior.
+  useEffect(() => {
+    if (!copyOnSelect) return;
+    const viewport = viewportRef.current;
+    if (!viewport) return;
+    const handler = () => {
+      const sel = window.getSelection();
+      if (!sel || sel.rangeCount === 0 || sel.isCollapsed) return;
+      const anchor = sel.anchorNode;
+      const focus = sel.focusNode;
+      if (!anchor || !focus) return;
+      if (!viewport.contains(anchor) || !viewport.contains(focus)) return;
+      const text = sel.toString();
+      if (!text) return;
+      void writeClipboardText(text);
+    };
+    viewport.addEventListener("mouseup", handler);
+    return () => viewport.removeEventListener("mouseup", handler);
+  }, [copyOnSelect, session]);
 
   useEffect(() => {
     setStatusTerminalSize(terminalSize.cols, terminalSize.rows);

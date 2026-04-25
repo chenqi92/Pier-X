@@ -639,6 +639,133 @@ pub fn git_init_repo(path: Option<String>) -> Result<String, String> {
     run_git_at(&repo_path, &["init"])
 }
 
+// ── Global git config (Settings → Git page) ────────────────────
+//
+// `git config --global` operates against ~/.gitconfig regardless of
+// cwd, so these helpers don't take a repo path. Reads return "" for
+// any unset key (we never want a hard error just because the user
+// hasn't picked a signing method yet), writes use `--unset` when the
+// new value is empty so we don't persist literal empty strings into
+// the user's config file.
+
+fn run_git_global(args: &[&str]) -> Result<String, String> {
+    let mut command = Command::new("git");
+    command.args(args);
+    #[cfg(target_os = "windows")]
+    {
+        use std::os::windows::process::CommandExt;
+        command.creation_flags(0x0800_0000);
+    }
+    command.env("GIT_TERMINAL_PROMPT", "0");
+
+    let output = command
+        .output()
+        .map_err(|error| format!("failed to run git {}: {}", args.join(" "), error))?;
+    let stdout = String::from_utf8_lossy(&output.stdout).to_string();
+    let stderr = String::from_utf8_lossy(&output.stderr).to_string();
+
+    if !output.status.success() {
+        // `git config --global <key>` exits 1 when the key is unset
+        // with empty stderr — that's not an error here, treat as "".
+        if output.status.code() == Some(1) && stderr.trim().is_empty() {
+            return Ok(stdout);
+        }
+        let detail = stderr.trim();
+        return Err(if detail.is_empty() {
+            format!("git {} failed", args.join(" "))
+        } else {
+            format!("git {} failed: {}", args.join(" "), detail)
+        });
+    }
+    Ok(stdout)
+}
+
+fn git_global_get(key: &str) -> String {
+    run_git_global(&["config", "--global", key])
+        .map(|s| s.trim().to_string())
+        .unwrap_or_default()
+}
+
+fn git_global_get_bool(key: &str) -> bool {
+    matches!(
+        git_global_get(key).to_lowercase().as_str(),
+        "true" | "1" | "yes" | "on",
+    )
+}
+
+fn git_global_set(key: &str, value: &str) -> Result<(), String> {
+    if value.is_empty() {
+        // Unset rather than persist an empty string. `--unset` returns
+        // exit code 5 when the key wasn't set in the first place — we
+        // ignore that since the desired end state is the same.
+        let mut command = Command::new("git");
+        command.args(["config", "--global", "--unset", key]);
+        #[cfg(target_os = "windows")]
+        {
+            use std::os::windows::process::CommandExt;
+            command.creation_flags(0x0800_0000);
+        }
+        let output = command
+            .output()
+            .map_err(|error| format!("failed to unset {}: {}", key, error))?;
+        let code = output.status.code();
+        if !output.status.success() && code != Some(5) {
+            let stderr = String::from_utf8_lossy(&output.stderr);
+            return Err(format!(
+                "git config --unset {} failed: {}",
+                key,
+                stderr.trim(),
+            ));
+        }
+        return Ok(());
+    }
+    run_git_global(&["config", "--global", key, value]).map(|_| ())
+}
+
+fn git_global_set_bool(key: &str, value: bool) -> Result<(), String> {
+    git_global_set(key, if value { "true" } else { "false" })
+}
+
+#[derive(Serialize, Deserialize, Default)]
+#[serde(rename_all = "camelCase")]
+pub struct GitGlobalConfig {
+    pub user_name: String,
+    pub user_email: String,
+    /// init.defaultBranch — the name new `git init` repos start on.
+    pub default_branch: String,
+    /// gpg.format — "openpgp" | "ssh" | "x509" | "" (off).
+    pub signing_method: String,
+    /// user.signingkey — path or fingerprint depending on method.
+    pub signing_key: String,
+    pub sign_commits: bool,
+    pub sign_tags: bool,
+}
+
+#[tauri::command]
+pub fn git_global_config_get() -> Result<GitGlobalConfig, String> {
+    Ok(GitGlobalConfig {
+        user_name: git_global_get("user.name"),
+        user_email: git_global_get("user.email"),
+        default_branch: git_global_get("init.defaultBranch"),
+        signing_method: git_global_get("gpg.format"),
+        signing_key: git_global_get("user.signingkey"),
+        sign_commits: git_global_get_bool("commit.gpgsign"),
+        sign_tags: git_global_get_bool("tag.gpgsign"),
+    })
+}
+
+#[tauri::command]
+pub fn git_global_config_set(config: GitGlobalConfig) -> Result<(), String> {
+    git_global_set("user.name", config.user_name.trim())?;
+    git_global_set("user.email", config.user_email.trim())?;
+    git_global_set("init.defaultBranch", config.default_branch.trim())?;
+    git_global_set("gpg.format", config.signing_method.trim())?;
+    git_global_set("user.signingkey", config.signing_key.trim())?;
+    git_global_set_bool("commit.gpgsign", config.sign_commits)?;
+    git_global_set_bool("tag.gpgsign", config.sign_tags)?;
+    Ok(())
+}
+
 #[tauri::command]
 pub fn git_panel_state(path: Option<String>) -> Result<GitPanelState, String> {
     let client = open_git_client(path)?;

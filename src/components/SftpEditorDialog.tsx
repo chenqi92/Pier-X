@@ -2,6 +2,8 @@ import { useEffect, useMemo, useRef, useState, type MouseEvent as ReactMouseEven
 import {
   AlertTriangle,
   AlignJustify,
+  ChevronDown,
+  ChevronUp,
   Clock,
   Copy,
   Download,
@@ -11,9 +13,12 @@ import {
   HardDrive,
   Key,
   List,
+  Replace,
   RotateCcw,
   Save,
   Search,
+  Server,
+  User,
   X,
 } from "lucide-react";
 import { EditorState, EditorSelection, Compartment, type Extension } from "@codemirror/state";
@@ -38,9 +43,14 @@ import {
 import {
   search,
   searchKeymap,
-  openSearchPanel,
   closeSearchPanel,
   highlightSelectionMatches,
+  SearchQuery,
+  setSearchQuery,
+  findNext,
+  findPrevious,
+  replaceNext,
+  replaceAll,
 } from "@codemirror/search";
 import {
   bracketMatching,
@@ -55,6 +65,7 @@ import ContextMenu, { type ContextMenuItem } from "./ContextMenu";
 import { useDraggableDialog } from "./useDraggableDialog";
 import { useI18n } from "../i18n/useI18n";
 import { localizeError } from "../i18n/localizeMessage";
+import { useSettingsStore } from "../stores/useSettingsStore";
 import { writeClipboardText } from "../lib/clipboard";
 import * as cmd from "../lib/commands";
 import type { SftpTextFile } from "../lib/commands";
@@ -88,6 +99,8 @@ type Props = {
   onClose: () => void;
   /** Called after a successful save with the persisted byte count. */
   onSaved?: (bytes: number) => void;
+  /** Optional owner label shown in the head chips (e.g. "deploy"). */
+  ownerLabel?: string;
 };
 
 type Mode = "view" | "edit";
@@ -111,6 +124,7 @@ export default function SftpEditorDialog({
   sshArgs,
   onClose,
   onSaved,
+  ownerLabel,
 }: Props) {
   const { t } = useI18n();
   const { dialogStyle, handleProps } = useDraggableDialog(open);
@@ -118,6 +132,16 @@ export default function SftpEditorDialog({
   const viewRef = useRef<EditorView | null>(null);
   const baselineRef = useRef<string>("");
   const saveRef = useRef<() => Promise<void>>(async () => {});
+  const openFindRef = useRef<(withReplace: boolean) => void>(() => {});
+
+  // ── Editor preferences (Settings → Editor) ─────────────────
+  // Read defaults from the global settings store; the dialog's
+  // wrap / line-numbers toggles are session overrides on top.
+  const editorWrapDefault = useSettingsStore((s) => s.editorWrapDefault);
+  const editorLineNumbersDefault = useSettingsStore((s) => s.editorLineNumbersDefault);
+  const editorTabSize = useSettingsStore((s) => s.editorTabSize);
+  const trimTrailingOnSave = useSettingsStore((s) => s.editorTrimTrailingOnSave);
+  const ensureFinalNewlineOnSave = useSettingsStore((s) => s.editorEnsureFinalNewlineOnSave);
 
   // Compartments let us toggle features at runtime — read-only for the
   // View mode segment, line-wrap for the toolbar, line-numbers for the
@@ -132,12 +156,22 @@ export default function SftpEditorDialog({
   const [meta, setMeta] = useState<Pick<SftpTextFile, "size" | "permissions" | "modified" | "lossy"> | null>(null);
   const [dirty, setDirty] = useState(false);
   const [mode, setMode] = useState<Mode>("edit");
-  const [wrap, setWrap] = useState(false);
-  const [showNums, setShowNums] = useState(true);
+  const [wrap, setWrap] = useState(editorWrapDefault);
+  const [showNums, setShowNums] = useState(editorLineNumbersDefault);
   const [cursor, setCursor] = useState<{ line: number; col: number; selLen: number; totalLines: number }>({ line: 1, col: 1, selLen: 0, totalLines: 0 });
   const [ctxMenu, setCtxMenu] = useState<{ x: number; y: number } | null>(null);
   const [copiedPath, setCopiedPath] = useState(false);
   const overlayDownRef = useRef(false);
+
+  // In-dialog Find/Replace bar state — drives CodeMirror via setSearchQuery
+  // + findNext/findPrevious/replaceNext/replaceAll, instead of CM's bottom panel.
+  const [findOpen, setFindOpen] = useState(false);
+  const [findReplace, setFindReplace] = useState(false);
+  const [findText, setFindText] = useState("");
+  const [replaceText, setReplaceText] = useState("");
+  const [findRegex, setFindRegex] = useState(false);
+  const [findCase, setFindCase] = useState(false);
+  const findInputRef = useRef<HTMLInputElement | null>(null);
 
   const formatError = (e: unknown) => localizeError(e, t);
   const effectiveName = useMemo(() => name || basename(path), [name, path]);
@@ -201,6 +235,7 @@ export default function SftpEditorDialog({
     const lang = languageFromFilename(effectiveName);
     const extensions: Extension[] = [
       EditorState.phrases.of(phrases),
+      EditorState.tabSize.of(editorTabSize),
       lineNumsComp.of(showNums ? cmLineNumbers() : []),
       highlightActiveLineGutter(),
       highlightSpecialChars(),
@@ -221,8 +256,8 @@ export default function SftpEditorDialog({
       readOnlyComp.of(EditorState.readOnly.of(false)),
       keymap.of([
         { key: "Mod-s", preventDefault: true, run: () => { void saveRef.current(); return true; } },
-        { key: "Mod-f", preventDefault: true, run: openSearchPanel },
-        { key: "Mod-h", preventDefault: true, run: openSearchPanel },
+        { key: "Mod-f", preventDefault: true, run: () => { openFindRef.current(false); return true; } },
+        { key: "Mod-h", preventDefault: true, run: () => { openFindRef.current(true); return true; } },
         indentWithTab,
         ...defaultKeymap,
         ...historyKeymap,
@@ -288,7 +323,28 @@ export default function SftpEditorDialog({
   saveRef.current = async () => {
     const view = viewRef.current;
     if (!view || saving) return;
-    const content = view.state.doc.toString();
+    let content = view.state.doc.toString();
+
+    // Apply on-save transforms before either replacing the buffer or
+    // shipping bytes. We mutate the buffer too so the user sees the
+    // post-save shape — otherwise editing a "clean" file then saving
+    // would silently change it on disk vs what's in the editor.
+    if (trimTrailingOnSave) {
+      content = content.replace(/[ \t]+$/gm, "");
+    }
+    if (ensureFinalNewlineOnSave) {
+      // Normalize to exactly one trailing newline (drop excess, add
+      // one if missing). Empty buffer stays empty.
+      if (content.length > 0) {
+        content = content.replace(/\n+$/, "") + "\n";
+      }
+    }
+    if (content !== view.state.doc.toString()) {
+      view.dispatch({
+        changes: { from: 0, to: view.state.doc.length, insert: content },
+      });
+    }
+
     setSaving(true);
     setError("");
     try {
@@ -313,21 +369,68 @@ export default function SftpEditorDialog({
     onClose();
   };
 
-  const isSearchOpen = () => {
-    const v = viewRef.current;
-    return !!v && !!v.dom.querySelector(".cm-panel.cm-search");
-  };
-
-  const toggleSearch = () => {
+  // Sync the in-dialog find inputs to CodeMirror's search query so
+  // findNext/findPrevious/replaceNext/replaceAll act on the right string.
+  const syncSearchQuery = () => {
     const v = viewRef.current;
     if (!v) return;
-    if (isSearchOpen()) {
+    v.dispatch({
+      effects: setSearchQuery.of(
+        new SearchQuery({
+          search: findText,
+          replace: replaceText,
+          caseSensitive: findCase,
+          regexp: findRegex,
+        }),
+      ),
+    });
+  };
+
+  useEffect(() => {
+    if (!findOpen) return;
+    syncSearchQuery();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [findOpen, findText, replaceText, findCase, findRegex]);
+
+  const openFind = (withReplace: boolean) => {
+    if (withReplace) {
+      setFindReplace(true);
+      if (mode === "view") setMode("edit");
+    }
+    setFindOpen(true);
+    requestAnimationFrame(() => findInputRef.current?.focus());
+  };
+  openFindRef.current = openFind;
+
+  const closeFind = () => {
+    setFindOpen(false);
+    const v = viewRef.current;
+    if (v) {
+      // CM might also have its bottom panel open from a stray ⌘F earlier — tidy up.
       closeSearchPanel(v);
       v.focus();
-    } else {
-      v.focus();
-      openSearchPanel(v);
     }
+  };
+
+  const goNext = () => {
+    const v = viewRef.current;
+    if (!v || !findText) return;
+    findNext(v);
+  };
+  const goPrev = () => {
+    const v = viewRef.current;
+    if (!v || !findText) return;
+    findPrevious(v);
+  };
+  const doReplaceOne = () => {
+    const v = viewRef.current;
+    if (!v || !findText) return;
+    replaceNext(v);
+  };
+  const doReplaceAll = () => {
+    const v = viewRef.current;
+    if (!v || !findText) return;
+    replaceAll(v);
   };
 
   const revert = () => {
@@ -404,7 +507,7 @@ export default function SftpEditorDialog({
       { label: t("Paste"), action: () => void pasteAt(), shortcut: "Ctrl+V" },
       { divider: true },
       { label: t("Select all"), action: selectAll, shortcut: "Ctrl+A" },
-      { label: t("Find / Replace"), action: () => { if (v) { v.focus(); openSearchPanel(v); } }, shortcut: "Ctrl+F" },
+      { label: t("Find / Replace"), action: () => openFindRef.current(true), shortcut: "Ctrl+F" },
     ];
   };
 
@@ -413,6 +516,11 @@ export default function SftpEditorDialog({
     if (e.key === "Escape") {
       const view = viewRef.current;
       if (view && view.dom.querySelector(".cm-panel.cm-search")) return;
+      if (findOpen) {
+        e.preventDefault();
+        closeFind();
+        return;
+      }
       e.preventDefault();
       requestClose();
     }
@@ -454,6 +562,9 @@ export default function SftpEditorDialog({
             <span className="editor-chip"><HardDrive size={9} /> {sizeLabel}</span>
             <span className="editor-chip"><Clock size={9} /> {modifiedLabel}</span>
             <span className="editor-chip"><Key size={9} /> {permLabel}</span>
+            {ownerLabel && (
+              <span className="editor-chip"><User size={9} /> {ownerLabel}</span>
+            )}
           </span>
           <span className="editor-path mono" title={path}>{path}</span>
           <div className="editor-mode-seg" role="tablist">
@@ -490,11 +601,19 @@ export default function SftpEditorDialog({
           <span className="editor-toolbar-spacer" />
           <button
             type="button"
-            className="editor-tool-btn"
-            title={t("Find / Replace")}
-            onClick={toggleSearch}
+            className={"editor-tool-btn" + (findOpen && !findReplace ? " on" : "")}
+            title={t("Find (⌘F)")}
+            onClick={() => (findOpen && !findReplace ? closeFind() : openFind(false))}
           >
             <Search size={11} />
+          </button>
+          <button
+            type="button"
+            className={"editor-tool-btn" + (findOpen && findReplace ? " on" : "")}
+            title={t("Find & Replace (⌘H)")}
+            onClick={() => (findOpen && findReplace ? closeFind() : openFind(true))}
+          >
+            <Replace size={11} />
           </button>
           <button
             type="button"
@@ -560,6 +679,108 @@ export default function SftpEditorDialog({
           </div>
         )}
 
+        {findOpen && (
+          <div className="editor-find">
+            <div className="editor-find-row">
+              <Search size={11} />
+              <input
+                ref={findInputRef}
+                className="editor-find-input mono"
+                placeholder={findRegex ? t("/regex/") : t("find…")}
+                value={findText}
+                onChange={(e) => setFindText(e.target.value)}
+                onKeyDown={(e) => {
+                  if (e.key === "Enter") {
+                    e.preventDefault();
+                    if (e.shiftKey) goPrev();
+                    else goNext();
+                  }
+                }}
+              />
+              <button
+                type="button"
+                className={"editor-find-opt mono" + (findCase ? " on" : "")}
+                title={t("Case sensitive")}
+                onClick={() => setFindCase((v) => !v)}
+              >
+                Aa
+              </button>
+              <button
+                type="button"
+                className={"editor-find-opt mono" + (findRegex ? " on" : "")}
+                title={t("Regex")}
+                onClick={() => setFindRegex((v) => !v)}
+              >
+                .*
+              </button>
+              <button
+                type="button"
+                className="editor-tool-btn"
+                title={t("Previous (⇧⏎)")}
+                onClick={goPrev}
+                disabled={!findText}
+              >
+                <ChevronUp size={11} />
+              </button>
+              <button
+                type="button"
+                className="editor-tool-btn"
+                title={t("Next (⏎)")}
+                onClick={goNext}
+                disabled={!findText}
+              >
+                <ChevronDown size={11} />
+              </button>
+              <button
+                type="button"
+                className={"editor-tool-btn" + (findReplace ? " on" : "")}
+                title={t("Toggle replace")}
+                onClick={() => {
+                  setFindReplace((v) => !v);
+                  if (!findReplace && mode === "view") setMode("edit");
+                }}
+              >
+                <Edit size={11} />
+              </button>
+              <button
+                type="button"
+                className="editor-tool-btn"
+                title={t("Close (Esc)")}
+                onClick={closeFind}
+              >
+                <X size={11} />
+              </button>
+            </div>
+            {findReplace && (
+              <div className="editor-find-row">
+                <Replace size={11} />
+                <input
+                  className="editor-find-input mono"
+                  placeholder={t("replace with…")}
+                  value={replaceText}
+                  onChange={(e) => setReplaceText(e.target.value)}
+                />
+                <button
+                  type="button"
+                  className="btn is-compact"
+                  onClick={doReplaceOne}
+                  disabled={!findText || mode !== "edit"}
+                >
+                  {t("Replace")}
+                </button>
+                <button
+                  type="button"
+                  className="btn is-primary is-compact"
+                  onClick={doReplaceAll}
+                  disabled={!findText || mode !== "edit"}
+                >
+                  {t("Replace all")}
+                </button>
+              </div>
+            )}
+          </div>
+        )}
+
         <div className="dlg-body dlg-body--editor">
           {loading && <div className="editor-loading mono">{t("Loading…")}</div>}
           {error && !loading && <div className="editor-error">{error}</div>}
@@ -567,7 +788,9 @@ export default function SftpEditorDialog({
         </div>
 
         <div className="editor-status mono">
-          <span>{sshArgs.user}@{sshArgs.host}</span>
+          <span className="editor-status-cell">
+            <Server size={9} /> {sshArgs.user}@{sshArgs.host}
+          </span>
           <span className="sep">·</span>
           <span>{t("Ln {line}, Col {col}", { line: cursor.line, col: cursor.col })}</span>
           {cursor.selLen > 0 && (
@@ -576,14 +799,14 @@ export default function SftpEditorDialog({
               <span>{t("{n} selected", { n: cursor.selLen })}</span>
             </>
           )}
-          <div style={{ flex: 1 }} />
+          <span className="editor-status-spacer" />
           <span>UTF-8</span>
           <span className="sep">·</span>
           <span>LF</span>
           <span className="sep">·</span>
           <span>{langName}</span>
           <span className="sep">·</span>
-          <span style={{ color: dirty ? "var(--warn)" : "var(--muted)" }}>
+          <span className={dirty ? "editor-status-dirty" : "editor-status-saved"}>
             {dirty ? t("modified") : t("saved")}
           </span>
         </div>

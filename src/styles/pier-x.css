@@ -848,6 +848,11 @@ body.is-resizing .app { transition: none; }
   min-width: 0;
   display: flex;
   flex-direction: column;
+  /* Establishes a positioning context for descendants that use
+     `position: absolute; inset: 0;` to fill the panel (e.g.
+     DbConnectSplash). Without this, those descendants walk up to
+     `.app` and visually escape the right sidebar bounds. */
+  position: relative;
 }
 .right-tool-slot.is-hidden { display: none; }
 
@@ -924,7 +929,12 @@ body.is-resizing .app { transition: none; }
 
 /* ─── Command palette overlay ─── */
 .cmdp-overlay {
-  position: absolute; inset: 0; z-index: 200;
+  /* `fixed` (vs `absolute`) so the overlay always anchors to the
+   * viewport. Dialogs rendered inside a panel — DbAddCredentialDialog,
+   * ContainerLogsDialog, RunContainerDialog, RegistryProxyDialog,
+   * SftpPanel's preview overlay — would otherwise be trapped by the
+   * nearest positioned ancestor (e.g. .right-tool-slot) and clipped. */
+  position: fixed; inset: 0; z-index: 1000;
   background: var(--overlay-scrim);
   backdrop-filter: blur(2px);
   display: flex; align-items: flex-start; justify-content: center;
@@ -1133,6 +1143,42 @@ body.is-resizing .app { transition: none; }
   font-size: var(--size-micro);
   color: var(--muted);
   display: inline-flex; align-items: center; gap: var(--sp-1);
+}
+
+/* Test-connection result chip in DbAddCredentialDialog footer. */
+.dlg-test-result {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 2px var(--sp-1-5);
+  border-radius: var(--radius-pill);
+  font-size: var(--ui-fs-sm);
+  max-width: 280px;
+  min-width: 0;
+}
+.dlg-test-result--ok {
+  background: color-mix(in srgb, var(--pos) 16%, transparent);
+  color: var(--pos);
+  border: 1px solid color-mix(in srgb, var(--pos) 35%, transparent);
+}
+.dlg-test-result--err {
+  background: color-mix(in srgb, var(--neg) 14%, transparent);
+  color: var(--neg);
+  border: 1px solid color-mix(in srgb, var(--neg) 35%, transparent);
+}
+.dlg-test-result-msg {
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  min-width: 0;
+}
+
+/* Spin keyframes — re-used by Loader2 icons across dialogs. */
+@keyframes spin {
+  to { transform: rotate(360deg); }
+}
+.spin {
+  animation: spin 1s linear infinite;
 }
 .dlg-foot-hint svg { color: var(--pos); }
 
@@ -2053,6 +2099,61 @@ body.is-resizing .app { transition: none; }
 }
 .editor-tool-btn:disabled { opacity: 0.4; cursor: default; }
 .editor-tool-btn:disabled:hover { background: transparent; color: var(--muted); }
+
+/* In-dialog Find / Replace bar */
+.editor-find {
+  background: var(--panel);
+  border-bottom: 1px solid var(--line);
+  padding: var(--sp-1) var(--sp-2);
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-1);
+}
+.editor-find-row {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-1);
+}
+.editor-find-row > svg { color: var(--muted); flex: none; }
+.editor-find-input {
+  flex: 1;
+  background: var(--bg);
+  border: 1px solid var(--line-2);
+  color: var(--ink);
+  padding: 4px var(--sp-2);
+  border-radius: var(--radius-xs);
+  font-size: var(--ui-fs-sm);
+  outline: none;
+}
+.editor-find-input:focus { border-color: var(--accent); }
+.editor-find-opt {
+  background: var(--bg);
+  border: 1px solid var(--line-2);
+  color: var(--muted);
+  padding: 3px 7px;
+  border-radius: var(--radius-xs);
+  cursor: pointer;
+  font-size: var(--size-small);
+  line-height: 1;
+  font-family: var(--mono);
+}
+.editor-find-opt:hover:not(.on) { color: var(--ink); }
+.editor-find-opt.on {
+  background: var(--accent-dim);
+  color: var(--accent);
+  border-color: color-mix(in srgb, var(--accent) 40%, transparent);
+}
+
+/* Status bar cells */
+.editor-status-cell {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+}
+.editor-status-cell svg { color: var(--muted); flex: none; }
+.editor-status-spacer { flex: 1; }
+.editor-status-dirty { color: var(--warn); }
+.editor-status-saved { color: var(--muted); }
 
 /* Properties dialog */
 

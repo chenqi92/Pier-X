@@ -11,6 +11,13 @@ import DbSchemaTree, { type DbSchemaDatabase } from "../components/db/DbSchemaTr
 import DbSqlEditor from "../components/db/DbSqlEditor";
 import DbStubView from "../components/db/DbStubView";
 import type { DbSplashRowData } from "../components/db/DbSplashRow";
+import { useDbSqlTabs } from "../components/db/useDbSqlTabs";
+import {
+  gridColumnsFromSqlite,
+  mutationToSql,
+  qualifyTable,
+  type DbMutation,
+} from "../components/db/dbColumnRules";
 import { useI18n } from "../i18n/useI18n";
 import { localizeError } from "../i18n/localizeMessage";
 import { writeClipboardText } from "../lib/clipboard";
@@ -43,9 +50,12 @@ export default function SqlitePanel({ tab }: Props) {
 
   const [path, setPath] = useState("");
   const [tableName, setTableName] = useState("");
-  const [sql, setSql] = useState(
-    "SELECT name FROM sqlite_master WHERE type='table' ORDER BY name;",
-  );
+  const sqlTabs = useDbSqlTabs({
+    initialSql: "SELECT name FROM sqlite_master WHERE type='table' ORDER BY name;",
+    initialName: t("query"),
+  });
+  const sql = sqlTabs.sql;
+  const setSql = sqlTabs.setSql;
   const [readOnly, setReadOnly] = useState(true);
   const [writeConfirm, setWriteConfirm] = useState("");
   const [state, setState] = useState<SqliteBrowserState | null>(null);
@@ -188,8 +198,9 @@ export default function SqlitePanel({ tab }: Props) {
     setQueryError("");
     setNotice("");
     try {
+      let r: QueryExecutionResult;
       if (isRemoteMode && sshTarget) {
-        const r = await cmd.sqliteExecuteRemote({
+        r = await cmd.sqliteExecuteRemote({
           host: sshTarget.host,
           port: sshTarget.port,
           user: sshTarget.user,
@@ -200,13 +211,19 @@ export default function SqlitePanel({ tab }: Props) {
           dbPath: path.trim(),
           sql,
         });
-        setQueryResult(r);
-        setNotice(t("{elapsed} ms", { elapsed: r.elapsedMs }));
       } else {
-        const r = await cmd.sqliteExecute(path.trim(), sql);
-        setQueryResult(r);
-        setNotice(t("{elapsed} ms", { elapsed: r.elapsedMs }));
+        r = await cmd.sqliteExecute(path.trim(), sql);
       }
+      setQueryResult(r);
+      setNotice(t("{elapsed} ms", { elapsed: r.elapsedMs }));
+      sqlTabs.pushHistory({
+        sql,
+        at: t("just now"),
+        rows: r.rows?.length ?? null,
+        ms: r.elapsedMs,
+        write: needsWrite,
+      });
+      sqlTabs.markActiveSaved();
       if (needsWrite) {
         setReadOnly(true);
         setWriteConfirm("");
@@ -434,6 +451,48 @@ export default function SqlitePanel({ tab }: Props) {
     type: c.colType,
     pk: c.primaryKey,
   }));
+  const gridColumns = gridColumnsFromSqlite(state.columns);
+
+  const [committing, setCommitting] = useState(false);
+  async function commitMutations(mutations: DbMutation[]) {
+    if (!state || mutations.length === 0) return;
+    const tableRef = qualifyTable("sqlite", { table: state.tableName });
+    setCommitting(true);
+    setQueryError("");
+    setNotice("");
+    try {
+      let written = 0;
+      for (const mut of mutations) {
+        const sql = mutationToSql(
+          { dialect: "sqlite", table: tableRef, columns: gridColumns },
+          mut,
+        );
+        if (isRemoteMode && sshTarget) {
+          await cmd.sqliteExecuteRemote({
+            host: sshTarget.host,
+            port: sshTarget.port,
+            user: sshTarget.user,
+            authMode: sshTarget.authMode,
+            password: sshTarget.password,
+            keyPath: sshTarget.keyPath,
+            savedConnectionIndex: sshTarget.savedConnectionIndex,
+            dbPath: path.trim(),
+            sql,
+          });
+        } else {
+          await cmd.sqliteExecute(path.trim(), sql);
+        }
+        written += 1;
+      }
+      setNotice(t("Committed {n} change(s).", { n: written }));
+      void browse(tableName);
+    } catch (e) {
+      setQueryError(formatError(e));
+      throw e;
+    } finally {
+      setCommitting(false);
+    }
+  }
 
   const banner = error ? (
     <DismissibleNote variant="status" tone="error" onDismiss={() => setError("")}>
@@ -471,6 +530,13 @@ export default function SqlitePanel({ tab }: Props) {
         onRun={() => void runQuery()}
         canRun={canRun}
         running={queryBusy}
+        tabs={sqlTabs.tabs}
+        activeTabId={sqlTabs.activeTabId}
+        onActiveTabChange={sqlTabs.setActiveTabId}
+        onAddTab={() => sqlTabs.addTab()}
+        onCloseTab={sqlTabs.closeTab}
+        history={sqlTabs.history}
+        onPickHistory={sqlTabs.loadHistory}
       />
       <DbResultGrid
         preview={state.preview}
@@ -486,6 +552,10 @@ export default function SqlitePanel({ tab }: Props) {
             ? t("Select a row to inspect.")
             : t("Pick a table from the tree to preview rows.")
         }
+        columnsMeta={gridColumns}
+        writable={!readOnly && state.tableName !== ""}
+        onCommit={commitMutations}
+        committing={committing}
       />
       {queryError && (
         <div className="db-panel-banner">
@@ -556,7 +626,10 @@ export default function SqlitePanel({ tab }: Props) {
             onSelectTable={(_db, node) => {
               const tbl = node.label;
               setTableName(tbl);
-              setSql(`SELECT * FROM "${tbl.replace(/"/g, '""')}" LIMIT 100;`);
+              sqlTabs.replaceActiveSql(
+                `SELECT * FROM "${tbl.replace(/"/g, '""')}" LIMIT 100;`,
+                tbl,
+              );
               setRowDetail(null);
               void browse(tbl);
             }}

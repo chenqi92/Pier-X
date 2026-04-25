@@ -17,6 +17,7 @@ import SftpPanel from "../panels/SftpPanel";
 import ServerMonitorPanel from "../panels/ServerMonitorPanel";
 import MarkdownPanel from "../panels/MarkdownPanel";
 import LogViewerPanel from "../panels/LogViewerPanel";
+import FirewallPanel from "../panels/FirewallPanel";
 import ToolStrip from "./ToolStrip";
 import ConnectSplash from "../components/ConnectSplash";
 import PanelHeader from "../components/PanelHeader";
@@ -38,7 +39,7 @@ type Props = {
   onToggleCollapsed: () => void;
 };
 
-type SplashTool = "monitor" | "docker" | "mysql" | "postgres" | "redis" | "log" | "sftp";
+type SplashTool = "monitor" | "docker" | "mysql" | "postgres" | "redis" | "log" | "sftp" | "firewall";
 
 function renderSplash(
   kind: SplashTool,
@@ -97,6 +98,8 @@ function ToolContent({
         : renderSplash("monitor", t, onConnectSaved, onNewConnection);
     case "docker":
       return tab ? <DockerPanel key={tab.id} tab={tab} /> : renderSplash("docker", t, onConnectSaved, onNewConnection);
+    case "firewall":
+      return tab ? <FirewallPanel key={tab.id} tab={tab} isActive={isActive} /> : renderSplash("firewall", t, onConnectSaved, onNewConnection);
     case "mysql":
       return tab ? <MySqlPanel key={tab.id} tab={tab} /> : renderSplash("mysql", t, onConnectSaved, onNewConnection);
     case "postgres":

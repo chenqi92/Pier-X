@@ -73,6 +73,7 @@
   --svc-log: #b48cff;
   --svc-sftp: #8aa0b8;
   --svc-sqlite: #8aa0b8;
+  --svc-firewall: #daa45f;
 
   /* ── Legacy aliases (Phase A/B/C compat) ─────────────────── */
   --bg-canvas: var(--bg);
@@ -322,4 +323,41 @@
   --panel-header-h: 38px;
   --control-height: 32px;
   --field-height: 36px;
+}
+
+/* ── Spacious density ──────────────────────────────────────────
+ * Adds another 2–4px on top of Comfortable. Useful for high-DPI
+ * displays at lower scale factors and for users who want extra
+ * breathing room around table rows / form fields. */
+[data-density="spacious"] {
+  --row-h: 36px;
+  --row-pad: 14px;
+  --ui-fs: 13.5px;
+  --ui-fs-sm: 12.5px;
+  --ui-fs-lg: 15px;
+  --titlebar-h: 44px;
+  --tabbar-h: 40px;
+  --panel-header-h: 40px;
+  --control-height: 34px;
+  --field-height: 38px;
+}
+
+/* ── Theme-card preview swatches ───────────────────────────────
+ * Constant colors used by the Settings → Appearance "Color scheme"
+ * thumbnail cards. They must NOT follow the user's current theme —
+ * a user in Dark mode picks Light by visually previewing the
+ * Light look here, so each card needs its own fixed palette. Kept
+ * in tokens.css so the rule "no hex outside tokens.css" still holds. */
+:root {
+  --preview-dark-bg:   #1a1f24;
+  --preview-dark-line: #2a3138;
+  --preview-dark-1:    #3a444f;
+  --preview-dark-2:    #5a6675;
+  --preview-dark-3:    #2a3138;
+
+  --preview-light-bg:   #fbfaf5;
+  --preview-light-line: #e0dccf;
+  --preview-light-1:    #d6d2c4;
+  --preview-light-2:    #b8b3a3;
+  --preview-light-3:    #e8e4d6;
 }

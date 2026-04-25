@@ -18,6 +18,13 @@ import {
   useDbCredentialFlow,
   type DbCredentialFieldAdapter,
 } from "../components/db/useDbCredentialFlow";
+import { useDbSqlTabs } from "../components/db/useDbSqlTabs";
+import {
+  gridColumnsFromPostgres,
+  mutationToSql,
+  qualifyTable,
+  type DbMutation,
+} from "../components/db/dbColumnRules";
 import { useI18n } from "../i18n/useI18n";
 import { localizeError } from "../i18n/localizeMessage";
 import { writeClipboardText } from "../lib/clipboard";
@@ -80,7 +87,6 @@ export default function PostgresPanel({ tab }: Props) {
   const [state, setState] = useState<PostgresBrowserState | null>(null);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
-  const [sql, setSql] = useState("SELECT version();");
   const [readOnly, setReadOnly] = useState(true);
   const [writeConfirm, setWriteConfirm] = useState("");
   const [queryResult, setQueryResult] = useState<QueryExecutionResult | null>(null);
@@ -90,6 +96,10 @@ export default function PostgresPanel({ tab }: Props) {
 
   const [connectedTab, setConnectedTab] = useState<DbConnectedTab>("data");
   const [rowDetail, setRowDetail] = useState<PinnedRow | null>(null);
+
+  const sqlTabs = useDbSqlTabs({ initialSql: "SELECT version();", initialName: t("query") });
+  const sql = sqlTabs.sql;
+  const setSql = sqlTabs.setSql;
 
   const passwordInputRef = useRef<HTMLInputElement | null>(null);
 
@@ -162,6 +172,14 @@ export default function PostgresPanel({ tab }: Props) {
       });
       setQueryResult(r);
       setNotice(t("{elapsed} ms", { elapsed: r.elapsedMs }));
+      sqlTabs.pushHistory({
+        sql,
+        at: t("just now"),
+        rows: r.rows?.length ?? null,
+        ms: r.elapsedMs,
+        write: needsWrite,
+      });
+      sqlTabs.markActiveSaved();
       if (needsWrite) {
         setReadOnly(true);
         setWriteConfirm("");
@@ -277,6 +295,45 @@ export default function PostgresPanel({ tab }: Props) {
         pk: c.key === "PRI" || c.key === "PK",
       }))
     : [];
+  const gridColumns = state ? gridColumnsFromPostgres(state.columns) : [];
+
+  const [committing, setCommitting] = useState(false);
+  async function commitMutations(mutations: DbMutation[]) {
+    if (!state || mutations.length === 0) return;
+    const tableRef = qualifyTable("postgres", {
+      schema: state.schemaName,
+      table: state.tableName,
+    });
+    setCommitting(true);
+    setQueryError("");
+    setNotice("");
+    try {
+      const target = await flow.ensureConnectionTarget();
+      let written = 0;
+      for (const mut of mutations) {
+        const sql = mutationToSql(
+          { dialect: "postgres", table: tableRef, columns: gridColumns },
+          mut,
+        );
+        await cmd.postgresExecute({
+          host: target.host,
+          port: target.port,
+          user: tab.pgUser.trim(),
+          password: tab.pgPassword,
+          database: tab.pgDatabase.trim() || null,
+          sql,
+        });
+        written += 1;
+      }
+      setNotice(t("Committed {n} change(s).", { n: written }));
+      await browse();
+    } catch (e) {
+      setQueryError(formatError(e));
+      throw e;
+    } finally {
+      setCommitting(false);
+    }
+  }
 
   const headerStats = state
     ? [
@@ -401,6 +458,13 @@ export default function PostgresPanel({ tab }: Props) {
         onRun={() => void runQuery()}
         canRun={canRun}
         running={queryBusy}
+        tabs={sqlTabs.tabs}
+        activeTabId={sqlTabs.activeTabId}
+        onActiveTabChange={sqlTabs.setActiveTabId}
+        onAddTab={() => sqlTabs.addTab()}
+        onCloseTab={sqlTabs.closeTab}
+        history={sqlTabs.history}
+        onPickHistory={sqlTabs.loadHistory}
       />
       <DbResultGrid
         preview={state.preview}
@@ -414,6 +478,10 @@ export default function PostgresPanel({ tab }: Props) {
         emptyLabel={
           state.tableName ? t("Select a row to inspect.") : t("Pick a table from the tree to preview rows.")
         }
+        columnsMeta={gridColumns}
+        writable={!readOnly && state.tableName !== ""}
+        onCommit={commitMutations}
+        committing={committing}
       />
       {queryError && (
         <div className="db-panel-banner">
@@ -490,7 +558,7 @@ export default function PostgresPanel({ tab }: Props) {
             }
             onSelectTable={(_db, node) => {
               const tbl = node.label;
-              setSql(`SELECT * FROM "${state.schemaName}"."${tbl}" LIMIT 100;`);
+              sqlTabs.replaceActiveSql(`SELECT * FROM "${state.schemaName}"."${tbl}" LIMIT 100;`, tbl);
               setRowDetail(null);
               void browse(undefined, tbl);
             }}

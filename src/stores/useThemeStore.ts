@@ -2,7 +2,7 @@ import { create } from "zustand";
 
 export type ThemeMode = "system" | "dark" | "light";
 export type AccentName = "blue" | "green" | "amber" | "violet" | "coral";
-export type Density = "compact" | "comfortable";
+export type Density = "compact" | "comfortable" | "spacious";
 
 export type TerminalTheme = {
   name: string;

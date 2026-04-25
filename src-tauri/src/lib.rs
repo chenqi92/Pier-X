@@ -15,7 +15,9 @@ use pier_core::services::sqlite_remote;
 use pier_core::ssh::config::{DbCredential, DbCredentialSource, DbKind};
 use pier_core::ssh::db_detect::{self, DbDetectionReport, DetectedDbInstance};
 use pier_core::ssh::service_detector;
-use pier_core::ssh::{AuthMethod, ExecStream, HostKeyVerifier, SftpClient, SshConfig, SshSession, Tunnel};
+use pier_core::ssh::{
+    AuthMethod, ExecStream, HostKeyVerifier, SftpClient, SshConfig, SshSession, Tunnel,
+};
 use pier_core::terminal::{Cell, Color, NotifyEvent, NotifyFn, PierTerminal};
 use serde::Serialize;
 use std::collections::HashMap;
@@ -770,7 +772,9 @@ extern "C" fn tauri_terminal_notify(user_data: *mut c_void, event: u32) {
         }
         let _ = ctx.app.emit(
             TERMINAL_SSH_PASSWORD_PROMPT_EVENT,
-            PromptPayload { session_id: &ctx.session_id },
+            PromptPayload {
+                session_id: &ctx.session_id,
+            },
         );
         return;
     }
@@ -862,7 +866,10 @@ fn expand_local_path(raw: &str) -> PathBuf {
     if trimmed == "~" {
         return home_dir();
     }
-    if let Some(rest) = trimmed.strip_prefix("~/").or_else(|| trimmed.strip_prefix("~\\")) {
+    if let Some(rest) = trimmed
+        .strip_prefix("~/")
+        .or_else(|| trimmed.strip_prefix("~\\"))
+    {
         return home_dir().join(rest);
     }
     PathBuf::from(trimmed)
@@ -913,30 +920,48 @@ fn format_size(size: u64) -> String {
 }
 
 fn normalize_ssh_port(port: u16) -> u16 {
-    if port == 0 { 22 } else { port }
+    if port == 0 {
+        22
+    } else {
+        port
+    }
 }
 
 fn normalize_mysql_port(port: u16) -> u16 {
-    if port == 0 { 3306 } else { port }
+    if port == 0 {
+        3306
+    } else {
+        port
+    }
 }
 
 fn normalize_redis_port(port: u16) -> u16 {
-    if port == 0 { 6379 } else { port }
+    if port == 0 {
+        6379
+    } else {
+        port
+    }
 }
 
 fn normalize_postgres_port(port: u16) -> u16 {
-    if port == 0 { 5432 } else { port }
+    if port == 0 {
+        5432
+    } else {
+        port
+    }
 }
 
-fn map_postgres_preview(
-    result: pier_core::services::postgres::QueryResult,
-) -> DataPreview {
+fn map_postgres_preview(result: pier_core::services::postgres::QueryResult) -> DataPreview {
     DataPreview {
         columns: result.columns.clone(),
         rows: result
             .rows
             .into_iter()
-            .map(|row| row.into_iter().map(|cell| cell.unwrap_or_default()).collect())
+            .map(|row| {
+                row.into_iter()
+                    .map(|cell| cell.unwrap_or_default())
+                    .collect()
+            })
             .collect(),
         truncated: result.truncated,
     }
@@ -950,7 +975,11 @@ fn map_postgres_query_result(
         rows: result
             .rows
             .into_iter()
-            .map(|row| row.into_iter().map(|cell| cell.unwrap_or_default()).collect())
+            .map(|row| {
+                row.into_iter()
+                    .map(|cell| cell.unwrap_or_default())
+                    .collect()
+            })
             .collect(),
         truncated: result.truncated,
         affected_rows: result.affected_rows,
@@ -990,8 +1019,7 @@ fn build_ssh_session_from_params(
     );
     config.port = normalize_ssh_port(port);
     config.auth = auth;
-    SshSession::connect_blocking(&config, HostKeyVerifier::default())
-        .map_err(|e| e.to_string())
+    SshSession::connect_blocking(&config, HostKeyVerifier::default()).map_err(|e| e.to_string())
 }
 
 /// Build an SSH session for a panel command, preferring the stored
@@ -1030,9 +1058,7 @@ fn build_ssh_session_saved_or_params(
         _ => false,
     };
     if have_param_credential {
-        return build_ssh_session_from_params(
-            host, port, user, auth_mode, password, key_path,
-        );
+        return build_ssh_session_from_params(host, port, user, auth_mode, password, key_path);
     }
 
     if let Some(index) = saved_index {
@@ -1154,7 +1180,13 @@ fn get_or_open_ssh_session(
         &format!("opening fresh SSH session for {}", key),
     );
     let session = match build_ssh_session_saved_or_params(
-        saved_index, host, port, user, auth_mode, password, key_path,
+        saved_index,
+        host,
+        port,
+        user,
+        auth_mode,
+        password,
+        key_path,
     ) {
         Ok(s) => s,
         Err(e) => {
@@ -1205,7 +1237,13 @@ fn recent_handshake_failure(guard: &HandshakeGuard) -> Option<String> {
 /// opens a fresh one. Paired with `run_with_session_retry` to give
 /// panel commands one automatic recovery without surfacing the
 /// transient error to the user.
-fn evict_ssh_session(state: &tauri::State<'_, AppState>, host: &str, port: u16, user: &str, auth_mode: &str) {
+fn evict_ssh_session(
+    state: &tauri::State<'_, AppState>,
+    host: &str,
+    port: u16,
+    user: &str,
+    auth_mode: &str,
+) {
     let key = sftp_cache_key(host, port, user, auth_mode);
     if let Ok(mut cache) = state.sftp_sessions.lock() {
         if cache.remove(&key).is_some() {
@@ -1279,7 +1317,14 @@ where
     let mut attempt = 0;
     loop {
         let session = get_or_open_ssh_session(
-            state, host, port, user, auth_mode, password, key_path, saved_index,
+            state,
+            host,
+            port,
+            user,
+            auth_mode,
+            password,
+            key_path,
+            saved_index,
         )?;
         match op(&session) {
             Ok(v) => return Ok(v),
@@ -1301,7 +1346,13 @@ where
 /// the panel's use.
 fn format_posix_permissions(bits: u32, is_dir: bool, is_link: bool) -> String {
     let mut out = String::with_capacity(10);
-    out.push(if is_link { 'l' } else if is_dir { 'd' } else { '-' });
+    out.push(if is_link {
+        'l'
+    } else if is_dir {
+        'd'
+    } else {
+        '-'
+    });
     for shift in [6u32, 3, 0] {
         let perm = (bits >> shift) & 0o7;
         out.push(if perm & 0o4 != 0 { 'r' } else { '-' });
@@ -1323,10 +1374,7 @@ fn build_tunnel_view(tunnel_id: String, tunnel: &ManagedTunnel) -> TunnelInfoVie
 }
 
 fn choose_active_item(preferred: Option<String>, items: &[String]) -> String {
-    let resolved = preferred
-        .unwrap_or_default()
-        .trim()
-        .to_string();
+    let resolved = preferred.unwrap_or_default().trim().to_string();
     if !resolved.is_empty() && items.iter().any(|item| item == &resolved) {
         resolved
     } else {
@@ -1420,7 +1468,9 @@ fn map_mysql_query_result(result: mysql_service::QueryResult) -> QueryExecutionR
     }
 }
 
-fn map_sqlite_preview(result: pier_core::services::sqlite::SqliteQueryResult) -> Option<DataPreview> {
+fn map_sqlite_preview(
+    result: pier_core::services::sqlite::SqliteQueryResult,
+) -> Option<DataPreview> {
     if result.error.is_some() {
         None
     } else {
@@ -1816,7 +1866,10 @@ fn resolve_segment_style(cell: &Cell, is_cursor: bool) -> SegmentStyle {
     }
 }
 
-fn build_terminal_lines(snapshot: &pier_core::terminal::GridSnapshot, alive: bool) -> Vec<TerminalLine> {
+fn build_terminal_lines(
+    snapshot: &pier_core::terminal::GridSnapshot,
+    alive: bool,
+) -> Vec<TerminalLine> {
     let width = snapshot.cols as usize;
     snapshot
         .cells
@@ -1874,11 +1927,21 @@ fn build_terminal_lines(snapshot: &pier_core::terminal::GridSnapshot, alive: boo
 fn core_info() -> CoreInfo {
     CoreInfo {
         version: pier_core::VERSION.to_string(),
-        profile: if cfg!(debug_assertions) { "debug" } else { "release" },
+        profile: if cfg!(debug_assertions) {
+            "debug"
+        } else {
+            "release"
+        },
         ui_target: "tauri",
         home_dir: home_dir().display().to_string(),
         workspace_root: workspace_root().display().to_string(),
-        platform: if cfg!(target_os = "macos") { "macos" } else if cfg!(target_os = "windows") { "windows" } else { "linux" },
+        platform: if cfg!(target_os = "macos") {
+            "macos"
+        } else if cfg!(target_os = "windows") {
+            "windows"
+        } else {
+            "linux"
+        },
         default_shell: default_shell(),
         services: vec!["terminal", "ssh", "git", "mysql", "sqlite", "redis"],
     }
@@ -1914,8 +1977,7 @@ fn ssh_keys_list() -> Result<Vec<SshKeyInfo>, String> {
         return Ok(Vec::new());
     }
     let mut out = Vec::new();
-    let entries = fs::read_dir(&ssh_dir)
-        .map_err(|e| format!("read ~/.ssh failed: {}", e))?;
+    let entries = fs::read_dir(&ssh_dir).map_err(|e| format!("read ~/.ssh failed: {}", e))?;
     for entry in entries.flatten() {
         let path = entry.path();
         let Some(name) = path.file_name().and_then(|s| s.to_str()) else {
@@ -1994,14 +2056,46 @@ struct ComponentInfo {
 #[tauri::command]
 fn core_components_info() -> Vec<ComponentInfo> {
     vec![
-        ComponentInfo { name: "Tauri",       role: "App runtime",       version: "2.x" },
-        ComponentInfo { name: "russh",       role: "SSH client",        version: "0.60" },
-        ComponentInfo { name: "git2",        role: "Git bindings",      version: "0.19" },
-        ComponentInfo { name: "tokio",       role: "Async runtime",     version: "1.x" },
-        ComponentInfo { name: "React",       role: "UI framework",      version: "19.x" },
-        ComponentInfo { name: "Vite",        role: "Frontend build",    version: "7.x" },
-        ComponentInfo { name: "@xterm/xterm", role: "Terminal renderer", version: "6.x" },
-        ComponentInfo { name: "CodeMirror",  role: "SFTP file editor",  version: "6.x" },
+        ComponentInfo {
+            name: "Tauri",
+            role: "App runtime",
+            version: "2.x",
+        },
+        ComponentInfo {
+            name: "russh",
+            role: "SSH client",
+            version: "0.60",
+        },
+        ComponentInfo {
+            name: "git2",
+            role: "Git bindings",
+            version: "0.19",
+        },
+        ComponentInfo {
+            name: "tokio",
+            role: "Async runtime",
+            version: "1.x",
+        },
+        ComponentInfo {
+            name: "React",
+            role: "UI framework",
+            version: "19.x",
+        },
+        ComponentInfo {
+            name: "Vite",
+            role: "Frontend build",
+            version: "7.x",
+        },
+        ComponentInfo {
+            name: "@xterm/xterm",
+            role: "Terminal renderer",
+            version: "6.x",
+        },
+        ComponentInfo {
+            name: "CodeMirror",
+            role: "SFTP file editor",
+            version: "6.x",
+        },
     ]
 }
 
@@ -2015,7 +2109,11 @@ fn list_directory(path: Option<String>) -> Result<Vec<FileEntry>, String> {
         .filter_map(|entry| {
             let path = entry.path();
             let metadata = entry.metadata().ok()?;
-            let kind = if metadata.is_dir() { "directory" } else { "file" };
+            let kind = if metadata.is_dir() {
+                "directory"
+            } else {
+                "file"
+            };
             let file_size = metadata.len();
             let modified_ts = metadata
                 .modified()
@@ -2034,10 +2132,10 @@ fn list_directory(path: Option<String>) -> Result<Vec<FileEntry>, String> {
                 let epoch_days = days + 719468; // days from year 0
                 let era = epoch_days / 146097;
                 let doe = epoch_days - era * 146097;
-                let yoe = (doe - doe/1461 + doe/36524 - doe/146097) / 365;
-                let doy = doe - (365*yoe + yoe/4 - yoe/100);
-                let mp = (5*doy + 2) / 153;
-                let d = doy - (153*mp + 2)/5 + 1;
+                let yoe = (doe - doe / 1461 + doe / 36524 - doe / 146097) / 365;
+                let doy = doe - (365 * yoe + yoe / 4 - yoe / 100);
+                let mp = (5 * doy + 2) / 153;
+                let d = doy - (153 * mp + 2) / 5 + 1;
                 let m = if mp < 10 { mp + 3 } else { mp - 9 };
                 format!("{:02}-{:02} {:02}:{:02}", m, d, hours, minutes)
             } else {
@@ -2224,7 +2322,9 @@ fn git_diff(
 ) -> Result<String, String> {
     let client = open_git_client(path)?;
     if untracked {
-        client.diff_untracked(&file_path).map_err(|error| error.to_string())
+        client
+            .diff_untracked(&file_path)
+            .map_err(|error| error.to_string())
     } else {
         client
             .diff(&file_path, staged)
@@ -2296,7 +2396,10 @@ fn git_checkout_branch(path: Option<String>, name: String) -> Result<String, Str
 }
 
 #[tauri::command]
-fn git_recent_commits(path: Option<String>, limit: Option<usize>) -> Result<Vec<GitCommitEntry>, String> {
+fn git_recent_commits(
+    path: Option<String>,
+    limit: Option<usize>,
+) -> Result<Vec<GitCommitEntry>, String> {
     let client = open_git_client(path)?;
     let resolved_limit = limit.unwrap_or(8).clamp(1, 16);
     let commits = match client.log(resolved_limit) {
@@ -2449,7 +2552,9 @@ fn ssh_connection_save(
             if keychain_ok {
                 AuthMethod::KeychainPassword { credential_id }
             } else {
-                AuthMethod::DirectPassword { password: resolved_password }
+                AuthMethod::DirectPassword {
+                    password: resolved_password,
+                }
             }
         }
     };
@@ -2567,16 +2672,17 @@ fn ssh_connection_update(
                 AuthMethod::KeychainPassword { credential_id } => Some(credential_id.clone()),
                 _ => None,
             };
-            match password.map(|value| value.trim().to_string()).filter(|value| !value.is_empty()) {
+            match password
+                .map(|value| value.trim().to_string())
+                .filter(|value| !value.is_empty())
+            {
                 Some(resolved_password) => {
                     let credential_id = existing_credential_id
                         .clone()
                         .unwrap_or_else(|| make_credential_id(resolved_host, resolved_user));
-                    let keychain_ok = credentials::set_and_verify(
-                        &credential_id,
-                        &resolved_password,
-                    )
-                    .map_err(|error| error.to_string())?;
+                    let keychain_ok =
+                        credentials::set_and_verify(&credential_id, &resolved_password)
+                            .map_err(|error| error.to_string())?;
                     if keychain_ok {
                         AuthMethod::KeychainPassword { credential_id }
                     } else {
@@ -2585,7 +2691,9 @@ fn ssh_connection_update(
                         // the saved connection still works on the
                         // next launch (matches the new-save fallback
                         // path in `ssh_connection_save`).
-                        AuthMethod::DirectPassword { password: resolved_password }
+                        AuthMethod::DirectPassword {
+                            password: resolved_password,
+                        }
                     }
                 }
                 None => match existing_credential_id {
@@ -2611,7 +2719,11 @@ fn ssh_connection_update(
     config.group = match group {
         Some(value) => {
             let trimmed = value.trim();
-            if trimmed.is_empty() { None } else { Some(trimmed.to_string()) }
+            if trimmed.is_empty() {
+                None
+            } else {
+                Some(trimmed.to_string())
+            }
         }
         None => existing.group.clone(),
     };
@@ -2638,10 +2750,7 @@ fn ssh_connection_update(
 /// Group display order is derived from first-appearance in the new
 /// list, so reordering groups is done by arranging members contiguously.
 #[tauri::command]
-fn ssh_connections_reorder(
-    order: Vec<usize>,
-    groups: Vec<Option<String>>,
-) -> Result<(), String> {
+fn ssh_connections_reorder(order: Vec<usize>, groups: Vec<Option<String>>) -> Result<(), String> {
     let mut store = ConnectionStore::load_default().map_err(|error| error.to_string())?;
     store
         .reorder_with_groups(&order, &groups)
@@ -2686,10 +2795,21 @@ fn ssh_tunnel_open(
     // Reuse the cached SSH session (seeded by the terminal) so a DB
     // panel opening its first tunnel doesn't re-handshake.
     let tunnel = run_with_session_retry(
-        &state, &host, port, &user, &auth_mode, &password, &key_path, saved_connection_index,
+        &state,
+        &host,
+        port,
+        &user,
+        &auth_mode,
+        &password,
+        &key_path,
+        saved_connection_index,
         |session| {
             session
-                .open_local_forward_blocking(local_port.unwrap_or(0), &resolved_remote_host, remote_port)
+                .open_local_forward_blocking(
+                    local_port.unwrap_or(0),
+                    &resolved_remote_host,
+                    remote_port,
+                )
                 .map_err(|error| error.to_string())
         },
     )?;
@@ -2747,10 +2867,7 @@ fn ssh_tunnel_list(state: tauri::State<'_, AppState>) -> Result<Vec<TunnelInfoVi
 }
 
 #[tauri::command]
-fn ssh_tunnel_close(
-    state: tauri::State<'_, AppState>,
-    tunnel_id: String,
-) -> Result<(), String> {
+fn ssh_tunnel_close(state: tauri::State<'_, AppState>, tunnel_id: String) -> Result<(), String> {
     let mut tunnels = state
         .tunnels
         .lock()
@@ -2840,7 +2957,14 @@ fn ssh_session_prewarm(
         // failure here just means the next panel call opens its own
         // session the usual way.
         let session = match get_or_open_ssh_session(
-            &state, &host, port, &user, &auth_mode, &password, &key_path, saved_connection_index,
+            &state,
+            &host,
+            port,
+            &user,
+            &auth_mode,
+            &password,
+            &key_path,
+            saved_connection_index,
         ) {
             Ok(s) => s,
             Err(_) => return,
@@ -3023,7 +3147,10 @@ fn redis_browse(
     let details = if key_name.is_empty() {
         None
     } else {
-        client.inspect_blocking(&key_name).ok().map(map_redis_details)
+        client
+            .inspect_blocking(&key_name)
+            .ok()
+            .map(map_redis_details)
     };
     let server_info = client.info_blocking("server").unwrap_or_default();
     let memory_info = client.info_blocking("memory").unwrap_or_default();
@@ -3414,9 +3541,7 @@ fn postgres_execute(
     })
     .map_err(|e| e.to_string())?;
 
-    let result = client
-        .execute_blocking(&sql)
-        .map_err(|e| e.to_string())?;
+    let result = client.execute_blocking(&sql).map_err(|e| e.to_string())?;
     Ok(map_postgres_query_result(result))
 }
 
@@ -3435,7 +3560,14 @@ fn docker_overview(
     saved_connection_index: Option<usize>,
 ) -> Result<DockerOverview, String> {
     let session = get_or_open_ssh_session(
-        &state, &host, port, &user, &auth_mode, &password, &key_path, saved_connection_index,
+        &state,
+        &host,
+        port,
+        &user,
+        &auth_mode,
+        &password,
+        &key_path,
+        saved_connection_index,
     )?;
 
     // First-open path: containers only. Images / volumes / networks are
@@ -3480,7 +3612,14 @@ fn docker_images(
     saved_connection_index: Option<usize>,
 ) -> Result<Vec<DockerImageView>, String> {
     let session = get_or_open_ssh_session(
-        &state, &host, port, &user, &auth_mode, &password, &key_path, saved_connection_index,
+        &state,
+        &host,
+        port,
+        &user,
+        &auth_mode,
+        &password,
+        &key_path,
+        saved_connection_index,
     )?;
     let images = docker::list_images_blocking(&session)
         .map_err(|e| e.to_string())?
@@ -3508,7 +3647,14 @@ fn docker_volumes(
     saved_connection_index: Option<usize>,
 ) -> Result<Vec<DockerVolumeView>, String> {
     let session = get_or_open_ssh_session(
-        &state, &host, port, &user, &auth_mode, &password, &key_path, saved_connection_index,
+        &state,
+        &host,
+        port,
+        &user,
+        &auth_mode,
+        &password,
+        &key_path,
+        saved_connection_index,
     )?;
     let volumes: Vec<DockerVolumeView> = docker::list_volumes_blocking(&session)
         .map_err(|e| e.to_string())?
@@ -3537,7 +3683,14 @@ fn docker_networks(
     saved_connection_index: Option<usize>,
 ) -> Result<Vec<DockerNetworkView>, String> {
     let session = get_or_open_ssh_session(
-        &state, &host, port, &user, &auth_mode, &password, &key_path, saved_connection_index,
+        &state,
+        &host,
+        port,
+        &user,
+        &auth_mode,
+        &password,
+        &key_path,
+        saved_connection_index,
     )?;
     let networks = docker::list_networks_blocking(&session)
         .map_err(|e| e.to_string())?
@@ -3574,7 +3727,14 @@ fn docker_stats(
     saved_connection_index: Option<usize>,
 ) -> Result<Vec<DockerContainerStatsView>, String> {
     let session = get_or_open_ssh_session(
-        &state, &host, port, &user, &auth_mode, &password, &key_path, saved_connection_index,
+        &state,
+        &host,
+        port,
+        &user,
+        &auth_mode,
+        &password,
+        &key_path,
+        saved_connection_index,
     )?;
     let stats = docker::list_container_stats_blocking(&session).unwrap_or_default();
     Ok(stats
@@ -3609,7 +3769,14 @@ fn docker_volume_usage(
     saved_connection_index: Option<usize>,
 ) -> Result<Vec<DockerVolumeUsageView>, String> {
     let session = get_or_open_ssh_session(
-        &state, &host, port, &user, &auth_mode, &password, &key_path, saved_connection_index,
+        &state,
+        &host,
+        port,
+        &user,
+        &auth_mode,
+        &password,
+        &key_path,
+        saved_connection_index,
     )?;
     let usages = docker::list_volume_sizes_blocking(&session).unwrap_or_default();
     Ok(usages
@@ -3637,7 +3804,14 @@ fn docker_container_action(
     saved_connection_index: Option<usize>,
 ) -> Result<String, String> {
     run_with_session_retry(
-        &state, &host, port, &user, &auth_mode, &password, &key_path, saved_connection_index,
+        &state,
+        &host,
+        port,
+        &user,
+        &auth_mode,
+        &password,
+        &key_path,
+        saved_connection_index,
         |session| match action.as_str() {
             "start" => docker::start_blocking(session, &container_id)
                 .map_err(|e| e.to_string())
@@ -3788,7 +3962,6 @@ fn is_safe_shell_username(user: &str) -> bool {
             .all(|c| c.is_ascii_alphanumeric() || matches!(c, '.' | '_' | '-'))
 }
 
-
 #[tauri::command]
 fn sftp_browse(
     state: tauri::State<'_, AppState>,
@@ -3809,12 +3982,17 @@ fn sftp_browse(
     let mut attempt = 0;
     loop {
         let session = get_or_open_ssh_session(
-            &state, &host, port, &user, &auth_mode, &password, &key_path, saved_connection_index,
+            &state,
+            &host,
+            port,
+            &user,
+            &auth_mode,
+            &password,
+            &key_path,
+            saved_connection_index,
         )?;
 
-        let sftp = match get_or_open_sftp_client(
-            &state, &session, &host, port, &user, &auth_mode,
-        ) {
+        let sftp = match get_or_open_sftp_client(&state, &session, &host, port, &user, &auth_mode) {
             Ok(s) => s,
             Err(e) if attempt == 0 => {
                 evict_ssh_session(&state, &host, port, &user, &auth_mode);
@@ -3839,10 +4017,8 @@ fn sftp_browse(
         // first browse pays the cost.
         let target_path = match explicit_path.clone() {
             Some(p) => p,
-            None => resolve_remote_home_cached(
-                &state, &session, &host, port, &user, &auth_mode,
-            )
-            .unwrap_or_else(|_| "/".to_string()),
+            None => resolve_remote_home_cached(&state, &session, &host, port, &user, &auth_mode)
+                .unwrap_or_else(|_| "/".to_string()),
         };
 
         // Skip the canonicalize round-trip when the caller already
@@ -3905,8 +4081,7 @@ fn markdown_render(source: String) -> String {
 
 #[tauri::command]
 fn markdown_render_file(path: String) -> Result<String, String> {
-    let source = markdown::load_file(std::path::Path::new(&path))
-        .map_err(|e| e.to_string())?;
+    let source = markdown::load_file(std::path::Path::new(&path)).map_err(|e| e.to_string())?;
     Ok(markdown::render_html(&source))
 }
 
@@ -3935,7 +4110,13 @@ fn server_monitor_probe(
     let mut attempt = 0;
     let snap = loop {
         let session = get_or_open_ssh_session(
-            &state, &host, port, &user, &auth_mode, &password, &key_path,
+            &state,
+            &host,
+            port,
+            &user,
+            &auth_mode,
+            &password,
+            &key_path,
             saved_connection_index,
         )
         .map_err(|e| {
@@ -4067,7 +4248,13 @@ fn firewall_snapshot(
     let mut attempt = 0;
     let snap = loop {
         let session = get_or_open_ssh_session(
-            &state, &host, port, &user, &auth_mode, &password, &key_path,
+            &state,
+            &host,
+            port,
+            &user,
+            &auth_mode,
+            &password,
+            &key_path,
             saved_connection_index,
         )?;
         match firewall::snapshot_blocking(&session) {
@@ -4103,7 +4290,14 @@ fn detect_services(
     // `--version` probes serially over one SSH session, so a fresh
     // handshake per call is wasteful on slow links.
     let session = get_or_open_ssh_session(
-        &state, &host, port, &user, &auth_mode, &password, &key_path, saved_connection_index,
+        &state,
+        &host,
+        port,
+        &user,
+        &auth_mode,
+        &password,
+        &key_path,
+        saved_connection_index,
     )?;
 
     let services = service_detector::detect_all_blocking(&session);
@@ -4137,7 +4331,14 @@ fn db_detect(
     saved_connection_index: Option<usize>,
 ) -> Result<DbDetectionReportView, String> {
     let session = get_or_open_ssh_session(
-        &state, &host, port, &user, &auth_mode, &password, &key_path, saved_connection_index,
+        &state,
+        &host,
+        port,
+        &user,
+        &auth_mode,
+        &password,
+        &key_path,
+        saved_connection_index,
     )?;
     let report = db_detect::detect_blocking(&session);
     Ok(map_db_detection_report(report))
@@ -4199,10 +4400,7 @@ fn db_cred_update(
 }
 
 #[tauri::command]
-fn db_cred_delete(
-    saved_connection_index: usize,
-    credential_id: String,
-) -> Result<(), String> {
+fn db_cred_delete(saved_connection_index: usize, credential_id: String) -> Result<(), String> {
     connections::delete_db_credential(saved_connection_index, &credential_id)
         .map_err(|e| e.to_string())
 }
@@ -4230,8 +4428,17 @@ fn docker_inspect_db_env(
     saved_connection_index: Option<usize>,
 ) -> Result<DockerDbEnvView, String> {
     let env = run_with_session_retry(
-        &state, &host, port, &user, &auth_mode, &password, &key_path, saved_connection_index,
-        |session| docker::inspect_db_env_blocking(session, &container_id).map_err(|e| e.to_string()),
+        &state,
+        &host,
+        port,
+        &user,
+        &auth_mode,
+        &password,
+        &key_path,
+        saved_connection_index,
+        |session| {
+            docker::inspect_db_env_blocking(session, &container_id).map_err(|e| e.to_string())
+        },
     )?;
     Ok(DockerDbEnvView {
         mysql_database: env.mysql_database,
@@ -4290,7 +4497,14 @@ fn sqlite_remote_capable(
     saved_connection_index: Option<usize>,
 ) -> Result<RemoteSqliteCapabilityView, String> {
     let session = get_or_open_ssh_session(
-        &state, &host, port, &user, &auth_mode, &password, &key_path, saved_connection_index,
+        &state,
+        &host,
+        port,
+        &user,
+        &auth_mode,
+        &password,
+        &key_path,
+        saved_connection_index,
     )?;
     let cap = sqlite_remote::probe_blocking(&session);
     Ok(RemoteSqliteCapabilityView {
@@ -4318,7 +4532,14 @@ fn sqlite_browse_remote(
         return Err(String::from("remote SQLite path must not be empty"));
     }
     let session = get_or_open_ssh_session(
-        &state, &host, port, &user, &auth_mode, &password, &key_path, saved_connection_index,
+        &state,
+        &host,
+        port,
+        &user,
+        &auth_mode,
+        &password,
+        &key_path,
+        saved_connection_index,
     )?;
     let tables =
         sqlite_remote::list_tables_blocking(&session, trimmed).map_err(|e| e.to_string())?;
@@ -4380,7 +4601,14 @@ fn sqlite_execute_remote(
         return Err(String::from("SQL must not be empty"));
     }
     let session = get_or_open_ssh_session(
-        &state, &host, port, &user, &auth_mode, &password, &key_path, saved_connection_index,
+        &state,
+        &host,
+        port,
+        &user,
+        &auth_mode,
+        &password,
+        &key_path,
+        saved_connection_index,
     )?;
     let result = sqlite_remote::execute_blocking(&session, trimmed_path, trimmed_sql)
         .map_err(|e| e.to_string())?;
@@ -4416,7 +4644,14 @@ fn sqlite_find_in_dir(
     max_depth: Option<u32>,
 ) -> Result<Vec<RemoteSqliteCandidate>, String> {
     let session = get_or_open_ssh_session(
-        &state, &host, port, &user, &auth_mode, &password, &key_path, saved_connection_index,
+        &state,
+        &host,
+        port,
+        &user,
+        &auth_mode,
+        &password,
+        &key_path,
+        saved_connection_index,
     )?;
     let dir = directory.trim();
     if dir.is_empty() {
@@ -4518,8 +4753,17 @@ fn docker_inspect(
     saved_connection_index: Option<usize>,
 ) -> Result<String, String> {
     run_with_session_retry(
-        &state, &host, port, &user, &auth_mode, &password, &key_path, saved_connection_index,
-        |session| docker::inspect_container_blocking(session, &container_id).map_err(|e| e.to_string()),
+        &state,
+        &host,
+        port,
+        &user,
+        &auth_mode,
+        &password,
+        &key_path,
+        saved_connection_index,
+        |session| {
+            docker::inspect_container_blocking(session, &container_id).map_err(|e| e.to_string())
+        },
     )
 }
 
@@ -4537,8 +4781,17 @@ fn docker_remove_image(
     saved_connection_index: Option<usize>,
 ) -> Result<(), String> {
     run_with_session_retry(
-        &state, &host, port, &user, &auth_mode, &password, &key_path, saved_connection_index,
-        |session| docker::remove_image_blocking(session, &image_id, force).map_err(|e| e.to_string()),
+        &state,
+        &host,
+        port,
+        &user,
+        &auth_mode,
+        &password,
+        &key_path,
+        saved_connection_index,
+        |session| {
+            docker::remove_image_blocking(session, &image_id, force).map_err(|e| e.to_string())
+        },
     )
 }
 
@@ -4555,7 +4808,14 @@ fn docker_remove_volume(
     saved_connection_index: Option<usize>,
 ) -> Result<(), String> {
     run_with_session_retry(
-        &state, &host, port, &user, &auth_mode, &password, &key_path, saved_connection_index,
+        &state,
+        &host,
+        port,
+        &user,
+        &auth_mode,
+        &password,
+        &key_path,
+        saved_connection_index,
         |session| docker::remove_volume_blocking(session, &volume_name).map_err(|e| e.to_string()),
     )
 }
@@ -4573,8 +4833,17 @@ fn docker_remove_network(
     saved_connection_index: Option<usize>,
 ) -> Result<(), String> {
     run_with_session_retry(
-        &state, &host, port, &user, &auth_mode, &password, &key_path, saved_connection_index,
-        |session| docker::remove_network_blocking(session, &network_name).map_err(|e| e.to_string()),
+        &state,
+        &host,
+        port,
+        &user,
+        &auth_mode,
+        &password,
+        &key_path,
+        saved_connection_index,
+        |session| {
+            docker::remove_network_blocking(session, &network_name).map_err(|e| e.to_string())
+        },
     )
 }
 
@@ -4624,7 +4893,14 @@ fn docker_run_container(
 ) -> Result<String, String> {
     let opts: docker::RunContainerOptions = options.into();
     run_with_session_retry(
-        &state, &host, port, &user, &auth_mode, &password, &key_path, saved_connection_index,
+        &state,
+        &host,
+        port,
+        &user,
+        &auth_mode,
+        &password,
+        &key_path,
+        saved_connection_index,
         |session| docker::run_container_blocking(session, &opts).map_err(|e| e.to_string()),
     )
 }
@@ -4641,7 +4917,14 @@ fn docker_prune_volumes(
     saved_connection_index: Option<usize>,
 ) -> Result<String, String> {
     run_with_session_retry(
-        &state, &host, port, &user, &auth_mode, &password, &key_path, saved_connection_index,
+        &state,
+        &host,
+        port,
+        &user,
+        &auth_mode,
+        &password,
+        &key_path,
+        saved_connection_index,
         |session| docker::prune_volumes_blocking(session).map_err(|e| e.to_string()),
     )
 }
@@ -4658,7 +4941,14 @@ fn docker_prune_images(
     saved_connection_index: Option<usize>,
 ) -> Result<String, String> {
     run_with_session_retry(
-        &state, &host, port, &user, &auth_mode, &password, &key_path, saved_connection_index,
+        &state,
+        &host,
+        port,
+        &user,
+        &auth_mode,
+        &password,
+        &key_path,
+        saved_connection_index,
         |session| docker::prune_images_blocking(session).map_err(|e| e.to_string()),
     )
 }
@@ -4681,8 +4971,17 @@ fn docker_pull_image(
     let env = env_prefix.unwrap_or_default();
     let env_refs: Vec<(&str, &str)> = env.iter().map(|(k, v)| (k.as_str(), v.as_str())).collect();
     run_with_session_retry(
-        &state, &host, port, &user, &auth_mode, &password, &key_path, saved_connection_index,
-        |session| docker::pull_image_blocking(session, &image_ref, &env_refs).map_err(|e| e.to_string()),
+        &state,
+        &host,
+        port,
+        &user,
+        &auth_mode,
+        &password,
+        &key_path,
+        saved_connection_index,
+        |session| {
+            docker::pull_image_blocking(session, &image_ref, &env_refs).map_err(|e| e.to_string())
+        },
     )
 }
 
@@ -4721,8 +5020,17 @@ fn docker_volume_files(
     saved_connection_index: Option<usize>,
 ) -> Result<String, String> {
     run_with_session_retry(
-        &state, &host, port, &user, &auth_mode, &password, &key_path, saved_connection_index,
-        |session| docker::list_volume_files_blocking(session, &mountpoint).map_err(|e| e.to_string()),
+        &state,
+        &host,
+        port,
+        &user,
+        &auth_mode,
+        &password,
+        &key_path,
+        saved_connection_index,
+        |session| {
+            docker::list_volume_files_blocking(session, &mountpoint).map_err(|e| e.to_string())
+        },
     )
 }
 
@@ -4744,19 +5052,29 @@ async fn local_docker_run_container(options: DockerRunOptionsView) -> Result<Str
     for (h, g) in &opts.ports {
         let h = h.trim();
         let g = g.trim();
-        if g.is_empty() { continue; }
+        if g.is_empty() {
+            continue;
+        }
         args.push("-p".into());
-        args.push(if h.is_empty() { g.into() } else { format!("{h}:{g}") });
+        args.push(if h.is_empty() {
+            g.into()
+        } else {
+            format!("{h}:{g}")
+        });
     }
     for (k, v) in &opts.env {
-        if k.trim().is_empty() { continue; }
+        if k.trim().is_empty() {
+            continue;
+        }
         args.push("-e".into());
         args.push(format!("{}={}", k.trim(), v));
     }
     for (h, g) in &opts.volumes {
         let h = h.trim();
         let g = g.trim();
-        if h.is_empty() || g.is_empty() { continue; }
+        if h.is_empty() || g.is_empty() {
+            continue;
+        }
         args.push("-v".into());
         args.push(format!("{h}:{g}"));
     }
@@ -4833,7 +5151,14 @@ fn sftp_mkdir(
     saved_connection_index: Option<usize>,
 ) -> Result<(), String> {
     let session = get_or_open_ssh_session(
-        &state, &host, port, &user, &auth_mode, &password, &key_path, saved_connection_index,
+        &state,
+        &host,
+        port,
+        &user,
+        &auth_mode,
+        &password,
+        &key_path,
+        saved_connection_index,
     )?;
     let sftp = get_or_open_sftp_client(&state, &session, &host, port, &user, &auth_mode)?;
     sftp.create_dir_blocking(&path).map_err(|e| e.to_string())
@@ -4853,7 +5178,14 @@ fn sftp_remove(
     saved_connection_index: Option<usize>,
 ) -> Result<(), String> {
     let session = get_or_open_ssh_session(
-        &state, &host, port, &user, &auth_mode, &password, &key_path, saved_connection_index,
+        &state,
+        &host,
+        port,
+        &user,
+        &auth_mode,
+        &password,
+        &key_path,
+        saved_connection_index,
     )?;
     let sftp = get_or_open_sftp_client(&state, &session, &host, port, &user, &auth_mode)?;
     if is_dir {
@@ -4877,7 +5209,14 @@ fn sftp_rename(
     saved_connection_index: Option<usize>,
 ) -> Result<(), String> {
     let session = get_or_open_ssh_session(
-        &state, &host, port, &user, &auth_mode, &password, &key_path, saved_connection_index,
+        &state,
+        &host,
+        port,
+        &user,
+        &auth_mode,
+        &password,
+        &key_path,
+        saved_connection_index,
     )?;
     let sftp = get_or_open_sftp_client(&state, &session, &host, port, &user, &auth_mode)?;
     sftp.rename_blocking(&from, &to).map_err(|e| e.to_string())
@@ -4898,7 +5237,14 @@ fn sftp_chmod(
     saved_connection_index: Option<usize>,
 ) -> Result<(), String> {
     let session = get_or_open_ssh_session(
-        &state, &host, port, &user, &auth_mode, &password, &key_path, saved_connection_index,
+        &state,
+        &host,
+        port,
+        &user,
+        &auth_mode,
+        &password,
+        &key_path,
+        saved_connection_index,
     )?;
     let sftp = get_or_open_sftp_client(&state, &session, &host, port, &user, &auth_mode)?;
     sftp.set_permissions_blocking(&path, mode)
@@ -4919,11 +5265,17 @@ fn sftp_create_file(
     saved_connection_index: Option<usize>,
 ) -> Result<(), String> {
     let session = get_or_open_ssh_session(
-        &state, &host, port, &user, &auth_mode, &password, &key_path, saved_connection_index,
+        &state,
+        &host,
+        port,
+        &user,
+        &auth_mode,
+        &password,
+        &key_path,
+        saved_connection_index,
     )?;
     let sftp = get_or_open_sftp_client(&state, &session, &host, port, &user, &auth_mode)?;
-    sftp.create_file_blocking(&path)
-        .map_err(|e| e.to_string())
+    sftp.create_file_blocking(&path).map_err(|e| e.to_string())
 }
 
 /// Metadata + UTF-8 content returned by [`sftp_read_text`]. The
@@ -4966,11 +5318,20 @@ fn sftp_read_text(
     saved_connection_index: Option<usize>,
 ) -> Result<SftpTextFile, String> {
     let session = get_or_open_ssh_session(
-        &state, &host, port, &user, &auth_mode, &password, &key_path, saved_connection_index,
+        &state,
+        &host,
+        port,
+        &user,
+        &auth_mode,
+        &password,
+        &key_path,
+        saved_connection_index,
     )?;
     let sftp = get_or_open_sftp_client(&state, &session, &host, port, &user, &auth_mode)?;
     let meta = sftp.stat_blocking(&path).map_err(|e| e.to_string())?;
-    let limit = max_bytes.unwrap_or(SFTP_TEXT_READ_MAX).min(SFTP_TEXT_READ_MAX);
+    let limit = max_bytes
+        .unwrap_or(SFTP_TEXT_READ_MAX)
+        .min(SFTP_TEXT_READ_MAX);
     if meta.size > limit {
         return Err(format!(
             "File is {} bytes; editor limit is {} bytes",
@@ -5007,7 +5368,14 @@ fn sftp_write_text(
     saved_connection_index: Option<usize>,
 ) -> Result<(), String> {
     let session = get_or_open_ssh_session(
-        &state, &host, port, &user, &auth_mode, &password, &key_path, saved_connection_index,
+        &state,
+        &host,
+        port,
+        &user,
+        &auth_mode,
+        &password,
+        &key_path,
+        saved_connection_index,
     )?;
     let sftp = get_or_open_sftp_client(&state, &session, &host, port, &user, &auth_mode)?;
     sftp.write_file_blocking(&path, content.as_bytes())
@@ -5061,7 +5429,14 @@ fn sftp_download(
     transfer_id: Option<String>,
 ) -> Result<(), String> {
     let session = get_or_open_ssh_session(
-        &state, &host, port, &user, &auth_mode, &password, &key_path, saved_connection_index,
+        &state,
+        &host,
+        port,
+        &user,
+        &auth_mode,
+        &password,
+        &key_path,
+        saved_connection_index,
     )?;
     let sftp = get_or_open_sftp_client(&state, &session, &host, port, &user, &auth_mode)?;
     let resolved_local = expand_local_path(&local_path);
@@ -5143,7 +5518,14 @@ fn sftp_upload(
     transfer_id: Option<String>,
 ) -> Result<(), String> {
     let session = get_or_open_ssh_session(
-        &state, &host, port, &user, &auth_mode, &password, &key_path, saved_connection_index,
+        &state,
+        &host,
+        port,
+        &user,
+        &auth_mode,
+        &password,
+        &key_path,
+        saved_connection_index,
     )?;
     let sftp = get_or_open_sftp_client(&state, &session, &host, port, &user, &auth_mode)?;
     let resolved_local = expand_local_path(&local_path);
@@ -5225,7 +5607,14 @@ fn sftp_upload_tree(
     transfer_id: Option<String>,
 ) -> Result<(), String> {
     let session = get_or_open_ssh_session(
-        &state, &host, port, &user, &auth_mode, &password, &key_path, saved_connection_index,
+        &state,
+        &host,
+        port,
+        &user,
+        &auth_mode,
+        &password,
+        &key_path,
+        saved_connection_index,
     )?;
     let sftp = get_or_open_sftp_client(&state, &session, &host, port, &user, &auth_mode)?;
     let resolved_local = expand_local_path(&local_path);
@@ -5302,7 +5691,14 @@ fn sftp_download_tree(
     transfer_id: Option<String>,
 ) -> Result<(), String> {
     let session = get_or_open_ssh_session(
-        &state, &host, port, &user, &auth_mode, &password, &key_path, saved_connection_index,
+        &state,
+        &host,
+        port,
+        &user,
+        &auth_mode,
+        &password,
+        &key_path,
+        saved_connection_index,
     )?;
     let sftp = get_or_open_sftp_client(&state, &session, &host, port, &user, &auth_mode)?;
     let resolved_local = expand_local_path(&local_path);
@@ -5380,8 +5776,19 @@ fn log_stream_start(
     // opens its own russh channel on the existing session — cheap
     // compared to a full connect.
     let stream = run_with_session_retry(
-        &state, &host, port, &user, &auth_mode, &password, &key_path, saved_connection_index,
-        |session| session.spawn_exec_stream_blocking(&command).map_err(|e| e.to_string()),
+        &state,
+        &host,
+        port,
+        &user,
+        &auth_mode,
+        &password,
+        &key_path,
+        saved_connection_index,
+        |session| {
+            session
+                .spawn_exec_stream_blocking(&command)
+                .map_err(|e| e.to_string())
+        },
     )?;
 
     let id = format!(
@@ -5440,10 +5847,7 @@ fn log_stream_drain(
 }
 
 #[tauri::command]
-fn log_stream_stop(
-    state: tauri::State<'_, AppState>,
-    stream_id: String,
-) -> Result<(), String> {
+fn log_stream_stop(state: tauri::State<'_, AppState>, stream_id: String) -> Result<(), String> {
     let mut streams = state
         .log_streams
         .lock()
@@ -5689,20 +6093,28 @@ async fn local_docker_action(container_id: String, action: String) -> Result<Str
 fn local_system_info() -> Result<ServerSnapshotView, String> {
     #[cfg(target_os = "macos")]
     {
-        let uptime = std::process::Command::new("uptime").output()
+        let uptime = std::process::Command::new("uptime")
+            .output()
             .map(|o| String::from_utf8_lossy(&o.stdout).trim().to_string())
             .unwrap_or_default();
-        let vm_stat = std::process::Command::new("vm_stat").output()
+        let vm_stat = std::process::Command::new("vm_stat")
+            .output()
             .map(|o| String::from_utf8_lossy(&o.stdout).to_string())
             .unwrap_or_default();
         let sysctl = std::process::Command::new("sysctl")
             .args(["-n", "hw.memsize"])
             .output()
-            .map(|o| String::from_utf8_lossy(&o.stdout).trim().parse::<f64>().unwrap_or(0.0))
+            .map(|o| {
+                String::from_utf8_lossy(&o.stdout)
+                    .trim()
+                    .parse::<f64>()
+                    .unwrap_or(0.0)
+            })
             .unwrap_or(0.0);
         let mem_total_mb = sysctl / (1024.0 * 1024.0);
         // Parse free pages from vm_stat
-        let free_pages: f64 = vm_stat.lines()
+        let free_pages: f64 = vm_stat
+            .lines()
             .find(|l| l.starts_with("Pages free"))
             .and_then(|l| l.split_whitespace().last())
             .and_then(|v| v.trim_end_matches('.').parse::<f64>().ok())
@@ -5712,7 +6124,9 @@ fn local_system_info() -> Result<ServerSnapshotView, String> {
         let mem_used_mb = mem_total_mb - mem_free_mb;
         // Disk — parse the full `df -hT` so the per-mount breakdown
         // shows up alongside the root-fs gauge.
-        let df_full = std::process::Command::new("df").args(["-hT"]).output()
+        let df_full = std::process::Command::new("df")
+            .args(["-hT"])
+            .output()
             .map(|o| String::from_utf8_lossy(&o.stdout).to_string())
             .unwrap_or_default();
         let mut df_snap = server_monitor::ServerSnapshot::default();
@@ -5720,9 +6134,15 @@ fn local_system_info() -> Result<ServerSnapshotView, String> {
         let disk_total = df_snap.disk_total.clone();
         let disk_used = df_snap.disk_used.clone();
         let disk_avail = df_snap.disk_avail.clone();
-        let disk_use_pct = if df_snap.disk_use_pct == 0.0 && disk_total.is_empty() { -1.0 } else { df_snap.disk_use_pct };
+        let disk_use_pct = if df_snap.disk_use_pct == 0.0 && disk_total.is_empty() {
+            -1.0
+        } else {
+            df_snap.disk_use_pct
+        };
         // Load
-        let load_parts: Vec<f64> = uptime.rsplit("load averages:").next()
+        let load_parts: Vec<f64> = uptime
+            .rsplit("load averages:")
+            .next()
             .or_else(|| uptime.rsplit("load average:").next())
             .unwrap_or("")
             .split(|c: char| c == ',' || c == ' ')
@@ -5733,9 +6153,15 @@ fn local_system_info() -> Result<ServerSnapshotView, String> {
             load_1: *load_parts.first().unwrap_or(&-1.0),
             load_5: *load_parts.get(1).unwrap_or(&-1.0),
             load_15: *load_parts.get(2).unwrap_or(&-1.0),
-            mem_total_mb, mem_used_mb, mem_free_mb,
-            swap_total_mb: 0.0, swap_used_mb: 0.0,
-            disk_total, disk_used, disk_avail, disk_use_pct,
+            mem_total_mb,
+            mem_used_mb,
+            mem_free_mb,
+            swap_total_mb: 0.0,
+            swap_used_mb: 0.0,
+            disk_total,
+            disk_used,
+            disk_avail,
+            disk_use_pct,
             cpu_pct: -1.0,
             cpu_count: 0,
             proc_count: 0,
@@ -5766,31 +6192,56 @@ fn local_system_info() -> Result<ServerSnapshotView, String> {
         let loadavg = fs::read_to_string("/proc/loadavg").unwrap_or_default();
         let meminfo = fs::read_to_string("/proc/meminfo").unwrap_or_default();
         fn parse_meminfo(info: &str, key: &str) -> f64 {
-            info.lines().find(|l| l.starts_with(key))
+            info.lines()
+                .find(|l| l.starts_with(key))
                 .and_then(|l| l.split_whitespace().nth(1))
                 .and_then(|v| v.parse::<f64>().ok())
-                .unwrap_or(0.0) / 1024.0
+                .unwrap_or(0.0)
+                / 1024.0
         }
         let mem_total_mb = parse_meminfo(&meminfo, "MemTotal");
-        let mem_free_mb = parse_meminfo(&meminfo, "MemAvailable").max(parse_meminfo(&meminfo, "MemFree"));
+        let mem_free_mb =
+            parse_meminfo(&meminfo, "MemAvailable").max(parse_meminfo(&meminfo, "MemFree"));
         let swap_total_mb = parse_meminfo(&meminfo, "SwapTotal");
         let swap_free = parse_meminfo(&meminfo, "SwapFree");
-        let loads: Vec<f64> = loadavg.split_whitespace().take(3).filter_map(|s| s.parse().ok()).collect();
-        let df_full = std::process::Command::new("df").args(["-hPT"]).output()
-            .map(|o| String::from_utf8_lossy(&o.stdout).to_string()).unwrap_or_default();
+        let loads: Vec<f64> = loadavg
+            .split_whitespace()
+            .take(3)
+            .filter_map(|s| s.parse().ok())
+            .collect();
+        let df_full = std::process::Command::new("df")
+            .args(["-hPT"])
+            .output()
+            .map(|o| String::from_utf8_lossy(&o.stdout).to_string())
+            .unwrap_or_default();
         let mut df_snap = server_monitor::ServerSnapshot::default();
         server_monitor::parse_df(&df_full, &mut df_snap);
         Ok(ServerSnapshotView {
-            uptime: format!("{:.0}s", uptime.split_whitespace().next().unwrap_or("0").parse::<f64>().unwrap_or(0.0)),
+            uptime: format!(
+                "{:.0}s",
+                uptime
+                    .split_whitespace()
+                    .next()
+                    .unwrap_or("0")
+                    .parse::<f64>()
+                    .unwrap_or(0.0)
+            ),
             load_1: *loads.first().unwrap_or(&-1.0),
             load_5: *loads.get(1).unwrap_or(&-1.0),
             load_15: *loads.get(2).unwrap_or(&-1.0),
-            mem_total_mb, mem_used_mb: mem_total_mb - mem_free_mb, mem_free_mb,
-            swap_total_mb, swap_used_mb: swap_total_mb - swap_free,
+            mem_total_mb,
+            mem_used_mb: mem_total_mb - mem_free_mb,
+            mem_free_mb,
+            swap_total_mb,
+            swap_used_mb: swap_total_mb - swap_free,
             disk_total: df_snap.disk_total.clone(),
             disk_used: df_snap.disk_used.clone(),
             disk_avail: df_snap.disk_avail.clone(),
-            disk_use_pct: if df_snap.disk_use_pct == 0.0 && df_snap.disk_total.is_empty() { -1.0 } else { df_snap.disk_use_pct },
+            disk_use_pct: if df_snap.disk_use_pct == 0.0 && df_snap.disk_total.is_empty() {
+                -1.0
+            } else {
+                df_snap.disk_use_pct
+            },
             cpu_pct: -1.0,
             cpu_count: 0,
             proc_count: 0,
@@ -5902,7 +6353,11 @@ fn log_clear() -> Result<(), String> {
     let Some(path) = pier_core::logging::log_file_path() else {
         return Ok(());
     };
-    match std::fs::OpenOptions::new().write(true).truncate(true).open(&path) {
+    match std::fs::OpenOptions::new()
+        .write(true)
+        .truncate(true)
+        .open(&path)
+    {
         Ok(_) => Ok(()),
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(()),
         Err(e) => Err(e.to_string()),

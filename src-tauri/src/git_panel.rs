@@ -329,7 +329,10 @@ fn parse_commit_detail(
 
     let parent_tokens: Vec<&str> = parents_output.split_whitespace().collect();
     if parent_tokens.len() > 1 {
-        detail.parent_hashes = parent_tokens[1..].iter().map(|value| (*value).to_string()).collect();
+        detail.parent_hashes = parent_tokens[1..]
+            .iter()
+            .map(|value| (*value).to_string())
+            .collect();
         detail.parent_hash = detail.parent_hashes.first().cloned().unwrap_or_default();
     }
 
@@ -346,8 +349,16 @@ fn parse_commit_detail(
         if parts.len() < 3 {
             continue;
         }
-        let additions = if parts[0] == "-" { 0 } else { parts[0].parse().unwrap_or(0) };
-        let deletions = if parts[1] == "-" { 0 } else { parts[1].parse().unwrap_or(0) };
+        let additions = if parts[0] == "-" {
+            0
+        } else {
+            parts[0].parse().unwrap_or(0)
+        };
+        let deletions = if parts[1] == "-" {
+            0
+        } else {
+            parts[1].parse().unwrap_or(0)
+        };
         let path = parts[2..].join("\t").trim().to_string();
         detail.changed_files.push(GitCommitChangedFileView {
             additions,
@@ -594,7 +605,11 @@ fn create_sequence_editor_script(todo_path: &Path) -> Result<PathBuf, String> {
                 .permissions();
             permissions.set_mode(0o700);
             fs::set_permissions(&script_path, permissions).map_err(|error| {
-                format!("Failed to set permissions on {}: {}", script_path.display(), error)
+                format!(
+                    "Failed to set permissions on {}: {}",
+                    script_path.display(),
+                    error
+                )
             })?;
         }
         Ok(script_path)
@@ -784,7 +799,10 @@ pub fn git_panel_state(path: Option<String>) -> Result<GitPanelState, String> {
         .cloned()
         .map(map_git_panel_file)
         .collect();
-    let conflict_count = unstaged_files.iter().filter(|file| file.status == "U").count();
+    let conflict_count = unstaged_files
+        .iter()
+        .filter(|file| file.status == "U")
+        .count();
 
     Ok(GitPanelState {
         repo_path: client.repo_path().display().to_string(),
@@ -901,9 +919,15 @@ pub fn git_graph_history(params: GitGraphHistoryParams) -> Result<Vec<GitGraphRo
     let main_ref = explicit_branch
         .or_else(|| {
             let cb = current_branch.trim();
-            if cb.is_empty() || cb == "HEAD" { None } else { Some(cb.to_string()) }
+            if cb.is_empty() || cb == "HEAD" {
+                None
+            } else {
+                Some(cb.to_string())
+            }
         })
-        .unwrap_or_else(|| git_graph::detect_default_branch(&repo_path).unwrap_or_else(|_| String::from("HEAD")));
+        .unwrap_or_else(|| {
+            git_graph::detect_default_branch(&repo_path).unwrap_or_else(|_| String::from("HEAD"))
+        });
     let main_chain: HashSet<String> = git_graph::first_parent_chain(&repo_path, &main_ref, limit)?
         .into_iter()
         .collect();
@@ -967,7 +991,10 @@ pub fn git_graph_history(params: GitGraphHistoryParams) -> Result<Vec<GitGraphRo
 }
 
 #[tauri::command]
-pub fn git_commit_detail(path: Option<String>, hash: String) -> Result<GitCommitDetailView, String> {
+pub fn git_commit_detail(
+    path: Option<String>,
+    hash: String,
+) -> Result<GitCommitDetailView, String> {
     let repo_path = repo_root(path)?;
     let commit_hash = hash.trim();
     if commit_hash.is_empty() {
@@ -983,14 +1010,27 @@ pub fn git_commit_detail(path: Option<String>, hash: String) -> Result<GitCommit
             commit_hash,
         ],
     )?;
-    let stats = run_git_at(&repo_path, &["show", "--shortstat", "--format=", commit_hash]).unwrap_or_default();
-    let numstat = run_git_at(&repo_path, &["show", "--numstat", "--format=", commit_hash]).unwrap_or_default();
-    let parents = run_git_at(&repo_path, &["rev-list", "--parents", "-n", "1", commit_hash]).unwrap_or_default();
+    let stats = run_git_at(
+        &repo_path,
+        &["show", "--shortstat", "--format=", commit_hash],
+    )
+    .unwrap_or_default();
+    let numstat = run_git_at(&repo_path, &["show", "--numstat", "--format=", commit_hash])
+        .unwrap_or_default();
+    let parents = run_git_at(
+        &repo_path,
+        &["rev-list", "--parents", "-n", "1", commit_hash],
+    )
+    .unwrap_or_default();
     Ok(parse_commit_detail(&meta, &stats, &numstat, &parents))
 }
 
 #[tauri::command]
-pub fn git_commit_file_diff(path: Option<String>, hash: String, file_path: String) -> Result<String, String> {
+pub fn git_commit_file_diff(
+    path: Option<String>,
+    hash: String,
+    file_path: String,
+) -> Result<String, String> {
     let repo_path = repo_root(path)?;
     let commit_hash = hash.trim();
     let relative_path = file_path.trim();
@@ -1014,7 +1054,10 @@ pub fn git_commit_file_diff(path: Option<String>, hash: String, file_path: Strin
 }
 
 #[tauri::command]
-pub fn git_comparison_files(path: Option<String>, hash: String) -> Result<Vec<GitComparisonFileView>, String> {
+pub fn git_comparison_files(
+    path: Option<String>,
+    hash: String,
+) -> Result<Vec<GitComparisonFileView>, String> {
     let repo_path = repo_root(path)?;
     let commit_hash = hash.trim();
     if commit_hash.is_empty() {
@@ -1045,7 +1088,11 @@ pub fn git_comparison_files(path: Option<String>, hash: String) -> Result<Vec<Gi
 }
 
 #[tauri::command]
-pub fn git_comparison_diff(path: Option<String>, hash: String, file_path: String) -> Result<String, String> {
+pub fn git_comparison_diff(
+    path: Option<String>,
+    hash: String,
+    file_path: String,
+) -> Result<String, String> {
     let repo_path = repo_root(path)?;
     let commit_hash = hash.trim();
     let relative_path = file_path.trim();
@@ -1059,7 +1106,11 @@ pub fn git_comparison_diff(path: Option<String>, hash: String, file_path: String
 }
 
 #[tauri::command]
-pub fn git_checkout_target(path: Option<String>, target: String, tracking: Option<String>) -> Result<String, String> {
+pub fn git_checkout_target(
+    path: Option<String>,
+    target: String,
+    tracking: Option<String>,
+) -> Result<String, String> {
     let repo_path = repo_root(path)?;
     let target_ref = target.trim();
     if target_ref.is_empty() {
@@ -1069,7 +1120,10 @@ pub fn git_checkout_target(path: Option<String>, target: String, tracking: Optio
     if tracking_ref.trim().is_empty() {
         run_git_at(&repo_path, &["checkout", target_ref])
     } else {
-        run_git_at(&repo_path, &["checkout", "-b", target_ref, tracking_ref.trim()])
+        run_git_at(
+            &repo_path,
+            &["checkout", "-b", target_ref, tracking_ref.trim()],
+        )
     }
 }
 
@@ -1079,7 +1133,11 @@ pub fn git_create_branch(path: Option<String>, name: String) -> Result<String, S
 }
 
 #[tauri::command]
-pub fn git_create_branch_at(path: Option<String>, name: String, start_point: Option<String>) -> Result<String, String> {
+pub fn git_create_branch_at(
+    path: Option<String>,
+    name: String,
+    start_point: Option<String>,
+) -> Result<String, String> {
     let repo_path = repo_root(path)?;
     let branch_name = name.trim();
     if branch_name.is_empty() {
@@ -1104,7 +1162,11 @@ pub fn git_delete_branch(path: Option<String>, name: String) -> Result<String, S
 }
 
 #[tauri::command]
-pub fn git_rename_branch(path: Option<String>, old_name: String, new_name: String) -> Result<String, String> {
+pub fn git_rename_branch(
+    path: Option<String>,
+    old_name: String,
+    new_name: String,
+) -> Result<String, String> {
     let repo_path = repo_root(path)?;
     let from = old_name.trim();
     let to = new_name.trim();
@@ -1126,19 +1188,27 @@ pub fn git_rename_remote_branch(
     let from = old_branch.trim();
     let to = new_name.trim();
     if remote.is_empty() || from.is_empty() || to.is_empty() {
-        return Err(String::from("remote branch rename requires remote, old branch, and new name"));
+        return Err(String::from(
+            "remote branch rename requires remote, old branch, and new name",
+        ));
     }
     run_git_at(&repo_path, &["push", remote, &format!("{from}:{to}")])?;
     run_git_at(&repo_path, &["push", remote, "--delete", from])
 }
 
 #[tauri::command]
-pub fn git_delete_remote_branch(path: Option<String>, remote_name: String, branch_name: String) -> Result<String, String> {
+pub fn git_delete_remote_branch(
+    path: Option<String>,
+    remote_name: String,
+    branch_name: String,
+) -> Result<String, String> {
     let repo_path = repo_root(path)?;
     let remote = remote_name.trim();
     let branch = branch_name.trim();
     if remote.is_empty() || branch.is_empty() {
-        return Err(String::from("remote branch delete requires remote and branch"));
+        return Err(String::from(
+            "remote branch delete requires remote and branch",
+        ));
     }
     run_git_at(&repo_path, &["push", remote, "--delete", branch])
 }
@@ -1154,7 +1224,11 @@ pub fn git_merge_branch(path: Option<String>, name: String) -> Result<String, St
 }
 
 #[tauri::command]
-pub fn git_set_branch_tracking(path: Option<String>, branch_name: String, upstream: String) -> Result<String, String> {
+pub fn git_set_branch_tracking(
+    path: Option<String>,
+    branch_name: String,
+    upstream: String,
+) -> Result<String, String> {
     let repo_path = repo_root(path)?;
     let branch = branch_name.trim();
     let upstream_ref = upstream.trim();
@@ -1163,12 +1237,19 @@ pub fn git_set_branch_tracking(path: Option<String>, branch_name: String, upstre
     }
     run_git_at(
         &repo_path,
-        &["branch", &format!("--set-upstream-to={upstream_ref}"), branch],
+        &[
+            "branch",
+            &format!("--set-upstream-to={upstream_ref}"),
+            branch,
+        ],
     )
 }
 
 #[tauri::command]
-pub fn git_unset_branch_tracking(path: Option<String>, branch_name: String) -> Result<String, String> {
+pub fn git_unset_branch_tracking(
+    path: Option<String>,
+    branch_name: String,
+) -> Result<String, String> {
     let repo_path = repo_root(path)?;
     let branch = branch_name.trim();
     if branch.is_empty() {
@@ -1178,13 +1259,18 @@ pub fn git_unset_branch_tracking(path: Option<String>, branch_name: String) -> R
 }
 
 #[tauri::command]
-pub fn git_blame_file(path: Option<String>, file_path: String) -> Result<Vec<GitBlameLineView>, String> {
+pub fn git_blame_file(
+    path: Option<String>,
+    file_path: String,
+) -> Result<Vec<GitBlameLineView>, String> {
     let client = open_git_client(path)?;
     let relative_path = file_path.trim();
     if relative_path.is_empty() {
         return Err(String::from("file path cannot be empty"));
     }
-    let lines: Vec<BlameLine> = client.blame(relative_path).map_err(|error| error.to_string())?;
+    let lines: Vec<BlameLine> = client
+        .blame(relative_path)
+        .map_err(|error| error.to_string())?;
     Ok(lines
         .into_iter()
         .map(|line| GitBlameLineView {
@@ -1218,7 +1304,11 @@ pub fn git_tags_list(path: Option<String>) -> Result<Vec<GitTagView>, String> {
 }
 
 #[tauri::command]
-pub fn git_create_tag(path: Option<String>, name: String, message: String) -> Result<String, String> {
+pub fn git_create_tag(
+    path: Option<String>,
+    name: String,
+    message: String,
+) -> Result<String, String> {
     git_create_tag_at(path, name, None, message)
 }
 
@@ -1245,14 +1335,19 @@ pub fn git_create_tag_at(
     } else if target_ref.trim().is_empty() {
         run_git_at(&repo_path, &["tag", "-a", tag_name, "-m", annotation])
     } else {
-        run_git_at(&repo_path, &["tag", "-a", tag_name, target_ref.trim(), "-m", annotation])
+        run_git_at(
+            &repo_path,
+            &["tag", "-a", tag_name, target_ref.trim(), "-m", annotation],
+        )
     }
 }
 
 #[tauri::command]
 pub fn git_delete_tag(path: Option<String>, name: String) -> Result<String, String> {
     let client = open_git_client(path)?;
-    client.tag_delete(name.trim()).map_err(|error| error.to_string())
+    client
+        .tag_delete(name.trim())
+        .map_err(|error| error.to_string())
 }
 
 #[tauri::command]
@@ -1301,7 +1396,11 @@ pub fn git_add_remote(path: Option<String>, name: String, url: String) -> Result
 }
 
 #[tauri::command]
-pub fn git_set_remote_url(path: Option<String>, name: String, url: String) -> Result<String, String> {
+pub fn git_set_remote_url(
+    path: Option<String>,
+    name: String,
+    url: String,
+) -> Result<String, String> {
     let repo_path = repo_root(path)?;
     let remote_name = name.trim();
     let remote_url = url.trim();
@@ -1319,7 +1418,9 @@ pub fn git_set_remote_url(path: Option<String>, name: String, url: String) -> Re
 #[tauri::command]
 pub fn git_remove_remote(path: Option<String>, name: String) -> Result<String, String> {
     let client = open_git_client(path)?;
-    client.remote_remove(name.trim()).map_err(|error| error.to_string())
+    client
+        .remote_remove(name.trim())
+        .map_err(|error| error.to_string())
 }
 
 #[tauri::command]
@@ -1362,7 +1463,12 @@ pub fn git_config_list(path: Option<String>) -> Result<Vec<GitConfigEntryView>, 
 }
 
 #[tauri::command]
-pub fn git_set_config_value(path: Option<String>, key: String, value: String, global: bool) -> Result<String, String> {
+pub fn git_set_config_value(
+    path: Option<String>,
+    key: String,
+    value: String,
+    global: bool,
+) -> Result<String, String> {
     let client = open_git_client(path)?;
     client
         .config_set(key.trim(), &value, global)
@@ -1370,7 +1476,11 @@ pub fn git_set_config_value(path: Option<String>, key: String, value: String, gl
 }
 
 #[tauri::command]
-pub fn git_unset_config_value(path: Option<String>, key: String, global: bool) -> Result<String, String> {
+pub fn git_unset_config_value(
+    path: Option<String>,
+    key: String,
+    global: bool,
+) -> Result<String, String> {
     let client = open_git_client(path)?;
     client
         .config_unset(key.trim(), global)
@@ -1378,7 +1488,11 @@ pub fn git_unset_config_value(path: Option<String>, key: String, global: bool) -
 }
 
 #[tauri::command]
-pub fn git_reset_to_commit(path: Option<String>, hash: String, mode: String) -> Result<String, String> {
+pub fn git_reset_to_commit(
+    path: Option<String>,
+    hash: String,
+    mode: String,
+) -> Result<String, String> {
     let repo_path = repo_root(path)?;
     let commit_hash = hash.trim();
     if commit_hash.is_empty() {
@@ -1389,11 +1503,18 @@ pub fn git_reset_to_commit(path: Option<String>, hash: String, mode: String) -> 
         "hard" => "hard",
         _ => "mixed",
     };
-    run_git_at(&repo_path, &["reset", &format!("--{reset_mode}"), commit_hash])
+    run_git_at(
+        &repo_path,
+        &["reset", &format!("--{reset_mode}"), commit_hash],
+    )
 }
 
 #[tauri::command]
-pub fn git_amend_head_commit_message(path: Option<String>, hash: String, message: String) -> Result<String, String> {
+pub fn git_amend_head_commit_message(
+    path: Option<String>,
+    hash: String,
+    message: String,
+) -> Result<String, String> {
     let repo_path = repo_root(path)?;
     let commit_hash = hash.trim();
     let new_message = message.trim();
@@ -1475,7 +1596,12 @@ pub fn git_reflog_list(
     let count_arg = format!("-{count}");
     let output = run_git_at(
         &repo_path,
-        &["reflog", "--date=relative", count_arg.as_str(), format.as_str()],
+        &[
+            "reflog",
+            "--date=relative",
+            count_arg.as_str(),
+            format.as_str(),
+        ],
     )?;
     let mut entries = Vec::new();
     for line in output.lines() {
@@ -1498,7 +1624,11 @@ pub fn git_reflog_list(
 }
 
 #[tauri::command]
-pub fn git_drop_commit(path: Option<String>, hash: String, parent_hash: Option<String>) -> Result<String, String> {
+pub fn git_drop_commit(
+    path: Option<String>,
+    hash: String,
+    parent_hash: Option<String>,
+) -> Result<String, String> {
     let repo_path = repo_root(path)?;
     let commit_hash = hash.trim();
     if commit_hash.is_empty() {
@@ -1510,7 +1640,9 @@ pub fn git_drop_commit(path: Option<String>, hash: String, parent_hash: Option<S
     }
     let parent = parent_hash.unwrap_or_default();
     if parent.trim().is_empty() {
-        return Err(String::from("parent hash is required to drop a non-HEAD commit"));
+        return Err(String::from(
+            "parent hash is required to drop a non-HEAD commit",
+        ));
     }
     run_git_at(
         &repo_path,
@@ -1519,17 +1651,16 @@ pub fn git_drop_commit(path: Option<String>, hash: String, parent_hash: Option<S
 }
 
 #[tauri::command]
-pub fn git_rebase_plan(path: Option<String>, count: Option<usize>) -> Result<GitRebasePlanView, String> {
+pub fn git_rebase_plan(
+    path: Option<String>,
+    count: Option<usize>,
+) -> Result<GitRebasePlanView, String> {
     let repo_path = repo_root(path)?;
     let item_count = count.unwrap_or(10).clamp(1, 50);
     let rebase_merge_path = git_path_for_repo(&repo_path, "rebase-merge").ok();
     let rebase_apply_path = git_path_for_repo(&repo_path, "rebase-apply").ok();
-    let in_progress = rebase_merge_path
-        .as_ref()
-        .is_some_and(|path| path.exists())
-        || rebase_apply_path
-            .as_ref()
-            .is_some_and(|path| path.exists());
+    let in_progress = rebase_merge_path.as_ref().is_some_and(|path| path.exists())
+        || rebase_apply_path.as_ref().is_some_and(|path| path.exists());
 
     let items = if in_progress {
         let todo_path = rebase_merge_path
@@ -1554,7 +1685,13 @@ pub fn git_rebase_plan(path: Option<String>, count: Option<usize>) -> Result<Git
     } else {
         let output = run_git_at(
             &repo_path,
-            &["log", "--format=%H%x1f%s", "-n", &item_count.to_string(), "HEAD"],
+            &[
+                "log",
+                "--format=%H%x1f%s",
+                "-n",
+                &item_count.to_string(),
+                "HEAD",
+            ],
         )?;
         output
             .lines()
@@ -1576,20 +1713,24 @@ pub fn git_rebase_plan(path: Option<String>, count: Option<usize>) -> Result<Git
 }
 
 #[tauri::command]
-pub fn git_execute_rebase(path: Option<String>, items: Vec<GitRebaseItemView>, onto: Option<String>) -> Result<String, String> {
+pub fn git_execute_rebase(
+    path: Option<String>,
+    items: Vec<GitRebaseItemView>,
+    onto: Option<String>,
+) -> Result<String, String> {
     let repo_path = repo_root(path)?;
     if items.is_empty() {
         return Err(String::from("rebase items cannot be empty"));
     }
 
-    let base = onto
-        .unwrap_or_default()
-        .trim()
-        .to_string();
+    let base = onto.unwrap_or_default().trim().to_string();
     let resolved_base = if !base.is_empty() {
         base
     } else {
-        let oldest = items.last().map(|item| item.hash.clone()).unwrap_or_default();
+        let oldest = items
+            .last()
+            .map(|item| item.hash.clone())
+            .unwrap_or_default();
         if oldest.is_empty() {
             return Err(String::from("missing rebase base"));
         }
@@ -1606,7 +1747,11 @@ pub fn git_execute_rebase(path: Option<String>, items: Vec<GitRebaseItemView>, o
         } else {
             item.action.trim()
         };
-        todo_text.push_str(&format!("{action} {} {}\n", item.hash.trim(), item.message.trim()));
+        todo_text.push_str(&format!(
+            "{action} {} {}\n",
+            item.hash.trim(),
+            item.message.trim()
+        ));
     }
 
     let todo_path = unique_temp_path("pierx-rebase-todo", "txt");
@@ -1677,10 +1822,16 @@ pub fn git_init_submodules(path: Option<String>) -> Result<String, String> {
 }
 
 #[tauri::command]
-pub fn git_update_submodules(path: Option<String>, recursive: Option<bool>) -> Result<String, String> {
+pub fn git_update_submodules(
+    path: Option<String>,
+    recursive: Option<bool>,
+) -> Result<String, String> {
     let repo_path = repo_root(path)?;
     if recursive.unwrap_or(true) {
-        run_git_at(&repo_path, &["submodule", "update", "--init", "--recursive"])
+        run_git_at(
+            &repo_path,
+            &["submodule", "update", "--init", "--recursive"],
+        )
     } else {
         run_git_at(&repo_path, &["submodule", "update", "--init"])
     }
@@ -1698,7 +1849,11 @@ pub fn git_conflicts_list(path: Option<String>) -> Result<Vec<GitConflictFileVie
     let output = run_git_at(&repo_path, &["diff", "--name-only", "--diff-filter=U"])?;
     let mut files = Vec::new();
 
-    for entry in output.lines().map(str::trim).filter(|entry| !entry.is_empty()) {
+    for entry in output
+        .lines()
+        .map(str::trim)
+        .filter(|entry| !entry.is_empty())
+    {
         let absolute_path = repo_path.join(entry);
         let Ok(content) = fs::read_to_string(&absolute_path) else {
             continue;
@@ -1724,7 +1879,11 @@ pub fn git_conflicts_list(path: Option<String>) -> Result<Vec<GitConflictFileVie
 }
 
 #[tauri::command]
-pub fn git_conflict_accept_all(path: Option<String>, file_path: String, resolution: String) -> Result<String, String> {
+pub fn git_conflict_accept_all(
+    path: Option<String>,
+    file_path: String,
+    resolution: String,
+) -> Result<String, String> {
     let repo_path = repo_root(path)?;
     let relative_path = file_path.trim();
     let resolved = match resolution.trim() {

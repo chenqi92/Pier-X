@@ -1,0 +1,90 @@
+// ── Terminal syntax overlay ───────────────────────────────────────
+// Smart-mode (M2): paints a coloured copy of the in-progress input
+// line on top of the underlying terminal grid. The grid still shows
+// the same characters in the user's terminal-theme fg colour; the
+// overlay sits at z-index 1 with a matching background so the two
+// renderings do not double-print and the overlay's per-token colour
+// wins visually.
+//
+// Position is computed from the OSC 133;B prompt-end position
+// (`promptEnd`) plus the cell metrics (`charWidth`, `rowHeight`)
+// already measured by the parent for pty sizing. Because the
+// containing block is `.terminal-screen` (which we mark
+// `position: relative` for this purpose), the overlay's `top` /
+// `left` are in screen-pixel space relative to the screen's content
+// box.
+//
+// Multi-line input (long pasted lines, backslash continuation) is
+// out of scope for M2 — we render a single row from `promptEnd` to
+// the right edge of the grid. The overlay inherits the terminal's
+// font metrics so the spans align with the underlying cells.
+
+import { useMemo } from "react";
+import { tokenize, type ShellToken } from "../lib/shellLexer";
+
+type Props = {
+  /**
+   * The text the user has typed since the most recent prompt-end —
+   * mirrored on the frontend in `smartLineBufferRef`. Empty string
+   * is fine and renders nothing.
+   */
+  text: string;
+  /**
+   * Grid coordinate of OSC 133;B (`[row, col]`). When non-null and
+   * `awaiting_input` is true, the overlay is visible from this cell
+   * onward. Caller is responsible for not mounting the overlay when
+   * it should be hidden (alt-screen, bracketed-paste, etc.) — the
+   * component itself only handles layout and tokenisation.
+   */
+  promptEnd: [number, number];
+  /** Pixel width of a single grid cell. Measured upstream from the
+   *  font metrics of `.terminal-measure`. */
+  charWidth: number;
+  /** Pixel height of one grid row, matching `--terminal-row-h`. */
+  rowHeight: number;
+  /**
+   * Background colour to paint behind each token span. Must match
+   * the terminal's effective background so the overlay visually
+   * "covers" the underlying row instead of producing a doubled-up
+   * render with the terminal-segment text below.
+   */
+  bgColor: string;
+};
+
+export default function TerminalSyntaxOverlay({
+  text,
+  promptEnd,
+  charWidth,
+  rowHeight,
+  bgColor,
+}: Props) {
+  const tokens = useMemo<ShellToken[]>(() => tokenize(text), [text]);
+  if (!text || tokens.length === 0) return null;
+
+  const [row, col] = promptEnd;
+
+  return (
+    <div
+      className="terminal-syntax-overlay"
+      style={{
+        top: row * rowHeight,
+        left: col * charWidth,
+        // Inline bg so each span inherits a solid colour matching
+        // the user's terminal theme — the global stylesheet can't
+        // know the runtime theme value, but the parent passed it in.
+        background: bgColor,
+        height: rowHeight,
+        lineHeight: `${rowHeight}px`,
+      }}
+    >
+      {tokens.map((tok, i) => (
+        <span
+          key={i}
+          className={`terminal-syntax terminal-syntax--${tok.kind}`}
+        >
+          {tok.text}
+        </span>
+      ))}
+    </div>
+  );
+}

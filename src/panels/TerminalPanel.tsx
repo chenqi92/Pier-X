@@ -8,6 +8,7 @@ import { listen, type UnlistenFn } from "@tauri-apps/api/event";
 import * as cmd from "../lib/commands";
 import { controlKeyMap } from "../lib/commands";
 import ContextMenu, { type ContextMenuItem } from "../components/ContextMenu";
+import TerminalSyntaxOverlay from "../components/TerminalSyntaxOverlay";
 import { useI18n } from "../i18n/useI18n";
 import { isMissingKeychainError, localizeError } from "../i18n/localizeMessage";
 import type { TabState, TerminalSessionInfo, TerminalSnapshot, TerminalSize } from "../lib/types";
@@ -147,6 +148,22 @@ export default function TerminalPanel({ tab, isActive, onEditConnection }: Props
   const smartLineBufferRef = useRef("");
   const smartActiveRef = useRef(false);
 
+  // Render-driven mirror of `smartLineBufferRef`. The ref keeps event
+  // handlers fast and stale-closure-free; this state forces React to
+  // re-render the syntax overlay on every keystroke. We deliberately
+  // accept the extra render pass — the overlay is tiny (a few hundred
+  // chars max) and ANSI/lexer cost is negligible compared with the
+  // existing per-snapshot render of the full grid.
+  const [smartLineBufferText, setSmartLineBufferText] = useState("");
+
+  // Cell metrics (charWidth, rowHeight) derived from the live font
+  // measurement in the resize-observer effect below. Used by the
+  // syntax overlay to position itself onto the right grid cell.
+  const [cellMetrics, setCellMetrics] = useState<{
+    charWidth: number;
+    rowHeight: number;
+  }>({ charWidth: 7.8, rowHeight: 19 });
+
   // Prompt-anchored capture window. Armed when the backend PTY
   // reader sees the canonical OpenSSH `<user>@<host>'s password:` /
   // `Enter passphrase for key` shape in the output stream and fires
@@ -280,6 +297,16 @@ export default function TerminalPanel({ tab, isActive, onEditConnection }: Props
       const rows = Math.max(14, Math.min(72, Math.floor((viewport.clientHeight - 20) / rowH)));
       setTerminalSize((prev) =>
         prev.cols === cols && prev.rows === rows ? prev : { cols, rows },
+      );
+      // Smart-mode overlay needs the same metrics to align coloured
+      // spans with the underlying terminal cells. Stored as state so
+      // the overlay re-renders when font size or container width
+      // changes; the threshold avoids needless re-renders on
+      // sub-pixel jitter from the ResizeObserver.
+      setCellMetrics((prev) =>
+        Math.abs(prev.charWidth - charWidth) < 0.05 && prev.rowHeight === rowH
+          ? prev
+          : { charWidth, rowHeight: rowH },
       );
     };
 
@@ -688,6 +715,7 @@ export default function TerminalPanel({ tab, isActive, onEditConnection }: Props
       // buffer is re-armed empty by the prompt-end effect below
       // when conditions return to active.
       smartLineBufferRef.current = "";
+      setSmartLineBufferText("");
     }
   }, [smartActive]);
 
@@ -700,6 +728,7 @@ export default function TerminalPanel({ tab, isActive, onEditConnection }: Props
   useEffect(() => {
     if (!smartActive) return;
     smartLineBufferRef.current = "";
+    setSmartLineBufferText("");
   }, [smartActive, promptEndKey]);
 
   // ── Bell handling ───────────────────────────────────────────
@@ -844,6 +873,7 @@ export default function TerminalPanel({ tab, isActive, onEditConnection }: Props
     const DEL = 127;
     const ETX = 3;   // Ctrl+C
     const NAK = 21;  // Ctrl+U
+    let buf = smartLineBufferRef.current;
     for (let i = 0; i < data.length; i++) {
       const code = data.charCodeAt(i);
       if (code === CR || code === LF) {
@@ -852,7 +882,7 @@ export default function TerminalPanel({ tab, isActive, onEditConnection }: Props
         // effect will reset us. We pre-clear here so a buffered
         // line doesn't get carried into the moment between the
         // bytes leaving the keyboard and the C-sentinel arriving.
-        smartLineBufferRef.current = "";
+        buf = "";
         if (code === CR && data.charCodeAt(i + 1) === LF) i += 1;
         continue;
       }
@@ -861,7 +891,7 @@ export default function TerminalPanel({ tab, isActive, onEditConnection }: Props
         // any escape sequence resets, matching the SSH-capture
         // buffer's conservative stance. M4+ will need richer
         // line-editor semantics to cover Ctrl+W, Ctrl+A, etc.
-        smartLineBufferRef.current = "";
+        buf = "";
         const next = data[i + 1];
         if (next === "[") {
           i += 1;
@@ -875,18 +905,26 @@ export default function TerminalPanel({ tab, isActive, onEditConnection }: Props
         continue;
       }
       if (code === DEL || code === BS) {
-        smartLineBufferRef.current = smartLineBufferRef.current.slice(0, -1);
+        buf = buf.slice(0, -1);
         continue;
       }
       if (code === ETX || code === NAK) {
-        smartLineBufferRef.current = "";
+        buf = "";
         continue;
       }
       if (code < 0x20 || code === 0x7f) {
-        smartLineBufferRef.current = "";
+        buf = "";
         continue;
       }
-      smartLineBufferRef.current += data[i];
+      buf += data[i];
+    }
+    if (buf !== smartLineBufferRef.current) {
+      smartLineBufferRef.current = buf;
+      // Push the new value into render state so the syntax overlay
+      // re-tokenises with the latest text. React batches sequential
+      // setState calls inside event handlers, so a paste of N chars
+      // still produces only one re-render.
+      setSmartLineBufferText(buf);
     }
   }
 
@@ -1554,6 +1592,15 @@ export default function TerminalPanel({ tab, isActive, onEditConnection }: Props
                 })}
               </div>
             ))}
+            {smartActive && snapshot.promptEnd && smartLineBufferText && (
+              <TerminalSyntaxOverlay
+                text={smartLineBufferText}
+                promptEnd={snapshot.promptEnd}
+                charWidth={cellMetrics.charWidth}
+                rowHeight={cellMetrics.rowHeight}
+                bgColor={termTheme.bg}
+              />
+            )}
           </div>
         ) : (
           <div className="terminal-placeholder">{t("Launching shell...")}</div>

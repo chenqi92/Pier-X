@@ -2073,7 +2073,36 @@ button,
    * next with no sub-pixel gap — flex-column added WebKit rounding that showed
    * as visible separators when selection painted across rows. */
   line-height: calc(13px * 1.45);
+  /* Containing block for the smart-mode syntax overlay. The overlay's
+   * `top` / `left` are computed in cell × cell-metric space, anchored
+   * to the top-left of the screen's content box. */
+  position: relative;
 }
+
+/* Smart-mode syntax overlay (see TerminalSyntaxOverlay.tsx). Sits
+ * above the row grid and paints colour onto the in-progress input
+ * line. Background matches the terminal theme (passed inline) so it
+ * cleanly covers the doubled-up terminal-segment render underneath. */
+.terminal-syntax-overlay {
+  position: absolute;
+  pointer-events: none;
+  z-index: 1;
+  font-family: var(--mono);
+  white-space: pre;
+}
+.terminal-syntax-overlay .terminal-syntax {
+  display: inline;
+}
+.terminal-syntax--command { color: var(--accent); }
+.terminal-syntax--option { color: var(--info); }
+.terminal-syntax--string { color: var(--pos); }
+.terminal-syntax--path { color: var(--accent-subtle); }
+.terminal-syntax--variable { color: var(--info); font-style: italic; }
+.terminal-syntax--operator { color: var(--warn); }
+.terminal-syntax--redirect { color: var(--warn); font-weight: 510; }
+.terminal-syntax--comment { color: var(--muted); font-style: italic; }
+.terminal-syntax--text,
+.terminal-syntax--whitespace { color: inherit; }
 .terminal-row {
   display: block;
   height: var(--terminal-row-h, calc(13px * 1.45));

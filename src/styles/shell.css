@@ -2183,7 +2183,7 @@ button,
 }
 .terminal-syntax--option { color: var(--info); }
 .terminal-syntax--string { color: var(--pos); }
-.terminal-syntax--path { color: var(--accent-subtle); }
+.terminal-syntax--path { color: var(--syntax-path); }
 .terminal-syntax--variable { color: var(--info); font-style: italic; }
 .terminal-syntax--operator { color: var(--warn); }
 .terminal-syntax--redirect { color: var(--warn); font-weight: 510; }

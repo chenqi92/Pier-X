@@ -68,6 +68,13 @@
   --syntax-op: #56e0c8;
   --syntax-comment: var(--muted);
   --syntax-var: #c49eff;
+  /* Path token color for terminal syntax overlay. Cyan-leaning so
+   * it's readable on the terminal background AND visually distinct
+   * from `--accent` (used for command). Earlier code aliased this
+   * to `--accent-subtle` which is 0.08-alpha and unreadable as a
+   * foreground. Both light and dark themes pick a saturation that
+   * survives next to the terminal's own bg. */
+  --syntax-path: #56e0c8;
 
   /* ── Service brand tints (sidebar service chips, tool rail) */
   --svc-docker: #4aa3ff;
@@ -159,6 +166,7 @@
   --syntax-func: #7a4bd4;
   --syntax-op: #0e9488;
   --syntax-var: #7a4bd4;
+  --syntax-path: #0e9488;
 
   /* ── Legacy aliases ──────────────────────────────────────── */
   --bg-hover: rgba(0, 0, 0, 0.05);

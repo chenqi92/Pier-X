@@ -1,10 +1,11 @@
-import { CheckCircle2, Database, Loader2, Plug, Star, XCircle, X, Zap } from "lucide-react";
+import { CheckCircle2, Loader2, Plug, Star, XCircle, X } from "lucide-react";
 import { useEffect, useMemo, useState } from "react";
 import IconButton from "./IconButton";
 import { useDraggableDialog } from "./useDraggableDialog";
 import { useI18n } from "../i18n/useI18n";
 import { localizeError } from "../i18n/localizeMessage";
 import * as cmd from "../lib/commands";
+import { RIGHT_TOOL_META } from "../lib/rightToolMeta";
 import type { DbCredential, DbKind, DetectedDbInstance, TabState } from "../lib/types";
 import { effectiveSshTarget } from "../lib/types";
 import { useConnectionStore } from "../stores/useConnectionStore";
@@ -224,6 +225,9 @@ export default function DbAddCredentialDialog({
         } else {
           // Redis: PING via redisBrowse with a tiny pattern. The
           // `database` field on the form is the numeric DB index here.
+          // Username is only meaningful on Redis 6+ ACL setups; pre-6
+          // and default-user setups leave it blank and AUTH with just
+          // the password (or no password at all).
           const dbN = database.trim() === "" ? 0 : Number.parseInt(database, 10) || 0;
           await cmd.redisBrowse({
             host: liveHost,
@@ -231,6 +235,7 @@ export default function DbAddCredentialDialog({
             db: dbN,
             pattern: "*",
             key: null,
+            username: user.trim() || null,
             password: password.length > 0 ? password : null,
           });
         }
@@ -277,7 +282,7 @@ export default function DbAddCredentialDialog({
     }
   }
 
-  const Icon = kind === "redis" ? Zap : Database;
+  const Icon = RIGHT_TOOL_META[kind].icon;
 
   return (
     <div className="cmdp-overlay" onClick={onClose}>
@@ -383,7 +388,14 @@ export default function DbAddCredentialDialog({
         <div className="dlg-foot">
           <button
             className="gb-btn"
-            disabled={testing || saving || host.trim() === "" || user.trim() === ""}
+            disabled={
+              testing ||
+              saving ||
+              host.trim() === "" ||
+              // MySQL / Postgres won't accept an empty user; Redis can
+              // (no username = default ACL user, only meaningful from 6+).
+              (kind !== "redis" && user.trim() === "")
+            }
             onClick={() => void testConnection()}
             type="button"
             title={

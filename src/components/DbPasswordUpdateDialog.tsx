@@ -158,7 +158,10 @@ export default function DbPasswordUpdateDialog({
           {onTest && (
             <button
               className="gb-btn"
-              disabled={testing || saving || password.length === 0}
+              // No password requirement on Test — Redis without AUTH
+              // is a legitimate config, and the result tells the user
+              // whether their (possibly empty) password actually works.
+              disabled={testing || saving}
               onClick={() => void runTest()}
               type="button"
               title={t(

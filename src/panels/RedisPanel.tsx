@@ -767,6 +767,7 @@ function RedisPanelBody({ tab }: Props) {
                   db: Number.isFinite(d) ? d : 0,
                   pattern: "*",
                   key: null,
+                  username: user.trim() || null,
                   password: pw.length > 0 ? pw : null,
                 });
                 return { ok: true, via };

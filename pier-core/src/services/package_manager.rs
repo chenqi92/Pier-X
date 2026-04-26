@@ -51,6 +51,11 @@ pub struct PackageDescriptor {
     pub data_dirs: &'static [&'static str],
     /// Free-form note shown in the panel (e.g. "发行版仓库版本可能滞后").
     pub notes: Option<&'static str>,
+    /// `true` when this software's daemon supports `systemctl reload`
+    /// without a downtime restart (nginx, apache, …). The Software
+    /// panel uses this to show a "Reload (no downtime)" entry in the
+    /// row's service menu in addition to start / stop / restart.
+    pub supports_reload: bool,
 }
 
 /// Canonical package-manager IDs. Stable strings exposed to the UI via
@@ -158,6 +163,87 @@ pub struct UninstallOptions {
     pub remove_data_dirs: bool,
 }
 
+/// One of the systemctl verbs the Software panel exposes for a row's
+/// service. `Reload` is only offered when the descriptor's
+/// `supports_reload` is `true` — most services we ship would
+/// effectively restart on `reload` so we hide the option to keep the
+/// menu meaningful.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum ServiceAction {
+    /// `systemctl start <unit>`.
+    Start,
+    /// `systemctl stop <unit>`.
+    Stop,
+    /// `systemctl restart <unit>` — drops connections; the default
+    /// when the user wants their config change to take effect.
+    Restart,
+    /// `systemctl reload <unit>` — only offered for descriptors with
+    /// `supports_reload = true` (currently nginx).
+    Reload,
+}
+
+impl ServiceAction {
+    /// Lowercase verb passed straight to `systemctl`. Stable across
+    /// all systemd versions we target.
+    pub fn as_systemctl_verb(self) -> &'static str {
+        match self {
+            ServiceAction::Start => "start",
+            ServiceAction::Stop => "stop",
+            ServiceAction::Restart => "restart",
+            ServiceAction::Reload => "reload",
+        }
+    }
+}
+
+/// Outcome class for [`service_action`]. Mirrors the install /
+/// uninstall outcome shape so the frontend can reuse a single
+/// "describe outcome" formatting helper.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "kebab-case", tag = "kind")]
+pub enum ServiceActionStatus {
+    /// systemctl exited 0 and the post-action `is-active` agrees with
+    /// the requested verb (`start` / `restart` / `reload` → active;
+    /// `stop` → inactive).
+    Ok,
+    /// `sudo -n` reported that a password is required.
+    SudoRequiresPassword,
+    /// Anything else: systemctl exited non-zero, or the post-probe
+    /// disagrees with the requested verb.
+    Failed,
+}
+
+/// Structured result of a service action. `service_active_after`
+/// matches the post-action `systemctl is-active` ground truth so the
+/// panel can flip its dot without doing a full re-probe.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct ServiceActionReport {
+    /// Echoes the descriptor id so the frontend can correlate event
+    /// streams to rows.
+    pub package_id: String,
+    /// Outcome class — see [`ServiceActionStatus`].
+    pub status: ServiceActionStatus,
+    /// Verb that was attempted (`"start"` / `"stop"` / `"restart"`
+    /// / `"reload"`).
+    pub action: String,
+    /// Service unit name we drove (e.g. `"redis-server"` on debian,
+    /// `"redis"` on rhel-family). Empty when the descriptor has no
+    /// service unit for this distro family — shouldn't happen in
+    /// practice because the UI gates the menu on `has_service`.
+    pub unit: String,
+    /// Exact command that ran on the remote (sudo + sh -c …).
+    pub command: String,
+    /// Exit code from the systemctl invocation.
+    pub exit_code: i32,
+    /// Last ~60 lines of merged stdout+stderr.
+    pub output_tail: String,
+    /// `systemctl is-active` re-probe after the action. `true` =
+    /// active. `false` for any other value (`inactive` / `failed` /
+    /// `activating` / probe error). The frontend uses this directly
+    /// for the row's service-active dot.
+    pub service_active_after: bool,
+}
+
 /// Outcome of an uninstall attempt.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "kebab-case", tag = "kind")]
@@ -259,6 +345,7 @@ const REGISTRY: &[PackageDescriptor] = &[
         service_units: &[],
         data_dirs: &[],
         notes: None,
+        supports_reload: false,
     },
     PackageDescriptor {
         id: "docker",
@@ -282,6 +369,7 @@ const REGISTRY: &[PackageDescriptor] = &[
         ],
         data_dirs: &["/var/lib/docker", "/var/lib/containerd"],
         notes: Some("发行版仓库的 Docker 版本可能旧；如需最新版后续走 v2 的官方脚本通道。"),
+        supports_reload: false,
     },
     PackageDescriptor {
         id: "compose",
@@ -298,6 +386,7 @@ const REGISTRY: &[PackageDescriptor] = &[
         service_units: &[],
         data_dirs: &[],
         notes: None,
+        supports_reload: false,
     },
     PackageDescriptor {
         id: "redis",
@@ -321,6 +410,7 @@ const REGISTRY: &[PackageDescriptor] = &[
         ],
         data_dirs: &["/var/lib/redis"],
         notes: None,
+        supports_reload: false,
     },
     PackageDescriptor {
         id: "postgres",
@@ -344,6 +434,7 @@ const REGISTRY: &[PackageDescriptor] = &[
         ],
         data_dirs: &["/var/lib/postgresql", "/var/lib/pgsql"],
         notes: None,
+        supports_reload: false,
     },
     PackageDescriptor {
         id: "mariadb",
@@ -367,6 +458,7 @@ const REGISTRY: &[PackageDescriptor] = &[
         ],
         data_dirs: &["/var/lib/mysql"],
         notes: Some("默认装 MariaDB（与 MySQL 协议兼容，发行版仓库的标准选择）。"),
+        supports_reload: false,
     },
     PackageDescriptor {
         id: "nginx",
@@ -393,6 +485,10 @@ const REGISTRY: &[PackageDescriptor] = &[
         // dataset bucket.
         data_dirs: &[],
         notes: None,
+        // nginx reloads its config without dropping connections — the
+        // panel surfaces this as a separate service action so users
+        // don't reach for "restart" out of habit.
+        supports_reload: true,
     },
     PackageDescriptor {
         id: "jq",
@@ -409,6 +505,7 @@ const REGISTRY: &[PackageDescriptor] = &[
         service_units: &[],
         data_dirs: &[],
         notes: None,
+        supports_reload: false,
     },
     PackageDescriptor {
         id: "curl",
@@ -425,6 +522,7 @@ const REGISTRY: &[PackageDescriptor] = &[
         service_units: &[],
         data_dirs: &[],
         notes: None,
+        supports_reload: false,
     },
 ];
 
@@ -741,6 +839,71 @@ where
     crate::ssh::runtime::shared().block_on(uninstall(session, id, opts, on_line))
 }
 
+/// Drive a `systemctl <verb> <unit>` for one descriptor's service.
+/// Streams stdout / stderr through `on_line` for live UI feedback and
+/// always returns a structured report (only SSH-level failures
+/// surface as `Err`).
+///
+/// The descriptor's `service_units` matrix picks the unit name per
+/// package manager (e.g. `redis-server` on apt, `redis` on dnf). When
+/// the descriptor has no service for the resolved manager we still
+/// return `Ok` with [`ServiceActionStatus::Failed`] and an empty
+/// `unit` — the panel gates the menu on `has_service` so this is a
+/// belt-and-suspenders path, not a UX one.
+pub async fn service_action<F>(
+    session: &SshSession,
+    descriptor: &PackageDescriptor,
+    action: ServiceAction,
+    on_line: F,
+) -> Result<ServiceActionReport>
+where
+    F: FnMut(&str),
+{
+    run_service_action(session, descriptor, action, on_line).await
+}
+
+/// Blocking wrapper for [`service_action`]. Tauri commands using
+/// `spawn_blocking` call this directly so they can pass a synchronous
+/// `FnMut(&str)` for the streaming callback.
+pub fn service_action_blocking<F>(
+    session: &SshSession,
+    descriptor: &PackageDescriptor,
+    action: ServiceAction,
+    on_line: F,
+) -> Result<ServiceActionReport>
+where
+    F: FnMut(&str),
+{
+    crate::ssh::runtime::shared()
+        .block_on(service_action(session, descriptor, action, on_line))
+}
+
+/// Pull the most recent `lines` rows of `journalctl -u <unit>` output
+/// for one descriptor's service. One-shot — no streaming. Returns the
+/// list of lines in the order journalctl printed them (oldest →
+/// newest with `--no-pager`).
+///
+/// The frontend uses this to populate a "View logs" dialog with a
+/// refresh button; a true follow-style `-f` tail is intentionally
+/// out of scope (cancel semantics + multi-host fan-out push it to a
+/// later milestone — the existing Log panel handles real-time tail).
+pub async fn journalctl_tail(
+    session: &SshSession,
+    descriptor: &PackageDescriptor,
+    lines: usize,
+) -> Result<Vec<String>> {
+    run_journalctl_tail(session, descriptor, lines).await
+}
+
+/// Blocking wrapper for [`journalctl_tail`].
+pub fn journalctl_tail_blocking(
+    session: &SshSession,
+    descriptor: &PackageDescriptor,
+    lines: usize,
+) -> Result<Vec<String>> {
+    crate::ssh::runtime::shared().block_on(journalctl_tail(session, descriptor, lines))
+}
+
 // ── Internals ───────────────────────────────────────────────────────
 
 /// Common install / update path. `is_update` switches the apt/dnf
@@ -998,6 +1161,139 @@ where
         output_tail,
         data_dirs_removed,
     })
+}
+
+/// Common service-action path. Resolves the unit, runs
+/// `systemctl <verb> <unit>` (with `sudo -n` when non-root), streams
+/// the output, then re-probes `is-active` to decide the final
+/// status. The post-probe is the source of truth — a manager that
+/// exits 0 but leaves the unit `failed` (e.g. dependency cycle, port
+/// collision) should still surface as `Failed`.
+async fn run_service_action<F>(
+    session: &SshSession,
+    descriptor: &PackageDescriptor,
+    action: ServiceAction,
+    mut on_line: F,
+) -> Result<ServiceActionReport>
+where
+    F: FnMut(&str),
+{
+    let env = probe_host_env(session).await;
+    let unit = env
+        .package_manager
+        .and_then(|pm| descriptor_service_unit(descriptor, pm));
+    let Some(unit) = unit else {
+        return Ok(ServiceActionReport {
+            package_id: descriptor.id.to_string(),
+            status: ServiceActionStatus::Failed,
+            action: action.as_systemctl_verb().to_string(),
+            unit: String::new(),
+            command: String::new(),
+            exit_code: 0,
+            output_tail: String::new(),
+            service_active_after: false,
+        });
+    };
+
+    let command = build_systemctl_command(action, unit, env.is_root);
+
+    let mut tail_lines: Vec<String> = Vec::new();
+    let (exit_code, _full) = session
+        .exec_command_streaming(&command, |line| {
+            on_line(line);
+            tail_lines.push(line.to_string());
+            if tail_lines.len() > 80 {
+                tail_lines.drain(0..tail_lines.len() - 60);
+            }
+        })
+        .await?;
+    let output_tail = tail_lines.join("\n");
+
+    if !env.is_root && looks_like_sudo_password_prompt(&output_tail) {
+        return Ok(ServiceActionReport {
+            package_id: descriptor.id.to_string(),
+            status: ServiceActionStatus::SudoRequiresPassword,
+            action: action.as_systemctl_verb().to_string(),
+            unit: unit.to_string(),
+            command,
+            exit_code,
+            output_tail,
+            service_active_after: false,
+        });
+    }
+
+    let active_after = systemctl_is_active(session, unit).await;
+    let expected_active = !matches!(action, ServiceAction::Stop);
+    let succeeded = exit_code == 0 && active_after == expected_active;
+    let status = if succeeded {
+        ServiceActionStatus::Ok
+    } else {
+        ServiceActionStatus::Failed
+    };
+
+    Ok(ServiceActionReport {
+        package_id: descriptor.id.to_string(),
+        status,
+        action: action.as_systemctl_verb().to_string(),
+        unit: unit.to_string(),
+        command,
+        exit_code,
+        output_tail,
+        service_active_after: active_after,
+    })
+}
+
+/// Common journalctl-tail path. We merge stdout+stderr (`2>&1`) so
+/// hosts with `journalctl` warnings (missing unit, permission denied)
+/// still produce something for the UI to show.
+async fn run_journalctl_tail(
+    session: &SshSession,
+    descriptor: &PackageDescriptor,
+    lines: usize,
+) -> Result<Vec<String>> {
+    let env = probe_host_env(session).await;
+    let unit = env
+        .package_manager
+        .and_then(|pm| descriptor_service_unit(descriptor, pm));
+    let Some(unit) = unit else {
+        return Ok(Vec::new());
+    };
+    let command = build_journalctl_command(unit, lines, env.is_root);
+    let (_code, stdout) = session.exec_command(&command).await?;
+    Ok(stdout
+        .lines()
+        .map(|l| l.trim_end_matches('\r').to_string())
+        .collect())
+}
+
+/// Synthesise the `systemctl <verb> <unit>` command, with `sudo -n`
+/// when non-root and `2>&1` so stderr lines reach the streaming
+/// callback. The unit is single-quoted in case it ever contains
+/// shell metacharacters (today they don't, but the matrix is data).
+fn build_systemctl_command(
+    action: ServiceAction,
+    unit: &str,
+    is_root: bool,
+) -> String {
+    let prefix = if is_root { "" } else { "sudo -n " };
+    let verb = action.as_systemctl_verb();
+    format!(
+        "{prefix}systemctl {verb} {} 2>&1",
+        shell_single_quote(unit)
+    )
+}
+
+/// Synthesise the `journalctl -u <unit> -n <lines>` command. We pin
+/// `--no-pager` so the channel doesn't end up in `less` waiting for
+/// keypresses, and `2>&1` so "no entries" / permission warnings flow
+/// alongside the entries themselves.
+fn build_journalctl_command(unit: &str, lines: usize, is_root: bool) -> String {
+    let prefix = if is_root { "" } else { "sudo -n " };
+    format!(
+        "{prefix}journalctl -u {} -n {} --no-pager 2>&1",
+        shell_single_quote(unit),
+        lines,
+    )
 }
 
 /// Pick the package list for a manager, respecting registry order.
@@ -1830,6 +2126,119 @@ mod tests {
         assert!(between_remove_and_auto.contains(" && "));
         let between_auto_and_rm = &s[auto_pos..rm_pos];
         assert!(between_auto_and_rm.contains(" && "));
+    }
+
+    // ── Service control + log builders ──────────────────────
+
+    #[test]
+    fn build_systemctl_command_root_omits_sudo() {
+        let cmd = build_systemctl_command(ServiceAction::Restart, "redis-server", true);
+        assert_eq!(cmd, "systemctl restart 'redis-server' 2>&1");
+        assert!(!cmd.contains("sudo"));
+    }
+
+    #[test]
+    fn build_systemctl_command_non_root_uses_sudo_n() {
+        let cmd = build_systemctl_command(ServiceAction::Stop, "redis", false);
+        assert!(cmd.starts_with("sudo -n systemctl stop "));
+        assert!(cmd.contains("'redis'"));
+        assert!(cmd.ends_with("2>&1"));
+    }
+
+    #[test]
+    fn build_systemctl_command_quotes_unit() {
+        // Defensive: even though no v1 unit has metacharacters, the
+        // unit string is data — keep the escape in place.
+        let cmd = build_systemctl_command(ServiceAction::Start, "weird unit", true);
+        assert!(cmd.contains("'weird unit'"));
+    }
+
+    #[test]
+    fn build_systemctl_command_each_action_emits_correct_verb() {
+        for (action, verb) in [
+            (ServiceAction::Start, "start"),
+            (ServiceAction::Stop, "stop"),
+            (ServiceAction::Restart, "restart"),
+            (ServiceAction::Reload, "reload"),
+        ] {
+            let cmd = build_systemctl_command(action, "redis", true);
+            assert!(
+                cmd.contains(&format!("systemctl {verb} ")),
+                "{action:?} → expected verb {verb} in {cmd}",
+            );
+        }
+    }
+
+    #[test]
+    fn descriptor_service_unit_resolves_per_manager() {
+        let redis = descriptor("redis").unwrap();
+        // redis on apt is "redis-server"; on dnf / yum / apk / pacman / zypper it's "redis".
+        assert_eq!(
+            descriptor_service_unit(redis, PackageManager::Apt),
+            Some("redis-server"),
+        );
+        assert_eq!(
+            descriptor_service_unit(redis, PackageManager::Dnf),
+            Some("redis"),
+        );
+        assert_eq!(
+            descriptor_service_unit(redis, PackageManager::Pacman),
+            Some("redis"),
+        );
+
+        // sqlite has no service.
+        let sqlite = descriptor("sqlite3").unwrap();
+        assert!(
+            descriptor_service_unit(sqlite, PackageManager::Apt).is_none(),
+        );
+    }
+
+    #[test]
+    fn build_journalctl_command_root_no_sudo() {
+        let cmd = build_journalctl_command("redis-server", 200, true);
+        assert_eq!(
+            cmd,
+            "journalctl -u 'redis-server' -n 200 --no-pager 2>&1",
+        );
+    }
+
+    #[test]
+    fn build_journalctl_command_non_root_uses_sudo_n() {
+        let cmd = build_journalctl_command("nginx", 50, false);
+        assert!(cmd.starts_with("sudo -n journalctl -u 'nginx' -n 50 "));
+        assert!(cmd.contains("--no-pager"));
+        assert!(cmd.ends_with("2>&1"));
+    }
+
+    #[test]
+    fn build_journalctl_command_includes_lines_argument() {
+        let cmd = build_journalctl_command("redis", 1, true);
+        assert!(cmd.contains("-n 1 "));
+    }
+
+    #[test]
+    fn service_action_as_systemctl_verb_stable() {
+        // These strings are wire-visible (report.action) — pin them so
+        // a refactor doesn't silently break the panel's outcome strings.
+        assert_eq!(ServiceAction::Start.as_systemctl_verb(), "start");
+        assert_eq!(ServiceAction::Stop.as_systemctl_verb(), "stop");
+        assert_eq!(ServiceAction::Restart.as_systemctl_verb(), "restart");
+        assert_eq!(ServiceAction::Reload.as_systemctl_verb(), "reload");
+    }
+
+    #[test]
+    fn supports_reload_set_only_for_nginx_in_v1_registry() {
+        // Reload semantics are software-specific — most daemons we
+        // ship would effectively restart on `reload`. nginx is the
+        // one v1 entry that genuinely supports zero-downtime reload.
+        for d in registry() {
+            let expected = d.id == "nginx";
+            assert_eq!(
+                d.supports_reload, expected,
+                "{} supports_reload should be {}",
+                d.id, expected,
+            );
+        }
     }
 
     #[test]

@@ -994,6 +994,10 @@ export type SoftwareDescriptor = {
    *  uninstall dialog renders them inside the "also delete data
    *  directories" warning. Empty for stateless software (jq, curl, …). */
   dataDirs: string[];
+  /** `true` when the daemon supports `systemctl reload` without a
+   *  downtime restart (currently only nginx). Drives whether the
+   *  service menu shows a "Reload (no downtime)" entry. */
+  supportsReload: boolean;
 };
 
 export type HostPackageEnv = {
@@ -1153,6 +1157,77 @@ export async function subscribeSoftwareUninstall(
   const { listen } = await import("@tauri-apps/api/event");
   const unlisten = await listen<SoftwareUninstallEvent>(
     "software-uninstall",
+    (e) => {
+      if (e.payload.installId === installId) onEvent(e.payload);
+    },
+  );
+  return unlisten;
+}
+
+// ── Software panel — service control (v2) ──────────────────────
+
+/** Verbs surfaced in each row's service menu. Map 1:1 onto
+ *  `systemctl <verb> <unit>`. */
+export type SoftwareServiceAction = "start" | "stop" | "restart" | "reload";
+
+/** Outcome class for a service action — mirrors the install outcome
+ *  shape so the panel can reuse a single formatter. `failed` covers
+ *  both "systemctl exited non-zero" and "systemctl exited 0 but the
+ *  re-probe disagrees with the requested verb". */
+export type SoftwareServiceActionStatus =
+  | "ok"
+  | "sudo-requires-password"
+  | "failed";
+
+export type SoftwareServiceActionReport = {
+  packageId: string;
+  status: SoftwareServiceActionStatus;
+  /** Verb that was attempted — echoes the request. */
+  action: SoftwareServiceAction;
+  /** Service unit name that was driven (e.g. `redis-server` on apt,
+   *  `redis` on dnf). Empty when the descriptor has no service unit. */
+  unit: string;
+  command: string;
+  exitCode: number;
+  outputTail: string;
+  /** Post-action `systemctl is-active` ground truth. The panel uses
+   *  this to flip the row's service-active dot without a full re-probe. */
+  serviceActiveAfter: boolean;
+};
+
+/** Streaming event payload for `software-service-action`. Same
+ *  filter-by-installId pattern as the install / uninstall channels;
+ *  the `done` payload's `report` shape is service-action-specific. */
+export type SoftwareServiceActionEvent =
+  | { installId: string; kind: "line"; text: string }
+  | { installId: string; kind: "done"; report: SoftwareServiceActionReport }
+  | { installId: string; kind: "failed"; message: string };
+
+export const softwareServiceActionRemote = (
+  params: SshParams & {
+    packageId: string;
+    installId: string;
+    action: SoftwareServiceAction;
+  },
+) =>
+  invoke<SoftwareServiceActionReport>("software_service_action_remote", params);
+
+/** One-shot fetch of the most recent N lines from `journalctl -u <unit>`.
+ *  Backing the "View logs" dialog — true tailing is intentionally out
+ *  of scope (the existing Log panel handles streaming). */
+export const softwareServiceLogsRemote = (
+  params: SshParams & { packageId: string; lines: number },
+) => invoke<string[]>("software_service_logs_remote", params);
+
+/** Subscribe to streaming service-action output. Returns the unlisten
+ *  fn — call it on unmount. Mirrors {@link subscribeSoftwareInstall}. */
+export async function subscribeSoftwareServiceAction(
+  installId: string,
+  onEvent: (evt: SoftwareServiceActionEvent) => void,
+): Promise<() => void> {
+  const { listen } = await import("@tauri-apps/api/event");
+  const unlisten = await listen<SoftwareServiceActionEvent>(
+    "software-service-action",
     (e) => {
       if (e.payload.installId === installId) onEvent(e.payload);
     },

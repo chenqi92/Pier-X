@@ -3,19 +3,26 @@ import {
   ChevronDown,
   Circle,
   Download,
+  FileText,
   Loader,
   MoreHorizontal,
   Package,
+  Play,
   RefreshCw,
+  RotateCw,
+  Square,
   Trash2,
+  Zap,
 } from "lucide-react";
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 
 import * as cmd from "../lib/commands";
 import type {
   SoftwareDescriptor,
   SoftwareInstallReport,
   SoftwarePackageStatus,
+  SoftwareServiceAction,
+  SoftwareServiceActionReport,
   SoftwareUninstallReport,
   UninstallOptions,
 } from "../lib/commands";
@@ -28,10 +35,12 @@ import {
   isVersionCacheFresh,
   softwareKeyForTab,
   useSoftwareStore,
+  type SoftwareActivityKind,
 } from "../stores/useSoftwareStore";
 import Dialog from "../components/Dialog";
 import PanelSkeleton, { useDeferredMount } from "../components/PanelSkeleton";
 import Popover from "../components/Popover";
+import StatusDot from "../components/StatusDot";
 
 type Props = { tab: TabState | null };
 
@@ -83,6 +92,10 @@ function SoftwarePanelBody({ tab }: Props) {
    *  displayName from this descriptor to decide which checkboxes
    *  appear and what name the user must type to confirm a wipe. */
   const [uninstallTarget, setUninstallTarget] = useState<SoftwareDescriptor | null>(null);
+  /** Open log-dialog target. `null` = no dialog. The dialog owns its
+   *  own fetch + refresh state; the panel just feeds it the descriptor
+   *  + the SSH params it needs. */
+  const [logTarget, setLogTarget] = useState<SoftwareDescriptor | null>(null);
 
   const sshParams = useMemo(() => {
     if (!sshTarget) return null;
@@ -196,6 +209,53 @@ function SoftwarePanelBody({ tab }: Props) {
       // the staleness window.
     } finally {
       setVersionsLoading((prev) => ({ ...prev, [packageId]: false }));
+    }
+  }
+
+  /** Kick off a `systemctl <verb>` for one row's service. Mirrors the
+   *  install / uninstall handlers' lifecycle exactly so the row UI
+   *  (busy state, log streaming, post-action status flip) reuses the
+   *  same code path. */
+  async function runServiceAction(
+    descriptor: SoftwareDescriptor,
+    action: SoftwareServiceAction,
+  ) {
+    if (!sshParams || !swKey) return;
+    const installId =
+      typeof crypto !== "undefined" && "randomUUID" in crypto
+        ? crypto.randomUUID()
+        : `${Date.now()}-${Math.random()}`;
+    const kind: SoftwareActivityKind = `service-${action}`;
+    startActivity(swKey, descriptor.id, installId, kind);
+    const unlisten = await cmd.subscribeSoftwareServiceAction(installId, (evt) => {
+      if (evt.kind === "line") {
+        appendLine(swKey, descriptor.id, evt.text);
+      }
+    });
+    try {
+      const report: SoftwareServiceActionReport = await cmd.softwareServiceActionRemote({
+        ...sshParams,
+        packageId: descriptor.id,
+        installId,
+        action,
+      });
+      const localized = describeServiceOutcome(report, t);
+      // Flip just the serviceActive dot — version / installed are
+      // unchanged by start / stop / restart / reload.
+      const prior = statuses[descriptor.id] ?? null;
+      const nextStatus: SoftwarePackageStatus | null = prior
+        ? { ...prior, serviceActive: report.serviceActiveAfter }
+        : null;
+      finishActivity(
+        swKey,
+        descriptor.id,
+        report.status === "ok" ? "" : localized,
+        nextStatus,
+      );
+    } catch (e) {
+      finishActivity(swKey, descriptor.id, formatError(e), null);
+    } finally {
+      unlisten();
     }
   }
 
@@ -323,6 +383,8 @@ function SoftwarePanelBody({ tab }: Props) {
             }
             onLoadVersions={() => void loadVersionsForPackage(descriptor.id)}
             onUninstall={() => setUninstallTarget(descriptor)}
+            onServiceAction={(action) => void runServiceAction(descriptor, action)}
+            onViewLogs={() => setLogTarget(descriptor)}
             onAction={async (action) => {
               if (!sshParams || !swKey) return;
               const installId =
@@ -381,14 +443,19 @@ function SoftwarePanelBody({ tab }: Props) {
           if (uninstallTarget) void runUninstall(uninstallTarget, opts);
         }}
       />
+      <ServiceLogsDialog
+        target={logTarget}
+        sshParams={sshParams}
+        onClose={() => setLogTarget(null)}
+      />
     </div>
   );
 }
 
 /** Pick the label shown on the primary install/update button. Encodes
- *  the four states: busy install / busy update / busy uninstall →
- *  "...ing"; idle → "Install" or "Update", with the selected version
- *  appended when the user has pinned one. */
+ *  the busy states (install / update / uninstall / 4 service actions)
+ *  via `busyLabel`; idle → "Install" or "Update", with the selected
+ *  version appended when the user has pinned one. */
 function primaryButtonLabel({
   t,
   action,
@@ -399,14 +466,10 @@ function primaryButtonLabel({
   t: ReturnType<typeof useI18n>["t"];
   action: "install" | "update";
   busy: boolean;
-  activityKind: "install" | "update" | "uninstall" | undefined;
+  activityKind: SoftwareActivityKind | undefined;
   selectedVersion: string | undefined;
 }): string {
-  if (busy) {
-    if (activityKind === "uninstall") return t("Uninstalling...");
-    if (action === "update") return t("Updating...");
-    return t("Installing...");
-  }
+  if (busy) return busyLabel(activityKind, action, t);
   if (selectedVersion) {
     return action === "update"
       ? t("Update to v{version}", { version: selectedVersion })
@@ -414,6 +477,60 @@ function primaryButtonLabel({
   }
   return action === "update" ? t("Update") : t("Install");
 }
+
+function busyLabel(
+  kind: SoftwareActivityKind | undefined,
+  fallbackAction: "install" | "update",
+  t: ReturnType<typeof useI18n>["t"],
+): string {
+  switch (kind) {
+    case "uninstall":
+      return t("Uninstalling...");
+    case "update":
+      return t("Updating...");
+    case "install":
+      return t("Installing...");
+    case "service-start":
+      return t("Starting...");
+    case "service-stop":
+      return t("Stopping...");
+    case "service-restart":
+      return t("Restarting...");
+    case "service-reload":
+      return t("Reloading...");
+    default:
+      return fallbackAction === "update" ? t("Updating...") : t("Installing...");
+  }
+}
+
+function describeServiceOutcome(
+  report: SoftwareServiceActionReport,
+  t: ReturnType<typeof useI18n>["t"],
+): string {
+  switch (report.status) {
+    case "ok":
+      switch (report.action) {
+        case "start":
+          return t("Service started");
+        case "stop":
+          return t("Service stopped");
+        case "restart":
+          return t("Service restarted");
+        case "reload":
+          return t("Service reloaded");
+      }
+      return t("Done");
+    case "sudo-requires-password":
+      return t(
+        "sudo requires a password — connect as root or configure passwordless sudo.",
+      );
+    case "failed":
+      return t("Service action failed (exit {code})", { code: report.exitCode });
+  }
+}
+
+// `describeOutcome` (install) is now in lib/softwareInstall.ts as
+// `describeInstallOutcome` — imported via `describeInstallOutcome`.
 
 // `describeOutcome` was duplicated here pre-rebase; the canonical
 // implementation now lives in `src/lib/softwareInstall.ts` as
@@ -434,13 +551,15 @@ function SoftwareRow({
   onLoadVersions,
   onAction,
   onUninstall,
+  onServiceAction,
+  onViewLogs,
 }: {
   descriptor: SoftwareDescriptor;
   status: SoftwarePackageStatus | null;
   activity:
     | {
         installId: string;
-        kind: "install" | "update" | "uninstall";
+        kind: SoftwareActivityKind;
         log: string[];
         error: string;
         busy: boolean;
@@ -468,6 +587,12 @@ function SoftwareRow({
   /** Open the uninstall dialog for this row. The panel owns the
    *  dialog state so only one dialog is ever mounted at a time. */
   onUninstall: () => void;
+  /** Run `systemctl <verb>` against this row's service. Only ever
+   *  called for descriptors where `hasService` is true (the menu
+   *  hides the entries otherwise). */
+  onServiceAction: (action: SoftwareServiceAction) => void;
+  /** Open the journalctl viewer for this row. */
+  onViewLogs: () => void;
 }) {
   const { t } = useI18n();
   const logRef = useRef<HTMLPreElement>(null);
@@ -477,10 +602,17 @@ function SoftwareRow({
   const [versionMenuOpen, setVersionMenuOpen] = useState(false);
   const installed = status?.installed ?? false;
   const version = status?.version ?? null;
+  const serviceActive = status?.serviceActive ?? null;
   const busy = activity?.busy ?? false;
   const action: "install" | "update" = installed ? "update" : "install";
   const buttonDisabled = busy || disabledOtherBusy || !canManage;
   const menuDisabled = busy || disabledOtherBusy;
+  // Only offer service controls when (a) the descriptor declares a
+  // service unit and (b) the package is actually installed. We don't
+  // hide them on `serviceActive === null` (which can mean systemctl
+  // isn't on the host) — the action itself will surface a clear
+  // failure if it can't run.
+  const showServiceControls = descriptor.hasService && installed;
 
   // Auto-scroll the log to the latest line as it streams in.
   useEffect(() => {
@@ -522,8 +654,17 @@ function SoftwareRow({
         <span className="sw-row__name">{descriptor.displayName}</span>
         <span className="sw-row__version mono">
           {installed && version ? `v ${version}` : ""}
-          {installed && status?.serviceActive === true && (
-            <span className="sw-row__service-active"> · {t("service running")}</span>
+          {installed && descriptor.hasService && serviceActive !== null && (
+            <span
+              className="sw-row__service-pill"
+              title={
+                serviceActive
+                  ? t("service running")
+                  : t("service stopped")
+              }
+            >
+              <StatusDot tone={serviceActive ? "pos" : "neg"} />
+            </span>
           )}
         </span>
         <span className="sw-row__actions">
@@ -634,9 +775,84 @@ function SoftwareRow({
             anchor={menuButtonRef.current}
             onClose={() => setMenuOpen(false)}
             placement="bottom-end"
-            width={180}
+            width={200}
             className="ctx-menu sw-row-menu"
           >
+            {showServiceControls && (
+              <>
+                <button
+                  type="button"
+                  className="ctx-menu__item"
+                  onClick={() => {
+                    setMenuOpen(false);
+                    onServiceAction("restart");
+                  }}
+                >
+                  <span className="ctx-menu__label">
+                    <RotateCw size={12} />
+                    {t("Restart service")}
+                  </span>
+                </button>
+                {descriptor.supportsReload && (
+                  <button
+                    type="button"
+                    className="ctx-menu__item"
+                    onClick={() => {
+                      setMenuOpen(false);
+                      onServiceAction("reload");
+                    }}
+                  >
+                    <span className="ctx-menu__label">
+                      <Zap size={12} />
+                      {t("Reload (no downtime)")}
+                    </span>
+                  </button>
+                )}
+                {serviceActive === false ? (
+                  <button
+                    type="button"
+                    className="ctx-menu__item"
+                    onClick={() => {
+                      setMenuOpen(false);
+                      onServiceAction("start");
+                    }}
+                  >
+                    <span className="ctx-menu__label">
+                      <Play size={12} />
+                      {t("Start service")}
+                    </span>
+                  </button>
+                ) : (
+                  <button
+                    type="button"
+                    className="ctx-menu__item"
+                    onClick={() => {
+                      setMenuOpen(false);
+                      onServiceAction("stop");
+                    }}
+                  >
+                    <span className="ctx-menu__label">
+                      <Square size={12} />
+                      {t("Stop service")}
+                    </span>
+                  </button>
+                )}
+                <button
+                  type="button"
+                  className="ctx-menu__item"
+                  onClick={() => {
+                    setMenuOpen(false);
+                    onViewLogs();
+                  }}
+                >
+                  <span className="ctx-menu__label">
+                    <FileText size={12} />
+                    {t("View logs")}
+                  </span>
+                </button>
+                <div className="sw-row-menu__divider" role="separator" />
+              </>
+            )}
             <button
               type="button"
               className="ctx-menu__item sw-row-menu__danger"
@@ -828,6 +1044,112 @@ function UninstallDialog({
           </div>
         )}
       </div>
+    </Dialog>
+  );
+}
+
+const LOG_TAIL_LINES = 200;
+
+type LogSshParams = {
+  host: string;
+  port: number;
+  user: string;
+  authMode: string;
+  password: string;
+  keyPath: string;
+  savedConnectionIndex: number | null | undefined;
+};
+
+/** Per-row journalctl viewer. One-shot fetch of the last N lines on
+ *  open + manual refresh button. No live tail — that's the Log
+ *  panel's job; this dialog is "what just happened to the service?". */
+function ServiceLogsDialog({
+  target,
+  sshParams,
+  onClose,
+}: {
+  target: SoftwareDescriptor | null;
+  sshParams: LogSshParams | null;
+  onClose: () => void;
+}) {
+  const { t } = useI18n();
+  const formatError = (e: unknown) => localizeError(e, t);
+  const [lines, setLines] = useState<string[]>([]);
+  const [loading, setLoading] = useState(false);
+  const [error, setError] = useState("");
+  const preRef = useRef<HTMLPreElement>(null);
+
+  const refresh = useCallback(async () => {
+    if (!target || !sshParams) return;
+    setLoading(true);
+    setError("");
+    try {
+      const out = await cmd.softwareServiceLogsRemote({
+        ...sshParams,
+        packageId: target.id,
+        lines: LOG_TAIL_LINES,
+      });
+      setLines(out);
+    } catch (e) {
+      setError(formatError(e));
+    } finally {
+      setLoading(false);
+    }
+    // formatError closes over `t` which is stable across renders for
+    // the same i18n instance; no need to add to deps.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [target?.id, sshParams]);
+
+  // Reset + first fetch each time the dialog opens for a new target.
+  useEffect(() => {
+    setLines([]);
+    setError("");
+    if (target) void refresh();
+  }, [target?.id, refresh]);
+
+  // Pin scroll to the bottom (newest entry) after each refresh.
+  useEffect(() => {
+    if (preRef.current) preRef.current.scrollTop = preRef.current.scrollHeight;
+  }, [lines.length]);
+
+  if (!target) return null;
+  return (
+    <Dialog
+      open={!!target}
+      title={t("Logs · {name}", { name: target.displayName })}
+      subtitle={t("journalctl -u <unit> -n {n}", { n: LOG_TAIL_LINES })}
+      size="lg"
+      onClose={onClose}
+      footer={
+        <>
+          <div style={{ flex: 1 }} />
+          <button
+            type="button"
+            className="btn is-ghost is-compact"
+            onClick={() => void refresh()}
+            disabled={loading}
+            title={t("Re-fetch the latest entries")}
+          >
+            <RefreshCw size={10} />
+            {loading ? t("Loading...") : t("Refresh")}
+          </button>
+          <button type="button" className="btn" onClick={onClose}>
+            {t("Close")}
+          </button>
+        </>
+      }
+    >
+      {error ? (
+        <div className="status-note status-note--error mono">{error}</div>
+      ) : lines.length === 0 ? (
+        <div className="status-note mono">
+          {loading ? t("Loading...") : t("No journal entries found.")}
+        </div>
+      ) : (
+        <pre ref={preRef} className="install-log mono sw-logs__pre">
+          {lines.join("\n")}
+        </pre>
+      )}
     </Dialog>
   );
 }

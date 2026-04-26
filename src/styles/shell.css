@@ -6358,6 +6358,28 @@ button,
 .sw-row__service-active {
   color: var(--pos);
 }
+/* Inline status dot in the row header — sits next to the version
+ * string when the descriptor has a service. Tone is set via
+ * `<StatusDot tone="pos|neg" />`; this wrapper only handles spacing. */
+.sw-row__service-pill {
+  display: inline-flex;
+  align-items: center;
+  margin-left: var(--sp-1);
+}
+/* Hairline separator between the row's service controls and the
+ * destructive Uninstall entry — same colour as the popover's frame. */
+.sw-row-menu__divider {
+  height: 1px;
+  background: var(--line);
+  margin: var(--sp-1) 0;
+}
+/* Logs dialog body — taller cap than the install log because the
+ * dialog already has its own max-height. */
+.sw-logs__pre {
+  max-height: 60vh;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
 .sw-row__note {
   color: var(--muted);
   font-size: var(--size-micro);

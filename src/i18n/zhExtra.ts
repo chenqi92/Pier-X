@@ -1294,6 +1294,29 @@ export const zhExtra: Record<string, string> = {
   "Also delete data directories (irreversible)": "同时删除数据目录（不可恢复）",
   "Type {name} to confirm.": "请输入 {name} 确认。",
 
+  // Right-side Software panel — service control (v2)
+  "service stopped": "服务已停止",
+  "Restart service": "重启服务",
+  "Stop service": "停止服务",
+  "Start service": "启动服务",
+  "Reload (no downtime)": "热重载（不中断连接）",
+  "View logs": "查看日志",
+  "Starting...": "启动中…",
+  "Stopping...": "停止中…",
+  "Restarting...": "重启中…",
+  // "Reloading..." is intentionally not redefined here — see line ~1003
+  // for the existing entry shared with the command-library reload spinner.
+  "Service started": "服务已启动",
+  "Service stopped": "服务已停止",
+  "Service restarted": "服务已重启",
+  "Service reloaded": "服务已热重载",
+  "Service action failed (exit {code})": "服务操作失败（退出码 {code}）",
+  "Logs · {name}": "日志 · {name}",
+  "journalctl -u <unit> -n {n}": "journalctl -u <unit> -n {n}",
+  "Re-fetch the latest entries": "重新拉取最近的日志",
+  "Loading...": "加载中…",
+  "No journal entries found.": "未找到 journal 日志。",
+
   // Right-side Nginx panel
   "Nginx": "Nginx",
   "Open an SSH tab to manage Nginx config.": "打开 SSH 终端后再编辑 Nginx 配置。",

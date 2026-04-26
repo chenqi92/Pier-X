@@ -5617,6 +5617,10 @@ struct SoftwareDescriptorView {
     /// "also delete data directories" warning. Empty for stateless
     /// software.
     data_dirs: Vec<String>,
+    /// `true` when the daemon supports `systemctl reload` without a
+    /// downtime restart. Drives the "Reload (no downtime)" entry in
+    /// the row's service menu (currently only nginx).
+    supports_reload: bool,
 }
 
 #[derive(Serialize, Clone)]
@@ -5769,6 +5773,7 @@ fn software_registry() -> Vec<SoftwareDescriptorView> {
             notes: d.notes.map(str::to_string),
             has_service: !d.service_units.is_empty(),
             data_dirs: d.data_dirs.iter().map(|s| (*s).to_string()).collect(),
+            supports_reload: d.supports_reload,
         })
         .collect()
 }
@@ -6099,6 +6104,199 @@ async fn software_uninstall_remote(
             Err(msg)
         }
     }
+}
+
+/// View of `package_manager::ServiceActionReport`. Mirrors the install
+/// report shape so the panel can reuse a single outcome card / toast
+/// formatter, with extra `action` + `unit` + `serviceActiveAfter`
+/// fields the UI needs for the per-row dot.
+#[derive(Serialize, Clone)]
+#[serde(rename_all = "camelCase")]
+struct SoftwareServiceActionReportView {
+    package_id: String,
+    /// `ok` / `sudo-requires-password` / `failed`.
+    status: String,
+    /// `start` / `stop` / `restart` / `reload`.
+    action: String,
+    unit: String,
+    command: String,
+    exit_code: i32,
+    output_tail: String,
+    service_active_after: bool,
+}
+
+/// Streaming event payload for the service-action channel. We keep
+/// `kind: "line" | "done" | "failed"` shape compatible with the
+/// install channel — the only difference is the `report` payload's
+/// shape, which the frontend disambiguates by knowing which channel
+/// it subscribed to.
+#[derive(Serialize, Clone)]
+#[serde(rename_all = "camelCase")]
+struct SoftwareServiceActionEvent {
+    install_id: String,
+    kind: String,
+    text: Option<String>,
+    report: Option<SoftwareServiceActionReportView>,
+    message: Option<String>,
+}
+
+const SOFTWARE_SERVICE_EVENT: &str = "software-service-action";
+
+fn service_action_status_kebab(status: package_manager::ServiceActionStatus) -> &'static str {
+    match status {
+        package_manager::ServiceActionStatus::Ok => "ok",
+        package_manager::ServiceActionStatus::SudoRequiresPassword => "sudo-requires-password",
+        package_manager::ServiceActionStatus::Failed => "failed",
+    }
+}
+
+fn service_action_report_to_view(
+    report: package_manager::ServiceActionReport,
+) -> SoftwareServiceActionReportView {
+    SoftwareServiceActionReportView {
+        package_id: report.package_id,
+        status: service_action_status_kebab(report.status).to_string(),
+        action: report.action,
+        unit: report.unit,
+        command: report.command,
+        exit_code: report.exit_code,
+        output_tail: report.output_tail,
+        service_active_after: report.service_active_after,
+    }
+}
+
+fn parse_service_action(s: &str) -> Result<package_manager::ServiceAction, String> {
+    match s {
+        "start" => Ok(package_manager::ServiceAction::Start),
+        "stop" => Ok(package_manager::ServiceAction::Stop),
+        "restart" => Ok(package_manager::ServiceAction::Restart),
+        "reload" => Ok(package_manager::ServiceAction::Reload),
+        other => Err(format!("unknown service action: {other}")),
+    }
+}
+
+/// Drive a `systemctl <verb>` against one descriptor's service. Mirrors
+/// the install command's lifecycle: emits `line` events for streaming
+/// stdout/stderr, a final `done` event with the structured report, or
+/// a `failed` event on join error. The frontend filters by
+/// `installId` so concurrent rows on different hosts don't interleave.
+#[tauri::command]
+async fn software_service_action_remote(
+    app: tauri::AppHandle,
+    host: String,
+    port: u16,
+    user: String,
+    auth_mode: String,
+    password: String,
+    key_path: String,
+    saved_connection_index: Option<usize>,
+    package_id: String,
+    install_id: String,
+    action: String,
+) -> Result<SoftwareServiceActionReportView, String> {
+    let action = parse_service_action(&action)?;
+    let app_for_failure = app.clone();
+    let install_id_for_failure = install_id.clone();
+    let join = tauri::async_runtime::spawn_blocking(move || {
+        let state: tauri::State<'_, AppState> = app.state();
+        let session = get_or_open_ssh_session(
+            &state,
+            &host,
+            port,
+            &user,
+            &auth_mode,
+            &password,
+            &key_path,
+            saved_connection_index,
+        )?;
+        let descriptor = package_manager::descriptor(&package_id)
+            .ok_or_else(|| format!("unknown package id: {package_id}"))?;
+        let app_for_lines = app.clone();
+        let install_id_for_lines = install_id.clone();
+        let on_line = move |line: &str| {
+            let _ = app_for_lines.emit(
+                SOFTWARE_SERVICE_EVENT,
+                SoftwareServiceActionEvent {
+                    install_id: install_id_for_lines.clone(),
+                    kind: "line".to_string(),
+                    text: Some(line.to_string()),
+                    report: None,
+                    message: None,
+                },
+            );
+        };
+        let report =
+            package_manager::service_action_blocking(&session, descriptor, action, on_line)
+                .map_err(|e| e.to_string())?;
+        let view = service_action_report_to_view(report);
+        let _ = app.emit(
+            SOFTWARE_SERVICE_EVENT,
+            SoftwareServiceActionEvent {
+                install_id: install_id.clone(),
+                kind: "done".to_string(),
+                text: None,
+                report: Some(view.clone()),
+                message: None,
+            },
+        );
+        Ok::<_, String>(view)
+    })
+    .await;
+    match join {
+        Ok(inner) => inner,
+        Err(e) => {
+            let msg = format!("software service action join: {e}");
+            let _ = app_for_failure.emit(
+                SOFTWARE_SERVICE_EVENT,
+                SoftwareServiceActionEvent {
+                    install_id: install_id_for_failure,
+                    kind: "failed".to_string(),
+                    text: None,
+                    report: None,
+                    message: Some(msg.clone()),
+                },
+            );
+            Err(msg)
+        }
+    }
+}
+
+/// One-shot fetch of the most recent `lines` rows of `journalctl -u
+/// <unit>` output. Returns `Ok(vec![])` when the descriptor doesn't
+/// have a service unit on this host's distro family — the panel
+/// gates the menu on `has_service` so this path is defensive.
+#[tauri::command]
+async fn software_service_logs_remote(
+    app: tauri::AppHandle,
+    host: String,
+    port: u16,
+    user: String,
+    auth_mode: String,
+    password: String,
+    key_path: String,
+    saved_connection_index: Option<usize>,
+    package_id: String,
+    lines: usize,
+) -> Result<Vec<String>, String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        let state: tauri::State<'_, AppState> = app.state();
+        let session = get_or_open_ssh_session(
+            &state,
+            &host,
+            port,
+            &user,
+            &auth_mode,
+            &password,
+            &key_path,
+            saved_connection_index,
+        )?;
+        let descriptor = package_manager::descriptor(&package_id)
+            .ok_or_else(|| format!("unknown package id: {package_id}"))?;
+        package_manager::journalctl_tail_blocking(&session, descriptor, lines)
+            .map_err(|e| e.to_string())
+    })
+    .await
+    .map_err(|e| format!("software_service_logs_remote join: {e}"))?
 }
 
 // ── Nginx panel ────────────────────────────────────────────────
@@ -8633,6 +8831,8 @@ pub fn run() {
             software_update_remote,
             software_uninstall_remote,
             software_versions_remote,
+            software_service_action_remote,
+            software_service_logs_remote,
             nginx_layout,
             nginx_read_file,
             nginx_save_file,

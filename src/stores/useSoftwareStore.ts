@@ -43,13 +43,26 @@ export type SoftwareVersionCache = {
  *  on demand when the entry is older than this. */
 export const VERSION_CACHE_TTL_MS = 5 * 60_000;
 
+/** Lifecycle classes a row can be busy with. service-* variants come
+ *  from the v2 service-control menu; install / update / uninstall stay
+ *  the v1 + v1.1 path. */
+export type SoftwareActivityKind =
+  | "install"
+  | "update"
+  | "uninstall"
+  | "service-start"
+  | "service-stop"
+  | "service-restart"
+  | "service-reload";
+
 export type SoftwareActivity = {
   /** Stable id we generated for this install — also the event filter. */
   installId: string;
   /** Which lifecycle this row is mid-way through. Drives the busy
-   *  label ("Installing…" vs "Updating…" vs "Uninstalling…") and
-   *  the per-row outcome formatting in `describeOutcome`. */
-  kind: "install" | "update" | "uninstall";
+   *  label ("Installing…" vs "Updating…" vs "Uninstalling…" vs the
+   *  service verbs) and the per-row outcome formatting in
+   *  `describeOutcome`. */
+  kind: SoftwareActivityKind;
   log: string[];
   error: string;
   busy: boolean;
@@ -91,7 +104,7 @@ type SoftwareStoreState = {
     key: Key,
     packageId: string,
     installId: string,
-    kind: "install" | "update" | "uninstall",
+    kind: SoftwareActivityKind,
   ) => void;
   finishActivity: (
     key: Key,

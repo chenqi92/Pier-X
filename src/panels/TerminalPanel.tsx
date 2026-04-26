@@ -764,15 +764,13 @@ export default function TerminalPanel({ tab, isActive, onEditConnection }: Props
 
   // ── Smart-mode mirror state ────────────────────────────────
 
-  // True only when every condition for smart-mode tracking is met.
-  // Fed from the latest snapshot, so flipping the alt screen on
-  // (vim entering full-screen) or starting a bracketed paste both
-  // immediately disable the mirror without the user pressing
-  // anything.
+  // We deliberately don't gate on OSC 133 sentinels here: remote
+  // shells reached over `ssh` don't emit them, and the byte-stream
+  // mirror buffer already self-resets on CR/LF, so smart mode stays
+  // correct without prompt-end signals. Alt-screen and bracketed
+  // paste are universal vt100 signals — those still gate.
   const smartActive =
     smartMode &&
-    snapshot?.promptEnd != null &&
-    snapshot?.awaitingInput === true &&
     snapshot?.altScreen === false &&
     snapshot?.bracketedPaste === false;
 

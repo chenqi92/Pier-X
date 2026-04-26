@@ -26,7 +26,22 @@ export type SoftwareSnapshot = {
   /** Per-package install/update activity. The frontend uses this to
    *  disable buttons + render the live log. */
   activity: Record<string, SoftwareActivity>;
+  /** Per-package version-list cache. Each entry is freshest-first
+   *  (the package manager's natural ordering) and lives 5 minutes
+   *  before the dropdown re-fetches. Empty array on pacman / on
+   *  managers that returned no rows — the dropdown trigger hides
+   *  in that case. */
+  versionCache: Record<string, SoftwareVersionCache>;
 };
+
+export type SoftwareVersionCache = {
+  fetchedAt: number;
+  versions: string[];
+};
+
+/** TTL for the per-package version-list cache. The dropdown re-fetches
+ *  on demand when the entry is older than this. */
+export const VERSION_CACHE_TTL_MS = 5 * 60_000;
 
 export type SoftwareActivity = {
   /** Stable id we generated for this install — also the event filter. */
@@ -56,6 +71,7 @@ function emptySnapshot(): SoftwareSnapshot {
     inFlight: null,
     error: "",
     activity: {},
+    versionCache: {},
   };
 }
 
@@ -83,6 +99,9 @@ type SoftwareStoreState = {
     error: string,
     nextStatus: SoftwarePackageStatus | null,
   ) => void;
+  /** Mirror a freshly-fetched version list into the per-package
+   *  cache. Stamped with `Date.now()` for the TTL check below. */
+  setVersionCache: (key: Key, packageId: string, versions: string[]) => void;
   invalidate: (key: Key) => void;
 };
 
@@ -193,6 +212,23 @@ export const useSoftwareStore = create<SoftwareStoreState>((set, get) => ({
       };
     }),
 
+  setVersionCache: (key, packageId, versions) =>
+    set((s) => {
+      const prev = s.snapshots[key] ?? emptySnapshot();
+      return {
+        snapshots: {
+          ...s.snapshots,
+          [key]: {
+            ...prev,
+            versionCache: {
+              ...prev.versionCache,
+              [packageId]: { fetchedAt: Date.now(), versions },
+            },
+          },
+        },
+      };
+    }),
+
   invalidate: (key) =>
     set((s) => {
       const next = { ...s.snapshots };
@@ -200,6 +236,19 @@ export const useSoftwareStore = create<SoftwareStoreState>((set, get) => ({
       return { snapshots: next };
     }),
 }));
+
+/** Returns `true` when a version-cache entry for `packageId` is
+ *  present and younger than {@link VERSION_CACHE_TTL_MS}. The
+ *  panel uses this to decide whether to skip the network round-trip
+ *  on dropdown open. */
+export function isVersionCacheFresh(
+  snap: SoftwareSnapshot,
+  packageId: string,
+): boolean {
+  const entry = snap.versionCache[packageId];
+  if (!entry) return false;
+  return Date.now() - entry.fetchedAt < VERSION_CACHE_TTL_MS;
+}
 
 /** Returns the package id of the currently-busy row on this host, or
  *  `null` when nothing is running. The panel uses this to disable

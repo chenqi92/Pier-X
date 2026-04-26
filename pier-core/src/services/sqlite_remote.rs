@@ -186,7 +186,7 @@ pub async fn probe(session: &SshSession) -> RemoteSqliteCapability {
 pub async fn install(session: &SshSession) -> Result<RemoteSqliteInstallReport> {
     use crate::services::package_manager as pm;
 
-    let report = pm::install(session, "sqlite3", false, |_| {}).await?;
+    let report = pm::install(session, "sqlite3", false, None, |_| {}).await?;
     Ok(RemoteSqliteInstallReport {
         status: match report.status {
             pm::InstallStatus::Installed => RemoteSqliteInstallStatus::Installed,

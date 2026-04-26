@@ -1256,6 +1256,12 @@ export const zhExtra: Record<string, string> = {
   "Install": "安装",
   "Updating...": "更新中…",
   "Installing...": "安装中…",
+  "Pick version...": "选择版本…",
+  "Loading versions...": "加载版本中…",
+  "Latest": "最新版",
+  "No specific versions available": "无可选历史版本",
+  "Install v{version}": "安装 v{version}",
+  "Update to v{version}": "更新到 v{version}",
   "Done · {pm} {ver}": "完成 · {pm} {ver}",
   "This distro ({id}) is not in the auto-install list — please install manually.":
     "未识别此发行版（{id}），请手动安装。",

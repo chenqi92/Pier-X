@@ -1049,16 +1049,38 @@ export const softwareInstallRemote = (
     packageId: string;
     installId: string;
     enableService: boolean;
+    /** Pin to a specific package-manager version. `undefined` =
+     *  install whatever the manager picks (the registry's default). */
+    version?: string | null;
   },
-) => invoke<SoftwareInstallReport>("software_install_remote", params);
+) =>
+  invoke<SoftwareInstallReport>("software_install_remote", {
+    ...params,
+    version: params.version ?? null,
+  });
 
 export const softwareUpdateRemote = (
   params: SshParams & {
     packageId: string;
     installId: string;
     enableService: boolean;
+    /** Pin to a specific package-manager version. `undefined` =
+     *  upgrade to whatever the manager has as latest. */
+    version?: string | null;
   },
-) => invoke<SoftwareInstallReport>("software_update_remote", params);
+) =>
+  invoke<SoftwareInstallReport>("software_update_remote", {
+    ...params,
+    version: params.version ?? null,
+  });
+
+/** Enumerate package-manager-visible versions for `packageId` on the
+ *  remote host, freshest first. Empty array on unsupported distros and
+ *  on pacman (Arch repos don't carry historical versions). The
+ *  software panel caches the result for 5 min per host+package. */
+export const softwareVersionsRemote = (
+  params: SshParams & { packageId: string },
+) => invoke<string[]>("software_versions_remote", params);
 
 /** Subscribe to streaming install/update output. Returns the unlisten
  *  fn — call it on unmount. The handler is invoked with the typed

@@ -577,31 +577,78 @@ pub async fn probe_all(session: &SshSession) -> Vec<PackageStatus> {
 /// Install a single package. Streams every output line through
 /// `on_line`. Always returns a structured report — only an SSH-level
 /// failure surfaces as `Err`.
+///
+/// `version` pins to a specific package-manager version when `Some`.
+/// pacman silently ignores it (Arch repos only carry the latest).
 pub async fn install<F>(
     session: &SshSession,
     id: &str,
     enable_service: bool,
+    version: Option<&str>,
     on_line: F,
 ) -> Result<InstallReport>
 where
     F: FnMut(&str),
 {
-    run_install_or_update(session, id, false, enable_service, on_line).await
+    run_install_or_update(session, id, false, enable_service, version, on_line).await
 }
 
 /// Update (re-install / upgrade) a single package. Only meaningful for
 /// already-installed packages — for missing ones it falls through to
 /// the install command (most package managers' install is idempotent).
+///
+/// `version` pins to a specific package-manager version when `Some`.
+/// pacman silently ignores it (Arch repos only carry the latest).
 pub async fn update<F>(
     session: &SshSession,
     id: &str,
     enable_service: bool,
+    version: Option<&str>,
     on_line: F,
 ) -> Result<InstallReport>
 where
     F: FnMut(&str),
 {
-    run_install_or_update(session, id, true, enable_service, on_line).await
+    run_install_or_update(session, id, true, enable_service, version, on_line).await
+}
+
+/// List the package-manager-visible versions for a descriptor on the
+/// remote host, freshest first. The frontend caches this for 5
+/// minutes per host+package — [`available_versions`] always re-runs
+/// the command.
+///
+/// Per-manager dispatch:
+/// * apt → `apt-cache madison`
+/// * dnf / yum → `list available --showduplicates`
+/// * apk → `apk version -a` (filters to descriptor's package row)
+/// * pacman → empty Vec (Arch repos don't carry historical versions —
+///   the panel hides the dropdown)
+/// * zypper → `zypper search -s`, parsed with awk on `|` columns
+///
+/// Returns an empty Vec on unsupported distro / unknown package.
+pub async fn available_versions(
+    session: &SshSession,
+    id: &str,
+) -> Result<Vec<String>> {
+    let descriptor = descriptor(id).ok_or_else(|| {
+        SshError::InvalidConfig(format!("unknown package id: {id}"))
+    })?;
+    let env = probe_host_env(session).await;
+    let Some(manager) = env.package_manager else {
+        return Ok(Vec::new());
+    };
+    let Some(packages) = packages_for(descriptor, manager) else {
+        return Ok(Vec::new());
+    };
+    let pkg = match packages.first().copied() {
+        Some(p) if !p.is_empty() => p,
+        _ => return Ok(Vec::new()),
+    };
+    let Some(cmd) = build_versions_command(manager, pkg) else {
+        return Ok(Vec::new());
+    };
+    let (_, stdout) = session.exec_command(&cmd).await?;
+    Ok(parse_versions_output(&stdout))
 }
 
 /// Blocking wrapper for [`probe_host_env`].
@@ -622,12 +669,13 @@ pub fn install_blocking<F>(
     session: &SshSession,
     id: &str,
     enable_service: bool,
+    version: Option<&str>,
     on_line: F,
 ) -> Result<InstallReport>
 where
     F: FnMut(&str),
 {
-    crate::ssh::runtime::shared().block_on(install(session, id, enable_service, on_line))
+    crate::ssh::runtime::shared().block_on(install(session, id, enable_service, version, on_line))
 }
 
 /// Blocking wrapper for [`update`].
@@ -635,12 +683,22 @@ pub fn update_blocking<F>(
     session: &SshSession,
     id: &str,
     enable_service: bool,
+    version: Option<&str>,
     on_line: F,
 ) -> Result<InstallReport>
 where
     F: FnMut(&str),
 {
-    crate::ssh::runtime::shared().block_on(update(session, id, enable_service, on_line))
+    crate::ssh::runtime::shared().block_on(update(session, id, enable_service, version, on_line))
+}
+
+/// Blocking wrapper for [`available_versions`]. Tauri commands using
+/// `spawn_blocking` invoke it from the sync closure body.
+pub fn available_versions_blocking(
+    session: &SshSession,
+    id: &str,
+) -> Result<Vec<String>> {
+    crate::ssh::runtime::shared().block_on(available_versions(session, id))
 }
 
 /// Uninstall a single package. Streams every output line through
@@ -687,11 +745,15 @@ where
 
 /// Common install / update path. `is_update` switches the apt/dnf
 /// command from "install" to "install --only-upgrade" / equivalent.
+/// `version`, when set, pins the package-manager invocation to that
+/// version (formatted per manager — e.g. `pkg=ver` for apt/apk/zypper,
+/// `pkg-ver` for dnf/yum). pacman silently ignores it.
 async fn run_install_or_update<F>(
     session: &SshSession,
     id: &str,
     is_update: bool,
     enable_service: bool,
+    version: Option<&str>,
     mut on_line: F,
 ) -> Result<InstallReport>
 where
@@ -731,7 +793,7 @@ where
         });
     };
 
-    let install_inner = build_install_command(manager, packages, is_update);
+    let install_inner = build_install_command(manager, packages, is_update, version);
     let prefix = if env.is_root { "" } else { "sudo -n " };
     let command = format!(
         "{prefix}sh -c {} 2>&1",
@@ -960,15 +1022,101 @@ fn descriptor_service_unit(
         .find_map(|(m, unit)| (*m == manager).then_some(*unit))
 }
 
+/// Rewrite `packages` with the manager's version-pin syntax when
+/// `version` is set. Pacman returns the unmodified list because Arch
+/// repos only carry the latest. Whitespace in the version string is
+/// stripped to keep the resulting shell argv clean.
+fn format_packages_with_version(
+    manager: PackageManager,
+    packages: &[&str],
+    version: Option<&str>,
+) -> String {
+    let Some(v) = version else {
+        return packages.join(" ");
+    };
+    let v = v.trim();
+    if v.is_empty() {
+        return packages.join(" ");
+    }
+    match manager {
+        PackageManager::Pacman => packages.join(" "),
+        PackageManager::Apt | PackageManager::Apk | PackageManager::Zypper => packages
+            .iter()
+            .map(|p| format!("{p}={v}"))
+            .collect::<Vec<_>>()
+            .join(" "),
+        PackageManager::Dnf | PackageManager::Yum => packages
+            .iter()
+            .map(|p| format!("{p}-{v}"))
+            .collect::<Vec<_>>()
+            .join(" "),
+    }
+}
+
+/// Build the per-manager "list available versions" remote command.
+/// Returns `None` for managers that can't enumerate historical
+/// versions (currently pacman).
+///
+/// All commands suppress stderr and pipe through `awk` so the parsed
+/// stdout is one version-per-line, freshest first when the manager
+/// orders that way (`apt-cache madison`, `dnf list --showduplicates`).
+fn build_versions_command(manager: PackageManager, package: &str) -> Option<String> {
+    let pkg = shell_single_quote(package);
+    match manager {
+        PackageManager::Apt => Some(format!(
+            "apt-cache madison {pkg} 2>/dev/null | awk '{{print $3}}'"
+        )),
+        PackageManager::Dnf => Some(format!(
+            "dnf list available {pkg} --showduplicates -q 2>/dev/null | awk 'NR>1{{print $2}}'"
+        )),
+        PackageManager::Yum => Some(format!(
+            "yum list available {pkg} --showduplicates -q 2>/dev/null | awk 'NR>1{{print $2}}'"
+        )),
+        PackageManager::Apk => Some(format!(
+            "apk version -a 2>/dev/null | awk '$1=={pkg}{{print $3}}'"
+        )),
+        // pacman has no historical-version listing in the standard
+        // repos. Returning None tells the frontend to hide the dropdown.
+        PackageManager::Pacman => None,
+        PackageManager::Zypper => Some(format!(
+            "zypper search -s {pkg} 2>/dev/null | awk -F'|' 'NR>2 && /^v/{{gsub(/ /,\"\",$4); print $4}}' | sort -u"
+        )),
+    }
+}
+
+/// Parse the stdout of a `build_versions_command` invocation: split
+/// on newlines, trim, drop empties, dedup while preserving first-seen
+/// order so the manager's natural "freshest first" ordering survives.
+fn parse_versions_output(stdout: &str) -> Vec<String> {
+    let mut seen: std::collections::HashSet<String> = std::collections::HashSet::new();
+    let mut out: Vec<String> = Vec::new();
+    for line in stdout.lines() {
+        let v = line.trim();
+        if v.is_empty() {
+            continue;
+        }
+        if seen.insert(v.to_string()) {
+            out.push(v.to_string());
+        }
+    }
+    out
+}
+
 /// Synthesise the package-manager command for install or update. The
 /// returned string is the *inner* command — wrap it with `sh -c '...'`
 /// + optional `sudo -n` prefix at the call site.
+///
+/// When `version` is `Some`, each package atom is rewritten per the
+/// manager's pin syntax: `pkg=ver` for apt/apk/zypper, `pkg-ver` for
+/// dnf/yum. pacman ignores `version` because Arch repos don't carry
+/// historical versions; the panel hides the dropdown there.
 fn build_install_command(
     manager: PackageManager,
     packages: &[&str],
     is_update: bool,
+    version: Option<&str>,
 ) -> String {
-    let pkgs = packages.join(" ");
+    let pkgs = format_packages_with_version(manager, packages, version);
     match (manager, is_update) {
         (PackageManager::Apt, false) => format!(
             "DEBIAN_FRONTEND=noninteractive apt-get update -qq \
@@ -1222,22 +1370,164 @@ mod tests {
 
     #[test]
     fn build_install_command_apt_install_is_noninteractive() {
-        let cmd = build_install_command(PackageManager::Apt, &["sqlite3"], false);
+        let cmd = build_install_command(PackageManager::Apt, &["sqlite3"], false, None);
         assert!(cmd.contains("DEBIAN_FRONTEND=noninteractive"));
         assert!(cmd.contains("apt-get install -y sqlite3"));
     }
 
     #[test]
     fn build_install_command_apt_upgrade_uses_only_upgrade() {
-        let cmd = build_install_command(PackageManager::Apt, &["redis-server"], true);
+        let cmd = build_install_command(PackageManager::Apt, &["redis-server"], true, None);
         assert!(cmd.contains("--only-upgrade"));
         assert!(cmd.contains("redis-server"));
     }
 
     #[test]
     fn build_install_command_alpine_uses_apk() {
-        let cmd = build_install_command(PackageManager::Apk, &["sqlite"], false);
+        let cmd = build_install_command(PackageManager::Apk, &["sqlite"], false, None);
         assert_eq!(cmd, "apk add --no-cache sqlite");
+    }
+
+    // ── Version-pinned install commands ─────────────────────────
+
+    #[test]
+    fn build_install_command_apt_version_pin_uses_equals() {
+        let cmd = build_install_command(
+            PackageManager::Apt,
+            &["docker.io"],
+            false,
+            Some("27.5.1-0ubuntu1"),
+        );
+        assert!(cmd.contains("apt-get install -y docker.io=27.5.1-0ubuntu1"));
+    }
+
+    #[test]
+    fn build_install_command_dnf_version_pin_uses_dash() {
+        let cmd =
+            build_install_command(PackageManager::Dnf, &["docker"], false, Some("27.5.1-1.fc40"));
+        assert!(cmd.contains("dnf install -y docker-27.5.1-1.fc40"));
+    }
+
+    #[test]
+    fn build_install_command_yum_version_pin_uses_dash() {
+        let cmd = build_install_command(PackageManager::Yum, &["redis"], false, Some("7.2.4-1"));
+        assert!(cmd.contains("yum install -y redis-7.2.4-1"));
+    }
+
+    #[test]
+    fn build_install_command_apk_version_pin_uses_equals() {
+        let cmd =
+            build_install_command(PackageManager::Apk, &["sqlite"], false, Some("3.46.1-r0"));
+        assert_eq!(cmd, "apk add --no-cache sqlite=3.46.1-r0");
+    }
+
+    #[test]
+    fn build_install_command_zypper_version_pin_uses_equals() {
+        let cmd = build_install_command(
+            PackageManager::Zypper,
+            &["redis"],
+            false,
+            Some("7.0.4-1.1"),
+        );
+        assert!(cmd.contains("zypper --non-interactive install redis=7.0.4-1.1"));
+    }
+
+    #[test]
+    fn build_install_command_pacman_ignores_version_pin() {
+        // Arch's standard repos don't carry historical versions. The
+        // panel hides the dropdown, but defence-in-depth: even if
+        // `version=Some(...)` slips through, the command still runs.
+        let cmd = build_install_command(
+            PackageManager::Pacman,
+            &["redis"],
+            false,
+            Some("7.2.4-1"),
+        );
+        assert!(cmd.contains("pacman -S --noconfirm redis"));
+        assert!(!cmd.contains("7.2.4-1"));
+    }
+
+    #[test]
+    fn build_install_command_apt_update_with_version_keeps_upgrade_flag() {
+        let cmd = build_install_command(
+            PackageManager::Apt,
+            &["docker.io"],
+            true,
+            Some("27.5.1-0ubuntu1"),
+        );
+        assert!(cmd.contains("--only-upgrade"));
+        assert!(cmd.contains("docker.io=27.5.1-0ubuntu1"));
+    }
+
+    #[test]
+    fn build_install_command_blank_version_falls_back_to_unpinned() {
+        let cmd =
+            build_install_command(PackageManager::Apt, &["docker.io"], false, Some("   "));
+        assert!(cmd.contains("apt-get install -y docker.io"));
+        assert!(!cmd.contains("docker.io="));
+    }
+
+    // ── Versions probe builder + parser ─────────────────────────
+
+    #[test]
+    fn build_versions_command_per_manager() {
+        assert!(
+            build_versions_command(PackageManager::Apt, "docker.io")
+                .unwrap()
+                .contains("apt-cache madison")
+        );
+        assert!(
+            build_versions_command(PackageManager::Dnf, "docker")
+                .unwrap()
+                .contains("dnf list available")
+        );
+        assert!(
+            build_versions_command(PackageManager::Yum, "redis")
+                .unwrap()
+                .contains("yum list available")
+        );
+        assert!(
+            build_versions_command(PackageManager::Apk, "sqlite")
+                .unwrap()
+                .contains("apk version -a")
+        );
+        assert!(
+            build_versions_command(PackageManager::Zypper, "redis")
+                .unwrap()
+                .contains("zypper search -s")
+        );
+        // pacman has no historical-version query; surface as None so
+        // the frontend can hide the dropdown.
+        assert!(build_versions_command(PackageManager::Pacman, "redis").is_none());
+    }
+
+    #[test]
+    fn build_versions_command_quotes_package_name() {
+        // Defence-in-depth: even though descriptor ids come from a
+        // hardcoded registry, the package name flows into a shell
+        // command so single-quote it.
+        let cmd = build_versions_command(PackageManager::Apt, "evil; rm -rf /").unwrap();
+        assert!(cmd.contains("'evil; rm -rf /'"));
+    }
+
+    #[test]
+    fn parse_versions_output_dedups_and_preserves_order() {
+        let raw = "27.5.1-0ubuntu1\n27.5.1-0ubuntu1\n26.1.4-0ubuntu1\n   \n26.0.0-0ubuntu1\n";
+        let parsed = parse_versions_output(raw);
+        assert_eq!(
+            parsed,
+            vec![
+                "27.5.1-0ubuntu1".to_string(),
+                "26.1.4-0ubuntu1".to_string(),
+                "26.0.0-0ubuntu1".to_string(),
+            ],
+        );
+    }
+
+    #[test]
+    fn parse_versions_output_empty_returns_empty() {
+        assert!(parse_versions_output("").is_empty());
+        assert!(parse_versions_output("\n\n   \n").is_empty());
     }
 
     #[test]

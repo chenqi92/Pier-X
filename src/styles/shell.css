@@ -6385,6 +6385,45 @@ button,
   gap: var(--sp-1);
 }
 
+/* Split-button: left half (action) + right half (▼ version picker).
+ * The two halves share the same primary look but flatten the seam
+ * between them so they read as one control. The chevron half is
+ * suppressed entirely on pacman (latest-only) — the action button
+ * then keeps its normal pill shape because the split-btn-main class
+ * only applies when the chevron is present. */
+.sw-row__split-btn {
+  display: inline-flex;
+  align-items: stretch;
+  position: relative;
+}
+.sw-row__split-btn-main {
+  border-top-right-radius: 0;
+  border-bottom-right-radius: 0;
+  border-right: 1px solid var(--accent-hover);
+}
+.sw-row__split-btn-chevron {
+  border-top-left-radius: 0;
+  border-bottom-left-radius: 0;
+  padding: 0 var(--sp-1-5);
+}
+
+/* Version-picker popover: same chrome as ctx-menu but with a fixed
+ * left rail for the check icon so versions and the "Latest" entry
+ * line up. */
+.sw-row-version-menu { padding: var(--sp-1) 0; }
+.sw-row-version-menu__check {
+  display: inline-flex;
+  width: 12px;
+  justify-content: center;
+  color: var(--accent);
+}
+.sw-row-version-menu__hint {
+  padding: var(--sp-1) var(--sp-3);
+  font-size: var(--size-micro);
+  color: var(--muted);
+  font-style: italic;
+}
+
 /* Menu shown by the row's ⋯ button. Uses the shared `.ctx-menu`
  * popover frame (small dropdown look) plus a few overrides:
  * destructive entry tinted red, plus a muted hint when the only

@@ -1,5 +1,6 @@
 import {
   Check,
+  ChevronDown,
   Circle,
   Download,
   Loader,
@@ -24,6 +25,7 @@ import { useI18n } from "../i18n/useI18n";
 import { localizeError } from "../i18n/localizeMessage";
 import {
   activePackageId,
+  isVersionCacheFresh,
   softwareKeyForTab,
   useSoftwareStore,
 } from "../stores/useSoftwareStore";
@@ -59,6 +61,20 @@ function SoftwarePanelBody({ tab }: Props) {
   const startActivity = useSoftwareStore((s) => s.startActivity);
   const appendLine = useSoftwareStore((s) => s.appendLine);
   const finishActivity = useSoftwareStore((s) => s.finishActivity);
+  const setVersionCache = useSoftwareStore((s) => s.setVersionCache);
+
+  /** Per-row user-selected version. `undefined` = "latest"; the
+   *  install/update command goes out without a `version` and the
+   *  package manager picks the default. State lives at the panel
+   *  level so it survives row remounts (re-probe / activity end). */
+  const [selectedVersions, setSelectedVersions] = useState<
+    Record<string, string | undefined>
+  >({});
+  /** In-flight version-list fetches, keyed by package id. The
+   *  dropdown shows a spinner row while present. */
+  const [versionsLoading, setVersionsLoading] = useState<Record<string, boolean>>(
+    {},
+  );
 
   const [registry, setRegistry] = useState<SoftwareDescriptor[]>([]);
   const [enableService, setEnableService] = useState(true);
@@ -153,8 +169,35 @@ function SoftwarePanelBody({ tab }: Props) {
   const env = snapshot?.env ?? null;
   const statuses = snapshot?.statuses ?? {};
   const activity = snapshot?.activity ?? {};
+  const versionCache = snapshot?.versionCache ?? {};
   const busyPackageId = snapshot ? activePackageId(snapshot) : null;
   const canManage = env?.packageManager !== null && env?.packageManager !== undefined;
+  /** pacman repos only carry the latest version, so the panel hides
+   *  the dropdown trigger on Arch hosts. */
+  const supportsVersionPick = canManage && env?.packageManager !== "pacman";
+
+  /** Lazy-fetch the descriptor's version list. Skips the round-trip
+   *  when a fresh cache entry exists (TTL = 5 min). The dropdown
+   *  shows a "Loading versions..." row while in flight. */
+  async function loadVersionsForPackage(packageId: string) {
+    if (!sshParams || !swKey || !snapshot) return;
+    if (isVersionCacheFresh(snapshot, packageId)) return;
+    if (versionsLoading[packageId]) return;
+    setVersionsLoading((prev) => ({ ...prev, [packageId]: true }));
+    try {
+      const versions = await cmd.softwareVersionsRemote({
+        ...sshParams,
+        packageId,
+      });
+      setVersionCache(swKey, packageId, versions);
+    } catch {
+      // Leave the cache untouched; the dropdown will show "no versions".
+      // The user can retry by closing + reopening the dropdown after
+      // the staleness window.
+    } finally {
+      setVersionsLoading((prev) => ({ ...prev, [packageId]: false }));
+    }
+  }
 
   /** Kick off an uninstall for `descriptor` with the dialog's options.
    *  Mirrors the install handler's lifecycle: generate an installId,
@@ -268,6 +311,17 @@ function SoftwarePanelBody({ tab }: Props) {
             disabledOtherBusy={!!busyPackageId && busyPackageId !== descriptor.id}
             canManage={canManage}
             enableService={enableService}
+            supportsVersionPick={supportsVersionPick}
+            availableVersions={versionCache[descriptor.id]?.versions ?? null}
+            versionsLoading={!!versionsLoading[descriptor.id]}
+            selectedVersion={selectedVersions[descriptor.id]}
+            onSelectVersion={(version) =>
+              setSelectedVersions((prev) => ({
+                ...prev,
+                [descriptor.id]: version,
+              }))
+            }
+            onLoadVersions={() => void loadVersionsForPackage(descriptor.id)}
             onUninstall={() => setUninstallTarget(descriptor)}
             onAction={async (action) => {
               if (!sshParams || !swKey) return;
@@ -292,6 +346,7 @@ function SoftwarePanelBody({ tab }: Props) {
                   packageId: descriptor.id,
                   installId,
                   enableService,
+                  version: selectedVersions[descriptor.id],
                 };
                 const report: SoftwareInstallReport =
                   action === "update"
@@ -330,6 +385,40 @@ function SoftwarePanelBody({ tab }: Props) {
   );
 }
 
+/** Pick the label shown on the primary install/update button. Encodes
+ *  the four states: busy install / busy update / busy uninstall →
+ *  "...ing"; idle → "Install" or "Update", with the selected version
+ *  appended when the user has pinned one. */
+function primaryButtonLabel({
+  t,
+  action,
+  busy,
+  activityKind,
+  selectedVersion,
+}: {
+  t: ReturnType<typeof useI18n>["t"];
+  action: "install" | "update";
+  busy: boolean;
+  activityKind: "install" | "update" | "uninstall" | undefined;
+  selectedVersion: string | undefined;
+}): string {
+  if (busy) {
+    if (activityKind === "uninstall") return t("Uninstalling...");
+    if (action === "update") return t("Updating...");
+    return t("Installing...");
+  }
+  if (selectedVersion) {
+    return action === "update"
+      ? t("Update to v{version}", { version: selectedVersion })
+      : t("Install v{version}", { version: selectedVersion });
+  }
+  return action === "update" ? t("Update") : t("Install");
+}
+
+// `describeOutcome` was duplicated here pre-rebase; the canonical
+// implementation now lives in `src/lib/softwareInstall.ts` as
+// `describeInstallOutcome` (already imported at the top of this file).
+
 function SoftwareRow({
   descriptor,
   status,
@@ -337,6 +426,12 @@ function SoftwareRow({
   disabledOtherBusy,
   canManage,
   enableService: _enableService,
+  supportsVersionPick,
+  availableVersions,
+  versionsLoading,
+  selectedVersion,
+  onSelectVersion,
+  onLoadVersions,
   onAction,
   onUninstall,
 }: {
@@ -354,6 +449,21 @@ function SoftwareRow({
   disabledOtherBusy: boolean;
   canManage: boolean;
   enableService: boolean;
+  /** `false` on pacman / unsupported distros — the chevron-down half
+   *  of the split button is suppressed because the manager can only
+   *  install the latest. */
+  supportsVersionPick: boolean;
+  /** Cached version list (freshest first) or `null` when never
+   *  fetched. The dropdown lazy-loads on open. */
+  availableVersions: string[] | null;
+  /** A `software_versions_remote` request is in flight for this row. */
+  versionsLoading: boolean;
+  /** User's pinned version, or `undefined` for "latest". */
+  selectedVersion: string | undefined;
+  onSelectVersion: (version: string | undefined) => void;
+  /** Trigger the lazy-load of versions for this descriptor. The
+   *  panel skips the round-trip when the cache is fresh. */
+  onLoadVersions: () => void;
   onAction: (action: "install" | "update") => Promise<void> | void;
   /** Open the uninstall dialog for this row. The panel owns the
    *  dialog state so only one dialog is ever mounted at a time. */
@@ -362,7 +472,9 @@ function SoftwareRow({
   const { t } = useI18n();
   const logRef = useRef<HTMLPreElement>(null);
   const menuButtonRef = useRef<HTMLButtonElement>(null);
+  const versionButtonRef = useRef<HTMLButtonElement>(null);
   const [menuOpen, setMenuOpen] = useState(false);
+  const [versionMenuOpen, setVersionMenuOpen] = useState(false);
   const installed = status?.installed ?? false;
   const version = status?.version ?? null;
   const busy = activity?.busy ?? false;
@@ -375,6 +487,26 @@ function SoftwareRow({
     if (!activity || !logRef.current) return;
     logRef.current.scrollTop = logRef.current.scrollHeight;
   }, [activity?.log.length]);
+
+  // When versions arrive for an already-installed package whose
+  // installed version differs from the freshest available, default
+  // the [Update] button to the latest one — without this, clicking
+  // [Update] would just re-pull whatever the manager picks (often
+  // already-installed = no-op). Only fires once per cache refresh
+  // and never overrides an explicit user pick (which sets selectedVersion).
+  useEffect(() => {
+    if (
+      action === "update" &&
+      selectedVersion === undefined &&
+      availableVersions &&
+      availableVersions.length > 0 &&
+      version &&
+      availableVersions[0] !== version
+    ) {
+      onSelectVersion(availableVersions[0]);
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [availableVersions]);
 
   const StatusIcon = busy ? Loader : installed ? Check : Circle;
   return (
@@ -395,23 +527,98 @@ function SoftwareRow({
           )}
         </span>
         <span className="sw-row__actions">
-          <button
-            type="button"
-            className="btn is-primary is-compact"
-            disabled={buttonDisabled}
-            onClick={() => void onAction(action)}
-          >
-            <Download size={10} />
-            {busy
-              ? activity?.kind === "uninstall"
-                ? t("Uninstalling...")
-                : action === "update"
-                  ? t("Updating...")
-                  : t("Installing...")
-              : action === "update"
-                ? t("Update")
-                : t("Install")}
-          </button>
+          <span className="sw-row__split-btn">
+            <button
+              type="button"
+              className={`btn is-primary is-compact${
+                supportsVersionPick ? " sw-row__split-btn-main" : ""
+              }`}
+              disabled={buttonDisabled}
+              onClick={() => void onAction(action)}
+            >
+              <Download size={10} />
+              {primaryButtonLabel({
+                t,
+                action,
+                busy,
+                activityKind: activity?.kind,
+                selectedVersion,
+              })}
+            </button>
+            {supportsVersionPick && (
+              <button
+                ref={versionButtonRef}
+                type="button"
+                className="btn is-primary is-compact sw-row__split-btn-chevron"
+                disabled={buttonDisabled}
+                title={t("Pick version...")}
+                onClick={() => {
+                  setVersionMenuOpen((cur) => {
+                    const opening = !cur;
+                    if (opening) onLoadVersions();
+                    return opening;
+                  });
+                }}
+              >
+                <ChevronDown size={10} />
+              </button>
+            )}
+            <Popover
+              open={versionMenuOpen}
+              anchor={versionButtonRef.current}
+              onClose={() => setVersionMenuOpen(false)}
+              placement="bottom-end"
+              width={220}
+              className="ctx-menu sw-row-version-menu"
+            >
+              <button
+                type="button"
+                className="ctx-menu__item"
+                onClick={() => {
+                  onSelectVersion(undefined);
+                  setVersionMenuOpen(false);
+                }}
+              >
+                <span className="ctx-menu__label">
+                  <span className="sw-row-version-menu__check">
+                    {selectedVersion === undefined && <Check size={10} />}
+                  </span>
+                  {t("Latest")}
+                </span>
+              </button>
+              {versionsLoading && (
+                <div className="sw-row-version-menu__hint">
+                  {t("Loading versions...")}
+                </div>
+              )}
+              {!versionsLoading &&
+                availableVersions !== null &&
+                availableVersions.length === 0 && (
+                  <div className="sw-row-version-menu__hint">
+                    {t("No specific versions available")}
+                  </div>
+                )}
+              {!versionsLoading &&
+                availableVersions?.map((v) => (
+                  <button
+                    key={v}
+                    type="button"
+                    className="ctx-menu__item"
+                    onClick={() => {
+                      onSelectVersion(v);
+                      setVersionMenuOpen(false);
+                    }}
+                  >
+                    <span className="ctx-menu__label">
+                      <span className="sw-row-version-menu__check">
+                        {selectedVersion === v && <Check size={10} />}
+                      </span>
+                      <span className="mono">{v}</span>
+                    </span>
+                  </button>
+                ))}
+            </Popover>
+          </span>
           <button
             ref={menuButtonRef}
             type="button"

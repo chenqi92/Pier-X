@@ -5835,6 +5835,7 @@ async fn software_install_or_update_inner(
     package_id: String,
     install_id: String,
     enable_service: bool,
+    version: Option<String>,
     is_update: bool,
 ) -> Result<SoftwareInstallReportView, String> {
     let app_for_failure = app.clone();
@@ -5865,10 +5866,23 @@ async fn software_install_or_update_inner(
                 },
             );
         };
+        let version_ref = version.as_deref();
         let report = if is_update {
-            package_manager::update_blocking(&session, &package_id, enable_service, on_line)
+            package_manager::update_blocking(
+                &session,
+                &package_id,
+                enable_service,
+                version_ref,
+                on_line,
+            )
         } else {
-            package_manager::install_blocking(&session, &package_id, enable_service, on_line)
+            package_manager::install_blocking(
+                &session,
+                &package_id,
+                enable_service,
+                version_ref,
+                on_line,
+            )
         }
         .map_err(|e| e.to_string())?;
         let view = report_to_view(report);
@@ -5917,6 +5931,7 @@ async fn software_install_remote(
     package_id: String,
     install_id: String,
     enable_service: bool,
+    version: Option<String>,
 ) -> Result<SoftwareInstallReportView, String> {
     software_install_or_update_inner(
         app,
@@ -5930,6 +5945,7 @@ async fn software_install_remote(
         package_id,
         install_id,
         enable_service,
+        version,
         false,
     )
     .await
@@ -5948,6 +5964,7 @@ async fn software_update_remote(
     package_id: String,
     install_id: String,
     enable_service: bool,
+    version: Option<String>,
 ) -> Result<SoftwareInstallReportView, String> {
     software_install_or_update_inner(
         app,
@@ -5961,9 +5978,45 @@ async fn software_update_remote(
         package_id,
         install_id,
         enable_service,
+        version,
         true,
     )
     .await
+}
+
+/// Enumerate package-manager-visible versions for a descriptor on the
+/// remote host. Returns an empty Vec on unsupported distro / pacman /
+/// queries that produce no rows. The frontend caches the result for
+/// 5 minutes per host+package.
+#[tauri::command]
+async fn software_versions_remote(
+    app: tauri::AppHandle,
+    host: String,
+    port: u16,
+    user: String,
+    auth_mode: String,
+    password: String,
+    key_path: String,
+    saved_connection_index: Option<usize>,
+    package_id: String,
+) -> Result<Vec<String>, String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        let state: tauri::State<'_, AppState> = app.state();
+        let session = get_or_open_ssh_session(
+            &state,
+            &host,
+            port,
+            &user,
+            &auth_mode,
+            &password,
+            &key_path,
+            saved_connection_index,
+        )?;
+        package_manager::available_versions_blocking(&session, &package_id)
+            .map_err(|e| e.to_string())
+    })
+    .await
+    .map_err(|e| format!("software_versions_remote join: {e}"))?
 }
 
 /// Run a streaming uninstall. Mirrors `software_install_or_update_inner`
@@ -8579,6 +8632,7 @@ pub fn run() {
             software_install_remote,
             software_update_remote,
             software_uninstall_remote,
+            software_versions_remote,
             nginx_layout,
             nginx_read_file,
             nginx_save_file,

@@ -2,310 +2,384 @@
   "schema_version": 1,
   "command": "cargo",
   "tool_version": "1.75.0",
-  "source": "auto-imported",
-  "import_method": "man",
+  "source": "bundled-seed",
+  "import_method": "hand-curated",
   "import_date": "2026-04-26",
   "subcommands": [
     {
-      "name": "Build",
+      "name": "build",
       "i18n": {
-        "en": ""
+        "en": "Compile the current package",
+        "zh-CN": "编译当前项目（生成 target/）"
       },
       "options": [],
       "subcommands": []
     },
     {
-      "name": "cargo-bench(1)",
+      "name": "b",
       "i18n": {
-        "en": "Execute benchmarks of a package."
+        "en": "Alias for build",
+        "zh-CN": "build 的别名 — 编译当前项目"
       },
       "options": [],
       "subcommands": []
     },
     {
-      "name": "cargo-build(1)",
+      "name": "check",
       "i18n": {
-        "en": "Compile a package."
+        "en": "Analyze the current package and report errors, but don't build object files",
+        "zh-CN": "类型检查但不生成对象文件，比 build 快"
       },
       "options": [],
       "subcommands": []
     },
     {
-      "name": "cargo-check(1)",
+      "name": "c",
       "i18n": {
-        "en": "Check a local package and all of its dependencies for errors."
+        "en": "Alias for check",
+        "zh-CN": "check 的别名 — 仅做类型检查"
       },
       "options": [],
       "subcommands": []
     },
     {
-      "name": "cargo-clean(1)",
+      "name": "clean",
       "i18n": {
-        "en": "Remove artifacts that Cargo has generated in the past."
+        "en": "Remove the target directory",
+        "zh-CN": "删除 target/ 目录"
       },
       "options": [],
       "subcommands": []
     },
     {
-      "name": "cargo-doc(1)",
+      "name": "doc",
       "i18n": {
-        "en": "Build a package’s documentation."
+        "en": "Build this package's and its dependencies' documentation",
+        "zh-CN": "构建本项目及其依赖的 API 文档"
       },
       "options": [],
       "subcommands": []
     },
     {
-      "name": "cargo-fetch(1)",
+      "name": "d",
       "i18n": {
-        "en": "Fetch dependencies of a package from the network."
+        "en": "Alias for doc",
+        "zh-CN": "doc 的别名 — 生成文档"
       },
       "options": [],
       "subcommands": []
     },
     {
-      "name": "cargo-fix(1)",
+      "name": "new",
       "i18n": {
-        "en": "Automatically fix lint warnings reported by rustc."
+        "en": "Create a new cargo package",
+        "zh-CN": "创建新的 Cargo 项目（含 git 初始化）"
       },
       "options": [],
       "subcommands": []
     },
     {
-      "name": "cargo-run(1)",
+      "name": "init",
       "i18n": {
-        "en": "Run a binary or example of the local package."
+        "en": "Create a new cargo package in an existing directory",
+        "zh-CN": "在已有目录中初始化 Cargo 项目"
       },
       "options": [],
       "subcommands": []
     },
     {
-      "name": "cargo-rustc(1)",
+      "name": "add",
       "i18n": {
-        "en": "Compile a package, and pass extra options to the compiler."
+        "en": "Add dependencies to a manifest file",
+        "zh-CN": "向 Cargo.toml 添加依赖"
       },
       "options": [],
       "subcommands": []
     },
     {
-      "name": "cargo-rustdoc(1)",
+      "name": "remove",
       "i18n": {
-        "en": "Build a package’s documentation, using specified custom flags."
+        "en": "Remove dependencies from a manifest file",
+        "zh-CN": "从 Cargo.toml 删除依赖"
       },
       "options": [],
       "subcommands": []
     },
     {
-      "name": "cargo-test(1)",
+      "name": "run",
       "i18n": {
-        "en": "Execute unit and integration tests of a package."
+        "en": "Run a binary or example of the local package",
+        "zh-CN": "构建并运行二进制目标"
       },
       "options": [],
       "subcommands": []
     },
     {
-      "name": "Manifest",
+      "name": "r",
       "i18n": {
-        "en": ""
+        "en": "Alias for run",
+        "zh-CN": "run 的别名"
       },
       "options": [],
       "subcommands": []
     },
     {
-      "name": "cargo-generate-lockfile(1)",
+      "name": "test",
       "i18n": {
-        "en": "Generate Cargo.lock for a project."
+        "en": "Run the tests",
+        "zh-CN": "运行测试"
       },
       "options": [],
       "subcommands": []
     },
     {
-      "name": "cargo-locate-project(1)",
+      "name": "t",
       "i18n": {
-        "en": "Print a JSON representation of a Cargo.toml file’s location."
+        "en": "Alias for test",
+        "zh-CN": "test 的别名"
       },
       "options": [],
       "subcommands": []
     },
     {
-      "name": "cargo-metadata(1)",
+      "name": "bench",
       "i18n": {
-        "en": "Output the resolved dependencies of a package in machine-readable"
+        "en": "Run the benchmarks",
+        "zh-CN": "运行基准测试"
       },
       "options": [],
       "subcommands": []
     },
     {
-      "name": "format.",
+      "name": "update",
       "i18n": {
-        "en": ""
+        "en": "Update dependencies listed in Cargo.lock",
+        "zh-CN": "根据 Cargo.toml 更新 Cargo.lock 中的依赖版本"
       },
       "options": [],
       "subcommands": []
     },
     {
-      "name": "cargo-pkgid(1)",
+      "name": "search",
       "i18n": {
-        "en": "Print a fully qualified package specification."
+        "en": "Search registry for crates",
+        "zh-CN": "在 crates.io 上搜索 crate"
       },
       "options": [],
       "subcommands": []
     },
     {
-      "name": "cargo-tree(1)",
+      "name": "publish",
       "i18n": {
-        "en": "Display a tree visualization of a dependency graph."
+        "en": "Package and upload this package to the registry",
+        "zh-CN": "把 crate 发布到 registry"
       },
       "options": [],
       "subcommands": []
     },
     {
-      "name": "cargo-update(1)",
+      "name": "install",
       "i18n": {
-        "en": "Update dependencies as recorded in the local lock file."
+        "en": "Install a Rust binary",
+        "zh-CN": "安装 Rust 二进制到 ~/.cargo/bin"
       },
       "options": [],
       "subcommands": []
     },
     {
-      "name": "cargo-vendor(1)",
+      "name": "uninstall",
       "i18n": {
-        "en": "Vendor all dependencies locally."
+        "en": "Uninstall a Rust binary",
+        "zh-CN": "卸载已安装的 Cargo 二进制"
       },
       "options": [],
       "subcommands": []
     },
     {
-      "name": "cargo-verify-project(1)",
+      "name": "fetch",
       "i18n": {
-        "en": "Check correctness of crate manifest."
+        "en": "Fetch dependencies of a package from the network",
+        "zh-CN": "下载依赖到本地缓存（不编译）"
       },
       "options": [],
       "subcommands": []
     },
     {
-      "name": "Package",
+      "name": "tree",
       "i18n": {
-        "en": ""
+        "en": "Display a tree visualization of a dependency graph",
+        "zh-CN": "以树形展示依赖关系"
       },
       "options": [],
       "subcommands": []
     },
     {
-      "name": "cargo-init(1)",
+      "name": "vendor",
       "i18n": {
-        "en": "Create a new Cargo package in an existing directory."
+        "en": "Vendor all dependencies for a project locally",
+        "zh-CN": "把所有依赖源码下载到 vendor/ 目录"
       },
       "options": [],
       "subcommands": []
     },
     {
-      "name": "cargo-install(1)",
+      "name": "yank",
       "i18n": {
-        "en": "Build and install a Rust binary."
+        "en": "Remove a pushed crate from the index",
+        "zh-CN": "标记某版本不再可用"
       },
       "options": [],
       "subcommands": []
     },
     {
-      "name": "cargo-new(1)",
+      "name": "owner",
       "i18n": {
-        "en": "Create a new Cargo package."
+        "en": "Manage the owners of a crate on the registry",
+        "zh-CN": "管理 crate 在 registry 的所有者"
       },
       "options": [],
       "subcommands": []
     },
     {
-      "name": "cargo-search(1)",
+      "name": "login",
       "i18n": {
-        "en": "Search packages in crates.io."
+        "en": "Log in to a registry",
+        "zh-CN": "保存 registry 的 API token 到本地"
       },
       "options": [],
       "subcommands": []
     },
     {
-      "name": "cargo-uninstall(1)",
+      "name": "logout",
       "i18n": {
-        "en": "Remove a Rust binary."
+        "en": "Remove an API token from the registry locally",
+        "zh-CN": "删除本地 registry token"
       },
       "options": [],
       "subcommands": []
     },
     {
-      "name": "Publishing",
+      "name": "help",
       "i18n": {
-        "en": ""
+        "en": "Print help",
+        "zh-CN": "查看子命令帮助"
       },
       "options": [],
       "subcommands": []
     },
     {
-      "name": "cargo-login(1)",
+      "name": "version",
       "i18n": {
-        "en": "Save an API token from the registry locally."
+        "en": "Show version information",
+        "zh-CN": "打印 cargo 版本"
       },
       "options": [],
       "subcommands": []
     },
     {
-      "name": "cargo-logout(1)",
+      "name": "config",
       "i18n": {
-        "en": "Remove an API token from the registry locally."
+        "en": "Inspect configuration values",
+        "zh-CN": "查看 Cargo 配置"
       },
       "options": [],
       "subcommands": []
     },
     {
-      "name": "cargo-owner(1)",
+      "name": "fix",
       "i18n": {
-        "en": "Manage the owners of a crate on the registry."
+        "en": "Automatically fix lint warnings reported by rustc",
+        "zh-CN": "自动应用编译器建议的代码修复"
       },
       "options": [],
       "subcommands": []
     },
     {
-      "name": "cargo-package(1)",
+      "name": "report",
       "i18n": {
-        "en": "Assemble the local package into a distributable tarball."
+        "en": "Generate and display various kinds of reports",
+        "zh-CN": "生成 Cargo 错误诊断报告"
       },
       "options": [],
       "subcommands": []
     },
     {
-      "name": "cargo-publish(1)",
+      "name": "package",
       "i18n": {
-        "en": "Upload a package to the registry."
+        "en": "Assemble the local package into a distributable tarball",
+        "zh-CN": "构建本地 crate 分发文件（.crate）"
       },
       "options": [],
       "subcommands": []
     },
     {
-      "name": "cargo-yank(1)",
+      "name": "pkgid",
       "i18n": {
-        "en": "Remove a pushed crate from the index."
+        "en": "Print a fully qualified package specification",
+        "zh-CN": "解析包 ID 规格到完整字符串"
       },
       "options": [],
       "subcommands": []
     },
     {
-      "name": "General",
+      "name": "generate-lockfile",
       "i18n": {
-        "en": ""
+        "en": "Generate the lockfile for a package",
+        "zh-CN": "生成 Cargo.lock 文件"
       },
       "options": [],
       "subcommands": []
     },
     {
-      "name": "cargo-help(1)",
+      "name": "locate-project",
       "i18n": {
-        "en": "Display help information about Cargo."
+        "en": "Print a JSON representation of a Cargo.toml file's location",
+        "zh-CN": "打印当前 Cargo.toml 的绝对路径"
       },
       "options": [],
       "subcommands": []
     },
     {
-      "name": "cargo-version(1)",
+      "name": "metadata",
       "i18n": {
-        "en": "Show version information."
+        "en": "Output the resolved dependencies of a package, with concrete used versions",
+        "zh-CN": "以机器可读 JSON 输出工作区元信息"
+      },
+      "options": [],
+      "subcommands": []
+    },
+    {
+      "name": "verify-project",
+      "i18n": {
+        "en": "Check correctness of crate manifest",
+        "zh-CN": "校验 Cargo.toml 是否可解析"
+      },
+      "options": [],
+      "subcommands": []
+    },
+    {
+      "name": "rustc",
+      "i18n": {
+        "en": "Compile a package, and pass extra options to the compiler",
+        "zh-CN": "用自定义参数调用 rustc 编译当前 crate"
+      },
+      "options": [],
+      "subcommands": []
+    },
+    {
+      "name": "rustdoc",
+      "i18n": {
+        "en": "Build a package's documentation, using specified custom flags",
+        "zh-CN": "用自定义参数调用 rustdoc 构建当前 crate 文档"
+      },
+      "options": [],
+      "subcommands": []
+    },
+    {
+      "name": "read-manifest",
+      "i18n": {
+        "en": "Print a JSON representation of a Cargo.toml manifest",
+        "zh-CN": "打印 Cargo.toml 的 JSON 表示"
       },
       "options": [],
       "subcommands": []
@@ -315,37 +389,43 @@
     {
       "flag": "-V, --version",
       "i18n": {
-        "en": "Print version info and exit. If used with --verbose, prints extra information."
+        "en": "Print version info and exit. If used with --verbose, prints extra information.",
+        "zh-CN": "打印版本信息"
       }
     },
     {
       "flag": "--list",
       "i18n": {
-        "en": "List all installed Cargo subcommands. If used with --verbose, prints extra information."
+        "en": "List all installed Cargo subcommands. If used with --verbose, prints extra information.",
+        "zh-CN": "列出所有已安装的 cargo 子命令"
       }
     },
     {
       "flag": "--explain",
       "i18n": {
-        "en": "Run rustc --explain CODE which will print out a detailed explanation of an error message (for example, E0004)."
+        "en": "Run rustc --explain CODE which will print out a detailed explanation of an error message (for example, E0004).",
+        "zh-CN": "解释一个 rustc 错误码"
       }
     },
     {
       "flag": "-v, --verbose",
       "i18n": {
-        "en": "Use verbose output. May be specified twice for “very verbose” output which includes extra output such as dependency warnings and build script output. May also be specified with the term.verbose config value <https://doc.rust-lang.org/cargo/reference/config.html>."
+        "en": "Use verbose output. May be specified twice for “very verbose” output which includes extra output such as dependency warnings and build script output. May also be specified with the term.verbose config value <https://doc.rust-lang.org/cargo/reference/config.html>.",
+        "zh-CN": "输出详细日志"
       }
     },
     {
       "flag": "-q, --quiet",
       "i18n": {
-        "en": "Do not print cargo log messages. May also be specified with the term.quiet config value <https://doc.rust-lang.org/cargo/reference/config.html>."
+        "en": "Do not print cargo log messages. May also be specified with the term.quiet config value <https://doc.rust-lang.org/cargo/reference/config.html>.",
+        "zh-CN": "静默模式，不输出非错误信息"
       }
     },
     {
       "flag": "--color",
       "i18n": {
-        "en": "Control when colored output is used. Valid values:"
+        "en": "Control when colored output is used. Valid values:",
+        "zh-CN": "控制输出颜色：auto / always / never"
       }
     },
     {
@@ -357,31 +437,36 @@
     {
       "flag": "--offline",
       "i18n": {
-        "en": "Prevents Cargo from accessing the network for any reason. Without this flag, Cargo will stop with an error if it needs to access the network and the network is not available. With this flag, Cargo will attempt to proceed without the network if possible."
+        "en": "Prevents Cargo from accessing the network for any reason. Without this flag, Cargo will stop with an error if it needs to access the network and the network is not available. With this flag, Cargo will attempt to proceed without the network if possible.",
+        "zh-CN": "离线模式 — 禁止网络访问"
       }
     },
     {
       "flag": "--config",
       "i18n": {
-        "en": "Overrides a Cargo configuration value. The argument should be in TOML syntax of KEY=VALUE, or provided as a path to an extra configuration file. This flag may be specified multiple times. See the command-line overrides section <https://doc.rust-lang.org/cargo/reference/config.html#command-line-overrides> for more information."
+        "en": "Overrides a Cargo configuration value. The argument should be in TOML syntax of KEY=VALUE, or provided as a path to an extra configuration file. This flag may be specified multiple times. See the command-line overrides section <https://doc.rust-lang.org/cargo/reference/config.html#command-line-overrides> for more information.",
+        "zh-CN": "覆盖 Cargo 配置（KEY=VALUE 或路径）"
       }
     },
     {
       "flag": "-C",
       "i18n": {
-        "en": "Changes the current working directory before executing any specified operations. This affects things like where cargo looks by default for the project manifest (Cargo.toml), as well as the directories searched for discovering .cargo/config.toml, for example. This option must appear before the command name, for example cargo -C path/to/my-project build."
+        "en": "Changes the current working directory before executing any specified operations. This affects things like where cargo looks by default for the project manifest (Cargo.toml), as well as the directories searched for discovering .cargo/config.toml, for example. This option must appear before the command name, for example cargo -C path/to/my-project build.",
+        "zh-CN": "切换到指定目录后再执行"
       }
     },
     {
       "flag": "-h, --help",
       "i18n": {
-        "en": "Prints help information."
+        "en": "Prints help information.",
+        "zh-CN": "显示帮助信息"
       }
     },
     {
       "flag": "-Z",
       "i18n": {
-        "en": "Unstable (nightly-only) flags to Cargo. Run cargo -Z help for details."
+        "en": "Unstable (nightly-only) flags to Cargo. Run cargo -Z help for details.",
+        "zh-CN": "传递不稳定开关（仅 nightly 工具链）"
       }
     }
   ]

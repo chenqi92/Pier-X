@@ -10,13 +10,15 @@
     {
       "flag": "--check-device",
       "i18n": {
-        "en": "Check  device  numbers  when  creating incremental archives (de‐ fault)."
+        "en": "Check  device  numbers  when  creating incremental archives (de‐ fault).",
+        "zh-CN": "增量备份时按设备号区分文件"
       }
     },
     {
       "flag": "-g, --listed-incremental=FILE",
       "i18n": {
-        "en": "Handle new GNU-format incremental backups.  FILE is the name  of a  snapshot  file, where tar stores additional information which is used to decide which files changed since the previous  incre‐ mental  dump  and,  consequently, must be dumped again.  If FILE does not exist when creating an archive, it will be created  and all  files  will  be added to the resulting archive (the level 0 dump).  To create incremental archives of non-zero level N,  you need  a copy of the snapshot file created for level N-1, and use it as FILE."
+        "en": "Handle new GNU-format incremental backups.  FILE is the name  of a  snapshot  file, where tar stores additional information which is used to decide which files changed since the previous  incre‐ mental  dump  and,  consequently, must be dumped again.  If FILE does not exist when creating an archive, it will be created  and all  files  will  be added to the resulting archive (the level 0 dump).  To create incremental archives of non-zero level N,  you need  a copy of the snapshot file created for level N-1, and use it as FILE.",
+        "zh-CN": "增量归档（推荐格式）"
       }
     },
     {
@@ -28,13 +30,15 @@
     {
       "flag": "-G, --incremental",
       "i18n": {
-        "en": "Handle old GNU-format incremental backups."
+        "en": "Handle old GNU-format incremental backups.",
+        "zh-CN": "GNU 增量归档（旧格式）"
       }
     },
     {
       "flag": "--ignore-failed-read",
       "i18n": {
-        "en": "Do not exit with nonzero on unreadable files."
+        "en": "Do not exit with nonzero on unreadable files.",
+        "zh-CN": "忽略不可读文件，不退出"
       }
     },
     {
@@ -46,19 +50,22 @@
     {
       "flag": "-n, --seek",
       "i18n": {
-        "en": "Assume the archive is seekable.  Normally tar  determines  auto‐ matically whether the archive can be seeked or not.  This option is  intended  for  use in cases when such recognition fails.  It takes effect only if the archive is open for reading (e.g.  with --list or --extract options)."
+        "en": "Assume the archive is seekable.  Normally tar  determines  auto‐ matically whether the archive can be seeked or not.  This option is  intended  for  use in cases when such recognition fails.  It takes effect only if the archive is open for reading (e.g.  with --list or --extract options).",
+        "zh-CN": "归档可 seek（加速）"
       }
     },
     {
       "flag": "--no-check-device",
       "i18n": {
-        "en": "Do not check device numbers when creating incremental archives."
+        "en": "Do not check device numbers when creating incremental archives.",
+        "zh-CN": "增量备份时忽略设备号"
       }
     },
     {
       "flag": "--no-seek",
       "i18n": {
-        "en": "Assume the archive is not seekable."
+        "en": "Assume the archive is not seekable.",
+        "zh-CN": "不依赖 seek"
       }
     },
     {
@@ -70,43 +77,50 @@
     {
       "flag": "--restrict",
       "i18n": {
-        "en": "Disable the use of some potentially harmful options."
+        "en": "Disable the use of some potentially harmful options.",
+        "zh-CN": "禁用某些可能不安全的特性"
       }
     },
     {
       "flag": "--sparse-version=MAJOR[.MINOR]",
       "i18n": {
-        "en": "Set  which version of the sparse format to use.  This option im‐ plies --sparse.  Valid argument values are 0.0,  0.1,  and  1.0. For  a  detailed  discussion of sparse formats, refer to the GNU Tar Manual,  appendix  D,  \"Sparse  Formats\".   Using  the  info reader,  it  can be accessed running the following command: info tar 'Sparse Formats'."
+        "en": "Set  which version of the sparse format to use.  This option im‐ plies --sparse.  Valid argument values are 0.0,  0.1,  and  1.0. For  a  detailed  discussion of sparse formats, refer to the GNU Tar Manual,  appendix  D,  \"Sparse  Formats\".   Using  the  info reader,  it  can be accessed running the following command: info tar 'Sparse Formats'.",
+        "zh-CN": "选择稀疏文件格式版本"
       }
     },
     {
       "flag": "-S, --sparse",
       "i18n": {
-        "en": "Handle sparse files efficiently.  Some files in the file  system may have segments which were actually never written (quite often these  are database files created by such systems as DBM).  When given this option, tar attempts to  determine  if  the  file  is sparse prior to archiving it, and if so, to reduce the resulting archive size by not dumping empty parts of the file."
+        "en": "Handle sparse files efficiently.  Some files in the file  system may have segments which were actually never written (quite often these  are database files created by such systems as DBM).  When given this option, tar attempts to  determine  if  the  file  is sparse prior to archiving it, and if so, to reduce the resulting archive size by not dumping empty parts of the file.",
+        "zh-CN": "高效处理稀疏文件"
       }
     },
     {
       "flag": "-k, --keep-old-files",
       "i18n": {
-        "en": "Don't replace existing files when extracting."
+        "en": "Don't replace existing files when extracting.",
+        "zh-CN": "解压时不覆盖已存在文件"
       }
     },
     {
       "flag": "--keep-newer-files",
       "i18n": {
-        "en": "Don't  replace  existing files that are newer than their archive copies."
+        "en": "Don't  replace  existing files that are newer than their archive copies.",
+        "zh-CN": "不覆盖比归档中更新的文件"
       }
     },
     {
       "flag": "--keep-directory-symlink",
       "i18n": {
-        "en": "Don't replace existing symlinks to directories when extracting."
+        "en": "Don't replace existing symlinks to directories when extracting.",
+        "zh-CN": "解压时不替换目录符号链接"
       }
     },
     {
       "flag": "--no-overwrite-dir",
       "i18n": {
-        "en": "Preserve metadata of existing directories."
+        "en": "Preserve metadata of existing directories.",
+        "zh-CN": "不覆盖目录元数据"
       }
     },
     {
@@ -118,13 +132,15 @@
     {
       "flag": "--overwrite",
       "i18n": {
-        "en": "Overwrite existing files when extracting."
+        "en": "Overwrite existing files when extracting.",
+        "zh-CN": "无条件覆盖已存在文件"
       }
     },
     {
       "flag": "--overwrite-dir",
       "i18n": {
-        "en": "Overwrite  metadata of existing directories when extracting (de‐ fault)."
+        "en": "Overwrite  metadata of existing directories when extracting (de‐ fault).",
+        "zh-CN": "覆盖目录的元数据"
       }
     },
     {
@@ -136,7 +152,8 @@
     {
       "flag": "--remove-files",
       "i18n": {
-        "en": "Remove files from disk after adding them to the archive."
+        "en": "Remove files from disk after adding them to the archive.",
+        "zh-CN": "归档后删除源文件"
       }
     },
     {
@@ -154,31 +171,36 @@
     {
       "flag": "-W, --verify",
       "i18n": {
-        "en": "Verify the archive after writing it."
+        "en": "Verify the archive after writing it.",
+        "zh-CN": "归档后立即校验"
       }
     },
     {
       "flag": "--ignore-command-error",
       "i18n": {
-        "en": "Ignore subprocess exit codes."
+        "en": "Ignore subprocess exit codes.",
+        "zh-CN": "忽略 --to-command 的子进程退出码"
       }
     },
     {
       "flag": "--no-ignore-command-error",
       "i18n": {
-        "en": "Treat non-zero exit codes of children as error (default)."
+        "en": "Treat non-zero exit codes of children as error (default).",
+        "zh-CN": "尊重子进程退出码"
       }
     },
     {
       "flag": "-O, --to-stdout",
       "i18n": {
-        "en": "Extract files to standard output."
+        "en": "Extract files to standard output.",
+        "zh-CN": "解压到 stdout 而非文件"
       }
     },
     {
       "flag": "--to-command=COMMAND",
       "i18n": {
-        "en": "Pipe  extracted  files to COMMAND.  The argument is the pathname of an external program, optionally with command line  arguments. The  program  will be invoked and the contents of the file being extracted supplied to it on its standard input.  Additional data will be supplied via the following environment variables:"
+        "en": "Pipe  extracted  files to COMMAND.  The argument is the pathname of an external program, optionally with command line  arguments. The  program  will be invoked and the contents of the file being extracted supplied to it on its standard input.  Additional data will be supplied via the following environment variables:",
+        "zh-CN": "解压内容通过管道交给 COMMAND"
       }
     },
     {
@@ -202,19 +224,22 @@
     {
       "flag": "--group-map=FILE",
       "i18n": {
-        "en": "Read group translation map from FILE.  Empty lines are  ignored. Comments  are  introduced  with  # sign and extend to the end of line.  Each non-empty line in FILE  defines  translation  for  a single  group.   It must consist of two fields, delimited by any amount of whitespace:"
+        "en": "Read group translation map from FILE.  Empty lines are  ignored. Comments  are  introduced  with  # sign and extend to the end of line.  Each non-empty line in FILE  defines  translation  for  a single  group.   It must consist of two fields, delimited by any amount of whitespace:",
+        "zh-CN": "归档时按 FILE 重映射 group"
       }
     },
     {
       "flag": "--mode=CHANGES",
       "i18n": {
-        "en": "Force symbolic mode CHANGES for added files."
+        "en": "Force symbolic mode CHANGES for added files.",
+        "zh-CN": "归档时强制权限"
       }
     },
     {
       "flag": "--mtime=DATE-OR-FILE",
       "i18n": {
-        "en": "Set mtime for added files.  DATE-OR-FILE is either  a  date/time in almost arbitrary format, or the name of an existing file.  In the latter case the mtime of that file will be used."
+        "en": "Set mtime for added files.  DATE-OR-FILE is either  a  date/time in almost arbitrary format, or the name of an existing file.  In the latter case the mtime of that file will be used.",
+        "zh-CN": "归档时强制 mtime"
       }
     },
     {
@@ -232,13 +257,15 @@
     {
       "flag": "--no-same-owner",
       "i18n": {
-        "en": "Extract files as yourself (default for ordinary users)."
+        "en": "Extract files as yourself (default for ordinary users).",
+        "zh-CN": "解压时按当前用户接管文件"
       }
     },
     {
       "flag": "--no-same-permissions",
       "i18n": {
-        "en": "Apply  the  user's  umask  when  extracting permissions from the archive (default for ordinary users)."
+        "en": "Apply  the  user's  umask  when  extracting permissions from the archive (default for ordinary users).",
+        "zh-CN": "不保留权限（按 umask 应用）"
       }
     },
     {
@@ -256,19 +283,22 @@
     {
       "flag": "--owner-map=FILE",
       "i18n": {
-        "en": "Read  owner translation map from FILE.  Empty lines are ignored. Comments are introduced with # sign and extend  to  the  end  of line.   Each  non-empty  line  in FILE defines translation for a single UID.  It must consist of two  fields,  delimited  by  any amount of whitespace:"
+        "en": "Read  owner translation map from FILE.  Empty lines are ignored. Comments are introduced with # sign and extend  to  the  end  of line.   Each  non-empty  line  in FILE defines translation for a single UID.  It must consist of two  fields,  delimited  by  any amount of whitespace:",
+        "zh-CN": "归档时按 FILE 重映射 owner"
       }
     },
     {
       "flag": "-p, --preserve-permissions, --same-permissions",
       "i18n": {
-        "en": "Set permissions of extracted files  to  those  recorded  in  the archive (default for superuser)."
+        "en": "Set permissions of extracted files  to  those  recorded  in  the archive (default for superuser).",
+        "zh-CN": "保留文件权限"
       }
     },
     {
       "flag": "--same-owner",
       "i18n": {
-        "en": "Try  extracting  files  with the same ownership as exists in the archive (default for superuser)."
+        "en": "Try  extracting  files  with the same ownership as exists in the archive (default for superuser).",
+        "zh-CN": "解压时保留所有者（root 默认）"
       }
     },
     {
@@ -286,55 +316,64 @@
     {
       "flag": "--acls",
       "i18n": {
-        "en": ""
+        "en": "",
+        "zh-CN": "存/还原 ACL"
       }
     },
     {
       "flag": "--no-acls",
       "i18n": {
-        "en": "Disable POSIX ACLs support."
+        "en": "Disable POSIX ACLs support.",
+        "zh-CN": "不存/还原 ACL"
       }
     },
     {
       "flag": "--selinux",
       "i18n": {
-        "en": "Enable SELinux context support."
+        "en": "Enable SELinux context support.",
+        "zh-CN": "存/还原 SELinux 上下文"
       }
     },
     {
       "flag": "--no-selinux",
       "i18n": {
-        "en": "Disable SELinux context support."
+        "en": "Disable SELinux context support.",
+        "zh-CN": "不存/还原 SELinux 上下文"
       }
     },
     {
       "flag": "--xattrs",
       "i18n": {
-        "en": "Enable extended attributes support."
+        "en": "Enable extended attributes support.",
+        "zh-CN": "存/还原扩展属性"
       }
     },
     {
       "flag": "--no-xattrs",
       "i18n": {
-        "en": "Disable extended attributes support."
+        "en": "Disable extended attributes support.",
+        "zh-CN": "不存/还原扩展属性"
       }
     },
     {
       "flag": "--xattrs-exclude=PATTERN",
       "i18n": {
-        "en": "Specify  the exclude pattern for xattr keys.  PATTERN is a glob‐ bing pattern, e.g. --xattrs-exclude='user.*' to include only at‐ tributes from the user namespace."
+        "en": "Specify  the exclude pattern for xattr keys.  PATTERN is a glob‐ bing pattern, e.g. --xattrs-exclude='user.*' to include only at‐ tributes from the user namespace.",
+        "zh-CN": "排除匹配 PATTERN 的扩展属性"
       }
     },
     {
       "flag": "--xattrs-include=PATTERN",
       "i18n": {
-        "en": "Specify the include pattern for xattr keys.  PATTERN is a  glob‐ bing pattern."
+        "en": "Specify the include pattern for xattr keys.  PATTERN is a  glob‐ bing pattern.",
+        "zh-CN": "只处理匹配 PATTERN 的扩展属性"
       }
     },
     {
       "flag": "-f, --file=ARCHIVE",
       "i18n": {
-        "en": "Use  archive  file  or  device  ARCHIVE.   If this option is not given, tar will first examine the environment  variable  `TAPE'. If  it is set, its value will be used as the archive name.  Oth‐ erwise, tar will assume the compiled-in  default.   The  default value  can be inspected either using the --show-defaults option, or at the end of the tar --help output."
+        "en": "Use  archive  file  or  device  ARCHIVE.   If this option is not given, tar will first examine the environment  variable  `TAPE'. If  it is set, its value will be used as the archive name.  Oth‐ erwise, tar will assume the compiled-in  default.   The  default value  can be inspected either using the --show-defaults option, or at the end of the tar --help output.",
+        "zh-CN": "指定归档文件（- 代表 stdin/stdout）"
       }
     },
     {
@@ -358,43 +397,50 @@
     {
       "flag": "-M, --multi-volume",
       "i18n": {
-        "en": "Create/list/extract multi-volume archive."
+        "en": "Create/list/extract multi-volume archive.",
+        "zh-CN": "多卷归档"
       }
     },
     {
       "flag": "--rmt-command=COMMAND",
       "i18n": {
-        "en": "Use COMMAND instead of rmt when accessing remote archives.   See the description of the -f option, above."
+        "en": "Use COMMAND instead of rmt when accessing remote archives.   See the description of the -f option, above.",
+        "zh-CN": "指定远程磁带程序"
       }
     },
     {
       "flag": "--rsh-command=COMMAND",
       "i18n": {
-        "en": "Use  COMMAND instead of rsh when accessing remote archives.  See the description of the -f option, above."
+        "en": "Use  COMMAND instead of rsh when accessing remote archives.  See the description of the -f option, above.",
+        "zh-CN": "指定远端 shell（默认 ssh）"
       }
     },
     {
       "flag": "--volno-file=FILE",
       "i18n": {
-        "en": "When this option is used in conjunction with --multi-volume, tar will keep track of which volume of a multi-volume archive it  is working in FILE."
+        "en": "When this option is used in conjunction with --multi-volume, tar will keep track of which volume of a multi-volume archive it  is working in FILE.",
+        "zh-CN": "记录当前卷号的文件"
       }
     },
     {
       "flag": "-b, --blocking-factor=BLOCKS",
       "i18n": {
-        "en": "Set record size to BLOCKSx512 bytes."
+        "en": "Set record size to BLOCKSx512 bytes.",
+        "zh-CN": "每记录块数（默认 20）"
       }
     },
     {
       "flag": "-B, --read-full-records",
       "i18n": {
-        "en": "When  listing or extracting, accept incomplete input records af‐ ter end-of-file marker."
+        "en": "When  listing or extracting, accept incomplete input records af‐ ter end-of-file marker.",
+        "zh-CN": "从管道读取时按完整记录读取"
       }
     },
     {
       "flag": "-i, --ignore-zeros",
       "i18n": {
-        "en": "Ignore zeroed  blocks  in  archive.   Normally  two  consecutive 512-blocks filled with zeroes mean EOF and tar stops reading af‐ ter encountering them.  This option instructs it to read further and is useful when reading archives created with the -A option."
+        "en": "Ignore zeroed  blocks  in  archive.   Normally  two  consecutive 512-blocks filled with zeroes mean EOF and tar stops reading af‐ ter encountering them.  This option instructs it to read further and is useful when reading archives created with the -A option.",
+        "zh-CN": "忽略归档中的 0 块（用于拼接归档）"
       }
     },
     {
@@ -406,13 +452,15 @@
     {
       "flag": "-H, --format=FORMAT",
       "i18n": {
-        "en": "Create archive of the given format.  Valid formats are:"
+        "en": "Create archive of the given format.  Valid formats are:",
+        "zh-CN": "归档格式（gnu/posix/ustar/v7）"
       }
     },
     {
       "flag": "--old-archive, --portability",
       "i18n": {
-        "en": "Same as --format=v7."
+        "en": "Same as --format=v7.",
+        "zh-CN": "等同于 --format=v7"
       }
     },
     {
@@ -424,7 +472,8 @@
     {
       "flag": "--posix",
       "i18n": {
-        "en": "Same as --format=posix."
+        "en": "Same as --format=posix.",
+        "zh-CN": "使用 POSIX.1-2001 格式"
       }
     },
     {
@@ -436,7 +485,8 @@
     {
       "flag": "-a, --auto-compress",
       "i18n": {
-        "en": "Use archive suffix to determine the compression program."
+        "en": "Use archive suffix to determine the compression program.",
+        "zh-CN": "根据后缀自动选择压缩器"
       }
     },
     {
@@ -448,61 +498,71 @@
     {
       "flag": "-j, --bzip2",
       "i18n": {
-        "en": "Filter the archive through bzip2(1)."
+        "en": "Filter the archive through bzip2(1).",
+        "zh-CN": "通过 bzip2 压缩/解压"
       }
     },
     {
       "flag": "-J, --xz",
       "i18n": {
-        "en": "Filter the archive through xz(1)."
+        "en": "Filter the archive through xz(1).",
+        "zh-CN": "通过 xz 压缩/解压"
       }
     },
     {
       "flag": "--lzip",
       "i18n": {
-        "en": ""
+        "en": "",
+        "zh-CN": "通过 lzip 压缩/解压"
       }
     },
     {
       "flag": "--lzma",
       "i18n": {
-        "en": ""
+        "en": "",
+        "zh-CN": "通过 lzma 压缩/解压"
       }
     },
     {
       "flag": "--lzop",
       "i18n": {
-        "en": ""
+        "en": "",
+        "zh-CN": "通过 lzop 压缩/解压"
       }
     },
     {
       "flag": "--no-auto-compress",
       "i18n": {
-        "en": "Do not use archive suffix to determine the compression program."
+        "en": "Do not use archive suffix to determine the compression program.",
+        "zh-CN": "不根据后缀自动选择压缩器"
       }
     },
     {
       "flag": "-z, --gzip, --gunzip, --ungzip",
       "i18n": {
-        "en": "Filter the archive through gzip(1)."
+        "en": "Filter the archive through gzip(1).",
+        "zh-CN": "通过 gzip 压缩/解压"
       }
     },
     {
       "flag": "-Z, --compress, --uncompress",
       "i18n": {
-        "en": "Filter the archive through compress(1)."
+        "en": "Filter the archive through compress(1).",
+        "zh-CN": "通过 compress(1) 压缩/解压"
       }
     },
     {
       "flag": "--zstd",
       "i18n": {
-        "en": ""
+        "en": "",
+        "zh-CN": "通过 zstd 压缩/解压"
       }
     },
     {
       "flag": "--add-file=FILE",
       "i18n": {
-        "en": "Add FILE to the archive (useful if its name starts with a dash)."
+        "en": "Add FILE to the archive (useful if its name starts with a dash).",
+        "zh-CN": "把 FILE 加入归档（即使以 - 开头）"
       }
     },
     {
@@ -514,37 +574,43 @@
     {
       "flag": "-C, --directory=DIR",
       "i18n": {
-        "en": "Change to DIR before performing any operations.  This option  is order-sensitive, i.e. it affects all options that follow."
+        "en": "Change to DIR before performing any operations.  This option  is order-sensitive, i.e. it affects all options that follow.",
+        "zh-CN": "切换到指定目录后再操作"
       }
     },
     {
       "flag": "--exclude=PATTERN",
       "i18n": {
-        "en": "Exclude  files  matching  PATTERN, a glob(3)-style wildcard pat‐ tern."
+        "en": "Exclude  files  matching  PATTERN, a glob(3)-style wildcard pat‐ tern.",
+        "zh-CN": "排除匹配 PATTERN 的文件"
       }
     },
     {
       "flag": "--exclude-backups",
       "i18n": {
-        "en": "Exclude backup and lock files."
+        "en": "Exclude backup and lock files.",
+        "zh-CN": "排除常见备份文件（*~、.#* 等）"
       }
     },
     {
       "flag": "--exclude-caches",
       "i18n": {
-        "en": "Exclude contents of directories  containing  file  CACHEDIR.TAG, except for the tag file itself."
+        "en": "Exclude contents of directories  containing  file  CACHEDIR.TAG, except for the tag file itself.",
+        "zh-CN": "排除带 CACHEDIR.TAG 的目录"
       }
     },
     {
       "flag": "--exclude-caches-all",
       "i18n": {
-        "en": "Exclude  directories  containing  file CACHEDIR.TAG and the file itself."
+        "en": "Exclude  directories  containing  file CACHEDIR.TAG and the file itself.",
+        "zh-CN": "排除整个 cache 目录"
       }
     },
     {
       "flag": "--exclude-caches-under",
       "i18n": {
-        "en": "Exclude everything under directories containing CACHEDIR.TAG"
+        "en": "Exclude everything under directories containing CACHEDIR.TAG",
+        "zh-CN": "排除目录及其子目录（保留 tag 本身）"
       }
     },
     {
@@ -562,31 +628,36 @@
     {
       "flag": "--exclude-tag=FILE",
       "i18n": {
-        "en": "Exclude contents of directories containing FILE, except for FILE itself."
+        "en": "Exclude contents of directories containing FILE, except for FILE itself.",
+        "zh-CN": "排除任何含 FILE 的目录（仅文件本身保留）"
       }
     },
     {
       "flag": "--exclude-tag-all=FILE",
       "i18n": {
-        "en": "Exclude directories containing FILE."
+        "en": "Exclude directories containing FILE.",
+        "zh-CN": "完全排除整个目录"
       }
     },
     {
       "flag": "--exclude-tag-under=FILE",
       "i18n": {
-        "en": "Exclude everything under directories containing FILE."
+        "en": "Exclude everything under directories containing FILE.",
+        "zh-CN": "排除目录及其子目录"
       }
     },
     {
       "flag": "--exclude-vcs",
       "i18n": {
-        "en": "Exclude version control system directories."
+        "en": "Exclude version control system directories.",
+        "zh-CN": "排除常见 VCS 目录（.git/.svn 等）"
       }
     },
     {
       "flag": "--exclude-vcs-ignores",
       "i18n": {
-        "en": "Exclude  files that match patterns read from VCS-specific ignore files.  Supported files are: .cvsignore, .gitignore, .bzrignore, and .hgignore."
+        "en": "Exclude  files that match patterns read from VCS-specific ignore files.  Supported files are: .cvsignore, .gitignore, .bzrignore, and .hgignore.",
+        "zh-CN": "尊重 VCS 的 ignore 文件"
       }
     },
     {
@@ -598,7 +669,8 @@
     {
       "flag": "--hard-dereference",
       "i18n": {
-        "en": "Follow hard links; archive and dump the files they refer to."
+        "en": "Follow hard links; archive and dump the files they refer to.",
+        "zh-CN": "归档时跟随硬链接"
       }
     },
     {
@@ -610,25 +682,29 @@
     {
       "flag": "--newer-mtime=DATE",
       "i18n": {
-        "en": "Work on files whose data changed after the DATE.  If DATE starts with / or . it is taken to be a file name;  the  mtime  of  that file is used as the date."
+        "en": "Work on files whose data changed after the DATE.  If DATE starts with / or . it is taken to be a file name;  the  mtime  of  that file is used as the date.",
+        "zh-CN": "只归档 mtime 比 DATE 新的文件"
       }
     },
     {
       "flag": "--no-null",
       "i18n": {
-        "en": "Disable the effect of the previous --null option."
+        "en": "Disable the effect of the previous --null option.",
+        "zh-CN": "-T/-X 文件用换行分隔"
       }
     },
     {
       "flag": "--no-recursion",
       "i18n": {
-        "en": "Avoid descending automatically in directories."
+        "en": "Avoid descending automatically in directories.",
+        "zh-CN": "处理目录时不递归"
       }
     },
     {
       "flag": "--no-unquote",
       "i18n": {
-        "en": "Do not unquote input file or member names."
+        "en": "Do not unquote input file or member names.",
+        "zh-CN": "不对文件名清单做反引用"
       }
     },
     {
@@ -640,7 +716,8 @@
     {
       "flag": "--null",
       "i18n": {
-        "en": "verbatim  (disables  special handling of names that start with a dash)."
+        "en": "verbatim  (disables  special handling of names that start with a dash).",
+        "zh-CN": "-T/-X 文件用 NUL 而非换行分隔"
       }
     },
     {
@@ -658,13 +735,15 @@
     {
       "flag": "-P, --absolute-names",
       "i18n": {
-        "en": "Don't  strip  leading  slashes  from  file  names  when creating archives."
+        "en": "Don't  strip  leading  slashes  from  file  names  when creating archives.",
+        "zh-CN": "保留路径开头的 / 不剥离"
       }
     },
     {
       "flag": "--recursion",
       "i18n": {
-        "en": "Recurse into directories (default)."
+        "en": "Recurse into directories (default).",
+        "zh-CN": "递归进入目录（默认）"
       }
     },
     {
@@ -676,13 +755,15 @@
     {
       "flag": "-T, --files-from=FILE",
       "i18n": {
-        "en": "Get names to extract or create from FILE."
+        "en": "Get names to extract or create from FILE.",
+        "zh-CN": "从 FILE 读取要处理的文件名清单"
       }
     },
     {
       "flag": "--unquote",
       "i18n": {
-        "en": "Unquote file or member names (default)."
+        "en": "Unquote file or member names (default).",
+        "zh-CN": "对清单文件做反引用"
       }
     },
     {
@@ -694,13 +775,15 @@
     {
       "flag": "-X, --exclude-from=FILE",
       "i18n": {
-        "en": "Exclude files matching patterns listed in FILE."
+        "en": "Exclude files matching patterns listed in FILE.",
+        "zh-CN": "从 FILE 读取要排除的模式"
       }
     },
     {
       "flag": "--strip-components=NUMBER",
       "i18n": {
-        "en": "Strip NUMBER leading components from file names on extraction."
+        "en": "Strip NUMBER leading components from file names on extraction.",
+        "zh-CN": "解压时去掉前 NUMBER 层路径前缀"
       }
     },
     {
@@ -712,7 +795,8 @@
     {
       "flag": "--anchored",
       "i18n": {
-        "en": "Patterns match file name start."
+        "en": "Patterns match file name start.",
+        "zh-CN": "排除模式从路径开头匹配"
       }
     },
     {
@@ -724,7 +808,8 @@
     {
       "flag": "--no-anchored",
       "i18n": {
-        "en": "Patterns match after any / (default for exclusion)."
+        "en": "Patterns match after any / (default for exclusion).",
+        "zh-CN": "排除模式可在路径任意位置匹配"
       }
     },
     {
@@ -766,19 +851,22 @@
     {
       "flag": "--checkpoint-action=ACTION",
       "i18n": {
-        "en": "Run ACTION on each checkpoint."
+        "en": "Run ACTION on each checkpoint.",
+        "zh-CN": "到达检查点时执行的动作（如 echo/sleep）"
       }
     },
     {
       "flag": "--clamp-mtime",
       "i18n": {
-        "en": "Only set time when the file is more recent than what  was  given with --mtime."
+        "en": "Only set time when the file is more recent than what  was  given with --mtime.",
+        "zh-CN": "归档/解压时把 mtime 截断到 --mtime"
       }
     },
     {
       "flag": "--full-time",
       "i18n": {
-        "en": "Print file time to its full resolution."
+        "en": "Print file time to its full resolution.",
+        "zh-CN": "完整时间戳"
       }
     },
     {
@@ -796,19 +884,22 @@
     {
       "flag": "--no-quote-chars=STRING",
       "i18n": {
-        "en": "Disable quoting for characters from STRING."
+        "en": "Disable quoting for characters from STRING.",
+        "zh-CN": "不对 STRING 中的字符做引用"
       }
     },
     {
       "flag": "--quote-chars=STRING",
       "i18n": {
-        "en": "Additionally quote characters from STRING."
+        "en": "Additionally quote characters from STRING.",
+        "zh-CN": "始终对 STRING 中的字符做引用"
       }
     },
     {
       "flag": "--quoting-style=STYLE",
       "i18n": {
-        "en": "Set  quoting  style for file and member names.  Valid values for STYLE are literal, shell, shell-always, c, c-maybe, escape,  lo‐ cale, clocale."
+        "en": "Set  quoting  style for file and member names.  Valid values for STYLE are literal, shell, shell-always, c, c-maybe, escape,  lo‐ cale, clocale.",
+        "zh-CN": "文件名引用样式（escape/locale 等）"
       }
     },
     {
@@ -838,31 +929,36 @@
     {
       "flag": "--utc",
       "i18n": {
-        "en": ""
+        "en": "",
+        "zh-CN": "时间戳按 UTC 显示"
       }
     },
     {
       "flag": "-v, --verbose",
       "i18n": {
-        "en": "Verbosely list files processed.  Each instance of this option on the command line increases the verbosity level by one.  The max‐ imum verbosity level is 3.  For a  detailed  discussion  of  how various  verbosity  levels  affect tar's output, please refer to GNU Tar Manual, subsection 2.5.2 \"The '--verbose' Option\"."
+        "en": "Verbosely list files processed.  Each instance of this option on the command line increases the verbosity level by one.  The max‐ imum verbosity level is 3.  For a  detailed  discussion  of  how various  verbosity  levels  affect tar's output, please refer to GNU Tar Manual, subsection 2.5.2 \"The '--verbose' Option\".",
+        "zh-CN": "列出处理的每个文件"
       }
     },
     {
       "flag": "--warning=KEYWORD",
       "i18n": {
-        "en": "Enable or disable warning messages identified by  KEYWORD.   The messages  are suppressed if KEYWORD is prefixed with no- and en‐ abled otherwise."
+        "en": "Enable or disable warning messages identified by  KEYWORD.   The messages  are suppressed if KEYWORD is prefixed with no- and en‐ abled otherwise.",
+        "zh-CN": "控制告警分类（all/none/...）"
       }
     },
     {
       "flag": "-w, --interactive, --confirmation",
       "i18n": {
-        "en": "Ask for confirmation for every action."
+        "en": "Ask for confirmation for every action.",
+        "zh-CN": "每个动作前交互确认"
       }
     },
     {
       "flag": "-o",
       "i18n": {
-        "en": "--no-same-owner."
+        "en": "--no-same-owner.",
+        "zh-CN": "create 时同 --no-same-owner，extract 时同 --portability"
       }
     }
   ]

@@ -297,8 +297,22 @@ pub fn completion_library_reload() -> LibrarySnapshot {
 /// post-install so the UI can re-render in one round-trip.
 #[tauri::command]
 pub fn completion_library_install_pack(body: String) -> Result<LibrarySnapshot, String> {
+    install_pack_from_body(&body)
+}
+
+/// Same as [`completion_library_install_pack`] but reads the JSON
+/// from a path on disk. Saves the frontend from pulling in a
+/// filesystem plugin just to forward the file body — the dialog
+/// plugin already gives us a path string, so we read it here.
+#[tauri::command]
+pub fn completion_library_install_pack_from_path(path: String) -> Result<LibrarySnapshot, String> {
+    let body = std::fs::read_to_string(&path).map_err(|e| format!("read {path}: {e}"))?;
+    install_pack_from_body(&body)
+}
+
+fn install_pack_from_body(body: &str) -> Result<LibrarySnapshot, String> {
     use pier_core::terminal::CommandPack;
-    let pack: CommandPack = serde_json::from_str(&body).map_err(|e| format!("invalid JSON: {e}"))?;
+    let pack: CommandPack = serde_json::from_str(body).map_err(|e| format!("invalid JSON: {e}"))?;
     if pack.command.is_empty() {
         return Err(String::from("pack `command` field is empty"));
     }
@@ -318,8 +332,6 @@ pub fn completion_library_install_pack(body: String) -> Result<LibrarySnapshot, 
     std::fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
     let path = dir.join(format!("{}.json", pack.command));
     let pretty = serde_json::to_string_pretty(&pack).map_err(|e| e.to_string())?;
-    // Atomic write: temp file + rename so the live library never
-    // sees a partially-written file mid-load.
     let tmp = path.with_extension("json.tmp");
     std::fs::write(&tmp, pretty).map_err(|e| e.to_string())?;
     std::fs::rename(&tmp, &path).map_err(|e| e.to_string())?;

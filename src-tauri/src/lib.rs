@@ -39,9 +39,10 @@ use ssh_cred_cache::{SshCredCache, TargetKey};
 
 mod terminal_smart;
 use terminal_smart::{
-    completion_library_install_pack, completion_library_list, completion_library_reload,
-    completion_library_remove_pack, terminal_completions, terminal_history_clear,
-    terminal_history_load, terminal_history_push, terminal_man_synopsis, terminal_validate_command,
+    completion_library_install_pack, completion_library_install_pack_from_path,
+    completion_library_list, completion_library_reload, completion_library_remove_pack,
+    terminal_completions, terminal_history_clear, terminal_history_load, terminal_history_push,
+    terminal_man_synopsis, terminal_validate_command,
 };
 
 struct AppState {
@@ -7695,6 +7696,7 @@ pub fn run() {
             completion_library_list,
             completion_library_reload,
             completion_library_install_pack,
+            completion_library_install_pack_from_path,
             completion_library_remove_pack,
             postgres_browse,
             postgres_execute,

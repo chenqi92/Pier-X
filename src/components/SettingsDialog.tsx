@@ -18,6 +18,7 @@ import {
   Sun,
   Terminal as TerminalIcon,
   Trash2,
+  Upload,
   X,
 } from "lucide-react";
 import { openUrl } from "@tauri-apps/plugin-opener";
@@ -930,6 +931,28 @@ function CommandLibraryPanel() {
     }
   }
 
+  async function importPack() {
+    setBusy(true);
+    try {
+      const dialog = await import("@tauri-apps/plugin-dialog");
+      const picked = await dialog.open({
+        multiple: false,
+        directory: false,
+        filters: [{ name: "Pier-X command pack", extensions: ["json"] }],
+        title: t("Import command pack"),
+      });
+      if (typeof picked !== "string" || !picked) return;
+      const m = await import("../lib/terminalSmart");
+      const next = await m.completionLibraryInstallPackFromPath(picked);
+      setSnapshot(next);
+      toast.success(t("Pack imported"));
+    } catch (e) {
+      toast.error(`${t("Import failed")}: ${String(e)}`);
+    } finally {
+      setBusy(false);
+    }
+  }
+
   const entries = snapshot?.entries ?? [];
   const totalSubs = entries.reduce((acc, e) => acc + e.subcommandCount, 0);
   const zhCovered = entries.filter((e) =>
@@ -941,17 +964,27 @@ function CommandLibraryPanel() {
       <SettingRow
         label={t("Installed packs")}
         description={t(
-          "Bundled + user-supplied command packs feed the Tab completion popover. Drop importer-generated JSON files into the directory below and click Reload, or remove user packs from the table.",
+          "Bundled + user-supplied command packs feed the Tab completion popover. Use Import to add a pack JSON, drop importer output into the directory below and click Reload, or remove user packs from the table.",
         )}
       >
-        <button
-          type="button"
-          className="btn is-ghost is-compact"
-          disabled={busy}
-          onClick={() => void reload()}
-        >
-          <RefreshCw size={10} /> {busy ? t("Reloading...") : t("Reload")}
-        </button>
+        <div style={{ display: "flex", gap: "var(--sp-2)" }}>
+          <button
+            type="button"
+            className="btn is-compact"
+            disabled={busy}
+            onClick={() => void importPack()}
+          >
+            <Upload size={10} /> {t("Import…")}
+          </button>
+          <button
+            type="button"
+            className="btn is-ghost is-compact"
+            disabled={busy}
+            onClick={() => void reload()}
+          >
+            <RefreshCw size={10} /> {busy ? t("Reloading...") : t("Reload")}
+          </button>
+        </div>
       </SettingRow>
 
       <div

@@ -1871,6 +1871,22 @@ export default function TerminalPanel({ tab, isActive, onEditConnection }: Props
               ? `${snapshot.cols} \u00d7 ${snapshot.rows}`
               : `${terminalSize.cols} \u00d7 ${terminalSize.rows}`}
           </span>
+          {smartMode ? (
+            <span
+              className={`meta-pill ${smartActive ? "meta-pill--success" : ""}`}
+              title={
+                smartActive
+                  ? t("Smart mode is intercepting Tab / autosuggest in this tab")
+                  : snapshot?.altScreen
+                    ? t("Smart mode bypassed: alt-screen app (vim / htop / tmux)")
+                    : snapshot?.bracketedPaste
+                      ? t("Smart mode bypassed: paste in flight")
+                      : t("Smart mode loading\u2026")
+              }
+            >
+              {smartActive ? t("Smart") : t("Smart \u00b7 idle")}
+            </span>
+          ) : null}
           {scrollbackOffset > 0 ? (
             <button
               className="mini-button"

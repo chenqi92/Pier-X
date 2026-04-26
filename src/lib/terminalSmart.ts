@@ -157,6 +157,13 @@ export const completionLibraryReload = () =>
 export const completionLibraryInstallPack = (body: string) =>
   invoke<LibrarySnapshot>("completion_library_install_pack", { body });
 
+/** Install a pack by reading the JSON file at the given absolute
+ *  path. Returns the post-install snapshot. Used by the Settings
+ *  "Import…" file picker so the frontend doesn't need to pull in a
+ *  filesystem plugin just to forward the bytes. */
+export const completionLibraryInstallPackFromPath = (path: string) =>
+  invoke<LibrarySnapshot>("completion_library_install_pack_from_path", { path });
+
 /** Remove a user pack by command name. Bundled packs are
  *  immutable; the UI hides the button for them. */
 export const completionLibraryRemovePack = (command: string) =>

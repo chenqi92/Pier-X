@@ -9,7 +9,8 @@
     {
       "name": "toolchain",
       "i18n": {
-        "en": "Install, uninstall, or list toolchains"
+        "en": "Install, uninstall, or list toolchains",
+        "zh-CN": "管理工具链（list/install/link 等）"
       },
       "options": [],
       "subcommands": []
@@ -17,7 +18,8 @@
     {
       "name": "default",
       "i18n": {
-        "en": "Set the default toolchain"
+        "en": "Set the default toolchain",
+        "zh-CN": "设置默认工具链"
       },
       "options": [],
       "subcommands": []
@@ -25,7 +27,8 @@
     {
       "name": "show",
       "i18n": {
-        "en": "Show the active and installed toolchains or profiles"
+        "en": "Show the active and installed toolchains or profiles",
+        "zh-CN": "显示当前激活/已安装的工具链"
       },
       "options": [],
       "subcommands": []
@@ -33,7 +36,8 @@
     {
       "name": "update",
       "i18n": {
-        "en": "Update Rust toolchains and rustup"
+        "en": "Update Rust toolchains and rustup",
+        "zh-CN": "更新已安装的工具链"
       },
       "options": [],
       "subcommands": []
@@ -41,7 +45,8 @@
     {
       "name": "check",
       "i18n": {
-        "en": "Check for updates to Rust toolchains and rustup"
+        "en": "Check for updates to Rust toolchains and rustup",
+        "zh-CN": "检查是否有可用更新"
       },
       "options": [],
       "subcommands": []
@@ -49,7 +54,8 @@
     {
       "name": "target",
       "i18n": {
-        "en": "Modify a toolchain's supported targets"
+        "en": "Modify a toolchain's supported targets",
+        "zh-CN": "管理目标平台（编译目标三元组）"
       },
       "options": [],
       "subcommands": []
@@ -57,7 +63,8 @@
     {
       "name": "component",
       "i18n": {
-        "en": "Modify a toolchain's installed components"
+        "en": "Modify a toolchain's installed components",
+        "zh-CN": "管理工具链下的组件（如 rustfmt、clippy）"
       },
       "options": [],
       "subcommands": []
@@ -65,7 +72,8 @@
     {
       "name": "override",
       "i18n": {
-        "en": "Modify toolchain overrides for directories"
+        "en": "Modify toolchain overrides for directories",
+        "zh-CN": "为特定目录指定工具链"
       },
       "options": [],
       "subcommands": []
@@ -73,7 +81,8 @@
     {
       "name": "run",
       "i18n": {
-        "en": "Run a command with an environment configured for a given toolchain"
+        "en": "Run a command with an environment configured for a given toolchain",
+        "zh-CN": "在指定工具链下运行命令"
       },
       "options": [],
       "subcommands": []
@@ -81,7 +90,8 @@
     {
       "name": "which",
       "i18n": {
-        "en": "Display which binary will be run for a given command"
+        "en": "Display which binary will be run for a given command",
+        "zh-CN": "显示某二进制实际指向的工具链可执行文件"
       },
       "options": [],
       "subcommands": []
@@ -89,7 +99,8 @@
     {
       "name": "doc",
       "i18n": {
-        "en": "Open the documentation for the current toolchain"
+        "en": "Open the documentation for the current toolchain",
+        "zh-CN": "打开本地 Rust 文档（标准库等）"
       },
       "options": [],
       "subcommands": []
@@ -105,7 +116,8 @@
     {
       "name": "self",
       "i18n": {
-        "en": "Modify the rustup installation"
+        "en": "Modify the rustup installation",
+        "zh-CN": "管理 rustup 自身（升级/卸载）"
       },
       "options": [],
       "subcommands": []
@@ -113,7 +125,8 @@
     {
       "name": "set",
       "i18n": {
-        "en": "Alter rustup settings"
+        "en": "Alter rustup settings",
+        "zh-CN": "修改 rustup 设置"
       },
       "options": [],
       "subcommands": []
@@ -121,7 +134,8 @@
     {
       "name": "completions",
       "i18n": {
-        "en": "Generate tab-completion scripts for your shell"
+        "en": "Generate tab-completion scripts for your shell",
+        "zh-CN": "生成 shell 补全脚本"
       },
       "options": [],
       "subcommands": []
@@ -129,7 +143,8 @@
     {
       "name": "help",
       "i18n": {
-        "en": "Print this message or the help of the given subcommand(s)"
+        "en": "Print this message or the help of the given subcommand(s)",
+        "zh-CN": "查看子命令的帮助"
       },
       "options": [],
       "subcommands": []
@@ -147,19 +162,22 @@
     {
       "flag": "-v, --verbose",
       "i18n": {
-        "en": "Set log level to 'DEBUG' if 'RUSTUP_LOG' is unset"
+        "en": "Set log level to 'DEBUG' if 'RUSTUP_LOG' is unset",
+        "zh-CN": "输出详细日志"
       }
     },
     {
       "flag": "-q, --quiet",
       "i18n": {
-        "en": "Disable progress output, set log level to 'WARN' if 'RUSTUP_LOG' is unset"
+        "en": "Disable progress output, set log level to 'WARN' if 'RUSTUP_LOG' is unset",
+        "zh-CN": "静默模式"
       }
     },
     {
       "flag": "-h, --help",
       "i18n": {
-        "en": "Print help"
+        "en": "Print help",
+        "zh-CN": "显示帮助"
       }
     },
     {

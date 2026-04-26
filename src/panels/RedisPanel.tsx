@@ -57,7 +57,11 @@ function RedisPanelBody({ tab }: Props) {
   // local — small enough that wiring it through useTabStore
   // would only buy persistence for a value the user rarely
   // changes during a session.
-  const [treeMode, setTreeMode] = useState(false);
+  // Tree mode defaults to true: most Redis keyspaces use `:` as a
+  // namespace separator (`user:42:profile`, `cache:home:v1`), so the
+  // grouped view is the more useful default. Users can flip back to
+  // a flat list with the toolbar toggle.
+  const [treeMode, setTreeMode] = useState(true);
   const [command, setCommand] = useState("PING");
   const [state, setState] = useState<RedisBrowserState | null>(null);
   const [busy, setBusy] = useState(false);
@@ -220,11 +224,13 @@ function RedisPanelBody({ tab }: Props) {
       } catch (e) {
         if (isCurrent()) setError(formatError(e));
       } finally {
-        // Mirror useDbCredentialFlow: only clear the spinner; keep the
-        // last `connectingStep` visible in the splash footer so a
-        // silent failure doesn't look like a no-op.
+        // Clear both spinner and step. Success → splash unmounts so
+        // the cleared step is invisible anyway. Failure → the panel's
+        // error banner explains; a stale "Opening SSH tunnel…" next
+        // to it would just confuse the user.
         if (isCurrent()) {
           setActivating(null);
+          setConnectingStep(null);
         }
       }
     })();
@@ -304,6 +310,8 @@ function RedisPanelBody({ tab }: Props) {
       await browse(undefined, pw);
     } catch (e) {
       setError(formatError(e));
+    } finally {
+      setConnectingStep(null);
     }
   }
 
@@ -735,11 +743,35 @@ function RedisPanelBody({ tab }: Props) {
             }}
           />
           <label>{t("DB")}</label>
-          <input
+          <select
             className="rds-input rds-input--narrow"
             value={db}
-            onChange={(e) => setDb(e.currentTarget.value)}
-          />
+            onChange={(e) => {
+              const next = e.currentTarget.value;
+              setDb(next);
+              const n = Number.parseInt(next, 10);
+              if (Number.isFinite(n)) {
+                updateTab(tab.id, { redisDb: n });
+              }
+            }}
+            title={t("Redis DB index (0-15 by default)")}
+          >
+            {(() => {
+              // Standard Redis ships 16 DBs by default. If this profile
+              // is talking to a server tuned with `databases > 16` and
+              // the user already saved a higher value, surface it as an
+              // extra leading option so the dropdown round-trips losslessly.
+              const current = Number.parseInt(db, 10);
+              const extras = Number.isFinite(current) && (current < 0 || current > 15)
+                ? [current]
+                : [];
+              return [...extras, ...Array.from({ length: 16 }, (_, i) => i)].map((i) => (
+                <option key={i} value={String(i)}>
+                  {i}
+                </option>
+              ));
+            })()}
+          </select>
           <button
             type="button"
             className="btn is-ghost is-compact"

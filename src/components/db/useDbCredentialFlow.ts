@@ -339,28 +339,13 @@ export function useDbCredentialFlow(opts: UseDbCredentialFlowOpts): DbCredential
       setTimeout(() => passwordInputRef.current?.focus(), 0);
     };
 
-    // eslint-disable-next-line no-console
-    console.log("[db-flow] effect fire", {
-      kind, activeCredId, savedIndex, hasSsh, hasLiveState, tabHost,
-      tabPassword: tabPassword ? "(set)" : "(empty)",
-      browseTrigger, gen: myGen,
-    });
-
     void (async () => {
       try {
         let effectivePw = tabPassword;
         if (!effectivePw) {
           if (isCurrent()) setConnectingStep(t("Resolving saved password…"));
           try {
-            // eslint-disable-next-line no-console
-            console.log("[db-flow] dbCredResolve…", { gen: myGen });
             const resolved = await cmd.dbCredResolve(savedIndex, activeCredId);
-            // eslint-disable-next-line no-console
-            console.log("[db-flow] dbCredResolve ok", {
-              gen: myGen,
-              hasPassword: resolved.credential.hasPassword,
-              gotPw: !!resolved.password,
-            });
             if (!isCurrent()) return;
             effectivePw = resolved.password ?? "";
             if (effectivePw) {
@@ -369,9 +354,7 @@ export function useDbCredentialFlow(opts: UseDbCredentialFlowOpts): DbCredential
               surfaceMissingKeyring();
               return;
             }
-          } catch (resolveErr) {
-            // eslint-disable-next-line no-console
-            console.log("[db-flow] dbCredResolve threw", { gen: myGen, err: resolveErr });
+          } catch {
             if (!isCurrent()) return;
             surfaceMissingKeyring();
             return;
@@ -381,20 +364,18 @@ export function useDbCredentialFlow(opts: UseDbCredentialFlowOpts): DbCredential
         setConnectingStep(
           hasSsh ? t("Opening SSH tunnel and querying…") : t("Connecting…"),
         );
-        // eslint-disable-next-line no-console
-        console.log("[db-flow] calling panel browse()…", { gen: myGen, pwLen: effectivePw.length });
         await browse(effectivePw);
-        // eslint-disable-next-line no-console
-        console.log("[db-flow] panel browse() resolved", { gen: myGen });
       } catch (e) {
-        // eslint-disable-next-line no-console
-        console.log("[db-flow] async outer catch", { gen: myGen, err: e });
         if (isCurrent()) setError(formatError(e));
       } finally {
-        // eslint-disable-next-line no-console
-        console.log("[db-flow] async finally", { gen: myGen, isCurrent: isCurrent() });
+        // Clear both spinner and step. Success → splash unmounts so
+        // the cleared step is invisible anyway. Failure → the panel's
+        // own error banner (or `flow.tunnelError`) carries the real
+        // diagnosis; keeping a stale "Opening SSH tunnel…" alongside
+        // the error reads as a contradiction.
         if (isCurrent()) {
           setActivating(null);
+          setConnectingStep(null);
         }
       }
     })();
@@ -450,27 +431,17 @@ export function useDbCredentialFlow(opts: UseDbCredentialFlowOpts): DbCredential
     setError("");
     setConnectingStep(t("Re-resolving password and reconnecting…"));
     try {
-      // eslint-disable-next-line no-console
-      console.log("[db-flow] handlePasswordUpdated → resolve");
       const resolved = await cmd.dbCredResolve(savedIndex, activeCredId);
-      // eslint-disable-next-line no-console
-      console.log("[db-flow] handlePasswordUpdated → resolved", {
-        gotPw: !!resolved.password,
-      });
       const pw = resolved.password ?? "";
       updateTab(tab.id, adapter.patchPasswordAfterRotate(pw));
       setConnectingStep(
         hasSsh ? t("Opening SSH tunnel and querying…") : t("Connecting…"),
       );
-      // eslint-disable-next-line no-console
-      console.log("[db-flow] handlePasswordUpdated → calling panel browse()");
       await browse(pw);
-      // eslint-disable-next-line no-console
-      console.log("[db-flow] handlePasswordUpdated → panel browse() resolved");
     } catch (e) {
-      // eslint-disable-next-line no-console
-      console.log("[db-flow] handlePasswordUpdated → threw", e);
       setError(formatError(e));
+    } finally {
+      setConnectingStep(null);
     }
   }
 

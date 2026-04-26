@@ -161,11 +161,7 @@ function MySqlPanelBody({ tab }: Props) {
     setBusy(true);
     setError("");
     try {
-      // eslint-disable-next-line no-console
-      console.log("[mysql] browse start — ensureConnectionTarget…");
       const target = await flow.ensureConnectionTarget();
-      // eslint-disable-next-line no-console
-      console.log("[mysql] tunnel ok", { host: target.host, port: target.port });
       const pw = passwordOverride !== undefined ? passwordOverride : tab.mysqlPassword;
       const tableTarget = (nextTable ?? state?.tableName ?? "").trim() || null;
       // Switching the active table resets paging — the previous
@@ -173,14 +169,6 @@ function MySqlPanelBody({ tab }: Props) {
       const tableChanged = tableTarget !== (state?.tableName ?? "");
       const effectiveOffset = nextOffset ?? (tableChanged ? 0 : pageOffset);
       const effectiveSize = nextSize ?? pageSize;
-      // eslint-disable-next-line no-console
-      console.log("[mysql] mysqlBrowse…", {
-        host: target.host, port: target.port,
-        user: tab.mysqlUser.trim(),
-        pwLen: pw?.length ?? 0,
-        database: tab.mysqlDatabase.trim() || null,
-        table: tableTarget,
-      });
       const s = await cmd.mysqlBrowse({
         host: target.host,
         port: target.port,
@@ -191,12 +179,6 @@ function MySqlPanelBody({ tab }: Props) {
         offset: effectiveOffset,
         limit: effectiveSize,
       });
-      // eslint-disable-next-line no-console
-      console.log("[mysql] mysqlBrowse ok", {
-        databases: s.databases?.length,
-        tables: s.tables?.length,
-        previewRows: s.preview?.rows.length,
-      });
       setState(s);
       setPageSize(s.pageSize);
       setPageOffset(s.pageOffset);
@@ -204,12 +186,8 @@ function MySqlPanelBody({ tab }: Props) {
         updateTab(tab.id, { mysqlDatabase: s.databaseName });
       }
     } catch (e) {
-      // eslint-disable-next-line no-console
-      console.log("[mysql] browse threw", e);
       setError(formatError(e));
     } finally {
-      // eslint-disable-next-line no-console
-      console.log("[mysql] browse finally");
       setBusy(false);
     }
   }

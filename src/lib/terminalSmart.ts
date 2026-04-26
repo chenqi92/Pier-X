@@ -33,7 +33,8 @@ export type CompletionKind =
   | "file"
   | "directory"
   | "subcommand"
-  | "option";
+  | "option"
+  | "history";
 
 /** One row in the completion popover. `value` is the full text the
  *  UI should produce when this row is selected; `display` is what

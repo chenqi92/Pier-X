@@ -226,7 +226,6 @@ export default function TerminalPanel({ tab, isActive, onEditConnection }: Props
   const pushHistory = useTerminalHistoryStore((s) => s.push);
   const hydrateHistory = useTerminalHistoryStore((s) => s.hydrate);
   const historyPersist = useSettingsStore((s) => s.terminalHistoryPersist);
-  const prevAwaitingInputRef = useRef(false);
   // The suggestion suffix itself is computed alongside the other
   // smart-active-derived state below, after `smartActive` exists.
   // The ref is filled there too; declared up here so event handlers
@@ -806,38 +805,6 @@ export default function TerminalPanel({ tab, isActive, onEditConnection }: Props
     : "";
   suggestionSuffixRef.current = suggestionSuffix;
 
-  // M5: edge-triggered history capture. When `awaitingInput` flips
-  // from true to false we know the shell just received OSC 133;C,
-  // i.e. the user pressed Enter on the buffered line. Push it into
-  // the ring at that exact moment and let the buffer-clear effect
-  // above tear down the rest. We never push on smart-mode disable
-  // (rapid toggle would lose the line) — only on the genuine
-  // command-submitted transition.
-  //
-  // When `terminalHistoryPersist` is on we also forward the line
-  // to the backend so it lands on disk; the backend itself drops
-  // credential-bearing lines via the keyword filter.
-  useEffect(() => {
-    const prev = prevAwaitingInputRef.current;
-    const curr = snapshot?.awaitingInput === true;
-    if (prev && !curr && smartActive) {
-      const line = smartLineBufferRef.current;
-      if (line.trim()) {
-        pushHistory(line, {
-          shell: session?.shell,
-          persist: historyPersist,
-        });
-      }
-    }
-    prevAwaitingInputRef.current = curr;
-  }, [
-    snapshot?.awaitingInput,
-    smartActive,
-    pushHistory,
-    session?.shell,
-    historyPersist,
-  ]);
-
   // History persistence: hydrate the ring with the on-disk file
   // for this session's shell on first mount. The store dedups so
   // calling this for every tab open is safe — only the first one
@@ -1026,11 +993,19 @@ export default function TerminalPanel({ tab, isActive, onEditConnection }: Props
     for (let i = 0; i < data.length; i++) {
       const code = data.charCodeAt(i);
       if (code === CR || code === LF) {
-        // The shell will emit OSC 133;C in response to the actual
-        // submit, which clears `awaiting_input` and the snapshot
-        // effect will reset us. We pre-clear here so a buffered
-        // line doesn't get carried into the moment between the
-        // bytes leaving the keyboard and the C-sentinel arriving.
+        // M5 history capture: push the just-submitted line into the
+        // ring before clearing. We used to capture this on the
+        // OSC 133;C edge (`awaiting_input` true → false), but remote
+        // shells reached over `ssh` don't emit OSC 133, so that
+        // path missed every command typed inside SSH. The byte
+        // stream sees Enter regardless of where the shell lives.
+        const submitted = buf.trim();
+        if (submitted) {
+          pushHistory(submitted, {
+            shell: session?.shell,
+            persist: historyPersist,
+          });
+        }
         buf = "";
         if (code === CR && data.charCodeAt(i + 1) === LF) i += 1;
         continue;
@@ -1617,8 +1592,36 @@ export default function TerminalPanel({ tab, isActive, onEditConnection }: Props
     try {
       items = await terminalCompletions(line, cursor, cwd, locale);
     } catch {
-      return;
+      // Fall through with `items` empty — history rows below may
+      // still produce a useful popover even when the backend
+      // completer fails (e.g. transient IPC blip).
     }
+
+    // Prepend up-to-10 history rows that strictly extend the current
+    // line. We slice from the user's word-start so `insertCompletion`'s
+    // existing word-diff logic injects the right tail into the PTY.
+    // Most-recent-first ordering is preserved by `historyRing`'s
+    // insertion semantics in `useTerminalHistoryStore`.
+    const historyRows: Completion[] = [];
+    if (line.length > 0) {
+      const wordStart = findWordStart(line, cursor);
+      const seen = new Set<string>();
+      for (const entry of historyRing) {
+        if (historyRows.length >= 10) break;
+        if (entry.length <= line.length) continue;
+        if (!entry.startsWith(line)) continue;
+        if (seen.has(entry)) continue;
+        seen.add(entry);
+        historyRows.push({
+          kind: "history",
+          value: entry.slice(wordStart),
+          display: entry,
+          hint: null,
+          description: null,
+        });
+      }
+    }
+    items = [...historyRows, ...items];
     if (items.length === 0) return;
     // Always show the popover — even for a single match. The old
     // "auto-insert when exactly one candidate" path silently

@@ -20,6 +20,7 @@
 import { useEffect, useRef } from "react";
 import {
   Box,
+  Clock,
   FileText,
   Flag,
   Folder,
@@ -61,6 +62,8 @@ function iconForKind(kind: Completion["kind"]) {
       return GitBranch;
     case "option":
       return Flag;
+    case "history":
+      return Clock;
     case "file":
     default:
       return FileText;

@@ -7,6 +7,7 @@ use pier_core::services::docker;
 use pier_core::services::firewall;
 use pier_core::services::git::{CommitInfo, GitClient, StashEntry, UnpushedCommit};
 use pier_core::services::mysql::{self as mysql_service, MysqlClient, MysqlConfig};
+use pier_core::services::nginx;
 use pier_core::services::postgres::{PostgresClient, PostgresConfig};
 use pier_core::services::redis::{RedisClient, RedisConfig};
 use pier_core::services::package_manager;
@@ -6047,6 +6048,208 @@ async fn software_uninstall_remote(
     }
 }
 
+// ── Nginx panel ────────────────────────────────────────────────
+
+#[tauri::command]
+async fn nginx_layout(
+    app: tauri::AppHandle,
+    host: String,
+    port: u16,
+    user: String,
+    auth_mode: String,
+    password: String,
+    key_path: String,
+    saved_connection_index: Option<usize>,
+) -> Result<nginx::NginxLayout, String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        let state: tauri::State<'_, AppState> = app.state();
+        let session = get_or_open_ssh_session(
+            &state,
+            &host,
+            port,
+            &user,
+            &auth_mode,
+            &password,
+            &key_path,
+            saved_connection_index,
+        )?;
+        nginx::list_layout_blocking(&session).map_err(|e| e.to_string())
+    })
+    .await
+    .map_err(|e| format!("nginx_layout join: {e}"))?
+}
+
+#[tauri::command]
+async fn nginx_read_file(
+    app: tauri::AppHandle,
+    host: String,
+    port: u16,
+    user: String,
+    auth_mode: String,
+    password: String,
+    key_path: String,
+    saved_connection_index: Option<usize>,
+    path: String,
+) -> Result<NginxReadFileView, String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        let state: tauri::State<'_, AppState> = app.state();
+        let session = get_or_open_ssh_session(
+            &state,
+            &host,
+            port,
+            &user,
+            &auth_mode,
+            &password,
+            &key_path,
+            saved_connection_index,
+        )?;
+        let content = nginx::read_file_blocking(&session, &path)
+            .map_err(|e| e.to_string())?;
+        let parse = nginx::parse(&content);
+        Ok::<_, String>(NginxReadFileView {
+            path,
+            content,
+            parse,
+        })
+    })
+    .await
+    .map_err(|e| format!("nginx_read_file join: {e}"))?
+}
+
+#[tauri::command]
+async fn nginx_save_file(
+    app: tauri::AppHandle,
+    host: String,
+    port: u16,
+    user: String,
+    auth_mode: String,
+    password: String,
+    key_path: String,
+    saved_connection_index: Option<usize>,
+    path: String,
+    content: String,
+) -> Result<nginx::NginxSaveResult, String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        let state: tauri::State<'_, AppState> = app.state();
+        let session = get_or_open_ssh_session(
+            &state,
+            &host,
+            port,
+            &user,
+            &auth_mode,
+            &password,
+            &key_path,
+            saved_connection_index,
+        )?;
+        nginx::save_file_validate_reload_blocking(&session, &path, &content)
+            .map_err(|e| e.to_string())
+    })
+    .await
+    .map_err(|e| format!("nginx_save_file join: {e}"))?
+}
+
+#[tauri::command]
+async fn nginx_validate(
+    app: tauri::AppHandle,
+    host: String,
+    port: u16,
+    user: String,
+    auth_mode: String,
+    password: String,
+    key_path: String,
+    saved_connection_index: Option<usize>,
+) -> Result<nginx::NginxValidateResult, String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        let state: tauri::State<'_, AppState> = app.state();
+        let session = get_or_open_ssh_session(
+            &state,
+            &host,
+            port,
+            &user,
+            &auth_mode,
+            &password,
+            &key_path,
+            saved_connection_index,
+        )?;
+        nginx::validate_blocking(&session).map_err(|e| e.to_string())
+    })
+    .await
+    .map_err(|e| format!("nginx_validate join: {e}"))?
+}
+
+#[tauri::command]
+async fn nginx_reload(
+    app: tauri::AppHandle,
+    host: String,
+    port: u16,
+    user: String,
+    auth_mode: String,
+    password: String,
+    key_path: String,
+    saved_connection_index: Option<usize>,
+) -> Result<nginx::NginxValidateResult, String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        let state: tauri::State<'_, AppState> = app.state();
+        let session = get_or_open_ssh_session(
+            &state,
+            &host,
+            port,
+            &user,
+            &auth_mode,
+            &password,
+            &key_path,
+            saved_connection_index,
+        )?;
+        nginx::reload_blocking(&session).map_err(|e| e.to_string())
+    })
+    .await
+    .map_err(|e| format!("nginx_reload join: {e}"))?
+}
+
+#[tauri::command]
+async fn nginx_toggle_site(
+    app: tauri::AppHandle,
+    host: String,
+    port: u16,
+    user: String,
+    auth_mode: String,
+    password: String,
+    key_path: String,
+    saved_connection_index: Option<usize>,
+    site_name: String,
+    enable: bool,
+) -> Result<nginx::NginxValidateResult, String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        let state: tauri::State<'_, AppState> = app.state();
+        let session = get_or_open_ssh_session(
+            &state,
+            &host,
+            port,
+            &user,
+            &auth_mode,
+            &password,
+            &key_path,
+            saved_connection_index,
+        )?;
+        nginx::toggle_site_blocking(&session, &site_name, enable)
+            .map_err(|e| e.to_string())
+    })
+    .await
+    .map_err(|e| format!("nginx_toggle_site join: {e}"))?
+}
+
+/// Bundles the read content with its parsed AST so the frontend gets
+/// both in one round-trip. Surfacing the parse from the backend (as
+/// opposed to re-parsing in TS) keeps the AST shape canonical: any
+/// future renderer change lives in one place.
+#[derive(serde::Serialize, Clone)]
+#[serde(rename_all = "camelCase")]
+struct NginxReadFileView {
+    path: String,
+    content: String,
+    parse: nginx::NginxParseResult,
+}
+
 #[tauri::command]
 fn sqlite_browse_remote(
     state: tauri::State<'_, AppState>,
@@ -8344,6 +8547,12 @@ pub fn run() {
             software_install_remote,
             software_update_remote,
             software_uninstall_remote,
+            nginx_layout,
+            nginx_read_file,
+            nginx_save_file,
+            nginx_validate,
+            nginx_reload,
+            nginx_toggle_site,
             sqlite_find_in_dir,
             docker_inspect,
             docker_remove_image,

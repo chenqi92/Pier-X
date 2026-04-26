@@ -6759,3 +6759,365 @@ button,
 @media (prefers-reduced-motion: reduce) {
   .panel-stage > :not(.panel-sk) { animation: none; }
 }
+
+/* ── Nginx panel ─────────────────────────────────────────────────
+ * Layout: header → banners → two-column body (file tree + editor)
+ * → modules section. The structured editor renders its directives
+ * as nested `.ngx-card` blocks — the recursion limits matter for
+ * vertical density, not for clipping (overflow: visible). */
+.ngx-panel {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-2);
+  padding: var(--sp-3);
+  height: 100%;
+  overflow: auto;
+}
+.ngx-panel__error {
+  margin-top: var(--sp-1);
+}
+.ngx-panel__body {
+  display: grid;
+  grid-template-columns: minmax(180px, 240px) 1fr;
+  gap: var(--sp-3);
+  flex: 1;
+  min-height: 0;
+}
+.ngx-tree {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-2);
+  border: 1px solid var(--line);
+  border-radius: var(--radius-sm);
+  background: var(--surface);
+  padding: var(--sp-2);
+  overflow: auto;
+}
+.ngx-tree--empty { min-height: 80px; }
+.ngx-tree__section {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-0-5);
+}
+.ngx-tree__section-title {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-1);
+  color: var(--muted);
+  font-size: var(--size-micro);
+  text-transform: lowercase;
+  padding: var(--sp-0-5) var(--sp-1);
+}
+.ngx-tree__row {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-1);
+  padding: var(--sp-0-5) var(--sp-1);
+  border: 0;
+  background: transparent;
+  color: var(--ink-2);
+  font-size: var(--ui-fs-sm);
+  border-radius: var(--radius-xs);
+  cursor: pointer;
+  text-align: left;
+}
+.ngx-tree__row:hover { background: var(--bg-hover); color: var(--ink); }
+.ngx-tree__row.is-active {
+  background: var(--accent-dim);
+  color: var(--accent-ink);
+}
+.ngx-tree__name {
+  flex: 1;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.ngx-tree__toggle {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--sp-0-5);
+  padding: 0 var(--sp-1);
+  height: 16px;
+  border: 1px solid var(--line);
+  background: var(--surface-2);
+  color: var(--muted);
+  font-size: var(--size-micro);
+  border-radius: var(--radius-pill);
+  cursor: pointer;
+}
+.ngx-tree__toggle.is-on {
+  border-color: var(--svc-nginx);
+  color: var(--svc-nginx);
+  background: var(--accent-subtle);
+}
+.ngx-tree__toggle:hover { color: var(--ink); }
+
+.ngx-banner {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-1);
+  padding: var(--sp-2);
+  border-radius: var(--radius-sm);
+  border: 1px solid var(--line);
+  background: var(--surface);
+}
+.ngx-banner.is-ok {
+  border-color: var(--pos);
+  background: var(--pos-dim);
+}
+.ngx-banner.is-bad {
+  border-color: var(--neg);
+  background: var(--neg-dim);
+}
+.ngx-banner__head {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-1);
+  font-size: var(--ui-fs-sm);
+  color: var(--ink);
+}
+.ngx-banner__output {
+  margin: 0;
+  padding: var(--sp-1) var(--sp-2);
+  border-radius: var(--radius-xs);
+  background: var(--panel);
+  color: var(--ink-2);
+  font-size: var(--size-micro);
+  white-space: pre-wrap;
+  word-break: break-word;
+  max-height: 220px;
+  overflow: auto;
+}
+
+.ngx-panel__editor {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  min-height: 0;
+}
+.ngx-editor {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-2);
+  flex: 1;
+  min-height: 0;
+}
+.ngx-editor__head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--sp-2);
+  flex-wrap: wrap;
+}
+.ngx-editor__path {
+  color: var(--ink);
+  font-size: var(--ui-fs-sm);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  flex: 1;
+  min-width: 0;
+}
+.ngx-editor__dirty { color: var(--warn); }
+.ngx-editor__modes {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--sp-1);
+}
+.ngx-raw {
+  flex: 1;
+  min-height: 280px;
+  width: 100%;
+  resize: vertical;
+  border: 1px solid var(--line);
+  border-radius: var(--radius-sm);
+  background: var(--panel);
+  color: var(--ink);
+  font-size: var(--ui-fs-sm);
+  padding: var(--sp-2);
+  font-family: var(--mono);
+  white-space: pre;
+}
+.ngx-raw:focus {
+  outline: none;
+  border-color: var(--accent);
+}
+
+.ngx-tree-cards {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-1);
+  overflow: auto;
+  padding-bottom: var(--sp-3);
+}
+.ngx-card {
+  border: 1px solid var(--line);
+  border-radius: var(--radius-sm);
+  background: var(--surface);
+}
+.ngx-card--comment {
+  background: var(--surface-2);
+  border-style: dashed;
+  color: var(--muted);
+}
+.ngx-card__head {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-1);
+  width: 100%;
+  padding: var(--sp-1) var(--sp-2);
+  border: 0;
+  background: transparent;
+  color: var(--ink);
+  font-size: var(--ui-fs-sm);
+  cursor: pointer;
+  text-align: left;
+}
+.ngx-card__head:hover { background: var(--bg-hover); }
+.ngx-card__name {
+  color: var(--svc-nginx);
+  font-weight: 500;
+}
+.ngx-card__summary {
+  color: var(--muted);
+  font-size: var(--size-micro);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  flex: 1;
+  min-width: 0;
+}
+.ngx-card__body {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-2);
+  padding: var(--sp-2);
+  border-top: 1px solid var(--line);
+}
+.ngx-card__children {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-1);
+  margin-left: var(--sp-2);
+  padding-left: var(--sp-2);
+  border-left: 1px solid var(--line-2);
+}
+.ngx-card__lua {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-1);
+}
+.ngx-card__field-label {
+  color: var(--muted);
+  font-size: var(--size-micro);
+}
+.ngx-card__lua-body {
+  margin: 0;
+  padding: var(--sp-2);
+  background: var(--panel);
+  border-radius: var(--radius-xs);
+  color: var(--ink-2);
+  font-size: var(--size-micro);
+  white-space: pre;
+  overflow: auto;
+  max-height: 240px;
+}
+
+.ngx-form {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--sp-2);
+  align-items: flex-start;
+}
+.ngx-form__field {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-0-5);
+  min-width: 160px;
+}
+.ngx-form__field--grow { flex: 1; }
+.ngx-form__label {
+  color: var(--muted);
+  font-size: var(--size-micro);
+}
+.ngx-form__hint {
+  color: var(--muted);
+  font-size: var(--size-micro);
+}
+.ngx-form__flags {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--sp-2);
+  flex-wrap: wrap;
+}
+.ngx-form__flag {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--sp-1);
+  color: var(--ink-2);
+  font-size: var(--ui-fs-sm);
+}
+.ngx-form__chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--sp-1);
+  align-items: center;
+}
+.ngx-input {
+  border: 1px solid var(--line);
+  border-radius: var(--radius-xs);
+  background: var(--panel);
+  color: var(--ink);
+  padding: var(--sp-1) var(--sp-2);
+  font-size: var(--ui-fs-sm);
+  font-family: var(--mono);
+}
+.ngx-input:focus {
+  outline: none;
+  border-color: var(--accent);
+}
+.ngx-input--inline { min-width: 160px; }
+.ngx-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--sp-0-5);
+  padding: 0 var(--sp-1);
+  height: 22px;
+  border: 1px solid var(--line);
+  background: var(--surface-2);
+  color: var(--ink-2);
+  font-size: var(--size-micro);
+  border-radius: var(--radius-pill);
+  cursor: pointer;
+}
+.ngx-chip:hover { background: var(--neg-dim); color: var(--neg); border-color: var(--neg); }
+
+.ngx-modules {
+  border: 1px solid var(--line);
+  border-radius: var(--radius-sm);
+  background: var(--surface);
+  padding: var(--sp-2);
+}
+.ngx-modules__summary {
+  cursor: pointer;
+  color: var(--ink-2);
+  font-size: var(--ui-fs-sm);
+}
+.ngx-modules__list {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--sp-1);
+  margin-top: var(--sp-2);
+}
+.ngx-modules__chip {
+  padding: 2px var(--sp-1);
+  background: var(--panel);
+  color: var(--ink-2);
+  border-radius: var(--radius-pill);
+  font-size: var(--size-micro);
+}
+.ngx-modules__hint {
+  margin-top: var(--sp-2);
+  color: var(--muted);
+  font-size: var(--size-micro);
+}

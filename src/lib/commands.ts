@@ -1157,6 +1157,111 @@ export const sqliteFindInDir = (
     maxDepth: params.maxDepth ?? null,
   });
 
+// ── Nginx panel ────────────────────────────────────────────────
+
+/** Nginx config-file kind. The frontend uses this to decide which icon
+ *  + label to render and whether the row gets the sites-enabled toggle. */
+export type NginxFileKind =
+  | { kind: "main" }
+  | { kind: "conf-d" }
+  | { kind: "site-available"; enabled: boolean }
+  | { kind: "site-enabled-orphan"; linkTarget: string };
+
+export type NginxFile = {
+  path: string;
+  name: string;
+  kind: NginxFileKind;
+  sizeBytes: number;
+  /** Last-modified epoch seconds; 0 when stat failed. */
+  mtimeSecs: number;
+};
+
+export type NginxLayout = {
+  installed: boolean;
+  /** `nginx -v` output, e.g. `"nginx version: nginx/1.24.0"`. Empty
+   *  when nginx isn't on PATH. */
+  version: string;
+  /** Compile-time `--with-*` modules from `nginx -V`. */
+  builtinModules: string[];
+  files: NginxFile[];
+  isRoot: boolean;
+};
+
+/** A directive in the parsed AST. The shape mirrors
+ *  `pier_core::services::nginx::NginxDirective`. */
+export type NginxDirective = {
+  name: string;
+  /** Positional args; quoted args keep their surrounding `"..."` /
+   *  `'...'` so round-trip preserves the original style. */
+  args: string[];
+  leadingComments: string[];
+  leadingBlanks: number;
+  inlineComment: string | null;
+  /** Block body when this directive opens `{ ... }`; mutually
+   *  exclusive with `opaqueBody`. */
+  block: NginxNode[] | null;
+  /** Raw body for `*_by_lua_block` / `*_by_njs_block` — preserved
+   *  verbatim so embedded Lua/JS isn't reinterpreted. */
+  opaqueBody: string | null;
+};
+
+/** A node in the AST: either a directive (with optional block) or a
+ *  standalone comment. The two share a string `kind` discriminant
+ *  matching the backend's `#[serde(tag = "kind")]`. */
+export type NginxNode =
+  | ({ kind: "directive" } & NginxDirective)
+  | { kind: "comment"; text: string; leadingBlanks: number };
+
+export type NginxParseResult = {
+  nodes: NginxNode[];
+  /** Recoverable parse warnings. Empty on a clean parse. */
+  errors: string[];
+};
+
+export type NginxReadFileResult = {
+  path: string;
+  content: string;
+  parse: NginxParseResult;
+};
+
+export type NginxValidateResult = {
+  ok: boolean;
+  exitCode: number;
+  output: string;
+};
+
+export type NginxSaveResult = {
+  validate: NginxValidateResult;
+  reloaded: boolean;
+  reloadOutput: string;
+  /** Whether the original file is in a clean state — true on success
+   *  AND on a validation-fail-then-restore path. False only when the
+   *  restore step itself failed. */
+  restored: boolean;
+  restoreError: string | null;
+  backupPath: string;
+};
+
+export const nginxLayout = (params: SshParams) =>
+  invoke<NginxLayout>("nginx_layout", params);
+
+export const nginxReadFile = (params: SshParams & { path: string }) =>
+  invoke<NginxReadFileResult>("nginx_read_file", params);
+
+export const nginxSaveFile = (
+  params: SshParams & { path: string; content: string },
+) => invoke<NginxSaveResult>("nginx_save_file", params);
+
+export const nginxValidate = (params: SshParams) =>
+  invoke<NginxValidateResult>("nginx_validate", params);
+
+export const nginxReload = (params: SshParams) =>
+  invoke<NginxValidateResult>("nginx_reload", params);
+
+export const nginxToggleSite = (
+  params: SshParams & { siteName: string; enable: boolean },
+) => invoke<NginxValidateResult>("nginx_toggle_site", params);
+
 /** Last-known shell working directory, if the remote shell has
  *  emitted an OSC 7 sequence (most distros' default bash/zsh
  *  do). Returns null before the first prompt fires. */

@@ -1283,6 +1283,65 @@ export const zhExtra: Record<string, string> = {
   "Also delete data directories (irreversible)": "同时删除数据目录（不可恢复）",
   "Type {name} to confirm.": "请输入 {name} 确认。",
 
+  // Right-side Nginx panel
+  "Nginx": "Nginx",
+  "Open an SSH tab to manage Nginx config.": "打开 SSH 终端后再编辑 Nginx 配置。",
+  "This tab has no SSH context — Nginx management is remote-only.":
+    "当前终端未连接 SSH，Nginx 管理仅在远端可用。",
+  "Browse and edit nginx config on a saved server, validate with `nginx -t`, then reload.":
+    "在远端浏览和编辑 nginx 配置，先 `nginx -t` 校验后再 reload。",
+  "nginx not installed": "未安装 nginx",
+  "nginx is not installed on this host. Use the Software panel to install it.":
+    "此主机未安装 nginx。请在「软件管理」面板里安装。",
+  "Re-scan config files": "重新扫描配置文件",
+  "Run nginx -t against the live tree": "对当前配置树运行 nginx -t 校验",
+  "Validate": "校验",
+  "systemctl reload nginx": "systemctl reload nginx",
+  "{label} OK": "{label} 通过",
+  "{label} failed (exit {code})": "{label} 失败（退出码 {code}）",
+  "nginx -t": "nginx -t",
+  "reload": "reload",
+  "Pick a config file on the left to start editing.": "在左侧选择一个配置文件开始编辑。",
+  "Reading file…": "读取中…",
+  "Saved · validated · reloaded.": "已保存 · 校验通过 · 已 reload。",
+  "Save aborted — `nginx -t` failed; original restored.":
+    "保存已中止 —— `nginx -t` 校验失败，原文件已回滚。",
+  "Saved + validated, but reload failed.": "已保存并校验通过，但 reload 失败。",
+  "Restore from backup failed: {err}": "从备份恢复失败：{err}",
+  "Backup at {path}": "备份在 {path}",
+  "Edit as cards / forms": "结构化编辑",
+  "Structured": "结构化",
+  "Edit raw text": "编辑原文",
+  "Raw": "原文",
+  "Backup → write → nginx -t → reload": "备份 → 写入 → nginx -t → reload",
+  "Parse warnings:": "解析警告：",
+  "(empty file — switch to Raw to add directives)":
+    "（空文件 —— 切到「原文」模式添加指令）",
+  "(empty block — edit in Raw to add directives)":
+    "（空块 —— 切到「原文」模式添加指令）",
+  "(no args)": "（无参数）",
+  "Match": "匹配方式",
+  "Disable this site (rm sites-enabled link)": "禁用站点（删除 sites-enabled 软链接）",
+  "Enable this site (ln -sf into sites-enabled)": "启用站点（在 sites-enabled 创建软链接）",
+  "enabled": "已启用",
+  "disabled": "未启用",
+  "Listen on": "监听",
+  "Hostnames": "Host 名",
+  "(extra args preserved on save: {extra})": "（保存时保留多余参数：{extra}）",
+  "(prefix)": "（前缀匹配）",
+  "= (exact)": "= （精确）",
+  "^~ (prefix, no regex)": "^~ （前缀，不退化到正则）",
+  "~ (regex, case-sensitive)": "~ （正则，区分大小写）",
+  "~* (regex, case-insensitive)": "~* （正则，不区分大小写）",
+  "Upstream name": "Upstream 名称",
+  "Members are the `server …;` directives inside the block.":
+    "成员是块内的 `server …;` 指令。",
+  "Built-in modules ({n})": "内置模块（{n}）",
+  "To install extras (e.g. headers-more, geoip2), use the Software panel — packages like nginx-extras or distro-equivalents.":
+    "如需扩展模块（如 headers-more、geoip2），请在「软件管理」面板安装 nginx-extras 等包。",
+  "Lua / njs body (read-only here — edit in Raw mode)":
+    "Lua / njs 块（此处只读 —— 在「原文」模式编辑）",
+
   // DB panels — SQLite
   "Open a database by path, or scan a remote directory for .db / .sqlite files.":
     "通过路径打开数据库，或扫描远程目录查找 .db / .sqlite 文件。",

@@ -1,0 +1,142 @@
+{
+  "schema_version": 1,
+  "command": "df",
+  "tool_version": "9.4",
+  "source": "auto-imported",
+  "import_method": "man",
+  "import_date": "2026-04-26",
+  "subcommands": [],
+  "options": [
+    {
+      "flag": "-a, --all",
+      "i18n": {
+        "en": "include pseudo, duplicate, inaccessible file systems",
+        "zh-CN": "包括伪文件系统（如 tmpfs）"
+      }
+    },
+    {
+      "flag": "-B, --block-size=SIZE",
+      "i18n": {
+        "en": "scale  sizes  by  SIZE  before printing them; e.g., '-BM' prints sizes in units of 1,048,576 bytes; see SIZE format below",
+        "zh-CN": "按 SIZE 缩放显示"
+      }
+    },
+    {
+      "flag": "-h, --human-readable",
+      "i18n": {
+        "en": "print sizes in powers of 1024 (e.g., 1023M)",
+        "zh-CN": "人类可读单位（K/M/G）"
+      }
+    },
+    {
+      "flag": "-H, --si",
+      "i18n": {
+        "en": "print sizes in powers of 1000 (e.g., 1.1G)",
+        "zh-CN": "人类可读单位（1000 进制 SI）"
+      }
+    },
+    {
+      "flag": "-i, --inodes",
+      "i18n": {
+        "en": "list inode information instead of block usage",
+        "zh-CN": "显示 inode 信息而非块大小"
+      }
+    },
+    {
+      "flag": "-k",
+      "i18n": {
+        "en": "",
+        "zh-CN": "按 1024 字节块显示"
+      }
+    },
+    {
+      "flag": "-l, --local",
+      "i18n": {
+        "en": "limit listing to local file systems",
+        "zh-CN": "只列本地文件系统"
+      }
+    },
+    {
+      "flag": "--no-sync",
+      "i18n": {
+        "en": "do not invoke sync before getting usage info (default)",
+        "zh-CN": "不执行 sync（默认）"
+      }
+    },
+    {
+      "flag": "--output[=FIELD_LIST]",
+      "i18n": {
+        "en": "use the output format defined by FIELD_LIST, or print all fields if FIELD_LIST is omitted.",
+        "zh-CN": "自定义输出列"
+      }
+    },
+    {
+      "flag": "-P, --portability",
+      "i18n": {
+        "en": "use the POSIX output format",
+        "zh-CN": "POSIX 输出格式"
+      }
+    },
+    {
+      "flag": "--sync",
+      "i18n": {
+        "en": "",
+        "zh-CN": "执行 sync 后再获取使用信息"
+      }
+    },
+    {
+      "flag": "--total",
+      "i18n": {
+        "en": "elide all entries insignificant to available space, and  produce a grand total",
+        "zh-CN": "末尾打印合计"
+      }
+    },
+    {
+      "flag": "-t, --type=TYPE",
+      "i18n": {
+        "en": "limit listing to file systems of type TYPE",
+        "zh-CN": "限定文件系统类型"
+      }
+    },
+    {
+      "flag": "-T, --print-type",
+      "i18n": {
+        "en": "print file system type",
+        "zh-CN": "显示文件系统类型"
+      }
+    },
+    {
+      "flag": "-x, --exclude-type=TYPE",
+      "i18n": {
+        "en": "limit listing to file systems not of type TYPE",
+        "zh-CN": "排除指定文件系统类型"
+      }
+    },
+    {
+      "flag": "-v",
+      "i18n": {
+        "en": ""
+      }
+    },
+    {
+      "flag": "--help",
+      "i18n": {
+        "en": "",
+        "zh-CN": "显示帮助"
+      }
+    },
+    {
+      "flag": "--version",
+      "i18n": {
+        "en": "output version information and exit",
+        "zh-CN": "打印版本"
+      }
+    },
+    {
+      "flag": "--block-size,",
+      "i18n": {
+        "en": ""
+      }
+    }
+  ]
+}

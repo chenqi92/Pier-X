@@ -1,0 +1,263 @@
+{
+  "schema_version": 1,
+  "command": "find",
+  "tool_version": "",
+  "source": "bundled-seed",
+  "import_method": "hand-curated",
+  "import_date": "2026-04-26",
+  "subcommands": [],
+  "options": [
+    {
+      "flag": "-H",
+      "i18n": {
+        "en": "Follow symlinks only on the command line",
+        "zh-CN": "只跟随命令行上的符号链接"
+      }
+    },
+    {
+      "flag": "-L",
+      "i18n": {
+        "en": "Follow all symlinks",
+        "zh-CN": "跟随所有符号链接"
+      }
+    },
+    {
+      "flag": "-P",
+      "i18n": {
+        "en": "Never follow symlinks (default)",
+        "zh-CN": "不跟随符号链接（默认）"
+      }
+    },
+    {
+      "flag": "-D debugopts",
+      "i18n": {
+        "en": "Print find debug info",
+        "zh-CN": "打印调试信息"
+      }
+    },
+    {
+      "flag": "-Olevel",
+      "i18n": {
+        "en": "Optimization level",
+        "zh-CN": "优化级别（0..3）"
+      }
+    },
+    {
+      "flag": "-name PATTERN",
+      "i18n": {
+        "en": "Match basename (case-sensitive)",
+        "zh-CN": "按文件名（区分大小写）"
+      }
+    },
+    {
+      "flag": "-iname PATTERN",
+      "i18n": {
+        "en": "Match basename (case-insensitive)",
+        "zh-CN": "按文件名（忽略大小写）"
+      }
+    },
+    {
+      "flag": "-path PATTERN",
+      "i18n": {
+        "en": "Match full path",
+        "zh-CN": "按完整路径匹配"
+      }
+    },
+    {
+      "flag": "-ipath PATTERN",
+      "i18n": {
+        "en": "Match full path (case-insensitive)",
+        "zh-CN": "按完整路径匹配（忽略大小写）"
+      }
+    },
+    {
+      "flag": "-regex PATTERN",
+      "i18n": {
+        "en": "Match path against regex",
+        "zh-CN": "按正则匹配整路径"
+      }
+    },
+    {
+      "flag": "-type C",
+      "i18n": {
+        "en": "By type: f=file d=dir l=link b/c=block/char p=fifo s=socket",
+        "zh-CN": "按类型过滤（f/d/l/b/c/p/s）"
+      }
+    },
+    {
+      "flag": "-size N[cwbkMG]",
+      "i18n": {
+        "en": "Filter by size (e.g. +10M)",
+        "zh-CN": "按大小过滤（如 +10M）"
+      }
+    },
+    {
+      "flag": "-mtime N",
+      "i18n": {
+        "en": "Modified N*24h ago (+N more than, -N less than)",
+        "zh-CN": "修改时间在 N 天之前/之内"
+      }
+    },
+    {
+      "flag": "-mmin N",
+      "i18n": {
+        "en": "Modified N minutes ago",
+        "zh-CN": "修改时间在 N 分钟之前/之内"
+      }
+    },
+    {
+      "flag": "-newer FILE",
+      "i18n": {
+        "en": "Modified after FILE's mtime",
+        "zh-CN": "比 FILE 更新"
+      }
+    },
+    {
+      "flag": "-user NAME",
+      "i18n": {
+        "en": "Owned by NAME",
+        "zh-CN": "按所有者过滤"
+      }
+    },
+    {
+      "flag": "-group NAME",
+      "i18n": {
+        "en": "Owned by group NAME",
+        "zh-CN": "按属组过滤"
+      }
+    },
+    {
+      "flag": "-perm MODE",
+      "i18n": {
+        "en": "Permissions match MODE (e.g. -u+x)",
+        "zh-CN": "按权限匹配（如 -u+x）"
+      }
+    },
+    {
+      "flag": "-empty",
+      "i18n": {
+        "en": "Empty file or directory",
+        "zh-CN": "空文件或空目录"
+      }
+    },
+    {
+      "flag": "-maxdepth N",
+      "i18n": {
+        "en": "Descend at most N levels",
+        "zh-CN": "最大递归深度"
+      }
+    },
+    {
+      "flag": "-mindepth N",
+      "i18n": {
+        "en": "Don't apply tests at levels < N",
+        "zh-CN": "最小递归深度"
+      }
+    },
+    {
+      "flag": "-prune",
+      "i18n": {
+        "en": "Don't descend into matched directory",
+        "zh-CN": "命中目录后不再深入"
+      }
+    },
+    {
+      "flag": "-print",
+      "i18n": {
+        "en": "Print path (default action)",
+        "zh-CN": "打印路径（默认动作）"
+      }
+    },
+    {
+      "flag": "-print0",
+      "i18n": {
+        "en": "Print path with NUL separator",
+        "zh-CN": "用 NUL 分隔打印"
+      }
+    },
+    {
+      "flag": "-printf FORMAT",
+      "i18n": {
+        "en": "Print using printf-style format",
+        "zh-CN": "按 printf 格式打印"
+      }
+    },
+    {
+      "flag": "-delete",
+      "i18n": {
+        "en": "Delete matched entries (use with care)",
+        "zh-CN": "删除命中项（谨慎）"
+      }
+    },
+    {
+      "flag": "-exec CMD {} \\;",
+      "i18n": {
+        "en": "Run CMD on each match",
+        "zh-CN": "对每个命中执行命令"
+      }
+    },
+    {
+      "flag": "-exec CMD {} +",
+      "i18n": {
+        "en": "Run CMD on grouped matches (xargs-style)",
+        "zh-CN": "批量执行命令（类 xargs）"
+      }
+    },
+    {
+      "flag": "-execdir CMD {} \\;",
+      "i18n": {
+        "en": "Like -exec but cwd is parent of match",
+        "zh-CN": "类 -exec 但 cwd 是匹配项的父目录"
+      }
+    },
+    {
+      "flag": "-not, !",
+      "i18n": {
+        "en": "Negate the next test",
+        "zh-CN": "取反"
+      }
+    },
+    {
+      "flag": "-and, -a",
+      "i18n": {
+        "en": "Logical AND (default between tests)",
+        "zh-CN": "逻辑与（默认）"
+      }
+    },
+    {
+      "flag": "-or, -o",
+      "i18n": {
+        "en": "Logical OR",
+        "zh-CN": "逻辑或"
+      }
+    },
+    {
+      "flag": "-xdev",
+      "i18n": {
+        "en": "Don't cross filesystem boundaries",
+        "zh-CN": "不跨越文件系统"
+      }
+    },
+    {
+      "flag": "-fstype TYPE",
+      "i18n": {
+        "en": "Filter by filesystem type",
+        "zh-CN": "按文件系统类型过滤"
+      }
+    },
+    {
+      "flag": "--help",
+      "i18n": {
+        "en": "Display help",
+        "zh-CN": "显示帮助"
+      }
+    },
+    {
+      "flag": "--version",
+      "i18n": {
+        "en": "Print version",
+        "zh-CN": "打印版本"
+      }
+    }
+  ]
+}

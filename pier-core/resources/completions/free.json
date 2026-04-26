@@ -1,0 +1,163 @@
+{
+  "schema_version": 1,
+  "command": "free",
+  "tool_version": "4.0.4",
+  "source": "auto-imported",
+  "import_method": "man",
+  "import_date": "2026-04-26",
+  "subcommands": [],
+  "options": [
+    {
+      "flag": "-b, --bytes",
+      "i18n": {
+        "en": "Display the amount of memory in bytes.",
+        "zh-CN": "以字节为单位显示"
+      }
+    },
+    {
+      "flag": "-k, --kibi",
+      "i18n": {
+        "en": "Display the amount of memory in kibibytes.  This is the default.",
+        "zh-CN": "以 KiB 为单位显示（默认）"
+      }
+    },
+    {
+      "flag": "-m, --mebi",
+      "i18n": {
+        "en": "Display the amount of memory in mebibytes.",
+        "zh-CN": "以 MiB 为单位显示"
+      }
+    },
+    {
+      "flag": "-g, --gibi",
+      "i18n": {
+        "en": "Display the amount of memory in gibibytes.",
+        "zh-CN": "以 GiB 为单位显示"
+      }
+    },
+    {
+      "flag": "--tebi",
+      "i18n": {
+        "en": "",
+        "zh-CN": "以 TiB 为单位显示"
+      }
+    },
+    {
+      "flag": "--pebi",
+      "i18n": {
+        "en": "",
+        "zh-CN": "以 PiB 为单位显示"
+      }
+    },
+    {
+      "flag": "--kilo",
+      "i18n": {
+        "en": "",
+        "zh-CN": "以 KB 为单位显示（1000 进制）"
+      }
+    },
+    {
+      "flag": "--mega",
+      "i18n": {
+        "en": "",
+        "zh-CN": "以 MB 为单位显示（1000 进制）"
+      }
+    },
+    {
+      "flag": "--giga",
+      "i18n": {
+        "en": "",
+        "zh-CN": "以 GB 为单位显示（1000 进制）"
+      }
+    },
+    {
+      "flag": "--tera",
+      "i18n": {
+        "en": "",
+        "zh-CN": "以 TB 为单位显示（1000 进制）"
+      }
+    },
+    {
+      "flag": "--peta",
+      "i18n": {
+        "en": "",
+        "zh-CN": "以 PB 为单位显示（1000 进制）"
+      }
+    },
+    {
+      "flag": "-h, --human",
+      "i18n": {
+        "en": "Show  all  output  fields automatically scaled to shortest three digit unit and display the units of print out.  Following  units are used.",
+        "zh-CN": "人类可读单位"
+      }
+    },
+    {
+      "flag": "-w, --wide",
+      "i18n": {
+        "en": "Switch  to  the  wide  mode. The wide mode produces lines longer than 80 characters. In this mode buffers and cache are  reported in two separate columns.",
+        "zh-CN": "宽屏输出（buffers 和 cache 分开列）"
+      }
+    },
+    {
+      "flag": "-c, --count",
+      "i18n": {
+        "en": "Display the result count times.  Requires the -s option."
+      }
+    },
+    {
+      "flag": "-l, --lohi",
+      "i18n": {
+        "en": "Show detailed low and high memory statistics.",
+        "zh-CN": "显示低/高内存详情"
+      }
+    },
+    {
+      "flag": "-L, --line",
+      "i18n": {
+        "en": "Show  output  on a single line, often used with the -s option to show memory statistics repeatedly.",
+        "zh-CN": "单行紧凑输出"
+      }
+    },
+    {
+      "flag": "-s, --seconds",
+      "i18n": {
+        "en": "Continuously display the result delay  seconds apart.   You  may actually  specify  any floating point number for delay using ei‐ ther . or , for decimal point.  usleep(3) is used for  microsec‐ ond resolution delay times."
+      }
+    },
+    {
+      "flag": "--si",
+      "i18n": {
+        "en": "gibi (power of 1024).",
+        "zh-CN": "人类可读但用 1000 进制 SI 单位"
+      }
+    },
+    {
+      "flag": "-t, --total",
+      "i18n": {
+        "en": "Display a line showing the column totals.",
+        "zh-CN": "显示合计行（RAM+swap）"
+      }
+    },
+    {
+      "flag": "-v, --committed",
+      "i18n": {
+        "en": "Display a line showing the memory commit  limit  and  amount  of committed/uncommitted memory. The total column on this line will display the memory commit limit.   This line is relevant if mem‐ ory overcommit is disabled.",
+        "zh-CN": "显示 committed 内存"
+      }
+    },
+    {
+      "flag": "--help",
+      "i18n": {
+        "en": "",
+        "zh-CN": "显示帮助"
+      }
+    },
+    {
+      "flag": "-V, --version",
+      "i18n": {
+        "en": "Display version information.",
+        "zh-CN": "打印版本"
+      }
+    }
+  ]
+}

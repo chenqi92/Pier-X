@@ -1,0 +1,186 @@
+{
+  "schema_version": 1,
+  "command": "jq",
+  "tool_version": "",
+  "source": "bundled-seed",
+  "import_method": "hand-curated",
+  "import_date": "2026-04-26",
+  "subcommands": [],
+  "options": [
+    {
+      "flag": "-c, --compact-output",
+      "i18n": {
+        "en": "Output more compact (one JSON per line)",
+        "zh-CN": "紧凑输出（每行一个 JSON）"
+      }
+    },
+    {
+      "flag": "-r, --raw-output",
+      "i18n": {
+        "en": "Output strings without quotes",
+        "zh-CN": "字符串结果不带引号"
+      }
+    },
+    {
+      "flag": "-R, --raw-input",
+      "i18n": {
+        "en": "Don't parse input as JSON; treat as raw strings",
+        "zh-CN": "输入不当 JSON 解析，按原始字符串"
+      }
+    },
+    {
+      "flag": "-s, --slurp",
+      "i18n": {
+        "en": "Read entire input stream into a large array",
+        "zh-CN": "把整个输入读进一个数组"
+      }
+    },
+    {
+      "flag": "-n, --null-input",
+      "i18n": {
+        "en": "Use null as input value",
+        "zh-CN": "用 null 作为输入"
+      }
+    },
+    {
+      "flag": "-a, --ascii-output",
+      "i18n": {
+        "en": "Force output to be ASCII",
+        "zh-CN": "强制 ASCII 输出"
+      }
+    },
+    {
+      "flag": "-S, --sort-keys",
+      "i18n": {
+        "en": "Sort keys of objects on output",
+        "zh-CN": "输出时按 key 排序"
+      }
+    },
+    {
+      "flag": "-C, --color-output",
+      "i18n": {
+        "en": "Force colored output",
+        "zh-CN": "强制彩色输出"
+      }
+    },
+    {
+      "flag": "-M, --monochrome-output",
+      "i18n": {
+        "en": "Disable colored output",
+        "zh-CN": "禁用彩色输出"
+      }
+    },
+    {
+      "flag": "-j, --join-output",
+      "i18n": {
+        "en": "Like -r but doesn't print a newline",
+        "zh-CN": "类 -r 但不追加换行"
+      }
+    },
+    {
+      "flag": "--tab",
+      "i18n": {
+        "en": "Use tabs for indentation",
+        "zh-CN": "用 Tab 缩进"
+      }
+    },
+    {
+      "flag": "--indent N",
+      "i18n": {
+        "en": "Use N spaces for indentation (max 7)",
+        "zh-CN": "用 N 个空格缩进（最多 7）"
+      }
+    },
+    {
+      "flag": "--arg NAME VALUE",
+      "i18n": {
+        "en": "Set $NAME to the string VALUE",
+        "zh-CN": "把 $NAME 设为字符串 VALUE"
+      }
+    },
+    {
+      "flag": "--argjson NAME JSON-VAL",
+      "i18n": {
+        "en": "Set $NAME to the JSON value JSON-VAL",
+        "zh-CN": "把 $NAME 设为 JSON 值"
+      }
+    },
+    {
+      "flag": "--slurpfile NAME FILE",
+      "i18n": {
+        "en": "Set $NAME to array of JSON texts read from FILE",
+        "zh-CN": "把 $NAME 设为 FILE 中的 JSON 数组"
+      }
+    },
+    {
+      "flag": "--rawfile NAME FILE",
+      "i18n": {
+        "en": "Set $NAME to a string from FILE",
+        "zh-CN": "把 $NAME 设为 FILE 的原始内容"
+      }
+    },
+    {
+      "flag": "--args",
+      "i18n": {
+        "en": "Remaining args are positional ($ARGS.positional)",
+        "zh-CN": "剩余参数视为位置参数"
+      }
+    },
+    {
+      "flag": "--jsonargs",
+      "i18n": {
+        "en": "Remaining args are JSON-parsed positional",
+        "zh-CN": "剩余参数 JSON 解析后作为位置参数"
+      }
+    },
+    {
+      "flag": "-e, --exit-status",
+      "i18n": {
+        "en": "Set exit status based on output",
+        "zh-CN": "按输出设置退出码（无结果非零）"
+      }
+    },
+    {
+      "flag": "--seq",
+      "i18n": {
+        "en": "Use ASCII RS as record separator",
+        "zh-CN": "用 ASCII RS 分隔记录"
+      }
+    },
+    {
+      "flag": "--stream",
+      "i18n": {
+        "en": "Stream output instead of building in-memory",
+        "zh-CN": "流式输出（适合大 JSON）"
+      }
+    },
+    {
+      "flag": "--unbuffered",
+      "i18n": {
+        "en": "Flush output after each JSON value",
+        "zh-CN": "每个 JSON 后 flush 输出"
+      }
+    },
+    {
+      "flag": "-f, --from-file FILE",
+      "i18n": {
+        "en": "Read filter from FILE",
+        "zh-CN": "从文件读取过滤器"
+      }
+    },
+    {
+      "flag": "-h, --help",
+      "i18n": {
+        "en": "Show help",
+        "zh-CN": "显示帮助"
+      }
+    },
+    {
+      "flag": "-V, --version",
+      "i18n": {
+        "en": "Show version info",
+        "zh-CN": "打印版本"
+      }
+    }
+  ]
+}

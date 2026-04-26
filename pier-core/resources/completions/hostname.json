@@ -1,0 +1,94 @@
+{
+  "schema_version": 1,
+  "command": "hostname",
+  "tool_version": "3.23",
+  "source": "auto-imported",
+  "import_method": "man",
+  "import_date": "2026-04-26",
+  "subcommands": [],
+  "options": [
+    {
+      "flag": "-a, --alias",
+      "i18n": {
+        "en": "Display  the  alias  name  of the host (if used). This option is deprecated and should not be used anymore.",
+        "zh-CN": "显示主机别名"
+      }
+    },
+    {
+      "flag": "-A, --all-fqdns",
+      "i18n": {
+        "en": "Displays all FQDNs of the machine. This  option  enumerates  all configured  network  addresses  on all configured network inter‐ faces, and translates them to DNS domain names.  Addresses  that cannot be translated (i.e. because they do not have an appropri‐ ate reverse IP entry) are skipped. Note that different addresses may  resolve  to the same name, therefore the output may contain duplicate entries. Do not make any assumptions about  the  order of the output.",
+        "zh-CN": "显示所有 FQDN"
+      }
+    },
+    {
+      "flag": "-b, --boot",
+      "i18n": {
+        "en": "Always  set  a hostname; this allows the file specified by -F to be non-existent or empty, in which case the default hostname lo‐ calhost will be used if none is yet set.",
+        "zh-CN": "如果 hostname 未设置则设置（启动时使用）"
+      }
+    },
+    {
+      "flag": "-d, --domain",
+      "i18n": {
+        "en": "Display the name of the DNS domain.  Don't use the  command  do‐ mainname to get the DNS domain name because it will show the NIS domain  name  and not the DNS domain name. Use dnsdomainname in‐ stead. See the warnings in section THE FQDN above, and avoid us‐ ing this option.",
+        "zh-CN": "显示 DNS 域名"
+      }
+    },
+    {
+      "flag": "-f, --fqdn, --long",
+      "i18n": {
+        "en": "Display the FQDN (Fully Qualified Domain Name). A FQDN  consists of a short host name and the DNS domain name. Unless you are us‐ ing bind or NIS for host lookups you can change the FQDN and the DNS  domain  name  (which is part of the FQDN) in the /etc/hosts file. See the warnings in section THE FQDN above und  use  host‐ name --all-fqdns instead wherever possible.",
+        "zh-CN": "显示完全限定域名（FQDN）"
+      }
+    },
+    {
+      "flag": "-F, --file",
+      "i18n": {
+        "en": "Read  the  host  name  from  the specified file. Comments (lines starting with a `#') are ignored."
+      }
+    },
+    {
+      "flag": "-i, --ip-address",
+      "i18n": {
+        "en": "Display the network address(es) of the host name. Note that this works only if the host name can be resolved.  Avoid  using  this option; use hostname --all-ip-addresses instead.",
+        "zh-CN": "显示主机的 IP 地址"
+      }
+    },
+    {
+      "flag": "-I, --all-ip-addresses",
+      "i18n": {
+        "en": "Display  all  network addresses of the host. This option enumer‐ ates all configured addresses on  all  network  interfaces.  The loopback  interface  and  IPv6 link-local addresses are omitted. Contrary to option -i, this option does not depend on name reso‐ lution. Do not make any assumptions about the order of the  out‐ put.",
+        "zh-CN": "显示所有网络接口的 IP 地址"
+      }
+    },
+    {
+      "flag": "-s, --short",
+      "i18n": {
+        "en": "Display  the  short  host name. This is the host name cut at the first dot.",
+        "zh-CN": "显示短主机名（去掉域名部分）"
+      }
+    },
+    {
+      "flag": "-V, --version",
+      "i18n": {
+        "en": "Print version information on standard output and  exit  success‐ fully.",
+        "zh-CN": "打印版本"
+      }
+    },
+    {
+      "flag": "-y, --yp, --nis",
+      "i18n": {
+        "en": "Display  the NIS domain name. If a parameter is given (or --file name ) then root can also set a new NIS domain.",
+        "zh-CN": "显示 NIS 域名"
+      }
+    },
+    {
+      "flag": "-h, --help",
+      "i18n": {
+        "en": "Print a usage message and exit.",
+        "zh-CN": "显示帮助"
+      }
+    }
+  ]
+}

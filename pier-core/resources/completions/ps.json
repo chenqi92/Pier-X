@@ -1,0 +1,207 @@
+{
+  "schema_version": 1,
+  "command": "ps",
+  "tool_version": "",
+  "source": "bundled-seed",
+  "import_method": "hand-curated",
+  "import_date": "2026-04-26",
+  "subcommands": [],
+  "options": [
+    {
+      "flag": "-e, -A",
+      "i18n": {
+        "en": "Select all processes",
+        "zh-CN": "显示所有进程"
+      }
+    },
+    {
+      "flag": "-a",
+      "i18n": {
+        "en": "All processes with terminal, except session leaders",
+        "zh-CN": "显示有终端的所有进程"
+      }
+    },
+    {
+      "flag": "-d",
+      "i18n": {
+        "en": "All except session leaders",
+        "zh-CN": "显示除会话领导者外的所有进程"
+      }
+    },
+    {
+      "flag": "-N, --deselect",
+      "i18n": {
+        "en": "Negate the selection",
+        "zh-CN": "反选"
+      }
+    },
+    {
+      "flag": "-T",
+      "i18n": {
+        "en": "All processes associated with this terminal",
+        "zh-CN": "显示当前终端的所有进程"
+      }
+    },
+    {
+      "flag": "-r",
+      "i18n": {
+        "en": "Only running processes",
+        "zh-CN": "只显示运行中的进程"
+      }
+    },
+    {
+      "flag": "-x",
+      "i18n": {
+        "en": "Processes without controlling terminal (BSD style)",
+        "zh-CN": "包括无终端的进程（BSD 风格）"
+      }
+    },
+    {
+      "flag": "-u",
+      "i18n": {
+        "en": "User-oriented format (BSD)",
+        "zh-CN": "以用户为中心的格式（BSD）"
+      }
+    },
+    {
+      "flag": "aux",
+      "i18n": {
+        "en": "All users + with TTY + including no-TTY (BSD shorthand)",
+        "zh-CN": "BSD 缩写：所有用户/含无终端进程"
+      }
+    },
+    {
+      "flag": "-f",
+      "i18n": {
+        "en": "Full-format listing",
+        "zh-CN": "完整格式输出"
+      }
+    },
+    {
+      "flag": "-F",
+      "i18n": {
+        "en": "Extra full format",
+        "zh-CN": "扩展完整格式"
+      }
+    },
+    {
+      "flag": "-l",
+      "i18n": {
+        "en": "Long format",
+        "zh-CN": "长格式"
+      }
+    },
+    {
+      "flag": "-j",
+      "i18n": {
+        "en": "Jobs format",
+        "zh-CN": "Jobs 格式（含 PGID/SID）"
+      }
+    },
+    {
+      "flag": "-o, --format FORMAT",
+      "i18n": {
+        "en": "User-defined format (`pid,user,%cpu`)",
+        "zh-CN": "自定义输出列（如 pid,user,%cpu）"
+      }
+    },
+    {
+      "flag": "-p, --pid PIDLIST",
+      "i18n": {
+        "en": "Select by PID",
+        "zh-CN": "按 PID 过滤"
+      }
+    },
+    {
+      "flag": "-U, --User USERLIST",
+      "i18n": {
+        "en": "Select by real user ID",
+        "zh-CN": "按真实用户 ID 过滤"
+      }
+    },
+    {
+      "flag": "-u, --user USERLIST",
+      "i18n": {
+        "en": "Select by effective user ID",
+        "zh-CN": "按有效用户 ID 过滤"
+      }
+    },
+    {
+      "flag": "-C CMDLIST",
+      "i18n": {
+        "en": "Select by command name",
+        "zh-CN": "按命令名过滤"
+      }
+    },
+    {
+      "flag": "-G, --Group GRPLIST",
+      "i18n": {
+        "en": "Select by real group ID",
+        "zh-CN": "按真实组 ID 过滤"
+      }
+    },
+    {
+      "flag": "-g, --group GRPLIST",
+      "i18n": {
+        "en": "Select by session OR effective group",
+        "zh-CN": "按会话或有效组过滤"
+      }
+    },
+    {
+      "flag": "-t, --tty TTYLIST",
+      "i18n": {
+        "en": "Select by tty",
+        "zh-CN": "按终端过滤"
+      }
+    },
+    {
+      "flag": "--sort SPEC",
+      "i18n": {
+        "en": "Sort by column (`-pcpu`, `+rss`)",
+        "zh-CN": "按列排序（前缀 - 降序）"
+      }
+    },
+    {
+      "flag": "-w, -ww",
+      "i18n": {
+        "en": "Wide output (don't truncate)",
+        "zh-CN": "宽输出，不截断"
+      }
+    },
+    {
+      "flag": "-H",
+      "i18n": {
+        "en": "Show process hierarchy (forest)",
+        "zh-CN": "显示进程层级（森林）"
+      }
+    },
+    {
+      "flag": "--forest",
+      "i18n": {
+        "en": "ASCII art tree of processes",
+        "zh-CN": "ASCII 进程树"
+      }
+    },
+    {
+      "flag": "--no-headers",
+      "i18n": {
+        "en": "Don't print header line",
+        "zh-CN": "不打印表头"
+      }
+    },
+    {
+      "flag": "--help",
+      "i18n": {
+        "en": "Display help",
+        "zh-CN": "显示帮助"
+      }
+    },
+    {
+      "flag": "-V, --version",
+      "i18n": {
+        "en": "Print version",
+        "zh-CN": "打印版本"
+      }
+    }
+  ]
+}

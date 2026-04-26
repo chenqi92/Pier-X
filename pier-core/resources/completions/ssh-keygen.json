@@ -1,0 +1,186 @@
+{
+  "schema_version": 1,
+  "command": "ssh-keygen",
+  "tool_version": "",
+  "source": "bundled-seed",
+  "import_method": "hand-curated",
+  "import_date": "2026-04-26",
+  "subcommands": [],
+  "options": [
+    {
+      "flag": "-t TYPE",
+      "i18n": {
+        "en": "Key type (rsa / ed25519 / ecdsa / dsa)",
+        "zh-CN": "密钥类型（rsa / ed25519 / ecdsa）"
+      }
+    },
+    {
+      "flag": "-b BITS",
+      "i18n": {
+        "en": "Number of bits in the key",
+        "zh-CN": "密钥位数"
+      }
+    },
+    {
+      "flag": "-C COMMENT",
+      "i18n": {
+        "en": "Provide a new comment",
+        "zh-CN": "为密钥添加注释（通常是邮箱）"
+      }
+    },
+    {
+      "flag": "-f FILE",
+      "i18n": {
+        "en": "Specify the filename of the key file",
+        "zh-CN": "指定密钥文件路径"
+      }
+    },
+    {
+      "flag": "-N PASSPHRASE",
+      "i18n": {
+        "en": "Provide new passphrase",
+        "zh-CN": "新密钥的口令"
+      }
+    },
+    {
+      "flag": "-P PASSPHRASE",
+      "i18n": {
+        "en": "Provide old passphrase (when changing)",
+        "zh-CN": "原密钥的口令（改密时）"
+      }
+    },
+    {
+      "flag": "-p",
+      "i18n": {
+        "en": "Change the passphrase of a private key",
+        "zh-CN": "修改私钥口令"
+      }
+    },
+    {
+      "flag": "-y",
+      "i18n": {
+        "en": "Read private key, output public key",
+        "zh-CN": "读私钥并输出公钥"
+      }
+    },
+    {
+      "flag": "-l",
+      "i18n": {
+        "en": "Show fingerprint of specified public key file",
+        "zh-CN": "显示密钥指纹"
+      }
+    },
+    {
+      "flag": "-E HASH",
+      "i18n": {
+        "en": "Specify hash algorithm for fingerprint (md5 / sha256)",
+        "zh-CN": "指纹哈希算法"
+      }
+    },
+    {
+      "flag": "-F HOSTNAME",
+      "i18n": {
+        "en": "Search known_hosts for HOSTNAME",
+        "zh-CN": "在 known_hosts 中查找主机"
+      }
+    },
+    {
+      "flag": "-R HOSTNAME",
+      "i18n": {
+        "en": "Remove HOSTNAME from known_hosts",
+        "zh-CN": "从 known_hosts 移除主机"
+      }
+    },
+    {
+      "flag": "-H",
+      "i18n": {
+        "en": "Hash known_hosts file",
+        "zh-CN": "将 known_hosts 主机名哈希"
+      }
+    },
+    {
+      "flag": "-A",
+      "i18n": {
+        "en": "Generate host keys for all default key types",
+        "zh-CN": "为所有默认类型生成主机密钥"
+      }
+    },
+    {
+      "flag": "-s CA_KEY",
+      "i18n": {
+        "en": "Sign public keys using CA_KEY",
+        "zh-CN": "用 CA 签发公钥"
+      }
+    },
+    {
+      "flag": "-I IDENTITY",
+      "i18n": {
+        "en": "Specify key identity (when signing)",
+        "zh-CN": "签发时指定身份"
+      }
+    },
+    {
+      "flag": "-V VALIDITY",
+      "i18n": {
+        "en": "Specify validity interval (when signing)",
+        "zh-CN": "签发时设置有效期"
+      }
+    },
+    {
+      "flag": "-Y FUNCTION",
+      "i18n": {
+        "en": "Functions related to signing data",
+        "zh-CN": "签名相关功能（sign / verify 等）"
+      }
+    },
+    {
+      "flag": "-n PRINCIPAL",
+      "i18n": {
+        "en": "List of principals included in cert",
+        "zh-CN": "证书允许的主体（用户列表）"
+      }
+    },
+    {
+      "flag": "-z SERIAL",
+      "i18n": {
+        "en": "Specify the certificate serial number",
+        "zh-CN": "证书序号"
+      }
+    },
+    {
+      "flag": "-q",
+      "i18n": {
+        "en": "Quiet output",
+        "zh-CN": "静默"
+      }
+    },
+    {
+      "flag": "-v",
+      "i18n": {
+        "en": "Verbose mode",
+        "zh-CN": "详细模式"
+      }
+    },
+    {
+      "flag": "-K",
+      "i18n": {
+        "en": "Download resident keys from a security key",
+        "zh-CN": "从安全令牌下载常驻密钥"
+      }
+    },
+    {
+      "flag": "-k",
+      "i18n": {
+        "en": "Generate a KRL or test against KRL",
+        "zh-CN": "生成或测试 KRL"
+      }
+    },
+    {
+      "flag": "--help",
+      "i18n": {
+        "en": "Display help",
+        "zh-CN": "显示帮助"
+      }
+    }
+  ]
+}

@@ -1,0 +1,368 @@
+{
+  "schema_version": 1,
+  "command": "curl",
+  "tool_version": "",
+  "source": "bundled-seed",
+  "import_method": "hand-curated",
+  "import_date": "2026-04-26",
+  "subcommands": [],
+  "options": [
+    {
+      "flag": "-X, --request COMMAND",
+      "i18n": {
+        "en": "HTTP method (GET / POST / PUT / DELETE …)",
+        "zh-CN": "指定 HTTP 方法（GET/POST/PUT/DELETE 等）"
+      }
+    },
+    {
+      "flag": "-H, --header HEADER",
+      "i18n": {
+        "en": "Pass custom header to server (repeatable)",
+        "zh-CN": "自定义请求头（可重复）"
+      }
+    },
+    {
+      "flag": "-d, --data DATA",
+      "i18n": {
+        "en": "HTTP POST data",
+        "zh-CN": "POST 请求体"
+      }
+    },
+    {
+      "flag": "--data-raw DATA",
+      "i18n": {
+        "en": "POST raw data without @ interpretation",
+        "zh-CN": "POST 原始数据，不解析 @"
+      }
+    },
+    {
+      "flag": "--data-urlencode DATA",
+      "i18n": {
+        "en": "URL-encode data before posting",
+        "zh-CN": "POST 前先 URL 编码"
+      }
+    },
+    {
+      "flag": "-F, --form CONTENT",
+      "i18n": {
+        "en": "Specify multipart form data (repeatable)",
+        "zh-CN": "multipart 表单字段（可重复）"
+      }
+    },
+    {
+      "flag": "-G, --get",
+      "i18n": {
+        "en": "Put the post data in the URL and use GET",
+        "zh-CN": "把 POST 数据塞进 URL 走 GET"
+      }
+    },
+    {
+      "flag": "-o, --output FILE",
+      "i18n": {
+        "en": "Write to FILE instead of stdout",
+        "zh-CN": "保存到 FILE 而不是 stdout"
+      }
+    },
+    {
+      "flag": "-O, --remote-name",
+      "i18n": {
+        "en": "Save to file with same name as remote",
+        "zh-CN": "用远端文件名保存"
+      }
+    },
+    {
+      "flag": "-i, --include",
+      "i18n": {
+        "en": "Include HTTP response headers in output",
+        "zh-CN": "输出包含响应头"
+      }
+    },
+    {
+      "flag": "-I, --head",
+      "i18n": {
+        "en": "Show document headers only (HEAD request)",
+        "zh-CN": "只看响应头（HEAD 请求）"
+      }
+    },
+    {
+      "flag": "-v, --verbose",
+      "i18n": {
+        "en": "Make the operation more talkative",
+        "zh-CN": "详细输出（含请求过程）"
+      }
+    },
+    {
+      "flag": "--trace FILE",
+      "i18n": {
+        "en": "Write a debug trace to FILE",
+        "zh-CN": "把调试 trace 写到 FILE"
+      }
+    },
+    {
+      "flag": "--trace-ascii FILE",
+      "i18n": {
+        "en": "Like --trace but without hex output",
+        "zh-CN": "ASCII 形式的 trace"
+      }
+    },
+    {
+      "flag": "-s, --silent",
+      "i18n": {
+        "en": "Silent mode",
+        "zh-CN": "静默模式"
+      }
+    },
+    {
+      "flag": "-S, --show-error",
+      "i18n": {
+        "en": "Show error even when -s is used",
+        "zh-CN": "用了 -s 时仍显示错误"
+      }
+    },
+    {
+      "flag": "-L, --location",
+      "i18n": {
+        "en": "Follow redirects",
+        "zh-CN": "跟随重定向"
+      }
+    },
+    {
+      "flag": "--max-redirs NUM",
+      "i18n": {
+        "en": "Maximum number of redirects allowed",
+        "zh-CN": "最多跟随的重定向次数"
+      }
+    },
+    {
+      "flag": "-k, --insecure",
+      "i18n": {
+        "en": "Allow insecure SSL connections",
+        "zh-CN": "允许不安全的 SSL 连接"
+      }
+    },
+    {
+      "flag": "--cacert FILE",
+      "i18n": {
+        "en": "CA certificate to verify peer against",
+        "zh-CN": "用 FILE 作为 CA 证书"
+      }
+    },
+    {
+      "flag": "--cert CERT[:PASSWD]",
+      "i18n": {
+        "en": "Client certificate file and password",
+        "zh-CN": "客户端证书及密码"
+      }
+    },
+    {
+      "flag": "--key KEY",
+      "i18n": {
+        "en": "Private key file name",
+        "zh-CN": "私钥文件"
+      }
+    },
+    {
+      "flag": "-u, --user USER:PASSWORD",
+      "i18n": {
+        "en": "Server user and password",
+        "zh-CN": "登录用户名密码"
+      }
+    },
+    {
+      "flag": "--basic",
+      "i18n": {
+        "en": "Use HTTP Basic authentication",
+        "zh-CN": "使用 HTTP Basic 认证"
+      }
+    },
+    {
+      "flag": "--digest",
+      "i18n": {
+        "en": "Use HTTP Digest authentication",
+        "zh-CN": "使用 HTTP Digest 认证"
+      }
+    },
+    {
+      "flag": "--bearer TOKEN",
+      "i18n": {
+        "en": "Bearer token for HTTP authentication",
+        "zh-CN": "Bearer token 认证"
+      }
+    },
+    {
+      "flag": "-A, --user-agent STRING",
+      "i18n": {
+        "en": "Send User-Agent STRING",
+        "zh-CN": "自定义 User-Agent"
+      }
+    },
+    {
+      "flag": "-e, --referer URL",
+      "i18n": {
+        "en": "Referer URL",
+        "zh-CN": "设置 Referer"
+      }
+    },
+    {
+      "flag": "-b, --cookie FILE/STRING",
+      "i18n": {
+        "en": "Send cookies from FILE or string",
+        "zh-CN": "发送 cookie"
+      }
+    },
+    {
+      "flag": "-c, --cookie-jar FILE",
+      "i18n": {
+        "en": "Write cookies to FILE after operation",
+        "zh-CN": "把 cookie 存到 FILE"
+      }
+    },
+    {
+      "flag": "--resolve HOST:PORT:ADDR",
+      "i18n": {
+        "en": "Force resolve HOST:PORT to ADDR",
+        "zh-CN": "强制把 HOST:PORT 解析到 ADDR"
+      }
+    },
+    {
+      "flag": "--connect-to HOST:PORT:CONNECT-TO-HOST:CONNECT-TO-PORT",
+      "i18n": {
+        "en": "Connect to a different host",
+        "zh-CN": "连接到指定主机/端口"
+      }
+    },
+    {
+      "flag": "-x, --proxy [PROTO://]HOST[:PORT]",
+      "i18n": {
+        "en": "Use this proxy",
+        "zh-CN": "使用代理"
+      }
+    },
+    {
+      "flag": "--proxy-user USER:PASSWORD",
+      "i18n": {
+        "en": "Proxy user and password",
+        "zh-CN": "代理认证"
+      }
+    },
+    {
+      "flag": "--socks5 HOST[:PORT]",
+      "i18n": {
+        "en": "SOCKS5 proxy on given host + port",
+        "zh-CN": "SOCKS5 代理"
+      }
+    },
+    {
+      "flag": "--connect-timeout SECONDS",
+      "i18n": {
+        "en": "Maximum time allowed for connection",
+        "zh-CN": "连接超时"
+      }
+    },
+    {
+      "flag": "--max-time SECONDS",
+      "i18n": {
+        "en": "Maximum time allowed for transfer",
+        "zh-CN": "整次传输超时"
+      }
+    },
+    {
+      "flag": "--retry NUM",
+      "i18n": {
+        "en": "Retry request NUM times if transient error",
+        "zh-CN": "失败重试次数"
+      }
+    },
+    {
+      "flag": "--retry-delay SECONDS",
+      "i18n": {
+        "en": "Wait time between retries",
+        "zh-CN": "重试间隔"
+      }
+    },
+    {
+      "flag": "-z, --time-cond TIME",
+      "i18n": {
+        "en": "Transfer based on a time condition",
+        "zh-CN": "按 If-Modified-Since 条件下载"
+      }
+    },
+    {
+      "flag": "--compressed",
+      "i18n": {
+        "en": "Request compressed response",
+        "zh-CN": "请求压缩响应"
+      }
+    },
+    {
+      "flag": "--http2",
+      "i18n": {
+        "en": "Use HTTP/2",
+        "zh-CN": "使用 HTTP/2"
+      }
+    },
+    {
+      "flag": "--http3",
+      "i18n": {
+        "en": "Use HTTP/3",
+        "zh-CN": "使用 HTTP/3"
+      }
+    },
+    {
+      "flag": "-4, --ipv4",
+      "i18n": {
+        "en": "Resolve names to IPv4 addresses",
+        "zh-CN": "限定 IPv4"
+      }
+    },
+    {
+      "flag": "-6, --ipv6",
+      "i18n": {
+        "en": "Resolve names to IPv6 addresses",
+        "zh-CN": "限定 IPv6"
+      }
+    },
+    {
+      "flag": "--limit-rate SPEED",
+      "i18n": {
+        "en": "Limit transfer speed",
+        "zh-CN": "限速（如 100K）"
+      }
+    },
+    {
+      "flag": "-w, --write-out FORMAT",
+      "i18n": {
+        "en": "Use output FORMAT after completion",
+        "zh-CN": "完成后按格式输出（如 %{http_code}）"
+      }
+    },
+    {
+      "flag": "--fail",
+      "i18n": {
+        "en": "Fail silently on HTTP errors (no body)",
+        "zh-CN": "HTTP 错误时静默失败"
+      }
+    },
+    {
+      "flag": "--fail-with-body",
+      "i18n": {
+        "en": "Fail on errors but still output the body",
+        "zh-CN": "HTTP 错误时失败但输出 body"
+      }
+    },
+    {
+      "flag": "-h, --help",
+      "i18n": {
+        "en": "Get help for commands",
+        "zh-CN": "显示帮助"
+      }
+    },
+    {
+      "flag": "-V, --version",
+      "i18n": {
+        "en": "Show version number and quit",
+        "zh-CN": "打印版本"
+      }
+    }
+  ]
+}

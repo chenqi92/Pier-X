@@ -1,0 +1,158 @@
+{
+  "schema_version": 1,
+  "command": "cp",
+  "tool_version": "",
+  "source": "bundled-seed",
+  "import_method": "hand-curated",
+  "import_date": "2026-04-26",
+  "subcommands": [],
+  "options": [
+    {
+      "flag": "-r, -R, --recursive",
+      "i18n": {
+        "en": "Copy directories recursively",
+        "zh-CN": "递归复制目录"
+      }
+    },
+    {
+      "flag": "-i, --interactive",
+      "i18n": {
+        "en": "Prompt before overwrite",
+        "zh-CN": "覆盖前提示"
+      }
+    },
+    {
+      "flag": "-n, --no-clobber",
+      "i18n": {
+        "en": "Do not overwrite existing files",
+        "zh-CN": "不覆盖已存在文件"
+      }
+    },
+    {
+      "flag": "-f, --force",
+      "i18n": {
+        "en": "Force overwrite without prompting",
+        "zh-CN": "强制覆盖，不提示"
+      }
+    },
+    {
+      "flag": "-u, --update",
+      "i18n": {
+        "en": "Copy only when source is newer",
+        "zh-CN": "源文件更新才复制"
+      }
+    },
+    {
+      "flag": "-v, --verbose",
+      "i18n": {
+        "en": "Explain what is being done",
+        "zh-CN": "详细输出"
+      }
+    },
+    {
+      "flag": "-a, --archive",
+      "i18n": {
+        "en": "Same as -dR --preserve=all",
+        "zh-CN": "归档模式（保留权限/链接/时间等）"
+      }
+    },
+    {
+      "flag": "-p, --preserve[=ATTR_LIST]",
+      "i18n": {
+        "en": "Preserve mode/ownership/timestamps",
+        "zh-CN": "保留属性（mode/owner/timestamps）"
+      }
+    },
+    {
+      "flag": "--no-preserve=ATTR_LIST",
+      "i18n": {
+        "en": "Don't preserve specified attributes",
+        "zh-CN": "不保留指定属性"
+      }
+    },
+    {
+      "flag": "-d",
+      "i18n": {
+        "en": "Same as --no-dereference --preserve=links",
+        "zh-CN": "等同 --no-dereference --preserve=links"
+      }
+    },
+    {
+      "flag": "-L, --dereference",
+      "i18n": {
+        "en": "Always follow symbolic links in SOURCE",
+        "zh-CN": "总是跟随源端符号链接"
+      }
+    },
+    {
+      "flag": "-P, --no-dereference",
+      "i18n": {
+        "en": "Never follow symbolic links in SOURCE",
+        "zh-CN": "不跟随符号链接"
+      }
+    },
+    {
+      "flag": "-l, --link",
+      "i18n": {
+        "en": "Hard link files instead of copying",
+        "zh-CN": "硬链接而非复制"
+      }
+    },
+    {
+      "flag": "-s, --symbolic-link",
+      "i18n": {
+        "en": "Make symbolic links instead of copying",
+        "zh-CN": "创建符号链接而非复制"
+      }
+    },
+    {
+      "flag": "-x, --one-file-system",
+      "i18n": {
+        "en": "Stay on this file system",
+        "zh-CN": "不跨越文件系统"
+      }
+    },
+    {
+      "flag": "-t, --target-directory=DIR",
+      "i18n": {
+        "en": "Copy all SOURCE arguments into DIR",
+        "zh-CN": "把所有源复制到目标目录 DIR"
+      }
+    },
+    {
+      "flag": "-T, --no-target-directory",
+      "i18n": {
+        "en": "Treat DEST as normal file",
+        "zh-CN": "把目标当普通文件"
+      }
+    },
+    {
+      "flag": "--backup[=CONTROL]",
+      "i18n": {
+        "en": "Make backup of each existing destination file",
+        "zh-CN": "覆盖前先备份"
+      }
+    },
+    {
+      "flag": "-b",
+      "i18n": {
+        "en": "Like --backup but accepts no argument",
+        "zh-CN": "等同 --backup（无参数）"
+      }
+    },
+    {
+      "flag": "--help",
+      "i18n": {
+        "en": "Display help",
+        "zh-CN": "显示帮助"
+      }
+    },
+    {
+      "flag": "--version",
+      "i18n": {
+        "en": "Output version information",
+        "zh-CN": "打印版本"
+      }
+    }
+  ]
+}

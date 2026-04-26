@@ -1,0 +1,172 @@
+{
+  "schema_version": 1,
+  "command": "ls",
+  "tool_version": "",
+  "source": "bundled-seed",
+  "import_method": "hand-curated",
+  "import_date": "2026-04-26",
+  "subcommands": [],
+  "options": [
+    {
+      "flag": "-a, --all",
+      "i18n": {
+        "en": "Do not ignore entries starting with .",
+        "zh-CN": "显示所有文件，包括以 . 开头的隐藏文件"
+      }
+    },
+    {
+      "flag": "-A, --almost-all",
+      "i18n": {
+        "en": "Do not list . and ..",
+        "zh-CN": "显示所有文件，但不显示 . 和 .."
+      }
+    },
+    {
+      "flag": "-l",
+      "i18n": {
+        "en": "Use long listing format",
+        "zh-CN": "长格式列出（含权限/大小/时间）"
+      }
+    },
+    {
+      "flag": "-h, --human-readable",
+      "i18n": {
+        "en": "Print sizes in K/M/G",
+        "zh-CN": "文件大小用人类可读单位（K/M/G）"
+      }
+    },
+    {
+      "flag": "-S",
+      "i18n": {
+        "en": "Sort by file size, largest first",
+        "zh-CN": "按文件大小降序排序"
+      }
+    },
+    {
+      "flag": "-t",
+      "i18n": {
+        "en": "Sort by modification time, newest first",
+        "zh-CN": "按修改时间排序，最新的在前"
+      }
+    },
+    {
+      "flag": "-r, --reverse",
+      "i18n": {
+        "en": "Reverse order while sorting",
+        "zh-CN": "反转排序顺序"
+      }
+    },
+    {
+      "flag": "-R, --recursive",
+      "i18n": {
+        "en": "List subdirectories recursively",
+        "zh-CN": "递归列出子目录"
+      }
+    },
+    {
+      "flag": "-d, --directory",
+      "i18n": {
+        "en": "List directories themselves, not their contents",
+        "zh-CN": "列目录本身，不进入"
+      }
+    },
+    {
+      "flag": "-i, --inode",
+      "i18n": {
+        "en": "Print the index number of each file",
+        "zh-CN": "显示 inode 编号"
+      }
+    },
+    {
+      "flag": "-1",
+      "i18n": {
+        "en": "List one file per line",
+        "zh-CN": "每行只列一个文件"
+      }
+    },
+    {
+      "flag": "-F, --classify",
+      "i18n": {
+        "en": "Append indicator (one of */=>@|) to entries",
+        "zh-CN": "为不同类型文件加后缀（/ * @ 等）"
+      }
+    },
+    {
+      "flag": "-G",
+      "i18n": {
+        "en": "Colorize the output",
+        "zh-CN": "彩色输出（macOS）"
+      }
+    },
+    {
+      "flag": "--color",
+      "i18n": {
+        "en": "Colorize output (auto / always / never)",
+        "zh-CN": "彩色输出策略（auto/always/never）"
+      }
+    },
+    {
+      "flag": "-n, --numeric-uid-gid",
+      "i18n": {
+        "en": "Like -l, but list UID/GID numbers",
+        "zh-CN": "类似 -l 但 owner/group 用数字"
+      }
+    },
+    {
+      "flag": "--group-directories-first",
+      "i18n": {
+        "en": "Group directories before files",
+        "zh-CN": "目录排在文件前"
+      }
+    },
+    {
+      "flag": "-s, --size",
+      "i18n": {
+        "en": "Print the allocated size of each file",
+        "zh-CN": "显示每个文件占用的块数"
+      }
+    },
+    {
+      "flag": "-T, --tabsize=COLS",
+      "i18n": {
+        "en": "Assume tab stops at each COLS",
+        "zh-CN": "Tab 宽度设为 COLS 列"
+      }
+    },
+    {
+      "flag": "-X",
+      "i18n": {
+        "en": "Sort alphabetically by entry extension",
+        "zh-CN": "按扩展名排序"
+      }
+    },
+    {
+      "flag": "--time-style=STYLE",
+      "i18n": {
+        "en": "Time/date format (full-iso / long-iso / iso / locale / +FORMAT)",
+        "zh-CN": "时间格式（full-iso / iso 等）"
+      }
+    },
+    {
+      "flag": "-Q, --quote-name",
+      "i18n": {
+        "en": "Enclose entry names in double quotes",
+        "zh-CN": "文件名加双引号"
+      }
+    },
+    {
+      "flag": "--help",
+      "i18n": {
+        "en": "Display help",
+        "zh-CN": "显示帮助"
+      }
+    },
+    {
+      "flag": "--version",
+      "i18n": {
+        "en": "Output version information",
+        "zh-CN": "打印版本"
+      }
+    }
+  ]
+}

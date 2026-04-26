@@ -1,0 +1,475 @@
+{
+  "schema_version": 1,
+  "command": "systemctl",
+  "tool_version": "",
+  "source": "bundled-seed",
+  "import_method": "hand-curated",
+  "import_date": "2026-04-26",
+  "subcommands": [
+    {
+      "name": "start",
+      "i18n": {
+        "en": "Start one or more units",
+        "zh-CN": "启动一个或多个 unit"
+      },
+      "options": [],
+      "subcommands": []
+    },
+    {
+      "name": "stop",
+      "i18n": {
+        "en": "Stop one or more units",
+        "zh-CN": "停止一个或多个 unit"
+      },
+      "options": [],
+      "subcommands": []
+    },
+    {
+      "name": "restart",
+      "i18n": {
+        "en": "Restart one or more units",
+        "zh-CN": "重启 unit"
+      },
+      "options": [],
+      "subcommands": []
+    },
+    {
+      "name": "reload",
+      "i18n": {
+        "en": "Reload one or more units",
+        "zh-CN": "重新加载 unit 的配置（不重启）"
+      },
+      "options": [],
+      "subcommands": []
+    },
+    {
+      "name": "status",
+      "i18n": {
+        "en": "Show runtime status of one or more units",
+        "zh-CN": "查看 unit 的运行状态"
+      },
+      "options": [],
+      "subcommands": []
+    },
+    {
+      "name": "enable",
+      "i18n": {
+        "en": "Enable one or more unit files",
+        "zh-CN": "开机自启（创建 symlink）"
+      },
+      "options": [],
+      "subcommands": []
+    },
+    {
+      "name": "disable",
+      "i18n": {
+        "en": "Disable one or more unit files",
+        "zh-CN": "取消开机自启"
+      },
+      "options": [],
+      "subcommands": []
+    },
+    {
+      "name": "is-active",
+      "i18n": {
+        "en": "Check whether units are active",
+        "zh-CN": "检查 unit 是否在运行"
+      },
+      "options": [],
+      "subcommands": []
+    },
+    {
+      "name": "is-enabled",
+      "i18n": {
+        "en": "Check whether unit files are enabled",
+        "zh-CN": "检查是否开机自启"
+      },
+      "options": [],
+      "subcommands": []
+    },
+    {
+      "name": "is-failed",
+      "i18n": {
+        "en": "Check whether units are in a failed state",
+        "zh-CN": "检查是否处于 failed 状态"
+      },
+      "options": [],
+      "subcommands": []
+    },
+    {
+      "name": "mask",
+      "i18n": {
+        "en": "Mask one or more unit files (forbid them)",
+        "zh-CN": "禁用并禁止启动（创建 /dev/null symlink）"
+      },
+      "options": [],
+      "subcommands": []
+    },
+    {
+      "name": "unmask",
+      "i18n": {
+        "en": "Unmask one or more unit files",
+        "zh-CN": "解除 mask"
+      },
+      "options": [],
+      "subcommands": []
+    },
+    {
+      "name": "reload-or-restart",
+      "i18n": {
+        "en": "Reload or restart one or more units",
+        "zh-CN": "能 reload 就 reload，否则 restart"
+      },
+      "options": [],
+      "subcommands": []
+    },
+    {
+      "name": "kill",
+      "i18n": {
+        "en": "Send a signal to processes of a unit",
+        "zh-CN": "向 unit 进程发信号"
+      },
+      "options": [],
+      "subcommands": []
+    },
+    {
+      "name": "daemon-reload",
+      "i18n": {
+        "en": "Reload systemd manager configuration",
+        "zh-CN": "重新加载 systemd 自身的配置"
+      },
+      "options": [],
+      "subcommands": []
+    },
+    {
+      "name": "list-units",
+      "i18n": {
+        "en": "List loaded units",
+        "zh-CN": "列出已加载的 unit"
+      },
+      "options": [],
+      "subcommands": []
+    },
+    {
+      "name": "list-unit-files",
+      "i18n": {
+        "en": "List installed unit files",
+        "zh-CN": "列出已安装的 unit 文件"
+      },
+      "options": [],
+      "subcommands": []
+    },
+    {
+      "name": "list-sockets",
+      "i18n": {
+        "en": "List sockets",
+        "zh-CN": "列出 socket unit"
+      },
+      "options": [],
+      "subcommands": []
+    },
+    {
+      "name": "list-timers",
+      "i18n": {
+        "en": "List timers",
+        "zh-CN": "列出 timer unit"
+      },
+      "options": [],
+      "subcommands": []
+    },
+    {
+      "name": "list-jobs",
+      "i18n": {
+        "en": "List jobs",
+        "zh-CN": "列出当前作业队列"
+      },
+      "options": [],
+      "subcommands": []
+    },
+    {
+      "name": "list-machines",
+      "i18n": {
+        "en": "List running machines",
+        "zh-CN": "列出运行中的 systemd machine"
+      },
+      "options": [],
+      "subcommands": []
+    },
+    {
+      "name": "show",
+      "i18n": {
+        "en": "Show properties of units / jobs / manager",
+        "zh-CN": "显示 unit / 作业 / 管理器属性"
+      },
+      "options": [],
+      "subcommands": []
+    },
+    {
+      "name": "cat",
+      "i18n": {
+        "en": "Show the source of a unit file",
+        "zh-CN": "显示 unit 文件源"
+      },
+      "options": [],
+      "subcommands": []
+    },
+    {
+      "name": "edit",
+      "i18n": {
+        "en": "Edit one or more unit files",
+        "zh-CN": "编辑 unit 文件（创建 override）"
+      },
+      "options": [],
+      "subcommands": []
+    },
+    {
+      "name": "get-default",
+      "i18n": {
+        "en": "Get default target",
+        "zh-CN": "查看默认 target"
+      },
+      "options": [],
+      "subcommands": []
+    },
+    {
+      "name": "set-default",
+      "i18n": {
+        "en": "Set default target",
+        "zh-CN": "设置默认 target"
+      },
+      "options": [],
+      "subcommands": []
+    },
+    {
+      "name": "isolate",
+      "i18n": {
+        "en": "Start a unit and stop all others",
+        "zh-CN": "启动 unit 并停掉其他"
+      },
+      "options": [],
+      "subcommands": []
+    },
+    {
+      "name": "rescue",
+      "i18n": {
+        "en": "Enter rescue mode",
+        "zh-CN": "进入救援模式"
+      },
+      "options": [],
+      "subcommands": []
+    },
+    {
+      "name": "emergency",
+      "i18n": {
+        "en": "Enter emergency mode",
+        "zh-CN": "进入紧急模式"
+      },
+      "options": [],
+      "subcommands": []
+    },
+    {
+      "name": "default",
+      "i18n": {
+        "en": "Boot to default target",
+        "zh-CN": "切到默认 target"
+      },
+      "options": [],
+      "subcommands": []
+    },
+    {
+      "name": "reboot",
+      "i18n": {
+        "en": "Shut down and reboot",
+        "zh-CN": "关机重启"
+      },
+      "options": [],
+      "subcommands": []
+    },
+    {
+      "name": "poweroff",
+      "i18n": {
+        "en": "Shut down and power off",
+        "zh-CN": "关机断电"
+      },
+      "options": [],
+      "subcommands": []
+    },
+    {
+      "name": "halt",
+      "i18n": {
+        "en": "Shut down and halt",
+        "zh-CN": "关机但不断电"
+      },
+      "options": [],
+      "subcommands": []
+    },
+    {
+      "name": "suspend",
+      "i18n": {
+        "en": "Suspend the system",
+        "zh-CN": "挂起到内存"
+      },
+      "options": [],
+      "subcommands": []
+    },
+    {
+      "name": "hibernate",
+      "i18n": {
+        "en": "Hibernate the system",
+        "zh-CN": "休眠到磁盘"
+      },
+      "options": [],
+      "subcommands": []
+    },
+    {
+      "name": "hybrid-sleep",
+      "i18n": {
+        "en": "Hibernate and suspend the system",
+        "zh-CN": "混合休眠"
+      },
+      "options": [],
+      "subcommands": []
+    },
+    {
+      "name": "daemon-reexec",
+      "i18n": {
+        "en": "Reexecute systemd",
+        "zh-CN": "重新执行 systemd（在新版本生效）"
+      },
+      "options": [],
+      "subcommands": []
+    },
+    {
+      "name": "preset",
+      "i18n": {
+        "en": "Enable / disable per preset policy",
+        "zh-CN": "按预设策略启停"
+      },
+      "options": [],
+      "subcommands": []
+    },
+    {
+      "name": "set-property",
+      "i18n": {
+        "en": "Set unit property at runtime",
+        "zh-CN": "运行时设置 unit 属性"
+      },
+      "options": [],
+      "subcommands": []
+    }
+  ],
+  "options": [
+    {
+      "flag": "--now",
+      "i18n": {
+        "en": "Combine enable/disable with start/stop",
+        "zh-CN": "联动 start/stop（配合 enable/disable）"
+      }
+    },
+    {
+      "flag": "--user",
+      "i18n": {
+        "en": "Operate on the user systemd instance",
+        "zh-CN": "操作用户级 systemd 实例"
+      }
+    },
+    {
+      "flag": "--system",
+      "i18n": {
+        "en": "Operate on the system systemd instance (default)",
+        "zh-CN": "操作系统级 systemd 实例（默认）"
+      }
+    },
+    {
+      "flag": "--machine=NAME",
+      "i18n": {
+        "en": "Operate on local container",
+        "zh-CN": "在指定容器内操作"
+      }
+    },
+    {
+      "flag": "--no-pager",
+      "i18n": {
+        "en": "Don't pipe output into a pager",
+        "zh-CN": "不通过 pager 显示"
+      }
+    },
+    {
+      "flag": "--no-legend",
+      "i18n": {
+        "en": "Don't print legend (column headers)",
+        "zh-CN": "不打印表头/图例"
+      }
+    },
+    {
+      "flag": "--type=TYPE",
+      "i18n": {
+        "en": "List units of TYPE (service / socket / timer ...)",
+        "zh-CN": "按类型过滤 unit"
+      }
+    },
+    {
+      "flag": "--state=STATE",
+      "i18n": {
+        "en": "List units in STATE (active / failed ...)",
+        "zh-CN": "按状态过滤 unit"
+      }
+    },
+    {
+      "flag": "--all",
+      "i18n": {
+        "en": "Show all loaded units regardless of state",
+        "zh-CN": "显示所有 unit（不论状态）"
+      }
+    },
+    {
+      "flag": "--full",
+      "i18n": {
+        "en": "Don't ellipsize unit names",
+        "zh-CN": "不截断 unit 名"
+      }
+    },
+    {
+      "flag": "-q, --quiet",
+      "i18n": {
+        "en": "Suppress output",
+        "zh-CN": "静默"
+      }
+    },
+    {
+      "flag": "-f, --force",
+      "i18n": {
+        "en": "Override conflicts when enabling unit files",
+        "zh-CN": "覆盖冲突（enable 时）"
+      }
+    },
+    {
+      "flag": "--runtime",
+      "i18n": {
+        "en": "Apply only temporarily (until reboot)",
+        "zh-CN": "仅临时生效（重启后失效）"
+      }
+    },
+    {
+      "flag": "--no-block",
+      "i18n": {
+        "en": "Don't wait for jobs to finish",
+        "zh-CN": "不等作业完成就返回"
+      }
+    },
+    {
+      "flag": "-h, --help",
+      "i18n": {
+        "en": "Display help",
+        "zh-CN": "显示帮助"
+      }
+    },
+    {
+      "flag": "--version",
+      "i18n": {
+        "en": "Show version",
+        "zh-CN": "打印版本"
+      }
+    }
+  ]
+}

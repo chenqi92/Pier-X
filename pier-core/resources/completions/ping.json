@@ -1,0 +1,256 @@
+{
+  "schema_version": 1,
+  "command": "ping",
+  "tool_version": "",
+  "source": "auto-imported",
+  "import_method": "man",
+  "import_date": "2026-04-26",
+  "subcommands": [],
+  "options": [
+    {
+      "flag": "-4",
+      "i18n": {
+        "en": "Use IPv4 only.",
+        "zh-CN": "限定 IPv4"
+      }
+    },
+    {
+      "flag": "-6",
+      "i18n": {
+        "en": "Use IPv6 only.",
+        "zh-CN": "限定 IPv6"
+      }
+    },
+    {
+      "flag": "-a",
+      "i18n": {
+        "en": "Audible ping."
+      }
+    },
+    {
+      "flag": "-A",
+      "i18n": {
+        "en": "Adaptive ping. Interpacket interval adapts to round-trip time, so that effectively not more than one (or more, if preload is set) unanswered probe is present in the network. The default interval is 2 ms, for more info see option -i. On networks with low RTT this mode is essentially equivalent to flood mode.",
+        "zh-CN": "自适应 ping（在 RTT 基础上发送）"
+      }
+    },
+    {
+      "flag": "-b",
+      "i18n": {
+        "en": "Allow pinging a broadcast address.",
+        "zh-CN": "允许 ping 广播地址"
+      }
+    },
+    {
+      "flag": "-B",
+      "i18n": {
+        "en": "Do not allow ping to change source address of probes. The address is bound to one selected when ping starts.",
+        "zh-CN": "禁止根据路由变化改源地址"
+      }
+    },
+    {
+      "flag": "-c",
+      "i18n": {
+        "en": "Stop after sending count ECHO_REQUEST packets. With deadline option, ping waits for count ECHO_REPLY packets, until the timeout expires."
+      }
+    },
+    {
+      "flag": "-C",
+      "i18n": {
+        "en": "Call connect() syscall on socket creation."
+      }
+    },
+    {
+      "flag": "-d",
+      "i18n": {
+        "en": "Set the SO_DEBUG option on the socket being used. Essentially, this socket option is not used by Linux kernel.",
+        "zh-CN": "设置 SO_DEBUG socket 选项"
+      }
+    },
+    {
+      "flag": "-D",
+      "i18n": {
+        "en": "Print timestamp (unix time + microseconds as in gettimeofday) before each line.",
+        "zh-CN": "在每行前加时间戳"
+      }
+    },
+    {
+      "flag": "-e",
+      "i18n": {
+        "en": "Set the identification field of ECHO_REQUEST. Value 0 implies using raw socket (not supported on ICMP datagram socket). The value of the field may be printed with -v option."
+      }
+    },
+    {
+      "flag": "-f",
+      "i18n": {
+        "en": "Flood ping. For every ECHO_REQUEST sent a period “.” is printed, while for every ECHO_REPLY received a backspace is printed. This provides a rapid display of how many packets are being dropped. If interval is not given, it sets interval to zero and outputs packets as fast as they come back or one hundred times per second, whichever is more. Only the super-user may use this option with zero interval.",
+        "zh-CN": "flood 模式（每个返回都立刻再发，root 才能用）"
+      }
+    },
+    {
+      "flag": "-F",
+      "i18n": {
+        "en": "IPv6 only. Allocate and set 20 bit flow label (in hex) on echo request packets. If value is zero, kernel allocates random flow label."
+      }
+    },
+    {
+      "flag": "-h",
+      "i18n": {
+        "en": "Show help."
+      }
+    },
+    {
+      "flag": "-H",
+      "i18n": {
+        "en": "Force DNS name resolution for the output. Useful for numeric destination, or -f option, which by default do not perform it. Override previously defined -n option."
+      }
+    },
+    {
+      "flag": "-i",
+      "i18n": {
+        "en": "Wait interval seconds between sending each packet. Real number allowed with dot as a decimal separator (regardless locale setup). The default is to wait for one second between each packet normally, or not to wait in flood mode. Only super-user may set interval to values less than 2 ms. Broadcast and multicast ping have even higher limitation for regular user: minimum is 1 sec."
+      }
+    },
+    {
+      "flag": "-I",
+      "i18n": {
+        "en": "interface is either an address, an interface name or a VRF name. If interface is an address, it sets source address to specified interface address. If interface is an interface name, it sets source interface to specified interface. If interface is a VRF name, each packet is routed using the corresponding routing table; in this case, the -I option can be repeated to specify a source address. NOTE: For IPv6, when doing ping to a link-local scope address, link specification (by the '%'-notation in destination, or by this option) can be used but it is no longer required."
+      }
+    },
+    {
+      "flag": "-l",
+      "i18n": {
+        "en": "If preload is specified, ping sends that many packets not waiting for reply. Only the super-user may select preload more than 3."
+      }
+    },
+    {
+      "flag": "-L",
+      "i18n": {
+        "en": "Suppress loopback of multicast packets. This flag only applies if the ping destination is a multicast address.",
+        "zh-CN": "组播禁用本地回环"
+      }
+    },
+    {
+      "flag": "-m",
+      "i18n": {
+        "en": "use mark to tag the packets going out. This is useful for variety of reasons within the kernel such as using policy routing to select specific outbound processing."
+      }
+    },
+    {
+      "flag": "-M",
+      "i18n": {
+        "en": "Select Path MTU Discovery strategy.  pmtudisc_option may be either do (set DF flag but subject to PMTU checks by kernel, packets too large will be rejected), want (do PMTU discovery, fragment locally when packet size is large), probe (set DF flag and bypass PMTU checks, useful for probing), or dont (do not set DF flag)."
+      }
+    },
+    {
+      "flag": "-N",
+      "i18n": {
+        "en": "IPv6 only. Send IPv6 Node Information Queries (RFC4620), instead of Echo Request. CAP_NET_RAW capability is required."
+      }
+    },
+    {
+      "flag": "-n",
+      "i18n": {
+        "en": "Numeric output only. No attempt will be made to lookup symbolic names for host addresses (no reverse DNS resolution). This is the default for numeric destination or -f option. Override previously defined -H option.",
+        "zh-CN": "数字模式 — 不解析主机名"
+      }
+    },
+    {
+      "flag": "-O",
+      "i18n": {
+        "en": "Report outstanding ICMP ECHO reply before sending next packet. This is useful together with the timestamp -D to log output to a diagnostic file and search for missing answers.",
+        "zh-CN": "为没有响应的包打印一行报告"
+      }
+    },
+    {
+      "flag": "-p",
+      "i18n": {
+        "en": "You may specify up to 16 “pad” bytes to fill out the packet you send. This is useful for diagnosing data-dependent problems in a network. For example, -p ff will cause the sent packet to be filled with all ones."
+      }
+    },
+    {
+      "flag": "-q",
+      "i18n": {
+        "en": "Quiet output. Nothing is displayed except the summary lines at startup time and when finished.",
+        "zh-CN": "安静模式（只打印开始和汇总）"
+      }
+    },
+    {
+      "flag": "-Q",
+      "i18n": {
+        "en": "Set Quality of Service -related bits in ICMP datagrams.  tos can be decimal (ping only) or hex number."
+      }
+    },
+    {
+      "flag": "-r",
+      "i18n": {
+        "en": "Bypass the normal routing tables and send directly to a host on an attached interface. If the host is not on a directly-attached network, an error is returned. This option can be used to ping a local host through an interface that has no route through it provided the option -I is also used.",
+        "zh-CN": "绕过路由表，直发到本网段"
+      }
+    },
+    {
+      "flag": "-R",
+      "i18n": {
+        "en": "ping only. Record route. Includes the RECORD_ROUTE option in the ECHO_REQUEST packet and displays the route buffer on returned packets. Note that the IP header is only large enough for nine such routes. Many hosts ignore or discard this option.",
+        "zh-CN": "记录路由（IPv4）"
+      }
+    },
+    {
+      "flag": "-s",
+      "i18n": {
+        "en": "Specifies the number of data bytes to be sent. The default is 56, which translates into 64 ICMP data bytes when combined with the 8 bytes of ICMP header data."
+      }
+    },
+    {
+      "flag": "-S",
+      "i18n": {
+        "en": "Set socket sndbuf. If not specified, it is selected to buffer not more than one packet."
+      }
+    },
+    {
+      "flag": "-t",
+      "i18n": {
+        "en": "ping only. Set the IP Time to Live."
+      }
+    },
+    {
+      "flag": "-T",
+      "i18n": {
+        "en": "Set special IP timestamp options.  timestamp option may be either tsonly (only timestamps), tsandaddr (timestamps and addresses) or tsprespec host1 [host2 [host3 [host4]]] (timestamp prespecified hops)."
+      }
+    },
+    {
+      "flag": "-U",
+      "i18n": {
+        "en": "Print full user-to-user latency (the old behaviour). Normally ping prints network round trip time, which can be different f.e. due to DNS failures.",
+        "zh-CN": "汇总时打印完整用户到用户的延迟"
+      }
+    },
+    {
+      "flag": "-v",
+      "i18n": {
+        "en": "Verbose output. Do not suppress DUP replies when pinging multicast address.",
+        "zh-CN": "详细输出"
+      }
+    },
+    {
+      "flag": "-V",
+      "i18n": {
+        "en": "Show version and exit.",
+        "zh-CN": "打印版本"
+      }
+    },
+    {
+      "flag": "-w",
+      "i18n": {
+        "en": "Specify a timeout, in seconds, before ping exits regardless of how many packets have been sent or received. In this case ping does not stop after count packet are sent, it waits either for deadline expire or until count probes are answered or for some error notification from network."
+      }
+    },
+    {
+      "flag": "-W",
+      "i18n": {
+        "en": "Time to wait for a response, in seconds. The option affects only timeout in absence of any responses, otherwise ping waits for two RTTs. Real number allowed with dot as a decimal separator (regardless locale setup). 0 means infinite timeout."
+      }
+    }
+  ]
+}

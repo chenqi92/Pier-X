@@ -1,0 +1,102 @@
+{
+  "schema_version": 1,
+  "command": "mv",
+  "tool_version": "",
+  "source": "bundled-seed",
+  "import_method": "hand-curated",
+  "import_date": "2026-04-26",
+  "subcommands": [],
+  "options": [
+    {
+      "flag": "-i, --interactive",
+      "i18n": {
+        "en": "Prompt before overwrite",
+        "zh-CN": "覆盖前提示"
+      }
+    },
+    {
+      "flag": "-n, --no-clobber",
+      "i18n": {
+        "en": "Do not overwrite existing files",
+        "zh-CN": "不覆盖已存在文件"
+      }
+    },
+    {
+      "flag": "-f, --force",
+      "i18n": {
+        "en": "Don't prompt before overwriting",
+        "zh-CN": "强制覆盖，不提示"
+      }
+    },
+    {
+      "flag": "-u, --update",
+      "i18n": {
+        "en": "Move only when source is newer",
+        "zh-CN": "源更新才覆盖"
+      }
+    },
+    {
+      "flag": "-v, --verbose",
+      "i18n": {
+        "en": "Explain what is being done",
+        "zh-CN": "详细输出"
+      }
+    },
+    {
+      "flag": "--backup[=CONTROL]",
+      "i18n": {
+        "en": "Make backup of each existing destination file",
+        "zh-CN": "覆盖前备份"
+      }
+    },
+    {
+      "flag": "-b",
+      "i18n": {
+        "en": "Like --backup but accepts no argument",
+        "zh-CN": "等同 --backup"
+      }
+    },
+    {
+      "flag": "-S, --suffix=SUFFIX",
+      "i18n": {
+        "en": "Override usual backup suffix",
+        "zh-CN": "备份文件后缀"
+      }
+    },
+    {
+      "flag": "-t, --target-directory=DIR",
+      "i18n": {
+        "en": "Move all SOURCE arguments into DIR",
+        "zh-CN": "把所有源移到目标目录 DIR"
+      }
+    },
+    {
+      "flag": "-T, --no-target-directory",
+      "i18n": {
+        "en": "Treat DEST as normal file",
+        "zh-CN": "把目标当普通文件"
+      }
+    },
+    {
+      "flag": "-Z, --context",
+      "i18n": {
+        "en": "Set SELinux context to default",
+        "zh-CN": "设置 SELinux 上下文"
+      }
+    },
+    {
+      "flag": "--help",
+      "i18n": {
+        "en": "Display help",
+        "zh-CN": "显示帮助"
+      }
+    },
+    {
+      "flag": "--version",
+      "i18n": {
+        "en": "Output version information",
+        "zh-CN": "打印版本"
+      }
+    }
+  ]
+}

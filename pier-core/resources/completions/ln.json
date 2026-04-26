@@ -1,0 +1,95 @@
+{
+  "schema_version": 1,
+  "command": "ln",
+  "tool_version": "",
+  "source": "bundled-seed",
+  "import_method": "hand-curated",
+  "import_date": "2026-04-26",
+  "subcommands": [],
+  "options": [
+    {
+      "flag": "-s, --symbolic",
+      "i18n": {
+        "en": "Make symbolic links instead of hard links",
+        "zh-CN": "创建符号链接（默认是硬链接）"
+      }
+    },
+    {
+      "flag": "-f, --force",
+      "i18n": {
+        "en": "Remove existing destination files",
+        "zh-CN": "存在时先删除目标"
+      }
+    },
+    {
+      "flag": "-i, --interactive",
+      "i18n": {
+        "en": "Prompt whether to remove destinations",
+        "zh-CN": "删除前提示"
+      }
+    },
+    {
+      "flag": "-n, --no-dereference",
+      "i18n": {
+        "en": "Treat LINK_NAME as a normal file when symlink to dir",
+        "zh-CN": "把符号链接当普通文件处理"
+      }
+    },
+    {
+      "flag": "-r, --relative",
+      "i18n": {
+        "en": "Create symbolic link relative to link location",
+        "zh-CN": "创建相对路径的符号链接"
+      }
+    },
+    {
+      "flag": "-T, --no-target-directory",
+      "i18n": {
+        "en": "Treat LINK_NAME as a normal file always",
+        "zh-CN": "把目标当普通文件"
+      }
+    },
+    {
+      "flag": "-t, --target-directory=DIR",
+      "i18n": {
+        "en": "Specify the directory where to create the links",
+        "zh-CN": "在指定目录中创建链接"
+      }
+    },
+    {
+      "flag": "-v, --verbose",
+      "i18n": {
+        "en": "Print name of each linked file",
+        "zh-CN": "为每个链接打印名字"
+      }
+    },
+    {
+      "flag": "--backup[=CONTROL]",
+      "i18n": {
+        "en": "Make backup of each existing destination",
+        "zh-CN": "覆盖前备份"
+      }
+    },
+    {
+      "flag": "-b",
+      "i18n": {
+        "en": "Like --backup but accepts no argument",
+        "zh-CN": "等同 --backup"
+      }
+    },
+    {
+      "flag": "--help",
+      "i18n": {
+        "en": "Display help",
+        "zh-CN": "显示帮助"
+      }
+    },
+    {
+      "flag": "--version",
+      "i18n": {
+        "en": "Output version information",
+        "zh-CN": "打印版本"
+      }
+    }
+  ]
+}

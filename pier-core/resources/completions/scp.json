@@ -1,0 +1,165 @@
+{
+  "schema_version": 1,
+  "command": "scp",
+  "tool_version": "",
+  "source": "bundled-seed",
+  "import_method": "hand-curated",
+  "import_date": "2026-04-26",
+  "subcommands": [],
+  "options": [
+    {
+      "flag": "-r",
+      "i18n": {
+        "en": "Recursively copy entire directories",
+        "zh-CN": "递归复制整个目录"
+      }
+    },
+    {
+      "flag": "-P PORT",
+      "i18n": {
+        "en": "Specify port to connect to on the remote host",
+        "zh-CN": "远端 SSH 端口"
+      }
+    },
+    {
+      "flag": "-i IDENTITY",
+      "i18n": {
+        "en": "Selects the file from which the identity is read",
+        "zh-CN": "指定私钥文件"
+      }
+    },
+    {
+      "flag": "-J DESTINATION",
+      "i18n": {
+        "en": "ProxyJump destination",
+        "zh-CN": "通过跳板机连接"
+      }
+    },
+    {
+      "flag": "-p",
+      "i18n": {
+        "en": "Preserve modification times, access times, and modes",
+        "zh-CN": "保留 mtime / atime / mode"
+      }
+    },
+    {
+      "flag": "-q",
+      "i18n": {
+        "en": "Quiet mode (disable progress meter and warnings)",
+        "zh-CN": "静默 — 不显示进度条"
+      }
+    },
+    {
+      "flag": "-v",
+      "i18n": {
+        "en": "Verbose mode",
+        "zh-CN": "详细输出（用于调试）"
+      }
+    },
+    {
+      "flag": "-C",
+      "i18n": {
+        "en": "Compression enable",
+        "zh-CN": "启用传输压缩"
+      }
+    },
+    {
+      "flag": "-c CIPHER",
+      "i18n": {
+        "en": "Selects the cipher to use",
+        "zh-CN": "选择加密算法"
+      }
+    },
+    {
+      "flag": "-l LIMIT",
+      "i18n": {
+        "en": "Limit bandwidth in Kbit/s",
+        "zh-CN": "带宽限制（Kbit/s）"
+      }
+    },
+    {
+      "flag": "-o OPTION",
+      "i18n": {
+        "en": "Pass option to ssh in same format as ssh_config",
+        "zh-CN": "把选项传给 ssh（按 ssh_config 格式）"
+      }
+    },
+    {
+      "flag": "-F CONFIG",
+      "i18n": {
+        "en": "Use alternative ssh_config",
+        "zh-CN": "使用指定 ssh_config"
+      }
+    },
+    {
+      "flag": "-3",
+      "i18n": {
+        "en": "Copies between two remote hosts via local",
+        "zh-CN": "经由本地中转跨两台远端复制"
+      }
+    },
+    {
+      "flag": "-4",
+      "i18n": {
+        "en": "Forces use of IPv4 only",
+        "zh-CN": "限定 IPv4"
+      }
+    },
+    {
+      "flag": "-6",
+      "i18n": {
+        "en": "Forces use of IPv6 only",
+        "zh-CN": "限定 IPv6"
+      }
+    },
+    {
+      "flag": "-B",
+      "i18n": {
+        "en": "Selects batch mode (no password prompts)",
+        "zh-CN": "批处理模式（不交互问密码）"
+      }
+    },
+    {
+      "flag": "-T",
+      "i18n": {
+        "en": "Disable strict filename checking",
+        "zh-CN": "禁用文件名严格校验"
+      }
+    },
+    {
+      "flag": "-O",
+      "i18n": {
+        "en": "Use legacy SCP protocol (instead of SFTP)",
+        "zh-CN": "使用旧的 SCP 协议而非 SFTP"
+      }
+    },
+    {
+      "flag": "-s",
+      "i18n": {
+        "en": "Use SFTP protocol",
+        "zh-CN": "使用 SFTP 协议（默认）"
+      }
+    },
+    {
+      "flag": "-A",
+      "i18n": {
+        "en": "Allow agent forwarding",
+        "zh-CN": "允许 agent 转发"
+      }
+    },
+    {
+      "flag": "-x",
+      "i18n": {
+        "en": "Disable X11 forwarding",
+        "zh-CN": "禁用 X11 转发"
+      }
+    },
+    {
+      "flag": "-X SFTP_OPT",
+      "i18n": {
+        "en": "Pass option to SFTP",
+        "zh-CN": "把选项传给 SFTP"
+      }
+    }
+  ]
+}

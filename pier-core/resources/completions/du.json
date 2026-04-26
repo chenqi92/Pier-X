@@ -1,0 +1,137 @@
+{
+  "schema_version": 1,
+  "command": "du",
+  "tool_version": "",
+  "source": "bundled-seed",
+  "import_method": "hand-curated",
+  "import_date": "2026-04-26",
+  "subcommands": [],
+  "options": [
+    {
+      "flag": "-h, --human-readable",
+      "i18n": {
+        "en": "Print sizes in human readable format",
+        "zh-CN": "人类可读单位（K/M/G）"
+      }
+    },
+    {
+      "flag": "-s, --summarize",
+      "i18n": {
+        "en": "Display total for each argument only",
+        "zh-CN": "每个参数只显示一行总计"
+      }
+    },
+    {
+      "flag": "-c, --total",
+      "i18n": {
+        "en": "Produce a grand total",
+        "zh-CN": "末尾打印总计"
+      }
+    },
+    {
+      "flag": "-a, --all",
+      "i18n": {
+        "en": "Write counts for all files, not just directories",
+        "zh-CN": "对所有文件计数（不仅目录）"
+      }
+    },
+    {
+      "flag": "-d, --max-depth=N",
+      "i18n": {
+        "en": "Print total for directories N levels deep",
+        "zh-CN": "递归深度 N 层"
+      }
+    },
+    {
+      "flag": "-x, --one-file-system",
+      "i18n": {
+        "en": "Skip directories on different filesystems",
+        "zh-CN": "不跨越文件系统"
+      }
+    },
+    {
+      "flag": "-L, --dereference",
+      "i18n": {
+        "en": "Follow all symbolic links",
+        "zh-CN": "跟随所有符号链接"
+      }
+    },
+    {
+      "flag": "-P, --no-dereference",
+      "i18n": {
+        "en": "Don't follow symbolic links (default)",
+        "zh-CN": "不跟随符号链接（默认）"
+      }
+    },
+    {
+      "flag": "-S, --separate-dirs",
+      "i18n": {
+        "en": "For directories, do not include size of subdirectories",
+        "zh-CN": "目录不计入子目录大小"
+      }
+    },
+    {
+      "flag": "--apparent-size",
+      "i18n": {
+        "en": "Print apparent sizes, not disk usage",
+        "zh-CN": "显示文件实际大小（而非磁盘占用）"
+      }
+    },
+    {
+      "flag": "--exclude=PATTERN",
+      "i18n": {
+        "en": "Exclude entries matching PATTERN",
+        "zh-CN": "排除匹配模式的条目"
+      }
+    },
+    {
+      "flag": "-X, --exclude-from=FILE",
+      "i18n": {
+        "en": "Read exclude patterns from FILE",
+        "zh-CN": "从 FILE 读取排除模式"
+      }
+    },
+    {
+      "flag": "-B, --block-size=SIZE",
+      "i18n": {
+        "en": "Scale sizes by SIZE before printing",
+        "zh-CN": "按 SIZE 缩放显示"
+      }
+    },
+    {
+      "flag": "-k",
+      "i18n": {
+        "en": "Like --block-size=1K",
+        "zh-CN": "等同 --block-size=1K"
+      }
+    },
+    {
+      "flag": "-m",
+      "i18n": {
+        "en": "Like --block-size=1M",
+        "zh-CN": "等同 --block-size=1M"
+      }
+    },
+    {
+      "flag": "--time",
+      "i18n": {
+        "en": "Show time of the last modification",
+        "zh-CN": "显示最后修改时间"
+      }
+    },
+    {
+      "flag": "--help",
+      "i18n": {
+        "en": "Display help",
+        "zh-CN": "显示帮助"
+      }
+    },
+    {
+      "flag": "--version",
+      "i18n": {
+        "en": "Output version information",
+        "zh-CN": "打印版本"
+      }
+    }
+  ]
+}

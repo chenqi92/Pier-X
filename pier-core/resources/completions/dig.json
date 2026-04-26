@@ -1,0 +1,113 @@
+{
+  "schema_version": 1,
+  "command": "dig",
+  "tool_version": "9.18.39",
+  "source": "auto-imported",
+  "import_method": "man",
+  "import_date": "2026-04-26",
+  "subcommands": [],
+  "options": [
+    {
+      "flag": "-4",
+      "i18n": {
+        "en": "",
+        "zh-CN": "限定 IPv4"
+      }
+    },
+    {
+      "flag": "-6",
+      "i18n": {
+        "en": "",
+        "zh-CN": "限定 IPv6"
+      }
+    },
+    {
+      "flag": "-b",
+      "i18n": {
+        "en": "This option sets the source IP address of the query. The address must be a valid address on one of the host's network interfaces, or \"0.0.0.0\" or \"::\". An optional port may be specified  by  ap‐ pending #port."
+      }
+    },
+    {
+      "flag": "-c",
+      "i18n": {
+        "en": "This option sets the query class. The default class is IN; other classes are HS for Hesiod records or CH for Chaosnet records."
+      }
+    },
+    {
+      "flag": "-f",
+      "i18n": {
+        "en": "This option sets batch mode, in which dig reads a list of lookup requests  to  process from the given file. Each line in the file should be organized in the same way it would be presented  as  a query to dig using the command-line interface."
+      }
+    },
+    {
+      "flag": "-h",
+      "i18n": {
+        "en": ""
+      }
+    },
+    {
+      "flag": "-k",
+      "i18n": {
+        "en": "This option tells dig to sign queries using TSIG or SIG(0) using a key read from the given file. Key files can be generated using tsig-keygen.  When  using TSIG authentication with dig, the name server that is queried needs to know the key and algorithm  that is  being  used.  In BIND, this is done by providing appropriate key and server statements in named.conf for TSIG and by  looking up the KEY record in zone data for SIG(0)."
+      }
+    },
+    {
+      "flag": "-m",
+      "i18n": {
+        "en": "",
+        "zh-CN": "启用内存调试"
+      }
+    },
+    {
+      "flag": "-p",
+      "i18n": {
+        "en": "This  option  sends  the  query  to  a  non-standard port on the server, instead of the default port 53. This option is  used  to test  a  name  server  that  has  been  configured to listen for queries on a non-standard port number."
+      }
+    },
+    {
+      "flag": "-q",
+      "i18n": {
+        "en": "This option specifies the domain name to query. This  is  useful to distinguish the name from other arguments."
+      }
+    },
+    {
+      "flag": "-r",
+      "i18n": {
+        "en": "not be read. This is useful for scripts  that  need  predictable behavior.",
+        "zh-CN": "不读 ~/.digrc"
+      }
+    },
+    {
+      "flag": "-t",
+      "i18n": {
+        "en": "This  option  indicates the resource record type to query, which can be any valid query type. If it is  a  resource  record  type supported  in BIND 9, it can be given by the type mnemonic (such as NS or AAAA). The default query type is A, unless the  -x  op‐ tion  is  supplied to indicate a reverse lookup. A zone transfer can be requested by specifying a type of AXFR. When an incremen‐ tal zone transfer (IXFR) is required, set the  type  to  ixfr=N. The  incremental  zone transfer contains all changes made to the zone since the serial number in the zone's SOA record was N."
+      }
+    },
+    {
+      "flag": "-u",
+      "i18n": {
+        "en": "in microseconds instead of milliseconds.",
+        "zh-CN": "显示查询用时（微秒）"
+      }
+    },
+    {
+      "flag": "-v",
+      "i18n": {
+        "en": "",
+        "zh-CN": "打印版本"
+      }
+    },
+    {
+      "flag": "-x",
+      "i18n": {
+        "en": "This  option  sets  simplified  reverse lookups, for mapping ad‐ dresses to names. The addr is an IPv4 address in  dotted-decimal notation,  or a colon-delimited IPv6 address. When the -x option is used, there is no need to provide the name, class,  and  type arguments.   dig automatically performs a lookup for a name like 94.2.0.192.in-addr.arpa and sets the query type and class to PTR and IN respectively. IPv6 addresses are looked up  using  nibble format under the IP6.ARPA domain."
+      }
+    },
+    {
+      "flag": "-y",
+      "i18n": {
+        "en": "This  option signs queries using TSIG with the given authentica‐ tion key.  keyname is the name of the key,  and  secret  is  the base64-encoded  shared secret. hmac is the name of the key algo‐ rithm;  valid  choices  are  hmac-md5,  hmac-sha1,  hmac-sha224, hmac-sha256,  hmac-sha384, or hmac-sha512. If hmac is not speci‐ fied, the default is hmac-md5; if MD5 was disabled, the  default is hmac-sha256."
+      }
+    }
+  ]
+}

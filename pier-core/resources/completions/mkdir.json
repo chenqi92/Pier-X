@@ -1,0 +1,53 @@
+{
+  "schema_version": 1,
+  "command": "mkdir",
+  "tool_version": "",
+  "source": "bundled-seed",
+  "import_method": "hand-curated",
+  "import_date": "2026-04-26",
+  "subcommands": [],
+  "options": [
+    {
+      "flag": "-p, --parents",
+      "i18n": {
+        "en": "Make parent directories as needed; no error if existing",
+        "zh-CN": "递归创建父目录；目录已存在不报错"
+      }
+    },
+    {
+      "flag": "-m, --mode=MODE",
+      "i18n": {
+        "en": "Set file mode (as in chmod)",
+        "zh-CN": "设置目录权限（如 chmod 那样）"
+      }
+    },
+    {
+      "flag": "-v, --verbose",
+      "i18n": {
+        "en": "Print message for each created directory",
+        "zh-CN": "为每个创建的目录打印消息"
+      }
+    },
+    {
+      "flag": "-Z, --context[=CTX]",
+      "i18n": {
+        "en": "Set SELinux security context",
+        "zh-CN": "设置 SELinux 上下文"
+      }
+    },
+    {
+      "flag": "--help",
+      "i18n": {
+        "en": "Display help",
+        "zh-CN": "显示帮助"
+      }
+    },
+    {
+      "flag": "--version",
+      "i18n": {
+        "en": "Output version information",
+        "zh-CN": "打印版本"
+      }
+    }
+  ]
+}

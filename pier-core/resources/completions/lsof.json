@@ -1,0 +1,186 @@
+{
+  "schema_version": 1,
+  "command": "lsof",
+  "tool_version": "",
+  "source": "bundled-seed",
+  "import_method": "hand-curated",
+  "import_date": "2026-04-26",
+  "subcommands": [],
+  "options": [
+    {
+      "flag": "-a",
+      "i18n": {
+        "en": "AND options instead of ORing",
+        "zh-CN": "选项之间用 AND 而不是 OR"
+      }
+    },
+    {
+      "flag": "-c PROC",
+      "i18n": {
+        "en": "List files for processes whose name starts with PROC",
+        "zh-CN": "进程名前缀过滤"
+      }
+    },
+    {
+      "flag": "-p PIDS",
+      "i18n": {
+        "en": "List files for given PIDs (comma-separated)",
+        "zh-CN": "按 PID 列表过滤"
+      }
+    },
+    {
+      "flag": "-u USERS",
+      "i18n": {
+        "en": "List files for given users (comma-separated)",
+        "zh-CN": "按用户列表过滤"
+      }
+    },
+    {
+      "flag": "-i [4|6][PROTO][@HOST][:PORT]",
+      "i18n": {
+        "en": "List network files (e.g. -i tcp:80, -i :443)",
+        "zh-CN": "列网络连接（如 -i tcp:80）"
+      }
+    },
+    {
+      "flag": "-iTCP",
+      "i18n": {
+        "en": "List TCP files only",
+        "zh-CN": "只列 TCP 连接"
+      }
+    },
+    {
+      "flag": "-iUDP",
+      "i18n": {
+        "en": "List UDP files only",
+        "zh-CN": "只列 UDP 连接"
+      }
+    },
+    {
+      "flag": "-i6",
+      "i18n": {
+        "en": "List IPv6 only",
+        "zh-CN": "只列 IPv6"
+      }
+    },
+    {
+      "flag": "-i4",
+      "i18n": {
+        "en": "List IPv4 only",
+        "zh-CN": "只列 IPv4"
+      }
+    },
+    {
+      "flag": "-n",
+      "i18n": {
+        "en": "Don't resolve hostnames",
+        "zh-CN": "不解析主机名"
+      }
+    },
+    {
+      "flag": "-P",
+      "i18n": {
+        "en": "Don't resolve port numbers to names",
+        "zh-CN": "不把端口号解析成名字"
+      }
+    },
+    {
+      "flag": "-N",
+      "i18n": {
+        "en": "List NFS files only",
+        "zh-CN": "只列 NFS 文件"
+      }
+    },
+    {
+      "flag": "-U",
+      "i18n": {
+        "en": "List UNIX domain socket files only",
+        "zh-CN": "只列 UNIX 域 socket"
+      }
+    },
+    {
+      "flag": "-d FDS",
+      "i18n": {
+        "en": "Filter by file descriptor (e.g. cwd, txt, 0-2)",
+        "zh-CN": "按文件描述符过滤（如 cwd / txt / 0-2）"
+      }
+    },
+    {
+      "flag": "-D D|R|i|u|b",
+      "i18n": {
+        "en": "Device cache control",
+        "zh-CN": "设备缓存控制"
+      }
+    },
+    {
+      "flag": "-F [f]",
+      "i18n": {
+        "en": "Field output format (machine-readable)",
+        "zh-CN": "字段输出格式（适合脚本解析）"
+      }
+    },
+    {
+      "flag": "-l",
+      "i18n": {
+        "en": "Don't translate UIDs to login names",
+        "zh-CN": "不把 UID 转用户名"
+      }
+    },
+    {
+      "flag": "-r [SECONDS]",
+      "i18n": {
+        "en": "Repeat every N seconds",
+        "zh-CN": "每隔 N 秒重复"
+      }
+    },
+    {
+      "flag": "-t",
+      "i18n": {
+        "en": "Print only PIDs (terse)",
+        "zh-CN": "只打印 PID（用于 kill `lsof -t`）"
+      }
+    },
+    {
+      "flag": "-V",
+      "i18n": {
+        "en": "Verbose output",
+        "zh-CN": "详细输出"
+      }
+    },
+    {
+      "flag": "-w",
+      "i18n": {
+        "en": "Suppress warning messages",
+        "zh-CN": "禁用警告输出"
+      }
+    },
+    {
+      "flag": "-x",
+      "i18n": {
+        "en": "Cross over symbolic links / mount points",
+        "zh-CN": "跨越符号链接 / 挂载点"
+      }
+    },
+    {
+      "flag": "+D DIR",
+      "i18n": {
+        "en": "Search files inside DIR (descends)",
+        "zh-CN": "搜索 DIR 下打开的文件（递归）"
+      }
+    },
+    {
+      "flag": "-h, -?",
+      "i18n": {
+        "en": "Display help",
+        "zh-CN": "显示帮助"
+      }
+    },
+    {
+      "flag": "-v",
+      "i18n": {
+        "en": "Print version info",
+        "zh-CN": "打印版本"
+      }
+    }
+  ]
+}

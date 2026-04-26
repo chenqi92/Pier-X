@@ -95,6 +95,9 @@ pub struct ColumnInfo {
     pub default_value: Option<String>,
     /// Extra metadata (e.g. `nextval(...)` for serial cols).
     pub extra: String,
+    /// Column comment via `col_description(attrelid, attnum)`. Empty
+    /// when the column has no comment — same shape as MySQL.
+    pub comment: String,
 }
 
 /// Schema-tree enrichment for one table — mirror of
@@ -117,6 +120,9 @@ pub struct TableSummary {
     pub engine: Option<String>,
     /// Always `None` for PostgreSQL — PG has no per-table update timestamp.
     pub updated_at: Option<String>,
+    /// Table comment via `obj_description(c.oid, 'pg_class')`. Empty
+    /// when the table has no comment — same shape as MySQL.
+    pub comment: String,
 }
 
 /// One row in the routines folder. `kind` is the upper-cased
@@ -431,14 +437,24 @@ impl PostgresClient {
                 "refusing unsafe table identifier {table:?}"
             )));
         }
+        // We pull `col_description` via the catalog OID to reach the
+        // attribute comment. `information_schema.columns` doesn't
+        // expose comments directly, hence the join through pg_attribute.
         let rows = self
             .client
             .query(
-                "SELECT column_name, data_type, is_nullable, \
-                        column_default, '' AS extra \
-                 FROM information_schema.columns \
-                 WHERE table_schema = $1 AND table_name = $2 \
-                 ORDER BY ordinal_position",
+                "SELECT c.column_name, c.data_type, c.is_nullable, \
+                        c.column_default, '' AS extra, \
+                        COALESCE(pg_catalog.col_description(pgc.oid, a.attnum), '') AS comment \
+                 FROM information_schema.columns c \
+                 JOIN pg_catalog.pg_class pgc \
+                   ON pgc.relname = c.table_name \
+                 JOIN pg_catalog.pg_namespace pgn \
+                   ON pgn.oid = pgc.relnamespace AND pgn.nspname = c.table_schema \
+                 JOIN pg_catalog.pg_attribute a \
+                   ON a.attrelid = pgc.oid AND a.attname = c.column_name \
+                 WHERE c.table_schema = $1 AND c.table_name = $2 \
+                 ORDER BY c.ordinal_position",
                 &[&schema, &table],
             )
             .await?;
@@ -450,6 +466,7 @@ impl PostgresClient {
                 let nullable_str: String = r.get(2);
                 let default_value: Option<String> = r.get(3);
                 let extra: String = r.get(4);
+                let comment: String = r.get(5);
                 ColumnInfo {
                     name,
                     column_type,
@@ -457,6 +474,7 @@ impl PostgresClient {
                     key: String::new(), // PG constraint info is more complex
                     default_value,
                     extra,
+                    comment,
                 }
             })
             .collect())
@@ -490,7 +508,8 @@ impl PostgresClient {
                 "SELECT c.relname,
                         c.reltuples::bigint,
                         pg_relation_size(c.oid),
-                        pg_indexes_size(c.oid)
+                        pg_indexes_size(c.oid),
+                        COALESCE(obj_description(c.oid, 'pg_class'), '') AS comment
                  FROM pg_class c
                  JOIN pg_namespace n ON n.oid = c.relnamespace
                  WHERE n.nspname = $1 AND c.relkind = 'r'
@@ -505,6 +524,7 @@ impl PostgresClient {
                 let row_i: Option<i64> = r.try_get(1).ok();
                 let data_i: Option<i64> = r.try_get(2).ok();
                 let idx_i: Option<i64> = r.try_get(3).ok();
+                let comment: String = r.try_get(4).unwrap_or_default();
                 TableSummary {
                     name,
                     row_count: row_i.and_then(|n| if n < 0 { None } else { Some(n as u64) }),
@@ -512,6 +532,7 @@ impl PostgresClient {
                     index_bytes: idx_i.and_then(|n| if n < 0 { None } else { Some(n as u64) }),
                     engine: None,
                     updated_at: None,
+                    comment,
                 }
             })
             .collect())
@@ -884,6 +905,7 @@ mod tests {
             key: String::new(),
             default_value: Some("nextval('id_seq')".into()),
             extra: String::new(),
+            comment: String::new(),
         };
         let json = serde_json::to_string(&c).unwrap();
         let back: ColumnInfo = serde_json::from_str(&json).unwrap();

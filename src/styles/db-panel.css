@@ -583,6 +583,10 @@
 }
 .dbt-row:hover { background: var(--panel-2); }
 .dbt-row.sel { background: var(--accent-dim); }
+.dbt-row.is-multi-selected {
+  background: color-mix(in srgb, var(--accent) 14%, transparent);
+  box-shadow: inset 2px 0 0 var(--accent);
+}
 .dbt-row.current { background: color-mix(in srgb, var(--accent) 6%, transparent); }
 .dbt-row.lvl-0 { padding-left: var(--sp-1-5); font-weight: var(--weight-medium); }
 .dbt-row.lvl-1 { padding-left: 18px; color: var(--ink-2); }
@@ -1579,6 +1583,18 @@
 .db2-structure__row--renamed td {
   background: color-mix(in srgb, var(--warn) 10%, transparent) !important;
 }
+/* Pending-modify row — type / comment pending change. Same warn tint
+ * as rename, distinguished by the per-cell `.rg-td-dirty` marker. */
+.db2-structure__row--modified td {
+  background: color-mix(in srgb, var(--warn) 6%, transparent) !important;
+}
+.db2-structure__comment {
+  color: var(--ink-2);
+  font-style: italic;
+}
+.db2-structure__comment-empty {
+  color: var(--dim);
+}
 .db2-structure__name {
   display: inline-flex;
   align-items: baseline;
@@ -1687,6 +1703,7 @@
   flex-direction: column;
   min-height: 0;
   background: var(--bg);
+  container-type: inline-size;
 }
 .db2-config__head {
   display: flex;
@@ -1755,23 +1772,68 @@
   overflow: auto;
   min-height: 0;
 }
-.db2-config__table { width: 100%; }
+.db2-config__table {
+  width: 100%;
+  table-layout: fixed;
+}
+.db2-config__table th {
+  text-align: left;
+  font-weight: var(--weight-medium);
+  color: var(--ink-2);
+}
+.db2-config__table th:nth-child(1) { width: 32%; }
+.db2-config__table th:nth-child(2) { width: 26%; }
+.db2-config__table th:nth-child(3) { width: 14%; }
+.db2-config__table th:nth-child(4) { width: auto; }
 .db2-config__td-name {
   font-weight: var(--weight-medium);
   color: var(--ink);
   white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 .db2-config__td-value {
   font-variant-numeric: tabular-nums;
-  word-break: break-all;
+  overflow-wrap: anywhere;
+  white-space: pre-wrap;
+  position: relative;
+}
+.db2-config__td-value--pending { opacity: 0.55; }
+.db2-config__lock {
+  margin-left: var(--sp-1);
+  color: var(--dim);
+  vertical-align: middle;
+}
+.db2-config__row-error {
+  display: block;
+  margin-top: var(--sp-0-5);
+  padding: var(--sp-0-5) var(--sp-1);
+  border-radius: var(--radius-xs);
+  background: color-mix(in srgb, var(--neg) 12%, transparent);
+  color: var(--neg);
+  font-size: var(--size-micro);
+  font-family: var(--mono);
+  white-space: pre-wrap;
 }
 .db2-config__td-source {
   color: var(--muted);
   font-size: var(--size-small);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 .db2-config__td-desc {
   color: var(--ink-2);
   font-size: var(--size-small);
+  overflow-wrap: anywhere;
+}
+@container (max-width: 520px) {
+  .db2-config__table th:nth-child(3),
+  .db2-config__table .db2-config__td-source { display: none; }
+  .db2-config__table th:nth-child(4),
+  .db2-config__table .db2-config__td-desc { display: none; }
+  .db2-config__table th:nth-child(1) { width: 50%; }
+  .db2-config__table th:nth-child(2) { width: 50%; }
 }
 .db2-config__hint {
   flex: 1;
@@ -1998,6 +2060,21 @@
   min-width: 240px;
   max-width: 360px;
   max-height: 360px;
+  /* The filter row is sticky; the menu's own padding would leave a
+   * transparent strip above/below it that table names scroll through.
+   * Strip the menu padding for the table-menu variant and let items
+   * hold their own inline insets via .db2-tablebar__db-item. */
+  padding: 0;
+}
+.db2-tablebar__table-menu > .db2-tablebar__db-item,
+.db2-tablebar__table-menu > .db2-tablebar__empty {
+  margin: 0 var(--sp-0-5);
+}
+.db2-tablebar__table-menu > .db2-tablebar__db-item:first-of-type {
+  margin-top: var(--sp-0-5);
+}
+.db2-tablebar__table-menu > .db2-tablebar__db-item:last-of-type {
+  margin-bottom: var(--sp-0-5);
 }
 .db2-tablebar__filter {
   display: flex;
@@ -2005,11 +2082,11 @@
   gap: var(--sp-1);
   padding: var(--sp-1) var(--sp-1-5);
   border-bottom: 1px solid var(--line);
-  margin-bottom: var(--sp-0-5);
   position: sticky;
   top: 0;
   background: var(--panel);
   z-index: 1;
+  border-radius: var(--radius-sm) var(--radius-sm) 0 0;
 }
 .db2-tablebar__filter svg { color: var(--muted); flex: none; }
 .db2-tablebar__filter input {

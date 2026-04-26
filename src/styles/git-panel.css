@@ -1769,15 +1769,15 @@
   border-top: 1px solid color-mix(in srgb, var(--accent) 18%, var(--border-subtle));
   border-bottom: 1px solid color-mix(in srgb, var(--accent) 18%, var(--border-subtle));
   border-left: 2px solid var(--accent);
-  /* Whole region is selectable so users can grab subject + body in one
-     swipe. Buttons inside re-disable selection so click stays clean. */
+  /* Whole region — including hash, file paths, meta — is freely selectable
+     so users can grab any substring (a paragraph from the body, the hash,
+     a single file path) and copy it. The shell-wide `button` rule still
+     forces non-selection on the small icon copy button below; for the
+     file rows we use a non-button click target (SelectableFileRow) so
+     dragging across a path text creates a real text selection. */
   user-select: text;
+  -webkit-user-select: text;
   cursor: text;
-}
-
-.git-history-inline button {
-  user-select: none;
-  cursor: default;
 }
 
 .git-history-inline__meta {
@@ -1789,14 +1789,8 @@
   flex-wrap: wrap;
 }
 
-.git-history-inline__spacer {
-  flex: 1;
-}
-
-.git-history-inline__hash-btn {
-  display: inline-flex;
-  align-items: center;
-  gap: 4px;
+.git-history-inline__hash {
+  display: inline-block;
   padding: 1px 6px;
   border: 1px solid color-mix(in srgb, var(--accent) 32%, transparent);
   border-radius: var(--radius-sm);
@@ -1807,34 +1801,27 @@
   font-weight: var(--weight-medium);
 }
 
-.git-history-inline__hash-btn:hover {
-  background: color-mix(in srgb, var(--accent) 18%, transparent);
-}
-
-.git-history-inline__hash {
-  color: var(--accent);
-  font-weight: var(--weight-medium);
-}
-
-.git-history-inline__author {
-  color: var(--ink-2);
-}
-
-.git-history-inline__copy-msg {
+.git-history-inline__copy-btn {
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  width: 22px;
-  height: 22px;
+  width: 18px;
+  height: 18px;
+  margin-left: -4px;
   border: none;
   border-radius: var(--radius-sm);
   background: transparent;
   color: var(--muted);
+  cursor: default;
 }
 
-.git-history-inline__copy-msg:hover {
+.git-history-inline__copy-btn:hover {
   background: var(--panel-2);
   color: var(--ink);
+}
+
+.git-history-inline__author {
+  color: var(--ink-2);
 }
 
 .git-history-inline__subject {
@@ -1896,6 +1883,11 @@
   cursor: default;
   text-align: left;
   font-size: 11px;
+  /* Non-button click target — keep children selectable so users can copy
+     the file path without the global `button { user-select: none }` rule
+     biting. */
+  user-select: text;
+  -webkit-user-select: text;
 }
 
 .git-history-inline__file:hover {

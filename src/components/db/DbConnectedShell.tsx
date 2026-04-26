@@ -4,7 +4,11 @@ import { useState } from "react";
 
 import { useI18n } from "../../i18n/useI18n";
 import DbHeaderPicker, { type DbHeaderInstance } from "./DbHeaderPicker";
-import DbSchemaTree, { type DbSchemaDatabase, type DbSchemaNode } from "./DbSchemaTree";
+import DbSchemaTree, {
+  type DbSchemaActions,
+  type DbSchemaDatabase,
+  type DbSchemaNode,
+} from "./DbSchemaTree";
 import DbTableBar from "./DbTableBar";
 import type { DbKind } from "../../lib/types";
 
@@ -19,6 +23,8 @@ export type DbConnectedSchema = {
    *  this — the panel re-runs `postgresBrowse` with the new
    *  schema. MySQL / SQLite leave it undefined. */
   onSelectSchema?: (databaseName: string, schema: string) => void;
+  /** Optional right-click actions for the wide-area schema tree. */
+  actions?: DbSchemaActions;
 };
 
 type Crumb = {
@@ -146,6 +152,7 @@ export default function DbConnectedShell({
               onSelectTable={schema.onSelectTable}
               onSelectDatabase={schema.onSelectDatabase}
               onSelectSchema={schema.onSelectSchema}
+              actions={schema.actions}
             />
           </div>
         )}

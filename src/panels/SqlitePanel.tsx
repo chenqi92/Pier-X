@@ -1,6 +1,8 @@
+import { open as openDialog, save as saveDialog } from "@tauri-apps/plugin-dialog";
 import { FolderSearch, HardDrive, Search } from "lucide-react";
 import { useEffect, useMemo, useState } from "react";
 
+import ConfirmDialog from "../components/ConfirmDialog";
 import DismissibleNote from "../components/DismissibleNote";
 import InlineInstallCta from "../components/InlineInstallCta";
 import DbConnectSplash from "../components/db/DbConnectSplash";
@@ -8,8 +10,12 @@ import DbConnectedShell, { type DbConnectedTab } from "../components/db/DbConnec
 import type { DbHeaderInstance } from "../components/db/DbHeaderPicker";
 import DbConfigView, { type DbConfigRow } from "../components/db/DbConfigView";
 import DbResultGrid from "../components/db/DbResultGrid";
-import { type DbSchemaDatabase } from "../components/db/DbSchemaTree";
+import { type DbSchemaActions, type DbSchemaDatabase } from "../components/db/DbSchemaTree";
 import DbStructureView from "../components/db/DbStructureView";
+import {
+  exportTablesAsInserts,
+  splitSqlStatements,
+} from "../components/db/dbImportExport";
 import DbSqlEditor from "../components/db/DbSqlEditor";
 import type { DbSplashRowData } from "../components/db/DbSplashRow";
 import { useDbSqlTabs } from "../components/db/useDbSqlTabs";
@@ -636,6 +642,165 @@ function SqlitePanelBody({ tab }: Props) {
     }
   }
 
+  // ── Schema-tree right-click actions ──────────────────────────
+  const [confirm, setConfirm] = useState<{
+    title: string;
+    message: string;
+    tone?: "destructive";
+    onConfirm: () => void | Promise<void>;
+  } | null>(null);
+
+  async function sqliteRunOne(sql: string): Promise<QueryExecutionResult> {
+    const usePath = path.trim();
+    if (isRemoteMode && sshTarget) {
+      return cmd.sqliteExecuteRemote({
+        host: sshTarget.host,
+        port: sshTarget.port,
+        user: sshTarget.user,
+        authMode: sshTarget.authMode,
+        password: sshTarget.password,
+        keyPath: sshTarget.keyPath,
+        savedConnectionIndex: sshTarget.savedConnectionIndex,
+        dbPath: usePath,
+        sql,
+      });
+    }
+    return cmd.sqliteExecute(usePath, sql);
+  }
+
+  const sqliteActions = useMemo<DbSchemaActions>(() => ({
+    onCopyTableName: (_db, tables) => {
+      void writeClipboardText(tables.join("\n"));
+    },
+    onRefreshDatabase: () => {
+      void browse(tableName);
+    },
+    // SQLite "databases" are files — `CREATE DATABASE` is meaningless.
+    // The user creates a new .db via the connect splash's file picker.
+    onTruncateTables: readOnly
+      ? undefined
+      : (_db, tables) => {
+          setConfirm({
+            title: t("Truncate {n} table(s)?", { n: tables.length }),
+            message: t(
+              "This deletes all rows in:\n  {tables}\n\nStructure (columns, indexes, FKs) is preserved.",
+              { tables: tables.join("\n  ") },
+            ),
+            tone: "destructive",
+            onConfirm: async () => {
+              setConfirm(null);
+              try {
+                // SQLite has no `TRUNCATE`. The optimised path is
+                // `DELETE FROM` (sqlite recognises it without a WHERE
+                // and skips the per-row trigger fires when there are
+                // none — the so-called "truncate optimisation").
+                for (const tbl of tables) {
+                  await sqliteRunOne(`DELETE FROM "${tbl.replace(/"/g, '""')}"`);
+                }
+                setNotice(t("Truncated {n} table(s).", { n: tables.length }));
+                void browse(tableName);
+              } catch (e) {
+                setQueryError(formatError(e));
+              }
+            },
+          });
+        },
+    onDropTables: readOnly
+      ? undefined
+      : (_db, tables) => {
+          setConfirm({
+            title: t("Drop {n} table(s)?", { n: tables.length }),
+            message: t(
+              "This permanently removes:\n  {tables}\n\nAll data and structure are deleted.",
+              { tables: tables.join("\n  ") },
+            ),
+            tone: "destructive",
+            onConfirm: async () => {
+              setConfirm(null);
+              try {
+                for (const tbl of tables) {
+                  await sqliteRunOne(`DROP TABLE "${tbl.replace(/"/g, '""')}"`);
+                }
+                setNotice(t("Dropped {n} table(s).", { n: tables.length }));
+                void browse("");
+              } catch (e) {
+                setQueryError(formatError(e));
+              }
+            },
+          });
+        },
+    onImportSql: readOnly
+      ? undefined
+      : async () => {
+          const picked = await openDialog({
+            multiple: false,
+            filters: [{ name: "SQL", extensions: ["sql"] }],
+          });
+          if (typeof picked !== "string") return;
+          try {
+            const text = await cmd.localReadTextFile(picked);
+            const stmts = splitSqlStatements(text);
+            if (stmts.length === 0) {
+              setNotice(t("No SQL statements found in the file."));
+              return;
+            }
+            for (const sql of stmts) {
+              await sqliteRunOne(sql);
+            }
+            setNotice(t("Executed {n} statement(s) from {file}.", {
+              n: stmts.length,
+              file: picked,
+            }));
+            void browse(tableName);
+          } catch (e) {
+            setQueryError(formatError(e));
+          }
+        },
+    onExportTables: async (_db, tables) => {
+      const picked = await saveDialog({
+        defaultPath: `${tables.length === 1 ? tables[0] : "tables"}.sql`,
+        filters: [{ name: "SQL", extensions: ["sql"] }],
+      });
+      if (typeof picked !== "string") return;
+      try {
+        const result = await exportTablesAsInserts(
+          (sql) => sqliteRunOne(sql),
+          "sqlite",
+          {},
+          tables,
+        );
+        await cmd.localWriteTextFile(picked, result.sql);
+        const totalRows = Object.values(result.perTableRowCounts).reduce(
+          (a, b) => a + b,
+          0,
+        );
+        const truncatedNote =
+          result.truncatedTables.length > 0
+            ? t(" · row cap hit on: {tables}", {
+                tables: result.truncatedTables.join(", "),
+              })
+            : "";
+        setNotice(t("Exported {tables} table(s), {rows} row(s) → {file}{warn}", {
+          tables: tables.length,
+          rows: totalRows.toLocaleString(),
+          file: picked,
+          warn: truncatedNote,
+        }));
+      } catch (e) {
+        setQueryError(formatError(e));
+      }
+    },
+    onExportDatabase: () => {
+      const allTables = state?.tables ?? [];
+      if (allTables.length === 0) {
+        setNotice(t("No tables to export."));
+        return;
+      }
+      void sqliteActions.onExportTables?.("", allTables);
+    },
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }), [readOnly, state?.tables, tableName, path, isRemoteMode, sshTarget, t]);
+
   const banner = error ? (
     <DismissibleNote variant="status" tone="error" onDismiss={() => setError("")}>
       {error}
@@ -737,6 +902,7 @@ function SqlitePanelBody({ tab }: Props) {
       editable={!readOnly && state.tableName !== ""}
       onCommit={commitStructure}
       committing={committingDdl}
+      dialect="sqlite"
     />
   );
 
@@ -775,27 +941,36 @@ function SqlitePanelBody({ tab }: Props) {
             );
             void browse(tbl);
           },
+          actions: sqliteActions,
         }}
         dataTab={dataTab}
         structureTab={structureTab}
         schemaTab={
           <DbConfigView
             title={t("SQLite pragmas")}
-            note={t("read-only")}
+            note={readOnly ? t("read-only") : t("connection-scoped")}
             load={async () => {
-              const PRAGMAS: { name: string; description: string }[] = [
-                { name: "journal_mode", description: t("Journal mode (delete / wal / memory / …)") },
-                { name: "synchronous", description: t("Sync level on commit (0 / 1 / 2 / 3)") },
-                { name: "foreign_keys", description: t("Enforce foreign keys (0 / 1)") },
-                { name: "page_size", description: t("Page size in bytes") },
-                { name: "cache_size", description: t("Cache size (pages or KiB)") },
-                { name: "encoding", description: t("Database text encoding") },
-                { name: "auto_vacuum", description: t("Auto-vacuum mode (0 / 1 / 2)") },
-                { name: "user_version", description: t("User-defined schema version") },
-                { name: "schema_version", description: t("Internal schema cookie") },
-                { name: "application_id", description: t("Magic application ID") },
-                { name: "temp_store", description: t("Temp store backing (file / memory)") },
-                { name: "wal_autocheckpoint", description: t("WAL auto-checkpoint threshold") },
+              const PRAGMAS: {
+                name: string;
+                description: string;
+                editable: boolean;
+              }[] = [
+                // Editable PRAGMAs that take effect on the current
+                // connection. Schema/version cookies and application_id
+                // are technically writable but rarely intended to be —
+                // we leave them read-only here for safety.
+                { name: "journal_mode", description: t("Journal mode (delete / wal / memory / …)"), editable: true },
+                { name: "synchronous", description: t("Sync level on commit (0 / 1 / 2 / 3)"), editable: true },
+                { name: "foreign_keys", description: t("Enforce foreign keys (0 / 1)"), editable: true },
+                { name: "page_size", description: t("Page size in bytes"), editable: false },
+                { name: "cache_size", description: t("Cache size (pages or KiB)"), editable: true },
+                { name: "encoding", description: t("Database text encoding"), editable: false },
+                { name: "auto_vacuum", description: t("Auto-vacuum mode (0 / 1 / 2)"), editable: false },
+                { name: "user_version", description: t("User-defined schema version"), editable: true },
+                { name: "schema_version", description: t("Internal schema cookie"), editable: false },
+                { name: "application_id", description: t("Magic application ID"), editable: false },
+                { name: "temp_store", description: t("Temp store backing (file / memory)"), editable: true },
+                { name: "wal_autocheckpoint", description: t("WAL auto-checkpoint threshold"), editable: true },
               ];
               const usePath = path.trim();
               const runOne = async (sql: string): Promise<QueryExecutionResult> => {
@@ -823,6 +998,10 @@ function SqlitePanelBody({ tab }: Props) {
                       value: r.rows[0]?.[0] ?? "",
                       description: p.description,
                       source: "PRAGMA",
+                      editable: p.editable && !readOnly,
+                      editHint: p.editable
+                        ? t("connection-scoped")
+                        : t("read-only at runtime"),
                     };
                   } catch {
                     return {
@@ -836,8 +1015,48 @@ function SqlitePanelBody({ tab }: Props) {
               );
               return results;
             }}
+            onEdit={
+              readOnly
+                ? undefined
+                : async (name, newValue) => {
+                    const usePath = path.trim();
+                    // PRAGMA <name> = <value>. Quote unless numeric so
+                    // text values (e.g. journal_mode='wal') get the
+                    // single quotes the parser expects.
+                    const trimmed = newValue.trim();
+                    const numeric =
+                      trimmed !== "" && Number.isFinite(Number(trimmed));
+                    const literal = numeric
+                      ? trimmed
+                      : `'${newValue.replace(/'/g, "''")}'`;
+                    const sql = `PRAGMA ${name} = ${literal};`;
+                    if (isRemoteMode && sshTarget) {
+                      await cmd.sqliteExecuteRemote({
+                        host: sshTarget.host,
+                        port: sshTarget.port,
+                        user: sshTarget.user,
+                        authMode: sshTarget.authMode,
+                        password: sshTarget.password,
+                        keyPath: sshTarget.keyPath,
+                        savedConnectionIndex: sshTarget.savedConnectionIndex,
+                        dbPath: usePath,
+                        sql,
+                      });
+                    } else {
+                      await cmd.sqliteExecute(usePath, sql);
+                    }
+                  }
+            }
           />
         }
+      />
+      <ConfirmDialog
+        open={!!confirm}
+        title={confirm?.title ?? ""}
+        message={confirm?.message ?? ""}
+        tone={confirm?.tone}
+        onCancel={() => setConfirm(null)}
+        onConfirm={() => void confirm?.onConfirm()}
       />
     </>
   );

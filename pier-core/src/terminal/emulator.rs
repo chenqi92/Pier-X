@@ -519,6 +519,34 @@ impl Perform for Performer<'_> {
                     *self.ssh_command_detected = true;
                 }
                 self.line_feed();
+                // A real LF (not a print-wrap, which calls `line_feed`
+                // internally without going through `execute`) means
+                // either the user pressed Enter on the prompt, or the
+                // shell is printing output past the prompt row. In
+                // both cases the OSC 133;B reference recorded for that
+                // prompt is now stale — and crucially, a sub-process
+                // that doesn't itself emit OSC 133 (a remote bash
+                // reached over `ssh`, a python REPL, `docker exec -it`,
+                // …) will never invalidate it through OSC 133;A. If
+                // we don't drop it here, the smart-mode UI keeps
+                // anchoring its overlay at the local-shell prompt
+                // position long after the user has moved on, and
+                // every keystroke inside the sub-process gets painted
+                // on top of the original prompt line. Drop it now so
+                // the overlay only re-arms once a fresh OSC 133;B
+                // marks a real prompt.
+                if self.last_prompt_end.is_some() {
+                    crate::logging::write_event_verbose(
+                        "DEBUG",
+                        "emu.osc133",
+                        &format!(
+                            "LF cleared stale prompt_end={:?} cursor=({},{})",
+                            *self.last_prompt_end, *self.cursor_y, *self.cursor_x,
+                        ),
+                    );
+                    *self.last_prompt_end = None;
+                    *self.awaiting_input = false;
+                }
             }
             // CR — back to column 0.
             b'\r' => *self.cursor_x = 0,
@@ -601,15 +629,33 @@ impl Perform for Performer<'_> {
                             // stale; reset until the matching B fires.
                             *self.last_prompt_end = None;
                             *self.awaiting_input = false;
+                            crate::logging::write_event_verbose(
+                                "DEBUG",
+                                "emu.osc133",
+                                "A reset prompt_end + awaiting_input",
+                            );
                         }
                         b'B' => {
                             *self.last_prompt_end = Some((*self.cursor_y, *self.cursor_x));
                             *self.awaiting_input = true;
+                            crate::logging::write_event_verbose(
+                                "DEBUG",
+                                "emu.osc133",
+                                &format!(
+                                    "B set prompt_end=({},{})",
+                                    *self.cursor_y, *self.cursor_x,
+                                ),
+                            );
                         }
                         b'C' => {
                             // User pressed Enter — the line we were
                             // tracking has been submitted to the shell.
                             *self.awaiting_input = false;
+                            crate::logging::write_event_verbose(
+                                "DEBUG",
+                                "emu.osc133",
+                                "C cleared awaiting_input",
+                            );
                         }
                         b'D' => {
                             // Command finished. No-op for M1.
@@ -1093,6 +1139,39 @@ mod tests {
         emu.process(b"\r\n\x1b]133;A\x07");
         assert!(!emu.awaiting_input);
         assert_eq!(emu.last_prompt_end, None);
+    }
+
+    #[test]
+    fn lf_invalidates_prompt_end_so_ssh_subshell_does_not_echo_overlay_at_local_prompt() {
+        // Reproduction for the "typing inside ssh paints over the
+        // local zsh prompt" bug. The local smart-mode shell wraps
+        // its prompt with OSC 133;A/B but doesn't emit C; the remote
+        // shell reached over `ssh` doesn't emit OSC 133 at all. Without
+        // the LF-clears-prompt-end rule, `last_prompt_end` would still
+        // point at the local prompt long after the user submitted the
+        // ssh command, and the smart UI would happily anchor its
+        // overlay there.
+        let mut emu = VtEmulator::new(40, 6);
+        // Local zsh draws its prompt with the OSC 133 wrappers.
+        emu.process(b"\x1b]133;A\x07user@host % \x1b]133;B\x07");
+        assert!(emu.awaiting_input);
+        assert!(emu.last_prompt_end.is_some());
+
+        // User types `ssh root@host` and hits Enter. The shell echoes
+        // the typed command and then a CRLF.
+        emu.process(b"ssh root@host\r\n");
+
+        // After the LF, the prompt-end reference must be gone — the
+        // remote shell will not emit a fresh OSC 133;A to invalidate
+        // it, so the emulator has to.
+        assert_eq!(
+            emu.last_prompt_end, None,
+            "LF after a prompt should drop the OSC 133;B reference",
+        );
+        assert!(
+            !emu.awaiting_input,
+            "LF after a prompt should clear awaiting_input",
+        );
     }
 
     #[test]

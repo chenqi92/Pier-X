@@ -175,15 +175,22 @@ export default function DbPasswordUpdateDialog({
           {testResult && (
             <span
               className={
-                "status-note " +
-                (testResult.ok ? "status-note--ok" : "status-note--error")
+                "dlg-test-result " +
+                (testResult.ok ? "dlg-test-result--ok" : "dlg-test-result--err")
               }
-              style={{ marginLeft: 8, display: "inline-flex", alignItems: "center", gap: 4 }}
+              title={testResult.ok ? "" : testResult.msg}
             >
-              {testResult.ok ? <CheckCircle2 size={12} /> : <XCircle size={12} />}
-              {testResult.ok
-                ? t("Connected via {via}.", { via: testResult.via })
-                : testResult.msg}
+              {testResult.ok ? (
+                <>
+                  <CheckCircle2 size={11} />
+                  {t("Connected via {via}.", { via: testResult.via })}
+                </>
+              ) : (
+                <>
+                  <XCircle size={11} />
+                  <span className="dlg-test-result-msg">{testResult.msg}</span>
+                </>
+              )}
             </span>
           )}
           <div style={{ flex: 1 }} />

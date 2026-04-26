@@ -9,9 +9,10 @@ import {
   Table,
   X,
 } from "lucide-react";
-import { useMemo, useState } from "react";
+import { useMemo, useRef, useState, type MouseEvent as ReactMouseEvent } from "react";
 
 import { useI18n } from "../../i18n/useI18n";
+import ContextMenu, { type ContextMenuItem } from "../ContextMenu";
 
 export type DbSchemaNode = {
   id: string;
@@ -51,6 +52,29 @@ export type DbSchemaDatabase = {
   activeSchema?: string;
 };
 
+/** Right-click action callbacks. Each one is optional — if a panel
+ *  doesn't wire it, the corresponding menu item is hidden rather
+ *  than disabled. The "tables" arg is always an array so single +
+ *  multi-select share one signature; for single-table actions it's
+ *  a one-element array.
+ *
+ *  All callbacks are fire-and-forget from the tree's perspective —
+ *  the panel decides whether to show a confirmation dialog. */
+export type DbSchemaActions = {
+  /** Tree-root or empty-area right click. */
+  onCreateDatabase?: () => void;
+  onImportSql?: () => void;
+  /** Right-click on a database row. */
+  onRefreshDatabase?: (db: string) => void;
+  onExportDatabase?: (db: string) => void;
+  onDropDatabase?: (db: string) => void;
+  /** Right-click on a table row (or on the multi-select). */
+  onCopyTableName?: (db: string, tables: string[]) => void;
+  onExportTables?: (db: string, tables: string[]) => void;
+  onTruncateTables?: (db: string, tables: string[]) => void;
+  onDropTables?: (db: string, tables: string[]) => void;
+};
+
 type Props = {
   databases: DbSchemaDatabase[];
   selectedTableId: string | null;
@@ -59,6 +83,15 @@ type Props = {
   /** Fired when the user clicks a non-active schema row. The
    *  panel re-runs `postgresBrowse` with the new schema. */
   onSelectSchema?: (databaseName: string, schema: string) => void;
+  /** Optional right-click actions. Engines opt in by passing the
+   *  callbacks they support. */
+  actions?: DbSchemaActions;
+};
+
+type MenuState = {
+  x: number;
+  y: number;
+  items: ContextMenuItem[];
 };
 
 /**
@@ -73,6 +106,7 @@ export default function DbSchemaTree({
   onSelectTable,
   onSelectDatabase,
   onSelectSchema,
+  actions,
 }: Props) {
   const { t } = useI18n();
   const [openDb, setOpenDb] = useState<Record<string, boolean>>(() =>
@@ -87,6 +121,16 @@ export default function DbSchemaTree({
   const [openViews, setOpenViews] = useState<Record<string, boolean>>({});
   const [openRoutines, setOpenRoutines] = useState<Record<string, boolean>>({});
   const [q, setQ] = useState("");
+  /** Multi-select for table rows. Holds DbSchemaNode.id values. The
+   *  panel's `selectedTableId` is the "primary" selection (always
+   *  reflected in the schema tree's `sel` class); the multi-select
+   *  is purely local — it powers right-click "Export selected" without
+   *  bothering the panel until the user asks. */
+  const [multiSel, setMultiSel] = useState<Set<string>>(new Set());
+  /** Anchor for shift-click range selection. Cleared whenever the
+   *  user clicks without any modifier key. */
+  const anchorRef = useRef<{ db: string; index: number } | null>(null);
+  const [menu, setMenu] = useState<MenuState | null>(null);
 
   const qLower = q.trim().toLowerCase();
   const visible = useMemo(() => {
@@ -108,8 +152,153 @@ export default function DbSchemaTree({
   const toggleRoutines = (name: string) =>
     setOpenRoutines((prev) => ({ ...prev, [name]: !prev[name] }));
 
+  /** Resolve the table list the right-click menu should target. If
+   *  the right-clicked node is part of the active multi-selection,
+   *  the menu acts on the whole batch; otherwise it acts on the
+   *  single node (and the multi-selection is left intact in case the
+   *  user only wanted to peek). */
+  const resolveTargetTables = (clickedNode: DbSchemaNode, dbName: string): string[] => {
+    if (multiSel.has(clickedNode.id) && multiSel.size > 1) {
+      // Map ids → labels. Keep order stable by walking the
+      // database's table list in display order.
+      const db = databases.find((d) => d.name === dbName);
+      if (!db) return [clickedNode.label];
+      return db.tables.filter((n) => multiSel.has(n.id)).map((n) => n.label);
+    }
+    return [clickedNode.label];
+  };
+
+  function buildRootMenu(): ContextMenuItem[] {
+    const items: ContextMenuItem[] = [];
+    if (actions?.onCreateDatabase) {
+      items.push({ label: t("New database…"), action: () => actions.onCreateDatabase!() });
+    }
+    if (actions?.onImportSql) {
+      items.push({ label: t("Import SQL…"), action: () => actions.onImportSql!() });
+    }
+    return items;
+  }
+
+  function buildDatabaseMenu(dbName: string, isCurrent: boolean): ContextMenuItem[] {
+    const items: ContextMenuItem[] = [];
+    if (actions?.onRefreshDatabase) {
+      items.push({
+        label: t("Refresh"),
+        action: () => actions.onRefreshDatabase!(dbName),
+        disabled: !isCurrent,
+      });
+    }
+    if (actions?.onExportDatabase) {
+      items.push({
+        label: t("Export database…"),
+        action: () => actions.onExportDatabase!(dbName),
+      });
+    }
+    if (actions?.onCreateDatabase || actions?.onImportSql) {
+      if (items.length > 0) items.push({ divider: true });
+      if (actions?.onCreateDatabase) {
+        items.push({ label: t("New database…"), action: () => actions.onCreateDatabase!() });
+      }
+      if (actions?.onImportSql) {
+        items.push({ label: t("Import SQL…"), action: () => actions.onImportSql!() });
+      }
+    }
+    if (actions?.onDropDatabase) {
+      if (items.length > 0) items.push({ divider: true });
+      items.push({
+        label: t("Drop database…"),
+        action: () => actions.onDropDatabase!(dbName),
+      });
+    }
+    return items;
+  }
+
+  function buildTableMenu(dbName: string, tables: string[]): ContextMenuItem[] {
+    const items: ContextMenuItem[] = [];
+    const multi = tables.length > 1;
+    if (multi) {
+      items.push({ section: t("{n} tables selected", { n: tables.length }) });
+    }
+    if (actions?.onCopyTableName) {
+      items.push({
+        label: multi ? t("Copy {n} names", { n: tables.length }) : t("Copy name"),
+        action: () => actions.onCopyTableName!(dbName, tables),
+      });
+    }
+    if (actions?.onExportTables) {
+      items.push({
+        label: multi
+          ? t("Export {n} tables…", { n: tables.length })
+          : t("Export table…"),
+        action: () => actions.onExportTables!(dbName, tables),
+      });
+    }
+    if (actions?.onTruncateTables || actions?.onDropTables) {
+      if (items.length > 0) items.push({ divider: true });
+      if (actions?.onTruncateTables) {
+        items.push({
+          label: multi ? t("Truncate {n} tables…", { n: tables.length }) : t("Truncate…"),
+          action: () => actions.onTruncateTables!(dbName, tables),
+        });
+      }
+      if (actions?.onDropTables) {
+        items.push({
+          label: multi ? t("Drop {n} tables…", { n: tables.length }) : t("Drop table…"),
+          action: () => actions.onDropTables!(dbName, tables),
+        });
+      }
+    }
+    return items;
+  }
+
+  function openMenu(e: ReactMouseEvent, items: ContextMenuItem[]) {
+    if (items.length === 0) return; // no actions wired → no menu
+    e.preventDefault();
+    e.stopPropagation();
+    setMenu({ x: e.clientX, y: e.clientY, items });
+  }
+
+  function handleTableClick(
+    e: ReactMouseEvent,
+    db: DbSchemaDatabase,
+    node: DbSchemaNode,
+    indexInDb: number,
+  ) {
+    // cmd / ctrl → toggle in multi-selection, don't change primary
+    if (e.metaKey || e.ctrlKey) {
+      e.preventDefault();
+      setMultiSel((prev) => {
+        const next = new Set(prev);
+        if (next.has(node.id)) next.delete(node.id);
+        else next.add(node.id);
+        return next;
+      });
+      anchorRef.current = { db: db.name, index: indexInDb };
+      return;
+    }
+    // shift → range select against the anchor (or last clicked)
+    if (e.shiftKey && anchorRef.current && anchorRef.current.db === db.name) {
+      e.preventDefault();
+      const [a, b] = [anchorRef.current.index, indexInDb].sort((x, y) => x - y);
+      const range = db.tables.slice(a, b + 1).map((n) => n.id);
+      setMultiSel(new Set(range));
+      return;
+    }
+    // Plain click → reset multi-selection and let the panel handle
+    // the primary selection.
+    setMultiSel(new Set([node.id]));
+    anchorRef.current = { db: db.name, index: indexInDb };
+    onSelectTable(db.name, node);
+  }
+
   return (
-    <div className="dbt">
+    <div
+      className="dbt"
+      onContextMenu={(e) => {
+        // Tree-area background right-click → root menu.
+        if (e.target === e.currentTarget) openMenu(e, buildRootMenu());
+      }}
+    >
       <div className="dbt-search">
         <Search size={11} />
         <input
@@ -128,7 +317,13 @@ export default function DbSchemaTree({
           </button>
         )}
       </div>
-      <div className="dbt-body">
+      <div
+        className="dbt-body"
+        onContextMenu={(e) => {
+          // Empty area inside the body → root menu too.
+          if (e.target === e.currentTarget) openMenu(e, buildRootMenu());
+        }}
+      >
         {visible.length === 0 && (
           <div className="dbt-empty">{t("No databases.")}</div>
         )}
@@ -144,6 +339,7 @@ export default function DbSchemaTree({
                   toggleDb(db.name);
                   if (!db.current) onSelectDatabase?.(db.name);
                 }}
+                onContextMenu={(e) => openMenu(e, buildDatabaseMenu(db.name, db.current))}
               >
                 <span className="dbt-caret">
                   {dbOpen ? <ChevronDown size={10} /> : <ChevronRight size={10} />}
@@ -199,14 +395,23 @@ export default function DbSchemaTree({
                     <div className="dbt-empty">{t("No tables in this database.")}</div>
                   )}
                   {tablesOpen &&
-                    db.tables.map((node) => {
+                    db.tables.map((node, idx) => {
                       const isSelected = node.id === selectedTableId;
+                      const isMulti = multiSel.has(node.id) && multiSel.size > 1;
                       return (
                         <button
                           key={node.id}
                           type="button"
-                          className={"dbt-row lvl-2 leaf" + (isSelected ? " sel" : "")}
-                          onClick={() => onSelectTable(db.name, node)}
+                          className={
+                            "dbt-row lvl-2 leaf" +
+                            (isSelected ? " sel" : "") +
+                            (isMulti ? " is-multi-selected" : "")
+                          }
+                          onClick={(e) => handleTableClick(e, db, node, idx)}
+                          onContextMenu={(e) => {
+                            const targets = resolveTargetTables(node, db.name);
+                            openMenu(e, buildTableMenu(db.name, targets));
+                          }}
                           title={node.tooltip ?? undefined}
                         >
                           <span className="dbt-caret" />
@@ -308,6 +513,14 @@ export default function DbSchemaTree({
           );
         })}
       </div>
+      {menu && (
+        <ContextMenu
+          x={menu.x}
+          y={menu.y}
+          items={menu.items}
+          onClose={() => setMenu(null)}
+        />
+      )}
     </div>
   );
 }

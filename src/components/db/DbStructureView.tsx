@@ -30,6 +30,9 @@ export type DbStructureColumn = {
   defaultValue?: string | null;
   /** Free-form extra (MySQL `EXTRA`, PG attoptions). Optional. */
   extra?: string;
+  /** Column comment. MySQL / PG only — SQLite has no native comment
+   *  field and the panel hides the column entirely. */
+  comment?: string;
 };
 
 /** Index row rendered in the Structure tab's Indexes section.
@@ -111,6 +114,14 @@ type Props = {
   /** True while the panel's commit Promise is in flight — disables
    *  the buttons so the user can't double-fire. */
   committing?: boolean;
+  /** Render the Comment column. MySQL/PG enable this; SQLite leaves
+   *  it off because columns have no native comment field. When
+   *  true, the value is also inline-editable (paired with `editable`). */
+  commentEditable?: boolean;
+  /** Engine dialect — needed because in-place type changes are
+   *  not supported on SQLite, and the type cell stays read-only
+   *  there even when `editable` is true. */
+  dialect?: "mysql" | "postgres" | "sqlite";
 };
 
 export default function DbStructureView({
@@ -123,6 +134,8 @@ export default function DbStructureView({
   editable = false,
   onCommit,
   committing = false,
+  commentEditable = false,
+  dialect,
 }: Props) {
   const { t } = useI18n();
 
@@ -130,16 +143,28 @@ export default function DbStructureView({
   // (typically a table-switch or a successful commit re-fetch). ──
   const [pendingDrops, setPendingDrops] = useState<Set<string>>(new Set());
   const [pendingRenames, setPendingRenames] = useState<Map<string, string>>(new Map());
+  const [pendingTypeChanges, setPendingTypeChanges] = useState<Map<string, string>>(new Map());
+  const [pendingComments, setPendingComments] = useState<Map<string, string>>(new Map());
   const [pendingAdds, setPendingAdds] = useState<PendingAdd[]>([]);
   const [editingRename, setEditingRename] = useState<string | null>(null);
   const [renameDraft, setRenameDraft] = useState("");
+  const [editingType, setEditingType] = useState<string | null>(null);
+  const [typeDraft, setTypeDraft] = useState("");
+  const [editingComment, setEditingComment] = useState<string | null>(null);
+  const [commentDraft, setCommentDraft] = useState("");
 
   useEffect(() => {
     setPendingDrops(new Set());
     setPendingRenames(new Map());
+    setPendingTypeChanges(new Map());
+    setPendingComments(new Map());
     setPendingAdds([]);
     setEditingRename(null);
     setRenameDraft("");
+    setEditingType(null);
+    setTypeDraft("");
+    setEditingComment(null);
+    setCommentDraft("");
     // Reset on column-shape change. Reference equality on the
     // columns array would be too aggressive (we get a fresh array
     // on every render), so key off the JSON-stringified column
@@ -148,8 +173,15 @@ export default function DbStructureView({
   }, [columns.map((c) => c.name).join("|")]);
 
   const editableEnabled = editable && !!onCommit;
+  const typeEditableEnabled = editableEnabled && dialect !== "sqlite";
+  const commentEditableEnabled = editableEnabled && commentEditable;
+  const showCommentColumn = commentEditable;
   const pendingCount =
-    pendingDrops.size + pendingRenames.size + pendingAdds.length;
+    pendingDrops.size +
+    pendingRenames.size +
+    pendingTypeChanges.size +
+    pendingComments.size +
+    pendingAdds.length;
 
   function startRename(col: DbStructureColumn) {
     if (!editableEnabled || pendingDrops.has(col.name)) return;
@@ -202,6 +234,67 @@ export default function DbStructureView({
     if (editingRename === col.name) cancelRename();
   }
 
+  function startTypeEdit(col: DbStructureColumn) {
+    if (!typeEditableEnabled || pendingDrops.has(col.name)) return;
+    setEditingType(col.name);
+    setTypeDraft(pendingTypeChanges.get(col.name) ?? col.type);
+  }
+
+  function commitTypeEdit(col: DbStructureColumn, draft: string) {
+    setEditingType(null);
+    const next = draft.trim();
+    if (!next || next === col.type) {
+      // No-op edit cleans up any stale pending change.
+      setPendingTypeChanges((prev) => {
+        if (!prev.has(col.name)) return prev;
+        const m = new Map(prev);
+        m.delete(col.name);
+        return m;
+      });
+      return;
+    }
+    setPendingTypeChanges((prev) => {
+      const m = new Map(prev);
+      m.set(col.name, next);
+      return m;
+    });
+  }
+
+  function cancelTypeEdit() {
+    setEditingType(null);
+    setTypeDraft("");
+  }
+
+  function startCommentEdit(col: DbStructureColumn) {
+    if (!commentEditableEnabled || pendingDrops.has(col.name)) return;
+    setEditingComment(col.name);
+    setCommentDraft(pendingComments.get(col.name) ?? col.comment ?? "");
+  }
+
+  function commitCommentEdit(col: DbStructureColumn, draft: string) {
+    setEditingComment(null);
+    const original = col.comment ?? "";
+    if (draft === original) {
+      setPendingComments((prev) => {
+        if (!prev.has(col.name)) return prev;
+        const m = new Map(prev);
+        m.delete(col.name);
+        return m;
+      });
+      return;
+    }
+    setPendingComments((prev) => {
+      const m = new Map(prev);
+      m.set(col.name, draft);
+      return m;
+    });
+  }
+
+  function cancelCommentEdit() {
+    setEditingComment(null);
+    setCommentDraft("");
+  }
+
   function startAdd() {
     if (!editableEnabled) return;
     setPendingAdds((prev) => [
@@ -227,9 +320,15 @@ export default function DbStructureView({
   function discardAll() {
     setPendingDrops(new Set());
     setPendingRenames(new Map());
+    setPendingTypeChanges(new Map());
+    setPendingComments(new Map());
     setPendingAdds([]);
     setEditingRename(null);
     setRenameDraft("");
+    setEditingType(null);
+    setTypeDraft("");
+    setEditingComment(null);
+    setCommentDraft("");
   }
 
   /** Validate + assemble. Validation is intentionally light — the
@@ -239,6 +338,7 @@ export default function DbStructureView({
    *  on success or a localized error message. */
   function validateAndCollect(): { ok: true; muts: DdlMutation[] } | { ok: false; msg: string } {
     const muts: DdlMutation[] = [];
+    const colByName = new Map(columns.map((c) => [c.name, c]));
 
     // Drops first — they don't conflict with each other and they
     // free up the namespace for adds in the same batch.
@@ -254,6 +354,51 @@ export default function DbStructureView({
         return { ok: false, msg: t("Rename target is empty.") };
       }
       muts.push({ kind: "renameColumn", oldName, newName: trimmed });
+    }
+
+    // Type changes — skip drops; rename target wins so we use the
+    // *original* column name (rename runs first server-side anyway,
+    // but here both mutations target the same row by old name from
+    // the catalog). MySQL needs the snapshot for MODIFY COLUMN.
+    for (const [name, newType] of pendingTypeChanges) {
+      if (pendingDrops.has(name)) continue;
+      const col = colByName.get(name);
+      if (!col) continue;
+      muts.push({
+        kind: "modifyColumnType",
+        name,
+        newType,
+        snapshot: {
+          nullable: col.nullable,
+          defaultValue: col.defaultValue ?? null,
+          comment: col.comment,
+        },
+      });
+    }
+
+    // Comment changes — same pattern. PG uses the dedicated
+    // `COMMENT ON COLUMN`; MySQL repeats the column spec.
+    for (const [name, comment] of pendingComments) {
+      if (pendingDrops.has(name)) continue;
+      const col = colByName.get(name);
+      if (!col) continue;
+      // If the user also changed the type, the type-change MODIFY
+      // COLUMN already carries the (now-stale) old comment forward.
+      // Replace it: the snapshot type used for the comment mutation
+      // becomes the *new* type so MySQL doesn't roll back to the
+      // old type when rewriting the column. For PG this branch is
+      // a no-op (PG ignores the snapshot type).
+      const effectiveType = pendingTypeChanges.get(name) ?? col.type;
+      muts.push({
+        kind: "setColumnComment",
+        name,
+        comment,
+        snapshot: {
+          type: effectiveType,
+          nullable: col.nullable,
+          defaultValue: col.defaultValue ?? null,
+        },
+      });
     }
 
     // Adds — name + type required.
@@ -360,6 +505,13 @@ export default function DbStructureView({
                   <span className="rg-th-name">{t("Extra")}</span>
                 </div>
               </th>
+              {showCommentColumn && (
+                <th>
+                  <div className="rg-th-body">
+                    <span className="rg-th-name">{t("Comment")}</span>
+                  </div>
+                </th>
+              )}
               {editableEnabled && <th className="db2-structure__th-acts" />}
             </tr>
           </thead>
@@ -370,6 +522,7 @@ export default function DbStructureView({
                 add={add}
                 onChange={(patch) => patchAdd(add.id, patch)}
                 onRemove={() => removeAdd(add.id)}
+                showCommentColumn={showCommentColumn}
                 t={t}
               />
             ))}
@@ -380,11 +533,17 @@ export default function DbStructureView({
               const extraBits = [col.keyHint, col.extra].filter((s): s is string => !!s && s.trim() !== "");
               const dropped = pendingDrops.has(col.name);
               const renamed = pendingRenames.has(col.name);
+              const typeChanged = pendingTypeChanges.has(col.name);
+              const commentChanged = pendingComments.has(col.name);
+              const modified = typeChanged || commentChanged;
               const display = renamedDisplayName(col);
+              const displayType = pendingTypeChanges.get(col.name) ?? col.type;
+              const displayComment = pendingComments.get(col.name) ?? col.comment ?? "";
               const rowClass =
                 "rg-row" +
                 (dropped ? " db2-structure__row--dropped" : "") +
-                (renamed && !dropped ? " db2-structure__row--renamed" : "");
+                (renamed && !dropped ? " db2-structure__row--renamed" : "") +
+                (modified && !dropped ? " db2-structure__row--modified" : "");
               return (
                 <tr key={col.name} className={rowClass}>
                   <td className="rg-td db2-structure__td-pk">
@@ -419,8 +578,41 @@ export default function DbStructureView({
                       </span>
                     )}
                   </td>
-                  <td className="rg-td" style={typeStyle}>
-                    {col.type}
+                  <td
+                    className={
+                      "rg-td" +
+                      (typeEditableEnabled && !dropped ? " rg-td-editable" : "") +
+                      (typeChanged ? " rg-td-dirty" : "")
+                    }
+                    style={typeStyle}
+                    onClick={() => editingType !== col.name && startTypeEdit(col)}
+                    title={
+                      dialect === "sqlite"
+                        ? t("SQLite does not support changing column types in place.")
+                        : typeEditableEnabled
+                          ? t("Click to change type")
+                          : col.type
+                    }
+                  >
+                    {editingType === col.name ? (
+                      <PlainCellEditor
+                        initial={typeDraft}
+                        onCommit={(v) => commitTypeEdit(col, v)}
+                        onCancel={cancelTypeEdit}
+                      />
+                    ) : (
+                      <>
+                        {displayType}
+                        {typeChanged && (
+                          <span
+                            className="db2-structure__renamed-tag"
+                            title={t("Was {name}", { name: col.type })}
+                          >
+                            ←{col.type}
+                          </span>
+                        )}
+                      </>
+                    )}
                   </td>
                   <td className="rg-td">{col.nullable ? t("YES") : t("NO")}</td>
                   <td className="rg-td">
@@ -429,6 +621,36 @@ export default function DbStructureView({
                   <td className="rg-td">
                     {extraBits.length > 0 ? extraBits.join(" · ") : "—"}
                   </td>
+                  {showCommentColumn && (
+                    <td
+                      className={
+                        "rg-td" +
+                        (commentEditableEnabled && !dropped ? " rg-td-editable" : "") +
+                        (commentChanged ? " rg-td-dirty" : "")
+                      }
+                      onClick={() =>
+                        editingComment !== col.name && startCommentEdit(col)
+                      }
+                      title={
+                        commentEditableEnabled
+                          ? t("Click to edit comment")
+                          : displayComment || ""
+                      }
+                    >
+                      {editingComment === col.name ? (
+                        <PlainCellEditor
+                          initial={commentDraft}
+                          onCommit={(v) => commitCommentEdit(col, v)}
+                          onCancel={cancelCommentEdit}
+                          placeholder={t("(no comment)")}
+                        />
+                      ) : displayComment ? (
+                        <span className="db2-structure__comment">{displayComment}</span>
+                      ) : (
+                        <span className="db2-structure__comment-empty">—</span>
+                      )}
+                    </td>
+                  )}
                   {editableEnabled && (
                     <td className="rg-td-acts" onClick={(e) => e.stopPropagation()}>
                       {dropped ? (
@@ -638,6 +860,47 @@ function RenameEditor({
   );
 }
 
+/** Plain text-cell editor — used for in-place type and comment edits.
+ *  Does not do select-on-focus the way RenameEditor does, since types
+ *  and comments are usually appended to rather than replaced. Commits
+ *  on blur or Enter, cancels on Escape. */
+function PlainCellEditor({
+  initial,
+  onCommit,
+  onCancel,
+  placeholder,
+}: {
+  initial: string;
+  onCommit: (v: string) => void;
+  onCancel: () => void;
+  placeholder?: string;
+}) {
+  const ref = useRef<HTMLInputElement | null>(null);
+  const [val, setVal] = useState(initial);
+  useEffect(() => {
+    ref.current?.focus();
+  }, []);
+  return (
+    <input
+      ref={ref}
+      className="rg-td-input"
+      value={val}
+      placeholder={placeholder}
+      onChange={(e) => setVal(e.currentTarget.value)}
+      onBlur={() => onCommit(val)}
+      onKeyDown={(e) => {
+        if (e.key === "Enter") {
+          e.preventDefault();
+          (e.currentTarget as HTMLInputElement).blur();
+        } else if (e.key === "Escape") {
+          e.preventDefault();
+          onCancel();
+        }
+      }}
+    />
+  );
+}
+
 /** New-column row — three inputs (name / type / default) plus a NULL
  *  toggle. Lives at the top of the columns table while the user is
  *  staging the add; removed from the staging list (and thus from the
@@ -646,11 +909,13 @@ function PendingAddRow({
   add,
   onChange,
   onRemove,
+  showCommentColumn,
   t,
 }: {
   add: PendingAdd;
   onChange: (patch: Partial<PendingAdd>) => void;
   onRemove: () => void;
+  showCommentColumn: boolean;
   t: (s: string, vars?: Record<string, string | number>) => string;
 }) {
   // Default-toggle UX: the user types a default value to set one,
@@ -704,6 +969,7 @@ function PendingAddRow({
         />
       </td>
       <td className="rg-td">—</td>
+      {showCommentColumn && <td className="rg-td">—</td>}
       <td className="rg-td-acts" onClick={(e) => e.stopPropagation()}>
         <button
           type="button"

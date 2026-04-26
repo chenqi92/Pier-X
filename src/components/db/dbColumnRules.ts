@@ -35,10 +35,10 @@ export type DbMutation =
   | { kind: "insert"; values: Record<string, string | null> }
   | { kind: "delete"; pk: Record<string, string> };
 
-/** DDL mutations from the editable structure view. Add/drop/rename
- *  column only — modify-type, PK changes, indexes and FKs are
- *  out-of-scope for the MVP because their syntax diverges sharply
- *  per engine (and SQLite needs full table rebuilds for most of them). */
+/** DDL mutations from the editable structure view. Add / drop /
+ *  rename / type-change / comment. Index / FK / PK changes remain
+ *  out-of-scope for now; they need full table rebuilds on SQLite and
+ *  per-engine grammars. */
 export type DdlMutation =
   | {
       kind: "addColumn";
@@ -51,7 +51,34 @@ export type DdlMutation =
       defaultValue?: string | null;
     }
   | { kind: "dropColumn"; name: string }
-  | { kind: "renameColumn"; oldName: string; newName: string };
+  | { kind: "renameColumn"; oldName: string; newName: string }
+  | {
+      kind: "modifyColumnType";
+      name: string;
+      newType: string;
+      /** Pre-change column shape. MySQL needs the full re-spec on
+       *  `MODIFY COLUMN` so we preserve nullable / default / comment;
+       *  PG only uses `newType`; SQLite is rejected here (returns an
+       *  Error from the builder — caller must surface it). */
+      snapshot: {
+        nullable: boolean;
+        defaultValue?: string | null;
+        comment?: string;
+      };
+    }
+  | {
+      kind: "setColumnComment";
+      name: string;
+      comment: string;
+      /** Pre-change column shape. MySQL has to repeat the type / null /
+       *  default on `MODIFY COLUMN` to set a comment. Other engines
+       *  ignore the snapshot. */
+      snapshot: {
+        type: string;
+        nullable: boolean;
+        defaultValue?: string | null;
+      };
+    };
 
 /** Numeric-type regex shared across dialects. */
 const NUMERIC_RE =
@@ -205,11 +232,89 @@ export function buildRenameColumnSql(
   return `ALTER TABLE ${args.table} RENAME COLUMN ${oldId} TO ${newId}`;
 }
 
+/** Change a column's data type. MySQL repeats the full column spec
+ *  on `MODIFY COLUMN`; PG uses `ALTER COLUMN ... TYPE`; SQLite has
+ *  no in-place type change and we throw so the panel can surface
+ *  the limitation rather than silently emit broken SQL. */
+export function buildModifyColumnTypeSql(
+  args: BuildDdlArgs,
+  spec: {
+    name: string;
+    newType: string;
+    snapshot: { nullable: boolean; defaultValue?: string | null; comment?: string };
+  },
+): string {
+  const colId = quoteIdent(args.dialect, spec.name);
+  if (args.dialect === "sqlite") {
+    throw new Error(
+      "SQLite does not support changing a column's type in place; recreate the table.",
+    );
+  }
+  if (args.dialect === "postgres") {
+    return `ALTER TABLE ${args.table} ALTER COLUMN ${colId} TYPE ${spec.newType}`;
+  }
+  // MySQL: MODIFY COLUMN must re-state nullable + default + comment
+  // because anything omitted is treated as "set to default". Carry
+  // the snapshot through so we don't accidentally drop a comment
+  // when the user only meant to widen a type.
+  const nullClause = spec.snapshot.nullable ? "" : " NOT NULL";
+  const defaultClause =
+    spec.snapshot.defaultValue === undefined || spec.snapshot.defaultValue === null
+      ? ""
+      : ` DEFAULT ${escapeValue(spec.snapshot.defaultValue, false)}`;
+  const commentClause =
+    spec.snapshot.comment && spec.snapshot.comment !== ""
+      ? ` COMMENT ${escapeValue(spec.snapshot.comment, false)}`
+      : "";
+  return `ALTER TABLE ${args.table} MODIFY COLUMN ${colId} ${spec.newType}${nullClause}${defaultClause}${commentClause}`;
+}
+
+/** Set or clear a column's comment. MySQL must repeat the full
+ *  column spec on `MODIFY COLUMN`; PG has the dedicated
+ *  `COMMENT ON COLUMN`. SQLite is rejected (no native column
+ *  comments — the panel hides the column entirely there). */
+export function buildSetColumnCommentSql(
+  args: BuildDdlArgs,
+  spec: {
+    name: string;
+    comment: string;
+    snapshot: { type: string; nullable: boolean; defaultValue?: string | null };
+  },
+): string {
+  const colId = quoteIdent(args.dialect, spec.name);
+  if (args.dialect === "sqlite") {
+    throw new Error("SQLite columns have no native comment.");
+  }
+  if (args.dialect === "postgres") {
+    // Empty comment → IS NULL drops the comment cleanly. Non-empty
+    // is single-quote escaped via escapeValue (which routes empty
+    // strings to NULL too — so the branch matches PG semantics).
+    if (spec.comment === "") {
+      return `COMMENT ON COLUMN ${args.table}.${colId} IS NULL`;
+    }
+    return `COMMENT ON COLUMN ${args.table}.${colId} IS ${escapeValue(spec.comment, false)}`;
+  }
+  // MySQL: same MODIFY COLUMN dance as buildModifyColumnTypeSql.
+  // Empty comment = clear: emit `COMMENT ''`.
+  const nullClause = spec.snapshot.nullable ? "" : " NOT NULL";
+  const defaultClause =
+    spec.snapshot.defaultValue === undefined || spec.snapshot.defaultValue === null
+      ? ""
+      : ` DEFAULT ${escapeValue(spec.snapshot.defaultValue, false)}`;
+  const commentClause =
+    spec.comment === ""
+      ? " COMMENT ''"
+      : ` COMMENT ${escapeValue(spec.comment, false)}`;
+  return `ALTER TABLE ${args.table} MODIFY COLUMN ${colId} ${spec.snapshot.type}${nullClause}${defaultClause}${commentClause}`;
+}
+
 /** Produce a one-shot DDL string for a single structure mutation. */
 export function ddlToSql(args: BuildDdlArgs, mut: DdlMutation): string {
   if (mut.kind === "addColumn") return buildAddColumnSql(args, mut);
   if (mut.kind === "dropColumn") return buildDropColumnSql(args, mut);
-  return buildRenameColumnSql(args, mut);
+  if (mut.kind === "renameColumn") return buildRenameColumnSql(args, mut);
+  if (mut.kind === "modifyColumnType") return buildModifyColumnTypeSql(args, mut);
+  return buildSetColumnCommentSql(args, mut);
 }
 
 // ── Per-engine column adapters ────────────────────────────────────

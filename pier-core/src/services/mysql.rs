@@ -162,6 +162,10 @@ pub struct TableSummary {
     /// Last-update timestamp as the server formats it; `None` for
     /// engines that don't track it (most InnoDB tables).
     pub updated_at: Option<String>,
+    /// `information_schema.tables.table_comment`. Empty string for
+    /// tables without a comment — we forward verbatim so the UI can
+    /// render a tooltip line only when it has content.
+    pub comment: String,
 }
 
 /// One row in the schema-tree's routines folder — covers both
@@ -192,6 +196,9 @@ pub struct ColumnInfo {
     pub default_value: Option<String>,
     /// Extra metadata, e.g. `auto_increment`.
     pub extra: String,
+    /// `COLUMN_COMMENT` from `SHOW FULL COLUMNS`. Empty string when
+    /// the column has no comment.
+    pub comment: String,
 }
 
 /// One index defined on a table — name, ordered column list, and
@@ -433,7 +440,8 @@ impl MysqlClient {
         // DATETIME types — we just forward what the server says.
         let sql = "
             SELECT table_name, table_rows, data_length, index_length,
-                   engine, CAST(update_time AS CHAR) AS update_time
+                   engine, CAST(update_time AS CHAR) AS update_time,
+                   COALESCE(table_comment, '')
               FROM information_schema.tables
              WHERE table_schema = :schema
                AND table_type = 'BASE TABLE'
@@ -446,6 +454,7 @@ impl MysqlClient {
             Option<u64>,
             Option<String>,
             Option<String>,
+            String,
         );
         let rows: Vec<TableRow> = sql
             .with(mysql_async::params! { "schema" => database })
@@ -455,13 +464,16 @@ impl MysqlClient {
         Ok(rows
             .into_iter()
             .map(
-                |(name, row_count, data_bytes, index_bytes, engine, updated_at)| TableSummary {
-                    name,
-                    row_count,
-                    data_bytes,
-                    index_bytes,
-                    engine,
-                    updated_at,
+                |(name, row_count, data_bytes, index_bytes, engine, updated_at, comment)| {
+                    TableSummary {
+                        name,
+                        row_count,
+                        data_bytes,
+                        index_bytes,
+                        engine,
+                        updated_at,
+                        comment,
+                    }
                 },
             )
             .collect())
@@ -549,21 +561,38 @@ impl MysqlClient {
             )));
         }
         let mut conn = self.pool.get_conn().await?;
-        let sql = format!("SHOW COLUMNS FROM `{database}`.`{table}`");
-        let rows: Vec<(String, String, String, String, Option<String>, String)> =
-            sql.fetch(&mut conn).await?;
+        // `SHOW FULL COLUMNS` adds Collation / Privileges / Comment
+        // to the standard SHOW COLUMNS output. We only need Comment
+        // here but the column order is fixed by the server, so we
+        // bind all 9 and drop the two we don't surface.
+        let sql = format!("SHOW FULL COLUMNS FROM `{database}`.`{table}`");
+        type FullColumnRow = (
+            String,         // Field
+            String,         // Type
+            Option<String>, // Collation
+            String,         // Null
+            String,         // Key
+            Option<String>, // Default
+            String,         // Extra
+            String,         // Privileges
+            String,         // Comment
+        );
+        let rows: Vec<FullColumnRow> = sql.fetch(&mut conn).await?;
         drop(conn);
 
         Ok(rows
             .into_iter()
             .map(
-                |(name, column_type, null_flag, key, default_value, extra)| ColumnInfo {
-                    name,
-                    column_type,
-                    nullable: null_flag.eq_ignore_ascii_case("YES"),
-                    key,
-                    default_value,
-                    extra,
+                |(name, column_type, _collation, null_flag, key, default_value, extra, _priv, comment)| {
+                    ColumnInfo {
+                        name,
+                        column_type,
+                        nullable: null_flag.eq_ignore_ascii_case("YES"),
+                        key,
+                        default_value,
+                        extra,
+                        comment,
+                    }
                 },
             )
             .collect())

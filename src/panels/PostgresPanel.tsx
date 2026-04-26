@@ -1,5 +1,7 @@
+import { open as openDialog, save as saveDialog } from "@tauri-apps/plugin-dialog";
 import { useEffect, useMemo, useRef, useState } from "react";
 
+import ConfirmDialog from "../components/ConfirmDialog";
 import DbAddCredentialDialog from "../components/DbAddCredentialDialog";
 import DbPasswordUpdateDialog from "../components/DbPasswordUpdateDialog";
 import DbTunnelChip from "../components/DbTunnelChip";
@@ -7,11 +9,16 @@ import DismissibleNote from "../components/DismissibleNote";
 import InlineInstallCta from "../components/InlineInstallCta";
 import DbConnectSplash from "../components/db/DbConnectSplash";
 import DbConnectedShell, { type DbConnectedTab } from "../components/db/DbConnectedShell";
+import DbCreateDbDialog from "../components/db/DbCreateDbDialog";
 import type { DbHeaderInstance } from "../components/db/DbHeaderPicker";
 import DbConfigView, { type DbConfigRow } from "../components/db/DbConfigView";
 import DbResultGrid from "../components/db/DbResultGrid";
-import { type DbSchemaDatabase } from "../components/db/DbSchemaTree";
+import { type DbSchemaActions, type DbSchemaDatabase } from "../components/db/DbSchemaTree";
 import DbStructureView from "../components/db/DbStructureView";
+import {
+  exportTablesAsInserts,
+  splitSqlStatements,
+} from "../components/db/dbImportExport";
 import DbSqlEditor from "../components/db/DbSqlEditor";
 import type { DbSplashRowData } from "../components/db/DbSplashRow";
 import { inferEnv } from "../components/db/dbTheme";
@@ -391,6 +398,10 @@ function PostgresPanelBody({ tab }: Props) {
           if (typeof meta?.indexBytes === "number") {
             tooltipParts.push(t("idx {n}", { n: formatBytes(meta.indexBytes) }));
           }
+          const trimmedComment = meta?.comment?.trim() ?? "";
+          if (trimmedComment) {
+            tooltipParts.push(t("comment: {c}", { c: trimmedComment }));
+          }
           return {
             id: `${name}.${state.schemaName}.${tname}`,
             label: tname,
@@ -506,6 +517,187 @@ function PostgresPanelBody({ tab }: Props) {
       setCommittingDdl(false);
     }
   }
+
+  // ── Schema-tree right-click actions ──────────────────────────
+  const [confirm, setConfirm] = useState<{
+    title: string;
+    message: string;
+    tone?: "destructive";
+    onConfirm: () => void | Promise<void>;
+  } | null>(null);
+  const [createDbOpen, setCreateDbOpen] = useState(false);
+
+  async function pgRunOne(sql: string): Promise<QueryExecutionResult> {
+    const target = await flow.ensureConnectionTarget();
+    return cmd.postgresExecute({
+      host: target.host,
+      port: target.port,
+      user: tab.pgUser.trim(),
+      password: tab.pgPassword,
+      database: tab.pgDatabase.trim() || null,
+      sql,
+    });
+  }
+
+  const pgActions = useMemo<DbSchemaActions>(() => {
+    const schemaName = state?.schemaName || "public";
+    const qSchema = `"${schemaName.replace(/"/g, '""')}"`;
+    const qIdent = (s: string) => `"${s.replace(/"/g, '""')}"`;
+    return {
+      onCopyTableName: (_db, tables) => {
+        void writeClipboardText(tables.join("\n"));
+      },
+      onRefreshDatabase: () => {
+        void browse();
+      },
+      onCreateDatabase: readOnly ? undefined : () => setCreateDbOpen(true),
+      onTruncateTables: readOnly
+        ? undefined
+        : (_db, tables) => {
+            setConfirm({
+              title: t("Truncate {n} table(s)?", { n: tables.length }),
+              message: t(
+                "This deletes all rows in:\n  {tables}\n\nStructure (columns, indexes, FKs) is preserved.",
+                { tables: tables.join("\n  ") },
+              ),
+              tone: "destructive",
+              onConfirm: async () => {
+                setConfirm(null);
+                try {
+                  const list = tables.map((t) => `${qSchema}.${qIdent(t)}`).join(", ");
+                  await pgRunOne(`TRUNCATE TABLE ${list}`);
+                  setNotice(t("Truncated {n} table(s).", { n: tables.length }));
+                  await browse();
+                } catch (e) {
+                  setQueryError(formatError(e));
+                }
+              },
+            });
+          },
+      onDropTables: readOnly
+        ? undefined
+        : (_db, tables) => {
+            setConfirm({
+              title: t("Drop {n} table(s)?", { n: tables.length }),
+              message: t(
+                "This permanently removes:\n  {tables}\n\nAll data and structure are deleted.",
+                { tables: tables.join("\n  ") },
+              ),
+              tone: "destructive",
+              onConfirm: async () => {
+                setConfirm(null);
+                try {
+                  for (const tbl of tables) {
+                    await pgRunOne(`DROP TABLE ${qSchema}.${qIdent(tbl)}`);
+                  }
+                  setNotice(t("Dropped {n} table(s).", { n: tables.length }));
+                  await browse(undefined, "");
+                } catch (e) {
+                  setQueryError(formatError(e));
+                }
+              },
+            });
+          },
+      onDropDatabase: readOnly
+        ? undefined
+        : (db) => {
+            setConfirm({
+              title: t("Drop database \"{db}\"?", { db }),
+              message: t(
+                "This permanently removes the database \"{db}\" and every schema inside it. The connection will close. This cannot be undone.",
+                { db },
+              ),
+              tone: "destructive",
+              onConfirm: async () => {
+                setConfirm(null);
+                try {
+                  // PG can't drop the database we're connected to, so
+                  // only attempt this when targeting a different DB. The
+                  // schema tree's context menu always targets the
+                  // current DB today; a future iteration can bounce us
+                  // through a maintenance DB. For now, surface the
+                  // engine error verbatim.
+                  await pgRunOne(`DROP DATABASE ${qIdent(db)}`);
+                  setNotice(t("Dropped database \"{db}\".", { db }));
+                  await browse();
+                } catch (e) {
+                  setQueryError(formatError(e));
+                }
+              },
+            });
+          },
+      onImportSql: readOnly
+        ? undefined
+        : async () => {
+            const picked = await openDialog({
+              multiple: false,
+              filters: [{ name: "SQL", extensions: ["sql"] }],
+            });
+            if (typeof picked !== "string") return;
+            try {
+              const text = await cmd.localReadTextFile(picked);
+              const stmts = splitSqlStatements(text);
+              if (stmts.length === 0) {
+                setNotice(t("No SQL statements found in the file."));
+                return;
+              }
+              for (const sql of stmts) {
+                await pgRunOne(sql);
+              }
+              setNotice(t("Executed {n} statement(s) from {file}.", {
+                n: stmts.length,
+                file: picked,
+              }));
+              await browse();
+            } catch (e) {
+              setQueryError(formatError(e));
+            }
+          },
+      onExportTables: async (_db, tables) => {
+        const picked = await saveDialog({
+          defaultPath: `${schemaName}-${tables.length === 1 ? tables[0] : "tables"}.sql`,
+          filters: [{ name: "SQL", extensions: ["sql"] }],
+        });
+        if (typeof picked !== "string") return;
+        try {
+          const result = await exportTablesAsInserts(
+            (sql) => pgRunOne(sql),
+            "postgres",
+            { schema: schemaName },
+            tables,
+          );
+          await cmd.localWriteTextFile(picked, result.sql);
+          const totalRows = Object.values(result.perTableRowCounts).reduce(
+            (a, b) => a + b,
+            0,
+          );
+          const truncatedNote =
+            result.truncatedTables.length > 0
+              ? t(" · row cap hit on: {tables}", {
+                  tables: result.truncatedTables.join(", "),
+                })
+              : "";
+          setNotice(t("Exported {tables} table(s), {rows} row(s) → {file}{warn}", {
+            tables: tables.length,
+            rows: totalRows.toLocaleString(),
+            file: picked,
+            warn: truncatedNote,
+          }));
+        } catch (e) {
+          setQueryError(formatError(e));
+        }
+      },
+      onExportDatabase: (db) => {
+        const allTables = state?.tables ?? [];
+        if (allTables.length === 0) {
+          setNotice(t("No tables to export in {db}.", { db }));
+          return;
+        }
+        void pgActions.onExportTables?.(db, allTables);
+      },
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [readOnly, state?.tables, state?.schemaName, tab.pgUser, tab.pgPassword, tab.pgDatabase, t]);
 
   const headerStats = state
     ? [
@@ -754,6 +946,9 @@ function PostgresPanelBody({ tab }: Props) {
         pk: c.key === "PRI" || c.key === "PK",
         nullable: c.nullable,
         keyHint: c.key && !(c.key === "PRI" || c.key === "PK") ? c.key : undefined,
+        defaultValue: c.defaultValue || undefined,
+        extra: c.extra,
+        comment: c.comment,
       }))}
       typeAccentVar="var(--svc-postgres)"
       indexes={state.indexes}
@@ -761,6 +956,8 @@ function PostgresPanelBody({ tab }: Props) {
       editable={!readOnly && state.tableName !== ""}
       onCommit={commitStructure}
       committing={committingDdl}
+      commentEditable
+      dialect="postgres"
     />
   );
 
@@ -806,13 +1003,14 @@ function PostgresPanelBody({ tab }: Props) {
             setSchema(nextSchema);
             void browse(undefined, "", undefined, nextSchema);
           },
+          actions: pgActions,
         }}
         dataTab={dataTab}
         structureTab={structureTab}
         schemaTab={
           <DbConfigView
             title={t("PostgreSQL settings")}
-            note={t("read-only")}
+            note={readOnly ? t("read-only") : t("editable")}
             load={async () => {
               const target = await flow.ensureConnectionTarget();
               const r = await cmd.postgresExecute({
@@ -826,18 +1024,81 @@ function PostgresPanelBody({ tab }: Props) {
               return r.rows.map((row): DbConfigRow => {
                 const setting = row[1] ?? "";
                 const unit = row[2] ?? "";
+                const context = String(row[4] ?? "").toLowerCase();
+                // `user`, `superuser`, `sighup` reload at runtime. The
+                // panel always issues ALTER SYSTEM + pg_reload_conf,
+                // so user-level settings reload too — same path as a
+                // proper postgresql.conf edit. `postmaster` and
+                // `internal` need a server restart, so we mark those
+                // read-only here even though ALTER SYSTEM would accept
+                // them — surfacing the restart requirement is more
+                // honest than silently writing.
+                const dynamic = ["user", "superuser", "sighup"].includes(context);
                 return {
                   name: row[0] ?? "",
                   value: unit ? `${setting} ${unit}` : setting,
                   description: row[3] ?? "",
                   source: row[4] ?? "",
+                  editable: dynamic && !readOnly,
+                  editHint: dynamic
+                    ? t("ALTER SYSTEM · pg_reload_conf()")
+                    : t("requires restart ({context})", { context: context || "internal" }),
                 };
               });
             }}
+            onEdit={
+              readOnly
+                ? undefined
+                : async (name, newValue) => {
+                    const target = await flow.ensureConnectionTarget();
+                    // ALTER SYSTEM SET <name> = <value>; SELECT pg_reload_conf();
+                    // The PG identifier rules are stricter than MySQL;
+                    // double-quote the name to be safe with reserved
+                    // words. Empty newValue → reset.
+                    const ident = `"${name.replace(/"/g, '""')}"`;
+                    const stmts =
+                      newValue === ""
+                        ? `ALTER SYSTEM RESET ${ident}; SELECT pg_reload_conf();`
+                        : `ALTER SYSTEM SET ${ident} = '${newValue.replace(/'/g, "''")}'; SELECT pg_reload_conf();`;
+                    await cmd.postgresExecute({
+                      host: target.host,
+                      port: target.port,
+                      user: tab.pgUser.trim(),
+                      password: tab.pgPassword,
+                      database: tab.pgDatabase.trim() || null,
+                      sql: stmts,
+                    });
+                  }
+            }
           />
         }
       />
       {dialogs}
+      <ConfirmDialog
+        open={!!confirm}
+        title={confirm?.title ?? ""}
+        message={confirm?.message ?? ""}
+        tone={confirm?.tone}
+        onCancel={() => setConfirm(null)}
+        onConfirm={() => void confirm?.onConfirm()}
+      />
+      <DbCreateDbDialog
+        open={createDbOpen}
+        kind="postgres"
+        onCancel={() => setCreateDbOpen(false)}
+        onSubmit={async (name, opts) => {
+          // PG doesn't allow CREATE DATABASE inside a transaction.
+          // postgresExecute starts each call as its own statement so
+          // we're fine. OWNER is optional — when omitted, PG defaults
+          // to the current role.
+          let sql = `CREATE DATABASE "${name.replace(/"/g, '""')}"`;
+          if (opts.owner) sql += ` OWNER "${opts.owner.replace(/"/g, '""')}"`;
+          await pgRunOne(sql);
+          setCreateDbOpen(false);
+          setNotice(t("Created database \"{name}\".", { name }));
+          await browse();
+        }}
+      />
     </>
   );
 }

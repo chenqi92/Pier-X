@@ -92,6 +92,17 @@ export const localRename = (from: string, to: string) =>
 export const localRemove = (path: string, isDir: boolean) =>
   invoke<void>("local_remove", { path, isDir });
 
+/** Read a UTF-8 text file from the local filesystem. Capped at 64
+ *  MiB by the backend; bigger imports go through engine-native dump
+ *  tools (mysqldump / pg_dump). */
+export const localReadTextFile = (path: string) =>
+  invoke<string>("local_read_text_file", { path });
+
+/** Write a UTF-8 text file to the local filesystem. Creates parent
+ *  directories as needed. */
+export const localWriteTextFile = (path: string, content: string) =>
+  invoke<void>("local_write_text_file", { path, content });
+
 // ── Git ─────────────────────────────────────────────────────────
 
 export const gitOverview = (path?: string) =>

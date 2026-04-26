@@ -561,6 +561,10 @@ const GIT_STATUS_POLL_MS = 10_000;
 
 function GitGraphLane({ row, isHead, width }: { row: GitGraphRowView; isHead: boolean; width: number }) {
   const dotColor = graphColor(row.colorIndex);
+  // Half-pixel offset so the 2px stroke straddles a pixel boundary cleanly
+  // (avoids WebKit sub-pixel anti-aliasing turning the vertical line into a
+  // washed-out 3-pixel band — the visual gap that made Pier-X's graph look
+  // "dotted" compared to Pier's Canvas-rendered IDEA-style lines).
   const cx = row.nodeColumn * GRAPH_LANE_PX + GRAPH_LANE_PX / 2 + 4;
   const cy = GRAPH_ROW_H / 2;
   return (
@@ -569,20 +573,31 @@ function GitGraphLane({ row, isHead, width }: { row: GitGraphRowView; isHead: bo
       width={width}
       height={GRAPH_ROW_H}
       viewBox={`0 0 ${width} ${GRAPH_ROW_H}`}
+      shapeRendering="geometricPrecision"
       aria-hidden="true"
     >
-      {row.segments.map((segment, index) => (
-        <line
-          key={`${row.hash}-segment-${index}`}
-          x1={segment.xTop}
-          y1={segment.yTop}
-          x2={segment.xBottom}
-          y2={segment.yBottom}
-          stroke={graphColor(segment.colorIndex)}
-          strokeWidth="1.5"
-          strokeLinecap="butt"
-        />
-      ))}
+      {row.segments.map((segment, index) => {
+        const isVertical = Math.abs(segment.xTop - segment.xBottom) < 0.5;
+        // Vertical lines: snap x to half-pixel + use crispEdges so the
+        // 2px stroke renders as a sharp 2-pixel column instead of a fuzzy
+        // 3-pixel band. Diagonals: keep geometricPrecision (set on the
+        // root <svg>) for smooth anti-aliased arcs.
+        const x1 = isVertical ? Math.round(segment.xTop) + 0.5 : segment.xTop;
+        const x2 = isVertical ? Math.round(segment.xBottom) + 0.5 : segment.xBottom;
+        return (
+          <line
+            key={`${row.hash}-segment-${index}`}
+            x1={x1}
+            y1={segment.yTop}
+            x2={x2}
+            y2={segment.yBottom}
+            stroke={graphColor(segment.colorIndex)}
+            strokeWidth="2"
+            strokeLinecap="butt"
+            shapeRendering={isVertical ? "crispEdges" : undefined}
+          />
+        );
+      })}
       {row.arrows.map((arrow, index) => {
         const arrowColor = graphColor(arrow.colorIndex);
         const armLen = 5;
@@ -685,6 +700,48 @@ function ColResizer({
       role="separator"
       aria-orientation="vertical"
     />
+  );
+}
+
+// Click target whose children remain text-selectable. A native <button> would
+// block selection (per the global chrome rule). Mousedown position is recorded
+// so a drag-to-select gesture doesn't accidentally fire `onActivate`.
+function SelectableFileRow({
+  onActivate,
+  title,
+  children,
+}: {
+  onActivate: () => void;
+  title?: string;
+  children: ReactNode;
+}) {
+  const downRef = useRef<{ x: number; y: number } | null>(null);
+  return (
+    <div
+      role="button"
+      tabIndex={0}
+      className="git-history-inline__file"
+      title={title}
+      onMouseDown={(e) => {
+        downRef.current = { x: e.clientX, y: e.clientY };
+      }}
+      onClick={(e) => {
+        const down = downRef.current;
+        downRef.current = null;
+        if (down && (Math.abs(e.clientX - down.x) > 4 || Math.abs(e.clientY - down.y) > 4)) {
+          return;
+        }
+        onActivate();
+      }}
+      onKeyDown={(e) => {
+        if (e.key === "Enter" || e.key === " ") {
+          e.preventDefault();
+          onActivate();
+        }
+      }}
+    >
+      {children}
+    </div>
   );
 }
 
@@ -2198,30 +2255,21 @@ function GitPanelBody({ browserPath, isActive = true }: Props) {
   function renderHistoryInlineDetail(detail: GitCommitDetailView) {
     const subject = detail.message.split("\n", 1)[0] || "";
     const body = detail.message.slice(subject.length).replace(/^\n+/, "");
-    const fullMessage = body ? `${subject}\n\n${body}` : subject;
     return (
       <div className="git-history-inline">
         <div className="git-history-inline__meta mono">
+          <span className="git-history-inline__hash" title={detail.hash}>{detail.shortHash}</span>
           <button
             type="button"
-            className="git-history-inline__hash-btn"
+            className="git-history-inline__copy-btn"
             onClick={() => void writeClipboardText(detail.hash)}
             title={t("Copy hash") + " · " + detail.hash}
+            aria-label={t("Copy hash")}
           >
-            <span className="git-history-inline__hash">{detail.shortHash}</span>
             <Copy size={11} />
           </button>
           <span className="git-history-inline__author">{detail.author}</span>
           <span className="git-history-inline__date">{detail.date}</span>
-          <span className="git-history-inline__spacer" />
-          <button
-            type="button"
-            className="git-history-inline__copy-msg"
-            onClick={() => void writeClipboardText(fullMessage)}
-            title={t("Copy message")}
-          >
-            <Copy size={12} />
-          </button>
         </div>
         <div className="git-history-inline__subject">{subject}</div>
         {body ? <pre className="git-history-inline__body mono">{body}</pre> : null}
@@ -2232,11 +2280,9 @@ function GitPanelBody({ browserPath, isActive = true }: Props) {
               <span className="git-history-inline__files-count">{detail.changedFiles.length}</span>
             </div>
             {detail.changedFiles.map((file) => (
-              <button
+              <SelectableFileRow
                 key={`${detail.hash}-${file.path}`}
-                type="button"
-                className="git-history-inline__file"
-                onClick={() => openCommitMultiDiff(detail, file.path)}
+                onActivate={() => openCommitMultiDiff(detail, file.path)}
                 title={t("Open diff") + " · " + file.path}
               >
                 <span className="git-history-inline__file-delta mono">
@@ -2244,7 +2290,7 @@ function GitPanelBody({ browserPath, isActive = true }: Props) {
                   {file.deletions > 0 ? <span className="git-file-row__delta-del">−{file.deletions}</span> : null}
                 </span>
                 <span className="git-history-inline__file-path mono" title={file.path}>{file.path}</span>
-              </button>
+              </SelectableFileRow>
             ))}
           </div>
         ) : null}

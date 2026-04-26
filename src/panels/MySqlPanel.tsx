@@ -1,5 +1,7 @@
+import { open as openDialog, save as saveDialog } from "@tauri-apps/plugin-dialog";
 import { useEffect, useMemo, useRef, useState } from "react";
 
+import ConfirmDialog from "../components/ConfirmDialog";
 import DbAddCredentialDialog from "../components/DbAddCredentialDialog";
 import DbPasswordUpdateDialog from "../components/DbPasswordUpdateDialog";
 import DbTunnelChip from "../components/DbTunnelChip";
@@ -7,11 +9,16 @@ import DismissibleNote from "../components/DismissibleNote";
 import InlineInstallCta from "../components/InlineInstallCta";
 import DbConnectSplash from "../components/db/DbConnectSplash";
 import DbConnectedShell, { type DbConnectedTab } from "../components/db/DbConnectedShell";
+import DbCreateDbDialog from "../components/db/DbCreateDbDialog";
 import type { DbHeaderInstance } from "../components/db/DbHeaderPicker";
 import DbConfigView, { type DbConfigRow } from "../components/db/DbConfigView";
 import DbResultGrid from "../components/db/DbResultGrid";
-import { type DbSchemaDatabase } from "../components/db/DbSchemaTree";
+import { type DbSchemaActions, type DbSchemaDatabase } from "../components/db/DbSchemaTree";
 import DbStructureView from "../components/db/DbStructureView";
+import {
+  exportTablesAsInserts,
+  splitSqlStatements,
+} from "../components/db/dbImportExport";
 import DbSqlEditor from "../components/db/DbSqlEditor";
 import type { DbSplashRowData } from "../components/db/DbSplashRow";
 import { inferEnv } from "../components/db/dbTheme";
@@ -426,6 +433,12 @@ function MySqlPanelBody({ tab }: Props) {
           if (meta?.updatedAt) {
             tooltipParts.push(t("updated {n}", { n: meta.updatedAt }));
           }
+          // Table comment, if any. Single-line for the title attribute;
+          // the Structure tab is the place to read multi-line comments.
+          const trimmedComment = meta?.comment?.trim() ?? "";
+          if (trimmedComment) {
+            tooltipParts.push(t("comment: {c}", { c: trimmedComment }));
+          }
           return {
             id: `${name}.${tname}`,
             label: tname,
@@ -548,6 +561,182 @@ function MySqlPanelBody({ tab }: Props) {
         { icon: "disk" as const, label: t("{count} tables", { count: state.tables.length }) },
       ]
     : [];
+
+  // ── Schema-tree right-click actions ──────────────────────────
+  const [confirm, setConfirm] = useState<{
+    title: string;
+    message: string;
+    tone?: "destructive";
+    onConfirm: () => void | Promise<void>;
+  } | null>(null);
+  const [createDbOpen, setCreateDbOpen] = useState(false);
+
+  // Helper: run a single SQL statement against the active connection.
+  // Wrapping it in one place keeps the right-click action wiring
+  // shorter and routes errors through the panel's notice / banner.
+  async function runOne(sql: string): Promise<QueryExecutionResult> {
+    const target = await flow.ensureConnectionTarget();
+    return cmd.mysqlExecute({
+      host: target.host,
+      port: target.port,
+      user: tab.mysqlUser.trim(),
+      password: tab.mysqlPassword,
+      database: tab.mysqlDatabase.trim() || null,
+      sql,
+    });
+  }
+
+  const mysqlActions = useMemo<DbSchemaActions>(() => ({
+    onCopyTableName: (_db, tables) => {
+      void writeClipboardText(tables.join("\n"));
+    },
+    onRefreshDatabase: () => {
+      void browse();
+    },
+    onCreateDatabase: readOnly ? undefined : () => setCreateDbOpen(true),
+    onTruncateTables: readOnly
+      ? undefined
+      : (db, tables) => {
+          setConfirm({
+            title: t("Truncate {n} table(s)?", { n: tables.length }),
+            message: t(
+              "This deletes all rows in:\n  {tables}\n\nStructure (columns, indexes, FKs) is preserved.",
+              { tables: tables.join("\n  ") },
+            ),
+            tone: "destructive",
+            onConfirm: async () => {
+              setConfirm(null);
+              try {
+                for (const tbl of tables) {
+                  await runOne(`TRUNCATE TABLE \`${db}\`.\`${tbl}\``);
+                }
+                setNotice(t("Truncated {n} table(s).", { n: tables.length }));
+                await browse();
+              } catch (e) {
+                setQueryError(formatError(e));
+              }
+            },
+          });
+        },
+    onDropTables: readOnly
+      ? undefined
+      : (db, tables) => {
+          setConfirm({
+            title: t("Drop {n} table(s)?", { n: tables.length }),
+            message: t(
+              "This permanently removes:\n  {tables}\n\nAll data and structure are deleted.",
+              { tables: tables.join("\n  ") },
+            ),
+            tone: "destructive",
+            onConfirm: async () => {
+              setConfirm(null);
+              try {
+                for (const tbl of tables) {
+                  await runOne(`DROP TABLE \`${db}\`.\`${tbl}\``);
+                }
+                setNotice(t("Dropped {n} table(s).", { n: tables.length }));
+                await browse(undefined, "");
+              } catch (e) {
+                setQueryError(formatError(e));
+              }
+            },
+          });
+        },
+    onDropDatabase: readOnly
+      ? undefined
+      : (db) => {
+          setConfirm({
+            title: t("Drop database \"{db}\"?", { db }),
+            message: t(
+              "This permanently removes the database \"{db}\" and every table inside it. This cannot be undone.",
+              { db },
+            ),
+            tone: "destructive",
+            onConfirm: async () => {
+              setConfirm(null);
+              try {
+                await runOne(`DROP DATABASE \`${db}\``);
+                setNotice(t("Dropped database \"{db}\".", { db }));
+                await browse();
+              } catch (e) {
+                setQueryError(formatError(e));
+              }
+            },
+          });
+        },
+    onImportSql: readOnly
+      ? undefined
+      : async () => {
+          const picked = await openDialog({
+            multiple: false,
+            filters: [{ name: "SQL", extensions: ["sql"] }],
+          });
+          if (typeof picked !== "string") return;
+          try {
+            const text = await cmd.localReadTextFile(picked);
+            const stmts = splitSqlStatements(text);
+            if (stmts.length === 0) {
+              setNotice(t("No SQL statements found in the file."));
+              return;
+            }
+            for (const sql of stmts) {
+              await runOne(sql);
+            }
+            setNotice(t("Executed {n} statement(s) from {file}.", {
+              n: stmts.length,
+              file: picked,
+            }));
+            await browse();
+          } catch (e) {
+            setQueryError(formatError(e));
+          }
+        },
+    onExportTables: async (db, tables) => {
+      const picked = await saveDialog({
+        defaultPath: `${db}-${tables.length === 1 ? tables[0] : "tables"}.sql`,
+        filters: [{ name: "SQL", extensions: ["sql"] }],
+      });
+      if (typeof picked !== "string") return;
+      try {
+        const result = await exportTablesAsInserts(
+          (sql) => runOne(sql),
+          "mysql",
+          { database: db },
+          tables,
+        );
+        await cmd.localWriteTextFile(picked, result.sql);
+        const totalRows = Object.values(result.perTableRowCounts).reduce(
+          (a, b) => a + b,
+          0,
+        );
+        const truncatedNote =
+          result.truncatedTables.length > 0
+            ? t(" · row cap hit on: {tables}", {
+                tables: result.truncatedTables.join(", "),
+              })
+            : "";
+        setNotice(t("Exported {tables} table(s), {rows} row(s) → {file}{warn}", {
+          tables: tables.length,
+          rows: totalRows.toLocaleString(),
+          file: picked,
+          warn: truncatedNote,
+        }));
+      } catch (e) {
+        setQueryError(formatError(e));
+      }
+    },
+    onExportDatabase: (db) => {
+      // Reuse the per-table path with the full table list. The user
+      // gets one .sql file with all tables concatenated.
+      const allTables = state?.tables ?? [];
+      if (allTables.length === 0) {
+        setNotice(t("No tables to export in {db}.", { db }));
+        return;
+      }
+      void mysqlActions.onExportTables?.(db, allTables);
+    },
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }), [readOnly, state?.tables, tab.mysqlUser, tab.mysqlPassword, tab.mysqlDatabase, t]);
 
   // Reset the auto-browse password focus target when the panel remounts.
   useEffect(() => {
@@ -863,6 +1052,9 @@ function MySqlPanelBody({ tab }: Props) {
         pk: c.key === "PRI",
         nullable: c.nullable,
         keyHint: c.key && c.key !== "PRI" ? c.key : undefined,
+        defaultValue: c.defaultValue || undefined,
+        extra: c.extra,
+        comment: c.comment,
       }))}
       typeAccentVar="var(--svc-mysql)"
       indexes={state.indexes}
@@ -870,6 +1062,8 @@ function MySqlPanelBody({ tab }: Props) {
       editable={!readOnly && state.tableName !== ""}
       onCommit={commitStructure}
       committing={committingDdl}
+      commentEditable
+      dialect="mysql"
     />
   );
 
@@ -913,34 +1107,109 @@ function MySqlPanelBody({ tab }: Props) {
             updateTab(tab.id, { mysqlDatabase: name });
             void browse(undefined, "");
           },
+          actions: mysqlActions,
         }}
         dataTab={dataTab}
         structureTab={structureTab}
         schemaTab={
           <DbConfigView
             title={t("MySQL variables")}
-            note={t("read-only")}
+            note={readOnly ? t("read-only") : t("editable")}
             load={async () => {
               const target = await flow.ensureConnectionTarget();
-              const r = await cmd.mysqlExecute({
+              const conn = {
                 host: target.host,
                 port: target.port,
                 user: tab.mysqlUser.trim(),
                 password: tab.mysqlPassword,
                 database: tab.mysqlDatabase.trim() || null,
+              };
+              const r = await cmd.mysqlExecute({
+                ...conn,
                 sql: "SHOW VARIABLES",
               });
-              return r.rows.map(
-                (row): DbConfigRow => ({
-                  name: row[0] ?? "",
+              // performance_schema.variables_info reports IS_DYNAMIC
+              // ("YES" → editable at runtime). The view may be disabled
+              // or the role may lack privileges; fail-soft to all-readonly.
+              let dynamic: Map<string, string> = new Map();
+              try {
+                const info = await cmd.mysqlExecute({
+                  ...conn,
+                  sql:
+                    "SELECT VARIABLE_NAME, IS_DYNAMIC FROM performance_schema.variables_info",
+                });
+                dynamic = new Map(
+                  info.rows.map((row) => [
+                    String(row[0] ?? "").toLowerCase(),
+                    String(row[1] ?? "").toUpperCase(),
+                  ]),
+                );
+              } catch {
+                // ignored — leave map empty so all rows render as read-only
+              }
+              return r.rows.map((row): DbConfigRow => {
+                const name = row[0] ?? "";
+                const isDyn = dynamic.get(name.toLowerCase()) === "YES";
+                return {
+                  name,
                   value: row[1] ?? "",
-                }),
-              );
+                  editable: isDyn && !readOnly,
+                  editHint: isDyn ? t("global scope") : t("not runtime-writable"),
+                };
+              });
             }}
+            onEdit={
+              readOnly
+                ? undefined
+                : async (name, newValue) => {
+                    const target = await flow.ensureConnectionTarget();
+                    // Numeric → emit bare, string → single-quote escape.
+                    const trimmed = newValue.trim();
+                    const numeric =
+                      trimmed !== "" && Number.isFinite(Number(trimmed));
+                    const literal = numeric
+                      ? trimmed
+                      : `'${newValue.replace(/'/g, "''")}'`;
+                    // SET GLOBAL — `name` comes from SHOW VARIABLES so
+                    // it's already a known identifier; we don't need
+                    // to re-quote it.
+                    const sql = `SET GLOBAL ${name} = ${literal}`;
+                    await cmd.mysqlExecute({
+                      host: target.host,
+                      port: target.port,
+                      user: tab.mysqlUser.trim(),
+                      password: tab.mysqlPassword,
+                      database: tab.mysqlDatabase.trim() || null,
+                      sql,
+                    });
+                  }
+            }
           />
         }
       />
       {dialogs}
+      <ConfirmDialog
+        open={!!confirm}
+        title={confirm?.title ?? ""}
+        message={confirm?.message ?? ""}
+        tone={confirm?.tone}
+        onCancel={() => setConfirm(null)}
+        onConfirm={() => void confirm?.onConfirm()}
+      />
+      <DbCreateDbDialog
+        open={createDbOpen}
+        kind="mysql"
+        onCancel={() => setCreateDbOpen(false)}
+        onSubmit={async (name, opts) => {
+          let sql = `CREATE DATABASE \`${name.replace(/`/g, "``")}\``;
+          if (opts.charset) sql += ` CHARACTER SET ${opts.charset}`;
+          if (opts.collation) sql += ` COLLATE ${opts.collation}`;
+          await runOne(sql);
+          setCreateDbOpen(false);
+          setNotice(t("Created database \"{name}\".", { name }));
+          await browse();
+        }}
+      />
     </>
   );
 }

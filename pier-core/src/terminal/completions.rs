@@ -98,7 +98,25 @@ pub fn complete_with_library(
     let prefix = &line[word_start..cursor];
 
     if is_command_position(line, word_start) {
-        return complete_command(prefix);
+        let mut rows = complete_command(prefix);
+        // If the user has typed the *full* name of a library command
+        // (e.g. `docker` without a trailing space) and hits Tab, what
+        // they almost always want next is to drill into subcommands —
+        // so surface those too. Pre-pending the command name to each
+        // row's `value` lets the frontend's word-diff inject the right
+        // tail (`docker` + Tab + `attach` → ` attach` written to PTY).
+        // The popover keeps the bare subcommand name in `display`, so
+        // the row stays visually compact.
+        if !prefix.is_empty() {
+            if let Some(pack) = lib.lookup(prefix) {
+                let sub_rows = library_rows("", &pack.subcommands, &pack.options, locale);
+                for mut sub in sub_rows {
+                    sub.value = format!("{prefix} {}", sub.value);
+                    rows.push(sub);
+                }
+            }
+        }
+        return rows;
     }
 
     // Argument position. First word of the line drives the library
@@ -640,6 +658,28 @@ mod tests {
             "expected English description, got {:?}",
             build_row.description,
         );
+    }
+
+    #[test]
+    fn library_command_position_with_exact_match_offers_subcommands_with_prefixed_value() {
+        // `docker` (no trailing space) + Tab — backend should also
+        // include the docker pack's subcommands so the user can drill
+        // in without having to first type a space. Each subcommand
+        // row's `value` must be prefixed with the full command + space
+        // so the frontend's word-diff inserts ` <sub>` correctly.
+        let lib = super::super::library::Library::bundled();
+        let line = "docker";
+        let rows = complete_with_library(line, line.len(), None, &lib, "en");
+        let attach = rows
+            .iter()
+            .find(|r| r.display == "attach")
+            .expect("attach subcommand should be surfaced at command-position");
+        assert_eq!(attach.kind, CompletionKind::Subcommand);
+        assert_eq!(attach.value, "docker attach");
+        // We should still see the regular binary completion for the
+        // command name itself.
+        assert!(rows.iter().any(|r| r.value == "docker" && matches!(r.kind, CompletionKind::Binary | CompletionKind::Builtin)),
+                "`docker` itself should still be in the list");
     }
 
     #[test]

@@ -339,29 +339,39 @@ export function useDbCredentialFlow(opts: UseDbCredentialFlowOpts): DbCredential
       setTimeout(() => passwordInputRef.current?.focus(), 0);
     };
 
+    // eslint-disable-next-line no-console
+    console.log("[db-flow] effect fire", {
+      kind, activeCredId, savedIndex, hasSsh, hasLiveState, tabHost,
+      tabPassword: tabPassword ? "(set)" : "(empty)",
+      browseTrigger, gen: myGen,
+    });
+
     void (async () => {
       try {
         let effectivePw = tabPassword;
         if (!effectivePw) {
           if (isCurrent()) setConnectingStep(t("Resolving saved password…"));
           try {
+            // eslint-disable-next-line no-console
+            console.log("[db-flow] dbCredResolve…", { gen: myGen });
             const resolved = await cmd.dbCredResolve(savedIndex, activeCredId);
+            // eslint-disable-next-line no-console
+            console.log("[db-flow] dbCredResolve ok", {
+              gen: myGen,
+              hasPassword: resolved.credential.hasPassword,
+              gotPw: !!resolved.password,
+            });
             if (!isCurrent()) return;
             effectivePw = resolved.password ?? "";
             if (effectivePw) {
               updateTab(tab.id, adapter.patchPassword(effectivePw));
             } else if (resolved.credential.hasPassword) {
-              // Backend says this cred had a password (keyring or
-              // Direct-fallback variant tag) but the actual lookup came
-              // back empty. Most likely the keyring entry was wiped
-              // (macOS keychain reset / cred saved on another machine /
-              // Direct-fallback's in-memory cache lost across an app
-              // restart). Pop the update dialog instead of silently
-              // authing with "".
               surfaceMissingKeyring();
               return;
             }
-          } catch {
+          } catch (resolveErr) {
+            // eslint-disable-next-line no-console
+            console.log("[db-flow] dbCredResolve threw", { gen: myGen, err: resolveErr });
             if (!isCurrent()) return;
             surfaceMissingKeyring();
             return;
@@ -371,15 +381,18 @@ export function useDbCredentialFlow(opts: UseDbCredentialFlowOpts): DbCredential
         setConnectingStep(
           hasSsh ? t("Opening SSH tunnel and querying…") : t("Connecting…"),
         );
+        // eslint-disable-next-line no-console
+        console.log("[db-flow] calling panel browse()…", { gen: myGen, pwLen: effectivePw.length });
         await browse(effectivePw);
+        // eslint-disable-next-line no-console
+        console.log("[db-flow] panel browse() resolved", { gen: myGen });
       } catch (e) {
+        // eslint-disable-next-line no-console
+        console.log("[db-flow] async outer catch", { gen: myGen, err: e });
         if (isCurrent()) setError(formatError(e));
       } finally {
-        // Clear the spinner — but leave `connectingStep` in place so
-        // a silent failure (no exception, no `state` flip) is visible
-        // in the splash footer instead of looking like a no-op. The
-        // step text is reset on the next `activateCredential` click
-        // and on the early-return guards above.
+        // eslint-disable-next-line no-console
+        console.log("[db-flow] async finally", { gen: myGen, isCurrent: isCurrent() });
         if (isCurrent()) {
           setActivating(null);
         }
@@ -435,12 +448,28 @@ export function useDbCredentialFlow(opts: UseDbCredentialFlowOpts): DbCredential
   async function handlePasswordUpdated() {
     if (savedIndex === null || !activeCredId) return;
     setError("");
+    setConnectingStep(t("Re-resolving password and reconnecting…"));
     try {
+      // eslint-disable-next-line no-console
+      console.log("[db-flow] handlePasswordUpdated → resolve");
       const resolved = await cmd.dbCredResolve(savedIndex, activeCredId);
+      // eslint-disable-next-line no-console
+      console.log("[db-flow] handlePasswordUpdated → resolved", {
+        gotPw: !!resolved.password,
+      });
       const pw = resolved.password ?? "";
       updateTab(tab.id, adapter.patchPasswordAfterRotate(pw));
+      setConnectingStep(
+        hasSsh ? t("Opening SSH tunnel and querying…") : t("Connecting…"),
+      );
+      // eslint-disable-next-line no-console
+      console.log("[db-flow] handlePasswordUpdated → calling panel browse()");
       await browse(pw);
+      // eslint-disable-next-line no-console
+      console.log("[db-flow] handlePasswordUpdated → panel browse() resolved");
     } catch (e) {
+      // eslint-disable-next-line no-console
+      console.log("[db-flow] handlePasswordUpdated → threw", e);
       setError(formatError(e));
     }
   }

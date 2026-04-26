@@ -538,6 +538,7 @@ export const zhExtra: Record<string, string> = {
     "密钥环中找不到该连接的保存密码，请重新输入以恢复连接。",
   "Saved password unavailable. Enter it manually or update the keyring.":
     "保存的密码不可用，请手动输入或更新密钥环。",
+  "Re-resolving password and reconnecting…": "重新读取密码并尝试连接…",
   "Re-enter password": "重新输入密码",
   "Keychain lookup failed: {detail}": "密钥环读取失败：{detail}",
   "Unexpected PING reply: {reply}": "意外的 PING 响应：{reply}",

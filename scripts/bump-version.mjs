@@ -1,13 +1,18 @@
 #!/usr/bin/env node
 // Bump Pier-X version across the frontend, the Tauri config, and both
-// Cargo manifests. Optionally stages, commits, and tags the change.
+// Cargo manifests. Optionally stages, commits, and pushes the change.
+//
+// The release workflow (`.github/workflows/release.yml`) detects version
+// changes in `package.json` on push to `main` and creates the matching
+// `vX.Y.Z` git tag + GitHub Release itself. This script no longer creates
+// or pushes tags — push the version-bump commit and let the workflow take
+// over.
 //
 // Usage:
 //   node scripts/bump-version.mjs <version>     (e.g. 0.2.0)
 //   node scripts/bump-version.mjs major|minor|patch
 //   node scripts/bump-version.mjs <version> --no-git
-//   node scripts/bump-version.mjs <version> --no-tag
-//   node scripts/bump-version.mjs <version> --push     (git push + push --tags)
+//   node scripts/bump-version.mjs <version> --push     (git push the bump commit)
 //   node scripts/bump-version.mjs <version> --dry-run
 
 import { readFileSync, writeFileSync } from "node:fs";
@@ -47,11 +52,15 @@ function die(msg) {
 }
 
 function parseArgs(argv) {
-  const flags = { noGit: false, noTag: false, dryRun: false, push: false };
+  const flags = { noGit: false, dryRun: false, push: false };
   const positional = [];
   for (const a of argv) {
     if (a === "--no-git") flags.noGit = true;
-    else if (a === "--no-tag") flags.noTag = true;
+    else if (a === "--no-tag") {
+      // Accepted for backwards compatibility — tags are no longer created
+      // by this script regardless of this flag.
+      console.warn("bump-version: --no-tag is a no-op (tags are created by the release workflow)");
+    }
     else if (a === "--dry-run") flags.dryRun = true;
     else if (a === "--push") flags.push = true;
     else if (a.startsWith("--")) die(`unknown flag: ${a}`);
@@ -144,16 +153,14 @@ function main() {
   const files = TARGETS.map((t) => t.path).map((p) => `"${p}"`).join(" ");
   runGit(`git add ${files}`, flags.dryRun);
   runGit(`git commit -m "chore(release): v${next}"`, flags.dryRun);
-  if (!flags.noTag) {
-    runGit(`git tag -a v${next} -m "Pier-X v${next}"`, flags.dryRun);
-    if (flags.push) {
-      runGit(`git push`, flags.dryRun);
-      runGit(`git push origin v${next}`, flags.dryRun);
-      console.log(`\nPushed v${next} to origin.`);
-    } else {
-      console.log(`\nTagged v${next}. Push with:`);
-      console.log(`  git push && git push --tags`);
-    }
+  if (flags.push) {
+    runGit(`git push`, flags.dryRun);
+    console.log(`\nPushed v${next} bump commit to origin.`);
+    console.log(`Release workflow will create the v${next} tag and GitHub Release.`);
+  } else {
+    console.log(`\nCommitted v${next} bump. Push with:`);
+    console.log(`  git push`);
+    console.log(`The release workflow will then create the tag and GitHub Release.`);
   }
 }
 

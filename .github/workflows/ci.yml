@@ -1,10 +1,6 @@
 name: CI
 
 on:
-  push:
-    branches: [main]
-  pull_request:
-    branches: [main]
   workflow_dispatch:
 
 concurrency:
@@ -15,51 +11,8 @@ env:
   FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: 'true'
 
 jobs:
-  detect-version-change:
-    name: Detect version change
-    runs-on: ubuntu-latest
-    outputs:
-      changed: ${{ steps.check.outputs.changed }}
-    steps:
-      - name: Checkout
-        uses: actions/checkout@v6
-        with:
-          fetch-depth: 2
-      - name: Compare package.json version against parent
-        id: check
-        shell: bash
-        run: |
-          set -euo pipefail
-          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
-            echo "manual dispatch — treating as changed"
-            echo "changed=true" >> "$GITHUB_OUTPUT"
-            exit 0
-          fi
-          if [ "${{ github.event_name }}" = "pull_request" ]; then
-            base="${{ github.event.pull_request.base.sha }}"
-          else
-            base="${{ github.event.before }}"
-          fi
-          if [ -z "$base" ] || [ "$base" = "0000000000000000000000000000000000000000" ]; then
-            echo "no usable base sha — treating as changed"
-            echo "changed=true" >> "$GITHUB_OUTPUT"
-            exit 0
-          fi
-          git fetch --depth=1 origin "$base" 2>/dev/null || true
-          prev="$(git show "$base:package.json" 2>/dev/null | jq -r '.version' || true)"
-          curr="$(jq -r '.version' package.json)"
-          echo "previous=$prev"
-          echo "current=$curr"
-          if [ "$prev" != "$curr" ]; then
-            echo "changed=true" >> "$GITHUB_OUTPUT"
-          else
-            echo "changed=false" >> "$GITHUB_OUTPUT"
-          fi
-
   tauri-shell:
     name: Tauri shell · ${{ matrix.name }}
-    needs: detect-version-change
-    if: needs.detect-version-change.outputs.changed == 'true'
     runs-on: ${{ matrix.os }}
     strategy:
       fail-fast: false
@@ -99,8 +52,6 @@ jobs:
 
   rust-core:
     name: Rust core · ${{ matrix.os }}
-    needs: detect-version-change
-    if: needs.detect-version-change.outputs.changed == 'true'
     runs-on: ${{ matrix.os }}
     strategy:
       fail-fast: false

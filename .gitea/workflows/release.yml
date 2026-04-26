@@ -2,18 +2,106 @@ name: Release
 
 on:
   push:
-    tags:
-      - 'v*.*.*'
+    branches: [main]
+    paths:
+      - 'package.json'
   workflow_dispatch:
     inputs:
-      tag:
-        description: 'Release tag (e.g. v0.1.0)'
-        required: true
-        type: string
+      force:
+        description: 'Force release at current package.json version (skip change detection)'
+        required: false
+        default: 'false'
+        type: choice
+        options:
+          - 'false'
+          - 'true'
 
 jobs:
+  detect-and-prepare:
+    name: Detect version change
+    runs-on: ubuntu-22.04
+    outputs:
+      should_release: ${{ steps.decide.outputs.should_release }}
+      version: ${{ steps.decide.outputs.version }}
+      tag: ${{ steps.decide.outputs.tag }}
+      prerelease: ${{ steps.decide.outputs.prerelease }}
+      changelog: ${{ steps.decide.outputs.changelog }}
+    steps:
+      - name: Install jq
+        run: sudo apt-get update && sudo apt-get install -y jq
+
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Decide whether to release
+        id: decide
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          curr="$(jq -r '.version' package.json)"
+          if [ -z "$curr" ] || [ "$curr" = "null" ]; then
+            echo "package.json has no .version"
+            exit 1
+          fi
+          tag="v$curr"
+
+          force="${{ github.event.inputs.force }}"
+          should_release="false"
+
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ] && [ "$force" = "true" ]; then
+            echo "manual dispatch with force=true"
+            should_release="true"
+          else
+            base="${{ github.event.before }}"
+            if [ -z "$base" ] || [ "$base" = "0000000000000000000000000000000000000000" ]; then
+              echo "no usable base sha — treating as version change"
+              should_release="true"
+            else
+              git fetch --depth=1 origin "$base" 2>/dev/null || true
+              prev="$(git show "$base:package.json" 2>/dev/null | jq -r '.version' || true)"
+              echo "previous=$prev current=$curr"
+              if [ "$prev" != "$curr" ] && [ -n "$prev" ] && [ "$prev" != "null" ]; then
+                should_release="true"
+              fi
+            fi
+          fi
+
+          if [ "$should_release" = "true" ] && git rev-parse "$tag" >/dev/null 2>&1; then
+            echo "tag $tag already exists; skipping release"
+            should_release="false"
+          fi
+
+          prerelease="false"
+          case "$tag" in v0.*) prerelease="true" ;; esac
+
+          prev_tag="$(git tag --list 'v*' --sort=-v:refname | head -n 1 || true)"
+          if [ -n "$prev_tag" ]; then
+            range="$prev_tag..HEAD"
+          else
+            range="HEAD"
+          fi
+          changelog="$(git log "$range" --pretty=format:'- %s (%h)' --no-merges || true)"
+          if [ -z "$changelog" ]; then
+            changelog="- (no commits since previous release)"
+          fi
+
+          {
+            echo "should_release=$should_release"
+            echo "version=$curr"
+            echo "tag=$tag"
+            echo "prerelease=$prerelease"
+            echo "changelog<<__CHANGELOG_EOF__"
+            echo "$changelog"
+            echo "__CHANGELOG_EOF__"
+          } >> "$GITHUB_OUTPUT"
+
   publish-linux:
     name: Publish Linux bundles
+    needs: detect-and-prepare
+    if: needs.detect-and-prepare.outputs.should_release == 'true'
     runs-on: ubuntu-22.04
 
     steps:
@@ -21,16 +109,7 @@ jobs:
         uses: actions/checkout@v4
         with:
           fetch-depth: 0
-
-      - name: Determine tag
-        id: tag
-        shell: bash
-        run: |
-          if [ "${GITHUB_EVENT_NAME}" = "workflow_dispatch" ]; then
-            echo "value=${{ inputs.tag }}" >> "$GITHUB_OUTPUT"
-          else
-            echo "value=${GITHUB_REF#refs/tags/}" >> "$GITHUB_OUTPUT"
-          fi
+          token: ${{ secrets.GITEA_TOKEN || github.token }}
 
       - name: Install system dependencies
         run: |
@@ -77,31 +156,49 @@ jobs:
           echo "---- collected ----"
           ls -lh dist-assets
 
+      - name: Push release tag
+        shell: bash
+        env:
+          TAG: ${{ needs.detect-and-prepare.outputs.tag }}
+        run: |
+          set -euo pipefail
+          git config user.name "${GITHUB_ACTOR:-gitea-actions}"
+          git config user.email "${GITHUB_ACTOR:-gitea-actions}@users.noreply.gitea"
+          if git rev-parse "$TAG" >/dev/null 2>&1; then
+            echo "tag $TAG already exists locally"
+          else
+            git tag -a "$TAG" -m "Pier-X $TAG"
+          fi
+          git push origin "$TAG"
+
       - name: Publish to Gitea Release
         shell: bash
         env:
           GITEA_TOKEN: ${{ secrets.GITEA_TOKEN || github.token }}
           GITEA_SERVER_URL: ${{ github.server_url }}
           REPO: ${{ github.repository }}
-          TAG: ${{ steps.tag.outputs.value }}
+          TAG: ${{ needs.detect-and-prepare.outputs.tag }}
+          PRERELEASE: ${{ needs.detect-and-prepare.outputs.prerelease }}
+          CHANGELOG: ${{ needs.detect-and-prepare.outputs.changelog }}
         run: |
           set -euo pipefail
           api="$GITEA_SERVER_URL/api/v1"
           auth="Authorization: token $GITEA_TOKEN"
 
+          body_md="$(printf '## What'\''s changed\n\n%s\n\n---\nDownload the platform-specific bundle below to install.\n' "$CHANGELOG")"
+
           # 1. Find or create the release for this tag.
           rel="$(curl -sS -H "$auth" "$api/repos/$REPO/releases/tags/$TAG" || true)"
           rid="$(echo "$rel" | jq -r '.id // empty')"
           if [ -z "$rid" ]; then
-            prerelease=false
-            case "$TAG" in v0.*) prerelease=true ;; esac
-            body="$(jq -n \
+            payload="$(jq -n \
               --arg tag "$TAG" \
               --arg name "Pier-X $TAG" \
-              --argjson pre "$prerelease" \
-              '{tag_name:$tag, name:$name, body:"See assets to download this version and install.", draft:false, prerelease:$pre}')"
+              --arg body "$body_md" \
+              --argjson pre "$PRERELEASE" \
+              '{tag_name:$tag, name:$name, body:$body, draft:false, prerelease:$pre}')"
             rel="$(curl -sS -X POST -H "$auth" -H "Content-Type: application/json" \
-              -d "$body" "$api/repos/$REPO/releases")"
+              -d "$payload" "$api/repos/$REPO/releases")"
             rid="$(echo "$rel" | jq -r '.id')"
           fi
           echo "release id: $rid"

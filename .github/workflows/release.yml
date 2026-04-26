@@ -2,21 +2,106 @@ name: Release
 
 on:
   push:
-    tags:
-      - 'v*.*.*'
+    branches: [main]
+    paths:
+      - 'package.json'
   workflow_dispatch:
     inputs:
-      tag:
-        description: 'Release tag (e.g. v0.1.0)'
-        required: true
-        type: string
+      force:
+        description: 'Force release at current package.json version (skip change detection)'
+        required: false
+        default: 'false'
+        type: choice
+        options:
+          - 'false'
+          - 'true'
 
 env:
   FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: 'true'
 
 jobs:
+  detect-and-prepare:
+    name: Detect version change
+    runs-on: ubuntu-latest
+    outputs:
+      should_release: ${{ steps.decide.outputs.should_release }}
+      version: ${{ steps.decide.outputs.version }}
+      tag: ${{ steps.decide.outputs.tag }}
+      prerelease: ${{ steps.decide.outputs.prerelease }}
+      changelog: ${{ steps.decide.outputs.changelog }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+
+      - name: Decide whether to release
+        id: decide
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          curr="$(jq -r '.version' package.json)"
+          if [ -z "$curr" ] || [ "$curr" = "null" ]; then
+            echo "package.json has no .version"
+            exit 1
+          fi
+          tag="v$curr"
+
+          force="${{ github.event.inputs.force }}"
+          should_release="false"
+
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ] && [ "$force" = "true" ]; then
+            echo "manual dispatch with force=true"
+            should_release="true"
+          else
+            base="${{ github.event.before }}"
+            if [ -z "$base" ] || [ "$base" = "0000000000000000000000000000000000000000" ]; then
+              echo "no usable base sha — treating as version change"
+              should_release="true"
+            else
+              git fetch --depth=1 origin "$base" 2>/dev/null || true
+              prev="$(git show "$base:package.json" 2>/dev/null | jq -r '.version' || true)"
+              echo "previous=$prev current=$curr"
+              if [ "$prev" != "$curr" ] && [ -n "$prev" ] && [ "$prev" != "null" ]; then
+                should_release="true"
+              fi
+            fi
+          fi
+
+          if [ "$should_release" = "true" ] && git rev-parse "$tag" >/dev/null 2>&1; then
+            echo "tag $tag already exists; skipping release"
+            should_release="false"
+          fi
+
+          prerelease="false"
+          case "$tag" in v0.*) prerelease="true" ;; esac
+
+          prev_tag="$(git tag --list 'v*' --sort=-v:refname | head -n 1 || true)"
+          if [ -n "$prev_tag" ]; then
+            range="$prev_tag..HEAD"
+          else
+            range="HEAD"
+          fi
+          changelog="$(git log "$range" --pretty=format:'- %s (%h)' --no-merges || true)"
+          if [ -z "$changelog" ]; then
+            changelog="- (no commits since previous release)"
+          fi
+
+          {
+            echo "should_release=$should_release"
+            echo "version=$curr"
+            echo "tag=$tag"
+            echo "prerelease=$prerelease"
+            echo "changelog<<__CHANGELOG_EOF__"
+            echo "$changelog"
+            echo "__CHANGELOG_EOF__"
+          } >> "$GITHUB_OUTPUT"
+
   publish-tauri:
     name: Publish · ${{ matrix.name }}
+    needs: detect-and-prepare
+    if: needs.detect-and-prepare.outputs.should_release == 'true'
     permissions:
       contents: write
     strategy:
@@ -40,16 +125,6 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@v6
-
-      - name: Determine tag
-        id: tag
-        shell: bash
-        run: |
-          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
-            echo "value=${{ inputs.tag }}" >> "$GITHUB_OUTPUT"
-          else
-            echo "value=${GITHUB_REF#refs/tags/}" >> "$GITHUB_OUTPUT"
-          fi
 
       - name: Setup Node.js
         uses: actions/setup-node@v4
@@ -88,9 +163,15 @@ jobs:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         with:
           projectPath: .
-          tagName: ${{ steps.tag.outputs.value }}
-          releaseName: Pier-X ${{ steps.tag.outputs.value }}
-          releaseBody: See the assets to download this version and install.
+          tagName: ${{ needs.detect-and-prepare.outputs.tag }}
+          releaseName: Pier-X ${{ needs.detect-and-prepare.outputs.tag }}
+          releaseBody: |
+            ## What's changed
+
+            ${{ needs.detect-and-prepare.outputs.changelog }}
+
+            ---
+            Download the platform-specific bundle below to install.
           releaseDraft: false
-          prerelease: ${{ startsWith(steps.tag.outputs.value, 'v0.') }}
+          prerelease: ${{ needs.detect-and-prepare.outputs.prerelease == 'true' }}
           args: ${{ matrix.args }}

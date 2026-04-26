@@ -1224,7 +1224,15 @@ fn expand_local_path(raw: &str) -> PathBuf {
 }
 
 fn workspace_root() -> PathBuf {
-    std::env::current_dir().unwrap_or_else(|_| home_dir())
+    let cwd = std::env::current_dir().unwrap_or_else(|_| home_dir());
+    // `tauri dev` 把进程 cwd 设为 src-tauri/（tauri.conf.json 所在），
+    // basename 透到 UI 即"src-tauri"标签。剥掉这层壳，返回项目根。
+    if cwd.file_name().and_then(|s| s.to_str()) == Some("src-tauri") {
+        if let Some(parent) = cwd.parent() {
+            return parent.to_path_buf();
+        }
+    }
+    cwd
 }
 
 fn resolve_existing_path(path: Option<String>) -> PathBuf {
@@ -4220,6 +4228,88 @@ fn terminal_current_cwd(
         .get(&session_id)
         .ok_or_else(|| format!("unknown terminal session: {}", session_id))?;
     Ok(managed.terminal.current_cwd())
+}
+
+/// SFTP-backed Tab completion for an active SSH terminal tab. Same
+/// shape as `terminal_completions` but file rows come from the live
+/// SFTP session keyed by `(auth_mode, user, host, port)` — so e.g.
+/// `cd /mnt/da` + Tab in a russh tab lists `/mnt/data/`, `/mnt/dev/`
+/// etc from the **remote** filesystem, not the local Mac.
+///
+/// Library + builtin/PATH-binary rows still come from the local pack
+/// dir (those are about *what to type*, not *what files exist where*),
+/// so the user sees the same docker/git/kubectl subcommands as in a
+/// local tab.
+#[tauri::command]
+fn terminal_completions_remote(
+    state: tauri::State<'_, AppState>,
+    line: String,
+    cursor: usize,
+    cwd: Option<String>,
+    locale: Option<String>,
+    host: String,
+    port: u16,
+    user: String,
+    auth_mode: String,
+) -> Result<Vec<pier_core::terminal::Completion>, String> {
+    use pier_core::terminal::{
+        complete_with_library_using, DirReadEntry, DirReader, LocalDirReader,
+    };
+    use std::path::Path;
+
+    let key = sftp_cache_key(&host, port, &user, &auth_mode);
+    let session_opt = match state.sftp_sessions.lock() {
+        Ok(g) => g.get(&key).cloned(),
+        Err(p) => p.into_inner().get(&key).cloned(),
+    };
+    let sftp_client = if let Some(session) = session_opt {
+        get_or_open_sftp_client(&state, &session, &host, port, &user, &auth_mode).ok()
+    } else {
+        None
+    };
+
+    /// `DirReader` that lists a remote directory through the cached
+    /// SFTP client. Failures fold to an empty list — completion
+    /// shows fewer rows but never errors out at the keyboard.
+    struct SftpDirReader(SftpClient);
+    impl DirReader for SftpDirReader {
+        fn list(&self, dir: &Path) -> Vec<DirReadEntry> {
+            let path = dir.to_string_lossy();
+            let entries = match self.0.list_dir_blocking(&path) {
+                Ok(e) => e,
+                Err(_) => return Vec::new(),
+            };
+            entries
+                .into_iter()
+                .map(|e| DirReadEntry {
+                    name: e.name,
+                    is_dir: e.is_dir,
+                })
+                .collect()
+        }
+    }
+
+    let cwd_path = cwd.as_deref().map(Path::new);
+    let locale_str = locale.as_deref().unwrap_or("en");
+    let lib = terminal_smart::completion_library_snapshot();
+
+    let rows = if let Some(client) = sftp_client {
+        let reader = SftpDirReader(client);
+        complete_with_library_using(&line, cursor, cwd_path, &lib, locale_str, &reader)
+    } else {
+        // No SFTP cached yet (tab still authenticating, mismatched
+        // auth_mode, etc.) — fall back to local readdir. Library +
+        // history rows are unaffected.
+        complete_with_library_using(
+            &line,
+            cursor,
+            cwd_path,
+            &lib,
+            locale_str,
+            &LocalDirReader,
+        )
+    };
+    Ok(rows)
 }
 
 #[tauri::command]
@@ -9036,6 +9126,7 @@ pub fn run() {
             terminal_close,
             terminal_validate_command,
             terminal_completions,
+            terminal_completions_remote,
             terminal_man_synopsis,
             terminal_history_load,
             terminal_history_push,

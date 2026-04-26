@@ -47,6 +47,17 @@ fn completion_library() -> &'static RwLock<Library> {
     })
 }
 
+/// Clone the live command library out of the lock so callers from
+/// other modules (lib.rs's `terminal_completions_remote`) can run
+/// completions against it without exposing the static directly.
+pub fn completion_library_snapshot() -> Library {
+    let lib_lock = completion_library();
+    match lib_lock.read() {
+        Ok(g) => g.clone(),
+        Err(p) => p.into_inner().clone(),
+    }
+}
+
 /// Re-read user packs from disk and swap them into the live
 /// library. Called by the Settings UI after a "Check for updates"
 /// or manual install. Bundled packs are unchanged.

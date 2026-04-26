@@ -76,6 +76,46 @@ pub fn complete(line: &str, cursor: usize, cwd: Option<&Path>) -> Vec<Completion
     complete_with_library(line, cursor, cwd, &super::library::Library::empty(), "en")
 }
 
+/// One directory listing entry — name + whether it's a directory.
+/// Returned by `DirReader::list` and consumed by `complete_file_with`
+/// to build path-completion rows.
+#[derive(Debug, Clone)]
+pub struct DirReadEntry {
+    pub name: String,
+    pub is_dir: bool,
+}
+
+/// Pluggable directory reader. The local Tab path uses
+/// [`LocalDirReader`] (wraps `std::fs::read_dir`); the SSH path
+/// supplies an SFTP-driven implementation in `src-tauri` so file
+/// completion in russh tabs queries the **remote** filesystem
+/// instead of the local one.
+pub trait DirReader {
+    /// List entries in `dir`. Errors should be folded to an empty
+    /// list — the completer just shows fewer rows; it never fails.
+    fn list(&self, dir: &Path) -> Vec<DirReadEntry>;
+}
+
+/// `DirReader` that reads the local filesystem via `std::fs`.
+pub struct LocalDirReader;
+
+impl DirReader for LocalDirReader {
+    fn list(&self, dir: &Path) -> Vec<DirReadEntry> {
+        let entries = match std::fs::read_dir(dir) {
+            Ok(e) => e,
+            Err(_) => return Vec::new(),
+        };
+        entries
+            .flatten()
+            .filter_map(|e| {
+                let name = e.file_name().into_string().ok()?;
+                let is_dir = e.file_type().map(|t| t.is_dir()).unwrap_or(false);
+                Some(DirReadEntry { name, is_dir })
+            })
+            .collect()
+    }
+}
+
 /// Library-aware variant. When `lib` knows the active command, the
 /// argument-position branch first emits **subcommand** rows from the
 /// pack (with localized descriptions), then falls back to file
@@ -92,6 +132,20 @@ pub fn complete_with_library(
     cwd: Option<&Path>,
     lib: &super::library::Library,
     locale: &str,
+) -> Vec<Completion> {
+    complete_with_library_using(line, cursor, cwd, lib, locale, &LocalDirReader)
+}
+
+/// Like [`complete_with_library`] but parameterized over a
+/// `DirReader`. The SSH path passes an SFTP-backed reader so
+/// `cd /mnt/da` + Tab in a russh tab lists the **remote** `/mnt/`.
+pub fn complete_with_library_using(
+    line: &str,
+    cursor: usize,
+    cwd: Option<&Path>,
+    lib: &super::library::Library,
+    locale: &str,
+    reader: &dyn DirReader,
 ) -> Vec<Completion> {
     let cursor = cursor.min(line.len());
     let word_start = find_word_start(line, cursor);
@@ -140,7 +194,7 @@ pub fn complete_with_library(
     }
 
     let resolved_cwd = resolve_cwd(cwd);
-    complete_file(prefix, resolved_cwd.as_deref())
+    complete_file_with(prefix, resolved_cwd.as_deref(), reader)
 }
 
 /// Returns the bare first word of the line (the command name), or
@@ -385,7 +439,11 @@ fn complete_command(prefix: &str) -> Vec<Completion> {
 /// File and directory entries under `cwd / dirname(prefix)` whose
 /// basename begins with `basename(prefix)`. Returns directories
 /// before files for stable ordering.
-fn complete_file(prefix: &str, cwd: Option<&Path>) -> Vec<Completion> {
+fn complete_file_with(
+    prefix: &str,
+    cwd: Option<&Path>,
+    reader: &dyn DirReader,
+) -> Vec<Completion> {
     let (dir_part, base_part) = split_path_prefix(prefix);
 
     let base_dir = if dir_part.is_empty() {
@@ -407,18 +465,12 @@ fn complete_file(prefix: &str, cwd: Option<&Path>) -> Vec<Completion> {
             .unwrap_or_else(|| PathBuf::from(&dir_part))
     };
 
-    let entries = match std::fs::read_dir(&base_dir) {
-        Ok(e) => e,
-        Err(_) => return Vec::new(),
-    };
+    let entries = reader.list(&base_dir);
 
     let mut dirs: Vec<Completion> = Vec::new();
     let mut files: Vec<Completion> = Vec::new();
-    for entry in entries.flatten() {
-        let name = match entry.file_name().into_string() {
-            Ok(s) => s,
-            Err(_) => continue,
-        };
+    for entry in entries {
+        let name = entry.name;
         // Hide dotfiles unless the user typed at least one leading
         // dot — matches typical shell behaviour and keeps the popup
         // clean on home / project directories.
@@ -428,8 +480,7 @@ fn complete_file(prefix: &str, cwd: Option<&Path>) -> Vec<Completion> {
         if !name.starts_with(&base_part) {
             continue;
         }
-
-        let is_dir = entry.file_type().map(|t| t.is_dir()).unwrap_or(false);
+        let is_dir = entry.is_dir;
 
         // Reattach the user's typed dir prefix so inserting `value`
         // into the line preserves what they had. Trailing `/` for

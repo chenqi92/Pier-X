@@ -65,6 +65,33 @@ export const terminalCompletions = (
 ) =>
   invoke<Completion[]>("terminal_completions", { line, cursor, cwd, locale });
 
+/** SFTP-backed Tab completion for an SSH terminal tab. File rows
+ *  come from the live remote filesystem (`cd /mnt/da` + Tab in a
+ *  russh tab returns `/mnt/data/`, `/mnt/dev/` etc), library +
+ *  builtin/PATH-binary rows are still local. Caller passes the
+ *  same connection coords used by `sftp_cache_key` so the backend
+ *  finds the existing SFTP session. */
+export const terminalCompletionsRemote = (
+  line: string,
+  cursor: number,
+  cwd: string | null,
+  locale: string | null,
+  host: string,
+  port: number,
+  user: string,
+  authMode: string,
+) =>
+  invoke<Completion[]>("terminal_completions_remote", {
+    line,
+    cursor,
+    cwd,
+    locale,
+    host,
+    port,
+    user,
+    authMode,
+  });
+
 /** A single option flag + its summary parsed from the man / --help
  *  output. Rendered as one row in the man-popover OPTIONS section. */
 export type ManOption = {

@@ -13,6 +13,7 @@ import CompletionPopover from "../components/CompletionPopover";
 import ManPagePopover from "../components/ManPagePopover";
 import {
   terminalCompletions,
+  terminalCompletionsRemote,
   terminalManSynopsis,
   type Completion,
   type ManSynopsis,
@@ -1718,7 +1719,27 @@ export default function TerminalPanel({ tab, isActive, onEditConnection }: Props
     }
     let items: Completion[] = [];
     try {
-      items = await terminalCompletions(line, cursor, cwd, locale);
+      // For russh tabs, route file rows through SFTP so `cd /mnt/da`
+      // + Tab on a remote host actually lists *that host's* /mnt/.
+      // We pass the same `(host, port, user, authMode)` quadruple
+      // the SFTP cache is keyed by; backend falls back to local
+      // readdir if the cache hasn't seen the session yet (e.g. tab
+      // still authenticating). Library + history rows stay client-
+      // side either way.
+      if (tab.backend === "ssh" && tab.sshHost && tab.sshUser) {
+        items = await terminalCompletionsRemote(
+          line,
+          cursor,
+          cwd,
+          locale,
+          tab.sshHost,
+          tab.sshPort,
+          tab.sshUser,
+          tab.sshAuthMode,
+        );
+      } else {
+        items = await terminalCompletions(line, cursor, cwd, locale);
+      }
     } catch {
       // Fall through with `items` empty — history rows below may
       // still produce a useful popover even when the backend

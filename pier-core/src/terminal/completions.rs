@@ -147,8 +147,14 @@ pub fn complete_with_library_using(
     locale: &str,
     reader: &dyn DirReader,
 ) -> Vec<Completion> {
-    let cursor = cursor.min(line.len());
-    let word_start = find_word_start(line, cursor);
+    // Defensively snap `cursor` and `word_start` onto valid UTF-8
+    // char boundaries before slicing — the JS frontend often sends
+    // `line.length` (UTF-16 code-unit count) as the cursor, which is
+    // off by N bytes whenever the line contains multi-byte chars
+    // (Chinese punctuation, emoji, etc.). Without this snap, slicing
+    // panics with `byte index N is not a char boundary`.
+    let cursor = round_down_to_char_boundary(line, cursor.min(line.len()));
+    let word_start = round_down_to_char_boundary(line, find_word_start(line, cursor));
     let prefix = &line[word_start..cursor];
 
     if is_command_position(line, word_start) {
@@ -317,6 +323,22 @@ fn pick_long_form(flag: &str) -> &str {
         .map(str::trim)
         .find(|f| f.starts_with("--"))
         .unwrap_or_else(|| flag.split(',').next().map(str::trim).unwrap_or(flag))
+}
+
+/// Walk back from `n` until it lands on a UTF-8 char boundary
+/// (Rust slicing requires this; mid-codepoint indices panic).
+/// Used to defensively snap incoming byte offsets — particularly
+/// `cursor` from the JS frontend which often comes in as UTF-16
+/// code units, off by N bytes for multi-byte chars like Chinese
+/// punctuation or emoji.
+fn round_down_to_char_boundary(line: &str, mut n: usize) -> usize {
+    if n > line.len() {
+        n = line.len();
+    }
+    while n > 0 && !line.is_char_boundary(n) {
+        n -= 1;
+    }
+    n
 }
 
 /// Walk back from `cursor` while the char is part of a "word" — not
@@ -627,7 +649,7 @@ mod tests {
         fs::write(tmp.join("beta.txt"), b"").unwrap();
         fs::create_dir(tmp.join("subdir")).unwrap();
 
-        let results = complete_file("", Some(&tmp));
+        let results = complete_file_with("", Some(&tmp), &LocalDirReader);
         let names: HashSet<_> = results.iter().map(|c| c.display.as_str()).collect();
         assert!(names.contains("alpha.txt"), "got {names:?}");
         assert!(names.contains("beta.txt"), "got {names:?}");
@@ -731,6 +753,21 @@ mod tests {
         // command name itself.
         assert!(rows.iter().any(|r| r.value == "docker" && matches!(r.kind, CompletionKind::Binary | CompletionKind::Builtin)),
                 "`docker` itself should still be in the list");
+    }
+
+    #[test]
+    fn complete_with_library_does_not_panic_on_multibyte_chars() {
+        // The JS frontend often sends `line.length` (UTF-16 units)
+        // as the cursor, but our slicing is byte-indexed. Without
+        // the char-boundary snap, lines containing Chinese / emoji
+        // panic with `byte index N is not a char boundary`. This
+        // test exercises every cursor offset on a mixed line and
+        // asserts no panic + char-boundary safety.
+        let lib = super::super::library::Library::bundled();
+        let line = "cd 。"; // 3 ASCII + 1 Chinese (3 bytes) = 6 bytes
+        for cursor in 0..=line.len() + 4 {
+            let _ = complete_with_library(line, cursor, None, &lib, "en");
+        }
     }
 
     #[test]

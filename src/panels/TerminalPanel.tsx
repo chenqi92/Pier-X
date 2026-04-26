@@ -1672,7 +1672,13 @@ export default function TerminalPanel({ tab, isActive, onEditConnection }: Props
   async function openCompletion() {
     if (!session) return;
     const line = smartLineBufferRef.current;
-    const cursor = line.length;
+    // Backend slices `line` by byte offset, but JS `.length` returns
+    // UTF-16 code units — those disagree the moment the line has any
+    // multi-byte char (Chinese punctuation `。`, emoji, etc.) and the
+    // resulting mismatch panics inside `complete_with_library`. Send
+    // the UTF-8 byte length so backend slicing always lands on a
+    // char boundary.
+    const cursor = new TextEncoder().encode(line).length;
     let cwd: string | null = null;
     try {
       cwd = (await cmd.terminalCurrentCwd(session.sessionId)) ?? null;

@@ -1,7 +1,8 @@
-import { Download, FolderSearch, HardDrive, Search } from "lucide-react";
+import { FolderSearch, HardDrive, Search } from "lucide-react";
 import { useEffect, useMemo, useState } from "react";
 
 import DismissibleNote from "../components/DismissibleNote";
+import InlineInstallCta from "../components/InlineInstallCta";
 import DbConnectSplash from "../components/db/DbConnectSplash";
 import DbConnectedShell, { type DbConnectedTab } from "../components/db/DbConnectedShell";
 import type { DbHeaderInstance } from "../components/db/DbHeaderPicker";
@@ -32,6 +33,8 @@ import type {
   TabState,
 } from "../lib/types";
 import { effectiveSshTarget } from "../lib/types";
+import { softwareKeyForTab } from "../stores/useSoftwareStore";
+import { useSoftwareSnapshot } from "../lib/softwareInstall";
 import PanelSkeleton, { useDeferredMount } from "../components/PanelSkeleton";
 
 type Props = { tab: TabState | null };
@@ -60,6 +63,31 @@ function SqlitePanelBody({ tab }: Props) {
 
   const sshTarget = tab ? effectiveSshTarget(tab) : null;
   const hasSsh = sshTarget !== null;
+  const swKey = tab ? softwareKeyForTab(tab) : null;
+  const sshParams = useMemo(
+    () =>
+      sshTarget
+        ? {
+            host: sshTarget.host,
+            port: sshTarget.port,
+            user: sshTarget.user,
+            authMode: sshTarget.authMode,
+            password: sshTarget.password,
+            keyPath: sshTarget.keyPath,
+            savedConnectionIndex: sshTarget.savedConnectionIndex,
+          }
+        : null,
+    [
+      sshTarget?.host,
+      sshTarget?.port,
+      sshTarget?.user,
+      sshTarget?.authMode,
+      sshTarget?.password,
+      sshTarget?.keyPath,
+      sshTarget?.savedConnectionIndex,
+    ],
+  );
+  useSoftwareSnapshot(swKey, sshParams);
 
   const [path, setPath] = useState("");
   const [tableName, setTableName] = useState("");
@@ -92,10 +120,6 @@ function SqlitePanelBody({ tab }: Props) {
   const [remoteStatus, setRemoteStatus] = useState<RemoteStatus>(
     hasSsh ? { kind: "unknown" } : { kind: "local-only" },
   );
-  const [installBusy, setInstallBusy] = useState(false);
-  const [installError, setInstallError] = useState("");
-  const [installNotice, setInstallNotice] = useState("");
-  const [installLog, setInstallLog] = useState("");
   const [candidates, setCandidates] = useState<RemoteSqliteCandidate[]>([]);
   const [cwdHint, setCwdHint] = useState("");
   const [shellCwd, setShellCwd] = useState<string | null>(null);
@@ -146,11 +170,6 @@ function SqlitePanelBody({ tab }: Props) {
     }
     let cancelled = false;
     setRemoteStatus({ kind: "unknown" });
-    // Drop any install feedback from a previous host — it's stale the
-    // moment we point at a different SSH target.
-    setInstallError("");
-    setInstallNotice("");
-    setInstallLog("");
     cmd
       .sqliteRemoteCapable({
         host: sshTarget.host,
@@ -289,14 +308,10 @@ function SqlitePanelBody({ tab }: Props) {
     }
   }
 
-  async function runInstall() {
-    if (!sshTarget || installBusy) return;
-    setInstallBusy(true);
-    setInstallError("");
-    setInstallNotice("");
-    setInstallLog("");
+  async function reprobeSqliteCapability() {
+    if (!sshTarget) return;
     try {
-      const report = await cmd.sqliteInstallRemote({
+      const cap = await cmd.sqliteRemoteCapable({
         host: sshTarget.host,
         port: sshTarget.port,
         user: sshTarget.user,
@@ -305,71 +320,15 @@ function SqlitePanelBody({ tab }: Props) {
         keyPath: sshTarget.keyPath,
         savedConnectionIndex: sshTarget.savedConnectionIndex,
       });
-      setInstallLog(report.outputTail);
-      switch (report.status) {
-        case "installed":
-          // Re-run capability probe so the panel switches to remote mode.
-          setRemoteStatus({
-            kind: "installed",
-            supportsJson: false, // refreshed below
-            version: report.installedVersion,
-          });
-          setInstallNotice(
-            t("Installed sqlite3 v{version} via {pm}", {
-              version: report.installedVersion ?? "?",
-              pm: report.packageManager || "—",
-            }),
-          );
-          // Authoritative re-probe — picks up `supportsJson` correctly.
-          cmd
-            .sqliteRemoteCapable({
-              host: sshTarget.host,
-              port: sshTarget.port,
-              user: sshTarget.user,
-              authMode: sshTarget.authMode,
-              password: sshTarget.password,
-              keyPath: sshTarget.keyPath,
-              savedConnectionIndex: sshTarget.savedConnectionIndex,
-            })
-            .then((cap) => {
-              if (cap.installed) {
-                setRemoteStatus({
-                  kind: "installed",
-                  supportsJson: cap.supportsJson,
-                  version: cap.version,
-                });
-              }
-            })
-            .catch(() => {
-              /* keep the optimistic status */
-            });
-          break;
-        case "unsupported-distro":
-          setInstallError(
-            t(
-              "This distro ({id}) is not in the auto-install list — please install sqlite3 manually.",
-              { id: report.distroId || "?" },
-            ),
-          );
-          break;
-        case "sudo-requires-password":
-          setInstallError(
-            t("sudo requires a password — connect as root or configure passwordless sudo."),
-          );
-          break;
-        case "package-manager-failed":
-          setInstallError(
-            t("Install failed via {pm} (exit {code})", {
-              pm: report.packageManager || "—",
-              code: report.exitCode,
-            }),
-          );
-          break;
+      if (cap.installed) {
+        setRemoteStatus({
+          kind: "installed",
+          supportsJson: cap.supportsJson,
+          version: cap.version,
+        });
       }
-    } catch (e) {
-      setInstallError(formatError(e));
-    } finally {
-      setInstallBusy(false);
+    } catch {
+      /* leave remoteStatus alone — InlineInstallCta will show the error */
     }
   }
 
@@ -458,26 +417,13 @@ function SqlitePanelBody({ tab }: Props) {
         <div className="status-note mono">{remoteBannerContent}</div>
       )}
       {showInstallCta && (
-        <div className="branch-row">
-          <button
-            type="button"
-            className="btn is-primary is-compact"
-            disabled={installBusy || !sshTarget}
-            onClick={() => void runInstall()}
-          >
-            <Download size={10} />
-            {installBusy ? t("Installing sqlite3...") : t("Detect & install sqlite3")}
-          </button>
-        </div>
-      )}
-      {installNotice && (
-        <div className="status-note mono">{installNotice}</div>
-      )}
-      {installError && (
-        <div className="status-note status-note--error mono">{installError}</div>
-      )}
-      {installLog && (
-        <pre className="install-log mono">{installLog}</pre>
+        <InlineInstallCta
+          packageId="sqlite3"
+          sshParams={sshParams}
+          swKey={swKey}
+          enableService={false}
+          onInstalled={() => void reprobeSqliteCapability()}
+        />
       )}
       {hasSsh && isRemoteMode && (
         <div className="form-stack">

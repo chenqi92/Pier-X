@@ -948,7 +948,7 @@ export type RemoteSqliteCandidate = {
   modified: number | null;
 };
 
-type SshParams = {
+export type SshParams = {
   host: string;
   port: number;
   user: string;

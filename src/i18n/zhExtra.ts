@@ -1261,6 +1261,11 @@ export const zhExtra: Record<string, string> = {
     "未识别此发行版（{id}），请手动安装。",
   "Open an SSH tab to view the host's tool stack and install or update packages with live progress.":
     "打开 SSH 终端后可查看远端工具栈并实时安装/更新软件。",
+  "Another install is in progress on this host.": "当前主机已有安装任务在进行。",
+  "Docker is not installed on this host.": "此主机未安装 Docker。",
+  "Redis (server) is not installed on this host.": "此主机未安装 Redis（服务端）。",
+  "MySQL / MariaDB client is not installed on this host.": "此主机未安装 MySQL / MariaDB 客户端。",
+  "PostgreSQL client is not installed on this host.": "此主机未安装 PostgreSQL 客户端。",
 
   // Right-side Software panel — uninstall (v1.1)
   "Uninstall": "卸载",

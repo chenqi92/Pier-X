@@ -1,4 +1,5 @@
-import { Container, Play, Plus, Trash2, X } from "lucide-react";
+import { Play, Plus, Trash2, X } from "lucide-react";
+import DockerIcon from "../components/icons/DockerIcon";
 import { useEffect, useState } from "react";
 import { createPortal } from "react-dom";
 import IconButton from "../components/IconButton";
@@ -182,7 +183,7 @@ export default function RunContainerDialog({ open, busy, defaultImage, onClose, 
           <div style={{ flex: 1 }} />
           <button type="button" className="gb-btn" onClick={onClose}>{t("Cancel")}</button>
           <button type="button" className="gb-btn primary" disabled={!canRun} onClick={submit}>
-            <Container size={11} /> {t("Create & run")}
+            <DockerIcon size={11} /> {t("Create & run")}
           </button>
         </div>
       </div>

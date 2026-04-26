@@ -1,9 +1,10 @@
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 
 import DbAddCredentialDialog from "../components/DbAddCredentialDialog";
 import DbPasswordUpdateDialog from "../components/DbPasswordUpdateDialog";
 import DbTunnelChip from "../components/DbTunnelChip";
 import DismissibleNote from "../components/DismissibleNote";
+import InlineInstallCta from "../components/InlineInstallCta";
 import DbConnectSplash from "../components/db/DbConnectSplash";
 import DbConnectedShell, { type DbConnectedTab } from "../components/db/DbConnectedShell";
 import type { DbHeaderInstance } from "../components/db/DbHeaderPicker";
@@ -39,6 +40,8 @@ import type {
   TabState,
 } from "../lib/types";
 import { useTabStore } from "../stores/useTabStore";
+import { softwareKeyForTab, useSoftwareStore } from "../stores/useSoftwareStore";
+import { useSoftwareSnapshot } from "../lib/softwareInstall";
 import PanelSkeleton, { useDeferredMount } from "../components/PanelSkeleton";
 
 type Props = { tab: TabState };
@@ -178,6 +181,35 @@ function PostgresPanelBody({ tab }: Props) {
     passwordInputRef,
     t,
   });
+
+  const swKey = softwareKeyForTab(tab);
+  const swSshParams = useMemo(
+    () =>
+      flow.sshTarget
+        ? {
+            host: flow.sshTarget.host,
+            port: flow.sshTarget.port,
+            user: flow.sshTarget.user,
+            authMode: flow.sshTarget.authMode,
+            password: flow.sshTarget.password,
+            keyPath: flow.sshTarget.keyPath,
+            savedConnectionIndex: flow.sshTarget.savedConnectionIndex,
+          }
+        : null,
+    [
+      flow.sshTarget?.host,
+      flow.sshTarget?.port,
+      flow.sshTarget?.user,
+      flow.sshTarget?.authMode,
+      flow.sshTarget?.password,
+      flow.sshTarget?.keyPath,
+      flow.sshTarget?.savedConnectionIndex,
+    ],
+  );
+  useSoftwareSnapshot(swKey, swSshParams);
+  const postgresInstalled = useSoftwareStore((s) =>
+    swKey ? s.get(swKey).statuses["postgres"]?.installed : undefined,
+  );
 
   async function runQuery() {
     setQueryBusy(true);
@@ -610,6 +642,18 @@ function PostgresPanelBody({ tab }: Props) {
             flow.hasSsh
               ? undefined
               : t("No SSH session on this tab — add a connection manually to connect directly.")
+          }
+          extraBody={
+            flow.hasSsh && postgresInstalled === false ? (
+              <InlineInstallCta
+                packageId="postgres"
+                sshParams={swSshParams}
+                swKey={swKey}
+                enableService={false}
+                hint={t("PostgreSQL client is not installed on this host.")}
+                onInstalled={() => void flow.refreshDetection()}
+              />
+            ) : undefined
           }
         />
         {dialogs}

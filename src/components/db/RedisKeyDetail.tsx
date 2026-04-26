@@ -1,4 +1,5 @@
-import { Check, Edit, Plus, Save, Trash2, X, Zap } from "lucide-react";
+import { Check, Edit, Plus, Save, Trash2, X } from "lucide-react";
+import RedisIcon from "../icons/RedisIcon";
 import { useEffect, useRef, useState } from "react";
 
 import { useI18n } from "../../i18n/useI18n";
@@ -63,7 +64,7 @@ export default function RedisKeyDetail({
   if (!details) {
     return (
       <div className="rds-detail-empty">
-        <Zap size={22} />
+        <RedisIcon size={22} />
         <div>{t("Select a key to view its value.")}</div>
       </div>
     );

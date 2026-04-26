@@ -1,4 +1,5 @@
-import { Container, Plus, RefreshCw, Server, Star, Trash2 } from "lucide-react";
+import { Plus, RefreshCw, Server, Star, Trash2 } from "lucide-react";
+import DockerIcon from "./icons/DockerIcon";
 import { useEffect, useMemo, useState } from "react";
 import { useI18n } from "../i18n/useI18n";
 import { localizeError } from "../i18n/localizeMessage";
@@ -249,7 +250,7 @@ export default function DbInstancePicker({
                 </span>
               ) : (
                 detectedForKind.map((det) => {
-                  const SourceIcon = det.source === "docker" ? Container : Server;
+                  const SourceIcon = det.source === "docker" ? DockerIcon : Server;
                   return (
                     <button
                       key={det.signature}

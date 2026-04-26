@@ -26,12 +26,10 @@ import type { DragEvent as ReactDragEvent, MouseEvent as ReactMouseEvent } from 
 import type { ComponentType } from "react";
 import * as cmd from "../lib/commands";
 import { SFTP_PROGRESS_EVENT, type SftpProgressEvent } from "../lib/commands";
-import { RIGHT_TOOL_META } from "../lib/rightToolMeta";
 import type { SftpBrowseState, SftpEntryView, TabState } from "../lib/types";
 import { effectiveSshTarget, isSshTargetReady } from "../lib/types";
 import { useI18n } from "../i18n/useI18n";
 import { localizeError } from "../i18n/localizeMessage";
-import PanelHeader from "../components/PanelHeader";
 import StatusDot from "../components/StatusDot";
 import VirtualList from "../components/VirtualList";
 import ContextMenu, { type ContextMenuItem } from "../components/ContextMenu";
@@ -1223,7 +1221,6 @@ function SftpPanelBody({ tab }: Props) {
 
   return (
     <>
-      <PanelHeader icon={RIGHT_TOOL_META.sftp.icon} title={t("SFTP")} meta={currentRemotePath} />
       <div className="ftp" ref={panelRef}>
         <div className="ftp-host-bar">
           <span className="ftp-host-ic"><Server size={12} /></span>

@@ -9,7 +9,6 @@ import { useI18n } from "../i18n/useI18n";
 import { isMissingKeychainError, localizeError } from "../i18n/localizeMessage";
 import DbConnRow from "../components/DbConnRow";
 import DismissibleNote from "../components/DismissibleNote";
-import PanelHeader from "../components/PanelHeader";
 import StatusDot from "../components/StatusDot";
 import { useUiActionsStore } from "../stores/useUiActionsStore";
 import { logEvent } from "../lib/logger";
@@ -507,11 +506,6 @@ function ServerMonitorPanelBody({ tab, onEditConnection, isActive = true }: Prop
 
   return (
     <>
-      <PanelHeader
-        icon={MONITOR_ICON}
-        title={t("Server Monitor")}
-        meta={headerMeta}
-      />
       <DbConnRow
         icon={MONITOR_ICON}
         tint="var(--pos-dim)"

@@ -18,6 +18,7 @@ import type {
   SoftwareUninstallReport,
   UninstallOptions,
 } from "../lib/commands";
+import { describeInstallOutcome } from "../lib/softwareInstall";
 import { effectiveSshTarget, type TabState } from "../lib/types";
 import { useI18n } from "../i18n/useI18n";
 import { localizeError } from "../i18n/localizeMessage";
@@ -296,7 +297,7 @@ function SoftwarePanelBody({ tab }: Props) {
                   action === "update"
                     ? await cmd.softwareUpdateRemote(params)
                     : await cmd.softwareInstallRemote(params);
-                const localized = describeOutcome(report, t);
+                const localized = describeInstallOutcome(report, t);
                 const nextStatus: SoftwarePackageStatus = {
                   id: descriptor.id,
                   installed: report.status === "installed",
@@ -327,33 +328,6 @@ function SoftwarePanelBody({ tab }: Props) {
       />
     </div>
   );
-}
-
-function describeOutcome(
-  report: SoftwareInstallReport,
-  t: ReturnType<typeof useI18n>["t"],
-): string {
-  switch (report.status) {
-    case "installed":
-      return t("Done · {pm} {ver}", {
-        pm: report.packageManager || "—",
-        ver: report.installedVersion ?? "?",
-      });
-    case "unsupported-distro":
-      return t(
-        "This distro ({id}) is not in the auto-install list — please install manually.",
-        { id: report.distroId || "?" },
-      );
-    case "sudo-requires-password":
-      return t(
-        "sudo requires a password — connect as root or configure passwordless sudo.",
-      );
-    case "package-manager-failed":
-      return t("Install failed via {pm} (exit {code})", {
-        pm: report.packageManager || "—",
-        code: report.exitCode,
-      });
-  }
 }
 
 function SoftwareRow({

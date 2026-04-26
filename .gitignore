@@ -60,3 +60,5 @@ $RECYCLE.BIN/
 # (its content has been extracted to extracted/ and synthesized into SKILL.md)
 .claude/skills/pier-design-system/reference/
 pier-x-copy
+# Claude Code worktrees (per-task isolated checkouts)
+.claude/worktrees/

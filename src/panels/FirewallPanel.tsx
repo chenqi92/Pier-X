@@ -29,7 +29,6 @@ import { useI18n } from "../i18n/useI18n";
 import { localizeError } from "../i18n/localizeMessage";
 import DbConnRow from "../components/DbConnRow";
 import DismissibleNote from "../components/DismissibleNote";
-import PanelHeader from "../components/PanelHeader";
 import StatusDot from "../components/StatusDot";
 import PanelSkeleton, { useDeferredMount } from "../components/PanelSkeleton";
 
@@ -612,19 +611,19 @@ function FirewallPanelBody({ tab, isActive = true }: Props) {
     );
   }, [mappings, search]);
 
-  const headerMeta = sshTarget ? `${sshTarget.user}@${sshTarget.host}:${sshTarget.port}` : "";
-  const hostLabel = headerMeta || t("No connection");
+  const hostLabel = sshTarget
+    ? `${sshTarget.user}@${sshTarget.host}:${sshTarget.port}`
+    : t("No connection");
   const hostSub = snap
     ? `${backendLabel(backend)}${backendActive ? "" : ` · ${t("inactive")}`} · ${snap.user || "?"}${isRoot ? " (root)" : ""}`
     : t("not yet probed");
 
   return (
     <>
-      <PanelHeader icon={Shield} title={t("Firewall")} meta={headerMeta} />
       <div className="dk fw">
         <DbConnRow
           icon={Shield}
-          tint="var(--svc-firewall)"
+          tint="color-mix(in srgb, var(--svc-firewall) 18%, transparent)"
           iconTint="var(--svc-firewall)"
           name={hostLabel}
           sub={hostSub}

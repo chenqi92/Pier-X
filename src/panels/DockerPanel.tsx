@@ -28,12 +28,15 @@ import { useI18n } from "../i18n/useI18n";
 import { localizeError, localizeRuntimeMessage } from "../i18n/localizeMessage";
 import DbConnRow from "../components/DbConnRow";
 import DismissibleNote from "../components/DismissibleNote";
-import PanelHeader from "../components/PanelHeader";
+import InlineInstallCta from "../components/InlineInstallCta";
+import DockerIcon from "../components/icons/DockerIcon";
 import StatusDot from "../components/StatusDot";
 import ContainerLogsDialog from "../shell/ContainerLogsDialog";
 import RegistryProxyDialog from "../shell/RegistryProxyDialog";
 import RunContainerDialog from "../shell/RunContainerDialog";
 import { dockerKeyForTab, useDockerStore, type DockerSection } from "../stores/useDockerStore";
+import { softwareKeyForTab, useSoftwareStore } from "../stores/useSoftwareStore";
+import { useSoftwareSnapshot } from "../lib/softwareInstall";
 import { useTabStore } from "../stores/useTabStore";
 import PanelSkeleton, { useDeferredMount } from "../components/PanelSkeleton";
 
@@ -196,6 +199,28 @@ function DockerPanelBody({ tab }: Props) {
     keyPath: sshTarget?.keyPath ?? "",
     savedConnectionIndex: sshTarget?.savedConnectionIndex ?? null,
   };
+
+  const swKey = softwareKeyForTab(tab);
+  const swSshParams = useMemo(
+    () => (hasSsh && canProbe ? sshArgs : null),
+    // sshArgs is a fresh object every render — depend on the underlying
+    // SSH-target identity instead.
+    [
+      hasSsh,
+      canProbe,
+      sshTarget?.host,
+      sshTarget?.port,
+      sshTarget?.user,
+      sshTarget?.authMode,
+      sshTarget?.password,
+      sshTarget?.keyPath,
+      sshTarget?.savedConnectionIndex,
+    ],
+  );
+  useSoftwareSnapshot(swKey, swSshParams);
+  const dockerInstalled = useSoftwareStore((s) =>
+    swKey ? s.get(swKey).statuses["docker"]?.installed : undefined,
+  );
 
   const sshParams = {
     host: sshArgs.host,
@@ -854,9 +879,6 @@ function DockerPanelBody({ tab }: Props) {
   );
 
   const hostLabel = hasSsh ? sshArgs.host : isLocal ? t("local") : "—";
-  const headerMeta = state
-    ? t("{host} · {count} containers", { host: hostLabel, count: state.containers.length })
-    : hostLabel;
   const hostSub = hasSsh
     ? `${sshArgs.user}@${sshArgs.host}:${sshArgs.port} · ${t("remote via SSH")}`
     : isLocal
@@ -916,10 +938,9 @@ function DockerPanelBody({ tab }: Props) {
 
   return (
     <>
-      <PanelHeader icon={ContainerIcon} title={t("Docker")} meta={headerMeta} />
       <div className="dk">
         <DbConnRow
-          icon={ContainerIcon}
+          icon={DockerIcon}
           tint="var(--pos-dim)"
           iconTint="var(--pos)"
           name={hostLabel}
@@ -989,6 +1010,18 @@ function DockerPanelBody({ tab }: Props) {
           <DismissibleNote tone="error" onDismiss={() => setError("")}>
             {error}
           </DismissibleNote>
+        )}
+        {hasSsh && dockerInstalled === false && (
+          <div style={{ padding: "var(--sp-3)" }}>
+            <InlineInstallCta
+              packageId="docker"
+              sshParams={swSshParams}
+              swKey={swKey}
+              enableService={true}
+              hint={t("Docker is not installed on this host.")}
+              onInstalled={() => void refresh(true)}
+            />
+          </div>
         )}
 
         {activeTab === "containers" && (

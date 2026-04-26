@@ -5,6 +5,7 @@ import DbAddCredentialDialog from "../components/DbAddCredentialDialog";
 import DbPasswordUpdateDialog from "../components/DbPasswordUpdateDialog";
 import DbTunnelChip from "../components/DbTunnelChip";
 import DismissibleNote from "../components/DismissibleNote";
+import InlineInstallCta from "../components/InlineInstallCta";
 import DbConnectSplash from "../components/db/DbConnectSplash";
 import DbHeaderPicker, { type DbHeaderInstance } from "../components/db/DbHeaderPicker";
 import RedisKeyDetail, { type RedisEdit } from "../components/db/RedisKeyDetail";
@@ -25,6 +26,8 @@ import type {
 import { effectiveSshTarget } from "../lib/types";
 import { useConnectionStore } from "../stores/useConnectionStore";
 import { useDetectedServicesStore } from "../stores/useDetectedServicesStore";
+import { softwareKeyForTab, useSoftwareStore } from "../stores/useSoftwareStore";
+import { useSoftwareSnapshot } from "../lib/softwareInstall";
 import { useTabStore } from "../stores/useTabStore";
 import PanelSkeleton, { useDeferredMount } from "../components/PanelSkeleton";
 
@@ -91,6 +94,34 @@ function RedisPanelBody({ tab }: Props) {
   const hasSsh = effectiveSshTarget(tab) !== null;
   const sshTarget = effectiveSshTarget(tab);
   const savedIndex = sshTarget?.savedConnectionIndex ?? null;
+  const swKey = softwareKeyForTab(tab);
+  const swSshParams = useMemo(
+    () =>
+      sshTarget
+        ? {
+            host: sshTarget.host,
+            port: sshTarget.port,
+            user: sshTarget.user,
+            authMode: sshTarget.authMode,
+            password: sshTarget.password,
+            keyPath: sshTarget.keyPath,
+            savedConnectionIndex: sshTarget.savedConnectionIndex,
+          }
+        : null,
+    [
+      sshTarget?.host,
+      sshTarget?.port,
+      sshTarget?.user,
+      sshTarget?.authMode,
+      sshTarget?.password,
+      sshTarget?.keyPath,
+      sshTarget?.savedConnectionIndex,
+    ],
+  );
+  useSoftwareSnapshot(swKey, swSshParams);
+  const redisInstalled = useSoftwareStore((s) =>
+    swKey ? s.get(swKey).statuses["redis"]?.installed : undefined,
+  );
   const p = Number.parseInt(port, 10);
   const d = Number.parseInt(db, 10);
   const canBrowse = host.trim() && Number.isFinite(p) && p > 0 && Number.isFinite(d);
@@ -811,6 +842,18 @@ function RedisPanelBody({ tab }: Props) {
             hasSsh
               ? undefined
               : t("No SSH session on this tab — add a connection manually to connect directly.")
+          }
+          extraBody={
+            hasSsh && redisInstalled === false ? (
+              <InlineInstallCta
+                packageId="redis"
+                sshParams={swSshParams}
+                swKey={swKey}
+                enableService={false}
+                hint={t("Redis (server) is not installed on this host.")}
+                onInstalled={() => void refreshDetection()}
+              />
+            ) : undefined
           }
         />
         {dialogs}

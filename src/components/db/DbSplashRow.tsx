@@ -1,8 +1,9 @@
-import { Container, Key, Link2, Loader2, Play, Server } from "lucide-react";
+import { Key, Link2, Loader2, Play, Server } from "lucide-react";
 import type { ReactNode } from "react";
 
 import DbEnvTag from "./DbEnvTag";
 import type { DbEnv } from "./dbTheme";
+import DockerIcon from "../icons/DockerIcon";
 
 /** One row of the splash's detected / saved list. */
 export type DbSplashRowData = {
@@ -36,7 +37,7 @@ function ViaIcon({ kind }: { kind: DbSplashRowData["via"]["kind"] }) {
     case "remote":
       return <Server size={9} />;
     case "local":
-      return <Container size={9} />;
+      return <DockerIcon size={9} />;
     default:
       return <Server size={9} />;
   }

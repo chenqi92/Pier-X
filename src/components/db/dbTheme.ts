@@ -1,6 +1,9 @@
-import { Database, HardDrive, Zap } from "lucide-react";
 import type { ComponentType, SVGProps } from "react";
 
+import MySqlIcon from "../icons/MySqlIcon";
+import PostgresIcon from "../icons/PostgresIcon";
+import RedisIcon from "../icons/RedisIcon";
+import SqliteIcon from "../icons/SqliteIcon";
 import type { DbKind } from "../../lib/types";
 
 type LucideIcon = ComponentType<SVGProps<SVGSVGElement> & { size?: number | string }>;
@@ -28,28 +31,28 @@ export const DB_THEMES: Record<DbKind, DbTheme> = {
     tintVar: "var(--svc-mysql)",
     chipBgVar: "color-mix(in srgb, var(--svc-mysql) 18%, transparent)",
     daemon: "mysqld",
-    icon: Database,
+    icon: MySqlIcon,
   },
   postgres: {
     kind: "postgres",
     tintVar: "var(--svc-postgres)",
     chipBgVar: "color-mix(in srgb, var(--svc-postgres) 18%, transparent)",
     daemon: "postgres",
-    icon: Database,
+    icon: PostgresIcon,
   },
   redis: {
     kind: "redis",
     tintVar: "var(--svc-redis)",
     chipBgVar: "color-mix(in srgb, var(--svc-redis) 18%, transparent)",
     daemon: "redis-server",
-    icon: Zap,
+    icon: RedisIcon,
   },
   sqlite: {
     kind: "sqlite",
     tintVar: "var(--svc-sqlite)",
     chipBgVar: "color-mix(in srgb, var(--svc-sqlite) 18%, transparent)",
     daemon: "libsqlite3",
-    icon: HardDrive,
+    icon: SqliteIcon,
   },
 };
 

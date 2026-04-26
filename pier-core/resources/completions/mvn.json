@@ -22,31 +22,36 @@
     {
       "flag": "-B,--batch-mode",
       "i18n": {
-        "en": "Run in non-interactive (batch)"
+        "en": "Run in non-interactive (batch)",
+        "zh-CN": "批处理模式（适合脚本/CI）"
       }
     },
     {
       "flag": "-b,--builder",
       "i18n": {
-        "en": "The id of the build strategy to"
+        "en": "The id of the build strategy to",
+        "zh-CN": "指定构建策略实现"
       }
     },
     {
       "flag": "-C,--strict-checksums",
       "i18n": {
-        "en": "Fail the build if checksums don't"
+        "en": "Fail the build if checksums don't",
+        "zh-CN": "校验和不匹配则失败"
       }
     },
     {
       "flag": "-c,--lax-checksums",
       "i18n": {
-        "en": "Warn if checksums don't match"
+        "en": "Warn if checksums don't match",
+        "zh-CN": "校验和不匹配只警告"
       }
     },
     {
       "flag": "--color",
       "i18n": {
-        "en": "Defines the color mode of the"
+        "en": "Defines the color mode of the",
+        "zh-CN": "控制输出着色（auto/always/never）"
       }
     },
     {
@@ -58,13 +63,15 @@
     {
       "flag": "-D,--define",
       "i18n": {
-        "en": "Define a user property"
+        "en": "Define a user property",
+        "zh-CN": "定义 system property（KEY=VALUE）"
       }
     },
     {
       "flag": "-e,--errors",
       "i18n": {
-        "en": "Produce execution error messages"
+        "en": "Produce execution error messages",
+        "zh-CN": "出错时打印完整堆栈"
       }
     },
     {
@@ -82,7 +89,8 @@
     {
       "flag": "-f,--file",
       "i18n": {
-        "en": "Force the use of an alternate POM"
+        "en": "Force the use of an alternate POM",
+        "zh-CN": "强制使用指定 POM 文件"
       }
     },
     {
@@ -118,7 +126,8 @@
     {
       "flag": "-h,--help",
       "i18n": {
-        "en": "Display help information"
+        "en": "Display help information",
+        "zh-CN": "显示帮助"
       }
     },
     {
@@ -130,7 +139,8 @@
     {
       "flag": "-l,--log-file",
       "i18n": {
-        "en": "Log file where all build output"
+        "en": "Log file where all build output",
+        "zh-CN": "把输出写入 LOG_FILE"
       }
     },
     {
@@ -142,7 +152,8 @@
     {
       "flag": "-N,--non-recursive",
       "i18n": {
-        "en": "Do not recurse into sub-projects"
+        "en": "Do not recurse into sub-projects",
+        "zh-CN": "只构建当前项目，不下钻子模块"
       }
     },
     {
@@ -172,13 +183,15 @@
     {
       "flag": "-o,--offline",
       "i18n": {
-        "en": "Work offline"
+        "en": "Work offline",
+        "zh-CN": "离线模式（不连远程仓库）"
       }
     },
     {
       "flag": "-P,--activate-profiles",
       "i18n": {
-        "en": "Comma-delimited list of profiles"
+        "en": "Comma-delimited list of profiles",
+        "zh-CN": "激活/禁用一组 profile"
       }
     },
     {
@@ -190,7 +203,8 @@
     {
       "flag": "-q,--quiet",
       "i18n": {
-        "en": "Quiet output - only show errors"
+        "en": "Quiet output - only show errors",
+        "zh-CN": "静默 — 仅显示错误"
       }
     },
     {
@@ -208,25 +222,29 @@
     {
       "flag": "-s,--settings",
       "i18n": {
-        "en": "Alternate path for the user"
+        "en": "Alternate path for the user",
+        "zh-CN": "指定 user settings.xml"
       }
     },
     {
       "flag": "-t,--toolchains",
       "i18n": {
-        "en": "Alternate path for the user"
+        "en": "Alternate path for the user",
+        "zh-CN": "指定 toolchains.xml"
       }
     },
     {
       "flag": "-T,--threads",
       "i18n": {
-        "en": "Thread count, for instance 4"
+        "en": "Thread count, for instance 4",
+        "zh-CN": "并发线程数（如 4 / 1C）"
       }
     },
     {
       "flag": "-U,--update-snapshots",
       "i18n": {
-        "en": "Forces a check for missing"
+        "en": "Forces a check for missing",
+        "zh-CN": "强制更新 snapshot"
       }
     },
     {
@@ -238,19 +256,22 @@
     {
       "flag": "-v,--version",
       "i18n": {
-        "en": "Display version information"
+        "en": "Display version information",
+        "zh-CN": "打印版本"
       }
     },
     {
       "flag": "-V,--show-version",
       "i18n": {
-        "en": "Display version information"
+        "en": "Display version information",
+        "zh-CN": "打印版本并继续构建"
       }
     },
     {
       "flag": "-X,--debug",
       "i18n": {
-        "en": "Produce execution debug output"
+        "en": "Produce execution debug output",
+        "zh-CN": "开启调试输出"
       }
     }
   ]

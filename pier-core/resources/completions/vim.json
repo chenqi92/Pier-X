@@ -16,7 +16,8 @@
     {
       "flag": "-A",
       "i18n": {
-        "en": "right-to-left oriented files and Arabic keyboard mapping, this option starts Vim in Arabic mode, i.e. 'arabic' is set.  Otherwise an error message is given and Vim aborts."
+        "en": "right-to-left oriented files and Arabic keyboard mapping, this option starts Vim in Arabic mode, i.e. 'arabic' is set.  Otherwise an error message is given and Vim aborts.",
+        "zh-CN": "Arabic 模式"
       }
     },
     {
@@ -28,37 +29,43 @@
     {
       "flag": "-C",
       "i18n": {
-        "en": "Vim behave mostly like Vi, even though a .vimrc file exists."
+        "en": "Vim behave mostly like Vi, even though a .vimrc file exists.",
+        "zh-CN": "兼容模式（更接近 vi）"
       }
     },
     {
       "flag": "-d",
       "i18n": {
-        "en": "name arguments.  Vim will open all the files and show differences between them.  Works like vimdiff(1)."
+        "en": "name arguments.  Vim will open all the files and show differences between them.  Works like vimdiff(1).",
+        "zh-CN": "diff 模式（同 vimdiff）"
       }
     },
     {
       "flag": "-d",
       "i18n": {
-        "en": "Open {device} for use as a terminal.  Only on the Amiga. Example: \"-d con:20/30/600/150\"."
+        "en": "Open {device} for use as a terminal.  Only on the Amiga. Example: \"-d con:20/30/600/150\".",
+        "zh-CN": "diff 模式（同 vimdiff）"
       }
     },
     {
       "flag": "-D",
       "i18n": {
-        "en": "command from a script."
+        "en": "command from a script.",
+        "zh-CN": "调试模式"
       }
     },
     {
       "flag": "-e",
       "i18n": {
-        "en": "\"ex\"."
+        "en": "\"ex\".",
+        "zh-CN": "Ex 模式"
       }
     },
     {
       "flag": "-E",
       "i18n": {
-        "en": "called \"exim\"."
+        "en": "called \"exim\".",
+        "zh-CN": "改进版 Ex 模式"
       }
     },
     {
@@ -70,19 +77,22 @@
     {
       "flag": "-F",
       "i18n": {
-        "en": "right-to-left oriented files and Farsi keyboard mapping, this option starts Vim in Farsi mode, i.e. 'fkmap' and 'rightleft' are set.  Otherwise an error message is given and Vim aborts. Note: Farsi support has been removed in patch 8.1.0932."
+        "en": "right-to-left oriented files and Farsi keyboard mapping, this option starts Vim in Farsi mode, i.e. 'fkmap' and 'rightleft' are set.  Otherwise an error message is given and Vim aborts. Note: Farsi support has been removed in patch 8.1.0932.",
+        "zh-CN": "Farsi 模式（已弃用）"
       }
     },
     {
       "flag": "-g",
       "i18n": {
-        "en": "enables the GUI.  If no GUI support was compiled in, an error message is given and Vim aborts."
+        "en": "enables the GUI.  If no GUI support was compiled in, an error message is given and Vim aborts.",
+        "zh-CN": "GUI 模式（同 gvim）"
       }
     },
     {
       "flag": "-H",
       "i18n": {
-        "en": "right-to-left oriented files and Hebrew keyboard mapping, this option starts Vim in Hebrew mode, i.e. 'hkmap' and 'rightleft' are set.  Otherwise an error message is given and Vim aborts."
+        "en": "right-to-left oriented files and Hebrew keyboard mapping, this option starts Vim in Hebrew mode, i.e. 'hkmap' and 'rightleft' are set.  Otherwise an error message is given and Vim aborts.",
+        "zh-CN": "Hebrew 模式"
       }
     },
     {
@@ -100,31 +110,36 @@
     {
       "flag": "-L",
       "i18n": {
-        "en": ""
+        "en": "",
+        "zh-CN": "等同 -r 列表"
       }
     },
     {
       "flag": "-m",
       "i18n": {
-        "en": "You can still modify the buffer, but writing a file is not possible."
+        "en": "You can still modify the buffer, but writing a file is not possible.",
+        "zh-CN": "禁止修改保存（缓冲区可改但禁写）"
       }
     },
     {
       "flag": "-M",
       "i18n": {
-        "en": "options will be unset, so that changes are not allowed and files can not be written.  Note that these options can be set to enable making modifications."
+        "en": "options will be unset, so that changes are not allowed and files can not be written.  Note that these options can be set to enable making modifications.",
+        "zh-CN": "禁止任何修改"
       }
     },
     {
       "flag": "-n",
       "i18n": {
-        "en": "impossible.  Handy if you want to edit a file on a very slow medium (e.g. floppy).  Can also be done with \":set uc=0\".  Can be undone with \":set uc=200\"."
+        "en": "impossible.  Handy if you want to edit a file on a very slow medium (e.g. floppy).  Can also be done with \":set uc=0\".  Can be undone with \":set uc=200\".",
+        "zh-CN": "禁用 swap 文件"
       }
     },
     {
       "flag": "-N",
       "i18n": {
-        "en": "will make Vim behave a bit better, but less Vi compatible, even though a .vimrc file does not exist."
+        "en": "will make Vim behave a bit better, but less Vi compatible, even though a .vimrc file does not exist.",
+        "zh-CN": "非兼容模式（vim 默认）"
       }
     },
     {
@@ -136,19 +151,22 @@
     {
       "flag": "-o[N]",
       "i18n": {
-        "en": "for each file."
+        "en": "for each file.",
+        "zh-CN": "在 N 个水平窗口中打开"
       }
     },
     {
       "flag": "-O[N]",
       "i18n": {
-        "en": "window for each file."
+        "en": "window for each file.",
+        "zh-CN": "在 N 个垂直窗口中打开"
       }
     },
     {
       "flag": "-p[N]",
       "i18n": {
-        "en": "each file."
+        "en": "each file.",
+        "zh-CN": "在 N 个 tab 页中打开多个文件"
       }
     },
     {
@@ -160,31 +178,36 @@
     {
       "flag": "-r",
       "i18n": {
-        "en": "recovery."
+        "en": "recovery.",
+        "zh-CN": "列出可恢复的 swap 文件"
       }
     },
     {
       "flag": "-r",
       "i18n": {
-        "en": "editing session.  The swap file is a file with the same filename as the text file with \".swp\" appended.  See \":help recovery\"."
+        "en": "editing session.  The swap file is a file with the same filename as the text file with \".swp\" appended.  See \":help recovery\".",
+        "zh-CN": "列出可恢复的 swap 文件"
       }
     },
     {
       "flag": "-R",
       "i18n": {
-        "en": "can still edit the buffer, but will be prevented from accidentally overwriting a file.  If you do want to overwrite a file, add an exclamation mark to the Ex command, as in \":w!\".  The -R option also implies the -n option (see above).  The 'readonly' option can be reset with \":set noro\".  See \":help 'readonly'\"."
+        "en": "can still edit the buffer, but will be prevented from accidentally overwriting a file.  If you do want to overwrite a file, add an exclamation mark to the Ex command, as in \":w!\".  The -R option also implies the -n option (see above).  The 'readonly' option can be reset with \":set noro\".  See \":help 'readonly'\".",
+        "zh-CN": "只读模式"
       }
     },
     {
       "flag": "-s",
       "i18n": {
-        "en": "option was given before the \"-s\" option."
+        "en": "option was given before the \"-s\" option.",
+        "zh-CN": "静默 / 批处理 Ex 模式"
       }
     },
     {
       "flag": "-s",
       "i18n": {
-        "en": "The script file {scriptin} is read.  The characters in the file are interpreted as if you had typed them.  The same can be done with the command \":source! {scriptin}\".  If the end of the file is reached before the editor exits, further characters are read from the keyboard."
+        "en": "The script file {scriptin} is read.  The characters in the file are interpreted as if you had typed them.  The same can be done with the command \":source! {scriptin}\".  If the end of the file is reached before the editor exits, further characters are read from the keyboard.",
+        "zh-CN": "静默 / 批处理 Ex 模式"
       }
     },
     {
@@ -214,13 +237,15 @@
     {
       "flag": "-v",
       "i18n": {
-        "en": "\"vi\".  This only has effect when the executable is called \"ex\"."
+        "en": "\"vi\".  This only has effect when the executable is called \"ex\".",
+        "zh-CN": "Vi 模式（同 vi）"
       }
     },
     {
       "flag": "-V[N]",
       "i18n": {
-        "en": "for reading and writing a viminfo file.  The optional number N is the value for 'verbose'.  Default is 10."
+        "en": "for reading and writing a viminfo file.  The optional number N is the value for 'verbose'.  Default is 10.",
+        "zh-CN": "verbose 等级 N（默认 10）"
       }
     },
     {
@@ -250,7 +275,8 @@
     {
       "flag": "-x",
       "i18n": {
-        "en": "encryption when writing files.  Will prompt for a crypt key."
+        "en": "encryption when writing files.  Will prompt for a crypt key.",
+        "zh-CN": "用加密文件打开"
       }
     },
     {
@@ -262,31 +288,36 @@
     {
       "flag": "-Y",
       "i18n": {
-        "en": ""
+        "en": "",
+        "zh-CN": "禁用 mod 行（已弃用）"
       }
     },
     {
       "flag": "-y",
       "i18n": {
-        "en": "\"evim\" or \"eview\".  Makes Vim behave like a click-and-type editor."
+        "en": "\"evim\" or \"eview\".  Makes Vim behave like a click-and-type editor.",
+        "zh-CN": "easy 模式（即开即用）"
       }
     },
     {
       "flag": "-Z",
       "i18n": {
-        "en": "\"r\"."
+        "en": "\"r\".",
+        "zh-CN": "受限模式"
       }
     },
     {
       "flag": "--",
       "i18n": {
-        "en": "be handled as a file name.  This can be used to edit a filename that starts with a '-'."
+        "en": "be handled as a file name.  This can be used to edit a filename that starts with a '-'.",
+        "zh-CN": "选项结束标记"
       }
     },
     {
       "flag": "--clean",
       "i18n": {
-        "en": "etc.).  Useful to see if a problem reproduces with a clean Vim setup."
+        "en": "etc.).  Useful to see if a problem reproduces with a clean Vim setup.",
+        "zh-CN": "干净启动（不读用户配置）"
       }
     },
     {
@@ -298,7 +329,8 @@
     {
       "flag": "--echo-wid",
       "i18n": {
-        "en": ""
+        "en": "",
+        "zh-CN": "GUI vim 启动后打印窗口 ID"
       }
     },
     {
@@ -316,7 +348,8 @@
     {
       "flag": "--literal",
       "i18n": {
-        "en": "wildcards.  This has no effect on Unix where the shell expands wildcards."
+        "en": "wildcards.  This has no effect on Unix where the shell expands wildcards.",
+        "zh-CN": "把文件名当字面字符串（不展开 glob）"
       }
     },
     {
@@ -334,19 +367,22 @@
     {
       "flag": "--noplugin",
       "i18n": {
-        "en": ""
+        "en": "",
+        "zh-CN": "不加载任何 plugin"
       }
     },
     {
       "flag": "--not-a-term",
       "i18n": {
-        "en": "Tells Vim that the user knows that the input and/or output is not connected to a terminal.  This will avoid the warning and the two second delay that would happen."
+        "en": "Tells Vim that the user knows that the input and/or output is not connected to a terminal.  This will avoid the warning and the two second delay that would happen.",
+        "zh-CN": "禁用 \"输入不来自终端\" 的警告"
       }
     },
     {
       "flag": "--remote",
       "i18n": {
-        "en": "the rest of the arguments.  If no server is found a warning is given and the files are edited in the current Vim."
+        "en": "the rest of the arguments.  If no server is found a warning is given and the files are edited in the current Vim.",
+        "zh-CN": "用现有 server 打开文件"
       }
     },
     {
@@ -364,25 +400,29 @@
     {
       "flag": "--remote-silent",
       "i18n": {
-        "en": "As --remote, but without the warning when no server is found."
+        "en": "As --remote, but without the warning when no server is found.",
+        "zh-CN": "等同 --remote 但失败时不报错"
       }
     },
     {
       "flag": "--remote-wait",
       "i18n": {
-        "en": "As --remote, but Vim does not exit until the files have been edited."
+        "en": "As --remote, but Vim does not exit until the files have been edited.",
+        "zh-CN": "等待远端 server 处理完再退出"
       }
     },
     {
       "flag": "--remote-wait-silent",
       "i18n": {
-        "en": "As --remote-wait, but without the warning when no server is found."
+        "en": "As --remote-wait, but without the warning when no server is found.",
+        "zh-CN": "wait + silent"
       }
     },
     {
       "flag": "--serverlist",
       "i18n": {
-        "en": "List the names of all Vim servers that can be found."
+        "en": "List the names of all Vim servers that can be found.",
+        "zh-CN": "列出可用的 vim server"
       }
     },
     {
@@ -412,13 +452,15 @@
     {
       "flag": "--ttyfail",
       "i18n": {
-        "en": "right away."
+        "en": "right away.",
+        "zh-CN": "stdin/stdout 非 tty 时退出"
       }
     },
     {
       "flag": "--version",
       "i18n": {
-        "en": ""
+        "en": "",
+        "zh-CN": "打印版本"
       }
     },
     {

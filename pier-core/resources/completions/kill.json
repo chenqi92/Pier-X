@@ -40,7 +40,8 @@
     {
       "flag": "-L, --table",
       "i18n": {
-        "en": "List signal names in a nice table."
+        "en": "List signal names in a nice table.",
+        "zh-CN": "以表格形式列出信号"
       }
     }
   ]

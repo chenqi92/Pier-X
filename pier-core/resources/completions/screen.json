@@ -10,13 +10,15 @@
     {
       "flag": "-a",
       "i18n": {
-        "en": "Force all capabilities into each window's termcap."
+        "en": "Force all capabilities into each window's termcap.",
+        "zh-CN": "强制把所有功能放进每个窗口的 termcap"
       }
     },
     {
       "flag": "-A -[r|R]",
       "i18n": {
-        "en": "Adapt all windows to the new display width & height."
+        "en": "Adapt all windows to the new display width & height.",
+        "zh-CN": "把所有窗口缩放到当前终端尺寸"
       }
     },
     {
@@ -46,7 +48,8 @@
     {
       "flag": "-D -RR",
       "i18n": {
-        "en": "Do whatever is needed to get a screen session."
+        "en": "Do whatever is needed to get a screen session.",
+        "zh-CN": "全力重连/创建会话"
       }
     },
     {
@@ -58,7 +61,8 @@
     {
       "flag": "-f",
       "i18n": {
-        "en": "Flow control on, -fn = off, -fa = auto."
+        "en": "Flow control on, -fn = off, -fa = auto.",
+        "zh-CN": "启用流控（默认）"
       }
     },
     {
@@ -70,31 +74,36 @@
     {
       "flag": "-i",
       "i18n": {
-        "en": "Interrupt output sooner when flow control is on."
+        "en": "Interrupt output sooner when flow control is on.",
+        "zh-CN": "C-s/C-q 立即生效"
       }
     },
     {
       "flag": "-list",
       "i18n": {
-        "en": "or -ls. Do nothing, just list our SockDir."
+        "en": "or -ls. Do nothing, just list our SockDir.",
+        "zh-CN": "等同 -ls"
       }
     },
     {
       "flag": "-L",
       "i18n": {
-        "en": "Turn on output logging."
+        "en": "Turn on output logging.",
+        "zh-CN": "开启自动日志"
       }
     },
     {
       "flag": "-m",
       "i18n": {
-        "en": "ignore $STY variable, do create a new screen session."
+        "en": "ignore $STY variable, do create a new screen session.",
+        "zh-CN": "忽略 $STY，强制建会话"
       }
     },
     {
       "flag": "-O",
       "i18n": {
-        "en": "Choose optimal output rather than exact vt100 emulation."
+        "en": "Choose optimal output rather than exact vt100 emulation.",
+        "zh-CN": "选择最优输出（不一定 VT100 兼容）"
       }
     },
     {
@@ -106,7 +115,8 @@
     {
       "flag": "-q",
       "i18n": {
-        "en": "Quiet startup. Exits with non-zero return code if unsuccessful."
+        "en": "Quiet startup. Exits with non-zero return code if unsuccessful.",
+        "zh-CN": "静默模式（无输出/不询问）"
       }
     },
     {
@@ -118,7 +128,8 @@
     {
       "flag": "-R",
       "i18n": {
-        "en": "Reattach if possible, otherwise start a new session."
+        "en": "Reattach if possible, otherwise start a new session.",
+        "zh-CN": "试图重连，没有则建新"
       }
     },
     {
@@ -148,13 +159,15 @@
     {
       "flag": "-U",
       "i18n": {
-        "en": "Tell screen to use UTF-8 encoding."
+        "en": "Tell screen to use UTF-8 encoding.",
+        "zh-CN": "UTF-8 模式"
       }
     },
     {
       "flag": "-v",
       "i18n": {
-        "en": "Print \"Screen version 4.00.03 (FAU) 23-Oct-06\"."
+        "en": "Print \"Screen version 4.00.03 (FAU) 23-Oct-06\".",
+        "zh-CN": "打印版本"
       }
     },
     {
@@ -166,13 +179,15 @@
     {
       "flag": "-x",
       "i18n": {
-        "en": "Attach to a not detached screen. (Multi display mode)."
+        "en": "Attach to a not detached screen. (Multi display mode).",
+        "zh-CN": "连入已 attach 的会话（多人共享）"
       }
     },
     {
       "flag": "-X",
       "i18n": {
-        "en": "Execute <cmd> as a screen command in the specified session."
+        "en": "Execute <cmd> as a screen command in the specified session.",
+        "zh-CN": "在指定会话内执行命令"
       }
     }
   ]

@@ -9,7 +9,8 @@
     {
       "name": "The",
       "i18n": {
-        "en": ""
+        "en": "",
+        "zh-CN": "（man 段落标题误识别 — 应忽略）"
       },
       "options": [],
       "subcommands": []
@@ -17,7 +18,8 @@
     {
       "name": "is",
       "i18n": {
-        "en": ""
+        "en": "",
+        "zh-CN": "（man 段落标题误识别 — 应忽略）"
       },
       "options": [],
       "subcommands": []

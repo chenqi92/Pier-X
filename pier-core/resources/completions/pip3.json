@@ -9,7 +9,8 @@
     {
       "name": "install",
       "i18n": {
-        "en": "Install packages."
+        "en": "Install packages.",
+        "zh-CN": "安装包（从 PyPI / 文件 / VCS）"
       },
       "options": [],
       "subcommands": []
@@ -17,7 +18,8 @@
     {
       "name": "lock",
       "i18n": {
-        "en": "Generate a lock file."
+        "en": "Generate a lock file.",
+        "zh-CN": "为 requirements 生成锁文件（实验）"
       },
       "options": [],
       "subcommands": []
@@ -25,7 +27,8 @@
     {
       "name": "download",
       "i18n": {
-        "en": "Download packages."
+        "en": "Download packages.",
+        "zh-CN": "下载包（不安装）"
       },
       "options": [],
       "subcommands": []
@@ -33,7 +36,8 @@
     {
       "name": "uninstall",
       "i18n": {
-        "en": "Uninstall packages."
+        "en": "Uninstall packages.",
+        "zh-CN": "卸载已安装的包"
       },
       "options": [],
       "subcommands": []
@@ -41,7 +45,8 @@
     {
       "name": "freeze",
       "i18n": {
-        "en": "Output installed packages in requirements format."
+        "en": "Output installed packages in requirements format.",
+        "zh-CN": "以 requirements 格式输出已安装包及版本"
       },
       "options": [],
       "subcommands": []
@@ -49,7 +54,8 @@
     {
       "name": "inspect",
       "i18n": {
-        "en": "Inspect the python environment."
+        "en": "Inspect the python environment.",
+        "zh-CN": "查看安装包信息"
       },
       "options": [],
       "subcommands": []
@@ -57,7 +63,8 @@
     {
       "name": "list",
       "i18n": {
-        "en": "List installed packages."
+        "en": "List installed packages.",
+        "zh-CN": "列出已安装的包"
       },
       "options": [],
       "subcommands": []
@@ -65,7 +72,8 @@
     {
       "name": "show",
       "i18n": {
-        "en": "Show information about installed packages."
+        "en": "Show information about installed packages.",
+        "zh-CN": "显示某个包的详细信息"
       },
       "options": [],
       "subcommands": []
@@ -73,7 +81,8 @@
     {
       "name": "check",
       "i18n": {
-        "en": "Verify installed packages have compatible"
+        "en": "Verify installed packages have compatible",
+        "zh-CN": "校验已安装包的依赖关系"
       },
       "options": [],
       "subcommands": []
@@ -81,7 +90,8 @@
     {
       "name": "config",
       "i18n": {
-        "en": "Manage local and global configuration."
+        "en": "Manage local and global configuration.",
+        "zh-CN": "查看/修改 pip 配置"
       },
       "options": [],
       "subcommands": []
@@ -89,7 +99,8 @@
     {
       "name": "search",
       "i18n": {
-        "en": "Search PyPI for packages."
+        "en": "Search PyPI for packages.",
+        "zh-CN": "在 PyPI 搜索包（已弃用）"
       },
       "options": [],
       "subcommands": []
@@ -97,7 +108,8 @@
     {
       "name": "cache",
       "i18n": {
-        "en": "Inspect and manage pip's wheel cache."
+        "en": "Inspect and manage pip's wheel cache.",
+        "zh-CN": "管理本地下载缓存"
       },
       "options": [],
       "subcommands": []
@@ -105,7 +117,8 @@
     {
       "name": "index",
       "i18n": {
-        "en": "Inspect information available from package"
+        "en": "Inspect information available from package",
+        "zh-CN": "查询包索引（PyPI）"
       },
       "options": [],
       "subcommands": []
@@ -113,7 +126,8 @@
     {
       "name": "wheel",
       "i18n": {
-        "en": "Build wheels from your requirements."
+        "en": "Build wheels from your requirements.",
+        "zh-CN": "为 requirements 构建 wheel 包"
       },
       "options": [],
       "subcommands": []
@@ -121,7 +135,8 @@
     {
       "name": "hash",
       "i18n": {
-        "en": "Compute hashes of package archives."
+        "en": "Compute hashes of package archives.",
+        "zh-CN": "计算包文件的哈希"
       },
       "options": [],
       "subcommands": []
@@ -129,7 +144,8 @@
     {
       "name": "completion",
       "i18n": {
-        "en": "A helper command used for command completion."
+        "en": "A helper command used for command completion.",
+        "zh-CN": "输出 shell 补全脚本"
       },
       "options": [],
       "subcommands": []
@@ -137,7 +153,8 @@
     {
       "name": "debug",
       "i18n": {
-        "en": "Show information useful for debugging."
+        "en": "Show information useful for debugging.",
+        "zh-CN": "打印调试用的环境信息"
       },
       "options": [],
       "subcommands": []
@@ -145,7 +162,8 @@
     {
       "name": "help",
       "i18n": {
-        "en": "Show help for commands."
+        "en": "Show help for commands.",
+        "zh-CN": "查看子命令帮助"
       },
       "options": [],
       "subcommands": []

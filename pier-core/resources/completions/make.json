@@ -16,7 +16,8 @@
     {
       "flag": "-B, --always-make",
       "i18n": {
-        "en": "Unconditionally make all targets."
+        "en": "Unconditionally make all targets.",
+        "zh-CN": "无条件重建所有目标"
       }
     },
     {
@@ -28,19 +29,22 @@
     {
       "flag": "-d",
       "i18n": {
-        "en": "debugging  information  says  which files are being considered for remaking, which file-times are being compared and  with  what  re‐ sults,  which  files  actually  need  to be remade, which implicit rules are considered and which are applied---everything  interest‐ ing about how make decides what to do."
+        "en": "debugging  information  says  which files are being considered for remaking, which file-times are being compared and  with  what  re‐ sults,  which  files  actually  need  to be remade, which implicit rules are considered and which are applied---everything  interest‐ ing about how make decides what to do.",
+        "zh-CN": "打印调试信息"
       }
     },
     {
       "flag": "--debug[=FLAGS]",
       "i18n": {
-        "en": "Print  debugging information in addition to normal processing.  If the FLAGS are omitted, then the behavior is the same as if -d  was specified.  FLAGS may be a for all debugging output (same as using -d),  b for basic debugging, v for more verbose basic debugging, i for showing implicit rules, j for details on  invocation  of  com‐ mands,  and  m  for  debugging while remaking makefiles.  Use n to disable all previous debugging flags."
+        "en": "Print  debugging information in addition to normal processing.  If the FLAGS are omitted, then the behavior is the same as if -d  was specified.  FLAGS may be a for all debugging output (same as using -d),  b for basic debugging, v for more verbose basic debugging, i for showing implicit rules, j for details on  invocation  of  com‐ mands,  and  m  for  debugging while remaking makefiles.  Use n to disable all previous debugging flags.",
+        "zh-CN": "可选地控制调试输出类别"
       }
     },
     {
       "flag": "-e, --environment-overrides",
       "i18n": {
-        "en": "Give variables taken from the environment  precedence  over  vari‐ ables from makefiles."
+        "en": "Give variables taken from the environment  precedence  over  vari‐ ables from makefiles.",
+        "zh-CN": "环境变量覆盖 makefile 内变量"
       }
     },
     {
@@ -52,7 +56,8 @@
     {
       "flag": "-i, --ignore-errors",
       "i18n": {
-        "en": "Ignore all errors in commands executed to remake files."
+        "en": "Ignore all errors in commands executed to remake files.",
+        "zh-CN": "忽略命令错误"
       }
     },
     {
@@ -76,7 +81,8 @@
     {
       "flag": "-k, --keep-going",
       "i18n": {
-        "en": "Continue  as  much  as  possible after an error.  While the target that failed, and those that depend on it, cannot  be  remade,  the other dependencies of these targets can be processed all the same."
+        "en": "Continue  as  much  as  possible after an error.  While the target that failed, and those that depend on it, cannot  be  remade,  the other dependencies of these targets can be processed all the same.",
+        "zh-CN": "出错后继续构建独立的目标"
       }
     },
     {
@@ -88,13 +94,15 @@
     {
       "flag": "-L, --check-symlink-times",
       "i18n": {
-        "en": "Use the latest mtime between symlinks and target."
+        "en": "Use the latest mtime between symlinks and target.",
+        "zh-CN": "考虑符号链接最新者的时间戳"
       }
     },
     {
       "flag": "-n, --just-print, --dry-run, --recon",
       "i18n": {
-        "en": "Print the commands that would be executed, but do not execute them (except in certain circumstances)."
+        "en": "Print the commands that would be executed, but do not execute them (except in certain circumstances).",
+        "zh-CN": "只打印将要执行的命令，不执行"
       }
     },
     {
@@ -112,67 +120,78 @@
     {
       "flag": "-p, --print-data-base",
       "i18n": {
-        "en": "Print the data base (rules and variable values) that results  from reading the makefiles; then execute as usual or as otherwise spec‐ ified.   This  also prints the version information given by the -v switch (see below).  To print the data base without trying to  re‐ make any files, use make -p -f/dev/null."
+        "en": "Print the data base (rules and variable values) that results  from reading the makefiles; then execute as usual or as otherwise spec‐ ified.   This  also prints the version information given by the -v switch (see below).  To print the data base without trying to  re‐ make any files, use make -p -f/dev/null.",
+        "zh-CN": "打印 make 内部数据库"
       }
     },
     {
       "flag": "-q, --question",
       "i18n": {
-        "en": "``Question  mode''.   Do  not run any commands, or print anything; just return an exit status that is zero if the  specified  targets are already up to date, nonzero otherwise."
+        "en": "``Question  mode''.   Do  not run any commands, or print anything; just return an exit status that is zero if the  specified  targets are already up to date, nonzero otherwise.",
+        "zh-CN": "查询模式：仅返回是否需要重做"
       }
     },
     {
       "flag": "-r, --no-builtin-rules",
       "i18n": {
-        "en": "Eliminate  use of the built-in implicit rules.  Also clear out the default list of suffixes for suffix rules."
+        "en": "Eliminate  use of the built-in implicit rules.  Also clear out the default list of suffixes for suffix rules.",
+        "zh-CN": "禁用所有内置规则"
       }
     },
     {
       "flag": "-R, --no-builtin-variables",
       "i18n": {
-        "en": "Don't define any built-in variables."
+        "en": "Don't define any built-in variables.",
+        "zh-CN": "禁用所有内置变量"
       }
     },
     {
       "flag": "-s, --silent, --quiet",
       "i18n": {
-        "en": "Silent operation; do not print the commands as they are executed."
+        "en": "Silent operation; do not print the commands as they are executed.",
+        "zh-CN": "不打印执行的命令"
       }
     },
     {
       "flag": "-S, --no-keep-going, --stop",
       "i18n": {
-        "en": "Cancel the effect of the -k option.  This is never  necessary  ex‐ cept in a recursive make where -k might be inherited from the top- level make via MAKEFLAGS or if you set -k in MAKEFLAGS in your en‐ vironment."
+        "en": "Cancel the effect of the -k option.  This is never  necessary  ex‐ cept in a recursive make where -k might be inherited from the top- level make via MAKEFLAGS or if you set -k in MAKEFLAGS in your en‐ vironment.",
+        "zh-CN": "停在第一个错误（取消 -k）"
       }
     },
     {
       "flag": "-t, --touch",
       "i18n": {
-        "en": "Touch  files  (mark  them up to date without really changing them) instead of running their commands.  This is used to  pretend  that the  commands  were  done,  in order to fool future invocations of make."
+        "en": "Touch  files  (mark  them up to date without really changing them) instead of running their commands.  This is used to  pretend  that the  commands  were  done,  in order to fool future invocations of make.",
+        "zh-CN": "touch 目标文件而非真正构建"
       }
     },
     {
       "flag": "--trace",
       "i18n": {
-        "en": "Information about the disposition of each target is  printed  (why the  target  is being rebuilt and what commands are run to rebuild it)."
+        "en": "Information about the disposition of each target is  printed  (why the  target  is being rebuilt and what commands are run to rebuild it).",
+        "zh-CN": "追踪规则匹配"
       }
     },
     {
       "flag": "-v, --version",
       "i18n": {
-        "en": "Print the version of the make program plus a copyright, a list  of authors and a notice that there is no warranty."
+        "en": "Print the version of the make program plus a copyright, a list  of authors and a notice that there is no warranty.",
+        "zh-CN": "打印版本"
       }
     },
     {
       "flag": "-w, --print-directory",
       "i18n": {
-        "en": "Print  a message containing the working directory before and after other processing.  This may be useful  for  tracking  down  errors from complicated nests of recursive make commands."
+        "en": "Print  a message containing the working directory before and after other processing.  This may be useful  for  tracking  down  errors from complicated nests of recursive make commands.",
+        "zh-CN": "打印进出目录信息"
       }
     },
     {
       "flag": "--no-print-directory",
       "i18n": {
-        "en": "Turn off -w, even if it was turned on implicitly."
+        "en": "Turn off -w, even if it was turned on implicitly.",
+        "zh-CN": "不打印进出目录信息"
       }
     },
     {
@@ -184,7 +203,8 @@
     {
       "flag": "--warn-undefined-variables",
       "i18n": {
-        "en": "Warn when an undefined variable is referenced."
+        "en": "Warn when an undefined variable is referenced.",
+        "zh-CN": "使用未定义变量时警告"
       }
     }
   ]

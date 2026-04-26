@@ -10,13 +10,15 @@
     {
       "flag": "-A, --smarthome",
       "i18n": {
-        "en": "Make the Home key smarter.  When Home is pressed anywhere but at the  very  beginning of non-whitespace characters on a line, the cursor will jump to that beginning  (either  forwards  or  back‐ wards).  If the cursor is already at that position, it will jump to the true beginning of the line."
+        "en": "Make the Home key smarter.  When Home is pressed anywhere but at the  very  beginning of non-whitespace characters on a line, the cursor will jump to that beginning  (either  forwards  or  back‐ wards).  If the cursor is already at that position, it will jump to the true beginning of the line.",
+        "zh-CN": "聪明的 Home 键行为"
       }
     },
     {
       "flag": "-B, --backup",
       "i18n": {
-        "en": "When  saving  a  file, back up the previous version of it, using the current filename suffixed with a tilde (~)."
+        "en": "When  saving  a  file, back up the previous version of it, using the current filename suffixed with a tilde (~).",
+        "zh-CN": "保存时生成 .bak 备份"
       }
     },
     {
@@ -28,37 +30,43 @@
     {
       "flag": "-D, --boldtext",
       "i18n": {
-        "en": "For the interface, use bold instead of reverse video.  This will be  overridden  by  setting the options titlecolor, statuscolor, keycolor, functioncolor, numbercolor,  and/or  selectedcolor  in your nanorc file.  See nanorc(5)."
+        "en": "For the interface, use bold instead of reverse video.  This will be  overridden  by  setting the options titlecolor, statuscolor, keycolor, functioncolor, numbercolor,  and/or  selectedcolor  in your nanorc file.  See nanorc(5).",
+        "zh-CN": "用粗体替代反相显示"
       }
     },
     {
       "flag": "-E, --tabstospaces",
       "i18n": {
-        "en": "Convert each typed tab to spaces -- to the number of spaces that a tab at that position would take up."
+        "en": "Convert each typed tab to spaces -- to the number of spaces that a tab at that position would take up.",
+        "zh-CN": "Tab 转空格"
       }
     },
     {
       "flag": "-F, --multibuffer",
       "i18n": {
-        "en": "Read a file into a new buffer by default."
+        "en": "Read a file into a new buffer by default.",
+        "zh-CN": "在新缓冲区打开下一文件"
       }
     },
     {
       "flag": "-G, --locking",
       "i18n": {
-        "en": "Use vim-style file locking when editing files."
+        "en": "Use vim-style file locking when editing files.",
+        "zh-CN": "为编辑文件加锁"
       }
     },
     {
       "flag": "-H, --historylog",
       "i18n": {
-        "en": "Save the last hundred search strings and replacement strings and executed  commands,  so  they can be easily reused in later ses‐ sions."
+        "en": "Save the last hundred search strings and replacement strings and executed  commands,  so  they can be easily reused in later ses‐ sions.",
+        "zh-CN": "记录搜索/替换历史"
       }
     },
     {
       "flag": "-I, --ignorercfiles",
       "i18n": {
-        "en": "Don't look at the system's nanorc nor at the user's nanorc."
+        "en": "Don't look at the system's nanorc nor at the user's nanorc.",
+        "zh-CN": "忽略 nanorc 配置"
       }
     },
     {
@@ -70,37 +78,43 @@
     {
       "flag": "-K, --rawsequences",
       "i18n": {
-        "en": "Interpret  escape  sequences directly, instead of asking ncurses to translate them.  (If you need this option to get some keys to work properly, it means that the terminfo  terminal  description that  is  used  does not fully match the actual behavior of your terminal.  This can happen when you ssh into a BSD machine,  for example.)  Using this option disables nano's mouse support."
+        "en": "Interpret  escape  sequences directly, instead of asking ncurses to translate them.  (If you need this option to get some keys to work properly, it means that the terminfo  terminal  description that  is  used  does not fully match the actual behavior of your terminal.  This can happen when you ssh into a BSD machine,  for example.)  Using this option disables nano's mouse support.",
+        "zh-CN": "解析转义序列为字面字符"
       }
     },
     {
       "flag": "-L, --nonewlines",
       "i18n": {
-        "en": "Don't  automatically add a newline when a text does not end with one.  (This can cause you to save non-POSIX text files.)"
+        "en": "Don't  automatically add a newline when a text does not end with one.  (This can cause you to save non-POSIX text files.)",
+        "zh-CN": "保存时不在文件末追加换行"
       }
     },
     {
       "flag": "-M, --trimblanks",
       "i18n": {
-        "en": "Snip trailing whitespace from the wrapped  line  when  automatic hard-wrapping occurs or when text is justified."
+        "en": "Snip trailing whitespace from the wrapped  line  when  automatic hard-wrapping occurs or when text is justified.",
+        "zh-CN": "硬换行时去除尾部空白"
       }
     },
     {
       "flag": "-N, --noconvert",
       "i18n": {
-        "en": "Disable automatic conversion of files from DOS/Mac format."
+        "en": "Disable automatic conversion of files from DOS/Mac format.",
+        "zh-CN": "不把 DOS/Mac 文件转换为 Unix"
       }
     },
     {
       "flag": "-O, --bookstyle",
       "i18n": {
-        "en": "When  justifying,  treat any line that starts with whitespace as the beginning of a paragraph (unless auto-indenting is on)."
+        "en": "When  justifying,  treat any line that starts with whitespace as the beginning of a paragraph (unless auto-indenting is on).",
+        "zh-CN": "段落以缩进起始"
       }
     },
     {
       "flag": "-P, --positionlog",
       "i18n": {
-        "en": "For the 200 most recent files, log the last position of the cur‐ sor, and place it at that position again upon reopening  such  a file."
+        "en": "For the 200 most recent files, log the last position of the cur‐ sor, and place it at that position again upon reopening  such  a file.",
+        "zh-CN": "保存光标最后位置"
       }
     },
     {
@@ -112,13 +126,15 @@
     {
       "flag": "-R, --restricted",
       "i18n": {
-        "en": "Restricted  mode:  don't read or write to any file not specified on the command line.  This means: don't read  or  write  history files; don't allow suspending; don't allow spell checking; don't allow  a  file to be appended to, prepended to, or saved under a different name if it already has  one;  and  don't  make  backup files.   Restricted  mode can also be activated by invoking nano with any name beginning with 'r' (e.g. \"rnano\")."
+        "en": "Restricted  mode:  don't read or write to any file not specified on the command line.  This means: don't read  or  write  history files; don't allow suspending; don't allow spell checking; don't allow  a  file to be appended to, prepended to, or saved under a different name if it already has  one;  and  don't  make  backup files.   Restricted  mode can also be activated by invoking nano with any name beginning with 'r' (e.g. \"rnano\").",
+        "zh-CN": "受限模式（不允许保存到任意路径）"
       }
     },
     {
       "flag": "-S, --softwrap",
       "i18n": {
-        "en": "Display over multiple screen rows lines that exceed the screen's width.  (You can make this soft-wrapping occur at whitespace in‐ stead of rudely at the screen's edge, by using also --atblanks.) (The old short option, -$, is deprecated.)"
+        "en": "Display over multiple screen rows lines that exceed the screen's width.  (You can make this soft-wrapping occur at whitespace in‐ stead of rudely at the screen's edge, by using also --atblanks.) (The old short option, -$, is deprecated.)",
+        "zh-CN": "软换行长行"
       }
     },
     {
@@ -130,19 +146,22 @@
     {
       "flag": "-U, --quickblank",
       "i18n": {
-        "en": "Make  status-bar messages disappear after 1 keystroke instead of after 20.  Note that option -c (--constantshow) overrides  this. When option --minibar or --zero is in effect, --quickblank makes a  message  disappear after 0.8 seconds instead of after the de‐ fault 1.5 seconds."
+        "en": "Make  status-bar messages disappear after 1 keystroke instead of after 20.  Note that option -c (--constantshow) overrides  this. When option --minibar or --zero is in effect, --quickblank makes a  message  disappear after 0.8 seconds instead of after the de‐ fault 1.5 seconds.",
+        "zh-CN": "快速清除状态栏"
       }
     },
     {
       "flag": "-V, --version",
       "i18n": {
-        "en": "Show the current version number and exit."
+        "en": "Show the current version number and exit.",
+        "zh-CN": "打印版本"
       }
     },
     {
       "flag": "-W, --wordbounds",
       "i18n": {
-        "en": "Detect word boundaries differently by treating punctuation char‐ acters as part of a word."
+        "en": "Detect word boundaries differently by treating punctuation char‐ acters as part of a word.",
+        "zh-CN": "更严格地判定词边界"
       }
     },
     {
@@ -160,37 +179,43 @@
     {
       "flag": "-Z, --zap",
       "i18n": {
-        "en": "Let  an  unmodified  Backspace or Delete erase the marked region (instead of a single character, and without affecting  the  cut‐ buffer)."
+        "en": "Let  an  unmodified  Backspace or Delete erase the marked region (instead of a single character, and without affecting  the  cut‐ buffer).",
+        "zh-CN": "Backspace/Delete 删除选中区"
       }
     },
     {
       "flag": "-a, --atblanks",
       "i18n": {
-        "en": "When  doing soft line wrapping, wrap lines at whitespace instead of always at the edge of the screen."
+        "en": "When  doing soft line wrapping, wrap lines at whitespace instead of always at the edge of the screen.",
+        "zh-CN": "软换行时优先在空白处断行"
       }
     },
     {
       "flag": "-b, --breaklonglines",
       "i18n": {
-        "en": "Automatically hard-wrap the current line when it  becomes  over‐ long.  (This option is the opposite of -w (--nowrap) -- the last one given takes effect.)"
+        "en": "Automatically hard-wrap the current line when it  becomes  over‐ long.  (This option is the opposite of -w (--nowrap) -- the last one given takes effect.)",
+        "zh-CN": "硬换行长行（自动换行）"
       }
     },
     {
       "flag": "-c, --constantshow",
       "i18n": {
-        "en": "Constantly  show  the  cursor  position on the status bar.  Note that this overrides option -U (--quickblank)."
+        "en": "Constantly  show  the  cursor  position on the status bar.  Note that this overrides option -U (--quickblank).",
+        "zh-CN": "状态栏持续显示光标位置"
       }
     },
     {
       "flag": "-d, --rebinddelete",
       "i18n": {
-        "en": "Interpret the Delete and Backspace keys differently so that both Backspace and Delete work properly.  You should  only  use  this option  when on your system either Backspace acts like Delete or Delete acts like Backspace."
+        "en": "Interpret the Delete and Backspace keys differently so that both Backspace and Delete work properly.  You should  only  use  this option  when on your system either Backspace acts like Delete or Delete acts like Backspace.",
+        "zh-CN": "修复某些终端 Backspace/Delete 错乱"
       }
     },
     {
       "flag": "-e, --emptyline",
       "i18n": {
-        "en": "Do not use the line below the title  bar,  leaving  it  entirely blank."
+        "en": "Do not use the line below the title  bar,  leaving  it  entirely blank.",
+        "zh-CN": "保留状态栏上方一空行"
       }
     },
     {
@@ -202,49 +227,57 @@
     {
       "flag": "-g, --showcursor",
       "i18n": {
-        "en": "Make  the  cursor visible in the file browser (putting it on the highlighted item) and in the help viewer.   Useful  for  braille users and people with poor vision."
+        "en": "Make  the  cursor visible in the file browser (putting it on the highlighted item) and in the help viewer.   Useful  for  braille users and people with poor vision.",
+        "zh-CN": "在文件浏览器中显示光标"
       }
     },
     {
       "flag": "-h, --help",
       "i18n": {
-        "en": "Show a summary of the available command-line options and exit."
+        "en": "Show a summary of the available command-line options and exit.",
+        "zh-CN": "显示帮助"
       }
     },
     {
       "flag": "-i, --autoindent",
       "i18n": {
-        "en": "Automatically  indent a newly created line to the same number of tabs and/or spaces as the previous line (or as the next line  if the previous line is the beginning of a paragraph)."
+        "en": "Automatically  indent a newly created line to the same number of tabs and/or spaces as the previous line (or as the next line  if the previous line is the beginning of a paragraph).",
+        "zh-CN": "自动缩进新行"
       }
     },
     {
       "flag": "-j, --jumpyscrolling",
       "i18n": {
-        "en": "Scroll the buffer contents per half-screen instead of per line."
+        "en": "Scroll the buffer contents per half-screen instead of per line.",
+        "zh-CN": "整页滚动而非按行"
       }
     },
     {
       "flag": "-k, --cutfromcursor",
       "i18n": {
-        "en": "Make  the  'Cut Text' command (normally ^K) cut from the current cursor position to the end of the line, instead of  cutting  the entire line."
+        "en": "Make  the  'Cut Text' command (normally ^K) cut from the current cursor position to the end of the line, instead of  cutting  the entire line.",
+        "zh-CN": "Ctrl-K 从光标剪到行末"
       }
     },
     {
       "flag": "-l, --linenumbers",
       "i18n": {
-        "en": "Display  line  numbers  to the left of the text area.  (Any line with an anchor additionally gets a mark in the margin.)"
+        "en": "Display  line  numbers  to the left of the text area.  (Any line with an anchor additionally gets a mark in the margin.)",
+        "zh-CN": "显示行号列"
       }
     },
     {
       "flag": "-m, --mouse",
       "i18n": {
-        "en": "Enable mouse support, if available for your  system.   When  en‐ abled,  mouse  clicks  can  be used to place the cursor, set the mark (with a double click), and execute  shortcuts.   The  mouse will work in the X Window System, and on the console when gpm is running.  Text can still be selected through dragging by holding down the Shift key."
+        "en": "Enable mouse support, if available for your  system.   When  en‐ abled,  mouse  clicks  can  be used to place the cursor, set the mark (with a double click), and execute  shortcuts.   The  mouse will work in the X Window System, and on the console when gpm is running.  Text can still be selected through dragging by holding down the Shift key.",
+        "zh-CN": "启用鼠标"
       }
     },
     {
       "flag": "-n, --noread",
       "i18n": {
-        "en": "Treat  any  name  given on the command line as a new file.  This allows nano to write to named pipes: it will start with a  blank buffer,  and  will  write  to  the  pipe when the user saves the \"file\".  This way nano can be used as an editor  in  combination with  for instance gpg without having to write sensitive data to disk first."
+        "en": "Treat  any  name  given on the command line as a new file.  This allows nano to write to named pipes: it will start with a  blank buffer,  and  will  write  to  the  pipe when the user saves the \"file\".  This way nano can be used as an editor  in  combination with  for instance gpg without having to write sensitive data to disk first.",
+        "zh-CN": "不读文件（仅写）"
       }
     },
     {
@@ -256,13 +289,15 @@
     {
       "flag": "-p, --preserve",
       "i18n": {
-        "en": "Preserve  the XON and XOFF sequences (^Q and ^S) so they will be caught by the terminal."
+        "en": "Preserve  the XON and XOFF sequences (^Q and ^S) so they will be caught by the terminal.",
+        "zh-CN": "保留 ^Q / ^S 给终端流控"
       }
     },
     {
       "flag": "-q, --indicator",
       "i18n": {
-        "en": "Display a \"scrollbar\" on the righthand side of the edit  window. It shows the position of the viewport in the buffer and how much of the buffer is covered by the viewport."
+        "en": "Display a \"scrollbar\" on the righthand side of the edit  window. It shows the position of the viewport in the buffer and how much of the buffer is covered by the viewport.",
+        "zh-CN": "显示滚动条"
       }
     },
     {
@@ -280,37 +315,43 @@
     {
       "flag": "-t, --saveonexit",
       "i18n": {
-        "en": "Save a changed buffer without prompting (when exiting with ^X)."
+        "en": "Save a changed buffer without prompting (when exiting with ^X).",
+        "zh-CN": "退出时不询问，直接保存"
       }
     },
     {
       "flag": "-u, --unix",
       "i18n": {
-        "en": "Save a file by default in Unix format.   This  overrides  nano's default  behavior  of  saving  a file in the format that it had. (This option has no effect when you also use --noconvert.)"
+        "en": "Save a file by default in Unix format.   This  overrides  nano's default  behavior  of  saving  a file in the format that it had. (This option has no effect when you also use --noconvert.)",
+        "zh-CN": "把文件按 Unix 行尾保存"
       }
     },
     {
       "flag": "-v, --view",
       "i18n": {
-        "en": "Just view the file and disallow editing: read-only  mode.   This mode  allows  the user to open also other files for viewing, un‐ less --restricted is given too."
+        "en": "Just view the file and disallow editing: read-only  mode.   This mode  allows  the user to open also other files for viewing, un‐ less --restricted is given too.",
+        "zh-CN": "只读视图模式"
       }
     },
     {
       "flag": "-w, --nowrap",
       "i18n": {
-        "en": "Do not automatically hard-wrap the current line when it  becomes overlong.  This is the default.  (This option is the opposite of -b (--breaklonglines) -- the last one given takes effect.)"
+        "en": "Do not automatically hard-wrap the current line when it  becomes overlong.  This is the default.  (This option is the opposite of -b (--breaklonglines) -- the last one given takes effect.)",
+        "zh-CN": "（已弃用，长行总是不自动换行）"
       }
     },
     {
       "flag": "-x, --nohelp",
       "i18n": {
-        "en": "Don't show the two help lines at the bottom of the screen."
+        "en": "Don't show the two help lines at the bottom of the screen.",
+        "zh-CN": "隐藏底部两行帮助"
       }
     },
     {
       "flag": "-y, --afterends",
       "i18n": {
-        "en": "Make Ctrl+Right and Ctrl+Delete stop at word ends instead of be‐ ginnings."
+        "en": "Make Ctrl+Right and Ctrl+Delete stop at word ends instead of be‐ ginnings.",
+        "zh-CN": "Ctrl-Right 在词尾停"
       }
     },
     {
@@ -322,19 +363,22 @@
     {
       "flag": "-%, --stateflags",
       "i18n": {
-        "en": "Use  the  top-right  corner of the screen for showing some state flags: I when auto-indenting, M when the  mark  is  on,  L  when hard-wrapping  (breaking  long lines), R when recording a macro, and S when soft-wrapping.  When the buffer is modified,  a  star (*) is shown after the filename in the center of the title bar."
+        "en": "Use  the  top-right  corner of the screen for showing some state flags: I when auto-indenting, M when the  mark  is  on,  L  when hard-wrapping  (breaking  long lines), R when recording a macro, and S when soft-wrapping.  When the buffer is modified,  a  star (*) is shown after the filename in the center of the title bar.",
+        "zh-CN": "在标题栏显示新建/修改等状态"
       }
     },
     {
       "flag": "-_, --minibar",
       "i18n": {
-        "en": "Suppress  the  title  bar and instead show information about the current buffer at the bottom of the screen, in the space for the status bar.  In this \"minibar\" the  filename  is  shown  on  the left,  followed  by an asterisk if the buffer has been modified. On the right are displayed the current line and  column  number, the  code  of the character under the cursor (in Unicode format: U+xxxx), the same flags as are shown by --stateflags, and a per‐ centage that expresses how far  the  cursor  is  into  the  file (linewise).   When  a  file  is  loaded  or saved, and also when switching between buffers, the number of lines in the buffer  is displayed  after  the filename.  This number is cleared upon the next keystroke, or replaced with an [i/n] counter when  multiple buffers  are open.  The line plus column numbers and the charac‐ ter code are displayed only when --constantshow is used, and can be toggled on and off with M-C.  The state flags  are  displayed only when --stateflags is used."
+        "en": "Suppress  the  title  bar and instead show information about the current buffer at the bottom of the screen, in the space for the status bar.  In this \"minibar\" the  filename  is  shown  on  the left,  followed  by an asterisk if the buffer has been modified. On the right are displayed the current line and  column  number, the  code  of the character under the cursor (in Unicode format: U+xxxx), the same flags as are shown by --stateflags, and a per‐ centage that expresses how far  the  cursor  is  into  the  file (linewise).   When  a  file  is  loaded  or saved, and also when switching between buffers, the number of lines in the buffer  is displayed  after  the filename.  This number is cleared upon the next keystroke, or replaced with an [i/n] counter when  multiple buffers  are open.  The line plus column numbers and the charac‐ ter code are displayed only when --constantshow is used, and can be toggled on and off with M-C.  The state flags  are  displayed only when --stateflags is used.",
+        "zh-CN": "在底部显示一行迷你状态栏"
       }
     },
     {
       "flag": "-0, --zero",
       "i18n": {
-        "en": "Hide  all  elements of the interface (title bar, status bar, and help lines) and use all rows of the  terminal  for  showing  the contents  of the buffer.  The status bar appears only when there is a significant message, and disappears after  1.5  seconds  or upon the next keystroke.  With M-Z the title bar plus status bar can be toggled.  With M-X the help lines."
+        "en": "Hide  all  elements of the interface (title bar, status bar, and help lines) and use all rows of the  terminal  for  showing  the contents  of the buffer.  The status bar appears only when there is a significant message, and disappears after  1.5  seconds  or upon the next keystroke.  With M-Z the title bar plus status bar can be toggled.  With M-X the help lines.",
+        "zh-CN": "全屏 — 隐藏标题栏与状态栏"
       }
     }
   ]

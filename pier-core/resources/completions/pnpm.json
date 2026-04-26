@@ -10,7 +10,8 @@
     {
       "flag": "-r, --recursive",
       "i18n": {
-        "en": "Run the command for each project in the workspace."
+        "en": "Run the command for each project in the workspace.",
+        "zh-CN": "在 workspace 所有项目上批量执行"
       }
     }
   ]

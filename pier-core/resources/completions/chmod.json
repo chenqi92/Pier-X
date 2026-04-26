@@ -10,55 +10,64 @@
     {
       "flag": "-c, --changes",
       "i18n": {
-        "en": "like verbose but report only when a change is made"
+        "en": "like verbose but report only when a change is made",
+        "zh-CN": "只在权限实际变更时报告"
       }
     },
     {
       "flag": "-f, --silent, --quiet",
       "i18n": {
-        "en": "suppress most error messages"
+        "en": "suppress most error messages",
+        "zh-CN": "不报告大多数错误"
       }
     },
     {
       "flag": "-v, --verbose",
       "i18n": {
-        "en": "output a diagnostic for every file processed"
+        "en": "output a diagnostic for every file processed",
+        "zh-CN": "对每个文件都输出处理结果"
       }
     },
     {
       "flag": "--no-preserve-root",
       "i18n": {
-        "en": "do not treat '/' specially (the default)"
+        "en": "do not treat '/' specially (the default)",
+        "zh-CN": "不特殊对待根目录 / （默认）"
       }
     },
     {
       "flag": "--preserve-root",
       "i18n": {
-        "en": "fail to operate recursively on '/'"
+        "en": "fail to operate recursively on '/'",
+        "zh-CN": "拒绝在 / 上递归操作"
       }
     },
     {
       "flag": "--reference=RFILE",
       "i18n": {
-        "en": "use  RFILE's  mode  instead of specifying MODE values.  RFILE is always dereferenced if a symbolic link."
+        "en": "use  RFILE's  mode  instead of specifying MODE values.  RFILE is always dereferenced if a symbolic link.",
+        "zh-CN": "把权限设成与 RFILE 相同"
       }
     },
     {
       "flag": "-R, --recursive",
       "i18n": {
-        "en": "change files and directories recursively"
+        "en": "change files and directories recursively",
+        "zh-CN": "递归处理目录"
       }
     },
     {
       "flag": "--help",
       "i18n": {
-        "en": ""
+        "en": "",
+        "zh-CN": "显示帮助"
       }
     },
     {
       "flag": "--version",
       "i18n": {
-        "en": "output version information and exit"
+        "en": "output version information and exit",
+        "zh-CN": "打印版本"
       }
     }
   ]

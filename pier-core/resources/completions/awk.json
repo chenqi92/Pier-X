@@ -10,85 +10,99 @@
     {
       "flag": "-F",
       "i18n": {
-        "en": ""
+        "en": "",
+        "zh-CN": "字段分隔符"
       }
     },
     {
       "flag": "-f",
       "i18n": {
-        "en": "mand line.  Multiple -f options are allowed."
+        "en": "mand line.  Multiple -f options are allowed.",
+        "zh-CN": "从文件读取 awk 程序"
       }
     },
     {
       "flag": "-v",
       "i18n": {
-        "en": ""
+        "en": "",
+        "zh-CN": "在程序前预置变量"
       }
     },
     {
       "flag": "--",
       "i18n": {
-        "en": ""
+        "en": "",
+        "zh-CN": "选项结束标记"
       }
     },
     {
       "flag": "-W",
       "i18n": {
-        "en": "writes  an assembler like listing of the internal representation of the program to stdout and exits  0  (on  successful  compila‐ tion)."
+        "en": "writes  an assembler like listing of the internal representation of the program to stdout and exits  0  (on  successful  compila‐ tion).",
+        "zh-CN": "兼容选项 / 实现专用扩展"
       }
     },
     {
       "flag": "-W",
       "i18n": {
-        "en": "Program text is read from file and this is the last option."
+        "en": "Program text is read from file and this is the last option.",
+        "zh-CN": "兼容选项 / 实现专用扩展"
       }
     },
     {
       "flag": "-W",
       "i18n": {
-        "en": "prints a usage message to stderr and exits (same as “-W usage”)."
+        "en": "prints a usage message to stderr and exits (same as “-W usage”).",
+        "zh-CN": "兼容选项 / 实现专用扩展"
       }
     },
     {
       "flag": "-W",
       "i18n": {
-        "en": "sets  unbuffered  writes  to stdout and line buffered reads from stdin.  Records from stdin are lines regardless of the value  of RS."
+        "en": "sets  unbuffered  writes  to stdout and line buffered reads from stdin.  Records from stdin are lines regardless of the value  of RS.",
+        "zh-CN": "兼容选项 / 实现专用扩展"
       }
     },
     {
       "flag": "-W",
       "i18n": {
-        "en": "modifies mawk's behavior to be more POSIX-compliant:"
+        "en": "modifies mawk's behavior to be more POSIX-compliant:",
+        "zh-CN": "兼容选项 / 实现专用扩展"
       }
     },
     {
       "flag": "-W",
       "i18n": {
-        "en": "calls  srand  with  the given parameter (and overrides the auto- seeding behavior)."
+        "en": "calls  srand  with  the given parameter (and overrides the auto- seeding behavior).",
+        "zh-CN": "兼容选项 / 实现专用扩展"
       }
     },
     {
       "flag": "-W",
       "i18n": {
-        "en": "adjusts the size of mawk's internal sprintf buffer to num bytes. More than rare use of this option indicates mawk should  be  re‐ compiled."
+        "en": "adjusts the size of mawk's internal sprintf buffer to num bytes. More than rare use of this option indicates mawk should  be  re‐ compiled.",
+        "zh-CN": "兼容选项 / 实现专用扩展"
       }
     },
     {
       "flag": "-W",
       "i18n": {
-        "en": "Omit  features  such as interval expressions which were not sup‐ ported by traditional awk."
+        "en": "Omit  features  such as interval expressions which were not sup‐ ported by traditional awk.",
+        "zh-CN": "兼容选项 / 实现专用扩展"
       }
     },
     {
       "flag": "-W",
       "i18n": {
-        "en": "prints a usage message to stderr and exits (same as “-W help”)."
+        "en": "prints a usage message to stderr and exits (same as “-W help”).",
+        "zh-CN": "兼容选项 / 实现专用扩展"
       }
     },
     {
       "flag": "-W",
       "i18n": {
-        "en": "mawk writes its version and copyright  to  stdout  and  compiled limits to stderr and exits 0."
+        "en": "mawk writes its version and copyright  to  stdout  and  compiled limits to stderr and exits 0.",
+        "zh-CN": "兼容选项 / 实现专用扩展"
       }
     }
   ]

@@ -10,13 +10,15 @@
     {
       "flag": "-h, --help",
       "i18n": {
-        "en": "Show summary of options."
+        "en": "Show summary of options.",
+        "zh-CN": "显示帮助"
       }
     },
     {
       "flag": "-V, --version",
       "i18n": {
-        "en": "Output version information."
+        "en": "Output version information.",
+        "zh-CN": "打印版本"
       }
     },
     {
@@ -34,49 +36,57 @@
     {
       "flag": "-n, --numeric",
       "i18n": {
-        "en": "Do not try to resolve service names. Show exact  bandwidth  val‐ ues, instead of human-readable."
+        "en": "Do not try to resolve service names. Show exact  bandwidth  val‐ ues, instead of human-readable.",
+        "zh-CN": "数字模式（不解析名称）"
       }
     },
     {
       "flag": "-r, --resolve",
       "i18n": {
-        "en": "Try to resolve numeric address/ports."
+        "en": "Try to resolve numeric address/ports.",
+        "zh-CN": "解析名称"
       }
     },
     {
       "flag": "-a, --all",
       "i18n": {
-        "en": "Display both listening and non-listening (for TCP this means es‐ tablished connections) sockets."
+        "en": "Display both listening and non-listening (for TCP this means es‐ tablished connections) sockets.",
+        "zh-CN": "所有 socket（含 LISTEN）"
       }
     },
     {
       "flag": "-l, --listening",
       "i18n": {
-        "en": "Display only listening sockets (these are omitted by default)."
+        "en": "Display only listening sockets (these are omitted by default).",
+        "zh-CN": "只显示 LISTEN 的 socket"
       }
     },
     {
       "flag": "-o, --options",
       "i18n": {
-        "en": "Show timer information. For TCP protocol, the output format is:"
+        "en": "Show timer information. For TCP protocol, the output format is:",
+        "zh-CN": "显示 timer 信息"
       }
     },
     {
       "flag": "-e, --extended",
       "i18n": {
-        "en": "Show detailed socket information. The output format is:"
+        "en": "Show detailed socket information. The output format is:",
+        "zh-CN": "显示更多 socket 信息"
       }
     },
     {
       "flag": "-m, --memory",
       "i18n": {
-        "en": "Show socket memory usage. The output format is:"
+        "en": "Show socket memory usage. The output format is:",
+        "zh-CN": "显示 socket 内存用量"
       }
     },
     {
       "flag": "-p, --processes",
       "i18n": {
-        "en": "Show process using socket."
+        "en": "Show process using socket.",
+        "zh-CN": "显示监听进程"
       }
     },
     {
@@ -88,7 +98,8 @@
     {
       "flag": "-i, --info",
       "i18n": {
-        "en": "Show internal TCP information. Below fields may appear:"
+        "en": "Show internal TCP information. Below fields may appear:",
+        "zh-CN": "显示 TCP 内部信息"
       }
     },
     {

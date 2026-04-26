@@ -10,19 +10,22 @@
     {
       "flag": "-",
       "i18n": {
-        "en": "utilities.  The executed script is read from stdin, and remaining arguments are passed to the script."
+        "en": "utilities.  The executed script is read from stdin, and remaining arguments are passed to the script.",
+        "zh-CN": "标准输入/输出（依命令而定）"
       }
     },
     {
       "flag": "--",
       "i18n": {
-        "en": "arguments to the script."
+        "en": "arguments to the script.",
+        "zh-CN": "选项结束标记"
       }
     },
     {
       "flag": "--abort-on-uncaught-exception",
       "i18n": {
-        "en": "Aborting instead of exiting causes a core file to be generated for analysis."
+        "en": "Aborting instead of exiting causes a core file to be generated for analysis.",
+        "zh-CN": "未捕获异常时 abort 而不是退出"
       }
     },
     {
@@ -46,7 +49,8 @@
     {
       "flag": "--allow-child-process",
       "i18n": {
-        "en": "Allow spawning process when using the permission model."
+        "en": "Allow spawning process when using the permission model.",
+        "zh-CN": "权限模型：允许子进程"
       }
     },
     {
@@ -64,7 +68,8 @@
     {
       "flag": "--allow-worker",
       "i18n": {
-        "en": "Allow creating worker threads when using the permission model."
+        "en": "Allow creating worker threads when using the permission model.",
+        "zh-CN": "权限模型：允许 worker"
       }
     },
     {
@@ -82,7 +87,8 @@
     {
       "flag": "--cpu-prof",
       "i18n": {
-        "en": "Start the V8 CPU profiler on start up, and write the CPU profile to disk before exit. If --cpu-prof-dir is not specified, the profile will be written to the current working directory with a generated file name."
+        "en": "Start the V8 CPU profiler on start up, and write the CPU profile to disk before exit. If --cpu-prof-dir is not specified, the profile will be written to the current working directory with a generated file name.",
+        "zh-CN": "进程退出时生成 CPU profile"
       }
     },
     {
@@ -130,7 +136,8 @@
     {
       "flag": "--enable-fips",
       "i18n": {
-        "en": "Enable FIPS-compliant crypto at startup.  Requires Node.js to be built with ./configure --openssl-fips."
+        "en": "Enable FIPS-compliant crypto at startup.  Requires Node.js to be built with ./configure --openssl-fips.",
+        "zh-CN": "启用 FIPS 模式"
       }
     },
     {
@@ -166,13 +173,15 @@
     {
       "flag": "--experimental-import-meta-resolve",
       "i18n": {
-        "en": "Enable experimental ES modules support for import.meta.resolve()."
+        "en": "Enable experimental ES modules support for import.meta.resolve().",
+        "zh-CN": "实验：import.meta.resolve"
       }
     },
     {
       "flag": "--experimental-loader=module",
       "i18n": {
-        "en": "Specify the module to use as a custom module loader."
+        "en": "Specify the module to use as a custom module loader.",
+        "zh-CN": "实验：自定义 loader（已弃用）"
       }
     },
     {
@@ -184,19 +193,22 @@
     {
       "flag": "--experimental-shadow-realm",
       "i18n": {
-        "en": "Use this flag to enable ShadowRealm support."
+        "en": "Use this flag to enable ShadowRealm support.",
+        "zh-CN": "实验：ShadowRealm"
       }
     },
     {
       "flag": "--experimental-test-coverage",
       "i18n": {
-        "en": "Enable code coverage in the test runner."
+        "en": "Enable code coverage in the test runner.",
+        "zh-CN": "实验：内置 test runner 覆盖率"
       }
     },
     {
       "flag": "--experimental-test-module-mocks",
       "i18n": {
-        "en": "Enable module mocking in the test runner."
+        "en": "Enable module mocking in the test runner.",
+        "zh-CN": "实验：test runner 的模块 mock"
       }
     },
     {
@@ -244,13 +256,15 @@
     {
       "flag": "--experimental-vm-modules",
       "i18n": {
-        "en": "Enable experimental ES module support in VM module."
+        "en": "Enable experimental ES module support in VM module.",
+        "zh-CN": "实验：vm.Module / SourceTextModule"
       }
     },
     {
       "flag": "--experimental-wasi-unstable-preview1",
       "i18n": {
-        "en": "Enable experimental WebAssembly System Interface support. This flag is no longer required as WASI is enabled by default."
+        "en": "Enable experimental WebAssembly System Interface support. This flag is no longer required as WASI is enabled by default.",
+        "zh-CN": "实验：WASI Preview1"
       }
     },
     {
@@ -274,13 +288,15 @@
     {
       "flag": "--force-fips",
       "i18n": {
-        "en": "Force FIPS-compliant crypto on startup (Cannot be disabled from script code).  Same requirements as --enable-fips."
+        "en": "Force FIPS-compliant crypto on startup (Cannot be disabled from script code).  Same requirements as --enable-fips.",
+        "zh-CN": "强制 FIPS（任何禁用尝试都报错）"
       }
     },
     {
       "flag": "--frozen-intrinsics",
       "i18n": {
-        "en": "Enable experimental frozen intrinsics support."
+        "en": "Enable experimental frozen intrinsics support.",
+        "zh-CN": "冻结 Object.prototype 等内置原型"
       }
     },
     {
@@ -298,7 +314,8 @@
     {
       "flag": "--heap-prof",
       "i18n": {
-        "en": "Start the V8 heap profiler on start up, and write the heap profile to disk before exit. If --heap-prof-dir is not specified, the profile will be written to the current working directory with a generated file name."
+        "en": "Start the V8 heap profiler on start up, and write the heap profile to disk before exit. If --heap-prof-dir is not specified, the profile will be written to the current working directory with a generated file name.",
+        "zh-CN": "进程退出时生成堆 profile"
       }
     },
     {
@@ -328,7 +345,8 @@
     {
       "flag": "--input-type=type",
       "i18n": {
-        "en": "Set the module resolution type for input via --eval, --print or STDIN."
+        "en": "Set the module resolution type for input via --eval, --print or STDIN.",
+        "zh-CN": "stdin 解释方式（module/commonjs）"
       }
     },
     {
@@ -340,7 +358,8 @@
     {
       "flag": "--inspect-port=[host:]port",
       "i18n": {
-        "en": "Set the host:port to be used when the inspector is activated."
+        "en": "Set the host:port to be used when the inspector is activated.",
+        "zh-CN": "指定 inspector 端口"
       }
     },
     {
@@ -364,7 +383,8 @@
     {
       "flag": "--insecure-http-parser",
       "i18n": {
-        "en": "Use an insecure HTTP parser that accepts invalid HTTP headers. This may allow interoperability with non-conformant HTTP implementations. It may also allow request smuggling and other HTTP attacks that rely on invalid headers being accepted. Avoid using this option."
+        "en": "Use an insecure HTTP parser that accepts invalid HTTP headers. This may allow interoperability with non-conformant HTTP implementations. It may also allow request smuggling and other HTTP attacks that rely on invalid headers being accepted. Avoid using this option.",
+        "zh-CN": "宽松 HTTP 解析器（不推荐）"
       }
     },
     {
@@ -382,7 +402,8 @@
     {
       "flag": "--max-http-header-size=size",
       "i18n": {
-        "en": "Specify the maximum size of HTTP headers in bytes. Defaults to 16 KiB."
+        "en": "Specify the maximum size of HTTP headers in bytes. Defaults to 16 KiB.",
+        "zh-CN": "HTTP 头最大字节数"
       }
     },
     {
@@ -394,19 +415,22 @@
     {
       "flag": "--napi-modules",
       "i18n": {
-        "en": "This option is a no-op.  It is kept for compatibility."
+        "en": "This option is a no-op.  It is kept for compatibility.",
+        "zh-CN": "（保留兼容选项）"
       }
     },
     {
       "flag": "--no-deprecation",
       "i18n": {
-        "en": "Silence deprecation warnings."
+        "en": "Silence deprecation warnings.",
+        "zh-CN": "完全禁用 deprecation 警告"
       }
     },
     {
       "flag": "--no-extra-info-on-fatal-exception",
       "i18n": {
-        "en": "Hide extra information on fatal exception that causes exit."
+        "en": "Hide extra information on fatal exception that causes exit.",
+        "zh-CN": "致命异常时不打印额外信息"
       }
     },
     {
@@ -418,19 +442,22 @@
     {
       "flag": "--no-addons",
       "i18n": {
-        "en": "Disable the `node-addons` exports condition as well as disable loading native addons. When `--no-addons` is specified, calling `process.dlopen` or requiring a native C++ addon will fail and throw an exception."
+        "en": "Disable the `node-addons` exports condition as well as disable loading native addons. When `--no-addons` is specified, calling `process.dlopen` or requiring a native C++ addon will fail and throw an exception.",
+        "zh-CN": "禁用 native addons"
       }
     },
     {
       "flag": "--no-global-search-paths",
       "i18n": {
-        "en": "Do not search modules from global paths."
+        "en": "Do not search modules from global paths.",
+        "zh-CN": "不在全局路径中查找模块"
       }
     },
     {
       "flag": "--no-warnings",
       "i18n": {
-        "en": "Silence all process warnings (including deprecations)."
+        "en": "Silence all process warnings (including deprecations).",
+        "zh-CN": "禁用所有 process warning"
       }
     },
     {
@@ -442,49 +469,57 @@
     {
       "flag": "--openssl-config=file",
       "i18n": {
-        "en": "Load an OpenSSL configuration file on startup.  Among other uses, this can be used to enable FIPS-compliant crypto if Node.js is built with ./configure --openssl-fips."
+        "en": "Load an OpenSSL configuration file on startup.  Among other uses, this can be used to enable FIPS-compliant crypto if Node.js is built with ./configure --openssl-fips.",
+        "zh-CN": "指定 OpenSSL 配置文件"
       }
     },
     {
       "flag": "--pending-deprecation",
       "i18n": {
-        "en": "Emit pending deprecation warnings."
+        "en": "Emit pending deprecation warnings.",
+        "zh-CN": "把 pending deprecation 当成警告"
       }
     },
     {
       "flag": "--preserve-symlinks",
       "i18n": {
-        "en": "Instructs the module loader to preserve symbolic links when resolving and caching modules other than the main module."
+        "en": "Instructs the module loader to preserve symbolic links when resolving and caching modules other than the main module.",
+        "zh-CN": "解析模块时保留符号链接"
       }
     },
     {
       "flag": "--preserve-symlinks-main",
       "i18n": {
-        "en": "Instructs the module loader to preserve symbolic links when resolving and caching the main module."
+        "en": "Instructs the module loader to preserve symbolic links when resolving and caching the main module.",
+        "zh-CN": "main 入口模块也保留符号链接"
       }
     },
     {
       "flag": "--prof",
       "i18n": {
-        "en": ""
+        "en": "",
+        "zh-CN": "启用 V8 内置 profiler"
       }
     },
     {
       "flag": "--prof-process",
       "i18n": {
-        "en": "Process V8 profiler output generated using the V8 option --prof."
+        "en": "Process V8 profiler output generated using the V8 option --prof.",
+        "zh-CN": "处理 V8 profiler 输出"
       }
     },
     {
       "flag": "--redirect-warnings=file",
       "i18n": {
-        "en": "Write process warnings to the given file instead of printing to stderr."
+        "en": "Write process warnings to the given file instead of printing to stderr.",
+        "zh-CN": "把 warning 重定向到文件"
       }
     },
     {
       "flag": "--report-compact",
       "i18n": {
-        "en": "Write diagnostic reports in a compact format, single-line JSON."
+        "en": "Write diagnostic reports in a compact format, single-line JSON.",
+        "zh-CN": "紧凑模式生成报告"
       }
     },
     {
@@ -502,13 +537,15 @@
     {
       "flag": "--report-on-fatalerror",
       "i18n": {
-        "en": "Enables the diagnostic report to be triggered on fatal errors (internal errors within the Node.js runtime such as out of memory) that leads to termination of the application. Useful to inspect various diagnostic data elements such as heap, stack, event loop state, resource consumption etc. to reason about the fatal error."
+        "en": "Enables the diagnostic report to be triggered on fatal errors (internal errors within the Node.js runtime such as out of memory) that leads to termination of the application. Useful to inspect various diagnostic data elements such as heap, stack, event loop state, resource consumption etc. to reason about the fatal error.",
+        "zh-CN": "致命错误时生成诊断报告"
       }
     },
     {
       "flag": "--report-on-signal",
       "i18n": {
-        "en": "Enables diagnostic report to be generated upon receiving the specified (or predefined) signal to the running Node.js process. Default signal is SIGUSR2."
+        "en": "Enables diagnostic report to be generated upon receiving the specified (or predefined) signal to the running Node.js process. Default signal is SIGUSR2.",
+        "zh-CN": "收到信号时生成诊断报告"
       }
     },
     {
@@ -520,19 +557,22 @@
     {
       "flag": "--report-uncaught-exception",
       "i18n": {
-        "en": "Enables diagnostic report to be generated on un-caught exceptions. Useful when inspecting JavaScript stack in conjunction with native stack and other runtime environment data."
+        "en": "Enables diagnostic report to be generated on un-caught exceptions. Useful when inspecting JavaScript stack in conjunction with native stack and other runtime environment data.",
+        "zh-CN": "未捕获异常时生成诊断报告"
       }
     },
     {
       "flag": "--secure-heap=n",
       "i18n": {
-        "en": "Specify the size of the OpenSSL secure heap. Any value less than 2 disables the secure heap. The default is 0. The value must be a power of two."
+        "en": "Specify the size of the OpenSSL secure heap. Any value less than 2 disables the secure heap. The default is 0. The value must be a power of two.",
+        "zh-CN": "保护堆大小（OpenSSL 用）"
       }
     },
     {
       "flag": "--secure-heap-min=n",
       "i18n": {
-        "en": "Specify the minimum allocation from the OpenSSL secure heap. The default is 2. The value must be a power of two."
+        "en": "Specify the minimum allocation from the OpenSSL secure heap. The default is 2. The value must be a power of two.",
+        "zh-CN": "保护堆最小分配粒度"
       }
     },
     {
@@ -652,13 +692,15 @@
     {
       "flag": "--throw-deprecation",
       "i18n": {
-        "en": "Throw errors for deprecations."
+        "en": "Throw errors for deprecations.",
+        "zh-CN": "把 deprecation warning 当成异常抛"
       }
     },
     {
       "flag": "--title=title",
       "i18n": {
-        "en": "Specify process.title on startup."
+        "en": "Specify process.title on startup.",
+        "zh-CN": "设置进程标题"
       }
     },
     {
@@ -670,67 +712,78 @@
     {
       "flag": "--tls-keylog=file",
       "i18n": {
-        "en": "Log TLS key material to a file. The key material is in NSS SSLKEYLOGFILE format and can be used by software (such as Wireshark) to decrypt the TLS traffic."
+        "en": "Log TLS key material to a file. The key material is in NSS SSLKEYLOGFILE format and can be used by software (such as Wireshark) to decrypt the TLS traffic.",
+        "zh-CN": "记录 TLS key（用于 Wireshark 解密）"
       }
     },
     {
       "flag": "--tls-max-v1.2",
       "i18n": {
-        "en": "Set default  maxVersion to 'TLSv1.2'. Use to disable support for TLSv1.3."
+        "en": "Set default  maxVersion to 'TLSv1.2'. Use to disable support for TLSv1.3.",
+        "zh-CN": "允许最高 TLS 1.2"
       }
     },
     {
       "flag": "--tls-max-v1.3",
       "i18n": {
-        "en": "Set default  maxVersion to 'TLSv1.3'. Use to enable support for TLSv1.3."
+        "en": "Set default  maxVersion to 'TLSv1.3'. Use to enable support for TLSv1.3.",
+        "zh-CN": "允许最高 TLS 1.3（默认）"
       }
     },
     {
       "flag": "--tls-min-v1.0",
       "i18n": {
-        "en": "Set default minVersion to 'TLSv1'. Use for compatibility with old TLS clients or servers."
+        "en": "Set default minVersion to 'TLSv1'. Use for compatibility with old TLS clients or servers.",
+        "zh-CN": "允许最低 TLS 1.0"
       }
     },
     {
       "flag": "--tls-min-v1.1",
       "i18n": {
-        "en": "Set default minVersion to 'TLSv1.1'. Use for compatibility with old TLS clients or servers."
+        "en": "Set default minVersion to 'TLSv1.1'. Use for compatibility with old TLS clients or servers.",
+        "zh-CN": "允许最低 TLS 1.1"
       }
     },
     {
       "flag": "--tls-min-v1.2",
       "i18n": {
-        "en": "Set default minVersion to 'TLSv1.2'. This is the default for 12.x and later, but the option is supported for compatibility with older Node.js versions."
+        "en": "Set default minVersion to 'TLSv1.2'. This is the default for 12.x and later, but the option is supported for compatibility with older Node.js versions.",
+        "zh-CN": "允许最低 TLS 1.2（默认）"
       }
     },
     {
       "flag": "--tls-min-v1.3",
       "i18n": {
-        "en": "Set default minVersion to 'TLSv1.3'. Use to disable support for TLSv1.2 in favour of TLSv1.3, which is more secure."
+        "en": "Set default minVersion to 'TLSv1.3'. Use to disable support for TLSv1.2 in favour of TLSv1.3, which is more secure.",
+        "zh-CN": "允许最低 TLS 1.3"
       }
     },
     {
       "flag": "--trace-deprecation",
       "i18n": {
-        "en": "Print stack traces for deprecations."
+        "en": "Print stack traces for deprecations.",
+        "zh-CN": "deprecation 时打印堆栈"
       }
     },
     {
       "flag": "--trace-event-categories",
       "i18n": {
-        "en": "A comma-separated list of categories that should be traced when trace event tracing is enabled using --trace-events-enabled."
+        "en": "A comma-separated list of categories that should be traced when trace event tracing is enabled using --trace-events-enabled.",
+        "zh-CN": "trace event 类别（性能分析）"
       }
     },
     {
       "flag": "--trace-event-file-pattern",
       "i18n": {
-        "en": "Template string specifying the filepath for the trace event data, it supports ${rotation} and ${pid}."
+        "en": "Template string specifying the filepath for the trace event data, it supports ${rotation} and ${pid}.",
+        "zh-CN": "trace event 输出文件名模板"
       }
     },
     {
       "flag": "--trace-events-enabled",
       "i18n": {
-        "en": "Enable the collection of trace event tracing information."
+        "en": "Enable the collection of trace event tracing information.",
+        "zh-CN": "启用 trace events"
       }
     },
     {
@@ -742,7 +795,8 @@
     {
       "flag": "--trace-sigint",
       "i18n": {
-        "en": "Prints a stack trace on SIGINT."
+        "en": "Prints a stack trace on SIGINT.",
+        "zh-CN": "SIGINT 时打印 JS 堆栈"
       }
     },
     {
@@ -760,25 +814,29 @@
     {
       "flag": "--trace-uncaught",
       "i18n": {
-        "en": "Print stack traces for uncaught exceptions; usually, the stack trace associated with the creation of an Error is printed, whereas this makes Node.js also print the stack trace associated with throwing the value (which does not need to be an Error instance)."
+        "en": "Print stack traces for uncaught exceptions; usually, the stack trace associated with the creation of an Error is printed, whereas this makes Node.js also print the stack trace associated with throwing the value (which does not need to be an Error instance).",
+        "zh-CN": "未捕获异常时打印更多堆栈"
       }
     },
     {
       "flag": "--trace-warnings",
       "i18n": {
-        "en": "Print stack traces for process warnings (including deprecations)."
+        "en": "Print stack traces for process warnings (including deprecations).",
+        "zh-CN": "warning 时打印堆栈"
       }
     },
     {
       "flag": "--track-heap-objects",
       "i18n": {
-        "en": "Track heap object allocations for heap snapshots."
+        "en": "Track heap object allocations for heap snapshots.",
+        "zh-CN": "在堆 snapshot 中标识对象创建栈"
       }
     },
     {
       "flag": "--unhandled-rejections=mode",
       "i18n": {
-        "en": "Define the behavior for unhandled rejections. Can be one of `strict` (raise an error), `warn` (enforce warnings) or `none` (silence warnings)."
+        "en": "Define the behavior for unhandled rejections. Can be one of `strict` (raise an error), `warn` (enforce warnings) or `none` (silence warnings).",
+        "zh-CN": "未处理的 Promise reject 行为"
       }
     },
     {
@@ -802,25 +860,29 @@
     {
       "flag": "--use-largepages=mode",
       "i18n": {
-        "en": "Re-map the Node.js static code to large memory pages at startup. If supported on the target system, this will cause the Node.js static code to be moved onto 2 MiB pages instead of 4 KiB pages."
+        "en": "Re-map the Node.js static code to large memory pages at startup. If supported on the target system, this will cause the Node.js static code to be moved onto 2 MiB pages instead of 4 KiB pages.",
+        "zh-CN": "尝试把代码段映射到大页内存"
       }
     },
     {
       "flag": "--v8-options",
       "i18n": {
-        "en": "Print V8 command-line options."
+        "en": "Print V8 command-line options.",
+        "zh-CN": "打印所有 V8 选项"
       }
     },
     {
       "flag": "--v8-pool-size=num",
       "i18n": {
-        "en": "Set V8's thread pool size which will be used to allocate background jobs.  If set to 0 then V8 will choose an appropriate size of the thread pool based on the number of online processors. If the value provided is larger than V8's maximum, then the largest value will be chosen."
+        "en": "Set V8's thread pool size which will be used to allocate background jobs.  If set to 0 then V8 will choose an appropriate size of the thread pool based on the number of online processors. If the value provided is larger than V8's maximum, then the largest value will be chosen.",
+        "zh-CN": "V8 后台线程池大小"
       }
     },
     {
       "flag": "--watch",
       "i18n": {
-        "en": "Starts Node.js in watch mode. When in watch mode, changes in the watched files cause the Node.js process to restart."
+        "en": "Starts Node.js in watch mode. When in watch mode, changes in the watched files cause the Node.js process to restart.",
+        "zh-CN": "监听文件改动并重启"
       }
     },
     {
@@ -838,13 +900,15 @@
     {
       "flag": "--zero-fill-buffers",
       "i18n": {
-        "en": "Automatically zero-fills all newly allocated Buffer and SlowBuffer instances."
+        "en": "Automatically zero-fills all newly allocated Buffer and SlowBuffer instances.",
+        "zh-CN": "Buffer.allocUnsafe 也置零"
       }
     },
     {
       "flag": "-c, --check",
       "i18n": {
-        "en": "Check the script's syntax without executing it.  Exits with an error code if script is invalid."
+        "en": "Check the script's syntax without executing it.  Exits with an error code if script is invalid.",
+        "zh-CN": "只做语法检查不执行"
       }
     },
     {
@@ -856,19 +920,22 @@
     {
       "flag": "-h, --help",
       "i18n": {
-        "en": "Print command-line options.  The output of this option is less detailed than this document."
+        "en": "Print command-line options.  The output of this option is less detailed than this document.",
+        "zh-CN": "显示帮助"
       }
     },
     {
       "flag": "-i, --interactive",
       "i18n": {
-        "en": "Open the REPL even if stdin does not appear to be a terminal."
+        "en": "Open the REPL even if stdin does not appear to be a terminal.",
+        "zh-CN": "强制 REPL 模式（即使 stdin 不是 TTY）"
       }
     },
     {
       "flag": "-p, --print",
       "i18n": {
-        "en": "Identical to -e, but prints the result."
+        "en": "Identical to -e, but prints the result.",
+        "zh-CN": "等同 -e 但同时打印结果"
       }
     },
     {
@@ -880,7 +947,8 @@
     {
       "flag": "-v, --version",
       "i18n": {
-        "en": "Print node's version."
+        "en": "Print node's version.",
+        "zh-CN": "打印 Node.js 版本"
       }
     }
   ]

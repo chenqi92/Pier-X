@@ -10,37 +10,43 @@
     {
       "flag": "-f, --force",
       "i18n": {
-        "en": "ignore nonexistent files and arguments, never prompt"
+        "en": "ignore nonexistent files and arguments, never prompt",
+        "zh-CN": "强制删除，不提示，忽略不存在的文件"
       }
     },
     {
       "flag": "-i",
       "i18n": {
-        "en": ""
+        "en": "",
+        "zh-CN": "每次删除前提示"
       }
     },
     {
       "flag": "-I",
       "i18n": {
-        "en": "moving  recursively;  less intrusive than -i, while still giving protection against most mistakes"
+        "en": "moving  recursively;  less intrusive than -i, while still giving protection against most mistakes",
+        "zh-CN": "删除多于 3 个文件前提示一次"
       }
     },
     {
       "flag": "--interactive[=WHEN]",
       "i18n": {
-        "en": "prompt according to WHEN: never,  once  (-I),  or  always  (-i); without WHEN, prompt always"
+        "en": "prompt according to WHEN: never,  once  (-I),  or  always  (-i); without WHEN, prompt always",
+        "zh-CN": "提示策略（never/once/always）"
       }
     },
     {
       "flag": "--one-file-system",
       "i18n": {
-        "en": "when  removing  a hierarchy recursively, skip any directory that is on a file system different from  that  of  the  corresponding command line argument"
+        "en": "when  removing  a hierarchy recursively, skip any directory that is on a file system different from  that  of  the  corresponding command line argument",
+        "zh-CN": "递归时不跨越文件系统"
       }
     },
     {
       "flag": "--no-preserve-root",
       "i18n": {
-        "en": "do not treat '/' specially"
+        "en": "do not treat '/' specially",
+        "zh-CN": "不特殊对待根目录 /"
       }
     },
     {
@@ -58,25 +64,29 @@
     {
       "flag": "-d, --dir",
       "i18n": {
-        "en": "remove empty directories"
+        "en": "remove empty directories",
+        "zh-CN": "删除空目录"
       }
     },
     {
       "flag": "-v, --verbose",
       "i18n": {
-        "en": "explain what is being done"
+        "en": "explain what is being done",
+        "zh-CN": "详细输出每一删除"
       }
     },
     {
       "flag": "--help",
       "i18n": {
-        "en": ""
+        "en": "",
+        "zh-CN": "显示帮助"
       }
     },
     {
       "flag": "--version",
       "i18n": {
-        "en": "output version information and exit"
+        "en": "output version information and exit",
+        "zh-CN": "打印版本"
       }
     },
     {

@@ -16,91 +16,106 @@
     {
       "flag": "-c, --changes",
       "i18n": {
-        "en": "like verbose but report only when a change is made"
+        "en": "like verbose but report only when a change is made",
+        "zh-CN": "只在所有者实际变更时报告"
       }
     },
     {
       "flag": "-f, --silent, --quiet",
       "i18n": {
-        "en": "suppress most error messages"
+        "en": "suppress most error messages",
+        "zh-CN": "不报告大多数错误"
       }
     },
     {
       "flag": "-v, --verbose",
       "i18n": {
-        "en": "output a diagnostic for every file processed"
+        "en": "output a diagnostic for every file processed",
+        "zh-CN": "对每个文件都输出处理结果"
       }
     },
     {
       "flag": "--dereference",
       "i18n": {
-        "en": "affect the referent of each symbolic link (this is the default), rather than the symbolic link itself"
+        "en": "affect the referent of each symbolic link (this is the default), rather than the symbolic link itself",
+        "zh-CN": "对符号链接的目标做修改（默认）"
       }
     },
     {
       "flag": "-h, --no-dereference",
       "i18n": {
-        "en": "affect symbolic links instead of  any  referenced  file  (useful only on systems that can change the ownership of a symlink)"
+        "en": "affect symbolic links instead of  any  referenced  file  (useful only on systems that can change the ownership of a symlink)",
+        "zh-CN": "对符号链接本身做修改"
       }
     },
     {
       "flag": "--from=CURRENT_OWNER:CURRENT_GROUP",
       "i18n": {
-        "en": "change  the  owner and/or group of each file only if its current owner and/or group match those specified here.   Either  may  be omitted,  in  which case a match is not required for the omitted attribute"
+        "en": "change  the  owner and/or group of each file only if its current owner and/or group match those specified here.   Either  may  be omitted,  in  which case a match is not required for the omitted attribute",
+        "zh-CN": "只在当前 owner/group 匹配时才修改"
       }
     },
     {
       "flag": "--no-preserve-root",
       "i18n": {
-        "en": "do not treat '/' specially (the default)"
+        "en": "do not treat '/' specially (the default)",
+        "zh-CN": "不特殊对待根目录 /"
       }
     },
     {
       "flag": "--preserve-root",
       "i18n": {
-        "en": "fail to operate recursively on '/'"
+        "en": "fail to operate recursively on '/'",
+        "zh-CN": "拒绝在 / 上递归操作"
       }
     },
     {
       "flag": "--reference=RFILE",
       "i18n": {
-        "en": "use RFILE's owner and group rather than  specifying  OWNER:GROUP values.  RFILE is always dereferenced."
+        "en": "use RFILE's owner and group rather than  specifying  OWNER:GROUP values.  RFILE is always dereferenced.",
+        "zh-CN": "把所有者改成与 RFILE 相同"
       }
     },
     {
       "flag": "-R, --recursive",
       "i18n": {
-        "en": "operate on files and directories recursively"
+        "en": "operate on files and directories recursively",
+        "zh-CN": "递归处理目录"
       }
     },
     {
       "flag": "-H",
       "i18n": {
-        "en": "traverse it"
+        "en": "traverse it",
+        "zh-CN": "递归时跟随命令行上的符号链接"
       }
     },
     {
       "flag": "-L",
       "i18n": {
-        "en": ""
+        "en": "",
+        "zh-CN": "递归时跟随所有符号链接"
       }
     },
     {
       "flag": "-P",
       "i18n": {
-        "en": ""
+        "en": "",
+        "zh-CN": "递归时不跟随任何符号链接（默认）"
       }
     },
     {
       "flag": "--help",
       "i18n": {
-        "en": ""
+        "en": "",
+        "zh-CN": "显示帮助"
       }
     },
     {
       "flag": "--version",
       "i18n": {
-        "en": "output version information and exit"
+        "en": "output version information and exit",
+        "zh-CN": "打印版本"
       }
     }
   ]

@@ -10,115 +10,134 @@
     {
       "flag": "-b, --batch-mode",
       "i18n": {
-        "en": "run in non-interactive batch mode"
+        "en": "run in non-interactive batch mode",
+        "zh-CN": "批处理模式"
       }
     },
     {
       "flag": "-c, --cmdline-toggle",
       "i18n": {
-        "en": "reverse last remembered 'c' state"
+        "en": "reverse last remembered 'c' state",
+        "zh-CN": "切换显示完整命令行"
       }
     },
     {
       "flag": "-d, --delay",
       "i18n": {
-        "en": "iterative delay as SECS [.TENTHS]"
+        "en": "iterative delay as SECS [.TENTHS]",
+        "zh-CN": "刷新间隔"
       }
     },
     {
       "flag": "-E, --scale-summary-mem",
       "i18n": {
-        "en": "set mem as: k,m,g,t,p,e for SCALE"
+        "en": "set mem as: k,m,g,t,p,e for SCALE",
+        "zh-CN": "顶部内存的显示单位"
       }
     },
     {
       "flag": "-e, --scale-task-mem",
       "i18n": {
-        "en": "set mem with: k,m,g,t,p for SCALE"
+        "en": "set mem with: k,m,g,t,p for SCALE",
+        "zh-CN": "进程内存的显示单位"
       }
     },
     {
       "flag": "-H, --threads-show",
       "i18n": {
-        "en": "show tasks plus all their threads"
+        "en": "show tasks plus all their threads",
+        "zh-CN": "线程模式（按线程显示）"
       }
     },
     {
       "flag": "-i, --idle-toggle",
       "i18n": {
-        "en": "reverse last remembered 'i' state"
+        "en": "reverse last remembered 'i' state",
+        "zh-CN": "隐藏空闲/僵死的进程"
       }
     },
     {
       "flag": "-n, --iterations",
       "i18n": {
-        "en": "exit on maximum iterations NUMBER"
+        "en": "exit on maximum iterations NUMBER",
+        "zh-CN": "刷新指定次数后退出"
       }
     },
     {
       "flag": "-O, --list-fields",
       "i18n": {
-        "en": "output all field names, then exit"
+        "en": "output all field names, then exit",
+        "zh-CN": "列出可排序字段"
       }
     },
     {
       "flag": "-o, --sort-override",
       "i18n": {
-        "en": "force sorting on this named FIELD"
+        "en": "force sorting on this named FIELD",
+        "zh-CN": "按字段排序"
       }
     },
     {
       "flag": "-p, --pid",
       "i18n": {
-        "en": "monitor only the tasks in PIDLIST"
+        "en": "monitor only the tasks in PIDLIST",
+        "zh-CN": "只监控指定 PID"
       }
     },
     {
       "flag": "-S, --accum-time-toggle",
       "i18n": {
-        "en": "reverse last remembered 'S' state"
+        "en": "reverse last remembered 'S' state",
+        "zh-CN": "显示累计 CPU 时间"
       }
     },
     {
       "flag": "-s, --secure-mode",
       "i18n": {
-        "en": "run with secure mode restrictions"
+        "en": "run with secure mode restrictions",
+        "zh-CN": "安全模式"
       }
     },
     {
       "flag": "-U, --filter-any-user",
       "i18n": {
-        "en": "show only processes owned by USER"
+        "en": "show only processes owned by USER",
+        "zh-CN": "按用户过滤（任一身份）"
       }
     },
     {
       "flag": "-u, --filter-only-euser",
       "i18n": {
-        "en": "show only processes owned by USER"
+        "en": "show only processes owned by USER",
+        "zh-CN": "按有效用户过滤"
       }
     },
     {
       "flag": "-w, --width",
       "i18n": {
-        "en": "change print width [,use COLUMNS]"
+        "en": "change print width [,use COLUMNS]",
+        "zh-CN": "强制宽度"
       }
     },
     {
       "flag": "-1, --single-cpu-toggle",
       "i18n": {
-        "en": "reverse last remembered '1' state"
+        "en": "reverse last remembered '1' state",
+        "zh-CN": "单 CPU 显示模式"
       }
     },
     {
       "flag": "-h, --help",
       "i18n": {
-        "en": "display this help text, then exit"
+        "en": "display this help text, then exit",
+        "zh-CN": "显示帮助"
       }
     },
     {
       "flag": "-V, --version",
       "i18n": {
-        "en": "output version information & exit"
+        "en": "output version information & exit",
+        "zh-CN": "打印版本"
       }
     }
   ]

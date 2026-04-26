@@ -5,32 +5,7 @@
   "source": "auto-imported",
   "import_method": "completion-zsh",
   "import_date": "2026-04-26",
-  "subcommands": [
-    {
-      "name": "${words[@]",
-      "i18n": {
-        "en": "1}"
-      },
-      "options": [],
-      "subcommands": []
-    },
-    {
-      "name": "__gh_handle_completion_types",
-      "i18n": {
-        "en": "COMP_TYPE is $COMP_TYPE"
-      },
-      "options": [],
-      "subcommands": []
-    },
-    {
-      "name": "COMPREPLY[0]",
-      "i18n": {
-        "en": "${COMPREPLY[0]}"
-      },
-      "options": [],
-      "subcommands": []
-    }
-  ],
+  "subcommands": [],
   "options": [
     {
       "flag": "-eq",

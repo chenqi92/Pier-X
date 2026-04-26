@@ -9,7 +9,8 @@
     {
       "name": "cache",
       "i18n": {
-        "en": ""
+        "en": "",
+        "zh-CN": "管理 bat 的语法/主题缓存"
       },
       "options": [],
       "subcommands": []
@@ -19,7 +20,8 @@
     {
       "flag": "-A, --show-all",
       "i18n": {
-        "en": ""
+        "en": "",
+        "zh-CN": "显示所有不可见字符"
       }
     },
     {
@@ -43,49 +45,57 @@
     {
       "flag": "-p, --plain",
       "i18n": {
-        "en": ""
+        "en": "",
+        "zh-CN": "纯文本模式（无装饰）"
       }
     },
     {
       "flag": "-l, --language",
       "i18n": {
-        "en": ""
+        "en": "",
+        "zh-CN": "强制语法高亮的语言"
       }
     },
     {
       "flag": "-H, --highlight-line",
       "i18n": {
-        "en": ""
+        "en": "",
+        "zh-CN": "高亮指定行号"
       }
     },
     {
       "flag": "--file-name",
       "i18n": {
-        "en": ""
+        "en": "",
+        "zh-CN": "覆盖显示用的文件名"
       }
     },
     {
       "flag": "-d, --diff",
       "i18n": {
-        "en": ""
+        "en": "",
+        "zh-CN": "只显示与 git 相比有差异的行"
       }
     },
     {
       "flag": "--diff-context",
       "i18n": {
-        "en": ""
+        "en": "",
+        "zh-CN": "diff 显示模式下保留的上下文行数"
       }
     },
     {
       "flag": "--tabs",
       "i18n": {
-        "en": ""
+        "en": "",
+        "zh-CN": "Tab 字符的展开宽度"
       }
     },
     {
       "flag": "--wrap",
       "i18n": {
-        "en": ""
+        "en": "",
+        "zh-CN": "长行换行模式（auto/never/character）"
       }
     },
     {
@@ -97,55 +107,64 @@
     {
       "flag": "--terminal-width",
       "i18n": {
-        "en": ""
+        "en": "",
+        "zh-CN": "强制终端宽度"
       }
     },
     {
       "flag": "-n, --number",
       "i18n": {
-        "en": ""
+        "en": "",
+        "zh-CN": "只显示行号（等价 --style=numbers）"
       }
     },
     {
       "flag": "--color",
       "i18n": {
-        "en": ""
+        "en": "",
+        "zh-CN": "输出着色（auto/always/never）"
       }
     },
     {
       "flag": "--italic-text",
       "i18n": {
-        "en": ""
+        "en": "",
+        "zh-CN": "在终端中启用斜体（auto/always/never）"
       }
     },
     {
       "flag": "--decorations",
       "i18n": {
-        "en": ""
+        "en": "",
+        "zh-CN": "显示装饰列（auto/always/never）"
       }
     },
     {
       "flag": "-f, --force-colorization",
       "i18n": {
-        "en": ""
+        "en": "",
+        "zh-CN": "强制启用着色（用于 pipe）"
       }
     },
     {
       "flag": "--paging",
       "i18n": {
-        "en": ""
+        "en": "",
+        "zh-CN": "是否分页（auto/always/never）"
       }
     },
     {
       "flag": "--pager",
       "i18n": {
-        "en": ""
+        "en": "",
+        "zh-CN": "指定分页器命令"
       }
     },
     {
       "flag": "-m, --map-syntax",
       "i18n": {
-        "en": ""
+        "en": "",
+        "zh-CN": "把扩展名映射到指定语法"
       }
     },
     {
@@ -157,25 +176,29 @@
     {
       "flag": "--theme",
       "i18n": {
-        "en": ""
+        "en": "",
+        "zh-CN": "选择高亮主题"
       }
     },
     {
       "flag": "--theme-dark",
       "i18n": {
-        "en": ""
+        "en": "",
+        "zh-CN": "深色模式下的主题"
       }
     },
     {
       "flag": "--theme-light",
       "i18n": {
-        "en": ""
+        "en": "",
+        "zh-CN": "浅色模式下的主题"
       }
     },
     {
       "flag": "--list-themes",
       "i18n": {
-        "en": ""
+        "en": "",
+        "zh-CN": "列出所有内置主题"
       }
     },
     {
@@ -187,31 +210,36 @@
     {
       "flag": "--squeeze-limit",
       "i18n": {
-        "en": ""
+        "en": "",
+        "zh-CN": "保留 N 行空行后再压缩"
       }
     },
     {
       "flag": "--strip-ansi",
       "i18n": {
-        "en": ""
+        "en": "",
+        "zh-CN": "移除输入中的 ANSI 转义序列"
       }
     },
     {
       "flag": "--style",
       "i18n": {
-        "en": ""
+        "en": "",
+        "zh-CN": "组合显示风格（full/numbers/grid 等）"
       }
     },
     {
       "flag": "-r, --line-range",
       "i18n": {
-        "en": ""
+        "en": "",
+        "zh-CN": "只显示指定行号区间"
       }
     },
     {
       "flag": "-L, --list-languages",
       "i18n": {
-        "en": ""
+        "en": "",
+        "zh-CN": "列出支持的语言"
       }
     },
     {
@@ -229,43 +257,50 @@
     {
       "flag": "--config-dir",
       "i18n": {
-        "en": ""
+        "en": "",
+        "zh-CN": "打印配置目录"
       }
     },
     {
       "flag": "--cache-dir",
       "i18n": {
-        "en": ""
+        "en": "",
+        "zh-CN": "打印缓存目录"
       }
     },
     {
       "flag": "--diagnostic",
       "i18n": {
-        "en": ""
+        "en": "",
+        "zh-CN": "打印诊断信息以反馈 bug"
       }
     },
     {
       "flag": "--acknowledgements",
       "i18n": {
-        "en": ""
+        "en": "",
+        "zh-CN": "打印致谢列表"
       }
     },
     {
       "flag": "--set-terminal-title",
       "i18n": {
-        "en": ""
+        "en": "",
+        "zh-CN": "把当前文件名设到终端标题"
       }
     },
     {
       "flag": "-h, --help",
       "i18n": {
-        "en": ""
+        "en": "",
+        "zh-CN": "显示帮助"
       }
     },
     {
       "flag": "-V, --version",
       "i18n": {
-        "en": ""
+        "en": "",
+        "zh-CN": "打印版本"
       }
     }
   ]

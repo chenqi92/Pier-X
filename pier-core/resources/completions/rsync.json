@@ -16,13 +16,15 @@
     {
       "flag": "--info=FLAGS",
       "i18n": {
-        "en": "fine-grained informational verbosity"
+        "en": "fine-grained informational verbosity",
+        "zh-CN": "细粒度控制信息输出"
       }
     },
     {
       "flag": "--debug=FLAGS",
       "i18n": {
-        "en": "fine-grained debug verbosity"
+        "en": "fine-grained debug verbosity",
+        "zh-CN": "细粒度控制调试输出"
       }
     },
     {
@@ -40,7 +42,8 @@
     {
       "flag": "--no-motd",
       "i18n": {
-        "en": "suppress daemon-mode MOTD"
+        "en": "suppress daemon-mode MOTD",
+        "zh-CN": "不显示守护进程的 MOTD"
       }
     },
     {
@@ -58,7 +61,8 @@
     {
       "flag": "--no-OPTION",
       "i18n": {
-        "en": "turn off an implied OPTION (e.g. --no-D)"
+        "en": "turn off an implied OPTION (e.g. --no-D)",
+        "zh-CN": "关掉默认开启的选项"
       }
     },
     {
@@ -76,7 +80,8 @@
     {
       "flag": "--no-implied-dirs",
       "i18n": {
-        "en": "don't send implied dirs with --relative"
+        "en": "don't send implied dirs with --relative",
+        "zh-CN": "不补全 --relative 推断的目录"
       }
     },
     {
@@ -88,13 +93,15 @@
     {
       "flag": "--backup-dir=DIR",
       "i18n": {
-        "en": "make backups into hierarchy based in DIR"
+        "en": "make backups into hierarchy based in DIR",
+        "zh-CN": "备份目录"
       }
     },
     {
       "flag": "--suffix=SUFFIX",
       "i18n": {
-        "en": "backup suffix (default ~ w/o --backup-dir)"
+        "en": "backup suffix (default ~ w/o --backup-dir)",
+        "zh-CN": "备份文件后缀（默认 ~）"
       }
     },
     {
@@ -106,19 +113,22 @@
     {
       "flag": "--inplace",
       "i18n": {
-        "en": "update destination files in-place"
+        "en": "update destination files in-place",
+        "zh-CN": "原地写新数据（不创建临时文件）"
       }
     },
     {
       "flag": "--append",
       "i18n": {
-        "en": "append data onto shorter files"
+        "en": "append data onto shorter files",
+        "zh-CN": "追加模式（只追加更长部分）"
       }
     },
     {
       "flag": "--append-verify",
       "i18n": {
-        "en": "--append w/old data in file checksum"
+        "en": "--append w/old data in file checksum",
+        "zh-CN": "追加并校验已有部分"
       }
     },
     {
@@ -136,7 +146,8 @@
     {
       "flag": "--mkpath",
       "i18n": {
-        "en": "create destination's missing path components"
+        "en": "create destination's missing path components",
+        "zh-CN": "传输前先创建目标路径中缺失的目录"
       }
     },
     {
@@ -154,19 +165,22 @@
     {
       "flag": "--copy-unsafe-links",
       "i18n": {
-        "en": "only \"unsafe\" symlinks are transformed"
+        "en": "only \"unsafe\" symlinks are transformed",
+        "zh-CN": "传输不指向源树内的符号链接"
       }
     },
     {
       "flag": "--safe-links",
       "i18n": {
-        "en": "ignore symlinks that point outside the tree"
+        "en": "ignore symlinks that point outside the tree",
+        "zh-CN": "忽略不安全的符号链接"
       }
     },
     {
       "flag": "--munge-links",
       "i18n": {
-        "en": "munge symlinks to make them safe & unusable"
+        "en": "munge symlinks to make them safe & unusable",
+        "zh-CN": "本地化符号链接的目标"
       }
     },
     {
@@ -202,7 +216,8 @@
     {
       "flag": "--chmod=CHMOD",
       "i18n": {
-        "en": "affect file and/or directory permissions"
+        "en": "affect file and/or directory permissions",
+        "zh-CN": "传输时强制 chmod"
       }
     },
     {
@@ -232,31 +247,36 @@
     {
       "flag": "--devices",
       "i18n": {
-        "en": "preserve device files (super-user only)"
+        "en": "preserve device files (super-user only)",
+        "zh-CN": "保留设备文件（仅 super-user）"
       }
     },
     {
       "flag": "--copy-devices",
       "i18n": {
-        "en": "copy device contents as a regular file"
+        "en": "copy device contents as a regular file",
+        "zh-CN": "把设备文件当作内容复制"
       }
     },
     {
       "flag": "--write-devices",
       "i18n": {
-        "en": "write to devices as files (implies --inplace)"
+        "en": "write to devices as files (implies --inplace)",
+        "zh-CN": "允许写入设备文件"
       }
     },
     {
       "flag": "--specials",
       "i18n": {
-        "en": "preserve special files"
+        "en": "preserve special files",
+        "zh-CN": "保留特殊文件（FIFO/socket）"
       }
     },
     {
       "flag": "-D",
       "i18n": {
-        "en": "same as --devices --specials"
+        "en": "same as --devices --specials",
+        "zh-CN": "等同 --devices --specials"
       }
     },
     {
@@ -274,7 +294,8 @@
     {
       "flag": "--open-noatime",
       "i18n": {
-        "en": "avoid changing the atime on opened files"
+        "en": "avoid changing the atime on opened files",
+        "zh-CN": "读取时不更新 atime"
       }
     },
     {
@@ -298,13 +319,15 @@
     {
       "flag": "--super",
       "i18n": {
-        "en": "receiver attempts super-user activities"
+        "en": "receiver attempts super-user activities",
+        "zh-CN": "强制以 super-user 行为传输"
       }
     },
     {
       "flag": "--fake-super",
       "i18n": {
-        "en": "store/recover privileged attrs using xattrs"
+        "en": "store/recover privileged attrs using xattrs",
+        "zh-CN": "用 xattr 模拟 super-user"
       }
     },
     {
@@ -316,7 +339,8 @@
     {
       "flag": "--preallocate",
       "i18n": {
-        "en": "allocate dest files before writing them"
+        "en": "allocate dest files before writing them",
+        "zh-CN": "目标端先预分配磁盘空间"
       }
     },
     {
@@ -334,7 +358,8 @@
     {
       "flag": "--checksum-choice=STR",
       "i18n": {
-        "en": "choose the checksum algorithm (aka --cc)"
+        "en": "choose the checksum algorithm (aka --cc)",
+        "zh-CN": "选择校验和算法"
       }
     },
     {
@@ -358,133 +383,155 @@
     {
       "flag": "--rsync-path=PROGRAM",
       "i18n": {
-        "en": "specify the rsync to run on remote machine"
+        "en": "specify the rsync to run on remote machine",
+        "zh-CN": "远端 rsync 程序路径"
       }
     },
     {
       "flag": "--existing",
       "i18n": {
-        "en": "skip creating new files on receiver"
+        "en": "skip creating new files on receiver",
+        "zh-CN": "跳过目标不存在的文件"
       }
     },
     {
       "flag": "--ignore-existing",
       "i18n": {
-        "en": "skip updating files that exist on receiver"
+        "en": "skip updating files that exist on receiver",
+        "zh-CN": "跳过目标已存在的文件"
       }
     },
     {
       "flag": "--remove-source-files",
       "i18n": {
-        "en": "sender removes synchronized files (non-dir)"
+        "en": "sender removes synchronized files (non-dir)",
+        "zh-CN": "传输成功后删除源文件"
       }
     },
     {
       "flag": "--del",
       "i18n": {
-        "en": "an alias for --delete-during"
+        "en": "an alias for --delete-during",
+        "zh-CN": "等同 --delete-during"
       }
     },
     {
       "flag": "--delete",
       "i18n": {
-        "en": "delete extraneous files from dest dirs"
+        "en": "delete extraneous files from dest dirs",
+        "zh-CN": "目标端删除源端不存在的文件"
       }
     },
     {
       "flag": "--delete-before",
       "i18n": {
-        "en": "receiver deletes before xfer, not during"
+        "en": "receiver deletes before xfer, not during",
+        "zh-CN": "传输前先做删除"
       }
     },
     {
       "flag": "--delete-during",
       "i18n": {
-        "en": "receiver deletes during the transfer"
+        "en": "receiver deletes during the transfer",
+        "zh-CN": "边传输边删除"
       }
     },
     {
       "flag": "--delete-delay",
       "i18n": {
-        "en": "find deletions during, delete after"
+        "en": "find deletions during, delete after",
+        "zh-CN": "在传输结束后批量删除"
       }
     },
     {
       "flag": "--delete-after",
       "i18n": {
-        "en": "receiver deletes after transfer, not during"
+        "en": "receiver deletes after transfer, not during",
+        "zh-CN": "传输完成后再删除"
       }
     },
     {
       "flag": "--delete-excluded",
       "i18n": {
-        "en": "also delete excluded files from dest dirs"
+        "en": "also delete excluded files from dest dirs",
+        "zh-CN": "也删除 --exclude 排除的文件"
       }
     },
     {
       "flag": "--ignore-missing-args",
       "i18n": {
-        "en": "ignore missing source args without error"
+        "en": "ignore missing source args without error",
+        "zh-CN": "忽略缺失的源文件"
       }
     },
     {
       "flag": "--delete-missing-args",
       "i18n": {
-        "en": "delete missing source args from destination"
+        "en": "delete missing source args from destination",
+        "zh-CN": "缺失的源文件 → 目标端删掉"
       }
     },
     {
       "flag": "--ignore-errors",
       "i18n": {
-        "en": "delete even if there are I/O errors"
+        "en": "delete even if there are I/O errors",
+        "zh-CN": "出错也继续 --delete"
       }
     },
     {
       "flag": "--force",
       "i18n": {
-        "en": "force deletion of dirs even if not empty"
+        "en": "force deletion of dirs even if not empty",
+        "zh-CN": "强制删除非空目录"
       }
     },
     {
       "flag": "--max-delete=NUM",
       "i18n": {
-        "en": "don't delete more than NUM files"
+        "en": "don't delete more than NUM files",
+        "zh-CN": "最多删除 N 个文件"
       }
     },
     {
       "flag": "--max-size=SIZE",
       "i18n": {
-        "en": "don't transfer any file larger than SIZE"
+        "en": "don't transfer any file larger than SIZE",
+        "zh-CN": "跳过大于 SIZE 的文件"
       }
     },
     {
       "flag": "--min-size=SIZE",
       "i18n": {
-        "en": "don't transfer any file smaller than SIZE"
+        "en": "don't transfer any file smaller than SIZE",
+        "zh-CN": "跳过小于 SIZE 的文件"
       }
     },
     {
       "flag": "--max-alloc=SIZE",
       "i18n": {
-        "en": "change a limit relating to memory alloc"
+        "en": "change a limit relating to memory alloc",
+        "zh-CN": "rsync 自身分配上限"
       }
     },
     {
       "flag": "--partial",
       "i18n": {
-        "en": "keep partially transferred files"
+        "en": "keep partially transferred files",
+        "zh-CN": "保留部分传输的文件"
       }
     },
     {
       "flag": "--partial-dir=DIR",
       "i18n": {
-        "en": "put a partially transferred file into DIR"
+        "en": "put a partially transferred file into DIR",
+        "zh-CN": "部分文件存到 DIR"
       }
     },
     {
       "flag": "--delay-updates",
       "i18n": {
-        "en": "put all updated files into place at end"
+        "en": "put all updated files into place at end",
+        "zh-CN": "所有文件准备好后再原子替换"
       }
     },
     {
@@ -496,37 +543,43 @@
     {
       "flag": "--numeric-ids",
       "i18n": {
-        "en": "don't map uid/gid values by user/group name"
+        "en": "don't map uid/gid values by user/group name",
+        "zh-CN": "不解析 uid/gid 名字"
       }
     },
     {
       "flag": "--usermap=STRING",
       "i18n": {
-        "en": "custom username mapping"
+        "en": "custom username mapping",
+        "zh-CN": "传输时映射用户"
       }
     },
     {
       "flag": "--groupmap=STRING",
       "i18n": {
-        "en": "custom groupname mapping"
+        "en": "custom groupname mapping",
+        "zh-CN": "传输时映射组"
       }
     },
     {
       "flag": "--chown=USER:GROUP",
       "i18n": {
-        "en": "simple username/groupname mapping"
+        "en": "simple username/groupname mapping",
+        "zh-CN": "强制目标 owner/group"
       }
     },
     {
       "flag": "--timeout=SECONDS",
       "i18n": {
-        "en": "set I/O timeout in seconds"
+        "en": "set I/O timeout in seconds",
+        "zh-CN": "I/O 超时"
       }
     },
     {
       "flag": "--contimeout=SECONDS",
       "i18n": {
-        "en": "set daemon connection timeout in seconds"
+        "en": "set daemon connection timeout in seconds",
+        "zh-CN": "守护进程连接超时"
       }
     },
     {
@@ -538,7 +591,8 @@
     {
       "flag": "--size-only",
       "i18n": {
-        "en": "skip files that match in size"
+        "en": "skip files that match in size",
+        "zh-CN": "只按大小判断"
       }
     },
     {
@@ -562,19 +616,22 @@
     {
       "flag": "--compare-dest=DIR",
       "i18n": {
-        "en": "also compare destination files relative to DIR"
+        "en": "also compare destination files relative to DIR",
+        "zh-CN": "对比 DIR 来决定是否传"
       }
     },
     {
       "flag": "--copy-dest=DIR",
       "i18n": {
-        "en": "... and include copies of unchanged files"
+        "en": "... and include copies of unchanged files",
+        "zh-CN": "类似 --compare-dest 但允许复制"
       }
     },
     {
       "flag": "--link-dest=DIR",
       "i18n": {
-        "en": "hardlink to files in DIR when unchanged"
+        "en": "hardlink to files in DIR when unchanged",
+        "zh-CN": "若与 DIR 中文件一致则做硬链接"
       }
     },
     {
@@ -586,19 +643,22 @@
     {
       "flag": "--compress-choice=STR",
       "i18n": {
-        "en": "choose the compression algorithm (aka --zc)"
+        "en": "choose the compression algorithm (aka --zc)",
+        "zh-CN": "压缩算法（zstd/lz4/zlib 等）"
       }
     },
     {
       "flag": "--compress-level=NUM",
       "i18n": {
-        "en": "explicitly set compression level (aka --zl)"
+        "en": "explicitly set compression level (aka --zl)",
+        "zh-CN": "压缩级别"
       }
     },
     {
       "flag": "--skip-compress=LIST",
       "i18n": {
-        "en": "skip compressing files with suffix in LIST"
+        "en": "skip compressing files with suffix in LIST",
+        "zh-CN": "跳过这些扩展名的压缩"
       }
     },
     {
@@ -616,37 +676,43 @@
     {
       "flag": "-F",
       "i18n": {
-        "en": "same as --filter='dir-merge /.rsync-filter'"
+        "en": "same as --filter='dir-merge /.rsync-filter'",
+        "zh-CN": "等同 --filter='dir-merge .rsync-filter'"
       }
     },
     {
       "flag": "--exclude=PATTERN",
       "i18n": {
-        "en": "exclude files matching PATTERN"
+        "en": "exclude files matching PATTERN",
+        "zh-CN": "排除匹配的文件"
       }
     },
     {
       "flag": "--exclude-from=FILE",
       "i18n": {
-        "en": "read exclude patterns from FILE"
+        "en": "read exclude patterns from FILE",
+        "zh-CN": "从 FILE 读取排除模式"
       }
     },
     {
       "flag": "--include=PATTERN",
       "i18n": {
-        "en": "don't exclude files matching PATTERN"
+        "en": "don't exclude files matching PATTERN",
+        "zh-CN": "包含匹配的文件（覆盖 --exclude）"
       }
     },
     {
       "flag": "--include-from=FILE",
       "i18n": {
-        "en": "read include patterns from FILE"
+        "en": "read include patterns from FILE",
+        "zh-CN": "从 FILE 读取包含模式"
       }
     },
     {
       "flag": "--files-from=FILE",
       "i18n": {
-        "en": "read list of source-file names from FILE"
+        "en": "read list of source-file names from FILE",
+        "zh-CN": "只传 FILE 中列出的文件"
       }
     },
     {
@@ -658,7 +724,8 @@
     {
       "flag": "--old-args",
       "i18n": {
-        "en": "disable the modern arg-protection idiom"
+        "en": "disable the modern arg-protection idiom",
+        "zh-CN": "兼容旧 rsync 的参数解析"
       }
     },
     {
@@ -670,49 +737,57 @@
     {
       "flag": "--trust-sender",
       "i18n": {
-        "en": "trust the remote sender's file list"
+        "en": "trust the remote sender's file list",
+        "zh-CN": "信任远端 sender 的文件清单"
       }
     },
     {
       "flag": "--copy-as=USER[:GROUP]",
       "i18n": {
-        "en": "specify user & optional group for the copy"
+        "en": "specify user & optional group for the copy",
+        "zh-CN": "把传输任务以 USER 身份执行"
       }
     },
     {
       "flag": "--address=ADDRESS",
       "i18n": {
-        "en": "bind address for outgoing socket to daemon"
+        "en": "bind address for outgoing socket to daemon",
+        "zh-CN": "绑定本地地址"
       }
     },
     {
       "flag": "--port=PORT",
       "i18n": {
-        "en": "specify double-colon alternate port number"
+        "en": "specify double-colon alternate port number",
+        "zh-CN": "rsync 守护进程端口"
       }
     },
     {
       "flag": "--sockopts=OPTIONS",
       "i18n": {
-        "en": "specify custom TCP options"
+        "en": "specify custom TCP options",
+        "zh-CN": "TCP socket 选项"
       }
     },
     {
       "flag": "--blocking-io",
       "i18n": {
-        "en": "use blocking I/O for the remote shell"
+        "en": "use blocking I/O for the remote shell",
+        "zh-CN": "用阻塞 I/O 与远端通信"
       }
     },
     {
       "flag": "--outbuf=N|L|B",
       "i18n": {
-        "en": "set out buffering to None, Line, or Block"
+        "en": "set out buffering to None, Line, or Block",
+        "zh-CN": "stdout 缓冲（none/line/block）"
       }
     },
     {
       "flag": "--stats",
       "i18n": {
-        "en": "give some file-transfer stats"
+        "en": "give some file-transfer stats",
+        "zh-CN": "结束时打印传输统计"
       }
     },
     {
@@ -730,13 +805,15 @@
     {
       "flag": "--progress",
       "i18n": {
-        "en": "show progress during transfer"
+        "en": "show progress during transfer",
+        "zh-CN": "传输过程中显示进度"
       }
     },
     {
       "flag": "-P",
       "i18n": {
-        "en": "same as --partial --progress"
+        "en": "same as --partial --progress",
+        "zh-CN": "等同 --partial --progress"
       }
     },
     {
@@ -754,55 +831,64 @@
     {
       "flag": "--out-format=FORMAT",
       "i18n": {
-        "en": "output updates using the specified FORMAT"
+        "en": "output updates using the specified FORMAT",
+        "zh-CN": "用 FORMAT 输出每个文件信息"
       }
     },
     {
       "flag": "--log-file=FILE",
       "i18n": {
-        "en": "log what we're doing to the specified FILE"
+        "en": "log what we're doing to the specified FILE",
+        "zh-CN": "写入日志文件"
       }
     },
     {
       "flag": "--log-file-format=FMT",
       "i18n": {
-        "en": "log updates using the specified FMT"
+        "en": "log updates using the specified FMT",
+        "zh-CN": "日志输出格式"
       }
     },
     {
       "flag": "--password-file=FILE",
       "i18n": {
-        "en": "read daemon-access password from FILE"
+        "en": "read daemon-access password from FILE",
+        "zh-CN": "从 FILE 读取守护进程密码"
       }
     },
     {
       "flag": "--early-input=FILE",
       "i18n": {
-        "en": "use FILE for daemon's early exec input"
+        "en": "use FILE for daemon's early exec input",
+        "zh-CN": "把 FILE 内容交给远端 'pre-xfer' 命令"
       }
     },
     {
       "flag": "--list-only",
       "i18n": {
-        "en": "list the files instead of copying them"
+        "en": "list the files instead of copying them",
+        "zh-CN": "只列出文件，不传"
       }
     },
     {
       "flag": "--bwlimit=RATE",
       "i18n": {
-        "en": "limit socket I/O bandwidth"
+        "en": "limit socket I/O bandwidth",
+        "zh-CN": "带宽上限（如 1.5M）"
       }
     },
     {
       "flag": "--stop-after=MINS",
       "i18n": {
-        "en": "Stop rsync after MINS minutes have elapsed"
+        "en": "Stop rsync after MINS minutes have elapsed",
+        "zh-CN": "运行 MINS 分钟后停止"
       }
     },
     {
       "flag": "--stop-at=y-m-dTh:m",
       "i18n": {
-        "en": "Stop rsync at the specified point in time"
+        "en": "Stop rsync at the specified point in time",
+        "zh-CN": "在指定时间停止"
       }
     },
     {
@@ -814,37 +900,43 @@
     {
       "flag": "--write-batch=FILE",
       "i18n": {
-        "en": "write a batched update to FILE"
+        "en": "write a batched update to FILE",
+        "zh-CN": "把同步指令写到 FILE 备用"
       }
     },
     {
       "flag": "--only-write-batch=FILE",
       "i18n": {
-        "en": "like --write-batch but w/o updating dest"
+        "en": "like --write-batch but w/o updating dest",
+        "zh-CN": "等同 --write-batch 但不真正同步"
       }
     },
     {
       "flag": "--read-batch=FILE",
       "i18n": {
-        "en": "read a batched update from FILE"
+        "en": "read a batched update from FILE",
+        "zh-CN": "重放 FILE 中记录的同步指令"
       }
     },
     {
       "flag": "--protocol=NUM",
       "i18n": {
-        "en": "force an older protocol version to be used"
+        "en": "force an older protocol version to be used",
+        "zh-CN": "强制旧版本协议（兼容老服务器）"
       }
     },
     {
       "flag": "--iconv=CONVERT_SPEC",
       "i18n": {
-        "en": "request charset conversion of filenames"
+        "en": "request charset conversion of filenames",
+        "zh-CN": "在文件名编码间转换"
       }
     },
     {
       "flag": "--checksum-seed=NUM",
       "i18n": {
-        "en": "set block/file checksum seed (advanced)"
+        "en": "set block/file checksum seed (advanced)",
+        "zh-CN": "校验和种子（高级）"
       }
     },
     {

@@ -28,19 +28,22 @@
     {
       "flag": "--numeric-hosts",
       "i18n": {
-        "en": ""
+        "en": "",
+        "zh-CN": "主机用数字 IP"
       }
     },
     {
       "flag": "--numeric-ports",
       "i18n": {
-        "en": ""
+        "en": "",
+        "zh-CN": "端口用数字"
       }
     },
     {
       "flag": "--numeric-users",
       "i18n": {
-        "en": ""
+        "en": "",
+        "zh-CN": "用户用 UID"
       }
     },
     {
@@ -64,13 +67,15 @@
     {
       "flag": "-e, --extend",
       "i18n": {
-        "en": ""
+        "en": "",
+        "zh-CN": "更多信息（可叠加 -ee）"
       }
     },
     {
       "flag": "-o, --timers",
       "i18n": {
-        "en": ""
+        "en": "",
+        "zh-CN": "显示连接的计时器信息"
       }
     },
     {
@@ -82,13 +87,15 @@
     {
       "flag": "-l, --listening",
       "i18n": {
-        "en": ""
+        "en": "",
+        "zh-CN": "只显示 LISTEN 状态的端口"
       }
     },
     {
       "flag": "-a, --all",
       "i18n": {
-        "en": ""
+        "en": "",
+        "zh-CN": "显示所有套接字（含 LISTEN）"
       }
     },
     {

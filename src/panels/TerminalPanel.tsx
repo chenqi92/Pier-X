@@ -766,12 +766,16 @@ export default function TerminalPanel({ tab, isActive, onEditConnection }: Props
   // We deliberately don't gate on OSC 133 sentinels here: remote
   // shells reached over `ssh` don't emit them, and the byte-stream
   // mirror buffer already self-resets on CR/LF, so smart mode stays
-  // correct without prompt-end signals. Alt-screen and bracketed
-  // paste are universal vt100 signals — those still gate.
+  // correct without prompt-end signals. We also accept a missing
+  // snapshot (initial mount, just-restarted tab) — only an *active*
+  // alt-screen / paste state forces a bypass. The previous strict
+  // `=== false` form turned the gate off any time the field was
+  // undefined, which silently disabled smart mode for russh tabs
+  // whose first snapshot hadn't arrived yet.
   const smartActive =
     smartMode &&
-    snapshot?.altScreen === false &&
-    snapshot?.bracketedPaste === false;
+    snapshot?.altScreen !== true &&
+    snapshot?.bracketedPaste !== true;
 
   useEffect(() => {
     smartActiveRef.current = smartActive;

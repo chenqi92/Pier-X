@@ -159,6 +159,13 @@ export default function TerminalPanel({ tab, isActive, onEditConnection }: Props
   // boolean below.
   const smartLineBufferRef = useRef("");
   const smartActiveRef = useRef(false);
+  /** Counter incremented before every cycle-insert and decremented
+   *  in the .then() that follows. The popover refilter useEffect
+   *  uses this to tell "buffer changed because we cycled" apart
+   *  from "buffer changed because the user typed a key", since both
+   *  paths feed `updateSmartLineBuffer` and would otherwise look
+   *  identical. */
+  const cycleInFlightRef = useRef(0);
 
   // Render-driven mirror of `smartLineBufferRef`. The ref keeps event
   // handlers fast and stale-closure-free; this state forces React to
@@ -189,12 +196,30 @@ export default function TerminalPanel({ tab, isActive, onEditConnection }: Props
     items: Completion[];
     filtered: Completion[];
     selectedIndex: number;
+    /** Snapshot of the mirror buffer at the moment the popover
+     *  opened. Used to undo cycle insertions so each Tab cycle can
+     *  replace the previous candidate without leaving stale text in
+     *  the line. Empty when popover is closed. */
+    basePrefix: string;
+    /** What we have currently appended to `basePrefix` in the PTY +
+     *  mirror as a result of the highlighted candidate. Cycling
+     *  sends `appliedInsert.length` backspaces to undo this before
+     *  injecting the new candidate's diff. Empty when no candidate
+     *  has been applied yet (popover just opened, or Esc reverted). */
+    appliedInsert: string;
+    /** Cached `findWordStart` result from `basePrefix` at popover
+     *  open. Used to compute each candidate's append-suffix without
+     *  re-walking the buffer on every cycle. */
+    baseWordStart: number;
   };
   const [completion, setCompletion] = useState<CompletionState>({
     open: false,
     items: [],
     filtered: [],
     selectedIndex: 0,
+    basePrefix: "",
+    appliedInsert: "",
+    baseWordStart: 0,
   });
 
   // M6: man-page popover. Triggered by Ctrl+Shift+M in smart mode.
@@ -824,24 +849,32 @@ export default function TerminalPanel({ tab, isActive, onEditConnection }: Props
     void hydrateHistory(session.shell, historyPersist);
   }, [session?.shell, historyPersist, hydrateHistory]);
 
-  // M4: refilter the open completion popover on every keystroke so
-  // the candidate list narrows as the user types more characters.
-  // We re-derive the prefix from the live mirror buffer ref rather
-  // than the state mirror to keep filtering in lock-step with what
-  // the user actually typed (the state lags by one render).
+  // M4: refilter the open completion popover when the user types
+  // *new* characters while the popover is up. We can't refilter on
+  // every mirror change anymore — cycle-inserting (warp menu-complete)
+  // also grows the buffer with the highlighted candidate's tail, and
+  // refiltering against `basePrefix + appliedInsert` would correctly
+  // shrink the list to nothing. We skip when the buffer matches our
+  // own applied state and only refilter on a genuine user keystroke
+  // (buffer diverges from base+applied).
   useEffect(() => {
+    // Skip while a cycle's PTY write is mid-flight — the buffer
+    // change is ours, not the user's. Without this guard the effect
+    // sees "buffer extended by ` build` but state still has the
+    // prior ` attach`" and wrongly concludes the user typed.
+    if (cycleInFlightRef.current > 0) return;
     setCompletion((s) => {
       if (!s.open) return s;
       const line = smartLineBufferRef.current;
-      const cursor = line.length;
-      const wordStart = findWordStart(line, cursor);
-      const prefix = line.slice(wordStart, cursor);
-      const filtered = s.items.filter((it) => it.value.startsWith(prefix));
-      const selectedIndex =
-        filtered.length === 0
-          ? 0
-          : Math.min(s.selectedIndex, filtered.length - 1);
-      return { ...s, filtered, selectedIndex };
+      const ourState = s.basePrefix + s.appliedInsert;
+      if (line === ourState) return s;
+      // User typed something. Easiest correct behaviour: dismiss
+      // popover so the new char takes effect and the next Tab pops
+      // a fresh list against the longer prefix. Live in-popover
+      // narrowing was nice but doesn't compose with cycle-inserting;
+      // re-pop is one keystroke away.
+      void eraseLastN(s.appliedInsert.length);
+      return { ...s, open: false, appliedInsert: "" };
     });
   }, [smartLineBufferText]);
 
@@ -1514,28 +1547,100 @@ export default function TerminalPanel({ tab, isActive, onEditConnection }: Props
     return i;
   }
 
-  function closeCompletion() {
-    setCompletion((s) => (s.open ? { ...s, open: false } : s));
+  /**
+   * Compute what we'd need to *append* to `basePrefix` to land on
+   * `item.value`. Mirrors the word-diff logic the old
+   * `insertCompletion` used, but pure — doesn't touch any state.
+   * Returns `null` when the candidate doesn't share the current word
+   * prefix (rare but possible with stale popover candidates).
+   */
+  function appendSuffixFor(
+    item: Completion,
+    basePrefix: string,
+    baseWordStart: number,
+  ): string | null {
+    const baseWord = basePrefix.slice(baseWordStart);
+    if (!item.value.startsWith(baseWord)) return null;
+    return item.value.slice(baseWord.length);
   }
 
   /**
-   * Insert the diff between the candidate and the current word at
-   * cursor. The shell's echo of those bytes drives the standard
-   * mirror-buffer update path, so highlight + caret stay in sync
-   * for free. A candidate shorter than the typed prefix is treated
-   * as a no-op for M4 — backspace-and-replace lands in M5+ once we
-   * have richer line-editor semantics.
+   * Undo whatever's currently appended to `basePrefix` by sending
+   * DEL bytes (`\x7f`) to the PTY — readline interprets each as
+   * "backspace + delete", and the byte-stream mirror handler treats
+   * code 127 as a one-char buffer pop. Resolves once `n` bytes have
+   * been queued.
    */
-  function insertCompletion(item: Completion) {
-    const line = smartLineBufferRef.current;
-    const cursor = line.length;
-    const wordStart = findWordStart(line, cursor);
-    const currentWord = line.slice(wordStart, cursor);
-    if (item.value.startsWith(currentWord)) {
-      const diff = item.value.slice(currentWord.length);
-      if (diff) void sendInput(diff);
+  async function eraseLastN(n: number) {
+    if (n <= 0) return;
+    await sendInput("\x7f".repeat(n));
+  }
+
+  /** Apply a candidate by index. Cancels any prior cycle's insert
+   *  (via DEL bytes), then injects this candidate's append-suffix.
+   *  Returns the new `appliedInsert` so callers can fold it into
+   *  state alongside `selectedIndex`. The cycle-in-flight counter
+   *  brackets the PTY writes so the refilter useEffect knows to
+   *  skip the buffer changes we ourselves caused. */
+  async function applyCandidateAt(
+    idx: number,
+    state: CompletionState,
+  ): Promise<string> {
+    const item = state.filtered[idx];
+    if (!item) return "";
+    const suffix = appendSuffixFor(item, state.basePrefix, state.baseWordStart);
+    if (suffix === null) return state.appliedInsert;
+    cycleInFlightRef.current += 1;
+    try {
+      await eraseLastN(state.appliedInsert.length);
+      if (suffix.length > 0) await sendInput(suffix);
+      return suffix;
+    } finally {
+      cycleInFlightRef.current = Math.max(0, cycleInFlightRef.current - 1);
     }
-    closeCompletion();
+  }
+
+  /** Cycle the popover by `direction` (+1 / -1) and reflect the new
+   *  selection in the PTY. Wraps modulo `filtered.length`. */
+  function cycleSelection(direction: 1 | -1) {
+    setCompletion((s) => {
+      if (!s.open || s.filtered.length === 0) return s;
+      const next = (s.selectedIndex + direction + s.filtered.length) %
+        s.filtered.length;
+      // Fire-and-forget the PTY mutation. We update `selectedIndex`
+      // synchronously and reconcile `appliedInsert` once the writes
+      // have queued; mirror buffer is updated synchronously inside
+      // sendInput so a fast cycle still reads the right baseline.
+      void applyCandidateAt(next, { ...s, selectedIndex: next }).then(
+        (applied) => {
+          setCompletion((cur) =>
+            cur.open && cur.selectedIndex === next
+              ? { ...cur, appliedInsert: applied }
+              : cur,
+          );
+        },
+      );
+      return { ...s, selectedIndex: next };
+    });
+  }
+
+  function closeCompletion() {
+    setCompletion((s) => (s.open ? { ...s, open: false, appliedInsert: "" } : s));
+  }
+
+  /** Esc handler — undo whatever cycle inserted, then close. */
+  function cancelCompletion() {
+    setCompletion((s) => {
+      if (!s.open) return s;
+      void eraseLastN(s.appliedInsert.length);
+      return { ...s, open: false, appliedInsert: "" };
+    });
+  }
+
+  /** Enter handler — keep whatever's currently in the line (the
+   *  cycle insertion is the final answer), just dismiss the popover. */
+  function acceptCompletion() {
+    setCompletion((s) => (s.open ? { ...s, open: false } : s));
   }
 
   /**
@@ -1595,9 +1700,11 @@ export default function TerminalPanel({ tab, isActive, onEditConnection }: Props
   }
 
   /**
-   * Tab handler: ask the backend for completion candidates against
-   * the current mirror buffer + cursor, then either auto-insert
-   * (single match) or open the popover.
+   * Tab handler: open the popover with backend + history candidates,
+   * and *eagerly* insert the first one into the PTY so the user sees
+   * the highlighted candidate reflected in the line immediately
+   * (warp / fish menu-complete pattern). Subsequent Tabs cycle the
+   * highlight + replace the inserted text.
    */
   async function openCompletion() {
     if (!session) return;
@@ -1619,13 +1726,11 @@ export default function TerminalPanel({ tab, isActive, onEditConnection }: Props
     }
 
     // Prepend up-to-10 history rows that strictly extend the current
-    // line. We slice from the user's word-start so `insertCompletion`'s
-    // existing word-diff logic injects the right tail into the PTY.
-    // Most-recent-first ordering is preserved by `historyRing`'s
-    // insertion semantics in `useTerminalHistoryStore`.
+    // line. We slice from the user's word-start so the cycle/insert
+    // logic injects the right tail into the PTY.
+    const wordStart = findWordStart(line, cursor);
     const historyRows: Completion[] = [];
     if (line.length > 0) {
-      const wordStart = findWordStart(line, cursor);
       const seen = new Set<string>();
       for (const entry of historyRing) {
         if (historyRows.length >= 10) break;
@@ -1644,19 +1749,23 @@ export default function TerminalPanel({ tab, isActive, onEditConnection }: Props
     }
     items = [...historyRows, ...items];
     if (items.length === 0) return;
-    // Always show the popover — even for a single match. The old
-    // "auto-insert when exactly one candidate" path silently
-    // consumed the first Tab when (e.g.) `cd Doc<Tab>` had a
-    // unique completion, which made the popover feel unreliable
-    // (users would press Tab a second time to see anything).
-    // Visible feedback on every Tab > the half-second saved by
-    // skipping the popover for one candidate.
-    setCompletion({
+
+    // Apply the first candidate immediately so the line shows what's
+    // selected. The mirror buffer updates synchronously inside
+    // sendInput; we read it after the await to learn what was
+    // actually appended (handles the value-doesn't-startsWith-word
+    // edge case cleanly — appliedInsert stays "" then).
+    const initialState: CompletionState = {
       open: true,
       items,
       filtered: items,
       selectedIndex: 0,
-    });
+      basePrefix: line,
+      appliedInsert: "",
+      baseWordStart: wordStart,
+    };
+    const applied = await applyCandidateAt(0, initialState);
+    setCompletion({ ...initialState, appliedInsert: applied });
   }
 
   function handleKeyDown(event: React.KeyboardEvent<HTMLDivElement>) {
@@ -1668,47 +1777,30 @@ export default function TerminalPanel({ tab, isActive, onEditConnection }: Props
     // those bytes never reach the underlying shell readline (which
     // would otherwise scroll its history or submit the line).
     //
-    // Tab here cycles the highlight (warp / fish style) instead of
-    // confirming. Confirm is reserved for Enter — user's mental model
-    // is "Tab to keep browsing, Enter to commit". Shift+Tab cycles
-    // backward; both wrap so Tab past the last item lands on the
-    // first one.
+    // Tab here cycles the highlight (warp / fish menu-complete) AND
+    // injects the highlighted candidate's bytes into the PTY so the
+    // line tracks the selection in real time. Shift+Tab cycles back.
+    // Enter accepts whatever's currently inserted and dismisses; Esc
+    // rolls back to the line as it was before the popover opened.
     if (completion.open) {
       if (event.key === "ArrowDown" || (event.key === "Tab" && !event.shiftKey)) {
         event.preventDefault();
-        setCompletion((s) =>
-          s.filtered.length === 0
-            ? s
-            : {
-                ...s,
-                selectedIndex: (s.selectedIndex + 1) % s.filtered.length,
-              },
-        );
+        cycleSelection(1);
         return;
       }
       if (event.key === "ArrowUp" || (event.key === "Tab" && event.shiftKey)) {
         event.preventDefault();
-        setCompletion((s) =>
-          s.filtered.length === 0
-            ? s
-            : {
-                ...s,
-                selectedIndex:
-                  (s.selectedIndex - 1 + s.filtered.length) % s.filtered.length,
-              },
-        );
+        cycleSelection(-1);
         return;
       }
       if (event.key === "Escape") {
         event.preventDefault();
-        closeCompletion();
+        cancelCompletion();
         return;
       }
       if (event.key === "Enter") {
         event.preventDefault();
-        const sel = completion.filtered[completion.selectedIndex];
-        if (sel) insertCompletion(sel);
-        else closeCompletion();
+        acceptCompletion();
         return;
       }
       // Any other key — fall through to the normal handler so the
@@ -2133,10 +2225,29 @@ export default function TerminalPanel({ tab, isActive, onEditConnection }: Props
         items={completion.filtered}
         selectedIndex={completion.selectedIndex}
         onHighlight={(idx) =>
+          // Hover only updates the visual highlight — we don't push
+          // each hover into the PTY (would spam writes when the user
+          // sweeps through the list). PTY catches up on the next
+          // keyboard cycle or click.
           setCompletion((s) => ({ ...s, selectedIndex: idx }))
         }
-        onSelect={(item) => insertCompletion(item)}
-        onClose={() => closeCompletion()}
+        onSelect={(item, idx) => {
+          // Click = apply this candidate, then accept (close popover
+          // without rolling back). Goes through the same apply path
+          // as Tab cycling so the line lands at exactly this row's
+          // value.
+          setCompletion((s) => {
+            if (!s.open) return s;
+            void applyCandidateAt(idx, s).then(() =>
+              setCompletion((cur) =>
+                cur.open ? { ...cur, open: false } : cur,
+              ),
+            );
+            return { ...s, selectedIndex: idx };
+          });
+          void item;
+        }}
+        onClose={() => cancelCompletion()}
       />
 
       <ManPagePopover

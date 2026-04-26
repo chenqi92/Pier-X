@@ -1,0 +1,65 @@
+{
+  "schema_version": 1,
+  "command": "chmod",
+  "tool_version": "9.4",
+  "source": "auto-imported",
+  "import_method": "man",
+  "import_date": "2026-04-26",
+  "subcommands": [],
+  "options": [
+    {
+      "flag": "-c, --changes",
+      "i18n": {
+        "en": "like verbose but report only when a change is made"
+      }
+    },
+    {
+      "flag": "-f, --silent, --quiet",
+      "i18n": {
+        "en": "suppress most error messages"
+      }
+    },
+    {
+      "flag": "-v, --verbose",
+      "i18n": {
+        "en": "output a diagnostic for every file processed"
+      }
+    },
+    {
+      "flag": "--no-preserve-root",
+      "i18n": {
+        "en": "do not treat '/' specially (the default)"
+      }
+    },
+    {
+      "flag": "--preserve-root",
+      "i18n": {
+        "en": "fail to operate recursively on '/'"
+      }
+    },
+    {
+      "flag": "--reference=RFILE",
+      "i18n": {
+        "en": "use  RFILE's  mode  instead of specifying MODE values.  RFILE is always dereferenced if a symbolic link."
+      }
+    },
+    {
+      "flag": "-R, --recursive",
+      "i18n": {
+        "en": "change files and directories recursively"
+      }
+    },
+    {
+      "flag": "--help",
+      "i18n": {
+        "en": ""
+      }
+    },
+    {
+      "flag": "--version",
+      "i18n": {
+        "en": "output version information and exit"
+      }
+    }
+  ]
+}

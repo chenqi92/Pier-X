@@ -1,0 +1,113 @@
+{
+  "schema_version": 1,
+  "command": "ss",
+  "tool_version": "6.1.0",
+  "source": "auto-imported",
+  "import_method": "man",
+  "import_date": "2026-04-26",
+  "subcommands": [],
+  "options": [
+    {
+      "flag": "-h, --help",
+      "i18n": {
+        "en": "Show summary of options."
+      }
+    },
+    {
+      "flag": "-V, --version",
+      "i18n": {
+        "en": "Output version information."
+      }
+    },
+    {
+      "flag": "-H, --no-header",
+      "i18n": {
+        "en": "Suppress header line."
+      }
+    },
+    {
+      "flag": "-O, --oneline",
+      "i18n": {
+        "en": "Print each socket's data on a single line."
+      }
+    },
+    {
+      "flag": "-n, --numeric",
+      "i18n": {
+        "en": "Do not try to resolve service names. Show exact  bandwidth  val‐ ues, instead of human-readable."
+      }
+    },
+    {
+      "flag": "-r, --resolve",
+      "i18n": {
+        "en": "Try to resolve numeric address/ports."
+      }
+    },
+    {
+      "flag": "-a, --all",
+      "i18n": {
+        "en": "Display both listening and non-listening (for TCP this means es‐ tablished connections) sockets."
+      }
+    },
+    {
+      "flag": "-l, --listening",
+      "i18n": {
+        "en": "Display only listening sockets (these are omitted by default)."
+      }
+    },
+    {
+      "flag": "-o, --options",
+      "i18n": {
+        "en": "Show timer information. For TCP protocol, the output format is:"
+      }
+    },
+    {
+      "flag": "-e, --extended",
+      "i18n": {
+        "en": "Show detailed socket information. The output format is:"
+      }
+    },
+    {
+      "flag": "-m, --memory",
+      "i18n": {
+        "en": "Show socket memory usage. The output format is:"
+      }
+    },
+    {
+      "flag": "-p, --processes",
+      "i18n": {
+        "en": "Show process using socket."
+      }
+    },
+    {
+      "flag": "-T, --threads",
+      "i18n": {
+        "en": "Show thread using socket. Implies -p.  -p."
+      }
+    },
+    {
+      "flag": "-i, --info",
+      "i18n": {
+        "en": "Show internal TCP information. Below fields may appear:"
+      }
+    },
+    {
+      "flag": "--tos",
+      "i18n": {
+        "en": ""
+      }
+    },
+    {
+      "flag": "--cgroup",
+      "i18n": {
+        "en": "Show cgroup information. Below fields may appear:"
+      }
+    },
+    {
+      "flag": "--tipcinfo",
+      "i18n": {
+        "en": "Show internal tipc socket information."
+      }
+    }
+  ]
+}

@@ -29,6 +29,7 @@
 use std::process::Command;
 
 use crate::schema::{CommandPack, OptionEntry, SubcommandEntry};
+use crate::timeout::{run_with_timeout, DEFAULT_TIMEOUT};
 
 pub fn extract(cmd: &str) -> Result<CommandPack, String> {
     let body = run_help(cmd)?;
@@ -44,7 +45,9 @@ pub fn extract(cmd: &str) -> Result<CommandPack, String> {
 fn run_help(cmd: &str) -> Result<String, String> {
     // Try `--help` first, then `-h` (some old Unix tools).
     for arg in ["--help", "-h"] {
-        let out = match Command::new(cmd).arg(arg).output() {
+        let mut command = Command::new(cmd);
+        command.arg(arg);
+        let out = match run_with_timeout(command, DEFAULT_TIMEOUT) {
             Ok(o) => o,
             Err(e) => return Err(format!("spawn `{cmd} {arg}`: {e}")),
         };

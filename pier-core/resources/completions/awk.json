@@ -1,0 +1,95 @@
+{
+  "schema_version": 1,
+  "command": "awk",
+  "tool_version": "1.3.4",
+  "source": "auto-imported",
+  "import_method": "man",
+  "import_date": "2026-04-26",
+  "subcommands": [],
+  "options": [
+    {
+      "flag": "-F",
+      "i18n": {
+        "en": ""
+      }
+    },
+    {
+      "flag": "-f",
+      "i18n": {
+        "en": "mand line.  Multiple -f options are allowed."
+      }
+    },
+    {
+      "flag": "-v",
+      "i18n": {
+        "en": ""
+      }
+    },
+    {
+      "flag": "--",
+      "i18n": {
+        "en": ""
+      }
+    },
+    {
+      "flag": "-W",
+      "i18n": {
+        "en": "writes  an assembler like listing of the internal representation of the program to stdout and exits  0  (on  successful  compila‐ tion)."
+      }
+    },
+    {
+      "flag": "-W",
+      "i18n": {
+        "en": "Program text is read from file and this is the last option."
+      }
+    },
+    {
+      "flag": "-W",
+      "i18n": {
+        "en": "prints a usage message to stderr and exits (same as “-W usage”)."
+      }
+    },
+    {
+      "flag": "-W",
+      "i18n": {
+        "en": "sets  unbuffered  writes  to stdout and line buffered reads from stdin.  Records from stdin are lines regardless of the value  of RS."
+      }
+    },
+    {
+      "flag": "-W",
+      "i18n": {
+        "en": "modifies mawk's behavior to be more POSIX-compliant:"
+      }
+    },
+    {
+      "flag": "-W",
+      "i18n": {
+        "en": "calls  srand  with  the given parameter (and overrides the auto- seeding behavior)."
+      }
+    },
+    {
+      "flag": "-W",
+      "i18n": {
+        "en": "adjusts the size of mawk's internal sprintf buffer to num bytes. More than rare use of this option indicates mawk should  be  re‐ compiled."
+      }
+    },
+    {
+      "flag": "-W",
+      "i18n": {
+        "en": "Omit  features  such as interval expressions which were not sup‐ ported by traditional awk."
+      }
+    },
+    {
+      "flag": "-W",
+      "i18n": {
+        "en": "prints a usage message to stderr and exits (same as “-W help”)."
+      }
+    },
+    {
+      "flag": "-W",
+      "i18n": {
+        "en": "mawk writes its version and copyright  to  stdout  and  compiled limits to stderr and exits 0."
+      }
+    }
+  ]
+}

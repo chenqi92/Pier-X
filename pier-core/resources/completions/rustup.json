@@ -1,0 +1,172 @@
+{
+  "schema_version": 1,
+  "command": "rustup",
+  "tool_version": "1.28.2",
+  "source": "auto-imported",
+  "import_method": "help",
+  "import_date": "2026-04-26",
+  "subcommands": [
+    {
+      "name": "toolchain",
+      "i18n": {
+        "en": "Install, uninstall, or list toolchains"
+      },
+      "options": [],
+      "subcommands": []
+    },
+    {
+      "name": "default",
+      "i18n": {
+        "en": "Set the default toolchain"
+      },
+      "options": [],
+      "subcommands": []
+    },
+    {
+      "name": "show",
+      "i18n": {
+        "en": "Show the active and installed toolchains or profiles"
+      },
+      "options": [],
+      "subcommands": []
+    },
+    {
+      "name": "update",
+      "i18n": {
+        "en": "Update Rust toolchains and rustup"
+      },
+      "options": [],
+      "subcommands": []
+    },
+    {
+      "name": "check",
+      "i18n": {
+        "en": "Check for updates to Rust toolchains and rustup"
+      },
+      "options": [],
+      "subcommands": []
+    },
+    {
+      "name": "target",
+      "i18n": {
+        "en": "Modify a toolchain's supported targets"
+      },
+      "options": [],
+      "subcommands": []
+    },
+    {
+      "name": "component",
+      "i18n": {
+        "en": "Modify a toolchain's installed components"
+      },
+      "options": [],
+      "subcommands": []
+    },
+    {
+      "name": "override",
+      "i18n": {
+        "en": "Modify toolchain overrides for directories"
+      },
+      "options": [],
+      "subcommands": []
+    },
+    {
+      "name": "run",
+      "i18n": {
+        "en": "Run a command with an environment configured for a given toolchain"
+      },
+      "options": [],
+      "subcommands": []
+    },
+    {
+      "name": "which",
+      "i18n": {
+        "en": "Display which binary will be run for a given command"
+      },
+      "options": [],
+      "subcommands": []
+    },
+    {
+      "name": "doc",
+      "i18n": {
+        "en": "Open the documentation for the current toolchain"
+      },
+      "options": [],
+      "subcommands": []
+    },
+    {
+      "name": "man",
+      "i18n": {
+        "en": "View the man page for a given command"
+      },
+      "options": [],
+      "subcommands": []
+    },
+    {
+      "name": "self",
+      "i18n": {
+        "en": "Modify the rustup installation"
+      },
+      "options": [],
+      "subcommands": []
+    },
+    {
+      "name": "set",
+      "i18n": {
+        "en": "Alter rustup settings"
+      },
+      "options": [],
+      "subcommands": []
+    },
+    {
+      "name": "completions",
+      "i18n": {
+        "en": "Generate tab-completion scripts for your shell"
+      },
+      "options": [],
+      "subcommands": []
+    },
+    {
+      "name": "help",
+      "i18n": {
+        "en": "Print this message or the help of the given subcommand(s)"
+      },
+      "options": [],
+      "subcommands": []
+    },
+    {
+      "name": "[+toolchain]",
+      "i18n": {
+        "en": "Release channel (e.g. +stable) or custom toolchain to set override"
+      },
+      "options": [],
+      "subcommands": []
+    }
+  ],
+  "options": [
+    {
+      "flag": "-v, --verbose",
+      "i18n": {
+        "en": "Set log level to 'DEBUG' if 'RUSTUP_LOG' is unset"
+      }
+    },
+    {
+      "flag": "-q, --quiet",
+      "i18n": {
+        "en": "Disable progress output, set log level to 'WARN' if 'RUSTUP_LOG' is unset"
+      }
+    },
+    {
+      "flag": "-h, --help",
+      "i18n": {
+        "en": "Print help"
+      }
+    },
+    {
+      "flag": "-V, --version",
+      "i18n": {
+        "en": "Print version"
+      }
+    }
+  ]
+}

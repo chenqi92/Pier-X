@@ -1,0 +1,155 @@
+{
+  "schema_version": 1,
+  "command": "pip",
+  "tool_version": "26.0",
+  "source": "auto-imported",
+  "import_method": "help",
+  "import_date": "2026-04-26",
+  "subcommands": [
+    {
+      "name": "install",
+      "i18n": {
+        "en": "Install packages."
+      },
+      "options": [],
+      "subcommands": []
+    },
+    {
+      "name": "lock",
+      "i18n": {
+        "en": "Generate a lock file."
+      },
+      "options": [],
+      "subcommands": []
+    },
+    {
+      "name": "download",
+      "i18n": {
+        "en": "Download packages."
+      },
+      "options": [],
+      "subcommands": []
+    },
+    {
+      "name": "uninstall",
+      "i18n": {
+        "en": "Uninstall packages."
+      },
+      "options": [],
+      "subcommands": []
+    },
+    {
+      "name": "freeze",
+      "i18n": {
+        "en": "Output installed packages in requirements format."
+      },
+      "options": [],
+      "subcommands": []
+    },
+    {
+      "name": "inspect",
+      "i18n": {
+        "en": "Inspect the python environment."
+      },
+      "options": [],
+      "subcommands": []
+    },
+    {
+      "name": "list",
+      "i18n": {
+        "en": "List installed packages."
+      },
+      "options": [],
+      "subcommands": []
+    },
+    {
+      "name": "show",
+      "i18n": {
+        "en": "Show information about installed packages."
+      },
+      "options": [],
+      "subcommands": []
+    },
+    {
+      "name": "check",
+      "i18n": {
+        "en": "Verify installed packages have compatible"
+      },
+      "options": [],
+      "subcommands": []
+    },
+    {
+      "name": "config",
+      "i18n": {
+        "en": "Manage local and global configuration."
+      },
+      "options": [],
+      "subcommands": []
+    },
+    {
+      "name": "search",
+      "i18n": {
+        "en": "Search PyPI for packages."
+      },
+      "options": [],
+      "subcommands": []
+    },
+    {
+      "name": "cache",
+      "i18n": {
+        "en": "Inspect and manage pip's wheel cache."
+      },
+      "options": [],
+      "subcommands": []
+    },
+    {
+      "name": "index",
+      "i18n": {
+        "en": "Inspect information available from package"
+      },
+      "options": [],
+      "subcommands": []
+    },
+    {
+      "name": "wheel",
+      "i18n": {
+        "en": "Build wheels from your requirements."
+      },
+      "options": [],
+      "subcommands": []
+    },
+    {
+      "name": "hash",
+      "i18n": {
+        "en": "Compute hashes of package archives."
+      },
+      "options": [],
+      "subcommands": []
+    },
+    {
+      "name": "completion",
+      "i18n": {
+        "en": "A helper command used for command completion."
+      },
+      "options": [],
+      "subcommands": []
+    },
+    {
+      "name": "debug",
+      "i18n": {
+        "en": "Show information useful for debugging."
+      },
+      "options": [],
+      "subcommands": []
+    },
+    {
+      "name": "help",
+      "i18n": {
+        "en": "Show help for commands."
+      },
+      "options": [],
+      "subcommands": []
+    }
+  ],
+  "options": []
+}

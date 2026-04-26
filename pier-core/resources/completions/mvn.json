@@ -1,0 +1,257 @@
+{
+  "schema_version": 1,
+  "command": "mvn",
+  "tool_version": "3.9.12",
+  "source": "auto-imported",
+  "import_method": "help",
+  "import_date": "2026-04-26",
+  "subcommands": [],
+  "options": [
+    {
+      "flag": "-am,--also-make",
+      "i18n": {
+        "en": "If project list is specified,"
+      }
+    },
+    {
+      "flag": "-amd,--also-make-dependents",
+      "i18n": {
+        "en": "If project list is specified,"
+      }
+    },
+    {
+      "flag": "-B,--batch-mode",
+      "i18n": {
+        "en": "Run in non-interactive (batch)"
+      }
+    },
+    {
+      "flag": "-b,--builder",
+      "i18n": {
+        "en": "The id of the build strategy to"
+      }
+    },
+    {
+      "flag": "-C,--strict-checksums",
+      "i18n": {
+        "en": "Fail the build if checksums don't"
+      }
+    },
+    {
+      "flag": "-c,--lax-checksums",
+      "i18n": {
+        "en": "Warn if checksums don't match"
+      }
+    },
+    {
+      "flag": "--color",
+      "i18n": {
+        "en": "Defines the color mode of the"
+      }
+    },
+    {
+      "flag": "-cpu,--check-plugin-updates",
+      "i18n": {
+        "en": "Ineffective, only kept for"
+      }
+    },
+    {
+      "flag": "-D,--define",
+      "i18n": {
+        "en": "Define a user property"
+      }
+    },
+    {
+      "flag": "-e,--errors",
+      "i18n": {
+        "en": "Produce execution error messages"
+      }
+    },
+    {
+      "flag": "-emp,--encrypt-master-password",
+      "i18n": {
+        "en": "Encrypt master security password"
+      }
+    },
+    {
+      "flag": "-ep,--encrypt-password",
+      "i18n": {
+        "en": "Encrypt server password"
+      }
+    },
+    {
+      "flag": "-f,--file",
+      "i18n": {
+        "en": "Force the use of an alternate POM"
+      }
+    },
+    {
+      "flag": "-fae,--fail-at-end",
+      "i18n": {
+        "en": "Only fail the build afterwards;"
+      }
+    },
+    {
+      "flag": "-ff,--fail-fast",
+      "i18n": {
+        "en": "Stop at first failure in"
+      }
+    },
+    {
+      "flag": "-fn,--fail-never",
+      "i18n": {
+        "en": "NEVER fail the build, regardless"
+      }
+    },
+    {
+      "flag": "-gs,--global-settings",
+      "i18n": {
+        "en": "Alternate path for the global"
+      }
+    },
+    {
+      "flag": "-gt,--global-toolchains",
+      "i18n": {
+        "en": "Alternate path for the global"
+      }
+    },
+    {
+      "flag": "-h,--help",
+      "i18n": {
+        "en": "Display help information"
+      }
+    },
+    {
+      "flag": "-itr,--ignore-transitive-repositories",
+      "i18n": {
+        "en": "If set, Maven will ignore remote"
+      }
+    },
+    {
+      "flag": "-l,--log-file",
+      "i18n": {
+        "en": "Log file where all build output"
+      }
+    },
+    {
+      "flag": "-llr,--legacy-local-repository",
+      "i18n": {
+        "en": "UNSUPPORTED: Use of this option"
+      }
+    },
+    {
+      "flag": "-N,--non-recursive",
+      "i18n": {
+        "en": "Do not recurse into sub-projects"
+      }
+    },
+    {
+      "flag": "-npr,--no-plugin-registry",
+      "i18n": {
+        "en": "Ineffective, only kept for"
+      }
+    },
+    {
+      "flag": "-npu,--no-plugin-updates",
+      "i18n": {
+        "en": "Ineffective, only kept for"
+      }
+    },
+    {
+      "flag": "-nsu,--no-snapshot-updates",
+      "i18n": {
+        "en": "Suppress SNAPSHOT updates"
+      }
+    },
+    {
+      "flag": "-ntp,--no-transfer-progress",
+      "i18n": {
+        "en": "Do not display transfer progress"
+      }
+    },
+    {
+      "flag": "-o,--offline",
+      "i18n": {
+        "en": "Work offline"
+      }
+    },
+    {
+      "flag": "-P,--activate-profiles",
+      "i18n": {
+        "en": "Comma-delimited list of profiles"
+      }
+    },
+    {
+      "flag": "-pl,--projects",
+      "i18n": {
+        "en": "Comma-delimited list of specified"
+      }
+    },
+    {
+      "flag": "-q,--quiet",
+      "i18n": {
+        "en": "Quiet output - only show errors"
+      }
+    },
+    {
+      "flag": "--raw-streams",
+      "i18n": {
+        "en": "Ignored (Maven4 option)"
+      }
+    },
+    {
+      "flag": "-rf,--resume-from",
+      "i18n": {
+        "en": "Resume reactor from specified"
+      }
+    },
+    {
+      "flag": "-s,--settings",
+      "i18n": {
+        "en": "Alternate path for the user"
+      }
+    },
+    {
+      "flag": "-t,--toolchains",
+      "i18n": {
+        "en": "Alternate path for the user"
+      }
+    },
+    {
+      "flag": "-T,--threads",
+      "i18n": {
+        "en": "Thread count, for instance 4"
+      }
+    },
+    {
+      "flag": "-U,--update-snapshots",
+      "i18n": {
+        "en": "Forces a check for missing"
+      }
+    },
+    {
+      "flag": "-up,--update-plugins",
+      "i18n": {
+        "en": "Ineffective, only kept for"
+      }
+    },
+    {
+      "flag": "-v,--version",
+      "i18n": {
+        "en": "Display version information"
+      }
+    },
+    {
+      "flag": "-V,--show-version",
+      "i18n": {
+        "en": "Display version information"
+      }
+    },
+    {
+      "flag": "-X,--debug",
+      "i18n": {
+        "en": "Produce execution debug output"
+      }
+    }
+  ]
+}

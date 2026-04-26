@@ -332,15 +332,53 @@ impl Library {
 /// codegen crate — the runtime parses them on first call to
 /// [`Library::bundled`].
 ///
-/// Add new bundled commands here. The first 10 covers the bulk of
-/// what users type; everything else is fetched at runtime.
+/// First 5 entries (docker / git / kubectl / npm / ssh) are
+/// hand-curated with full zh-CN translations; the rest are
+/// auto-imported from `<cmd> --help` / man / `completion zsh`
+/// on macOS + Linux via the `pier-x-completions-importer`
+/// tool. English-only at import time; zh-CN gets layered in
+/// later via the locale-overlay loader.
+///
+/// Add new bundled commands here as the importer grows its
+/// seed list. Anything not bundled still resolves at runtime
+/// via the user pack directory.
 fn bundled_seeds() -> &'static [&'static str] {
     &[
+        // ── Hand-curated (en + zh-CN) ────────────────────────
         include_str!("../../resources/completions/docker.json"),
         include_str!("../../resources/completions/git.json"),
         include_str!("../../resources/completions/kubectl.json"),
         include_str!("../../resources/completions/npm.json"),
         include_str!("../../resources/completions/ssh.json"),
+        // ── Auto-imported (en only, zh-CN to come) ───────────
+        include_str!("../../resources/completions/apt-get.json"),
+        include_str!("../../resources/completions/awk.json"),
+        include_str!("../../resources/completions/bat.json"),
+        include_str!("../../resources/completions/cargo.json"),
+        include_str!("../../resources/completions/chmod.json"),
+        include_str!("../../resources/completions/chown.json"),
+        include_str!("../../resources/completions/fd.json"),
+        include_str!("../../resources/completions/gh.json"),
+        include_str!("../../resources/completions/grep.json"),
+        include_str!("../../resources/completions/ip.json"),
+        include_str!("../../resources/completions/journalctl.json"),
+        include_str!("../../resources/completions/kill.json"),
+        include_str!("../../resources/completions/make.json"),
+        include_str!("../../resources/completions/mvn.json"),
+        include_str!("../../resources/completions/nano.json"),
+        include_str!("../../resources/completions/netstat.json"),
+        include_str!("../../resources/completions/node.json"),
+        include_str!("../../resources/completions/pip.json"),
+        include_str!("../../resources/completions/pip3.json"),
+        include_str!("../../resources/completions/pnpm.json"),
+        include_str!("../../resources/completions/rm.json"),
+        include_str!("../../resources/completions/rsync.json"),
+        include_str!("../../resources/completions/rustup.json"),
+        include_str!("../../resources/completions/screen.json"),
+        include_str!("../../resources/completions/ss.json"),
+        include_str!("../../resources/completions/tar.json"),
+        include_str!("../../resources/completions/top.json"),
+        include_str!("../../resources/completions/vim.json"),
     ]
 }
 

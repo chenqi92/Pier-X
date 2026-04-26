@@ -1,0 +1,179 @@
+{
+  "schema_version": 1,
+  "command": "screen",
+  "tool_version": "4.00.03",
+  "source": "auto-imported",
+  "import_method": "help",
+  "import_date": "2026-04-26",
+  "subcommands": [],
+  "options": [
+    {
+      "flag": "-a",
+      "i18n": {
+        "en": "Force all capabilities into each window's termcap."
+      }
+    },
+    {
+      "flag": "-A -[r|R]",
+      "i18n": {
+        "en": "Adapt all windows to the new display width & height."
+      }
+    },
+    {
+      "flag": "-c",
+      "i18n": {
+        "en": "Read configuration file instead of '.screenrc'."
+      }
+    },
+    {
+      "flag": "-d",
+      "i18n": {
+        "en": "Detach the elsewhere running screen (and reattach here)."
+      }
+    },
+    {
+      "flag": "-dmS",
+      "i18n": {
+        "en": "Start as daemon: Screen session in detached mode."
+      }
+    },
+    {
+      "flag": "-D",
+      "i18n": {
+        "en": "Detach and logout remote (and reattach here)."
+      }
+    },
+    {
+      "flag": "-D -RR",
+      "i18n": {
+        "en": "Do whatever is needed to get a screen session."
+      }
+    },
+    {
+      "flag": "-e",
+      "i18n": {
+        "en": "Change command characters."
+      }
+    },
+    {
+      "flag": "-f",
+      "i18n": {
+        "en": "Flow control on, -fn = off, -fa = auto."
+      }
+    },
+    {
+      "flag": "-h",
+      "i18n": {
+        "en": "Set the size of the scrollback history buffer."
+      }
+    },
+    {
+      "flag": "-i",
+      "i18n": {
+        "en": "Interrupt output sooner when flow control is on."
+      }
+    },
+    {
+      "flag": "-list",
+      "i18n": {
+        "en": "or -ls. Do nothing, just list our SockDir."
+      }
+    },
+    {
+      "flag": "-L",
+      "i18n": {
+        "en": "Turn on output logging."
+      }
+    },
+    {
+      "flag": "-m",
+      "i18n": {
+        "en": "ignore $STY variable, do create a new screen session."
+      }
+    },
+    {
+      "flag": "-O",
+      "i18n": {
+        "en": "Choose optimal output rather than exact vt100 emulation."
+      }
+    },
+    {
+      "flag": "-p",
+      "i18n": {
+        "en": "Preselect the named window if it exists."
+      }
+    },
+    {
+      "flag": "-q",
+      "i18n": {
+        "en": "Quiet startup. Exits with non-zero return code if unsuccessful."
+      }
+    },
+    {
+      "flag": "-r",
+      "i18n": {
+        "en": "Reattach to a detached screen process."
+      }
+    },
+    {
+      "flag": "-R",
+      "i18n": {
+        "en": "Reattach if possible, otherwise start a new session."
+      }
+    },
+    {
+      "flag": "-s",
+      "i18n": {
+        "en": "Shell to execute rather than $SHELL."
+      }
+    },
+    {
+      "flag": "-S",
+      "i18n": {
+        "en": "Name this session <pid>.sockname instead of <pid>.<tty>.<host>."
+      }
+    },
+    {
+      "flag": "-t",
+      "i18n": {
+        "en": "Set title. (window's name)."
+      }
+    },
+    {
+      "flag": "-T",
+      "i18n": {
+        "en": "Use term as $TERM for windows, rather than \"screen\"."
+      }
+    },
+    {
+      "flag": "-U",
+      "i18n": {
+        "en": "Tell screen to use UTF-8 encoding."
+      }
+    },
+    {
+      "flag": "-v",
+      "i18n": {
+        "en": "Print \"Screen version 4.00.03 (FAU) 23-Oct-06\"."
+      }
+    },
+    {
+      "flag": "-wipe",
+      "i18n": {
+        "en": "Do nothing, just clean up SockDir."
+      }
+    },
+    {
+      "flag": "-x",
+      "i18n": {
+        "en": "Attach to a not detached screen. (Multi display mode)."
+      }
+    },
+    {
+      "flag": "-X",
+      "i18n": {
+        "en": "Execute <cmd> as a screen command in the specified session."
+      }
+    }
+  ]
+}

@@ -1,0 +1,431 @@
+{
+  "schema_version": 1,
+  "command": "vim",
+  "tool_version": "9.1",
+  "source": "auto-imported",
+  "import_method": "man",
+  "import_date": "2026-04-26",
+  "subcommands": [],
+  "options": [
+    {
+      "flag": "-c",
+      "i18n": {
+        "en": "{command} will be executed after the first file has been read.  {command} is interpreted as an Ex command.  If the {command} contains spaces it must be enclosed in double quotes (this depends on the shell that is used).  Example: vim \"+set si\" main.c Note: You can use up to 10 \"+\" or \"-c\" commands."
+      }
+    },
+    {
+      "flag": "-A",
+      "i18n": {
+        "en": "right-to-left oriented files and Arabic keyboard mapping, this option starts Vim in Arabic mode, i.e. 'arabic' is set.  Otherwise an error message is given and Vim aborts."
+      }
+    },
+    {
+      "flag": "-b",
+      "i18n": {
+        "en": "possible to edit a binary or executable file."
+      }
+    },
+    {
+      "flag": "-C",
+      "i18n": {
+        "en": "Vim behave mostly like Vi, even though a .vimrc file exists."
+      }
+    },
+    {
+      "flag": "-d",
+      "i18n": {
+        "en": "name arguments.  Vim will open all the files and show differences between them.  Works like vimdiff(1)."
+      }
+    },
+    {
+      "flag": "-d",
+      "i18n": {
+        "en": "Open {device} for use as a terminal.  Only on the Amiga. Example: \"-d con:20/30/600/150\"."
+      }
+    },
+    {
+      "flag": "-D",
+      "i18n": {
+        "en": "command from a script."
+      }
+    },
+    {
+      "flag": "-e",
+      "i18n": {
+        "en": "\"ex\"."
+      }
+    },
+    {
+      "flag": "-E",
+      "i18n": {
+        "en": "called \"exim\"."
+      }
+    },
+    {
+      "flag": "-f",
+      "i18n": {
+        "en": "detach from the shell it was started in.  On the Amiga, Vim is not restarted to open a new window.  This option should be used when Vim is executed by a program that will wait for the edit session to finish (e.g. mail).  On the Amiga the \":sh\" and \":!\" commands will not work."
+      }
+    },
+    {
+      "flag": "-F",
+      "i18n": {
+        "en": "right-to-left oriented files and Farsi keyboard mapping, this option starts Vim in Farsi mode, i.e. 'fkmap' and 'rightleft' are set.  Otherwise an error message is given and Vim aborts. Note: Farsi support has been removed in patch 8.1.0932."
+      }
+    },
+    {
+      "flag": "-g",
+      "i18n": {
+        "en": "enables the GUI.  If no GUI support was compiled in, an error message is given and Vim aborts."
+      }
+    },
+    {
+      "flag": "-H",
+      "i18n": {
+        "en": "right-to-left oriented files and Hebrew keyboard mapping, this option starts Vim in Hebrew mode, i.e. 'hkmap' and 'rightleft' are set.  Otherwise an error message is given and Vim aborts."
+      }
+    },
+    {
+      "flag": "-i",
+      "i18n": {
+        "en": "Specifies the filename to use when reading or writing the viminfo file, instead of the default \"~/.viminfo\".  This can also be used to skip the use of the .viminfo file, by giving the name \"NONE\"."
+      }
+    },
+    {
+      "flag": "-l",
+      "i18n": {
+        "en": ""
+      }
+    },
+    {
+      "flag": "-L",
+      "i18n": {
+        "en": ""
+      }
+    },
+    {
+      "flag": "-m",
+      "i18n": {
+        "en": "You can still modify the buffer, but writing a file is not possible."
+      }
+    },
+    {
+      "flag": "-M",
+      "i18n": {
+        "en": "options will be unset, so that changes are not allowed and files can not be written.  Note that these options can be set to enable making modifications."
+      }
+    },
+    {
+      "flag": "-n",
+      "i18n": {
+        "en": "impossible.  Handy if you want to edit a file on a very slow medium (e.g. floppy).  Can also be done with \":set uc=0\".  Can be undone with \":set uc=200\"."
+      }
+    },
+    {
+      "flag": "-N",
+      "i18n": {
+        "en": "will make Vim behave a bit better, but less Vi compatible, even though a .vimrc file does not exist."
+      }
+    },
+    {
+      "flag": "-nb",
+      "i18n": {
+        "en": "details."
+      }
+    },
+    {
+      "flag": "-o[N]",
+      "i18n": {
+        "en": "for each file."
+      }
+    },
+    {
+      "flag": "-O[N]",
+      "i18n": {
+        "en": "window for each file."
+      }
+    },
+    {
+      "flag": "-p[N]",
+      "i18n": {
+        "en": "each file."
+      }
+    },
+    {
+      "flag": "-P",
+      "i18n": {
+        "en": "Win32 GUI only: Specify the title of the parent application.  When possible, Vim will run in an MDI window inside the application. {parent-title} must appear in the window title of the parent application.  Make sure that it is specific enough. Note that the implementation is still primitive.  It won't work with all applications and the menu doesn't work."
+      }
+    },
+    {
+      "flag": "-r",
+      "i18n": {
+        "en": "recovery."
+      }
+    },
+    {
+      "flag": "-r",
+      "i18n": {
+        "en": "editing session.  The swap file is a file with the same filename as the text file with \".swp\" appended.  See \":help recovery\"."
+      }
+    },
+    {
+      "flag": "-R",
+      "i18n": {
+        "en": "can still edit the buffer, but will be prevented from accidentally overwriting a file.  If you do want to overwrite a file, add an exclamation mark to the Ex command, as in \":w!\".  The -R option also implies the -n option (see above).  The 'readonly' option can be reset with \":set noro\".  See \":help 'readonly'\"."
+      }
+    },
+    {
+      "flag": "-s",
+      "i18n": {
+        "en": "option was given before the \"-s\" option."
+      }
+    },
+    {
+      "flag": "-s",
+      "i18n": {
+        "en": "The script file {scriptin} is read.  The characters in the file are interpreted as if you had typed them.  The same can be done with the command \":source! {scriptin}\".  If the end of the file is reached before the editor exits, further characters are read from the keyboard."
+      }
+    },
+    {
+      "flag": "-S",
+      "i18n": {
+        "en": "This is equivalent to -c \"source {file}\".  {file} cannot start with '-'.  If {file} is omitted \"Session.vim\" is used (only works when -S is the last argument)."
+      }
+    },
+    {
+      "flag": "-T",
+      "i18n": {
+        "en": "Tells Vim the name of the terminal you are using.  Only required when the automatic way doesn't work.  Should be a terminal known to Vim (builtin) or defined in the termcap or terminfo file."
+      }
+    },
+    {
+      "flag": "-u",
+      "i18n": {
+        "en": "All the other initializations are skipped.  Use this to edit a special kind of files.  It can also be used to skip all initializations by giving the name \"NONE\".  See \":help initialization\" within vim for more details."
+      }
+    },
+    {
+      "flag": "-U",
+      "i18n": {
+        "en": "initializations.  All the other GUI initializations are skipped.  It can also be used to skip all GUI initializations by giving the name \"NONE\".  See \":help gui-init\" within vim for more details."
+      }
+    },
+    {
+      "flag": "-v",
+      "i18n": {
+        "en": "\"vi\".  This only has effect when the executable is called \"ex\"."
+      }
+    },
+    {
+      "flag": "-V[N]",
+      "i18n": {
+        "en": "for reading and writing a viminfo file.  The optional number N is the value for 'verbose'.  Default is 10."
+      }
+    },
+    {
+      "flag": "-V[N]{filename}",
+      "i18n": {
+        "en": "Like -V and set 'verbosefile' to {filename}.  The result is that messages are not displayed but written to the file {filename}.  {filename} must not start with a digit."
+      }
+    },
+    {
+      "flag": "-w{number}",
+      "i18n": {
+        "en": ""
+      }
+    },
+    {
+      "flag": "-w",
+      "i18n": {
+        "en": "All the characters that you type are recorded in the file {scriptout}, until you exit Vim.  This is useful if you want to create a script file to be used with \"vim -s\" or \":source!\".  If the {scriptout} file exists, characters are appended."
+      }
+    },
+    {
+      "flag": "-W",
+      "i18n": {
+        "en": "Like -w, but an existing file is overwritten."
+      }
+    },
+    {
+      "flag": "-x",
+      "i18n": {
+        "en": "encryption when writing files.  Will prompt for a crypt key."
+      }
+    },
+    {
+      "flag": "-X",
+      "i18n": {
+        "en": "terminal, but the window title and clipboard will not be used."
+      }
+    },
+    {
+      "flag": "-Y",
+      "i18n": {
+        "en": ""
+      }
+    },
+    {
+      "flag": "-y",
+      "i18n": {
+        "en": "\"evim\" or \"eview\".  Makes Vim behave like a click-and-type editor."
+      }
+    },
+    {
+      "flag": "-Z",
+      "i18n": {
+        "en": "\"r\"."
+      }
+    },
+    {
+      "flag": "--",
+      "i18n": {
+        "en": "be handled as a file name.  This can be used to edit a filename that starts with a '-'."
+      }
+    },
+    {
+      "flag": "--clean",
+      "i18n": {
+        "en": "etc.).  Useful to see if a problem reproduces with a clean Vim setup."
+      }
+    },
+    {
+      "flag": "--cmd",
+      "i18n": {
+        "en": "Like using \"-c\", but the command is executed just before processing any vimrc file.  You can use up to 10 of these commands, independently from \"-c\" commands."
+      }
+    },
+    {
+      "flag": "--echo-wid",
+      "i18n": {
+        "en": ""
+      }
+    },
+    {
+      "flag": "--gui-dialog-file",
+      "i18n": {
+        "en": "When using the GUI, instead of showing a dialog, write the title and message of the dialog to file {name}.  The file is created or appended to.  Only useful for testing, to avoid that the test gets stuck on a dialog that can't be seen.  Without the GUI the argument is ignored."
+      }
+    },
+    {
+      "flag": "--help,",
+      "i18n": {
+        "en": "Give a bit of help about the command line arguments and options.  After this Vim exits."
+      }
+    },
+    {
+      "flag": "--literal",
+      "i18n": {
+        "en": "wildcards.  This has no effect on Unix where the shell expands wildcards."
+      }
+    },
+    {
+      "flag": "--log",
+      "i18n": {
+        "en": "If Vim has been compiled with eval and channel feature, start logging and write entries to {filename}. This works like calling ch_logfile({filename}, 'ao') very early during startup."
+      }
+    },
+    {
+      "flag": "--nofork",
+      "i18n": {
+        "en": "detach from the shell it was started in."
+      }
+    },
+    {
+      "flag": "--noplugin",
+      "i18n": {
+        "en": ""
+      }
+    },
+    {
+      "flag": "--not-a-term",
+      "i18n": {
+        "en": "Tells Vim that the user knows that the input and/or output is not connected to a terminal.  This will avoid the warning and the two second delay that would happen."
+      }
+    },
+    {
+      "flag": "--remote",
+      "i18n": {
+        "en": "the rest of the arguments.  If no server is found a warning is given and the files are edited in the current Vim."
+      }
+    },
+    {
+      "flag": "--remote-expr",
+      "i18n": {
+        "en": "Connect to a Vim server, evaluate {expr} in it and print the result on stdout."
+      }
+    },
+    {
+      "flag": "--remote-send",
+      "i18n": {
+        "en": "Connect to a Vim server and send {keys} to it."
+      }
+    },
+    {
+      "flag": "--remote-silent",
+      "i18n": {
+        "en": "As --remote, but without the warning when no server is found."
+      }
+    },
+    {
+      "flag": "--remote-wait",
+      "i18n": {
+        "en": "As --remote, but Vim does not exit until the files have been edited."
+      }
+    },
+    {
+      "flag": "--remote-wait-silent",
+      "i18n": {
+        "en": "As --remote-wait, but without the warning when no server is found."
+      }
+    },
+    {
+      "flag": "--serverlist",
+      "i18n": {
+        "en": "List the names of all Vim servers that can be found."
+      }
+    },
+    {
+      "flag": "--servername",
+      "i18n": {
+        "en": "Use {name} as the server name.  Used for the current Vim, unless used with a --remote argument, then it's the name of the server to connect to.  If the socketserver backend is being used, if the name starts with \"/\", \"./\", or \"../\", it is taken as either an absolute, relative or relative path to the socket."
+      }
+    },
+    {
+      "flag": "--clientserver",
+      "i18n": {
+        "en": "Use {backend} as the backend for clientserver functionality, either \"socket\" or \"x11\" respectively.  Only available when compiled with both socketserver and X11 features present"
+      }
+    },
+    {
+      "flag": "--socketid",
+      "i18n": {
+        "en": "GTK GUI only: Use the GtkPlug mechanism to run gVim in another window."
+      }
+    },
+    {
+      "flag": "--startuptime",
+      "i18n": {
+        "en": "During startup write timing messages to the file {fname}."
+      }
+    },
+    {
+      "flag": "--ttyfail",
+      "i18n": {
+        "en": "right away."
+      }
+    },
+    {
+      "flag": "--version",
+      "i18n": {
+        "en": ""
+      }
+    },
+    {
+      "flag": "--windowid",
+      "i18n": {
+        "en": "Win32 GUI only: Make gVim try to use the window {id} as a parent, so that it runs inside that window."
+      }
+    }
+  ]
+}

@@ -1,0 +1,869 @@
+{
+  "schema_version": 1,
+  "command": "tar",
+  "tool_version": "1.35",
+  "source": "auto-imported",
+  "import_method": "man",
+  "import_date": "2026-04-26",
+  "subcommands": [],
+  "options": [
+    {
+      "flag": "--check-device",
+      "i18n": {
+        "en": "Check  device  numbers  when  creating incremental archives (de‐ fault)."
+      }
+    },
+    {
+      "flag": "-g, --listed-incremental=FILE",
+      "i18n": {
+        "en": "Handle new GNU-format incremental backups.  FILE is the name  of a  snapshot  file, where tar stores additional information which is used to decide which files changed since the previous  incre‐ mental  dump  and,  consequently, must be dumped again.  If FILE does not exist when creating an archive, it will be created  and all  files  will  be added to the resulting archive (the level 0 dump).  To create incremental archives of non-zero level N,  you need  a copy of the snapshot file created for level N-1, and use it as FILE."
+      }
+    },
+    {
+      "flag": "--hole-detection=METHOD",
+      "i18n": {
+        "en": "Use METHOD to detect holes in sparse files.  This option implies --sparse.  Valid values for METHOD are seek and raw.  Default is seek with fallback to raw when not applicable."
+      }
+    },
+    {
+      "flag": "-G, --incremental",
+      "i18n": {
+        "en": "Handle old GNU-format incremental backups."
+      }
+    },
+    {
+      "flag": "--ignore-failed-read",
+      "i18n": {
+        "en": "Do not exit with nonzero on unreadable files."
+      }
+    },
+    {
+      "flag": "--level=NUMBER",
+      "i18n": {
+        "en": "Set dump level for a created listed-incremental  archive.   Cur‐ rently  only  --level=0 is meaningful: it instructs tar to trun‐ cate the snapshot file before dumping, thereby forcing a level 0 dump."
+      }
+    },
+    {
+      "flag": "-n, --seek",
+      "i18n": {
+        "en": "Assume the archive is seekable.  Normally tar  determines  auto‐ matically whether the archive can be seeked or not.  This option is  intended  for  use in cases when such recognition fails.  It takes effect only if the archive is open for reading (e.g.  with --list or --extract options)."
+      }
+    },
+    {
+      "flag": "--no-check-device",
+      "i18n": {
+        "en": "Do not check device numbers when creating incremental archives."
+      }
+    },
+    {
+      "flag": "--no-seek",
+      "i18n": {
+        "en": "Assume the archive is not seekable."
+      }
+    },
+    {
+      "flag": "--occurrence[=N]",
+      "i18n": {
+        "en": "Process  only  the  Nth  occurrence of each file in the archive. This option is valid only when used with one  of  the  following subcommands:  --delete,  --diff,  --extract or --list and when a list of files is given either on the command line or via the  -T option.  The default N is 1."
+      }
+    },
+    {
+      "flag": "--restrict",
+      "i18n": {
+        "en": "Disable the use of some potentially harmful options."
+      }
+    },
+    {
+      "flag": "--sparse-version=MAJOR[.MINOR]",
+      "i18n": {
+        "en": "Set  which version of the sparse format to use.  This option im‐ plies --sparse.  Valid argument values are 0.0,  0.1,  and  1.0. For  a  detailed  discussion of sparse formats, refer to the GNU Tar Manual,  appendix  D,  \"Sparse  Formats\".   Using  the  info reader,  it  can be accessed running the following command: info tar 'Sparse Formats'."
+      }
+    },
+    {
+      "flag": "-S, --sparse",
+      "i18n": {
+        "en": "Handle sparse files efficiently.  Some files in the file  system may have segments which were actually never written (quite often these  are database files created by such systems as DBM).  When given this option, tar attempts to  determine  if  the  file  is sparse prior to archiving it, and if so, to reduce the resulting archive size by not dumping empty parts of the file."
+      }
+    },
+    {
+      "flag": "-k, --keep-old-files",
+      "i18n": {
+        "en": "Don't replace existing files when extracting."
+      }
+    },
+    {
+      "flag": "--keep-newer-files",
+      "i18n": {
+        "en": "Don't  replace  existing files that are newer than their archive copies."
+      }
+    },
+    {
+      "flag": "--keep-directory-symlink",
+      "i18n": {
+        "en": "Don't replace existing symlinks to directories when extracting."
+      }
+    },
+    {
+      "flag": "--no-overwrite-dir",
+      "i18n": {
+        "en": "Preserve metadata of existing directories."
+      }
+    },
+    {
+      "flag": "--one-top-level[=DIR]",
+      "i18n": {
+        "en": "Extract all files into DIR, or, if used without argument, into a subdirectory named by the base name of the archive (minus  stan‐ dard compression suffixes recognizable by --auto-compress)."
+      }
+    },
+    {
+      "flag": "--overwrite",
+      "i18n": {
+        "en": "Overwrite existing files when extracting."
+      }
+    },
+    {
+      "flag": "--overwrite-dir",
+      "i18n": {
+        "en": "Overwrite  metadata of existing directories when extracting (de‐ fault)."
+      }
+    },
+    {
+      "flag": "--recursive-unlink",
+      "i18n": {
+        "en": "Recursively remove all files in the directory prior to  extract‐ ing it."
+      }
+    },
+    {
+      "flag": "--remove-files",
+      "i18n": {
+        "en": "Remove files from disk after adding them to the archive."
+      }
+    },
+    {
+      "flag": "--skip-old-files",
+      "i18n": {
+        "en": "Don't replace existing files when extracting, silently skip over them."
+      }
+    },
+    {
+      "flag": "-U, --unlink-first",
+      "i18n": {
+        "en": "Remove each file prior to extracting over it."
+      }
+    },
+    {
+      "flag": "-W, --verify",
+      "i18n": {
+        "en": "Verify the archive after writing it."
+      }
+    },
+    {
+      "flag": "--ignore-command-error",
+      "i18n": {
+        "en": "Ignore subprocess exit codes."
+      }
+    },
+    {
+      "flag": "--no-ignore-command-error",
+      "i18n": {
+        "en": "Treat non-zero exit codes of children as error (default)."
+      }
+    },
+    {
+      "flag": "-O, --to-stdout",
+      "i18n": {
+        "en": "Extract files to standard output."
+      }
+    },
+    {
+      "flag": "--to-command=COMMAND",
+      "i18n": {
+        "en": "Pipe  extracted  files to COMMAND.  The argument is the pathname of an external program, optionally with command line  arguments. The  program  will be invoked and the contents of the file being extracted supplied to it on its standard input.  Additional data will be supplied via the following environment variables:"
+      }
+    },
+    {
+      "flag": "--atime-preserve[=METHOD]",
+      "i18n": {
+        "en": "Preserve  access  times on dumped files, either by restoring the times after reading (METHOD=replace, this is the default) or  by not setting the times in the first place (METHOD=system)."
+      }
+    },
+    {
+      "flag": "--delay-directory-restore",
+      "i18n": {
+        "en": "Delay  setting  modification  times and permissions of extracted directories until the end of extraction.  Use this  option  when extracting from an archive which has unusual member ordering."
+      }
+    },
+    {
+      "flag": "--group=NAME[:GID]",
+      "i18n": {
+        "en": "Force  NAME  as  group for added files.  If GID is not supplied, NAME can be either a user name or numeric GID.  In this case the missing part (GID or name) will be  inferred  from  the  current host's group database."
+      }
+    },
+    {
+      "flag": "--group-map=FILE",
+      "i18n": {
+        "en": "Read group translation map from FILE.  Empty lines are  ignored. Comments  are  introduced  with  # sign and extend to the end of line.  Each non-empty line in FILE  defines  translation  for  a single  group.   It must consist of two fields, delimited by any amount of whitespace:"
+      }
+    },
+    {
+      "flag": "--mode=CHANGES",
+      "i18n": {
+        "en": "Force symbolic mode CHANGES for added files."
+      }
+    },
+    {
+      "flag": "--mtime=DATE-OR-FILE",
+      "i18n": {
+        "en": "Set mtime for added files.  DATE-OR-FILE is either  a  date/time in almost arbitrary format, or the name of an existing file.  In the latter case the mtime of that file will be used."
+      }
+    },
+    {
+      "flag": "-m, --touch",
+      "i18n": {
+        "en": "Don't extract file modified time."
+      }
+    },
+    {
+      "flag": "--no-delay-directory-restore",
+      "i18n": {
+        "en": "Cancel the effect of the prior --delay-directory-restore option."
+      }
+    },
+    {
+      "flag": "--no-same-owner",
+      "i18n": {
+        "en": "Extract files as yourself (default for ordinary users)."
+      }
+    },
+    {
+      "flag": "--no-same-permissions",
+      "i18n": {
+        "en": "Apply  the  user's  umask  when  extracting permissions from the archive (default for ordinary users)."
+      }
+    },
+    {
+      "flag": "--numeric-owner",
+      "i18n": {
+        "en": "Always use numbers for user/group names."
+      }
+    },
+    {
+      "flag": "--owner=NAME[:UID]",
+      "i18n": {
+        "en": "Force NAME as owner for added files.  If UID  is  not  supplied, NAME can be either a user name or numeric UID.  In this case the missing  part  (UID  or  name) will be inferred from the current host's user database."
+      }
+    },
+    {
+      "flag": "--owner-map=FILE",
+      "i18n": {
+        "en": "Read  owner translation map from FILE.  Empty lines are ignored. Comments are introduced with # sign and extend  to  the  end  of line.   Each  non-empty  line  in FILE defines translation for a single UID.  It must consist of two  fields,  delimited  by  any amount of whitespace:"
+      }
+    },
+    {
+      "flag": "-p, --preserve-permissions, --same-permissions",
+      "i18n": {
+        "en": "Set permissions of extracted files  to  those  recorded  in  the archive (default for superuser)."
+      }
+    },
+    {
+      "flag": "--same-owner",
+      "i18n": {
+        "en": "Try  extracting  files  with the same ownership as exists in the archive (default for superuser)."
+      }
+    },
+    {
+      "flag": "-s, --preserve-order, --same-order",
+      "i18n": {
+        "en": "Tell tar that the list of file names to process is sorted in the same order as the files in the archive."
+      }
+    },
+    {
+      "flag": "--sort=ORDER",
+      "i18n": {
+        "en": "When creating an archive, sort directory  entries  according  to ORDER, which is one of none, name, or inode."
+      }
+    },
+    {
+      "flag": "--acls",
+      "i18n": {
+        "en": ""
+      }
+    },
+    {
+      "flag": "--no-acls",
+      "i18n": {
+        "en": "Disable POSIX ACLs support."
+      }
+    },
+    {
+      "flag": "--selinux",
+      "i18n": {
+        "en": "Enable SELinux context support."
+      }
+    },
+    {
+      "flag": "--no-selinux",
+      "i18n": {
+        "en": "Disable SELinux context support."
+      }
+    },
+    {
+      "flag": "--xattrs",
+      "i18n": {
+        "en": "Enable extended attributes support."
+      }
+    },
+    {
+      "flag": "--no-xattrs",
+      "i18n": {
+        "en": "Disable extended attributes support."
+      }
+    },
+    {
+      "flag": "--xattrs-exclude=PATTERN",
+      "i18n": {
+        "en": "Specify  the exclude pattern for xattr keys.  PATTERN is a glob‐ bing pattern, e.g. --xattrs-exclude='user.*' to include only at‐ tributes from the user namespace."
+      }
+    },
+    {
+      "flag": "--xattrs-include=PATTERN",
+      "i18n": {
+        "en": "Specify the include pattern for xattr keys.  PATTERN is a  glob‐ bing pattern."
+      }
+    },
+    {
+      "flag": "-f, --file=ARCHIVE",
+      "i18n": {
+        "en": "Use  archive  file  or  device  ARCHIVE.   If this option is not given, tar will first examine the environment  variable  `TAPE'. If  it is set, its value will be used as the archive name.  Oth‐ erwise, tar will assume the compiled-in  default.   The  default value  can be inspected either using the --show-defaults option, or at the end of the tar --help output."
+      }
+    },
+    {
+      "flag": "--force-local",
+      "i18n": {
+        "en": "Archive file is local even if it has a colon."
+      }
+    },
+    {
+      "flag": "-F, --info-script=COMMAND, --new-volume-script=COMMAND",
+      "i18n": {
+        "en": "Run COMMAND at the end of each tape (implies -M).   The  command can  include arguments.  When started, it will inherit tar's en‐ vironment plus the following variables:"
+      }
+    },
+    {
+      "flag": "-L, --tape-length=N",
+      "i18n": {
+        "en": "Change  tape  after writing Nx1024 bytes.  If N is followed by a size suffix (see the subsection Size suffixes below), the suffix specifies the multiplicative factor to be used instead of 1024."
+      }
+    },
+    {
+      "flag": "-M, --multi-volume",
+      "i18n": {
+        "en": "Create/list/extract multi-volume archive."
+      }
+    },
+    {
+      "flag": "--rmt-command=COMMAND",
+      "i18n": {
+        "en": "Use COMMAND instead of rmt when accessing remote archives.   See the description of the -f option, above."
+      }
+    },
+    {
+      "flag": "--rsh-command=COMMAND",
+      "i18n": {
+        "en": "Use  COMMAND instead of rsh when accessing remote archives.  See the description of the -f option, above."
+      }
+    },
+    {
+      "flag": "--volno-file=FILE",
+      "i18n": {
+        "en": "When this option is used in conjunction with --multi-volume, tar will keep track of which volume of a multi-volume archive it  is working in FILE."
+      }
+    },
+    {
+      "flag": "-b, --blocking-factor=BLOCKS",
+      "i18n": {
+        "en": "Set record size to BLOCKSx512 bytes."
+      }
+    },
+    {
+      "flag": "-B, --read-full-records",
+      "i18n": {
+        "en": "When  listing or extracting, accept incomplete input records af‐ ter end-of-file marker."
+      }
+    },
+    {
+      "flag": "-i, --ignore-zeros",
+      "i18n": {
+        "en": "Ignore zeroed  blocks  in  archive.   Normally  two  consecutive 512-blocks filled with zeroes mean EOF and tar stops reading af‐ ter encountering them.  This option instructs it to read further and is useful when reading archives created with the -A option."
+      }
+    },
+    {
+      "flag": "--record-size=NUMBER",
+      "i18n": {
+        "en": "Set  record size.  NUMBER is the number of bytes per record.  It must be multiple of 512.  It can can be  suffixed  with  a  size suffix,  e.g. --record-size=10K, for 10 Kilobytes.  See the sub‐ section Size suffixes, for a list of valid suffixes."
+      }
+    },
+    {
+      "flag": "-H, --format=FORMAT",
+      "i18n": {
+        "en": "Create archive of the given format.  Valid formats are:"
+      }
+    },
+    {
+      "flag": "--old-archive, --portability",
+      "i18n": {
+        "en": "Same as --format=v7."
+      }
+    },
+    {
+      "flag": "--pax-option=keyword[[:]=value][,keyword[[:]=value]]...",
+      "i18n": {
+        "en": "Control pax keywords when creating PAX archives (-H pax).   This option is equivalent to the -o option of the pax(1) utility."
+      }
+    },
+    {
+      "flag": "--posix",
+      "i18n": {
+        "en": "Same as --format=posix."
+      }
+    },
+    {
+      "flag": "-V, --label=TEXT",
+      "i18n": {
+        "en": "Create archive with volume name TEXT.  If listing or extracting, use TEXT as a globbing pattern for volume name."
+      }
+    },
+    {
+      "flag": "-a, --auto-compress",
+      "i18n": {
+        "en": "Use archive suffix to determine the compression program."
+      }
+    },
+    {
+      "flag": "-I, --use-compress-program=COMMAND",
+      "i18n": {
+        "en": "Filter  data through COMMAND.  It must accept the -d option, for decompression.  The argument can contain command line options."
+      }
+    },
+    {
+      "flag": "-j, --bzip2",
+      "i18n": {
+        "en": "Filter the archive through bzip2(1)."
+      }
+    },
+    {
+      "flag": "-J, --xz",
+      "i18n": {
+        "en": "Filter the archive through xz(1)."
+      }
+    },
+    {
+      "flag": "--lzip",
+      "i18n": {
+        "en": ""
+      }
+    },
+    {
+      "flag": "--lzma",
+      "i18n": {
+        "en": ""
+      }
+    },
+    {
+      "flag": "--lzop",
+      "i18n": {
+        "en": ""
+      }
+    },
+    {
+      "flag": "--no-auto-compress",
+      "i18n": {
+        "en": "Do not use archive suffix to determine the compression program."
+      }
+    },
+    {
+      "flag": "-z, --gzip, --gunzip, --ungzip",
+      "i18n": {
+        "en": "Filter the archive through gzip(1)."
+      }
+    },
+    {
+      "flag": "-Z, --compress, --uncompress",
+      "i18n": {
+        "en": "Filter the archive through compress(1)."
+      }
+    },
+    {
+      "flag": "--zstd",
+      "i18n": {
+        "en": ""
+      }
+    },
+    {
+      "flag": "--add-file=FILE",
+      "i18n": {
+        "en": "Add FILE to the archive (useful if its name starts with a dash)."
+      }
+    },
+    {
+      "flag": "--backup[=CONTROL]",
+      "i18n": {
+        "en": "Backup before removal.  The CONTROL argument, if supplied,  con‐ trols the backup policy.  Its valid values are:"
+      }
+    },
+    {
+      "flag": "-C, --directory=DIR",
+      "i18n": {
+        "en": "Change to DIR before performing any operations.  This option  is order-sensitive, i.e. it affects all options that follow."
+      }
+    },
+    {
+      "flag": "--exclude=PATTERN",
+      "i18n": {
+        "en": "Exclude  files  matching  PATTERN, a glob(3)-style wildcard pat‐ tern."
+      }
+    },
+    {
+      "flag": "--exclude-backups",
+      "i18n": {
+        "en": "Exclude backup and lock files."
+      }
+    },
+    {
+      "flag": "--exclude-caches",
+      "i18n": {
+        "en": "Exclude contents of directories  containing  file  CACHEDIR.TAG, except for the tag file itself."
+      }
+    },
+    {
+      "flag": "--exclude-caches-all",
+      "i18n": {
+        "en": "Exclude  directories  containing  file CACHEDIR.TAG and the file itself."
+      }
+    },
+    {
+      "flag": "--exclude-caches-under",
+      "i18n": {
+        "en": "Exclude everything under directories containing CACHEDIR.TAG"
+      }
+    },
+    {
+      "flag": "--exclude-ignore=FILE",
+      "i18n": {
+        "en": "Before dumping a directory, see if it  contains  FILE.   If  so, read  exclusion  patterns  from  this file.  The patterns affect only the directory itself."
+      }
+    },
+    {
+      "flag": "--exclude-ignore-recursive=FILE",
+      "i18n": {
+        "en": "Same as --exclude-ignore, except that patterns from FILE  affect both the directory and all its subdirectories."
+      }
+    },
+    {
+      "flag": "--exclude-tag=FILE",
+      "i18n": {
+        "en": "Exclude contents of directories containing FILE, except for FILE itself."
+      }
+    },
+    {
+      "flag": "--exclude-tag-all=FILE",
+      "i18n": {
+        "en": "Exclude directories containing FILE."
+      }
+    },
+    {
+      "flag": "--exclude-tag-under=FILE",
+      "i18n": {
+        "en": "Exclude everything under directories containing FILE."
+      }
+    },
+    {
+      "flag": "--exclude-vcs",
+      "i18n": {
+        "en": "Exclude version control system directories."
+      }
+    },
+    {
+      "flag": "--exclude-vcs-ignores",
+      "i18n": {
+        "en": "Exclude  files that match patterns read from VCS-specific ignore files.  Supported files are: .cvsignore, .gitignore, .bzrignore, and .hgignore."
+      }
+    },
+    {
+      "flag": "-h, --dereference",
+      "i18n": {
+        "en": "Follow symlinks; archive and dump the files they point to."
+      }
+    },
+    {
+      "flag": "--hard-dereference",
+      "i18n": {
+        "en": "Follow hard links; archive and dump the files they refer to."
+      }
+    },
+    {
+      "flag": "-K, --starting-file=MEMBER",
+      "i18n": {
+        "en": "Begin at the given member in the archive."
+      }
+    },
+    {
+      "flag": "--newer-mtime=DATE",
+      "i18n": {
+        "en": "Work on files whose data changed after the DATE.  If DATE starts with / or . it is taken to be a file name;  the  mtime  of  that file is used as the date."
+      }
+    },
+    {
+      "flag": "--no-null",
+      "i18n": {
+        "en": "Disable the effect of the previous --null option."
+      }
+    },
+    {
+      "flag": "--no-recursion",
+      "i18n": {
+        "en": "Avoid descending automatically in directories."
+      }
+    },
+    {
+      "flag": "--no-unquote",
+      "i18n": {
+        "en": "Do not unquote input file or member names."
+      }
+    },
+    {
+      "flag": "--no-verbatim-files-from",
+      "i18n": {
+        "en": "Treat  each line read from a file list as if it were supplied in the command line.  I.e., leading and trailing whitespace is  re‐ moved  and,  if  the  resulting string begins with a dash, it is treated as tar command line option."
+      }
+    },
+    {
+      "flag": "--null",
+      "i18n": {
+        "en": "verbatim  (disables  special handling of names that start with a dash)."
+      }
+    },
+    {
+      "flag": "-N, --newer=DATE, --after-date=DATE",
+      "i18n": {
+        "en": "Only store files newer than DATE.  If DATE starts with / or . it is taken to be a file name; the mtime of that file  is  used  as the date."
+      }
+    },
+    {
+      "flag": "--one-file-system",
+      "i18n": {
+        "en": "Stay in local file system when creating archive."
+      }
+    },
+    {
+      "flag": "-P, --absolute-names",
+      "i18n": {
+        "en": "Don't  strip  leading  slashes  from  file  names  when creating archives."
+      }
+    },
+    {
+      "flag": "--recursion",
+      "i18n": {
+        "en": "Recurse into directories (default)."
+      }
+    },
+    {
+      "flag": "--suffix=STRING",
+      "i18n": {
+        "en": "Backup before removal, override usual suffix.  Default suffix is ~, unless overridden by environment variable  SIMPLE_BACKUP_SUF‐ FIX."
+      }
+    },
+    {
+      "flag": "-T, --files-from=FILE",
+      "i18n": {
+        "en": "Get names to extract or create from FILE."
+      }
+    },
+    {
+      "flag": "--unquote",
+      "i18n": {
+        "en": "Unquote file or member names (default)."
+      }
+    },
+    {
+      "flag": "--verbatim-files-from",
+      "i18n": {
+        "en": "Treat each line obtained from a file list as a file  name,  even if  it  starts  with  a  dash.  File lists are supplied with the --files-from (-T) option.  The default  behavior  is  to  handle names  supplied  in file lists as if they were typed in the com‐ mand line, i.e. any names starting with a dash  are  treated  as tar options.  The --verbatim-files-from option disables this be‐ havior."
+      }
+    },
+    {
+      "flag": "-X, --exclude-from=FILE",
+      "i18n": {
+        "en": "Exclude files matching patterns listed in FILE."
+      }
+    },
+    {
+      "flag": "--strip-components=NUMBER",
+      "i18n": {
+        "en": "Strip NUMBER leading components from file names on extraction."
+      }
+    },
+    {
+      "flag": "--transform=EXPRESSION, --xform=EXPRESSION",
+      "i18n": {
+        "en": "Use sed replace EXPRESSION to transform file names."
+      }
+    },
+    {
+      "flag": "--anchored",
+      "i18n": {
+        "en": "Patterns match file name start."
+      }
+    },
+    {
+      "flag": "--ignore-case",
+      "i18n": {
+        "en": "Ignore case."
+      }
+    },
+    {
+      "flag": "--no-anchored",
+      "i18n": {
+        "en": "Patterns match after any / (default for exclusion)."
+      }
+    },
+    {
+      "flag": "--no-ignore-case",
+      "i18n": {
+        "en": "Case sensitive matching (default)."
+      }
+    },
+    {
+      "flag": "--no-wildcards",
+      "i18n": {
+        "en": "Verbatim string matching."
+      }
+    },
+    {
+      "flag": "--no-wildcards-match-slash",
+      "i18n": {
+        "en": "Wildcards do not match /."
+      }
+    },
+    {
+      "flag": "--wildcards",
+      "i18n": {
+        "en": "Use wildcards (default for exclusion)."
+      }
+    },
+    {
+      "flag": "--wildcards-match-slash",
+      "i18n": {
+        "en": "Wildcards match / (default for exclusion)."
+      }
+    },
+    {
+      "flag": "--checkpoint[=N]",
+      "i18n": {
+        "en": "Display progress messages every Nth record (default 10)."
+      }
+    },
+    {
+      "flag": "--checkpoint-action=ACTION",
+      "i18n": {
+        "en": "Run ACTION on each checkpoint."
+      }
+    },
+    {
+      "flag": "--clamp-mtime",
+      "i18n": {
+        "en": "Only set time when the file is more recent than what  was  given with --mtime."
+      }
+    },
+    {
+      "flag": "--full-time",
+      "i18n": {
+        "en": "Print file time to its full resolution."
+      }
+    },
+    {
+      "flag": "--index-file=FILE",
+      "i18n": {
+        "en": "Send verbose output to FILE."
+      }
+    },
+    {
+      "flag": "-l, --check-links",
+      "i18n": {
+        "en": "Print a message if not all links are dumped."
+      }
+    },
+    {
+      "flag": "--no-quote-chars=STRING",
+      "i18n": {
+        "en": "Disable quoting for characters from STRING."
+      }
+    },
+    {
+      "flag": "--quote-chars=STRING",
+      "i18n": {
+        "en": "Additionally quote characters from STRING."
+      }
+    },
+    {
+      "flag": "--quoting-style=STYLE",
+      "i18n": {
+        "en": "Set  quoting  style for file and member names.  Valid values for STYLE are literal, shell, shell-always, c, c-maybe, escape,  lo‐ cale, clocale."
+      }
+    },
+    {
+      "flag": "-R, --block-number",
+      "i18n": {
+        "en": "Show block number within archive with each message."
+      }
+    },
+    {
+      "flag": "--show-omitted-dirs",
+      "i18n": {
+        "en": "When  listing  or  extracting, list each directory that does not match search criteria."
+      }
+    },
+    {
+      "flag": "--show-transformed-names, --show-stored-names",
+      "i18n": {
+        "en": "Show file or archive names after transformation by  --strip  and --transform options."
+      }
+    },
+    {
+      "flag": "--totals[=SIGNAL]",
+      "i18n": {
+        "en": "Print  total  bytes  after processing the archive.  If SIGNAL is given, print total bytes when this signal is delivered.  Allowed signals are: SIGHUP, SIGQUIT, SIGINT, SIGUSR1, and SIGUSR2.  The SIG prefix can be omitted."
+      }
+    },
+    {
+      "flag": "--utc",
+      "i18n": {
+        "en": ""
+      }
+    },
+    {
+      "flag": "-v, --verbose",
+      "i18n": {
+        "en": "Verbosely list files processed.  Each instance of this option on the command line increases the verbosity level by one.  The max‐ imum verbosity level is 3.  For a  detailed  discussion  of  how various  verbosity  levels  affect tar's output, please refer to GNU Tar Manual, subsection 2.5.2 \"The '--verbose' Option\"."
+      }
+    },
+    {
+      "flag": "--warning=KEYWORD",
+      "i18n": {
+        "en": "Enable or disable warning messages identified by  KEYWORD.   The messages  are suppressed if KEYWORD is prefixed with no- and en‐ abled otherwise."
+      }
+    },
+    {
+      "flag": "-w, --interactive, --confirmation",
+      "i18n": {
+        "en": "Ask for confirmation for every action."
+      }
+    },
+    {
+      "flag": "-o",
+      "i18n": {
+        "en": "--no-same-owner."
+      }
+    }
+  ]
+}

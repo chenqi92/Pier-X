@@ -1,0 +1,125 @@
+{
+  "schema_version": 1,
+  "command": "top",
+  "tool_version": "4.0.4",
+  "source": "auto-imported",
+  "import_method": "help",
+  "import_date": "2026-04-26",
+  "subcommands": [],
+  "options": [
+    {
+      "flag": "-b, --batch-mode",
+      "i18n": {
+        "en": "run in non-interactive batch mode"
+      }
+    },
+    {
+      "flag": "-c, --cmdline-toggle",
+      "i18n": {
+        "en": "reverse last remembered 'c' state"
+      }
+    },
+    {
+      "flag": "-d, --delay",
+      "i18n": {
+        "en": "iterative delay as SECS [.TENTHS]"
+      }
+    },
+    {
+      "flag": "-E, --scale-summary-mem",
+      "i18n": {
+        "en": "set mem as: k,m,g,t,p,e for SCALE"
+      }
+    },
+    {
+      "flag": "-e, --scale-task-mem",
+      "i18n": {
+        "en": "set mem with: k,m,g,t,p for SCALE"
+      }
+    },
+    {
+      "flag": "-H, --threads-show",
+      "i18n": {
+        "en": "show tasks plus all their threads"
+      }
+    },
+    {
+      "flag": "-i, --idle-toggle",
+      "i18n": {
+        "en": "reverse last remembered 'i' state"
+      }
+    },
+    {
+      "flag": "-n, --iterations",
+      "i18n": {
+        "en": "exit on maximum iterations NUMBER"
+      }
+    },
+    {
+      "flag": "-O, --list-fields",
+      "i18n": {
+        "en": "output all field names, then exit"
+      }
+    },
+    {
+      "flag": "-o, --sort-override",
+      "i18n": {
+        "en": "force sorting on this named FIELD"
+      }
+    },
+    {
+      "flag": "-p, --pid",
+      "i18n": {
+        "en": "monitor only the tasks in PIDLIST"
+      }
+    },
+    {
+      "flag": "-S, --accum-time-toggle",
+      "i18n": {
+        "en": "reverse last remembered 'S' state"
+      }
+    },
+    {
+      "flag": "-s, --secure-mode",
+      "i18n": {
+        "en": "run with secure mode restrictions"
+      }
+    },
+    {
+      "flag": "-U, --filter-any-user",
+      "i18n": {
+        "en": "show only processes owned by USER"
+      }
+    },
+    {
+      "flag": "-u, --filter-only-euser",
+      "i18n": {
+        "en": "show only processes owned by USER"
+      }
+    },
+    {
+      "flag": "-w, --width",
+      "i18n": {
+        "en": "change print width [,use COLUMNS]"
+      }
+    },
+    {
+      "flag": "-1, --single-cpu-toggle",
+      "i18n": {
+        "en": "reverse last remembered '1' state"
+      }
+    },
+    {
+      "flag": "-h, --help",
+      "i18n": {
+        "en": "display this help text, then exit"
+      }
+    },
+    {
+      "flag": "-V, --version",
+      "i18n": {
+        "en": "output version information & exit"
+      }
+    }
+  ]
+}

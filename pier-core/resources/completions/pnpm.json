@@ -1,0 +1,17 @@
+{
+  "schema_version": 1,
+  "command": "pnpm",
+  "tool_version": "10.29.3",
+  "source": "auto-imported",
+  "import_method": "help",
+  "import_date": "2026-04-26",
+  "subcommands": [],
+  "options": [
+    {
+      "flag": "-r, --recursive",
+      "i18n": {
+        "en": "Run the command for each project in the workspace."
+      }
+    }
+  ]
+}

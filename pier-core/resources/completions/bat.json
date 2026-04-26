@@ -1,0 +1,272 @@
+{
+  "schema_version": 1,
+  "command": "bat",
+  "tool_version": "0.26.1",
+  "source": "auto-imported",
+  "import_method": "man",
+  "import_date": "2026-04-26",
+  "subcommands": [
+    {
+      "name": "cache",
+      "i18n": {
+        "en": ""
+      },
+      "options": [],
+      "subcommands": []
+    }
+  ],
+  "options": [
+    {
+      "flag": "-A, --show-all",
+      "i18n": {
+        "en": ""
+      }
+    },
+    {
+      "flag": "--nonprintable-notation",
+      "i18n": {
+        "en": ""
+      }
+    },
+    {
+      "flag": "--binary",
+      "i18n": {
+        "en": ""
+      }
+    },
+    {
+      "flag": "--completion",
+      "i18n": {
+        "en": ""
+      }
+    },
+    {
+      "flag": "-p, --plain",
+      "i18n": {
+        "en": ""
+      }
+    },
+    {
+      "flag": "-l, --language",
+      "i18n": {
+        "en": ""
+      }
+    },
+    {
+      "flag": "-H, --highlight-line",
+      "i18n": {
+        "en": ""
+      }
+    },
+    {
+      "flag": "--file-name",
+      "i18n": {
+        "en": ""
+      }
+    },
+    {
+      "flag": "-d, --diff",
+      "i18n": {
+        "en": ""
+      }
+    },
+    {
+      "flag": "--diff-context",
+      "i18n": {
+        "en": ""
+      }
+    },
+    {
+      "flag": "--tabs",
+      "i18n": {
+        "en": ""
+      }
+    },
+    {
+      "flag": "--wrap",
+      "i18n": {
+        "en": ""
+      }
+    },
+    {
+      "flag": "-S, --chop-long-lines",
+      "i18n": {
+        "en": ""
+      }
+    },
+    {
+      "flag": "--terminal-width",
+      "i18n": {
+        "en": ""
+      }
+    },
+    {
+      "flag": "-n, --number",
+      "i18n": {
+        "en": ""
+      }
+    },
+    {
+      "flag": "--color",
+      "i18n": {
+        "en": ""
+      }
+    },
+    {
+      "flag": "--italic-text",
+      "i18n": {
+        "en": ""
+      }
+    },
+    {
+      "flag": "--decorations",
+      "i18n": {
+        "en": ""
+      }
+    },
+    {
+      "flag": "-f, --force-colorization",
+      "i18n": {
+        "en": ""
+      }
+    },
+    {
+      "flag": "--paging",
+      "i18n": {
+        "en": ""
+      }
+    },
+    {
+      "flag": "--pager",
+      "i18n": {
+        "en": ""
+      }
+    },
+    {
+      "flag": "-m, --map-syntax",
+      "i18n": {
+        "en": ""
+      }
+    },
+    {
+      "flag": "--ignored-suffix",
+      "i18n": {
+        "en": ""
+      }
+    },
+    {
+      "flag": "--theme",
+      "i18n": {
+        "en": ""
+      }
+    },
+    {
+      "flag": "--theme-dark",
+      "i18n": {
+        "en": ""
+      }
+    },
+    {
+      "flag": "--theme-light",
+      "i18n": {
+        "en": ""
+      }
+    },
+    {
+      "flag": "--list-themes",
+      "i18n": {
+        "en": ""
+      }
+    },
+    {
+      "flag": "-s, --squeeze-blank",
+      "i18n": {
+        "en": ""
+      }
+    },
+    {
+      "flag": "--squeeze-limit",
+      "i18n": {
+        "en": ""
+      }
+    },
+    {
+      "flag": "--strip-ansi",
+      "i18n": {
+        "en": ""
+      }
+    },
+    {
+      "flag": "--style",
+      "i18n": {
+        "en": ""
+      }
+    },
+    {
+      "flag": "-r, --line-range",
+      "i18n": {
+        "en": ""
+      }
+    },
+    {
+      "flag": "-L, --list-languages",
+      "i18n": {
+        "en": ""
+      }
+    },
+    {
+      "flag": "-u, --unbuffered",
+      "i18n": {
+        "en": ""
+      }
+    },
+    {
+      "flag": "--no-custom-assets",
+      "i18n": {
+        "en": ""
+      }
+    },
+    {
+      "flag": "--config-dir",
+      "i18n": {
+        "en": ""
+      }
+    },
+    {
+      "flag": "--cache-dir",
+      "i18n": {
+        "en": ""
+      }
+    },
+    {
+      "flag": "--diagnostic",
+      "i18n": {
+        "en": ""
+      }
+    },
+    {
+      "flag": "--acknowledgements",
+      "i18n": {
+        "en": ""
+      }
+    },
+    {
+      "flag": "--set-terminal-title",
+      "i18n": {
+        "en": ""
+      }
+    },
+    {
+      "flag": "-h, --help",
+      "i18n": {
+        "en": ""
+      }
+    },
+    {
+      "flag": "-V, --version",
+      "i18n": {
+        "en": ""
+      }
+    }
+  ]
+}

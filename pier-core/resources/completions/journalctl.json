@@ -1,0 +1,27 @@
+{
+  "schema_version": 1,
+  "command": "journalctl",
+  "tool_version": "255.4",
+  "source": "auto-imported",
+  "import_method": "man",
+  "import_date": "2026-04-26",
+  "subcommands": [
+    {
+      "name": "The",
+      "i18n": {
+        "en": ""
+      },
+      "options": [],
+      "subcommands": []
+    },
+    {
+      "name": "is",
+      "i18n": {
+        "en": ""
+      },
+      "options": [],
+      "subcommands": []
+    }
+  ],
+  "options": []
+}

@@ -1,0 +1,47 @@
+{
+  "schema_version": 1,
+  "command": "kill",
+  "tool_version": "4.0.4",
+  "source": "auto-imported",
+  "import_method": "man",
+  "import_date": "2026-04-26",
+  "subcommands": [],
+  "options": [
+    {
+      "flag": "-<signal>",
+      "i18n": {
+        "en": ""
+      }
+    },
+    {
+      "flag": "-s",
+      "i18n": {
+        "en": ""
+      }
+    },
+    {
+      "flag": "--signal",
+      "i18n": {
+        "en": "Specify  the  signal to be sent.  The signal can be specified by using name or number.  The behavior of signals is  explained  in signal(7) manual page."
+      }
+    },
+    {
+      "flag": "-q, --queue",
+      "i18n": {
+        "en": "Use  sigqueue(3)  rather  than kill(2) and the value argument is used to specify an integer to be sent with the  signal.  If  the receiving  process has installed a handler for this signal using the SA_SIGINFO flag to sigaction(2), then  it  can  obtain  this data via the si_value field of the siginfo_t structure."
+      }
+    },
+    {
+      "flag": "-l, --list",
+      "i18n": {
+        "en": "List  signal  names.   This  option has optional argument, which will convert signal number to signal name, or other way round."
+      }
+    },
+    {
+      "flag": "-L, --table",
+      "i18n": {
+        "en": "List signal names in a nice table."
+      }
+    }
+  ]
+}

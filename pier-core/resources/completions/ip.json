@@ -1,0 +1,173 @@
+{
+  "schema_version": 1,
+  "command": "ip",
+  "tool_version": "",
+  "source": "auto-imported",
+  "import_method": "man",
+  "import_date": "2026-04-26",
+  "subcommands": [],
+  "options": [
+    {
+      "flag": "-V,",
+      "i18n": {
+        "en": "Print the version of the ip utility and exit."
+      }
+    },
+    {
+      "flag": "-h,",
+      "i18n": {
+        "en": "output statistics with human readable values followed by suffix."
+      }
+    },
+    {
+      "flag": "-b,",
+      "i18n": {
+        "en": "Read  commands  from  provided file or standard input and invoke them.  First failure will cause termination of ip."
+      }
+    },
+    {
+      "flag": "-force",
+      "i18n": {
+        "en": "errors  during execution of the commands, the application return code will be non zero."
+      }
+    },
+    {
+      "flag": "-s,",
+      "i18n": {
+        "en": "Output more information. If the option appears  twice  or  more, the amount of information increases.  As a rule, the information is statistics or some time values."
+      }
+    },
+    {
+      "flag": "-d,",
+      "i18n": {
+        "en": "Output more detailed information."
+      }
+    },
+    {
+      "flag": "-l,",
+      "i18n": {
+        "en": "Specify  maximum  number  of  loops the 'ip address flush' logic will attempt before giving up. The  default  is  10.   Zero  (0) means loop until all addresses are removed."
+      }
+    },
+    {
+      "flag": "-f,",
+      "i18n": {
+        "en": "Specifies  the protocol family to use. The protocol family iden‐ tifier can be one of inet, inet6, bridge, mpls or link.  If this option is not present, the protocol family is guessed from other arguments. If the rest of the command line does not give  enough information  to  guess  the family, ip falls back to the default one, usually inet or any.  link is a special  family  identifier meaning that no networking protocol is involved."
+      }
+    },
+    {
+      "flag": "-4",
+      "i18n": {
+        "en": ""
+      }
+    },
+    {
+      "flag": "-6",
+      "i18n": {
+        "en": ""
+      }
+    },
+    {
+      "flag": "-B",
+      "i18n": {
+        "en": ""
+      }
+    },
+    {
+      "flag": "-M",
+      "i18n": {
+        "en": ""
+      }
+    },
+    {
+      "flag": "-0",
+      "i18n": {
+        "en": ""
+      }
+    },
+    {
+      "flag": "-o,",
+      "i18n": {
+        "en": "output  each  record on a single line, replacing line feeds with the '\\' character. This is convenient when  you  want  to  count records with wc(1) or to grep(1) the output."
+      }
+    },
+    {
+      "flag": "-r,",
+      "i18n": {
+        "en": "use  the  system's  name  resolver to print DNS names instead of host addresses."
+      }
+    },
+    {
+      "flag": "-n,",
+      "i18n": {
+        "en": "switches ip to the specified network namespace NETNS.   Actually it just simplifies executing of:"
+      }
+    },
+    {
+      "flag": "-N,",
+      "i18n": {
+        "en": "Print  the  number of protocol, scope, dsfield, etc directly in‐ stead of converting it to human readable name."
+      }
+    },
+    {
+      "flag": "-a,",
+      "i18n": {
+        "en": "executes specified command over all objects, it depends if  com‐ mand supports this option."
+      }
+    },
+    {
+      "flag": "-c[color][={always|auto|never}",
+      "i18n": {
+        "en": "Configure color output. If parameter is omitted or always, color output  is  enabled  regardless of stdout state. If parameter is auto, stdout is checked to be a terminal before  enabling  color output.  If  parameter  is  never,  color output is disabled. If specified multiple times, the last one  takes  precedence.  This flag is ignored if -json is also given."
+      }
+    },
+    {
+      "flag": "-t,",
+      "i18n": {
+        "en": "display current time when using monitor option."
+      }
+    },
+    {
+      "flag": "-ts,",
+      "i18n": {
+        "en": "Like -timestamp, but use shorter format."
+      }
+    },
+    {
+      "flag": "-rc,",
+      "i18n": {
+        "en": "Set the netlink socket receive buffer size, defaults to 1MB."
+      }
+    },
+    {
+      "flag": "-iec",
+      "i18n": {
+        "en": ""
+      }
+    },
+    {
+      "flag": "-br,",
+      "i18n": {
+        "en": "Print only basic information in  a  tabular  format  for  better readability.  This option is currently only supported by ip addr show , ip link show & ip neigh show commands."
+      }
+    },
+    {
+      "flag": "-j,",
+      "i18n": {
+        "en": "Output results in JavaScript Object Notation (JSON)."
+      }
+    },
+    {
+      "flag": "-p,",
+      "i18n": {
+        "en": "The default JSON format is compact and more efficient  to  parse but hard for most users to read.  This flag adds indentation for readability."
+      }
+    },
+    {
+      "flag": "-echo",
+      "i18n": {
+        "en": ""
+      }
+    }
+  ]
+}

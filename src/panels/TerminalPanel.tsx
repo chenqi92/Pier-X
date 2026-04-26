@@ -625,6 +625,7 @@ export default function TerminalPanel({ tab, isActive, onEditConnection }: Props
     let inflight = false;
     let dirty = false;
     let safety: number | null = null;
+    let rafHandle: number | null = null;
 
     // The safety timer fires only after 1500ms of quiet — any
     // event-driven refresh re-arms it, so we no longer get the
@@ -636,6 +637,20 @@ export default function TerminalPanel({ tab, isActive, onEditConnection }: Props
         safety = null;
         refresh();
       }, 1500);
+    };
+
+    // Coalesce bursts of `terminal:event` (one per ≤16ms backend frame)
+    // into at most one IPC + setSnapshot per animation frame. Without
+    // this, a `docker logs -f` flood drives setSnapshot well above
+    // 60Hz and can race React's `useSyncExternalStore` snapshot
+    // detection into "infinite loop" lock-up.
+    const scheduleRefresh = () => {
+      if (disposed) return;
+      if (rafHandle !== null) return;
+      rafHandle = window.requestAnimationFrame(() => {
+        rafHandle = null;
+        refresh();
+      });
     };
 
     const refresh = () => {
@@ -664,7 +679,7 @@ export default function TerminalPanel({ tab, isActive, onEditConnection }: Props
         .finally(() => {
           inflight = false;
           if (dirty && !disposed) {
-            refresh();
+            scheduleRefresh();
           } else if (!disposed) {
             armSafety();
           }
@@ -673,6 +688,21 @@ export default function TerminalPanel({ tab, isActive, onEditConnection }: Props
 
     refresh();
 
+    // Tauri's `_unlisten` looks up `listeners[eventId]` on the JS side and
+    // throws `TypeError: undefined is not an object (evaluating
+    // 'listeners[eventId].handlerId')` if the entry was already removed —
+    // which happens when this effect's cleanup races with the late
+    // resolution of `listen()`. Swallow it so it never escapes as an
+    // unhandledrejection.
+    const safeUnlisten = (fn: UnlistenFn | undefined) => {
+      if (!fn) return;
+      try {
+        fn();
+      } catch {
+        // Already-unregistered handler; nothing to do.
+      }
+    };
+
     // Listen for backend-pushed events. Each TerminalPanel subscribes;
     // the payload carries `sessionId` so we filter other tabs out.
     let unlisten: UnlistenFn | undefined;
@@ -680,11 +710,13 @@ export default function TerminalPanel({ tab, isActive, onEditConnection }: Props
     void listen<TerminalEventPayload>("terminal:event", (event) => {
       if (disposed) return;
       if (event.payload.sessionId !== session.sessionId) return;
-      refresh();
-    }).then((u) => {
-      if (disposed) u();
-      else unlisten = u;
-    });
+      scheduleRefresh();
+    })
+      .then((u) => {
+        if (disposed) safeUnlisten(u);
+        else unlisten = u;
+      })
+      .catch(() => {});
 
     // Subscribe to the SSH-child state event. The backend watcher
     // polls this terminal's PTY descendant tree once a second and
@@ -697,10 +729,12 @@ export default function TerminalPanel({ tab, isActive, onEditConnection }: Props
       if (disposed) return;
       if (event.payload.sessionId !== session.sessionId) return;
       applySshStateFromWatcher(event.payload.target);
-    }).then((u) => {
-      if (disposed) u();
-      else unlistenSshState = u;
-    });
+    })
+      .then((u) => {
+        if (disposed) safeUnlisten(u);
+        else unlistenSshState = u;
+      })
+      .catch(() => {});
 
     // Subscribe to the one-shot password-prompt event. The PTY
     // reader fires this when it sees the canonical OpenSSH prompt
@@ -719,10 +753,12 @@ export default function TerminalPanel({ tab, isActive, onEditConnection }: Props
         kind: "password",
       };
       logEvent("INFO", "ssh.capture", `tab=${tab.id} armed capture on OpenSSH password prompt`);
-    }).then((u) => {
-      if (disposed) u();
-      else unlistenSshPrompt = u;
-    });
+    })
+      .then((u) => {
+        if (disposed) safeUnlisten(u);
+        else unlistenSshPrompt = u;
+      })
+      .catch(() => {});
 
     // Separate event for `Enter passphrase for key '<path>':` — the
     // captured value is a key passphrase, not a server password, so
@@ -743,18 +779,24 @@ export default function TerminalPanel({ tab, isActive, onEditConnection }: Props
         "ssh.capture",
         `tab=${tab.id} armed capture on OpenSSH key passphrase prompt`,
       );
-    }).then((u) => {
-      if (disposed) u();
-      else unlistenSshPassphrasePrompt = u;
-    });
+    })
+      .then((u) => {
+        if (disposed) safeUnlisten(u);
+        else unlistenSshPassphrasePrompt = u;
+      })
+      .catch(() => {});
 
     return () => {
       disposed = true;
       if (safety !== null) window.clearTimeout(safety);
-      if (unlisten) unlisten();
-      if (unlistenSshState) unlistenSshState();
-      if (unlistenSshPrompt) unlistenSshPrompt();
-      if (unlistenSshPassphrasePrompt) unlistenSshPassphrasePrompt();
+      if (rafHandle !== null) {
+        window.cancelAnimationFrame(rafHandle);
+        rafHandle = null;
+      }
+      safeUnlisten(unlisten);
+      safeUnlisten(unlistenSshState);
+      safeUnlisten(unlistenSshPrompt);
+      safeUnlisten(unlistenSshPassphrasePrompt);
     };
   }, [session, scrollbackOffset]);
 

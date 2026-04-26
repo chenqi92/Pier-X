@@ -2,17 +2,20 @@ import { useEffect, useMemo, useRef, useState, type MouseEvent as ReactMouseEven
 import {
   AlertTriangle,
   AlignJustify,
+  CheckCircle2,
   ChevronDown,
   ChevronUp,
   Clock,
   Copy,
   Download,
   Edit,
+  ExternalLink,
   Eye,
   FileText,
   HardDrive,
   Key,
   List,
+  Loader2,
   Replace,
   RotateCcw,
   Save,
@@ -21,6 +24,8 @@ import {
   User,
   X,
 } from "lucide-react";
+import { listen, type UnlistenFn } from "@tauri-apps/api/event";
+import { open as openDialog } from "@tauri-apps/plugin-dialog";
 import { EditorState, EditorSelection, Compartment, type Extension } from "@codemirror/state";
 import {
   EditorView,
@@ -68,7 +73,8 @@ import { localizeError } from "../i18n/localizeMessage";
 import { useSettingsStore } from "../stores/useSettingsStore";
 import { writeClipboardText } from "../lib/clipboard";
 import * as cmd from "../lib/commands";
-import type { SftpTextFile } from "../lib/commands";
+import type { SftpExternalEditEvent, SftpTextFile } from "../lib/commands";
+import { SFTP_EXTERNAL_EDIT_EVENT } from "../lib/commands";
 import {
   MAX_EDITOR_BYTES,
   buildEditorPhrases,
@@ -95,6 +101,11 @@ type Props = {
   path: string;
   /** Leaf filename — seeds the title bar and language detection. */
   name: string;
+  /** Optional file size hint from the listing. When > MAX_EDITOR_BYTES
+   *  the dialog skips the inline read entirely and renders the
+   *  "too large to inline-edit" branch with the external-editor
+   *  hand-off + download fallback instead of erroring out. */
+  size?: number;
   sshArgs: SftpEditorSshArgs;
   onClose: () => void;
   /** Called after a successful save with the persisted byte count. */
@@ -104,6 +115,22 @@ type Props = {
 };
 
 type Mode = "view" | "edit";
+
+/** Above this byte count we skip the CodeMirror language extension —
+ *  syntax highlighting on multi-MB files turns the initial mount
+ *  into a multi-second blocking parse. Line numbers, search, and
+ *  bracket matching still work; only the colored tokens go. */
+const LARGE_LANGUAGE_BYTES = 256 * 1024;
+
+type ExternalEditState = {
+  watcherId: string;
+  localPath: string;
+  status: "opening" | "watching" | "uploading" | "uploaded" | "error";
+  /** Wall-clock seconds since epoch for the most recent successful
+   *  upload — drives the "Last synced" footer label. */
+  lastSyncedAt?: number;
+  lastError?: string;
+};
 
 function basename(path: string): string {
   const i = path.lastIndexOf("/");
@@ -121,6 +148,7 @@ export default function SftpEditorDialog({
   open,
   path,
   name,
+  size,
   sshArgs,
   onClose,
   onSaved,
@@ -159,6 +187,25 @@ export default function SftpEditorDialog({
   > | null>(null);
   const [dirty, setDirty] = useState(false);
   const [mode, setMode] = useState<Mode>("edit");
+  // External-editor session, when the user picks "Open with system
+  // editor" (either explicitly via the toolbar or implicitly because
+  // the file is too large for inline editing). Held in a ref alongside
+  // state so the cleanup path on close can stop the watcher even if
+  // the React state has already moved on.
+  const [externalEdit, setExternalEdit] = useState<ExternalEditState | null>(null);
+  const externalEditRef = useRef<ExternalEditState | null>(null);
+  externalEditRef.current = externalEdit;
+  const [externalBusy, setExternalBusy] = useState(false);
+  // True the moment we know the file exceeds MAX_EDITOR_BYTES — drives
+  // the "too large to inline-edit" branch so we never even attempt
+  // sftp_read_text against a multi-MB file.
+  const tooLargeForInline = typeof size === "number" && size > MAX_EDITOR_BYTES;
+  // "Card" view — replaces the inline editor / toolbar / footer with a
+  // single status card. Triggered when the file is too large to inline
+  // edit OR when the user has handed it off to the OS default editor
+  // (in which case keeping the inline editor visible would invite
+  // confusing competing-write races).
+  const cardMode = tooLargeForInline || !!externalEdit;
   const [wrap, setWrap] = useState(editorWrapDefault);
   const [showNums, setShowNums] = useState(editorLineNumbersDefault);
   const [cursor, setCursor] = useState<{ line: number; col: number; selLen: number; totalLines: number }>({ line: 1, col: 1, selLen: 0, totalLines: 0 });
@@ -184,11 +231,32 @@ export default function SftpEditorDialog({
   useEffect(() => {
     if (!open) return;
     let alive = true;
-    setLoading(true);
     setError("");
     setDirty(false);
-    setMeta(null);
     setMode("edit");
+    // Too-large files skip the inline read entirely — the dialog
+    // body shows the external-editor / download branch instead.
+    // Seeding `meta.size` from the prop lets the header chip render
+    // useful info even though we never call sftp_read_text.
+    if (tooLargeForInline) {
+      setLoading(false);
+      setMeta({
+        size: size ?? 0,
+        permissions: null,
+        modified: null,
+        lossy: false,
+        owner: "",
+        group: "",
+        eol: "",
+        encoding: "",
+      });
+      return () => {
+        alive = false;
+        disposeEditor();
+      };
+    }
+    setLoading(true);
+    setMeta(null);
     void (async () => {
       try {
         const res = await cmd.sftpReadText({
@@ -208,10 +276,22 @@ export default function SftpEditorDialog({
           eol: res.eol,
           encoding: res.encoding,
         });
-        setTimeout(() => {
+        // Two-step mount: bring the empty editor up immediately so the
+        // dialog frame paints, then push the content on the next frame.
+        // For multi-100KB files the language extension turns the
+        // initial parse into a multi-second blocking call, so we drop
+        // it past LARGE_LANGUAGE_BYTES and keep just line numbers,
+        // search, and bracket matching.
+        const disableLanguage = res.content.length > LARGE_LANGUAGE_BYTES;
+        mountEditor("", { disableLanguage });
+        requestAnimationFrame(() => {
           if (!alive) return;
-          mountEditor(res.content);
-        }, 0);
+          const v = viewRef.current;
+          if (!v) return;
+          v.dispatch({ changes: { from: 0, insert: res.content } });
+          baselineRef.current = res.content;
+          setDirty(false);
+        });
       } catch (e) {
         if (!alive) return;
         setError(formatError(e));
@@ -224,7 +304,7 @@ export default function SftpEditorDialog({
       disposeEditor();
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [open, path]);
+  }, [open, path, tooLargeForInline]);
 
   useEffect(() => () => disposeEditor(), []);
 
@@ -235,11 +315,132 @@ export default function SftpEditorDialog({
     }
   }
 
-  function mountEditor(initial: string) {
+  // Subscribe to backend `sftp:external-edit` events while a watcher
+  // is active so the dialog can show upload status (uploading →
+  // uploaded → optional error) and clear itself when the backend
+  // emits `stopped`. Filter by watcherId so multiple SFTP panels
+  // don't cross-talk when the user opens the same file twice.
+  useEffect(() => {
+    if (!externalEdit?.watcherId) return;
+    const watcherId = externalEdit.watcherId;
+    let alive = true;
+    let unlisten: UnlistenFn | null = null;
+    void listen<SftpExternalEditEvent>(SFTP_EXTERNAL_EDIT_EVENT, (evt) => {
+      const payload = evt.payload;
+      if (!payload || payload.watcherId !== watcherId) return;
+      setExternalEdit((cur) => {
+        if (!cur || cur.watcherId !== watcherId) return cur;
+        switch (payload.kind) {
+          case "uploading":
+            return { ...cur, status: "uploading", lastError: undefined };
+          case "uploaded":
+            return {
+              ...cur,
+              status: "uploaded",
+              lastSyncedAt: payload.modified ?? Math.floor(Date.now() / 1000),
+              lastError: undefined,
+            };
+          case "error":
+            return { ...cur, status: "error", lastError: payload.error ?? "" };
+          case "stopped":
+            return null;
+          default:
+            return cur;
+        }
+      });
+      if (payload.kind === "uploaded") {
+        // Refresh the panel listing so the file's mtime/size jump is
+        // visible without a manual refresh.
+        onSaved?.(payload.bytes ?? 0);
+      }
+    }).then((dispose) => {
+      if (!alive) {
+        dispose();
+      } else {
+        unlisten = dispose;
+      }
+    });
+    return () => {
+      alive = false;
+      unlisten?.();
+    };
+    // onSaved is intentionally omitted — capturing the latest reference
+    // would re-subscribe on every render. The closure above is safe to
+    // call against a stale onSaved because it's an event hook only.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [externalEdit?.watcherId]);
+
+  // Wind down any active watcher when the dialog actually closes
+  // (the user picked Close, parent cleared `editorTarget`, etc.).
+  // Using a ref means we don't have to thread externalEdit through
+  // requestClose / unmount paths.
+  useEffect(() => {
+    if (open) return;
+    const cur = externalEditRef.current;
+    if (!cur) return;
+    void cmd.sftpExternalEditStop(cur.watcherId).catch(() => {});
+    setExternalEdit(null);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [open]);
+
+  // Hard cleanup on unmount — covers the React Strict Mode double-
+  // invoke and the unusual case where the parent unmounts the dialog
+  // without flipping `open` first.
+  useEffect(
+    () => () => {
+      const cur = externalEditRef.current;
+      if (cur) void cmd.sftpExternalEditStop(cur.watcherId).catch(() => {});
+    },
+    [],
+  );
+
+  async function startExternalEdit() {
+    if (externalBusy || externalEdit) return;
+    setExternalBusy(true);
+    setError("");
+    try {
+      const res = await cmd.sftpOpenExternal({ ...sshArgs, path });
+      // Tear down the inline editor — we've now handed authority
+      // over the file to the OS editor, and keeping the CodeMirror
+      // buffer alive would let an in-dialog Save race the watcher.
+      disposeEditor();
+      setDirty(false);
+      setExternalEdit({
+        watcherId: res.watcherId,
+        localPath: res.localPath,
+        status: "watching",
+      });
+    } catch (e) {
+      setError(formatError(e));
+    } finally {
+      setExternalBusy(false);
+    }
+  }
+
+  async function stopExternalEdit() {
+    const cur = externalEditRef.current;
+    if (!cur) return;
+    setExternalBusy(true);
+    try {
+      await cmd.sftpExternalEditStop(cur.watcherId);
+    } catch {
+      /* idempotent on the backend; UI already cleared */
+    } finally {
+      setExternalEdit(null);
+      setExternalBusy(false);
+      // Close the dialog as well — once the watcher is gone there's
+      // nothing left to render in card mode, and dropping back to a
+      // blank inline editor host would be more confusing than
+      // helpful. Re-opening the file from the panel re-fetches.
+      onClose();
+    }
+  }
+
+  function mountEditor(initial: string, opts: { disableLanguage?: boolean } = {}) {
     disposeEditor();
     const host = hostRef.current;
     if (!host) return;
-    const lang = languageFromFilename(effectiveName);
+    const lang = opts.disableLanguage ? null : languageFromFilename(effectiveName);
     const extensions: Extension[] = [
       EditorState.phrases.of(phrases),
       EditorState.tabSize.of(editorTabSize),
@@ -457,19 +658,40 @@ export default function SftpEditorDialog({
 
   const download = async () => {
     const v = viewRef.current;
-    if (!v) return;
+    // Inline-editor path: serialize the in-memory buffer through the
+    // browser's anchor-download trick. Lets the user grab their
+    // edited-but-unsaved buffer without an SFTP round-trip.
+    if (v) {
+      try {
+        const blob = new Blob([v.state.doc.toString()], { type: "text/plain;charset=utf-8" });
+        const url = URL.createObjectURL(blob);
+        const a = document.createElement("a");
+        a.href = url;
+        a.download = effectiveName || "download.txt";
+        document.body.appendChild(a);
+        a.click();
+        a.remove();
+        window.setTimeout(() => URL.revokeObjectURL(url), 0);
+      } catch {
+        /* ignore — browser may reject download in sandboxed env */
+      }
+      return;
+    }
+    // Card-mode path: no in-memory buffer to write out, so route
+    // through `sftp_download` against a user-picked folder. This is
+    // the same flow the panel context menu uses for "Download…".
     try {
-      const blob = new Blob([v.state.doc.toString()], { type: "text/plain;charset=utf-8" });
-      const url = URL.createObjectURL(blob);
-      const a = document.createElement("a");
-      a.href = url;
-      a.download = effectiveName || "download.txt";
-      document.body.appendChild(a);
-      a.click();
-      a.remove();
-      window.setTimeout(() => URL.revokeObjectURL(url), 0);
-    } catch {
-      /* ignore — browser may reject download in sandboxed env */
+      const picked = await openDialog({
+        directory: true,
+        multiple: false,
+        title: t("Select download folder"),
+      });
+      if (!picked || typeof picked !== "string") return;
+      const sep = /^[A-Za-z]:($|[\\/])|^\\\\/.test(picked) ? "\\" : "/";
+      const localPath = `${picked.replace(/[\\/]+$/, "")}${sep}${effectiveName || "download"}`;
+      await cmd.sftpDownload({ ...sshArgs, remotePath: path, localPath });
+    } catch (e) {
+      setError(formatError(e));
     }
   };
 
@@ -638,6 +860,7 @@ export default function SftpEditorDialog({
           </IconButton>
         </div>
 
+        {!cardMode && (
         <div className="editor-toolbar">
           <span className="editor-toolbar-stat">
             <b>{langName}</b>
@@ -692,6 +915,15 @@ export default function SftpEditorDialog({
           </button>
           <button
             type="button"
+            className="editor-tool-btn"
+            title={t("Open with system editor")}
+            disabled={externalBusy || !!externalEdit}
+            onClick={() => void startExternalEdit()}
+          >
+            <ExternalLink size={11} />
+          </button>
+          <button
+            type="button"
             className={"editor-tool-btn" + (copiedPath ? " on" : "")}
             title={t("Copy path")}
             onClick={copyPath}
@@ -721,15 +953,16 @@ export default function SftpEditorDialog({
             </>
           )}
         </div>
+        )}
 
-        {meta?.lossy && (
+        {!cardMode && meta?.lossy && (
           <div className="editor-warn">
             <AlertTriangle size={12} />
             <span>{t("Non-UTF-8 bytes were replaced with U+FFFD. Saving will persist the replacement.")}</span>
           </div>
         )}
 
-        {findOpen && (
+        {!cardMode && findOpen && (
           <div className="editor-find">
             <div className="editor-find-row">
               <Search size={11} />
@@ -832,34 +1065,53 @@ export default function SftpEditorDialog({
         )}
 
         <div className="dlg-body dlg-body--editor">
-          {loading && <div className="editor-loading mono">{t("Loading…")}</div>}
-          {error && !loading && <div className="editor-error">{error}</div>}
-          <div ref={hostRef} className="editor-host" onContextMenu={handleEditorContextMenu} />
-        </div>
-
-        <div className="editor-status mono">
-          <span className="editor-status-cell">
-            <Server size={9} /> {sshArgs.user}@{sshArgs.host}
-          </span>
-          <span className="sep">·</span>
-          <span>{t("Ln {line}, Col {col}", { line: cursor.line, col: cursor.col })}</span>
-          {cursor.selLen > 0 && (
+          {cardMode ? (
+            <ExternalEditCard
+              size={size ?? meta?.size ?? 0}
+              tooLarge={tooLargeForInline}
+              limit={MAX_EDITOR_BYTES}
+              externalEdit={externalEdit}
+              busy={externalBusy}
+              error={error}
+              onOpenExternal={() => void startExternalEdit()}
+              onStopWatcher={() => void stopExternalEdit()}
+              onDownload={() => void download()}
+              t={t}
+            />
+          ) : (
             <>
-              <span className="sep">·</span>
-              <span>{t("{n} selected", { n: cursor.selLen })}</span>
+              {loading && <div className="editor-loading mono">{t("Loading…")}</div>}
+              {error && !loading && <div className="editor-error">{error}</div>}
+              <div ref={hostRef} className="editor-host" onContextMenu={handleEditorContextMenu} />
             </>
           )}
-          <span className="editor-status-spacer" />
-          <span>{encodingLabel ?? "UTF-8"}</span>
-          <span className="sep">·</span>
-          <span>{eolLabel ?? "LF"}</span>
-          <span className="sep">·</span>
-          <span>{langName}</span>
-          <span className="sep">·</span>
-          <span className={dirty ? "editor-status-dirty" : "editor-status-saved"}>
-            {dirty ? t("modified") : t("saved")}
-          </span>
         </div>
+
+        {!cardMode && (
+          <div className="editor-status mono">
+            <span className="editor-status-cell">
+              <Server size={9} /> {sshArgs.user}@{sshArgs.host}
+            </span>
+            <span className="sep">·</span>
+            <span>{t("Ln {line}, Col {col}", { line: cursor.line, col: cursor.col })}</span>
+            {cursor.selLen > 0 && (
+              <>
+                <span className="sep">·</span>
+                <span>{t("{n} selected", { n: cursor.selLen })}</span>
+              </>
+            )}
+            <span className="editor-status-spacer" />
+            <span>{encodingLabel ?? "UTF-8"}</span>
+            <span className="sep">·</span>
+            <span>{eolLabel ?? "LF"}</span>
+            <span className="sep">·</span>
+            <span>{langName}</span>
+            <span className="sep">·</span>
+            <span className={dirty ? "editor-status-dirty" : "editor-status-saved"}>
+              {dirty ? t("modified") : t("saved")}
+            </span>
+          </div>
+        )}
       </div>
     </div>
     {ctxMenu && (
@@ -884,4 +1136,138 @@ function formatBytes(n: number): string {
     u++;
   }
   return `${val < 10 && u > 0 ? val.toFixed(1) : Math.round(val)} ${units[u]}`;
+}
+
+function formatClock(unixSeconds: number | undefined): string {
+  if (!unixSeconds) return "—";
+  const d = new Date(unixSeconds * 1000);
+  const pad = (n: number) => (n < 10 ? `0${n}` : `${n}`);
+  return `${pad(d.getHours())}:${pad(d.getMinutes())}:${pad(d.getSeconds())}`;
+}
+
+/** Card view shown when the file is too large to inline-edit OR
+ *  when the user has handed off to the OS default editor. Replaces
+ *  the CodeMirror host + toolbar + footer for the duration of the
+ *  external session. */
+function ExternalEditCard({
+  size,
+  tooLarge,
+  limit,
+  externalEdit,
+  busy,
+  error,
+  onOpenExternal,
+  onStopWatcher,
+  onDownload,
+  t,
+}: {
+  size: number;
+  tooLarge: boolean;
+  limit: number;
+  externalEdit: ExternalEditState | null;
+  busy: boolean;
+  error: string;
+  onOpenExternal: () => void;
+  onStopWatcher: () => void;
+  onDownload: () => void;
+  t: (key: string, vars?: Record<string, string | number>) => string;
+}) {
+  const sizeLabel = formatBytes(size);
+  const limitLabel = formatBytes(limit);
+  return (
+    <div className="editor-toolarge">
+      <div className="editor-toolarge-icon">
+        {externalEdit ? <ExternalLink size={28} /> : <AlertTriangle size={28} />}
+      </div>
+      <h3 className="editor-toolarge-title">
+        {externalEdit
+          ? t("Editing in your system editor")
+          : tooLarge
+            ? t("File is too large for inline editing")
+            : t("Open with system editor")}
+      </h3>
+      <p className="editor-toolarge-sub">
+        {externalEdit
+          ? t("Saves are auto-uploaded back over SFTP.")
+          : tooLarge
+            ? t("{size} · inline editor handles up to {limit}.", { size: sizeLabel, limit: limitLabel })
+            : t("Hand the file off to your OS default editor; saves auto-upload back.")}
+      </p>
+
+      {externalEdit ? (
+        <>
+          <div className="editor-toolarge-pathrow mono" title={externalEdit.localPath}>
+            <HardDrive size={11} />
+            <span className="editor-toolarge-path">{externalEdit.localPath}</span>
+          </div>
+          <div className="editor-extstatus">
+            {externalEdit.status === "uploading" && (
+              <>
+                <Loader2 size={12} className="editor-extstatus-spin" />
+                <span>{t("Uploading change…")}</span>
+              </>
+            )}
+            {externalEdit.status === "uploaded" && (
+              <>
+                <CheckCircle2 size={12} className="editor-extstatus-ok" />
+                <span>{t("Last synced {time}", { time: formatClock(externalEdit.lastSyncedAt) })}</span>
+              </>
+            )}
+            {externalEdit.status === "error" && (
+              <>
+                <AlertTriangle size={12} className="editor-extstatus-err" />
+                <span>{externalEdit.lastError || t("Upload failed")}</span>
+              </>
+            )}
+            {externalEdit.status === "watching" && (
+              <>
+                <Clock size={12} />
+                <span>{t("Watching for changes…")}</span>
+              </>
+            )}
+            {externalEdit.status === "opening" && (
+              <>
+                <Loader2 size={12} className="editor-extstatus-spin" />
+                <span>{t("Opening editor…")}</span>
+              </>
+            )}
+          </div>
+          <div className="editor-toolarge-actions">
+            <button
+              type="button"
+              className="btn"
+              onClick={onStopWatcher}
+              disabled={busy}
+              title={t("Stop watching and close this dialog. The file may remain open in your system editor.")}
+            >
+              <X size={11} /> {t("Done")}
+            </button>
+          </div>
+        </>
+      ) : (
+        <>
+          {error && <div className="editor-toolarge-err">{error}</div>}
+          <div className="editor-toolarge-actions">
+            <button
+              type="button"
+              className="btn is-primary"
+              onClick={onOpenExternal}
+              disabled={busy}
+            >
+              <ExternalLink size={11} />{" "}
+              {busy ? t("Opening…") : t("Open with system editor")}
+            </button>
+            <button
+              type="button"
+              className="btn"
+              onClick={onDownload}
+              disabled={busy}
+            >
+              <Download size={11} /> {t("Download…")}
+            </button>
+          </div>
+        </>
+      )}
+    </div>
+  );
 }

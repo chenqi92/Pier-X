@@ -118,6 +118,25 @@ struct AppState {
     /// removed in the join branch — success, failure, and explicit
     /// cancel all clean up.
     software_cancel: Mutex<HashMap<String, CancellationToken>>,
+    /// Active "open with external editor" sessions for the SFTP
+    /// editor dialog. Each entry keeps the local temp file path,
+    /// the remote target, and a cancellation token that the file
+    /// watcher thread polls so `sftp_external_edit_stop` can wind
+    /// it down without races. Entries are removed on stop; the
+    /// watcher thread also exits when the token is cancelled.
+    external_editors: Mutex<HashMap<String, ExternalEditWatcher>>,
+}
+
+/// Bookkeeping for one in-flight "edit remote file with the OS
+/// default editor" session. The watcher thread polls
+/// [`local_path`] for mtime/size changes and uploads the bytes
+/// back to [`remote_path`] over the cached SFTP client when the
+/// file settles. `cleanup_temp_dir` drives whether stop should
+/// also `remove_dir_all` the per-watcher temp directory.
+struct ExternalEditWatcher {
+    stop_token: CancellationToken,
+    local_path: PathBuf,
+    cleanup_temp_dir: bool,
 }
 
 impl Default for AppState {
@@ -135,6 +154,7 @@ impl Default for AppState {
             monitor_net_baselines: Mutex::new(HashMap::new()),
             ssh_cred_cache: SshCredCache::default(),
             software_cancel: Mutex::new(HashMap::new()),
+            external_editors: Mutex::new(HashMap::new()),
         }
     }
 }
@@ -8189,6 +8209,350 @@ fn sftp_download_tree(
     }
 }
 
+// ── SFTP external editor ────────────────────────────────────────
+
+/// Hard ceiling on what we'll mirror through the external-editor
+/// flow. We still fetch the bytes once and then poll the local
+/// copy, so picking a multi-GB log here would burn temp disk for
+/// no real win — desktop editors choke long before that anyway.
+const SFTP_EXTERNAL_EDIT_MAX: u64 = 256 * 1024 * 1024;
+
+/// Polling cadence for the watcher thread. 250ms is fine-grained
+/// enough that `Save` in any editor reflects within a heartbeat,
+/// but coarse enough that an idle watcher costs nothing measurable.
+const EXTERNAL_EDIT_POLL: Duration = Duration::from_millis(250);
+
+/// Wait this long after a detected mtime/size change before pushing
+/// bytes back. Editors that write the file in multiple syscalls
+/// (truncate → write → fsync) would otherwise trigger one upload
+/// per intermediate state; debouncing collapses those into one.
+const EXTERNAL_EDIT_DEBOUNCE: Duration = Duration::from_millis(600);
+
+/// Event name the frontend subscribes to for upload status updates
+/// from active external-editor watchers.
+const SFTP_EXTERNAL_EDIT_EVENT: &str = "sftp:external-edit";
+
+#[derive(Serialize, Clone)]
+#[serde(rename_all = "camelCase")]
+struct SftpExternalEditEvent {
+    /// Watcher id assigned by [`sftp_open_external`]. Frontend
+    /// dialogs filter events by their own id.
+    watcher_id: String,
+    /// One of: `"uploading"`, `"uploaded"`, `"error"`, `"stopped"`.
+    /// Lifecycle order is `uploading` → `uploaded` (or `error`)
+    /// per detected change, then `stopped` once on shutdown.
+    kind: String,
+    /// Bytes written on a successful upload.
+    bytes: Option<u64>,
+    /// Wall-clock timestamp (seconds since epoch) of the upload —
+    /// drives the dialog's "last synced HH:MM:SS" footer.
+    modified: Option<u64>,
+    /// Populated for the `"error"` kind.
+    error: Option<String>,
+}
+
+#[derive(Serialize, Clone)]
+#[serde(rename_all = "camelCase")]
+struct SftpExternalEditOpen {
+    watcher_id: String,
+    local_path: String,
+}
+
+fn emit_external_edit_event(app: &tauri::AppHandle, evt: SftpExternalEditEvent) {
+    use tauri::Emitter;
+    let _ = app.emit(SFTP_EXTERNAL_EDIT_EVENT, evt);
+}
+
+/// Strip path separators from a remote basename so the temp path
+/// is always one component deep. Empty / dotty inputs collapse
+/// to a generic placeholder.
+fn sanitize_temp_basename(name: &str) -> String {
+    let cleaned: String = name
+        .chars()
+        .map(|c| if matches!(c, '/' | '\\' | '\0') { '_' } else { c })
+        .collect();
+    let trimmed = cleaned.trim_matches('.').trim();
+    if trimmed.is_empty() {
+        "file".to_string()
+    } else {
+        trimmed.to_string()
+    }
+}
+
+/// Hand off `path` to the user's OS default opener. Spawning
+/// (rather than waiting) lets the editor outlive this command —
+/// the watcher thread is the long-lived bit.
+fn open_with_default_app(path: &std::path::Path) -> std::io::Result<()> {
+    use std::process::Command;
+    #[cfg(target_os = "macos")]
+    {
+        Command::new("open").arg(path).spawn()?;
+    }
+    #[cfg(target_os = "windows")]
+    {
+        // `start` is a `cmd` builtin, not an exe. The empty `""`
+        // is the window title slot — without it `start` interprets
+        // the first quoted arg as the title and silently no-ops.
+        Command::new("cmd")
+            .args(["/C", "start", "", &path.to_string_lossy()])
+            .spawn()?;
+    }
+    #[cfg(all(unix, not(target_os = "macos")))]
+    {
+        Command::new("xdg-open").arg(path).spawn()?;
+    }
+    Ok(())
+}
+
+/// Watch `local_path` for changes and push them back over SFTP
+/// until [`stop_token`] fires. Runs on a dedicated OS thread —
+/// not a tokio task — because the SFTP client's blocking helpers
+/// internally `block_on` the shared runtime, which would deadlock
+/// if we re-entered from within that runtime.
+#[allow(clippy::too_many_arguments)]
+fn external_edit_watch_loop(
+    app: tauri::AppHandle,
+    watcher_id: String,
+    local_path: PathBuf,
+    remote_path: String,
+    sftp: SftpClient,
+    stop_token: CancellationToken,
+    mut last_mtime: Option<SystemTime>,
+    mut last_size: u64,
+) {
+    let mut pending_change_since: Option<Instant> = None;
+
+    while !stop_token.is_cancelled() {
+        std::thread::sleep(EXTERNAL_EDIT_POLL);
+
+        let meta = match std::fs::metadata(&local_path) {
+            Ok(m) => m,
+            // The user may have deleted the temp file from outside
+            // the editor; skip this tick and try again next round.
+            Err(_) => continue,
+        };
+        let cur_mtime = meta.modified().ok();
+        let cur_size = meta.len();
+
+        if cur_mtime != last_mtime || cur_size != last_size {
+            // Reset the debounce window — wait until the file
+            // settles before uploading.
+            pending_change_since = Some(Instant::now());
+            last_mtime = cur_mtime;
+            last_size = cur_size;
+            continue;
+        }
+
+        let Some(changed_at) = pending_change_since else {
+            continue;
+        };
+        if changed_at.elapsed() < EXTERNAL_EDIT_DEBOUNCE {
+            continue;
+        }
+        pending_change_since = None;
+
+        emit_external_edit_event(
+            &app,
+            SftpExternalEditEvent {
+                watcher_id: watcher_id.clone(),
+                kind: "uploading".into(),
+                bytes: None,
+                modified: None,
+                error: None,
+            },
+        );
+
+        let bytes_res = std::fs::read(&local_path);
+        match bytes_res {
+            Err(e) => emit_external_edit_event(
+                &app,
+                SftpExternalEditEvent {
+                    watcher_id: watcher_id.clone(),
+                    kind: "error".into(),
+                    bytes: None,
+                    modified: None,
+                    error: Some(format!("read local: {e}")),
+                },
+            ),
+            Ok(bytes) => {
+                let upload_res = sftp.write_file_blocking(&remote_path, &bytes);
+                match upload_res {
+                    Err(e) => emit_external_edit_event(
+                        &app,
+                        SftpExternalEditEvent {
+                            watcher_id: watcher_id.clone(),
+                            kind: "error".into(),
+                            bytes: None,
+                            modified: None,
+                            error: Some(format!("upload: {e}")),
+                        },
+                    ),
+                    Ok(_) => emit_external_edit_event(
+                        &app,
+                        SftpExternalEditEvent {
+                            watcher_id: watcher_id.clone(),
+                            kind: "uploaded".into(),
+                            bytes: Some(bytes.len() as u64),
+                            modified: SystemTime::now()
+                                .duration_since(UNIX_EPOCH)
+                                .ok()
+                                .map(|d| d.as_secs()),
+                            error: None,
+                        },
+                    ),
+                }
+            }
+        }
+    }
+
+    emit_external_edit_event(
+        &app,
+        SftpExternalEditEvent {
+            watcher_id,
+            kind: "stopped".into(),
+            bytes: None,
+            modified: None,
+            error: None,
+        },
+    );
+}
+
+/// Mirror a remote SFTP file to a local temp path, hand it off to
+/// the user's OS default editor, and start a watcher thread that
+/// auto-uploads any saves back. Returns a watcher id the frontend
+/// passes to [`sftp_external_edit_stop`] when the dialog closes.
+#[tauri::command]
+fn sftp_open_external(
+    app: tauri::AppHandle,
+    state: tauri::State<'_, AppState>,
+    host: String,
+    port: u16,
+    user: String,
+    auth_mode: String,
+    password: String,
+    key_path: String,
+    path: String,
+    saved_connection_index: Option<usize>,
+) -> Result<SftpExternalEditOpen, String> {
+    let session = get_or_open_ssh_session(
+        &state,
+        &host,
+        port,
+        &user,
+        &auth_mode,
+        &password,
+        &key_path,
+        saved_connection_index,
+    )?;
+    let sftp = get_or_open_sftp_client(&state, &session, &host, port, &user, &auth_mode)?;
+
+    let meta = sftp.stat_blocking(&path).map_err(|e| e.to_string())?;
+    if meta.size > SFTP_EXTERNAL_EDIT_MAX {
+        return Err(format!(
+            "File is {} MB; external-editor limit is {} MB",
+            meta.size / (1024 * 1024),
+            SFTP_EXTERNAL_EDIT_MAX / (1024 * 1024),
+        ));
+    }
+
+    let watcher_id = format!(
+        "ext-{}-{}",
+        std::process::id(),
+        SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_nanos()
+    );
+    let temp_root = std::env::temp_dir()
+        .join("pierx-sftp-edit")
+        .join(&watcher_id);
+    std::fs::create_dir_all(&temp_root)
+        .map_err(|e| format!("create temp dir: {e}"))?;
+
+    let basename = path.rsplit('/').next().unwrap_or("file");
+    let local_path = temp_root.join(sanitize_temp_basename(basename));
+
+    sftp.download_to_blocking(&path, &local_path)
+        .map_err(|e| format!("download: {e}"))?;
+
+    let post_download_meta = std::fs::metadata(&local_path)
+        .map_err(|e| format!("stat temp file: {e}"))?;
+    let last_mtime = post_download_meta.modified().ok();
+    let last_size = post_download_meta.len();
+
+    open_with_default_app(&local_path)
+        .map_err(|e| format!("opener failed: {e}"))?;
+
+    let stop_token = CancellationToken::new();
+    {
+        let mut map = state
+            .external_editors
+            .lock()
+            .map_err(|_| "external editors state poisoned".to_string())?;
+        map.insert(
+            watcher_id.clone(),
+            ExternalEditWatcher {
+                stop_token: stop_token.clone(),
+                local_path: local_path.clone(),
+                cleanup_temp_dir: true,
+            },
+        );
+    }
+
+    let app_for_thread = app.clone();
+    let watcher_id_for_thread = watcher_id.clone();
+    let local_for_thread = local_path.clone();
+    let remote_for_thread = path.clone();
+    let sftp_for_thread = sftp.clone();
+    let stop_for_thread = stop_token.clone();
+    std::thread::Builder::new()
+        .name(format!("sftp-extedit-{watcher_id}"))
+        .spawn(move || {
+            external_edit_watch_loop(
+                app_for_thread,
+                watcher_id_for_thread,
+                local_for_thread,
+                remote_for_thread,
+                sftp_for_thread,
+                stop_for_thread,
+                last_mtime,
+                last_size,
+            );
+        })
+        .map_err(|e| format!("spawn watcher: {e}"))?;
+
+    Ok(SftpExternalEditOpen {
+        watcher_id,
+        local_path: local_path.to_string_lossy().into_owned(),
+    })
+}
+
+/// Tear down an external-editor session: cancel the watcher
+/// thread (which exits on its next poll) and best-effort delete
+/// the per-watcher temp dir. Idempotent — calling with a stale
+/// id is a no-op.
+#[tauri::command]
+fn sftp_external_edit_stop(
+    state: tauri::State<'_, AppState>,
+    watcher_id: String,
+) -> Result<(), String> {
+    let handle = {
+        let mut map = state
+            .external_editors
+            .lock()
+            .map_err(|_| "external editors state poisoned".to_string())?;
+        map.remove(&watcher_id)
+    };
+    let Some(h) = handle else { return Ok(()); };
+    h.stop_token.cancel();
+    if h.cleanup_temp_dir {
+        if let Some(dir) = h.local_path.parent() {
+            let _ = std::fs::remove_dir_all(dir);
+        }
+    }
+    Ok(())
+}
+
 // ── Log Stream ──────────────────────────────────────────────────
 
 #[tauri::command]
@@ -9198,6 +9562,8 @@ pub fn run() {
             sftp_upload,
             sftp_upload_tree,
             sftp_download_tree,
+            sftp_open_external,
+            sftp_external_edit_stop,
             log_stream_start,
             log_stream_drain,
             log_stream_stop,

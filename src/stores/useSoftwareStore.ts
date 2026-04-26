@@ -82,16 +82,23 @@ export function softwareKeyForTab(tab: TabState): Key | null {
 
 const STALE_MS = 60_000;
 
+// Frozen singleton — returned by `get(key)` when no entry exists yet so the
+// selector identity stays stable across reads. A fresh object would trip
+// `useSyncExternalStore`'s "getSnapshot should be cached to avoid an
+// infinite loop" detector and freeze the UI under high-frequency store
+// activity (e.g. a SSH terminal flooded by `docker logs -f`).
+const EMPTY_SOFTWARE_SNAPSHOT: SoftwareSnapshot = Object.freeze({
+  env: null,
+  statuses: {} as SoftwareSnapshot["statuses"],
+  lastFetchedAt: 0,
+  inFlight: null as SoftwareSnapshot["inFlight"],
+  error: "",
+  activity: {} as SoftwareSnapshot["activity"],
+  versionCache: {} as SoftwareSnapshot["versionCache"],
+}) as SoftwareSnapshot;
+
 function emptySnapshot(): SoftwareSnapshot {
-  return {
-    env: null,
-    statuses: {},
-    lastFetchedAt: 0,
-    inFlight: null,
-    error: "",
-    activity: {},
-    versionCache: {},
-  };
+  return EMPTY_SOFTWARE_SNAPSHOT;
 }
 
 type SoftwareStoreState = {

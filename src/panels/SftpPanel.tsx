@@ -262,7 +262,9 @@ function SftpPanelBody({ tab }: Props) {
     | null;
   const [ctxMenu, setCtxMenu] = useState<CtxState>(null);
 
-  const [editorTarget, setEditorTarget] = useState<{ path: string; name: string } | null>(null);
+  const [editorTarget, setEditorTarget] = useState<
+    { path: string; name: string; size: number } | null
+  >(null);
 
   const [chmodTarget, setChmodTarget] = useState<{ path: string; mode: number | null } | null>(null);
 
@@ -637,16 +639,38 @@ function SftpPanelBody({ tab }: Props) {
     }
   }
 
+  /** Hand a remote file off to the OS default editor without going
+   *  through the editor dialog at all — useful from the context menu
+   *  for files the user knows they want to edit externally (e.g.
+   *  binaries, multi-MB logs). The backend downloads to a temp path,
+   *  spawns the system opener, and starts the auto-upload watcher.
+   *  We don't surface watcher status here — that's the dialog's job;
+   *  callers from the context menu just get a confirmation notice. */
+  async function openEntryExternally(entry: SftpEntryView) {
+    if (!hasSsh || entry.isDir) return;
+    setActionBusy(true);
+    setError("");
+    setNotice("");
+    try {
+      await cmd.sftpOpenExternal({ ...sshArgs, path: entry.path });
+      setNotice(t("Opened {name} in your system editor.", { name: entry.name }));
+    } catch (e) {
+      setError(formatError(e));
+    } finally {
+      setActionBusy(false);
+    }
+  }
+
   function openEditorFor(entry: SftpEntryView) {
     if (entry.isDir) {
       void browse(entry.path, { pushHistory: true });
       return;
     }
-    if (entry.size > MAX_EDITOR_BYTES) {
-      setError(t("File is too large to edit inline. Download first."));
-      return;
-    }
-    setEditorTarget({ path: entry.path, name: entry.name });
+    // Always open the dialog — for too-large files it renders the
+    // "open with system editor / download" branch instead of erroring
+    // out silently. Pass `size` so the dialog can pick that branch
+    // before issuing any sftp_read_text round-trip.
+    setEditorTarget({ path: entry.path, name: entry.name, size: entry.size });
   }
 
   /** Download a single remote file into `localDir` (an absolute local
@@ -814,11 +838,13 @@ function SftpPanelBody({ tab }: Props) {
       void browse(entry.path, { pushHistory: true });
       return;
     }
-    // Double-click on a text-ish file under the editor size limit →
-    // open the inline editor. Everything else stays "select and let
-    // the inspector show details" so binaries aren't accidentally
-    // opened through a UTF-8 lossy read.
-    if (isEditableFilename(entry.name) && entry.size <= MAX_EDITOR_BYTES) {
+    // Double-click on a text-ish file → open the editor dialog. The
+    // dialog handles the size split internally: under the inline
+    // limit it mounts CodeMirror, otherwise it shows the "open with
+    // system editor / download" card. Binary-looking files stay on
+    // "select only" so a misclick doesn't dump 200MB through a
+    // UTF-8 lossy read.
+    if (isEditableFilename(entry.name)) {
       selectEntry(entry);
       openEditorFor(entry);
       return;
@@ -830,7 +856,10 @@ function SftpPanelBody({ tab }: Props) {
     entry: SftpEntryView,
     anchor?: { x: number; y: number },
   ): ContextMenuItem[] {
-    const canEdit = !entry.isDir && isEditableFilename(entry.name) && entry.size <= MAX_EDITOR_BYTES;
+    // Edit is now always available for non-directories — the dialog
+    // handles the inline-vs-too-large split internally and shows
+    // sensible fallbacks (open externally / download) for binaries
+    // and oversized files.
     const items: ContextMenuItem[] = [];
     if (entry.isDir) {
       items.push({
@@ -841,7 +870,11 @@ function SftpPanelBody({ tab }: Props) {
       items.push({
         label: t("Edit"),
         action: () => openEditorFor(entry),
-        disabled: !canEdit,
+      });
+      items.push({
+        label: t("Open with system editor"),
+        action: () => void openEntryExternally(entry),
+        disabled: actionBusy,
       });
       items.push({
         label: t("Download…"),
@@ -1506,6 +1539,7 @@ function SftpPanelBody({ tab }: Props) {
             open
             path={editorTarget.path}
             name={editorTarget.name}
+            size={editorTarget.size}
             sshArgs={sshArgs}
             ownerLabel={sshArgs.user}
             onClose={() => setEditorTarget(null)}

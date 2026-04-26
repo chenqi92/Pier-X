@@ -67,16 +67,27 @@ function emptyOverview(): DockerOverview {
   };
 }
 
+// Frozen singleton returned by `get(key)` for missing keys. A fresh object
+// per read trips `useSyncExternalStore`'s infinite-loop detector and locks
+// the UI when the store is read from a component that re-renders under a
+// hot event stream — see useSoftwareStore for the same pattern.
+const EMPTY_DOCKER_SNAPSHOT: DockerSnapshot = Object.freeze({
+  overview: null,
+  lastFetchedAt: 0,
+  error: "",
+  inFlight: null,
+  loaded: Object.freeze({
+    containers: false,
+    images: false,
+    volumes: false,
+    networks: false,
+  }) as Record<DockerSection, boolean>,
+  sectionInFlight: {} as DockerSnapshot["sectionInFlight"],
+  volumeFiles: {} as DockerSnapshot["volumeFiles"],
+}) as DockerSnapshot;
+
 function emptySnapshot(): DockerSnapshot {
-  return {
-    overview: null,
-    lastFetchedAt: 0,
-    error: "",
-    inFlight: null,
-    loaded: emptyLoaded(),
-    sectionInFlight: {},
-    volumeFiles: {},
-  };
+  return EMPTY_DOCKER_SNAPSHOT;
 }
 
 export function dockerKeyForTab(tab: TabState): Key {

@@ -1751,6 +1751,46 @@ export const sftpDownloadTree = (params: {
   transferId?: string | null;
 }) => invoke<void>("sftp_download_tree", params);
 
+/** Result of {@link sftpOpenExternal} — backend has already
+ *  downloaded the remote file to `localPath` and handed it off to
+ *  the OS default editor. Hold onto `watcherId` so the dialog can
+ *  call {@link sftpExternalEditStop} on close. */
+export type SftpExternalEditOpen = {
+  watcherId: string;
+  localPath: string;
+};
+
+/** Mirror a remote SFTP file to a local temp path, open it in the
+ *  user's OS default editor, and start a watcher that auto-uploads
+ *  any saves. Used by the editor dialog's too-large-to-inline-edit
+ *  branch and as an explicit "Open externally" action. */
+export const sftpOpenExternal = (params: {
+  host: string; port: number; user: string; authMode: string; password: string; keyPath: string;
+  path: string;
+  savedConnectionIndex?: number | null;
+}) => invoke<SftpExternalEditOpen>("sftp_open_external", params);
+
+/** Tear down the watcher started by {@link sftpOpenExternal}.
+ *  Idempotent — safe to call from cleanup paths even if the
+ *  watcher was never registered. */
+export const sftpExternalEditStop = (watcherId: string) =>
+  invoke<void>("sftp_external_edit_stop", { watcherId });
+
+/** Payload of the `sftp:external-edit` event emitted by the
+ *  watcher thread on each upload attempt. `kind` advances:
+ *  `uploading` → `uploaded` (or `error`) per detected change,
+ *  then a single `stopped` on shutdown. */
+export type SftpExternalEditEvent = {
+  watcherId: string;
+  kind: "uploading" | "uploaded" | "error" | "stopped";
+  bytes: number | null;
+  modified: number | null;
+  error: string | null;
+};
+
+/** Event channel for {@link SftpExternalEditEvent}. */
+export const SFTP_EXTERNAL_EDIT_EVENT = "sftp:external-edit";
+
 // ── Log Stream ──────────────────────────────────────────────────
 
 export const logStreamStart = (params: {

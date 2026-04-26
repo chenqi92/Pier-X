@@ -2028,6 +2028,90 @@ body.is-resizing .app { transition: none; }
 }
 .editor-host .cm-editor { height: 100%; }
 
+/* Card view shown by SftpEditorDialog when the file is too large to
+ * inline edit, or while a system-editor watcher is active. Sized to
+ * fill the dialog body so the dialog frame stays the same as the
+ * inline editor — no jarring resize when toggling modes. */
+.editor-toolarge {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: var(--sp-2);
+  padding: var(--sp-6) var(--sp-4);
+  text-align: center;
+  background: var(--panel);
+}
+.editor-toolarge-icon {
+  color: var(--accent);
+  margin-bottom: var(--sp-1);
+}
+.editor-toolarge-title {
+  margin: 0;
+  font-size: var(--size-h4, var(--ui-fs-lg));
+  font-weight: 600;
+  color: var(--ink);
+}
+.editor-toolarge-sub {
+  margin: 0;
+  max-width: 520px;
+  color: var(--ink-2);
+  font-size: var(--ui-fs-sm);
+  line-height: 1.5;
+}
+.editor-toolarge-pathrow {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--sp-1);
+  max-width: 100%;
+  padding: var(--sp-1) var(--sp-2);
+  background: var(--surface-2);
+  border: 1px solid var(--line);
+  border-radius: var(--radius-xs);
+  color: var(--ink-2);
+  font-size: var(--ui-fs-sm);
+}
+.editor-toolarge-path {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  max-width: 560px;
+}
+.editor-toolarge-actions {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--sp-2);
+  margin-top: var(--sp-2);
+}
+.editor-toolarge-err {
+  color: var(--neg);
+  background: color-mix(in srgb, var(--neg) 12%, transparent);
+  padding: var(--sp-1) var(--sp-2);
+  border-radius: var(--radius-xs);
+  font-size: var(--ui-fs-sm);
+  max-width: 600px;
+}
+.editor-extstatus {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--sp-1);
+  padding: var(--sp-1) var(--sp-2);
+  color: var(--ink-2);
+  font-size: var(--ui-fs-sm);
+}
+.editor-extstatus-ok { color: var(--pos); }
+.editor-extstatus-err { color: var(--neg); }
+.editor-extstatus-spin {
+  animation: editor-extstatus-spin 1s linear infinite;
+  color: var(--accent);
+}
+@keyframes editor-extstatus-spin {
+  from { transform: rotate(0deg); }
+  to { transform: rotate(360deg); }
+}
+
 .editor-status {
   display: flex;
   align-items: center;

@@ -100,7 +100,7 @@ pub fn init(cache_dir: &Path) -> std::io::Result<()> {
     let settings = read_settings(&settings_path).unwrap_or_default();
 
     write_config(&config_path, &socket_dir, &settings)?;
-    write_wrapper(&wrapper_dir, &config_path)?;
+    write_wrapper(&wrapper_dir, &config_path, &socket_dir)?;
 
     let _ = STATE.set(State {
         config_path,
@@ -119,6 +119,16 @@ pub fn init(cache_dir: &Path) -> std::io::Result<()> {
 /// to "no mux", same as before this module existed).
 pub fn wrapper_dir() -> Option<&'static Path> {
     STATE.get().map(|s| s.wrapper_dir.as_path())
+}
+
+/// Directory holding ControlMaster sockets and the wrapper's
+/// per-shell hint files (`recent-by-shell-<ppid>`). The pier-core
+/// SSH watcher reads this dir to recover the active target when
+/// the actual ssh client process is too short-lived to catch via
+/// the PTY-tree scan — which is the steady state in
+/// `ControlMaster=auto` mode after the master has daemonised.
+pub fn socket_dir() -> Option<&'static Path> {
+    STATE.get().map(|s| s.socket_dir.as_path())
 }
 
 /// The on-disk path of the auto-generated ssh config. Used by
@@ -279,7 +289,11 @@ fn write_config(
     write_atomic(config_path, body.as_bytes())
 }
 
-fn write_wrapper(wrapper_dir: &Path, config_path: &Path) -> std::io::Result<()> {
+fn write_wrapper(
+    wrapper_dir: &Path,
+    config_path: &Path,
+    socket_dir: &Path,
+) -> std::io::Result<()> {
     let wrapper_path = wrapper_dir.join("ssh");
     // POSIX shell, not bash — the system /bin/sh exists everywhere
     // we ship. `exec` replaces the wrapper process so $? and
@@ -287,13 +301,42 @@ fn write_wrapper(wrapper_dir: &Path, config_path: &Path) -> std::io::Result<()> 
     //
     // Using an absolute /usr/bin/ssh prevents recursion when the
     // wrapper happens to find itself first on the inherited PATH.
+    //
+    // The wrapper additionally records the invocation's argv to
+    // `<socket_dir>/recent-by-shell-$PPID` BEFORE exec'ing ssh.
+    // The pier-core watcher reads this hint to recover the active
+    // target whenever the PTY-tree scan returns nothing — which is
+    // exactly what happens in OpenSSH `ControlMaster=auto` mode:
+    // the ssh client forks the master, the master daemonises out
+    // of the PTY ancestor chain (parent becomes init), and the
+    // client itself exits within milliseconds. By the time the
+    // watcher's 250ms scan runs, there is nothing left under the
+    // shell PID to find. The hint file (keyed by `$PPID` = the
+    // shell that invoked us = the watcher's `root_pid`) is the
+    // bridge.
+    //
+    // The `printf '%s\n' "$@"` form puts each argv element on its
+    // own line so the watcher can faithfully re-tokenise without
+    // having to undo shell quoting; multi-arg / quoted commands
+    // (`ssh user@host 'long cmd'`) round-trip correctly.
     let body = format!(
         "#!/bin/sh\n\
-         # Pier-X SSH wrapper — injects -F so the launched ssh\n\
-         # picks up the auto-generated ControlMaster config.\n\
-         # Regenerated on every Pier-X launch; do not edit.\n\
-         exec /usr/bin/ssh -F {} \"$@\"\n",
-        shell_escape(config_path.to_string_lossy().as_ref())
+         # Pier-X SSH wrapper — auto-generated; regenerated on every\n\
+         # app launch. Do not edit.\n\
+         #\n\
+         # Step 1: drop a hint for the pier-core SSH watcher so it can\n\
+         # follow ControlMaster mux sessions even after the ssh client\n\
+         # daemonises out of our PTY ancestor chain.\n\
+         hint_dir={socket_dir}\n\
+         {{\n\
+         \tdate +%s\n\
+         \tprintf '%s\\n' \"$@\"\n\
+         }} > \"$hint_dir/recent-by-shell-$PPID\" 2>/dev/null || true\n\
+         #\n\
+         # Step 2: exec the real ssh with our auto-generated config.\n\
+         exec /usr/bin/ssh -F {config} \"$@\"\n",
+        socket_dir = shell_escape(socket_dir.to_string_lossy().as_ref()),
+        config = shell_escape(config_path.to_string_lossy().as_ref()),
     );
     write_atomic(&wrapper_path, body.as_bytes())?;
     set_executable(&wrapper_path)?;

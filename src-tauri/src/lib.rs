@@ -7532,6 +7532,19 @@ pub fn run() {
                             ssh_mux::settings(),
                         ),
                     );
+                    // Tell the pier-core SSH watcher where to look
+                    // for the wrapper's per-shell hint files. Without
+                    // this the watcher's `scan_with_mux_fallback`
+                    // path is a no-op, which means the right-side
+                    // panels go silent any time OpenSSH's
+                    // `ControlMaster=auto` mode daemonises the master
+                    // out of our PTY's ancestor tree (the steady
+                    // state for any user who has the mux feature on).
+                    if let Some(socket_dir) = ssh_mux::socket_dir() {
+                        pier_core::terminal::ssh_watcher::set_mux_hint_dir(
+                            socket_dir.to_path_buf(),
+                        );
+                    }
                 }
                 Err(e) => {
                     pier_core::logging::write_event(

@@ -315,17 +315,6 @@ impl PierTerminal {
         // Capture the child pid before we move the pty into Inner;
         // once it's behind the mutex we'd need to lock to read it.
         let child_pid = pty.child_pid();
-        // TEMP DIAGNOSTIC — track watcher lifecycle so we can tell
-        // a "watcher never spawned" failure mode apart from a "watcher
-        // spawned but never matched anything" one. The whole point of
-        // having logs is being able to tell those apart in the field;
-        // without this the only way to debug a silent watcher is to
-        // attach a debugger to a running Pier-X build.
-        crate::logging::write_event(
-            "INFO",
-            "ssh.watcher",
-            &format!("PierTerminal::with_pty child_pid={:?}", child_pid),
-        );
 
         let emu = VtEmulator::new(cols as usize, rows as usize);
         let inner = Arc::new(Mutex::new(Inner {
@@ -351,11 +340,6 @@ impl PierTerminal {
         // scanning *this* host's process tree would return nonsense
         // for a session that's running commands on a remote host.
         let ssh_watcher = child_pid.map(|pid| {
-            crate::logging::write_event(
-                "INFO",
-                "ssh.watcher",
-                &format!("spawn_ssh_watcher root_pid={pid}"),
-            );
             Self::spawn_ssh_watcher(
                 Arc::clone(&inner),
                 Arc::clone(&shutdown),
@@ -505,11 +489,6 @@ impl PierTerminal {
         thread::Builder::new()
             .name("pier-terminal-ssh-watcher".to_string())
             .spawn(move || {
-                crate::logging::write_event(
-                    "INFO",
-                    "ssh.watcher",
-                    &format!("watcher thread started root_pid={root_pid}"),
-                );
                 // Lazy-init the System. The first scan_for_ssh call
                 // populates the full process map; subsequent calls
                 // only diff what changed, which is why we hold onto
@@ -523,7 +502,6 @@ impl PierTerminal {
                 let fast_interval = Duration::from_millis(250);
                 let fast_scans_remaining_init = 8u32;
                 let mut fast_scans_remaining = fast_scans_remaining_init;
-                let mut iter_count: u32 = 0;
 
                 let user_data = user_data_addr as *mut std::ffi::c_void;
 
@@ -541,20 +519,18 @@ impl PierTerminal {
                     // is already about to scan.
                     ssh_failure_kick.store(false, Ordering::Relaxed);
 
-                    let new_target = ssh_watcher::scan(&mut system, root_pid);
-                    iter_count = iter_count.saturating_add(1);
-                    if iter_count <= 12 || iter_count % 30 == 0 {
-                        // First ~12 iterations always log so we capture the
-                        // boot-up race; after that throttle to once every
-                        // ~30s so the file doesn't bloat.
-                        crate::logging::write_event(
-                            "DEBUG",
-                            "ssh.watcher",
-                            &format!(
-                                "iter={iter_count} root_pid={root_pid} scan→{new_target:?}"
-                            ),
-                        );
-                    }
+                    // `scan_with_mux_fallback` first does the normal
+                    // PTY-tree walk, then — when that comes up empty
+                    // — checks the wrapper-written hint file under
+                    // ssh-mux's socket dir. The fallback is what makes
+                    // the watcher correct under `ControlMaster=auto`,
+                    // where the live ssh client process exits within
+                    // milliseconds and the master daemonises out of
+                    // our PTY ancestor chain. See `ssh_watcher.rs`
+                    // for the safety checks (mtime TTL + master
+                    // socket presence) that keep stale hints from
+                    // surfacing as fake targets.
+                    let new_target = ssh_watcher::scan_with_mux_fallback(&mut system, root_pid);
 
                     // Minimise the critical section: compute under
                     // the lock only long enough to compare + swap,
@@ -577,7 +553,7 @@ impl PierTerminal {
                             "INFO",
                             "ssh.watcher",
                             &format!(
-                                "transition: notify SshStateChanged target={new_target:?}"
+                                "tab root_pid={root_pid} ssh state changed → {new_target:?}"
                             ),
                         );
                         (notify)(user_data, NotifyEvent::SshStateChanged as u32);

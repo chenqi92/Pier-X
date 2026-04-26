@@ -38,6 +38,8 @@
 //! a couple of milliseconds on a busy laptop.
 
 use std::collections::HashMap;
+use std::path::{Path, PathBuf};
+use std::sync::OnceLock;
 
 use sysinfo::{Pid, ProcessRefreshKind, ProcessesToUpdate, System, UpdateKind};
 
@@ -239,6 +241,121 @@ pub fn scan(system: &mut System, root_pid: u32) -> Option<SshChildTarget> {
     }
 
     best.map(|(_, t)| t)
+}
+
+/// Process-global handle to Pier-X's ssh-mux directory (where the
+/// PATH-injected wrapper drops `recent-by-shell-<ppid>` hint files
+/// and where ControlMaster sockets `cm-<hash>` live). The host app
+/// (pier-x's tauri layer) sets this once at startup via
+/// [`set_mux_hint_dir`]; pier-core itself stays UI-agnostic by
+/// only consulting it in the optional [`scan_with_mux_fallback`]
+/// path. Subsequent [`set_mux_hint_dir`] calls are no-ops.
+static MUX_HINT_DIR: OnceLock<PathBuf> = OnceLock::new();
+
+/// Wired by the host app at startup to the directory where the
+/// ssh-mux wrapper writes its per-shell argv hints. After this is
+/// set, the watcher's [`scan_with_mux_fallback`] gains the ability
+/// to recover an SSH target even when the actual ssh client process
+/// is too short-lived for the PTY-tree scan to catch — which is the
+/// steady state in OpenSSH `ControlMaster=auto` mode after the
+/// master has daemonised out of our PTY's ancestor chain.
+pub fn set_mux_hint_dir(dir: PathBuf) {
+    let _ = MUX_HINT_DIR.set(dir);
+}
+
+/// Maximum age of a `recent-by-shell-<ppid>` hint file before we
+/// stop trusting it. Set to match the default OpenSSH
+/// `ControlPersist` of 600s — once a master has been gone that
+/// long the user has effectively walked away, and the file is
+/// almost certainly stale.
+const MUX_HINT_TTL_SECS: u64 = 600;
+
+/// PTY-tree scan with a ControlMaster fallback.
+///
+/// The base [`scan`] only finds an `ssh` process whose ancestor
+/// chain reaches `root_pid` (the PTY's child shell). That works
+/// perfectly for plain ssh — the client process runs for the
+/// duration of the session under the shell. It silently fails for
+/// `ControlMaster=auto` mux mode: the client forks the master,
+/// the master `daemon()`s itself with `parent=1`, and the client
+/// itself exits within milliseconds of the user pressing Enter.
+/// By the time the watcher's 250ms scan runs, the only ssh
+/// process left is the master — and its ancestor chain bypasses
+/// `root_pid` entirely.
+///
+/// This wrapper covers the gap: when [`scan`] returns `None` it
+/// reads `<MUX_HINT_DIR>/recent-by-shell-<root_pid>`, the file
+/// the wrapper script wrote BEFORE exec'ing ssh. The argv it
+/// recorded is re-parsed with [`parse_ssh_argv`] so the resulting
+/// target is bit-identical to what the live-process path would
+/// have produced. Two safety checks guard against stale hints:
+///
+///   1. `mtime` of the hint must be within [`MUX_HINT_TTL_SECS`]
+///      — older entries imply the user already exited and walked
+///      away; the file is just stale residue.
+///   2. At least one `cm-*` socket must exist in the same
+///      directory — proves an OpenSSH master is currently alive
+///      somewhere. Without this we'd happily re-claim a target
+///      moments after `ssh -O exit` killed the master.
+///
+/// Both checks are best-effort: a stale hint that survives both
+/// only misleads the right-side panel for one probe cycle, after
+/// which the panel surfaces an "auth rejected" / "connection
+/// refused" the user can act on (vs. silent stuck-on-old-state).
+pub fn scan_with_mux_fallback(system: &mut System, root_pid: u32) -> Option<SshChildTarget> {
+    if let Some(target) = scan(system, root_pid) {
+        return Some(target);
+    }
+    let dir = MUX_HINT_DIR.get()?;
+    if !dir.is_dir() {
+        return None;
+    }
+    let hint_path = dir.join(format!("recent-by-shell-{root_pid}"));
+    let content = std::fs::read_to_string(&hint_path).ok()?;
+    let mut lines = content.lines();
+    let timestamp: u64 = lines.next()?.trim().parse().ok()?;
+    let now = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .ok()?
+        .as_secs();
+    if now.saturating_sub(timestamp) > MUX_HINT_TTL_SECS {
+        return None;
+    }
+    let mut argv: Vec<String> = Vec::with_capacity(8);
+    // parse_ssh_argv expects argv[0] to be the program name; the
+    // hint file stores only the user-supplied arguments (what was
+    // passed to the wrapper), so prepend a synthetic `ssh`.
+    argv.push("ssh".to_string());
+    for arg in lines {
+        argv.push(arg.to_string());
+    }
+    let target = parse_ssh_argv(&argv)?;
+    if !any_master_socket_present(dir) {
+        return None;
+    }
+    Some(target)
+}
+
+/// Cheap "is at least one ControlMaster master alive" check —
+/// scans the mux dir for any `cm-*` socket file. We do not query
+/// the master via `ssh -O check` here because (a) it spawns a
+/// subprocess and the watcher loop runs every 250ms, and (b) any
+/// active master file is a strong-enough signal: stale unix
+/// sockets get cleaned up by the master itself on `O exit`, by
+/// the OS on reboot (the dir is under `/tmp`), or explicitly by
+/// `ssh_mux::shutdown_all_masters` on Pier-X exit.
+fn any_master_socket_present(dir: &Path) -> bool {
+    std::fs::read_dir(dir)
+        .ok()
+        .into_iter()
+        .flatten()
+        .filter_map(|entry| entry.ok())
+        .any(|entry| {
+            entry
+                .file_name()
+                .to_string_lossy()
+                .starts_with("cm-")
+        })
 }
 
 /// Leaf-name check: matches `ssh` on Unix, `ssh.exe` on Windows

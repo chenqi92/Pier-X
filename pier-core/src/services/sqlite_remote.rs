@@ -178,82 +178,33 @@ pub async fn probe(session: &SshSession) -> RemoteSqliteCapability {
     }
 }
 
-/// Auto-install `sqlite3` on the remote host: read `/etc/os-release`,
-/// pick a package manager, run the install with `sudo -n` if we are
-/// not already root, then re-probe to confirm. Returns a structured
-/// report — only an SSH-level failure surfaces as `Err`.
+/// Auto-install `sqlite3` on the remote host. Thin wrapper over the
+/// generic [`crate::services::package_manager::install`] with a noop
+/// per-line callback — the SQLite panel's button shows a single status
+/// note rather than a streaming log, so we don't need the live feed
+/// here. The Software panel exposes the streaming variant directly.
 pub async fn install(session: &SshSession) -> Result<RemoteSqliteInstallReport> {
-    // No-op fast path — the user may have hit the button after the
-    // probe raced an apt-running admin elsewhere.
-    let pre = probe(session).await;
-    if pre.installed {
-        return Ok(RemoteSqliteInstallReport {
-            status: RemoteSqliteInstallStatus::Installed,
-            distro_id: String::new(),
-            package_manager: String::new(),
-            command: String::new(),
-            exit_code: 0,
-            output_tail: String::new(),
-            installed_version: pre.version,
-        });
-    }
+    use crate::services::package_manager as pm;
 
-    let distro_id = detect_distro_id(session).await;
-    let Some((package_manager, install_cmd)) = pick_package_manager(&distro_id) else {
-        return Ok(RemoteSqliteInstallReport {
-            status: RemoteSqliteInstallStatus::UnsupportedDistro,
-            distro_id,
-            package_manager: String::new(),
-            command: String::new(),
-            exit_code: 0,
-            output_tail: String::new(),
-            installed_version: None,
-        });
-    };
-
-    let needs_sudo = !is_root(session).await;
-    let prefix = if needs_sudo { "sudo -n " } else { "" };
-    // Merge stderr into stdout so package manager errors land in our
-    // single returned string — `exec_command` drops `ExtendedData`.
-    let command = format!("{prefix}sh -c {} 2>&1", shell_single_quote(install_cmd));
-
-    let (exit_code, output) = session.exec_command(&command).await?;
-    let output_tail = tail_lines(&output, 40);
-
-    if needs_sudo && looks_like_sudo_password_prompt(&output) {
-        return Ok(RemoteSqliteInstallReport {
-            status: RemoteSqliteInstallStatus::SudoRequiresPassword,
-            distro_id,
-            package_manager: package_manager.to_string(),
-            command,
-            exit_code,
-            output_tail,
-            installed_version: None,
-        });
-    }
-
-    let post = probe(session).await;
-    if post.installed {
-        Ok(RemoteSqliteInstallReport {
-            status: RemoteSqliteInstallStatus::Installed,
-            distro_id,
-            package_manager: package_manager.to_string(),
-            command,
-            exit_code,
-            output_tail,
-            installed_version: post.version,
-        })
-    } else {
-        Ok(RemoteSqliteInstallReport {
-            status: RemoteSqliteInstallStatus::PackageManagerFailed,
-            distro_id,
-            package_manager: package_manager.to_string(),
-            command,
-            exit_code,
-            output_tail,
-            installed_version: None,
-        })
-    }
+    let report = pm::install(session, "sqlite3", false, |_| {}).await?;
+    Ok(RemoteSqliteInstallReport {
+        status: match report.status {
+            pm::InstallStatus::Installed => RemoteSqliteInstallStatus::Installed,
+            pm::InstallStatus::UnsupportedDistro => RemoteSqliteInstallStatus::UnsupportedDistro,
+            pm::InstallStatus::SudoRequiresPassword => {
+                RemoteSqliteInstallStatus::SudoRequiresPassword
+            }
+            pm::InstallStatus::PackageManagerFailed => {
+                RemoteSqliteInstallStatus::PackageManagerFailed
+            }
+        },
+        distro_id: report.distro_id,
+        package_manager: report.package_manager,
+        command: report.command,
+        exit_code: report.exit_code,
+        output_tail: report.output_tail,
+        installed_version: report.installed_version,
+    })
 }
 
 /// List tables on a remote `.db` file. Equivalent to
@@ -736,113 +687,6 @@ fn skip_json_value(bytes: &[u8], mut pos: usize, outer_depth: i32) -> Option<usi
     Some(pos)
 }
 
-/// Read `ID=` from `/etc/os-release`, falling back to the first
-/// `ID_LIKE=` token (so `linuxmint` resolves to `debian`, etc.).
-/// Returns an empty string when the file is missing/unreadable.
-async fn detect_distro_id(session: &SshSession) -> String {
-    let Ok((code, stdout)) = session
-        .exec_command("cat /etc/os-release 2>/dev/null")
-        .await
-    else {
-        return String::new();
-    };
-    if code != 0 {
-        return String::new();
-    }
-    let mut id = String::new();
-    let mut id_like = String::new();
-    for line in stdout.lines() {
-        let line = line.trim();
-        if let Some(rest) = line.strip_prefix("ID=") {
-            id = strip_os_release_quotes(rest).to_lowercase();
-        } else if let Some(rest) = line.strip_prefix("ID_LIKE=") {
-            id_like = strip_os_release_quotes(rest).to_lowercase();
-        }
-    }
-    if !id.is_empty() {
-        return id;
-    }
-    id_like
-        .split_whitespace()
-        .next()
-        .unwrap_or("")
-        .to_string()
-}
-
-fn strip_os_release_quotes(value: &str) -> &str {
-    value
-        .trim()
-        .trim_start_matches('"')
-        .trim_end_matches('"')
-        .trim_start_matches('\'')
-        .trim_end_matches('\'')
-}
-
-/// Map `/etc/os-release` `ID=` to `(label, install_command)`. Returns
-/// `None` for unknown distros. The command is always idempotent and
-/// non-interactive; a `sudo -n ` prefix is added by the caller when
-/// the session is not already root.
-fn pick_package_manager(distro_id: &str) -> Option<(&'static str, &'static str)> {
-    match distro_id {
-        "debian" | "ubuntu" | "linuxmint" | "raspbian" | "pop" | "elementary" | "kali" => Some((
-            "apt",
-            "DEBIAN_FRONTEND=noninteractive apt-get update -qq \
-             && DEBIAN_FRONTEND=noninteractive apt-get install -y sqlite3",
-        )),
-        "fedora" => Some(("dnf", "dnf install -y sqlite")),
-        "rhel" | "centos" | "rocky" | "almalinux" | "ol" | "amzn" => Some((
-            "dnf",
-            "(command -v dnf >/dev/null 2>&1 && dnf install -y sqlite) \
-             || yum install -y sqlite",
-        )),
-        "alpine" => Some(("apk", "apk add --no-cache sqlite")),
-        "arch" | "manjaro" | "endeavouros" => {
-            Some(("pacman", "pacman -S --noconfirm sqlite"))
-        }
-        "opensuse" | "opensuse-leap" | "opensuse-tumbleweed" | "sles" | "sled" => {
-            Some(("zypper", "zypper --non-interactive install sqlite3"))
-        }
-        _ => None,
-    }
-}
-
-/// `id -u` reports `0` for root. Treat any failure as "not root" so
-/// we err on the side of using `sudo` rather than running raw apt as
-/// a normal user (which would always fail).
-async fn is_root(session: &SshSession) -> bool {
-    let Ok((code, stdout)) = session.exec_command("id -u").await else {
-        return false;
-    };
-    code == 0 && stdout.trim() == "0"
-}
-
-/// Heuristic for "sudo -n bailed because it needs a password". Sudo
-/// prints to stderr in English regardless of locale; we merge stderr
-/// via `2>&1` so the marker shows up in the captured output.
-fn looks_like_sudo_password_prompt(output: &str) -> bool {
-    let lower = output.to_ascii_lowercase();
-    lower.contains("a password is required")
-        || lower.contains("sudo: a terminal is required")
-        || lower.contains("no tty present")
-        || (lower.contains("sudo:") && lower.contains("password"))
-}
-
-/// Tail the last `n` lines of `s`, capped at ~4 KiB so a runaway
-/// install log doesn't flood the IPC channel.
-fn tail_lines(s: &str, n: usize) -> String {
-    const MAX_BYTES: usize = 4096;
-    let mut lines: Vec<&str> = s.lines().collect();
-    if lines.len() > n {
-        lines = lines.split_off(lines.len() - n);
-    }
-    let mut out = lines.join("\n");
-    if out.len() > MAX_BYTES {
-        let cut = out.len() - MAX_BYTES;
-        out = format!("…{}", &out[cut..]);
-    }
-    out
-}
-
 fn parse_sqlite_version(output: &str) -> Option<String> {
     // `sqlite3 --version` prints e.g. `3.46.1 2024-08-13 ...`
     output
@@ -1090,59 +934,9 @@ mod tests {
         assert_eq!(rows[0].get("name").map(String::as_str), Some("Ann"));
     }
 
-    #[test]
-    fn pick_package_manager_covers_known_distros() {
-        assert_eq!(pick_package_manager("ubuntu").map(|p| p.0), Some("apt"));
-        assert_eq!(pick_package_manager("debian").map(|p| p.0), Some("apt"));
-        assert_eq!(pick_package_manager("alpine").map(|p| p.0), Some("apk"));
-        assert_eq!(pick_package_manager("fedora").map(|p| p.0), Some("dnf"));
-        assert_eq!(pick_package_manager("centos").map(|p| p.0), Some("dnf"));
-        assert_eq!(pick_package_manager("arch").map(|p| p.0), Some("pacman"));
-        assert_eq!(pick_package_manager("opensuse-leap").map(|p| p.0), Some("zypper"));
-    }
-
-    #[test]
-    fn pick_package_manager_unknown_returns_none() {
-        assert!(pick_package_manager("solaris").is_none());
-        assert!(pick_package_manager("").is_none());
-    }
-
-    #[test]
-    fn pick_package_manager_apt_command_is_noninteractive() {
-        let (_, cmd) = pick_package_manager("ubuntu").unwrap();
-        assert!(cmd.contains("DEBIAN_FRONTEND=noninteractive"));
-        assert!(cmd.contains("apt-get install -y sqlite3"));
-    }
-
-    #[test]
-    fn strip_os_release_quotes_handles_double_and_single() {
-        assert_eq!(strip_os_release_quotes("\"ubuntu\""), "ubuntu");
-        assert_eq!(strip_os_release_quotes("'ubuntu'"), "ubuntu");
-        assert_eq!(strip_os_release_quotes("ubuntu"), "ubuntu");
-        assert_eq!(strip_os_release_quotes(" debian "), "debian");
-    }
-
-    #[test]
-    fn looks_like_sudo_password_prompt_recognises_common_messages() {
-        assert!(looks_like_sudo_password_prompt(
-            "sudo: a password is required"
-        ));
-        assert!(looks_like_sudo_password_prompt(
-            "sudo: a terminal is required to read the password; either use the -S option to read from standard input or configure an askpass helper"
-        ));
-        assert!(!looks_like_sudo_password_prompt(
-            "E: Unable to locate package sqlite3"
-        ));
-        assert!(!looks_like_sudo_password_prompt(""));
-    }
-
-    #[test]
-    fn tail_lines_keeps_last_n() {
-        let s = "a\nb\nc\nd\ne";
-        assert_eq!(tail_lines(s, 2), "d\ne");
-        assert_eq!(tail_lines(s, 99), s);
-        assert_eq!(tail_lines("", 5), "");
-    }
+    // Package-manager detection / install-command synthesis tests
+    // moved to `crate::services::package_manager::tests` (the SQLite
+    // install path is now a thin delegator over that module).
 
     #[test]
     fn remote_query_result_round_trips_through_json() {

@@ -685,43 +685,108 @@ impl SshSession {
     /// service_detector's substring-based matching never hits
     /// a decode error from a mis-tagged binary on the remote.
     pub async fn exec_command(&self, command: &str) -> Result<(i32, String)> {
-        let mut channel = self.handle.channel_open_session().await?;
-        channel.exec(true, command).await?;
-
-        let mut stdout = Vec::new();
-        let mut exit_code: i32 = -1;
-        loop {
-            let Some(msg) = channel.wait().await else {
-                // Channel closed without an ExitStatus — treat
-                // as "command didn't report a status"; callers
-                // check exit_code and default to failure.
-                break;
-            };
-            match msg {
-                russh::ChannelMsg::Data { data } => stdout.extend_from_slice(&data),
-                russh::ChannelMsg::ExtendedData { data: _, ext: _ } => {
-                    // Drop stderr for now. Service detection
-                    // only reads stdout.
-                }
-                russh::ChannelMsg::ExitStatus { exit_status } => {
-                    exit_code = exit_status as i32;
-                }
-                russh::ChannelMsg::Eof | russh::ChannelMsg::Close => {
-                    // Some servers deliver Close before the
-                    // final ExitStatus. Keep draining until the
-                    // channel reports `None` so successful execs
-                    // do not get misclassified as exit -1.
-                }
-                _ => {}
-            }
-        }
-        let text = String::from_utf8_lossy(&stdout).into_owned();
-        Ok((exit_code, text))
+        self.exec_command_streaming(command, |_| {}).await
     }
 
     /// Sync convenience for [`Self::exec_command`].
     pub fn exec_command_blocking(&self, command: &str) -> Result<(i32, String)> {
         runtime::shared().block_on(self.exec_command(command))
+    }
+
+    /// Run `command` remotely and stream every complete output line
+    /// (stdout *and* stderr, merged in arrival order) through `on_line`
+    /// while it runs. Returns the same `(exit_status, full_stdout)` as
+    /// [`Self::exec_command`] when the channel closes — `full_stdout`
+    /// here contains the same merged text the callback saw.
+    ///
+    /// Lines are emitted as `\n`-delimited UTF-8; trailing `\r` (CRLF
+    /// hosts) is stripped before the callback fires. A partial trailing
+    /// line (no `\n`) is flushed as a final callback after the channel
+    /// closes, so progress shells like `apt-get -qq` whose final line
+    /// lacks a newline still surface to the UI.
+    ///
+    /// Long-running installs (`apt-get update && install`, `docker pull`)
+    /// rely on this so the panel can render progress instead of waiting
+    /// 30+ seconds for one final dump.
+    pub async fn exec_command_streaming<F>(
+        &self,
+        command: &str,
+        mut on_line: F,
+    ) -> Result<(i32, String)>
+    where
+        F: FnMut(&str),
+    {
+        let mut channel = self.handle.channel_open_session().await?;
+        channel.exec(true, command).await?;
+
+        let mut full = Vec::new();
+        let mut line_buf: Vec<u8> = Vec::new();
+        let mut exit_code: i32 = -1;
+        loop {
+            let Some(msg) = channel.wait().await else {
+                // Channel closed without an ExitStatus — keep whatever
+                // we accumulated; callers check exit_code.
+                break;
+            };
+            match msg {
+                russh::ChannelMsg::Data { data } => {
+                    Self::drain_chunk(&data, &mut full, &mut line_buf, &mut on_line);
+                }
+                russh::ChannelMsg::ExtendedData { data, ext: _ } => {
+                    // Merge stderr — install commands print warnings and
+                    // package-manager prompts on stderr that the UI
+                    // absolutely needs to see.
+                    Self::drain_chunk(&data, &mut full, &mut line_buf, &mut on_line);
+                }
+                russh::ChannelMsg::ExitStatus { exit_status } => {
+                    exit_code = exit_status as i32;
+                }
+                russh::ChannelMsg::Eof | russh::ChannelMsg::Close => {}
+                _ => {}
+            }
+        }
+        if !line_buf.is_empty() {
+            let trimmed = line_buf
+                .strip_suffix(b"\r")
+                .unwrap_or(&line_buf);
+            on_line(&String::from_utf8_lossy(trimmed));
+        }
+        Ok((exit_code, String::from_utf8_lossy(&full).into_owned()))
+    }
+
+    /// Sync convenience for [`Self::exec_command_streaming`].
+    pub fn exec_command_streaming_blocking<F>(
+        &self,
+        command: &str,
+        on_line: F,
+    ) -> Result<(i32, String)>
+    where
+        F: FnMut(&str),
+    {
+        runtime::shared().block_on(self.exec_command_streaming(command, on_line))
+    }
+
+    /// Append `chunk` to the running buffer and emit any complete
+    /// `\n`-terminated lines through `on_line`. Partial trailing line
+    /// stays in `line_buf` until the next chunk arrives. Splits on
+    /// raw bytes — multi-byte UTF-8 sequences split across chunks are
+    /// safe because we only look at the `\n` byte.
+    fn drain_chunk<F: FnMut(&str)>(
+        chunk: &[u8],
+        full: &mut Vec<u8>,
+        line_buf: &mut Vec<u8>,
+        on_line: &mut F,
+    ) {
+        full.extend_from_slice(chunk);
+        line_buf.extend_from_slice(chunk);
+        while let Some(nl) = line_buf.iter().position(|&b| b == b'\n') {
+            let mut line: Vec<u8> = line_buf.drain(..=nl).collect();
+            line.pop(); // drop the \n
+            if line.last() == Some(&b'\r') {
+                line.pop();
+            }
+            on_line(&String::from_utf8_lossy(&line));
+        }
     }
 
     /// Returns the number of strong references still holding this
@@ -916,6 +981,61 @@ mod tests {
                 SshError::Timeout(_) | SshError::Connect(_) | SshError::Protocol(_)
             ),
             "expected Timeout / Connect / Protocol, got {err:?}",
+        );
+    }
+
+    fn drain_capture(
+        input: &[u8],
+        full: &mut Vec<u8>,
+        buf: &mut Vec<u8>,
+    ) -> Vec<String> {
+        let mut lines = Vec::new();
+        SshSession::drain_chunk(input, full, buf, &mut |s: &str| {
+            lines.push(s.to_string())
+        });
+        lines
+    }
+
+    #[test]
+    fn drain_chunk_emits_complete_lines_only() {
+        let mut full = Vec::new();
+        let mut buf = Vec::new();
+
+        assert_eq!(drain_capture(b"hello\nworld", &mut full, &mut buf), vec!["hello"]);
+        assert_eq!(buf, b"world");
+
+        assert_eq!(drain_capture(b"\nlast", &mut full, &mut buf), vec!["world"]);
+        assert_eq!(buf, b"last");
+
+        // Trailing line without \n stays in buf until the caller flushes.
+        assert_eq!(drain_capture(b"\n", &mut full, &mut buf), vec!["last"]);
+        assert!(buf.is_empty());
+    }
+
+    #[test]
+    fn drain_chunk_strips_trailing_cr() {
+        let mut full = Vec::new();
+        let mut buf = Vec::new();
+        assert_eq!(
+            drain_capture(b"crlf\r\nlf\n", &mut full, &mut buf),
+            vec!["crlf", "lf"],
+        );
+    }
+
+    #[test]
+    fn drain_chunk_handles_split_utf8_across_chunks() {
+        // The Chinese character "中" is 3 bytes (0xE4 0xB8 0xAD).
+        // Splitting between bytes must not panic — we only look at \n.
+        let mut full = Vec::new();
+        let mut buf = Vec::new();
+
+        assert!(
+            drain_capture(&[0xE4, 0xB8], &mut full, &mut buf).is_empty(),
+            "no \\n yet, no emission",
+        );
+        assert_eq!(
+            drain_capture(&[0xAD, b'\n'], &mut full, &mut buf),
+            vec!["中".to_string()],
         );
     }
 }

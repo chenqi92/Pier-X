@@ -3,6 +3,7 @@ import {
   FileText,
   FolderSync,
   GitBranch,
+  Package,
   Shield,
 } from "lucide-react";
 import type { ComponentType, SVGProps } from "react";
@@ -46,6 +47,7 @@ export const RIGHT_TOOL_ORDER: RightTool[] = [
   "postgres",
   "redis",
   "sqlite",
+  "software",
 ];
 
 // Firewall is intentionally NOT here: it's a universal capability of any
@@ -141,5 +143,14 @@ export const RIGHT_TOOL_META: Record<RightTool, RightToolMeta> = {
     tintVar: "var(--svc-firewall)",
     splashTitle: "Firewall",
     splashSubtitle: "Open a saved server to view firewall rules, listening ports, and per-interface traffic.",
+  },
+  software: {
+    label: "Software",
+    icon: Package,
+    remoteOnly: true,
+    tintVar: "var(--svc-software)",
+    splashTitle: "Software",
+    splashSubtitle:
+      "Open an SSH tab to view the host's tool stack and install or update packages with live progress.",
   },
 };

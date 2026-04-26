@@ -79,6 +79,7 @@
   --svc-sftp: #8aa0b8;
   --svc-sqlite: #8aa0b8;
   --svc-firewall: #daa45f;
+  --svc-software: #c49eff;
 
   /* ── Legacy aliases (Phase A/B/C compat) ─────────────────── */
   --bg-canvas: var(--bg);

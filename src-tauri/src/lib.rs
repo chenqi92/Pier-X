@@ -9,6 +9,7 @@ use pier_core::services::git::{CommitInfo, GitClient, StashEntry, UnpushedCommit
 use pier_core::services::mysql::{self as mysql_service, MysqlClient, MysqlConfig};
 use pier_core::services::postgres::{PostgresClient, PostgresConfig};
 use pier_core::services::redis::{RedisClient, RedisConfig};
+use pier_core::services::package_manager;
 use pier_core::services::server_monitor;
 use pier_core::services::sqlite::SqliteClient;
 use pier_core::services::sqlite_remote;
@@ -5598,6 +5599,454 @@ async fn sqlite_install_remote(
     .map_err(|e| format!("sqlite_install_remote join: {e}"))?
 }
 
+// ── Software panel ─────────────────────────────────────────────
+
+const SOFTWARE_INSTALL_EVENT: &str = "software-install";
+const SOFTWARE_UNINSTALL_EVENT: &str = "software-uninstall";
+
+#[derive(Serialize, Clone)]
+#[serde(rename_all = "camelCase")]
+struct SoftwareDescriptorView {
+    id: String,
+    display_name: String,
+    notes: Option<String>,
+    has_service: bool,
+    /// Filesystem dirs declared as user data on the descriptor —
+    /// surfaced to the uninstall dialog so it can list them in the
+    /// "also delete data directories" warning. Empty for stateless
+    /// software.
+    data_dirs: Vec<String>,
+}
+
+#[derive(Serialize, Clone)]
+#[serde(rename_all = "camelCase")]
+struct HostPackageEnvView {
+    distro_id: String,
+    distro_pretty: String,
+    package_manager: Option<String>,
+    is_root: bool,
+}
+
+#[derive(Serialize, Clone)]
+#[serde(rename_all = "camelCase")]
+struct PackageStatusView {
+    id: String,
+    installed: bool,
+    version: Option<String>,
+    service_active: Option<bool>,
+}
+
+#[derive(Serialize, Clone)]
+#[serde(rename_all = "camelCase")]
+struct SoftwareProbeView {
+    env: HostPackageEnvView,
+    statuses: Vec<PackageStatusView>,
+}
+
+#[derive(Serialize, Clone)]
+#[serde(rename_all = "camelCase")]
+struct SoftwareInstallReportView {
+    package_id: String,
+    /// One of `installed` / `unsupported-distro` / `sudo-requires-password`
+    /// / `package-manager-failed`. Mirrors the kebab-case tag emitted by
+    /// `package_manager::InstallStatus`.
+    status: String,
+    distro_id: String,
+    package_manager: String,
+    command: String,
+    exit_code: i32,
+    output_tail: String,
+    installed_version: Option<String>,
+    service_active: Option<bool>,
+}
+
+/// Streaming event payload — a flat shape so the frontend can listen
+/// once and dispatch on `kind`.
+#[derive(Serialize, Clone)]
+#[serde(rename_all = "camelCase")]
+struct SoftwareInstallEvent {
+    install_id: String,
+    /// `"line"` (during run), `"done"` (final report), or `"failed"`
+    /// (the spawn task itself errored).
+    kind: String,
+    text: Option<String>,
+    report: Option<SoftwareInstallReportView>,
+    message: Option<String>,
+}
+
+/// View of `package_manager::UninstallReport`. Mirrors the install
+/// report layout so the frontend's outcome card is shape-compatible.
+#[derive(Serialize, Clone)]
+#[serde(rename_all = "camelCase")]
+struct SoftwareUninstallReportView {
+    package_id: String,
+    /// `uninstalled` / `unsupported-distro` / `sudo-requires-password`
+    /// / `package-manager-failed` / `not-installed`.
+    status: String,
+    distro_id: String,
+    package_manager: String,
+    command: String,
+    exit_code: i32,
+    output_tail: String,
+    data_dirs_removed: bool,
+}
+
+/// Uninstall-side streaming event. Lives on its own channel
+/// (`SOFTWARE_UNINSTALL_EVENT`) so the report shape can differ from
+/// the install event without ugly union encoding.
+#[derive(Serialize, Clone)]
+#[serde(rename_all = "camelCase")]
+struct SoftwareUninstallEvent {
+    install_id: String,
+    /// `"line"` (during run), `"done"` (final report), or `"failed"`
+    /// (the spawn task itself errored).
+    kind: String,
+    text: Option<String>,
+    report: Option<SoftwareUninstallReportView>,
+    message: Option<String>,
+}
+
+fn package_manager_to_string(m: package_manager::PackageManager) -> String {
+    m.as_str().to_string()
+}
+
+fn install_status_kebab(status: package_manager::InstallStatus) -> &'static str {
+    match status {
+        package_manager::InstallStatus::Installed => "installed",
+        package_manager::InstallStatus::UnsupportedDistro => "unsupported-distro",
+        package_manager::InstallStatus::SudoRequiresPassword => "sudo-requires-password",
+        package_manager::InstallStatus::PackageManagerFailed => "package-manager-failed",
+    }
+}
+
+fn uninstall_status_kebab(status: package_manager::UninstallStatus) -> &'static str {
+    match status {
+        package_manager::UninstallStatus::Uninstalled => "uninstalled",
+        package_manager::UninstallStatus::UnsupportedDistro => "unsupported-distro",
+        package_manager::UninstallStatus::SudoRequiresPassword => "sudo-requires-password",
+        package_manager::UninstallStatus::PackageManagerFailed => "package-manager-failed",
+        package_manager::UninstallStatus::NotInstalled => "not-installed",
+    }
+}
+
+fn report_to_view(report: package_manager::InstallReport) -> SoftwareInstallReportView {
+    SoftwareInstallReportView {
+        package_id: report.package_id,
+        status: install_status_kebab(report.status).to_string(),
+        distro_id: report.distro_id,
+        package_manager: report.package_manager,
+        command: report.command,
+        exit_code: report.exit_code,
+        output_tail: report.output_tail,
+        installed_version: report.installed_version,
+        service_active: report.service_active,
+    }
+}
+
+fn uninstall_report_to_view(
+    report: package_manager::UninstallReport,
+) -> SoftwareUninstallReportView {
+    SoftwareUninstallReportView {
+        package_id: report.package_id,
+        status: uninstall_status_kebab(report.status).to_string(),
+        distro_id: report.distro_id,
+        package_manager: report.package_manager,
+        command: report.command,
+        exit_code: report.exit_code,
+        output_tail: report.output_tail,
+        data_dirs_removed: report.data_dirs_removed,
+    }
+}
+
+#[tauri::command]
+fn software_registry() -> Vec<SoftwareDescriptorView> {
+    package_manager::registry()
+        .iter()
+        .map(|d| SoftwareDescriptorView {
+            id: d.id.to_string(),
+            display_name: d.display_name.to_string(),
+            notes: d.notes.map(str::to_string),
+            has_service: !d.service_units.is_empty(),
+            data_dirs: d.data_dirs.iter().map(|s| (*s).to_string()).collect(),
+        })
+        .collect()
+}
+
+#[tauri::command]
+async fn software_probe_remote(
+    app: tauri::AppHandle,
+    host: String,
+    port: u16,
+    user: String,
+    auth_mode: String,
+    password: String,
+    key_path: String,
+    saved_connection_index: Option<usize>,
+) -> Result<SoftwareProbeView, String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        let state: tauri::State<'_, AppState> = app.state();
+        let session = get_or_open_ssh_session(
+            &state,
+            &host,
+            port,
+            &user,
+            &auth_mode,
+            &password,
+            &key_path,
+            saved_connection_index,
+        )?;
+        let env = package_manager::probe_host_env_blocking(&session);
+        let statuses = package_manager::probe_all_blocking(&session);
+        Ok::<_, String>(SoftwareProbeView {
+            env: HostPackageEnvView {
+                distro_id: env.distro_id,
+                distro_pretty: env.distro_pretty,
+                package_manager: env.package_manager.map(package_manager_to_string),
+                is_root: env.is_root,
+            },
+            statuses: statuses
+                .into_iter()
+                .map(|s| PackageStatusView {
+                    id: s.id,
+                    installed: s.installed,
+                    version: s.version,
+                    service_active: s.service_active,
+                })
+                .collect(),
+        })
+    })
+    .await
+    .map_err(|e| format!("software_probe_remote join: {e}"))?
+}
+
+/// Run a streaming install or update. The synchronous body emits a
+/// `line` event per stdout/stderr line and a final `done` event with
+/// the structured report; on join failure we emit `failed`.
+async fn software_install_or_update_inner(
+    app: tauri::AppHandle,
+    host: String,
+    port: u16,
+    user: String,
+    auth_mode: String,
+    password: String,
+    key_path: String,
+    saved_connection_index: Option<usize>,
+    package_id: String,
+    install_id: String,
+    enable_service: bool,
+    is_update: bool,
+) -> Result<SoftwareInstallReportView, String> {
+    let app_for_failure = app.clone();
+    let install_id_for_failure = install_id.clone();
+    let join = tauri::async_runtime::spawn_blocking(move || {
+        let state: tauri::State<'_, AppState> = app.state();
+        let session = get_or_open_ssh_session(
+            &state,
+            &host,
+            port,
+            &user,
+            &auth_mode,
+            &password,
+            &key_path,
+            saved_connection_index,
+        )?;
+        let app_for_lines = app.clone();
+        let install_id_for_lines = install_id.clone();
+        let on_line = move |line: &str| {
+            let _ = app_for_lines.emit(
+                SOFTWARE_INSTALL_EVENT,
+                SoftwareInstallEvent {
+                    install_id: install_id_for_lines.clone(),
+                    kind: "line".to_string(),
+                    text: Some(line.to_string()),
+                    report: None,
+                    message: None,
+                },
+            );
+        };
+        let report = if is_update {
+            package_manager::update_blocking(&session, &package_id, enable_service, on_line)
+        } else {
+            package_manager::install_blocking(&session, &package_id, enable_service, on_line)
+        }
+        .map_err(|e| e.to_string())?;
+        let view = report_to_view(report);
+        let _ = app.emit(
+            SOFTWARE_INSTALL_EVENT,
+            SoftwareInstallEvent {
+                install_id: install_id.clone(),
+                kind: "done".to_string(),
+                text: None,
+                report: Some(view.clone()),
+                message: None,
+            },
+        );
+        Ok::<_, String>(view)
+    })
+    .await;
+    match join {
+        Ok(inner) => inner,
+        Err(e) => {
+            let msg = format!("software install join: {e}");
+            let _ = app_for_failure.emit(
+                SOFTWARE_INSTALL_EVENT,
+                SoftwareInstallEvent {
+                    install_id: install_id_for_failure,
+                    kind: "failed".to_string(),
+                    text: None,
+                    report: None,
+                    message: Some(msg.clone()),
+                },
+            );
+            Err(msg)
+        }
+    }
+}
+
+#[tauri::command]
+async fn software_install_remote(
+    app: tauri::AppHandle,
+    host: String,
+    port: u16,
+    user: String,
+    auth_mode: String,
+    password: String,
+    key_path: String,
+    saved_connection_index: Option<usize>,
+    package_id: String,
+    install_id: String,
+    enable_service: bool,
+) -> Result<SoftwareInstallReportView, String> {
+    software_install_or_update_inner(
+        app,
+        host,
+        port,
+        user,
+        auth_mode,
+        password,
+        key_path,
+        saved_connection_index,
+        package_id,
+        install_id,
+        enable_service,
+        false,
+    )
+    .await
+}
+
+#[tauri::command]
+async fn software_update_remote(
+    app: tauri::AppHandle,
+    host: String,
+    port: u16,
+    user: String,
+    auth_mode: String,
+    password: String,
+    key_path: String,
+    saved_connection_index: Option<usize>,
+    package_id: String,
+    install_id: String,
+    enable_service: bool,
+) -> Result<SoftwareInstallReportView, String> {
+    software_install_or_update_inner(
+        app,
+        host,
+        port,
+        user,
+        auth_mode,
+        password,
+        key_path,
+        saved_connection_index,
+        package_id,
+        install_id,
+        enable_service,
+        true,
+    )
+    .await
+}
+
+/// Run a streaming uninstall. Mirrors `software_install_or_update_inner`
+/// in shape but emits on `SOFTWARE_UNINSTALL_EVENT` so the report
+/// payload can carry uninstall-specific fields without a discriminant
+/// union on the install channel.
+#[tauri::command]
+async fn software_uninstall_remote(
+    app: tauri::AppHandle,
+    host: String,
+    port: u16,
+    user: String,
+    auth_mode: String,
+    password: String,
+    key_path: String,
+    saved_connection_index: Option<usize>,
+    package_id: String,
+    install_id: String,
+    options: package_manager::UninstallOptions,
+) -> Result<SoftwareUninstallReportView, String> {
+    let app_for_failure = app.clone();
+    let install_id_for_failure = install_id.clone();
+    let join = tauri::async_runtime::spawn_blocking(move || {
+        let state: tauri::State<'_, AppState> = app.state();
+        let session = get_or_open_ssh_session(
+            &state,
+            &host,
+            port,
+            &user,
+            &auth_mode,
+            &password,
+            &key_path,
+            saved_connection_index,
+        )?;
+        let app_for_lines = app.clone();
+        let install_id_for_lines = install_id.clone();
+        let on_line = move |line: &str| {
+            let _ = app_for_lines.emit(
+                SOFTWARE_UNINSTALL_EVENT,
+                SoftwareUninstallEvent {
+                    install_id: install_id_for_lines.clone(),
+                    kind: "line".to_string(),
+                    text: Some(line.to_string()),
+                    report: None,
+                    message: None,
+                },
+            );
+        };
+        let report =
+            package_manager::uninstall_blocking(&session, &package_id, &options, on_line)
+                .map_err(|e| e.to_string())?;
+        let view = uninstall_report_to_view(report);
+        let _ = app.emit(
+            SOFTWARE_UNINSTALL_EVENT,
+            SoftwareUninstallEvent {
+                install_id: install_id.clone(),
+                kind: "done".to_string(),
+                text: None,
+                report: Some(view.clone()),
+                message: None,
+            },
+        );
+        Ok::<_, String>(view)
+    })
+    .await;
+    match join {
+        Ok(inner) => inner,
+        Err(e) => {
+            let msg = format!("software uninstall join: {e}");
+            let _ = app_for_failure.emit(
+                SOFTWARE_UNINSTALL_EVENT,
+                SoftwareUninstallEvent {
+                    install_id: install_id_for_failure,
+                    kind: "failed".to_string(),
+                    text: None,
+                    report: None,
+                    message: Some(msg.clone()),
+                },
+            );
+            Err(msg)
+        }
+    }
+}
+
 #[tauri::command]
 fn sqlite_browse_remote(
     state: tauri::State<'_, AppState>,
@@ -7890,6 +8339,11 @@ pub fn run() {
             sqlite_install_remote,
             sqlite_browse_remote,
             sqlite_execute_remote,
+            software_registry,
+            software_probe_remote,
+            software_install_remote,
+            software_update_remote,
+            software_uninstall_remote,
             sqlite_find_in_dir,
             docker_inspect,
             docker_remove_image,

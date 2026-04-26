@@ -18,6 +18,7 @@ import ServerMonitorPanel from "../panels/ServerMonitorPanel";
 import MarkdownPanel from "../panels/MarkdownPanel";
 import LogViewerPanel from "../panels/LogViewerPanel";
 import FirewallPanel from "../panels/FirewallPanel";
+import SoftwarePanel from "../panels/SoftwarePanel";
 import ToolStrip from "./ToolStrip";
 import ConnectSplash from "../components/ConnectSplash";
 import PanelHeader from "../components/PanelHeader";
@@ -39,7 +40,7 @@ type Props = {
   onToggleCollapsed: () => void;
 };
 
-type SplashTool = "monitor" | "docker" | "mysql" | "postgres" | "redis" | "log" | "sftp" | "firewall";
+type SplashTool = "monitor" | "docker" | "mysql" | "postgres" | "redis" | "log" | "sftp" | "firewall" | "software";
 
 function renderSplash(
   kind: SplashTool,
@@ -112,6 +113,8 @@ function ToolContent({
       return tab ? <SftpPanel key={tab.id} tab={tab} /> : renderSplash("sftp", t, onConnectSaved, onNewConnection);
     case "sqlite":
       return <SqlitePanel key={tabKey} tab={tab} />;
+    case "software":
+      return tab ? <SoftwarePanel key={tab.id} tab={tab} /> : renderSplash("software", t, onConnectSaved, onNewConnection);
     case "markdown":
       return <MarkdownPanel key={markdownPath} filePath={markdownPath} />;
     default:

@@ -6282,6 +6282,162 @@ button,
   border: 1px solid var(--line);
   border-radius: var(--radius-sm);
 }
+
+/* ── Software panel ───────────────────────────────────────────── */
+.sw-panel {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-2);
+  padding: var(--sp-3);
+  overflow: auto;
+}
+.sw-panel__header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--sp-2);
+}
+.sw-panel__title {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-1);
+  color: var(--ink);
+  font-size: var(--ui-fs);
+}
+.sw-panel__env {
+  color: var(--muted);
+  font-size: var(--size-micro);
+}
+.sw-panel__list {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-2);
+  margin-top: var(--sp-1);
+}
+.sw-panel__service-toggle {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-1);
+  color: var(--ink-2);
+  font-size: var(--ui-fs-sm);
+  padding: var(--sp-1) 0;
+}
+.sw-row {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-1);
+  padding: var(--sp-2);
+  border: 1px solid var(--line);
+  border-radius: var(--radius-sm);
+  background: var(--surface);
+}
+.sw-row__head {
+  display: grid;
+  grid-template-columns: auto 1fr auto auto;
+  align-items: center;
+  gap: var(--sp-2);
+}
+.sw-row__status {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 16px;
+  height: 16px;
+}
+.sw-row__status--ok { color: var(--pos); }
+.sw-row__status--missing { color: var(--muted); }
+.sw-row__status--busy { color: var(--accent); }
+.sw-row__name {
+  color: var(--ink);
+  font-size: var(--ui-fs-sm);
+}
+.sw-row__version {
+  color: var(--muted);
+  font-size: var(--size-micro);
+}
+.sw-row__service-active {
+  color: var(--pos);
+}
+.sw-row__note {
+  color: var(--muted);
+  font-size: var(--size-micro);
+}
+.sw-row__error {
+  margin-top: var(--sp-1);
+}
+.sw-row__log {
+  margin-top: var(--sp-1);
+}
+@keyframes sw-row-spin {
+  from { transform: rotate(0deg); }
+  to { transform: rotate(360deg); }
+}
+.sw-row__spin {
+  animation: sw-row-spin 1.2s linear infinite;
+}
+
+/* Inline action group on each Software row — primary install/update
+ * button + ⋯ overflow menu trigger. Tightens the gap inside the
+ * grid's last-column slot so they read as one cluster. */
+.sw-row__actions {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--sp-1);
+}
+
+/* Menu shown by the row's ⋯ button. Uses the shared `.ctx-menu`
+ * popover frame (small dropdown look) plus a few overrides:
+ * destructive entry tinted red, plus a muted hint when the only
+ * action would be a no-op. */
+.sw-row-menu { padding: var(--sp-1) 0; }
+.sw-row-menu__danger { color: var(--neg); }
+.sw-row-menu__danger:hover { background: var(--neg-dim); color: var(--neg); }
+.sw-row-menu__hint {
+  padding: var(--sp-1) var(--sp-3);
+  font-size: var(--size-micro);
+  color: var(--muted);
+  font-style: italic;
+}
+
+/* Body of the uninstall confirmation dialog — three checkboxes plus
+ * an optional "type the package id" gate when the user is wiping
+ * data dirs. */
+.sw-uninstall-form {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-3);
+}
+.sw-check {
+  display: flex;
+  align-items: flex-start;
+  gap: var(--sp-2);
+  cursor: default;
+}
+.sw-check input[type="checkbox"] { margin-top: 3px; flex: none; }
+.sw-check__title {
+  display: block;
+  font-size: var(--ui-fs);
+  color: var(--ink);
+}
+.sw-check__hint {
+  display: block;
+  font-size: var(--size-small);
+  color: var(--muted);
+  margin-top: 2px;
+}
+.sw-check--danger .sw-check__title { color: var(--neg); }
+/* Red-tinted box around the "type {name} to confirm" input so the
+ * destructive branch reads as visually quarantined from the safer
+ * checkboxes above it. */
+.sw-uninstall-confirm {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-1);
+  padding: var(--sp-2);
+  border-radius: var(--radius-sm);
+  background: var(--neg-dim);
+}
+
 .fw .fw-hint {
   padding: var(--sp-2) var(--sp-3);
   color: var(--muted);

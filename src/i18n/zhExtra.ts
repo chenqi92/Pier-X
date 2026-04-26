@@ -1237,6 +1237,52 @@ export const zhExtra: Record<string, string> = {
   "Showing colon-separated tree; click to flatten": "正在按冒号分组显示树形结构，点击切换为扁平视图",
   "Group keys by colon namespaces": "按冒号命名空间分组键",
 
+  // Right-side Software panel
+  "Software": "软件管理",
+  "Open an SSH tab to manage installed software.": "打开 SSH 终端后再使用软件管理。",
+  "This tab has no SSH context — software management is remote-only.":
+    "当前终端未连接 SSH，软件管理仅在远端可用。",
+  "Re-probe host": "重新探测主机",
+  "Probing host...": "正在探测主机…",
+  "Probing...": "探测中…",
+  "Unknown OS": "未识别系统",
+  "no package manager detected": "未识别包管理器",
+  "non-root (sudo -n)": "非 root（使用 sudo -n）",
+  "Distro \"{id}\" is not in the supported list. Install software manually for now.":
+    "未识别此发行版（{id}），请暂时手动安装软件。",
+  "After install, also enable & start the systemd service":
+    "装完同时启用并启动 systemd 服务",
+  "service running": "服务已启动",
+  "Install": "安装",
+  "Updating...": "更新中…",
+  "Installing...": "安装中…",
+  "Done · {pm} {ver}": "完成 · {pm} {ver}",
+  "This distro ({id}) is not in the auto-install list — please install manually.":
+    "未识别此发行版（{id}），请手动安装。",
+  "Open an SSH tab to view the host's tool stack and install or update packages with live progress.":
+    "打开 SSH 终端后可查看远端工具栈并实时安装/更新软件。",
+
+  // Right-side Software panel — uninstall (v1.1)
+  "Uninstall": "卸载",
+  "Uninstall {name}": "卸载 {name}",
+  "Uninstalling...": "卸载中…",
+  "Uninstalled · {pm}": "已卸载 · {pm}",
+  "Uninstalled · {pm} (data wiped)": "已卸载 · {pm}（数据目录已清除）",
+  "Not installed — nothing to remove.": "尚未安装，无需卸载。",
+  "Uninstall failed via {pm} (exit {code})": "通过 {pm} 卸载失败（退出码 {code}）",
+  "This distro ({id}) is not in the auto-install list — please uninstall manually.":
+    "未识别此发行版（{id}），请手动卸载。",
+  "More actions": "更多操作",
+  "Install before you can uninstall.": "请先安装后再卸载。",
+  "Also remove configuration": "同时移除配置",
+  "apt purge / pacman -Rn. Without this, package config files stay on disk.":
+    "apt purge / pacman -Rn。否则软件包的配置文件会保留在磁盘上。",
+  "Also clean up dependencies": "同时清理依赖",
+  "apt autoremove / dnf autoremove / zypper --clean-deps / pacman -Rs. No-op on apk.":
+    "apt autoremove / dnf autoremove / zypper --clean-deps / pacman -Rs。在 apk 上无效。",
+  "Also delete data directories (irreversible)": "同时删除数据目录（不可恢复）",
+  "Type {name} to confirm.": "请输入 {name} 确认。",
+
   // DB panels — SQLite
   "Open a database by path, or scan a remote directory for .db / .sqlite files.":
     "通过路径打开数据库，或扫描远程目录查找 .db / .sqlite 文件。",

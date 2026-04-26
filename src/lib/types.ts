@@ -958,7 +958,8 @@ export type RightTool =
   | "sqlite"
   | "postgres"
   | "markdown"
-  | "firewall";
+  | "firewall"
+  | "software";
 
 // ── Tab Model (matches Qt Main.qml tab schema) ─────────────────
 

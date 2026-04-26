@@ -982,6 +982,162 @@ export type RemoteSqliteInstallReport = {
 export const sqliteInstallRemote = (params: SshParams) =>
   invoke<RemoteSqliteInstallReport>("sqlite_install_remote", params);
 
+// ── Software panel ─────────────────────────────────────────────
+
+/** One row in the software registry. Order is the rendering order. */
+export type SoftwareDescriptor = {
+  id: string;
+  displayName: string;
+  notes: string | null;
+  hasService: boolean;
+  /** Filesystem dirs declared as user data on the descriptor. The
+   *  uninstall dialog renders them inside the "also delete data
+   *  directories" warning. Empty for stateless software (jq, curl, …). */
+  dataDirs: string[];
+};
+
+export type HostPackageEnv = {
+  distroId: string;
+  distroPretty: string;
+  /** `null` when the host's distro isn't in the supported list — the
+   *  install column should be disabled with a helpful message. */
+  packageManager: string | null;
+  isRoot: boolean;
+};
+
+export type SoftwarePackageStatus = {
+  id: string;
+  installed: boolean;
+  version: string | null;
+  /** `null` when the descriptor has no service to manage. */
+  serviceActive: boolean | null;
+};
+
+export type SoftwareProbeResult = {
+  env: HostPackageEnv;
+  statuses: SoftwarePackageStatus[];
+};
+
+export type SoftwareInstallStatus = RemoteSqliteInstallStatus;
+
+export type SoftwareInstallReport = {
+  packageId: string;
+  status: SoftwareInstallStatus;
+  distroId: string;
+  packageManager: string;
+  command: string;
+  exitCode: number;
+  outputTail: string;
+  installedVersion: string | null;
+  serviceActive: boolean | null;
+};
+
+/** Streaming event payload for `software-install`. The frontend filters
+ *  by `installId` so concurrent installs across hosts don't interleave. */
+export type SoftwareInstallEvent =
+  | { installId: string; kind: "line"; text: string }
+  | { installId: string; kind: "done"; report: SoftwareInstallReport }
+  | { installId: string; kind: "failed"; message: string };
+
+export const softwareRegistry = () => invoke<SoftwareDescriptor[]>("software_registry");
+
+export const softwareProbeRemote = (params: SshParams) =>
+  invoke<SoftwareProbeResult>("software_probe_remote", params);
+
+export const softwareInstallRemote = (
+  params: SshParams & {
+    packageId: string;
+    installId: string;
+    enableService: boolean;
+  },
+) => invoke<SoftwareInstallReport>("software_install_remote", params);
+
+export const softwareUpdateRemote = (
+  params: SshParams & {
+    packageId: string;
+    installId: string;
+    enableService: boolean;
+  },
+) => invoke<SoftwareInstallReport>("software_update_remote", params);
+
+/** Subscribe to streaming install/update output. Returns the unlisten
+ *  fn — call it on unmount. The handler is invoked with the typed
+ *  payload pre-filtered to a single `installId` (so callers don't have
+ *  to write the same `if (e.installId === ...)` check everywhere). */
+export async function subscribeSoftwareInstall(
+  installId: string,
+  onEvent: (evt: SoftwareInstallEvent) => void,
+): Promise<() => void> {
+  const { listen } = await import("@tauri-apps/api/event");
+  const unlisten = await listen<SoftwareInstallEvent>("software-install", (e) => {
+    if (e.payload.installId === installId) onEvent(e.payload);
+  });
+  return unlisten;
+}
+
+// ── Software panel — uninstall (v1.1) ──────────────────────────
+
+export type SoftwareUninstallStatus =
+  | "uninstalled"
+  | "unsupported-distro"
+  | "sudo-requires-password"
+  | "package-manager-failed"
+  | "not-installed";
+
+export type SoftwareUninstallReport = {
+  packageId: string;
+  status: SoftwareUninstallStatus;
+  distroId: string;
+  packageManager: string;
+  command: string;
+  exitCode: number;
+  outputTail: string;
+  /** True iff the descriptor has data_dirs, the user opted in, and
+   *  the package manager succeeded — i.e. `rm -rf` actually ran. */
+  dataDirsRemoved: boolean;
+};
+
+/** Streaming event payload for `software-uninstall`. Same `installId`
+ *  filtering pattern as the install side; the report shape differs
+ *  (no version / serviceActive on the uninstall side, dataDirsRemoved
+ *  instead). */
+export type SoftwareUninstallEvent =
+  | { installId: string; kind: "line"; text: string }
+  | { installId: string; kind: "done"; report: SoftwareUninstallReport }
+  | { installId: string; kind: "failed"; message: string };
+
+/** Options carried from the uninstall dialog into the backend. */
+export type UninstallOptions = {
+  purgeConfig: boolean;
+  autoremove: boolean;
+  removeDataDirs: boolean;
+};
+
+export const softwareUninstallRemote = (
+  params: SshParams & {
+    packageId: string;
+    installId: string;
+    options: UninstallOptions;
+  },
+) => invoke<SoftwareUninstallReport>("software_uninstall_remote", params);
+
+/** Subscribe to streaming uninstall output. Mirrors
+ *  {@link subscribeSoftwareInstall} but on the `software-uninstall`
+ *  channel. */
+export async function subscribeSoftwareUninstall(
+  installId: string,
+  onEvent: (evt: SoftwareUninstallEvent) => void,
+): Promise<() => void> {
+  const { listen } = await import("@tauri-apps/api/event");
+  const unlisten = await listen<SoftwareUninstallEvent>(
+    "software-uninstall",
+    (e) => {
+      if (e.payload.installId === installId) onEvent(e.payload);
+    },
+  );
+  return unlisten;
+}
+
 export const sqliteBrowseRemote = (
   params: SshParams & { dbPath: string; table?: string | null },
 ) =>

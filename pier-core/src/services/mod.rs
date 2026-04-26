@@ -39,6 +39,7 @@ pub mod firewall;
 pub mod git;
 pub mod local_exec;
 pub mod mysql;
+pub mod package_manager;
 pub mod postgres;
 pub mod redis;
 pub mod search;

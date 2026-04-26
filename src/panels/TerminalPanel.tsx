@@ -766,16 +766,21 @@ export default function TerminalPanel({ tab, isActive, onEditConnection }: Props
   // We deliberately don't gate on OSC 133 sentinels here: remote
   // shells reached over `ssh` don't emit them, and the byte-stream
   // mirror buffer already self-resets on CR/LF, so smart mode stays
-  // correct without prompt-end signals. We also accept a missing
-  // snapshot (initial mount, just-restarted tab) — only an *active*
-  // alt-screen / paste state forces a bypass. The previous strict
-  // `=== false` form turned the gate off any time the field was
-  // undefined, which silently disabled smart mode for russh tabs
-  // whose first snapshot hadn't arrived yet.
-  const smartActive =
-    smartMode &&
-    snapshot?.altScreen !== true &&
-    snapshot?.bracketedPaste !== true;
+  // correct without prompt-end signals.
+  //
+  // We also no longer gate on `bracketedPaste`. That field tracks
+  // DECSET 2004 — i.e. whether the shell has *enabled* bracketed-
+  // paste mode — which bash/zsh do for the entire interactive prompt
+  // lifetime. So gating on it as if it meant "paste in flight"
+  // silently disabled smart mode on every normal prompt. Detecting
+  // an actual paste needs the `\e[200~`/`\e[201~` start/end markers,
+  // which the emulator doesn't surface separately yet — TODO when
+  // we want to mute the lexer for huge pastes.
+  //
+  // Alt-screen is still a real signal — vim/htop genuinely take over
+  // the screen and the smart UI must hide. Snapshot may be null on
+  // first mount; that's fine, we activate eagerly.
+  const smartActive = smartMode && snapshot?.altScreen !== true;
 
   useEffect(() => {
     smartActiveRef.current = smartActive;
@@ -1878,17 +1883,13 @@ export default function TerminalPanel({ tab, isActive, onEditConnection }: Props
           {smartMode ? (
             <span
               className={`meta-pill ${smartActive ? "meta-pill--success" : ""}`}
-              title={`smartMode=${smartMode} altScreen=${snapshot?.altScreen ?? "null"} bracketedPaste=${snapshot?.bracketedPaste ?? "null"} smartActive=${smartActive} bufferLen=${smartLineBufferText.length}`}
+              title={
+                smartActive
+                  ? t("Smart mode is intercepting Tab / autosuggest in this tab")
+                  : t("Smart mode bypassed: alt-screen app (vim / htop / tmux)")
+              }
             >
-              {smartActive
-                ? t("Smart")
-                : snapshot?.altScreen
-                  ? t("Smart \u00b7 alt")
-                  : snapshot?.bracketedPaste
-                    ? t("Smart \u00b7 paste")
-                    : !snapshot
-                      ? t("Smart \u00b7 loading")
-                      : t("Smart \u00b7 idle")}
+              {smartActive ? t("Smart") : t("Smart \u00b7 alt")}
             </span>
           ) : null}
           {scrollbackOffset > 0 ? (

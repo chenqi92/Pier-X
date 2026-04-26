@@ -179,10 +179,13 @@ pub struct VtEmulator {
     /// itself.
     pub alt_screen: bool,
 
-    /// `true` while the shell is inside a bracketed-paste sequence
-    /// (DECSET 2004). The smart-mode layer pauses completion and
-    /// autosuggest while a paste is in flight so a 1000-line paste
-    /// doesn't fire a thousand lexer passes.
+    /// `true` while the shell has bracketed-paste mode *enabled*
+    /// (DECSET 2004). bash/zsh leave this on for the whole life of
+    /// an interactive prompt, so this flag does NOT mean "paste in
+    /// flight" — it just means readline is willing to receive
+    /// `\e[200~`/`\e[201~` markers. To pause the lexer during a
+    /// real multi-kB paste we'd need to track those markers
+    /// separately; not implemented yet.
     pub bracketed_paste: bool,
 }
 

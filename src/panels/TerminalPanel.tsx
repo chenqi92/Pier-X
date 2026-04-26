@@ -160,13 +160,6 @@ export default function TerminalPanel({ tab, isActive, onEditConnection }: Props
   // boolean below.
   const smartLineBufferRef = useRef("");
   const smartActiveRef = useRef(false);
-  /** Counter incremented before every cycle-insert and decremented
-   *  in the .then() that follows. The popover refilter useEffect
-   *  uses this to tell "buffer changed because we cycled" apart
-   *  from "buffer changed because the user typed a key", since both
-   *  paths feed `updateSmartLineBuffer` and would otherwise look
-   *  identical. */
-  const cycleInFlightRef = useRef(0);
 
   // Render-driven mirror of `smartLineBufferRef`. The ref keeps event
   // handlers fast and stale-closure-free; this state forces React to
@@ -198,19 +191,15 @@ export default function TerminalPanel({ tab, isActive, onEditConnection }: Props
     filtered: Completion[];
     selectedIndex: number;
     /** Snapshot of the mirror buffer at the moment the popover
-     *  opened. Used to undo cycle insertions so each Tab cycle can
-     *  replace the previous candidate without leaving stale text in
-     *  the line. Empty when popover is closed. */
+     *  opened (after the longest-common-prefix auto-complete was
+     *  applied — so this is what the user has *committed to* by
+     *  pressing Tab). Used to compute the extra prefix the user
+     *  types while the popover is open (for live filtering) and
+     *  the remaining tail to inject on Enter. */
     basePrefix: string;
-    /** What we have currently appended to `basePrefix` in the PTY +
-     *  mirror as a result of the highlighted candidate. Cycling
-     *  sends `appliedInsert.length` backspaces to undo this before
-     *  injecting the new candidate's diff. Empty when no candidate
-     *  has been applied yet (popover just opened, or Esc reverted). */
-    appliedInsert: string;
-    /** Cached `findWordStart` result from `basePrefix` at popover
-     *  open. Used to compute each candidate's append-suffix without
-     *  re-walking the buffer on every cycle. */
+    /** Cached `findWordStart` of `basePrefix`. Each candidate's
+     *  append-suffix is recomputed from this without walking the
+     *  buffer on every render. */
     baseWordStart: number;
   };
   const [completion, setCompletion] = useState<CompletionState>({
@@ -219,7 +208,6 @@ export default function TerminalPanel({ tab, isActive, onEditConnection }: Props
     filtered: [],
     selectedIndex: 0,
     basePrefix: "",
-    appliedInsert: "",
     baseWordStart: 0,
   });
 
@@ -850,32 +838,32 @@ export default function TerminalPanel({ tab, isActive, onEditConnection }: Props
     void hydrateHistory(session.shell, historyPersist);
   }, [session?.shell, historyPersist, hydrateHistory]);
 
-  // M4: refilter the open completion popover when the user types
-  // *new* characters while the popover is up. We can't refilter on
-  // every mirror change anymore — cycle-inserting (warp menu-complete)
-  // also grows the buffer with the highlighted candidate's tail, and
-  // refiltering against `basePrefix + appliedInsert` would correctly
-  // shrink the list to nothing. We skip when the buffer matches our
-  // own applied state and only refilter on a genuine user keystroke
-  // (buffer diverges from base+applied).
+  // Live narrow the popover as the user keeps typing past `basePrefix`.
+  // The buffer at popover-open is `basePrefix` (after the LCP auto-
+  // complete on Tab); each subsequent keystroke extends it. We filter
+  // candidates whose append-suffix still starts with what's been
+  // typed beyond `basePrefix`, mirroring fish / warp's narrowing
+  // behaviour. When the user backspaces past the open-time base
+  // (or filters down to zero), we just close — they can Tab again
+  // for a fresh list.
   useEffect(() => {
-    // Skip while a cycle's PTY write is mid-flight — the buffer
-    // change is ours, not the user's. Without this guard the effect
-    // sees "buffer extended by ` build` but state still has the
-    // prior ` attach`" and wrongly concludes the user typed.
-    if (cycleInFlightRef.current > 0) return;
     setCompletion((s) => {
       if (!s.open) return s;
       const line = smartLineBufferRef.current;
-      const ourState = s.basePrefix + s.appliedInsert;
-      if (line === ourState) return s;
-      // User typed something. Easiest correct behaviour: dismiss
-      // popover so the new char takes effect and the next Tab pops
-      // a fresh list against the longer prefix. Live in-popover
-      // narrowing was nice but doesn't compose with cycle-inserting;
-      // re-pop is one keystroke away.
-      void eraseLastN(s.appliedInsert.length);
-      return { ...s, open: false, appliedInsert: "" };
+      if (!line.startsWith(s.basePrefix)) {
+        return { ...s, open: false };
+      }
+      const extra = line.slice(s.basePrefix.length);
+      const filtered = s.items.filter((it) => {
+        const sfx = appendSuffixFor(it, s.basePrefix, s.baseWordStart);
+        return sfx !== null && sfx.startsWith(extra) && sfx.length > extra.length;
+      });
+      if (filtered.length === 0) {
+        return { ...s, open: false };
+      }
+      const selectedIndex =
+        s.selectedIndex < filtered.length ? s.selectedIndex : 0;
+      return { ...s, filtered, selectedIndex };
     });
   }, [smartLineBufferText]);
 
@@ -1550,8 +1538,7 @@ export default function TerminalPanel({ tab, isActive, onEditConnection }: Props
 
   /**
    * Compute what we'd need to *append* to `basePrefix` to land on
-   * `item.value`. Mirrors the word-diff logic the old
-   * `insertCompletion` used, but pure — doesn't touch any state.
+   * `item.value`. Pure — used by both LCP-on-Tab and accept-on-Enter.
    * Returns `null` when the candidate doesn't share the current word
    * prefix (rare but possible with stale popover candidates).
    */
@@ -1565,83 +1552,58 @@ export default function TerminalPanel({ tab, isActive, onEditConnection }: Props
     return item.value.slice(baseWord.length);
   }
 
-  /**
-   * Undo whatever's currently appended to `basePrefix` by sending
-   * DEL bytes (`\x7f`) to the PTY — readline interprets each as
-   * "backspace + delete", and the byte-stream mirror handler treats
-   * code 127 as a one-char buffer pop. Resolves once `n` bytes have
-   * been queued.
-   */
-  async function eraseLastN(n: number) {
-    if (n <= 0) return;
-    await sendInput("\x7f".repeat(n));
-  }
-
-  /** Apply a candidate by index. Cancels any prior cycle's insert
-   *  (via DEL bytes), then injects this candidate's append-suffix.
-   *  Returns the new `appliedInsert` so callers can fold it into
-   *  state alongside `selectedIndex`. The cycle-in-flight counter
-   *  brackets the PTY writes so the refilter useEffect knows to
-   *  skip the buffer changes we ourselves caused. */
-  async function applyCandidateAt(
-    idx: number,
-    state: CompletionState,
-  ): Promise<string> {
-    const item = state.filtered[idx];
-    if (!item) return "";
-    const suffix = appendSuffixFor(item, state.basePrefix, state.baseWordStart);
-    if (suffix === null) return state.appliedInsert;
-    cycleInFlightRef.current += 1;
-    try {
-      await eraseLastN(state.appliedInsert.length);
-      if (suffix.length > 0) await sendInput(suffix);
-      return suffix;
-    } finally {
-      cycleInFlightRef.current = Math.max(0, cycleInFlightRef.current - 1);
+  /** Longest string `p` such that every entry in `xs` starts with `p`.
+   *  Empty string when the inputs disagree from the first character. */
+  function longestCommonPrefix(xs: string[]): string {
+    if (xs.length === 0) return "";
+    let p = xs[0];
+    for (let i = 1; i < xs.length; i += 1) {
+      while (!xs[i].startsWith(p)) {
+        p = p.slice(0, -1);
+        if (!p) return "";
+      }
     }
+    return p;
   }
 
-  /** Cycle the popover by `direction` (+1 / -1) and reflect the new
-   *  selection in the PTY. Wraps modulo `filtered.length`. */
+  /** Cycle the popover highlight (visual only — PTY isn't touched).
+   *  Wraps modulo `filtered.length`. */
   function cycleSelection(direction: 1 | -1) {
     setCompletion((s) => {
       if (!s.open || s.filtered.length === 0) return s;
       const next = (s.selectedIndex + direction + s.filtered.length) %
         s.filtered.length;
-      // Fire-and-forget the PTY mutation. We update `selectedIndex`
-      // synchronously and reconcile `appliedInsert` once the writes
-      // have queued; mirror buffer is updated synchronously inside
-      // sendInput so a fast cycle still reads the right baseline.
-      void applyCandidateAt(next, { ...s, selectedIndex: next }).then(
-        (applied) => {
-          setCompletion((cur) =>
-            cur.open && cur.selectedIndex === next
-              ? { ...cur, appliedInsert: applied }
-              : cur,
-          );
-        },
-      );
       return { ...s, selectedIndex: next };
     });
   }
 
+  /** Close the popover without touching the line. The line content
+   *  past `basePrefix` is the longest-common-prefix we already auto-
+   *  completed on Tab plus any chars the user typed afterwards —
+   *  both are theirs to keep. */
   function closeCompletion() {
-    setCompletion((s) => (s.open ? { ...s, open: false, appliedInsert: "" } : s));
+    setCompletion((s) => (s.open ? { ...s, open: false } : s));
   }
 
-  /** Esc handler — undo whatever cycle inserted, then close. */
-  function cancelCompletion() {
+  /** Enter / click handler. Inject the rest of the highlighted
+   *  candidate that isn't already in the buffer (basePrefix +
+   *  whatever the user typed in the popover) and dismiss. */
+  function acceptCompletion() {
     setCompletion((s) => {
       if (!s.open) return s;
-      void eraseLastN(s.appliedInsert.length);
-      return { ...s, open: false, appliedInsert: "" };
+      const item = s.filtered[s.selectedIndex];
+      if (item) {
+        const fullSuffix = appendSuffixFor(item, s.basePrefix, s.baseWordStart);
+        if (fullSuffix !== null) {
+          const alreadyTyped = smartLineBufferRef.current.slice(s.basePrefix.length);
+          if (fullSuffix.startsWith(alreadyTyped)) {
+            const remaining = fullSuffix.slice(alreadyTyped.length);
+            if (remaining.length > 0) void sendInput(remaining);
+          }
+        }
+      }
+      return { ...s, open: false };
     });
-  }
-
-  /** Enter handler — keep whatever's currently in the line (the
-   *  cycle insertion is the final answer), just dismiss the popover. */
-  function acceptCompletion() {
-    setCompletion((s) => (s.open ? { ...s, open: false } : s));
   }
 
   /**
@@ -1771,22 +1733,46 @@ export default function TerminalPanel({ tab, isActive, onEditConnection }: Props
     items = [...historyRows, ...items];
     if (items.length === 0) return;
 
-    // Apply the first candidate immediately so the line shows what's
-    // selected. The mirror buffer updates synchronously inside
-    // sendInput; we read it after the await to learn what was
-    // actually appended (handles the value-doesn't-startsWith-word
-    // edge case cleanly — appliedInsert stays "" then).
-    const initialState: CompletionState = {
+    // Mainstream Tab semantics:
+    //   1. Compute the longest common append-suffix among all
+    //      candidates and write *that* into the line (auto-complete
+    //      to the unambiguous part — exactly what bash does on the
+    //      first Tab).
+    //   2. If the LCP collapses every candidate to a unique match,
+    //      we're done — don't open the popover at all.
+    //   3. Otherwise open the popover so the user can pick. The
+    //      popover only highlights visually; cycling Tabs / arrows
+    //      doesn't touch the PTY. Enter / click commits the selected
+    //      candidate's remaining tail.
+    const suffixes: string[] = [];
+    for (const it of items) {
+      const s = appendSuffixFor(it, line, wordStart);
+      if (s !== null) suffixes.push(s);
+    }
+    if (suffixes.length === 0) return;
+    const lcp = longestCommonPrefix(suffixes);
+
+    if (lcp.length > 0) await sendInput(lcp);
+    const newBase = line + lcp;
+
+    // Filter to candidates whose suffix is strictly longer than the
+    // LCP — those are the ones still worth picking. If only one
+    // remains and we already injected its full tail via LCP, we're
+    // done; close silently.
+    const remaining = items.filter((it) => {
+      const s = appendSuffixFor(it, line, wordStart);
+      return s !== null && s.length > lcp.length;
+    });
+    if (remaining.length === 0) return;
+
+    setCompletion({
       open: true,
       items,
-      filtered: items,
+      filtered: remaining,
       selectedIndex: 0,
-      basePrefix: line,
-      appliedInsert: "",
+      basePrefix: newBase,
       baseWordStart: wordStart,
-    };
-    const applied = await applyCandidateAt(0, initialState);
-    setCompletion({ ...initialState, appliedInsert: applied });
+    });
   }
 
   function handleKeyDown(event: React.KeyboardEvent<HTMLDivElement>) {
@@ -1801,8 +1787,10 @@ export default function TerminalPanel({ tab, isActive, onEditConnection }: Props
     // Tab here cycles the highlight (warp / fish menu-complete) AND
     // injects the highlighted candidate's bytes into the PTY so the
     // line tracks the selection in real time. Shift+Tab cycles back.
-    // Enter accepts whatever's currently inserted and dismisses; Esc
-    // rolls back to the line as it was before the popover opened.
+    // Tab / arrows cycle the popover visually only — PTY isn't
+    // touched until Enter. Esc closes without rolling back (LCP
+    // we auto-completed on Tab and any chars the user typed
+    // afterwards both stay).
     if (completion.open) {
       if (event.key === "ArrowDown" || (event.key === "Tab" && !event.shiftKey)) {
         event.preventDefault();
@@ -1816,7 +1804,7 @@ export default function TerminalPanel({ tab, isActive, onEditConnection }: Props
       }
       if (event.key === "Escape") {
         event.preventDefault();
-        cancelCompletion();
+        closeCompletion();
         return;
       }
       if (event.key === "Enter") {
@@ -1825,7 +1813,7 @@ export default function TerminalPanel({ tab, isActive, onEditConnection }: Props
         return;
       }
       // Any other key — fall through to the normal handler so the
-      // user can keep typing and the popover refilters in real time.
+      // user can keep typing and the popover narrows in real time.
     }
 
     // M4: Tab in smart mode pops the completion menu. SSH tabs
@@ -2246,29 +2234,16 @@ export default function TerminalPanel({ tab, isActive, onEditConnection }: Props
         items={completion.filtered}
         selectedIndex={completion.selectedIndex}
         onHighlight={(idx) =>
-          // Hover only updates the visual highlight — we don't push
-          // each hover into the PTY (would spam writes when the user
-          // sweeps through the list). PTY catches up on the next
-          // keyboard cycle or click.
           setCompletion((s) => ({ ...s, selectedIndex: idx }))
         }
-        onSelect={(item, idx) => {
-          // Click = apply this candidate, then accept (close popover
-          // without rolling back). Goes through the same apply path
-          // as Tab cycling so the line lands at exactly this row's
-          // value.
-          setCompletion((s) => {
-            if (!s.open) return s;
-            void applyCandidateAt(idx, s).then(() =>
-              setCompletion((cur) =>
-                cur.open ? { ...cur, open: false } : cur,
-              ),
-            );
-            return { ...s, selectedIndex: idx };
-          });
-          void item;
+        onSelect={(_item, idx) => {
+          // Click = highlight this row + commit (same as Enter on it).
+          setCompletion((s) => ({ ...s, selectedIndex: idx }));
+          // Defer to next tick so the highlight state lands before
+          // accept reads it.
+          queueMicrotask(() => acceptCompletion());
         }}
-        onClose={() => cancelCompletion()}
+        onClose={() => closeCompletion()}
       />
 
       <ManPagePopover

@@ -1076,6 +1076,10 @@ export const zhExtra: Record<string, string> = {
   "YES": "是",
   "NO": "否",
   "No table selected": "未选择表",
+  "Indexes": "索引",
+  "UNIQUE": "唯一",
+  "INDEX": "索引",
+  "ON UPDATE {u} · ON DELETE {d}": "更新 {u} · 删除 {d}",
   "Schema overview": "Schema 概览",
   "This tab will surface more introspection once the backend exposes it.":
     "待后端补齐能力后，此处将展示更多元信息。",

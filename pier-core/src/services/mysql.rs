@@ -185,6 +185,44 @@ pub struct ColumnInfo {
     pub extra: String,
 }
 
+/// One index defined on a table — name, ordered column list, and
+/// uniqueness / kind metadata. The Structure tab renders this in
+/// a small "Indexes" section under the column grid. Single-column
+/// and multi-column indexes share the shape; `columns` preserves
+/// ordinal position.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct IndexSummary {
+    pub name: String,
+    pub columns: Vec<String>,
+    pub unique: bool,
+    /// `BTREE` / `HASH` / `FULLTEXT` / `SPATIAL` from
+    /// `information_schema.statistics.index_type`. Most users
+    /// only care that it's BTREE, but exposing the raw value
+    /// keeps the UI engine-agnostic.
+    pub kind: String,
+}
+
+/// One foreign-key constraint on a table. Carries everything the
+/// UI needs to show a "X (col) → Y (col)" arrow + on-update /
+/// on-delete cascade rules. Multi-column FKs preserve order in
+/// `columns` / `ref_columns` (same length, paired by index).
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ForeignKey {
+    /// Constraint name from the catalog (e.g. `fk_orders_user`).
+    pub name: String,
+    pub columns: Vec<String>,
+    /// Schema of the referenced table — usually the same DB.
+    pub ref_schema: String,
+    pub ref_table: String,
+    pub ref_columns: Vec<String>,
+    /// Action token from `referential_constraints.update_rule` —
+    /// `NO ACTION` / `RESTRICT` / `CASCADE` / `SET NULL` /
+    /// `SET DEFAULT`.
+    pub on_update: String,
+    /// Action token from `referential_constraints.delete_rule`.
+    pub on_delete: String,
+}
+
 /// Full result of a single executed statement.
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct QueryResult {
@@ -520,6 +558,166 @@ impl MysqlClient {
     /// Blocking wrapper for [`Self::list_columns`].
     pub fn list_columns_blocking(&self, database: &str, table: &str) -> Result<Vec<ColumnInfo>> {
         crate::ssh::runtime::shared().block_on(self.list_columns(database, table))
+    }
+
+    /// All indexes defined on `<database>.<table>`. Pulls from
+    /// `information_schema.statistics`, which lists one row per
+    /// (index, column) pair — we group by `index_name` so the
+    /// caller gets one [`IndexSummary`] per index with its
+    /// columns ordered by `seq_in_index`.
+    pub async fn list_indexes(&self, database: &str, table: &str) -> Result<Vec<IndexSummary>> {
+        if !is_safe_ident(database) {
+            return Err(MysqlError::InvalidConfig(format!(
+                "refusing unsafe database identifier {database:?}"
+            )));
+        }
+        if !is_safe_ident(table) {
+            return Err(MysqlError::InvalidConfig(format!(
+                "refusing unsafe table identifier {table:?}"
+            )));
+        }
+        let mut conn = self.pool.get_conn().await?;
+        // `non_unique` is `0` for unique indexes (including the
+        // primary key) and `1` otherwise — we invert. Index_type
+        // and the per-column `seq_in_index` come back per row;
+        // the panel groups them client-side.
+        let sql = "
+            SELECT index_name, column_name, seq_in_index, non_unique, index_type
+              FROM information_schema.statistics
+             WHERE table_schema = :schema AND table_name = :table
+             ORDER BY index_name, seq_in_index
+        ";
+        let rows: Vec<(String, String, u32, u32, String)> = sql
+            .with(mysql_async::params! {
+                "schema" => database,
+                "table" => table,
+            })
+            .fetch(&mut conn)
+            .await?;
+        drop(conn);
+
+        // Group rows by index_name preserving order. We rely on
+        // the SQL ORDER BY having put related rows together so a
+        // simple "current name" walk is enough — no HashMap needed.
+        let mut out: Vec<IndexSummary> = Vec::new();
+        for (name, column, _seq, non_unique, kind) in rows {
+            match out.last_mut() {
+                Some(last) if last.name == name => {
+                    last.columns.push(column);
+                }
+                _ => {
+                    out.push(IndexSummary {
+                        name,
+                        columns: vec![column],
+                        unique: non_unique == 0,
+                        kind,
+                    });
+                }
+            }
+        }
+        Ok(out)
+    }
+
+    /// Blocking wrapper for [`Self::list_indexes`].
+    pub fn list_indexes_blocking(
+        &self,
+        database: &str,
+        table: &str,
+    ) -> Result<Vec<IndexSummary>> {
+        crate::ssh::runtime::shared().block_on(self.list_indexes(database, table))
+    }
+
+    /// All foreign keys outgoing from `<database>.<table>`. Joins
+    /// `key_column_usage` (column-level FK rows) with
+    /// `referential_constraints` (one-per-constraint update /
+    /// delete rules). Composite FKs come back as one
+    /// [`ForeignKey`] with multiple paired entries in `columns` /
+    /// `ref_columns` — same logic as the index grouping.
+    pub async fn list_foreign_keys(
+        &self,
+        database: &str,
+        table: &str,
+    ) -> Result<Vec<ForeignKey>> {
+        if !is_safe_ident(database) {
+            return Err(MysqlError::InvalidConfig(format!(
+                "refusing unsafe database identifier {database:?}"
+            )));
+        }
+        if !is_safe_ident(table) {
+            return Err(MysqlError::InvalidConfig(format!(
+                "refusing unsafe table identifier {table:?}"
+            )));
+        }
+        let mut conn = self.pool.get_conn().await?;
+        let sql = "
+            SELECT k.constraint_name,
+                   k.column_name,
+                   k.referenced_table_schema,
+                   k.referenced_table_name,
+                   k.referenced_column_name,
+                   r.update_rule,
+                   r.delete_rule,
+                   k.ordinal_position
+              FROM information_schema.key_column_usage AS k
+              JOIN information_schema.referential_constraints AS r
+                ON r.constraint_schema = k.constraint_schema
+               AND r.constraint_name   = k.constraint_name
+             WHERE k.table_schema = :schema
+               AND k.table_name   = :table
+               AND k.referenced_table_name IS NOT NULL
+             ORDER BY k.constraint_name, k.ordinal_position
+        ";
+        let rows: Vec<(
+            String,
+            String,
+            Option<String>,
+            Option<String>,
+            Option<String>,
+            String,
+            String,
+            u32,
+        )> = sql
+            .with(mysql_async::params! {
+                "schema" => database,
+                "table" => table,
+            })
+            .fetch(&mut conn)
+            .await?;
+        drop(conn);
+
+        let mut out: Vec<ForeignKey> = Vec::new();
+        for (name, col, ref_schema, ref_table, ref_col, on_update, on_delete, _ord) in rows {
+            let ref_schema = ref_schema.unwrap_or_default();
+            let ref_table = ref_table.unwrap_or_default();
+            let ref_col = ref_col.unwrap_or_default();
+            match out.last_mut() {
+                Some(last) if last.name == name => {
+                    last.columns.push(col);
+                    last.ref_columns.push(ref_col);
+                }
+                _ => {
+                    out.push(ForeignKey {
+                        name,
+                        columns: vec![col],
+                        ref_schema,
+                        ref_table,
+                        ref_columns: vec![ref_col],
+                        on_update,
+                        on_delete,
+                    });
+                }
+            }
+        }
+        Ok(out)
+    }
+
+    /// Blocking wrapper for [`Self::list_foreign_keys`].
+    pub fn list_foreign_keys_blocking(
+        &self,
+        database: &str,
+        table: &str,
+    ) -> Result<Vec<ForeignKey>> {
+        crate::ssh::runtime::shared().block_on(self.list_foreign_keys(database, table))
     }
 
     /// Tear down the pool. Called when the UI panel closes.

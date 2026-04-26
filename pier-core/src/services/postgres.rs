@@ -122,6 +122,34 @@ pub struct RoutineSummary {
     pub kind: String,
 }
 
+/// One index defined on a table — same shape as
+/// [`super::mysql::IndexSummary`]. PG's `kind` comes from the
+/// access-method name (`btree`, `hash`, `gin`, `gist`, …).
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct IndexSummary {
+    pub name: String,
+    pub columns: Vec<String>,
+    pub unique: bool,
+    pub kind: String,
+}
+
+/// One foreign-key constraint — same shape as
+/// [`super::mysql::ForeignKey`]. PG stores referential actions
+/// as single chars; we expand to the same `NO ACTION` /
+/// `RESTRICT` / `CASCADE` / `SET NULL` / `SET DEFAULT` spelling
+/// MySQL uses so the panel can render both engines uniformly.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ForeignKey {
+    pub name: String,
+    pub columns: Vec<String>,
+    pub ref_schema: String,
+    pub ref_table: String,
+    pub ref_columns: Vec<String>,
+    pub on_update: String,
+    pub on_delete: String,
+}
+
+
 /// One row of query results. Same type as MySQL's.
 pub type ResultRow = Vec<Option<String>>;
 
@@ -287,9 +315,31 @@ impl PostgresClient {
         crate::ssh::runtime::shared().block_on(self.list_databases())
     }
 
-    /// List schemas in the current database, hiding the internal
-    /// `pg_*` and `information_schema` namespaces. Sorted with the
-    /// caller's current schema floated to the top — convenient for
+    /// User-visible schemas in the active database. Filters out
+    /// `pg_catalog`, `information_schema`, and the per-database
+    /// `pg_toast*` / `pg_temp_*` schemas — the panel never wants
+    /// the user to land in those by accident. Returns names in
+    /// alphabetical order.
+    pub async fn list_schemas(&self) -> Result<Vec<String>> {
+        let rows = self
+            .client
+            .query(
+                "SELECT schema_name FROM information_schema.schemata \
+                 WHERE schema_name NOT IN ('pg_catalog', 'information_schema') \
+                   AND schema_name NOT LIKE 'pg_toast%' \
+                   AND schema_name NOT LIKE 'pg_temp_%' \
+                 ORDER BY schema_name",
+                &[],
+            )
+            .await?;
+        Ok(rows.iter().map(|r| r.get::<_, String>(0)).collect())
+    }
+
+    /// Blocking wrapper for [`Self::list_schemas`].
+    pub fn list_schemas_blocking(&self) -> Result<Vec<String>> {
+        crate::ssh::runtime::shared().block_on(self.list_schemas())
+    }
+
     /// Snapshot of `pg_stat_activity` filtered to the current
     /// database. Returns `(active, total)` — `active` is rows with
     /// `state = 'active'`, `total` is the row count regardless of
@@ -398,31 +448,6 @@ impl PostgresClient {
         crate::ssh::runtime::shared().block_on(self.list_columns(schema, table))
     }
 
-    /// User-visible schemas in the active database. Filters out
-    /// the catalog (`pg_catalog`), `information_schema`, and the
-    /// per-database `pg_toast*` schemas — the panel never wants
-    /// the user to land in those by accident. Returns names in
-    /// alphabetical order.
-    pub async fn list_schemas(&self) -> Result<Vec<String>> {
-        let rows = self
-            .client
-            .query(
-                "SELECT schema_name FROM information_schema.schemata \
-                 WHERE schema_name NOT IN ('pg_catalog', 'information_schema') \
-                   AND schema_name NOT LIKE 'pg_toast%' \
-                   AND schema_name NOT LIKE 'pg_temp_%' \
-                 ORDER BY schema_name",
-                &[],
-            )
-            .await?;
-        Ok(rows.iter().map(|r| r.get::<_, String>(0)).collect())
-    }
-
-    /// Blocking wrapper for [`Self::list_schemas`].
-    pub fn list_schemas_blocking(&self) -> Result<Vec<String>> {
-        crate::ssh::runtime::shared().block_on(self.list_schemas())
-    }
-
     /// Enriched table list — same set of tables as
     /// [`Self::list_tables`] but joined with `pg_class` for the
     /// row-count estimate (`reltuples`) and `pg_total_relation_size`
@@ -457,9 +482,6 @@ impl PostgresClient {
         Ok(rows
             .iter()
             .map(|r| {
-                // tokio_postgres widens int → i64; we cast to u64
-                // for the public type, clamping any negative
-                // edge-case (reltuples is supposed to be ≥ 0).
                 let name: String = r.get(0);
                 let row_i: Option<i64> = r.try_get(1).ok();
                 let data_i: Option<i64> = r.try_get(2).ok();
@@ -481,8 +503,7 @@ impl PostgresClient {
         crate::ssh::runtime::shared().block_on(self.list_tables_meta(schema))
     }
 
-    /// View names in `schema`. Pulled from `information_schema.views`
-    /// just like the MySQL counterpart.
+    /// View names in `schema`. Pulled from `information_schema.views`.
     pub async fn list_views(&self, schema: &str) -> Result<Vec<String>> {
         let schema = if schema.is_empty() { "public" } else { schema };
         if !super::mysql::is_safe_ident(schema) {
@@ -538,6 +559,176 @@ impl PostgresClient {
     /// Blocking wrapper for [`Self::list_routines`].
     pub fn list_routines_blocking(&self, schema: &str) -> Result<Vec<RoutineSummary>> {
         crate::ssh::runtime::shared().block_on(self.list_routines(schema))
+    }
+
+    /// All indexes on `<schema>.<table>`. Walks `pg_index` joined
+    /// with `pg_class` (index + table relations), `pg_namespace`
+    /// (schema), `pg_attribute` (column names), and `pg_am` for
+    /// the access method.
+    pub async fn list_indexes(&self, schema: &str, table: &str) -> Result<Vec<IndexSummary>> {
+        let schema = if schema.is_empty() { "public" } else { schema };
+        if !super::mysql::is_safe_ident(schema) {
+            return Err(PostgresError::InvalidConfig(format!(
+                "refusing unsafe schema identifier {schema:?}"
+            )));
+        }
+        if !super::mysql::is_safe_ident(table) {
+            return Err(PostgresError::InvalidConfig(format!(
+                "refusing unsafe table identifier {table:?}"
+            )));
+        }
+        let rows = self
+            .client
+            .query(
+                "SELECT i.relname AS index_name,
+                        a.attname AS column_name,
+                        ix.indisunique AS is_unique,
+                        am.amname AS kind,
+                        ord
+                   FROM pg_index ix
+                   JOIN pg_class i ON i.oid = ix.indexrelid
+                   JOIN pg_class t ON t.oid = ix.indrelid
+                   JOIN pg_namespace n ON n.oid = t.relnamespace
+                   JOIN pg_am am ON am.oid = i.relam,
+                        unnest(ix.indkey) WITH ORDINALITY AS u(attnum, ord)
+                   JOIN pg_attribute a ON a.attrelid = t.oid AND a.attnum = u.attnum
+                  WHERE n.nspname = $1 AND t.relname = $2
+                  ORDER BY i.relname, ord",
+                &[&schema, &table],
+            )
+            .await?;
+        let mut out: Vec<IndexSummary> = Vec::new();
+        for r in rows {
+            let name: String = r.get(0);
+            let column: String = r.get(1);
+            let unique: bool = r.get(2);
+            let kind: String = r.get(3);
+            match out.last_mut() {
+                Some(last) if last.name == name => {
+                    last.columns.push(column);
+                }
+                _ => {
+                    out.push(IndexSummary {
+                        name,
+                        columns: vec![column],
+                        unique,
+                        kind,
+                    });
+                }
+            }
+        }
+        Ok(out)
+    }
+
+    /// Blocking wrapper for [`Self::list_indexes`].
+    pub fn list_indexes_blocking(
+        &self,
+        schema: &str,
+        table: &str,
+    ) -> Result<Vec<IndexSummary>> {
+        crate::ssh::runtime::shared().block_on(self.list_indexes(schema, table))
+    }
+
+    /// All foreign keys outgoing from `<schema>.<table>`. PG
+    /// stores FKs in `pg_constraint` with `contype = 'f'`; column
+    /// indexes live in `conkey` (local) and `confkey` (foreign).
+    pub async fn list_foreign_keys(
+        &self,
+        schema: &str,
+        table: &str,
+    ) -> Result<Vec<ForeignKey>> {
+        let schema = if schema.is_empty() { "public" } else { schema };
+        if !super::mysql::is_safe_ident(schema) {
+            return Err(PostgresError::InvalidConfig(format!(
+                "refusing unsafe schema identifier {schema:?}"
+            )));
+        }
+        if !super::mysql::is_safe_ident(table) {
+            return Err(PostgresError::InvalidConfig(format!(
+                "refusing unsafe table identifier {table:?}"
+            )));
+        }
+        let rows = self
+            .client
+            .query(
+                "SELECT con.conname AS name,
+                        att.attname AS column_name,
+                        fns.nspname AS ref_schema,
+                        fcl.relname AS ref_table,
+                        fatt.attname AS ref_column,
+                        con.confupdtype AS upd,
+                        con.confdeltype AS del,
+                        ord
+                   FROM pg_constraint con
+                   JOIN pg_class cl ON cl.oid = con.conrelid
+                   JOIN pg_namespace ns ON ns.oid = cl.relnamespace
+                   JOIN pg_class fcl ON fcl.oid = con.confrelid
+                   JOIN pg_namespace fns ON fns.oid = fcl.relnamespace,
+                        unnest(con.conkey, con.confkey) WITH ORDINALITY AS u(localcol, refcol, ord)
+                   JOIN pg_attribute att ON att.attrelid = cl.oid AND att.attnum = u.localcol
+                   JOIN pg_attribute fatt ON fatt.attrelid = fcl.oid AND fatt.attnum = u.refcol
+                  WHERE ns.nspname = $1 AND cl.relname = $2 AND con.contype = 'f'
+                  ORDER BY con.conname, ord",
+                &[&schema, &table],
+            )
+            .await?;
+        let mut out: Vec<ForeignKey> = Vec::new();
+        for r in rows {
+            let name: String = r.get(0);
+            let column: String = r.get(1);
+            let ref_schema: String = r.get(2);
+            let ref_table: String = r.get(3);
+            let ref_column: String = r.get(4);
+            let upd_byte: i8 = r.try_get(5).unwrap_or(b'a' as i8);
+            let del_byte: i8 = r.try_get(6).unwrap_or(b'a' as i8);
+            let on_update = map_action(upd_byte as u8 as char);
+            let on_delete = map_action(del_byte as u8 as char);
+            match out.last_mut() {
+                Some(last) if last.name == name => {
+                    last.columns.push(column);
+                    last.ref_columns.push(ref_column);
+                }
+                _ => {
+                    out.push(ForeignKey {
+                        name,
+                        columns: vec![column],
+                        ref_schema,
+                        ref_table,
+                        ref_columns: vec![ref_column],
+                        on_update,
+                        on_delete,
+                    });
+                }
+            }
+        }
+        Ok(out)
+    }
+
+    /// Blocking wrapper for [`Self::list_foreign_keys`].
+    pub fn list_foreign_keys_blocking(
+        &self,
+        schema: &str,
+        table: &str,
+    ) -> Result<Vec<ForeignKey>> {
+        crate::ssh::runtime::shared().block_on(self.list_foreign_keys(schema, table))
+    }
+}
+
+/// Expand the single-char `confupdtype` / `confdeltype` field
+/// from `pg_constraint` to the same spelling MySQL emits via
+/// `referential_constraints`. Lets the panel render both engines
+/// with one set of strings.
+fn map_action(c: char) -> String {
+    match c {
+        'a' => "NO ACTION".to_string(),
+        'r' => "RESTRICT".to_string(),
+        'c' => "CASCADE".to_string(),
+        'n' => "SET NULL".to_string(),
+        'd' => "SET DEFAULT".to_string(),
+        // Anything else (catalog corruption, future PG version
+        // adding a new code) stays empty so the panel renders a
+        // dash — better than guessing.
+        _ => String::new(),
     }
 }
 

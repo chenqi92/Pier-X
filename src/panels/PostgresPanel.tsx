@@ -571,7 +571,8 @@ function PostgresPanelBody({ tab }: Props) {
         keyHint: c.key && !(c.key === "PRI" || c.key === "PK") ? c.key : undefined,
       }))}
       typeAccentVar="var(--svc-postgres)"
-      footnote={t("Indexes and foreign keys will appear here once the backend exposes them — see docs/BACKEND-GAPS.md.")}
+      indexes={state.indexes}
+      foreignKeys={state.foreignKeys}
     />
   );
 

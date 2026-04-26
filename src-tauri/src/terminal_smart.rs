@@ -8,7 +8,8 @@
 //! Pure-IPC layer — every business-logic decision belongs in
 //! `pier-core`. The shapes here just (de)serialise and forward.
 
-use std::sync::OnceLock;
+use std::path::PathBuf;
+use std::sync::{OnceLock, RwLock};
 
 use pier_core::terminal::{
     complete_with_library, history_append, history_clear, history_load, man_synopsis,
@@ -16,15 +17,45 @@ use pier_core::terminal::{
 };
 use serde::Serialize;
 
-/// Process-global command library. Populated lazily on first call
-/// to [`completion_library`] from the bundled JSON packs. Phase C
-/// will widen this into a `RwLock<Library>` so user packs and
-/// online updates can replace it without restart; for now it's a
-/// read-only cell — the library only contains compile-time data.
-static COMPLETION_LIBRARY: OnceLock<Library> = OnceLock::new();
+/// Process-global command library. Wrapped in a `RwLock` so the
+/// Settings UI can hot-reload after a user installs / removes a
+/// pack on disk — every Tab acquires a read lock; the writer path
+/// (Phase D's "reload library" command) takes the write lock for
+/// the brief window where it rebuilds the map.
+static COMPLETION_LIBRARY: OnceLock<RwLock<Library>> = OnceLock::new();
 
-fn completion_library() -> &'static Library {
-    COMPLETION_LIBRARY.get_or_init(Library::bundled)
+/// Tauri sets this once at startup with the resolved
+/// `${app_data}/Pier-X/completions/packs/` path. We keep it in
+/// the cell so subsequent `reload_completion_library` calls don't
+/// have to re-resolve the dir.
+static USER_PACK_DIR: OnceLock<Option<PathBuf>> = OnceLock::new();
+
+/// Set once at startup by the Tauri builder with the resolved
+/// user pack directory. Subsequent reloads use this path.
+pub fn init_user_pack_dir(dir: Option<PathBuf>) {
+    let _ = USER_PACK_DIR.set(dir);
+}
+
+fn user_pack_dir() -> Option<&'static PathBuf> {
+    USER_PACK_DIR.get().and_then(Option::as_ref)
+}
+
+fn completion_library() -> &'static RwLock<Library> {
+    COMPLETION_LIBRARY.get_or_init(|| {
+        let dir = user_pack_dir().map(|p| p.as_path());
+        RwLock::new(Library::from_bundled_and_dir(dir))
+    })
+}
+
+/// Re-read user packs from disk and swap them into the live
+/// library. Called by the Settings UI after a "Check for updates"
+/// or manual install. Bundled packs are unchanged.
+pub fn reload_completion_library() {
+    let dir = user_pack_dir().map(|p| p.as_path());
+    let next = Library::from_bundled_and_dir(dir);
+    if let Ok(mut guard) = completion_library().write() {
+        *guard = next;
+    }
 }
 
 /// Result of [`terminal_validate_command`].
@@ -85,7 +116,15 @@ pub fn terminal_completions(
 ) -> Vec<Completion> {
     let cwd_path = cwd.as_deref().map(std::path::Path::new);
     let locale_str = locale.as_deref().unwrap_or("en");
-    complete_with_library(&line, cursor, cwd_path, completion_library(), locale_str)
+    let lib_lock = completion_library();
+    let guard = match lib_lock.read() {
+        Ok(g) => g,
+        // Lock poisoned (writer panicked). Recover by reading
+        // anyway — the library state is just data, no invariant
+        // a panic could have left half-broken.
+        Err(p) => p.into_inner(),
+    };
+    complete_with_library(&line, cursor, cwd_path, &guard, locale_str)
 }
 
 /// Look up the man-page summary (or `--help` fallback) for `cmd`.
@@ -145,4 +184,168 @@ pub fn terminal_history_clear(shell: String) -> Result<(), String> {
         Err(HistoryError::NoDataDir) => Ok(()),
         Err(e) => Err(e.to_string()),
     }
+}
+
+// ── Smart-mode command library — Settings panel surface ──────────
+//
+// Phase D. Three commands drive the Settings UI:
+//
+// * `completion_library_list` — dump every loaded pack as a
+//   shallow summary (no nested options/subcommands; the UI only
+//   needs the row count for display).
+// * `completion_library_reload` — re-read user packs from disk.
+//   Called by the Settings UI after the user installs a pack
+//   manually or hits "Update all".
+// * `completion_library_install_pack` — write a JSON body to the
+//   user pack dir as `<command>.json`. The body is validated as a
+//   `CommandPack` before the file lands; malformed input gets
+//   rejected without touching disk.
+
+/// One row in the Settings library table. Same shape as the
+/// frontend's TS `LibraryEntry`. We strip the heavy
+/// `subcommands` / `options` arrays — Settings only shows
+/// counts, not the actual data.
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct LibraryEntry {
+    /// `command` name, e.g. `"docker"`.
+    pub command: String,
+    /// Upstream tool version captured at import time. Empty when
+    /// the importer couldn't parse `--version` output.
+    pub tool_version: String,
+    /// `"bundled-seed"` / `"auto-imported"` / `"user"`. Maps to
+    /// the Settings UI's source pill (`bundled` / `user`).
+    pub source: String,
+    /// `"completion-zsh"` / `"man"` / `"help"` / `"hand-curated"`.
+    pub import_method: String,
+    /// ISO-8601 (`YYYY-MM-DD`) date the pack was generated.
+    pub import_date: String,
+    /// Number of subcommands the pack carries.
+    pub subcommand_count: usize,
+    /// Number of top-level option flags.
+    pub option_count: usize,
+    /// Sorted list of locale tags present somewhere in the pack
+    /// (top-level options + subcommands collapsed). Helps Settings
+    /// surface "中文覆盖度" without dumping every i18n map.
+    pub locales: Vec<String>,
+}
+
+/// Snapshot for the Settings library page.
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct LibrarySnapshot {
+    pub entries: Vec<LibraryEntry>,
+    /// Absolute path to the user pack directory. Empty when the
+    /// platform doesn't have an `app_data_dir` (rare). Settings
+    /// shows this as a small footer so power users can drop their
+    /// own files in.
+    pub user_dir: String,
+}
+
+#[tauri::command]
+pub fn completion_library_list() -> LibrarySnapshot {
+    use std::collections::BTreeSet;
+
+    let lib_lock = completion_library();
+    let guard = match lib_lock.read() {
+        Ok(g) => g,
+        Err(p) => p.into_inner(),
+    };
+    let entries: Vec<LibraryEntry> = guard
+        .iter()
+        .map(|(name, pack)| {
+            let mut locales: BTreeSet<&str> = BTreeSet::new();
+            for opt in &pack.options {
+                for k in opt.i18n.keys() {
+                    locales.insert(k.as_str());
+                }
+            }
+            for sub in &pack.subcommands {
+                for k in sub.i18n.keys() {
+                    locales.insert(k.as_str());
+                }
+            }
+            LibraryEntry {
+                command: name.to_string(),
+                tool_version: pack.tool_version.clone(),
+                source: pack.source.clone(),
+                import_method: pack.import_method.clone(),
+                import_date: pack.import_date.clone(),
+                subcommand_count: pack.subcommands.len(),
+                option_count: pack.options.len(),
+                locales: locales.into_iter().map(String::from).collect(),
+            }
+        })
+        .collect();
+    LibrarySnapshot {
+        entries,
+        user_dir: user_pack_dir()
+            .map(|p| p.display().to_string())
+            .unwrap_or_default(),
+    }
+}
+
+#[tauri::command]
+pub fn completion_library_reload() -> LibrarySnapshot {
+    reload_completion_library();
+    completion_library_list()
+}
+
+/// Install (or replace) a user pack. `body` is the raw JSON; the
+/// command validates it as a `CommandPack` before writing to
+/// `${user_pack_dir}/<command>.json`. Returns the snapshot
+/// post-install so the UI can re-render in one round-trip.
+#[tauri::command]
+pub fn completion_library_install_pack(body: String) -> Result<LibrarySnapshot, String> {
+    use pier_core::terminal::CommandPack;
+    let pack: CommandPack = serde_json::from_str(&body).map_err(|e| format!("invalid JSON: {e}"))?;
+    if pack.command.is_empty() {
+        return Err(String::from("pack `command` field is empty"));
+    }
+    if pack
+        .command
+        .chars()
+        .any(|c| matches!(c, '/' | '\\' | '.' | '\0'))
+    {
+        return Err(format!(
+            "refusing unsafe command name {:?} (path-like)",
+            pack.command
+        ));
+    }
+    let dir = user_pack_dir()
+        .ok_or_else(|| String::from("no app_data_dir on this platform — cannot persist"))?
+        .clone();
+    std::fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
+    let path = dir.join(format!("{}.json", pack.command));
+    let pretty = serde_json::to_string_pretty(&pack).map_err(|e| e.to_string())?;
+    // Atomic write: temp file + rename so the live library never
+    // sees a partially-written file mid-load.
+    let tmp = path.with_extension("json.tmp");
+    std::fs::write(&tmp, pretty).map_err(|e| e.to_string())?;
+    std::fs::rename(&tmp, &path).map_err(|e| e.to_string())?;
+    reload_completion_library();
+    Ok(completion_library_list())
+}
+
+/// Remove a user pack. Bundled packs can't be removed — they're
+/// embedded in the binary; the UI hides the remove action for
+/// rows whose `source` is `"bundled-seed"`.
+#[tauri::command]
+pub fn completion_library_remove_pack(command: String) -> Result<LibrarySnapshot, String> {
+    if command.is_empty()
+        || command
+            .chars()
+            .any(|c| matches!(c, '/' | '\\' | '.' | '\0'))
+    {
+        return Err(format!("refusing unsafe command name {:?}", command));
+    }
+    let dir = user_pack_dir()
+        .ok_or_else(|| String::from("no app_data_dir on this platform"))?
+        .clone();
+    let path = dir.join(format!("{}.json", command));
+    if path.exists() {
+        std::fs::remove_file(&path).map_err(|e| e.to_string())?;
+    }
+    reload_completion_library();
+    Ok(completion_library_list())
 }

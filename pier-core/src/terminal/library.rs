@@ -59,6 +59,7 @@
 //! global state, no init step.
 
 use std::collections::HashMap;
+use std::path::Path;
 
 use serde::{Deserialize, Serialize};
 
@@ -212,6 +213,82 @@ impl Library {
         self.by_command.get(cmd)
     }
 
+    /// Load every `*.json` file in `dir` and merge it into the
+    /// library. Returns the count of successfully loaded packs.
+    /// Malformed files are logged and skipped — one bad pack
+    /// shouldn't take the whole load with it.
+    ///
+    /// `dir` is allowed to not exist (returns 0). The loader does
+    /// **not** create the directory on its own; the Settings flow
+    /// owns that.
+    pub fn merge_dir(&mut self, dir: &Path) -> usize {
+        let mut loaded = 0usize;
+        let entries = match std::fs::read_dir(dir) {
+            Ok(it) => it,
+            Err(_) => return 0,
+        };
+        for entry in entries.flatten() {
+            let path = entry.path();
+            if path.extension().and_then(|s| s.to_str()) != Some("json") {
+                continue;
+            }
+            let body = match std::fs::read_to_string(&path) {
+                Ok(s) => s,
+                Err(e) => {
+                    log::warn!("user pack {:?}: read failed: {e}", path);
+                    continue;
+                }
+            };
+            let pack: CommandPack = match serde_json::from_str(&body) {
+                Ok(p) => p,
+                Err(e) => {
+                    log::warn!("user pack {:?}: parse failed: {e}", path);
+                    continue;
+                }
+            };
+            if pack.schema_version > SCHEMA_VERSION {
+                log::warn!(
+                    "user pack {:?}: schema_version {} > {}; skipping",
+                    path,
+                    pack.schema_version,
+                    SCHEMA_VERSION
+                );
+                continue;
+            }
+            self.insert(pack);
+            loaded += 1;
+        }
+        loaded
+    }
+
+    /// Build the full library by stacking bundled + user packs.
+    /// User packs win when both define the same command — that's
+    /// the override path users use to fix or extend a bundled
+    /// pack without rebuilding Pier-X.
+    pub fn from_bundled_and_dir(user_dir: Option<&Path>) -> Self {
+        let mut lib = Self::bundled();
+        if let Some(dir) = user_dir {
+            let n = lib.merge_dir(dir);
+            if n > 0 {
+                log::info!("loaded {n} user completion pack(s) from {:?}", dir);
+            }
+        }
+        lib
+    }
+
+    /// Iterator-friendly view: `(command_name, pack)` pairs sorted
+    /// alphabetically. Used by the Settings UI to render the list
+    /// of installed packs.
+    pub fn iter(&self) -> impl Iterator<Item = (&str, &CommandPack)> {
+        let mut pairs: Vec<(&str, &CommandPack)> = self
+            .by_command
+            .iter()
+            .map(|(k, v)| (k.as_str(), v))
+            .collect();
+        pairs.sort_by_key(|(k, _)| *k);
+        pairs.into_iter()
+    }
+
     /// Resolve `i18n` for the user's locale. Resolution order:
     ///   1. Exact match on the requested locale (`"zh-CN"`).
     ///   2. Language root if the locale was a region tag
@@ -322,6 +399,48 @@ mod tests {
             );
             assert_eq!(pack.command, name, "pack {name} self-name mismatch");
         }
+    }
+
+    #[test]
+    fn merge_dir_loads_only_json_files_and_skips_malformed() {
+        let tmp = std::env::temp_dir().join(format!(
+            "pier-x-lib-test-{}",
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        std::fs::create_dir_all(&tmp).unwrap();
+        // Valid pack.
+        std::fs::write(
+            tmp.join("foo.json"),
+            r#"{"schema_version":1,"command":"foo","tool_version":"","source":"user","import_method":"hand-curated","import_date":"","subcommands":[],"options":[]}"#,
+        ).unwrap();
+        // Garbage — should be skipped without crashing.
+        std::fs::write(tmp.join("bar.json"), "not json").unwrap();
+        // Wrong extension — ignored.
+        std::fs::write(tmp.join("baz.txt"), "{}").unwrap();
+        // Future schema — refused.
+        std::fs::write(
+            tmp.join("future.json"),
+            r#"{"schema_version":99,"command":"future","tool_version":"","source":"user","import_method":"","import_date":"","subcommands":[],"options":[]}"#,
+        ).unwrap();
+
+        let mut lib = Library::empty();
+        let loaded = lib.merge_dir(&tmp);
+        assert_eq!(loaded, 1);
+        assert!(lib.lookup("foo").is_some());
+        assert!(lib.lookup("future").is_none());
+        let _ = std::fs::remove_dir_all(&tmp);
+    }
+
+    #[test]
+    fn merge_dir_returns_zero_when_directory_missing() {
+        let lib_count = {
+            let mut lib = Library::empty();
+            lib.merge_dir(Path::new("/nonexistent/path/that/does/not/exist"))
+        };
+        assert_eq!(lib_count, 0);
     }
 
     #[test]

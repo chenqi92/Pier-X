@@ -107,3 +107,56 @@ export const terminalHistoryPush = (shell: string, command: string) =>
 /** Wipe `shell`'s persisted history file. Idempotent. */
 export const terminalHistoryClear = (shell: string) =>
   invoke<void>("terminal_history_clear", { shell });
+
+// ── Smart-mode command library ───────────────────────────────────
+//
+// Settings → Terminal → Command library. The library is a
+// structured catalogue of commands with subcommand + option
+// descriptions feeding the Tab completion popover. A small set
+// ships bundled in the binary; users can install or update extra
+// packs from disk (Phase D / E).
+
+/** One row in the Settings library list. */
+export type LibraryEntry = {
+  command: string;
+  toolVersion: string;
+  /** `"bundled-seed"` (compiled-in), `"auto-imported"` (importer
+   *  produced this from a CLI's `--help`/man/completion script),
+   *  or `"user"` (hand-curated). */
+  source: string;
+  /** `"completion-zsh"` / `"man"` / `"help"` / `"hand-curated"`. */
+  importMethod: string;
+  /** `YYYY-MM-DD`. */
+  importDate: string;
+  subcommandCount: number;
+  optionCount: number;
+  /** Sorted list of locales present somewhere in the pack
+   *  (e.g. `["en", "zh-CN"]`). */
+  locales: string[];
+};
+
+/** Snapshot returned by the library Tauri commands. */
+export type LibrarySnapshot = {
+  entries: LibraryEntry[];
+  /** Absolute path to the user pack directory; empty when the
+   *  platform doesn't have an `app_data_dir`. */
+  userDir: string;
+};
+
+/** List every loaded pack (bundled + user) for the Settings UI. */
+export const completionLibraryList = () =>
+  invoke<LibrarySnapshot>("completion_library_list");
+
+/** Re-read user packs from disk and return the fresh snapshot. */
+export const completionLibraryReload = () =>
+  invoke<LibrarySnapshot>("completion_library_reload");
+
+/** Install (or replace) a user pack. `body` is the raw JSON of a
+ *  `CommandPack`; the backend validates schema + safe filename. */
+export const completionLibraryInstallPack = (body: string) =>
+  invoke<LibrarySnapshot>("completion_library_install_pack", { body });
+
+/** Remove a user pack by command name. Bundled packs are
+ *  immutable; the UI hides the button for them. */
+export const completionLibraryRemovePack = (command: string) =>
+  invoke<LibrarySnapshot>("completion_library_remove_pack", { command });

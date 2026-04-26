@@ -1077,6 +1077,12 @@ struct TerminalSnapshot {
     /// is off, the shell hasn't drawn a wrapped prompt yet, or the
     /// user is scrolled into history.
     prompt_end: Option<[u16; 2]>,
+    /// Live cursor position. Used by the smart-mode UI to anchor
+    /// the Tab popover at the user's cursor in tabs (russh / nested
+    /// shells) where OSC 133 isn't emitted, so `prompt_end` would
+    /// otherwise leave the popover floating in the viewport.
+    cursor_x: u16,
+    cursor_y: u16,
     /// `true` when the user is currently inside an editable input
     /// line (between OSC 133;B and OSC 133;C). The frontend mirror
     /// buffer should only accept keystrokes while this is set.
@@ -4172,6 +4178,8 @@ fn terminal_snapshot(
         bell_pending: managed.terminal.take_bell_pending(),
         lines: build_terminal_lines(&snapshot, alive),
         prompt_end: snapshot.prompt_end.map(|(r, c)| [r, c]),
+        cursor_x: snapshot.cursor_x,
+        cursor_y: snapshot.cursor_y,
         awaiting_input: snapshot.awaiting_input,
         alt_screen: snapshot.alt_screen,
         bracketed_paste: snapshot.bracketed_paste,
@@ -8761,6 +8769,42 @@ fn dev_toggle_devtools() -> Result<(), String> {
     Err("devtools disabled in release build".into())
 }
 
+/// Read a UTF-8 text file from the local filesystem. Used by the DB
+/// panels' "Import SQL" right-click action to load an `.sql` file
+/// the user picked via the OS file dialog. Capped at 64 MiB so a
+/// pathological pick can't OOM the renderer; bigger imports go
+/// through `mysqldump`/`pg_dump` (still TODO).
+#[tauri::command]
+fn local_read_text_file(path: String) -> Result<String, String> {
+    let p = std::path::Path::new(&path);
+    let meta = std::fs::metadata(p).map_err(|e| e.to_string())?;
+    const CAP: u64 = 64 * 1024 * 1024;
+    if meta.len() > CAP {
+        return Err(format!(
+            "file is {} bytes; refusing to read more than {} bytes",
+            meta.len(),
+            CAP
+        ));
+    }
+    std::fs::read_to_string(p).map_err(|e| e.to_string())
+}
+
+/// Write a UTF-8 text file to the local filesystem. Used by the DB
+/// panels' "Export SQL" right-click action to save the generated
+/// dump to a path the user picked via the OS save dialog.
+#[tauri::command]
+fn local_write_text_file(path: String, content: String) -> Result<(), String> {
+    let p = std::path::Path::new(&path);
+    if let Some(parent) = p.parent() {
+        // The save-dialog usually creates the directory itself, but
+        // be tolerant in case the user typed a fresh path.
+        if !parent.as_os_str().is_empty() {
+            std::fs::create_dir_all(parent).map_err(|e| e.to_string())?;
+        }
+    }
+    std::fs::write(p, content).map_err(|e| e.to_string())
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     tauri::Builder::default()
@@ -9085,6 +9129,8 @@ pub fn run() {
             log_clear,
             log_set_verbose,
             log_get_verbose,
+            local_read_text_file,
+            local_write_text_file,
             ssh_mux_get_settings,
             ssh_mux_set_settings,
             ssh_mux_forget_target,

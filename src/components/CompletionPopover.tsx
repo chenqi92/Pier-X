@@ -96,16 +96,14 @@ export default function CompletionPopover({
 
   if (!open) return null;
 
-  // When any row carries a description (library subcommands, options,
-  // history rows with metadata) we render in warp-style two-column
-  // mode: a compact name column on the left, a detail card on the
-  // right showing the highlighted row's full description. For plain
-  // file/binary lists (no descriptions) we keep the single-column
-  // shape so a `cd ` Tab popover doesn't grow gratuitously.
+  // Single-pane warp/fish style: each row shows `name + description`
+  // inline, with the description in a muted right column. No separate
+  // detail card — the row IS the documentation. Popover is sized
+  // narrow enough to feel anchored to the cursor (warp keeps it
+  // compact too), wider only when descriptions are present so the
+  // text has room to breathe before the ellipsis kicks in.
   const hasDescriptions = items.some((it) => !!it.description);
-  const popoverWidth = hasDescriptions ? 560 : 320;
-  const active = items[selectedIndex];
-  const ActiveIcon = active ? iconForKind(active.kind) : null;
+  const popoverWidth = hasDescriptions ? 460 : 280;
 
   return (
     <Popover
@@ -116,70 +114,46 @@ export default function CompletionPopover({
       width={popoverWidth}
       closeOnScroll={false}
     >
-      <div
-        className={
-          hasDescriptions
-            ? "completion-popover-shell completion-popover-shell--split"
-            : "completion-popover-shell"
-        }
-      >
-        <div ref={listRef} className="completion-popover-list">
-          {items.length === 0 ? (
-            <div className="popover-section">No matches</div>
-          ) : (
-            items.map((item, idx) => {
-              const Icon = iconForKind(item.kind);
-              const className =
-                idx === selectedIndex
-                  ? "popover-item is-active"
-                  : "popover-item";
-              return (
-                <button
-                  key={`${item.kind}:${item.value}:${idx}`}
-                  type="button"
-                  data-completion-index={idx}
-                  className={className}
-                  onMouseEnter={() => onHighlight(idx)}
-                  onMouseDown={(event) => {
-                    // Keep terminal focus while the click resolves.
-                    event.preventDefault();
-                    onSelect(item, idx);
-                  }}
-                >
-                  <span className="popover-item__icon">
-                    <Icon size={12} />
+      <div ref={listRef} className="completion-popover-list">
+        {items.length === 0 ? (
+          <div className="popover-section">No matches</div>
+        ) : (
+          items.map((item, idx) => {
+            const Icon = iconForKind(item.kind);
+            const className =
+              idx === selectedIndex
+                ? "popover-item is-active"
+                : "popover-item";
+            return (
+              <button
+                key={`${item.kind}:${item.value}:${idx}`}
+                type="button"
+                data-completion-index={idx}
+                className={className}
+                onMouseEnter={() => onHighlight(idx)}
+                onMouseDown={(event) => {
+                  // Keep terminal focus while the click resolves.
+                  event.preventDefault();
+                  onSelect(item, idx);
+                }}
+              >
+                <span className="popover-item__icon">
+                  <Icon size={12} />
+                </span>
+                <span className="popover-item__label completion-popover-name">
+                  {item.display}
+                </span>
+                {item.description ? (
+                  <span className="completion-popover-desc">
+                    {item.description}
                   </span>
-                  <span className="popover-item__label">{item.display}</span>
-                  {/* hint (resolved binary path, etc.) stays inline
-                    * even in split mode — it's structural metadata,
-                    * not free-form description. */}
-                  {item.hint ? (
-                    <span className="completion-popover-hint">{item.hint}</span>
-                  ) : null}
-                </button>
-              );
-            })
-          )}
-        </div>
-        {hasDescriptions && active ? (
-          <aside className="completion-popover-detail">
-            <header className="completion-popover-detail__head">
-              {ActiveIcon ? <ActiveIcon size={12} /> : null}
-              <span className="completion-popover-detail__name">
-                {active.display}
-              </span>
-            </header>
-            {active.description ? (
-              <p className="completion-popover-detail__body">
-                {active.description}
-              </p>
-            ) : (
-              <p className="completion-popover-detail__body completion-popover-detail__body--muted">
-                {active.hint ?? ""}
-              </p>
-            )}
-          </aside>
-        ) : null}
+                ) : item.hint ? (
+                  <span className="completion-popover-hint">{item.hint}</span>
+                ) : null}
+              </button>
+            );
+          })
+        )}
       </div>
     </Popover>
   );

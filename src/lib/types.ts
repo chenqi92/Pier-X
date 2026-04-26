@@ -371,6 +371,9 @@ export type MysqlColumnView = {
   key: string;
   defaultValue: string;
   extra: string;
+  /** `COLUMN_COMMENT` from `SHOW FULL COLUMNS`. Empty string when
+   *  the column has no comment. */
+  comment: string;
 };
 
 /** Per-table enrichment surfaced as schema-tree badges + tooltip
@@ -386,6 +389,9 @@ export type MysqlTableSummary = {
   indexBytes: number | null;
   engine: string | null;
   updatedAt: string | null;
+  /** `information_schema.tables.table_comment`. Empty string when
+   *  the table has no comment. */
+  comment: string;
 };
 
 /** Stored procedure / function row in the schema tree.
@@ -549,6 +555,9 @@ export type PostgresColumnView = {
   key: string;
   defaultValue: string;
   extra: string;
+  /** Column comment via `col_description`. Empty string when the
+   *  column has no comment. */
+  comment: string;
 };
 
 export type PostgresPoolView = {
@@ -569,6 +578,9 @@ export type PostgresTableSummary = {
   indexBytes: number | null;
   engine: string | null;
   updatedAt: string | null;
+  /** Table comment via `obj_description`. Empty string when the
+   *  table has no comment. */
+  comment: string;
 };
 
 /** Stored function / procedure row in the schema tree.
@@ -914,6 +926,12 @@ export type TerminalSnapshot = {
    * scrolled into history. The smart-mode UI overlays autosuggest
    * and syntax-highlight from this cell onward. */
   promptEnd: [number, number] | null;
+  /** Live cursor position. The smart-mode UI uses this to anchor
+   * the Tab popover at the cursor cell when `promptEnd` is null
+   * (russh sessions / nested shells without OSC 133), so the popover
+   * doesn't end up floating in the middle of the viewport. */
+  cursorX: number;
+  cursorY: number;
   /** `true` when the user is currently inside an editable input
    * line (between OSC 133;B and OSC 133;C). The mirror lineBuffer
    * accepts keystrokes only while this is set. */

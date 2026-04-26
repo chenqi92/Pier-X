@@ -2047,27 +2047,35 @@ export default function TerminalPanel({ tab, isActive, onEditConnection }: Props
                   suggestionSuffix={suggestionSuffix}
                 />
               )}
-            {smartActive && snapshot.promptEnd && (
-              <div
-                ref={cursorAnchorRef}
-                aria-hidden
-                style={{
-                  position: "absolute",
-                  // Anchor sits at the cursor cell so Popover can
-                  // place the menu just below the row. Width 0 with
-                  // `pointer-events: none` keeps it invisible to
-                  // text selection and mouse events.
-                  top:
-                    snapshot.promptEnd[0] * cellMetrics.rowHeight,
-                  left:
-                    (snapshot.promptEnd[1] + smartLineBufferText.length) *
-                    cellMetrics.charWidth,
-                  width: 0,
-                  height: cellMetrics.rowHeight,
-                  pointerEvents: "none",
-                }}
-              />
-            )}
+            {smartActive && (() => {
+              // Prefer the OSC 133 prompt-end + mirror buffer length
+              // when available — that's the most precise (it tracks
+              // wrapped prompts correctly). Fall back to the live
+              // cursor coords from the snapshot so russh tabs and
+              // any other shell that doesn't emit OSC 133 still get
+              // the popover anchored at the cursor instead of
+              // floating in the middle of the viewport.
+              const [row, col] = snapshot.promptEnd
+                ? [
+                    snapshot.promptEnd[0],
+                    snapshot.promptEnd[1] + smartLineBufferText.length,
+                  ]
+                : [snapshot.cursorY, snapshot.cursorX];
+              return (
+                <div
+                  ref={cursorAnchorRef}
+                  aria-hidden
+                  style={{
+                    position: "absolute",
+                    top: row * cellMetrics.rowHeight,
+                    left: col * cellMetrics.charWidth,
+                    width: 0,
+                    height: cellMetrics.rowHeight,
+                    pointerEvents: "none",
+                  }}
+                />
+              );
+            })()}
           </div>
         ) : (
           <div className="terminal-placeholder">{t("Launching shell...")}</div>

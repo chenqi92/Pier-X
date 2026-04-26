@@ -2219,67 +2219,36 @@ button,
   flex-direction: column;
   gap: var(--sp-0-5);
   min-width: 0;
-}
-
-/* Two-column shell: list on the left, detail card on the right.
- * Triggered when any row in the popover carries a description
- * (library subcommands / options / history); plain file/binary
- * lists keep the single-column flow without this wrapper class. */
-.completion-popover-shell {
-  display: flex;
-  flex-direction: column;
-  min-width: 0;
-}
-.completion-popover-shell--split {
-  flex-direction: row;
-  gap: var(--sp-2);
-  align-items: stretch;
-}
-.completion-popover-shell--split .completion-popover-list {
-  flex: 0 0 220px;
-  max-height: 320px;
+  max-height: 360px;
   overflow-y: auto;
 }
 
-/* Right-side detail card. Shows the highlighted row's display name
- * + full description; updates as the user navigates with ↑/↓ or
- * Tab cycling. Reuses the muted/elev tokens so it tracks theme. */
-.completion-popover-detail {
-  flex: 1;
-  min-width: 0;
-  padding: var(--sp-2);
-  border-radius: var(--radius-sm);
-  background: var(--surface-2);
-  border: 1px solid var(--line);
-  display: flex;
-  flex-direction: column;
-  gap: var(--sp-1);
-  align-self: flex-start;
-}
-.completion-popover-detail__head {
-  display: flex;
-  align-items: center;
-  gap: var(--sp-1);
-  color: var(--ink);
-  font-family: var(--mono);
-  font-size: var(--ui-fs);
-  font-weight: 600;
-}
-.completion-popover-detail__name {
+/* Per-row name column — fixed minimum so descriptions line up
+ * vertically across all rows even when names are short ("cp" vs
+ * "container"). Larger names overflow into the description column
+ * with ellipsis, which stays acceptable for our token-bucket
+ * layout. */
+.completion-popover-name {
+  flex: 0 0 auto;
+  min-width: 96px;
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
 }
-.completion-popover-detail__body {
-  margin: 0;
-  color: var(--ink-2);
-  font-size: var(--size-small);
-  line-height: 1.4;
-  white-space: normal;
-  overflow-wrap: break-word;
-}
-.completion-popover-detail__body--muted {
+
+/* Per-row description shown next to the name (warp / fish style):
+ * library subcommands and options ship a short blurb that explains
+ * what the command does. Single line, ellipsis on overflow — the
+ * popover width grows when descriptions are present so most fit. */
+.completion-popover-desc {
+  flex: 1;
+  min-width: 0;
+  margin-left: var(--sp-2);
   color: var(--muted);
+  font-size: var(--size-small);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 
 /* M6: man-page popover. Reuses the standard `.popover` chrome and

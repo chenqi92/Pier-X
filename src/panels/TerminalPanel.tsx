@@ -1878,17 +1878,17 @@ export default function TerminalPanel({ tab, isActive, onEditConnection }: Props
           {smartMode ? (
             <span
               className={`meta-pill ${smartActive ? "meta-pill--success" : ""}`}
-              title={
-                smartActive
-                  ? t("Smart mode is intercepting Tab / autosuggest in this tab")
-                  : snapshot?.altScreen
-                    ? t("Smart mode bypassed: alt-screen app (vim / htop / tmux)")
-                    : snapshot?.bracketedPaste
-                      ? t("Smart mode bypassed: paste in flight")
-                      : t("Smart mode loading\u2026")
-              }
+              title={`smartMode=${smartMode} altScreen=${snapshot?.altScreen ?? "null"} bracketedPaste=${snapshot?.bracketedPaste ?? "null"} smartActive=${smartActive} bufferLen=${smartLineBufferText.length}`}
             >
-              {smartActive ? t("Smart") : t("Smart \u00b7 idle")}
+              {smartActive
+                ? t("Smart")
+                : snapshot?.altScreen
+                  ? t("Smart \u00b7 alt")
+                  : snapshot?.bracketedPaste
+                    ? t("Smart \u00b7 paste")
+                    : !snapshot
+                      ? t("Smart \u00b7 loading")
+                      : t("Smart \u00b7 idle")}
             </span>
           ) : null}
           {scrollbackOffset > 0 ? (

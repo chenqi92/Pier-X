@@ -23,7 +23,7 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import * as cmd from "../lib/commands";
 import type { DockerContainerView, DockerOverview, TabState } from "../lib/types";
-import { effectiveSshTarget, parseDockerLabels } from "../lib/types";
+import { effectiveSshTarget, isSshTargetReady, parseDockerLabels } from "../lib/types";
 import { useI18n } from "../i18n/useI18n";
 import { localizeError, localizeRuntimeMessage } from "../i18n/localizeMessage";
 import DbConnRow from "../components/DbConnRow";
@@ -182,6 +182,11 @@ function DockerPanelBody({ tab }: Props) {
   // backend nor an inferred SSH target.
   const isLocal = tab.backend === "local" && !hasSsh;
   const canRefresh = isLocal || hasSsh;
+  // Decoupled from `canRefresh`: hold off probes until the SSH target
+  // actually has credential material — the watcher can populate
+  // host/user/port before the password is captured, and a probe at
+  // that moment surfaces a misleading auth-rejected error.
+  const canProbe = isLocal || isSshTargetReady(sshTarget);
   const sshArgs = {
     host: sshTarget?.host ?? "",
     port: sshTarget?.port ?? 22,
@@ -332,19 +337,32 @@ function DockerPanelBody({ tab }: Props) {
   // and kick off a background refresh if the cache is stale. The store's
   // in-flight guard collapses StrictMode's double-invoke into one fetch.
   useEffect(() => {
-    if (!canRefresh) return;
+    if (!canProbe) return;
     void refresh(false);
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [dockerKey, canRefresh]);
+  }, [
+    dockerKey,
+    canProbe,
+    sshTarget?.password,
+    sshTarget?.authMode,
+    sshTarget?.savedConnectionIndex,
+  ]);
 
   useEffect(() => {
-    if (!canRefresh) return;
+    if (!canProbe) return;
     // `containers` loads via `refresh()` already; `projects` is a
     // derived view of containers, so both skip the section load.
     if (activeTab === "containers" || activeTab === "projects") return;
     void loadDockerSection(activeTab, false);
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [activeTab, dockerKey, canRefresh]);
+  }, [
+    activeTab,
+    dockerKey,
+    canProbe,
+    sshTarget?.password,
+    sshTarget?.authMode,
+    sshTarget?.savedConnectionIndex,
+  ]);
 
   // Note: container CPU/Memory stats are no longer auto-fetched on tab
   // open. `docker stats --no-stream` is the slowest CLI on the panel
@@ -354,7 +372,7 @@ function DockerPanelBody({ tab }: Props) {
   // toolbar button (or the panel-level refresh while on Containers).
 
   useEffect(() => {
-    if (!canRefresh || activeTab !== "volumes" || volumeUsageBusy) return;
+    if (!canProbe || activeTab !== "volumes" || volumeUsageBusy) return;
     if (!(snapshot?.loaded?.volumes ?? false)) return;
     const volumes = state?.volumes ?? [];
     if (!volumes.length) return;
@@ -367,7 +385,7 @@ function DockerPanelBody({ tab }: Props) {
     }, 300);
     return () => window.clearTimeout(timer);
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [activeTab, dockerKey, canRefresh, snapshot?.loaded?.volumes, state?.volumes, volumeUsageBusy]);
+  }, [activeTab, dockerKey, canProbe, snapshot?.loaded?.volumes, state?.volumes, volumeUsageBusy]);
 
   // Default-select the first container once data is available.
   useEffect(() => {
@@ -384,7 +402,7 @@ function DockerPanelBody({ tab }: Props) {
   // above both fire on first render.
   const prevShowAllRef = useRef(showAll);
   useEffect(() => {
-    if (!canRefresh) return;
+    if (!canProbe) return;
     if (prevShowAllRef.current === showAll) return;
     prevShowAllRef.current = showAll;
     void refresh(true);
@@ -954,7 +972,7 @@ function DockerPanelBody({ tab }: Props) {
               </button>
             )}
           </div>
-          <button className="dk-ic" type="button" title={t("Refresh")} disabled={!canRefresh || busy || activeSectionBusy} onClick={() => void refreshActiveTab(true)}>
+          <button className="dk-ic" type="button" title={t("Refresh")} disabled={!canProbe || busy || activeSectionBusy} onClick={() => void refreshActiveTab(true)}>
             <RefreshCw size={11} />
           </button>
         </div>

@@ -24,7 +24,7 @@ import type {
   FirewallInterfaceCounter,
   TabState,
 } from "../lib/types";
-import { effectiveSshTarget } from "../lib/types";
+import { effectiveSshTarget, isSshTargetReady } from "../lib/types";
 import { useI18n } from "../i18n/useI18n";
 import { localizeError } from "../i18n/localizeMessage";
 import DbConnRow from "../components/DbConnRow";
@@ -424,6 +424,11 @@ function FirewallPanelBody({ tab, isActive = true }: Props) {
   const sshTarget = effectiveSshTarget(tab);
   const hasSsh = sshTarget !== null;
   const canRefresh = hasSsh;
+  // Decoupled from `canRefresh`: the SSH target may be known
+  // (watcher saw `ssh user@host`) before the password has been
+  // captured. Probing now would surface a misleading auth-rejected
+  // error against an empty password.
+  const canProbe = isSshTargetReady(sshTarget);
   const terminalSessionId = tab.terminalSessionId;
 
   const [snap, setSnap] = useState<FirewallSnapshotView | null>(null);
@@ -458,7 +463,7 @@ function FirewallPanelBody({ tab, isActive = true }: Props) {
   busyRef.current = busy;
 
   async function probe(): Promise<FirewallSnapshotView | null> {
-    if (!canRefresh || !sshTarget) return null;
+    if (!canProbe || !sshTarget) return null;
     try {
       const s = await cmd.firewallSnapshot({
         host: sshTarget.host,
@@ -495,23 +500,32 @@ function FirewallPanelBody({ tab, isActive = true }: Props) {
   }
 
   useEffect(() => {
-    if (!canRefresh) return;
+    if (!canProbe) return;
     setBusy(true);
     void probe().finally(() => setBusy(false));
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [tab.id, canRefresh]);
+  }, [
+    tab.id,
+    canProbe,
+    sshTarget?.host,
+    sshTarget?.port,
+    sshTarget?.user,
+    sshTarget?.authMode,
+    sshTarget?.password,
+    sshTarget?.savedConnectionIndex,
+  ]);
 
   // Traffic-only 2s polling. Other tabs stay on the cached snapshot
   // until the user hits Refresh; firewall rules don't change every
   // 2 seconds, but interface counters do.
   useEffect(() => {
-    if (!isActive || activeTab !== "traffic" || !canRefresh) return;
+    if (!isActive || activeTab !== "traffic" || !canProbe) return;
     const id = window.setInterval(() => {
       if (!busyRef.current) void probe();
     }, TRAFFIC_POLL_MS);
     return () => window.clearInterval(id);
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [isActive, activeTab, canRefresh, tab.id]);
+  }, [isActive, activeTab, canProbe, tab.id]);
 
   async function refreshNow() {
     if (busy) return;
@@ -675,7 +689,7 @@ function FirewallPanelBody({ tab, isActive = true }: Props) {
             className="dk-ic"
             type="button"
             title={t("Refresh")}
-            disabled={!canRefresh || busy}
+            disabled={!canProbe || busy}
             onClick={() => void refreshNow()}
           >
             <RefreshCw size={11} className={busy ? "spin" : ""} />

@@ -961,6 +961,27 @@ type SshParams = {
 export const sqliteRemoteCapable = (params: SshParams) =>
   invoke<RemoteSqliteCapability>("sqlite_remote_capable", params);
 
+/** Outcome class returned by `sqliteInstallRemote`. Keep in sync with
+ *  `RemoteSqliteInstallStatus` in `pier-core/src/services/sqlite_remote.rs`. */
+export type RemoteSqliteInstallStatus =
+  | "installed"
+  | "unsupported-distro"
+  | "sudo-requires-password"
+  | "package-manager-failed";
+
+export type RemoteSqliteInstallReport = {
+  status: RemoteSqliteInstallStatus;
+  distroId: string;
+  packageManager: string;
+  command: string;
+  exitCode: number;
+  outputTail: string;
+  installedVersion: string | null;
+};
+
+export const sqliteInstallRemote = (params: SshParams) =>
+  invoke<RemoteSqliteInstallReport>("sqlite_install_remote", params);
+
 export const sqliteBrowseRemote = (
   params: SshParams & { dbPath: string; table?: string | null },
 ) =>

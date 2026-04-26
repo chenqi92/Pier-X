@@ -28,7 +28,7 @@ import * as cmd from "../lib/commands";
 import { SFTP_PROGRESS_EVENT, type SftpProgressEvent } from "../lib/commands";
 import { RIGHT_TOOL_META } from "../lib/rightToolMeta";
 import type { SftpBrowseState, SftpEntryView, TabState } from "../lib/types";
-import { effectiveSshTarget } from "../lib/types";
+import { effectiveSshTarget, isSshTargetReady } from "../lib/types";
 import { useI18n } from "../i18n/useI18n";
 import { localizeError } from "../i18n/localizeMessage";
 import PanelHeader from "../components/PanelHeader";
@@ -784,7 +784,11 @@ function SftpPanelBody({ tab }: Props) {
   // effect-scheduling cost and risked double calls under React
   // Strict Mode. The initial browse covers every case we care about.
   useEffect(() => {
-    if (!hasSsh) return;
+    // Gate on credentials, not just `hasSsh`: the PTY watcher writes
+    // host/user/port the moment it sees `ssh user@host`, but the
+    // password lands later when the user types it. A premature browse
+    // with empty password produces a misleading auth-rejected error.
+    if (!isSshTargetReady(sshTarget)) return;
     if (state) return;
     if (busy) return;
     // Pass the current path (which is "" on the very first browse);
@@ -793,7 +797,15 @@ function SftpPanelBody({ tab }: Props) {
     // always carry an explicit path.
     void browse(path);
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [tab.id, hasSsh]);
+  }, [
+    tab.id,
+    sshTarget?.host,
+    sshTarget?.port,
+    sshTarget?.user,
+    sshTarget?.authMode,
+    sshTarget?.password,
+    sshTarget?.savedConnectionIndex,
+  ]);
 
   function selectEntry(entry: SftpEntryView) {
     setSelectedPath(entry.path);

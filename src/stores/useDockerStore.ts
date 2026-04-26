@@ -15,7 +15,7 @@
 // double-invoke (and accidental rapid-refresh) into one request.
 
 import { create } from "zustand";
-import type { DockerOverview, DockerVolumeView, TabState } from "../lib/types";
+import { effectiveSshTarget, type DockerOverview, type DockerVolumeView, type TabState } from "../lib/types";
 
 /** Milliseconds of freshness before we treat a snapshot as stale. A click
  *  on the Docker tool within this window re-renders from cache; outside
@@ -80,10 +80,12 @@ function emptySnapshot(): DockerSnapshot {
 }
 
 export function dockerKeyForTab(tab: TabState): Key {
-  if (tab.backend === "local") return "local";
-  // Stable identity for the remote, independent of the tab that opened
-  // it — if the user has two tabs on the same host they share cache.
-  return `ssh:${tab.sshUser}@${tab.sshHost}:${tab.sshPort}`;
+  // Honor nested-ssh overlay so `ssh root@B` inside a hostA tab repoints
+  // the cache (and the auto-refresh effect) at hostB. Two tabs targeting
+  // the same effective host still share one cache entry.
+  const target = effectiveSshTarget(tab);
+  if (!target) return "local";
+  return `ssh:${target.user}@${target.host}:${target.port}`;
 }
 
 export type DockerFetchers = {

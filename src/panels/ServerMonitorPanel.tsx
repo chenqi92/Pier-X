@@ -4,7 +4,7 @@ import type { ReactNode } from "react";
 import * as cmd from "../lib/commands";
 import { RIGHT_TOOL_META } from "../lib/rightToolMeta";
 import type { BlockDeviceEntryView, ServerSnapshotView, TabState } from "../lib/types";
-import { effectiveSshTarget } from "../lib/types";
+import { effectiveSshTarget, isSshTargetReady } from "../lib/types";
 import { useI18n } from "../i18n/useI18n";
 import { isMissingKeychainError, localizeError } from "../i18n/localizeMessage";
 import DbConnRow from "../components/DbConnRow";
@@ -390,11 +390,7 @@ function ServerMonitorPanelBody({ tab, onEditConnection, isActive = true }: Prop
   // that also runs `df` + `lsblk`. The `busy` guard prevents stacking
   // when a previous probe is still in flight on a slow remote.
   useEffect(() => {
-    const haveCreds =
-      sshTarget !== null &&
-      (sshTarget.authMode !== "password" ||
-        sshTarget.password.length > 0 ||
-        sshTarget.savedConnectionIndex !== null);
+    const haveCreds = isSshTargetReady(sshTarget);
     // For real SSH-backend tabs, hold off the first probe until the
     // terminal session is up. The backend's `terminal_create_ssh_*`
     // call seeds the shared SSH cache as soon as the russh handshake
@@ -685,34 +681,16 @@ function ServerMonitorPanelBody({ tab, onEditConnection, isActive = true }: Prop
         </div>
 
         {/*
-          Block-device topology — shown only when the remote returned an
-          lsblk readout (Linux with util-linux). Renders the disk →
-          part → crypt → lv tree so the user can see physical disks
-          (including unmounted ones), media type (SSD vs HDD), bus
-          (NVMe / SATA / virtio / USB), and the model string. Hidden
-          on macOS local probes and on BusyBox-only remotes where lsblk
-          isn't installed.
-        */}
-        {snap && snap.blockDevices && snap.blockDevices.length > 0 && (
-          <div className="mon-block">
-            <div className="mon-block-head">
-              <span>{t("BLOCK DEVICES")}</span>
-              <span className="mono mon-block-meta">{t("lsblk")}</span>
-            </div>
-            <ul className="mon-tree">
-              {blockTree.map((node) => (
-                <BlockTreeRow key={node.kname} node={node} depth={0} />
-              ))}
-            </ul>
-          </div>
-        )}
-
-        {/*
           Top processes table. Backend runs `ps -eo …` twice per
           probe — once with `--sort=-pcpu` and once with
           `--sort=-pmem` — so the MEM toggle surfaces real memory
           hogs (low-CPU DB/browser heaps) rather than a client-side
           re-sort of the CPU list.
+
+          Sits directly below the DISKS table — the everyday
+          "what's eating my server" pair stays adjacent, and the
+          BLOCK DEVICES infra readout (which changes far less
+          often) drops to the bottom of the panel.
 
           Layout is dense by design: the right panel is narrow so
           `table-layout: fixed` + ellipsis on the COMMAND column
@@ -774,6 +752,29 @@ function ServerMonitorPanelBody({ tab, onEditConnection, isActive = true }: Prop
             </tbody>
           </table>
         </div>
+
+        {/*
+          Block-device topology — shown only when the remote returned an
+          lsblk readout (Linux with util-linux). Renders the disk →
+          part → crypt → lv tree so the user can see physical disks
+          (including unmounted ones), media type (SSD vs HDD), bus
+          (NVMe / SATA / virtio / USB), and the model string. Hidden
+          on macOS local probes and on BusyBox-only remotes where lsblk
+          isn't installed.
+        */}
+        {snap && snap.blockDevices && snap.blockDevices.length > 0 && (
+          <div className="mon-block">
+            <div className="mon-block-head">
+              <span>{t("BLOCK DEVICES")}</span>
+              <span className="mono mon-block-meta">{t("lsblk")}</span>
+            </div>
+            <ul className="mon-tree">
+              {blockTree.map((node) => (
+                <BlockTreeRow key={node.kname} node={node} depth={0} />
+              ))}
+            </ul>
+          </div>
+        )}
 
         <div className="mon-actions">
           <button

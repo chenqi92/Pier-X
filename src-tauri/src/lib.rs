@@ -1609,8 +1609,20 @@ fn get_or_open_ssh_session(
             // fingerprint stamps which credential bag produced the
             // failure — when the bag changes (e.g. password just
             // captured), a fresh handshake gets a fresh shot.
-            if let Ok(mut slot) = guard.last_fail.lock() {
-                *slot = Some((Instant::now(), e.clone(), cred_fp));
+            //
+            // Skip when password-mode was requested with no password
+            // material at all (param empty + cred-cache empty + no
+            // saved profile): the failure is "the caller hadn't
+            // supplied credentials yet", not "the credentials are
+            // wrong". Stamping it would just delay the legitimate
+            // retry the moment the watcher captures the password.
+            let attempt_was_credential_starved = auth_mode == "password"
+                && password.is_empty()
+                && saved_index.is_none();
+            if !attempt_was_credential_starved {
+                if let Ok(mut slot) = guard.last_fail.lock() {
+                    *slot = Some((Instant::now(), e.clone(), cred_fp));
+                }
             }
             pier_core::logging::write_event(
                 "ERROR",
@@ -5462,6 +5474,22 @@ struct RemoteSqliteCapabilityView {
 
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
+struct RemoteSqliteInstallReportView {
+    /// One of `installed` / `unsupported-distro` / `sudo-requires-password`
+    /// / `package-manager-failed`. Mirrors the kebab-case tag emitted by
+    /// `RemoteSqliteInstallStatus`'s serde representation so the frontend
+    /// can match on a flat string.
+    status: String,
+    distro_id: String,
+    package_manager: String,
+    command: String,
+    exit_code: i32,
+    output_tail: String,
+    installed_version: Option<String>,
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
 struct RemoteSqliteBrowserState {
     path: String,
     table_name: String,
@@ -5515,6 +5543,59 @@ fn sqlite_remote_capable(
         version: cap.version,
         supports_json: cap.supports_json,
     })
+}
+
+#[tauri::command]
+async fn sqlite_install_remote(
+    app: tauri::AppHandle,
+    host: String,
+    port: u16,
+    user: String,
+    auth_mode: String,
+    password: String,
+    key_path: String,
+    saved_connection_index: Option<usize>,
+) -> Result<RemoteSqliteInstallReportView, String> {
+    // `apt-get update + install` over SSH routinely takes 20–60s. Running
+    // that on the IPC worker would starve every other invoke (server
+    // monitor probes, terminal CWD polling, panel refreshes) and the
+    // whole UI looks frozen. Push the wait onto tokio's blocking pool
+    // instead — same pattern as `local_docker_overview`.
+    tauri::async_runtime::spawn_blocking(move || {
+        let state: tauri::State<'_, AppState> = app.state();
+        let session = get_or_open_ssh_session(
+            &state,
+            &host,
+            port,
+            &user,
+            &auth_mode,
+            &password,
+            &key_path,
+            saved_connection_index,
+        )?;
+        let report = sqlite_remote::install_blocking(&session).map_err(|e| e.to_string())?;
+        let status = match report.status {
+            sqlite_remote::RemoteSqliteInstallStatus::Installed => "installed",
+            sqlite_remote::RemoteSqliteInstallStatus::UnsupportedDistro => "unsupported-distro",
+            sqlite_remote::RemoteSqliteInstallStatus::SudoRequiresPassword => {
+                "sudo-requires-password"
+            }
+            sqlite_remote::RemoteSqliteInstallStatus::PackageManagerFailed => {
+                "package-manager-failed"
+            }
+        };
+        Ok::<_, String>(RemoteSqliteInstallReportView {
+            status: status.to_string(),
+            distro_id: report.distro_id,
+            package_manager: report.package_manager,
+            command: report.command,
+            exit_code: report.exit_code,
+            output_tail: report.output_tail,
+            installed_version: report.installed_version,
+        })
+    })
+    .await
+    .map_err(|e| format!("sqlite_install_remote join: {e}"))?
 }
 
 #[tauri::command]
@@ -7806,6 +7887,7 @@ pub fn run() {
             db_cred_resolve,
             docker_inspect_db_env,
             sqlite_remote_capable,
+            sqlite_install_remote,
             sqlite_browse_remote,
             sqlite_execute_remote,
             sqlite_find_in_dir,

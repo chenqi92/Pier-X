@@ -6268,6 +6268,20 @@ button,
   max-height: 320px;
   border-bottom: 1px solid var(--line);
 }
+.install-log {
+  margin: 0;
+  padding: var(--sp-2) var(--sp-3);
+  background: var(--panel-2);
+  color: var(--ink-2);
+  font-size: var(--ui-fs-sm);
+  line-height: 1.45;
+  white-space: pre-wrap;
+  word-break: break-all;
+  overflow: auto;
+  max-height: 180px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius-sm);
+}
 .fw .fw-hint {
   padding: var(--sp-2) var(--sp-3);
   color: var(--muted);

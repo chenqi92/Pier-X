@@ -1397,12 +1397,24 @@ export default function TerminalPanel({ tab, isActive, onEditConnection }: Props
       pendingPasswordCaptureRef.current = null;
     }
 
-    // Nested ssh inside a real SSH-backend tab: the backend watcher
-    // on this tab's PTY won't see anything (the PTY is a remote ssh
-    // channel, not a local process), so we still have to update tab
-    // state from the input scan. Local-backend tabs defer entirely
-    // to the watcher event.
-    if (tab.backend === "ssh") {
+    // Decide whether this `ssh` line is a nested hop we have to record
+    // ourselves. Two cases:
+    //   - SSH-backend tab: the PTY is a remote channel, the watcher
+    //     can't see the inner process — input parsing is the only
+    //     signal.
+    //   - Local-backend tab whose primary SSH fields are already
+    //     populated: the watcher has confirmed the outer `ssh` and
+    //     can't see the second hop typed inside it. Without this
+    //     branch the right side stays pinned to the first host.
+    // The first ssh on a fresh local tab still defers to the watcher
+    // (primary is empty here, so the gate skips us) — letting the
+    // watcher remain authoritative for argv → connection matching.
+    const isNestedOnSshTab = tab.backend === "ssh";
+    const isNestedOnLocalTab =
+      tab.backend === "local"
+      && tab.sshHost.trim().length > 0
+      && tab.sshUser.trim().length > 0;
+    if (isNestedOnSshTab || isNestedOnLocalTab) {
       const authMode: "password" | "agent" | "key" | "auto" =
         matched?.authKind ?? (parsed.identityPath ? "key" : "auto");
       const keyPath = parsed.identityPath || matched?.keyPath || "";

@@ -1077,6 +1077,28 @@ export function effectiveSshTarget(tab: TabState): NestedSshTarget | null {
   };
 }
 
+// Right-side panels (Firewall, ServerMonitor, Docker, SFTP, …) probe
+// over SSH the moment they see a non-null target. The PTY watcher
+// populates `sshHost`/`sshUser`/`sshPort` as soon as it spots the
+// `ssh user@host` invocation — well before the user has typed the
+// password — so a panel that probes on `effectiveSshTarget !== null`
+// alone fires `firewall_snapshot` (etc.) with `password=""` and
+// surfaces a misleading "agent + publickey rejected" error.
+//
+// `isSshTargetReady` answers "does the backend have enough credentials
+// material to even attempt the handshake?":
+//   * a saved profile means the backend resolves credentials itself
+//     (keyring → ssh_cred_cache fallback);
+//   * password mode requires a captured/typed password to be present;
+//   * key/auto modes legitimately probe with empty `password` because
+//     the backend tries agent + key file regardless.
+export function isSshTargetReady(target: NestedSshTarget | null): target is NestedSshTarget {
+  if (!target) return false;
+  if (target.savedConnectionIndex != null) return true;
+  if (target.authMode === "password") return target.password.length > 0;
+  return true;
+}
+
 export const DEFAULT_LOG_SOURCE: LogSource = {
   mode: "system",
   filePath: "",

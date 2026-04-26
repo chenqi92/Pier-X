@@ -197,7 +197,16 @@ pub async fn install(session: &SshSession) -> Result<RemoteSqliteInstallReport> 
             pm::InstallStatus::SudoRequiresPassword => {
                 RemoteSqliteInstallStatus::SudoRequiresPassword
             }
-            pm::InstallStatus::PackageManagerFailed | pm::InstallStatus::Cancelled => {
+            // sqlite3 has no vendor_script — the v2 vendor variants
+            // can't be produced by `pm::install("sqlite3", …)`. Map
+            // them (along with PackageManagerFailed and Cancelled)
+            // to PackageManagerFailed so the SQLite panel's existing
+            // error UI keeps working if a future descriptor edit
+            // ever changes that.
+            pm::InstallStatus::PackageManagerFailed
+            | pm::InstallStatus::Cancelled
+            | pm::InstallStatus::VendorScriptDownloadFailed
+            | pm::InstallStatus::VendorScriptFailed => {
                 RemoteSqliteInstallStatus::PackageManagerFailed
             }
         },

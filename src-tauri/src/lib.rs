@@ -5631,6 +5631,23 @@ struct SoftwareDescriptorView {
     /// downtime restart. Drives the "Reload (no downtime)" entry in
     /// the row's service menu (currently only nginx).
     supports_reload: bool,
+    /// `Some(_)` when the descriptor exposes a v2 vendor-script
+    /// install path (e.g. Docker → `https://get.docker.com`). The
+    /// frontend renders the install button as a split-button when
+    /// this is non-null. `None` = only the default apt / dnf / …
+    /// path is offered.
+    vendor_script: Option<VendorScriptDescriptorView>,
+}
+
+/// View of [`package_manager::VendorScriptDescriptor`] — same fields,
+/// camelCase'd for the frontend.
+#[derive(Serialize, Clone)]
+#[serde(rename_all = "camelCase")]
+struct VendorScriptDescriptorView {
+    label: String,
+    url: String,
+    notes: String,
+    conflicts_with_apt: bool,
 }
 
 #[derive(Serialize, Clone)]
@@ -5663,7 +5680,8 @@ struct SoftwareProbeView {
 struct SoftwareInstallReportView {
     package_id: String,
     /// One of `installed` / `unsupported-distro` / `sudo-requires-password`
-    /// / `package-manager-failed`. Mirrors the kebab-case tag emitted by
+    /// / `package-manager-failed` / `vendor-script-download-failed` /
+    /// `vendor-script-failed`. Mirrors the kebab-case tag emitted by
     /// `package_manager::InstallStatus`.
     status: String,
     distro_id: String,
@@ -5673,6 +5691,20 @@ struct SoftwareInstallReportView {
     output_tail: String,
     installed_version: Option<String>,
     service_active: Option<bool>,
+    /// `Some(_)` when the install ran via the v2 vendor-script
+    /// channel. Carries the label + URL the user picked so the
+    /// frontend can render `via {label} ({url})` in the activity log
+    /// without re-reading the registry.
+    vendor_script: Option<VendorScriptUsedView>,
+}
+
+/// View of [`package_manager::VendorScriptUsedView`] — same fields,
+/// camelCase'd for the frontend.
+#[derive(Serialize, Clone)]
+#[serde(rename_all = "camelCase")]
+struct VendorScriptUsedView {
+    label: String,
+    url: String,
 }
 
 /// Streaming event payload — a flat shape so the frontend can listen
@@ -5732,6 +5764,10 @@ fn install_status_kebab(status: package_manager::InstallStatus) -> &'static str 
         package_manager::InstallStatus::SudoRequiresPassword => "sudo-requires-password",
         package_manager::InstallStatus::PackageManagerFailed => "package-manager-failed",
         package_manager::InstallStatus::Cancelled => "cancelled",
+        package_manager::InstallStatus::VendorScriptDownloadFailed => {
+            "vendor-script-download-failed"
+        }
+        package_manager::InstallStatus::VendorScriptFailed => "vendor-script-failed",
     }
 }
 
@@ -5757,6 +5793,10 @@ fn report_to_view(report: package_manager::InstallReport) -> SoftwareInstallRepo
         output_tail: report.output_tail,
         installed_version: report.installed_version,
         service_active: report.service_active,
+        vendor_script: report.vendor_script.map(|v| VendorScriptUsedView {
+            label: v.label,
+            url: v.url,
+        }),
     }
 }
 
@@ -5786,6 +5826,12 @@ fn software_registry() -> Vec<SoftwareDescriptorView> {
             has_service: !d.service_units.is_empty(),
             data_dirs: d.data_dirs.iter().map(|s| (*s).to_string()).collect(),
             supports_reload: d.supports_reload,
+            vendor_script: d.vendor_script.map(|v| VendorScriptDescriptorView {
+                label: v.label.to_string(),
+                url: v.url.to_string(),
+                notes: v.notes.to_string(),
+                conflicts_with_apt: v.conflicts_with_apt,
+            }),
         })
         .collect()
 }
@@ -5846,6 +5892,10 @@ async fn software_probe_remote(
 /// invocation can flip it. The token is removed in every exit path —
 /// success, package-manager failure, runtime cancel, or join error —
 /// so a stale entry can't accumulate.
+/// `via_vendor_script` is only meaningful when `is_update == false` —
+/// the v2 channel is install-only; updates always use the default
+/// package-manager path because the official installers (e.g.
+/// get.docker.com) are idempotent installers, not upgrade scripts.
 async fn software_install_or_update_inner(
     app: tauri::AppHandle,
     host: String,
@@ -5860,6 +5910,7 @@ async fn software_install_or_update_inner(
     enable_service: bool,
     version: Option<String>,
     is_update: bool,
+    via_vendor_script: bool,
 ) -> Result<SoftwareInstallReportView, String> {
     let app_for_failure = app.clone();
     let install_id_for_failure = install_id.clone();
@@ -5900,6 +5951,13 @@ async fn software_install_or_update_inner(
                 version_ref,
                 on_line,
                 Some(token_for_task.clone()),
+            )
+        } else if via_vendor_script {
+            package_manager::install_via_script_blocking(
+                &session,
+                &package_id,
+                enable_service,
+                on_line,
             )
         } else {
             package_manager::install_blocking(
@@ -5992,7 +6050,13 @@ async fn software_install_remote(
     install_id: String,
     enable_service: bool,
     version: Option<String>,
+    via_vendor_script: Option<bool>,
 ) -> Result<SoftwareInstallReportView, String> {
+    // `via_vendor_script == Some(true)` routes through the descriptor's
+    // vendor_script channel (download + run the official installer)
+    // instead of the default package-manager path. The frontend's
+    // confirm dialog gates this — there's no UI path that sets the
+    // flag without an explicit user opt-in.
     software_install_or_update_inner(
         app,
         host,
@@ -6007,6 +6071,7 @@ async fn software_install_remote(
         enable_service,
         version,
         false,
+        via_vendor_script.unwrap_or(false),
     )
     .await
 }
@@ -6040,6 +6105,7 @@ async fn software_update_remote(
         enable_service,
         version,
         true,
+        false,
     )
     .await
 }

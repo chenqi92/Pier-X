@@ -1321,6 +1321,24 @@ export const zhExtra: Record<string, string> = {
   "Cancelled": "已取消",
   "Cancel signal sent — the remote may still be running.":
     "已发送取消信号，远端可能仍在执行（apt 中断常留 dpkg lock，需手动清理）。",
+  // Right-side Software panel — vendor-script install (v2)
+  "Choose install channel": "选择安装通道",
+  "Install via apt (default)": "通过 apt（默认）",
+  "Install via {label}": "通过 {label}",
+  "Install {name} via official script": "使用官方脚本安装 {name}",
+  "Continue install": "继续安装",
+  "Script source": "脚本来源",
+  "Maintainer note": "维护方说明",
+  "Copied to clipboard": "已复制",
+  "I understand Pier-X does not verify the script signature.":
+    "我了解 Pier-X 不会校验脚本签名。",
+  "This installer may conflict with the distro package. Uninstall the apt version first if it's already on this host.":
+    "此官方脚本与发行版仓库的包可能冲突；如已通过 apt 安装，请先卸载发行版版本再继续。",
+  "via {label} ({url})": "via {label}（{url}）",
+  "Failed to download installer script (exit {code})":
+    "下载安装脚本失败（退出码 {code}）",
+  "Vendor installer script failed (exit {code})":
+    "官方脚本执行失败（退出码 {code}）",
 
   // Right-side Nginx panel
   "Nginx": "Nginx",

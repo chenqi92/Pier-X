@@ -6499,6 +6499,75 @@ button,
   background: var(--neg-dim);
 }
 
+/* Split-button cluster on each Software row: primary action on the
+ * left, channel-chooser chevron on the right. The two share a single
+ * accent fill but the chevron has a 1px inner border so it reads as
+ * a separable trigger, matching IntelliJ-style split buttons. */
+.sw-row__primary {
+  display: inline-flex;
+  align-items: stretch;
+}
+.sw-row__primary--split .sw-row__primary-btn {
+  border-top-right-radius: 0;
+  border-bottom-right-radius: 0;
+  padding-right: var(--sp-2);
+}
+.sw-row__primary--split .sw-row__primary-chevron {
+  border-top-left-radius: 0;
+  border-bottom-left-radius: 0;
+  border-left-color: var(--accent-hover);
+  padding: 0 var(--sp-1-5);
+  min-width: 0;
+}
+
+/* Channel-chooser popover (apt / vendor script). The vendor entry
+ * gets a subtle warning tint so it reads as the "different path"
+ * option without screaming red. */
+.sw-channel-menu { padding: var(--sp-1) 0; }
+.sw-channel-menu__vendor { color: var(--warn); }
+.sw-channel-menu__vendor:hover {
+  background: var(--warn-dim);
+  color: var(--warn);
+}
+
+/* Body of the vendor-script confirmation dialog — script URL row,
+ * maintainer notes, optional apt-conflict warning, "I understand"
+ * checkbox. Same shape language as the uninstall dialog so the two
+ * destructive flows feel related. */
+.sw-vendor-form {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-3);
+}
+.sw-vendor-form__row {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-1);
+}
+.sw-vendor-url {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-2);
+  padding: var(--sp-1-5) var(--sp-2);
+  border-radius: var(--radius-sm);
+  border: 1px solid var(--line-2);
+  background: var(--surface-2);
+  font-size: var(--ui-fs-sm);
+  color: var(--ink);
+}
+.sw-vendor-url__text {
+  flex: 1;
+  overflow-x: auto;
+  white-space: nowrap;
+}
+.sw-vendor-form__warning {
+  padding: var(--sp-2);
+  border-radius: var(--radius-sm);
+  background: var(--warn-dim);
+  color: var(--warn);
+  font-size: var(--size-small);
+}
+
 .fw .fw-hint {
   padding: var(--sp-2) var(--sp-3);
   color: var(--muted);

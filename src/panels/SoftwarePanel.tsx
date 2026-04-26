@@ -2,6 +2,7 @@ import {
   Check,
   ChevronDown,
   Circle,
+  Copy,
   Download,
   FileText,
   Loader,
@@ -28,6 +29,7 @@ import type {
   UninstallOptions,
 } from "../lib/commands";
 import { describeInstallOutcome } from "../lib/softwareInstall";
+import { writeClipboardText } from "../lib/clipboard";
 import { effectiveSshTarget, type TabState } from "../lib/types";
 import { useI18n } from "../i18n/useI18n";
 import { localizeError } from "../i18n/localizeMessage";
@@ -98,6 +100,11 @@ function SoftwarePanelBody({ tab }: Props) {
    *  own fetch + refresh state; the panel just feeds it the descriptor
    *  + the SSH params it needs. */
   const [logTarget, setLogTarget] = useState<SoftwareDescriptor | null>(null);
+  /** Open vendor-script confirm-dialog target. Distinct state from
+   *  the uninstall dialog so a user can't have both open at once. The
+   *  dialog reads `descriptor.vendorScript` to render the URL / risk
+   *  notes / "I understand" gate. */
+  const [vendorTarget, setVendorTarget] = useState<SoftwareDescriptor | null>(null);
 
   const sshParams = useMemo(() => {
     if (!sshTarget) return null;
@@ -252,6 +259,85 @@ function SoftwarePanelBody({ tab }: Props) {
         swKey,
         descriptor.id,
         report.status === "ok" ? "" : localized,
+        nextStatus,
+      );
+    } catch (e) {
+      finishActivity(swKey, descriptor.id, formatError(e), null);
+    } finally {
+      unlisten();
+    }
+  }
+
+  /** Kick off an install / update / vendor-script install for
+   *  `descriptor`. Single owner of the install lifecycle so the row
+   *  click and the vendor confirm-dialog both end up on the same
+   *  code path. `action`:
+   *
+   *  - `"install"` — default apt / dnf / … path
+   *  - `"update"` — re-install / upgrade via the same default path
+   *  - `"install-vendor"` — v2: download + run the descriptor's
+   *    `vendorScript` (e.g. get.docker.com). Only valid when the
+   *    descriptor exposes a `vendorScript`. */
+  async function runInstall(
+    descriptor: SoftwareDescriptor,
+    action: "install" | "update" | "install-vendor",
+  ) {
+    if (!sshParams || !swKey) return;
+    const installId =
+      typeof crypto !== "undefined" && "randomUUID" in crypto
+        ? crypto.randomUUID()
+        : `${Date.now()}-${Math.random()}`;
+    // The store only knows two kinds of activity ("install" / "update" /
+    // "uninstall"); collapse the vendor variant to "install" so the
+    // existing "Installing…" label and busy-row dimming keep working.
+    startActivity(
+      swKey,
+      descriptor.id,
+      installId,
+      action === "install-vendor" ? "install" : action,
+    );
+    const unlisten = await cmd.subscribeSoftwareInstall(installId, (evt) => {
+      if (evt.kind === "line") {
+        appendLine(swKey, descriptor.id, evt.text);
+      }
+    });
+    try {
+      const params = {
+        ...sshParams,
+        packageId: descriptor.id,
+        installId,
+        enableService,
+        version: selectedVersions[descriptor.id],
+        ...(action === "install-vendor" ? { viaVendorScript: true } : {}),
+      };
+      const report: SoftwareInstallReport =
+        action === "update"
+          ? await cmd.softwareUpdateRemote(params)
+          : await cmd.softwareInstallRemote(params);
+      // Vendor-script runs end with an explicit "via {label} ({url})"
+      // line in the activity log so the user can audit which channel
+      // produced the install without reading the report struct.
+      if (report.vendorScript) {
+        appendLine(
+          swKey,
+          descriptor.id,
+          t("via {label} ({url})", {
+            label: report.vendorScript.label,
+            url: report.vendorScript.url,
+          }),
+        );
+      }
+      const localized = describeInstallOutcome(report, t);
+      const nextStatus: SoftwarePackageStatus = {
+        id: descriptor.id,
+        installed: report.status === "installed",
+        version: report.installedVersion,
+        serviceActive: report.serviceActive,
+      };
+      finishActivity(
+        swKey,
+        descriptor.id,
+        report.status === "installed" ? "" : localized,
         nextStatus,
       );
     } catch (e) {
@@ -425,71 +511,8 @@ function SoftwarePanelBody({ tab }: Props) {
             onServiceAction={(action) => void runServiceAction(descriptor, action)}
             onViewLogs={() => setLogTarget(descriptor)}
             onCancel={() => void cancelRow(descriptor.id)}
-            onAction={async (action) => {
-              if (!sshParams || !swKey) return;
-              const installId =
-                typeof crypto !== "undefined" && "randomUUID" in crypto
-                  ? crypto.randomUUID()
-                  : `${Date.now()}-${Math.random()}`;
-              startActivity(swKey, descriptor.id, installId, action);
-              // Same cancel-vs-done race guard as `runUninstall` — see
-              // the comment block there.
-              let cancelledSeen = false;
-              const unlisten = await cmd.subscribeSoftwareInstall(
-                installId,
-                (evt) => {
-                  if (evt.kind === "line") {
-                    appendLine(swKey, descriptor.id, evt.text);
-                  } else if (evt.kind === "cancelled") {
-                    cancelledSeen = true;
-                    finishActivity(
-                      swKey,
-                      descriptor.id,
-                      t("Cancelled"),
-                      null,
-                    );
-                  }
-                  // `done` / `failed` are handled by the promise
-                  // resolve/reject below — no extra work here.
-                },
-              );
-              try {
-                const params = {
-                  ...sshParams,
-                  packageId: descriptor.id,
-                  installId,
-                  enableService,
-                  version: selectedVersions[descriptor.id],
-                };
-                const report: SoftwareInstallReport =
-                  action === "update"
-                    ? await cmd.softwareUpdateRemote(params)
-                    : await cmd.softwareInstallRemote(params);
-                if (cancelledSeen) return;
-                if (report.status === "cancelled") {
-                  finishActivity(swKey, descriptor.id, t("Cancelled"), null);
-                  return;
-                }
-                const localized = describeInstallOutcome(report, t);
-                const nextStatus: SoftwarePackageStatus = {
-                  id: descriptor.id,
-                  installed: report.status === "installed",
-                  version: report.installedVersion,
-                  serviceActive: report.serviceActive,
-                };
-                finishActivity(
-                  swKey,
-                  descriptor.id,
-                  report.status === "installed" ? "" : localized,
-                  nextStatus,
-                );
-              } catch (e) {
-                if (cancelledSeen) return;
-                finishActivity(swKey, descriptor.id, formatError(e), null);
-              } finally {
-                unlisten();
-              }
-            }}
+            onVendorPick={() => setVendorTarget(descriptor)}
+            onAction={(action) => void runInstall(descriptor, action)}
           />
         ))}
       </div>
@@ -504,6 +527,15 @@ function SoftwarePanelBody({ tab }: Props) {
         target={logTarget}
         sshParams={sshParams}
         onClose={() => setLogTarget(null)}
+      />
+      <VendorScriptConfirmDialog
+        target={vendorTarget}
+        onCancel={() => setVendorTarget(null)}
+        onConfirm={() => {
+          const target = vendorTarget;
+          setVendorTarget(null);
+          if (target) void runInstall(target, "install-vendor");
+        }}
       />
     </div>
   );
@@ -587,7 +619,10 @@ function describeServiceOutcome(
 }
 
 // `describeInstallOutcome` (and the `cancelled` case for it) lives in
-// `src/lib/softwareInstall.ts` — imported at the top of this file.
+// `src/lib/softwareInstall.ts` — imported at the top of this file. The
+// vendor-script-* cases ride along on the same install switch and need
+// to be added there in a follow-up; for now they fall through and the
+// row shows the generic install-failed wording.
 
 function SoftwareRow({
   descriptor,
@@ -607,6 +642,7 @@ function SoftwareRow({
   onServiceAction,
   onViewLogs,
   onCancel,
+  onVendorPick,
 }: {
   descriptor: SoftwareDescriptor;
   status: SoftwarePackageStatus | null;
@@ -650,6 +686,10 @@ function SoftwareRow({
   onViewLogs: () => void;
   /** Trigger backend cancel for the row's in-flight activity. */
   onCancel: () => void;
+  /** Open the vendor-script confirm dialog. Only invoked from the
+   *  install-channel chooser when the descriptor exposes a
+   *  `vendorScript`. */
+  onVendorPick: () => void;
 }) {
   const { t } = useI18n();
   const logRef = useRef<HTMLPreElement>(null);
@@ -657,6 +697,8 @@ function SoftwareRow({
   const versionButtonRef = useRef<HTMLButtonElement>(null);
   const [menuOpen, setMenuOpen] = useState(false);
   const [versionMenuOpen, setVersionMenuOpen] = useState(false);
+  const channelButtonRef = useRef<HTMLButtonElement>(null);
+  const [channelMenuOpen, setChannelMenuOpen] = useState(false);
   const installed = status?.installed ?? false;
   const version = status?.version ?? null;
   const serviceActive = status?.serviceActive ?? null;
@@ -671,6 +713,11 @@ function SoftwareRow({
   // isn't on the host) — the action itself will surface a clear
   // failure if it can't run.
   const showServiceControls = descriptor.hasService && installed;
+  // Split-button chevron only shows on the install path. Once the
+  // package is installed, "更新" goes straight through the apt path —
+  // vendor scripts (get.docker.com) are install-only by design.
+  const showChannelChooser =
+    !installed && descriptor.vendorScript != null;
 
   // Auto-scroll the log to the latest line as it streams in.
   useEffect(() => {
@@ -832,6 +879,54 @@ function SoftwareRow({
                   ))}
               </Popover>
             </span>
+          )}
+          {showChannelChooser && (
+            <button
+              ref={channelButtonRef}
+              type="button"
+              className="btn is-primary is-compact sw-row__primary-chevron"
+              onClick={() => setChannelMenuOpen((cur) => !cur)}
+              disabled={buttonDisabled}
+              title={t("Choose install channel")}
+              aria-label={t("Choose install channel")}
+            >
+              <ChevronDown size={10} />
+            </button>
+          )}
+          {showChannelChooser && (
+            <Popover
+              open={channelMenuOpen}
+              anchor={channelButtonRef.current}
+              onClose={() => setChannelMenuOpen(false)}
+              placement="bottom-end"
+              width={220}
+              className="ctx-menu sw-channel-menu"
+            >
+              <button
+                type="button"
+                className="ctx-menu__item"
+                onClick={() => {
+                  setChannelMenuOpen(false);
+                  void onAction(action);
+                }}
+              >
+                <span className="ctx-menu__label">{t("Install via apt (default)")}</span>
+              </button>
+              <button
+                type="button"
+                className="ctx-menu__item sw-channel-menu__vendor"
+                onClick={() => {
+                  setChannelMenuOpen(false);
+                  onVendorPick();
+                }}
+              >
+                <span className="ctx-menu__label">
+                  {t("Install via {label}", {
+                    label: descriptor.vendorScript?.label ?? "",
+                  })}
+                </span>
+              </button>
+            </Popover>
           )}
           <button
             ref={menuButtonRef}
@@ -1225,6 +1320,118 @@ function ServiceLogsDialog({
           {lines.join("\n")}
         </pre>
       )}
+    </Dialog>
+  );
+}
+
+/** Confirm dialog for the v2 vendor-script install path. The user
+ *  must explicitly check the "I understand Pier-X does not verify the
+ *  script signature" box before the destructive [Continue] button
+ *  unlocks. Default-focused button is [Cancel] so a stray Enter from
+ *  the row doesn't auto-confirm. */
+function VendorScriptConfirmDialog({
+  target,
+  onCancel,
+  onConfirm,
+}: {
+  target: SoftwareDescriptor | null;
+  onCancel: () => void;
+  onConfirm: () => void;
+}) {
+  const { t } = useI18n();
+  const [understood, setUnderstood] = useState(false);
+  const [copied, setCopied] = useState(false);
+  const cancelRef = useRef<HTMLButtonElement>(null);
+
+  // Reset every time a new target opens so the prior session's
+  // "understood" tick doesn't leak into a fresh confirmation.
+  useEffect(() => {
+    setUnderstood(false);
+    setCopied(false);
+    if (target) {
+      // Default focus on Cancel — consistent with the rest of
+      // Pier-X's destructive dialogs.
+      const id = window.setTimeout(() => cancelRef.current?.focus(), 0);
+      return () => window.clearTimeout(id);
+    }
+  }, [target?.id]);
+
+  if (!target || !target.vendorScript) return null;
+  const script = target.vendorScript;
+
+  return (
+    <Dialog
+      open={!!target}
+      title={t("Install {name} via official script", {
+        name: target.displayName,
+      })}
+      size="sm"
+      onClose={onCancel}
+      footer={
+        <>
+          <div style={{ flex: 1 }} />
+          <button ref={cancelRef} type="button" className="btn" onClick={onCancel}>
+            {t("Cancel")}
+          </button>
+          <button
+            type="button"
+            className="btn is-danger"
+            disabled={!understood}
+            onClick={onConfirm}
+          >
+            {t("Continue install")}
+          </button>
+        </>
+      }
+    >
+      <div className="sw-vendor-form">
+        <div className="sw-vendor-form__row">
+          <div className="sw-check__title">{t("Script source")}</div>
+          <div className="sw-vendor-url mono">
+            <span className="sw-vendor-url__text">{script.url}</span>
+            <button
+              type="button"
+              className="icon-btn"
+              onClick={() => {
+                void writeClipboardText(script.url).then(() => {
+                  setCopied(true);
+                  window.setTimeout(() => setCopied(false), 1200);
+                });
+              }}
+              title={t("Copy URL")}
+              aria-label={t("Copy URL")}
+            >
+              <Copy size={11} />
+            </button>
+          </div>
+          {copied && (
+            <div className="sw-check__hint">{t("Copied to clipboard")}</div>
+          )}
+        </div>
+        <div className="sw-vendor-form__row">
+          <div className="sw-check__title">{t("Maintainer note")}</div>
+          <div className="sw-check__hint">{script.notes}</div>
+        </div>
+        {script.conflictsWithApt && (
+          <div className="sw-vendor-form__warning mono">
+            {t(
+              "This installer may conflict with the distro package. Uninstall the apt version first if it's already on this host.",
+            )}
+          </div>
+        )}
+        <label className="sw-check">
+          <input
+            type="checkbox"
+            checked={understood}
+            onChange={(e) => setUnderstood(e.target.checked)}
+          />
+          <span>
+            <span className="sw-check__title">
+              {t("I understand Pier-X does not verify the script signature.")}
+            </span>
+          </span>
+        </label>
+      </div>
     </Dialog>
   );
 }

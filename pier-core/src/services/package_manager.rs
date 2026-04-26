@@ -58,6 +58,45 @@ pub struct PackageDescriptor {
     /// panel uses this to show a "Reload (no downtime)" entry in the
     /// row's service menu in addition to start / stop / restart.
     pub supports_reload: bool,
+    /// Optional vendor-supplied install script (v2). When `Some`, the
+    /// panel offers a second install path next to the default apt /
+    /// dnf / … one — typically used to pick up a version much newer
+    /// than the distro repos carry (Docker is the canonical example).
+    /// `None` = only the default package-manager path is offered.
+    pub vendor_script: Option<VendorScriptDescriptor>,
+}
+
+/// Static description of an "official upstream installer" we know how
+/// to invoke via the v2 vendor-script channel.
+///
+/// **The URL is hard-coded in the registry** — the frontend never
+/// passes a URL into the install command, and there is no way for a
+/// user to point the channel at an arbitrary script. Adding a new
+/// vendor source requires landing a registry change. This is the
+/// security boundary for the channel.
+#[derive(Debug, Clone, Copy)]
+pub struct VendorScriptDescriptor {
+    /// Short label rendered in the install dropdown and the post-run
+    /// "via {label}" log line (e.g. `"Docker 官方脚本"`).
+    pub label: &'static str,
+    /// Fully-qualified `https://` URL of the installer script. **Must**
+    /// be a static literal so the URL set is auditable from the
+    /// registry alone.
+    pub url: &'static str,
+    /// Most upstream installers (get.docker.com, NodeSource, etc.)
+    /// expect to be run as root because they `apt-get install` /
+    /// `systemctl enable` themselves. When `true` and the session
+    /// isn't root, we prefix the script invocation with `sudo -n `.
+    pub run_as_root: bool,
+    /// Free-form risk-disclosure text rendered in the confirmation
+    /// dialog (e.g. "由 Docker, Inc. 维护…").
+    pub notes: &'static str,
+    /// `true` when installing via this script will conflict with the
+    /// distro-package version of the same software (`docker.io` vs
+    /// the upstream `docker-ce` package, classically). The default
+    /// apt path stays available, but the dialog warns the user to
+    /// uninstall the distro package first.
+    pub conflicts_with_apt: bool,
 }
 
 /// Canonical package-manager IDs. Stable strings exposed to the UI via
@@ -147,6 +186,16 @@ pub enum InstallStatus {
     /// packages); see PRODUCT-SPEC §5.11 v2 for the user-facing
     /// caveat.
     Cancelled,
+    /// Vendor-script path: download of the installer (`curl -fsSL …`)
+    /// failed — typically a DNS / network / TLS error or HTTP 404.
+    /// Distinct from `PackageManagerFailed` so the UI can say "网络下
+    /// 载失败" instead of pointing the finger at apt.
+    VendorScriptDownloadFailed,
+    /// Vendor-script path: download succeeded but executing the
+    /// script exited non-zero, **and** the post-run probe still can't
+    /// see the binary on PATH. Mirrors `PackageManagerFailed` but on
+    /// the script channel.
+    VendorScriptFailed,
 }
 
 /// Per-call options for [`uninstall`]. The frontend's uninstall dialog
@@ -332,6 +381,24 @@ pub struct InstallReport {
     /// `Some(true)` when the descriptor has a service and the post-
     /// install `systemctl enable --now` succeeded.
     pub service_active: Option<bool>,
+    /// `Some(label)` when the install ran via the v2 vendor-script
+    /// channel. The label is the same string the user picked from the
+    /// install dropdown (e.g. `"Docker 官方脚本"`); the frontend uses
+    /// it to append a `via {label} ({url})` line to the activity log
+    /// once the report arrives. `None` for the default apt / dnf / …
+    /// path.
+    pub vendor_script: Option<VendorScriptUsedView>,
+}
+
+/// Echo-back of the vendor script that produced an install — kept on
+/// the report so the frontend can render `via {label} ({url})` after
+/// the run completes without re-reading the registry.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct VendorScriptUsedView {
+    /// Same string as the descriptor's `label` (e.g. `"Docker 官方脚本"`).
+    pub label: String,
+    /// Same string as the descriptor's `url` (e.g. `"https://get.docker.com"`).
+    pub url: String,
 }
 
 // ── Registry ────────────────────────────────────────────────────────
@@ -358,6 +425,7 @@ const REGISTRY: &[PackageDescriptor] = &[
         data_dirs: &[],
         notes: None,
         supports_reload: false,
+        vendor_script: None,
     },
     PackageDescriptor {
         id: "docker",
@@ -380,8 +448,15 @@ const REGISTRY: &[PackageDescriptor] = &[
             (PackageManager::Zypper, "docker"),
         ],
         data_dirs: &["/var/lib/docker", "/var/lib/containerd"],
-        notes: Some("发行版仓库的 Docker 版本可能旧；如需最新版后续走 v2 的官方脚本通道。"),
         supports_reload: false,
+        notes: Some("发行版仓库的 Docker 版本可能旧；可选择 Docker 官方脚本安装最新稳定版。"),
+        vendor_script: Some(VendorScriptDescriptor {
+            label: "Docker 官方脚本",
+            url: "https://get.docker.com",
+            run_as_root: true,
+            notes: "由 Docker, Inc. 维护，会自动添加上游 apt/yum 仓库并安装 docker-ce 最新稳定版。Pier-X 不会校验脚本签名，请确认网络通路可信后再继续。",
+            conflicts_with_apt: true,
+        }),
     },
     PackageDescriptor {
         id: "compose",
@@ -399,6 +474,7 @@ const REGISTRY: &[PackageDescriptor] = &[
         data_dirs: &[],
         notes: None,
         supports_reload: false,
+        vendor_script: None,
     },
     PackageDescriptor {
         id: "redis",
@@ -423,6 +499,7 @@ const REGISTRY: &[PackageDescriptor] = &[
         data_dirs: &["/var/lib/redis"],
         notes: None,
         supports_reload: false,
+        vendor_script: None,
     },
     PackageDescriptor {
         id: "postgres",
@@ -447,6 +524,7 @@ const REGISTRY: &[PackageDescriptor] = &[
         data_dirs: &["/var/lib/postgresql", "/var/lib/pgsql"],
         notes: None,
         supports_reload: false,
+        vendor_script: None,
     },
     PackageDescriptor {
         id: "mariadb",
@@ -471,6 +549,7 @@ const REGISTRY: &[PackageDescriptor] = &[
         data_dirs: &["/var/lib/mysql"],
         notes: Some("默认装 MariaDB（与 MySQL 协议兼容，发行版仓库的标准选择）。"),
         supports_reload: false,
+        vendor_script: None,
     },
     PackageDescriptor {
         id: "nginx",
@@ -501,6 +580,7 @@ const REGISTRY: &[PackageDescriptor] = &[
         // panel surfaces this as a separate service action so users
         // don't reach for "restart" out of habit.
         supports_reload: true,
+        vendor_script: None,
     },
     PackageDescriptor {
         id: "jq",
@@ -518,6 +598,7 @@ const REGISTRY: &[PackageDescriptor] = &[
         data_dirs: &[],
         notes: None,
         supports_reload: false,
+        vendor_script: None,
     },
     PackageDescriptor {
         id: "curl",
@@ -535,6 +616,7 @@ const REGISTRY: &[PackageDescriptor] = &[
         data_dirs: &[],
         notes: None,
         supports_reload: false,
+        vendor_script: None,
     },
 ];
 
@@ -771,6 +853,60 @@ pub async fn available_versions(
     Ok(parse_versions_output(&stdout))
 }
 
+/// Install via the descriptor's vendor-supplied script (v2). The
+/// `descriptor` argument is borrowed from [`registry`] — there is no
+/// way to pass an arbitrary URL through this function.
+///
+/// Sequence:
+///
+/// 1. `mktemp`-equivalent path: `/tmp/pier-x-installer-{id}.sh`. The
+///    `id` is the descriptor id, NOT user input — so the path is
+///    statically known per package and can't be injected into.
+/// 2. `curl -fsSL '<url>' -o '<path>'` (streamed; `-f` makes HTTP 4xx
+///    a non-zero exit, `-S` keeps error messages, `-L` follows
+///    redirects).
+/// 3. `stat` for non-empty file size — defends against a 200-with-empty
+///    body or a transparent proxy returning a placeholder.
+/// 4. `sh '<path>'` (NOT `bash -c "$(curl ...)"` and NOT `curl … | sh`)
+///    — splitting download from execution makes the audit trail
+///    obvious and allows step 3's size-check to short-circuit.
+/// 5. `rm -f '<path>'` always runs (cleanup), inside an `sh -c` chain
+///    using `trap` so it fires even on failure.
+/// 6. Re-probe to confirm the binary is on PATH.
+///
+/// We do **not** verify GPG signatures or sha256 hashes. The dialog
+/// surfaces this to the user explicitly; v3 is where signature
+/// verification lands once we have a vendor public-key registry.
+pub async fn install_via_script<F>(
+    session: &SshSession,
+    id: &str,
+    enable_service: bool,
+    on_line: F,
+) -> Result<InstallReport>
+where
+    F: FnMut(&str),
+{
+    run_install_via_script(session, id, enable_service, on_line).await
+}
+
+/// Blocking wrapper for [`install_via_script`].
+pub fn install_via_script_blocking<F>(
+    session: &SshSession,
+    id: &str,
+    enable_service: bool,
+    on_line: F,
+) -> Result<InstallReport>
+where
+    F: FnMut(&str),
+{
+    crate::ssh::runtime::shared().block_on(install_via_script(
+        session,
+        id,
+        enable_service,
+        on_line,
+    ))
+}
+
 /// Blocking wrapper for [`probe_host_env`].
 pub fn probe_host_env_blocking(session: &SshSession) -> HostPackageEnv {
     crate::ssh::runtime::shared().block_on(probe_host_env(session))
@@ -932,6 +1068,232 @@ pub fn journalctl_tail_blocking(
 
 // ── Internals ───────────────────────────────────────────────────────
 
+/// Vendor-script install path. Owns the `curl → stat → sh → rm`
+/// pipeline; see [`install_via_script`] for the sequence rationale.
+async fn run_install_via_script<F>(
+    session: &SshSession,
+    id: &str,
+    enable_service: bool,
+    mut on_line: F,
+) -> Result<InstallReport>
+where
+    F: FnMut(&str),
+{
+    let descriptor = descriptor(id).ok_or_else(|| {
+        SshError::InvalidConfig(format!("unknown package id: {id}"))
+    })?;
+    let Some(vendor) = descriptor.vendor_script else {
+        return Err(SshError::InvalidConfig(format!(
+            "package {id} has no vendor_script"
+        )));
+    };
+
+    let env = probe_host_env(session).await;
+    let used_view = VendorScriptUsedView {
+        label: vendor.label.to_string(),
+        url: vendor.url.to_string(),
+    };
+
+    // --- Step 1+2: download ---
+    let script_path = format!("/tmp/pier-x-installer-{}.sh", descriptor.id);
+    let download_inner = build_vendor_download_command(vendor.url, &script_path);
+    // Download itself doesn't need root — `/tmp` is world-writable. We
+    // only escalate for the script execution step. Keeping these as two
+    // separate exec invocations means a download failure surfaces with a
+    // clean exit code instead of being shadowed by sudo's behavior.
+    let download_command = format!(
+        "sh -c {} 2>&1",
+        shell_single_quote(&download_inner)
+    );
+
+    let mut tail_lines: Vec<String> = Vec::new();
+    let push_tail = |line: &str, tail: &mut Vec<String>| {
+        tail.push(line.to_string());
+        if tail.len() > 80 {
+            tail.drain(0..tail.len() - 60);
+        }
+    };
+    let dl_exit = match session
+        .exec_command_streaming(
+            &download_command,
+            |line| {
+                on_line(line);
+                push_tail(line, &mut tail_lines);
+            },
+            None,
+        )
+        .await
+    {
+        Ok((code, _)) => code,
+        Err(e) => return Err(e),
+    };
+
+    if dl_exit != 0 {
+        // `cleanup_vendor_temp` is best-effort; ignore its result.
+        cleanup_vendor_temp(session, &script_path).await;
+        let output_tail = tail_lines.join("\n");
+        return Ok(InstallReport {
+            package_id: id.to_string(),
+            status: InstallStatus::VendorScriptDownloadFailed,
+            distro_id: env.distro_id,
+            package_manager: env
+                .package_manager
+                .map(|m| m.as_str().to_string())
+                .unwrap_or_default(),
+            command: download_command,
+            exit_code: dl_exit,
+            output_tail,
+            installed_version: None,
+            service_active: None,
+            vendor_script: Some(used_view),
+        });
+    }
+
+    // --- Step 3+4+5: size-check + execute + cleanup, single sh ---
+    let exec_inner = build_vendor_exec_command(&script_path);
+    let prefix = if vendor.run_as_root && !env.is_root {
+        "sudo -n "
+    } else {
+        ""
+    };
+    let exec_command = format!(
+        "{prefix}sh -c {} 2>&1",
+        shell_single_quote(&exec_inner)
+    );
+
+    let exec_exit = match session
+        .exec_command_streaming(
+            &exec_command,
+            |line| {
+                on_line(line);
+                push_tail(line, &mut tail_lines);
+            },
+            None,
+        )
+        .await
+    {
+        Ok((code, _)) => code,
+        Err(e) => {
+            cleanup_vendor_temp(session, &script_path).await;
+            return Err(e);
+        }
+    };
+    let output_tail = tail_lines.join("\n");
+
+    if !env.is_root && looks_like_sudo_password_prompt(&output_tail) {
+        cleanup_vendor_temp(session, &script_path).await;
+        return Ok(InstallReport {
+            package_id: id.to_string(),
+            status: InstallStatus::SudoRequiresPassword,
+            distro_id: env.distro_id,
+            package_manager: env
+                .package_manager
+                .map(|m| m.as_str().to_string())
+                .unwrap_or_default(),
+            command: exec_command,
+            exit_code: exec_exit,
+            output_tail,
+            installed_version: None,
+            service_active: None,
+            vendor_script: Some(used_view),
+        });
+    }
+
+    // --- Step 6: re-probe ---
+    let post = probe_status(session, id).await;
+    let installed_version = post.as_ref().and_then(|s| s.version.clone());
+    let was_installed_after = post.as_ref().map(|s| s.installed).unwrap_or(false);
+
+    let status = if was_installed_after {
+        InstallStatus::Installed
+    } else {
+        InstallStatus::VendorScriptFailed
+    };
+
+    // Vendor scripts (get.docker.com) typically already enable+start
+    // their service. Mirror the apt-path's enable-service logic so the
+    // checkbox keeps working for the script path too.
+    let service_active = if was_installed_after && enable_service {
+        if let Some(unit) = env
+            .package_manager
+            .and_then(|pm| descriptor_service_unit(descriptor, pm))
+        {
+            let svc_inner = format!("systemctl enable --now {unit} || true");
+            let svc_cmd =
+                format!("{prefix}sh -c {} 2>&1", shell_single_quote(&svc_inner));
+            let _ = session
+                .exec_command_streaming(&svc_cmd, &mut on_line, None)
+                .await;
+            Some(systemctl_is_active(session, unit).await)
+        } else {
+            None
+        }
+    } else if was_installed_after {
+        if let Some(unit) = env
+            .package_manager
+            .and_then(|pm| descriptor_service_unit(descriptor, pm))
+        {
+            Some(systemctl_is_active(session, unit).await)
+        } else {
+            None
+        }
+    } else {
+        None
+    };
+
+    Ok(InstallReport {
+        package_id: id.to_string(),
+        status,
+        distro_id: env.distro_id,
+        package_manager: env
+            .package_manager
+            .map(|m| m.as_str().to_string())
+            .unwrap_or_default(),
+        command: exec_command,
+        exit_code: exec_exit,
+        output_tail,
+        installed_version,
+        service_active,
+        vendor_script: Some(used_view),
+    })
+}
+
+/// `curl -fsSL '<url>' -o '<path>'`. URL is single-quoted so even if
+/// a future registry edit introduces quotes / `$` the shell can't
+/// interpret them — same defense as `shell_single_quote` elsewhere.
+/// Path is single-quoted for symmetry; in practice it's always
+/// `/tmp/pier-x-installer-{id}.sh` with a static id.
+fn build_vendor_download_command(url: &str, path: &str) -> String {
+    format!(
+        "curl -fsSL {url} -o {path}",
+        url = shell_single_quote(url),
+        path = shell_single_quote(path),
+    )
+}
+
+/// Size-check + execute + cleanup. The `trap` ensures the temp file
+/// is removed regardless of the script's exit code, so a failed
+/// install doesn't leave detritus in `/tmp`.
+fn build_vendor_exec_command(path: &str) -> String {
+    let qpath = shell_single_quote(path);
+    format!(
+        "trap 'rm -f {qpath}' EXIT; \
+         if [ ! -s {qpath} ]; then \
+         echo 'pier-x: downloaded installer is empty, aborting' >&2; \
+         exit 64; \
+         fi; \
+         sh {qpath}"
+    )
+}
+
+/// Best-effort `rm -f` for vendor-script tmp files. Used both in the
+/// success-fast-path's exec command (via `trap`) and in error branches
+/// that bail before `trap` ever runs.
+async fn cleanup_vendor_temp(session: &SshSession, path: &str) {
+    let cmd = format!("rm -f {} 2>/dev/null || true", shell_single_quote(path));
+    let _ = session.exec_command(&cmd).await;
+}
+
 /// Common install / update path. `is_update` switches the apt/dnf
 /// command from "install" to "install --only-upgrade" / equivalent.
 /// `version`, when set, pins the package-manager invocation to that
@@ -966,6 +1328,7 @@ where
             output_tail: String::new(),
             installed_version: None,
             service_active: None,
+            vendor_script: None,
         });
     };
 
@@ -980,6 +1343,7 @@ where
             output_tail: String::new(),
             installed_version: None,
             service_active: None,
+            vendor_script: None,
         });
     };
 
@@ -1025,6 +1389,7 @@ where
             output_tail,
             installed_version: None,
             service_active: None,
+            vendor_script: None,
         });
     }
 
@@ -1039,6 +1404,7 @@ where
             output_tail,
             installed_version: None,
             service_active: None,
+            vendor_script: None,
         });
     }
 
@@ -1094,6 +1460,7 @@ where
         output_tail,
         installed_version,
         service_active,
+        vendor_script: None,
     })
 }
 
@@ -2320,6 +2687,35 @@ mod tests {
         }
     }
 
+    // ── Vendor-script command builder ─────────────────────
+
+    #[test]
+    fn docker_descriptor_advertises_official_script() {
+        let d = descriptor("docker").expect("docker in registry");
+        let v = d.vendor_script.expect("docker has vendor_script");
+        assert_eq!(v.url, "https://get.docker.com");
+        assert!(v.run_as_root);
+        assert!(v.conflicts_with_apt);
+    }
+
+    #[test]
+    fn vendor_script_only_on_docker_for_v2() {
+        // v2 ships docker only; stricter assertion catches an
+        // accidental copy-paste leaving vendor_script populated on a
+        // package whose script path hasn't been audited.
+        for d in registry() {
+            if d.id == "docker" {
+                assert!(d.vendor_script.is_some(), "docker must have vendor_script");
+            } else {
+                assert!(
+                    d.vendor_script.is_none(),
+                    "{} should not have a vendor_script in v2",
+                    d.id,
+                );
+            }
+        }
+    }
+
     #[test]
     fn install_status_cancelled_serializes_with_kebab_kind() {
         // The `kind` discriminant is what crosses the IPC seam to the
@@ -2333,6 +2729,54 @@ mod tests {
     fn uninstall_status_cancelled_serializes_with_kebab_kind() {
         let json = serde_json::to_string(&UninstallStatus::Cancelled).unwrap();
         assert_eq!(json, r#"{"kind":"cancelled"}"#);
+    }
+
+    #[test]
+    fn vendor_download_command_quotes_url_and_path() {
+        let cmd = build_vendor_download_command(
+            "https://get.docker.com",
+            "/tmp/pier-x-installer-docker.sh",
+        );
+        assert!(cmd.contains("curl -fsSL "));
+        assert!(cmd.contains("'https://get.docker.com'"));
+        assert!(cmd.contains("-o '/tmp/pier-x-installer-docker.sh'"));
+    }
+
+    #[test]
+    fn vendor_download_command_escapes_quotes_in_url() {
+        // Defense-in-depth: even though the registry URLs are static
+        // literals, make sure our quoter handles a hostile value
+        // without breaking out of the single-quote — internal `'`
+        // gets rewritten as the canonical `'\''` close-escape-reopen
+        // sequence, and the `-o <path>` argument stays positionally
+        // separate from the URL.
+        let cmd = build_vendor_download_command(
+            "https://evil.example/x';rm -rf /;'",
+            "/tmp/x.sh",
+        );
+        // Embedded quotes were escaped via the close-escape-reopen
+        // dance — the literal `'\''` token has to appear at least
+        // once.
+        assert!(cmd.contains("'\\''"));
+        // The `-o` flag must remain a separate argument: the URL's
+        // closing quote followed by whitespace then `-o '/tmp/x.sh'`.
+        assert!(cmd.contains("' -o '/tmp/x.sh'"));
+        // And the curl invocation prefix must still parse cleanly.
+        assert!(cmd.starts_with("curl -fsSL '"));
+    }
+
+    #[test]
+    fn vendor_exec_command_traps_cleanup_and_size_checks() {
+        let cmd = build_vendor_exec_command("/tmp/pier-x-installer-docker.sh");
+        assert!(cmd.contains("trap 'rm -f"));
+        assert!(cmd.contains("EXIT"));
+        // Size-check defends against a 200-with-empty-body proxy.
+        assert!(cmd.contains("[ ! -s "));
+        // Plain `sh path` — never `bash -c "$(curl ...)"` and never a
+        // pipe to sh.
+        assert!(cmd.contains("sh '/tmp/pier-x-installer-docker.sh'"));
+        assert!(!cmd.contains("| sh"));
+        assert!(!cmd.contains("$(curl"));
     }
 
     #[test]

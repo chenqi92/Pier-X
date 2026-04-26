@@ -44,6 +44,14 @@ export function describeInstallOutcome(
       });
     case "cancelled":
       return t("Cancelled");
+    case "vendor-script-download-failed":
+      return t("Failed to download installer script (exit {code})", {
+        code: report.exitCode,
+      });
+    case "vendor-script-failed":
+      return t("Vendor installer script failed (exit {code})", {
+        code: report.exitCode,
+      });
   }
 }
 

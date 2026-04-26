@@ -984,6 +984,25 @@ export const sqliteInstallRemote = (params: SshParams) =>
 
 // ── Software panel ─────────────────────────────────────────────
 
+/** Static info about a v2 vendor-supplied installer (e.g. Docker's
+ *  `https://get.docker.com`). The URL set is sealed in the backend
+ *  registry — the frontend never passes a URL into the install
+ *  command. */
+export type VendorScriptDescriptor = {
+  /** Short label rendered in the install dropdown. */
+  label: string;
+  /** Fully-qualified `https://` URL. Read-only — surfaced to the user
+   *  in the confirmation dialog so they can verify it before opting in. */
+  url: string;
+  /** Risk-disclosure text shown in the confirmation dialog. */
+  notes: string;
+  /** When `true`, installing via this script will conflict with the
+   *  distro-package version of the same software (e.g. `docker.io`
+   *  vs. upstream `docker-ce`). The dialog warns the user to uninstall
+   *  the distro package first. */
+  conflictsWithApt: boolean;
+};
+
 /** One row in the software registry. Order is the rendering order. */
 export type SoftwareDescriptor = {
   id: string;
@@ -998,6 +1017,10 @@ export type SoftwareDescriptor = {
    *  downtime restart (currently only nginx). Drives whether the
    *  service menu shows a "Reload (no downtime)" entry. */
   supportsReload: boolean;
+  /** Non-null when the descriptor exposes a v2 vendor-script install
+   *  path. The panel renders the install button as a split-button
+   *  (default = apt path, dropdown = "通过 {label}") in this case. */
+  vendorScript: VendorScriptDescriptor | null;
 };
 
 export type HostPackageEnv = {
@@ -1022,12 +1045,30 @@ export type SoftwareProbeResult = {
   statuses: SoftwarePackageStatus[];
 };
 
+/** Outcome class returned by `softwareInstallRemote` /
+ *  `softwareUpdateRemote`. Superset of `RemoteSqliteInstallStatus` —
+ *  v2 adds Cancelled (cancel button) and the two vendor-script-only
+ *  outcomes (vendor channel). */
 export type SoftwareInstallStatus =
-  | RemoteSqliteInstallStatus
+  | "installed"
+  | "unsupported-distro"
+  | "sudo-requires-password"
+  | "package-manager-failed"
   /** The user clicked Cancel mid-run; the report's `exitCode` is the
    *  pier-core sentinel `-2`. Remote process state is unspecified —
    *  see PRODUCT-SPEC §5.11 v2. */
-  | "cancelled";
+  | "cancelled"
+  | "vendor-script-download-failed"
+  | "vendor-script-failed";
+
+/** Echo-back of the vendor script that produced an install — present
+ *  on `SoftwareInstallReport` only when the install ran via the v2
+ *  channel. The frontend appends `via {label} ({url})` to the
+ *  activity log when this is non-null. */
+export type VendorScriptUsed = {
+  label: string;
+  url: string;
+};
 
 export type SoftwareInstallReport = {
   packageId: string;
@@ -1039,6 +1080,8 @@ export type SoftwareInstallReport = {
   outputTail: string;
   installedVersion: string | null;
   serviceActive: boolean | null;
+  /** Non-null iff the install ran via the v2 vendor-script channel. */
+  vendorScript: VendorScriptUsed | null;
 };
 
 /** Streaming event payload for `software-install`. The frontend filters
@@ -1067,6 +1110,13 @@ export const softwareInstallRemote = (
     /** Pin to a specific package-manager version. `undefined` =
      *  install whatever the manager picks (the registry's default). */
     version?: string | null;
+    /** v2: when `true`, route through the descriptor's
+     *  `vendorScript` channel (curl + run the official installer)
+     *  instead of the default apt / dnf / … path. The panel only
+     *  sets this after the user clicks the dropdown's "通过 {label}"
+     *  entry AND confirms in the risk dialog. Omit / `false` =
+     *  default package-manager path. */
+    viaVendorScript?: boolean;
   },
 ) =>
   invoke<SoftwareInstallReport>("software_install_remote", {

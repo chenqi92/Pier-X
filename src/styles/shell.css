@@ -2225,6 +2225,7 @@ button,
 .terminal-screen ::selection { background: var(--selection-bg); color: var(--selection-fg); }
 
 .terminal-segment { display: inline; }
+.terminal-segment--filler { color: transparent; }
 .terminal-segment--cursor { background: var(--accent); color: var(--accent-ink); }
 .terminal-segment--cursor-beam { border-left: 2px solid var(--accent); }
 .terminal-segment--cursor-underline { border-bottom: 2px solid var(--accent); }

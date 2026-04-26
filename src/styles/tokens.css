@@ -214,12 +214,17 @@
   --dialog-header-height: var(--dialog-header-h);
   --dialog-footer-height: var(--dialog-footer-h);
 
+  /* Settings → Typography "Interface text scale" writes this; only
+   * font-size tokens consume it. Spacing/row-h/icon/radius are
+   * intentionally NOT scaled — type-only resizing per UX intent. */
+  --ui-scale: 1;
+
   /* Density — compact default (Remix baseline) */
   --row-h: 26px;
   --row-pad: 8px;
-  --ui-fs: 12px;
-  --ui-fs-sm: 11px;
-  --ui-fs-lg: 13px;
+  --ui-fs: calc(12px * var(--ui-scale));
+  --ui-fs-sm: calc(11px * var(--ui-scale));
+  --ui-fs-lg: calc(13px * var(--ui-scale));
 
   /* Legacy row-height aliases */
   --compact-row-height: var(--row-h);
@@ -238,15 +243,15 @@
   --font-serif: var(--serif);
 
   /* Type scale */
-  --size-display: 44px;
-  --size-h1: 24px;
-  --size-h2: 20px;
-  --size-h3: 16px;
-  --size-body-lg: 14px;
-  --size-body: 13px;
-  --size-caption: 12px;
-  --size-small: 11px;
-  --size-micro: 10.5px;
+  --size-display: calc(44px * var(--ui-scale));
+  --size-h1: calc(24px * var(--ui-scale));
+  --size-h2: calc(20px * var(--ui-scale));
+  --size-h3: calc(16px * var(--ui-scale));
+  --size-body-lg: calc(14px * var(--ui-scale));
+  --size-body: calc(13px * var(--ui-scale));
+  --size-caption: calc(12px * var(--ui-scale));
+  --size-small: calc(11px * var(--ui-scale));
+  --size-micro: calc(10.5px * var(--ui-scale));
 
   /* Weights (Inter 510 is signature → keep for IBM Plex 500) */
   --weight-regular: 400;
@@ -324,9 +329,9 @@
 [data-density="comfortable"] {
   --row-h: 32px;
   --row-pad: 12px;
-  --ui-fs: 13px;
-  --ui-fs-sm: 12px;
-  --ui-fs-lg: 14px;
+  --ui-fs: calc(13px * var(--ui-scale));
+  --ui-fs-sm: calc(12px * var(--ui-scale));
+  --ui-fs-lg: calc(14px * var(--ui-scale));
   --titlebar-h: 40px;
   --tabbar-h: 38px;
   --panel-header-h: 38px;
@@ -341,9 +346,9 @@
 [data-density="spacious"] {
   --row-h: 36px;
   --row-pad: 14px;
-  --ui-fs: 13.5px;
-  --ui-fs-sm: 12.5px;
-  --ui-fs-lg: 15px;
+  --ui-fs: calc(13.5px * var(--ui-scale));
+  --ui-fs-sm: calc(12.5px * var(--ui-scale));
+  --ui-fs-lg: calc(15px * var(--ui-scale));
   --titlebar-h: 44px;
   --tabbar-h: 40px;
   --panel-header-h: 40px;

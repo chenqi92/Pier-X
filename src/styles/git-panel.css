@@ -1553,38 +1553,6 @@
   100% { background-position: -200% 0; }
 }
 
-.git-history-columns {
-  display: flex;
-  align-items: center;
-  position: relative;
-  height: 22px;
-  padding: 0 10px 0 4px;
-  gap: 8px;
-  color: var(--muted);
-  font-size: var(--size-micro);
-  font-family: var(--mono);
-  text-transform: uppercase;
-  letter-spacing: 0.06em;
-  border-bottom: 1px solid var(--line);
-  background: var(--surface-2);
-  user-select: none;
-  flex: none;
-}
-
-.git-history-columns__graph {
-  width: var(--git-graph-lane-w, 56px);
-  flex-shrink: 0;
-}
-
-.git-history-columns__subject {
-  flex: 1;
-  min-width: 0;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-.git-history-columns__author,
 .git-history-row__author {
   display: inline-flex;
   align-items: center;
@@ -1603,7 +1571,6 @@
   min-width: 0;
 }
 
-.git-history-columns__date,
 .git-history-row__date {
   width: var(--col-date-w, 120px);
   flex-shrink: 0;
@@ -1612,7 +1579,6 @@
   white-space: nowrap;
 }
 
-.git-history-columns__hash,
 .git-history-row__hash {
   width: var(--col-hash-w, 64px);
   flex-shrink: 0;
@@ -1621,8 +1587,11 @@
   white-space: nowrap;
 }
 
-/* Column resizer — 5px hot zone with a 1px accent guide that brightens
-   on hover/drag. Sits between adjacent header cells. */
+/* Column resizer — 5px hot zone with a 1px guide. The base variant has
+   a fixed height (used in headers, none currently). The `--inline` variant
+   stretches to the row's full height so stacked rows form a continuous
+   vertical column divider. The guide stays subtle by default and brightens
+   to accent on hover / active drag. */
 .git-col-resizer {
   flex: none;
   width: 5px;
@@ -1633,6 +1602,11 @@
   background: transparent;
 }
 
+.git-col-resizer--inline {
+  height: 100%;
+  align-self: stretch;
+}
+
 .git-col-resizer::after {
   content: "";
   position: absolute;
@@ -1640,9 +1614,14 @@
   top: 4px;
   bottom: 4px;
   width: 1px;
-  background: transparent;
+  background: var(--line);
   transform: translateX(-50%);
   transition: background var(--dur-fast) var(--easing);
+}
+
+.git-col-resizer--inline::after {
+  top: 0;
+  bottom: 0;
 }
 
 .git-col-resizer:hover::after,
@@ -1651,29 +1630,23 @@
 }
 
 /* Responsive column collapse: hide Hash → Date → Author as the surface
-   gets narrower. Row classes mirror header classes so they stay in sync. */
-.git-history-list-surface[data-cols="3"] .git-history-columns__hash,
+   gets narrower. Hides both the cell and its preceding resizer. */
 .git-history-list-surface[data-cols="3"] .git-history-row__hash,
 .git-history-list-surface[data-cols="3"] .git-col-resizer--hash {
   display: none;
 }
 
-.git-history-list-surface[data-cols="2"] .git-history-columns__hash,
 .git-history-list-surface[data-cols="2"] .git-history-row__hash,
 .git-history-list-surface[data-cols="2"] .git-col-resizer--hash,
-.git-history-list-surface[data-cols="2"] .git-history-columns__date,
 .git-history-list-surface[data-cols="2"] .git-history-row__date,
 .git-history-list-surface[data-cols="2"] .git-col-resizer--date {
   display: none;
 }
 
-.git-history-list-surface[data-cols="1"] .git-history-columns__hash,
 .git-history-list-surface[data-cols="1"] .git-history-row__hash,
 .git-history-list-surface[data-cols="1"] .git-col-resizer--hash,
-.git-history-list-surface[data-cols="1"] .git-history-columns__date,
 .git-history-list-surface[data-cols="1"] .git-history-row__date,
 .git-history-list-surface[data-cols="1"] .git-col-resizer--date,
-.git-history-list-surface[data-cols="1"] .git-history-columns__author,
 .git-history-list-surface[data-cols="1"] .git-history-row__author,
 .git-history-list-surface[data-cols="1"] .git-col-resizer--author {
   display: none;

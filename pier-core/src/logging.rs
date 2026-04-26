@@ -215,7 +215,7 @@ fn civil_from_unix(secs: i64) -> (i32, u32, u32, u32, u32, u32) {
     };
     let doe = (z - era * 146_097) as u32; // [0, 146096]
     let yoe = (doe - doe / 1460 + doe / 36_524 - doe / 146_096) / 365; // [0, 399]
-    let y = (yoe as i64 + era * 400) as i64;
+    let y = yoe as i64 + era * 400;
     let doy = doe - (365 * yoe + yoe / 4 - yoe / 100); // [0, 365]
     let mp = (5 * doy + 2) / 153; // [0, 11]
     let d = doy - (153 * mp + 2) / 5 + 1; // [1, 31]

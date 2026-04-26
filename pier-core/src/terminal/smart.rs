@@ -116,8 +116,7 @@ impl TempDir {
             .unwrap_or(0);
         let n = SEQ.fetch_add(1, Ordering::Relaxed);
         let pid = std::process::id();
-        let dir =
-            std::env::temp_dir().join(format!("pier-x-smart-{pid}-{n}-{nanos}"));
+        let dir = std::env::temp_dir().join(format!("pier-x-smart-{pid}-{n}-{nanos}"));
         std::fs::create_dir_all(&dir)?;
         Ok(Self { path: dir })
     }

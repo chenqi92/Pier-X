@@ -124,6 +124,7 @@ pub fn wrapper_dir() -> Option<&'static Path> {
 /// The on-disk path of the auto-generated ssh config. Used by
 /// `forget_target` and `shutdown_all_masters` so they hit the same
 /// `ControlPath` template the wrapper uses.
+#[allow(dead_code)]
 pub fn config_path() -> Option<&'static Path> {
     STATE.get().map(|s| s.config_path.as_path())
 }
@@ -378,6 +379,7 @@ pub fn prepended_path(existing: &str) -> String {
 }
 
 /// Currently configured persist window, exposed for diagnostics.
+#[allow(dead_code)]
 pub fn persist_duration() -> Duration {
     Duration::from_secs(settings().persist_seconds.into())
 }

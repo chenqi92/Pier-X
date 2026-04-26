@@ -651,7 +651,9 @@ impl GitClient {
             // Strip trailing newlines introduced by %B's body section
             // and a stray leading newline if the parser consumed the
             // record-separator's adjacent line break.
-            let message = parts[4].trim_matches(|c: char| c == '\n' || c == '\r').to_string();
+            let message = parts[4]
+                .trim_matches(|c: char| c == '\n' || c == '\r')
+                .to_string();
             commits.push(UnpushedCommit {
                 short_hash: parts[1].trim().to_string(),
                 author: parts[2].to_string(),

@@ -105,11 +105,17 @@ pub struct ColumnInfo {
 /// the same field shape for cross-engine UI sharing.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct TableSummary {
+    /// Table name (relname).
     pub name: String,
+    /// Row count estimate from `pg_class.reltuples`.
     pub row_count: Option<u64>,
+    /// Data segment size in bytes (`pg_relation_size`).
     pub data_bytes: Option<u64>,
+    /// Total index size in bytes (`pg_indexes_size`).
     pub index_bytes: Option<u64>,
+    /// Always `None` for PostgreSQL — kept for cross-engine shape parity.
     pub engine: Option<String>,
+    /// Always `None` for PostgreSQL — PG has no per-table update timestamp.
     pub updated_at: Option<String>,
 }
 
@@ -118,7 +124,9 @@ pub struct TableSummary {
 /// `"FUNCTION"` or `"PROCEDURE"`.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct RoutineSummary {
+    /// Routine name from `information_schema.routines.routine_name`.
     pub name: String,
+    /// Upper-cased `routine_type` — usually `"FUNCTION"` or `"PROCEDURE"`.
     pub kind: String,
 }
 
@@ -127,9 +135,13 @@ pub struct RoutineSummary {
 /// access-method name (`btree`, `hash`, `gin`, `gist`, …).
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct IndexSummary {
+    /// Index name (relname of the pg_index row).
     pub name: String,
+    /// Indexed columns / expressions in declaration order.
     pub columns: Vec<String>,
+    /// True for UNIQUE / PRIMARY KEY indexes.
     pub unique: bool,
+    /// Access method name (`btree`, `hash`, `gin`, `gist`, `brin`, …).
     pub kind: String,
 }
 
@@ -140,15 +152,22 @@ pub struct IndexSummary {
 /// MySQL uses so the panel can render both engines uniformly.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ForeignKey {
+    /// Constraint name (`conname`).
     pub name: String,
+    /// Local columns participating in the FK, in declaration order.
     pub columns: Vec<String>,
+    /// Schema of the referenced table.
     pub ref_schema: String,
+    /// Referenced table name.
     pub ref_table: String,
+    /// Referenced columns, paired by index with `columns`.
     pub ref_columns: Vec<String>,
+    /// `ON UPDATE` action expanded to `NO ACTION` / `RESTRICT` /
+    /// `CASCADE` / `SET NULL` / `SET DEFAULT`.
     pub on_update: String,
+    /// `ON DELETE` action, same spelling as `on_update`.
     pub on_delete: String,
 }
-
 
 /// One row of query results. Same type as MySQL's.
 pub type ResultRow = Vec<Option<String>>;
@@ -621,22 +640,14 @@ impl PostgresClient {
     }
 
     /// Blocking wrapper for [`Self::list_indexes`].
-    pub fn list_indexes_blocking(
-        &self,
-        schema: &str,
-        table: &str,
-    ) -> Result<Vec<IndexSummary>> {
+    pub fn list_indexes_blocking(&self, schema: &str, table: &str) -> Result<Vec<IndexSummary>> {
         crate::ssh::runtime::shared().block_on(self.list_indexes(schema, table))
     }
 
     /// All foreign keys outgoing from `<schema>.<table>`. PG
     /// stores FKs in `pg_constraint` with `contype = 'f'`; column
     /// indexes live in `conkey` (local) and `confkey` (foreign).
-    pub async fn list_foreign_keys(
-        &self,
-        schema: &str,
-        table: &str,
-    ) -> Result<Vec<ForeignKey>> {
+    pub async fn list_foreign_keys(&self, schema: &str, table: &str) -> Result<Vec<ForeignKey>> {
         let schema = if schema.is_empty() { "public" } else { schema };
         if !super::mysql::is_safe_ident(schema) {
             return Err(PostgresError::InvalidConfig(format!(
@@ -705,11 +716,7 @@ impl PostgresClient {
     }
 
     /// Blocking wrapper for [`Self::list_foreign_keys`].
-    pub fn list_foreign_keys_blocking(
-        &self,
-        schema: &str,
-        table: &str,
-    ) -> Result<Vec<ForeignKey>> {
+    pub fn list_foreign_keys_blocking(&self, schema: &str, table: &str) -> Result<Vec<ForeignKey>> {
         crate::ssh::runtime::shared().block_on(self.list_foreign_keys(schema, table))
     }
 }

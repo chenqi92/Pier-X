@@ -253,10 +253,7 @@ fn is_ssh_process_name(name: &str) -> bool {
 /// (`/usr/bin/ssh`, `C:\\Windows\\System32\\OpenSSH\\ssh.exe`) or
 /// bare (`ssh`). We take the basename and reuse [`is_ssh_process_name`].
 fn is_ssh_argv0(argv0: &str) -> bool {
-    let basename = argv0
-        .rsplit(|c| c == '/' || c == '\\')
-        .next()
-        .unwrap_or(argv0);
+    let basename = argv0.rsplit(['/', '\\']).next().unwrap_or(argv0);
     is_ssh_process_name(basename)
 }
 
@@ -315,9 +312,7 @@ pub fn parse_ssh_argv(argv: &[String]) -> Option<SshChildTarget> {
             continue;
         }
         if FLAGS_WITH_VALUE.contains(&arg) {
-            let Some(value) = argv.get(i + 1) else {
-                return None;
-            };
+            let value = argv.get(i + 1)?;
             match arg {
                 "-p" => {
                     let parsed: u32 = value.parse().ok()?;

@@ -435,9 +435,8 @@ mod tests {
 
     #[test]
     fn split_handles_block_and_line_comments() {
-        let stmts = split_sql_statements(
-            "/* leading; */ SELECT 1;\n-- trailing; comment\nSELECT 2;",
-        );
+        let stmts =
+            split_sql_statements("/* leading; */ SELECT 1;\n-- trailing; comment\nSELECT 2;");
         assert_eq!(stmts.len(), 2);
         assert!(stmts[0].ends_with("SELECT 1"));
         assert!(stmts[1].ends_with("SELECT 2"));

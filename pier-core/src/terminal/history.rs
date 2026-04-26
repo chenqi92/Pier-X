@@ -41,7 +41,9 @@ use serde::{Deserialize, Serialize};
 /// merge across files.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct HistoryEntry {
+    /// UNIX timestamp (seconds since epoch) when the command ran.
     pub ts: u64,
+    /// Literal command text as the user typed it.
     pub cmd: String,
 }
 
@@ -51,10 +53,14 @@ pub struct HistoryEntry {
 /// error).
 #[derive(Debug, thiserror::Error)]
 pub enum HistoryError {
+    /// The current platform exposes no standard data directory; the
+    /// caller should skip persistence silently.
     #[error("no platform data dir available")]
     NoDataDir,
+    /// Underlying filesystem read/write failure.
     #[error("history I/O: {0}")]
     Io(#[from] std::io::Error),
+    /// JSONL record could not be parsed.
     #[error("history parse: {0}")]
     Json(#[from] serde_json::Error),
 }
@@ -111,8 +117,7 @@ fn shell_slug(shell: &str) -> String {
 /// platforms where `directories` can't determine a sensible
 /// location (rare — usually just headless CI).
 pub fn path_for(shell: &str) -> Result<PathBuf, HistoryError> {
-    let dirs = directories::ProjectDirs::from("", "", "pier-x")
-        .ok_or(HistoryError::NoDataDir)?;
+    let dirs = directories::ProjectDirs::from("", "", "pier-x").ok_or(HistoryError::NoDataDir)?;
     let dir = dirs.data_dir();
     fs::create_dir_all(dir)?;
     Ok(dir.join(format!("terminal-history-{}.jsonl", shell_slug(shell))))
@@ -184,10 +189,7 @@ pub fn append(shell: &str, cmd: &str) -> Result<(), HistoryError> {
         cmd: trimmed.to_string(),
     };
     let line = serde_json::to_string(&entry)?;
-    let mut file = OpenOptions::new()
-        .create(true)
-        .append(true)
-        .open(&path)?;
+    let mut file = OpenOptions::new().create(true).append(true).open(&path)?;
     writeln!(file, "{}", line)?;
     Ok(())
 }

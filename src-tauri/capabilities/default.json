@@ -12,8 +12,22 @@
     "core:window:allow-is-maximized",
     "core:window:allow-set-decorations",
     "opener:default",
-    "opener:allow-open-path",
-    "opener:allow-reveal-item-in-dir",
+    {
+      "identifier": "opener:allow-open-path",
+      "allow": [
+        { "path": "$HOME/**" },
+        { "path": "$APPLOG/**" },
+        { "path": "$TEMP/**" }
+      ]
+    },
+    {
+      "identifier": "opener:allow-reveal-item-in-dir",
+      "allow": [
+        { "path": "$HOME/**" },
+        { "path": "$APPLOG/**" },
+        { "path": "$TEMP/**" }
+      ]
+    },
     "dialog:default",
     "clipboard-manager:allow-read-text",
     "clipboard-manager:allow-write-text"

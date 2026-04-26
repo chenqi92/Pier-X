@@ -600,8 +600,7 @@ impl Perform for Performer<'_> {
                             *self.awaiting_input = false;
                         }
                         b'B' => {
-                            *self.last_prompt_end =
-                                Some((*self.cursor_y, *self.cursor_x));
+                            *self.last_prompt_end = Some((*self.cursor_y, *self.cursor_x));
                             *self.awaiting_input = true;
                         }
                         b'C' => {

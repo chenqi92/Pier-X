@@ -124,11 +124,7 @@ impl RedisConfig {
             .as_ref()
             .map(|s| s.trim().to_string())
             .filter(|s| !s.is_empty());
-        let p = self
-            .password
-            .as_ref()
-            .map(|s| s.clone())
-            .filter(|s| !s.is_empty());
+        let p = self.password.clone().filter(|s| !s.is_empty());
         (u, p)
     }
 }
@@ -419,9 +415,7 @@ impl RedisClient {
             for (i, k) in collected.iter().enumerate() {
                 let kind = match raw.get(i * 2) {
                     Some(redis::Value::SimpleString(s)) => s.clone(),
-                    Some(redis::Value::BulkString(b)) => {
-                        String::from_utf8_lossy(b).into_owned()
-                    }
+                    Some(redis::Value::BulkString(b)) => String::from_utf8_lossy(b).into_owned(),
                     Some(redis::Value::Okay) => "ok".to_string(),
                     _ => String::new(),
                 };
@@ -707,7 +701,9 @@ impl RedisClient {
     /// confirmed selection.
     pub async fn del(&self, key: &str) -> Result<bool> {
         if key.is_empty() {
-            return Err(RedisError::InvalidConfig("DEL key must not be empty".into()));
+            return Err(RedisError::InvalidConfig(
+                "DEL key must not be empty".into(),
+            ));
         }
         let mut conn = self.manager.lock().await;
         let removed: i64 = redis::cmd("DEL").arg(key).query_async(&mut *conn).await?;
@@ -761,12 +757,12 @@ pub struct ScanResult {
     pub limit: usize,
 }
 
-/// Per-key metadata returned alongside the scan cursor — kind
-/// + TTL pulled in a pipeline so the panel can show type
-/// badges and remaining-life chips without a second round trip
-/// per key.
+/// Per-key metadata returned alongside the scan cursor — kind and
+/// TTL pulled in a pipeline so the panel can show type badges and
+/// remaining-life chips without a second round trip per key.
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct KeyEntry {
+    /// Redis key name as returned by `SCAN`.
     pub key: String,
     /// Lower-case `redis-cli` type name: `string` / `hash` /
     /// `list` / `set` / `zset` / `stream` / `none` (key was

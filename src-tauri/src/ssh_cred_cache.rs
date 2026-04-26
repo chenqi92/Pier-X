@@ -160,6 +160,7 @@ impl SshCredCache {
     }
 
     /// Remember the explicit key path (-i <path>) the terminal used.
+    #[allow(dead_code)]
     pub fn put_key_path(&self, key: TargetKey, key_path: &str) -> bool {
         if key_path.is_empty() {
             return false;

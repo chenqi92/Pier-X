@@ -277,11 +277,7 @@ impl SshSession {
                     {
                         tried.push(format!("publickey ({path})"));
                         match self
-                            .try_publickey_auth_raw(
-                                &config.user,
-                                path,
-                                key_passphrase.as_deref(),
-                            )
+                            .try_publickey_auth_raw(&config.user, path, key_passphrase.as_deref())
                             .await
                         {
                             Ok(()) => {

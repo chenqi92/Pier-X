@@ -163,7 +163,7 @@ pub fn validate_command(name: &str) -> CommandKind {
     if trimmed.contains('/') || trimmed.contains('\\') {
         return CommandKind::Missing;
     }
-    if SHELL_BUILTINS.iter().any(|b| *b == trimmed) {
+    if SHELL_BUILTINS.contains(&trimmed) {
         return CommandKind::Builtin;
     }
 

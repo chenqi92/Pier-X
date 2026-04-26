@@ -29,29 +29,35 @@ use serde::{Deserialize, Serialize};
 use crate::ssh::error::{Result, SshError};
 use crate::ssh::SshSession;
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+/// Which firewall stack the host is running. Detection precedence is
+/// firewalld → ufw → nftables → iptables; the first whose CLI exists
+/// *and* whose ruleset/service is active wins.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
 pub enum FirewallBackend {
+    /// `firewalld` daemon (RHEL/Fedora default).
     Firewalld,
+    /// Ubuntu/Debian `ufw` frontend over iptables/nftables.
     Ufw,
+    /// Native `nftables` ruleset (non-empty `nft list ruleset`).
     Nftables,
+    /// Legacy `iptables` (or `iptables-nft` shim — same CLI surface).
     Iptables,
+    /// No detectable firewall stack on the host.
+    #[default]
     None,
 }
 
-impl Default for FirewallBackend {
-    fn default() -> Self {
-        FirewallBackend::None
-    }
-}
-
+/// One row from `ss -tulnp` — a port the host is currently listening on.
 #[derive(Clone, Debug, Default, Serialize, Deserialize)]
 #[serde(default, rename_all = "camelCase")]
 pub struct ListeningPort {
     /// "tcp" / "udp" (we collapse v4/v6 into one tag and rely on
     /// `local_addr` showing `::` to distinguish the family).
     pub proto: String,
+    /// Bind address as `ss` reports it (`0.0.0.0`, `::`, `127.0.0.1`, …).
     pub local_addr: String,
+    /// TCP/UDP port number.
     pub local_port: u16,
     /// "LISTEN" / "UNCONN". UDP rows from `ss` typically read UNCONN
     /// because UDP has no listen state — kept for completeness, the UI
@@ -60,14 +66,20 @@ pub struct ListeningPort {
     /// Best-effort process name from `ss -p`. Empty when the SSH user
     /// can't see the owning process (cross-uid without root).
     pub process: String,
+    /// Owning PID from `ss -p`, when readable.
     pub pid: Option<u32>,
 }
 
+/// One row from `/proc/net/dev` — cumulative RX/TX byte counters for a
+/// single network interface. Diff two snapshots to derive throughput.
 #[derive(Clone, Debug, Default, Serialize, Deserialize)]
 #[serde(default, rename_all = "camelCase")]
 pub struct InterfaceCounter {
+    /// Interface name (e.g. `eth0`, `wlan0`, `lo`, `docker0`).
     pub iface: String,
+    /// Cumulative bytes received since boot.
     pub rx_bytes: u64,
+    /// Cumulative bytes transmitted since boot.
     pub tx_bytes: u64,
 }
 
@@ -78,6 +90,7 @@ pub struct InterfaceCounter {
 #[derive(Clone, Debug, Default, Serialize, Deserialize)]
 #[serde(default, rename_all = "camelCase")]
 pub struct FirewallSnapshot {
+    /// Detected firewall stack on the host.
     pub backend: FirewallBackend,
     /// True if the detected backend appears to be running. For
     /// firewalld/ufw this is the `is-active` check; for nftables it
@@ -88,9 +101,13 @@ pub struct FirewallSnapshot {
     /// frontend offers write actions inline or routes them to the
     /// terminal with a `sudo` prefix.
     pub root: bool,
+    /// SSH login name (`whoami` on the remote host).
     pub user: String,
+    /// `uname -srm` output from the remote host (kernel + arch banner).
     pub uname: String,
+    /// All currently listening TCP/UDP ports.
     pub listening: Vec<ListeningPort>,
+    /// Per-interface byte counters; pair two snapshots to derive rates.
     pub interfaces: Vec<InterfaceCounter>,
     /// Server-side wall clock at capture, ms since epoch. Pair two
     /// snapshots and divide by `(t1 - t0)` for byte/sec rates that are
@@ -141,6 +158,8 @@ pub async fn snapshot(session: &SshSession) -> Result<FirewallSnapshot> {
     Ok(parse_snapshot(&stdout))
 }
 
+/// Synchronous wrapper around [`snapshot`] for callers outside an async
+/// context (Tauri command threads, FFI bridges).
 pub fn snapshot_blocking(session: &SshSession) -> Result<FirewallSnapshot> {
     crate::ssh::runtime::shared().block_on(snapshot(session))
 }

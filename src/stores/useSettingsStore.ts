@@ -195,7 +195,7 @@ function applyMonoFont(family: string) {
 }
 
 function applyUiScale(scale: number) {
-  document.documentElement.style.setProperty("font-size", `${13 * scale}px`);
+  document.documentElement.style.setProperty("--ui-scale", String(scale));
 }
 
 export const useSettingsStore = create<SettingsState>((set, get) => {

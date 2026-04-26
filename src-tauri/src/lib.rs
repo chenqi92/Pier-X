@@ -220,6 +220,7 @@ const TERMINAL_SSH_PASSWORD_PROMPT_EVENT: &str = "terminal:ssh-password-prompt";
 /// belongs in `tab.sshKeyPassphrase`, not `tab.sshPassword` —
 /// crossing them costs the user a wrong auth attempt and surfaces
 /// as a confusing "auth rejected" error on the right side.
+#[allow(dead_code)]
 const TERMINAL_SSH_PASSPHRASE_PROMPT_EVENT: &str = "terminal:ssh-passphrase-prompt";
 
 #[derive(Serialize, Clone)]

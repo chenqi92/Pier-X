@@ -24,6 +24,7 @@ use serde::Serialize;
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct Completion {
+    /// Row classifier — drives the popover icon and rendering.
     pub kind: CompletionKind,
     /// Full text the UI should produce when this row is selected.
     /// For directories, includes a trailing `/` so the next Tab
@@ -39,12 +40,18 @@ pub struct Completion {
     pub hint: Option<String>,
 }
 
+/// Classifier for a [`Completion`] row — determines the popover icon
+/// and how the UI renders the right-side hint.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "lowercase")]
 pub enum CompletionKind {
+    /// Shell builtin (e.g. `cd`, `export`).
     Builtin,
+    /// Executable found on `$PATH`.
     Binary,
+    /// Regular file in the current directory or a path prefix.
     File,
+    /// Directory entry (gets a trailing `/` in `value`).
     Directory,
 }
 
@@ -187,7 +194,8 @@ fn complete_file(prefix: &str, cwd: Option<&Path>) -> Vec<Completion> {
     let (dir_part, base_part) = split_path_prefix(prefix);
 
     let base_dir = if dir_part.is_empty() {
-        cwd.map(|c| c.to_path_buf()).unwrap_or_else(|| PathBuf::from("."))
+        cwd.map(|c| c.to_path_buf())
+            .unwrap_or_else(|| PathBuf::from("."))
     } else if dir_part == "~" || dir_part.starts_with("~/") {
         let home = std::env::var_os("HOME")
             .map(PathBuf::from)
@@ -226,10 +234,7 @@ fn complete_file(prefix: &str, cwd: Option<&Path>) -> Vec<Completion> {
             continue;
         }
 
-        let is_dir = entry
-            .file_type()
-            .map(|t| t.is_dir())
-            .unwrap_or(false);
+        let is_dir = entry.file_type().map(|t| t.is_dir()).unwrap_or(false);
 
         // Reattach the user's typed dir prefix so inserting `value`
         // into the line preserves what they had. Trailing `/` for
@@ -277,7 +282,10 @@ fn complete_file(prefix: &str, cwd: Option<&Path>) -> Vec<Completion> {
 /// `x`). For a bare basename without slashes → (``, `prefix`).
 fn split_path_prefix(prefix: &str) -> (String, String) {
     if let Some(idx) = prefix.rfind('/') {
-        (prefix[..idx + 1].trim_end_matches('/').to_string(), prefix[idx + 1..].to_string())
+        (
+            prefix[..idx + 1].trim_end_matches('/').to_string(),
+            prefix[idx + 1..].to_string(),
+        )
     } else {
         (String::new(), prefix.to_string())
     }
@@ -330,7 +338,10 @@ mod tests {
     fn empty_input_command_returns_builtins_at_least() {
         let results = complete_command("");
         // Caller controls MAX_RESULTS; we ship 64.
-        assert!(!results.is_empty(), "empty prefix should still yield results");
+        assert!(
+            !results.is_empty(),
+            "empty prefix should still yield results"
+        );
         assert!(results.len() <= MAX_RESULTS);
         let names: HashSet<_> = results.iter().map(|c| c.display.as_str()).collect();
         // `cd` and `echo` are universal — any sane PATH should at least

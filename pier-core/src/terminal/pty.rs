@@ -169,13 +169,13 @@ mod unix {
                 // its pointers valid for that long.
                 let extra_env_strings: Vec<std::ffi::CString> = extra_env
                     .iter()
-                    .filter_map(|(k, v)| {
-                        std::ffi::CString::new(format!("{}={}", k, v)).ok()
-                    })
+                    .filter_map(|(k, v)| std::ffi::CString::new(format!("{}={}", k, v)).ok())
                     .collect();
                 for entry in &extra_env_strings {
                     // SAFETY: same contract as the TERM/LANG putenvs above.
-                    unsafe { libc::putenv(entry.as_ptr() as *mut _); }
+                    unsafe {
+                        libc::putenv(entry.as_ptr() as *mut _);
+                    }
                 }
 
                 // Change to the user's home directory so new shells

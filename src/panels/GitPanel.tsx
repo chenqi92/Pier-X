@@ -622,6 +622,7 @@ function ColResizer({
   min,
   max,
   variant,
+  inline = false,
   onPersist,
 }: {
   surfaceRef: MutableRefObject<HTMLElement | null>;
@@ -630,6 +631,7 @@ function ColResizer({
   min: number;
   max: number;
   variant: "author" | "date" | "hash";
+  inline?: boolean;
   onPersist: (next: number) => void;
 }) {
   const [active, setActive] = useState(false);
@@ -678,7 +680,7 @@ function ColResizer({
 
   return (
     <div
-      className={`git-col-resizer git-col-resizer--${variant}${active ? " is-active" : ""}`}
+      className={`git-col-resizer git-col-resizer--${variant}${inline ? " git-col-resizer--inline" : ""}${active ? " is-active" : ""}`}
       onPointerDown={onPointerDown}
       role="separator"
       aria-orientation="vertical"
@@ -886,6 +888,9 @@ type HistoryRowProps = {
   showDate: boolean;
   showHash: boolean;
   titleText: string;
+  surfaceRef: MutableRefObject<HTMLElement | null>;
+  colWidthsRef: MutableRefObject<HistoryColWidths>;
+  onPersistCol: (field: keyof HistoryColWidths, value: number) => void;
   onSelect: (hash: string, wasActive: boolean) => void;
   onDoubleClick: (hash: string) => void;
   onContextMenu: (event: ReactMouseEvent<HTMLButtonElement>, row: GitGraphRowView) => void;
@@ -906,6 +911,9 @@ const HistoryRow = memo(function HistoryRow({
   showDate,
   showHash,
   titleText,
+  surfaceRef,
+  colWidthsRef,
+  onPersistCol,
   onSelect,
   onDoubleClick,
   onContextMenu,
@@ -947,19 +955,59 @@ const HistoryRow = memo(function HistoryRow({
             <span className="git-history-row__message">{row.message}</span>
           </div>
           {showAuthor ? (
-            <span className="git-history-row__author" title={row.author}>
-              <span
-                className="git-history-row__avatar"
-                style={{ background: authorColorValue }}
-                aria-hidden="true"
-              >
-                {authorInitialValue}
+            <>
+              <ColResizer
+                cssVar="--col-author-w"
+                initial={colWidthsRef.current.author}
+                max={HISTORY_COL_MAX.author}
+                min={HISTORY_COL_MIN.author}
+                onPersist={(value) => onPersistCol("author", value)}
+                surfaceRef={surfaceRef}
+                variant="author"
+                inline
+              />
+              <span className="git-history-row__author" title={row.author}>
+                <span
+                  className="git-history-row__avatar"
+                  style={{ background: authorColorValue }}
+                  aria-hidden="true"
+                >
+                  {authorInitialValue}
+                </span>
+                <span className="git-history-row__author-name">{row.author}</span>
               </span>
-              <span className="git-history-row__author-name">{row.author}</span>
-            </span>
+            </>
           ) : null}
-          {showDate ? <span className="git-history-row__date" title={formattedDate}>{formattedDate}</span> : null}
-          {showHash ? <span className="git-history-row__hash" title={row.shortHash}>{row.shortHash}</span> : null}
+          {showDate ? (
+            <>
+              <ColResizer
+                cssVar="--col-date-w"
+                initial={colWidthsRef.current.date}
+                max={HISTORY_COL_MAX.date}
+                min={HISTORY_COL_MIN.date}
+                onPersist={(value) => onPersistCol("date", value)}
+                surfaceRef={surfaceRef}
+                variant="date"
+                inline
+              />
+              <span className="git-history-row__date" title={formattedDate}>{formattedDate}</span>
+            </>
+          ) : null}
+          {showHash ? (
+            <>
+              <ColResizer
+                cssVar="--col-hash-w"
+                initial={colWidthsRef.current.hash}
+                max={HISTORY_COL_MAX.hash}
+                min={HISTORY_COL_MIN.hash}
+                onPersist={(value) => onPersistCol("hash", value)}
+                surfaceRef={surfaceRef}
+                variant="hash"
+                inline
+              />
+              <span className="git-history-row__hash" title={row.shortHash}>{row.shortHash}</span>
+            </>
+          ) : null}
         </div>
       </button>
     </div>
@@ -3011,52 +3059,6 @@ function GitPanelBody({ browserPath, isActive = true }: Props) {
               >
                 {graphRows.length ? (
                   <>
-                    <div className="git-history-columns">
-                      <div className="git-history-columns__graph" />
-                      <div className="git-history-columns__subject">{t("Subject")}</div>
-                      {historyShowAuthor ? (
-                        <>
-                          <ColResizer
-                            cssVar="--col-author-w"
-                            initial={historyColWidthsRef.current.author}
-                            max={HISTORY_COL_MAX.author}
-                            min={HISTORY_COL_MIN.author}
-                            onPersist={(value) => persistHistoryCol("author", value)}
-                            surfaceRef={historyListSurfaceRef}
-                            variant="author"
-                          />
-                          <div className="git-history-columns__author">{t("Author")}</div>
-                        </>
-                      ) : null}
-                      {historyShowDate ? (
-                        <>
-                          <ColResizer
-                            cssVar="--col-date-w"
-                            initial={historyColWidthsRef.current.date}
-                            max={HISTORY_COL_MAX.date}
-                            min={HISTORY_COL_MIN.date}
-                            onPersist={(value) => persistHistoryCol("date", value)}
-                            surfaceRef={historyListSurfaceRef}
-                            variant="date"
-                          />
-                          <div className="git-history-columns__date">{t("Date")}</div>
-                        </>
-                      ) : null}
-                      {historyShowHash ? (
-                        <>
-                          <ColResizer
-                            cssVar="--col-hash-w"
-                            initial={historyColWidthsRef.current.hash}
-                            max={HISTORY_COL_MAX.hash}
-                            min={HISTORY_COL_MIN.hash}
-                            onPersist={(value) => persistHistoryCol("hash", value)}
-                            surfaceRef={historyListSurfaceRef}
-                            variant="hash"
-                          />
-                          <div className="git-history-columns__hash">{t("Hash")}</div>
-                        </>
-                      ) : null}
-                    </div>
                     <GitHistoryVirtualList
                       className="git-history-list"
                       scrollRef={historyListRef}
@@ -3087,6 +3089,9 @@ function GitPanelBody({ browserPath, isActive = true }: Props) {
                             showDate={historyShowDate}
                             showHash={historyShowHash}
                             titleText={`${row.shortHash} · ${row.message}`}
+                            surfaceRef={historyListSurfaceRef}
+                            colWidthsRef={historyColWidthsRef}
+                            onPersistCol={persistHistoryCol}
                             onSelect={handleHistorySelect}
                             onDoubleClick={handleHistoryDoubleClick}
                             onContextMenu={handleHistoryContextMenu}

@@ -149,11 +149,18 @@ pub type ResultRow = Vec<Option<String>>;
 /// `0` when the count is genuinely unknown.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct TableSummary {
+    /// Table name from `information_schema.tables`.
     pub name: String,
+    /// Row count estimate; `None` when the catalog reports `NULL`.
     pub row_count: Option<u64>,
+    /// On-disk data segment size in bytes.
     pub data_bytes: Option<u64>,
+    /// On-disk index segment size in bytes.
     pub index_bytes: Option<u64>,
+    /// Storage engine (`InnoDB`, `MyISAM`, `Aria`, …).
     pub engine: Option<String>,
+    /// Last-update timestamp as the server formats it; `None` for
+    /// engines that don't track it (most InnoDB tables).
     pub updated_at: Option<String>,
 }
 
@@ -164,7 +171,9 @@ pub struct TableSummary {
 /// per-row icons.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct RoutineSummary {
+    /// Routine name from `information_schema.routines.routine_name`.
     pub name: String,
+    /// `"PROCEDURE"` or `"FUNCTION"` from `routine_type`.
     pub kind: String,
 }
 
@@ -192,8 +201,11 @@ pub struct ColumnInfo {
 /// ordinal position.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct IndexSummary {
+    /// Index name from `information_schema.statistics.index_name`.
     pub name: String,
+    /// Indexed columns in ordinal-position order.
     pub columns: Vec<String>,
+    /// True for UNIQUE / PRIMARY KEY indexes.
     pub unique: bool,
     /// `BTREE` / `HASH` / `FULLTEXT` / `SPATIAL` from
     /// `information_schema.statistics.index_type`. Most users
@@ -210,10 +222,13 @@ pub struct IndexSummary {
 pub struct ForeignKey {
     /// Constraint name from the catalog (e.g. `fk_orders_user`).
     pub name: String,
+    /// Local columns participating in the FK, in declaration order.
     pub columns: Vec<String>,
     /// Schema of the referenced table — usually the same DB.
     pub ref_schema: String,
+    /// Referenced table name.
     pub ref_table: String,
+    /// Referenced columns, paired by index with `columns`.
     pub ref_columns: Vec<String>,
     /// Action token from `referential_constraints.update_rule` —
     /// `NO ACTION` / `RESTRICT` / `CASCADE` / `SET NULL` /
@@ -424,14 +439,15 @@ impl MysqlClient {
                AND table_type = 'BASE TABLE'
              ORDER BY table_name
         ";
-        let rows: Vec<(
+        type TableRow = (
             String,
             Option<u64>,
             Option<u64>,
             Option<u64>,
             Option<String>,
             Option<String>,
-        )> = sql
+        );
+        let rows: Vec<TableRow> = sql
             .with(mysql_async::params! { "schema" => database })
             .fetch(&mut conn)
             .await?;
@@ -439,15 +455,13 @@ impl MysqlClient {
         Ok(rows
             .into_iter()
             .map(
-                |(name, row_count, data_bytes, index_bytes, engine, updated_at)| {
-                    TableSummary {
-                        name,
-                        row_count,
-                        data_bytes,
-                        index_bytes,
-                        engine,
-                        updated_at,
-                    }
+                |(name, row_count, data_bytes, index_bytes, engine, updated_at)| TableSummary {
+                    name,
+                    row_count,
+                    data_bytes,
+                    index_bytes,
+                    engine,
+                    updated_at,
                 },
             )
             .collect())
@@ -619,11 +633,7 @@ impl MysqlClient {
     }
 
     /// Blocking wrapper for [`Self::list_indexes`].
-    pub fn list_indexes_blocking(
-        &self,
-        database: &str,
-        table: &str,
-    ) -> Result<Vec<IndexSummary>> {
+    pub fn list_indexes_blocking(&self, database: &str, table: &str) -> Result<Vec<IndexSummary>> {
         crate::ssh::runtime::shared().block_on(self.list_indexes(database, table))
     }
 
@@ -633,11 +643,7 @@ impl MysqlClient {
     /// delete rules). Composite FKs come back as one
     /// [`ForeignKey`] with multiple paired entries in `columns` /
     /// `ref_columns` — same logic as the index grouping.
-    pub async fn list_foreign_keys(
-        &self,
-        database: &str,
-        table: &str,
-    ) -> Result<Vec<ForeignKey>> {
+    pub async fn list_foreign_keys(&self, database: &str, table: &str) -> Result<Vec<ForeignKey>> {
         if !is_safe_ident(database) {
             return Err(MysqlError::InvalidConfig(format!(
                 "refusing unsafe database identifier {database:?}"
@@ -667,7 +673,7 @@ impl MysqlClient {
                AND k.referenced_table_name IS NOT NULL
              ORDER BY k.constraint_name, k.ordinal_position
         ";
-        let rows: Vec<(
+        type FkRow = (
             String,
             String,
             Option<String>,
@@ -676,7 +682,8 @@ impl MysqlClient {
             String,
             String,
             u32,
-        )> = sql
+        );
+        let rows: Vec<FkRow> = sql
             .with(mysql_async::params! {
                 "schema" => database,
                 "table" => table,

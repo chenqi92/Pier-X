@@ -56,8 +56,11 @@ pub struct ManOption {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ManSynopsis {
+    /// Extracted SYNOPSIS section, joined into a single line.
     pub synopsis: String,
+    /// First paragraph of the DESCRIPTION section.
     pub description: String,
+    /// Parsed flag rows from the OPTIONS section.
     pub options: Vec<ManOption>,
     /// `"man"` / `"help"` / `""`. The popover shows this as a tiny
     /// muted hint so the user knows whether they're looking at a
@@ -70,6 +73,8 @@ pub struct ManSynopsis {
 /// enum lean.
 #[derive(Debug, thiserror::Error)]
 pub enum ManError {
+    /// Command name is empty or contains shell metacharacters that
+    /// make it unsafe to spawn.
     #[error("command name is empty or invalid")]
     InvalidName,
     /// Command lookup found no usable text from `man` or `--help`.
@@ -162,18 +167,12 @@ fn lookup_uncached(cmd: &str) -> Result<ManSynopsis, ManError> {
 /// cadence — short enough that timeout slop stays under the user's
 /// perceptual threshold, slow enough that the polling loop costs
 /// effectively nothing.
-fn run_with_timeout(
-    mut cmd: Command,
-    timeout: Duration,
-) -> Result<std::process::Output, ManError> {
+fn run_with_timeout(mut cmd: Command, timeout: Duration) -> Result<std::process::Output, ManError> {
     let mut child = cmd.stdout(Stdio::piped()).stderr(Stdio::piped()).spawn()?;
     let start = Instant::now();
     loop {
-        match child.try_wait()? {
-            Some(_status) => {
-                return child.wait_with_output().map_err(ManError::from);
-            }
-            None => {}
+        if child.try_wait()?.is_some() {
+            return child.wait_with_output().map_err(ManError::from);
         }
         if start.elapsed() > timeout {
             // Best effort — if kill fails the OS will reap the
@@ -282,7 +281,8 @@ fn parse_sections(text: &str, source: &str) -> ManSynopsis {
         if let Some(first) = lines.next() {
             let trimmed = first.trim_start();
             if trimmed.to_ascii_lowercase().starts_with("usage:") {
-                out.synopsis = trimmed.trim_start_matches("Usage:")
+                out.synopsis = trimmed
+                    .trim_start_matches("Usage:")
                     .trim_start_matches("usage:")
                     .trim()
                     .to_string();
@@ -489,7 +489,13 @@ fn cache_put(key: String, value: ManSynopsis) {
             guard.remove(&oldest_key);
         }
     }
-    guard.insert(key, CacheEntry { written_at: Instant::now(), value });
+    guard.insert(
+        key,
+        CacheEntry {
+            written_at: Instant::now(),
+            value,
+        },
+    );
 }
 
 #[cfg(test)]
@@ -501,16 +507,17 @@ mod tests {
         assert!(matches!(man_synopsis(""), Err(ManError::InvalidName)));
         assert!(matches!(man_synopsis("   "), Err(ManError::InvalidName)));
         assert!(matches!(man_synopsis("ls; rm"), Err(ManError::InvalidName)));
-        assert!(matches!(man_synopsis("foo bar"), Err(ManError::InvalidName)));
+        assert!(matches!(
+            man_synopsis("foo bar"),
+            Err(ManError::InvalidName)
+        ));
         assert!(matches!(man_synopsis("a$b"), Err(ManError::InvalidName)));
     }
 
     #[test]
     fn strip_overstriking_collapses_man_styling() {
         // `S\bSY\bY` -> `SY` (bold rendering of `SY`)
-        let input: Vec<u8> = vec![
-            b'S', 0x08, b'S', b'Y', 0x08, b'Y', b' ', b'_', 0x08, b'X',
-        ];
+        let input: Vec<u8> = vec![b'S', 0x08, b'S', b'Y', 0x08, b'Y', b' ', b'_', 0x08, b'X'];
         let out = strip_overstriking(&input);
         assert_eq!(out, "SY X");
     }

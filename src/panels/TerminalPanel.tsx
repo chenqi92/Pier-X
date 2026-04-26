@@ -1945,42 +1945,51 @@ export default function TerminalPanel({ tab, isActive, onEditConnection }: Props
               color: termTheme.fg,
             }}
           >
-            {snapshot.lines.map((line, i) => (
-              <div className="terminal-row" key={`line-${i}`} style={{ color: termTheme.fg }}>
-                {line.segments.map((seg, j) => {
-                  const isCursor = seg.cursor;
-                  // Cursor style: 0=block (default), 1=beam, 2=underline
-                  const cursorClass = isCursor
-                    ? cursorStyle === 1
-                      ? "terminal-segment terminal-segment--cursor-beam"
-                      : cursorStyle === 2
-                        ? "terminal-segment terminal-segment--cursor-underline"
-                        : "terminal-segment terminal-segment--cursor"
-                    : "terminal-segment";
-                  const segBg = isCursor
-                    ? undefined
-                    : resolveTerminalColor(seg.bg, termTheme.ansi);
-                  const segFg = isCursor
-                    ? undefined
-                    : resolveTerminalColor(seg.fg, termTheme.ansi);
-                  return (
-                    <span
-                      className={cursorClass}
-                      key={`seg-${i}-${j}`}
-                      style={{
-                        backgroundColor: segBg,
-                        color: segFg,
-                        fontWeight: seg.bold ? 510 : 400,
-                        textDecoration: seg.underline ? "underline" : "none",
-                        animation: isCursor && cursorBlink ? "cursor-blink 1s step-end infinite" : undefined,
-                      }}
-                    >
-                      {seg.text}
+            {snapshot.lines.map((line, i) => {
+              const usedCols = line.segments.reduce((n, s) => n + s.text.length, 0);
+              const padCols = Math.max(0, snapshot.cols - usedCols);
+              return (
+                <div className="terminal-row" key={`line-${i}`} style={{ color: termTheme.fg }}>
+                  {line.segments.map((seg, j) => {
+                    const isCursor = seg.cursor;
+                    // Cursor style: 0=block (default), 1=beam, 2=underline
+                    const cursorClass = isCursor
+                      ? cursorStyle === 1
+                        ? "terminal-segment terminal-segment--cursor-beam"
+                        : cursorStyle === 2
+                          ? "terminal-segment terminal-segment--cursor-underline"
+                          : "terminal-segment terminal-segment--cursor"
+                      : "terminal-segment";
+                    const segBg = isCursor
+                      ? undefined
+                      : resolveTerminalColor(seg.bg, termTheme.ansi);
+                    const segFg = isCursor
+                      ? undefined
+                      : resolveTerminalColor(seg.fg, termTheme.ansi);
+                    return (
+                      <span
+                        className={cursorClass}
+                        key={`seg-${i}-${j}`}
+                        style={{
+                          backgroundColor: segBg,
+                          color: segFg,
+                          fontWeight: seg.bold ? 510 : 400,
+                          textDecoration: seg.underline ? "underline" : "none",
+                          animation: isCursor && cursorBlink ? "cursor-blink 1s step-end infinite" : undefined,
+                        }}
+                      >
+                        {seg.text}
+                      </span>
+                    );
+                  })}
+                  {padCols > 0 && (
+                    <span className="terminal-segment terminal-segment--filler" aria-hidden>
+                      {" ".repeat(padCols)}
                     </span>
-                  );
-                })}
-              </div>
-            ))}
+                  )}
+                </div>
+              );
+            })}
             {smartActive &&
               snapshot.promptEnd &&
               (smartLineBufferText || suggestionSuffix) && (

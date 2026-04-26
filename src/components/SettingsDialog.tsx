@@ -749,6 +749,7 @@ function DiagnosticsPanel() {
         style={{
           maxHeight: 260,
           overflow: "auto",
+          overscrollBehavior: "contain",
           padding: "var(--sp-2) var(--sp-3)",
           background: "var(--surface)",
           border: "1px solid var(--line)",
@@ -1013,8 +1014,6 @@ function SshKeysPanel() {
           ))}
         </div>
       )}
-
-      <KnownHostsList />
     </>
   );
 }

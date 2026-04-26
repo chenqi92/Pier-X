@@ -41,8 +41,8 @@ pub mod validate;
 pub use completions::{complete, Completion, CompletionKind};
 pub use emulator::{Cell, Color, VtEmulator};
 pub use history::{
-    append as history_append, clear as history_clear, is_sensitive,
-    load as history_load, HistoryError,
+    append as history_append, clear as history_clear, is_sensitive, load as history_load,
+    HistoryError,
 };
 pub use man::{man_synopsis, ManError, ManOption, ManSynopsis};
 pub use pty::{Pty, TerminalError};

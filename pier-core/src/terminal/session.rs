@@ -278,7 +278,7 @@ impl PierTerminal {
                     cols, rows, shell, extra_env,
                 )?)
             };
-            return Self::with_pty(pty, cols, rows, notify, user_data);
+            Self::with_pty(pty, cols, rows, notify, user_data)
         }
         #[cfg(windows)]
         {
@@ -413,8 +413,7 @@ impl PierTerminal {
                                 if ssh_watcher::output_indicates_ssh_failure(&chunk) {
                                     ssh_failure_kick.store(true, Ordering::Relaxed);
                                 }
-                                let prompt_kind =
-                                    ssh_watcher::detect_ssh_secret_prompt(&chunk);
+                                let prompt_kind = ssh_watcher::detect_ssh_secret_prompt(&chunk);
                                 guard.emu.process(&chunk);
                                 match prompt_kind {
                                     Some(ssh_watcher::SshSecretPromptKind::Passphrase) => {
@@ -634,10 +633,7 @@ impl PierTerminal {
             cursor_x: guard.emu.cursor_x as u16,
             cursor_y: guard.emu.cursor_y as u16,
             cells,
-            prompt_end: guard
-                .emu
-                .last_prompt_end
-                .map(|(r, c)| (r as u16, c as u16)),
+            prompt_end: guard.emu.last_prompt_end.map(|(r, c)| (r as u16, c as u16)),
             awaiting_input: guard.emu.awaiting_input,
             alt_screen: guard.emu.alt_screen,
             bracketed_paste: guard.emu.bracketed_paste,
@@ -694,10 +690,7 @@ impl PierTerminal {
             cursor_y: guard.emu.cursor_y as u16,
             cells,
             prompt_end: if smart_visible {
-                guard
-                    .emu
-                    .last_prompt_end
-                    .map(|(r, c)| (r as u16, c as u16))
+                guard.emu.last_prompt_end.map(|(r, c)| (r as u16, c as u16))
             } else {
                 None
             },

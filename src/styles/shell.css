@@ -2222,6 +2222,18 @@ button,
   max-height: 360px;
   overflow-y: auto;
 }
+/* Kill the inherited `.popover-item` background transition inside
+ * the completion popover. Arrow-key / Tab cycling fires class
+ * toggles back-to-back; the fade-in/out from the shared atom rule
+ * leaves a visible ghost on the previous row while the next row is
+ * still ramping up. Navigation lists need crisp instant highlight,
+ * not a hover-style fade — so reset transition here. Other consumers
+ * of the atom (context menus etc.) still get the original hover
+ * polish. */
+.completion-popover-list .popover-item,
+.completion-popover-list .popover-item.is-active {
+  transition: none;
+}
 
 /* Per-row name column — fixed minimum so descriptions line up
  * vertically across all rows even when names are short ("cp" vs

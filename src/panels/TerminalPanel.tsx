@@ -1667,28 +1667,36 @@ export default function TerminalPanel({ tab, isActive, onEditConnection }: Props
     // own arrow / Enter / Tab / Esc while the popover is open, so
     // those bytes never reach the underlying shell readline (which
     // would otherwise scroll its history or submit the line).
+    //
+    // Tab here cycles the highlight (warp / fish style) instead of
+    // confirming. Confirm is reserved for Enter — user's mental model
+    // is "Tab to keep browsing, Enter to commit". Shift+Tab cycles
+    // backward; both wrap so Tab past the last item lands on the
+    // first one.
     if (completion.open) {
-      if (event.key === "ArrowDown") {
+      if (event.key === "ArrowDown" || (event.key === "Tab" && !event.shiftKey)) {
         event.preventDefault();
         setCompletion((s) =>
           s.filtered.length === 0
             ? s
             : {
                 ...s,
-                selectedIndex: Math.min(
-                  s.selectedIndex + 1,
-                  s.filtered.length - 1,
-                ),
+                selectedIndex: (s.selectedIndex + 1) % s.filtered.length,
               },
         );
         return;
       }
-      if (event.key === "ArrowUp") {
+      if (event.key === "ArrowUp" || (event.key === "Tab" && event.shiftKey)) {
         event.preventDefault();
-        setCompletion((s) => ({
-          ...s,
-          selectedIndex: Math.max(s.selectedIndex - 1, 0),
-        }));
+        setCompletion((s) =>
+          s.filtered.length === 0
+            ? s
+            : {
+                ...s,
+                selectedIndex:
+                  (s.selectedIndex - 1 + s.filtered.length) % s.filtered.length,
+              },
+        );
         return;
       }
       if (event.key === "Escape") {
@@ -1696,7 +1704,7 @@ export default function TerminalPanel({ tab, isActive, onEditConnection }: Props
         closeCompletion();
         return;
       }
-      if (event.key === "Enter" || event.key === "Tab") {
+      if (event.key === "Enter") {
         event.preventDefault();
         const sel = completion.filtered[completion.selectedIndex];
         if (sel) insertCompletion(sel);

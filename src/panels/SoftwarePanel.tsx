@@ -287,8 +287,8 @@ function SoftwarePanelBody({ tab }: Props) {
       typeof crypto !== "undefined" && "randomUUID" in crypto
         ? crypto.randomUUID()
         : `${Date.now()}-${Math.random()}`;
-    // The store only knows two kinds of activity ("install" / "update" /
-    // "uninstall"); collapse the vendor variant to "install" so the
+    // The store only knows three kinds of activity ("install" / "update"
+    // / "uninstall"); collapse the vendor variant to "install" so the
     // existing "Installing…" label and busy-row dimming keep working.
     startActivity(
       swKey,
@@ -296,10 +296,21 @@ function SoftwarePanelBody({ tab }: Props) {
       installId,
       action === "install-vendor" ? "install" : action,
     );
+    // Cancel-vs-done race guard: when the user clicks Cancel, the
+    // backend emits a `cancelled` event AND the awaited promise also
+    // resolves with `status: "cancelled"`. Without this flag both code
+    // paths would call finishActivity, the second overwriting the
+    // first. Mirrors `runUninstall`'s guard.
+    let cancelledSeen = false;
     const unlisten = await cmd.subscribeSoftwareInstall(installId, (evt) => {
       if (evt.kind === "line") {
         appendLine(swKey, descriptor.id, evt.text);
+      } else if (evt.kind === "cancelled") {
+        cancelledSeen = true;
+        finishActivity(swKey, descriptor.id, t("Cancelled"), null);
       }
+      // `done` / `failed` are handled by the promise resolve/reject
+      // below — no extra work here.
     });
     try {
       const params = {
@@ -314,6 +325,16 @@ function SoftwarePanelBody({ tab }: Props) {
         action === "update"
           ? await cmd.softwareUpdateRemote(params)
           : await cmd.softwareInstallRemote(params);
+      // The `cancelled` event may have arrived first (most common —
+      // event channel beats the awaited Tauri response) OR the report
+      // itself may carry status="cancelled" (the response landed first).
+      // Either way bail before letting the report overwrite the
+      // "Cancelled" label the event handler already set.
+      if (cancelledSeen) return;
+      if (report.status === "cancelled") {
+        finishActivity(swKey, descriptor.id, t("Cancelled"), null);
+        return;
+      }
       // Vendor-script runs end with an explicit "via {label} ({url})"
       // line in the activity log so the user can audit which channel
       // produced the install without reading the report struct.
@@ -341,6 +362,10 @@ function SoftwarePanelBody({ tab }: Props) {
         nextStatus,
       );
     } catch (e) {
+      // Same guard on the failure path — if cancel already finished
+      // the activity, don't replace its localized "Cancelled" label
+      // with a raw error string from the unwound promise.
+      if (cancelledSeen) return;
       finishActivity(swKey, descriptor.id, formatError(e), null);
     } finally {
       unlisten();

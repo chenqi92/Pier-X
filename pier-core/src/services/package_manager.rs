@@ -882,19 +882,25 @@ pub async fn install_via_script<F>(
     id: &str,
     enable_service: bool,
     on_line: F,
+    cancel: Option<CancellationToken>,
 ) -> Result<InstallReport>
 where
     F: FnMut(&str),
 {
-    run_install_via_script(session, id, enable_service, on_line).await
+    run_install_via_script(session, id, enable_service, on_line, cancel).await
 }
 
-/// Blocking wrapper for [`install_via_script`].
+/// Blocking wrapper for [`install_via_script`]. Accepts the same
+/// `CancellationToken` plumbing as [`install_blocking`] — the Tauri
+/// command registers `install_id → token` before kicking the
+/// `spawn_blocking` task and a Cancel click triggers the token to bail
+/// out of the curl / sh exec channels.
 pub fn install_via_script_blocking<F>(
     session: &SshSession,
     id: &str,
     enable_service: bool,
     on_line: F,
+    cancel: Option<CancellationToken>,
 ) -> Result<InstallReport>
 where
     F: FnMut(&str),
@@ -904,6 +910,7 @@ where
         id,
         enable_service,
         on_line,
+        cancel,
     ))
 }
 
@@ -1075,6 +1082,7 @@ async fn run_install_via_script<F>(
     id: &str,
     enable_service: bool,
     mut on_line: F,
+    cancel: Option<CancellationToken>,
 ) -> Result<InstallReport>
 where
     F: FnMut(&str),
@@ -1092,6 +1100,26 @@ where
     let used_view = VendorScriptUsedView {
         label: vendor.label.to_string(),
         url: vendor.url.to_string(),
+    };
+
+    // Helper: build a Cancelled report from any state we have in hand.
+    // Used by both the post-download and post-execute cancel checks so
+    // we never run later steps (sh exec / re-probe / service-enable)
+    // after the user has bailed.
+    let cancelled_report = |command: String, exit_code: i32, output_tail: String| InstallReport {
+        package_id: id.to_string(),
+        status: InstallStatus::Cancelled,
+        distro_id: env.distro_id.clone(),
+        package_manager: env
+            .package_manager
+            .map(|m| m.as_str().to_string())
+            .unwrap_or_default(),
+        command,
+        exit_code,
+        output_tail,
+        installed_version: None,
+        service_active: None,
+        vendor_script: Some(used_view.clone()),
     };
 
     // --- Step 1+2: download ---
@@ -1120,13 +1148,25 @@ where
                 on_line(line);
                 push_tail(line, &mut tail_lines);
             },
-            None,
+            cancel.clone(),
         )
         .await
     {
         Ok((code, _)) => code,
         Err(e) => return Err(e),
     };
+
+    // Cancel check must precede the download-failure branch — a
+    // cancelled curl can return any exit code (including the
+    // CANCELLED_EXIT_CODE sentinel from `exec_command_streaming` or
+    // a vanilla curl error if SIGHUP arrived mid-handshake). Either way
+    // the user's intent was Cancel, not "download failed".
+    if dl_exit == CANCELLED_EXIT_CODE
+        || cancel.as_ref().is_some_and(|t| t.is_cancelled())
+    {
+        cleanup_vendor_temp(session, &script_path).await;
+        return Ok(cancelled_report(download_command, dl_exit, tail_lines.join("\n")));
+    }
 
     if dl_exit != 0 {
         // `cleanup_vendor_temp` is best-effort; ignore its result.
@@ -1168,7 +1208,7 @@ where
                 on_line(line);
                 push_tail(line, &mut tail_lines);
             },
-            None,
+            cancel.clone(),
         )
         .await
     {
@@ -1179,6 +1219,15 @@ where
         }
     };
     let output_tail = tail_lines.join("\n");
+
+    // Same priority as the apt path: cancellation wins over both
+    // sudo-prompt detection and the post-probe / service-enable steps.
+    if exec_exit == CANCELLED_EXIT_CODE
+        || cancel.as_ref().is_some_and(|t| t.is_cancelled())
+    {
+        cleanup_vendor_temp(session, &script_path).await;
+        return Ok(cancelled_report(exec_command, exec_exit, output_tail));
+    }
 
     if !env.is_root && looks_like_sudo_password_prompt(&output_tail) {
         cleanup_vendor_temp(session, &script_path).await;

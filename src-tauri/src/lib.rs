@@ -385,6 +385,7 @@ struct MysqlColumnView {
     key: String,
     default_value: String,
     extra: String,
+    comment: String,
 }
 
 /// Per-table enrichment surfaced in the MySQL panel's schema tree.
@@ -399,6 +400,7 @@ struct MysqlTableSummary {
     index_bytes: Option<u64>,
     engine: Option<String>,
     updated_at: Option<String>,
+    comment: String,
 }
 
 #[derive(Serialize)]
@@ -595,6 +597,7 @@ struct PostgresColumnView {
     key: String,
     default_value: String,
     extra: String,
+    comment: String,
 }
 
 /// Per-table enrichment for the PG schema tree. Same shape as
@@ -611,6 +614,7 @@ struct PostgresTableSummary {
     index_bytes: Option<u64>,
     engine: Option<String>,
     updated_at: Option<String>,
+    comment: String,
 }
 
 #[derive(Serialize)]
@@ -3510,6 +3514,7 @@ fn mysql_browse(
                 index_bytes: s.index_bytes,
                 engine: s.engine,
                 updated_at: s.updated_at,
+                comment: s.comment,
             })
             .collect()
     };
@@ -3554,6 +3559,7 @@ fn mysql_browse(
                 key: column.key,
                 default_value: column.default_value.unwrap_or_default(),
                 extra: column.extra,
+                comment: column.comment,
             })
             .collect()
     };
@@ -4291,6 +4297,7 @@ fn postgres_browse(
                 index_bytes: s.index_bytes,
                 engine: s.engine,
                 updated_at: s.updated_at,
+                comment: s.comment,
             })
             .collect()
     };
@@ -4333,6 +4340,7 @@ fn postgres_browse(
                 key: col.key,
                 default_value: col.default_value.unwrap_or_default(),
                 extra: col.extra,
+                comment: col.comment,
             })
             .collect()
     };
@@ -5958,6 +5966,7 @@ async fn software_install_or_update_inner(
                 &package_id,
                 enable_service,
                 on_line,
+                Some(token_for_task.clone()),
             )
         } else {
             package_manager::install_blocking(

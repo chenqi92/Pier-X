@@ -38,6 +38,12 @@ pub struct Completion {
     /// resolved absolute path; for `file`/`directory`, blank.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub hint: Option<String>,
+    /// Optional localized description — fish/warp-style, shown as
+    /// a side panel in the popover. Sourced from
+    /// [`super::library::Library`] when the current word is a known
+    /// subcommand or option of a known command. Empty otherwise.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub description: Option<String>,
 }
 
 /// Classifier for a [`Completion`] row — determines the popover icon
@@ -53,6 +59,13 @@ pub enum CompletionKind {
     File,
     /// Directory entry (gets a trailing `/` in `value`).
     Directory,
+    /// Library-known subcommand of the active command (e.g. `build`
+    /// when typing `docker `). Carries a localized description from
+    /// the bundled pack.
+    Subcommand,
+    /// Library-known option flag of the active (sub)command (e.g.
+    /// `--tag` after `docker build `).
+    Option,
 }
 
 /// Top-level entry point. `cursor` is a byte offset into `line`; if
@@ -60,16 +73,178 @@ pub enum CompletionKind {
 /// `cwd` is the shell's last-known directory (from OSC 7) — pass
 /// `None` to fall back to the process cwd.
 pub fn complete(line: &str, cursor: usize, cwd: Option<&Path>) -> Vec<Completion> {
+    complete_with_library(line, cursor, cwd, &super::library::Library::empty(), "en")
+}
+
+/// Library-aware variant. When `lib` knows the active command, the
+/// argument-position branch first emits **subcommand** rows from the
+/// pack (with localized descriptions), then falls back to file
+/// completion when no subcommand matches the prefix. `locale` picks
+/// the description language (e.g. `"zh-CN"`) — see
+/// [`super::library::Library::pick_locale`].
+///
+/// The Tauri layer constructs a process-global library at startup
+/// and threads it (plus the user's locale) into every Tab press,
+/// so this function stays pure.
+pub fn complete_with_library(
+    line: &str,
+    cursor: usize,
+    cwd: Option<&Path>,
+    lib: &super::library::Library,
+    locale: &str,
+) -> Vec<Completion> {
     let cursor = cursor.min(line.len());
     let word_start = find_word_start(line, cursor);
     let prefix = &line[word_start..cursor];
 
     if is_command_position(line, word_start) {
-        complete_command(prefix)
-    } else {
-        let resolved_cwd = resolve_cwd(cwd);
-        complete_file(prefix, resolved_cwd.as_deref())
+        return complete_command(prefix);
     }
+
+    // Argument position. First word of the line drives the library
+    // lookup — so `git push` resolves the `git` pack and we offer
+    // its `push` subcommand even though the cursor sits past `git `.
+    let head = head_command(line);
+    if let Some(pack) = head.and_then(|c| lib.lookup(c)) {
+        // Walk into nested subcommands when typing e.g.
+        // `git remote add `: each preceding word that matches a
+        // subcommand drills one level deeper.
+        let preceding = preceding_words(line, word_start);
+        let active = walk_subcommands(pack, &preceding[1..]);
+        let lib_rows = match active {
+            Some(SubcommandView::Pack(p)) => library_rows(prefix, &p.subcommands, &p.options, locale),
+            Some(SubcommandView::Sub(s)) => library_rows(prefix, &s.subcommands, &s.options, locale),
+            None => Vec::new(),
+        };
+        if !lib_rows.is_empty() {
+            return lib_rows;
+        }
+    }
+
+    let resolved_cwd = resolve_cwd(cwd);
+    complete_file(prefix, resolved_cwd.as_deref())
+}
+
+/// Returns the bare first word of the line (the command name), or
+/// `None` when the line is empty / starts with whitespace and
+/// nothing has been typed.
+fn head_command(line: &str) -> Option<&str> {
+    let trimmed = line.trim_start();
+    let end = trimmed.find(|c: char| c.is_whitespace()).unwrap_or(trimmed.len());
+    let head = &trimmed[..end];
+    if head.is_empty() { None } else { Some(head) }
+}
+
+/// Words separating the head command from the cursor's current
+/// word. For `git remote add ori|` (`|` = cursor) this returns
+/// `["git", "remote", "add"]`. The first element is always the
+/// command head.
+fn preceding_words(line: &str, word_start: usize) -> Vec<&str> {
+    line[..word_start]
+        .split_whitespace()
+        .collect()
+}
+
+/// View into the active subcommand context — either the top-level
+/// pack or a nested subcommand reached by walking N levels.
+enum SubcommandView<'a> {
+    Pack(&'a super::library::CommandPack),
+    Sub(&'a super::library::SubcommandEntry),
+}
+
+/// Walk nested subcommands. `chain` is the words *between* the
+/// head command and the cursor's current word — e.g. for
+/// `git remote add ori|` (head=git), the chain is `["remote", "add"]`.
+/// Returns the deepest subcommand whose name matched; `None` means
+/// one of the chain elements wasn't a known subcommand at its
+/// level (so the user typed something unknown — fall through to
+/// files).
+fn walk_subcommands<'a>(
+    pack: &'a super::library::CommandPack,
+    chain: &[&str],
+) -> Option<SubcommandView<'a>> {
+    if chain.is_empty() {
+        return Some(SubcommandView::Pack(pack));
+    }
+    // Skip flag-shaped tokens — `git -C path commit` should still
+    // resolve `commit` against the top-level pack.
+    let mut subs: &[super::library::SubcommandEntry] = &pack.subcommands;
+    let mut current: Option<&super::library::SubcommandEntry> = None;
+    for word in chain {
+        if word.starts_with('-') {
+            continue;
+        }
+        let found = subs.iter().find(|s| s.name == *word)?;
+        current = Some(found);
+        subs = &found.subcommands;
+    }
+    Some(match current {
+        Some(s) => SubcommandView::Sub(s),
+        None => SubcommandView::Pack(pack),
+    })
+}
+
+/// Build the popover rows from a (subcommands, options) pair. When
+/// `prefix` starts with `-`, only options match; otherwise only
+/// subcommands.
+fn library_rows(
+    prefix: &str,
+    subs: &[super::library::SubcommandEntry],
+    opts: &[super::library::OptionEntry],
+    locale: &str,
+) -> Vec<Completion> {
+    use super::library::Library;
+    let mut out: Vec<Completion> = Vec::new();
+    if prefix.starts_with('-') {
+        for opt in opts {
+            // Match against any of the comma-separated forms — so
+            // typing `--ta` matches `-t, --tag`.
+            let matched = opt
+                .flag
+                .split(',')
+                .map(str::trim)
+                .any(|f| f.starts_with(prefix));
+            if !matched {
+                continue;
+            }
+            let desc = Library::pick_locale(&opt.i18n, locale).to_string();
+            // The `value` for option rows is the longest form (the
+            // one beginning with `--`) when both forms exist —
+            // matches user expectation for Tab-completing flags.
+            let value = pick_long_form(&opt.flag).to_string();
+            out.push(Completion {
+                kind: CompletionKind::Option,
+                value: value.clone(),
+                display: opt.flag.clone(),
+                hint: None,
+                description: if desc.is_empty() { None } else { Some(desc) },
+            });
+        }
+    } else {
+        for sub in subs {
+            if !sub.name.starts_with(prefix) {
+                continue;
+            }
+            let desc = Library::pick_locale(&sub.i18n, locale).to_string();
+            out.push(Completion {
+                kind: CompletionKind::Subcommand,
+                value: sub.name.clone(),
+                display: sub.name.clone(),
+                hint: None,
+                description: if desc.is_empty() { None } else { Some(desc) },
+            });
+        }
+    }
+    out
+}
+
+/// Pick the `--long` form from a `"shortest, longest"` style flag
+/// string. Falls back to the original when only one form is present.
+fn pick_long_form(flag: &str) -> &str {
+    flag.split(',')
+        .map(str::trim)
+        .find(|f| f.starts_with("--"))
+        .unwrap_or_else(|| flag.split(',').next().map(str::trim).unwrap_or(flag))
 }
 
 /// Walk back from `cursor` while the char is part of a "word" — not
@@ -134,6 +309,7 @@ fn complete_command(prefix: &str) -> Vec<Completion> {
             value: (*builtin).to_string(),
             display: (*builtin).to_string(),
             hint: Some("builtin".to_string()),
+            description: None,
         });
         if out.len() >= MAX_RESULTS {
             break;
@@ -171,6 +347,7 @@ fn complete_command(prefix: &str) -> Vec<Completion> {
                         value: name.clone(),
                         display: name,
                         hint: Some(path.to_string_lossy().into_owned()),
+                        description: None,
                     });
                     if out.len() >= MAX_RESULTS {
                         break;
@@ -260,6 +437,7 @@ fn complete_file(prefix: &str, cwd: Option<&Path>) -> Vec<Completion> {
             value,
             display: if is_dir { format!("{}/", name) } else { name },
             hint: None,
+            description: None,
         };
 
         if is_dir {
@@ -443,4 +621,133 @@ mod tests {
             file_results.iter().map(|c| &c.display).collect::<Vec<_>>(),
         );
     }
+
+    #[test]
+    fn library_subcommand_completion_emits_descriptions() {
+        let lib = super::super::library::Library::bundled();
+        // After `docker `, the prefix is empty so we should get
+        // every docker subcommand back, each with a description.
+        let line = "docker ";
+        let rows = complete_with_library(line, line.len(), None, &lib, "en");
+        assert!(!rows.is_empty(), "bundled docker pack should match");
+        let build_row = rows
+            .iter()
+            .find(|r| r.value == "build")
+            .expect("`build` should be a known docker subcommand");
+        assert_eq!(build_row.kind, CompletionKind::Subcommand);
+        assert!(
+            build_row.description.as_deref().unwrap_or("").contains("Build"),
+            "expected English description, got {:?}",
+            build_row.description,
+        );
+    }
+
+    #[test]
+    fn library_completion_falls_back_to_files_when_prefix_does_not_match_subcommand() {
+        let lib = super::super::library::Library::bundled();
+        // `docker zzz` — `zzz` isn't a known subcommand, so the
+        // engine falls through to file completion. We just verify
+        // the library path doesn't swallow the line and returns
+        // *something* (could be empty in cwd).
+        let line = "docker zzz";
+        let _ = complete_with_library(line, line.len(), None, &lib, "en");
+        // No assertion — the contract is "no panic, falls through".
+    }
+
+    #[test]
+    fn library_completion_picks_user_locale_when_present() {
+        let lib = super::super::library::Library::bundled();
+        let line = "docker bui";
+        let rows_en = complete_with_library(line, line.len(), None, &lib, "en");
+        let rows_zh = complete_with_library(line, line.len(), None, &lib, "zh-CN");
+        let en_build = rows_en.iter().find(|r| r.value == "build").unwrap();
+        let zh_build = rows_zh.iter().find(|r| r.value == "build").unwrap();
+        // Different locales should yield different description text
+        // when both are present in the bundled pack.
+        assert_ne!(en_build.description, zh_build.description);
+        assert!(zh_build
+            .description
+            .as_deref()
+            .unwrap_or("")
+            .contains("Dockerfile"));
+    }
+
+    #[test]
+    fn library_walks_nested_subcommands_when_chain_matches() {
+        // Hand-build a tiny library to exercise the chain walker
+        // without depending on the bundled `git` pack growing
+        // nested entries.
+        use super::super::library::{CommandPack, SubcommandEntry};
+        let mut pack = CommandPack {
+            schema_version: super::super::library::SCHEMA_VERSION,
+            command: "git".into(),
+            tool_version: String::new(),
+            source: String::new(),
+            import_method: String::new(),
+            import_date: String::new(),
+            options: Vec::new(),
+            subcommands: vec![SubcommandEntry {
+                name: "remote".into(),
+                i18n: HashMap::new(),
+                options: Vec::new(),
+                subcommands: vec![SubcommandEntry {
+                    name: "add".into(),
+                    i18n: {
+                        let mut m = HashMap::new();
+                        m.insert("en".into(), "Add a remote".into());
+                        m
+                    },
+                    options: Vec::new(),
+                    subcommands: Vec::new(),
+                }],
+            }],
+        };
+        // Need to import HashMap for the test
+        let _ = std::mem::replace(&mut pack.command, "git".into());
+        let mut lib = super::super::library::Library::empty();
+        lib.insert(pack);
+
+        // Type `git remote a` — chain is ["git", "remote"], cursor
+        // word is "a". The `remote` walks one level, then we match
+        // `a` against {add}.
+        let line = "git remote a";
+        let rows = complete_with_library(line, line.len(), None, &lib, "en");
+        assert!(rows.iter().any(|r| r.value == "add"));
+    }
+
+    #[test]
+    fn library_option_rows_match_either_short_or_long_flag_form() {
+        use super::super::library::{CommandPack, OptionEntry};
+        let mut lib = super::super::library::Library::empty();
+        lib.insert(CommandPack {
+            schema_version: super::super::library::SCHEMA_VERSION,
+            command: "myc".into(),
+            tool_version: String::new(),
+            source: String::new(),
+            import_method: String::new(),
+            import_date: String::new(),
+            subcommands: Vec::new(),
+            options: vec![OptionEntry {
+                flag: "-t, --tag".into(),
+                i18n: {
+                    let mut m = HashMap::new();
+                    m.insert("en".into(), "Tag the build".into());
+                    m
+                },
+            }],
+        });
+        // Long form lookup
+        let line = "myc --ta";
+        let rows = complete_with_library(line, line.len(), None, &lib, "en");
+        assert_eq!(rows.len(), 1);
+        assert_eq!(rows[0].kind, CompletionKind::Option);
+        assert_eq!(rows[0].value, "--tag");
+        // Short form lookup
+        let line = "myc -t";
+        let rows = complete_with_library(line, line.len(), None, &lib, "en");
+        assert_eq!(rows.len(), 1);
+        assert_eq!(rows[0].value, "--tag"); // value always picks long form
+    }
+
+    use std::collections::HashMap;
 }

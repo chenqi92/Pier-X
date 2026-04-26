@@ -98,7 +98,7 @@ type Props = {
 };
 
 export default function TerminalPanel({ tab, isActive, onEditConnection }: Props) {
-  const { t } = useI18n();
+  const { t, locale } = useI18n();
   const formatError = (error: unknown) => localizeError(error, t);
   const updateTab = useTabStore((s) => s.updateTab);
   const terminalFontSize = useSettingsStore((s) => s.terminalFontSize);
@@ -1617,15 +1617,18 @@ export default function TerminalPanel({ tab, isActive, onEditConnection }: Props
     }
     let items: Completion[] = [];
     try {
-      items = await terminalCompletions(line, cursor, cwd);
+      items = await terminalCompletions(line, cursor, cwd, locale);
     } catch {
       return;
     }
     if (items.length === 0) return;
-    if (items.length === 1) {
-      insertCompletion(items[0]);
-      return;
-    }
+    // Always show the popover — even for a single match. The old
+    // "auto-insert when exactly one candidate" path silently
+    // consumed the first Tab when (e.g.) `cd Doc<Tab>` had a
+    // unique completion, which made the popover feel unreliable
+    // (users would press Tab a second time to see anything).
+    // Visible feedback on every Tab > the half-second saved by
+    // skipping the popover for one candidate.
     setCompletion({
       open: true,
       items,

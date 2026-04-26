@@ -1630,21 +1630,22 @@
 }
 
 /* Responsive column collapse: hide Hash → Date → Author as the surface
-   gets narrower. Hides both the cell and its preceding resizer. */
+   gets narrower. Each resizer controls the column to its LEFT, so when a
+   column is hidden, hide the resizer immediately to its LEFT (which now
+   has no neighbour to push against). */
 .git-history-list-surface[data-cols="3"] .git-history-row__hash,
-.git-history-list-surface[data-cols="3"] .git-col-resizer--hash {
+.git-history-list-surface[data-cols="3"] .git-col-resizer--date {
   display: none;
 }
 
 .git-history-list-surface[data-cols="2"] .git-history-row__hash,
-.git-history-list-surface[data-cols="2"] .git-col-resizer--hash,
 .git-history-list-surface[data-cols="2"] .git-history-row__date,
-.git-history-list-surface[data-cols="2"] .git-col-resizer--date {
+.git-history-list-surface[data-cols="2"] .git-col-resizer--date,
+.git-history-list-surface[data-cols="2"] .git-col-resizer--author {
   display: none;
 }
 
 .git-history-list-surface[data-cols="1"] .git-history-row__hash,
-.git-history-list-surface[data-cols="1"] .git-col-resizer--hash,
 .git-history-list-surface[data-cols="1"] .git-history-row__date,
 .git-history-list-surface[data-cols="1"] .git-col-resizer--date,
 .git-history-list-surface[data-cols="1"] .git-history-row__author,

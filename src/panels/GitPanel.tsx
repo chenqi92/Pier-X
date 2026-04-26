@@ -653,9 +653,9 @@ function ColResizer({
       const drag = dragRef.current;
       const surf = surfaceRef.current;
       if (!drag || !surf) return;
-      // Subject column shrinks/grows from the LEFT side of these resizers,
-      // so dragging right = wider following column.
-      const dx = drag.startX - e.clientX;
+      // Resizer sits at the RIGHT edge of the column it controls, so dragging
+      // right = wider, dragging left = narrower (intuitive grab-the-handle).
+      const dx = e.clientX - drag.startX;
       const next = Math.max(min, Math.min(max, drag.startWidth + dx));
       surf.style.setProperty(cssVar, `${Math.round(next)}px`);
     };
@@ -955,58 +955,46 @@ const HistoryRow = memo(function HistoryRow({
             <span className="git-history-row__message">{row.message}</span>
           </div>
           {showAuthor ? (
-            <>
-              <ColResizer
-                cssVar="--col-author-w"
-                initial={colWidthsRef.current.author}
-                max={HISTORY_COL_MAX.author}
-                min={HISTORY_COL_MIN.author}
-                onPersist={(value) => onPersistCol("author", value)}
-                surfaceRef={surfaceRef}
-                variant="author"
-                inline
-              />
-              <span className="git-history-row__author" title={row.author}>
-                <span
-                  className="git-history-row__avatar"
-                  style={{ background: authorColorValue }}
-                  aria-hidden="true"
-                >
-                  {authorInitialValue}
-                </span>
-                <span className="git-history-row__author-name">{row.author}</span>
+            <span className="git-history-row__author" title={row.author}>
+              <span
+                className="git-history-row__avatar"
+                style={{ background: authorColorValue }}
+                aria-hidden="true"
+              >
+                {authorInitialValue}
               </span>
-            </>
+              <span className="git-history-row__author-name">{row.author}</span>
+            </span>
+          ) : null}
+          {showAuthor && (showDate || showHash) ? (
+            <ColResizer
+              cssVar="--col-author-w"
+              initial={colWidthsRef.current.author}
+              max={HISTORY_COL_MAX.author}
+              min={HISTORY_COL_MIN.author}
+              onPersist={(value) => onPersistCol("author", value)}
+              surfaceRef={surfaceRef}
+              variant="author"
+              inline
+            />
           ) : null}
           {showDate ? (
-            <>
-              <ColResizer
-                cssVar="--col-date-w"
-                initial={colWidthsRef.current.date}
-                max={HISTORY_COL_MAX.date}
-                min={HISTORY_COL_MIN.date}
-                onPersist={(value) => onPersistCol("date", value)}
-                surfaceRef={surfaceRef}
-                variant="date"
-                inline
-              />
-              <span className="git-history-row__date" title={formattedDate}>{formattedDate}</span>
-            </>
+            <span className="git-history-row__date" title={formattedDate}>{formattedDate}</span>
+          ) : null}
+          {showDate && showHash ? (
+            <ColResizer
+              cssVar="--col-date-w"
+              initial={colWidthsRef.current.date}
+              max={HISTORY_COL_MAX.date}
+              min={HISTORY_COL_MIN.date}
+              onPersist={(value) => onPersistCol("date", value)}
+              surfaceRef={surfaceRef}
+              variant="date"
+              inline
+            />
           ) : null}
           {showHash ? (
-            <>
-              <ColResizer
-                cssVar="--col-hash-w"
-                initial={colWidthsRef.current.hash}
-                max={HISTORY_COL_MAX.hash}
-                min={HISTORY_COL_MIN.hash}
-                onPersist={(value) => onPersistCol("hash", value)}
-                surfaceRef={surfaceRef}
-                variant="hash"
-                inline
-              />
-              <span className="git-history-row__hash" title={row.shortHash}>{row.shortHash}</span>
-            </>
+            <span className="git-history-row__hash" title={row.shortHash}>{row.shortHash}</span>
           ) : null}
         </div>
       </button>

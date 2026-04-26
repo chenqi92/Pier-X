@@ -8,11 +8,24 @@
 //! Pure-IPC layer — every business-logic decision belongs in
 //! `pier-core`. The shapes here just (de)serialise and forward.
 
+use std::sync::OnceLock;
+
 use pier_core::terminal::{
-    complete, history_append, history_clear, history_load, man_synopsis, validate_command,
-    CommandKind, Completion, ManSynopsis,
+    complete_with_library, history_append, history_clear, history_load, man_synopsis,
+    validate_command, CommandKind, Completion, Library, ManSynopsis,
 };
 use serde::Serialize;
+
+/// Process-global command library. Populated lazily on first call
+/// to [`completion_library`] from the bundled JSON packs. Phase C
+/// will widen this into a `RwLock<Library>` so user packs and
+/// online updates can replace it without restart; for now it's a
+/// read-only cell — the library only contains compile-time data.
+static COMPLETION_LIBRARY: OnceLock<Library> = OnceLock::new();
+
+fn completion_library() -> &'static Library {
+    COMPLETION_LIBRARY.get_or_init(Library::bundled)
+}
 
 /// Result of [`terminal_validate_command`].
 ///
@@ -58,14 +71,21 @@ pub fn terminal_validate_command(name: String) -> CommandValidation {
 /// `AppState`. Returning everything in one shot also keeps the IPC
 /// path simple; the popover filters as the user types without
 /// re-invoking until they hit Tab again.
+///
+/// `locale` selects the description language emitted by library-
+/// driven rows (subcommands / option flags). Frontend passes the
+/// active i18n locale (e.g. `"zh-CN"`); fallback chain inside the
+/// library is `locale → language root → en → empty`.
 #[tauri::command]
 pub fn terminal_completions(
     line: String,
     cursor: usize,
     cwd: Option<String>,
+    locale: Option<String>,
 ) -> Vec<Completion> {
     let cwd_path = cwd.as_deref().map(std::path::Path::new);
-    complete(&line, cursor, cwd_path)
+    let locale_str = locale.as_deref().unwrap_or("en");
+    complete_with_library(&line, cursor, cwd_path, completion_library(), locale_str)
 }
 
 /// Look up the man-page summary (or `--help` fallback) for `cmd`.

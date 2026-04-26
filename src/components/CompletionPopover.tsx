@@ -21,7 +21,9 @@ import { useEffect, useRef } from "react";
 import {
   Box,
   FileText,
+  Flag,
   Folder,
+  GitBranch,
   Terminal as TerminalIcon,
 } from "lucide-react";
 import Popover from "./Popover";
@@ -55,6 +57,10 @@ function iconForKind(kind: Completion["kind"]) {
       return Box;
     case "directory":
       return Folder;
+    case "subcommand":
+      return GitBranch;
+    case "option":
+      return Flag;
     case "file":
     default:
       return FileText;
@@ -87,13 +93,20 @@ export default function CompletionPopover({
 
   if (!open) return null;
 
+  // When *any* row in the current list carries a description we
+  // expand the popover and show the inline description on the row.
+  // Pure file/binary lists (no descriptions) keep the compact
+  // single-column shape so the popover doesn't grow gratuitously.
+  const hasDescriptions = items.some((it) => !!it.description);
+  const popoverWidth = hasDescriptions ? 480 : 320;
+
   return (
     <Popover
       open={open}
       anchor={anchor}
       onClose={onClose}
       placement="bottom-start"
-      width={320}
+      width={popoverWidth}
       closeOnScroll={false}
     >
       <div ref={listRef} className="completion-popover-list">
@@ -125,7 +138,16 @@ export default function CompletionPopover({
                   <Icon size={12} />
                 </span>
                 <span className="popover-item__label">{item.display}</span>
-                {item.hint ? (
+                {/* Library-driven rows show their description inline
+                  * to the right of the label (fish/warp style). When
+                  * no description exists we fall back to the legacy
+                  * `hint` slot used by binary path / "builtin"
+                  * markers — both render in the same muted column. */}
+                {item.description ? (
+                  <span className="completion-popover-desc">
+                    {item.description}
+                  </span>
+                ) : item.hint ? (
                   <span className="completion-popover-hint">{item.hint}</span>
                 ) : null}
               </button>

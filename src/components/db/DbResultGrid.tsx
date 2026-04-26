@@ -17,6 +17,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 
 import { useI18n } from "../../i18n/useI18n";
 import type { DataPreview } from "../../lib/types";
+import { prettyJsonish } from "./cellFormat";
 import type { DbMutation, GridColumnMeta } from "./dbColumnRules";
 
 type SortDir = "asc" | "desc";
@@ -474,17 +475,28 @@ export default function DbResultGrid({
                       const isDirty = dirtyVal !== null;
                       const display = dirtyVal !== null ? dirtyVal : cell;
                       const isNull = display === null || display === "" || display === "NULL";
+                      // JSONB / json / array-as-json values come
+                      // back compact. Show the pretty-printed form
+                      // on hover so the user can read it without
+                      // expanding the row. Plain text returns null
+                      // and the title attr just stays absent.
+                      const prettyTip =
+                        !isNull && typeof display === "string"
+                          ? prettyJsonish(display)
+                          : null;
                       const className =
                         "rg-td" +
                         (isNum ? " rg-td-num" : "") +
                         (isPk ? " rg-td-pk" : "") +
                         (isDirty ? " rg-td-dirty" : "") +
-                        (isEditing ? " rg-td-editing" : "");
+                        (isEditing ? " rg-td-editing" : "") +
+                        (prettyTip ? " rg-td-jsonish" : "");
                       return (
                         <td
                           key={ci}
                           className={className}
                           style={{ textAlign: isNum ? "right" : "left" }}
+                          title={prettyTip ?? undefined}
                           onDoubleClick={(e) => {
                             e.stopPropagation();
                             startEdit(absIdx, col);

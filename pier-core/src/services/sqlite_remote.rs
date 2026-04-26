@@ -186,7 +186,10 @@ pub async fn probe(session: &SshSession) -> RemoteSqliteCapability {
 pub async fn install(session: &SshSession) -> Result<RemoteSqliteInstallReport> {
     use crate::services::package_manager as pm;
 
-    let report = pm::install(session, "sqlite3", false, None, |_| {}).await?;
+    // The SQLite panel button has no version pin and no Cancel UI —
+    // pass `None` for both. Match arm below stays exhaustive for
+    // `Cancelled` defensively in case a future caller injects a token.
+    let report = pm::install(session, "sqlite3", false, None, |_| {}, None).await?;
     Ok(RemoteSqliteInstallReport {
         status: match report.status {
             pm::InstallStatus::Installed => RemoteSqliteInstallStatus::Installed,
@@ -194,7 +197,7 @@ pub async fn install(session: &SshSession) -> Result<RemoteSqliteInstallReport> 
             pm::InstallStatus::SudoRequiresPassword => {
                 RemoteSqliteInstallStatus::SudoRequiresPassword
             }
-            pm::InstallStatus::PackageManagerFailed => {
+            pm::InstallStatus::PackageManagerFailed | pm::InstallStatus::Cancelled => {
                 RemoteSqliteInstallStatus::PackageManagerFailed
             }
         },

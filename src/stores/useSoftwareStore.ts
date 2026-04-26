@@ -66,6 +66,12 @@ export type SoftwareActivity = {
   log: string[];
   error: string;
   busy: boolean;
+  /** Set the moment the user clicks Cancel and reset when the activity
+   *  finishes. Disables the cancel button so a double-click doesn't
+   *  fire two `software_install_cancel` invocations (harmless on the
+   *  backend, but the second one's `cancelled` event would re-flash
+   *  the row state). */
+  cancelling: boolean;
 };
 
 export function softwareKeyForTab(tab: TabState): Key | null {
@@ -115,6 +121,9 @@ type SoftwareStoreState = {
   /** Mirror a freshly-fetched version list into the per-package
    *  cache. Stamped with `Date.now()` for the TTL check below. */
   setVersionCache: (key: Key, packageId: string, versions: string[]) => void;
+  /** Mark a row as "cancel in flight" so the UI can disable the cancel
+   *  button between the click and the resulting `cancelled` event. */
+  setCancelling: (key: Key, packageId: string, cancelling: boolean) => void;
   invalidate: (key: Key) => void;
 };
 
@@ -180,6 +189,7 @@ export const useSoftwareStore = create<SoftwareStoreState>((set, get) => ({
                 log: [],
                 error: "",
                 busy: true,
+                cancelling: false,
               },
             },
           },
@@ -213,7 +223,14 @@ export const useSoftwareStore = create<SoftwareStoreState>((set, get) => ({
       if (!prev) return s;
       const a = prev.activity[packageId];
       const nextActivity = { ...prev.activity };
-      if (a) nextActivity[packageId] = { ...a, busy: false, error };
+      if (a) {
+        nextActivity[packageId] = {
+          ...a,
+          busy: false,
+          cancelling: false,
+          error,
+        };
+      }
       const nextStatuses = nextStatus
         ? { ...prev.statuses, [packageId]: nextStatus }
         : prev.statuses;
@@ -236,6 +253,26 @@ export const useSoftwareStore = create<SoftwareStoreState>((set, get) => ({
             versionCache: {
               ...prev.versionCache,
               [packageId]: { fetchedAt: Date.now(), versions },
+            },
+          },
+        },
+      };
+    }),
+
+  setCancelling: (key, packageId, cancelling) =>
+    set((s) => {
+      const prev = s.snapshots[key];
+      if (!prev) return s;
+      const a = prev.activity[packageId];
+      if (!a) return s;
+      return {
+        snapshots: {
+          ...s.snapshots,
+          [key]: {
+            ...prev,
+            activity: {
+              ...prev.activity,
+              [packageId]: { ...a, cancelling },
             },
           },
         },

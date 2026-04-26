@@ -17,8 +17,10 @@
 //! special-case any single tool.
 
 use serde::{Deserialize, Serialize};
+use tokio_util::sync::CancellationToken;
 
 use crate::ssh::error::{Result, SshError};
+use crate::ssh::session::CANCELLED_EXIT_CODE;
 use crate::ssh::SshSession;
 
 // ── Types ───────────────────────────────────────────────────────────
@@ -139,6 +141,12 @@ pub enum InstallStatus {
     /// The package manager exited non-zero and a follow-up probe still
     /// can't see the binary.
     PackageManagerFailed,
+    /// The caller-supplied [`CancellationToken`] fired while the package
+    /// manager was still running. We bail out without re-probing — the
+    /// remote process may still be alive (apt/dpkg lock, half-staged
+    /// packages); see PRODUCT-SPEC §5.11 v2 for the user-facing
+    /// caveat.
+    Cancelled,
 }
 
 /// Per-call options for [`uninstall`]. The frontend's uninstall dialog
@@ -262,6 +270,10 @@ pub enum UninstallStatus {
     /// We still surface this as a "successful" no-op so the UI can
     /// drop the row's "installed" badge.
     NotInstalled,
+    /// The caller-supplied [`CancellationToken`] fired while the
+    /// package manager was still running. Same caveat as
+    /// [`InstallStatus::Cancelled`].
+    Cancelled,
 }
 
 /// Structured result of an uninstall attempt. Mirrors [`InstallReport`]
@@ -678,17 +690,24 @@ pub async fn probe_all(session: &SshSession) -> Vec<PackageStatus> {
 ///
 /// `version` pins to a specific package-manager version when `Some`.
 /// pacman silently ignores it (Arch repos only carry the latest).
+///
+/// `cancel` is the cancellation token forwarded into
+/// [`SshSession::exec_command_streaming`]. When it fires mid-run the
+/// returned report has [`InstallStatus::Cancelled`] and the post-install
+/// probe / service-enable steps are skipped. `None` keeps the legacy
+/// behaviour.
 pub async fn install<F>(
     session: &SshSession,
     id: &str,
     enable_service: bool,
     version: Option<&str>,
     on_line: F,
+    cancel: Option<CancellationToken>,
 ) -> Result<InstallReport>
 where
     F: FnMut(&str),
 {
-    run_install_or_update(session, id, false, enable_service, version, on_line).await
+    run_install_or_update(session, id, false, enable_service, version, on_line, cancel).await
 }
 
 /// Update (re-install / upgrade) a single package. Only meaningful for
@@ -697,17 +716,20 @@ where
 ///
 /// `version` pins to a specific package-manager version when `Some`.
 /// pacman silently ignores it (Arch repos only carry the latest).
+///
+/// `cancel` semantics match [`install`].
 pub async fn update<F>(
     session: &SshSession,
     id: &str,
     enable_service: bool,
     version: Option<&str>,
     on_line: F,
+    cancel: Option<CancellationToken>,
 ) -> Result<InstallReport>
 where
     F: FnMut(&str),
 {
-    run_install_or_update(session, id, true, enable_service, version, on_line).await
+    run_install_or_update(session, id, true, enable_service, version, on_line, cancel).await
 }
 
 /// List the package-manager-visible versions for a descriptor on the
@@ -769,11 +791,12 @@ pub fn install_blocking<F>(
     enable_service: bool,
     version: Option<&str>,
     on_line: F,
+    cancel: Option<CancellationToken>,
 ) -> Result<InstallReport>
 where
     F: FnMut(&str),
 {
-    crate::ssh::runtime::shared().block_on(install(session, id, enable_service, version, on_line))
+    crate::ssh::runtime::shared().block_on(install(session, id, enable_service, version, on_line, cancel))
 }
 
 /// Blocking wrapper for [`update`].
@@ -783,11 +806,12 @@ pub fn update_blocking<F>(
     enable_service: bool,
     version: Option<&str>,
     on_line: F,
+    cancel: Option<CancellationToken>,
 ) -> Result<InstallReport>
 where
     F: FnMut(&str),
 {
-    crate::ssh::runtime::shared().block_on(update(session, id, enable_service, version, on_line))
+    crate::ssh::runtime::shared().block_on(update(session, id, enable_service, version, on_line, cancel))
 }
 
 /// Blocking wrapper for [`available_versions`]. Tauri commands using
@@ -819,11 +843,12 @@ pub async fn uninstall<F>(
     id: &str,
     opts: &UninstallOptions,
     on_line: F,
+    cancel: Option<CancellationToken>,
 ) -> Result<UninstallReport>
 where
     F: FnMut(&str),
 {
-    run_uninstall(session, id, opts, on_line).await
+    run_uninstall(session, id, opts, on_line, cancel).await
 }
 
 /// Blocking wrapper for [`uninstall`].
@@ -832,11 +857,12 @@ pub fn uninstall_blocking<F>(
     id: &str,
     opts: &UninstallOptions,
     on_line: F,
+    cancel: Option<CancellationToken>,
 ) -> Result<UninstallReport>
 where
     F: FnMut(&str),
 {
-    crate::ssh::runtime::shared().block_on(uninstall(session, id, opts, on_line))
+    crate::ssh::runtime::shared().block_on(uninstall(session, id, opts, on_line, cancel))
 }
 
 /// Drive a `systemctl <verb> <unit>` for one descriptor's service.
@@ -918,6 +944,7 @@ async fn run_install_or_update<F>(
     enable_service: bool,
     version: Option<&str>,
     mut on_line: F,
+    cancel: Option<CancellationToken>,
 ) -> Result<InstallReport>
 where
     F: FnMut(&str),
@@ -965,15 +992,41 @@ where
 
     let mut tail_lines: Vec<String> = Vec::new();
     let (exit_code, _full) = session
-        .exec_command_streaming(&command, |line| {
-            on_line(line);
-            tail_lines.push(line.to_string());
-            if tail_lines.len() > 80 {
-                tail_lines.drain(0..tail_lines.len() - 60);
-            }
-        })
+        .exec_command_streaming(
+            &command,
+            |line| {
+                on_line(line);
+                tail_lines.push(line.to_string());
+                if tail_lines.len() > 80 {
+                    tail_lines.drain(0..tail_lines.len() - 60);
+                }
+            },
+            cancel.clone(),
+        )
         .await?;
     let output_tail = tail_lines.join("\n");
+
+    // Cancellation has to be checked BEFORE the "looks like sudo" /
+    // post-probe / service-enable branches: those would fire fresh
+    // commands on the same session and can mask the user's bail-out
+    // intent. The CANCELLED_EXIT_CODE check covers both the case where
+    // we tripped the select! arm ourselves and the rare case where the
+    // remote happened to surface the same code.
+    if exit_code == CANCELLED_EXIT_CODE
+        || cancel.as_ref().is_some_and(|t| t.is_cancelled())
+    {
+        return Ok(InstallReport {
+            package_id: id.to_string(),
+            status: InstallStatus::Cancelled,
+            distro_id: env.distro_id,
+            package_manager: manager.as_str().to_string(),
+            command,
+            exit_code,
+            output_tail,
+            installed_version: None,
+            service_active: None,
+        });
+    }
 
     if !env.is_root && looks_like_sudo_password_prompt(&output_tail) {
         return Ok(InstallReport {
@@ -1013,7 +1066,7 @@ where
                 ))
             );
             let _ = session
-                .exec_command_streaming(&svc_cmd, &mut on_line)
+                .exec_command_streaming(&svc_cmd, &mut on_line, cancel.clone())
                 .await;
             Some(systemctl_is_active(session, unit).await)
         } else {
@@ -1052,6 +1105,7 @@ async fn run_uninstall<F>(
     id: &str,
     opts: &UninstallOptions,
     mut on_line: F,
+    cancel: Option<CancellationToken>,
 ) -> Result<UninstallReport>
 where
     F: FnMut(&str),
@@ -1113,15 +1167,36 @@ where
 
     let mut tail_lines: Vec<String> = Vec::new();
     let (exit_code, _full) = session
-        .exec_command_streaming(&command, |line| {
-            on_line(line);
-            tail_lines.push(line.to_string());
-            if tail_lines.len() > 80 {
-                tail_lines.drain(0..tail_lines.len() - 60);
-            }
-        })
+        .exec_command_streaming(
+            &command,
+            |line| {
+                on_line(line);
+                tail_lines.push(line.to_string());
+                if tail_lines.len() > 80 {
+                    tail_lines.drain(0..tail_lines.len() - 60);
+                }
+            },
+            cancel.clone(),
+        )
         .await?;
     let output_tail = tail_lines.join("\n");
+
+    // Same fast-path-out as the install side: cancel beats every other
+    // post-action branch, including the post-removal probe.
+    if exit_code == CANCELLED_EXIT_CODE
+        || cancel.as_ref().is_some_and(|t| t.is_cancelled())
+    {
+        return Ok(UninstallReport {
+            package_id: id.to_string(),
+            status: UninstallStatus::Cancelled,
+            distro_id: env.distro_id,
+            package_manager: manager.as_str().to_string(),
+            command,
+            exit_code,
+            output_tail,
+            data_dirs_removed: false,
+        });
+    }
 
     if !env.is_root && looks_like_sudo_password_prompt(&output_tail) {
         return Ok(UninstallReport {
@@ -1199,13 +1274,17 @@ where
 
     let mut tail_lines: Vec<String> = Vec::new();
     let (exit_code, _full) = session
-        .exec_command_streaming(&command, |line| {
-            on_line(line);
-            tail_lines.push(line.to_string());
-            if tail_lines.len() > 80 {
-                tail_lines.drain(0..tail_lines.len() - 60);
-            }
-        })
+        .exec_command_streaming(
+            &command,
+            |line| {
+                on_line(line);
+                tail_lines.push(line.to_string());
+                if tail_lines.len() > 80 {
+                    tail_lines.drain(0..tail_lines.len() - 60);
+                }
+            },
+            None,
+        )
         .await?;
     let output_tail = tail_lines.join("\n");
 
@@ -2239,6 +2318,21 @@ mod tests {
                 d.id, expected,
             );
         }
+    }
+
+    #[test]
+    fn install_status_cancelled_serializes_with_kebab_kind() {
+        // The `kind` discriminant is what crosses the IPC seam to the
+        // Tauri view layer — if this changes, the frontend dispatch on
+        // `report.status` silently misses the cancelled branch.
+        let json = serde_json::to_string(&InstallStatus::Cancelled).unwrap();
+        assert_eq!(json, r#"{"kind":"cancelled"}"#);
+    }
+
+    #[test]
+    fn uninstall_status_cancelled_serializes_with_kebab_kind() {
+        let json = serde_json::to_string(&UninstallStatus::Cancelled).unwrap();
+        assert_eq!(json, r#"{"kind":"cancelled"}"#);
     }
 
     #[test]

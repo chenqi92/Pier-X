@@ -30,6 +30,7 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 use tauri::{Emitter, Manager};
+use tokio_util::sync::CancellationToken;
 
 mod git_panel;
 use git_panel::*;
@@ -109,6 +110,14 @@ struct AppState {
     /// In-memory only; cleared on app exit. See
     /// [`ssh_cred_cache::SshCredCache`] for the rationale.
     ssh_cred_cache: SshCredCache,
+    /// In-flight cancellation tokens for the Software panel's
+    /// install / update / uninstall lifecycles. Keyed by the same
+    /// `installId` the frontend already generates per-row, so the
+    /// cancel command is a one-line `HashMap::get`. Tokens are
+    /// inserted right before the `spawn_blocking` task starts and
+    /// removed in the join branch — success, failure, and explicit
+    /// cancel all clean up.
+    software_cancel: Mutex<HashMap<String, CancellationToken>>,
 }
 
 impl Default for AppState {
@@ -125,6 +134,7 @@ impl Default for AppState {
             session_init_guards: Mutex::new(HashMap::new()),
             monitor_net_baselines: Mutex::new(HashMap::new()),
             ssh_cred_cache: SshCredCache::default(),
+            software_cancel: Mutex::new(HashMap::new()),
         }
     }
 }
@@ -5721,6 +5731,7 @@ fn install_status_kebab(status: package_manager::InstallStatus) -> &'static str 
         package_manager::InstallStatus::UnsupportedDistro => "unsupported-distro",
         package_manager::InstallStatus::SudoRequiresPassword => "sudo-requires-password",
         package_manager::InstallStatus::PackageManagerFailed => "package-manager-failed",
+        package_manager::InstallStatus::Cancelled => "cancelled",
     }
 }
 
@@ -5731,6 +5742,7 @@ fn uninstall_status_kebab(status: package_manager::UninstallStatus) -> &'static 
         package_manager::UninstallStatus::SudoRequiresPassword => "sudo-requires-password",
         package_manager::UninstallStatus::PackageManagerFailed => "package-manager-failed",
         package_manager::UninstallStatus::NotInstalled => "not-installed",
+        package_manager::UninstallStatus::Cancelled => "cancelled",
     }
 }
 
@@ -5828,6 +5840,12 @@ async fn software_probe_remote(
 /// Run a streaming install or update. The synchronous body emits a
 /// `line` event per stdout/stderr line and a final `done` event with
 /// the structured report; on join failure we emit `failed`.
+///
+/// Registers a [`CancellationToken`] keyed by `install_id` in
+/// `AppState.software_cancel` so a sibling `software_install_cancel`
+/// invocation can flip it. The token is removed in every exit path —
+/// success, package-manager failure, runtime cancel, or join error —
+/// so a stale entry can't accumulate.
 async fn software_install_or_update_inner(
     app: tauri::AppHandle,
     host: String,
@@ -5845,6 +5863,8 @@ async fn software_install_or_update_inner(
 ) -> Result<SoftwareInstallReportView, String> {
     let app_for_failure = app.clone();
     let install_id_for_failure = install_id.clone();
+    let token = register_software_cancel(&app, &install_id);
+    let token_for_task = token.clone();
     let join = tauri::async_runtime::spawn_blocking(move || {
         let state: tauri::State<'_, AppState> = app.state();
         let session = get_or_open_ssh_session(
@@ -5879,6 +5899,7 @@ async fn software_install_or_update_inner(
                 enable_service,
                 version_ref,
                 on_line,
+                Some(token_for_task.clone()),
             )
         } else {
             package_manager::install_blocking(
@@ -5887,15 +5908,26 @@ async fn software_install_or_update_inner(
                 enable_service,
                 version_ref,
                 on_line,
+                Some(token_for_task.clone()),
             )
         }
         .map_err(|e| e.to_string())?;
         let view = report_to_view(report);
+        // When pier-core decided the run was cancelled, emit a
+        // `cancelled` event instead of `done`. The frontend treats
+        // cancelled as terminal (same as done/failed) and clears the
+        // row's busy state, but the activity log carries the localized
+        // "cancelled" outcome rather than a fake-success report.
+        let kind = if view.status == "cancelled" {
+            "cancelled"
+        } else {
+            "done"
+        };
         let _ = app.emit(
             SOFTWARE_INSTALL_EVENT,
             SoftwareInstallEvent {
                 install_id: install_id.clone(),
-                kind: "done".to_string(),
+                kind: kind.to_string(),
                 text: None,
                 report: Some(view.clone()),
                 message: None,
@@ -5904,6 +5936,7 @@ async fn software_install_or_update_inner(
         Ok::<_, String>(view)
     })
     .await;
+    unregister_software_cancel(&app_for_failure, &install_id_for_failure);
     match join {
         Ok(inner) => inner,
         Err(e) => {
@@ -5921,6 +5954,28 @@ async fn software_install_or_update_inner(
             Err(msg)
         }
     }
+}
+
+/// Register a fresh cancellation token under `install_id` and return a
+/// clone for the task to consume. If a task with the same id is
+/// already registered (the frontend should never do this, but guard
+/// anyway), the prior token is dropped — the prior task keeps its
+/// clone and continues unaffected, but a subsequent cancel call can
+/// only reach the new task.
+fn register_software_cancel(app: &tauri::AppHandle, install_id: &str) -> CancellationToken {
+    let state: tauri::State<'_, AppState> = app.state();
+    let token = CancellationToken::new();
+    if let Ok(mut map) = state.software_cancel.lock() {
+        map.insert(install_id.to_string(), token.clone());
+    }
+    token
+}
+
+fn unregister_software_cancel(app: &tauri::AppHandle, install_id: &str) {
+    let state: tauri::State<'_, AppState> = app.state();
+    if let Ok(mut map) = state.software_cancel.lock() {
+        map.remove(install_id);
+    };
 }
 
 #[tauri::command]
@@ -6044,6 +6099,8 @@ async fn software_uninstall_remote(
 ) -> Result<SoftwareUninstallReportView, String> {
     let app_for_failure = app.clone();
     let install_id_for_failure = install_id.clone();
+    let token = register_software_cancel(&app, &install_id);
+    let token_for_task = token.clone();
     let join = tauri::async_runtime::spawn_blocking(move || {
         let state: tauri::State<'_, AppState> = app.state();
         let session = get_or_open_ssh_session(
@@ -6070,15 +6127,25 @@ async fn software_uninstall_remote(
                 },
             );
         };
-        let report =
-            package_manager::uninstall_blocking(&session, &package_id, &options, on_line)
-                .map_err(|e| e.to_string())?;
+        let report = package_manager::uninstall_blocking(
+            &session,
+            &package_id,
+            &options,
+            on_line,
+            Some(token_for_task.clone()),
+        )
+        .map_err(|e| e.to_string())?;
         let view = uninstall_report_to_view(report);
+        let kind = if view.status == "cancelled" {
+            "cancelled"
+        } else {
+            "done"
+        };
         let _ = app.emit(
             SOFTWARE_UNINSTALL_EVENT,
             SoftwareUninstallEvent {
                 install_id: install_id.clone(),
-                kind: "done".to_string(),
+                kind: kind.to_string(),
                 text: None,
                 report: Some(view.clone()),
                 message: None,
@@ -6087,6 +6154,7 @@ async fn software_uninstall_remote(
         Ok::<_, String>(view)
     })
     .await;
+    unregister_software_cancel(&app_for_failure, &install_id_for_failure);
     match join {
         Ok(inner) => inner,
         Err(e) => {
@@ -6297,6 +6365,62 @@ async fn software_service_logs_remote(
     })
     .await
     .map_err(|e| format!("software_service_logs_remote join: {e}"))?
+}
+
+/// Trigger the registered cancellation token for `install_id`. Resolves
+/// to `Ok(())` even when no task is running for that id — the user may
+/// have clicked Cancel right after the install completed; surfacing
+/// "no such task" as an error would be a UX regression. We do still
+/// emit a `cancelled` event in that case to give the frontend a single
+/// terminal signal it can hang state-reset off.
+///
+/// We can't tell from the install_id alone whether the task is an
+/// install or an uninstall, so the cancel event is fanned out on both
+/// channels — the frontend's per-id subscription filters it back down.
+#[tauri::command]
+async fn software_install_cancel(
+    app: tauri::AppHandle,
+    install_id: String,
+) -> Result<(), String> {
+    let token = {
+        let state: tauri::State<'_, AppState> = app.state();
+        let map = state
+            .software_cancel
+            .lock()
+            .map_err(|e| format!("software_cancel lock: {e}"))?;
+        map.get(&install_id).cloned()
+    };
+    if let Some(tok) = token {
+        tok.cancel();
+    }
+    // Fan the cancelled signal out on both channels — the install
+    // channel covers install + update activity, the uninstall channel
+    // covers uninstall. The frontend filters by install_id, so
+    // whichever subscription matches will pick it up.
+    let _ = app.emit(
+        SOFTWARE_INSTALL_EVENT,
+        SoftwareInstallEvent {
+            install_id: install_id.clone(),
+            kind: "cancelled".to_string(),
+            text: None,
+            report: None,
+            message: None,
+        },
+    );
+    let _ = app.emit(
+        SOFTWARE_UNINSTALL_EVENT,
+        SoftwareUninstallEvent {
+            install_id: install_id.clone(),
+            kind: "cancelled".to_string(),
+            text: None,
+            report: None,
+            message: None,
+        },
+    );
+    // Drop the entry now so a second cancel for the same id is a no-op
+    // even if the task hasn't unwound yet.
+    unregister_software_cancel(&app, &install_id);
+    Ok(())
 }
 
 // ── Nginx panel ────────────────────────────────────────────────
@@ -8833,6 +8957,7 @@ pub fn run() {
             software_versions_remote,
             software_service_action_remote,
             software_service_logs_remote,
+            software_install_cancel,
             nginx_layout,
             nginx_read_file,
             nginx_save_file,

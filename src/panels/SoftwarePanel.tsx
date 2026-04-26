@@ -13,6 +13,7 @@ import {
   Square,
   Trash2,
   Zap,
+  X,
 } from "lucide-react";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 
@@ -84,6 +85,7 @@ function SoftwarePanelBody({ tab }: Props) {
   const [versionsLoading, setVersionsLoading] = useState<Record<string, boolean>>(
     {},
   );
+  const setCancelling = useSoftwareStore((s) => s.setCancelling);
 
   const [registry, setRegistry] = useState<SoftwareDescriptor[]>([]);
   const [enableService, setEnableService] = useState(true);
@@ -262,7 +264,14 @@ function SoftwarePanelBody({ tab }: Props) {
   /** Kick off an uninstall for `descriptor` with the dialog's options.
    *  Mirrors the install handler's lifecycle: generate an installId,
    *  start activity, subscribe to the per-installId stream, fire the
-   *  command, mirror outcome into the store, then unsubscribe. */
+   *  command, mirror outcome into the store, then unsubscribe.
+   *
+   *  Cancellation race: if a `cancelled` event arrives during the
+   *  await — either because the user clicked Cancel and the backend
+   *  fanned the signal out, or pier-core observed the token mid-run —
+   *  the listener writes the cancelled outcome and the post-await
+   *  block early-returns so the resolved report can't overwrite it.
+   *  This implements the "cancelled wins over done" rule. */
   async function runUninstall(
     descriptor: SoftwareDescriptor,
     options: UninstallOptions,
@@ -274,9 +283,13 @@ function SoftwarePanelBody({ tab }: Props) {
         ? crypto.randomUUID()
         : `${Date.now()}-${Math.random()}`;
     startActivity(swKey, descriptor.id, installId, "uninstall");
+    let cancelledSeen = false;
     const unlisten = await cmd.subscribeSoftwareUninstall(installId, (evt) => {
       if (evt.kind === "line") {
         appendLine(swKey, descriptor.id, evt.text);
+      } else if (evt.kind === "cancelled") {
+        cancelledSeen = true;
+        finishActivity(swKey, descriptor.id, t("Cancelled"), null);
       }
     });
     try {
@@ -286,6 +299,11 @@ function SoftwarePanelBody({ tab }: Props) {
         installId,
         options,
       });
+      if (cancelledSeen) return;
+      if (report.status === "cancelled") {
+        finishActivity(swKey, descriptor.id, t("Cancelled"), null);
+        return;
+      }
       const localized = describeUninstallOutcome(report, t);
       // Refresh status: when the package is gone, drop installed/version;
       // when the remove failed, leave the prior status untouched (the
@@ -308,9 +326,30 @@ function SoftwarePanelBody({ tab }: Props) {
         nextStatus,
       );
     } catch (e) {
+      if (cancelledSeen) return;
       finishActivity(swKey, descriptor.id, formatError(e), null);
     } finally {
       unlisten();
+    }
+  }
+
+  /** Trigger the backend cancel for the row's in-flight activity.
+   *  No-op when the row isn't busy or has already requested cancel.
+   *  The backend may not be able to actually stop the remote process —
+   *  see the disclaimer in the i18n string and PRODUCT-SPEC §5.11 v2. */
+  async function cancelRow(packageId: string) {
+    if (!swKey) return;
+    const a = snapshot?.activity[packageId];
+    if (!a || !a.busy || a.cancelling) return;
+    setCancelling(swKey, packageId, true);
+    try {
+      await cmd.softwareInstallCancel(a.installId);
+    } catch {
+      // softwareInstallCancel resolves Ok even when the backend can't
+      // find the install_id — any error here is an IPC failure, in
+      // which case the cancelled event won't arrive and the user is
+      // stuck. Reset the cancelling flag so they can retry.
+      setCancelling(swKey, packageId, false);
     }
   }
 
@@ -385,6 +424,7 @@ function SoftwarePanelBody({ tab }: Props) {
             onUninstall={() => setUninstallTarget(descriptor)}
             onServiceAction={(action) => void runServiceAction(descriptor, action)}
             onViewLogs={() => setLogTarget(descriptor)}
+            onCancel={() => void cancelRow(descriptor.id)}
             onAction={async (action) => {
               if (!sshParams || !swKey) return;
               const installId =
@@ -392,14 +432,25 @@ function SoftwarePanelBody({ tab }: Props) {
                   ? crypto.randomUUID()
                   : `${Date.now()}-${Math.random()}`;
               startActivity(swKey, descriptor.id, installId, action);
+              // Same cancel-vs-done race guard as `runUninstall` — see
+              // the comment block there.
+              let cancelledSeen = false;
               const unlisten = await cmd.subscribeSoftwareInstall(
                 installId,
                 (evt) => {
                   if (evt.kind === "line") {
                     appendLine(swKey, descriptor.id, evt.text);
+                  } else if (evt.kind === "cancelled") {
+                    cancelledSeen = true;
+                    finishActivity(
+                      swKey,
+                      descriptor.id,
+                      t("Cancelled"),
+                      null,
+                    );
                   }
-                  // The `done` and `failed` paths are handled by the
-                  // promise resolve/reject below — no extra work here.
+                  // `done` / `failed` are handled by the promise
+                  // resolve/reject below — no extra work here.
                 },
               );
               try {
@@ -414,6 +465,11 @@ function SoftwarePanelBody({ tab }: Props) {
                   action === "update"
                     ? await cmd.softwareUpdateRemote(params)
                     : await cmd.softwareInstallRemote(params);
+                if (cancelledSeen) return;
+                if (report.status === "cancelled") {
+                  finishActivity(swKey, descriptor.id, t("Cancelled"), null);
+                  return;
+                }
                 const localized = describeInstallOutcome(report, t);
                 const nextStatus: SoftwarePackageStatus = {
                   id: descriptor.id,
@@ -428,6 +484,7 @@ function SoftwarePanelBody({ tab }: Props) {
                   nextStatus,
                 );
               } catch (e) {
+                if (cancelledSeen) return;
                 finishActivity(swKey, descriptor.id, formatError(e), null);
               } finally {
                 unlisten();
@@ -529,12 +586,8 @@ function describeServiceOutcome(
   }
 }
 
-// `describeOutcome` (install) is now in lib/softwareInstall.ts as
-// `describeInstallOutcome` — imported via `describeInstallOutcome`.
-
-// `describeOutcome` was duplicated here pre-rebase; the canonical
-// implementation now lives in `src/lib/softwareInstall.ts` as
-// `describeInstallOutcome` (already imported at the top of this file).
+// `describeInstallOutcome` (and the `cancelled` case for it) lives in
+// `src/lib/softwareInstall.ts` — imported at the top of this file.
 
 function SoftwareRow({
   descriptor,
@@ -553,6 +606,7 @@ function SoftwareRow({
   onUninstall,
   onServiceAction,
   onViewLogs,
+  onCancel,
 }: {
   descriptor: SoftwareDescriptor;
   status: SoftwarePackageStatus | null;
@@ -563,6 +617,7 @@ function SoftwareRow({
         log: string[];
         error: string;
         busy: boolean;
+        cancelling: boolean;
       }
     | null;
   disabledOtherBusy: boolean;
@@ -593,6 +648,8 @@ function SoftwareRow({
   onServiceAction: (action: SoftwareServiceAction) => void;
   /** Open the journalctl viewer for this row. */
   onViewLogs: () => void;
+  /** Trigger backend cancel for the row's in-flight activity. */
+  onCancel: () => void;
 }) {
   const { t } = useI18n();
   const logRef = useRef<HTMLPreElement>(null);
@@ -604,6 +661,7 @@ function SoftwareRow({
   const version = status?.version ?? null;
   const serviceActive = status?.serviceActive ?? null;
   const busy = activity?.busy ?? false;
+  const cancelling = activity?.cancelling ?? false;
   const action: "install" | "update" = installed ? "update" : "install";
   const buttonDisabled = busy || disabledOtherBusy || !canManage;
   const menuDisabled = busy || disabledOtherBusy;
@@ -668,98 +726,113 @@ function SoftwareRow({
           )}
         </span>
         <span className="sw-row__actions">
-          <span className="sw-row__split-btn">
+          {busy ? (
             <button
               type="button"
-              className={`btn is-primary is-compact${
-                supportsVersionPick ? " sw-row__split-btn-main" : ""
-              }`}
-              disabled={buttonDisabled}
-              onClick={() => void onAction(action)}
-            >
-              <Download size={10} />
-              {primaryButtonLabel({
-                t,
-                action,
-                busy,
-                activityKind: activity?.kind,
-                selectedVersion,
-              })}
-            </button>
-            {supportsVersionPick && (
-              <button
-                ref={versionButtonRef}
-                type="button"
-                className="btn is-primary is-compact sw-row__split-btn-chevron"
-                disabled={buttonDisabled}
-                title={t("Pick version...")}
-                onClick={() => {
-                  setVersionMenuOpen((cur) => {
-                    const opening = !cur;
-                    if (opening) onLoadVersions();
-                    return opening;
-                  });
-                }}
-              >
-                <ChevronDown size={10} />
-              </button>
-            )}
-            <Popover
-              open={versionMenuOpen}
-              anchor={versionButtonRef.current}
-              onClose={() => setVersionMenuOpen(false)}
-              placement="bottom-end"
-              width={220}
-              className="ctx-menu sw-row-version-menu"
-            >
-              <button
-                type="button"
-                className="ctx-menu__item"
-                onClick={() => {
-                  onSelectVersion(undefined);
-                  setVersionMenuOpen(false);
-                }}
-              >
-                <span className="ctx-menu__label">
-                  <span className="sw-row-version-menu__check">
-                    {selectedVersion === undefined && <Check size={10} />}
-                  </span>
-                  {t("Latest")}
-                </span>
-              </button>
-              {versionsLoading && (
-                <div className="sw-row-version-menu__hint">
-                  {t("Loading versions...")}
-                </div>
+              className="btn is-danger is-compact"
+              disabled={cancelling}
+              onClick={onCancel}
+              title={t(
+                "Cancel signal sent — the remote may still be running.",
               )}
-              {!versionsLoading &&
-                availableVersions !== null &&
-                availableVersions.length === 0 && (
+            >
+              <X size={10} />
+              {cancelling ? t("Cancelling...") : t("Cancel")}
+            </button>
+          ) : (
+            <span className="sw-row__split-btn">
+              <button
+                type="button"
+                className={`btn is-primary is-compact${
+                  supportsVersionPick ? " sw-row__split-btn-main" : ""
+                }`}
+                disabled={buttonDisabled}
+                onClick={() => void onAction(action)}
+              >
+                <Download size={10} />
+                {primaryButtonLabel({
+                  t,
+                  action,
+                  busy,
+                  activityKind: activity?.kind,
+                  selectedVersion,
+                })}
+              </button>
+              {supportsVersionPick && (
+                <button
+                  ref={versionButtonRef}
+                  type="button"
+                  className="btn is-primary is-compact sw-row__split-btn-chevron"
+                  disabled={buttonDisabled}
+                  title={t("Pick version...")}
+                  onClick={() => {
+                    setVersionMenuOpen((cur) => {
+                      const opening = !cur;
+                      if (opening) onLoadVersions();
+                      return opening;
+                    });
+                  }}
+                >
+                  <ChevronDown size={10} />
+                </button>
+              )}
+              <Popover
+                open={versionMenuOpen}
+                anchor={versionButtonRef.current}
+                onClose={() => setVersionMenuOpen(false)}
+                placement="bottom-end"
+                width={220}
+                className="ctx-menu sw-row-version-menu"
+              >
+                <button
+                  type="button"
+                  className="ctx-menu__item"
+                  onClick={() => {
+                    onSelectVersion(undefined);
+                    setVersionMenuOpen(false);
+                  }}
+                >
+                  <span className="ctx-menu__label">
+                    <span className="sw-row-version-menu__check">
+                      {selectedVersion === undefined && <Check size={10} />}
+                    </span>
+                    {t("Latest")}
+                  </span>
+                </button>
+                {versionsLoading && (
                   <div className="sw-row-version-menu__hint">
-                    {t("No specific versions available")}
+                    {t("Loading versions...")}
                   </div>
                 )}
-              {!versionsLoading &&
-                availableVersions?.map((v) => (
-                  <button
-                    key={v}
-                    type="button"
-                    className="ctx-menu__item"
-                    onClick={() => {
-                      onSelectVersion(v);
-                      setVersionMenuOpen(false);
-                    }}
-                  >
-                    <span className="ctx-menu__label">
-                      <span className="sw-row-version-menu__check">
-                        {selectedVersion === v && <Check size={10} />}
+                {!versionsLoading &&
+                  availableVersions !== null &&
+                  availableVersions.length === 0 && (
+                    <div className="sw-row-version-menu__hint">
+                      {t("No specific versions available")}
+                    </div>
+                  )}
+                {!versionsLoading &&
+                  availableVersions?.map((v) => (
+                    <button
+                      key={v}
+                      type="button"
+                      className="ctx-menu__item"
+                      onClick={() => {
+                        onSelectVersion(v);
+                        setVersionMenuOpen(false);
+                      }}
+                    >
+                      <span className="ctx-menu__label">
+                        <span className="sw-row-version-menu__check">
+                          {selectedVersion === v && <Check size={10} />}
+                        </span>
+                        <span className="mono">{v}</span>
                       </span>
-                      <span className="mono">{v}</span>
-                    </span>
-                  </button>
-                ))}
-            </Popover>
-          </span>
+                    </button>
+                  ))}
+              </Popover>
+            </span>
+          )}
           <button
             ref={menuButtonRef}
             type="button"
@@ -923,6 +996,8 @@ function describeUninstallOutcome(
         pm: report.packageManager || "—",
         code: report.exitCode,
       });
+    case "cancelled":
+      return t("Cancelled");
   }
 }
 

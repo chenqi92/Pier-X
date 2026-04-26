@@ -42,6 +42,8 @@ export function describeInstallOutcome(
         pm: report.packageManager || "—",
         code: report.exitCode,
       });
+    case "cancelled":
+      return t("Cancelled");
   }
 }
 

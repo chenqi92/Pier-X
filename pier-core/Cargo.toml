@@ -91,6 +91,13 @@ tokio = { version = "1", default-features = false, features = [
     "rt-multi-thread", "time", "net", "sync", "io-util", "macros", "fs",
 ] }
 
+# Cancellation token plumbing for long-running streamed remote
+# commands (apt install, docker pull, …) — `tokio::select!`-friendly
+# trigger that we hand into `SshSession::exec_command_streaming` so
+# the Software panel can abort an in-flight install without tearing
+# down the whole SSH session.
+tokio-util = { version = "0.7", default-features = false }
+
 # Cross-platform process inspection for the SSH watcher: the
 # local terminal's child tree is scanned once per second so the
 # right-side Server Monitor panel can follow a `ssh user@host`

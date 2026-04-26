@@ -4149,6 +4149,7 @@ dependencies = [
  "thiserror 2.0.18",
  "tokio",
  "tokio-postgres",
+ "tokio-util",
  "vte",
  "windows-sys 0.61.2",
 ]
@@ -4178,6 +4179,7 @@ dependencies = [
  "tauri-plugin-clipboard-manager",
  "tauri-plugin-dialog",
  "tauri-plugin-opener",
+ "tokio-util",
 ]
 
 [[package]]

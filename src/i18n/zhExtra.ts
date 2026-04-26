@@ -1316,6 +1316,11 @@ export const zhExtra: Record<string, string> = {
   "Re-fetch the latest entries": "重新拉取最近的日志",
   "Loading...": "加载中…",
   "No journal entries found.": "未找到 journal 日志。",
+  // Right-side Software panel — cancel (v2)
+  "Cancelling...": "取消中…",
+  "Cancelled": "已取消",
+  "Cancel signal sent — the remote may still be running.":
+    "已发送取消信号，远端可能仍在执行（apt 中断常留 dpkg lock，需手动清理）。",
 
   // Right-side Nginx panel
   "Nginx": "Nginx",

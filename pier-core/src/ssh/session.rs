@@ -30,12 +30,22 @@ use std::time::Duration;
 
 use russh::client::{self, Handle};
 use russh::keys::ssh_key::PublicKey;
+use tokio_util::sync::CancellationToken;
 
 use super::channel::SshChannelPty;
 use super::config::{AuthMethod, SshConfig};
 use super::error::{Result, SshError};
 use super::known_hosts::HostKeyVerifier;
 use super::runtime;
+
+/// Sentinel exit code returned by [`SshSession::exec_command_streaming`]
+/// when a caller-supplied [`CancellationToken`] fires before the remote
+/// command produced its own exit status. Distinct from `-1` (channel
+/// closed without an `ExitStatus`) and from any real shell exit code so
+/// callers — most importantly `services::package_manager` — can branch
+/// on "user cancelled" without misreading a remote `exit 254` as a
+/// cancellation.
+pub const CANCELLED_EXIT_CODE: i32 = -2;
 
 /// A live SSH session. Cheap to clone — the underlying
 /// `russh::client::Handle` is internally reference-counted, so
@@ -685,7 +695,7 @@ impl SshSession {
     /// service_detector's substring-based matching never hits
     /// a decode error from a mis-tagged binary on the remote.
     pub async fn exec_command(&self, command: &str) -> Result<(i32, String)> {
-        self.exec_command_streaming(command, |_| {}).await
+        self.exec_command_streaming(command, |_| {}, None).await
     }
 
     /// Sync convenience for [`Self::exec_command`].
@@ -708,10 +718,23 @@ impl SshSession {
     /// Long-running installs (`apt-get update && install`, `docker pull`)
     /// rely on this so the panel can render progress instead of waiting
     /// 30+ seconds for one final dump.
+    ///
+    /// `cancel = Some(token)` makes the loop cancellable: the moment the
+    /// token fires we close the channel and return early with
+    /// `exit_code = ` [`CANCELLED_EXIT_CODE`] (`-2`). `cancel = None`
+    /// preserves the pre-cancellation behaviour for every existing
+    /// caller (no select overhead, no behavioural change).
+    ///
+    /// Note that a successful cancel only stops *us* from reading more
+    /// output — the remote process is still alive. Package-manager
+    /// front-ends like `apt-get install` may leave a `dpkg` lock held;
+    /// the user is expected to clean that up. This trade-off is
+    /// documented in the Software panel's PRODUCT-SPEC §5.11 v2 note.
     pub async fn exec_command_streaming<F>(
         &self,
         command: &str,
         mut on_line: F,
+        cancel: Option<CancellationToken>,
     ) -> Result<(i32, String)>
     where
         F: FnMut(&str),
@@ -722,8 +745,31 @@ impl SshSession {
         let mut full = Vec::new();
         let mut line_buf: Vec<u8> = Vec::new();
         let mut exit_code: i32 = -1;
+        let mut cancelled = false;
         loop {
-            let Some(msg) = channel.wait().await else {
+            // Race the remote message stream against the cancellation
+            // token when one was supplied. `biased;` forces the cancel
+            // branch to be polled first — without it, a busy stream of
+            // Data frames could keep us scheduled on `channel.wait()`
+            // and starve the cancel arm. With `cancel = None` we take
+            // the no-overhead fast path.
+            let next = match &cancel {
+                Some(tok) => {
+                    tokio::select! {
+                        biased;
+                        _ = tok.cancelled() => {
+                            cancelled = true;
+                            None
+                        }
+                        msg = channel.wait() => msg,
+                    }
+                }
+                None => channel.wait().await,
+            };
+            if cancelled {
+                break;
+            }
+            let Some(msg) = next else {
                 // Channel closed without an ExitStatus — keep whatever
                 // we accumulated; callers check exit_code.
                 break;
@@ -745,6 +791,12 @@ impl SshSession {
                 _ => {}
             }
         }
+        if cancelled {
+            // Best-effort: tell the server we're done with this channel.
+            // We don't wait for confirmation — the user wanted out fast.
+            let _ = channel.close().await;
+            exit_code = CANCELLED_EXIT_CODE;
+        }
         if !line_buf.is_empty() {
             let trimmed = line_buf
                 .strip_suffix(b"\r")
@@ -759,11 +811,12 @@ impl SshSession {
         &self,
         command: &str,
         on_line: F,
+        cancel: Option<CancellationToken>,
     ) -> Result<(i32, String)>
     where
         F: FnMut(&str),
     {
-        runtime::shared().block_on(self.exec_command_streaming(command, on_line))
+        runtime::shared().block_on(self.exec_command_streaming(command, on_line, cancel))
     }
 
     /// Append `chunk` to the running buffer and emit any complete
@@ -1019,6 +1072,44 @@ mod tests {
         assert_eq!(
             drain_capture(b"crlf\r\nlf\n", &mut full, &mut buf),
             vec!["crlf", "lf"],
+        );
+    }
+
+    /// Exercises the same `tokio::select!` shape used by
+    /// [`SshSession::exec_command_streaming`] when a cancellation token
+    /// is supplied. We can't reach the real method without an SSH
+    /// server, so this asserts the cancellable wait pattern itself —
+    /// when the token fires, the future stops within ~tens of ms and
+    /// surfaces a "cancelled" outcome the caller can map to
+    /// [`CANCELLED_EXIT_CODE`].
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn cancellable_wait_pattern_returns_within_100ms() {
+        let token = CancellationToken::new();
+        let trigger = token.clone();
+
+        // Fire the cancel after 20ms — well inside the 100ms budget the
+        // package-manager spec promises the user.
+        tokio::spawn(async move {
+            tokio::time::sleep(Duration::from_millis(20)).await;
+            trigger.cancel();
+        });
+
+        let start = std::time::Instant::now();
+        // Stand-in for `channel.wait()` — a future that would normally
+        // stay pending for a long time. The select! inside the real
+        // implementation drops it the instant the token fires.
+        let fake_wait = tokio::time::sleep(Duration::from_secs(60));
+        let outcome = tokio::select! {
+            biased;
+            _ = token.cancelled() => CANCELLED_EXIT_CODE,
+            _ = fake_wait => 0,
+        };
+        let elapsed = start.elapsed();
+
+        assert_eq!(outcome, CANCELLED_EXIT_CODE);
+        assert!(
+            elapsed < Duration::from_millis(100),
+            "cancel should observe within 100ms but took {elapsed:?}",
         );
     }
 

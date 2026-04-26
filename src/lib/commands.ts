@@ -1022,7 +1022,12 @@ export type SoftwareProbeResult = {
   statuses: SoftwarePackageStatus[];
 };
 
-export type SoftwareInstallStatus = RemoteSqliteInstallStatus;
+export type SoftwareInstallStatus =
+  | RemoteSqliteInstallStatus
+  /** The user clicked Cancel mid-run; the report's `exitCode` is the
+   *  pier-core sentinel `-2`. Remote process state is unspecified —
+   *  see PRODUCT-SPEC §5.11 v2. */
+  | "cancelled";
 
 export type SoftwareInstallReport = {
   packageId: string;
@@ -1037,11 +1042,17 @@ export type SoftwareInstallReport = {
 };
 
 /** Streaming event payload for `software-install`. The frontend filters
- *  by `installId` so concurrent installs across hosts don't interleave. */
+ *  by `installId` so concurrent installs across hosts don't interleave.
+ *
+ *  `cancelled` may carry a final report (when pier-core observed the
+ *  cancel inside `exec_command_streaming`) or no report (when
+ *  `software_install_cancel` fanned out the signal before the task
+ *  finished unwinding). The frontend treats both as terminal. */
 export type SoftwareInstallEvent =
   | { installId: string; kind: "line"; text: string }
   | { installId: string; kind: "done"; report: SoftwareInstallReport }
-  | { installId: string; kind: "failed"; message: string };
+  | { installId: string; kind: "failed"; message: string }
+  | { installId: string; kind: "cancelled"; report?: SoftwareInstallReport };
 
 export const softwareRegistry = () => invoke<SoftwareDescriptor[]>("software_registry");
 
@@ -1108,7 +1119,10 @@ export type SoftwareUninstallStatus =
   | "unsupported-distro"
   | "sudo-requires-password"
   | "package-manager-failed"
-  | "not-installed";
+  | "not-installed"
+  /** Same semantics as the install side's `cancelled` — see
+   *  {@link SoftwareInstallStatus}. */
+  | "cancelled";
 
 export type SoftwareUninstallReport = {
   packageId: string;
@@ -1126,11 +1140,13 @@ export type SoftwareUninstallReport = {
 /** Streaming event payload for `software-uninstall`. Same `installId`
  *  filtering pattern as the install side; the report shape differs
  *  (no version / serviceActive on the uninstall side, dataDirsRemoved
- *  instead). */
+ *  instead). `cancelled` is dispatched in the same two flavours as
+ *  {@link SoftwareInstallEvent}. */
 export type SoftwareUninstallEvent =
   | { installId: string; kind: "line"; text: string }
   | { installId: string; kind: "done"; report: SoftwareUninstallReport }
-  | { installId: string; kind: "failed"; message: string };
+  | { installId: string; kind: "failed"; message: string }
+  | { installId: string; kind: "cancelled"; report?: SoftwareUninstallReport };
 
 /** Options carried from the uninstall dialog into the backend. */
 export type UninstallOptions = {
@@ -1146,6 +1162,14 @@ export const softwareUninstallRemote = (
     options: UninstallOptions;
   },
 ) => invoke<SoftwareUninstallReport>("software_uninstall_remote", params);
+
+/** Trigger cancellation for an in-flight install / update / uninstall.
+ *  The backend keys on the same `installId` the row generated when it
+ *  started the activity. Resolves OK even when nothing is running for
+ *  that id — the spawn task may have completed in the gap between the
+ *  user clicking Cancel and the IPC roundtrip. */
+export const softwareInstallCancel = (installId: string) =>
+  invoke<void>("software_install_cancel", { installId });
 
 /** Subscribe to streaming uninstall output. Mirrors
  *  {@link subscribeSoftwareInstall} but on the `software-uninstall`

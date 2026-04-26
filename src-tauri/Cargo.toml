@@ -35,5 +35,10 @@ tauri-plugin-dialog = "2"
 tauri-plugin-clipboard-manager = "2"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
+# CancellationToken for the in-flight install / update / uninstall
+# registry — see `software_install_cancel` and pier-core's
+# `package_manager`. Default features only (we just need the `sync`
+# token primitives).
+tokio-util = { version = "0.7", default-features = false }
 pier-core = { path = "../pier-core" }
 

@@ -100,6 +100,10 @@ type PopoverState = {
   left: number;
   top: number;
   width: number;
+  // Computed at open-time from the trigger's viewport position so the
+  // popover's internal scroller (overflow:auto in atoms.css .popover)
+  // never overflows the bottom edge.
+  maxHeight: number;
   data?: unknown;
 } | null;
 
@@ -507,7 +511,12 @@ function GitPopover({
       <div
         className="popover"
         onMouseDown={(event) => event.stopPropagation()}
-        style={{ left: popover.left, top: popover.top, width: popover.width }}
+        style={{
+          left: popover.left,
+          top: popover.top,
+          width: popover.width,
+          maxHeight: popover.maxHeight,
+        }}
       >
         {children}
       </div>
@@ -625,7 +634,12 @@ function GitGraphLane({ row, isHead, width }: { row: GitGraphRowView; isHead: bo
   );
 }
 
-const HISTORY_PAGE_SIZE = 180;
+// Mirrors Pier (which uses 500). Smaller values cut more long-spanning edges
+// across page boundaries — e.g. main → old-main edges that pass through a
+// merged-in side branch — and lose the IDEA-style ↓/↑ chevrons + diagonal
+// converge segments that mark the transition. 500 keeps almost all real-world
+// histories in a single page.
+const HISTORY_PAGE_SIZE = 500;
 
 // Column resizer for the history table. Drives a CSS variable on the
 // surface element so the header, all rows, and the resizer guide stay
@@ -1494,24 +1508,37 @@ function GitPanelBody({ browserPath, isActive = true }: Props) {
   }
 
   function openPopoverFromElement(kind: PopoverKind, element: HTMLElement, width: number, data?: unknown) {
+    // Anchor the popover's top-left so its top sits 4px under the
+    // trigger's bottom edge (standard dropdown placement). Horizontal
+    // alignment keeps the right edge flush with the trigger's right
+    // edge — most callers are toolbar icons in the Git panel's right
+    // pane, where right-align reads better than left-align.
+    //
+    // The popover layer is `position: fixed; inset: 0` (atoms.css), so
+    // these coordinates are in viewport space. maxHeight is sized from
+    // the real space below the trigger — that lets `.popover`'s
+    // built-in `overflow: auto` produce a scroller that ends right at
+    // the viewport bottom instead of being clipped by the static
+    // 82vh CSS cap.
     const rect = element.getBoundingClientRect();
     const vw = window.innerWidth;
     const vh = window.innerHeight;
-    const estHeight = Math.min(vh * 0.82, 720);
-    const preferBelow = rect.bottom + 4 + estHeight <= vh - 8;
-    const left = Math.max(8, Math.min(vw - width - 8, rect.right - width));
-    const top = preferBelow
-      ? rect.bottom + 4
-      : Math.max(8, rect.top - 4 - Math.min(estHeight, rect.top - 8));
-    setPopover({ kind, left, top, width, data });
+    const GAP = 4;
+    const MARGIN = 8;
+    const left = Math.max(MARGIN, Math.min(vw - width - MARGIN, rect.right - width));
+    const top = rect.bottom + GAP;
+    const maxHeight = Math.max(160, vh - top - MARGIN);
+    setPopover({ kind, left, top, width, maxHeight, data });
   }
 
   function openPopoverAt(kind: PopoverKind, clientX: number, clientY: number, width: number, data?: unknown) {
     const vw = window.innerWidth;
     const vh = window.innerHeight;
-    const left = Math.max(8, Math.min(vw - width - 8, clientX));
-    const top = Math.max(8, Math.min(vh - 16, clientY));
-    setPopover({ kind, left, top, width, data });
+    const MARGIN = 8;
+    const left = Math.max(MARGIN, Math.min(vw - width - MARGIN, clientX));
+    const top = Math.max(MARGIN, Math.min(vh - 16, clientY));
+    const maxHeight = Math.max(160, vh - top - MARGIN);
+    setPopover({ kind, left, top, width, maxHeight, data });
   }
 
   function openChangeFileMenu(event: ReactMouseEvent<HTMLButtonElement>, file: GitPanelState["stagedFiles"][number], staged: boolean) {
@@ -1615,11 +1642,21 @@ function GitPanelBody({ browserPath, isActive = true }: Props) {
       setHistoryLoadingMore(true);
     }
     try {
-      const skip = reset ? 0 : graphRows.length;
+      // Pier's pattern: each loadMore re-fetches the FULL window from row 0
+      // up to the new ceiling and recomputes the layout for all of them at
+      // once, then replaces graphRows. Appending per-page slices instead
+      // (the previous behaviour) loses cross-page edges — main's long
+      // first-parent edge through an off-main branch — and produces
+      // inconsistent lane assignments at page boundaries because each page
+      // saw a different commit set.
+      const desiredCount = reset
+        ? HISTORY_PAGE_SIZE
+        : graphRows.length + HISTORY_PAGE_SIZE;
+      const previousCount = reset ? 0 : graphRows.length;
       const rows = await cmd.gitGraphHistory({
         path: currentRepoPath,
-        limit: HISTORY_PAGE_SIZE,
-        skip,
+        limit: desiredCount,
+        skip: 0,
         branch: historyBranchFilter || null,
         author: historyAuthorFilter || null,
         searchText: deferredHistorySearch || null,
@@ -1630,20 +1667,10 @@ function GitPanelBody({ browserPath, isActive = true }: Props) {
         topoOrder: historySortMode === "topo",
         showLongEdges: historyShowLongEdges,
       });
-      if (reset) {
-        setGraphRows(rows);
-      } else {
-        setGraphRows((prev) => {
-          if (!rows.length) return prev;
-          const seen = new Set(prev.map((row) => row.hash));
-          const merged = prev.slice();
-          for (const row of rows) {
-            if (!seen.has(row.hash)) merged.push(row);
-          }
-          return merged;
-        });
-      }
-      setHistoryHasMore(rows.length === HISTORY_PAGE_SIZE);
+      setGraphRows(rows);
+      // hasMore = true while git keeps producing new commits. If a loadMore
+      // didn't actually grow the row count, we've hit the bottom of the log.
+      setHistoryHasMore(rows.length >= desiredCount && rows.length > previousCount);
     } catch (error) {
       showBanner(false, extractErrorMessage(error, t));
       if (reset) setGraphRows([]);

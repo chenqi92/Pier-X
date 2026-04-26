@@ -956,7 +956,12 @@ pub fn git_graph_history(params: GitGraphHistoryParams) -> Result<Vec<GitGraphRo
             .collect(),
     };
 
-    let limit = params.limit.unwrap_or(180).clamp(1, 800);
+    // Limit is the *total* number of commits the frontend wants this call to
+    // produce a layout for. With Pier's "merge old+new and recompute" pattern
+    // (which we mirror), this grows by `pageSize` on every loadMore — so the
+    // upper bound has to be much larger than a single page. 50_000 is well
+    // beyond any visible history and keeps the worst-case allocation bounded.
+    let limit = params.limit.unwrap_or(500).clamp(1, 50_000);
     let skip = params.skip.unwrap_or(0);
     let commits = git_graph::graph_log(&repo_path, limit, skip, &filter)?;
 
@@ -974,9 +979,19 @@ pub fn git_graph_history(params: GitGraphHistoryParams) -> Result<Vec<GitGraphRo
         .unwrap_or_else(|| {
             git_graph::detect_default_branch(&repo_path).unwrap_or_else(|_| String::from("HEAD"))
         });
-    let main_chain: HashSet<String> = git_graph::first_parent_chain(&repo_path, &main_ref, limit)?
-        .into_iter()
-        .collect();
+    // Main_chain must cover every commit we might color-0 — including pages
+    // beyond `limit`. Pulling only `limit` commits silently demoted older
+    // first-parent main commits to "non-main" lanes once the user scrolled
+    // past the first page, splitting a single green spine into multiple
+    // coloured chains. Pier sidesteps this by pre-fetching `pageSize * 2`
+    // up-front; we don't have a session cache, so pull enough per-call to
+    // cover the requested window plus generous headroom for off-main
+    // ancestors that might also appear in the topo-ordered log.
+    let main_chain_limit = (skip + limit).saturating_mul(4).max(5000);
+    let main_chain: HashSet<String> =
+        git_graph::first_parent_chain(&repo_path, &main_ref, main_chain_limit)?
+            .into_iter()
+            .collect();
     let layout_inputs: Vec<LayoutInput> = commits
         .iter()
         .map(|commit| LayoutInput {

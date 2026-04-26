@@ -35,6 +35,24 @@ export type DbMutation =
   | { kind: "insert"; values: Record<string, string | null> }
   | { kind: "delete"; pk: Record<string, string> };
 
+/** DDL mutations from the editable structure view. Add/drop/rename
+ *  column only — modify-type, PK changes, indexes and FKs are
+ *  out-of-scope for the MVP because their syntax diverges sharply
+ *  per engine (and SQLite needs full table rebuilds for most of them). */
+export type DdlMutation =
+  | {
+      kind: "addColumn";
+      name: string;
+      type: string;
+      nullable: boolean;
+      /** `null` = no DEFAULT clause (i.e. NULL when nullable, error
+       *  on existing rows when NOT NULL). Empty string is treated
+       *  as a string literal `''`, not "no default". */
+      defaultValue?: string | null;
+    }
+  | { kind: "dropColumn"; name: string }
+  | { kind: "renameColumn"; oldName: string; newName: string };
+
 /** Numeric-type regex shared across dialects. */
 const NUMERIC_RE =
   /^(tiny|small|medium|big)?int|^integer|^decimal|^numeric|^float|^double|^real|^money|^serial|^bigserial/i;
@@ -135,6 +153,63 @@ export function mutationToSql(args: BuildSqlArgs, mut: DbMutation): string {
   if (mut.kind === "update") return buildUpdateSql(args, mut.pk, mut.changes);
   if (mut.kind === "insert") return buildInsertSql(args, mut.values);
   return buildDeleteSql(args, mut.pk);
+}
+
+// ── DDL (structure-edit) builders ─────────────────────────────────
+
+type BuildDdlArgs = {
+  dialect: DbDialect;
+  /** Already-qualified table reference (e.g. `db`.`t` / "schema"."t" / "t"). */
+  table: string;
+};
+
+/** `ALTER TABLE … ADD COLUMN <name> <type> [NULL|NOT NULL] [DEFAULT …]`.
+ *  Type is passed through verbatim — the dialog validates a non-empty
+ *  type but does not parse it. NOT NULL on existing rows requires a
+ *  DEFAULT or the engine will reject the change; we surface that error
+ *  rather than silently inserting one. */
+export function buildAddColumnSql(
+  args: BuildDdlArgs,
+  spec: { name: string; type: string; nullable: boolean; defaultValue?: string | null },
+): string {
+  const colId = quoteIdent(args.dialect, spec.name);
+  const nullClause = spec.nullable ? "" : " NOT NULL";
+  const defaultClause =
+    spec.defaultValue === undefined || spec.defaultValue === null
+      ? ""
+      : ` DEFAULT ${escapeValue(spec.defaultValue, false)}`;
+  return `ALTER TABLE ${args.table} ADD COLUMN ${colId} ${spec.type}${nullClause}${defaultClause}`;
+}
+
+/** `ALTER TABLE … DROP COLUMN <name>`. Standard across MySQL 8 / PG /
+ *  SQLite ≥ 3.35. SQLite older than 3.35 will reject with a parse
+ *  error — we let the engine surface it rather than version-gating
+ *  on the frontend (which would race the cached probe). */
+export function buildDropColumnSql(
+  args: BuildDdlArgs,
+  spec: { name: string },
+): string {
+  return `ALTER TABLE ${args.table} DROP COLUMN ${quoteIdent(args.dialect, spec.name)}`;
+}
+
+/** Rename a column in-place. MySQL 8 / PG / SQLite ≥ 3.25 all accept
+ *  the same `RENAME COLUMN <old> TO <new>` syntax — the older MySQL
+ *  `CHANGE COLUMN` form (which also requires re-typing) is skipped.
+ *  Old SQLite emits a parse error which the user sees verbatim. */
+export function buildRenameColumnSql(
+  args: BuildDdlArgs,
+  spec: { oldName: string; newName: string },
+): string {
+  const oldId = quoteIdent(args.dialect, spec.oldName);
+  const newId = quoteIdent(args.dialect, spec.newName);
+  return `ALTER TABLE ${args.table} RENAME COLUMN ${oldId} TO ${newId}`;
+}
+
+/** Produce a one-shot DDL string for a single structure mutation. */
+export function ddlToSql(args: BuildDdlArgs, mut: DdlMutation): string {
+  if (mut.kind === "addColumn") return buildAddColumnSql(args, mut);
+  if (mut.kind === "dropColumn") return buildDropColumnSql(args, mut);
+  return buildRenameColumnSql(args, mut);
 }
 
 // ── Per-engine column adapters ────────────────────────────────────

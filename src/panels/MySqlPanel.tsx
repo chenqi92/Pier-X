@@ -20,10 +20,12 @@ import {
 } from "../components/db/useDbCredentialFlow";
 import { useDbSqlTabs } from "../components/db/useDbSqlTabs";
 import {
+  ddlToSql,
   gridColumnsFromMysql,
   mutationToSql,
   qualifyTable,
   type DbMutation,
+  type DdlMutation,
 } from "../components/db/dbColumnRules";
 import { formatSqlText } from "../components/db/sqlFormat";
 import { useI18n } from "../i18n/useI18n";
@@ -469,6 +471,45 @@ function MySqlPanelBody({ tab }: Props) {
     }
   }
 
+  // Structure-edit commit. Same shape as `commitMutations` but for
+  // DDL — assembles ALTER TABLE statements per-mutation and ships
+  // each through `mysqlExecute`. Re-browses on success so the
+  // refreshed column list lands in the structure tab.
+  const [committingDdl, setCommittingDdl] = useState(false);
+  async function commitStructure(mutations: DdlMutation[]) {
+    if (!state || mutations.length === 0) return;
+    const tableRef = qualifyTable("mysql", {
+      database: state.databaseName,
+      table: state.tableName,
+    });
+    setCommittingDdl(true);
+    setQueryError("");
+    setNotice("");
+    try {
+      const target = await flow.ensureConnectionTarget();
+      let written = 0;
+      for (const mut of mutations) {
+        const sql = ddlToSql({ dialect: "mysql", table: tableRef }, mut);
+        await cmd.mysqlExecute({
+          host: target.host,
+          port: target.port,
+          user: tab.mysqlUser.trim(),
+          password: tab.mysqlPassword,
+          database: tab.mysqlDatabase.trim() || null,
+          sql,
+        });
+        written += 1;
+      }
+      setNotice(t("Committed {n} structure change(s).", { n: written }));
+      await browse();
+    } catch (e) {
+      setQueryError(formatError(e));
+      throw e;
+    } finally {
+      setCommittingDdl(false);
+    }
+  }
+
   const headerStats = state
     ? [
         { icon: "database" as const, label: t("{count} dbs", { count: state.databases.length }) },
@@ -703,6 +744,10 @@ function MySqlPanelBody({ tab }: Props) {
         writable={!readOnly && state.tableName !== ""}
         onCommit={commitMutations}
         committing={committing}
+        onToggleWritable={() => {
+          setReadOnly((prev) => !prev);
+          setWriteConfirm("");
+        }}
       />
       {queryError && (
         <div className="db-panel-banner">
@@ -727,6 +772,9 @@ function MySqlPanelBody({ tab }: Props) {
       typeAccentVar="var(--svc-mysql)"
       indexes={state.indexes}
       foreignKeys={state.foreignKeys}
+      editable={!readOnly && state.tableName !== ""}
+      onCommit={commitStructure}
+      committing={committingDdl}
     />
   );
 

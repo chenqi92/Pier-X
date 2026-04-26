@@ -1289,6 +1289,21 @@
   font-variant-numeric: tabular-nums;
 }
 
+/* Editable cells get the text-cursor on hover so the user
+ * sees they're typeable. Locked cells keep the default arrow,
+ * and the hover `title` explains why they're locked. */
+.rg-td-editable { cursor: text; }
+
+/* Toolbar lock chip — mirrors the SQL editor's lock so users
+ * see the writable gate next to the data, not in the editor footer.
+ * Off = subdued; on = green tinted to match the foot's "Writes
+ * unlocked" affordance. */
+.rg-write-toggle.is-on {
+  color: var(--pos);
+  border-color: color-mix(in srgb, var(--pos) 35%, var(--line-2));
+  background: color-mix(in srgb, var(--pos) 10%, transparent);
+}
+
 /* Dirty cell — yellow tint until committed. */
 .rg-td-dirty {
   background: color-mix(in srgb, var(--warn) 14%, transparent) !important;
@@ -1536,6 +1551,64 @@
 .db2-structure__td-pk {
   color: var(--warn);
 }
+
+/* ── Editable structure tab affordances ───────────────────── */
+.db2-structure__head-actions {
+  margin-left: auto;
+  display: inline-flex;
+  align-items: center;
+  gap: var(--sp-1-5);
+}
+.db2-structure__th-acts {
+  width: 56px;
+  text-align: right;
+  padding: 0 var(--sp-1-5) !important;
+}
+/* Pending-add row — green tint, matches the grid's `rg-row-new`. */
+.db2-structure__row--new td {
+  background: color-mix(in srgb, var(--pos) 10%, transparent) !important;
+}
+/* Pending-drop row — strike-through + red tint until commit. */
+.db2-structure__row--dropped td {
+  background: color-mix(in srgb, var(--neg) 12%, transparent) !important;
+  text-decoration: line-through;
+  color: var(--muted);
+}
+/* Pending-rename row — yellow left edge to match the grid's
+ * dirty-cell tint. */
+.db2-structure__row--renamed td {
+  background: color-mix(in srgb, var(--warn) 10%, transparent) !important;
+}
+.db2-structure__name {
+  display: inline-flex;
+  align-items: baseline;
+  gap: var(--sp-1);
+}
+.db2-structure__renamed-tag {
+  font-family: var(--mono);
+  font-size: var(--size-micro);
+  color: var(--warn);
+  opacity: 0.85;
+}
+.db2-structure__commit {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-1-5);
+  padding: var(--sp-1-5) var(--sp-2-5);
+  border-top: 1px solid var(--line);
+  background: var(--surface);
+  flex: none;
+}
+.db2-structure__pending-stat {
+  font-family: var(--mono);
+  font-size: var(--size-small);
+  color: var(--warn);
+  display: inline-flex;
+  align-items: center;
+  gap: var(--sp-1);
+}
+.db2-structure__pending-spacer { flex: 1; }
+
 .db2-structure__footnote {
   padding: var(--sp-2) var(--sp-2-5);
   border-top: 1px solid var(--line);

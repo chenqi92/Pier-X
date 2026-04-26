@@ -1111,6 +1111,31 @@ export const zhExtra: Record<string, string> = {
   "NEW": "新增",
   "auto": "自动",
   "NULL": "NULL",
+  "Lock writes (return grid to read-only)": "锁定写入（恢复只读）",
+  "Unlock writes (enables double-click cell edit)": "解锁写入（允许双击编辑单元格）",
+  "Writes locked — unlock to double-click edit": "写入已锁定 —— 解锁后可双击编辑",
+  "This table has no primary key — inline edit is disabled.":
+    "该表没有主键 —— 不支持就地编辑。",
+  "Primary key columns are not editable.": "主键列不可直接编辑。",
+  "Commit will permanently delete {n} row(s). Continue?":
+    "确认要永久删除 {n} 行？此操作无法撤销。",
+
+  // DB panels — structure-edit
+  "Add column": "添加列",
+  "Rename column": "重命名列",
+  "Drop column": "删除列",
+  "Undo drop": "撤销删除",
+  "Renamed from {name}": "原名 {name}",
+  "Staged for commit": "已暂存待提交",
+  "{n} structure changes pending": "{n} 处结构变更待提交",
+  "Committed {n} structure change(s).": "已提交 {n} 处结构变更。",
+  "Rename target is empty.": "重命名后的列名不能为空。",
+  "New column name is empty.": "新列名不能为空。",
+  "Type for column \"{name}\" is empty.": "列「{name}」的类型不能为空。",
+  "Duplicate new column \"{name}\".": "新列「{name}」与已暂存项重名。",
+  "column_name": "column_name",
+  "e.g. VARCHAR(255)": "例如 VARCHAR(255)",
+  "(none)": "（无）",
 
   // DB panels — MySQL structure sub-view
   "Columns": "列",

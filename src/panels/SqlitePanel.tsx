@@ -13,10 +13,12 @@ import DbSqlEditor from "../components/db/DbSqlEditor";
 import type { DbSplashRowData } from "../components/db/DbSplashRow";
 import { useDbSqlTabs } from "../components/db/useDbSqlTabs";
 import {
+  ddlToSql,
   gridColumnsFromSqlite,
   mutationToSql,
   qualifyTable,
   type DbMutation,
+  type DdlMutation,
 } from "../components/db/dbColumnRules";
 import { useI18n } from "../i18n/useI18n";
 import { localizeError } from "../i18n/localizeMessage";
@@ -522,6 +524,48 @@ function SqlitePanelBody({ tab }: Props) {
     }
   }
 
+  // Structure-edit commit. SQLite needs ≥3.25 for RENAME COLUMN and
+  // ≥3.35 for DROP COLUMN; older binaries surface their own parse
+  // error verbatim — we don't pre-flight version-check because the
+  // capability probe is cached per-session and may go stale.
+  const [committingDdl, setCommittingDdl] = useState(false);
+  async function commitStructure(mutations: DdlMutation[]) {
+    if (!state || mutations.length === 0) return;
+    const tableRef = qualifyTable("sqlite", { table: state.tableName });
+    setCommittingDdl(true);
+    setQueryError("");
+    setNotice("");
+    try {
+      let written = 0;
+      for (const mut of mutations) {
+        const sql = ddlToSql({ dialect: "sqlite", table: tableRef }, mut);
+        if (isRemoteMode && sshTarget) {
+          await cmd.sqliteExecuteRemote({
+            host: sshTarget.host,
+            port: sshTarget.port,
+            user: sshTarget.user,
+            authMode: sshTarget.authMode,
+            password: sshTarget.password,
+            keyPath: sshTarget.keyPath,
+            savedConnectionIndex: sshTarget.savedConnectionIndex,
+            dbPath: path.trim(),
+            sql,
+          });
+        } else {
+          await cmd.sqliteExecute(path.trim(), sql);
+        }
+        written += 1;
+      }
+      setNotice(t("Committed {n} structure change(s).", { n: written }));
+      void browse(tableName);
+    } catch (e) {
+      setQueryError(formatError(e));
+      throw e;
+    } finally {
+      setCommittingDdl(false);
+    }
+  }
+
   const banner = error ? (
     <DismissibleNote variant="status" tone="error" onDismiss={() => setError("")}>
       {error}
@@ -584,6 +628,10 @@ function SqlitePanelBody({ tab }: Props) {
         writable={!readOnly && state.tableName !== ""}
         onCommit={commitMutations}
         committing={committing}
+        onToggleWritable={() => {
+          setReadOnly((p) => !p);
+          setWriteConfirm("");
+        }}
       />
       {queryError && (
         <div className="db-panel-banner">
@@ -616,6 +664,9 @@ function SqlitePanelBody({ tab }: Props) {
         event: tr.event,
         sql: tr.sql,
       }))}
+      editable={!readOnly && state.tableName !== ""}
+      onCommit={commitStructure}
+      committing={committingDdl}
     />
   );
 

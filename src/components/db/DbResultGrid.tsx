@@ -6,10 +6,12 @@ import {
   Check,
   Filter,
   KeyRound,
+  Lock,
   Plus,
   Save,
   Trash2,
   Undo2,
+  Unlock,
   X,
 } from "lucide-react";
 import type { ReactNode } from "react";
@@ -50,6 +52,11 @@ type Props = {
   onCommit?: (mutations: DbMutation[]) => Promise<void>;
   /** Optional spinner state from the parent — disables Commit. */
   committing?: boolean;
+  /** When provided, the grid toolbar gets a Lock/Unlock chip that
+   *  flips the parent's read-only state — same handler the SQL editor's
+   *  lock uses. Surfaces the gate next to the data instead of burying
+   *  it in the editor footer. */
+  onToggleWritable?: () => void;
 };
 
 const PAGE_SIZES: Array<50 | 100 | 200 | 500> = [50, 100, 200, 500];
@@ -80,6 +87,7 @@ export default function DbResultGrid({
   writable = false,
   onCommit,
   committing = false,
+  onToggleWritable,
 }: Props) {
   const { t } = useI18n();
   const [sortCol, setSortCol] = useState<string | null>(null);
@@ -286,6 +294,19 @@ export default function DbResultGrid({
     if (!onCommit || dirtyCount === 0) return;
     const muts = collectMutations();
     if (muts.length === 0) return;
+    // Confirm destructive deletes — INSERT/UPDATE are recoverable
+    // by re-editing, but DELETE goes through immediately and there's
+    // no undo. Skip the prompt when only one row is being dropped
+    // (the per-row trash interaction is itself a deliberate gesture).
+    const deleteCount = muts.filter((m) => m.kind === "delete").length;
+    if (deleteCount > 1) {
+      const confirmed = window.confirm(
+        t("Commit will permanently delete {n} row(s). Continue?", {
+          n: deleteCount,
+        }),
+      );
+      if (!confirmed) return;
+    }
     try {
       await onCommit(muts);
       // Parent is responsible for re-browsing; clear our local state.
@@ -347,6 +368,24 @@ export default function DbResultGrid({
             title={t("Insert row")}
           >
             <Plus size={10} /> {t("Insert row")}
+          </button>
+        )}
+        {onToggleWritable && !!columnsMeta && (
+          <button
+            type="button"
+            className={
+              "btn is-ghost is-compact rg-write-toggle" +
+              (writable ? " is-on" : "")
+            }
+            onClick={onToggleWritable}
+            title={
+              writable
+                ? t("Lock writes (return grid to read-only)")
+                : t("Unlock writes (enables double-click cell edit)")
+            }
+          >
+            {writable ? <Unlock size={10} /> : <Lock size={10} />}{" "}
+            {writable ? t("Writes unlocked") : t("Read-only")}
           </button>
         )}
         {toolbar}
@@ -484,19 +523,33 @@ export default function DbResultGrid({
                         !isNull && typeof display === "string"
                           ? prettyJsonish(display)
                           : null;
+                      // Per-cell editability — drives both the cursor
+                      // hint and a hover title that explains *why* a
+                      // cell can't be edited (locked, no PK, or PK).
+                      const cellEditable = editEnabled && !isPk;
+                      const lockHint = !editEnabled
+                        ? !writable
+                          ? t("Writes locked — unlock to double-click edit")
+                          : !columnsMeta || pkSet.size === 0
+                            ? t("This table has no primary key — inline edit is disabled.")
+                            : null
+                        : isPk
+                          ? t("Primary key columns are not editable.")
+                          : null;
                       const className =
                         "rg-td" +
                         (isNum ? " rg-td-num" : "") +
                         (isPk ? " rg-td-pk" : "") +
                         (isDirty ? " rg-td-dirty" : "") +
                         (isEditing ? " rg-td-editing" : "") +
+                        (cellEditable ? " rg-td-editable" : "") +
                         (prettyTip ? " rg-td-jsonish" : "");
                       return (
                         <td
                           key={ci}
                           className={className}
                           style={{ textAlign: isNum ? "right" : "left" }}
-                          title={prettyTip ?? undefined}
+                          title={prettyTip ?? lockHint ?? undefined}
                           onDoubleClick={(e) => {
                             e.stopPropagation();
                             startEdit(absIdx, col);

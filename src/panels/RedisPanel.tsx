@@ -71,11 +71,16 @@ function RedisPanelBody({ tab }: Props) {
   const [tunnelError, setTunnelError] = useState("");
   const [addOpen, setAddOpen] = useState(false);
   const [adopting, setAdopting] = useState<DetectedDbInstance | null>(null);
-  const [autoBrowseAttempted, setAutoBrowseAttempted] = useState(false);
   // See useDbCredentialFlow — bumped from `activateCredential` so the
   // auto-browse effect re-fires on a re-click of the already-active cred.
   const [browseTrigger, setBrowseTrigger] = useState(0);
   const [pwUpdateOpen, setPwUpdateOpen] = useState(false);
+  const [activating, setActivating] = useState<string | null>(null);
+  const [connectingStep, setConnectingStep] = useState<string | null>(null);
+  // Generation counter — every effect run takes a fresh ticket; later runs
+  // supersede earlier ones. Replaces the `autoBrowseAttempted` flag whose
+  // stale `true` swallowed every retry click.
+  const browseGenRef = useRef(0);
   const passwordInputRef = useRef<HTMLInputElement | null>(null);
 
   // ── Derived ────────────────────────────────────────────────
@@ -146,50 +151,69 @@ function RedisPanelBody({ tab }: Props) {
   }, [hasSsh, tab.id, tab.redisTunnelId, tab.redisTunnelPort, updateTab]);
 
   useEffect(() => {
-    if (autoBrowseAttempted) return;
-    if (!hasSsh || !tab.redisActiveCredentialId || savedIndex === null) return;
-    if (state) return;
-    if (!tab.redisHost.trim()) return;
+    if (!hasSsh || !tab.redisActiveCredentialId || savedIndex === null) {
+      setActivating(null);
+      setConnectingStep(null);
+      return;
+    }
+    if (state) {
+      setActivating(null);
+      setConnectingStep(null);
+      return;
+    }
+    if (!tab.redisHost.trim()) {
+      setActivating(null);
+      setConnectingStep(null);
+      return;
+    }
 
-    setAutoBrowseAttempted(true);
+    const myGen = ++browseGenRef.current;
     let cancelled = false;
+    const isCurrent = () => !cancelled && browseGenRef.current === myGen;
+
     void (async () => {
       try {
         let effectivePw = tab.redisPassword;
         if (!effectivePw) {
+          if (isCurrent()) setConnectingStep(t("Resolving saved password…"));
           try {
             const resolved = await cmd.dbCredResolve(
               savedIndex,
               tab.redisActiveCredentialId!,
             );
-            if (cancelled) return;
+            if (!isCurrent()) return;
             effectivePw = resolved.password ?? "";
             if (effectivePw) {
               updateTab(tab.id, { redisPassword: effectivePw });
               setPassword(effectivePw);
             } else if (resolved.credential.hasPassword) {
-              if (!cancelled) {
-                setError(
-                  t("Saved password unavailable. Enter it manually or update the keyring."),
-                );
-                setTimeout(() => passwordInputRef.current?.focus(), 0);
-              }
-              return;
-            }
-          } catch {
-            if (!cancelled) {
               setError(
                 t("Saved password unavailable. Enter it manually or update the keyring."),
               );
               setTimeout(() => passwordInputRef.current?.focus(), 0);
+              return;
             }
+          } catch {
+            if (!isCurrent()) return;
+            setError(
+              t("Saved password unavailable. Enter it manually or update the keyring."),
+            );
+            setTimeout(() => passwordInputRef.current?.focus(), 0);
             return;
           }
         }
-        if (cancelled) return;
+        if (!isCurrent()) return;
+        setConnectingStep(
+          hasSsh ? t("Opening SSH tunnel and querying…") : t("Connecting…"),
+        );
         await browse(undefined, effectivePw);
       } catch (e) {
-        if (!cancelled) setError(formatError(e));
+        if (isCurrent()) setError(formatError(e));
+      } finally {
+        if (isCurrent()) {
+          setActivating(null);
+          setConnectingStep(null);
+        }
       }
     })();
     return () => {
@@ -450,7 +474,8 @@ function RedisPanelBody({ tab }: Props) {
     setCmdResult(null);
     setCmdError("");
     setKeyName("");
-    setAutoBrowseAttempted(false);
+    setActivating(credId);
+    setConnectingStep(t("Starting…"));
     setHost(cred.host);
     setPort(String(cred.port));
     setUser(cred.user);
@@ -496,6 +521,7 @@ function RedisPanelBody({ tab }: Props) {
     tintVar: "var(--svc-redis)",
     connectLabel: t("Connect"),
     onConnect: () => activateCredential(cred.id),
+    pending: activating === cred.id,
   }));
 
   const detectedRows: DbSplashRowData[] = detectedForKind.map((det) => ({
@@ -571,7 +597,8 @@ function RedisPanelBody({ tab }: Props) {
         adopting={adopting}
         tab={tab}
         onSaved={(cred) => {
-          setAutoBrowseAttempted(false);
+          setActivating(cred.id);
+          setConnectingStep(t("Starting…"));
           setState(null);
           setHost(cred.host);
           setPort(String(cred.port));
@@ -619,7 +646,9 @@ function RedisPanelBody({ tab }: Props) {
             setAdopting(null);
             setAddOpen(true);
           }}
-          footerHint={busy ? t("Connecting...") : null}
+          footerHint={
+            connectingStep ?? (busy ? t("Connecting...") : null)
+          }
           description={
             hasSsh
               ? undefined

@@ -190,14 +190,28 @@ async fn run_select_rows(
     sql: &str,
 ) -> Result<Vec<BTreeMap<String, String>>> {
     let cmd = build_sqlite_json_command(db_path, sql);
-    let (exit, stdout) = session.exec_command(&cmd).await?;
-    if exit != 0 {
+    // Belt-and-braces: even with `.timeout 5000` baked into the command,
+    // a contended writer can still slip past the wait window. Retry
+    // exit-5 (`SQLITE_BUSY`) twice with a short backoff before giving
+    // up — clicking schema-introspection in quick succession is the
+    // common trigger and self-resolves within ~hundreds of ms.
+    let mut attempt = 0;
+    loop {
+        let (exit, stdout) = session.exec_command(&cmd).await?;
+        if exit == 0 {
+            return parse_json_rows(&stdout).map_err(SshError::InvalidConfig);
+        }
+        if exit == 5 && attempt < 2 {
+            attempt += 1;
+            let backoff_ms = 150 * attempt as u64;
+            tokio::time::sleep(std::time::Duration::from_millis(backoff_ms)).await;
+            continue;
+        }
         return Err(SshError::InvalidConfig(format!(
             "sqlite3 exited {exit}: {}",
             stdout.lines().next().unwrap_or("").trim()
         )));
     }
-    parse_json_rows(&stdout).map_err(SshError::InvalidConfig)
 }
 
 async fn run_query(session: &SshSession, db_path: &str, sql: &str) -> Result<RemoteQueryResult> {
@@ -275,13 +289,22 @@ async fn run_query(session: &SshSession, db_path: &str, sql: &str) -> Result<Rem
     })
 }
 
-/// Build the remote shell command: `sqlite3 -json -bail -- <path> "<sql>"`.
-/// Both the path and the SQL are single-quote-escaped, so any
-/// input is safe to interpolate into `/bin/sh -c`.
+/// Build the remote shell command:
+/// `sqlite3 -json -bail -cmd '.timeout 5000' -- <path> "<sql>"`.
+///
+/// `-cmd '.timeout 5000'` runs `PRAGMA busy_timeout = 5000` before the
+/// user SQL, so the CLI waits up to five seconds for a competing writer
+/// to release the lock instead of immediately returning exit code 5
+/// (`SQLITE_BUSY`). Without this the schema-introspection round-trip
+/// (e.g. `PRAGMA table_info` on a freshly-clicked table) routinely
+/// races our own previous query and surfaces a confusing error.
+///
+/// Both the path and the SQL are single-quote-escaped, so any input is
+/// safe to interpolate into `/bin/sh -c`.
 fn build_sqlite_json_command(db_path: &str, sql: &str) -> String {
     let path_q = shell_single_quote(db_path);
     let sql_q = shell_single_quote(sql);
-    format!("sqlite3 -json -bail -- {path_q} {sql_q}")
+    format!("sqlite3 -json -bail -cmd '.timeout 5000' -- {path_q} {sql_q}")
 }
 
 /// POSIX-safe single-quote escape for shell interpolation.
@@ -715,7 +738,10 @@ mod tests {
     #[test]
     fn build_sqlite_json_command_composes_parts() {
         let cmd = build_sqlite_json_command("/srv/app.db", "SELECT 1");
-        assert_eq!(cmd, "sqlite3 -json -bail -- '/srv/app.db' 'SELECT 1'");
+        assert_eq!(
+            cmd,
+            "sqlite3 -json -bail -cmd '.timeout 5000' -- '/srv/app.db' 'SELECT 1'",
+        );
     }
 
     #[test]

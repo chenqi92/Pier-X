@@ -444,12 +444,21 @@ fn make_db_cred_id() -> String {
     format!("pier-x.db.{nanos:x}{n:x}")
 }
 
-/// Append a new DB credential to `connection_index`'s profile
-/// and persist the store. `password` of `Some("")` is treated
-/// as "no password"; `None` also means passwordless. When a
-/// real password is supplied, storage falls back to `Direct`
-/// if the OS keyring silently drops the write (see
-/// [`credentials::set_and_verify`]).
+/// Save a DB credential under `connection_index`'s profile,
+/// using **upsert** semantics: if an existing credential matches
+/// the natural key (detection signature, or `(kind, host, port, user)`
+/// / `sqlite_path` for SQLite), the existing entry is updated in
+/// place and its id is preserved; otherwise a new entry is appended.
+///
+/// `password` of `Some("")` is treated as "no password"; `None`
+/// also means passwordless. When a real password is supplied,
+/// storage falls back to `Direct` if the OS keyring silently
+/// drops the write (see [`credentials::set_and_verify`]).
+///
+/// This is the only writer the UI calls when the user clicks
+/// "save" in the Add Credential dialog (incl. Adopt & connect),
+/// so the upsert is what stops accidental double-saves from
+/// surfacing duplicate rows in the Saved Profiles list.
 pub fn save_db_credential(
     connection_index: usize,
     input: NewDbCredential,
@@ -459,20 +468,92 @@ pub fn save_db_credential(
     if connection_index >= store.connections.len() {
         return Err(DbCredentialError::ConnectionIndex(connection_index));
     }
-    let id = make_db_cred_id();
-    let password_storage = store_password(&id, password)?;
+
+    let databases = &store.connections[connection_index].databases;
+    let upsert_idx = find_db_cred_upsert_slot(databases, &input);
 
     // Favourite is per (connection, kind): clear existing
     // favourite bits for this kind before writing the new one.
+    // Done before mutation so the upsert path can later set
+    // `favorite = true` on the matched slot in the same pass.
     if input.favorite {
-        for other in store.connections[connection_index]
+        for (i, other) in store.connections[connection_index]
             .databases
             .iter_mut()
-            .filter(|c| c.kind == input.kind)
+            .enumerate()
         {
-            other.favorite = false;
+            if other.kind == input.kind && Some(i) != upsert_idx {
+                other.favorite = false;
+            }
         }
     }
+
+    if let Some(idx) = upsert_idx {
+        // ── Upsert path ─────────────────────────────────────
+        let existing_id = store.connections[connection_index].databases[idx]
+            .id
+            .clone();
+        let prev_keyring_id = match &store.connections[connection_index].databases[idx].password {
+            DbPasswordStorage::Keyring { credential_id } => Some(credential_id.clone()),
+            _ => None,
+        };
+        // Best-effort drop of the old keyring entry before
+        // writing the new password under the *existing* cred id.
+        // Mirrors `update_db_credential`'s rotation flow.
+        if let Some(prev) = &prev_keyring_id {
+            let _ = credentials::delete(prev);
+        }
+        let password_storage = store_password(&existing_id, password)?;
+
+        // Apply field updates. Empty `label` / `database` /
+        // `sqlite_path` from the input do NOT clobber existing
+        // non-empty values — Adopt-flow callers sometimes leave
+        // these blank when re-saving an already-named entry.
+        let prev_source = store.connections[connection_index].databases[idx]
+            .source
+            .clone();
+        let cred = &mut store.connections[connection_index].databases[idx];
+        cred.host = input.host;
+        cred.port = input.port;
+        cred.user = input.user;
+        if !input.label.trim().is_empty() {
+            cred.label = input.label;
+        }
+        if let Some(db) = input.database.filter(|s| !s.is_empty()) {
+            cred.database = Some(db);
+        }
+        if let Some(sp) = input.sqlite_path.filter(|s| !s.is_empty()) {
+            cred.sqlite_path = Some(sp);
+        }
+        cred.favorite = input.favorite;
+        // Keep an existing detection signature if the new save
+        // is Manual — otherwise re-saving a manually edited
+        // adopted cred would forget where it came from.
+        cred.source = match (&prev_source, &input.source) {
+            (DbCredentialSource::Detected { .. }, DbCredentialSource::Manual) => prev_source,
+            _ => input.source,
+        };
+        cred.password = password_storage.clone();
+
+        let result = cred.clone();
+        if let Err(err) = store.save_default() {
+            // Only roll back the keyring if we actually wrote a
+            // *new* entry under this id. If we're still pointing
+            // at the same id with the same value, deleting would
+            // wipe a row the on-disk YAML still references.
+            if prev_keyring_id.as_deref() != Some(existing_id.as_str()) {
+                if let DbPasswordStorage::Keyring { credential_id } = &password_storage {
+                    let _ = credentials::delete(credential_id);
+                }
+            }
+            return Err(err.into());
+        }
+        return Ok(result);
+    }
+
+    // ── Insert path ─────────────────────────────────────────
+    let id = make_db_cred_id();
+    let password_storage = store_password(&id, password)?;
 
     let cred = DbCredential {
         id: id.clone(),
@@ -500,6 +581,63 @@ pub fn save_db_credential(
         return Err(err.into());
     }
     Ok(cred)
+}
+
+/// Locate the existing slot to upsert into for `save_db_credential`.
+/// Returns `Some(idx)` when an existing credential should be
+/// updated rather than a new row appended.
+///
+/// Matching strategy (kind-scoped — different kinds never collide):
+/// - SQLite: match on `sqlite_path` (the natural identity).
+/// - Detected source with non-empty `signature`: prefer matching an
+///   existing credential with the same `Detected` signature.
+/// - Otherwise: match on `(host, port, user)`.
+///
+/// Returns `None` if no existing slot is a duplicate, or if the
+/// would-be key has empty fields (which would otherwise collapse
+/// every empty-field cred together).
+fn find_db_cred_upsert_slot(
+    databases: &[DbCredential],
+    input: &NewDbCredential,
+) -> Option<usize> {
+    use crate::ssh::config::DbCredentialSource as Src;
+
+    if matches!(input.kind, DbKind::Sqlite) {
+        let path = input.sqlite_path.as_deref().unwrap_or("").trim();
+        if path.is_empty() {
+            return None;
+        }
+        return databases
+            .iter()
+            .position(|c| c.kind == DbKind::Sqlite && c.sqlite_path.as_deref() == Some(path));
+    }
+
+    if let Src::Detected { signature } = &input.source {
+        let sig = signature.trim();
+        if !sig.is_empty() {
+            if let Some(idx) = databases.iter().position(|c| {
+                c.kind == input.kind
+                    && matches!(&c.source, Src::Detected { signature: s } if s == sig)
+            }) {
+                return Some(idx);
+            }
+        }
+    }
+
+    let host = input.host.trim();
+    let port = input.port;
+    let user = input.user.trim();
+    if host.is_empty() {
+        // Don't collapse empty-host inputs — they'd all match each
+        // other, which is the same bug we're trying to fix.
+        return None;
+    }
+    databases.iter().position(|c| {
+        c.kind == input.kind
+            && c.host.trim() == host
+            && c.port == port
+            && c.user.trim() == user
+    })
 }
 
 /// Mutate an existing credential in-place. Unknown fields in
@@ -908,6 +1046,221 @@ mod tests {
         assert_eq!(touched, 2);
         assert_eq!(store.connections[0].group, None);
         assert_eq!(store.connections[1].group, None);
+    }
+
+    /// Build a fully-populated `DbCredential` for upsert-helper tests.
+    fn cred(
+        id: &str,
+        kind: DbKind,
+        host: &str,
+        port: u16,
+        user: &str,
+        source: DbCredentialSource,
+    ) -> DbCredential {
+        DbCredential {
+            id: id.into(),
+            kind,
+            label: id.into(),
+            host: host.into(),
+            port,
+            user: user.into(),
+            database: None,
+            sqlite_path: None,
+            password: DbPasswordStorage::None,
+            favorite: false,
+            source,
+        }
+    }
+
+    fn input(
+        kind: DbKind,
+        host: &str,
+        port: u16,
+        user: &str,
+        source: DbCredentialSource,
+    ) -> NewDbCredential {
+        NewDbCredential {
+            kind,
+            label: "from-input".into(),
+            host: host.into(),
+            port,
+            user: user.into(),
+            database: None,
+            sqlite_path: None,
+            favorite: false,
+            source,
+        }
+    }
+
+    #[test]
+    fn upsert_slot_matches_host_port_user_within_same_kind() {
+        let dbs = vec![
+            cred(
+                "a",
+                DbKind::Mysql,
+                "127.0.0.1",
+                3306,
+                "root",
+                DbCredentialSource::Manual,
+            ),
+            cred(
+                "b",
+                DbKind::Postgres,
+                "127.0.0.1",
+                3306,
+                "root",
+                DbCredentialSource::Manual,
+            ),
+        ];
+        let i = input(
+            DbKind::Mysql,
+            "127.0.0.1",
+            3306,
+            "root",
+            DbCredentialSource::Manual,
+        );
+        // Matches the Mysql row, not the Postgres one with the
+        // accidentally identical host/port/user.
+        assert_eq!(find_db_cred_upsert_slot(&dbs, &i), Some(0));
+    }
+
+    #[test]
+    fn upsert_slot_differs_on_user_or_port() {
+        let dbs = vec![cred(
+            "a",
+            DbKind::Mysql,
+            "127.0.0.1",
+            3306,
+            "root",
+            DbCredentialSource::Manual,
+        )];
+        let other_user = input(
+            DbKind::Mysql,
+            "127.0.0.1",
+            3306,
+            "readonly",
+            DbCredentialSource::Manual,
+        );
+        let other_port = input(
+            DbKind::Mysql,
+            "127.0.0.1",
+            3307,
+            "root",
+            DbCredentialSource::Manual,
+        );
+        assert_eq!(find_db_cred_upsert_slot(&dbs, &other_user), None);
+        assert_eq!(find_db_cred_upsert_slot(&dbs, &other_port), None);
+    }
+
+    #[test]
+    fn upsert_slot_prefers_signature_match_when_detected() {
+        // Two adopted creds at the same host/port: distinct
+        // detection signatures should be treated as separate.
+        let dbs = vec![
+            cred(
+                "a",
+                DbKind::Mysql,
+                "127.0.0.1",
+                3306,
+                "root",
+                DbCredentialSource::Detected {
+                    signature: "docker://aaa/127.0.0.1:3306".into(),
+                },
+            ),
+            cred(
+                "b",
+                DbKind::Mysql,
+                "127.0.0.1",
+                3306,
+                "root",
+                DbCredentialSource::Detected {
+                    signature: "docker://bbb/127.0.0.1:3306".into(),
+                },
+            ),
+        ];
+        let i = input(
+            DbKind::Mysql,
+            "127.0.0.1",
+            3306,
+            "root",
+            DbCredentialSource::Detected {
+                signature: "docker://bbb/127.0.0.1:3306".into(),
+            },
+        );
+        assert_eq!(find_db_cred_upsert_slot(&dbs, &i), Some(1));
+    }
+
+    #[test]
+    fn upsert_slot_falls_back_to_host_port_when_signature_unmatched() {
+        // Detected-source input with a brand-new signature still
+        // collapses onto an existing same-host/port/user entry.
+        // Matches the Adopt-then-double-click case the user hit.
+        let dbs = vec![cred(
+            "a",
+            DbKind::Mysql,
+            "127.0.0.1",
+            3306,
+            "root",
+            DbCredentialSource::Manual,
+        )];
+        let i = input(
+            DbKind::Mysql,
+            "127.0.0.1",
+            3306,
+            "root",
+            DbCredentialSource::Detected {
+                signature: "docker://abc/127.0.0.1:3306".into(),
+            },
+        );
+        assert_eq!(find_db_cred_upsert_slot(&dbs, &i), Some(0));
+    }
+
+    #[test]
+    fn upsert_slot_sqlite_uses_path() {
+        let mut a = cred(
+            "a",
+            DbKind::Sqlite,
+            "",
+            0,
+            "",
+            DbCredentialSource::Manual,
+        );
+        a.sqlite_path = Some("/srv/app.db".into());
+        let mut b = cred(
+            "b",
+            DbKind::Sqlite,
+            "",
+            0,
+            "",
+            DbCredentialSource::Manual,
+        );
+        b.sqlite_path = Some("/srv/other.db".into());
+        let dbs = vec![a, b];
+        let mut i = input(
+            DbKind::Sqlite,
+            "",
+            0,
+            "",
+            DbCredentialSource::Manual,
+        );
+        i.sqlite_path = Some("/srv/other.db".into());
+        assert_eq!(find_db_cred_upsert_slot(&dbs, &i), Some(1));
+    }
+
+    #[test]
+    fn upsert_slot_returns_none_for_blank_host() {
+        // Empty-host input must not collide with another empty-host
+        // entry — that's exactly the collapse the helper avoids.
+        let dbs = vec![cred(
+            "a",
+            DbKind::Mysql,
+            "",
+            0,
+            "",
+            DbCredentialSource::Manual,
+        )];
+        let i = input(DbKind::Mysql, "", 0, "", DbCredentialSource::Manual);
+        assert_eq!(find_db_cred_upsert_slot(&dbs, &i), None);
     }
 
     #[test]

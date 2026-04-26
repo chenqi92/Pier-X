@@ -286,6 +286,7 @@ function PostgresPanelBody({ tab }: Props) {
     tintVar: "var(--svc-postgres)",
     connectLabel: t("Connect"),
     onConnect: () => flow.activateCredential(cred.id),
+    pending: flow.activating === cred.id,
   }));
 
   const detectedRows: DbSplashRowData[] = flow.detectedForKind.map((det) => ({
@@ -516,7 +517,9 @@ function PostgresPanelBody({ tab }: Props) {
             flow.setAdopting(null);
             flow.setAddOpen(true);
           }}
-          footerHint={busy ? t("Connecting...") : null}
+          footerHint={
+            flow.connectingStep ?? (busy ? t("Connecting...") : null)
+          }
           description={
             flow.hasSsh
               ? undefined

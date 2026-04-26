@@ -189,6 +189,24 @@
 .dbs-connect {
   border: 1px solid;
   background: transparent;
+  /* `.btn` forces `cursor: default`; `.dbs-row` is a real <button>
+   * with `cursor: pointer`. Restore the pointer over the most
+   * prominent CTA so hovering matches the row's click behaviour. */
+  cursor: pointer;
+}
+.dbs-row[disabled] .dbs-connect,
+.dbs-row[aria-busy="true"] .dbs-connect {
+  cursor: progress;
+}
+.dbs-row[aria-busy="true"] {
+  opacity: 0.85;
+  cursor: progress;
+}
+.dbs-spin {
+  animation: dbs-spin 0.9s linear infinite;
+}
+@keyframes dbs-spin {
+  to { transform: rotate(360deg); }
 }
 .dbs-foot {
   display: flex;
@@ -693,13 +711,24 @@
   background: transparent;
   border: 1px solid transparent;
   color: var(--muted);
-  width: 22px;
+  min-width: 22px;
   height: 22px;
+  padding: 0 4px;
   border-radius: var(--radius-xs);
   cursor: pointer;
-  display: grid;
-  place-items: center;
+  /* inline-flex (not grid) so the icon + optional count badge sit
+   * side-by-side. With `display: grid` they stacked vertically and
+   * the count fell below the star. */
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 2px;
   align-self: center;
+}
+.sq-mini__count {
+  font-size: var(--size-small);
+  color: inherit;
+  font-family: var(--mono);
 }
 .sq-mini:hover { color: var(--ink); background: var(--panel-2); }
 .sq-mini.on {
@@ -876,6 +905,52 @@
   margin-top: 2px;
 }
 .sq-hist-meta .sep { color: var(--dim); }
+
+/* Favourites popover row — picker + unpin button side-by-side.
+ * Replaces the previous nested `.sq-hist-row` inside `.sq-hist-row`,
+ * which doubled the row borders and forced flex-start alignment on
+ * the unpin X. */
+.sq-fav-row {
+  display: flex;
+  align-items: stretch;
+  border-bottom: 1px solid var(--line);
+}
+.sq-fav-row:hover { background: var(--panel-2); }
+.sq-fav-pick {
+  flex: 1;
+  display: flex;
+  align-items: flex-start;
+  gap: var(--sp-1);
+  padding: var(--sp-1) var(--sp-2);
+  background: transparent;
+  border: 0;
+  text-align: left;
+  cursor: pointer;
+  font-family: var(--sans);
+  color: var(--ink-2);
+  min-width: 0;
+}
+.sq-fav-pick .sq-hist-meta span {
+  color: var(--muted);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  display: block;
+}
+.sq-fav-remove {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 22px;
+  margin-right: var(--sp-1);
+  background: transparent;
+  border: 0;
+  color: var(--muted);
+  cursor: pointer;
+  border-radius: var(--radius-xs);
+  align-self: center;
+}
+.sq-fav-remove:hover { color: var(--neg); background: var(--panel); }
 
 @media (max-width: 800px) {
   .sq-hist { width: 220px; }
@@ -1824,6 +1899,68 @@
   overflow: hidden;
   text-overflow: ellipsis;
   max-width: 180px;
+}
+
+/* Table picker (dropdown variant — replaces the old chip strip) */
+.db2-tablebar__tables {
+  flex: 1;
+  min-width: 0;
+}
+.db2-tablebar__table-btn {
+  width: 100%;
+  justify-content: flex-start;
+}
+.db2-tablebar__table-btn.is-empty .db2-tablebar__db-name {
+  color: var(--dim);
+  font-style: italic;
+}
+.db2-tablebar__table-count {
+  margin-left: auto;
+  color: var(--dim);
+  font-size: var(--size-micro);
+  font-family: var(--mono);
+  padding: 0 var(--sp-1);
+}
+.db2-tablebar__table-menu {
+  min-width: 240px;
+  max-width: 360px;
+  max-height: 360px;
+}
+.db2-tablebar__filter {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-1);
+  padding: var(--sp-1) var(--sp-1-5);
+  border-bottom: 1px solid var(--line);
+  margin-bottom: var(--sp-0-5);
+  position: sticky;
+  top: 0;
+  background: var(--panel);
+  z-index: 1;
+}
+.db2-tablebar__filter svg { color: var(--muted); flex: none; }
+.db2-tablebar__filter input {
+  border: 0;
+  background: transparent;
+  color: var(--ink);
+  font-family: var(--mono);
+  font-size: var(--size-small);
+  outline: none;
+  flex: 1;
+  min-width: 0;
+}
+.db2-tablebar__filter input::placeholder { color: var(--dim); }
+.db2-tablebar__db-item.is-selected {
+  background: var(--accent-dim);
+  color: var(--ink);
+}
+.db2-tablebar__db-item.is-selected svg { color: var(--accent); }
+.db2-tablebar__empty {
+  padding: var(--sp-2) var(--sp-2);
+  color: var(--dim);
+  font-size: var(--size-small);
+  font-family: var(--mono);
+  text-align: center;
 }
 
 @container db2 (max-width: 560px) {

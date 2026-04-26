@@ -1,4 +1,4 @@
-import { Container, Key, Link2, Play, Server } from "lucide-react";
+import { Container, Key, Link2, Loader2, Play, Server } from "lucide-react";
 import type { ReactNode } from "react";
 
 import DbEnvTag from "./DbEnvTag";
@@ -24,6 +24,9 @@ export type DbSplashRowData = {
   tintVar: string;
   connectLabel: string;
   onConnect: () => void;
+  /** True while the user's click is in flight — swap the Play glyph for a
+   *  spinner and disable the row so the click clearly registered. */
+  pending?: boolean;
 };
 
 function ViaIcon({ kind }: { kind: DbSplashRowData["via"]["kind"] }) {
@@ -53,9 +56,16 @@ export default function DbSplashRow({
   tintVar,
   connectLabel,
   onConnect,
+  pending = false,
 }: DbSplashRowData) {
   return (
-    <button type="button" className="dbs-row" onClick={onConnect}>
+    <button
+      type="button"
+      className="dbs-row"
+      onClick={onConnect}
+      disabled={pending}
+      aria-busy={pending || undefined}
+    >
       <span className={"db-status-dot " + (status === "up" ? "on" : "off")} />
       <div className="dbs-row-main">
         <div className="dbs-row-name">
@@ -97,7 +107,12 @@ export default function DbSplashRow({
           borderColor: `color-mix(in srgb, ${tintVar} 50%, var(--line-2))`,
         }}
       >
-        <Play size={10} /> {connectLabel}
+        {pending ? (
+          <Loader2 size={10} className="dbs-spin" />
+        ) : (
+          <Play size={10} />
+        )}{" "}
+        {connectLabel}
       </span>
     </button>
   );

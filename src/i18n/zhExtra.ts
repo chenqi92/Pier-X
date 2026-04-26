@@ -93,6 +93,9 @@ export const zhExtra: Record<string, string> = {
   "Connect": "连接",
   "Connect to discover services": "连接以发现服务",
   "Connecting...": "连接中…",
+  "Connecting…": "连接中…",
+  "Resolving saved password…": "正在从密钥环读取密码…",
+  "Opening SSH tunnel and querying…": "正在建立 SSH 隧道并加载…",
   "Connection details": "连接详情",
   "connected": "已连接",
   "Click the instance above to connect.": "点击上方实例以连接。",
@@ -125,11 +128,15 @@ export const zhExtra: Record<string, string> = {
   "DISK": "磁盘",
   "DISKS": "磁盘列表",
   "MOUNT": "挂载点",
-  "FILESYSTEM": "类型",
+  "TYPE": "类型",
+  "FILESYSTEM": "文件系统",
   "USED": "已用",
   "AVAIL": "可用",
   "USE%": "占比",
   "(no disk data)": "（无磁盘数据）",
+  "BLOCK DEVICES": "块设备",
+  "lsblk": "lsblk",
+  "{count} mounts": "{count} 个挂载",
   "Display": "显示",
   "Done": "完成",
   "Download": "下载",
@@ -516,6 +523,13 @@ export const zhExtra: Record<string, string> = {
   "SSH connection timed out after {duration}.": "SSH 连接在 {duration} 后超时。",
   "Invalid SSH configuration: {detail}": "SSH 配置无效：{detail}",
   "SFTP error: {detail}": "SFTP 错误：{detail}",
+  "SQLite database is busy (locked by another process): {detail}":
+    "SQLite 数据库被占用（另一个进程持有锁）：{detail}",
+  "SQLite database is busy (locked by another process).":
+    "SQLite 数据库被占用（另一个进程持有锁）。",
+  "SQLite exited with code {exit}: {detail}":
+    "sqlite3 退出码 {exit}：{detail}",
+  "SQLite exited with code {exit}.": "sqlite3 退出码 {exit}。",
   "SSH I/O error: {detail}": "SSH I/O 错误：{detail}",
   "Invalid configuration: {detail}": "配置无效：{detail}",
   "Saved password is missing from the system keychain. Re-enter the password to recover this connection.":
@@ -859,6 +873,8 @@ export const zhExtra: Record<string, string> = {
   "updated {n}": "更新 {n}",
   "No databases.": "暂无数据库。",
   "No tables in this database.": "当前库暂无表。",
+  "No matching tables.": "未找到匹配的表。",
+  "Pick a table…": "选择表…",
 
   // DB panels — SQL editor
   "query": "查询",

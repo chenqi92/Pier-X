@@ -223,9 +223,7 @@ export default function DbSqlEditor({
                 title={t("Favorites")}
               >
                 <Star size={11} fill="currentColor" />
-                <span style={{ marginLeft: 2, fontSize: "var(--size-small)" }}>
-                  {favorites.length}
-                </span>
+                <span className="sq-mini__count">{favorites.length}</span>
               </button>
             )}
           </>
@@ -345,12 +343,12 @@ export default function DbSqlEditor({
                 </div>
               )}
               {favorites.map((f) => (
-                <div key={f.id} className="sq-hist-row" style={{ display: "flex", alignItems: "center" }}>
+                <div key={f.id} className="sq-fav-row">
                   <button
                     type="button"
-                    className="sq-hist-row"
-                    style={{ flex: 1, border: 0, background: "transparent", padding: 0 }}
+                    className="sq-fav-pick"
                     onClick={() => onPickFavorite?.(f)}
+                    title={f.sql}
                   >
                     <span className="sq-hist-ic">
                       <Star size={9} fill="currentColor" />
@@ -358,21 +356,21 @@ export default function DbSqlEditor({
                     <div className="sq-hist-body">
                       <div className="sq-hist-sql"><b>{f.name}</b></div>
                       <div className="sq-hist-meta">
-                        <span style={{ color: "var(--muted)" }}>{f.sql}</span>
+                        <span>{f.sql}</span>
                       </div>
                     </div>
                   </button>
                   {onRemoveFavorite && (
                     <button
                       type="button"
-                      className="mini-button mini-button--ghost"
+                      className="sq-fav-remove"
                       onClick={(e) => {
                         e.stopPropagation();
                         onRemoveFavorite(f.id);
                       }}
                       title={t("Unpin")}
                     >
-                      <X size={9} />
+                      <X size={10} />
                     </button>
                   )}
                 </div>

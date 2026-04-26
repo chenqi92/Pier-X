@@ -102,6 +102,16 @@ export type DbCredentialFlow = {
   savedForKind: DbCredential[];
   detectedForKind: DetectedDbInstance[];
 
+  /** Credential id the auto-browse effect is currently working on (the row
+   *  the user just clicked Connect on). Cleared when the cycle resolves —
+   *  success, error, or supersession by another click. */
+  activating: string | null;
+  /** Human-readable phase of the in-flight auto-browse: "resolving the
+   *  saved password", "opening the SSH tunnel", "loading tables".
+   *  `null` when nothing is in flight. Splash uses this so a click never
+   *  looks like a no-op. */
+  connectingStep: string | null;
+
   /** "scanning" while detection is pending, "error" on failure, else "idle". */
   probeState: "idle" | "scanning" | "error";
   /** `user@host` string shown in the splash probe line. `null` on local tabs. */
@@ -152,7 +162,13 @@ export function useDbCredentialFlow(opts: UseDbCredentialFlowOpts): DbCredential
   const [addOpen, setAddOpen] = useState(false);
   const [adopting, setAdopting] = useState<DetectedDbInstance | null>(null);
   const [pwUpdateOpen, setPwUpdateOpen] = useState(false);
-  const autoBrowseAttemptedRef = useRef(false);
+  const [activating, setActivating] = useState<string | null>(null);
+  const [connectingStep, setConnectingStep] = useState<string | null>(null);
+  // Generation counter — every effect run takes a fresh ticket, every later
+  // run supersedes earlier ones. Replaces the previous `attempted` ref,
+  // which kept a stale `true` across StrictMode double-mounts and silently
+  // swallowed every later click.
+  const browseGenRef = useRef(0);
   // Bumped by `activateCredential` so the auto-browse effect re-fires
   // even when the user re-clicks the credential that's already active
   // (e.g. retrying after the seeded auto-browse failed). Without this
@@ -289,20 +305,37 @@ export function useDbCredentialFlow(opts: UseDbCredentialFlowOpts): DbCredential
   const activeCredId = adapter.readActiveCredId(tab);
   const tabPassword = adapter.readPassword(tab);
   useEffect(() => {
-    if (autoBrowseAttemptedRef.current) return;
-    if (!hasSsh || !activeCredId || savedIndex === null) return;
-    if (hasLiveState) return;
-    if (!tabHost.trim()) return;
+    if (!hasSsh || !activeCredId || savedIndex === null) {
+      // No work to do — drop any stale click-driven UI state so a
+      // pending spinner doesn't hang forever.
+      setActivating(null);
+      setConnectingStep(null);
+      return;
+    }
+    if (hasLiveState) {
+      // Already connected — nothing for the splash to do.
+      setActivating(null);
+      setConnectingStep(null);
+      return;
+    }
+    if (!tabHost.trim()) {
+      setActivating(null);
+      setConnectingStep(null);
+      return;
+    }
 
-    autoBrowseAttemptedRef.current = true;
+    const myGen = ++browseGenRef.current;
     let cancelled = false;
+    const isCurrent = () => !cancelled && browseGenRef.current === myGen;
+
     void (async () => {
       try {
         let effectivePw = tabPassword;
         if (!effectivePw) {
+          if (isCurrent()) setConnectingStep(t("Resolving saved password…"));
           try {
             const resolved = await cmd.dbCredResolve(savedIndex, activeCredId);
-            if (cancelled) return;
+            if (!isCurrent()) return;
             effectivePw = resolved.password ?? "";
             if (effectivePw) {
               updateTab(tab.id, adapter.patchPassword(effectivePw));
@@ -310,24 +343,29 @@ export function useDbCredentialFlow(opts: UseDbCredentialFlowOpts): DbCredential
               // Keyring says a password exists but returned empty.
               // Surface the auth-recovery flow rather than silently
               // authing with "" (which looks like bad credentials).
-              if (!cancelled) {
-                setError(t("Saved password unavailable. Enter it manually or update the keyring."));
-                setTimeout(() => passwordInputRef.current?.focus(), 0);
-              }
+              setError(t("Saved password unavailable. Enter it manually or update the keyring."));
+              setTimeout(() => passwordInputRef.current?.focus(), 0);
               return;
             }
           } catch {
-            if (!cancelled) {
-              setError(t("Saved password unavailable. Enter it manually or update the keyring."));
-              setTimeout(() => passwordInputRef.current?.focus(), 0);
-            }
+            if (!isCurrent()) return;
+            setError(t("Saved password unavailable. Enter it manually or update the keyring."));
+            setTimeout(() => passwordInputRef.current?.focus(), 0);
             return;
           }
         }
-        if (cancelled) return;
+        if (!isCurrent()) return;
+        setConnectingStep(
+          hasSsh ? t("Opening SSH tunnel and querying…") : t("Connecting…"),
+        );
         await browse(effectivePw);
       } catch (e) {
-        if (!cancelled) setError(formatError(e));
+        if (isCurrent()) setError(formatError(e));
+      } finally {
+        if (isCurrent()) {
+          setActivating(null);
+          setConnectingStep(null);
+        }
       }
     })();
     return () => {
@@ -343,8 +381,9 @@ export function useDbCredentialFlow(opts: UseDbCredentialFlowOpts): DbCredential
   function activateCredential(credId: string) {
     const cred = savedForKind.find((c) => c.id === credId);
     if (!cred) return;
-    autoBrowseAttemptedRef.current = false;
     setTunnelError("");
+    setActivating(credId);
+    setConnectingStep(t("Starting…"));
     updateTab(tab.id, adapter.patchFromCred(cred));
     onReset();
     // Force the auto-browse effect to re-run even if the activated
@@ -366,7 +405,8 @@ export function useDbCredentialFlow(opts: UseDbCredentialFlowOpts): DbCredential
   }
 
   function handleCredentialAdded(cred: DbCredential) {
-    autoBrowseAttemptedRef.current = false;
+    setActivating(cred.id);
+    setConnectingStep(t("Starting…"));
     updateTab(tab.id, adapter.patchFromSaved(cred));
     onReset();
     // Mirror activateCredential: even when the saved cred id collides
@@ -398,6 +438,8 @@ export function useDbCredentialFlow(opts: UseDbCredentialFlowOpts): DbCredential
     savedIndex,
     savedForKind,
     detectedForKind,
+    activating,
+    connectingStep,
     probeState,
     probeTarget,
     refreshDetection,

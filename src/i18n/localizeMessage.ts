@@ -134,6 +134,25 @@ function localizeRuntimeMessageInternal(message: string, t: Translator, depth: n
       }),
     },
     {
+      // Mirror the SFTP unwrap above: remote `sqlite3` invocations are
+      // ferried through `SshError::InvalidConfig` so the user sees
+      // "SSH 配置无效…" for what is really just a remote command exit.
+      // Strip the prefix and recognise SQLITE_BUSY (exit 5) specially
+      // so the message says "DB is busy" instead of cryptic "exited 5".
+      pattern: /^(?:invalid ssh config:\s*)?sqlite3 exited (\d+)(?::\s*(.*))?$/i,
+      resolve: ([, exit, detail]) => {
+        const trimmed = (detail ?? "").trim();
+        if (exit === "5") {
+          return trimmed
+            ? t("SQLite database is busy (locked by another process): {detail}", { detail: trimmed })
+            : t("SQLite database is busy (locked by another process).");
+        }
+        return trimmed
+          ? t("SQLite exited with code {exit}: {detail}", { exit, detail: trimmed })
+          : t("SQLite exited with code {exit}.", { exit });
+      },
+    },
+    {
       pattern: /^invalid ssh config: (.+)$/i,
       resolve: ([, detail]) => t("Invalid SSH configuration: {detail}", {
         detail: localizeRuntimeMessageInternal(detail, t, depth + 1),

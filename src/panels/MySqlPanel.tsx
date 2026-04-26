@@ -317,6 +317,7 @@ function MySqlPanelBody({ tab }: Props) {
     tintVar: "var(--svc-mysql)",
     connectLabel: t("Connect"),
     onConnect: () => flow.activateCredential(cred.id),
+    pending: flow.activating === cred.id,
   }));
 
   const detectedRows: DbSplashRowData[] = flow.detectedForKind.map((det) => ({
@@ -537,7 +538,9 @@ function MySqlPanelBody({ tab }: Props) {
             flow.setAdopting(null);
             flow.setAddOpen(true);
           }}
-          footerHint={busy ? t("Connecting...") : null}
+          footerHint={
+            flow.connectingStep ?? (busy ? t("Connecting...") : null)
+          }
           description={
             flow.hasSsh
               ? undefined

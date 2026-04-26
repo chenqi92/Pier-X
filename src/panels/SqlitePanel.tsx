@@ -80,6 +80,12 @@ function SqlitePanelBody({ tab }: Props) {
   const [queryError, setQueryError] = useState("");
   const [notice, setNotice] = useState("");
   const [committing, setCommitting] = useState(false);
+  // Structure-edit commit spinner. Has to be declared up here with the
+  // other Hooks — `commitStructure` lives below the `if (!state) return`
+  // splash branch, so a `useState` next to it would only register on
+  // renders past that gate and trip Rules of Hooks the moment the user
+  // opens a database.
+  const [committingDdl, setCommittingDdl] = useState(false);
 
   const [connectedTab, setConnectedTab] = useState<DbConnectedTab>("data");
 
@@ -528,7 +534,8 @@ function SqlitePanelBody({ tab }: Props) {
   // ≥3.35 for DROP COLUMN; older binaries surface their own parse
   // error verbatim — we don't pre-flight version-check because the
   // capability probe is cached per-session and may go stale.
-  const [committingDdl, setCommittingDdl] = useState(false);
+  // (The `committingDdl` state lives at the top of the component so
+  // it is registered on every render, not just when `state !== null`.)
   async function commitStructure(mutations: DdlMutation[]) {
     if (!state || mutations.length === 0) return;
     const tableRef = qualifyTable("sqlite", { table: state.tableName });

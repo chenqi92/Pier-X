@@ -171,6 +171,22 @@ function RedisPanelBody({ tab }: Props) {
     let cancelled = false;
     const isCurrent = () => !cancelled && browseGenRef.current === myGen;
 
+    /** Mirror of `useDbCredentialFlow.surfaceMissingKeyring`: the
+     *  backend says this cred *had* a saved password (Keyring/Direct
+     *  variant tag) but the actual lookup came back empty — most
+     *  often because the macOS keychain entry was wiped, the cred
+     *  was saved on another machine, or the Direct-fallback's
+     *  in-memory cache is gone after an app restart. Pop the password
+     *  update dialog instead of just stuffing a small banner the
+     *  user can miss. */
+    const surfaceMissingKeyring = () => {
+      setError(
+        t("Saved password is missing from the keyring. Re-enter it to reconnect."),
+      );
+      setPwUpdateOpen(true);
+      setTimeout(() => passwordInputRef.current?.focus(), 0);
+    };
+
     void (async () => {
       try {
         let effectivePw = tab.redisPassword;
@@ -187,18 +203,12 @@ function RedisPanelBody({ tab }: Props) {
               updateTab(tab.id, { redisPassword: effectivePw });
               setPassword(effectivePw);
             } else if (resolved.credential.hasPassword) {
-              setError(
-                t("Saved password unavailable. Enter it manually or update the keyring."),
-              );
-              setTimeout(() => passwordInputRef.current?.focus(), 0);
+              surfaceMissingKeyring();
               return;
             }
           } catch {
             if (!isCurrent()) return;
-            setError(
-              t("Saved password unavailable. Enter it manually or update the keyring."),
-            );
-            setTimeout(() => passwordInputRef.current?.focus(), 0);
+            surfaceMissingKeyring();
             return;
           }
         }
@@ -210,9 +220,11 @@ function RedisPanelBody({ tab }: Props) {
       } catch (e) {
         if (isCurrent()) setError(formatError(e));
       } finally {
+        // Mirror useDbCredentialFlow: only clear the spinner; keep the
+        // last `connectingStep` visible in the splash footer so a
+        // silent failure doesn't look like a no-op.
         if (isCurrent()) {
           setActivating(null);
-          setConnectingStep(null);
         }
       }
     })();
@@ -280,11 +292,15 @@ function RedisPanelBody({ tab }: Props) {
   async function handlePasswordUpdated() {
     if (savedIndex === null || !tab.redisActiveCredentialId) return;
     setError("");
+    setConnectingStep(t("Re-resolving password and reconnecting…"));
     try {
       const resolved = await cmd.dbCredResolve(savedIndex, tab.redisActiveCredentialId);
       const pw = resolved.password ?? "";
       updateTab(tab.id, { redisPassword: pw });
       setPassword(pw);
+      setConnectingStep(
+        hasSsh ? t("Opening SSH tunnel and querying…") : t("Connecting…"),
+      );
       await browse(undefined, pw);
     } catch (e) {
       setError(formatError(e));

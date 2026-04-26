@@ -25,6 +25,7 @@ import {
   qualifyTable,
   type DbMutation,
 } from "../components/db/dbColumnRules";
+import { formatSqlText } from "../components/db/sqlFormat";
 import { useI18n } from "../i18n/useI18n";
 import { localizeError } from "../i18n/localizeMessage";
 import { writeClipboardText } from "../lib/clipboard";
@@ -236,6 +237,55 @@ function MySqlPanelBody({ tab }: Props) {
       setQueryError(formatError(e));
     } finally {
       setQueryBusy(false);
+    }
+  }
+
+  /** Run `EXPLAIN <sql>` — wraps the current editor text without
+   *  mutating the editor state. If the user already wrote their
+   *  own EXPLAIN we don't double-wrap (skips the prepend when the
+   *  trimmed SQL begins with `explain `, case-insensitively).
+   *  Result lands in the same grid as a normal run. */
+  async function runExplain() {
+    const trimmed = sql.trim();
+    if (!trimmed) return;
+    const explainSql = /^explain\b/i.test(trimmed) ? trimmed : `EXPLAIN ${trimmed}`;
+    setQueryBusy(true);
+    setQueryError("");
+    setNotice("");
+    try {
+      const target = await flow.ensureConnectionTarget();
+      const r = await cmd.mysqlExecute({
+        host: target.host,
+        port: target.port,
+        user: tab.mysqlUser.trim(),
+        password: tab.mysqlPassword,
+        database: tab.mysqlDatabase.trim() || null,
+        sql: explainSql,
+      });
+      setQueryResult(r);
+      setNotice(t("EXPLAIN · {elapsed} ms", { elapsed: r.elapsedMs }));
+    } catch (e) {
+      setQueryResult(null);
+      setQueryError(formatError(e));
+    } finally {
+      setQueryBusy(false);
+    }
+  }
+
+  /** Reformat the active editor's SQL via `sql-formatter`. The
+   *  formatter is dialect-aware; we pass `mysql`. Failure (e.g.
+   *  on a syntactically broken fragment) leaves the SQL alone
+   *  with a notice — formatting should never lose work. */
+  function formatActiveSql() {
+    const trimmed = sql.trim();
+    if (!trimmed) return;
+    try {
+      const formatted = formatSqlText(sql, "mysql");
+      if (formatted && formatted !== sql) {
+        setSql(formatted);
+      }
+    } catch (e) {
+      setNotice(t("Format failed: {err}", { err: formatError(e) }));
     }
   }
 
@@ -635,6 +685,8 @@ function MySqlPanelBody({ tab }: Props) {
         onAddFavorite={(sql, name) => sqlTabs.addFavorite({ sql, name })}
         onRemoveFavorite={sqlTabs.removeFavorite}
         onPickFavorite={sqlTabs.loadFavorite}
+        onExplain={() => void runExplain()}
+        onFormat={formatActiveSql}
       />
       <DbResultGrid
         preview={state.preview}

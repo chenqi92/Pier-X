@@ -841,6 +841,13 @@ export const zhExtra: Record<string, string> = {
   "{count} tables": "{count} 张表",
   "{count} rows": "{count} 行",
 
+  // DB panels — SQL editor toolbar (M-2 — most keys already
+  // exist in the multi-tab section below; only the new ones go
+  // here to avoid duplicate-key errors in the dictionary).
+  "Format SQL": "格式化 SQL",
+  "EXPLAIN · {elapsed} ms": "EXPLAIN · {elapsed} 毫秒",
+  "Format failed: {err}": "格式化失败：{err}",
+
   // DB panels — schema tree
   "Filter tables…": "筛选表名…",
   "current": "当前",

@@ -305,37 +305,20 @@ export function useDbCredentialFlow(opts: UseDbCredentialFlowOpts): DbCredential
   const activeCredId = adapter.readActiveCredId(tab);
   const tabPassword = adapter.readPassword(tab);
   useEffect(() => {
-    // eslint-disable-next-line no-console
-    console.log("[db-flow] effect fire", {
-      kind,
-      activeCredId,
-      savedIndex,
-      hasSsh,
-      hasLiveState,
-      tabHost,
-      tabPassword: tabPassword ? "(set)" : "(empty)",
-      browseTrigger,
-    });
     if (!hasSsh || !activeCredId || savedIndex === null) {
       // No work to do — drop any stale click-driven UI state so a
       // pending spinner doesn't hang forever.
-      // eslint-disable-next-line no-console
-      console.log("[db-flow] guard: no ssh / no cred / no index");
       setActivating(null);
       setConnectingStep(null);
       return;
     }
     if (hasLiveState) {
       // Already connected — nothing for the splash to do.
-      // eslint-disable-next-line no-console
-      console.log("[db-flow] guard: already has live state");
       setActivating(null);
       setConnectingStep(null);
       return;
     }
     if (!tabHost.trim()) {
-      // eslint-disable-next-line no-console
-      console.log("[db-flow] guard: tabHost empty");
       setActivating(null);
       setConnectingStep(null);
       return;
@@ -344,8 +327,17 @@ export function useDbCredentialFlow(opts: UseDbCredentialFlowOpts): DbCredential
     const myGen = ++browseGenRef.current;
     let cancelled = false;
     const isCurrent = () => !cancelled && browseGenRef.current === myGen;
-    // eslint-disable-next-line no-console
-    console.log("[db-flow] async start", { gen: myGen });
+
+    /** Common recovery for "the keyring lookup didn't return a usable
+     *  password but the YAML insists one was saved" — auto-pop the
+     *  password-update dialog so the user has an obvious next action.
+     *  The previous behaviour (small dismissible banner only) was easy
+     *  to miss, especially when the message wasn't translated. */
+    const surfaceMissingKeyring = () => {
+      setError(t("Saved password is missing from the keyring. Re-enter it to reconnect."));
+      setPwUpdateOpen(true);
+      setTimeout(() => passwordInputRef.current?.focus(), 0);
+    };
 
     void (async () => {
       try {
@@ -353,32 +345,25 @@ export function useDbCredentialFlow(opts: UseDbCredentialFlowOpts): DbCredential
         if (!effectivePw) {
           if (isCurrent()) setConnectingStep(t("Resolving saved password…"));
           try {
-            // eslint-disable-next-line no-console
-            console.log("[db-flow] dbCredResolve…");
             const resolved = await cmd.dbCredResolve(savedIndex, activeCredId);
-            // eslint-disable-next-line no-console
-            console.log("[db-flow] dbCredResolve ok", {
-              hasPassword: resolved.credential.hasPassword,
-              gotPw: !!resolved.password,
-            });
             if (!isCurrent()) return;
             effectivePw = resolved.password ?? "";
             if (effectivePw) {
               updateTab(tab.id, adapter.patchPassword(effectivePw));
             } else if (resolved.credential.hasPassword) {
-              // Keyring says a password exists but returned empty.
-              // Surface the auth-recovery flow rather than silently
-              // authing with "" (which looks like bad credentials).
-              setError(t("Saved password unavailable. Enter it manually or update the keyring."));
-              setTimeout(() => passwordInputRef.current?.focus(), 0);
+              // Backend says this cred had a password (keyring or
+              // Direct-fallback variant tag) but the actual lookup came
+              // back empty. Most likely the keyring entry was wiped
+              // (macOS keychain reset / cred saved on another machine /
+              // Direct-fallback's in-memory cache lost across an app
+              // restart). Pop the update dialog instead of silently
+              // authing with "".
+              surfaceMissingKeyring();
               return;
             }
-          } catch (resolveErr) {
-            // eslint-disable-next-line no-console
-            console.log("[db-flow] dbCredResolve threw", resolveErr);
+          } catch {
             if (!isCurrent()) return;
-            setError(t("Saved password unavailable. Enter it manually or update the keyring."));
-            setTimeout(() => passwordInputRef.current?.focus(), 0);
+            surfaceMissingKeyring();
             return;
           }
         }
@@ -386,21 +371,10 @@ export function useDbCredentialFlow(opts: UseDbCredentialFlowOpts): DbCredential
         setConnectingStep(
           hasSsh ? t("Opening SSH tunnel and querying…") : t("Connecting…"),
         );
-        // eslint-disable-next-line no-console
-        console.log("[db-flow] calling panel browse()…");
         await browse(effectivePw);
-        // eslint-disable-next-line no-console
-        console.log("[db-flow] panel browse() resolved");
       } catch (e) {
-        // eslint-disable-next-line no-console
-        console.log("[db-flow] async outer catch", e);
         if (isCurrent()) setError(formatError(e));
       } finally {
-        // eslint-disable-next-line no-console
-        console.log("[db-flow] async finally", {
-          gen: myGen,
-          isCurrent: isCurrent(),
-        });
         // Clear the spinner — but leave `connectingStep` in place so
         // a silent failure (no exception, no `state` flip) is visible
         // in the splash footer instead of looking like a no-op. The

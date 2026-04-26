@@ -801,6 +801,10 @@ struct ServerSnapshotView {
     top_processes: Vec<ProcessRowView>,
     top_processes_mem: Vec<ProcessRowView>,
     disks: Vec<DiskEntryView>,
+    /// Block-device topology from `lsblk -P -b`. Empty when the remote
+    /// doesn't have lsblk (BusyBox, macOS) or when the caller asked for
+    /// a fast-tier probe that skipped the disk segments.
+    block_devices: Vec<BlockDeviceEntryView>,
 }
 
 #[derive(Serialize)]
@@ -812,6 +816,21 @@ struct DiskEntryView {
     used: String,
     avail: String,
     use_pct: f64,
+    mountpoint: String,
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct BlockDeviceEntryView {
+    name: String,
+    kname: String,
+    pkname: String,
+    dev_type: String,
+    size_bytes: u64,
+    rota: bool,
+    tran: String,
+    model: String,
+    fs_type: String,
     mountpoint: String,
 }
 
@@ -4924,6 +4943,10 @@ fn markdown_render_file(path: String) -> Result<String, String> {
 
 // ── Server Monitor ──────────────────────────────────────────────────
 
+// `include_disks=true` runs the full probe (CPU/memory/network + `df`
+// + `lsblk`); `include_disks=false` skips the disk segments so the
+// fast 5 s tier doesn't burn SSH / remote CPU re-running them every
+// poll. The frontend caches the prior full snapshot's disks in between.
 #[tauri::command]
 fn server_monitor_probe(
     state: tauri::State<'_, AppState>,
@@ -4934,6 +4957,7 @@ fn server_monitor_probe(
     password: String,
     key_path: String,
     saved_connection_index: Option<usize>,
+    include_disks: bool,
 ) -> Result<ServerSnapshotView, String> {
     // Reuse the shared SSH session cache so each 5-second poll
     // doesn't re-handshake. When the terminal for this tab is
@@ -4973,7 +4997,11 @@ fn server_monitor_probe(
             .lock()
             .ok()
             .and_then(|guard| guard.get(&baseline_key).copied());
-        match server_monitor::probe_with_baseline_blocking(&session, &mut local_baseline) {
+        match server_monitor::probe_with_baseline_blocking(
+            &session,
+            &mut local_baseline,
+            include_disks,
+        ) {
             Ok(snap) => {
                 if let Some(sample) = local_baseline {
                     if let Ok(mut guard) = state.monitor_net_baselines.lock() {
@@ -5059,6 +5087,22 @@ fn server_monitor_probe(
                 avail: d.avail,
                 use_pct: d.use_pct,
                 mountpoint: d.mountpoint,
+            })
+            .collect(),
+        block_devices: snap
+            .block_devices
+            .into_iter()
+            .map(|b| BlockDeviceEntryView {
+                name: b.name,
+                kname: b.kname,
+                pkname: b.pkname,
+                dev_type: b.dev_type,
+                size_bytes: b.size_bytes,
+                rota: b.rota,
+                tran: b.tran,
+                model: b.model,
+                fs_type: b.fs_type,
+                mountpoint: b.mountpoint,
             })
             .collect(),
     })
@@ -7164,8 +7208,12 @@ async fn local_docker_action(container_id: String, action: String) -> Result<Str
     }
 }
 
+// `include_disks` mirrors `server_monitor_probe`: `false` skips the
+// disk parts so the fast-tier poll doesn't `df` (and `lsblk` on Linux)
+// every 5 s. The previous full snapshot's disks/blockDevices are
+// retained on the frontend in between full polls.
 #[tauri::command]
-fn local_system_info() -> Result<ServerSnapshotView, String> {
+fn local_system_info(include_disks: bool) -> Result<ServerSnapshotView, String> {
     #[cfg(target_os = "macos")]
     {
         let uptime = std::process::Command::new("uptime")
@@ -7198,18 +7246,23 @@ fn local_system_info() -> Result<ServerSnapshotView, String> {
         let mem_free_mb = free_pages * page_size / (1024.0 * 1024.0);
         let mem_used_mb = mem_total_mb - mem_free_mb;
         // Disk — parse the full `df -hT` so the per-mount breakdown
-        // shows up alongside the root-fs gauge.
-        let df_full = std::process::Command::new("df")
-            .args(["-hT"])
-            .output()
-            .map(|o| String::from_utf8_lossy(&o.stdout).to_string())
-            .unwrap_or_default();
+        // shows up alongside the root-fs gauge. Skipped on fast-tier
+        // polls; the frontend keeps the prior full snapshot's disks.
         let mut df_snap = server_monitor::ServerSnapshot::default();
-        server_monitor::parse_df(&df_full, &mut df_snap);
+        if include_disks {
+            let df_full = std::process::Command::new("df")
+                .args(["-hT"])
+                .output()
+                .map(|o| String::from_utf8_lossy(&o.stdout).to_string())
+                .unwrap_or_default();
+            server_monitor::parse_df(&df_full, &mut df_snap);
+        }
         let disk_total = df_snap.disk_total.clone();
         let disk_used = df_snap.disk_used.clone();
         let disk_avail = df_snap.disk_avail.clone();
-        let disk_use_pct = if df_snap.disk_use_pct == 0.0 && disk_total.is_empty() {
+        let disk_use_pct = if !include_disks
+            || (df_snap.disk_use_pct == 0.0 && disk_total.is_empty())
+        {
             -1.0
         } else {
             df_snap.disk_use_pct
@@ -7258,6 +7311,9 @@ fn local_system_info() -> Result<ServerSnapshotView, String> {
                     mountpoint: d.mountpoint,
                 })
                 .collect(),
+            // macOS local probe: lsblk doesn't exist; the BLOCK DEVICES
+            // section stays empty and the UI hides itself accordingly.
+            block_devices: Vec::new(),
         })
     }
     #[cfg(not(target_os = "macos"))]
@@ -7284,13 +7340,28 @@ fn local_system_info() -> Result<ServerSnapshotView, String> {
             .take(3)
             .filter_map(|s| s.parse().ok())
             .collect();
-        let df_full = std::process::Command::new("df")
-            .args(["-hPT"])
-            .output()
-            .map(|o| String::from_utf8_lossy(&o.stdout).to_string())
-            .unwrap_or_default();
         let mut df_snap = server_monitor::ServerSnapshot::default();
-        server_monitor::parse_df(&df_full, &mut df_snap);
+        let mut block_devices: Vec<server_monitor::BlockDeviceEntry> = Vec::new();
+        if include_disks {
+            let df_full = std::process::Command::new("df")
+                .args(["-hPT"])
+                .output()
+                .map(|o| String::from_utf8_lossy(&o.stdout).to_string())
+                .unwrap_or_default();
+            server_monitor::parse_df(&df_full, &mut df_snap);
+            // Local Linux probe: pull the same lsblk topology the SSH
+            // path does so the BLOCK DEVICES UI works the same way for
+            // a "Local Monitor" tab on a Linux desktop.
+            let lsblk_out = std::process::Command::new("lsblk")
+                .args([
+                    "-P", "-b", "-o",
+                    "NAME,KNAME,PKNAME,TYPE,SIZE,ROTA,TRAN,MODEL,FSTYPE,MOUNTPOINT",
+                ])
+                .output()
+                .map(|o| String::from_utf8_lossy(&o.stdout).to_string())
+                .unwrap_or_default();
+            block_devices = server_monitor::parse_lsblk(&lsblk_out);
+        }
         Ok(ServerSnapshotView {
             uptime: format!(
                 "{:.0}s",
@@ -7312,7 +7383,9 @@ fn local_system_info() -> Result<ServerSnapshotView, String> {
             disk_total: df_snap.disk_total.clone(),
             disk_used: df_snap.disk_used.clone(),
             disk_avail: df_snap.disk_avail.clone(),
-            disk_use_pct: if df_snap.disk_use_pct == 0.0 && df_snap.disk_total.is_empty() {
+            disk_use_pct: if !include_disks
+                || (df_snap.disk_use_pct == 0.0 && df_snap.disk_total.is_empty())
+            {
                 -1.0
             } else {
                 df_snap.disk_use_pct
@@ -7336,6 +7409,21 @@ fn local_system_info() -> Result<ServerSnapshotView, String> {
                     avail: d.avail,
                     use_pct: d.use_pct,
                     mountpoint: d.mountpoint,
+                })
+                .collect(),
+            block_devices: block_devices
+                .into_iter()
+                .map(|b| BlockDeviceEntryView {
+                    name: b.name,
+                    kname: b.kname,
+                    pkname: b.pkname,
+                    dev_type: b.dev_type,
+                    size_bytes: b.size_bytes,
+                    rota: b.rota,
+                    tran: b.tran,
+                    model: b.model,
+                    fs_type: b.fs_type,
+                    mountpoint: b.mountpoint,
                 })
                 .collect(),
         })

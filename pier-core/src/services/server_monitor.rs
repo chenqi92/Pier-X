@@ -51,19 +51,30 @@ pub struct ServerSnapshot {
     pub swap_total_mb: f64,
     /// Used swap in MB. -1 if unavailable.
     pub swap_used_mb: f64,
-    /// Root filesystem total in human-readable form.
+    /// Aggregate disk total across every entry in [`disks`] (i.e. every
+    /// mount that survived the pseudo/container filter), in human-readable
+    /// form. So a host with `/` (913G) and `/mnt` (1.8T) reads "2.7T"
+    /// here, not just the root size.
     pub disk_total: String,
-    /// Root filesystem used.
+    /// Aggregate used across every entry in [`disks`].
     pub disk_used: String,
-    /// Root filesystem available.
+    /// Aggregate available across every entry in [`disks`].
     pub disk_avail: String,
-    /// Root filesystem use percentage (0-100). -1 if unavailable.
+    /// Aggregate used percentage = Σused / Σtotal · 100 (0-100). -1 when
+    /// no usable mount was found.
     pub disk_use_pct: f64,
     /// Per-filesystem breakdown from `df -hPT`. Populated with every
     /// mounted disk that isn't pseudo (tmpfs / devtmpfs / overlay) or
     /// docker-managed (`/var/lib/docker/*`, `/snap/*`). The root `/`
     /// entry is always first when present.
     pub disks: Vec<DiskEntry>,
+    /// Whole-disk topology from `lsblk -P -b -o NAME,KNAME,PKNAME,TYPE,
+    /// SIZE,ROTA,TRAN,MODEL,FSTYPE,MOUNTPOINT`. Includes physical disks
+    /// even when they have no filesystem yet, plus the
+    /// part/crypt/lvm/raid descendants needed to render the storage
+    /// tree. Empty on hosts without `lsblk` (BusyBox, macOS) — the UI
+    /// should hide its block-device section in that case.
+    pub block_devices: Vec<BlockDeviceEntry>,
     /// CPU usage percentage (0-100) since boot, from /proc/stat.
     /// -1 if unavailable (macOS, containers without /proc).
     pub cpu_pct: f64,
@@ -115,6 +126,40 @@ pub struct DiskEntry {
     pub mountpoint: String,
 }
 
+/// One row from `lsblk -P -b`. Sizes are bytes (the `-b` flag) so we
+/// can keep them numeric and let the UI format. The parent-key column
+/// (`pkname`) lets the frontend rebuild the disk → part → crypt → lv
+/// tree without having to re-run lsblk in tree mode.
+#[derive(Clone, Debug, Default, Serialize, Deserialize)]
+pub struct BlockDeviceEntry {
+    /// Device basename, e.g. `nvme0n1`, `nvme0n1p2`, `dm-0`.
+    pub name: String,
+    /// Internal kernel name — usually identical to `name` but stable
+    /// across udev rename rules; used as the primary key for the tree.
+    pub kname: String,
+    /// Parent kernel name (`""` for root physical disks). Children
+    /// reference this to find their parent in the tree.
+    pub pkname: String,
+    /// `disk` / `part` / `lvm` / `crypt` / `raid1` / `loop` etc.
+    pub dev_type: String,
+    /// Size in bytes (from `lsblk -b`). 0 when the column was empty.
+    pub size_bytes: u64,
+    /// Rotational media — `true` for spinning HDDs, `false` for SSDs
+    /// and any device whose rota flag is unset (e.g. virtio).
+    pub rota: bool,
+    /// Transport bus, e.g. `sata`, `nvme`, `virtio`, `usb`. Empty for
+    /// device-mapper layers (lvm/crypt) which don't have a bus.
+    pub tran: String,
+    /// Vendor-reported model string, e.g. `"Samsung SSD 980 PRO 1TB"`.
+    /// Empty when unknown.
+    pub model: String,
+    /// Filesystem type if the device holds one directly, otherwise "".
+    pub fs_type: String,
+    /// Mount point of this exact node (only the leaf in a stacked
+    /// topology gets one), or "" if not mounted.
+    pub mountpoint: String,
+}
+
 /// One row in the "top processes" table. All fields are best-effort —
 /// `ps`'s output column widths vary by distro and `comm` may be
 /// truncated; the parser keeps whatever the remote shell prints.
@@ -139,9 +184,14 @@ pub struct ProcessRow {
 /// individual sections are silently swallowed and default
 /// to -1 / empty, so a partial result is better than
 /// an error.
-pub async fn probe(session: &SshSession) -> Result<ServerSnapshot> {
+///
+/// `include_disks` controls whether the heavy disk sections (`df` and
+/// `lsblk`) are included. Pass `false` for the fast 5 s tier (CPU /
+/// memory / network / processes only); pass `true` for the slow 30 s
+/// tier or for one-off "refresh now" clicks.
+pub async fn probe(session: &SshSession, include_disks: bool) -> Result<ServerSnapshot> {
     let mut throwaway: Option<NetSample> = None;
-    probe_with_baseline(session, &mut throwaway).await
+    probe_with_baseline(session, &mut throwaway, include_disks).await
 }
 
 /// Like [`probe`] but threads a `/proc/net/dev` baseline through the
@@ -151,9 +201,14 @@ pub async fn probe(session: &SshSession) -> Result<ServerSnapshot> {
 /// updated to the most recent sample so the next call computes a
 /// rate over the elapsed interval. The first call (with `None`)
 /// leaves the rate fields at `-1`; subsequent calls fill them in.
+///
+/// `include_disks` mirrors [`probe`]: skip the disk segments when the
+/// caller is on its frequent (5 s) cadence so we don't burn SSH /
+/// remote CPU re-running `df` and `lsblk` for data that barely moves.
 pub async fn probe_with_baseline(
     session: &SshSession,
     baseline: &mut Option<NetSample>,
+    include_disks: bool,
 ) -> Result<ServerSnapshot> {
     // Chain commands with a separator line we can split on. Each step
     // is wrapped in `( … || true )` so a missing tool (no `free` on
@@ -170,25 +225,40 @@ pub async fn probe_with_baseline(
     // The full set of sections we now collect:
     //   UPTIME    — `uptime` for system uptime + load averages
     //   FREE      — `free -m` (or `vm_stat`) for memory + swap
-    //   DF        — `df -hP /` for root filesystem usage
+    //   DF        — `df -hPT` for per-mount usage (only with include_disks)
+    //   LSBLK     — `lsblk -P -b ...` for disk topology  (only with include_disks)
     //   CPUSTAT   — first line of `/proc/stat` for CPU%
     //   NPROC     — logical CPU count
     //   PROCS     — total process count (`ps -e | wc -l` minus header)
     //   OSREL     — distro / kernel id from `/etc/os-release` + `uname`
     //   NETDEV    — `cat /proc/net/dev` for network throughput
     //   TOPPROC   — `ps -eo pid,comm,pcpu,pmem,etime --sort=-pcpu` head
-    let cmd = "LC_ALL=C; export LC_ALL; \
-               echo '---UPTIME---'; (uptime 2>/dev/null || true); \
-               echo '---FREE---'; (free -m 2>/dev/null || vm_stat 2>/dev/null || true); \
-               echo '---DF---'; (df -hPT 2>/dev/null || df -hP / 2>/dev/null || df -h / 2>/dev/null || true); \
-               echo '---CPUSTAT---'; (head -1 /proc/stat 2>/dev/null || true); \
-               echo '---NPROC---'; (nproc 2>/dev/null || grep -c ^processor /proc/cpuinfo 2>/dev/null || true); \
-               echo '---PROCS---'; (ps -eo pid 2>/dev/null | wc -l 2>/dev/null || true); \
-               echo '---OSREL---'; (cat /etc/os-release 2>/dev/null; uname -sr 2>/dev/null || true); \
-               echo '---NETDEV---'; (cat /proc/net/dev 2>/dev/null || true); \
-               echo '---TOPPROC---'; (ps -eo pid,comm,pcpu,pmem,etime --sort=-pcpu --no-headers 2>/dev/null | head -8 || true); \
-               echo '---TOPPROCM---'; (ps -eo pid,comm,pcpu,pmem,etime --sort=-pmem --no-headers 2>/dev/null | head -8 || true)";
-    let (exit, stdout) = session.exec_command(cmd).await?;
+    //
+    // Disk sections are skipped on the fast (5 s) cadence — the gauges
+    // for CPU/memory/network are the part that needs a frequent
+    // refresh; `df` and `lsblk` re-runs on a slower cycle (30 s) and
+    // the frontend caches the previous disk view in between so the
+    // table doesn't go blank.
+    let disk_segments = if include_disks {
+        "echo '---DF---'; (df -hPT 2>/dev/null || df -hP / 2>/dev/null || df -h / 2>/dev/null || true); \
+         echo '---LSBLK---'; (lsblk -P -b -o NAME,KNAME,PKNAME,TYPE,SIZE,ROTA,TRAN,MODEL,FSTYPE,MOUNTPOINT 2>/dev/null || true); "
+    } else {
+        ""
+    };
+    let cmd = format!(
+        "LC_ALL=C; export LC_ALL; \
+         echo '---UPTIME---'; (uptime 2>/dev/null || true); \
+         echo '---FREE---'; (free -m 2>/dev/null || vm_stat 2>/dev/null || true); \
+         {disk_segments}\
+         echo '---CPUSTAT---'; (head -1 /proc/stat 2>/dev/null || true); \
+         echo '---NPROC---'; (nproc 2>/dev/null || grep -c ^processor /proc/cpuinfo 2>/dev/null || true); \
+         echo '---PROCS---'; (ps -eo pid 2>/dev/null | wc -l 2>/dev/null || true); \
+         echo '---OSREL---'; (cat /etc/os-release 2>/dev/null; uname -sr 2>/dev/null || true); \
+         echo '---NETDEV---'; (cat /proc/net/dev 2>/dev/null || true); \
+         echo '---TOPPROC---'; (ps -eo pid,comm,pcpu,pmem,etime --sort=-pcpu --no-headers 2>/dev/null | head -8 || true); \
+         echo '---TOPPROCM---'; (ps -eo pid,comm,pcpu,pmem,etime --sort=-pmem --no-headers 2>/dev/null | head -8 || true)"
+    );
+    let (exit, stdout) = session.exec_command(&cmd).await?;
     if exit != 0 && stdout.is_empty() {
         return Err(SshError::InvalidConfig(format!(
             "monitor probe exited {exit} with empty output"
@@ -227,6 +297,9 @@ pub async fn probe_with_baseline(
     }
     if let Some(s) = sections.get("DF") {
         parse_df(s, &mut snap);
+    }
+    if let Some(s) = sections.get("LSBLK") {
+        snap.block_devices = parse_lsblk(s);
     }
     if let Some(s) = sections.get("CPUSTAT") {
         parse_cpustat(s, &mut snap);
@@ -350,16 +423,17 @@ pub async fn probe_with_baseline(
 }
 
 /// Blocking wrapper for [`probe`].
-pub fn probe_blocking(session: &SshSession) -> Result<ServerSnapshot> {
-    crate::ssh::runtime::shared().block_on(probe(session))
+pub fn probe_blocking(session: &SshSession, include_disks: bool) -> Result<ServerSnapshot> {
+    crate::ssh::runtime::shared().block_on(probe(session, include_disks))
 }
 
 /// Blocking wrapper for [`probe_with_baseline`].
 pub fn probe_with_baseline_blocking(
     session: &SshSession,
     baseline: &mut Option<NetSample>,
+    include_disks: bool,
 ) -> Result<ServerSnapshot> {
-    crate::ssh::runtime::shared().block_on(probe_with_baseline(session, baseline))
+    crate::ssh::runtime::shared().block_on(probe_with_baseline(session, baseline, include_disks))
 }
 
 /// One `/proc/net/dev` sample — total rx/tx bytes summed across all
@@ -691,7 +765,6 @@ pub fn parse_df(text: &str, snap: &mut ServerSnapshot) {
             || m.starts_with("/private/var/vm")
     }
 
-    let mut root_set = false;
     for line in &joined {
         // Skip the header row whichever case it's in.
         let lower = line.to_ascii_lowercase();
@@ -738,17 +811,6 @@ pub fn parse_df(text: &str, snap: &mut ServerSnapshot) {
         let use_pct = pct_str.parse().unwrap_or(-1.0);
         let mountpoint = parts.get(pct_idx + 1).copied().unwrap_or("").to_string();
 
-        // Always fill the legacy single-disk gauge from the root
-        // filesystem — stays the primary "how full is the server?"
-        // signal, regardless of whether we also show per-disk rows.
-        if !root_set && mountpoint == "/" {
-            snap.disk_total = total.clone();
-            snap.disk_used = used.clone();
-            snap.disk_avail = avail.clone();
-            snap.disk_use_pct = use_pct;
-            root_set = true;
-        }
-
         let skip = is_ignorable_fs_type(&fs_type)
             || is_ignorable_mount(&mountpoint)
             || mountpoint.is_empty();
@@ -764,12 +826,15 @@ pub fn parse_df(text: &str, snap: &mut ServerSnapshot) {
             });
         }
     }
+    // The legacy "track the root FS into snap.disk_*" branch used to live
+    // in the loop; we now aggregate across every kept mount further down.
 
     // Legacy fallback: if the remote only returned a single-FS `df -h /`
     // row (pct_idx handling above skipped it for missing column count),
-    // try the old five-column parse one more time so the root gauge
-    // still populates.
-    if !root_set {
+    // try the old five-column parse one more time so we still surface a
+    // disk reading. Hits when the remote's `df` collapses output to one
+    // line with no header.
+    if snap.disks.is_empty() {
         for line in &joined {
             let lower = line.to_ascii_lowercase();
             if lower.starts_with("filesystem") {
@@ -800,6 +865,180 @@ pub fn parse_df(text: &str, snap: &mut ServerSnapshot) {
             (false, true) => std::cmp::Ordering::Greater,
             _ => a.mountpoint.cmp(&b.mountpoint),
         });
+
+    // Top-level "总计" / "DISK" gauge is the **sum across every mount we
+    // kept** — root + /mnt + any other real disks. Previously this only
+    // tracked `/`, so a host with a 913G root and a 1.8T `/mnt` data
+    // disk would show "913G total" and the user had no way to know the
+    // bigger one even existed in the gauge. Aggregating gives an
+    // honest "how much storage is attached to this machine" signal.
+    if !snap.disks.is_empty() {
+        let mut total_b: u64 = 0;
+        let mut used_b: u64 = 0;
+        let mut avail_b: u64 = 0;
+        let mut any = false;
+        for d in &snap.disks {
+            if let (Some(t), Some(u), Some(a)) = (
+                parse_df_size(&d.total),
+                parse_df_size(&d.used),
+                parse_df_size(&d.avail),
+            ) {
+                total_b = total_b.saturating_add(t);
+                used_b = used_b.saturating_add(u);
+                avail_b = avail_b.saturating_add(a);
+                any = true;
+            }
+        }
+        if any && total_b > 0 {
+            snap.disk_total = format_df_size(total_b);
+            snap.disk_used = format_df_size(used_b);
+            snap.disk_avail = format_df_size(avail_b);
+            snap.disk_use_pct =
+                ((used_b as f64 / total_b as f64) * 100.0 * 10.0).round() / 10.0;
+        }
+    }
+}
+
+/// Parse a df-style size string like `"913G"`, `"1.8T"`, `"212M"`,
+/// `"0"` into bytes. Returns `None` if the input doesn't match the
+/// `<number>[KMGTP][i?B?]` shape — the aggregation step uses that to
+/// quietly skip mounts the remote `df` reported in an unexpected form
+/// rather than poisoning the total. Uses 1024-power units to match
+/// `df -h`'s default.
+fn parse_df_size(s: &str) -> Option<u64> {
+    let trimmed = s.trim();
+    if trimmed.is_empty() || trimmed == "-" {
+        return None;
+    }
+    // Strip a trailing `B` / `iB` if present (some BSD `df`s emit that).
+    let stripped = trimmed.trim_end_matches('B').trim_end_matches('i');
+    let (num_part, suffix) = match stripped.chars().last() {
+        Some(c) if c.is_ascii_alphabetic() => stripped.split_at(stripped.len() - 1),
+        _ => (stripped, ""),
+    };
+    let num: f64 = num_part.parse().ok()?;
+    let mult: f64 = match suffix.to_ascii_uppercase().as_str() {
+        "" => 1.0,
+        "K" => 1024.0,
+        "M" => 1024.0 * 1024.0,
+        "G" => 1024.0 * 1024.0 * 1024.0,
+        "T" => 1024.0_f64.powi(4),
+        "P" => 1024.0_f64.powi(5),
+        "E" => 1024.0_f64.powi(6),
+        _ => return None,
+    };
+    Some((num * mult) as u64)
+}
+
+/// Inverse of [`parse_df_size`] — picks the largest unit that keeps the
+/// value ≥ 1 and renders one decimal place (matching `df -h`'s style).
+/// `0 → "0B"`, `1234 → "1.2K"`, `2_750_000_000_000 → "2.5T"`.
+fn format_df_size(bytes: u64) -> String {
+    if bytes == 0 {
+        return "0B".to_string();
+    }
+    // 1024-power scales matching `df -h`. Spelled out as literals
+    // because `f64::powi` isn't const-callable.
+    const UNITS: &[(&str, f64)] = &[
+        ("E", 1_152_921_504_606_846_976.0), // 1024^6
+        ("P", 1_125_899_906_842_624.0),     // 1024^5
+        ("T", 1_099_511_627_776.0),         // 1024^4
+        ("G", 1_073_741_824.0),             // 1024^3
+        ("M", 1_048_576.0),                 // 1024^2
+        ("K", 1024.0),
+    ];
+    let b = bytes as f64;
+    for (label, scale) in UNITS {
+        if b >= *scale {
+            let v = b / scale;
+            // df -h drops the decimal when the value rounds to ≥ 10.
+            if v >= 10.0 {
+                return format!("{:.0}{}", v, label);
+            }
+            return format!("{:.1}{}", v, label);
+        }
+    }
+    format!("{}B", bytes)
+}
+
+/// Parse `lsblk -P -b` (key="value" pairs, one device per line) into
+/// [`BlockDeviceEntry`] rows. Returns an empty Vec when the section is
+/// blank — that's the BusyBox/macOS path where lsblk isn't installed.
+///
+/// We deliberately don't try to build a tree here; the frontend handles
+/// the disk → part → crypt → lv layout because the rendering choices
+/// (collapsing, indent style) belong to the UI. The parser just keeps
+/// `pkname` so the UI can stitch the children to their parent.
+pub fn parse_lsblk(text: &str) -> Vec<BlockDeviceEntry> {
+    let mut out = Vec::new();
+    for line in text.lines() {
+        let trimmed = line.trim();
+        if trimmed.is_empty() {
+            continue;
+        }
+        let mut entry = BlockDeviceEntry::default();
+        // `-P` rows look like: NAME="sda" KNAME="sda" PKNAME="" TYPE="disk" ...
+        // A naive split on whitespace would shred quoted MODEL strings
+        // ("Samsung SSD 980 PRO 1TB"), so we walk the line by hand.
+        let bytes = trimmed.as_bytes();
+        let mut i = 0;
+        while i < bytes.len() {
+            // Skip leading whitespace.
+            while i < bytes.len() && bytes[i].is_ascii_whitespace() {
+                i += 1;
+            }
+            // Read the KEY up to the `=`.
+            let key_start = i;
+            while i < bytes.len() && bytes[i] != b'=' {
+                i += 1;
+            }
+            if i >= bytes.len() {
+                break;
+            }
+            let key = &trimmed[key_start..i];
+            i += 1; // skip `=`
+            // Read the value: either a quoted string or a bare token.
+            let value = if i < bytes.len() && bytes[i] == b'"' {
+                i += 1;
+                let v_start = i;
+                while i < bytes.len() && bytes[i] != b'"' {
+                    i += 1;
+                }
+                let v = &trimmed[v_start..i];
+                if i < bytes.len() {
+                    i += 1; // skip closing `"`
+                }
+                v
+            } else {
+                let v_start = i;
+                while i < bytes.len() && !bytes[i].is_ascii_whitespace() {
+                    i += 1;
+                }
+                &trimmed[v_start..i]
+            };
+            match key {
+                "NAME" => entry.name = value.to_string(),
+                "KNAME" => entry.kname = value.to_string(),
+                "PKNAME" => entry.pkname = value.to_string(),
+                "TYPE" => entry.dev_type = value.to_string(),
+                "SIZE" => entry.size_bytes = value.parse().unwrap_or(0),
+                "ROTA" => entry.rota = value == "1",
+                "TRAN" => entry.tran = value.to_string(),
+                "MODEL" => entry.model = value.trim().to_string(),
+                "FSTYPE" => entry.fs_type = value.to_string(),
+                "MOUNTPOINT" => entry.mountpoint = value.to_string(),
+                _ => {}
+            }
+        }
+        if entry.kname.is_empty() {
+            // Without a stable identifier we can't anchor children to
+            // this row, so drop the malformed line rather than emit a
+            // ghost node.
+            continue;
+        }
+        out.push(entry);
+    }
+    out
 }
 
 /// Parse `/proc/stat` first line to get overall CPU usage %.
@@ -876,10 +1115,119 @@ Swap:          2047           0        2047";
 Filesystem      Size  Used Avail Use% Mounted on
 /dev/sda1        50G   23G   25G  48% /";
         parse_df(text, &mut snap);
+        // Single-mount case: aggregation reduces to that one mount.
+        // Total/used/avail are reformatted from the byte sums (50 GiB =
+        // 50.0G), and use% is recomputed from used/total rather than
+        // taken verbatim from the `df` column.
         assert_eq!(snap.disk_total, "50G");
         assert_eq!(snap.disk_used, "23G");
         assert_eq!(snap.disk_avail, "25G");
-        assert!((snap.disk_use_pct - 48.0).abs() < 0.1);
+        // 23 / 50 * 100 = 46.0 (the 48% from df includes reserved blocks
+        // we don't see in Used/Avail).
+        assert!((snap.disk_use_pct - 46.0).abs() < 0.5);
+        assert_eq!(snap.disks.len(), 1);
+        assert_eq!(snap.disks[0].mountpoint, "/");
+    }
+
+    #[test]
+    fn parse_df_aggregates_multiple_mounts() {
+        // Reproducing the 192.168.0.3 layout: 913G root + 1.8T /mnt
+        // data disk. Pre-fix the panel showed "总计 913G" — root only.
+        // Post-fix the gauge sums both.
+        let mut snap = ServerSnapshot {
+            disk_use_pct: -1.0,
+            ..Default::default()
+        };
+        let text = "\
+Filesystem     Type   Size  Used Avail Use% Mounted on
+/dev/sda1      ext4   913G   59G  809G   7% /
+/dev/sda2      ext4   2.0G  212M  1.6G  12% /boot
+/dev/sdb1      xfs    1.8T   31G  1.7T   2% /mnt";
+        parse_df(text, &mut snap);
+        assert_eq!(snap.disks.len(), 3);
+        // Σtotal ≈ 913G + 2.0G + 1.8T ≈ 2.7T
+        assert!(
+            snap.disk_total.ends_with('T'),
+            "expected aggregate to roll over into T, got {}",
+            snap.disk_total
+        );
+        // Σused ≈ 59 + 0.2 + 31 = ~90G
+        assert!(
+            snap.disk_used.ends_with('G'),
+            "expected aggregate used in G, got {}",
+            snap.disk_used
+        );
+        // Aggregate percentage should be small — most of the storage is
+        // unused on /mnt — ≈ 90 / 2750 * 100 ≈ 3.3%.
+        assert!(
+            snap.disk_use_pct > 0.0 && snap.disk_use_pct < 10.0,
+            "aggregate use% should be a few percent, got {}",
+            snap.disk_use_pct
+        );
+    }
+
+    #[test]
+    fn parse_df_size_round_trips_common_units() {
+        // Round-tripping `df -h` output through bytes and back gives us
+        // the same shape (within one decimal place of precision).
+        for s in ["0", "212M", "1.6G", "913G", "1.8T", "2.7T"] {
+            let bytes = parse_df_size(s).unwrap_or_else(|| panic!("parse failed for {}", s));
+            let back = format_df_size(bytes);
+            // Allow either same string or one with a slight rounding
+            // difference (e.g. "913G" -> "913G", "1.8T" might come back
+            // as "1.8T" or "1.8T").
+            let trimmed = back.trim_end_matches('B');
+            assert!(
+                trimmed.starts_with(s.trim_end_matches('B').trim_start_matches('0'))
+                    || (s == "0" && back == "0B"),
+                "round trip for {} produced {}",
+                s,
+                back
+            );
+        }
+    }
+
+    #[test]
+    fn format_df_size_drops_decimal_above_ten() {
+        assert_eq!(format_df_size(0), "0B");
+        // 11 GiB → "11G" not "11.0G"
+        let eleven_gib = 11u64 * 1024 * 1024 * 1024;
+        assert_eq!(format_df_size(eleven_gib), "11G");
+        // 1.5 GiB → "1.5G"
+        let one_and_half_gib = 1024u64 * 1024 * 1024 * 3 / 2;
+        assert_eq!(format_df_size(one_and_half_gib), "1.5G");
+    }
+
+    #[test]
+    fn parse_lsblk_handles_quoted_model_and_tree() {
+        // Real lsblk output: nvme physical disk → partition → encrypted
+        // root → LVM volume group → logical volume mounted at /home.
+        let text = "\
+NAME=\"nvme0n1\" KNAME=\"nvme0n1\" PKNAME=\"\" TYPE=\"disk\" SIZE=\"1024209543168\" ROTA=\"0\" TRAN=\"nvme\" MODEL=\"Samsung SSD 980 PRO 1TB\" FSTYPE=\"\" MOUNTPOINT=\"\"
+NAME=\"nvme0n1p1\" KNAME=\"nvme0n1p1\" PKNAME=\"nvme0n1\" TYPE=\"part\" SIZE=\"536870912\" ROTA=\"0\" TRAN=\"\" MODEL=\"\" FSTYPE=\"vfat\" MOUNTPOINT=\"/boot/efi\"
+NAME=\"nvme0n1p2\" KNAME=\"nvme0n1p2\" PKNAME=\"nvme0n1\" TYPE=\"part\" SIZE=\"1023672672256\" ROTA=\"0\" TRAN=\"\" MODEL=\"\" FSTYPE=\"crypto_LUKS\" MOUNTPOINT=\"\"
+NAME=\"cryptroot\" KNAME=\"dm-0\" PKNAME=\"nvme0n1p2\" TYPE=\"crypt\" SIZE=\"1023668477952\" ROTA=\"0\" TRAN=\"\" MODEL=\"\" FSTYPE=\"LVM2_member\" MOUNTPOINT=\"\"
+NAME=\"vg-home\" KNAME=\"dm-1\" PKNAME=\"dm-0\" TYPE=\"lvm\" SIZE=\"858993459200\" ROTA=\"0\" TRAN=\"\" MODEL=\"\" FSTYPE=\"ext4\" MOUNTPOINT=\"/home\"";
+        let entries = parse_lsblk(text);
+        assert_eq!(entries.len(), 5);
+        assert_eq!(entries[0].name, "nvme0n1");
+        assert_eq!(entries[0].tran, "nvme");
+        assert!(!entries[0].rota); // SSD
+        assert_eq!(entries[0].model, "Samsung SSD 980 PRO 1TB"); // quoted, contains spaces
+        assert_eq!(entries[0].pkname, "");
+        assert_eq!(entries[1].pkname, "nvme0n1");
+        assert_eq!(entries[1].mountpoint, "/boot/efi");
+        assert_eq!(entries[3].dev_type, "crypt");
+        assert_eq!(entries[3].pkname, "nvme0n1p2");
+        assert_eq!(entries[4].dev_type, "lvm");
+        assert_eq!(entries[4].mountpoint, "/home");
+    }
+
+    #[test]
+    fn parse_lsblk_tolerates_empty_input() {
+        // BusyBox / macOS: no lsblk → segment is blank → empty Vec.
+        assert!(parse_lsblk("").is_empty());
+        assert!(parse_lsblk("   \n\n").is_empty());
     }
 
     #[test]
@@ -1025,6 +1373,9 @@ swap:          2047           0        2047";
         assert_eq!(snap.disk_total, "100G");
         assert_eq!(snap.disk_used, "42G");
         assert_eq!(snap.disk_avail, "58G");
-        assert!((snap.disk_use_pct - 43.0).abs() < 0.1);
+        // Aggregation recomputes pct from used/total — 42/100 = 42.0,
+        // not the verbatim 43% from df (which factors in reserved
+        // blocks the human-readable Used/Avail columns hide).
+        assert!((snap.disk_use_pct - 42.0).abs() < 0.5);
     }
 }

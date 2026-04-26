@@ -3,7 +3,7 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import type { ReactNode } from "react";
 import * as cmd from "../lib/commands";
 import { RIGHT_TOOL_META } from "../lib/rightToolMeta";
-import type { ServerSnapshotView, TabState } from "../lib/types";
+import type { BlockDeviceEntryView, ServerSnapshotView, TabState } from "../lib/types";
 import { effectiveSshTarget } from "../lib/types";
 import { useI18n } from "../i18n/useI18n";
 import { isMissingKeychainError, localizeError } from "../i18n/localizeMessage";
@@ -95,6 +95,150 @@ function formatTimestamp(ts: number): string {
   return `${pad(d.getHours())}:${pad(d.getMinutes())}:${pad(d.getSeconds())}`;
 }
 
+/** Render lsblk's `SIZE` (bytes) using the same 1024-power units df uses,
+ *  so the BLOCK DEVICES tree reads consistently with the DISKS table.
+ *  Mirrors the backend's `format_df_size` — kept in sync intentionally. */
+function formatBytes(n: number): string {
+  if (!n || n <= 0) return "—";
+  const units = [
+    ["E", 1024 ** 6],
+    ["P", 1024 ** 5],
+    ["T", 1024 ** 4],
+    ["G", 1024 ** 3],
+    ["M", 1024 ** 2],
+    ["K", 1024],
+  ] as const;
+  for (const [label, scale] of units) {
+    if (n >= scale) {
+      const v = n / scale;
+      return v >= 10 ? `${v.toFixed(0)}${label}` : `${v.toFixed(1)}${label}`;
+    }
+  }
+  return `${n}B`;
+}
+
+/** Compact descriptor for the DISKS-table TYPE column. e.g. "SSD · NVMe",
+ *  "HDD · SATA", "virt · virtio". Returns null when no block-device row
+ *  matches the mount (lsblk wasn't available, or the mount is on a path
+ *  lsblk doesn't expose). */
+function describeBlock(block: BlockDeviceEntryView | undefined): string | null {
+  if (!block) return null;
+  const tran = block.tran ? block.tran.toUpperCase() : null;
+  // virtio is by definition a virtual disk; surface that explicitly so
+  // the user can tell a passthrough nvme/sata apart from a hypervisor
+  // virtual disk at a glance.
+  if (block.tran === "virtio") return tran ? `virt · ${tran}` : "virt";
+  const media = block.rota ? "HDD" : "SSD";
+  return tran ? `${media} · ${tran}` : media;
+}
+
+/** Build a map from mountpoint → owning block device, walking up the
+ *  pkname chain so a mount on `vg-home` (lvm) resolves all the way to
+ *  the physical `nvme0n1` for media/transport info. We prefer the
+ *  attributes of the *physical* root because that's what determines
+ *  "is it really an SSD on an NVMe bus" — the lvm/crypt layers don't
+ *  carry their own ROTA/TRAN and would otherwise read empty. */
+function buildMountToBlock(
+  blocks: BlockDeviceEntryView[],
+): Map<string, BlockDeviceEntryView> {
+  const byKname = new Map<string, BlockDeviceEntryView>();
+  for (const b of blocks) byKname.set(b.kname, b);
+
+  function rootOf(b: BlockDeviceEntryView): BlockDeviceEntryView {
+    let cur = b;
+    const seen = new Set<string>();
+    while (cur.pkname && !seen.has(cur.kname)) {
+      seen.add(cur.kname);
+      const parent = byKname.get(cur.pkname);
+      if (!parent) break;
+      cur = parent;
+    }
+    return cur;
+  }
+
+  const out = new Map<string, BlockDeviceEntryView>();
+  for (const b of blocks) {
+    if (!b.mountpoint) continue;
+    const root = rootOf(b);
+    // Synthesise a row that keeps the leaf's identity (so tooltip can
+    // show the actual mounted device) but borrows ROTA/TRAN/MODEL from
+    // the physical disk that backs it.
+    out.set(b.mountpoint, {
+      ...b,
+      rota: root.rota,
+      tran: root.tran || b.tran,
+      model: root.model || b.model,
+    });
+  }
+  return out;
+}
+
+type BlockTreeNode = BlockDeviceEntryView & { children: BlockTreeNode[] };
+
+/** One row in the BLOCK DEVICES tree. The connector glyph + indent
+ *  encode the parent/child relationship without needing CSS lines. */
+function BlockTreeRow({ node, depth }: { node: BlockTreeNode; depth: number }) {
+  // Top-level (physical disk) gets the meaningful media/bus chips;
+  // children inherit visually via indentation, so we only repeat the
+  // bus on devices that have their own (none of the dm/crypt/lvm
+  // layers do). MODEL goes into the row tooltip to keep the row tight.
+  const tran = node.tran ? node.tran.toUpperCase() : null;
+  const media = depth === 0 ? (node.rota ? "HDD" : "SSD") : null;
+  const sizeText = node.sizeBytes > 0 ? formatBytes(node.sizeBytes) : "—";
+  const titleParts = [node.kname, node.devType];
+  if (node.model) titleParts.push(node.model);
+  if (node.fsType) titleParts.push(node.fsType);
+  if (node.mountpoint) titleParts.push(`→ ${node.mountpoint}`);
+  return (
+    <>
+      <li className="mon-tree-row" title={titleParts.join(" · ")}>
+        <span className="mon-tree-name mono">
+          <span className="mon-tree-indent" style={{ width: depth * 12 }} aria-hidden />
+          {depth > 0 && <span className="mon-tree-branch mono">└─ </span>}
+          {node.name || node.kname}
+        </span>
+        <span className="mon-tree-meta mono">
+          {media && <span className="mon-tree-chip">{media}</span>}
+          {tran && <span className="mon-tree-chip">{tran}</span>}
+          <span className="mon-tree-type">{node.devType || ""}</span>
+        </span>
+        <span className="mon-tree-size mono">{sizeText}</span>
+        <span className="mon-tree-mount mono mon-cell-trunc">
+          {node.mountpoint || node.fsType || "—"}
+        </span>
+      </li>
+      {node.children.map((c) => (
+        <BlockTreeRow key={c.kname} node={c} depth={depth + 1} />
+      ))}
+    </>
+  );
+}
+
+/** Stitch the flat lsblk rows into the disk → part → crypt → lv tree.
+ *  Roots are rows with empty `pkname` (physical disks) or rows whose
+ *  parent isn't in the input (defensive — keeps orphan rows visible
+ *  rather than silently dropping them). */
+function buildBlockTree(blocks: BlockDeviceEntryView[]): BlockTreeNode[] {
+  const nodes = new Map<string, BlockTreeNode>();
+  for (const b of blocks) nodes.set(b.kname, { ...b, children: [] });
+  const roots: BlockTreeNode[] = [];
+  for (const node of nodes.values()) {
+    if (node.pkname && nodes.has(node.pkname)) {
+      nodes.get(node.pkname)!.children.push(node);
+    } else {
+      roots.push(node);
+    }
+  }
+  // Stable order: physical disks first sorted by kname, children sorted
+  // by kname too, so re-renders don't shuffle rows around.
+  const sortRec = (arr: BlockTreeNode[]) => {
+    arr.sort((a, b) => a.kname.localeCompare(b.kname));
+    for (const n of arr) sortRec(n.children);
+  };
+  sortRec(roots);
+  return roots;
+}
+
 export default function ServerMonitorPanel(props: Props) {
   const ready = useDeferredMount();
   return (
@@ -138,7 +282,16 @@ function ServerMonitorPanelBody({ tab, onEditConnection, isActive = true }: Prop
   // overlay; otherwise the SSH path takes priority.
   const isLocal = tab.backend === "local" && !hasSsh;
 
-  async function probe() {
+  // The probe runs in two cadences:
+  //   • fast (5 s)  — CPU, memory, network, processes, uptime/load
+  //   • full (30 s) — adds the disk segments (`df` + `lsblk`)
+  //
+  // `df` is cheap (statvfs against the kernel cache, no disk I/O) but
+  // running it every 5 s burns SSH/remote CPU and makes the disk row
+  // re-render constantly. Disks barely move, so the slow cadence is
+  // enough; in between full polls the prior disks/blockDevices are
+  // kept in state and rendered as-is.
+  async function runProbe(includeDisks: boolean) {
     setBusy(true);
     setError("");
     setNeedsPasswordRecovery(false);
@@ -148,10 +301,14 @@ function ServerMonitorPanelBody({ tab, onEditConnection, isActive = true }: Prop
       : isLocal
         ? "local"
         : "no-connection";
-    logEvent("DEBUG", "monitor.panel", `tab=${tab.id} probe start → ${targetLabel}`);
+    logEvent(
+      "DEBUG",
+      "monitor.panel",
+      `tab=${tab.id} probe start (${includeDisks ? "full" : "fast"}) → ${targetLabel}`,
+    );
     try {
       const s = isLocal
-        ? await cmd.localSystemInfo()
+        ? await cmd.localSystemInfo(includeDisks)
         : sshTarget
           ? await cmd.serverMonitorProbe({
               host: sshTarget.host,
@@ -161,6 +318,7 @@ function ServerMonitorPanelBody({ tab, onEditConnection, isActive = true }: Prop
               password: sshTarget.password,
               keyPath: sshTarget.keyPath,
               savedConnectionIndex: sshTarget.savedConnectionIndex,
+              includeDisks,
             })
           : null;
       if (!s) {
@@ -168,15 +326,30 @@ function ServerMonitorPanelBody({ tab, onEditConnection, isActive = true }: Prop
         logEvent("WARN", "monitor.panel", `tab=${tab.id} probe → no target`);
         return;
       }
-      setSnap(s);
+      // Fast probes don't carry disk data; preserve whatever the last
+      // full probe wrote so the gauge / table don't blank out between
+      // ticks. The first probe after mount is always full, so the
+      // first fast one always finds something to merge against.
+      setSnap((prev) => {
+        if (includeDisks || !prev) return s;
+        return {
+          ...s,
+          diskTotal: prev.diskTotal,
+          diskUsed: prev.diskUsed,
+          diskAvail: prev.diskAvail,
+          diskUsePct: prev.diskUsePct,
+          disks: prev.disks,
+          blockDevices: prev.blockDevices,
+        };
+      });
       setLastProbed(Date.now());
       const elapsed = Date.now() - started;
       const degraded =
-        s.cpuPct < 0 && s.memTotalMb < 0 && s.diskUsePct < 0 && s.procCount === 0;
+        s.cpuPct < 0 && s.memTotalMb < 0 && s.procCount === 0;
       logEvent(
         degraded ? "WARN" : "DEBUG",
         "monitor.panel",
-        `tab=${tab.id} probe ok in ${elapsed}ms${degraded ? " (all fields empty — remote output did not parse)" : ""}`,
+        `tab=${tab.id} probe ok (${includeDisks ? "full" : "fast"}) in ${elapsed}ms${degraded ? " (all fields empty — remote output did not parse)" : ""}`,
       );
     } catch (e) {
       // Keep the last good snapshot visible instead of blanking the whole
@@ -212,12 +385,10 @@ function ServerMonitorPanelBody({ tab, onEditConnection, isActive = true }: Prop
   // the component is keyed by tab.id in RightSidebar so this fires on
   // tab switch too. Password-auth saved tabs that haven't primed their
   // password yet will no-op here; user can tap "探测服务器" to retry.
-  // Also installs a 5-second polling interval so the gauges actually
-  // move; without it the panel reads as "frozen" because the backend
-  // probe is one-shot (`server_monitor::probe` runs `uptime + free +
-  // df + /proc/stat` in a single SSH exec call). The poll skips when
-  // a previous probe is still in flight (`busy` guard) so a slow
-  // remote can't pile up overlapping requests.
+  // Installs a 5-second tick that fires a fast probe (CPU/memory/network
+  // /processes); every 6th tick (~30 s) is promoted to a full probe
+  // that also runs `df` + `lsblk`. The `busy` guard prevents stacking
+  // when a previous probe is still in flight on a slow remote.
   useEffect(() => {
     const haveCreds =
       sshTarget !== null &&
@@ -246,16 +417,24 @@ function ServerMonitorPanelBody({ tab, onEditConnection, isActive = true }: Prop
     // Monitor to another heavy tool (Docker in particular) fires one
     // extra monitor probe right as the new tool is doing its first load.
     if (!isActive) return;
-    void probe();
-    const interval = window.setInterval(() => {
+    // First probe is full so the disk gauges populate immediately;
+    // subsequent ticks split into 5 s fast (no disks) and 30 s full.
+    void runProbe(true);
+    let lastFullAt = Date.now();
+    const tick = window.setInterval(() => {
       // Re-read busy from the latest closure via a state check —
       // intentionally letting the JS engine grab the freshest value
       // since `busy` isn't in the deps (we don't want the interval
       // teardown/recreate cycle every time it flips).
       if (busyRef.current) return;
-      void probe();
+      const now = Date.now();
+      // Promote this tick to full if 30 s have elapsed since the last
+      // full probe; otherwise just refresh the cheap fields.
+      const wantFull = now - lastFullAt >= 30_000;
+      if (wantFull) lastFullAt = now;
+      void runProbe(wantFull);
     }, 5000);
-    return () => window.clearInterval(interval);
+    return () => window.clearInterval(tick);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [
     tab.id,
@@ -290,6 +469,19 @@ function ServerMonitorPanelBody({ tab, onEditConnection, isActive = true }: Prop
       <StatusDot tone={snap ? "pos" : "off"} />
       {snap ? t("ready") : t("offline")}
     </>
+  );
+
+  // Per-mount lookup into the lsblk topology — feeds the DISKS table's
+  // TYPE column ("SSD · NVMe" etc.) and the row tooltip's MODEL line.
+  // Memoised because rebuilding the map on every paint would be wasted
+  // work given the disks list only changes on the 30 s slow tick.
+  const mountToBlock = useMemo(
+    () => buildMountToBlock(snap?.blockDevices ?? []),
+    [snap?.blockDevices],
+  );
+  const blockTree = useMemo(
+    () => buildBlockTree(snap?.blockDevices ?? []),
+    [snap?.blockDevices],
   );
 
   const memPct = snap && snap.memTotalMb > 0 ? (snap.memUsedMb / snap.memTotalMb) * 100 : 0;
@@ -384,7 +576,11 @@ function ServerMonitorPanelBody({ tab, onEditConnection, isActive = true }: Prop
             value={snap
               ? <>{snap.diskUsePct >= 0 ? snap.diskUsePct.toFixed(0) : "—"}<span className="mon-gauge-unit">%</span></>
               : <>—</>}
-            sub={snap ? `${snap.diskAvail} ${t("free of")} ${snap.diskTotal}` : "—"}
+            sub={snap
+              ? snap.disks && snap.disks.length > 1
+                ? `${snap.diskAvail} ${t("free of")} ${snap.diskTotal} · ${t("{count} mounts", { count: snap.disks.length })}`
+                : `${snap.diskAvail} ${t("free of")} ${snap.diskTotal}`
+              : "—"}
             pct={snap ? diskPct : 0}
             tone={snap ? toneFromPct(diskPct) : "off"}
           />
@@ -444,10 +640,11 @@ function ServerMonitorPanelBody({ tab, onEditConnection, isActive = true }: Prop
             <thead>
               <tr>
                 <th>{t("MOUNT")}</th>
-                <th style={{ width: 52, textAlign: "right" }}>{t("SIZE")}</th>
-                <th style={{ width: 52, textAlign: "right" }}>{t("USED")}</th>
-                <th style={{ width: 52, textAlign: "right" }}>{t("AVAIL")}</th>
-                <th style={{ width: 44, textAlign: "right" }}>{t("USE%")}</th>
+                <th style={{ width: 64, textAlign: "left" }}>{t("TYPE")}</th>
+                <th style={{ width: 48, textAlign: "right" }}>{t("SIZE")}</th>
+                <th style={{ width: 48, textAlign: "right" }}>{t("USED")}</th>
+                <th style={{ width: 48, textAlign: "right" }}>{t("AVAIL")}</th>
+                <th style={{ width: 40, textAlign: "right" }}>{t("USE%")}</th>
               </tr>
             </thead>
             <tbody>
@@ -459,10 +656,16 @@ function ServerMonitorPanelBody({ tab, onEditConnection, isActive = true }: Prop
                     : disk.usePct >= 50
                       ? ""
                       : "mon-cell-muted";
-                  const rowTitle = `${disk.filesystem}${disk.fsType ? ` (${disk.fsType})` : ""} → ${disk.mountpoint}`;
+                  // Resolve TYPE / MODEL from the matching lsblk row.
+                  // Empty when lsblk wasn't available — column shows "—".
+                  const block = mountToBlock.get(disk.mountpoint);
+                  const typeLabel = describeBlock(block);
+                  const modelHint = block?.model ? ` · ${block.model}` : "";
+                  const rowTitle = `${disk.filesystem}${disk.fsType ? ` (${disk.fsType})` : ""} → ${disk.mountpoint}${modelHint}`;
                   return (
                     <tr key={`${disk.mountpoint}-${i}`} title={rowTitle}>
                       <td className="mono mon-cell-trunc">{disk.mountpoint}</td>
+                      <td className="mono mon-cell-type">{typeLabel ?? "—"}</td>
                       <td className="mono mon-cell-right">{disk.total}</td>
                       <td className="mono mon-cell-right">{disk.used}</td>
                       <td className="mono mon-cell-right">{disk.avail}</td>
@@ -472,7 +675,7 @@ function ServerMonitorPanelBody({ tab, onEditConnection, isActive = true }: Prop
                 })
               ) : (
                 <tr>
-                  <td colSpan={5} className="mon-empty mono">
+                  <td colSpan={6} className="mon-empty mono">
                     {snap ? t("(no disk data)") : "—"}
                   </td>
                 </tr>
@@ -480,6 +683,29 @@ function ServerMonitorPanelBody({ tab, onEditConnection, isActive = true }: Prop
             </tbody>
           </table>
         </div>
+
+        {/*
+          Block-device topology — shown only when the remote returned an
+          lsblk readout (Linux with util-linux). Renders the disk →
+          part → crypt → lv tree so the user can see physical disks
+          (including unmounted ones), media type (SSD vs HDD), bus
+          (NVMe / SATA / virtio / USB), and the model string. Hidden
+          on macOS local probes and on BusyBox-only remotes where lsblk
+          isn't installed.
+        */}
+        {snap && snap.blockDevices && snap.blockDevices.length > 0 && (
+          <div className="mon-block">
+            <div className="mon-block-head">
+              <span>{t("BLOCK DEVICES")}</span>
+              <span className="mono mon-block-meta">{t("lsblk")}</span>
+            </div>
+            <ul className="mon-tree">
+              {blockTree.map((node) => (
+                <BlockTreeRow key={node.kname} node={node} depth={0} />
+              ))}
+            </ul>
+          </div>
+        )}
 
         {/*
           Top processes table. Backend runs `ps -eo …` twice per
@@ -554,7 +780,7 @@ function ServerMonitorPanelBody({ tab, onEditConnection, isActive = true }: Prop
             type="button"
             className="btn is-ghost is-compact"
             disabled={!canProbe || busy}
-            onClick={() => void probe()}
+            onClick={() => void runProbe(true)}
           >
             <RefreshCw size={11} /> {busy ? t("Probing...") : snap ? t("Probe now") : t("Probe Server")}
           </button>

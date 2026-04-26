@@ -833,6 +833,12 @@ export const serverMonitorProbe = (params: {
   password: string;
   keyPath: string;
   savedConnectionIndex?: number | null;
+  /** `true` for the slow tier — collects `df` + `lsblk` alongside
+   *  CPU/memory/network. `false` for the fast 5 s tier — skips disk
+   *  segments so we don't burn SSH/remote CPU re-reading data that
+   *  barely moves. The panel keeps the prior full snapshot's disks
+   *  visible in between full polls. */
+  includeDisks: boolean;
 }) => invoke<ServerSnapshotView>("server_monitor_probe", params);
 
 // ── Firewall ────────────────────────────────────────────────────
@@ -1319,8 +1325,8 @@ export const localDockerVolumeUsage = () =>
 export const localDockerAction = (containerId: string, action: string) =>
   invoke<string>("local_docker_action", { containerId, action });
 
-export const localSystemInfo = () =>
-  invoke<ServerSnapshotView>("local_system_info");
+export const localSystemInfo = (includeDisks: boolean) =>
+  invoke<ServerSnapshotView>("local_system_info", { includeDisks });
 
 // ── Utility Functions ───────────────────────────────────────────
 

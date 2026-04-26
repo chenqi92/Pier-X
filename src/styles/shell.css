@@ -1934,6 +1934,83 @@ button,
   overflow: hidden;
   text-overflow: ellipsis;
 }
+/* DISKS-table TYPE column: muted small text on its own so the numeric
+ * size columns stay the visual center of gravity. */
+.mon-cell-type {
+  color: var(--muted);
+  font-size: var(--ui-fs-sm);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+/* BLOCK DEVICES tree — dense list of `lsblk` rows showing physical
+ * disks and their part/crypt/lvm descendants. Sits inside the same
+ * `.mon-block` chrome as the DISKS table so it matches visually. */
+.mon-tree {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  font-size: var(--size-small);
+}
+.mon-tree-row {
+  display: grid;
+  grid-template-columns: 1fr auto 56px minmax(60px, 1fr);
+  align-items: center;
+  gap: var(--sp-2);
+  padding: 4px var(--sp-3);
+  border-bottom: 1px solid var(--line);
+  color: var(--ink);
+}
+.mon-tree-row:last-child { border-bottom: none; }
+.mon-tree-row:hover { background: var(--panel-2); }
+.mon-tree-name {
+  display: inline-flex;
+  align-items: center;
+  min-width: 0;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.mon-tree-indent {
+  display: inline-block;
+  flex-shrink: 0;
+}
+.mon-tree-branch {
+  color: var(--line-3);
+  margin-right: 2px;
+}
+.mon-tree-meta {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--sp-1);
+  color: var(--muted);
+  font-size: var(--size-micro);
+}
+.mon-tree-chip {
+  padding: 0 6px;
+  border-radius: var(--radius-xs);
+  background: var(--surface-2);
+  border: 1px solid var(--line);
+  color: var(--ink-2);
+  font-size: var(--size-micro);
+  letter-spacing: 0.04em;
+}
+.mon-tree-type {
+  color: var(--dim);
+  text-transform: lowercase;
+}
+.mon-tree-size {
+  text-align: right;
+  color: var(--ink-2);
+}
+.mon-tree-mount {
+  color: var(--muted);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  text-align: right;
+}
 
 /* Inline sort toggle pair rendered in the `mon-block-head` slot.
  * Reuses the `.dk-sort` pill from the Docker panel for visual

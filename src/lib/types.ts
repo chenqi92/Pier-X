@@ -741,8 +741,16 @@ export type ServerSnapshotView = {
    *  caches) that sit near 0% CPU still surface. */
   topProcessesMem: ProcessRowView[];
   /** Per-filesystem breakdown from `df -hPT`, with Docker volumes and
-   *  pseudo filesystems (tmpfs / overlay / devtmpfs) filtered out. */
+   *  pseudo filesystems (tmpfs / overlay / devtmpfs) filtered out.
+   *  Empty on a fast-tier (no-disk) probe — the panel keeps the prior
+   *  list visible until the next slow tick. */
   disks: DiskEntryView[];
+  /** Block-device topology from `lsblk -P -b -o NAME,KNAME,PKNAME,
+   *  TYPE,SIZE,ROTA,TRAN,MODEL,FSTYPE,MOUNTPOINT`. Includes physical
+   *  disks (even unmounted) plus part/crypt/lvm/raid descendants so
+   *  the UI can render the storage tree. Empty on macOS (no `lsblk`),
+   *  on BusyBox without util-linux, and on fast-tier probes. */
+  blockDevices: BlockDeviceEntryView[];
 };
 
 export type DiskEntryView = {
@@ -752,6 +760,31 @@ export type DiskEntryView = {
   used: string;
   avail: string;
   usePct: number;
+  mountpoint: string;
+};
+
+export type BlockDeviceEntryView = {
+  /** Device basename, e.g. `nvme0n1`, `sda1`, `dm-0`. */
+  name: string;
+  /** Stable kernel name. Used as the tree node identifier. */
+  kname: string;
+  /** Parent kernel name. `""` for top-level physical disks. */
+  pkname: string;
+  /** `disk` / `part` / `lvm` / `crypt` / `raid1` / `loop` etc. */
+  devType: string;
+  /** Size in bytes (lsblk's `-b` output). 0 when missing. */
+  sizeBytes: number;
+  /** Rotational media — true for spinning HDDs. */
+  rota: boolean;
+  /** Transport bus, e.g. `sata`, `nvme`, `virtio`, `usb`. Empty for
+   *  device-mapper layers (lvm/crypt) which don't have a bus. */
+  tran: string;
+  /** Vendor / model name string. */
+  model: string;
+  /** Filesystem type if this node directly holds one. */
+  fsType: string;
+  /** Mount point of this node only — empty if it's a parent of a
+   *  mounted child rather than the mount itself. */
   mountpoint: string;
 };
 

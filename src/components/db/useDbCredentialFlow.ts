@@ -181,10 +181,29 @@ export function useDbCredentialFlow(opts: UseDbCredentialFlowOpts): DbCredential
     savedIndex !== null ? s.connections.find((c) => c.index === savedIndex) ?? null : null,
   );
   const refreshConnections = useConnectionStore((s) => s.refresh);
-  const savedForKind = useMemo<DbCredential[]>(
-    () => (connection?.databases ?? []).filter((c) => c.kind === kind),
-    [connection, kind],
-  );
+  const savedForKind = useMemo<DbCredential[]>(() => {
+    // Belt-and-braces dedup over the YAML list. The Rust
+    // `save_db_credential` upsert (36e2e46) prevents new duplicates
+    // for the *(kind, host, port, user)* tuple, but YAML files
+    // written before that fix can still contain two rows with the
+    // same key — collapse them here so the splash never shows a
+    // confusing pair. `favorite=true` wins; otherwise first-seen.
+    const all = (connection?.databases ?? []).filter((c) => c.kind === kind);
+    const seen = new Map<string, DbCredential>();
+    for (const cred of all) {
+      const sigKey =
+        cred.source.kind === "detected" && cred.source.signature
+          ? `sig:${cred.source.signature}`
+          : null;
+      const tupleKey = `tup:${cred.host}:${cred.port}:${cred.user}`;
+      const key = sigKey ?? tupleKey;
+      const prev = seen.get(key);
+      if (!prev || (cred.favorite && !prev.favorite)) {
+        seen.set(key, cred);
+      }
+    }
+    return Array.from(seen.values());
+  }, [connection, kind]);
 
   const instancesEntry = useDetectedServicesStore((s) => s.instancesByTab[tab.id]);
   const setDetectionPending = useDetectedServicesStore((s) => s.setDbInstancesPending);

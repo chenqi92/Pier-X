@@ -559,6 +559,52 @@ function MySqlPanelBody({ tab }: Props) {
           credentialId={tab.mysqlActiveCredentialId}
           credentialLabel={tab.mysqlDatabase.trim() || tab.mysqlHost.trim() || t("MySQL")}
           onUpdated={() => void flow.handlePasswordUpdated()}
+          onTest={async (pw) => {
+            // Probe through the same SSH context as the live connection
+            // so the test result matches what Save will actually do.
+            const sshTarget = flow.sshTarget;
+            let liveHost = tab.mysqlHost.trim() || "127.0.0.1";
+            let livePort = tab.mysqlPort;
+            let tunnelId: string | null = null;
+            let via = "direct";
+            try {
+              if (sshTarget) {
+                const info = await cmd.sshTunnelOpen({
+                  host: sshTarget.host,
+                  port: sshTarget.port,
+                  user: sshTarget.user,
+                  authMode: sshTarget.authMode,
+                  password: sshTarget.password,
+                  keyPath: sshTarget.keyPath,
+                  remoteHost: liveHost,
+                  remotePort: livePort,
+                  localPort: null,
+                  savedConnectionIndex: sshTarget.savedConnectionIndex,
+                });
+                liveHost = info.localHost;
+                livePort = info.localPort;
+                tunnelId = info.tunnelId;
+                via = "ssh-tunnel";
+              }
+              try {
+                await cmd.mysqlBrowse({
+                  host: liveHost,
+                  port: livePort,
+                  user: tab.mysqlUser.trim(),
+                  password: pw,
+                  database: tab.mysqlDatabase.trim() || null,
+                  table: null,
+                });
+                return { ok: true, via };
+              } finally {
+                if (tunnelId) {
+                  await cmd.sshTunnelClose(tunnelId).catch(() => {});
+                }
+              }
+            } catch (e) {
+              return { ok: false, msg: formatError(e) };
+            }
+          }}
         />
       )}
     </>
@@ -580,7 +626,12 @@ function MySqlPanelBody({ tab }: Props) {
             flow.setAddOpen(true);
           }}
           footerHint={
-            flow.connectingStep ?? (busy ? t("Connecting...") : null)
+            // Suppress the connecting/busy hint when an error banner is
+            // already shouting from the top of the splash — having both
+            // visible reads as a contradiction ("loading" vs "failed").
+            error || flow.tunnelError
+              ? null
+              : flow.connectingStep ?? (busy ? t("Connecting...") : null)
           }
           description={
             flow.hasSsh

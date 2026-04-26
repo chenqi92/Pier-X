@@ -534,6 +534,51 @@ function PostgresPanelBody({ tab }: Props) {
           credentialId={tab.pgActiveCredentialId}
           credentialLabel={tab.pgDatabase.trim() || tab.pgHost.trim() || t("PostgreSQL")}
           onUpdated={() => void flow.handlePasswordUpdated()}
+          onTest={async (pw) => {
+            const sshTarget = flow.sshTarget;
+            let liveHost = tab.pgHost.trim() || "127.0.0.1";
+            let livePort = tab.pgPort;
+            let tunnelId: string | null = null;
+            let via = "direct";
+            try {
+              if (sshTarget) {
+                const info = await cmd.sshTunnelOpen({
+                  host: sshTarget.host,
+                  port: sshTarget.port,
+                  user: sshTarget.user,
+                  authMode: sshTarget.authMode,
+                  password: sshTarget.password,
+                  keyPath: sshTarget.keyPath,
+                  remoteHost: liveHost,
+                  remotePort: livePort,
+                  localPort: null,
+                  savedConnectionIndex: sshTarget.savedConnectionIndex,
+                });
+                liveHost = info.localHost;
+                livePort = info.localPort;
+                tunnelId = info.tunnelId;
+                via = "ssh-tunnel";
+              }
+              try {
+                await cmd.postgresBrowse({
+                  host: liveHost,
+                  port: livePort,
+                  user: tab.pgUser.trim(),
+                  password: pw,
+                  database: tab.pgDatabase.trim() || null,
+                  schema: null,
+                  table: null,
+                });
+                return { ok: true, via };
+              } finally {
+                if (tunnelId) {
+                  await cmd.sshTunnelClose(tunnelId).catch(() => {});
+                }
+              }
+            } catch (e) {
+              return { ok: false, msg: formatError(e) };
+            }
+          }}
         />
       )}
     </>
@@ -555,7 +600,11 @@ function PostgresPanelBody({ tab }: Props) {
             flow.setAddOpen(true);
           }}
           footerHint={
-            flow.connectingStep ?? (busy ? t("Connecting...") : null)
+            // Suppress when an error banner is showing — keeps the
+            // splash from contradicting itself.
+            error || flow.tunnelError
+              ? null
+              : flow.connectingStep ?? (busy ? t("Connecting...") : null)
           }
           description={
             flow.hasSsh

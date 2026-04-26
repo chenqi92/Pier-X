@@ -7,7 +7,7 @@ import DbTunnelChip from "../components/DbTunnelChip";
 import DismissibleNote from "../components/DismissibleNote";
 import DbConnectSplash from "../components/db/DbConnectSplash";
 import DbHeaderPicker, { type DbHeaderInstance } from "../components/db/DbHeaderPicker";
-import RedisKeyDetail from "../components/db/RedisKeyDetail";
+import RedisKeyDetail, { type RedisEdit } from "../components/db/RedisKeyDetail";
 import RedisKeyList from "../components/db/RedisKeyList";
 import type { DbSplashRowData } from "../components/db/DbSplashRow";
 import { inferEnv } from "../components/db/dbTheme";
@@ -105,10 +105,25 @@ function RedisPanelBody({ tab }: Props) {
     savedIndex !== null ? s.connections.find((c) => c.index === savedIndex) ?? null : null,
   );
   const refreshConnections = useConnectionStore((s) => s.refresh);
-  const savedForKind = useMemo(
-    () => (connection?.databases ?? []).filter((c) => c.kind === "redis"),
-    [connection],
-  );
+  const savedForKind = useMemo(() => {
+    // Mirror useDbCredentialFlow dedup so the splash never shows two
+    // identical Redis rows when the YAML pre-dates the upsert fix.
+    const all = (connection?.databases ?? []).filter((c) => c.kind === "redis");
+    const seen = new Map<string, (typeof all)[number]>();
+    for (const cred of all) {
+      const sigKey =
+        cred.source.kind === "detected" && cred.source.signature
+          ? `sig:${cred.source.signature}`
+          : null;
+      const tupleKey = `tup:${cred.host}:${cred.port}:${cred.user}`;
+      const key = sigKey ?? tupleKey;
+      const prev = seen.get(key);
+      if (!prev || (cred.favorite && !prev.favorite)) {
+        seen.set(key, cred);
+      }
+    }
+    return Array.from(seen.values());
+  }, [connection]);
   const instancesEntry = useDetectedServicesStore((s) => s.instancesByTab[tab.id]);
   const setPending = useDetectedServicesStore((s) => s.setDbInstancesPending);
   const setInstances = useDetectedServicesStore((s) => s.setDbInstances);
@@ -408,6 +423,77 @@ function RedisPanelBody({ tab }: Props) {
     }
   }
 
+  /** Wrap a string for the Redis CLI tokenizer used by `redis_execute`:
+   *  double-quote the value and backslash-escape interior quotes /
+   *  backslashes. Keeps simple text values safe; binary data with
+   *  embedded newlines is not supported (the tokenizer treats whitespace
+   *  as a token separator inside / outside quotes — there's no
+   *  way to express a literal `\n` byte). */
+  function quoteRedisArg(s: string): string {
+    return `"${s.replace(/\\/g, "\\\\").replace(/"/g, '\\"')}"`;
+  }
+
+  async function editKey(op: RedisEdit) {
+    if (!keyName) return;
+    setKeyActionBusy(true);
+    setError("");
+    try {
+      const target = await ensureConnectionTarget();
+      const k = quoteRedisArg(keyName);
+      let command: string;
+      switch (op.kind) {
+        case "string-set":
+          command = `SET ${k} ${quoteRedisArg(op.value)}`;
+          break;
+        case "hash-set":
+          command = `HSET ${k} ${quoteRedisArg(op.field)} ${quoteRedisArg(op.value)}`;
+          break;
+        case "hash-del":
+          command = `HDEL ${k} ${quoteRedisArg(op.field)}`;
+          break;
+        case "list-set":
+          command = `LSET ${k} ${op.index} ${quoteRedisArg(op.value)}`;
+          break;
+        case "list-push":
+          command = `${op.side === "L" ? "LPUSH" : "RPUSH"} ${k} ${quoteRedisArg(op.value)}`;
+          break;
+        case "list-rem":
+          command = `LREM ${k} ${op.count} ${quoteRedisArg(op.value)}`;
+          break;
+        case "set-add":
+          command = `SADD ${k} ${quoteRedisArg(op.member)}`;
+          break;
+        case "set-rem":
+          command = `SREM ${k} ${quoteRedisArg(op.member)}`;
+          break;
+        case "zset-add":
+          command = `ZADD ${k} ${op.score} ${quoteRedisArg(op.member)}`;
+          break;
+        case "zset-rem":
+          command = `ZREM ${k} ${quoteRedisArg(op.member)}`;
+          break;
+        case "ttl-set":
+          command = op.seconds === null ? `PERSIST ${k}` : `EXPIRE ${k} ${op.seconds}`;
+          break;
+      }
+      await cmd.redisExecute({
+        host: target.host,
+        port: target.port,
+        db: d,
+        command,
+        username: user.trim() || null,
+        password: password || null,
+      });
+      // Reload the key detail (preview + length + TTL) after the
+      // mutation. Pass the same key so the selection sticks.
+      await browse(keyName);
+    } catch (e) {
+      setError(formatError(e));
+    } finally {
+      setKeyActionBusy(false);
+    }
+  }
+
   async function deleteKey(key: string) {
     setKeyActionBusy(true);
     setError("");
@@ -650,6 +736,49 @@ function RedisPanelBody({ tab }: Props) {
           credentialId={tab.redisActiveCredentialId}
           credentialLabel={host.trim() || t("Redis")}
           onUpdated={() => void handlePasswordUpdated()}
+          onTest={async (pw) => {
+            let liveHost = host.trim() || "127.0.0.1";
+            let livePort = p;
+            let tunnelId: string | null = null;
+            let via = "direct";
+            try {
+              if (sshTarget) {
+                const info = await cmd.sshTunnelOpen({
+                  host: sshTarget.host,
+                  port: sshTarget.port,
+                  user: sshTarget.user,
+                  authMode: sshTarget.authMode,
+                  password: sshTarget.password,
+                  keyPath: sshTarget.keyPath,
+                  remoteHost: liveHost,
+                  remotePort: livePort,
+                  localPort: null,
+                  savedConnectionIndex: sshTarget.savedConnectionIndex,
+                });
+                liveHost = info.localHost;
+                livePort = info.localPort;
+                tunnelId = info.tunnelId;
+                via = "ssh-tunnel";
+              }
+              try {
+                await cmd.redisBrowse({
+                  host: liveHost,
+                  port: livePort,
+                  db: Number.isFinite(d) ? d : 0,
+                  pattern: "*",
+                  key: null,
+                  password: pw.length > 0 ? pw : null,
+                });
+                return { ok: true, via };
+              } finally {
+                if (tunnelId) {
+                  await cmd.sshTunnelClose(tunnelId).catch(() => {});
+                }
+              }
+            } catch (e) {
+              return { ok: false, msg: formatError(e) };
+            }
+          }}
         />
       )}
     </>
@@ -671,7 +800,11 @@ function RedisPanelBody({ tab }: Props) {
             setAddOpen(true);
           }}
           footerHint={
-            connectingStep ?? (busy ? t("Connecting...") : null)
+            // Suppress when an error banner is showing — keeps the
+            // splash from contradicting itself.
+            error || tunnelError
+              ? null
+              : connectingStep ?? (busy ? t("Connecting...") : null)
           }
           description={
             hasSsh
@@ -863,6 +996,7 @@ function RedisPanelBody({ tab }: Props) {
               details={state.details}
               onRename={(from, to) => void renameKey(from, to)}
               onDelete={(key) => void deleteKey(key)}
+              onEdit={editKey}
               actionBusy={keyActionBusy}
             />
           </div>

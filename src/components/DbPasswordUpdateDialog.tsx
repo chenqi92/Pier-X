@@ -1,4 +1,4 @@
-import { KeyRound, X } from "lucide-react";
+import { CheckCircle2, KeyRound, Loader2, Plug, X, XCircle } from "lucide-react";
 import { useEffect, useState } from "react";
 import IconButton from "./IconButton";
 import { useDraggableDialog } from "./useDraggableDialog";
@@ -18,6 +18,13 @@ type Props = {
   /** Called after a successful password write. Panels typically
    *  retry their browse/connect here. */
   onUpdated: () => void;
+  /** Optional dry-run probe. When provided, the dialog renders a
+   *  「测试连接」 button that calls this with the typed password BEFORE
+   *  the user commits a Save. Lets the user catch a wrong password
+   *  here instead of saving it to the keyring and discovering
+   *  「Access denied」 only after the splash tries to connect. The
+   *  panel implements this — it has the cred + ssh context. */
+  onTest?: (password: string) => Promise<{ ok: true; via: string } | { ok: false; msg: string }>;
 };
 
 /**
@@ -35,6 +42,7 @@ export default function DbPasswordUpdateDialog({
   credentialId,
   credentialLabel,
   onUpdated,
+  onTest,
 }: Props) {
   const { t } = useI18n();
   const formatError = (e: unknown) => localizeError(e, t);
@@ -43,6 +51,10 @@ export default function DbPasswordUpdateDialog({
 
   const [password, setPassword] = useState("");
   const [saving, setSaving] = useState(false);
+  const [testing, setTesting] = useState(false);
+  const [testResult, setTestResult] = useState<
+    { ok: true; via: string } | { ok: false; msg: string } | null
+  >(null);
   const [error, setError] = useState("");
 
   useEffect(() => {
@@ -50,7 +62,16 @@ export default function DbPasswordUpdateDialog({
     setPassword("");
     setError("");
     setSaving(false);
+    setTesting(false);
+    setTestResult(null);
   }, [open]);
+
+  // Any keystroke after a test invalidates that test — the result
+  // shouldn't outlive the password it was measured against.
+  useEffect(() => {
+    if (testResult !== null) setTestResult(null);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [password]);
 
   useEffect(() => {
     if (!open) return;
@@ -62,6 +83,20 @@ export default function DbPasswordUpdateDialog({
   }, [open, onClose]);
 
   if (!open) return null;
+
+  async function runTest() {
+    if (!onTest || testing) return;
+    setTesting(true);
+    setTestResult(null);
+    try {
+      const result = await onTest(password);
+      setTestResult(result);
+    } catch (e) {
+      setTestResult({ ok: false, msg: formatError(e) });
+    } finally {
+      setTesting(false);
+    }
+  }
 
   async function save() {
     if (saving) return;
@@ -120,6 +155,34 @@ export default function DbPasswordUpdateDialog({
           </div>
         </div>
         <div className="dlg-foot">
+          {onTest && (
+            <button
+              className="gb-btn"
+              disabled={testing || saving || password.length === 0}
+              onClick={() => void runTest()}
+              type="button"
+              title={t(
+                "Probes the database with this password before saving. Catches a wrong password here instead of after the splash tries to connect.",
+              )}
+            >
+              {testing ? <Loader2 size={11} className="spin" /> : <Plug size={11} />}
+              {testing ? t("Testing...") : t("Test connection")}
+            </button>
+          )}
+          {testResult && (
+            <span
+              className={
+                "status-note " +
+                (testResult.ok ? "status-note--ok" : "status-note--error")
+              }
+              style={{ marginLeft: 8, display: "inline-flex", alignItems: "center", gap: 4 }}
+            >
+              {testResult.ok ? <CheckCircle2 size={12} /> : <XCircle size={12} />}
+              {testResult.ok
+                ? t("Connected via {via}.", { via: testResult.via })
+                : testResult.msg}
+            </span>
+          )}
           <div style={{ flex: 1 }} />
           <button className="gb-btn" onClick={onClose} type="button">
             {t("Cancel")}

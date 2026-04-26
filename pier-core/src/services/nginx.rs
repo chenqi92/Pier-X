@@ -457,6 +457,125 @@ pub fn read_file_blocking(session: &SshSession, path: &str) -> Result<String> {
     crate::ssh::runtime::shared().block_on(read_file(session, path))
 }
 
+/// Create a new config file under `conf.d/` or `sites-available/`.
+///
+/// Path is validated client-side too, but we double-check here:
+/// must live under one of the two allowed directories, must not
+/// contain `..` segments, and the file must not already exist
+/// (we refuse to clobber). New files are written via the same
+/// base64 → tmp → mv pipeline as `save_file_validate_reload`.
+///
+/// Note: this does NOT run `nginx -t` afterwards. A freshly-created
+/// site file with template content can leave the live tree in a
+/// state where `nginx -t` would actually complain about the new
+/// stub before the user customizes it (e.g. server_name collisions
+/// across multiple stub sites). The user's first save through the
+/// editor will run validation. If the stub itself is bad, that save
+/// rolls it back per the normal flow.
+pub async fn create_file(
+    session: &SshSession,
+    path: &str,
+    content: &str,
+) -> Result<NginxValidateResult> {
+    if !is_allowed_create_path(path) {
+        return Err(crate::ssh::error::SshError::InvalidConfig(format!(
+            "refusing to create {path}: must live under {NGINX_CONF_D_DIR}/ \
+             or {NGINX_SITES_AVAILABLE_DIR}/ with no `..` segments"
+        )));
+    }
+
+    let is_root = match session.exec_command("id -u").await {
+        Ok((0, stdout)) => stdout.trim() == "0",
+        _ => false,
+    };
+    let prefix = if is_root { "" } else { "sudo -n " };
+
+    // Refuse to clobber. `test -e` covers files, dirs, symlinks.
+    let exists_check = format!(
+        "{prefix}sh -c 'test -e {p} && echo EXISTS || echo MISSING' 2>&1",
+        p = shell_single_quote(path),
+    );
+    let (_, exists_out) = session.exec_command(&exists_check).await?;
+    if exists_out.contains("EXISTS") {
+        return Err(crate::ssh::error::SshError::InvalidConfig(format!(
+            "{path} already exists — pick another name"
+        )));
+    }
+
+    use std::io::Write;
+    let mut encoded = String::new();
+    {
+        let mut writer = base64_writer(&mut encoded);
+        writer.write_all(content.as_bytes()).ok();
+        writer.flush().ok();
+    }
+
+    let ts = match session.exec_command("date +%s").await {
+        Ok((0, out)) => out.trim().to_string(),
+        _ => "0".to_string(),
+    };
+    let tmp_path = format!("/tmp/pier-nginx-new-{ts}.conf");
+
+    // Touch a parent-permission reference: nginx.conf reliably exists
+    // and has the right ownership for new sibling configs. Falls back
+    // to mode 644 if `--reference` isn't supported (older coreutils).
+    let inner = format!(
+        "echo {b64} | base64 -d > {tmp} \
+         && (chmod --reference={ref} {tmp} 2>/dev/null || chmod 644 {tmp}) \
+         && (chown --reference={ref} {tmp} 2>/dev/null || true) \
+         && mv {tmp} {target}",
+        b64 = shell_single_quote(&encoded),
+        tmp = shell_single_quote(&tmp_path),
+        r#ref = shell_single_quote(NGINX_CONF_PATH),
+        target = shell_single_quote(path),
+    );
+    let cmd = format!("{prefix}sh -c {} 2>&1", shell_single_quote(&inner));
+    let (code, out) = session.exec_command(&cmd).await?;
+    Ok(NginxValidateResult {
+        ok: code == 0,
+        exit_code: code,
+        output: out,
+    })
+}
+
+/// Blocking wrapper for [`create_file`].
+pub fn create_file_blocking(
+    session: &SshSession,
+    path: &str,
+    content: &str,
+) -> Result<NginxValidateResult> {
+    crate::ssh::runtime::shared().block_on(create_file(session, path, content))
+}
+
+/// Path-allowlist for [`create_file`]. Returns `true` when the path
+/// lives directly under `/etc/nginx/conf.d/` or
+/// `/etc/nginx/sites-available/`, has no `..` segments, and ends with
+/// a non-empty leaf name. The leaf may contain dots (so `mysite.conf`
+/// is fine), but must not be `.` / `..` itself.
+fn is_allowed_create_path(path: &str) -> bool {
+    let allowed_prefixes = [
+        format!("{NGINX_CONF_D_DIR}/"),
+        format!("{NGINX_SITES_AVAILABLE_DIR}/"),
+    ];
+    let Some(prefix) = allowed_prefixes
+        .iter()
+        .find(|p| path.starts_with(p.as_str()))
+    else {
+        return false;
+    };
+    let leaf = &path[prefix.len()..];
+    if leaf.is_empty() || leaf.contains('/') || leaf.contains('\0') {
+        return false;
+    }
+    if leaf == "." || leaf == ".." {
+        return false;
+    }
+    // No `..` anywhere, even if leaf is the whole rest — defensive
+    // for paths like `conf.d/..foo` (legal) vs `conf.d/../etc` (rejected
+    // earlier by the leading-prefix check + the `/` check above).
+    !path.split('/').any(|seg| seg == "..")
+}
+
 /// Save → validate → reload. Layout:
 ///
 /// 1. `cp <path> <path>.pier-bak.<ts>` — backup. We use a timestamped
@@ -1561,6 +1680,33 @@ http {
             w.flush().unwrap();
         }
         assert_eq!(out2, "aGVsbG8gd29ybGQ=");
+    }
+
+    #[test]
+    fn is_allowed_create_path_accepts_conf_d_and_sites_available() {
+        assert!(is_allowed_create_path("/etc/nginx/conf.d/mysite.conf"));
+        assert!(is_allowed_create_path("/etc/nginx/conf.d/_inc.conf"));
+        assert!(is_allowed_create_path("/etc/nginx/sites-available/blog"));
+        assert!(is_allowed_create_path(
+            "/etc/nginx/sites-available/example.com"
+        ));
+    }
+
+    #[test]
+    fn is_allowed_create_path_rejects_traversal_and_other_dirs() {
+        assert!(!is_allowed_create_path("/etc/nginx/nginx.conf"));
+        assert!(!is_allowed_create_path("/etc/passwd"));
+        assert!(!is_allowed_create_path(
+            "/etc/nginx/conf.d/sub/file.conf"
+        ));
+        assert!(!is_allowed_create_path(
+            "/etc/nginx/conf.d/../passwd"
+        ));
+        assert!(!is_allowed_create_path("/etc/nginx/conf.d/"));
+        assert!(!is_allowed_create_path("/etc/nginx/conf.d/."));
+        assert!(!is_allowed_create_path("/etc/nginx/conf.d/.."));
+        assert!(!is_allowed_create_path("conf.d/foo.conf")); // not absolute
+        assert!(!is_allowed_create_path(""));
     }
 
     #[test]

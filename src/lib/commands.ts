@@ -1262,6 +1262,10 @@ export const nginxToggleSite = (
   params: SshParams & { siteName: string; enable: boolean },
 ) => invoke<NginxValidateResult>("nginx_toggle_site", params);
 
+export const nginxCreateFile = (
+  params: SshParams & { path: string; content: string },
+) => invoke<NginxValidateResult>("nginx_create_file", params);
+
 /** Last-known shell working directory, if the remote shell has
  *  emitted an OSC 7 sequence (most distros' default bash/zsh
  *  do). Returns null before the first prompt fires. */

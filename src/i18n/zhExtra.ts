@@ -1320,7 +1320,17 @@ export const zhExtra: Record<string, string> = {
   "(empty block — edit in Raw to add directives)":
     "（空块 —— 切到「原文」模式添加指令）",
   "(no args)": "（无参数）",
+  "(args)": "（参数）",
+  "(only comments in this file — toggle Comments to show)":
+    "（此文件只有注释 —— 切换「注释」按钮可显示）",
   "Match": "匹配方式",
+  "Comments": "注释",
+  "Show standalone comment cards": "显示独立注释卡",
+  "Hide standalone comment cards": "隐藏独立注释卡",
+  "New .conf file in conf.d": "在 conf.d 新建 .conf 文件",
+  "New site in sites-available": "在 sites-available 新建站点",
+  "Create": "创建",
+  "Create failed": "创建失败",
   "Disable this site (rm sites-enabled link)": "禁用站点（删除 sites-enabled 软链接）",
   "Enable this site (ln -sf into sites-enabled)": "启用站点（在 sites-enabled 创建软链接）",
   "enabled": "已启用",

@@ -3,14 +3,19 @@ import {
   ChevronDown,
   ChevronRight,
   Code2,
+  Eye,
+  EyeOff,
   FileCode,
+  FilePlus2,
   FileText,
   Folder,
   Link2,
+  Plus,
   RefreshCw,
   RotateCw,
   Save,
   ShieldCheck,
+  X,
 } from "lucide-react";
 import { useEffect, useMemo, useRef, useState } from "react";
 
@@ -97,6 +102,11 @@ function NginxPanelBody({ tab }: Props) {
    *  the file content. Round-trips structured ↔ raw rebuild content
    *  through the AST so a save from either mode is well-formed. */
   const [editMode, setEditMode] = useState<"structured" | "raw">("structured");
+  /** Standalone-comment cards default off — heavy banner comments
+   *  in stock nginx.conf (`##\n# Basic Settings\n##`) push the real
+   *  directives off-screen otherwise. Comments are still preserved
+   *  in the AST and round-tripped on save. */
+  const [showComments, setShowComments] = useState(false);
 
   async function refreshLayout() {
     if (!sshParams || !canProbe || layoutBusy) return;
@@ -273,6 +283,39 @@ function NginxPanelBody({ tab }: Props) {
     }
   };
 
+  const handleCreate = async (
+    target: "conf.d" | "sites-available",
+    name: string,
+  ) => {
+    if (!sshParams) return;
+    // Auto-add `.conf` for the conf.d bucket since nginx only loads
+    // matching files there. sites-available has no extension convention.
+    const leaf =
+      target === "conf.d" && !name.endsWith(".conf") ? `${name}.conf` : name;
+    const dir =
+      target === "conf.d"
+        ? "/etc/nginx/conf.d"
+        : "/etc/nginx/sites-available";
+    const path = `${dir}/${leaf}`;
+    const content = defaultTemplateFor(target, leaf);
+    setLayoutError("");
+    try {
+      const r = await cmd.nginxCreateFile({
+        ...sshParams,
+        path,
+        content,
+      });
+      if (!r.ok) {
+        setLayoutError(r.output.trim() || t("Create failed"));
+        return;
+      }
+      await refreshLayout();
+      setActivePath(path);
+    } catch (e) {
+      setLayoutError(formatError(e));
+    }
+  };
+
   return (
     <div className="ngx-panel">
       <PanelHeader
@@ -340,6 +383,7 @@ function NginxPanelBody({ tab }: Props) {
           activePath={activePath}
           onSelect={setActivePath}
           onToggleSite={handleToggleSite}
+          onCreate={handleCreate}
           t={t}
         />
         <div className="ngx-panel__editor">
@@ -360,6 +404,8 @@ function NginxPanelBody({ tab }: Props) {
               setDirtyContent={setOpenedDirty}
               editMode={editMode}
               setEditMode={setEditMode}
+              showComments={showComments}
+              setShowComments={setShowComments}
               onNodesChange={handleNodesChange}
               onSave={handleSave}
               saveBusy={saveBusy}
@@ -379,12 +425,20 @@ function FileTree({
   activePath,
   onSelect,
   onToggleSite,
+  onCreate,
   t,
 }: {
   layout: NginxLayout | null;
   activePath: string | null;
   onSelect: (path: string) => void;
   onToggleSite: (siteName: string, enable: boolean) => void | Promise<void>;
+  /** Called when the user submits a new-file form. The string is the
+   *  filename portion (with extension where applicable); the parent
+   *  joins it onto the section's directory. */
+  onCreate: (
+    target: "conf.d" | "sites-available",
+    name: string,
+  ) => void | Promise<void>;
   t: ReturnType<typeof useI18n>["t"];
 }) {
   if (!layout || !layout.installed) {
@@ -402,13 +456,24 @@ function FileTree({
 
   return (
     <div className="ngx-tree">
-      <FileTreeSection title="nginx.conf" files={main} activePath={activePath} onSelect={onSelect} />
-      <FileTreeSection title="conf.d" files={confd} activePath={activePath} onSelect={onSelect} />
+      <FileTreeSection title="nginx.conf" files={main} activePath={activePath} onSelect={onSelect} t={t} />
+      <FileTreeSection
+        title="conf.d"
+        files={confd}
+        activePath={activePath}
+        onSelect={onSelect}
+        createKind="conf.d"
+        onCreate={onCreate}
+        t={t}
+      />
       <FileTreeSection
         title="sites-available"
         files={sites}
         activePath={activePath}
         onSelect={onSelect}
+        createKind="sites-available"
+        onCreate={onCreate}
+        t={t}
         renderTrailing={(file) => {
           if (file.kind.kind !== "site-available") return null;
           const enabled = file.kind.enabled;
@@ -438,6 +503,7 @@ function FileTree({
           files={orphans}
           activePath={activePath}
           onSelect={onSelect}
+          t={t}
         />
       )}
     </div>
@@ -450,19 +516,106 @@ function FileTreeSection({
   activePath,
   onSelect,
   renderTrailing,
+  createKind,
+  onCreate,
+  t,
 }: {
   title: string;
   files: NginxFile[];
   activePath: string | null;
   onSelect: (path: string) => void;
   renderTrailing?: (file: NginxFile) => React.ReactNode;
+  /** When set, the section header gets a `+` button that opens an
+   *  inline name input. The kind drives the default-content template
+   *  the parent picks. */
+  createKind?: "conf.d" | "sites-available";
+  onCreate?: (
+    target: "conf.d" | "sites-available",
+    name: string,
+  ) => void | Promise<void>;
+  t: ReturnType<typeof useI18n>["t"];
 }) {
-  if (files.length === 0) return null;
+  const [creating, setCreating] = useState(false);
+  const [draft, setDraft] = useState("");
+  const canCreate = !!createKind && !!onCreate;
+
+  if (files.length === 0 && !canCreate) return null;
+
+  const submit = () => {
+    const name = draft.trim();
+    if (!name || !createKind || !onCreate) return;
+    void onCreate(createKind, name);
+    setCreating(false);
+    setDraft("");
+  };
+
   return (
     <div className="ngx-tree__section">
       <div className="ngx-tree__section-title mono">
-        <Folder size={10} /> {title}
+        <Folder size={10} />
+        <span style={{ flex: 1 }}>{title}</span>
+        {canCreate && !creating && (
+          <button
+            type="button"
+            className="ngx-tree__add"
+            onClick={() => {
+              setCreating(true);
+              setDraft("");
+            }}
+            title={
+              createKind === "conf.d"
+                ? t("New .conf file in conf.d")
+                : t("New site in sites-available")
+            }
+          >
+            <Plus size={10} />
+          </button>
+        )}
       </div>
+      {creating && (
+        <div className="ngx-tree__create">
+          <FilePlus2 size={11} />
+          <input
+            className="ngx-input mono ngx-input--inline"
+            value={draft}
+            spellCheck={false}
+            autoFocus
+            placeholder={
+              createKind === "conf.d" ? "mysite.conf" : "example.com"
+            }
+            onChange={(e) => setDraft(e.target.value)}
+            onKeyDown={(e) => {
+              if (e.key === "Enter") {
+                e.preventDefault();
+                submit();
+              } else if (e.key === "Escape") {
+                e.preventDefault();
+                setCreating(false);
+                setDraft("");
+              }
+            }}
+          />
+          <button
+            type="button"
+            className="btn is-primary is-compact"
+            disabled={!draft.trim()}
+            onClick={submit}
+          >
+            {t("Create")}
+          </button>
+          <button
+            type="button"
+            className="icon-btn"
+            onClick={() => {
+              setCreating(false);
+              setDraft("");
+            }}
+            title={t("Cancel")}
+          >
+            <X size={10} />
+          </button>
+        </div>
+      )}
       {files.map((f) => {
         const isActive = f.path === activePath;
         return (
@@ -571,6 +724,8 @@ function Editor({
   setDirtyContent,
   editMode,
   setEditMode,
+  showComments,
+  setShowComments,
   onNodesChange,
   onSave,
   saveBusy,
@@ -581,6 +736,8 @@ function Editor({
   setDirtyContent: (s: string | null) => void;
   editMode: "structured" | "raw";
   setEditMode: (m: "structured" | "raw") => void;
+  showComments: boolean;
+  setShowComments: (b: boolean) => void;
   onNodesChange: (nodes: NginxNode[]) => void;
   onSave: () => void | Promise<void>;
   saveBusy: boolean;
@@ -611,6 +768,21 @@ function Editor({
           >
             <Code2 size={10} /> {t("Raw")}
           </button>
+          {editMode === "structured" && (
+            <button
+              type="button"
+              className={`btn is-compact ${showComments ? "is-primary" : "is-ghost"}`}
+              onClick={() => setShowComments(!showComments)}
+              title={
+                showComments
+                  ? t("Hide standalone comment cards")
+                  : t("Show standalone comment cards")
+              }
+            >
+              {showComments ? <Eye size={10} /> : <EyeOff size={10} />}
+              {t("Comments")}
+            </button>
+          )}
           <button
             type="button"
             className="btn is-primary is-compact"
@@ -631,7 +803,12 @@ function Editor({
       )}
 
       {editMode === "structured" ? (
-        <StructuredEditor nodes={file.parse.nodes} onChange={onNodesChange} t={t} />
+        <StructuredEditor
+          nodes={file.parse.nodes}
+          showComments={showComments}
+          onChange={onNodesChange}
+          t={t}
+        />
       ) : (
         <RawEditor
           value={dirtyContent ?? file.content}
@@ -663,10 +840,12 @@ function RawEditor({
 
 function StructuredEditor({
   nodes,
+  showComments,
   onChange,
   t,
 }: {
   nodes: NginxNode[];
+  showComments: boolean;
   onChange: (nodes: NginxNode[]) => void;
   t: ReturnType<typeof useI18n>["t"];
 }) {
@@ -675,13 +854,20 @@ function StructuredEditor({
     copy[idx] = next;
     onChange(copy);
   };
+  // Filter at render time, not at array level — keeping the index
+  // stable means `updateChild(idx, …)` still maps onto the underlying
+  // AST array correctly when the user edits a directive.
+  const visible = nodes
+    .map((n, i) => ({ n, i }))
+    .filter(({ n }) => showComments || n.kind !== "comment");
   return (
     <div className="ngx-tree-cards">
-      {nodes.map((n, i) => (
+      {visible.map(({ n, i }) => (
         <NodeCard
           key={i}
           node={n}
           path={[i]}
+          showComments={showComments}
           onChange={(next) => updateChild(i, next)}
           t={t}
         />
@@ -689,6 +875,11 @@ function StructuredEditor({
       {nodes.length === 0 && (
         <div className="status-note mono">
           {t("(empty file — switch to Raw to add directives)")}
+        </div>
+      )}
+      {nodes.length > 0 && visible.length === 0 && (
+        <div className="status-note mono">
+          {t("(only comments in this file — toggle Comments to show)")}
         </div>
       )}
     </div>
@@ -701,11 +892,13 @@ function StructuredEditor({
 function NodeCard({
   node,
   path,
+  showComments,
   onChange,
   t,
 }: {
   node: NginxNode;
   path: number[];
+  showComments: boolean;
   onChange: (next: NginxNode) => void;
   t: ReturnType<typeof useI18n>["t"];
 }) {
@@ -730,6 +923,7 @@ function NodeCard({
       path={path}
       summary={summary}
       isBlock={isBlock}
+      showComments={showComments}
       onChange={onChange}
       t={t}
     />
@@ -741,6 +935,7 @@ function DirectiveCard({
   path,
   summary,
   isBlock,
+  showComments,
   onChange,
   t,
 }: {
@@ -748,6 +943,7 @@ function DirectiveCard({
   path: number[];
   summary: string;
   isBlock: boolean;
+  showComments: boolean;
   onChange: (next: NginxNode) => void;
   t: ReturnType<typeof useI18n>["t"];
 }) {
@@ -762,6 +958,25 @@ function DirectiveCard({
   const updateBlock = (block: NginxNode[]) => {
     onChange({ ...node, block });
   };
+
+  // Pure-block directive (events / http / server / location-without-
+  // path-yet etc.) → no point showing an empty `(args)` input row.
+  // Keep the inputs for the directives that have a fine-grained form
+  // (LocationHeaderForm needs the inputs even when args are empty).
+  const HAS_FINE_FORM = new Set([
+    "listen",
+    "server_name",
+    "root",
+    "proxy_pass",
+    "ssl_certificate",
+    "ssl_certificate_key",
+    "location",
+    "upstream",
+  ]);
+  const showFormBody =
+    HAS_FINE_FORM.has(node.name) ||
+    node.args.length > 0 ||
+    (!isBlock && node.opaqueBody === null);
 
   return (
     <div className="ngx-card">
@@ -785,7 +1000,9 @@ function DirectiveCard({
 
       {open && (
         <div className="ngx-card__body">
-          <DirectiveForm node={node} onArgsChange={updateArgs} t={t} />
+          {showFormBody && (
+            <DirectiveForm node={node} onArgsChange={updateArgs} t={t} />
+          )}
 
           {node.opaqueBody !== null && (
             <div className="ngx-card__lua">
@@ -798,19 +1015,25 @@ function DirectiveCard({
 
           {node.block !== null && (
             <div className="ngx-card__children">
-              {node.block.map((child, i) => (
-                <NodeCard
-                  key={i}
-                  node={child}
-                  path={[...path, i]}
-                  onChange={(next) => {
-                    const copy = node.block!.slice();
-                    copy[i] = next;
-                    updateBlock(copy);
-                  }}
-                  t={t}
-                />
-              ))}
+              {node.block
+                .map((child, i) => ({ child, i }))
+                .filter(
+                  ({ child }) => showComments || child.kind !== "comment",
+                )
+                .map(({ child, i }) => (
+                  <NodeCard
+                    key={i}
+                    node={child}
+                    path={[...path, i]}
+                    showComments={showComments}
+                    onChange={(next) => {
+                      const copy = node.block!.slice();
+                      copy[i] = next;
+                      updateBlock(copy);
+                    }}
+                    t={t}
+                  />
+                ))}
               {node.block.length === 0 && (
                 <div className="status-note mono">
                   {t("(empty block — edit in Raw to add directives)")}
@@ -861,6 +1084,7 @@ function GenericArgsForm({
   node: Extract<NginxNode, { kind: "directive" }>;
   onChange: (args: string[]) => void;
 }) {
+  const { t } = useI18n();
   // One row, space-joined args, parsed back on change. Quoting on
   // round-trip is handled by the renderer so unquoted "foo bar" survives.
   const [text, setText] = useState(node.args.join(" "));
@@ -883,7 +1107,7 @@ function GenericArgsForm({
         setText(next);
         onChange(splitArgs(next));
       }}
-      placeholder="(args)"
+      placeholder={t("(args)")}
     />
   );
 }
@@ -1246,6 +1470,36 @@ function needsQuoting(arg: string): boolean {
   const l = arg[arg.length - 1];
   if ((f === '"' && l === '"') || (f === "'" && l === "'")) return false;
   return /[\s;{}#"']/.test(arg);
+}
+
+/** Stub content for newly-created config files. We bias toward
+ *  templates that pass `nginx -t` immediately (no listen-port
+ *  collisions, no missing root paths) so the user's first save is a
+ *  noop validation, not a debugging session. */
+function defaultTemplateFor(
+  target: "conf.d" | "sites-available",
+  leafName: string,
+): string {
+  if (target === "sites-available") {
+    return `# ${leafName} — created by Pier-X
+# Edit listen / server_name / root then save to validate + reload.
+server {
+    listen 8080;
+    server_name ${leafName.replace(/[^a-zA-Z0-9.-]/g, "_")};
+    root /var/www/html;
+    index index.html index.htm;
+
+    location / {
+        try_files $uri $uri/ =404;
+    }
+}
+`;
+  }
+  // conf.d — typically used for snippets that get included into the
+  // global http context. Empty file passes `nginx -t` cleanly.
+  return `# ${leafName} — created by Pier-X
+# Add directives below; this file is included into the http context.
+`;
 }
 
 /** Crude quote-aware split for the GenericArgsForm. Splits on

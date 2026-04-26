@@ -6207,6 +6207,38 @@ async fn nginx_reload(
 }
 
 #[tauri::command]
+async fn nginx_create_file(
+    app: tauri::AppHandle,
+    host: String,
+    port: u16,
+    user: String,
+    auth_mode: String,
+    password: String,
+    key_path: String,
+    saved_connection_index: Option<usize>,
+    path: String,
+    content: String,
+) -> Result<nginx::NginxValidateResult, String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        let state: tauri::State<'_, AppState> = app.state();
+        let session = get_or_open_ssh_session(
+            &state,
+            &host,
+            port,
+            &user,
+            &auth_mode,
+            &password,
+            &key_path,
+            saved_connection_index,
+        )?;
+        nginx::create_file_blocking(&session, &path, &content)
+            .map_err(|e| e.to_string())
+    })
+    .await
+    .map_err(|e| format!("nginx_create_file join: {e}"))?
+}
+
+#[tauri::command]
 async fn nginx_toggle_site(
     app: tauri::AppHandle,
     host: String,
@@ -8553,6 +8585,7 @@ pub fn run() {
             nginx_validate,
             nginx_reload,
             nginx_toggle_site,
+            nginx_create_file,
             sqlite_find_in_dir,
             docker_inspect,
             docker_remove_image,

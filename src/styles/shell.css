@@ -6808,6 +6808,37 @@ button,
   text-transform: lowercase;
   padding: var(--sp-0-5) var(--sp-1);
 }
+.ngx-tree__add {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 18px;
+  height: 18px;
+  padding: 0;
+  border: 1px solid transparent;
+  background: transparent;
+  color: var(--muted);
+  border-radius: var(--radius-xs);
+  cursor: pointer;
+}
+.ngx-tree__add:hover {
+  color: var(--svc-nginx);
+  border-color: var(--line);
+  background: var(--bg-hover);
+}
+.ngx-tree__create {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-1);
+  padding: var(--sp-1);
+  border-radius: var(--radius-xs);
+  background: var(--surface-2);
+  margin-bottom: var(--sp-0-5);
+}
+.ngx-tree__create .ngx-input {
+  flex: 1;
+  min-width: 0;
+}
 .ngx-tree__row {
   display: flex;
   align-items: center;

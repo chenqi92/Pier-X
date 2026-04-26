@@ -1,0 +1,107 @@
+{
+  "schema_version": 1,
+  "command": "chown",
+  "tool_version": "9.4",
+  "source": "auto-imported",
+  "import_method": "man",
+  "import_date": "2026-04-26",
+  "subcommands": [],
+  "options": [
+    {
+      "flag": "--reference,",
+      "i18n": {
+        "en": ""
+      }
+    },
+    {
+      "flag": "-c, --changes",
+      "i18n": {
+        "en": "like verbose but report only when a change is made"
+      }
+    },
+    {
+      "flag": "-f, --silent, --quiet",
+      "i18n": {
+        "en": "suppress most error messages"
+      }
+    },
+    {
+      "flag": "-v, --verbose",
+      "i18n": {
+        "en": "output a diagnostic for every file processed"
+      }
+    },
+    {
+      "flag": "--dereference",
+      "i18n": {
+        "en": "affect the referent of each symbolic link (this is the default), rather than the symbolic link itself"
+      }
+    },
+    {
+      "flag": "-h, --no-dereference",
+      "i18n": {
+        "en": "affect symbolic links instead of  any  referenced  file  (useful only on systems that can change the ownership of a symlink)"
+      }
+    },
+    {
+      "flag": "--from=CURRENT_OWNER:CURRENT_GROUP",
+      "i18n": {
+        "en": "change  the  owner and/or group of each file only if its current owner and/or group match those specified here.   Either  may  be omitted,  in  which case a match is not required for the omitted attribute"
+      }
+    },
+    {
+      "flag": "--no-preserve-root",
+      "i18n": {
+        "en": "do not treat '/' specially (the default)"
+      }
+    },
+    {
+      "flag": "--preserve-root",
+      "i18n": {
+        "en": "fail to operate recursively on '/'"
+      }
+    },
+    {
+      "flag": "--reference=RFILE",
+      "i18n": {
+        "en": "use RFILE's owner and group rather than  specifying  OWNER:GROUP values.  RFILE is always dereferenced."
+      }
+    },
+    {
+      "flag": "-R, --recursive",
+      "i18n": {
+        "en": "operate on files and directories recursively"
+      }
+    },
+    {
+      "flag": "-H",
+      "i18n": {
+        "en": "traverse it"
+      }
+    },
+    {
+      "flag": "-L",
+      "i18n": {
+        "en": ""
+      }
+    },
+    {
+      "flag": "-P",
+      "i18n": {
+        "en": ""
+      }
+    },
+    {
+      "flag": "--help",
+      "i18n": {
+        "en": ""
+      }
+    },
+    {
+      "flag": "--version",
+      "i18n": {
+        "en": "output version information and exit"
+      }
+    }
+  ]
+}

@@ -29,11 +29,12 @@
 use std::process::Command;
 
 use crate::schema::{CommandPack, OptionEntry, SubcommandEntry};
+use crate::timeout::{run_with_timeout, DEFAULT_TIMEOUT};
 
 pub fn extract(cmd: &str) -> Result<CommandPack, String> {
-    let out = Command::new("man")
-        .args(["-P", "cat", cmd])
-        .output()
+    let mut command = Command::new("man");
+    command.args(["-P", "cat", cmd]);
+    let out = run_with_timeout(command, DEFAULT_TIMEOUT)
         .map_err(|e| format!("spawn `man -P cat {cmd}`: {e}"))?;
     if !out.status.success() {
         return Err(format!(

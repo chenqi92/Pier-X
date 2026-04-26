@@ -1,0 +1,388 @@
+{
+  "schema_version": 1,
+  "command": "cargo",
+  "tool_version": "1.75.0",
+  "source": "auto-imported",
+  "import_method": "man",
+  "import_date": "2026-04-26",
+  "subcommands": [
+    {
+      "name": "Build",
+      "i18n": {
+        "en": ""
+      },
+      "options": [],
+      "subcommands": []
+    },
+    {
+      "name": "cargo-bench(1)",
+      "i18n": {
+        "en": "Execute benchmarks of a package."
+      },
+      "options": [],
+      "subcommands": []
+    },
+    {
+      "name": "cargo-build(1)",
+      "i18n": {
+        "en": "Compile a package."
+      },
+      "options": [],
+      "subcommands": []
+    },
+    {
+      "name": "cargo-check(1)",
+      "i18n": {
+        "en": "Check a local package and all of its dependencies for errors."
+      },
+      "options": [],
+      "subcommands": []
+    },
+    {
+      "name": "cargo-clean(1)",
+      "i18n": {
+        "en": "Remove artifacts that Cargo has generated in the past."
+      },
+      "options": [],
+      "subcommands": []
+    },
+    {
+      "name": "cargo-doc(1)",
+      "i18n": {
+        "en": "Build a package’s documentation."
+      },
+      "options": [],
+      "subcommands": []
+    },
+    {
+      "name": "cargo-fetch(1)",
+      "i18n": {
+        "en": "Fetch dependencies of a package from the network."
+      },
+      "options": [],
+      "subcommands": []
+    },
+    {
+      "name": "cargo-fix(1)",
+      "i18n": {
+        "en": "Automatically fix lint warnings reported by rustc."
+      },
+      "options": [],
+      "subcommands": []
+    },
+    {
+      "name": "cargo-run(1)",
+      "i18n": {
+        "en": "Run a binary or example of the local package."
+      },
+      "options": [],
+      "subcommands": []
+    },
+    {
+      "name": "cargo-rustc(1)",
+      "i18n": {
+        "en": "Compile a package, and pass extra options to the compiler."
+      },
+      "options": [],
+      "subcommands": []
+    },
+    {
+      "name": "cargo-rustdoc(1)",
+      "i18n": {
+        "en": "Build a package’s documentation, using specified custom flags."
+      },
+      "options": [],
+      "subcommands": []
+    },
+    {
+      "name": "cargo-test(1)",
+      "i18n": {
+        "en": "Execute unit and integration tests of a package."
+      },
+      "options": [],
+      "subcommands": []
+    },
+    {
+      "name": "Manifest",
+      "i18n": {
+        "en": ""
+      },
+      "options": [],
+      "subcommands": []
+    },
+    {
+      "name": "cargo-generate-lockfile(1)",
+      "i18n": {
+        "en": "Generate Cargo.lock for a project."
+      },
+      "options": [],
+      "subcommands": []
+    },
+    {
+      "name": "cargo-locate-project(1)",
+      "i18n": {
+        "en": "Print a JSON representation of a Cargo.toml file’s location."
+      },
+      "options": [],
+      "subcommands": []
+    },
+    {
+      "name": "cargo-metadata(1)",
+      "i18n": {
+        "en": "Output the resolved dependencies of a package in machine-readable"
+      },
+      "options": [],
+      "subcommands": []
+    },
+    {
+      "name": "format.",
+      "i18n": {
+        "en": ""
+      },
+      "options": [],
+      "subcommands": []
+    },
+    {
+      "name": "cargo-pkgid(1)",
+      "i18n": {
+        "en": "Print a fully qualified package specification."
+      },
+      "options": [],
+      "subcommands": []
+    },
+    {
+      "name": "cargo-tree(1)",
+      "i18n": {
+        "en": "Display a tree visualization of a dependency graph."
+      },
+      "options": [],
+      "subcommands": []
+    },
+    {
+      "name": "cargo-update(1)",
+      "i18n": {
+        "en": "Update dependencies as recorded in the local lock file."
+      },
+      "options": [],
+      "subcommands": []
+    },
+    {
+      "name": "cargo-vendor(1)",
+      "i18n": {
+        "en": "Vendor all dependencies locally."
+      },
+      "options": [],
+      "subcommands": []
+    },
+    {
+      "name": "cargo-verify-project(1)",
+      "i18n": {
+        "en": "Check correctness of crate manifest."
+      },
+      "options": [],
+      "subcommands": []
+    },
+    {
+      "name": "Package",
+      "i18n": {
+        "en": ""
+      },
+      "options": [],
+      "subcommands": []
+    },
+    {
+      "name": "cargo-init(1)",
+      "i18n": {
+        "en": "Create a new Cargo package in an existing directory."
+      },
+      "options": [],
+      "subcommands": []
+    },
+    {
+      "name": "cargo-install(1)",
+      "i18n": {
+        "en": "Build and install a Rust binary."
+      },
+      "options": [],
+      "subcommands": []
+    },
+    {
+      "name": "cargo-new(1)",
+      "i18n": {
+        "en": "Create a new Cargo package."
+      },
+      "options": [],
+      "subcommands": []
+    },
+    {
+      "name": "cargo-search(1)",
+      "i18n": {
+        "en": "Search packages in crates.io."
+      },
+      "options": [],
+      "subcommands": []
+    },
+    {
+      "name": "cargo-uninstall(1)",
+      "i18n": {
+        "en": "Remove a Rust binary."
+      },
+      "options": [],
+      "subcommands": []
+    },
+    {
+      "name": "Publishing",
+      "i18n": {
+        "en": ""
+      },
+      "options": [],
+      "subcommands": []
+    },
+    {
+      "name": "cargo-login(1)",
+      "i18n": {
+        "en": "Save an API token from the registry locally."
+      },
+      "options": [],
+      "subcommands": []
+    },
+    {
+      "name": "cargo-logout(1)",
+      "i18n": {
+        "en": "Remove an API token from the registry locally."
+      },
+      "options": [],
+      "subcommands": []
+    },
+    {
+      "name": "cargo-owner(1)",
+      "i18n": {
+        "en": "Manage the owners of a crate on the registry."
+      },
+      "options": [],
+      "subcommands": []
+    },
+    {
+      "name": "cargo-package(1)",
+      "i18n": {
+        "en": "Assemble the local package into a distributable tarball."
+      },
+      "options": [],
+      "subcommands": []
+    },
+    {
+      "name": "cargo-publish(1)",
+      "i18n": {
+        "en": "Upload a package to the registry."
+      },
+      "options": [],
+      "subcommands": []
+    },
+    {
+      "name": "cargo-yank(1)",
+      "i18n": {
+        "en": "Remove a pushed crate from the index."
+      },
+      "options": [],
+      "subcommands": []
+    },
+    {
+      "name": "General",
+      "i18n": {
+        "en": ""
+      },
+      "options": [],
+      "subcommands": []
+    },
+    {
+      "name": "cargo-help(1)",
+      "i18n": {
+        "en": "Display help information about Cargo."
+      },
+      "options": [],
+      "subcommands": []
+    },
+    {
+      "name": "cargo-version(1)",
+      "i18n": {
+        "en": "Show version information."
+      },
+      "options": [],
+      "subcommands": []
+    }
+  ],
+  "options": [
+    {
+      "flag": "-V, --version",
+      "i18n": {
+        "en": "Print version info and exit. If used with --verbose, prints extra information."
+      }
+    },
+    {
+      "flag": "--list",
+      "i18n": {
+        "en": "List all installed Cargo subcommands. If used with --verbose, prints extra information."
+      }
+    },
+    {
+      "flag": "--explain",
+      "i18n": {
+        "en": "Run rustc --explain CODE which will print out a detailed explanation of an error message (for example, E0004)."
+      }
+    },
+    {
+      "flag": "-v, --verbose",
+      "i18n": {
+        "en": "Use verbose output. May be specified twice for “very verbose” output which includes extra output such as dependency warnings and build script output. May also be specified with the term.verbose config value <https://doc.rust-lang.org/cargo/reference/config.html>."
+      }
+    },
+    {
+      "flag": "-q, --quiet",
+      "i18n": {
+        "en": "Do not print cargo log messages. May also be specified with the term.quiet config value <https://doc.rust-lang.org/cargo/reference/config.html>."
+      }
+    },
+    {
+      "flag": "--color",
+      "i18n": {
+        "en": "Control when colored output is used. Valid values:"
+      }
+    },
+    {
+      "flag": "--frozen, --locked",
+      "i18n": {
+        "en": "Either of these flags requires that the Cargo.lock file is up-to-date. If the lock file is missing, or it needs to be updated, Cargo will exit with an error. The --frozen flag also prevents Cargo from attempting to access the network to determine if it is out-of-date."
+      }
+    },
+    {
+      "flag": "--offline",
+      "i18n": {
+        "en": "Prevents Cargo from accessing the network for any reason. Without this flag, Cargo will stop with an error if it needs to access the network and the network is not available. With this flag, Cargo will attempt to proceed without the network if possible."
+      }
+    },
+    {
+      "flag": "--config",
+      "i18n": {
+        "en": "Overrides a Cargo configuration value. The argument should be in TOML syntax of KEY=VALUE, or provided as a path to an extra configuration file. This flag may be specified multiple times. See the command-line overrides section <https://doc.rust-lang.org/cargo/reference/config.html#command-line-overrides> for more information."
+      }
+    },
+    {
+      "flag": "-C",
+      "i18n": {
+        "en": "Changes the current working directory before executing any specified operations. This affects things like where cargo looks by default for the project manifest (Cargo.toml), as well as the directories searched for discovering .cargo/config.toml, for example. This option must appear before the command name, for example cargo -C path/to/my-project build."
+      }
+    },
+    {
+      "flag": "-h, --help",
+      "i18n": {
+        "en": "Prints help information."
+      }
+    },
+    {
+      "flag": "-Z",
+      "i18n": {
+        "en": "Unstable (nightly-only) flags to Cargo. Run cargo -Z help for details."
+      }
+    }
+  ]
+}

@@ -1,0 +1,293 @@
+{
+  "schema_version": 1,
+  "command": "grep",
+  "tool_version": "3.11",
+  "source": "auto-imported",
+  "import_method": "man",
+  "import_date": "2026-04-26",
+  "subcommands": [],
+  "options": [
+    {
+      "flag": "--help",
+      "i18n": {
+        "en": ""
+      }
+    },
+    {
+      "flag": "-V, --version",
+      "i18n": {
+        "en": "Output the version number of grep and exit."
+      }
+    },
+    {
+      "flag": "-E, --extended-regexp",
+      "i18n": {
+        "en": "Interpret  PATTERNS  as  extended regular expressions (EREs, see below)."
+      }
+    },
+    {
+      "flag": "-F, --fixed-strings",
+      "i18n": {
+        "en": "Interpret PATTERNS as fixed strings, not regular expressions."
+      }
+    },
+    {
+      "flag": "-G, --basic-regexp",
+      "i18n": {
+        "en": "Interpret PATTERNS  as  basic  regular  expressions  (BREs,  see below).  This is the default."
+      }
+    },
+    {
+      "flag": "-P, --perl-regexp",
+      "i18n": {
+        "en": "Interpret   PATTERNS   as  Perl-compatible  regular  expressions (PCREs).  This option is experimental when combined with the  -z (--null-data)  option,  and  grep  -P  may warn of unimplemented features."
+      }
+    },
+    {
+      "flag": "-e",
+      "i18n": {
+        "en": "Use PATTERNS as the patterns.  If this option is  used  multiple times or is combined with the -f (--file) option, search for all patterns  given.   This  option can be used to protect a pattern beginning with “-”."
+      }
+    },
+    {
+      "flag": "-f",
+      "i18n": {
+        "en": "Obtain patterns from FILE, one per line.  If this option is used multiple times or is combined with  the  -e  (--regexp)  option, search  for  all  patterns  given.  The empty file contains zero patterns, and therefore matches nothing.  If FILE is  -  ,  read patterns from standard input."
+      }
+    },
+    {
+      "flag": "-i, --ignore-case",
+      "i18n": {
+        "en": "Ignore  case  distinctions  in  patterns and input data, so that characters that differ only in case match each other."
+      }
+    },
+    {
+      "flag": "--no-ignore-case",
+      "i18n": {
+        "en": "Do not ignore case distinctions  in  patterns  and  input  data. This is the default.  This option is useful for passing to shell scripts  that  already use -i, to cancel its effects because the two options override each other."
+      }
+    },
+    {
+      "flag": "-v, --invert-match",
+      "i18n": {
+        "en": "Invert the sense of matching, to select non-matching lines."
+      }
+    },
+    {
+      "flag": "-w, --word-regexp",
+      "i18n": {
+        "en": "Select only those  lines  containing  matches  that  form  whole words.   The  test is that the matching substring must either be at the  beginning  of  the  line,  or  preceded  by  a  non-word constituent  character.  Similarly, it must be either at the end of the line or followed by  a  non-word  constituent  character. Word-constituent   characters   are  letters,  digits,  and  the underscore.  This option has no effect if -x is also specified."
+      }
+    },
+    {
+      "flag": "-x, --line-regexp",
+      "i18n": {
+        "en": "Select only those matches that exactly  match  the  whole  line. For  a  regular  expression pattern, this is like parenthesizing the pattern and then surrounding it with ^ and $."
+      }
+    },
+    {
+      "flag": "-c, --count",
+      "i18n": {
+        "en": "Suppress normal output; instead print a count of matching  lines for  each  input  file.  With the -v, --invert-match option (see above), count non-matching lines."
+      }
+    },
+    {
+      "flag": "--color[=WHEN], --colour[=WHEN]",
+      "i18n": {
+        "en": "Surround  the  matched  (non-empty)  strings,  matching   lines, context  lines,  file  names,  line  numbers,  byte offsets, and separators (for fields and groups of context lines) with  escape sequences  to display them in color on the terminal.  The colors are defined by the environment variable  GREP_COLORS.   WHEN  is never, always, or auto."
+      }
+    },
+    {
+      "flag": "-L, --files-without-match",
+      "i18n": {
+        "en": "Suppress  normal  output;  instead  print the name of each input file from which no output would normally have been printed."
+      }
+    },
+    {
+      "flag": "-l, --files-with-matches",
+      "i18n": {
+        "en": "Suppress normal output; instead print the  name  of  each  input file  from  which  output  would  normally  have  been  printed. Scanning each input file stops upon first match."
+      }
+    },
+    {
+      "flag": "-m",
+      "i18n": {
+        "en": "Stop reading a file after NUM matching lines.  If NUM  is  zero, grep  stops  right  away  without reading input.  A NUM of -1 is treated as infinity and grep does not stop; this is the default. If the input is standard input from  a  regular  file,  and  NUM matching  lines are output, grep ensures that the standard input is positioned to  just  after  the  last  matching  line  before exiting,  regardless  of the presence of trailing context lines. This enables a calling process to resume a  search.   When  grep stops  after NUM matching lines, it outputs any trailing context lines.  When the -c or --count option is also  used,  grep  does not   output   a  count  greater  than  NUM.   When  the  -v  or --invert-match option is also used, grep stops after  outputting NUM non-matching lines."
+      }
+    },
+    {
+      "flag": "-o, --only-matching",
+      "i18n": {
+        "en": "Print  only  the  matched  (non-empty) parts of a matching line, with each such part on a separate output line."
+      }
+    },
+    {
+      "flag": "-q, --quiet, --silent",
+      "i18n": {
+        "en": "Quiet;  do  not  write  anything  to  standard   output.    Exit immediately  with  zero status if any match is found, even if an error was detected.  Also see the -s or --no-messages option."
+      }
+    },
+    {
+      "flag": "-s, --no-messages",
+      "i18n": {
+        "en": "Suppress error messages about nonexistent or unreadable files."
+      }
+    },
+    {
+      "flag": "-b, --byte-offset",
+      "i18n": {
+        "en": "Print the 0-based byte offset within the input file before  each line of output.  If -o (--only-matching) is specified, print the offset of the matching part itself."
+      }
+    },
+    {
+      "flag": "-H, --with-filename",
+      "i18n": {
+        "en": "Print  the  file  name for each match.  This is the default when there is more than one file to search.  This is a GNU extension."
+      }
+    },
+    {
+      "flag": "-h, --no-filename",
+      "i18n": {
+        "en": "Suppress the prefixing of file names on  output.   This  is  the default  when there is only one file (or only standard input) to search."
+      }
+    },
+    {
+      "flag": "--label=LABEL",
+      "i18n": {
+        "en": "Display input actually  coming  from  standard  input  as  input coming  from  file  LABEL.  This can be useful for commands that transform a file's contents before  searching,  e.g.,  gzip  -cd foo.gz  |  grep  --label=foo -H 'some pattern'.  See also the -H option."
+      }
+    },
+    {
+      "flag": "-n, --line-number",
+      "i18n": {
+        "en": "Prefix each line of output with the 1-based line  number  within its input file."
+      }
+    },
+    {
+      "flag": "-T, --initial-tab",
+      "i18n": {
+        "en": "Make  sure  that the first character of actual line content lies on a tab stop, so that the alignment of tabs looks normal.  This is useful with options that prefix their output  to  the  actual content:  -H,-n,  and  -b.   In order to improve the probability that lines from a single file will all start at the same column, this also causes the line number and byte offset (if present) to be printed in a minimum size field width."
+      }
+    },
+    {
+      "flag": "-Z, --null",
+      "i18n": {
+        "en": "Output a zero byte (the ASCII  NUL  character)  instead  of  the character  that normally follows a file name.  For example, grep -lZ outputs a zero byte after each  file  name  instead  of  the usual  newline.   This option makes the output unambiguous, even in the presence of file names containing unusual characters like newlines.  This option can  be  used  with  commands  like  find -print0,  perl  -0,  sort  -z, and xargs -0 to process arbitrary file names, even those that contain newline characters."
+      }
+    },
+    {
+      "flag": "-A",
+      "i18n": {
+        "en": "Print NUM  lines  of  trailing  context  after  matching  lines. Places   a  line  containing  a  group  separator  (--)  between contiguous groups of matches.  With the  -o  or  --only-matching option, this has no effect and a warning is given."
+      }
+    },
+    {
+      "flag": "-B",
+      "i18n": {
+        "en": "Print  NUM  lines  of  leading  context  before  matching lines. Places  a  line  containing  a  group  separator  (--)   between contiguous  groups  of  matches.  With the -o or --only-matching option, this has no effect and a warning is given."
+      }
+    },
+    {
+      "flag": "-C",
+      "i18n": {
+        "en": "Print NUM lines of output context.  Places a line  containing  a group separator (--) between contiguous groups of matches.  With the  -o  or  --only-matching  option,  this  has no effect and a warning is given."
+      }
+    },
+    {
+      "flag": "--group-separator=SEP",
+      "i18n": {
+        "en": "When -A, -B, or -C are in use, print SEP instead of  --  between groups of lines."
+      }
+    },
+    {
+      "flag": "--no-group-separator",
+      "i18n": {
+        "en": "When  -A, -B, or -C are in use, do not print a separator between groups of lines."
+      }
+    },
+    {
+      "flag": "-a, --text",
+      "i18n": {
+        "en": "Process a binary file as if it were text; this is equivalent  to the --binary-files=text option."
+      }
+    },
+    {
+      "flag": "--binary-files=TYPE",
+      "i18n": {
+        "en": "If  a  file's  data  or metadata indicate that the file contains binary data, assume that the file is  of  type  TYPE.   Non-text bytes  indicate  binary data; these are either output bytes that are improperly encoded for the current  locale,  or  null  input bytes when the -z option is not given."
+      }
+    },
+    {
+      "flag": "-D",
+      "i18n": {
+        "en": "If an input file is a device, FIFO  or  socket,  use  ACTION  to process  it.   By  default,  ACTION  is  read,  which means that devices are read just as if they were ordinary files.  If ACTION is skip, devices are silently skipped."
+      }
+    },
+    {
+      "flag": "-d",
+      "i18n": {
+        "en": "If an input file is a directory, use ACTION to process  it.   By default,  ACTION is read, i.e., read directories just as if they were  ordinary  files.   If  ACTION  is  skip,   silently   skip directories.   If  ACTION  is recurse, read all files under each directory, recursively, following symbolic links  only  if  they are on the command line.  This is equivalent to the -r option."
+      }
+    },
+    {
+      "flag": "--exclude=GLOB",
+      "i18n": {
+        "en": "Skip  any  command-line file with a name suffix that matches the pattern GLOB, using wildcard matching; a name suffix  is  either the  whole name, or a trailing part that starts with a non-slash character immediately after a  slash  (/)  in  the  name.   When searching  recursively, skip any subfile whose base name matches GLOB; the base name is the part after the last slash.  A pattern can use *, ?, and [...] as wildcards, and \\ to quote a  wildcard or backslash character literally."
+      }
+    },
+    {
+      "flag": "--exclude-from=FILE",
+      "i18n": {
+        "en": "Skip  files  whose  base name matches any of the file-name globs read from FILE  (using  wildcard  matching  as  described  under --exclude)."
+      }
+    },
+    {
+      "flag": "--exclude-dir=GLOB",
+      "i18n": {
+        "en": "Skip  any command-line directory with a name suffix that matches the  pattern  GLOB.   When  searching  recursively,   skip   any subdirectory whose base name matches GLOB.  Ignore any redundant trailing slashes in GLOB."
+      }
+    },
+    {
+      "flag": "-I",
+      "i18n": {
+        "en": "this is equivalent to the --binary-files=without-match option."
+      }
+    },
+    {
+      "flag": "--include=GLOB",
+      "i18n": {
+        "en": "Search only files whose base name matches GLOB  (using  wildcard matching   as  described  under  --exclude).   If  contradictory --include and --exclude options are given, the last matching one wins.  If no --include or --exclude options  match,  a  file  is included unless the first such option is --include."
+      }
+    },
+    {
+      "flag": "-r, --recursive",
+      "i18n": {
+        "en": "Read  all  files  under  each  directory, recursively, following symbolic links only if they are on the command line.  Note  that if   no  file  operand  is  given,  grep  searches  the  working directory.  This is equivalent to the -d recurse option."
+      }
+    },
+    {
+      "flag": "-R, --dereference-recursive",
+      "i18n": {
+        "en": "Read all files under each directory,  recursively.   Follow  all symbolic links, unlike -r."
+      }
+    },
+    {
+      "flag": "--line-buffered",
+      "i18n": {
+        "en": "Use  line  buffering  on  output.   This can cause a performance penalty."
+      }
+    },
+    {
+      "flag": "-U, --binary",
+      "i18n": {
+        "en": "Treat the file(s) as binary.  By default, under MS-DOS  and  MS- Windows,  grep  guesses  whether  a  file  is  text or binary as described for the --binary-files option.  If  grep  decides  the file  is  a  text  file,  it  strips  the CR characters from the original file contents (to make regular expressions with ^ and $ work  correctly).   Specifying  -U  overrules  this   guesswork, causing  all  files  to  be  read  and  passed  to  the matching mechanism verbatim; if the file is a text file with CR/LF  pairs at   the  end  of  each  line,  this  will  cause  some  regular expressions to fail.  This option has  no  effect  on  platforms other than MS-DOS and MS-Windows."
+      }
+    },
+    {
+      "flag": "-z, --null-data",
+      "i18n": {
+        "en": "Treat  input  and  output  data  as  sequences  of  lines,  each terminated by a zero byte (the ASCII NUL character) instead of a newline.  Like the -Z or --null option, this option can be  used with commands like sort -z to process arbitrary file names."
+      }
+    }
+  ]
+}

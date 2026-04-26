@@ -1,0 +1,875 @@
+{
+  "schema_version": 1,
+  "command": "rsync",
+  "tool_version": "3.2.7",
+  "source": "auto-imported",
+  "import_method": "help",
+  "import_date": "2026-04-26",
+  "subcommands": [],
+  "options": [
+    {
+      "flag": "--verbose, -v",
+      "i18n": {
+        "en": "increase verbosity"
+      }
+    },
+    {
+      "flag": "--info=FLAGS",
+      "i18n": {
+        "en": "fine-grained informational verbosity"
+      }
+    },
+    {
+      "flag": "--debug=FLAGS",
+      "i18n": {
+        "en": "fine-grained debug verbosity"
+      }
+    },
+    {
+      "flag": "--stderr=e|a|c",
+      "i18n": {
+        "en": "change stderr output mode (default: errors)"
+      }
+    },
+    {
+      "flag": "--quiet, -q",
+      "i18n": {
+        "en": "suppress non-error messages"
+      }
+    },
+    {
+      "flag": "--no-motd",
+      "i18n": {
+        "en": "suppress daemon-mode MOTD"
+      }
+    },
+    {
+      "flag": "--checksum, -c",
+      "i18n": {
+        "en": "skip based on checksum, not mod-time & size"
+      }
+    },
+    {
+      "flag": "--archive, -a",
+      "i18n": {
+        "en": "archive mode is -rlptgoD (no -A,-X,-U,-N,-H)"
+      }
+    },
+    {
+      "flag": "--no-OPTION",
+      "i18n": {
+        "en": "turn off an implied OPTION (e.g. --no-D)"
+      }
+    },
+    {
+      "flag": "--recursive, -r",
+      "i18n": {
+        "en": "recurse into directories"
+      }
+    },
+    {
+      "flag": "--relative, -R",
+      "i18n": {
+        "en": "use relative path names"
+      }
+    },
+    {
+      "flag": "--no-implied-dirs",
+      "i18n": {
+        "en": "don't send implied dirs with --relative"
+      }
+    },
+    {
+      "flag": "--backup, -b",
+      "i18n": {
+        "en": "make backups (see --suffix & --backup-dir)"
+      }
+    },
+    {
+      "flag": "--backup-dir=DIR",
+      "i18n": {
+        "en": "make backups into hierarchy based in DIR"
+      }
+    },
+    {
+      "flag": "--suffix=SUFFIX",
+      "i18n": {
+        "en": "backup suffix (default ~ w/o --backup-dir)"
+      }
+    },
+    {
+      "flag": "--update, -u",
+      "i18n": {
+        "en": "skip files that are newer on the receiver"
+      }
+    },
+    {
+      "flag": "--inplace",
+      "i18n": {
+        "en": "update destination files in-place"
+      }
+    },
+    {
+      "flag": "--append",
+      "i18n": {
+        "en": "append data onto shorter files"
+      }
+    },
+    {
+      "flag": "--append-verify",
+      "i18n": {
+        "en": "--append w/old data in file checksum"
+      }
+    },
+    {
+      "flag": "--dirs, -d",
+      "i18n": {
+        "en": "transfer directories without recursing"
+      }
+    },
+    {
+      "flag": "--old-dirs, --old-d",
+      "i18n": {
+        "en": "works like --dirs when talking to old rsync"
+      }
+    },
+    {
+      "flag": "--mkpath",
+      "i18n": {
+        "en": "create destination's missing path components"
+      }
+    },
+    {
+      "flag": "--links, -l",
+      "i18n": {
+        "en": "copy symlinks as symlinks"
+      }
+    },
+    {
+      "flag": "--copy-links, -L",
+      "i18n": {
+        "en": "transform symlink into referent file/dir"
+      }
+    },
+    {
+      "flag": "--copy-unsafe-links",
+      "i18n": {
+        "en": "only \"unsafe\" symlinks are transformed"
+      }
+    },
+    {
+      "flag": "--safe-links",
+      "i18n": {
+        "en": "ignore symlinks that point outside the tree"
+      }
+    },
+    {
+      "flag": "--munge-links",
+      "i18n": {
+        "en": "munge symlinks to make them safe & unusable"
+      }
+    },
+    {
+      "flag": "--copy-dirlinks, -k",
+      "i18n": {
+        "en": "transform symlink to dir into referent dir"
+      }
+    },
+    {
+      "flag": "--keep-dirlinks, -K",
+      "i18n": {
+        "en": "treat symlinked dir on receiver as dir"
+      }
+    },
+    {
+      "flag": "--hard-links, -H",
+      "i18n": {
+        "en": "preserve hard links"
+      }
+    },
+    {
+      "flag": "--perms, -p",
+      "i18n": {
+        "en": "preserve permissions"
+      }
+    },
+    {
+      "flag": "--executability, -E",
+      "i18n": {
+        "en": "preserve executability"
+      }
+    },
+    {
+      "flag": "--chmod=CHMOD",
+      "i18n": {
+        "en": "affect file and/or directory permissions"
+      }
+    },
+    {
+      "flag": "--acls, -A",
+      "i18n": {
+        "en": "preserve ACLs (implies --perms)"
+      }
+    },
+    {
+      "flag": "--xattrs, -X",
+      "i18n": {
+        "en": "preserve extended attributes"
+      }
+    },
+    {
+      "flag": "--owner, -o",
+      "i18n": {
+        "en": "preserve owner (super-user only)"
+      }
+    },
+    {
+      "flag": "--group, -g",
+      "i18n": {
+        "en": "preserve group"
+      }
+    },
+    {
+      "flag": "--devices",
+      "i18n": {
+        "en": "preserve device files (super-user only)"
+      }
+    },
+    {
+      "flag": "--copy-devices",
+      "i18n": {
+        "en": "copy device contents as a regular file"
+      }
+    },
+    {
+      "flag": "--write-devices",
+      "i18n": {
+        "en": "write to devices as files (implies --inplace)"
+      }
+    },
+    {
+      "flag": "--specials",
+      "i18n": {
+        "en": "preserve special files"
+      }
+    },
+    {
+      "flag": "-D",
+      "i18n": {
+        "en": "same as --devices --specials"
+      }
+    },
+    {
+      "flag": "--times, -t",
+      "i18n": {
+        "en": "preserve modification times"
+      }
+    },
+    {
+      "flag": "--atimes, -U",
+      "i18n": {
+        "en": "preserve access (use) times"
+      }
+    },
+    {
+      "flag": "--open-noatime",
+      "i18n": {
+        "en": "avoid changing the atime on opened files"
+      }
+    },
+    {
+      "flag": "--crtimes, -N",
+      "i18n": {
+        "en": "preserve create times (newness)"
+      }
+    },
+    {
+      "flag": "--omit-dir-times, -O",
+      "i18n": {
+        "en": "omit directories from --times"
+      }
+    },
+    {
+      "flag": "--omit-link-times, -J",
+      "i18n": {
+        "en": "omit symlinks from --times"
+      }
+    },
+    {
+      "flag": "--super",
+      "i18n": {
+        "en": "receiver attempts super-user activities"
+      }
+    },
+    {
+      "flag": "--fake-super",
+      "i18n": {
+        "en": "store/recover privileged attrs using xattrs"
+      }
+    },
+    {
+      "flag": "--sparse, -S",
+      "i18n": {
+        "en": "turn sequences of nulls into sparse blocks"
+      }
+    },
+    {
+      "flag": "--preallocate",
+      "i18n": {
+        "en": "allocate dest files before writing them"
+      }
+    },
+    {
+      "flag": "--dry-run, -n",
+      "i18n": {
+        "en": "perform a trial run with no changes made"
+      }
+    },
+    {
+      "flag": "--whole-file, -W",
+      "i18n": {
+        "en": "copy files whole (w/o delta-xfer algorithm)"
+      }
+    },
+    {
+      "flag": "--checksum-choice=STR",
+      "i18n": {
+        "en": "choose the checksum algorithm (aka --cc)"
+      }
+    },
+    {
+      "flag": "--one-file-system, -x",
+      "i18n": {
+        "en": "don't cross filesystem boundaries"
+      }
+    },
+    {
+      "flag": "--block-size=SIZE, -B",
+      "i18n": {
+        "en": "force a fixed checksum block-size"
+      }
+    },
+    {
+      "flag": "--rsh=COMMAND, -e",
+      "i18n": {
+        "en": "specify the remote shell to use"
+      }
+    },
+    {
+      "flag": "--rsync-path=PROGRAM",
+      "i18n": {
+        "en": "specify the rsync to run on remote machine"
+      }
+    },
+    {
+      "flag": "--existing",
+      "i18n": {
+        "en": "skip creating new files on receiver"
+      }
+    },
+    {
+      "flag": "--ignore-existing",
+      "i18n": {
+        "en": "skip updating files that exist on receiver"
+      }
+    },
+    {
+      "flag": "--remove-source-files",
+      "i18n": {
+        "en": "sender removes synchronized files (non-dir)"
+      }
+    },
+    {
+      "flag": "--del",
+      "i18n": {
+        "en": "an alias for --delete-during"
+      }
+    },
+    {
+      "flag": "--delete",
+      "i18n": {
+        "en": "delete extraneous files from dest dirs"
+      }
+    },
+    {
+      "flag": "--delete-before",
+      "i18n": {
+        "en": "receiver deletes before xfer, not during"
+      }
+    },
+    {
+      "flag": "--delete-during",
+      "i18n": {
+        "en": "receiver deletes during the transfer"
+      }
+    },
+    {
+      "flag": "--delete-delay",
+      "i18n": {
+        "en": "find deletions during, delete after"
+      }
+    },
+    {
+      "flag": "--delete-after",
+      "i18n": {
+        "en": "receiver deletes after transfer, not during"
+      }
+    },
+    {
+      "flag": "--delete-excluded",
+      "i18n": {
+        "en": "also delete excluded files from dest dirs"
+      }
+    },
+    {
+      "flag": "--ignore-missing-args",
+      "i18n": {
+        "en": "ignore missing source args without error"
+      }
+    },
+    {
+      "flag": "--delete-missing-args",
+      "i18n": {
+        "en": "delete missing source args from destination"
+      }
+    },
+    {
+      "flag": "--ignore-errors",
+      "i18n": {
+        "en": "delete even if there are I/O errors"
+      }
+    },
+    {
+      "flag": "--force",
+      "i18n": {
+        "en": "force deletion of dirs even if not empty"
+      }
+    },
+    {
+      "flag": "--max-delete=NUM",
+      "i18n": {
+        "en": "don't delete more than NUM files"
+      }
+    },
+    {
+      "flag": "--max-size=SIZE",
+      "i18n": {
+        "en": "don't transfer any file larger than SIZE"
+      }
+    },
+    {
+      "flag": "--min-size=SIZE",
+      "i18n": {
+        "en": "don't transfer any file smaller than SIZE"
+      }
+    },
+    {
+      "flag": "--max-alloc=SIZE",
+      "i18n": {
+        "en": "change a limit relating to memory alloc"
+      }
+    },
+    {
+      "flag": "--partial",
+      "i18n": {
+        "en": "keep partially transferred files"
+      }
+    },
+    {
+      "flag": "--partial-dir=DIR",
+      "i18n": {
+        "en": "put a partially transferred file into DIR"
+      }
+    },
+    {
+      "flag": "--delay-updates",
+      "i18n": {
+        "en": "put all updated files into place at end"
+      }
+    },
+    {
+      "flag": "--prune-empty-dirs, -m",
+      "i18n": {
+        "en": "prune empty directory chains from file-list"
+      }
+    },
+    {
+      "flag": "--numeric-ids",
+      "i18n": {
+        "en": "don't map uid/gid values by user/group name"
+      }
+    },
+    {
+      "flag": "--usermap=STRING",
+      "i18n": {
+        "en": "custom username mapping"
+      }
+    },
+    {
+      "flag": "--groupmap=STRING",
+      "i18n": {
+        "en": "custom groupname mapping"
+      }
+    },
+    {
+      "flag": "--chown=USER:GROUP",
+      "i18n": {
+        "en": "simple username/groupname mapping"
+      }
+    },
+    {
+      "flag": "--timeout=SECONDS",
+      "i18n": {
+        "en": "set I/O timeout in seconds"
+      }
+    },
+    {
+      "flag": "--contimeout=SECONDS",
+      "i18n": {
+        "en": "set daemon connection timeout in seconds"
+      }
+    },
+    {
+      "flag": "--ignore-times, -I",
+      "i18n": {
+        "en": "don't skip files that match size and time"
+      }
+    },
+    {
+      "flag": "--size-only",
+      "i18n": {
+        "en": "skip files that match in size"
+      }
+    },
+    {
+      "flag": "--modify-window=NUM, -@",
+      "i18n": {
+        "en": "set the accuracy for mod-time comparisons"
+      }
+    },
+    {
+      "flag": "--temp-dir=DIR, -T",
+      "i18n": {
+        "en": "create temporary files in directory DIR"
+      }
+    },
+    {
+      "flag": "--fuzzy, -y",
+      "i18n": {
+        "en": "find similar file for basis if no dest file"
+      }
+    },
+    {
+      "flag": "--compare-dest=DIR",
+      "i18n": {
+        "en": "also compare destination files relative to DIR"
+      }
+    },
+    {
+      "flag": "--copy-dest=DIR",
+      "i18n": {
+        "en": "... and include copies of unchanged files"
+      }
+    },
+    {
+      "flag": "--link-dest=DIR",
+      "i18n": {
+        "en": "hardlink to files in DIR when unchanged"
+      }
+    },
+    {
+      "flag": "--compress, -z",
+      "i18n": {
+        "en": "compress file data during the transfer"
+      }
+    },
+    {
+      "flag": "--compress-choice=STR",
+      "i18n": {
+        "en": "choose the compression algorithm (aka --zc)"
+      }
+    },
+    {
+      "flag": "--compress-level=NUM",
+      "i18n": {
+        "en": "explicitly set compression level (aka --zl)"
+      }
+    },
+    {
+      "flag": "--skip-compress=LIST",
+      "i18n": {
+        "en": "skip compressing files with suffix in LIST"
+      }
+    },
+    {
+      "flag": "--cvs-exclude, -C",
+      "i18n": {
+        "en": "auto-ignore files in the same way CVS does"
+      }
+    },
+    {
+      "flag": "--filter=RULE, -f",
+      "i18n": {
+        "en": "add a file-filtering RULE"
+      }
+    },
+    {
+      "flag": "-F",
+      "i18n": {
+        "en": "same as --filter='dir-merge /.rsync-filter'"
+      }
+    },
+    {
+      "flag": "--exclude=PATTERN",
+      "i18n": {
+        "en": "exclude files matching PATTERN"
+      }
+    },
+    {
+      "flag": "--exclude-from=FILE",
+      "i18n": {
+        "en": "read exclude patterns from FILE"
+      }
+    },
+    {
+      "flag": "--include=PATTERN",
+      "i18n": {
+        "en": "don't exclude files matching PATTERN"
+      }
+    },
+    {
+      "flag": "--include-from=FILE",
+      "i18n": {
+        "en": "read include patterns from FILE"
+      }
+    },
+    {
+      "flag": "--files-from=FILE",
+      "i18n": {
+        "en": "read list of source-file names from FILE"
+      }
+    },
+    {
+      "flag": "--from0, -0",
+      "i18n": {
+        "en": "all *-from/filter files are delimited by 0s"
+      }
+    },
+    {
+      "flag": "--old-args",
+      "i18n": {
+        "en": "disable the modern arg-protection idiom"
+      }
+    },
+    {
+      "flag": "--secluded-args, -s",
+      "i18n": {
+        "en": "use the protocol to safely send the args"
+      }
+    },
+    {
+      "flag": "--trust-sender",
+      "i18n": {
+        "en": "trust the remote sender's file list"
+      }
+    },
+    {
+      "flag": "--copy-as=USER[:GROUP]",
+      "i18n": {
+        "en": "specify user & optional group for the copy"
+      }
+    },
+    {
+      "flag": "--address=ADDRESS",
+      "i18n": {
+        "en": "bind address for outgoing socket to daemon"
+      }
+    },
+    {
+      "flag": "--port=PORT",
+      "i18n": {
+        "en": "specify double-colon alternate port number"
+      }
+    },
+    {
+      "flag": "--sockopts=OPTIONS",
+      "i18n": {
+        "en": "specify custom TCP options"
+      }
+    },
+    {
+      "flag": "--blocking-io",
+      "i18n": {
+        "en": "use blocking I/O for the remote shell"
+      }
+    },
+    {
+      "flag": "--outbuf=N|L|B",
+      "i18n": {
+        "en": "set out buffering to None, Line, or Block"
+      }
+    },
+    {
+      "flag": "--stats",
+      "i18n": {
+        "en": "give some file-transfer stats"
+      }
+    },
+    {
+      "flag": "--8-bit-output, -8",
+      "i18n": {
+        "en": "leave high-bit chars unescaped in output"
+      }
+    },
+    {
+      "flag": "--human-readable, -h",
+      "i18n": {
+        "en": "output numbers in a human-readable format"
+      }
+    },
+    {
+      "flag": "--progress",
+      "i18n": {
+        "en": "show progress during transfer"
+      }
+    },
+    {
+      "flag": "-P",
+      "i18n": {
+        "en": "same as --partial --progress"
+      }
+    },
+    {
+      "flag": "--itemize-changes, -i",
+      "i18n": {
+        "en": "output a change-summary for all updates"
+      }
+    },
+    {
+      "flag": "--remote-option=OPT, -M",
+      "i18n": {
+        "en": "send OPTION to the remote side only"
+      }
+    },
+    {
+      "flag": "--out-format=FORMAT",
+      "i18n": {
+        "en": "output updates using the specified FORMAT"
+      }
+    },
+    {
+      "flag": "--log-file=FILE",
+      "i18n": {
+        "en": "log what we're doing to the specified FILE"
+      }
+    },
+    {
+      "flag": "--log-file-format=FMT",
+      "i18n": {
+        "en": "log updates using the specified FMT"
+      }
+    },
+    {
+      "flag": "--password-file=FILE",
+      "i18n": {
+        "en": "read daemon-access password from FILE"
+      }
+    },
+    {
+      "flag": "--early-input=FILE",
+      "i18n": {
+        "en": "use FILE for daemon's early exec input"
+      }
+    },
+    {
+      "flag": "--list-only",
+      "i18n": {
+        "en": "list the files instead of copying them"
+      }
+    },
+    {
+      "flag": "--bwlimit=RATE",
+      "i18n": {
+        "en": "limit socket I/O bandwidth"
+      }
+    },
+    {
+      "flag": "--stop-after=MINS",
+      "i18n": {
+        "en": "Stop rsync after MINS minutes have elapsed"
+      }
+    },
+    {
+      "flag": "--stop-at=y-m-dTh:m",
+      "i18n": {
+        "en": "Stop rsync at the specified point in time"
+      }
+    },
+    {
+      "flag": "--fsync",
+      "i18n": {
+        "en": "fsync every written file"
+      }
+    },
+    {
+      "flag": "--write-batch=FILE",
+      "i18n": {
+        "en": "write a batched update to FILE"
+      }
+    },
+    {
+      "flag": "--only-write-batch=FILE",
+      "i18n": {
+        "en": "like --write-batch but w/o updating dest"
+      }
+    },
+    {
+      "flag": "--read-batch=FILE",
+      "i18n": {
+        "en": "read a batched update from FILE"
+      }
+    },
+    {
+      "flag": "--protocol=NUM",
+      "i18n": {
+        "en": "force an older protocol version to be used"
+      }
+    },
+    {
+      "flag": "--iconv=CONVERT_SPEC",
+      "i18n": {
+        "en": "request charset conversion of filenames"
+      }
+    },
+    {
+      "flag": "--checksum-seed=NUM",
+      "i18n": {
+        "en": "set block/file checksum seed (advanced)"
+      }
+    },
+    {
+      "flag": "--ipv4, -4",
+      "i18n": {
+        "en": "prefer IPv4"
+      }
+    },
+    {
+      "flag": "--ipv6, -6",
+      "i18n": {
+        "en": "prefer IPv6"
+      }
+    },
+    {
+      "flag": "--version, -V",
+      "i18n": {
+        "en": "print the version + other info and exit"
+      }
+    },
+    {
+      "flag": "--help, -h",
+      "i18n": {
+        "en": "show this help (* -h is help only on its own)"
+      }
+    }
+  ]
+}

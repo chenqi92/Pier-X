@@ -41,11 +41,17 @@
 use std::process::Command;
 
 use crate::schema::{CommandPack, OptionEntry, SubcommandEntry};
+use crate::timeout::{run_with_timeout, DEFAULT_TIMEOUT, SKIP_COMPLETION_ZSH};
 
 pub fn extract(cmd: &str) -> Result<CommandPack, String> {
-    let out = Command::new(cmd)
-        .args(["completion", "zsh"])
-        .output()
+    if SKIP_COMPLETION_ZSH.contains(&cmd) {
+        return Err(format!(
+            "skipping `{cmd} completion zsh` — known to drop into interactive mode"
+        ));
+    }
+    let mut command = Command::new(cmd);
+    command.args(["completion", "zsh"]);
+    let out = run_with_timeout(command, DEFAULT_TIMEOUT)
         .map_err(|e| format!("spawn `{cmd} completion zsh`: {e}"))?;
     if !out.status.success() {
         return Err(format!(

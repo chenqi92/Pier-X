@@ -51,6 +51,7 @@ use log::{info, warn};
 mod schema;
 mod score;
 mod sources;
+mod timeout;
 
 use schema::CommandPack;
 
@@ -189,7 +190,9 @@ fn build_pack(cmd: &str, forced: Option<ForcedSource>) -> Result<CommandPack, St
 /// version-shaped token. Empty when both fail.
 fn detect_version(cmd: &str) -> String {
     for args in [vec!["--version"], vec!["version"]] {
-        let out = match Command::new(cmd).args(&args).output() {
+        let mut command = Command::new(cmd);
+        command.args(&args);
+        let out = match timeout::run_with_timeout(command, std::time::Duration::from_secs(2)) {
             Ok(o) => o,
             Err(_) => continue,
         };
@@ -208,7 +211,11 @@ fn detect_version(cmd: &str) -> String {
 fn first_version_token(text: &str) -> Option<String> {
     // Match `1.2.3` or `1.2` somewhere in the first 256 chars —
     // we trust that the version line dominates the early output.
-    let head = &text[..text.len().min(256)];
+    // Use `take(256)` to walk by code points (not bytes) so we
+    // never split a multi-byte character — `--version` output
+    // is sometimes localized (`GNU Wget 在 darwin … 上编译`)
+    // and a byte slice would land mid-character.
+    let head: String = text.chars().take(256).collect();
     let mut chars = head.chars().peekable();
     while let Some(c) = chars.next() {
         if !c.is_ascii_digit() {

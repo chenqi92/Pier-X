@@ -1,0 +1,107 @@
+{
+  "schema_version": 1,
+  "command": "netstat",
+  "tool_version": "2.10",
+  "source": "auto-imported",
+  "import_method": "man",
+  "import_date": "2026-04-26",
+  "subcommands": [],
+  "options": [
+    {
+      "flag": "--verbose,",
+      "i18n": {
+        "en": ""
+      }
+    },
+    {
+      "flag": "--wide,",
+      "i18n": {
+        "en": ""
+      }
+    },
+    {
+      "flag": "--numeric,",
+      "i18n": {
+        "en": ""
+      }
+    },
+    {
+      "flag": "--numeric-hosts",
+      "i18n": {
+        "en": ""
+      }
+    },
+    {
+      "flag": "--numeric-ports",
+      "i18n": {
+        "en": ""
+      }
+    },
+    {
+      "flag": "--numeric-users",
+      "i18n": {
+        "en": ""
+      }
+    },
+    {
+      "flag": "--protocol=family,",
+      "i18n": {
+        "en": ""
+      }
+    },
+    {
+      "flag": "--netrom, --ddp, --bluetooth",
+      "i18n": {
+        "en": ""
+      }
+    },
+    {
+      "flag": "-c, --continuous",
+      "i18n": {
+        "en": ""
+      }
+    },
+    {
+      "flag": "-e, --extend",
+      "i18n": {
+        "en": ""
+      }
+    },
+    {
+      "flag": "-o, --timers",
+      "i18n": {
+        "en": ""
+      }
+    },
+    {
+      "flag": "-p, --program",
+      "i18n": {
+        "en": ""
+      }
+    },
+    {
+      "flag": "-l, --listening",
+      "i18n": {
+        "en": ""
+      }
+    },
+    {
+      "flag": "-a, --all",
+      "i18n": {
+        "en": ""
+      }
+    },
+    {
+      "flag": "-F",
+      "i18n": {
+        "en": ""
+      }
+    },
+    {
+      "flag": "-C",
+      "i18n": {
+        "en": ""
+      }
+    }
+  ]
+}

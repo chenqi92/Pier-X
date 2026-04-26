@@ -1,0 +1,293 @@
+{
+  "schema_version": 1,
+  "command": "fd",
+  "tool_version": "10.3.0",
+  "source": "auto-imported",
+  "import_method": "man",
+  "import_date": "2026-04-26",
+  "subcommands": [],
+  "options": [
+    {
+      "flag": "-H, --hidden",
+      "i18n": {
+        "en": "Include hidden files and directories in the search results (default: hidden files and directories are skipped). The flag can be overridden with '--no-hidden'."
+      }
+    },
+    {
+      "flag": "-I, --no-ignore",
+      "i18n": {
+        "en": "Show search results from files and directories that would otherwise be ignored by"
+      }
+    },
+    {
+      "flag": "-u, --unrestricted",
+      "i18n": {
+        "en": "Perform an unrestricted search, including ignored and hidden files. This is an alias for '--hidden --no-ignore'."
+      }
+    },
+    {
+      "flag": "--no-ignore-vcs",
+      "i18n": {
+        "en": "Show search results from files and directories that would otherwise be ignored by gitignore files including .gitignore, .git/info/exclude, and the global gitignore configuration (core.excludesFile git setting, which defaults to $HOME/.config/git/ignore).  The flag can be overridden with '--ignore-vcs'."
+      }
+    },
+    {
+      "flag": "--no-require-git",
+      "i18n": {
+        "en": "Do not require a git repository to respect gitignores. By default, fd will only respect global gitignore rules, .gitignore rules and local exclude rules if fd detects that you are searching inside a git repository. This flag allows you to relax this restriction such that fd will respect all git related ignore rules regardless of whether you're searching in a git repository or not. The flag can be overridden with '--require- git'."
+      }
+    },
+    {
+      "flag": "--no-ignore-parent",
+      "i18n": {
+        "en": "Show search results from files and directories that would otherwise be ignored by gitignore files in parent directories."
+      }
+    },
+    {
+      "flag": "-s, --case-sensitive",
+      "i18n": {
+        "en": "Perform a case-sensitive search. By default, fd uses case- insensitive searches, unless the pattern contains an uppercase character (smart case)."
+      }
+    },
+    {
+      "flag": "-i, --ignore-case",
+      "i18n": {
+        "en": "Perform a case-insensitive search. By default, fd uses case- insensitive searches, unless the pattern contains an uppercase character (smart case)."
+      }
+    },
+    {
+      "flag": "-g, --glob",
+      "i18n": {
+        "en": "Perform a glob-based search instead of a regular expression search.  If combined with the '--full-path' option, '**' can be used to match multiple path components."
+      }
+    },
+    {
+      "flag": "--regex",
+      "i18n": {
+        "en": "Perform a regular-expression based search (default). This can be used to override --glob."
+      }
+    },
+    {
+      "flag": "-F, --fixed-strings",
+      "i18n": {
+        "en": "Treat the pattern as a literal string instead of a regular expression. Note that this also performs substring comparison. If you want to match on an exact filename, consider using '--glob'."
+      }
+    },
+    {
+      "flag": "--and",
+      "i18n": {
+        "en": "Add additional required search patterns, all of which must be matched. Multiple additional patterns can be specified. The patterns are regular expressions, unless '--glob' or '--fixed-strings' is used."
+      }
+    },
+    {
+      "flag": "-a, --absolute-path",
+      "i18n": {
+        "en": "Shows the full path starting from the root as opposed to relative paths.  The flag can be overridden with '--relative- path'."
+      }
+    },
+    {
+      "flag": "-l, --list-details",
+      "i18n": {
+        "en": "Use a detailed listing format like 'ls -l'. This is basically an alias for '--exec-batch ls -l' with some additional 'ls' options. This can be used to see more metadata, to show symlink targets and to achieve a deterministic sort order."
+      }
+    },
+    {
+      "flag": "-L, --follow",
+      "i18n": {
+        "en": "By default, fd does not descend into symlinked directories. Using this flag, symbolic links are also traversed. The flag can be overridden with '--no-follow'."
+      }
+    },
+    {
+      "flag": "-p, --full-path",
+      "i18n": {
+        "en": "By default, the search pattern is only matched against the filename (or directory name). Using this flag, the pattern is matched against the full path."
+      }
+    },
+    {
+      "flag": "-0, --print0",
+      "i18n": {
+        "en": "Separate search results by the null character (instead of newlines). Useful for piping results to xargs."
+      }
+    },
+    {
+      "flag": "--max-results",
+      "i18n": {
+        "en": "Limit the number of search results to 'count' and quit immediately."
+      }
+    },
+    {
+      "flag": "-1",
+      "i18n": {
+        "en": "is an alias for '--max-results=1'."
+      }
+    },
+    {
+      "flag": "-q, --quiet",
+      "i18n": {
+        "en": "When the flag is present, the program does not print anything and will instead exit with a code of 0 if there is at least one search result.  Otherwise, the exit code will be 1.  This is mainly for usage in scripts and can be faster than checking for output because the search can be stopped early after the first match.  --has-results can be used as an alias."
+      }
+    },
+    {
+      "flag": "--show-errors",
+      "i18n": {
+        "en": "Enable the display of filesystem errors for situations such as insufficient permissions or dead symlinks."
+      }
+    },
+    {
+      "flag": "--strip-cwd-prefix",
+      "i18n": {
+        "en": "By default, relative paths are prefixed with './' when -x/--exec, -X/--exec-batch, or -0/--print0 are given, to reduce the risk of a path starting with '-' being treated as a command line option. Use this flag to change this behavior. If this flag is used without a value, it is equivalent to passing \"always\". Possible values are:"
+      }
+    },
+    {
+      "flag": "--one-file-system, --mount, --xdev",
+      "i18n": {
+        "en": "By default, fd will traverse the file system tree as far as other options dictate. With this flag, fd ensures that it does not descend into a different file system than the one it started in. Comparable to the -mount or -xdev filters of find(1)."
+      }
+    },
+    {
+      "flag": "-h, --help",
+      "i18n": {
+        "en": "Print help information."
+      }
+    },
+    {
+      "flag": "-V, --version",
+      "i18n": {
+        "en": "Print version information."
+      }
+    },
+    {
+      "flag": "-d, --max-depth",
+      "i18n": {
+        "en": "Limit directory traversal to at most d levels of depth. By default, there is no limit on the search depth."
+      }
+    },
+    {
+      "flag": "--min-depth",
+      "i18n": {
+        "en": "Only show search results starting at the given depth. See also: '--max-depth' and '--exact-depth'."
+      }
+    },
+    {
+      "flag": "--exact-depth",
+      "i18n": {
+        "en": "Only show search results at the exact given depth. This is an alias for '--min-depth <depth> --max-depth <depth>'."
+      }
+    },
+    {
+      "flag": "--prune",
+      "i18n": {
+        "en": "Do not traverse into matching directories."
+      }
+    },
+    {
+      "flag": "-t, --type",
+      "i18n": {
+        "en": "Filter search by type:"
+      }
+    },
+    {
+      "flag": "-e, --extension",
+      "i18n": {
+        "en": "Filter search results by file extension ext.  This option can be used repeatedly to allow for multiple possible file extensions."
+      }
+    },
+    {
+      "flag": "-E, --exclude",
+      "i18n": {
+        "en": "Exclude files/directories that match the given glob pattern. This overrides any other ignore logic.  Multiple exclude patterns can be specified.  Examples: --exclude '*.pyc' --exclude node_modules"
+      }
+    },
+    {
+      "flag": "--ignore-file",
+      "i18n": {
+        "en": "Add a custom ignore-file in '.gitignore' format.  These files have a low precedence."
+      }
+    },
+    {
+      "flag": "-c, --color",
+      "i18n": {
+        "en": "Declare when to colorize search results:"
+      }
+    },
+    {
+      "flag": "--hyperlink",
+      "i18n": {
+        "en": "Specify whether the output should use terminal escape codes to indicate a hyperlink to a file url pointing to the path."
+      }
+    },
+    {
+      "flag": "-j, --threads",
+      "i18n": {
+        "en": "Set number of threads to use for searching & executing (default: number of available CPU cores)."
+      }
+    },
+    {
+      "flag": "-S, --size",
+      "i18n": {
+        "en": "Limit results based on the size of files using the format <+-><NUM><UNIT>"
+      }
+    },
+    {
+      "flag": "--changed-within",
+      "i18n": {
+        "en": "Filter results based on the file modification time.  Files with modification timestamps greater than the argument will be returned.  The argument can be provided as a duration (10h, 1d, 35min) or as a specific point in time as full RFC3339 format with time zone, as a date or datetime in the local time zone (YYYY-MM-DD or YYYY-MM-DD HH:MM:SS), or as the prefix '@' followed by the number of seconds since the Unix epoch (@[0-9]+).  --change-newer-than, --newer or --changed-after can be used as aliases."
+      }
+    },
+    {
+      "flag": "--changed-before",
+      "i18n": {
+        "en": "Filter results based on the file modification time.  Files with modification timestamps less than the argument will be returned. The argument can be provided as a duration (10h, 1d, 35min) or as a specific point in time as full RFC3339 format with time zone, as a date or datetime in the local time zone (YYYY-MM-DD or YYYY-MM-DD HH:MM:SS), or as the prefix '@' followed by the number of seconds since the Unix epoch (@[0-9]+). --change-older-than or --older can be used as aliases."
+      }
+    },
+    {
+      "flag": "-o, --owner",
+      "i18n": {
+        "en": "Filter files by their user and/or group. Format: [(user|uid)][:(group|gid)]. Either side is optional. Precede either side with a '!' to exclude files instead."
+      }
+    },
+    {
+      "flag": "--base-directory",
+      "i18n": {
+        "en": "Change the current working directory of fd to the provided path. This means that search results will be shown with respect to the given base path. Note that relative paths which are passed to fd via the positional path argument or the --search-path option will also be resolved relative to this directory."
+      }
+    },
+    {
+      "flag": "--path-separator",
+      "i18n": {
+        "en": "Set the path separator to use when printing file paths. The default is the OS-specific separator ('/' on Unix, '\\' on Windows)."
+      }
+    },
+    {
+      "flag": "--search-path",
+      "i18n": {
+        "en": "Provide paths to search as an alternative to the positional path argument. Changes the usage to 'fd [FLAGS/OPTIONS] --search-path PATH --search-path PATH2 [PATTERN]'"
+      }
+    },
+    {
+      "flag": "--format",
+      "i18n": {
+        "en": "Specify a template string that is used for printing a line for each file found."
+      }
+    },
+    {
+      "flag": "-x, --exec",
+      "i18n": {
+        "en": "Execute command for each search result in parallel (use --threads=1 for sequential command execution)."
+      }
+    },
+    {
+      "flag": "-X, --exec-batch",
+      "i18n": {
+        "en": "Execute command once, with all search results as arguments."
+      }
+    },
+    {
+      "flag": "--batch-size",
+      "i18n": {
+        "en": "Maximum number of arguments to pass to the command given with -X. If the number of results is greater than the given size, the command given with -X is run again with remaining arguments. A batch size of zero means there is no limit (default), but note that batching might still happen due to OS restrictions on the maximum length of command lines."
+      }
+    }
+  ]
+}

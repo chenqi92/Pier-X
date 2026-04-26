@@ -305,20 +305,37 @@ export function useDbCredentialFlow(opts: UseDbCredentialFlowOpts): DbCredential
   const activeCredId = adapter.readActiveCredId(tab);
   const tabPassword = adapter.readPassword(tab);
   useEffect(() => {
+    // eslint-disable-next-line no-console
+    console.log("[db-flow] effect fire", {
+      kind,
+      activeCredId,
+      savedIndex,
+      hasSsh,
+      hasLiveState,
+      tabHost,
+      tabPassword: tabPassword ? "(set)" : "(empty)",
+      browseTrigger,
+    });
     if (!hasSsh || !activeCredId || savedIndex === null) {
       // No work to do — drop any stale click-driven UI state so a
       // pending spinner doesn't hang forever.
+      // eslint-disable-next-line no-console
+      console.log("[db-flow] guard: no ssh / no cred / no index");
       setActivating(null);
       setConnectingStep(null);
       return;
     }
     if (hasLiveState) {
       // Already connected — nothing for the splash to do.
+      // eslint-disable-next-line no-console
+      console.log("[db-flow] guard: already has live state");
       setActivating(null);
       setConnectingStep(null);
       return;
     }
     if (!tabHost.trim()) {
+      // eslint-disable-next-line no-console
+      console.log("[db-flow] guard: tabHost empty");
       setActivating(null);
       setConnectingStep(null);
       return;
@@ -327,6 +344,8 @@ export function useDbCredentialFlow(opts: UseDbCredentialFlowOpts): DbCredential
     const myGen = ++browseGenRef.current;
     let cancelled = false;
     const isCurrent = () => !cancelled && browseGenRef.current === myGen;
+    // eslint-disable-next-line no-console
+    console.log("[db-flow] async start", { gen: myGen });
 
     void (async () => {
       try {
@@ -334,7 +353,14 @@ export function useDbCredentialFlow(opts: UseDbCredentialFlowOpts): DbCredential
         if (!effectivePw) {
           if (isCurrent()) setConnectingStep(t("Resolving saved password…"));
           try {
+            // eslint-disable-next-line no-console
+            console.log("[db-flow] dbCredResolve…");
             const resolved = await cmd.dbCredResolve(savedIndex, activeCredId);
+            // eslint-disable-next-line no-console
+            console.log("[db-flow] dbCredResolve ok", {
+              hasPassword: resolved.credential.hasPassword,
+              gotPw: !!resolved.password,
+            });
             if (!isCurrent()) return;
             effectivePw = resolved.password ?? "";
             if (effectivePw) {
@@ -347,7 +373,9 @@ export function useDbCredentialFlow(opts: UseDbCredentialFlowOpts): DbCredential
               setTimeout(() => passwordInputRef.current?.focus(), 0);
               return;
             }
-          } catch {
+          } catch (resolveErr) {
+            // eslint-disable-next-line no-console
+            console.log("[db-flow] dbCredResolve threw", resolveErr);
             if (!isCurrent()) return;
             setError(t("Saved password unavailable. Enter it manually or update the keyring."));
             setTimeout(() => passwordInputRef.current?.focus(), 0);
@@ -358,13 +386,28 @@ export function useDbCredentialFlow(opts: UseDbCredentialFlowOpts): DbCredential
         setConnectingStep(
           hasSsh ? t("Opening SSH tunnel and querying…") : t("Connecting…"),
         );
+        // eslint-disable-next-line no-console
+        console.log("[db-flow] calling panel browse()…");
         await browse(effectivePw);
+        // eslint-disable-next-line no-console
+        console.log("[db-flow] panel browse() resolved");
       } catch (e) {
+        // eslint-disable-next-line no-console
+        console.log("[db-flow] async outer catch", e);
         if (isCurrent()) setError(formatError(e));
       } finally {
+        // eslint-disable-next-line no-console
+        console.log("[db-flow] async finally", {
+          gen: myGen,
+          isCurrent: isCurrent(),
+        });
+        // Clear the spinner — but leave `connectingStep` in place so
+        // a silent failure (no exception, no `state` flip) is visible
+        // in the splash footer instead of looking like a no-op. The
+        // step text is reset on the next `activateCredential` click
+        // and on the early-return guards above.
         if (isCurrent()) {
           setActivating(null);
-          setConnectingStep(null);
         }
       }
     })();

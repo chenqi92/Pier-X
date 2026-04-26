@@ -31,6 +31,7 @@
 pub mod completions;
 pub mod emulator;
 pub mod history;
+pub mod library;
 pub mod man;
 pub mod pty;
 pub mod session;
@@ -38,7 +39,8 @@ pub mod smart;
 pub mod ssh_watcher;
 pub mod validate;
 
-pub use completions::{complete, Completion, CompletionKind};
+pub use completions::{complete, complete_with_library, Completion, CompletionKind};
+pub use library::{CommandPack, Library, OptionEntry, SubcommandEntry, SCHEMA_VERSION};
 pub use emulator::{Cell, Color, VtEmulator};
 pub use history::{
     append as history_append, clear as history_clear, is_sensitive, load as history_load,

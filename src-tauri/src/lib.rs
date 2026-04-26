@@ -39,8 +39,9 @@ use ssh_cred_cache::{SshCredCache, TargetKey};
 
 mod terminal_smart;
 use terminal_smart::{
-    terminal_completions, terminal_history_clear, terminal_history_load, terminal_history_push,
-    terminal_man_synopsis, terminal_validate_command,
+    completion_library_install_pack, completion_library_list, completion_library_reload,
+    completion_library_remove_pack, terminal_completions, terminal_history_clear,
+    terminal_history_load, terminal_history_push, terminal_man_synopsis, terminal_validate_command,
 };
 
 struct AppState {
@@ -7490,6 +7491,28 @@ pub fn run() {
                 }
             }
 
+            // Resolve the user-pack directory for the smart-mode
+            // command library and seed the live library cell.
+            // Bundled packs are read from the binary; user packs
+            // live alongside everything else in app_data_dir.
+            // Failure to resolve the dir means user packs are
+            // disabled this session — the bundled set still works.
+            let pack_dir = app
+                .path()
+                .app_data_dir()
+                .ok()
+                .map(|d| d.join("completions").join("packs"));
+            if let Some(dir) = &pack_dir {
+                if let Err(e) = std::fs::create_dir_all(dir) {
+                    pier_core::logging::write_event(
+                        "WARN",
+                        "completions.library",
+                        &format!("could not create pack dir {}: {}", dir.display(), e),
+                    );
+                }
+            }
+            terminal_smart::init_user_pack_dir(pack_dir);
+
             // Initialise the ssh-mux wrapper + auto-generated config.
             // Failure to set this up is non-fatal — the worst case is
             // we don't get ControlMaster multiplexing for terminal-side
@@ -7656,6 +7679,10 @@ pub fn run() {
             terminal_history_load,
             terminal_history_push,
             terminal_history_clear,
+            completion_library_list,
+            completion_library_reload,
+            completion_library_install_pack,
+            completion_library_remove_pack,
             postgres_browse,
             postgres_execute,
             docker_overview,

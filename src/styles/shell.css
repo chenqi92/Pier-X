@@ -2142,6 +2142,24 @@ button,
   flex-direction: column;
   gap: var(--sp-0-5);
 }
+/* Library-driven description shown to the right of the row label —
+ * the fish/warp pattern of seeing the command + a one-line summary
+ * inline. Pier-X tokens drive the muted look; truncates with an
+ * ellipsis when the description outgrows the popover width.
+ *
+ * Wider max-width than `.completion-popover-hint` because library
+ * descriptions are full English/Chinese sentences rather than file
+ * paths; the popover bumps to 480px when any row uses this slot. */
+.completion-popover-desc {
+  flex: 1;
+  margin-left: var(--sp-2);
+  color: var(--muted);
+  font-size: var(--size-small);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  text-align: right;
+}
 
 /* M6: man-page popover. Reuses the standard `.popover` chrome and
  * `.popover-section` heading; we only need to lay out the three

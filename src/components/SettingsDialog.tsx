@@ -11,6 +11,7 @@ import {
   Lock,
   Monitor,
   Moon,
+  RefreshCw,
   Search,
   Server,
   Settings as SettingsIcon,
@@ -858,6 +859,201 @@ function EditorPanel() {
 //   2. Secret-scan patterns — user-defined regex patterns to flag.
 //      Storage-only for now (no enforcement) — wired so the future
 //      pre-commit / paste guard can read them straight away.
+/**
+ * Settings → Terminal → Command library.
+ *
+ * Renders the loaded packs (bundled + user) and exposes
+ * Reload / Remove actions. Online update (Phase E) lands later
+ * — for now the loader picks up files dropped into the user
+ * pack dir on disk; "Reload" forces a re-scan.
+ *
+ * The list is read-only when bundled; user packs get a Trash
+ * button per row. Source pill colors: bundled = accent, auto-
+ * imported = muted, user = positive.
+ */
+function CommandLibraryPanel() {
+  const { t } = useI18n();
+  const [snapshot, setSnapshot] = useState<{
+    entries: Array<{
+      command: string;
+      toolVersion: string;
+      source: string;
+      importMethod: string;
+      importDate: string;
+      subcommandCount: number;
+      optionCount: number;
+      locales: string[];
+    }>;
+    userDir: string;
+  } | null>(null);
+  const [busy, setBusy] = useState(false);
+
+  const refresh = useCallback(async () => {
+    try {
+      const next = await import("../lib/terminalSmart").then((m) =>
+        m.completionLibraryList(),
+      );
+      setSnapshot(next);
+    } catch (e) {
+      toast.error(`${t("Library list failed")}: ${String(e)}`);
+    }
+  }, [t]);
+
+  useEffect(() => {
+    void refresh();
+  }, [refresh]);
+
+  async function reload() {
+    setBusy(true);
+    try {
+      const m = await import("../lib/terminalSmart");
+      const next = await m.completionLibraryReload();
+      setSnapshot(next);
+      toast.success(t("Library reloaded"));
+    } catch (e) {
+      toast.error(`${t("Library reload failed")}: ${String(e)}`);
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function remove(command: string) {
+    setBusy(true);
+    try {
+      const m = await import("../lib/terminalSmart");
+      const next = await m.completionLibraryRemovePack(command);
+      setSnapshot(next);
+    } catch (e) {
+      toast.error(`${t("Remove failed")}: ${String(e)}`);
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  const entries = snapshot?.entries ?? [];
+  const totalSubs = entries.reduce((acc, e) => acc + e.subcommandCount, 0);
+  const zhCovered = entries.filter((e) =>
+    e.locales.some((l) => l === "zh-CN" || l.startsWith("zh-")),
+  ).length;
+
+  return (
+    <>
+      <SettingRow
+        label={t("Installed packs")}
+        description={t(
+          "Bundled + user-supplied command packs feed the Tab completion popover. Drop importer-generated JSON files into the directory below and click Reload, or remove user packs from the table.",
+        )}
+      >
+        <button
+          type="button"
+          className="btn is-ghost is-compact"
+          disabled={busy}
+          onClick={() => void reload()}
+        >
+          <RefreshCw size={10} /> {busy ? t("Reloading...") : t("Reload")}
+        </button>
+      </SettingRow>
+
+      <div
+        className="settings__row-desc mono"
+        style={{ marginBottom: "var(--sp-2)", fontSize: "var(--size-small)" }}
+      >
+        {t("{count} packs · {subs} subcommands · zh coverage {zh}/{total}", {
+          count: entries.length,
+          subs: totalSubs,
+          zh: zhCovered,
+          total: entries.length,
+        })}
+      </div>
+
+      <div
+        style={{
+          border: "1px solid var(--line)",
+          borderRadius: "var(--radius-sm)",
+          background: "var(--surface-2)",
+          overflow: "hidden",
+        }}
+      >
+        <table className="dk-table" style={{ margin: 0, width: "100%" }}>
+          <thead>
+            <tr>
+              <th style={{ width: 140 }}>{t("Command")}</th>
+              <th style={{ width: 90 }}>{t("Version")}</th>
+              <th style={{ width: 110 }}>{t("Source")}</th>
+              <th style={{ width: 90, textAlign: "right" }}>{t("Subcmds")}</th>
+              <th style={{ width: 70, textAlign: "right" }}>{t("Flags")}</th>
+              <th>{t("Locales")}</th>
+              <th style={{ width: 60 }} />
+            </tr>
+          </thead>
+          <tbody>
+            {entries.length === 0 && (
+              <tr>
+                <td
+                  colSpan={7}
+                  className="text-muted"
+                  style={{ padding: "var(--sp-3)", textAlign: "center" }}
+                >
+                  {t("No packs loaded.")}
+                </td>
+              </tr>
+            )}
+            {entries.map((e) => {
+              const isUser = e.source === "user" || e.source === "auto-imported";
+              const sourceColor =
+                e.source === "bundled-seed"
+                  ? "var(--accent)"
+                  : e.source === "user"
+                    ? "var(--pos)"
+                    : "var(--muted)";
+              return (
+                <tr key={e.command}>
+                  <td className="mono">
+                    <strong>{e.command}</strong>
+                  </td>
+                  <td className="mono text-muted">{e.toolVersion || "—"}</td>
+                  <td className="mono" style={{ color: sourceColor }}>
+                    {e.source}
+                  </td>
+                  <td className="mono" style={{ textAlign: "right" }}>
+                    {e.subcommandCount}
+                  </td>
+                  <td className="mono" style={{ textAlign: "right" }}>
+                    {e.optionCount}
+                  </td>
+                  <td className="mono text-muted">{e.locales.join(", ") || "—"}</td>
+                  <td style={{ textAlign: "right" }}>
+                    {isUser && (
+                      <button
+                        type="button"
+                        className="mini-btn"
+                        title={t("Remove pack")}
+                        disabled={busy}
+                        onClick={() => void remove(e.command)}
+                      >
+                        <Trash2 size={11} />
+                      </button>
+                    )}
+                  </td>
+                </tr>
+              );
+            })}
+          </tbody>
+        </table>
+      </div>
+
+      {snapshot?.userDir && (
+        <div
+          className="settings__row-desc mono"
+          style={{ marginTop: "var(--sp-2)", fontSize: "var(--size-small)" }}
+        >
+          {t("User pack directory")}: {snapshot.userDir}
+        </div>
+      )}
+    </>
+  );
+}
+
 function PrivacyPanel() {
   const { t } = useI18n();
   const settings = useSettingsStore();
@@ -1778,6 +1974,9 @@ export default function SettingsDialog({
                     onChange={settings.setTerminalHistoryPersist}
                   />
                 </SettingRow>
+
+                <SectionTitle>{t("Command library")}</SectionTitle>
+                <CommandLibraryPanel />
 
                 <div className="settings__row-desc" style={{ marginTop: "var(--sp-3)" }}>
                   {t("Per-shell args / working dir / env vars are configured per profile in Settings → Profiles.")}

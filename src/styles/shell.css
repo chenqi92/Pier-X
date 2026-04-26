@@ -2224,7 +2224,14 @@ button,
 .terminal-segment { user-select: text; }
 .terminal-screen ::selection { background: var(--selection-bg); color: var(--selection-fg); }
 
-.terminal-segment { display: inline; }
+.terminal-segment {
+  display: inline;
+  /* WebKit paints ::selection over the font's natural cell (~1.2em),
+   * not the row's full line-box. Padding extends the inline paint box
+   * so selection fills the whole row vertically — without this,
+   * adjacent selected rows leave ~3px gaps that read as row dividers. */
+  padding-block: calc((var(--terminal-row-h, calc(13px * 1.45)) - 1.2em) / 2);
+}
 .terminal-segment--filler { color: transparent; }
 .terminal-segment--cursor { background: var(--accent); color: var(--accent-ink); }
 .terminal-segment--cursor-beam { border-left: 2px solid var(--accent); }

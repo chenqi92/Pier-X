@@ -33,10 +33,16 @@ type PersistedShape = {
 // connections keep `sshSavedConnectionIndex`; the backend pulls the
 // actual password from the OS keyring on reconnect.
 function scrubRuntimeFields(tab: TabState): TabState {
-  return {
+  const base: TabState = {
     ...tab,
     terminalSessionId: null,
     sshPassword: "",
+    // Nested-ssh state is purely runtime — set by the SSH watcher
+    // when it sees an `ssh` child inside an existing PTY. After a
+    // restart there is no live PTY, so any persisted value is by
+    // definition stale. The watcher repopulates as soon as the
+    // user types a fresh `ssh` invocation.
+    nestedSshTarget: null,
     redisPassword: "",
     redisTunnelId: null,
     redisTunnelPort: null,
@@ -47,6 +53,39 @@ function scrubRuntimeFields(tab: TabState): TabState {
     pgTunnelId: null,
     pgTunnelPort: null,
   };
+
+  // For a local-backend tab the `ssh*` fields are NOT the tab's
+  // identity — they are whatever the SSH watcher last saw running
+  // inside the PTY before the previous session ended. After a
+  // restart there is no live ssh child, so leaving these fields
+  // populated tells `effectiveSshTarget(tab)` to return a real
+  // target, which causes the right-side Server Monitor / Firewall
+  // panels to fire a probe against credentials that are gone. The
+  // probe surfaces "SSH 认证被拒绝" before the user has done
+  // anything, with no path to recovery.
+  //
+  // The watcher repopulates these fields the moment the user runs
+  // `ssh user@host` in the freshly-spawned shell, so clearing them
+  // costs us nothing and removes the spurious error window.
+  //
+  // SSH-backend tabs are the opposite case: `sshHost`/`sshUser`/
+  // `sshSavedConnectionIndex` ARE the tab's identity (that's the
+  // connection the user explicitly opened). Keep those so the
+  // backend can re-establish the session via the saved profile +
+  // keychain on reconnect.
+  if (tab.backend === "local") {
+    return {
+      ...base,
+      sshHost: "",
+      sshPort: 22,
+      sshUser: "",
+      sshAuthMode: "password",
+      sshKeyPath: "",
+      sshSavedConnectionIndex: null,
+    };
+  }
+
+  return base;
 }
 
 function loadPersisted(): PersistedShape {

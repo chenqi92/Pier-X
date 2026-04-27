@@ -1246,6 +1246,28 @@ function GitPanelBody({ browserPath, isActive = true }: Props) {
   const [historyContextCommit, setHistoryContextCommit] = useState<GitGraphRowView | null>(null);
   const [historyPathSearchText, setHistoryPathSearchText] = useState("");
   const [historyPathSelection, setHistoryPathSelection] = useState<string[]>([]);
+  // historyPathSelectionState is called for every node on every render of
+  // the path tree. Keeping the linear scans inside it (`includes` +
+  // `some(startsWith)`) makes selection state O(n·m). Precompute a direct-
+  // match set and an ancestor-directory set once per selection change so
+  // each lookup is O(1).
+  const historyPathSelectionSet = useMemo(
+    () => new Set(historyPathSelection),
+    [historyPathSelection],
+  );
+  const historyPathAncestorSet = useMemo(() => {
+    const out = new Set<string>();
+    for (const p of historyPathSelection) {
+      let idx = p.lastIndexOf("/");
+      while (idx > 0) {
+        const prefix = p.slice(0, idx);
+        if (out.has(prefix)) break;
+        out.add(prefix);
+        idx = p.lastIndexOf("/", idx - 1);
+      }
+    }
+    return out;
+  }, [historyPathSelection]);
   const [historyPathExpanded, setHistoryPathExpanded] = useState<string[]>([]);
   const [historyBranchDialogOpen, setHistoryBranchDialogOpen] = useState(false);
   const [historyTagDialogOpen, setHistoryTagDialogOpen] = useState(false);
@@ -2127,10 +2149,8 @@ function GitPanelBody({ browserPath, isActive = true }: Props) {
   }
 
   function historyPathSelectionState(node: RepoPathTreeNode) {
-    if (historyPathSelection.includes(node.path)) return "selected";
-    if (node.kind === "directory" && historyPathSelection.some((path) => path.startsWith(`${node.path}/`))) {
-      return "partial";
-    }
+    if (historyPathSelectionSet.has(node.path)) return "selected";
+    if (node.kind === "directory" && historyPathAncestorSet.has(node.path)) return "partial";
     return "none";
   }
 

@@ -4549,6 +4549,246 @@ fn postgres_execute(
     Ok(map_postgres_query_result(result))
 }
 
+/// Dedicated DB connectivity probe. Opens the kind-specific client,
+/// runs the cheapest version-inspection query, returns the measured
+/// round-trip alongside the server version string. Used by the
+/// "Test" button in the New-connection dialog.
+#[derive(Debug, Clone, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+struct DbTestConnectionResult {
+    ok: bool,
+    elapsed_ms: u64,
+    server_version: String,
+}
+
+#[tauri::command]
+fn db_test_connection(
+    kind: String,
+    host: String,
+    port: u16,
+    user: String,
+    password: String,
+    database: Option<String>,
+) -> Result<DbTestConnectionResult, String> {
+    let host_trim = host.trim();
+    if host_trim.is_empty() {
+        return Err(String::from("Host must not be empty."));
+    }
+    let start = std::time::Instant::now();
+
+    match kind.as_str() {
+        "mysql" => {
+            let user_trim = user.trim();
+            if user_trim.is_empty() {
+                return Err(String::from("MySQL user must not be empty."));
+            }
+            let client = MysqlClient::connect_blocking(MysqlConfig {
+                host: host_trim.to_string(),
+                port: normalize_mysql_port(port),
+                user: user_trim.to_string(),
+                password,
+                database: database.filter(|v| !v.trim().is_empty()),
+            })
+            .map_err(|e| e.to_string())?;
+            let version = client
+                .execute_blocking("SELECT VERSION()")
+                .ok()
+                .and_then(|r| r.rows.into_iter().next())
+                .and_then(|row| row.into_iter().next())
+                .flatten()
+                .unwrap_or_default();
+            Ok(DbTestConnectionResult {
+                ok: true,
+                elapsed_ms: start.elapsed().as_millis() as u64,
+                server_version: version,
+            })
+        }
+        "postgres" => {
+            let user_trim = user.trim();
+            if user_trim.is_empty() {
+                return Err(String::from("PostgreSQL user must not be empty."));
+            }
+            let client = PostgresClient::connect_blocking(PostgresConfig {
+                host: host_trim.to_string(),
+                port: normalize_postgres_port(port),
+                user: user_trim.to_string(),
+                password,
+                database: database.filter(|v| !v.trim().is_empty()),
+            })
+            .map_err(|e| e.to_string())?;
+            let version = client
+                .execute_blocking("SELECT version()")
+                .ok()
+                .and_then(|r| r.rows.into_iter().next())
+                .and_then(|row| row.into_iter().next())
+                .flatten()
+                .unwrap_or_default();
+            Ok(DbTestConnectionResult {
+                ok: true,
+                elapsed_ms: start.elapsed().as_millis() as u64,
+                server_version: version,
+            })
+        }
+        "redis" => {
+            let client = RedisClient::connect_blocking(RedisConfig {
+                host: host_trim.to_string(),
+                port: normalize_redis_port(port),
+                db: 0,
+                username: {
+                    let u = user.trim();
+                    if u.is_empty() { None } else { Some(u.to_string()) }
+                },
+                password: if password.is_empty() { None } else { Some(password) },
+            })
+            .map_err(|e| e.to_string())?;
+            client.ping_blocking().map_err(|e| e.to_string())?;
+            let server_info = client.info_blocking("server").unwrap_or_default();
+            let version = server_info
+                .get("redis_version")
+                .or_else(|| server_info.get("valkey_version"))
+                .cloned()
+                .unwrap_or_default();
+            Ok(DbTestConnectionResult {
+                ok: true,
+                elapsed_ms: start.elapsed().as_millis() as u64,
+                server_version: version,
+            })
+        }
+        _ => Err(format!("Unsupported kind: {kind}")),
+    }
+}
+
+/// Summary view of a single file inside `~/.ssh/`. Returned by
+/// `ssh_key_list` — consumed by the Settings → SSH keys pane.
+#[derive(Debug, Clone, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+struct SshKeyEntry {
+    name: String,
+    path: String,
+    kind: String,
+    size: u64,
+    modified: Option<u64>,
+    comment: String,
+    algorithm: String,
+}
+
+fn resolve_ssh_dir() -> Option<PathBuf> {
+    let home = std::env::var("HOME")
+        .or_else(|_| std::env::var("USERPROFILE"))
+        .ok()
+        .or_else(|| {
+            let drive = std::env::var("HOMEDRIVE").ok()?;
+            let path = std::env::var("HOMEPATH").ok()?;
+            Some(format!("{drive}{path}"))
+        })?;
+    Some(PathBuf::from(home).join(".ssh"))
+}
+
+fn classify_ssh_file(name: &str, first_line: &str) -> (String, String, String) {
+    if name == "config" {
+        return ("config".into(), String::new(), String::new());
+    }
+    if name == "known_hosts" || name.starts_with("known_hosts") {
+        return ("known_hosts".into(), String::new(), String::new());
+    }
+    if name == "authorized_keys" {
+        return ("authorized_keys".into(), String::new(), String::new());
+    }
+    let trimmed = first_line.trim();
+    if trimmed.starts_with("-----BEGIN") {
+        return ("private".into(), String::new(), String::new());
+    }
+    if trimmed.starts_with("ssh-rsa ")
+        || trimmed.starts_with("ssh-ed25519 ")
+        || trimmed.starts_with("ssh-dss ")
+        || trimmed.starts_with("ecdsa-sha2-")
+        || trimmed.starts_with("sk-ssh-ed25519@openssh.com ")
+        || trimmed.starts_with("sk-ecdsa-sha2-nistp256@openssh.com ")
+    {
+        let mut parts = trimmed.splitn(3, ' ');
+        let alg = parts.next().unwrap_or("").to_string();
+        let _body = parts.next().unwrap_or("");
+        let comment = parts.next().unwrap_or("").trim().to_string();
+        return ("public".into(), alg, comment);
+    }
+    ("other".into(), String::new(), String::new())
+}
+
+/// Enumerate the local `~/.ssh/` directory. Only reads the first
+/// 1 KB of each file (enough to classify public keys + detect PEM
+/// armor) to keep the command cheap on large `known_hosts`.
+#[tauri::command]
+fn ssh_key_list() -> Result<Vec<SshKeyEntry>, String> {
+    let ssh_dir = match resolve_ssh_dir() {
+        Some(dir) => dir,
+        None => return Ok(Vec::new()),
+    };
+    if !ssh_dir.is_dir() {
+        return Ok(Vec::new());
+    }
+
+    let read = match fs::read_dir(&ssh_dir) {
+        Ok(rd) => rd,
+        Err(err) => return Err(format!("Cannot read {}: {err}", ssh_dir.display())),
+    };
+
+    let mut out: Vec<SshKeyEntry> = Vec::new();
+    for entry in read.flatten() {
+        let path = entry.path();
+        if !path.is_file() {
+            continue;
+        }
+        let name = match path.file_name().and_then(|s| s.to_str()) {
+            Some(n) => n.to_string(),
+            None => continue,
+        };
+        let metadata = match entry.metadata() {
+            Ok(m) => m,
+            Err(_) => continue,
+        };
+        let size = metadata.len();
+        let modified = metadata
+            .modified()
+            .ok()
+            .and_then(|t| t.duration_since(UNIX_EPOCH).ok())
+            .map(|d| d.as_secs());
+
+        let first_line = fs::read(&path)
+            .ok()
+            .map(|bytes| {
+                let slice = &bytes[..bytes.len().min(1024)];
+                let text = String::from_utf8_lossy(slice);
+                text.lines().next().unwrap_or("").to_string()
+            })
+            .unwrap_or_default();
+
+        let (kind, algorithm, comment) = classify_ssh_file(&name, &first_line);
+        out.push(SshKeyEntry {
+            name,
+            path: path.to_string_lossy().into_owned(),
+            kind,
+            size,
+            modified,
+            comment,
+            algorithm,
+        });
+    }
+    out.sort_by(|a, b| {
+        let rank = |k: &str| match k {
+            "public" => 0,
+            "private" => 1,
+            "authorized_keys" => 2,
+            "known_hosts" => 3,
+            "config" => 4,
+            _ => 5,
+        };
+        rank(&a.kind)
+            .cmp(&rank(&b.kind))
+            .then_with(|| a.name.cmp(&b.name))
+    });
+    Ok(out)
+}
+
 // ── Docker ──────────────────────────────────────────────────────────
 
 #[tauri::command]
@@ -9502,6 +9742,8 @@ pub fn run() {
             completion_library_remove_pack,
             postgres_browse,
             postgres_execute,
+            db_test_connection,
+            ssh_key_list,
             docker_overview,
             docker_images,
             docker_volumes,

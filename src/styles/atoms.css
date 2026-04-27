@@ -194,6 +194,16 @@
   font-size: var(--size-small);
 }
 
+/* Generic spin utility — apply to any SVG icon for a steady rotation. */
+.spin {
+  animation: spin 0.9s linear infinite;
+  transform-origin: 50% 50%;
+}
+@keyframes spin {
+  from { transform: rotate(0deg); }
+  to { transform: rotate(360deg); }
+}
+
 /* ─── DB connection row (used by every DB/remote panel) ──── */
 .db-conn-row {
   display: flex;

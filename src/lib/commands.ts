@@ -1012,6 +1012,19 @@ export type VendorScriptDescriptor = {
    *  vs. upstream `docker-ce`). The dialog warns the user to uninstall
    *  the distro package first. */
   conflictsWithApt: boolean;
+  /** `true` when the descriptor declares cleanup snippets. The
+   *  uninstall dialog uses this to decide whether to show the
+   *  "remove upstream source" checkbox. */
+  hasCleanupScripts: boolean;
+};
+
+/** Major-version variant on a multi-version descriptor (e.g. OpenJDK
+ *  8/11/17/21 on Java). Empty list = single-version software. */
+export type SoftwareVersionVariant = {
+  /** Stable id passed back to the install command as `variantKey`. */
+  key: string;
+  /** Human label rendered in the variant dropdown. */
+  label: string;
 };
 
 /** One row in the software registry. Order is the rendering order. */
@@ -1032,6 +1045,19 @@ export type SoftwareDescriptor = {
    *  path. The panel renders the install button as a split-button
    *  (default = apt path, dropdown = "通过 {label}") in this case. */
   vendorScript: VendorScriptDescriptor | null;
+  /** Major-version variants. Non-empty list switches the install
+   *  flow to "pick a variant first, then install" (e.g. Java →
+   *  OpenJDK 8/11/17/21). Empty for single-version software. */
+  versionVariants: SoftwareVersionVariant[];
+  /** Common config files declared on the descriptor. The details
+   *  pane filters these through `test -e` before display. */
+  configPaths: string[];
+  /** Default ports the software listens on with stock config. */
+  defaultPorts: number[];
+  /** App-store category id (`database` / `web` / `runtime` / …).
+   *  Empty string = "其它" / Other. The panel maps these onto
+   *  localized section titles. */
+  category: string;
 };
 
 export type HostPackageEnv = {
@@ -1121,6 +1147,10 @@ export const softwareInstallRemote = (
     /** Pin to a specific package-manager version. `undefined` =
      *  install whatever the manager picks (the registry's default). */
     version?: string | null;
+    /** Pick a major-version variant for descriptors that declare any
+     *  (e.g. `"openjdk-21"` for Java). `undefined` / `null` = the
+     *  descriptor's default install_packages. */
+    variantKey?: string | null;
     /** v2: when `true`, route through the descriptor's
      *  `vendorScript` channel (curl + run the official installer)
      *  instead of the default apt / dnf / … path. The panel only
@@ -1133,6 +1163,7 @@ export const softwareInstallRemote = (
   invoke<SoftwareInstallReport>("software_install_remote", {
     ...params,
     version: params.version ?? null,
+    variantKey: params.variantKey ?? null,
   });
 
 export const softwareUpdateRemote = (
@@ -1143,20 +1174,188 @@ export const softwareUpdateRemote = (
     /** Pin to a specific package-manager version. `undefined` =
      *  upgrade to whatever the manager has as latest. */
     version?: string | null;
+    /** See `softwareInstallRemote.variantKey`. */
+    variantKey?: string | null;
   },
 ) =>
   invoke<SoftwareInstallReport>("software_update_remote", {
     ...params,
     version: params.version ?? null,
+    variantKey: params.variantKey ?? null,
   });
 
 /** Enumerate package-manager-visible versions for `packageId` on the
  *  remote host, freshest first. Empty array on unsupported distros and
  *  on pacman (Arch repos don't carry historical versions). The
- *  software panel caches the result for 5 min per host+package. */
+ *  software panel caches the result for 5 min per host+package.
+ *
+ *  Pass `variantKey` to query the variant's package list (e.g. asking
+ *  for OpenJDK 21's apt versions instead of the descriptor's default). */
 export const softwareVersionsRemote = (
+  params: SshParams & { packageId: string; variantKey?: string | null },
+) =>
+  invoke<string[]>("software_versions_remote", {
+    ...params,
+    variantKey: params.variantKey ?? null,
+  });
+
+/** Per-row "expand" details. Loaded lazily — the panel calls this only
+ *  when the user clicks the disclosure on a row, so the slow candidate-
+ *  version + ss probes never block the panel's first paint. */
+export type SoftwarePackageDetail = {
+  packageId: string;
+  installed: boolean;
+  installPaths: string[];
+  configPaths: string[];
+  defaultPorts: number[];
+  listeningPorts: number[];
+  /** `false` when the `ss -ltn` probe failed (host has no `ss`, etc.).
+   *  In that case `listeningPorts` is unreliable and the UI hides the
+   *  "live ports" line. */
+  listenProbeOk: boolean;
+  serviceUnit: string | null;
+  /** Candidate version from the package manager's metadata cache
+   *  (apt-cache policy / dnf info / …). `null` on unsupported distro
+   *  or when the query produced nothing parseable. */
+  latestVersion: string | null;
+  installedVersion: string | null;
+  variants: SoftwarePackageVariantStatus[];
+};
+
+export type SoftwarePackageVariantStatus = {
+  key: string;
+  label: string;
+  installed: boolean;
+  installedVersion: string | null;
+};
+
+export const softwareDetailsRemote = (
   params: SshParams & { packageId: string },
-) => invoke<string[]>("software_versions_remote", params);
+) => invoke<SoftwarePackageDetail>("software_details_remote", params);
+
+/** Synthesise the install command without running it. The row's
+ *  "复制安装命令" menu entry uses this so users who'd rather paste
+ *  into their own SSH session can audit + run the command manually. */
+export type InstallCommandPreview = {
+  packageId: string;
+  packageManager: string;
+  isRoot: boolean;
+  /** Just the package-manager command, no sudo wrapper. */
+  innerCommand: string;
+  /** Full `sudo -n sh -c '...' 2>&1` form pier-core would have run. */
+  wrappedCommand: string;
+};
+
+export const softwareInstallPreview = (
+  params: SshParams & {
+    packageId: string;
+    version?: string | null;
+    variantKey?: string | null;
+    isUpdate?: boolean;
+  },
+) =>
+  invoke<InstallCommandPreview>("software_install_preview", {
+    ...params,
+    version: params.version ?? null,
+    variantKey: params.variantKey ?? null,
+    isUpdate: params.isUpdate ?? false,
+  });
+
+/** Curated software bundle (e.g. "DevOps 基础"). The panel renders
+ *  these as one-click cards; clicking opens a confirm dialog and
+ *  installs the listed packages sequentially. */
+export type SoftwareBundle = {
+  id: string;
+  displayName: string;
+  description: string;
+  packageIds: string[];
+};
+
+export const softwareBundles = () =>
+  invoke<SoftwareBundle[]>("software_bundles");
+
+// ── Mirror switching (v2.3) ─────────────────────────────────────
+
+/** Stable id of one curated mirror — must match the backend enum. */
+export type MirrorId = "aliyun" | "tsinghua" | "ustc" | "huawei" | "tencent";
+
+export type MirrorChoice = {
+  id: MirrorId;
+  label: string;
+  /** Hostname used to rewrite Debian/Ubuntu apt sources. */
+  aptHost: string;
+  /** Hostname used to rewrite RHEL-family dnf repo files. */
+  dnfHost: string;
+  /** Hostname used to rewrite Alpine `/etc/apk/repositories`. */
+  apkHost: string | null;
+  /** Full URL prefix for pacman `Server = ...` lines. */
+  pacmanUrl: string | null;
+  /** Hostname used to rewrite openSUSE `/etc/zypp/repos.d/*.repo`. */
+  zypperHost: string | null;
+};
+
+export type MirrorState = {
+  /** Which manager the state applies to (`apt` / `dnf` / empty
+   *  when the host has no detected manager). */
+  packageManager: string;
+  /** Curated id when the detected hostname matches one of the
+   *  catalog entries. `null` for "unknown / official upstream". */
+  currentId: MirrorId | null;
+  /** First hostname found in the sources file. */
+  currentHost: string | null;
+  /** `true` when a `.pier-bak` companion exists on the host. The
+   *  panel uses this to gate the "restore" button. */
+  hasBackup: boolean;
+};
+
+export type MirrorActionStatus =
+  | "ok"
+  | "sudo-requires-password"
+  | "failed"
+  | "unsupported-manager";
+
+export type MirrorActionReport = {
+  status: MirrorActionStatus;
+  packageManager: string;
+  command: string;
+  exitCode: number;
+  outputTail: string;
+  /** Re-detected mirror state after the action — the panel uses
+   *  this to update the badge without a second round-trip. */
+  stateAfter: MirrorState;
+};
+
+export const softwareMirrorCatalog = () =>
+  invoke<MirrorChoice[]>("software_mirror_catalog");
+
+/** Filesystem path of the user-extras JSON. `null` when src-tauri
+ *  hasn't initialised one (e.g. the OS rejected app_config_dir
+ *  resolution). The UI surfaces this in the registry's footer so
+ *  users know where to drop custom entries. */
+export const softwareUserExtrasPath = () =>
+  invoke<string | null>("software_user_extras_path");
+
+/** Persistent software-panel preferences. Stored in the app config
+ *  dir as `software-prefs.json`. */
+export type SoftwarePreferences = {
+  preferredMirrorId: MirrorId | null;
+};
+
+export const softwarePreferencesGet = () =>
+  invoke<SoftwarePreferences>("software_preferences_get");
+
+export const softwarePreferencesSetMirror = (mirrorId: MirrorId | null) =>
+  invoke<SoftwarePreferences>("software_preferences_set_mirror", { mirrorId });
+
+export const softwareMirrorGet = (params: SshParams) =>
+  invoke<MirrorState>("software_mirror_get", params);
+
+export const softwareMirrorSet = (
+  params: SshParams & { mirrorId: MirrorId },
+) => invoke<MirrorActionReport>("software_mirror_set", params);
+
+export const softwareMirrorRestore = (params: SshParams) =>
+  invoke<MirrorActionReport>("software_mirror_restore", params);
 
 /** Subscribe to streaming install/update output. Returns the unlisten
  *  fn — call it on unmount. The handler is invoked with the typed
@@ -1214,6 +1413,11 @@ export type UninstallOptions = {
   purgeConfig: boolean;
   autoremove: boolean;
   removeDataDirs: boolean;
+  /** Run the descriptor's `vendor_script.cleanup_scripts` snippet
+   *  after the uninstall succeeds — drops upstream-source files
+   *  (e.g. `/etc/apt/sources.list.d/pgdg.list`). No-op when the
+   *  descriptor has no cleanup snippet for the host's manager. */
+  removeUpstreamSource: boolean;
 };
 
 export const softwareUninstallRemote = (

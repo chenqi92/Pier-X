@@ -52,7 +52,7 @@ pub use history::{
 pub use man::{man_synopsis, ManError, ManOption, ManSynopsis};
 pub use pty::{Pty, TerminalError};
 pub use session::{GridSnapshot, NotifyEvent, NotifyFn, PierTerminal};
-pub use smart::{inject_init, SmartShellInit};
+pub use smart::{inject_init, pwsh_init_script, remote_init_payload, SmartShellInit};
 pub use ssh_watcher::SshChildTarget;
 pub use validate::{validate_command, CommandKind};
 

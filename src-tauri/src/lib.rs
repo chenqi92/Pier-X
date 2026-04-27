@@ -11,6 +11,7 @@ use pier_core::services::nginx;
 use pier_core::services::postgres::{PostgresClient, PostgresConfig};
 use pier_core::services::redis::{RedisClient, RedisConfig};
 use pier_core::services::package_manager;
+use pier_core::services::package_mirror;
 use pier_core::services::server_monitor;
 use pier_core::services::sqlite::SqliteClient;
 use pier_core::services::sqlite_remote;
@@ -2311,6 +2312,19 @@ fn create_ssh_terminal_from_config(
     )
     .map_err(|error| error.to_string())?;
 
+    // Push a one-shot prompt-hook line into the remote shell so it
+    // starts emitting OSC 7 (cwd) and OSC 133 (prompt sentinels) on
+    // every subsequent prompt. Without this the smart Tab popover
+    // can't tell where the user has `cd`-ed and falls back to the
+    // SFTP root (usually $HOME) which isn't useful.
+    //
+    // Mirrors the wezterm / VTE `shell-integration.sh` pattern: a
+    // shell-detecting one-liner that wires up bash and zsh and is
+    // a silent no-op under fish/dash/sh. Sent with a leading space
+    // so `HISTCONTROL=ignorespace` (default in modern distros)
+    // skips it from history.
+    let _ = terminal.write(&pier_core::terminal::remote_init_payload());
+
     store_terminal_session(
         state,
         session_id,
@@ -4291,11 +4305,44 @@ fn terminal_completions_remote(
     /// `DirReader` that lists a remote directory through the cached
     /// SFTP client. Failures fold to an empty list — completion
     /// shows fewer rows but never errors out at the keyboard.
-    struct SftpDirReader(SftpClient);
+    ///
+    /// When the completer asks for `.` (no cwd known yet because the
+    /// remote shell hasn't reported OSC 7 / our prompt-hook hasn't
+    /// installed), we substitute the SFTP server's canonical home
+    /// — same behaviour as `pwd` over an interactive SFTP session.
+    /// We cache the answer per-completion-call to avoid round-trips
+    /// for every relative subdir typed at the same prefix.
+    struct SftpDirReader {
+        client: SftpClient,
+        // OnceCell would be cleaner but we don't have it imported and
+        // a Mutex<Option<...>> is fine for one-shot caching at this
+        // call rate. RefCell is `!Sync`; DirReader is called only
+        // from one thread at a time but the trait isn't restricted.
+        home_cache: std::sync::Mutex<Option<String>>,
+    }
+    impl SftpDirReader {
+        fn resolve(&self, dir: &Path) -> String {
+            let raw = dir.to_string_lossy();
+            if raw != "." {
+                return raw.into_owned();
+            }
+            // Only ever "." reaches here; consult / populate the cache.
+            let mut guard = self.home_cache.lock().unwrap_or_else(|p| p.into_inner());
+            if let Some(cached) = guard.as_ref() {
+                return cached.clone();
+            }
+            let resolved = self
+                .client
+                .canonicalize_blocking(".")
+                .unwrap_or_else(|_| ".".to_string());
+            *guard = Some(resolved.clone());
+            resolved
+        }
+    }
     impl DirReader for SftpDirReader {
         fn list(&self, dir: &Path) -> Vec<DirReadEntry> {
-            let path = dir.to_string_lossy();
-            let entries = match self.0.list_dir_blocking(&path) {
+            let path = self.resolve(dir);
+            let entries = match self.client.list_dir_blocking(&path) {
                 Ok(e) => e,
                 Err(_) => return Vec::new(),
             };
@@ -4314,7 +4361,10 @@ fn terminal_completions_remote(
     let lib = terminal_smart::completion_library_snapshot();
 
     let rows = if let Some(client) = sftp_client {
-        let reader = SftpDirReader(client);
+        let reader = SftpDirReader {
+            client,
+            home_cache: std::sync::Mutex::new(None),
+        };
         complete_with_library_using(&line, cursor, cwd_path, &lib, locale_str, &reader)
     } else {
         // No SFTP cached yet (tab still authenticating, mismatched
@@ -6003,6 +6053,29 @@ struct SoftwareDescriptorView {
     /// this is non-null. `None` = only the default apt / dnf / …
     /// path is offered.
     vendor_script: Option<VendorScriptDescriptorView>,
+    /// Major-version variants (e.g. OpenJDK 8/11/17/21). Empty for
+    /// single-version software. When non-empty, the panel renders a
+    /// variant picker before install and routes the user's choice
+    /// back through the install command's `variantKey` field.
+    version_variants: Vec<SoftwareVersionVariantView>,
+    /// Common config files declared on the descriptor — surfaced in
+    /// the row's expanded details pane (filtered through `test -e`
+    /// before display so stale entries never reach the UI).
+    config_paths: Vec<String>,
+    /// Default network ports this software listens on. Surfaced as
+    /// "default" alongside an `ss -ltn` probe in the details pane.
+    default_ports: Vec<u16>,
+    /// App-store category (`database` / `web` / `runtime` / …).
+    /// Drives the panel's section grouping. Empty = "其它".
+    category: String,
+}
+
+/// Static view of one [`package_manager::VersionVariant`] entry.
+#[derive(Serialize, Clone)]
+#[serde(rename_all = "camelCase")]
+struct SoftwareVersionVariantView {
+    key: String,
+    label: String,
 }
 
 /// View of [`package_manager::VendorScriptDescriptor`] — same fields,
@@ -6014,6 +6087,10 @@ struct VendorScriptDescriptorView {
     url: String,
     notes: String,
     conflicts_with_apt: bool,
+    /// `true` when the descriptor has any `cleanup_scripts` entries.
+    /// Drives whether the uninstall dialog renders the "remove
+    /// upstream source" checkbox.
+    has_cleanup_scripts: bool,
 }
 
 #[derive(Serialize, Clone)]
@@ -6039,6 +6116,34 @@ struct PackageStatusView {
 struct SoftwareProbeView {
     env: HostPackageEnvView,
     statuses: Vec<PackageStatusView>,
+}
+
+/// View of [`package_manager::PackageDetail`]. Lazy-loaded — the panel
+/// fetches this only when the user expands the row, so the slow
+/// candidate-version + ss probes don't block the first paint.
+#[derive(Serialize, Clone)]
+#[serde(rename_all = "camelCase")]
+struct SoftwarePackageDetailView {
+    package_id: String,
+    installed: bool,
+    install_paths: Vec<String>,
+    config_paths: Vec<String>,
+    default_ports: Vec<u16>,
+    listening_ports: Vec<u16>,
+    listen_probe_ok: bool,
+    service_unit: Option<String>,
+    latest_version: Option<String>,
+    installed_version: Option<String>,
+    variants: Vec<SoftwarePackageVariantStatusView>,
+}
+
+#[derive(Serialize, Clone)]
+#[serde(rename_all = "camelCase")]
+struct SoftwarePackageVariantStatusView {
+    key: String,
+    label: String,
+    installed: bool,
+    installed_version: Option<String>,
 }
 
 #[derive(Serialize, Clone)]
@@ -6197,7 +6302,19 @@ fn software_registry() -> Vec<SoftwareDescriptorView> {
                 url: v.url.to_string(),
                 notes: v.notes.to_string(),
                 conflicts_with_apt: v.conflicts_with_apt,
+                has_cleanup_scripts: !v.cleanup_scripts.is_empty(),
             }),
+            version_variants: d
+                .version_variants
+                .iter()
+                .map(|v| SoftwareVersionVariantView {
+                    key: v.key.to_string(),
+                    label: v.label.to_string(),
+                })
+                .collect(),
+            config_paths: d.config_paths.iter().map(|s| (*s).to_string()).collect(),
+            default_ports: d.default_ports.to_vec(),
+            category: d.category.to_string(),
         })
         .collect()
 }
@@ -6275,6 +6392,7 @@ async fn software_install_or_update_inner(
     install_id: String,
     enable_service: bool,
     version: Option<String>,
+    variant_key: Option<String>,
     is_update: bool,
     via_vendor_script: bool,
 ) -> Result<SoftwareInstallReportView, String> {
@@ -6309,12 +6427,14 @@ async fn software_install_or_update_inner(
             );
         };
         let version_ref = version.as_deref();
+        let variant_ref = variant_key.as_deref();
         let report = if is_update {
             package_manager::update_blocking(
                 &session,
                 &package_id,
                 enable_service,
                 version_ref,
+                variant_ref,
                 on_line,
                 Some(token_for_task.clone()),
             )
@@ -6332,6 +6452,7 @@ async fn software_install_or_update_inner(
                 &package_id,
                 enable_service,
                 version_ref,
+                variant_ref,
                 on_line,
                 Some(token_for_task.clone()),
             )
@@ -6417,6 +6538,7 @@ async fn software_install_remote(
     install_id: String,
     enable_service: bool,
     version: Option<String>,
+    variant_key: Option<String>,
     via_vendor_script: Option<bool>,
 ) -> Result<SoftwareInstallReportView, String> {
     // `via_vendor_script == Some(true)` routes through the descriptor's
@@ -6437,6 +6559,7 @@ async fn software_install_remote(
         install_id,
         enable_service,
         version,
+        variant_key,
         false,
         via_vendor_script.unwrap_or(false),
     )
@@ -6457,6 +6580,7 @@ async fn software_update_remote(
     install_id: String,
     enable_service: bool,
     version: Option<String>,
+    variant_key: Option<String>,
 ) -> Result<SoftwareInstallReportView, String> {
     software_install_or_update_inner(
         app,
@@ -6471,6 +6595,7 @@ async fn software_update_remote(
         install_id,
         enable_service,
         version,
+        variant_key,
         true,
         false,
     )
@@ -6492,6 +6617,7 @@ async fn software_versions_remote(
     key_path: String,
     saved_connection_index: Option<usize>,
     package_id: String,
+    variant_key: Option<String>,
 ) -> Result<Vec<String>, String> {
     tauri::async_runtime::spawn_blocking(move || {
         let state: tauri::State<'_, AppState> = app.state();
@@ -6505,11 +6631,438 @@ async fn software_versions_remote(
             &key_path,
             saved_connection_index,
         )?;
-        package_manager::available_versions_blocking(&session, &package_id)
-            .map_err(|e| e.to_string())
+        package_manager::available_versions_blocking(
+            &session,
+            &package_id,
+            variant_key.as_deref(),
+        )
+        .map_err(|e| e.to_string())
     })
     .await
     .map_err(|e| format!("software_versions_remote join: {e}"))?
+}
+
+/// Lazy details probe for the row's expand pane. Runs install-path,
+/// config-path existence, listening-port, candidate-version, and
+/// per-variant probes. Frontend invokes this only when the user clicks
+/// the disclosure so the panel's first paint is unaffected.
+#[tauri::command]
+async fn software_details_remote(
+    app: tauri::AppHandle,
+    host: String,
+    port: u16,
+    user: String,
+    auth_mode: String,
+    password: String,
+    key_path: String,
+    saved_connection_index: Option<usize>,
+    package_id: String,
+) -> Result<SoftwarePackageDetailView, String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        let state: tauri::State<'_, AppState> = app.state();
+        let session = get_or_open_ssh_session(
+            &state,
+            &host,
+            port,
+            &user,
+            &auth_mode,
+            &password,
+            &key_path,
+            saved_connection_index,
+        )?;
+        let detail = package_manager::probe_details_blocking(&session, &package_id)
+            .map_err(|e| e.to_string())?;
+        Ok::<_, String>(SoftwarePackageDetailView {
+            package_id: detail.package_id,
+            installed: detail.installed,
+            install_paths: detail.install_paths,
+            config_paths: detail.config_paths,
+            default_ports: detail.default_ports,
+            listening_ports: detail.listening_ports,
+            listen_probe_ok: detail.listen_probe_ok,
+            service_unit: detail.service_unit,
+            latest_version: detail.latest_version,
+            installed_version: detail.installed_version,
+            variants: detail
+                .variants
+                .into_iter()
+                .map(|v| SoftwarePackageVariantStatusView {
+                    key: v.key,
+                    label: v.label,
+                    installed: v.installed,
+                    installed_version: v.installed_version,
+                })
+                .collect(),
+        })
+    })
+    .await
+    .map_err(|e| format!("software_details_remote join: {e}"))?
+}
+
+// ── Bundles (v2.6) ─────────────────────────────────────────────────
+
+#[derive(Serialize, Clone)]
+#[serde(rename_all = "camelCase")]
+struct SoftwareBundleView {
+    id: String,
+    display_name: String,
+    description: String,
+    package_ids: Vec<String>,
+}
+
+/// Static catalog of curated bundles. Same shape every call; the
+/// frontend renders these as one-click cards above the registry list.
+#[tauri::command]
+fn software_bundles() -> Vec<SoftwareBundleView> {
+    package_manager::bundles()
+        .iter()
+        .map(|b| SoftwareBundleView {
+            id: b.id.to_string(),
+            display_name: b.display_name.to_string(),
+            description: b.description.to_string(),
+            package_ids: b.package_ids.iter().map(|s| (*s).to_string()).collect(),
+        })
+        .collect()
+}
+
+// ── Install-command preview (v2.5) ────────────────────────────────
+
+#[derive(Serialize, Clone)]
+#[serde(rename_all = "camelCase")]
+struct InstallCommandPreviewView {
+    package_id: String,
+    package_manager: String,
+    is_root: bool,
+    inner_command: String,
+    wrapped_command: String,
+}
+
+/// Synthesise the install command without running it. The panel
+/// uses this to feed the "复制安装命令" menu entry — users who
+/// don't want pier-x running sudo on their behalf can paste the
+/// printed command into their own SSH session.
+#[tauri::command]
+async fn software_install_preview(
+    app: tauri::AppHandle,
+    host: String,
+    port: u16,
+    user: String,
+    auth_mode: String,
+    password: String,
+    key_path: String,
+    saved_connection_index: Option<usize>,
+    package_id: String,
+    version: Option<String>,
+    variant_key: Option<String>,
+    is_update: bool,
+) -> Result<InstallCommandPreviewView, String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        let state: tauri::State<'_, AppState> = app.state();
+        let session = get_or_open_ssh_session(
+            &state,
+            &host,
+            port,
+            &user,
+            &auth_mode,
+            &password,
+            &key_path,
+            saved_connection_index,
+        )?;
+        let preview = package_manager::install_command_preview_blocking(
+            &session,
+            &package_id,
+            version.as_deref(),
+            variant_key.as_deref(),
+            is_update,
+        )
+        .map_err(|e| e.to_string())?;
+        Ok::<_, String>(InstallCommandPreviewView {
+            package_id: preview.package_id,
+            package_manager: preview.package_manager,
+            is_root: preview.is_root,
+            inner_command: preview.inner_command,
+            wrapped_command: preview.wrapped_command,
+        })
+    })
+    .await
+    .map_err(|e| format!("software_install_preview join: {e}"))?
+}
+
+// ── Mirror switching (v2.3) ────────────────────────────────────────
+
+#[derive(Serialize, Clone)]
+#[serde(rename_all = "camelCase")]
+struct MirrorChoiceView {
+    id: String,
+    label: String,
+    apt_host: String,
+    dnf_host: String,
+    apk_host: Option<String>,
+    pacman_url: Option<String>,
+    zypper_host: Option<String>,
+}
+
+#[derive(Serialize, Clone)]
+#[serde(rename_all = "camelCase")]
+struct MirrorStateView {
+    package_manager: String,
+    current_id: Option<String>,
+    current_host: Option<String>,
+    has_backup: bool,
+}
+
+#[derive(Serialize, Clone)]
+#[serde(rename_all = "camelCase")]
+struct MirrorActionReportView {
+    /// `ok` / `sudo-requires-password` / `failed` / `unsupported-manager`.
+    status: String,
+    package_manager: String,
+    command: String,
+    exit_code: i32,
+    output_tail: String,
+    state_after: MirrorStateView,
+}
+
+fn mirror_action_status_kebab(status: package_mirror::MirrorActionStatus) -> &'static str {
+    match status {
+        package_mirror::MirrorActionStatus::Ok => "ok",
+        package_mirror::MirrorActionStatus::SudoRequiresPassword => "sudo-requires-password",
+        package_mirror::MirrorActionStatus::Failed => "failed",
+        package_mirror::MirrorActionStatus::UnsupportedManager => "unsupported-manager",
+    }
+}
+
+fn mirror_state_to_view(s: package_mirror::MirrorState) -> MirrorStateView {
+    MirrorStateView {
+        package_manager: s.package_manager,
+        current_id: s.current_id,
+        current_host: s.current_host,
+        has_backup: s.has_backup,
+    }
+}
+
+fn mirror_action_to_view(r: package_mirror::MirrorActionReport) -> MirrorActionReportView {
+    MirrorActionReportView {
+        status: mirror_action_status_kebab(r.status).to_string(),
+        package_manager: r.package_manager,
+        command: r.command,
+        exit_code: r.exit_code,
+        output_tail: r.output_tail,
+        state_after: mirror_state_to_view(r.state_after),
+    }
+}
+
+/// Filesystem path of the user-extras JSON file. The UI surfaces
+/// this so the user knows where to drop custom entries; src-tauri
+/// guarantees the parent dir exists at startup but doesn't create
+/// the file itself (it's optional).
+#[tauri::command]
+fn software_user_extras_path() -> Option<String> {
+    package_manager::user_extras_path().map(|p| p.display().to_string())
+}
+
+/// Software-panel preferences persisted in the app config dir.
+/// One file, one key for now (`preferredMirrorId`); easy to grow.
+#[derive(serde::Serialize, serde::Deserialize, Default, Clone)]
+#[serde(rename_all = "camelCase")]
+struct SoftwarePreferences {
+    /// Last-picked mirror id. The MirrorDialog suggests this when
+    /// the host has no detected mirror so users don't re-pick the
+    /// same one every time they SSH to a new box.
+    preferred_mirror_id: Option<String>,
+}
+
+fn software_preferences_path(app: &tauri::AppHandle) -> Option<std::path::PathBuf> {
+    let dir = app.path().app_config_dir().ok()?;
+    let _ = std::fs::create_dir_all(&dir);
+    Some(dir.join("software-prefs.json"))
+}
+
+fn load_software_preferences(app: &tauri::AppHandle) -> SoftwarePreferences {
+    let Some(path) = software_preferences_path(app) else {
+        return Default::default();
+    };
+    let Ok(bytes) = std::fs::read(&path) else {
+        return Default::default();
+    };
+    serde_json::from_slice(&bytes).unwrap_or_default()
+}
+
+fn save_software_preferences(app: &tauri::AppHandle, prefs: &SoftwarePreferences) {
+    let Some(path) = software_preferences_path(app) else {
+        return;
+    };
+    if let Ok(bytes) = serde_json::to_vec_pretty(prefs) {
+        let _ = std::fs::write(path, bytes);
+    }
+}
+
+#[tauri::command]
+fn software_preferences_get(app: tauri::AppHandle) -> SoftwarePreferences {
+    load_software_preferences(&app)
+}
+
+#[tauri::command]
+fn software_preferences_set_mirror(
+    app: tauri::AppHandle,
+    mirror_id: Option<String>,
+) -> SoftwarePreferences {
+    let mut prefs = load_software_preferences(&app);
+    prefs.preferred_mirror_id = mirror_id;
+    save_software_preferences(&app, &prefs);
+    prefs
+}
+
+/// Static mirror catalog. Doesn't touch the host — same shape every
+/// call, used by the frontend dialog to render the radio list.
+#[tauri::command]
+fn software_mirror_catalog() -> Vec<MirrorChoiceView> {
+    package_mirror::supported_mirrors()
+        .iter()
+        .map(|m| MirrorChoiceView {
+            id: m.id.as_str().to_string(),
+            label: m.label.to_string(),
+            apt_host: m.apt_host.to_string(),
+            dnf_host: m.dnf_host.to_string(),
+            apk_host: m.apk_host.map(str::to_string),
+            pacman_url: m.pacman_url.map(str::to_string),
+            zypper_host: m.zypper_host.map(str::to_string),
+        })
+        .collect()
+}
+
+/// Detect the current mirror state for the host's package manager.
+#[tauri::command]
+async fn software_mirror_get(
+    app: tauri::AppHandle,
+    host: String,
+    port: u16,
+    user: String,
+    auth_mode: String,
+    password: String,
+    key_path: String,
+    saved_connection_index: Option<usize>,
+) -> Result<MirrorStateView, String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        let state: tauri::State<'_, AppState> = app.state();
+        let session = get_or_open_ssh_session(
+            &state,
+            &host,
+            port,
+            &user,
+            &auth_mode,
+            &password,
+            &key_path,
+            saved_connection_index,
+        )?;
+        let env = package_manager::probe_host_env_blocking(&session);
+        let manager = match env.package_manager {
+            Some(m) => m,
+            None => {
+                // No detected manager — return an empty state that
+                // disables the dialog on the frontend.
+                return Ok::<_, String>(MirrorStateView {
+                    package_manager: String::new(),
+                    current_id: None,
+                    current_host: None,
+                    has_backup: false,
+                });
+            }
+        };
+        let s = package_mirror::detect_mirror_blocking(&session, manager);
+        Ok::<_, String>(mirror_state_to_view(s))
+    })
+    .await
+    .map_err(|e| format!("software_mirror_get join: {e}"))?
+}
+
+/// Switch the host's apt / dnf sources to `mirror_id`. Backs up
+/// the originals to `.pier-bak` on first invocation.
+#[tauri::command]
+async fn software_mirror_set(
+    app: tauri::AppHandle,
+    host: String,
+    port: u16,
+    user: String,
+    auth_mode: String,
+    password: String,
+    key_path: String,
+    saved_connection_index: Option<usize>,
+    mirror_id: String,
+) -> Result<MirrorActionReportView, String> {
+    let app_for_prefs = app.clone();
+    let mirror_id_for_prefs = mirror_id.clone();
+    let result = tauri::async_runtime::spawn_blocking(move || {
+        let state: tauri::State<'_, AppState> = app.state();
+        let session = get_or_open_ssh_session(
+            &state,
+            &host,
+            port,
+            &user,
+            &auth_mode,
+            &password,
+            &key_path,
+            saved_connection_index,
+        )?;
+        let env = package_manager::probe_host_env_blocking(&session);
+        let manager = env
+            .package_manager
+            .ok_or_else(|| "host has no detected package manager".to_string())?;
+        let id = package_mirror::MirrorId::from_str(&mirror_id)
+            .ok_or_else(|| format!("unknown mirror id: {mirror_id}"))?;
+        let report = package_mirror::set_mirror_blocking(&session, manager, id)
+            .map_err(|e| e.to_string())?;
+        Ok::<_, String>(mirror_action_to_view(report))
+    })
+    .await
+    .map_err(|e| format!("software_mirror_set join: {e}"))?;
+    // Remember the choice on success so the next host's dialog can
+    // suggest the same mirror without the user re-picking.
+    if let Ok(report) = &result {
+        if report.status == "ok" {
+            let mut prefs = load_software_preferences(&app_for_prefs);
+            prefs.preferred_mirror_id = Some(mirror_id_for_prefs);
+            save_software_preferences(&app_for_prefs, &prefs);
+        }
+    }
+    result
+}
+
+/// Restore the original sources from `.pier-bak`. No-op when no
+/// backup exists (the report still resolves with `ok`).
+#[tauri::command]
+async fn software_mirror_restore(
+    app: tauri::AppHandle,
+    host: String,
+    port: u16,
+    user: String,
+    auth_mode: String,
+    password: String,
+    key_path: String,
+    saved_connection_index: Option<usize>,
+) -> Result<MirrorActionReportView, String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        let state: tauri::State<'_, AppState> = app.state();
+        let session = get_or_open_ssh_session(
+            &state,
+            &host,
+            port,
+            &user,
+            &auth_mode,
+            &password,
+            &key_path,
+            saved_connection_index,
+        )?;
+        let env = package_manager::probe_host_env_blocking(&session);
+        let manager = env
+            .package_manager
+            .ok_or_else(|| "host has no detected package manager".to_string())?;
+        let report = package_mirror::restore_mirror_blocking(&session, manager)
+            .map_err(|e| e.to_string())?;
+        Ok::<_, String>(mirror_action_to_view(report))
+    })
+    .await
+    .map_err(|e| format!("software_mirror_restore join: {e}"))?
 }
 
 /// Run a streaming uninstall. Mirrors `software_install_or_update_inner`
@@ -9555,6 +10108,23 @@ pub fn run() {
             }
             terminal_smart::init_user_pack_dir(pack_dir);
 
+            // Tell pier-core where the user-extras catalog lives so
+            // the merged registry picks up custom entries on the
+            // panel's first registry() call. The file is optional —
+            // pier-core silently keeps the built-in catalog when it
+            // doesn't exist.
+            if let Ok(config_dir) = app.path().app_config_dir() {
+                let extras = config_dir.join("software-extras.json");
+                if let Err(e) = std::fs::create_dir_all(&config_dir) {
+                    pier_core::logging::write_event(
+                        "WARN",
+                        "software.extras",
+                        &format!("could not create config dir {}: {}", config_dir.display(), e),
+                    );
+                }
+                let _ = package_manager::set_user_extras_path(extras);
+            }
+
             // Initialise the ssh-mux wrapper + auto-generated config.
             // Failure to set this up is non-fatal — the worst case is
             // we don't get ControlMaster multiplexing for terminal-side
@@ -9771,6 +10341,16 @@ pub fn run() {
             software_update_remote,
             software_uninstall_remote,
             software_versions_remote,
+            software_details_remote,
+            software_install_preview,
+            software_bundles,
+            software_mirror_catalog,
+            software_mirror_get,
+            software_mirror_set,
+            software_mirror_restore,
+            software_user_extras_path,
+            software_preferences_get,
+            software_preferences_set_mirror,
             software_service_action_remote,
             software_service_logs_remote,
             software_install_cancel,

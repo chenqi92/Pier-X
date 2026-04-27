@@ -154,6 +154,19 @@ if [ -z \"${PIERX_PROMPT_WRAPPED:-}\" ]; then
   unset PIERX_OSC_A PIERX_OSC_B
   export PIERX_PROMPT_WRAPPED=1
 fi
+
+# OSC 7 — report cwd to the host every prompt redraw so the smart
+# completer can list files relative to where the user actually `cd`-ed
+# (matches what VTE's vte.sh and wezterm's shell-integration.sh do).
+__pierx_osc7() {
+  printf '\\033]7;file://%s%s\\033\\\\' \"${HOSTNAME:-localhost}\" \"$PWD\"
+}
+case \"${PROMPT_COMMAND:-}\" in
+  *__pierx_osc7*) ;;
+  '') PROMPT_COMMAND='__pierx_osc7' ;;
+  *) PROMPT_COMMAND='__pierx_osc7;'\"$PROMPT_COMMAND\" ;;
+esac
+__pierx_osc7
 ";
     let mut f = std::fs::File::create(&rc_path)?;
     f.write_all(script.as_bytes())?;
@@ -193,6 +206,18 @@ if [[ -z \"${PIERX_PROMPT_WRAPPED:-}\" ]]; then
   PROMPT=$'%{\\e]133;A\\a%}'\"$PROMPT\"$'%{\\e]133;B\\a%}'
   export PIERX_PROMPT_WRAPPED=1
 fi
+
+# OSC 7 — see bash_init for rationale. precmd_functions is zsh's
+# native pre-prompt hook; we keep it idempotent so re-sourcing zshrc
+# (oh-my-zsh `omz reload`) doesn't stack duplicates.
+__pierx_osc7() {
+  printf '\\e]7;file://%s%s\\e\\\\' \"${HOST:-localhost}\" \"$PWD\"
+}
+typeset -ga precmd_functions
+if [[ -z \"${precmd_functions[(r)__pierx_osc7]:-}\" ]]; then
+  precmd_functions+=(__pierx_osc7)
+fi
+__pierx_osc7
 unset pierx_real_zdotdir
 ";
     std::fs::write(&zshrc_path, script)?;
@@ -217,6 +242,128 @@ unset pierx_real_zdotdir
         recognised: true,
         _tmp_dir: Some(dir),
     })
+}
+
+/// PowerShell prompt-hook script. Returned as raw text so the
+/// caller can inject it via `-NoExit -Command "<script>"` when
+/// spawning pwsh on Windows.
+///
+/// Wraps the user's existing `prompt` function and prepends two
+/// OSC sequences on every redraw:
+///
+/// * **OSC 9;9;\<path\>** — Microsoft's Windows-Terminal-native
+///   "current working directory" channel. Honoured by Windows
+///   Terminal, ConEmu, Tabby; we parse it in `emulator.rs` so
+///   Pier-X tabs pick it up cheaply.
+/// * **OSC 7;file://host/path** — XTerm-style URI form. Provides
+///   compatibility with VS Code's terminal, iTerm2, the wider
+///   Linux/macOS ecosystem, and our own existing OSC 7 parser.
+///
+/// Reference: Microsoft's "Tutorial: New tab, same directory"
+/// guide for Windows Terminal walks through exactly this pattern,
+/// and pwsh-on-Windows users already follow it in their `$PROFILE`.
+/// We just inject it for free so smart-mode tabs work out of the
+/// box without modifying the user's profile.
+pub fn pwsh_init_script() -> &'static str {
+    // Single-quoted PowerShell here-string: `$` is literal so we
+    // don't have to escape every variable. The wrapper keeps a
+    // reference to the *previous* prompt so a user-customised
+    // `$profile` prompt continues to work — this is the same
+    // pattern Microsoft documents for Windows Terminal.
+    r#"
+if (-not (Get-Variable -Name __pierxPromptInstalled -Scope Global -ErrorAction SilentlyContinue)) {
+    $global:__pierxPromptInstalled = $true
+    $global:__pierxOldPrompt = $function:prompt
+    function global:prompt {
+        $loc = $executionContext.SessionState.Path.CurrentLocation
+        $esc = [char]27
+        $bel = [char]7
+        $host_ = [System.Net.Dns]::GetHostName()
+        # OSC 9;9 — Windows Terminal native cwd channel. Quote the
+        # path so paths with spaces survive.
+        [Console]::Write("$esc]9;9;`"$loc`"$esc\")
+        if ($loc.Provider.Name -eq 'FileSystem') {
+            $forward = $loc.ProviderPath -replace '\\','/'
+            # OSC 7 — file:// URI form for cross-tool compatibility.
+            [Console]::Write("$esc]7;file://$host_$forward$esc\")
+        }
+        & $global:__pierxOldPrompt
+    }
+}
+"#
+}
+
+/// One-shot init line to write into a freshly-spawned remote SSH
+/// shell so it starts emitting OSC 7 (cwd) and OSC 133 (prompt
+/// sentinels) on every prompt.
+///
+/// This is the SSH-equivalent of `bash_init` / `zsh_init`. We can't
+/// inject `--rcfile` over SSH (the channel runs the user's login
+/// shell directly), so we send a single semicolon-joined line via
+/// stdin after the channel comes up. The line is shell-detecting:
+/// it sets up a hook for whichever of bash/zsh is hosting it, and
+/// is a silent no-op under fish/sh/dash.
+///
+/// Behaviour:
+///
+/// * **bash** — appends a `__pierx_osc7` function to `PROMPT_COMMAND`
+///   (preserving any existing value), and wraps `PS1` with OSC 133.
+/// * **zsh** — adds the function to `precmd_functions` and wraps
+///   `PROMPT` with `%{...%}`-marked OSC 133.
+/// * **fish / sh / dash** — the conditional fails silently; no harm
+///   done.
+///
+/// Reference: this mirrors VTE's `vte.sh` and wezterm's
+/// `shell-integration.sh` patterns. We send it as one line so it
+/// pollutes history with at most one entry (and a leading space
+/// keeps it out of history under any shell with `HISTCONTROL`
+/// containing `ignorespace` — Ubuntu/Fedora default).
+pub fn remote_init_payload() -> Vec<u8> {
+    // Build the line carefully — every newline would split the line
+    // and bash would execute halves separately. Use `;` as the only
+    // statement separator. Trailing `\n` actually executes the line.
+    //
+    // We emit a leading SPACE so `HISTCONTROL=ignorespace` (default
+    // in most modern distros) drops it from history.
+    const SCRIPT: &str = concat!(
+        " ",
+        // bash branch
+        "if [ -n \"${BASH_VERSION:-}\" ]; then ",
+            "__pierx_osc7() { printf '\\033]7;file://%s%s\\033\\\\' \"${HOSTNAME:-localhost}\" \"$PWD\"; }; ",
+            "case \"${PROMPT_COMMAND:-}\" in *__pierx_osc7*) ;; ",
+                "'') PROMPT_COMMAND='__pierx_osc7' ;; ",
+                "*) PROMPT_COMMAND='__pierx_osc7;'\"$PROMPT_COMMAND\" ;; ",
+            "esac; ",
+            "if [ -z \"${PIERX_PROMPT_WRAPPED:-}\" ]; then ",
+                "PS1=$'\\001\\033]133;A\\007\\002'\"$PS1\"$'\\001\\033]133;B\\007\\002'; ",
+                "export PIERX_PROMPT_WRAPPED=1; ",
+            "fi; ",
+            "__pierx_osc7; ",
+        // zsh branch
+        "elif [ -n \"${ZSH_VERSION:-}\" ]; then ",
+            "__pierx_osc7() { printf '\\e]7;file://%s%s\\e\\\\' \"${HOST:-localhost}\" \"$PWD\"; }; ",
+            "typeset -ga precmd_functions; ",
+            "if [[ -z \"${precmd_functions[(r)__pierx_osc7]:-}\" ]]; then precmd_functions+=(__pierx_osc7); fi; ",
+            "if [[ -z \"${PIERX_PROMPT_WRAPPED:-}\" ]]; then ",
+                "PROMPT=$'%{\\e]133;A\\a%}'\"$PROMPT\"$'%{\\e]133;B\\a%}'; ",
+                "export PIERX_PROMPT_WRAPPED=1; ",
+            "fi; ",
+            "__pierx_osc7; ",
+        "fi; ",
+        // Wipe the visible echo of this very line. The PTY's terminal
+        // driver echoes everything we write to its master back as
+        // printable input (the remote shell hasn't reached its
+        // readline loop yet, so input is in canonical+echo mode), so
+        // without this the user sees ~10 wrapped lines of the init
+        // script before bash silently runs it. `printf '\033[H\033[2J'`
+        // clears the visible screen after the line executes — the
+        // banner / prompt that follows lands on a clean canvas. We
+        // intentionally don't `\033[3J` (erase scrollback): the user
+        // can still scroll up to see the SSH login banner if needed.
+        "printf '\\033[H\\033[2J'; true",
+        "\n",
+    );
+    SCRIPT.as_bytes().to_vec()
 }
 
 #[cfg(test)]
@@ -292,6 +439,71 @@ mod tests {
             "temp dir {:?} survived SmartShellInit drop",
             parent
         );
+    }
+
+    #[test]
+    fn bash_init_emits_osc7_for_cwd_tracking() {
+        let init = inject_init("/bin/bash");
+        let body = std::fs::read_to_string(&init.args[1]).unwrap();
+        assert!(body.contains("__pierx_osc7"), "missing OSC 7 hook");
+        // Path is reported as a file:// URI with $HOSTNAME + $PWD.
+        assert!(body.contains("]7;file://"));
+        // And it must register itself into PROMPT_COMMAND idempotently.
+        assert!(body.contains("PROMPT_COMMAND"));
+    }
+
+    #[test]
+    fn zsh_init_emits_osc7_via_precmd_functions() {
+        let init = inject_init("/usr/bin/zsh");
+        let zdotdir = init
+            .env
+            .iter()
+            .find(|(k, _)| k == "ZDOTDIR")
+            .map(|(_, v)| v.clone())
+            .unwrap();
+        let body = std::fs::read_to_string(std::path::Path::new(&zdotdir).join(".zshrc")).unwrap();
+        assert!(body.contains("__pierx_osc7"));
+        assert!(body.contains("precmd_functions"));
+        assert!(body.contains("]7;file://"));
+    }
+
+    #[test]
+    fn pwsh_init_script_carries_osc9_and_osc7() {
+        let s = pwsh_init_script();
+        assert!(s.contains("]9;9;"), "missing OSC 9;9 (Windows Terminal cwd)");
+        assert!(s.contains("]7;file://"), "missing OSC 7 (cross-tool cwd)");
+        assert!(s.contains("__pierxOldPrompt"), "must preserve user prompt");
+        assert!(
+            s.contains("__pierxPromptInstalled"),
+            "must guard against double-install on profile reload",
+        );
+    }
+
+    #[test]
+    fn remote_init_payload_has_no_embedded_newlines_until_terminator() {
+        let bytes = remote_init_payload();
+        let s = std::str::from_utf8(&bytes).expect("payload must be valid UTF-8");
+        // A bare newline mid-payload would split the line and bash
+        // would execute halves separately — we want one atomic
+        // command sent to the remote shell.
+        let body = s.trim_end_matches('\n');
+        assert!(
+            !body.contains('\n'),
+            "remote payload contained a mid-stream newline:\n{body}",
+        );
+        // The line must end with exactly one newline (the Enter that
+        // submits it to the remote shell).
+        assert!(s.ends_with('\n'));
+    }
+
+    #[test]
+    fn remote_init_payload_handles_both_bash_and_zsh() {
+        let s = String::from_utf8(remote_init_payload()).unwrap();
+        assert!(s.contains("BASH_VERSION"), "must check for bash");
+        assert!(s.contains("ZSH_VERSION"), "must check for zsh");
+        assert!(s.contains("__pierx_osc7"), "must define the hook");
+        // Leading space → HISTCONTROL=ignorespace drops it from history.
+        assert!(s.starts_with(' '), "leading space for history-skip");
     }
 
     #[test]

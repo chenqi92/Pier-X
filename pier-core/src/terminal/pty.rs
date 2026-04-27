@@ -588,18 +588,39 @@ mod windows_impl {
         ///
         /// PowerShell gets a profile-less interactive launch so local
         /// Pier-X sessions don't inherit line editor hooks or prompt
-        /// scripts that assume a native Win32 console host.
+        /// scripts that assume a native Win32 console host. We do
+        /// inject our own prompt-hook script via `-Command` so
+        /// every redraw emits OSC 9;9 + OSC 7 — the smart-mode
+        /// completer needs the cwd to list directories the user
+        /// has `Set-Location`-ed into.
+        ///
         /// `cmd.exe` gets `/Q /K` so it stays interactive and avoids
-        /// echoing every line back twice.
+        /// echoing every line back twice. cmd has no clean prompt
+        /// hook so cwd tracking stays unavailable for it (Pier-X
+        /// will fall back to the process cwd in that case).
         pub fn spawn_shell(cols: u16, rows: u16, shell: &str) -> Result<Self, TerminalError> {
             let leaf = shell
                 .rsplit(['\\', '/'])
                 .next()
                 .unwrap_or(shell)
                 .to_ascii_lowercase();
+            // `pwsh_args` is held in this function's stack so the
+            // `&str` slice we build below stays valid until `spawn`
+            // is called (which copies the strings into a Windows
+            // command line). Don't be tempted to replace this with
+            // a `vec![...]` returned from the match arm — the
+            // borrow would dangle.
+            let pwsh_args: [&str; 5];
             let args: &[&str] = match leaf.as_str() {
                 "powershell.exe" | "powershell" | "pwsh.exe" | "pwsh" => {
-                    &["-NoLogo", "-NoExit", "-NoProfile"]
+                    pwsh_args = [
+                        "-NoLogo",
+                        "-NoExit",
+                        "-NoProfile",
+                        "-Command",
+                        crate::terminal::smart::pwsh_init_script(),
+                    ];
+                    &pwsh_args[..]
                 }
                 "cmd.exe" | "cmd" => &["/D", "/Q", "/K"],
                 _ => &[],

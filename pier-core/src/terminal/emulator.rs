@@ -613,6 +613,29 @@ impl Perform for Performer<'_> {
                     }
                 }
             }
+            // OSC 9 — multiple Windows-Terminal sub-conventions share
+            // this number. Sub-code `9;9;<path>` is "current working
+            // directory" (Microsoft's documented native form, used by
+            // pwsh / cmd / Tabby / ConEmu). The path may arrive bare
+            // (`C:\Users\al`) or double-quoted (`"C:\Users\al"`); we
+            // strip the quotes and store the path verbatim.
+            //
+            // We coexist with OSC 7: whichever sequence the shell
+            // emits last wins, which matches Windows Terminal's
+            // own behaviour.
+            b"9" => {
+                if params.len() >= 3 && params[1] == b"9" {
+                    if let Ok(raw) = std::str::from_utf8(params[2]) {
+                        let trimmed = raw
+                            .trim()
+                            .trim_start_matches('"')
+                            .trim_end_matches('"');
+                        if !trimmed.is_empty() {
+                            *self.cwd = trimmed.to_string();
+                        }
+                    }
+                }
+            }
             // OSC 133 — prompt-sentinel sequences emitted by smart-mode
             // shells (see smart.rs). We track the cursor position at
             // the moment of `B` (prompt-end) so the UI can overlay the
@@ -1116,6 +1139,34 @@ mod tests {
         let mut emu = VtEmulator::new(10, 3);
         emu.process(b"\x1b]7;http://example.com/x\x07");
         assert_eq!(emu.cwd, "");
+    }
+
+    #[test]
+    fn osc9_9_sets_cwd_for_windows_terminal_pwsh() {
+        // Microsoft's pwsh / Windows Terminal convention: OSC 9;9
+        // carries a Windows-native path with no `file://` wrapper.
+        let mut emu = VtEmulator::new(10, 3);
+        emu.process(b"\x1b]9;9;C:\\Users\\al\x07");
+        assert_eq!(emu.cwd, "C:\\Users\\al");
+    }
+
+    #[test]
+    fn osc9_9_strips_surrounding_quotes() {
+        let mut emu = VtEmulator::new(10, 3);
+        // Windows Terminal documentation explicitly recommends quoting
+        // paths that contain spaces.
+        emu.process(b"\x1b]9;9;\"C:\\Program Files\\App\"\x07");
+        assert_eq!(emu.cwd, "C:\\Program Files\\App");
+    }
+
+    #[test]
+    fn osc9_other_subcodes_do_not_overwrite_cwd() {
+        let mut emu = VtEmulator::new(10, 3);
+        emu.process(b"\x1b]7;file://h/before\x07");
+        // OSC 9;4 is iTerm2's progress channel — must not be parsed
+        // as a cwd.
+        emu.process(b"\x1b]9;4;1;50\x07");
+        assert_eq!(emu.cwd, "/before");
     }
 
     #[test]

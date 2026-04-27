@@ -192,6 +192,7 @@ fn run_with_timeout(mut cmd: Command, timeout: Duration) -> Result<std::process:
 /// out of `bytes`. The terminal-rendering form of man pages emits
 /// these sequences on every styled character; without removing them
 /// the section headers come out as `S\bSY\bYN\bNO\bOP\bPS\bSI\bIS\bS`.
+#[cfg_attr(not(unix), allow(dead_code))]
 fn strip_overstriking(bytes: &[u8]) -> String {
     let mut out: Vec<u8> = Vec::with_capacity(bytes.len());
     let mut i = 0;

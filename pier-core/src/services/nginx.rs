@@ -63,10 +63,14 @@ pub enum NginxFileKind {
     /// outside `sites-available`. Surfaced separately so the user
     /// can see a stray link rather than having it silently shadowed.
     SiteEnabledOrphan {
+        /// Resolved target the symlink points at — surfaced verbatim
+        /// so the user can see where the stray link goes.
         link_target: String,
     },
 }
 
+/// One config file we discovered on the host. The panel renders these
+/// in the file tree and round-trips `path` back through read/save.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
 pub struct NginxFile {
@@ -76,7 +80,9 @@ pub struct NginxFile {
     /// Display label (basename for conf.d / site files; `nginx.conf`
     /// for the main file).
     pub name: String,
+    /// Which standard nginx config role this file plays.
     pub kind: NginxFileKind,
+    /// File size in bytes from the remote stat.
     pub size_bytes: u64,
     /// Last-modified epoch seconds; 0 when stat failed.
     pub mtime_secs: i64,
@@ -166,8 +172,11 @@ pub struct NginxDirective {
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
 pub struct NginxValidateResult {
+    /// `true` when `nginx -t` exited 0.
     pub ok: bool,
+    /// Raw exit code from `nginx -t`.
     pub exit_code: i32,
+    /// Merged stdout+stderr from `nginx -t`.
     pub output: String,
 }
 
@@ -178,10 +187,19 @@ pub struct NginxValidateResult {
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
 pub struct NginxSaveResult {
+    /// Result of the post-write `nginx -t` step.
     pub validate: NginxValidateResult,
+    /// `true` when `nginx -s reload` (or `systemctl reload nginx`)
+    /// completed successfully after a passing validation.
     pub reloaded: bool,
+    /// Merged stdout+stderr from the reload command. Empty when the
+    /// reload step was skipped.
     pub reload_output: String,
+    /// `true` when a failed validation triggered restoring the
+    /// `.pier-bak` and the restore itself succeeded.
     pub restored: bool,
+    /// Populated when `restored` is `false` *and* a restore was
+    /// attempted — describes why we couldn't put the original back.
     pub restore_error: Option<String>,
     /// Path of the `.pier-bak` we wrote — surfaced so the panel can
     /// tell the user where to recover from on a wedged restore.
@@ -992,7 +1010,7 @@ impl<'a> Lexer<'a> {
 /// terminator (`Eof` or `}`) is reached. Recoverable errors are pushed
 /// into `errors` and parsing continues.
 fn parse_block(
-    lex: &mut Lexer,
+    lex: &mut Lexer<'_>,
     stop_on_close: bool,
     errors: &mut Vec<String>,
 ) -> Vec<NginxNode> {
@@ -1051,7 +1069,6 @@ fn parse_block(
                         });
                         first = false;
                     }
-                    pending_blanks = 0;
                 }
                 pending_comments.push(text);
                 pending_blanks = 0;
@@ -1184,7 +1201,7 @@ fn parse_block(
 /// Read the body of a `*_by_lua_block { ... }` or `*_by_njs_block`
 /// directive. We've already consumed the opening `{`. Walk byte-by-byte
 /// tracking string state and brace depth; return the inner text.
-fn read_opaque_body(lex: &mut Lexer, errors: &mut Vec<String>) -> String {
+fn read_opaque_body(lex: &mut Lexer<'_>, errors: &mut Vec<String>) -> String {
     let mut depth: i32 = 1;
     let mut out = String::new();
     let mut in_str: Option<u8> = None;

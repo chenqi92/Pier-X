@@ -2128,6 +2128,13 @@ button,
 }
 .terminal-viewport:focus { box-shadow: inset 0 0 0 1px var(--accent-dim); }
 .terminal-viewport--bell { box-shadow: inset 0 0 0 1px var(--warn), 0 0 0 1px var(--warn-dim); }
+/* Hide the rendered grid for the first ~2 frames after the tab
+ * becomes active, so the ResizeObserver-driven SIGWINCH + snapshot
+ * reflow happens off-screen. Otherwise the bottom-anchored layout
+ * makes the previous (smaller) snapshot visibly slide up as the new
+ * (larger) snapshot fills in. `visibility: hidden` keeps the box
+ * sized so layout still settles; only paint is suppressed. */
+.terminal-viewport--activating .terminal-screen { visibility: hidden; }
 
 .terminal-measure {
   position: absolute;
@@ -6469,6 +6476,378 @@ button,
   font-size: var(--size-micro);
   color: var(--muted);
   font-style: italic;
+}
+
+/* Variant picker — the trigger reads "OpenJDK 21 ▾" so the user can
+ * see the current major-version family at a glance. Reuses the same
+ * popover chrome as the version menu. */
+.sw-row__variant-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--sp-1);
+  font-size: var(--ui-fs-sm);
+}
+.sw-row-variant-menu { padding: var(--sp-1) 0; }
+
+/* Row expand chevron + lazy-loaded details pane. The pane sits below
+ * the activity log so an in-flight install's stream doesn't push it
+ * out of view; it's a key/value grid with muted labels and mono values
+ * so install paths and config files line up at character boundaries. */
+.sw-row__expand-btn {
+  flex: none;
+  margin-right: var(--sp-1);
+  padding: 0;
+  width: 18px;
+  height: 18px;
+  color: var(--muted);
+}
+.sw-row__expand-btn:hover { color: var(--ink); }
+.sw-row__details {
+  margin-top: var(--sp-2);
+  padding: var(--sp-2) var(--sp-3);
+  background: var(--surface-2);
+  border: 1px solid var(--line);
+  border-radius: var(--radius-sm);
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-1);
+  font-size: var(--ui-fs-sm);
+}
+.sw-row__details-row {
+  display: grid;
+  grid-template-columns: 130px 1fr;
+  gap: var(--sp-2);
+  align-items: baseline;
+}
+.sw-row__details-label {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--sp-1);
+  color: var(--muted);
+}
+.sw-row__details-val {
+  color: var(--ink-2);
+  word-break: break-all;
+}
+.sw-row__path-list {
+  display: inline-flex;
+  flex-wrap: wrap;
+  gap: var(--sp-2);
+}
+.sw-row__path-btn {
+  background: transparent;
+  border: 0;
+  padding: 0 var(--sp-1);
+  margin: 0;
+  cursor: pointer;
+  color: var(--accent);
+  font-family: inherit;
+  font-size: inherit;
+  text-decoration: underline dotted;
+  text-underline-offset: 2px;
+  word-break: break-all;
+  text-align: left;
+}
+.sw-row__path-btn:hover { color: var(--accent-hover); }
+
+.sw-row__details-pill {
+  display: inline-block;
+  margin-left: var(--sp-2);
+  padding: 0 var(--sp-1-5);
+  border-radius: var(--radius-pill);
+  background: var(--accent-subtle);
+  color: var(--accent);
+  font-size: var(--size-micro);
+}
+.sw-row__details-actions {
+  display: flex;
+  justify-content: flex-end;
+  margin-top: var(--sp-1);
+}
+
+/* App-store search box. Sits between the env line and the row list,
+ * shares the same surface tone as the panel chrome so it doesn't
+ * fight for attention with the row buttons. */
+.sw-panel__search {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-1-5);
+  padding: var(--sp-1) var(--sp-2);
+  margin: var(--sp-1) var(--sp-3) 0;
+  background: var(--surface-2);
+  border: 1px solid var(--line);
+  border-radius: var(--radius-sm);
+}
+.sw-panel__search-icon {
+  color: var(--muted);
+  flex: none;
+}
+.sw-panel__search-input {
+  flex: 1;
+  background: transparent;
+  border: 0;
+  outline: 0;
+  color: var(--ink);
+  font-size: var(--ui-fs-sm);
+}
+.sw-panel__search-input::placeholder { color: var(--dim); }
+.sw-panel__search-clear {
+  flex: none;
+  width: 16px;
+  height: 16px;
+  padding: 0;
+  color: var(--muted);
+}
+.sw-panel__search-clear:hover { color: var(--ink); }
+
+/* Section headers — small caps with a count badge so the user can
+ * scan "I want a database" without reading every row. The list pads
+ * itself; the section just prefixes a header. */
+.sw-panel__section {
+  display: contents;
+}
+.sw-panel__section-title {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-2);
+  margin-top: var(--sp-3);
+  padding: 0 var(--sp-3);
+  font-size: var(--size-micro);
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: var(--muted);
+}
+.sw-panel__section-count {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 18px;
+  height: 14px;
+  padding: 0 var(--sp-1);
+  background: var(--surface-2);
+  border-radius: var(--radius-pill);
+  font-size: var(--size-micro);
+  color: var(--dim);
+}
+.sw-panel__empty {
+  padding: var(--sp-4) var(--sp-3);
+  color: var(--muted);
+  text-align: center;
+  font-size: var(--ui-fs-sm);
+}
+
+/* Mirror picker dialog. Each row reads "label · hostname" with the
+ * active mirror getting an accent border + check icon. The restore
+ * button sits at the bottom-left so it doesn't get clicked by reflex
+ * when the user is just trying to switch to a different mirror. */
+.sw-mirror-form {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-3);
+}
+.sw-mirror-form__list {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-1);
+}
+.sw-mirror-row {
+  display: grid;
+  grid-template-columns: 1fr auto auto;
+  align-items: center;
+  gap: var(--sp-2);
+  padding: var(--sp-2) var(--sp-2-5);
+  background: var(--surface-2);
+  border: 1px solid var(--line);
+  border-radius: var(--radius-sm);
+  cursor: pointer;
+  text-align: left;
+}
+.sw-mirror-row:hover:not(:disabled) {
+  border-color: var(--accent-dim);
+  background: var(--accent-subtle);
+}
+.sw-mirror-row.is-active {
+  border-color: var(--accent);
+  background: var(--accent-subtle);
+}
+.sw-mirror-row:disabled {
+  opacity: 0.6;
+  cursor: not-allowed;
+}
+.sw-mirror-row__label {
+  color: var(--ink);
+  font-size: var(--ui-fs);
+}
+.sw-mirror-row__host {
+  color: var(--muted);
+  font-size: var(--ui-fs-sm);
+}
+.sw-mirror-row__check { color: var(--accent); }
+.sw-mirror-row.is-suggested {
+  border-color: var(--accent-dim);
+  border-style: dashed;
+}
+.sw-mirror-row__suggest-pill {
+  display: inline-block;
+  margin-left: var(--sp-2);
+  padding: 0 var(--sp-1-5);
+  border-radius: var(--radius-pill);
+  background: var(--accent-subtle);
+  color: var(--accent);
+  font-size: var(--size-micro);
+}
+.sw-mirror-form__msg {
+  padding: var(--sp-2);
+  background: var(--surface-2);
+  border-radius: var(--radius-sm);
+  font-size: var(--ui-fs-sm);
+  color: var(--ink-2);
+}
+.sw-mirror-form__actions {
+  display: flex;
+  justify-content: space-between;
+  gap: var(--sp-2);
+}
+
+/* Extras-path footer — bottom of the registry, muted hint that
+ * teaches users where to drop custom entries. The path text is a
+ * button so click-to-copy is one tap. */
+.sw-panel__extras-note {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-1-5);
+  padding: var(--sp-2) var(--sp-3);
+  margin-top: var(--sp-3);
+  color: var(--muted);
+  font-size: var(--size-micro);
+  border-top: 1px dashed var(--line);
+}
+.sw-panel__extras-path {
+  background: transparent;
+  border: 0;
+  padding: 0;
+  cursor: pointer;
+  color: var(--accent);
+  font-family: inherit;
+  font-size: inherit;
+  text-decoration: underline dotted;
+  word-break: break-all;
+}
+.sw-panel__extras-path:hover { color: var(--accent-hover); }
+
+/* Bundles row — sits above the search box. Cards are clickable
+ * tiles in a responsive grid; each shows label / description /
+ * "installed/total" count. */
+.sw-panel__bundles {
+  margin: var(--sp-1) var(--sp-3) 0;
+}
+.sw-panel__bundles-title {
+  font-size: var(--size-micro);
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: var(--muted);
+  margin-bottom: var(--sp-1);
+}
+.sw-panel__bundles-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(180px, 1fr));
+  gap: var(--sp-2);
+}
+.sw-panel__bundle-card {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-1);
+  padding: var(--sp-2) var(--sp-2-5);
+  background: var(--surface-2);
+  border: 1px solid var(--line);
+  border-radius: var(--radius-sm);
+  cursor: pointer;
+  text-align: left;
+}
+.sw-panel__bundle-card:hover:not(:disabled) {
+  border-color: var(--accent-dim);
+  background: var(--accent-subtle);
+}
+.sw-panel__bundle-card:disabled {
+  opacity: 0.55;
+  cursor: not-allowed;
+}
+.sw-panel__bundle-card-head {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: var(--sp-2);
+}
+.sw-panel__bundle-card-label {
+  color: var(--ink);
+  font-weight: 500;
+  font-size: var(--ui-fs);
+}
+.sw-panel__bundle-card-count {
+  color: var(--muted);
+  font-size: var(--size-micro);
+}
+.sw-panel__bundle-card-desc {
+  color: var(--muted);
+  font-size: var(--size-small);
+  line-height: 1.4;
+}
+.sw-panel__bundle-card-running {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-1);
+  color: var(--accent);
+  font-size: var(--size-micro);
+}
+
+/* Bundle confirm dialog — list of member packages with status
+ * dots so users can see "what'll happen" before the install
+ * sequence kicks off. */
+.sw-bundle-form {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-3);
+}
+.sw-bundle-form__list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-1);
+  max-height: 280px;
+  overflow-y: auto;
+}
+.sw-bundle-form__item {
+  display: grid;
+  grid-template-columns: 16px 1fr auto;
+  align-items: center;
+  gap: var(--sp-2);
+  padding: var(--sp-1) var(--sp-2);
+  background: var(--surface-2);
+  border-radius: var(--radius-sm);
+  color: var(--ink);
+  font-size: var(--ui-fs-sm);
+}
+.sw-bundle-form__item.is-installed {
+  color: var(--pos);
+}
+.sw-bundle-form__item.is-missing {
+  color: var(--muted);
+  text-decoration: line-through;
+}
+.sw-bundle-form__id {
+  color: var(--muted);
+  font-size: var(--size-micro);
+}
+.sw-bundle-form__msg {
+  font-size: var(--ui-fs-sm);
+  color: var(--ink-2);
+}
+.sw-bundle-form__actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: var(--sp-2);
 }
 
 /* Menu shown by the row's ⋯ button. Uses the shared `.ctx-menu`

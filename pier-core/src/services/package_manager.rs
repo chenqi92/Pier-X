@@ -64,6 +64,52 @@ pub struct PackageDescriptor {
     /// than the distro repos carry (Docker is the canonical example).
     /// `None` = only the default package-manager path is offered.
     pub vendor_script: Option<VendorScriptDescriptor>,
+    /// Short binary name used by the details probe (`command -v {name}`
+    /// → resolved path → `readlink -f`). Empty = derive from the first
+    /// install package on the matching manager (works for jq/curl/git
+    /// where binary == package name).
+    pub binary_name: &'static str,
+    /// Common config-file / config-dir paths we surface in the details
+    /// pane. Each path is `test -e`'d at probe time so we never show a
+    /// stale entry. Empty for stateless software (jq, curl, …).
+    pub config_paths: &'static [&'static str],
+    /// Default ports this software listens on when running with stock
+    /// config (e.g. nginx → 80/443, postgres → 5432). Surfaced in the
+    /// details pane as "default" alongside an `ss -ltn` probe of which
+    /// of those are actually open. Empty for non-network software.
+    pub default_ports: &'static [u16],
+    /// Major-version variants (OpenJDK 8/11/17/21, Python 3.10/11/12).
+    /// Empty for single-version software — install/update use the
+    /// descriptor's `install_packages` directly. When non-empty the UI
+    /// shows a variant picker and the install command uses the picked
+    /// variant's `install_packages` instead of the descriptor's.
+    pub version_variants: &'static [VersionVariant],
+    /// Coarse-grained app-store category. Drives the panel's
+    /// section grouping. Stable strings — UI maps them to localized
+    /// labels via the i18n table. Empty string = "其它".
+    pub category: &'static str,
+}
+
+/// One installable major version of a multi-version software (e.g.
+/// `openjdk-21` for Java). The frontend shows a cascading picker on
+/// descriptors that declare any. Variants are mutually exclusive at
+/// install time (the UI surfaces a single picker, not checkboxes).
+#[derive(Debug, Clone, Copy)]
+pub struct VersionVariant {
+    /// Stable variant id passed across the IPC boundary
+    /// (e.g. `"openjdk-21"`). Lowercase, dash-separated.
+    pub key: &'static str,
+    /// Human label rendered in the picker (e.g. `"OpenJDK 21"`).
+    pub label: &'static str,
+    /// Per package-manager package list — same shape as the
+    /// descriptor's `install_packages`. The frontend uses the
+    /// resolved-manager row to display "via apt: openjdk-21-jdk".
+    pub install_packages: &'static [(PackageManager, &'static [&'static str])],
+    /// Optional override for the descriptor's `probe_command`. Use
+    /// when the variant has its own canonical binary path
+    /// (e.g. `/usr/lib/jvm/java-21-openjdk-amd64/bin/java -version`).
+    /// `None` = use descriptor's probe (which may detect any variant).
+    pub probe_command: Option<&'static str>,
 }
 
 /// Static description of an "official upstream installer" we know how
@@ -82,7 +128,41 @@ pub struct VendorScriptDescriptor {
     /// Fully-qualified `https://` URL of the installer script. **Must**
     /// be a static literal so the URL set is auditable from the
     /// registry alone.
+    ///
+    /// Used as the fallback when [`urls`] is empty or doesn't list
+    /// the host's package manager. Distros where the script needs a
+    /// per-family URL (NodeSource ships separate `deb.nodesource.com`
+    /// vs `rpm.nodesource.com`) populate `urls` with the matrix.
     pub url: &'static str,
+    /// Optional per-package-manager URL override. When set, the
+    /// install path picks the URL whose `PackageManager` matches the
+    /// host's resolved manager and falls back to `url` otherwise.
+    /// Empty = always use `url`.
+    pub urls: &'static [(PackageManager, &'static str)],
+    /// Multi-step pre-install setup snippets keyed by package manager.
+    /// When the matching entry is set, [`run_install_via_script`]
+    /// runs **this snippet first** (under `sudo -n sh -c '...'`),
+    /// then falls through to the normal package-manager install path
+    /// (`apt-get install <descriptor.install_packages>`) instead of
+    /// the curl→sh path.
+    ///
+    /// Use this for upstream sources whose setup is more than one
+    /// command — e.g. PostgreSQL's pgdg apt repo: install GPG key,
+    /// write `/etc/apt/sources.list.d/pgdg.list`, `apt-get update`.
+    /// `urls` and `setup_scripts` are mutually exclusive at runtime;
+    /// when both are populated for the resolved manager, setup wins.
+    pub setup_scripts: &'static [(PackageManager, &'static str)],
+    /// Reverse of [`setup_scripts`] — undoes the upstream source
+    /// install so the host falls back to distro packages. Run when
+    /// the user ticks "also remove upstream source" in the uninstall
+    /// dialog. The dialog only surfaces that checkbox when the
+    /// resolved manager has an entry here (otherwise: no-op).
+    ///
+    /// For PostgreSQL pgdg: removes
+    /// `/etc/apt/sources.list.d/pgdg.list` + the imported GPG key
+    /// (apt) or `pgdg-redhat-repo` package (dnf/yum), then
+    /// `apt-get update` / `dnf clean all` to refresh metadata.
+    pub cleanup_scripts: &'static [(PackageManager, &'static str)],
     /// Most upstream installers (get.docker.com, NodeSource, etc.)
     /// expect to be run as root because they `apt-get install` /
     /// `systemctl enable` themselves. When `true` and the session
@@ -101,7 +181,7 @@ pub struct VendorScriptDescriptor {
 
 /// Canonical package-manager IDs. Stable strings exposed to the UI via
 /// `as_str` — keep them short and lowercase.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
 pub enum PackageManager {
     /// Debian / Ubuntu / Mint / Raspbian / Pop / Elementary / Kali.
@@ -147,6 +227,74 @@ pub struct PackageStatus {
     /// service unit and the systemctl probe ran. `None` for software
     /// without a service or when systemctl is missing.
     pub service_active: Option<bool>,
+}
+
+/// Details surfaced in the per-row "expand" pane. Loaded lazily — the
+/// row only fetches this when the user clicks the disclosure, so the
+/// panel's first paint stays at one round-trip per package (the
+/// existing [`probe_status`]) and we never block the panel header on
+/// `apt-cache policy` / `dpkg -L`.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct PackageDetail {
+    /// Echoes the descriptor id.
+    pub package_id: String,
+    /// Re-probed installed flag. Independent of any prior cached
+    /// `PackageStatus` — the user may have apt-removed between the
+    /// first probe and the click that opens the details pane.
+    pub installed: bool,
+    /// Resolved binary paths from `command -v {bin}` + `readlink -f`.
+    /// Single entry for the common case; multiple when the descriptor
+    /// has aliases (none today, but the field is `Vec` for forward
+    /// compatibility with multi-binary packages like jdk → java/javac).
+    pub install_paths: Vec<String>,
+    /// Config paths from the descriptor that exist on the remote
+    /// (filtered through `test -e`). Stale entries never reach the UI.
+    pub config_paths: Vec<String>,
+    /// Default ports declared on the descriptor — surfaced as "default"
+    /// in the UI even when nothing is actually listening.
+    pub default_ports: Vec<u16>,
+    /// Subset of `default_ports` that an `ss -ltn` probe found bound on
+    /// the host. Empty when `ss` isn't installed or the probe failed —
+    /// distinguish from "nothing listening" via the side-channel
+    /// `listen_probe_ok`.
+    pub listening_ports: Vec<u16>,
+    /// `true` when the `ss -ltn` probe ran successfully (regardless of
+    /// whether anything was listening). `false` = the probe failed and
+    /// `listening_ports` is unreliable; the UI hides the "live ports"
+    /// row in that case.
+    pub listen_probe_ok: bool,
+    /// Service unit name resolved against the host's package manager,
+    /// or `None` when the descriptor has no service.
+    pub service_unit: Option<String>,
+    /// Latest installable version from the package manager's "candidate"
+    /// query (apt-cache policy / dnf info / apk policy / pacman -Si /
+    /// zypper info). `None` on unsupported distro or when the query
+    /// returned nothing parseable.
+    pub latest_version: Option<String>,
+    /// Currently-installed version (re-probed). Same value the panel
+    /// header shows after probe_all; surfaced here so a stale row
+    /// snapshot can't disagree with the details pane.
+    pub installed_version: Option<String>,
+    /// Per-variant install state when the descriptor declares
+    /// `version_variants`. Empty for single-version software.
+    pub variants: Vec<PackageVariantStatus>,
+}
+
+/// Per-variant install state for descriptors with `version_variants`.
+/// One entry per declared variant, same order as the descriptor.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct PackageVariantStatus {
+    /// Same as `VersionVariant::key`.
+    pub key: String,
+    /// Same as `VersionVariant::label`.
+    pub label: String,
+    /// `true` when this specific variant's probe succeeded.
+    pub installed: bool,
+    /// Version reported by the variant's probe; `None` when not
+    /// installed or the probe didn't yield a version token.
+    pub installed_version: Option<String>,
 }
 
 /// Snapshot of the host's package-manager environment, used to drive
@@ -218,6 +366,12 @@ pub struct UninstallOptions {
     /// package manager has finished. Empty descriptor `data_dirs` =
     /// no-op even when set.
     pub remove_data_dirs: bool,
+    /// Run the descriptor's `vendor_script.cleanup_scripts` snippet
+    /// for the host's manager after the uninstall succeeds. Drops
+    /// upstream sources files/repos (e.g. PostgreSQL pgdg). No-op
+    /// when the descriptor has no cleanup snippet for the manager.
+    #[serde(default)]
+    pub remove_upstream_source: bool,
 }
 
 /// One of the systemctl verbs the Software panel exposes for a row's
@@ -403,9 +557,12 @@ pub struct VendorScriptUsedView {
 
 // ── Registry ────────────────────────────────────────────────────────
 
-/// v1 software list. Order here is the order rendered in the panel.
+/// Software list rendered in the panel. Built lazily — the first
+/// call merges built-in REGISTRY with user-extras (when src-tauri
+/// has set [`set_user_extras_path`]); subsequent calls return the
+/// memoized slice.
 pub fn registry() -> &'static [PackageDescriptor] {
-    REGISTRY
+    merged_registry()
 }
 
 const REGISTRY: &[PackageDescriptor] = &[
@@ -426,6 +583,11 @@ const REGISTRY: &[PackageDescriptor] = &[
         notes: None,
         supports_reload: false,
         vendor_script: None,
+        binary_name: "sqlite3",
+        config_paths: &[],
+        default_ports: &[],
+        version_variants: &[],
+        category: "database",
     },
     PackageDescriptor {
         id: "docker",
@@ -453,10 +615,18 @@ const REGISTRY: &[PackageDescriptor] = &[
         vendor_script: Some(VendorScriptDescriptor {
             label: "Docker 官方脚本",
             url: "https://get.docker.com",
+            urls: &[],
+            setup_scripts: &[],
+            cleanup_scripts: &[],
             run_as_root: true,
             notes: "由 Docker, Inc. 维护，会自动添加上游 apt/yum 仓库并安装 docker-ce 最新稳定版。Pier-X 不会校验脚本签名，请确认网络通路可信后再继续。",
             conflicts_with_apt: true,
         }),
+        binary_name: "docker",
+        config_paths: &["/etc/docker/daemon.json"],
+        default_ports: &[],
+        version_variants: &[],
+        category: "container",
     },
     PackageDescriptor {
         id: "compose",
@@ -475,6 +645,11 @@ const REGISTRY: &[PackageDescriptor] = &[
         notes: None,
         supports_reload: false,
         vendor_script: None,
+        binary_name: "docker",
+        config_paths: &[],
+        default_ports: &[],
+        version_variants: &[],
+        category: "container",
     },
     PackageDescriptor {
         id: "redis",
@@ -500,6 +675,11 @@ const REGISTRY: &[PackageDescriptor] = &[
         notes: None,
         supports_reload: false,
         vendor_script: None,
+        binary_name: "redis-server",
+        config_paths: &["/etc/redis/redis.conf", "/etc/redis.conf"],
+        default_ports: &[6379],
+        version_variants: &[],
+        category: "database",
     },
     PackageDescriptor {
         id: "postgres",
@@ -522,9 +702,89 @@ const REGISTRY: &[PackageDescriptor] = &[
             (PackageManager::Zypper, "postgresql"),
         ],
         data_dirs: &["/var/lib/postgresql", "/var/lib/pgsql"],
-        notes: None,
+        notes: Some("发行版仓库的 PostgreSQL 通常滞后；可选 PostgreSQL 官方源安装最新主线版本。"),
         supports_reload: false,
-        vendor_script: None,
+        vendor_script: Some(VendorScriptDescriptor {
+            label: "PostgreSQL 官方源",
+            // url is a fallback marker only — setup_scripts handles
+            // the real action below. Keep the URL pointing at the
+            // canonical setup-doc page so the audit trail still has
+            // a meaningful "where this came from" record.
+            url: "https://www.postgresql.org/download/",
+            urls: &[],
+            // Multi-step setup: import the GPG key, write the
+            // sources file, refresh metadata. After this snippet
+            // returns 0, run_install_via_script falls through to
+            // the descriptor's install_packages with the new repo
+            // in place.
+            setup_scripts: &[
+                (
+                    PackageManager::Apt,
+                    "set -e; \
+                     install -d -m 0755 /usr/share/postgresql-common/pgdg; \
+                     curl -fsSL https://www.postgresql.org/media/keys/ACCC4CF8.asc \
+                       -o /usr/share/postgresql-common/pgdg/apt.postgresql.org.asc; \
+                     codename=$(. /etc/os-release && echo \"$VERSION_CODENAME\"); \
+                     [ -n \"$codename\" ] || codename=$(lsb_release -cs 2>/dev/null); \
+                     [ -n \"$codename\" ] || { echo 'cannot detect ubuntu/debian codename'; exit 1; }; \
+                     echo \"deb [signed-by=/usr/share/postgresql-common/pgdg/apt.postgresql.org.asc] \
+                       https://apt.postgresql.org/pub/repos/apt $codename-pgdg main\" \
+                       > /etc/apt/sources.list.d/pgdg.list; \
+                     apt-get update -qq",
+                ),
+                (
+                    PackageManager::Dnf,
+                    "set -e; \
+                     ver=$(rpm -E %rhel 2>/dev/null); \
+                     [ -n \"$ver\" ] || { echo 'cannot detect rhel version (rpm -E %rhel)'; exit 1; }; \
+                     dnf install -y \"https://download.postgresql.org/pub/repos/yum/reporpms/EL-${ver}-x86_64/pgdg-redhat-repo-latest.noarch.rpm\"; \
+                     dnf -qy module disable postgresql || true",
+                ),
+                (
+                    PackageManager::Yum,
+                    "set -e; \
+                     ver=$(rpm -E %rhel 2>/dev/null); \
+                     [ -n \"$ver\" ] || { echo 'cannot detect rhel version'; exit 1; }; \
+                     yum install -y \"https://download.postgresql.org/pub/repos/yum/reporpms/EL-${ver}-x86_64/pgdg-redhat-repo-latest.noarch.rpm\"",
+                ),
+            ],
+            // Reverse the setup. Each line is best-effort so a
+            // partially-set-up host (e.g. user removed the .list
+            // by hand) doesn't cause cleanup to bail out half-way.
+            cleanup_scripts: &[
+                (
+                    PackageManager::Apt,
+                    "rm -f /etc/apt/sources.list.d/pgdg.list \
+                       /usr/share/postgresql-common/pgdg/apt.postgresql.org.asc \
+                       2>/dev/null || true; \
+                     apt-get update -qq 2>/dev/null || true; \
+                     echo 'pgdg apt source removed'",
+                ),
+                (
+                    PackageManager::Dnf,
+                    "dnf remove -y pgdg-redhat-repo 2>/dev/null || true; \
+                     dnf clean all 2>/dev/null || true; \
+                     echo 'pgdg dnf source removed'",
+                ),
+                (
+                    PackageManager::Yum,
+                    "yum remove -y pgdg-redhat-repo 2>/dev/null || true; \
+                     yum clean all 2>/dev/null || true; \
+                     echo 'pgdg yum source removed'",
+                ),
+            ],
+            run_as_root: true,
+            notes: "由 PostgreSQL Global Development Group 维护。会写入 /etc/apt/sources.list.d/pgdg.list（apt）或安装 pgdg 源 RPM（dnf/yum），然后从官方源安装 postgresql。pgdg 不覆盖 pacman / apk / zypper（这些发行版的仓库通常已经较新）。Pier-X 不会校验脚本签名，请确认网络通路可信后再继续。",
+            conflicts_with_apt: true,
+        }),
+        binary_name: "psql",
+        config_paths: &[
+            "/etc/postgresql",
+            "/var/lib/pgsql/data/postgresql.conf",
+        ],
+        default_ports: &[5432],
+        version_variants: &[],
+        category: "database",
     },
     PackageDescriptor {
         id: "mariadb",
@@ -550,6 +810,15 @@ const REGISTRY: &[PackageDescriptor] = &[
         notes: Some("默认装 MariaDB（与 MySQL 协议兼容，发行版仓库的标准选择）。"),
         supports_reload: false,
         vendor_script: None,
+        binary_name: "mysql",
+        config_paths: &[
+            "/etc/mysql/my.cnf",
+            "/etc/my.cnf",
+            "/etc/mysql/mariadb.conf.d",
+        ],
+        default_ports: &[3306],
+        version_variants: &[],
+        category: "database",
     },
     PackageDescriptor {
         id: "nginx",
@@ -581,6 +850,15 @@ const REGISTRY: &[PackageDescriptor] = &[
         // don't reach for "restart" out of habit.
         supports_reload: true,
         vendor_script: None,
+        binary_name: "nginx",
+        config_paths: &[
+            "/etc/nginx/nginx.conf",
+            "/etc/nginx/conf.d",
+            "/etc/nginx/sites-enabled",
+        ],
+        default_ports: &[80, 443],
+        version_variants: &[],
+        category: "web",
     },
     PackageDescriptor {
         id: "jq",
@@ -599,6 +877,11 @@ const REGISTRY: &[PackageDescriptor] = &[
         notes: None,
         supports_reload: false,
         vendor_script: None,
+        binary_name: "jq",
+        config_paths: &[],
+        default_ports: &[],
+        version_variants: &[],
+        category: "text",
     },
     PackageDescriptor {
         id: "curl",
@@ -617,12 +900,1262 @@ const REGISTRY: &[PackageDescriptor] = &[
         notes: None,
         supports_reload: false,
         vendor_script: None,
+        binary_name: "curl",
+        config_paths: &[],
+        default_ports: &[],
+        version_variants: &[],
+        category: "network",
+    },
+    // ── Runtimes & build tools ─────────────────────────────────────
+    PackageDescriptor {
+        id: "java",
+        display_name: "Java (OpenJDK)",
+        // Generic probe — `java -version` writes to stderr; redirect
+        // for version capture. The descriptor's probe finds *any*
+        // installed JDK; per-variant detail probes use the variant's
+        // override when present.
+        probe_command: "command -v java >/dev/null 2>&1 && java -version 2>&1",
+        // Default install packages — used only when no variant is
+        // selected. Each manager's default JDK package picks a recent
+        // long-term-supported release.
+        install_packages: &[
+            (PackageManager::Apt, &["default-jdk"]),
+            (PackageManager::Dnf, &["java-latest-openjdk-devel"]),
+            (PackageManager::Yum, &["java-21-openjdk-devel"]),
+            (PackageManager::Apk, &["openjdk21"]),
+            (PackageManager::Pacman, &["jdk-openjdk"]),
+            (PackageManager::Zypper, &["java-21-openjdk-devel"]),
+        ],
+        service_units: &[],
+        data_dirs: &[],
+        notes: Some("可在版本下拉里选择 OpenJDK 8 / 11 / 17 / 21；默认按发行版仓库的当前推荐版本安装。"),
+        supports_reload: false,
+        vendor_script: None,
+        binary_name: "java",
+        config_paths: &[],
+        default_ports: &[],
+        version_variants: &[
+            VersionVariant {
+                key: "openjdk-8",
+                label: "OpenJDK 8",
+                install_packages: &[
+                    (PackageManager::Apt, &["openjdk-8-jdk"]),
+                    (PackageManager::Dnf, &["java-1.8.0-openjdk-devel"]),
+                    (PackageManager::Yum, &["java-1.8.0-openjdk-devel"]),
+                    (PackageManager::Apk, &["openjdk8"]),
+                    (PackageManager::Pacman, &["jdk8-openjdk"]),
+                    (PackageManager::Zypper, &["java-1_8_0-openjdk-devel"]),
+                ],
+                probe_command: None,
+            },
+            VersionVariant {
+                key: "openjdk-11",
+                label: "OpenJDK 11",
+                install_packages: &[
+                    (PackageManager::Apt, &["openjdk-11-jdk"]),
+                    (PackageManager::Dnf, &["java-11-openjdk-devel"]),
+                    (PackageManager::Yum, &["java-11-openjdk-devel"]),
+                    (PackageManager::Apk, &["openjdk11"]),
+                    (PackageManager::Pacman, &["jdk11-openjdk"]),
+                    (PackageManager::Zypper, &["java-11-openjdk-devel"]),
+                ],
+                probe_command: None,
+            },
+            VersionVariant {
+                key: "openjdk-17",
+                label: "OpenJDK 17",
+                install_packages: &[
+                    (PackageManager::Apt, &["openjdk-17-jdk"]),
+                    (PackageManager::Dnf, &["java-17-openjdk-devel"]),
+                    (PackageManager::Yum, &["java-17-openjdk-devel"]),
+                    (PackageManager::Apk, &["openjdk17"]),
+                    (PackageManager::Pacman, &["jdk17-openjdk"]),
+                    (PackageManager::Zypper, &["java-17-openjdk-devel"]),
+                ],
+                probe_command: None,
+            },
+            VersionVariant {
+                key: "openjdk-21",
+                label: "OpenJDK 21",
+                install_packages: &[
+                    (PackageManager::Apt, &["openjdk-21-jdk"]),
+                    (PackageManager::Dnf, &["java-21-openjdk-devel"]),
+                    (PackageManager::Yum, &["java-21-openjdk-devel"]),
+                    (PackageManager::Apk, &["openjdk21"]),
+                    (PackageManager::Pacman, &["jdk21-openjdk"]),
+                    (PackageManager::Zypper, &["java-21-openjdk-devel"]),
+                ],
+                probe_command: None,
+            },
+        ],
+        category: "runtime",
+    },
+    PackageDescriptor {
+        id: "maven",
+        display_name: "Apache Maven",
+        probe_command: "command -v mvn >/dev/null 2>&1 && mvn -v 2>&1",
+        install_packages: &[
+            (PackageManager::Apt, &["maven"]),
+            (PackageManager::Dnf, &["maven"]),
+            (PackageManager::Yum, &["maven"]),
+            (PackageManager::Apk, &["maven"]),
+            (PackageManager::Pacman, &["maven"]),
+            (PackageManager::Zypper, &["maven"]),
+        ],
+        service_units: &[],
+        data_dirs: &[],
+        notes: None,
+        supports_reload: false,
+        vendor_script: None,
+        binary_name: "mvn",
+        config_paths: &["/etc/maven/settings.xml"],
+        default_ports: &[],
+        version_variants: &[],
+        category: "dev",
+    },
+    PackageDescriptor {
+        id: "node",
+        display_name: "Node.js",
+        probe_command: "command -v node >/dev/null 2>&1 && node --version 2>&1",
+        install_packages: &[
+            (PackageManager::Apt, &["nodejs"]),
+            (PackageManager::Dnf, &["nodejs"]),
+            (PackageManager::Yum, &["nodejs"]),
+            (PackageManager::Apk, &["nodejs"]),
+            (PackageManager::Pacman, &["nodejs"]),
+            (PackageManager::Zypper, &["nodejs"]),
+        ],
+        service_units: &[],
+        data_dirs: &[],
+        notes: Some("发行版仓库的 Node 版本通常滞后；可选 NodeSource 官方脚本安装最新 LTS 主线版本。"),
+        supports_reload: false,
+        vendor_script: Some(VendorScriptDescriptor {
+            label: "NodeSource LTS",
+            // Fallback URL — used when the host's manager isn't in
+            // the per-family `urls` matrix below. NodeSource doesn't
+            // ship a unified entrypoint, so we keep apt's URL here
+            // and let RHEL-family route through `urls`.
+            url: "https://deb.nodesource.com/setup_lts.x",
+            urls: &[
+                (PackageManager::Apt, "https://deb.nodesource.com/setup_lts.x"),
+                (PackageManager::Dnf, "https://rpm.nodesource.com/setup_lts.x"),
+                (PackageManager::Yum, "https://rpm.nodesource.com/setup_lts.x"),
+            ],
+            setup_scripts: &[],
+            cleanup_scripts: &[],
+            run_as_root: true,
+            notes: "由 NodeSource 维护，会添加上游 apt / yum 仓库并安装最新 LTS 版 Node.js。Pier-X 不会校验脚本签名，请确认网络通路可信后再继续。",
+            conflicts_with_apt: true,
+        }),
+        binary_name: "node",
+        config_paths: &[],
+        default_ports: &[],
+        version_variants: &[],
+        category: "runtime",
+    },
+    PackageDescriptor {
+        id: "python3",
+        display_name: "Python 3",
+        probe_command: "command -v python3 >/dev/null 2>&1 && python3 --version 2>&1",
+        install_packages: &[
+            (PackageManager::Apt, &["python3"]),
+            (PackageManager::Dnf, &["python3"]),
+            (PackageManager::Yum, &["python3"]),
+            (PackageManager::Apk, &["python3"]),
+            (PackageManager::Pacman, &["python"]),
+            (PackageManager::Zypper, &["python3"]),
+        ],
+        service_units: &[],
+        data_dirs: &[],
+        notes: None,
+        supports_reload: false,
+        vendor_script: None,
+        binary_name: "python3",
+        config_paths: &[],
+        default_ports: &[],
+        version_variants: &[],
+        category: "runtime",
+    },
+    PackageDescriptor {
+        id: "go",
+        display_name: "Go",
+        probe_command: "command -v go >/dev/null 2>&1 && go version 2>&1",
+        install_packages: &[
+            (PackageManager::Apt, &["golang-go"]),
+            (PackageManager::Dnf, &["golang"]),
+            (PackageManager::Yum, &["golang"]),
+            (PackageManager::Apk, &["go"]),
+            (PackageManager::Pacman, &["go"]),
+            (PackageManager::Zypper, &["go"]),
+        ],
+        service_units: &[],
+        data_dirs: &[],
+        notes: None,
+        supports_reload: false,
+        vendor_script: None,
+        binary_name: "go",
+        config_paths: &[],
+        default_ports: &[],
+        version_variants: &[],
+        category: "runtime",
+    },
+    PackageDescriptor {
+        id: "git",
+        display_name: "Git",
+        probe_command: "command -v git >/dev/null 2>&1 && git --version 2>&1",
+        install_packages: &[
+            (PackageManager::Apt, &["git"]),
+            (PackageManager::Dnf, &["git"]),
+            (PackageManager::Yum, &["git"]),
+            (PackageManager::Apk, &["git"]),
+            (PackageManager::Pacman, &["git"]),
+            (PackageManager::Zypper, &["git"]),
+        ],
+        service_units: &[],
+        data_dirs: &[],
+        notes: None,
+        supports_reload: false,
+        vendor_script: None,
+        binary_name: "git",
+        config_paths: &["/etc/gitconfig"],
+        default_ports: &[],
+        version_variants: &[],
+        category: "dev",
+    },
+    PackageDescriptor {
+        id: "htop",
+        display_name: "htop",
+        probe_command: "command -v htop >/dev/null 2>&1 && htop --version 2>&1",
+        install_packages: &[
+            (PackageManager::Apt, &["htop"]),
+            (PackageManager::Dnf, &["htop"]),
+            (PackageManager::Yum, &["htop"]),
+            (PackageManager::Apk, &["htop"]),
+            (PackageManager::Pacman, &["htop"]),
+            (PackageManager::Zypper, &["htop"]),
+        ],
+        service_units: &[],
+        data_dirs: &[],
+        notes: None,
+        supports_reload: false,
+        vendor_script: None,
+        binary_name: "htop",
+        config_paths: &[],
+        default_ports: &[],
+        version_variants: &[],
+        category: "system",
+    },
+    PackageDescriptor {
+        id: "wget",
+        display_name: "wget",
+        probe_command: "command -v wget >/dev/null 2>&1 && wget --version 2>&1",
+        install_packages: &[
+            (PackageManager::Apt, &["wget"]),
+            (PackageManager::Dnf, &["wget"]),
+            (PackageManager::Yum, &["wget"]),
+            (PackageManager::Apk, &["wget"]),
+            (PackageManager::Pacman, &["wget"]),
+            (PackageManager::Zypper, &["wget"]),
+        ],
+        service_units: &[],
+        data_dirs: &[],
+        notes: None,
+        supports_reload: false,
+        vendor_script: None,
+        binary_name: "wget",
+        config_paths: &["/etc/wgetrc"],
+        default_ports: &[],
+        version_variants: &[],
+        category: "network",
+    },
+    PackageDescriptor {
+        id: "vim",
+        display_name: "Vim",
+        probe_command: "command -v vim >/dev/null 2>&1 && vim --version 2>&1 | head -1",
+        install_packages: &[
+            (PackageManager::Apt, &["vim"]),
+            (PackageManager::Dnf, &["vim-enhanced"]),
+            (PackageManager::Yum, &["vim-enhanced"]),
+            (PackageManager::Apk, &["vim"]),
+            (PackageManager::Pacman, &["vim"]),
+            (PackageManager::Zypper, &["vim"]),
+        ],
+        service_units: &[],
+        data_dirs: &[],
+        notes: None,
+        supports_reload: false,
+        vendor_script: None,
+        binary_name: "vim",
+        config_paths: &["/etc/vim/vimrc", "/etc/vimrc"],
+        default_ports: &[],
+        version_variants: &[],
+        category: "editor",
+    },
+    PackageDescriptor {
+        id: "tmux",
+        display_name: "tmux",
+        probe_command: "command -v tmux >/dev/null 2>&1 && tmux -V 2>&1",
+        install_packages: &[
+            (PackageManager::Apt, &["tmux"]),
+            (PackageManager::Dnf, &["tmux"]),
+            (PackageManager::Yum, &["tmux"]),
+            (PackageManager::Apk, &["tmux"]),
+            (PackageManager::Pacman, &["tmux"]),
+            (PackageManager::Zypper, &["tmux"]),
+        ],
+        service_units: &[],
+        data_dirs: &[],
+        notes: None,
+        supports_reload: false,
+        vendor_script: None,
+        binary_name: "tmux",
+        config_paths: &["/etc/tmux.conf"],
+        default_ports: &[],
+        version_variants: &[],
+        category: "terminal",
+    },
+    // ── App-store v2.2: editor / dev / network / system / text ────
+    PackageDescriptor {
+        id: "nano",
+        display_name: "GNU nano",
+        probe_command: "command -v nano >/dev/null 2>&1 && nano --version 2>&1 | head -1",
+        install_packages: &[
+            (PackageManager::Apt, &["nano"]),
+            (PackageManager::Dnf, &["nano"]),
+            (PackageManager::Yum, &["nano"]),
+            (PackageManager::Apk, &["nano"]),
+            (PackageManager::Pacman, &["nano"]),
+            (PackageManager::Zypper, &["nano"]),
+        ],
+        service_units: &[],
+        data_dirs: &[],
+        notes: None,
+        supports_reload: false,
+        vendor_script: None,
+        binary_name: "nano",
+        config_paths: &["/etc/nanorc"],
+        default_ports: &[],
+        version_variants: &[],
+        category: "editor",
+    },
+    PackageDescriptor {
+        id: "neovim",
+        display_name: "Neovim",
+        probe_command: "command -v nvim >/dev/null 2>&1 && nvim --version 2>&1 | head -1",
+        install_packages: &[
+            (PackageManager::Apt, &["neovim"]),
+            (PackageManager::Dnf, &["neovim"]),
+            (PackageManager::Yum, &["neovim"]),
+            (PackageManager::Apk, &["neovim"]),
+            (PackageManager::Pacman, &["neovim"]),
+            (PackageManager::Zypper, &["neovim"]),
+        ],
+        service_units: &[],
+        data_dirs: &[],
+        notes: None,
+        supports_reload: false,
+        vendor_script: None,
+        binary_name: "nvim",
+        config_paths: &[],
+        default_ports: &[],
+        version_variants: &[],
+        category: "editor",
+    },
+    PackageDescriptor {
+        id: "rust",
+        display_name: "Rust (rustc)",
+        // The distro `rustc` is usually old; the row's vendor-script
+        // path covers the rustup channel for users who need a recent
+        // toolchain. Probe matches whichever flavour is installed.
+        probe_command: "command -v rustc >/dev/null 2>&1 && rustc --version 2>&1",
+        install_packages: &[
+            (PackageManager::Apt, &["rustc"]),
+            (PackageManager::Dnf, &["rust"]),
+            (PackageManager::Yum, &["rust"]),
+            (PackageManager::Apk, &["rust"]),
+            (PackageManager::Pacman, &["rust"]),
+            (PackageManager::Zypper, &["rust"]),
+        ],
+        service_units: &[],
+        data_dirs: &[],
+        notes: Some("发行版仓库的 Rust 通常滞后。需要新版可选 rustup 官方脚本（按用户安装到 ~/.cargo）。"),
+        supports_reload: false,
+        vendor_script: Some(VendorScriptDescriptor {
+            label: "rustup 官方脚本",
+            url: "https://sh.rustup.rs",
+            urls: &[],
+            setup_scripts: &[],
+            cleanup_scripts: &[],
+            run_as_root: false,
+            notes: "由 Rust 官方维护，安装到当前用户的 ~/.cargo（不写系统目录）。Pier-X 不会校验脚本签名，请确认网络通路可信后再继续。",
+            conflicts_with_apt: false,
+        }),
+        binary_name: "rustc",
+        config_paths: &[],
+        default_ports: &[],
+        version_variants: &[],
+        category: "runtime",
+    },
+    PackageDescriptor {
+        id: "php",
+        display_name: "PHP CLI",
+        probe_command: "command -v php >/dev/null 2>&1 && php --version 2>&1 | head -1",
+        install_packages: &[
+            (PackageManager::Apt, &["php-cli"]),
+            (PackageManager::Dnf, &["php-cli"]),
+            (PackageManager::Yum, &["php-cli"]),
+            (PackageManager::Apk, &["php83-cli"]),
+            (PackageManager::Pacman, &["php"]),
+            (PackageManager::Zypper, &["php8-cli"]),
+        ],
+        service_units: &[],
+        data_dirs: &[],
+        notes: None,
+        supports_reload: false,
+        vendor_script: None,
+        binary_name: "php",
+        config_paths: &["/etc/php"],
+        default_ports: &[],
+        version_variants: &[],
+        category: "runtime",
+    },
+    PackageDescriptor {
+        id: "gcc",
+        display_name: "GCC (C compiler)",
+        probe_command: "command -v gcc >/dev/null 2>&1 && gcc --version 2>&1 | head -1",
+        install_packages: &[
+            (PackageManager::Apt, &["gcc"]),
+            (PackageManager::Dnf, &["gcc"]),
+            (PackageManager::Yum, &["gcc"]),
+            (PackageManager::Apk, &["gcc"]),
+            (PackageManager::Pacman, &["gcc"]),
+            (PackageManager::Zypper, &["gcc"]),
+        ],
+        service_units: &[],
+        data_dirs: &[],
+        notes: None,
+        supports_reload: false,
+        vendor_script: None,
+        binary_name: "gcc",
+        config_paths: &[],
+        default_ports: &[],
+        version_variants: &[],
+        category: "dev",
+    },
+    PackageDescriptor {
+        id: "make",
+        display_name: "GNU make",
+        probe_command: "command -v make >/dev/null 2>&1 && make --version 2>&1 | head -1",
+        install_packages: &[
+            (PackageManager::Apt, &["make"]),
+            (PackageManager::Dnf, &["make"]),
+            (PackageManager::Yum, &["make"]),
+            (PackageManager::Apk, &["make"]),
+            (PackageManager::Pacman, &["make"]),
+            (PackageManager::Zypper, &["make"]),
+        ],
+        service_units: &[],
+        data_dirs: &[],
+        notes: None,
+        supports_reload: false,
+        vendor_script: None,
+        binary_name: "make",
+        config_paths: &[],
+        default_ports: &[],
+        version_variants: &[],
+        category: "dev",
+    },
+    PackageDescriptor {
+        id: "cmake",
+        display_name: "CMake",
+        probe_command: "command -v cmake >/dev/null 2>&1 && cmake --version 2>&1 | head -1",
+        install_packages: &[
+            (PackageManager::Apt, &["cmake"]),
+            (PackageManager::Dnf, &["cmake"]),
+            (PackageManager::Yum, &["cmake"]),
+            (PackageManager::Apk, &["cmake"]),
+            (PackageManager::Pacman, &["cmake"]),
+            (PackageManager::Zypper, &["cmake"]),
+        ],
+        service_units: &[],
+        data_dirs: &[],
+        notes: None,
+        supports_reload: false,
+        vendor_script: None,
+        binary_name: "cmake",
+        config_paths: &[],
+        default_ports: &[],
+        version_variants: &[],
+        category: "dev",
+    },
+    PackageDescriptor {
+        id: "openssl",
+        display_name: "OpenSSL CLI",
+        probe_command: "command -v openssl >/dev/null 2>&1 && openssl version 2>&1",
+        install_packages: &[
+            (PackageManager::Apt, &["openssl"]),
+            (PackageManager::Dnf, &["openssl"]),
+            (PackageManager::Yum, &["openssl"]),
+            (PackageManager::Apk, &["openssl"]),
+            (PackageManager::Pacman, &["openssl"]),
+            (PackageManager::Zypper, &["openssl"]),
+        ],
+        service_units: &[],
+        data_dirs: &[],
+        notes: None,
+        supports_reload: false,
+        vendor_script: None,
+        binary_name: "openssl",
+        config_paths: &["/etc/ssl/openssl.cnf", "/etc/pki/tls/openssl.cnf"],
+        default_ports: &[],
+        version_variants: &[],
+        category: "network",
+    },
+    PackageDescriptor {
+        id: "fail2ban",
+        display_name: "Fail2Ban",
+        probe_command: "command -v fail2ban-server >/dev/null 2>&1 && fail2ban-server -V 2>&1",
+        install_packages: &[
+            (PackageManager::Apt, &["fail2ban"]),
+            (PackageManager::Dnf, &["fail2ban"]),
+            (PackageManager::Yum, &["fail2ban"]),
+            (PackageManager::Apk, &["fail2ban"]),
+            (PackageManager::Pacman, &["fail2ban"]),
+            (PackageManager::Zypper, &["fail2ban"]),
+        ],
+        service_units: &[
+            (PackageManager::Apt, "fail2ban"),
+            (PackageManager::Dnf, "fail2ban"),
+            (PackageManager::Yum, "fail2ban"),
+            (PackageManager::Apk, "fail2ban"),
+            (PackageManager::Pacman, "fail2ban"),
+            (PackageManager::Zypper, "fail2ban"),
+        ],
+        data_dirs: &["/var/lib/fail2ban"],
+        notes: None,
+        supports_reload: true,
+        vendor_script: None,
+        binary_name: "fail2ban-server",
+        config_paths: &["/etc/fail2ban/jail.local", "/etc/fail2ban/jail.conf"],
+        default_ports: &[],
+        version_variants: &[],
+        category: "system",
+    },
+    PackageDescriptor {
+        id: "zsh",
+        display_name: "Zsh",
+        probe_command: "command -v zsh >/dev/null 2>&1 && zsh --version 2>&1",
+        install_packages: &[
+            (PackageManager::Apt, &["zsh"]),
+            (PackageManager::Dnf, &["zsh"]),
+            (PackageManager::Yum, &["zsh"]),
+            (PackageManager::Apk, &["zsh"]),
+            (PackageManager::Pacman, &["zsh"]),
+            (PackageManager::Zypper, &["zsh"]),
+        ],
+        service_units: &[],
+        data_dirs: &[],
+        notes: None,
+        supports_reload: false,
+        vendor_script: None,
+        binary_name: "zsh",
+        config_paths: &["/etc/zsh/zshrc", "/etc/zshrc"],
+        default_ports: &[],
+        version_variants: &[],
+        category: "terminal",
+    },
+    PackageDescriptor {
+        id: "ca-certificates",
+        display_name: "CA Certificates",
+        // No `--version` for ca-certificates; check via dpkg/rpm/etc.
+        // We use update-ca-certificates / update-ca-trust as the
+        // canonical "is this present" probe across families.
+        probe_command:
+            "command -v update-ca-certificates >/dev/null 2>&1 || command -v update-ca-trust >/dev/null 2>&1",
+        install_packages: &[
+            (PackageManager::Apt, &["ca-certificates"]),
+            (PackageManager::Dnf, &["ca-certificates"]),
+            (PackageManager::Yum, &["ca-certificates"]),
+            (PackageManager::Apk, &["ca-certificates"]),
+            (PackageManager::Pacman, &["ca-certificates"]),
+            (PackageManager::Zypper, &["ca-certificates"]),
+        ],
+        service_units: &[],
+        data_dirs: &[],
+        notes: Some("根证书包。一些容器基底镜像未默认装；连 https 一直报证书错误时检查这里。"),
+        supports_reload: false,
+        vendor_script: None,
+        binary_name: "",
+        config_paths: &["/etc/ssl/certs", "/etc/pki/tls/certs"],
+        default_ports: &[],
+        version_variants: &[],
+        category: "system",
+    },
+    PackageDescriptor {
+        id: "rsync",
+        display_name: "rsync",
+        probe_command: "command -v rsync >/dev/null 2>&1 && rsync --version 2>&1 | head -1",
+        install_packages: &[
+            (PackageManager::Apt, &["rsync"]),
+            (PackageManager::Dnf, &["rsync"]),
+            (PackageManager::Yum, &["rsync"]),
+            (PackageManager::Apk, &["rsync"]),
+            (PackageManager::Pacman, &["rsync"]),
+            (PackageManager::Zypper, &["rsync"]),
+        ],
+        service_units: &[],
+        data_dirs: &[],
+        notes: None,
+        supports_reload: false,
+        vendor_script: None,
+        binary_name: "rsync",
+        config_paths: &[],
+        default_ports: &[],
+        version_variants: &[],
+        category: "network",
+    },
+    PackageDescriptor {
+        id: "unzip",
+        display_name: "unzip",
+        probe_command: "command -v unzip >/dev/null 2>&1 && unzip -v 2>&1 | head -1",
+        install_packages: &[
+            (PackageManager::Apt, &["unzip"]),
+            (PackageManager::Dnf, &["unzip"]),
+            (PackageManager::Yum, &["unzip"]),
+            (PackageManager::Apk, &["unzip"]),
+            (PackageManager::Pacman, &["unzip"]),
+            (PackageManager::Zypper, &["unzip"]),
+        ],
+        service_units: &[],
+        data_dirs: &[],
+        notes: None,
+        supports_reload: false,
+        vendor_script: None,
+        binary_name: "unzip",
+        config_paths: &[],
+        default_ports: &[],
+        version_variants: &[],
+        category: "system",
+    },
+    PackageDescriptor {
+        id: "ripgrep",
+        display_name: "ripgrep",
+        probe_command: "command -v rg >/dev/null 2>&1 && rg --version 2>&1 | head -1",
+        install_packages: &[
+            (PackageManager::Apt, &["ripgrep"]),
+            (PackageManager::Dnf, &["ripgrep"]),
+            (PackageManager::Yum, &["ripgrep"]),
+            (PackageManager::Apk, &["ripgrep"]),
+            (PackageManager::Pacman, &["ripgrep"]),
+            (PackageManager::Zypper, &["ripgrep"]),
+        ],
+        service_units: &[],
+        data_dirs: &[],
+        notes: None,
+        supports_reload: false,
+        vendor_script: None,
+        binary_name: "rg",
+        config_paths: &[],
+        default_ports: &[],
+        version_variants: &[],
+        category: "text",
+    },
+    // ── App-store v2.4: cross-distro common utilities ──────────────
+    PackageDescriptor {
+        id: "gradle",
+        display_name: "Gradle",
+        probe_command: "command -v gradle >/dev/null 2>&1 && gradle --version 2>&1 | head -3",
+        install_packages: &[
+            (PackageManager::Apt, &["gradle"]),
+            (PackageManager::Dnf, &["gradle"]),
+            (PackageManager::Yum, &["gradle"]),
+            (PackageManager::Apk, &["gradle"]),
+            (PackageManager::Pacman, &["gradle"]),
+            (PackageManager::Zypper, &["gradle"]),
+        ],
+        service_units: &[],
+        data_dirs: &[],
+        notes: None,
+        supports_reload: false,
+        vendor_script: None,
+        binary_name: "gradle",
+        config_paths: &[],
+        default_ports: &[],
+        version_variants: &[],
+        category: "dev",
+    },
+    PackageDescriptor {
+        id: "ansible",
+        display_name: "Ansible",
+        probe_command: "command -v ansible >/dev/null 2>&1 && ansible --version 2>&1 | head -1",
+        install_packages: &[
+            (PackageManager::Apt, &["ansible"]),
+            (PackageManager::Dnf, &["ansible"]),
+            (PackageManager::Yum, &["ansible"]),
+            (PackageManager::Apk, &["ansible"]),
+            (PackageManager::Pacman, &["ansible"]),
+            (PackageManager::Zypper, &["ansible"]),
+        ],
+        service_units: &[],
+        data_dirs: &[],
+        notes: None,
+        supports_reload: false,
+        vendor_script: None,
+        binary_name: "ansible",
+        config_paths: &["/etc/ansible/ansible.cfg"],
+        default_ports: &[],
+        version_variants: &[],
+        category: "system",
+    },
+    PackageDescriptor {
+        id: "screen",
+        display_name: "GNU Screen",
+        probe_command: "command -v screen >/dev/null 2>&1 && screen --version 2>&1 | head -1",
+        install_packages: &[
+            (PackageManager::Apt, &["screen"]),
+            (PackageManager::Dnf, &["screen"]),
+            (PackageManager::Yum, &["screen"]),
+            (PackageManager::Apk, &["screen"]),
+            (PackageManager::Pacman, &["screen"]),
+            (PackageManager::Zypper, &["screen"]),
+        ],
+        service_units: &[],
+        data_dirs: &[],
+        notes: None,
+        supports_reload: false,
+        vendor_script: None,
+        binary_name: "screen",
+        config_paths: &["/etc/screenrc"],
+        default_ports: &[],
+        version_variants: &[],
+        category: "terminal",
+    },
+    PackageDescriptor {
+        id: "less",
+        display_name: "less",
+        probe_command: "command -v less >/dev/null 2>&1 && less --version 2>&1 | head -1",
+        install_packages: &[
+            (PackageManager::Apt, &["less"]),
+            (PackageManager::Dnf, &["less"]),
+            (PackageManager::Yum, &["less"]),
+            (PackageManager::Apk, &["less"]),
+            (PackageManager::Pacman, &["less"]),
+            (PackageManager::Zypper, &["less"]),
+        ],
+        service_units: &[],
+        data_dirs: &[],
+        notes: None,
+        supports_reload: false,
+        vendor_script: None,
+        binary_name: "less",
+        config_paths: &[],
+        default_ports: &[],
+        version_variants: &[],
+        category: "system",
+    },
+    PackageDescriptor {
+        id: "lsof",
+        display_name: "lsof",
+        probe_command: "command -v lsof >/dev/null 2>&1 && lsof -v 2>&1 | head -2",
+        install_packages: &[
+            (PackageManager::Apt, &["lsof"]),
+            (PackageManager::Dnf, &["lsof"]),
+            (PackageManager::Yum, &["lsof"]),
+            (PackageManager::Apk, &["lsof"]),
+            (PackageManager::Pacman, &["lsof"]),
+            (PackageManager::Zypper, &["lsof"]),
+        ],
+        service_units: &[],
+        data_dirs: &[],
+        notes: None,
+        supports_reload: false,
+        vendor_script: None,
+        binary_name: "lsof",
+        config_paths: &[],
+        default_ports: &[],
+        version_variants: &[],
+        category: "system",
+    },
+    PackageDescriptor {
+        id: "strace",
+        display_name: "strace",
+        probe_command: "command -v strace >/dev/null 2>&1 && strace -V 2>&1",
+        install_packages: &[
+            (PackageManager::Apt, &["strace"]),
+            (PackageManager::Dnf, &["strace"]),
+            (PackageManager::Yum, &["strace"]),
+            (PackageManager::Apk, &["strace"]),
+            (PackageManager::Pacman, &["strace"]),
+            (PackageManager::Zypper, &["strace"]),
+        ],
+        service_units: &[],
+        data_dirs: &[],
+        notes: None,
+        supports_reload: false,
+        vendor_script: None,
+        binary_name: "strace",
+        config_paths: &[],
+        default_ports: &[],
+        version_variants: &[],
+        category: "dev",
+    },
+    PackageDescriptor {
+        id: "net-tools",
+        display_name: "net-tools (ifconfig/netstat)",
+        // No `--version` — probe via the canonical binary's presence;
+        // version comes back empty which the panel handles gracefully.
+        probe_command: "command -v ifconfig >/dev/null 2>&1 && ifconfig --version 2>&1 | head -1",
+        install_packages: &[
+            (PackageManager::Apt, &["net-tools"]),
+            (PackageManager::Dnf, &["net-tools"]),
+            (PackageManager::Yum, &["net-tools"]),
+            (PackageManager::Apk, &["net-tools"]),
+            (PackageManager::Pacman, &["net-tools"]),
+            (PackageManager::Zypper, &["net-tools"]),
+        ],
+        service_units: &[],
+        data_dirs: &[],
+        notes: Some("提供 ifconfig/netstat/route 等老牌命令；现代发行版已默认改用 ip/ss。"),
+        supports_reload: false,
+        vendor_script: None,
+        binary_name: "ifconfig",
+        config_paths: &[],
+        default_ports: &[],
+        version_variants: &[],
+        category: "network",
+    },
+    PackageDescriptor {
+        id: "bash-completion",
+        display_name: "bash-completion",
+        // bash-completion is a sourced script set — `command -v` is
+        // pointless. Probe the canonical install marker file.
+        probe_command:
+            "[ -e /usr/share/bash-completion/bash_completion ] && echo bash-completion installed",
+        install_packages: &[
+            (PackageManager::Apt, &["bash-completion"]),
+            (PackageManager::Dnf, &["bash-completion"]),
+            (PackageManager::Yum, &["bash-completion"]),
+            (PackageManager::Apk, &["bash-completion"]),
+            (PackageManager::Pacman, &["bash-completion"]),
+            (PackageManager::Zypper, &["bash-completion"]),
+        ],
+        service_units: &[],
+        data_dirs: &[],
+        notes: None,
+        supports_reload: false,
+        vendor_script: None,
+        binary_name: "",
+        config_paths: &["/etc/bash_completion.d"],
+        default_ports: &[],
+        version_variants: &[],
+        category: "system",
     },
 ];
 
 /// Look up a descriptor by id. `None` means "not in registry".
 pub fn descriptor(id: &str) -> Option<&'static PackageDescriptor> {
-    REGISTRY.iter().find(|d| d.id == id)
+    merged_registry().iter().find(|d| d.id == id)
+}
+
+// ── Curated bundles (v2.6) ─────────────────────────────────────────
+//
+// Pre-baked groups of registry ids that go together. The panel
+// renders these as one-click cards above the per-package list so a
+// fresh host can come up with "DevOps basics" or "Java dev" in a
+// single confirmation.
+//
+// Bundles point at descriptor ids — order in `package_ids` is the
+// order the panel installs them. We don't resolve the ids here so a
+// user-extras entry can be referenced by a bundle (the merged
+// registry resolves it at render time; missing ids are skipped with
+// a log line).
+
+/// One curated bundle.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct SoftwareBundle {
+    /// Stable id (`"devops"`, `"java-dev"`, …).
+    pub id: &'static str,
+    /// Human label rendered on the bundle card.
+    pub display_name: &'static str,
+    /// One-liner description shown beneath the label.
+    pub description: &'static str,
+    /// Descriptor ids this bundle pulls in. Install order = this
+    /// order; a missing id (e.g. dropped by a future registry edit)
+    /// is silently skipped at install time.
+    pub package_ids: &'static [&'static str],
+}
+
+const BUNDLES: &[SoftwareBundle] = &[
+    SoftwareBundle {
+        id: "devops",
+        display_name: "DevOps 基础",
+        description: "git / curl / jq / vim / htop / tmux / ripgrep — 服务器维护常用工具",
+        package_ids: &["git", "curl", "jq", "vim", "htop", "tmux", "ripgrep"],
+    },
+    SoftwareBundle {
+        id: "java-dev",
+        display_name: "Java 开发",
+        description: "OpenJDK + Maven + Gradle + Git — Java 服务端开发起步",
+        package_ids: &["java", "maven", "gradle", "git"],
+    },
+    SoftwareBundle {
+        id: "container-ops",
+        display_name: "容器运维",
+        description: "Docker + Compose + git + curl — 跑容器化应用最小集合",
+        package_ids: &["docker", "compose", "git", "curl"],
+    },
+    SoftwareBundle {
+        id: "lamp",
+        display_name: "Web 服务（LNMP）",
+        description: "nginx + MariaDB + PHP — 经典 Linux Web 栈（M 用 MariaDB 替代 MySQL）",
+        package_ids: &["nginx", "mariadb", "php"],
+    },
+    SoftwareBundle {
+        id: "diagnostics",
+        display_name: "系统诊断",
+        description: "lsof + strace + net-tools + less — 排查线上问题常用",
+        package_ids: &["lsof", "strace", "net-tools", "less"],
+    },
+];
+
+/// Public bundle catalog. Built-in BUNDLES merged with user-extras
+/// bundles (see `software-extras.json`'s `bundles` field). Order:
+/// built-in first, then user extras in declaration order.
+pub fn bundles() -> &'static [SoftwareBundle] {
+    merged_bundles()
+}
+
+// ── User-extras catalog ─────────────────────────────────────────────
+//
+// On startup, src-tauri calls [`set_user_extras_path`] with a path
+// to a JSON file (typically the app config dir). The first call to
+// [`registry`] / [`merged_registry`] / [`descriptor`] reads + parses
+// that file; entries that pass validation are leaked into static
+// memory and appended to the catalog the panel renders.
+//
+// Failures (file missing, JSON parse error, validation error) are
+// logged but never surface as a panel error — the user keeps the
+// built-in catalog regardless.
+
+/// Path injected by src-tauri at startup. Set once; later calls
+/// silently no-op so a misbehaving caller can't swap the file
+/// after the catalog has already been built.
+static USER_EXTRAS_PATH: std::sync::OnceLock<std::path::PathBuf> =
+    std::sync::OnceLock::new();
+
+/// Memoized merged catalog: REGISTRY + parsed user extras. Built
+/// lazily on first access. Subsequent edits to the extras file are
+/// not observed — restart the app to pick up changes.
+static MERGED_REGISTRY: std::sync::OnceLock<&'static [PackageDescriptor]> =
+    std::sync::OnceLock::new();
+
+/// Set the path to the user-extras JSON file. Idempotent — only
+/// the first call wins. Errors when called after the catalog is
+/// already built (the panel queried `registry()` before init).
+pub fn set_user_extras_path(path: std::path::PathBuf) -> std::result::Result<(), &'static str> {
+    USER_EXTRAS_PATH
+        .set(path)
+        .map_err(|_| "user_extras_path already set")
+}
+
+/// Return the path src-tauri set (if any). Used by tests + the
+/// `software_user_extras_path` Tauri command so the UI can show
+/// "your extras live here" in the panel.
+pub fn user_extras_path() -> Option<&'static std::path::Path> {
+    USER_EXTRAS_PATH.get().map(|p| p.as_path())
+}
+
+/// Memoized merged bundle catalog: built-in BUNDLES + user extras.
+/// Same lazy + Box::leak pattern as MERGED_REGISTRY.
+static MERGED_BUNDLES: std::sync::OnceLock<&'static [SoftwareBundle]> =
+    std::sync::OnceLock::new();
+
+fn ensure_user_extras_loaded() -> &'static UserExtrasParsed {
+    static CACHED: std::sync::OnceLock<UserExtrasParsed> = std::sync::OnceLock::new();
+    CACHED.get_or_init(|| {
+        let Some(path) = USER_EXTRAS_PATH.get() else {
+            return UserExtrasParsed::default();
+        };
+        match load_user_extras(path) {
+            Ok(e) => UserExtrasParsed {
+                packages: e.packages,
+                bundles: e.bundles,
+            },
+            Err(e) => {
+                eprintln!(
+                    "pier-core: failed to load user extras at {}: {e}",
+                    path.display()
+                );
+                UserExtrasParsed::default()
+            }
+        }
+    })
+}
+
+#[derive(Default)]
+struct UserExtrasParsed {
+    packages: Vec<PackageDescriptor>,
+    bundles: Vec<SoftwareBundle>,
+}
+
+fn merged_registry() -> &'static [PackageDescriptor] {
+    MERGED_REGISTRY.get_or_init(|| {
+        let extras = ensure_user_extras_loaded();
+        let mut v: Vec<PackageDescriptor> = REGISTRY.iter().cloned().collect();
+        let built_in_ids: std::collections::HashSet<&str> =
+            REGISTRY.iter().map(|d| d.id).collect();
+        for e in &extras.packages {
+            if built_in_ids.contains(e.id) {
+                eprintln!(
+                    "pier-core: user extra '{}' skipped (id collides with built-in)",
+                    e.id
+                );
+                continue;
+            }
+            v.push(e.clone());
+        }
+        Box::leak(v.into_boxed_slice())
+    })
+}
+
+fn merged_bundles() -> &'static [SoftwareBundle] {
+    MERGED_BUNDLES.get_or_init(|| {
+        let extras = ensure_user_extras_loaded();
+        let mut v: Vec<SoftwareBundle> = BUNDLES.iter().copied().collect();
+        let built_in_ids: std::collections::HashSet<&str> =
+            BUNDLES.iter().map(|b| b.id).collect();
+        for b in &extras.bundles {
+            if built_in_ids.contains(b.id) {
+                eprintln!(
+                    "pier-core: user bundle '{}' skipped (id collides with built-in)",
+                    b.id
+                );
+                continue;
+            }
+            v.push(*b);
+        }
+        Box::leak(v.into_boxed_slice())
+    })
+}
+
+/// JSON schema mirror — what the user writes in software-extras.json.
+/// Keep the field set narrow on purpose: every field that surfaces
+/// in the panel must be settable, but advanced fields (vendor_script,
+/// version_variants) stay out of the user-facing surface for now —
+/// they're security-sensitive and would need their own validation.
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct UserPackageJson {
+    id: String,
+    display_name: String,
+    probe_command: String,
+    install_packages: std::collections::HashMap<String, Vec<String>>,
+    #[serde(default)]
+    notes: Option<String>,
+    #[serde(default)]
+    binary_name: Option<String>,
+    #[serde(default)]
+    config_paths: Vec<String>,
+    #[serde(default)]
+    default_ports: Vec<u16>,
+    #[serde(default)]
+    data_dirs: Vec<String>,
+    #[serde(default)]
+    service_units: std::collections::HashMap<String, String>,
+    #[serde(default)]
+    supports_reload: bool,
+    #[serde(default)]
+    category: Option<String>,
+}
+
+/// Parsed contents of `software-extras.json`. The schema accepts both
+/// the legacy `[<package>...]` array and a richer wrapper object so
+/// users can ship custom bundles alongside their custom packages.
+#[derive(Debug, Default)]
+struct UserExtras {
+    packages: Vec<PackageDescriptor>,
+    bundles: Vec<SoftwareBundle>,
+}
+
+/// Wrapper-form schema. Legacy file shapes (a top-level array) get
+/// promoted into this struct's `packages` field with `bundles` empty.
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct UserExtrasWrapper {
+    #[serde(default)]
+    packages: Vec<UserPackageJson>,
+    #[serde(default)]
+    bundles: Vec<UserBundleJson>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct UserBundleJson {
+    id: String,
+    display_name: String,
+    #[serde(default)]
+    description: String,
+    package_ids: Vec<String>,
+}
+
+/// Two-shape JSON deserialiser. Accepts either:
+///   * `[ {package}, {package}, ... ]`               (legacy)
+///   * `{ "packages": [...], "bundles": [...] }`     (wrapper)
+fn parse_user_extras_bytes(
+    bytes: &[u8],
+) -> std::result::Result<UserExtrasWrapper, String> {
+    // Probe the first non-whitespace byte: `[` → legacy, `{` → wrapper.
+    let first = bytes.iter().copied().find(|b| !b.is_ascii_whitespace());
+    if first == Some(b'[') {
+        let pkgs: Vec<UserPackageJson> =
+            serde_json::from_slice(bytes).map_err(|e| e.to_string())?;
+        Ok(UserExtrasWrapper {
+            packages: pkgs,
+            bundles: Vec::new(),
+        })
+    } else {
+        serde_json::from_slice::<UserExtrasWrapper>(bytes).map_err(|e| e.to_string())
+    }
+}
+
+fn load_user_extras(
+    path: &std::path::Path,
+) -> std::result::Result<UserExtras, String> {
+    let bytes = std::fs::read(path).map_err(|e| e.to_string())?;
+    let wrapper = parse_user_extras_bytes(&bytes)?;
+    let mut packages: Vec<PackageDescriptor> = Vec::with_capacity(wrapper.packages.len());
+    for raw in wrapper.packages {
+        match validate_and_leak(raw) {
+            Ok(d) => packages.push(d),
+            Err(e) => eprintln!("pier-core: skipping user extra package: {e}"),
+        }
+    }
+    let mut bundles: Vec<SoftwareBundle> = Vec::with_capacity(wrapper.bundles.len());
+    for raw in wrapper.bundles {
+        match validate_and_leak_bundle(raw) {
+            Ok(b) => bundles.push(b),
+            Err(e) => eprintln!("pier-core: skipping user extra bundle: {e}"),
+        }
+    }
+    Ok(UserExtras { packages, bundles })
+}
+
+fn validate_and_leak_bundle(
+    raw: UserBundleJson,
+) -> std::result::Result<SoftwareBundle, String> {
+    if raw.id.trim().is_empty() {
+        return Err("bundle missing id".into());
+    }
+    if raw.display_name.trim().is_empty() {
+        return Err(format!("bundle '{}' missing displayName", raw.id));
+    }
+    if raw.package_ids.is_empty() {
+        return Err(format!("bundle '{}' has empty packageIds", raw.id));
+    }
+    let leaked_ids: Vec<&'static str> = raw.package_ids.into_iter().map(leak_str).collect();
+    Ok(SoftwareBundle {
+        id: leak_str(raw.id),
+        display_name: leak_str(raw.display_name),
+        description: leak_str(raw.description),
+        package_ids: leak_slice(leaked_ids),
+    })
+}
+
+fn validate_and_leak(raw: UserPackageJson) -> std::result::Result<PackageDescriptor, String> {
+    if raw.id.trim().is_empty() {
+        return Err("entry missing id".into());
+    }
+    if raw.display_name.trim().is_empty() {
+        return Err(format!("entry '{}' missing displayName", raw.id));
+    }
+    if raw.probe_command.trim().is_empty() {
+        return Err(format!("entry '{}' missing probeCommand", raw.id));
+    }
+    if raw.install_packages.is_empty() {
+        return Err(format!(
+            "entry '{}' has empty installPackages",
+            raw.id
+        ));
+    }
+    let mut install: Vec<(PackageManager, &'static [&'static str])> =
+        Vec::with_capacity(raw.install_packages.len());
+    for (manager_id, pkgs) in raw.install_packages {
+        if pkgs.is_empty() {
+            return Err(format!(
+                "entry '{}' has empty package list for manager '{}'",
+                raw.id, manager_id
+            ));
+        }
+        let manager = parse_manager_id(&manager_id).ok_or_else(|| {
+            format!(
+                "entry '{}' references unknown manager '{}'",
+                raw.id, manager_id
+            )
+        })?;
+        let leaked: Vec<&'static str> = pkgs.into_iter().map(leak_str).collect();
+        install.push((manager, leak_slice(leaked)));
+    }
+    let install_packages: &'static [(PackageManager, &'static [&'static str])] =
+        leak_slice(install);
+
+    let mut services: Vec<(PackageManager, &'static str)> = Vec::new();
+    for (manager_id, unit) in raw.service_units {
+        let manager = parse_manager_id(&manager_id).ok_or_else(|| {
+            format!(
+                "entry '{}' service_units references unknown manager '{}'",
+                raw.id, manager_id
+            )
+        })?;
+        services.push((manager, leak_str(unit)));
+    }
+    let service_units: &'static [(PackageManager, &'static str)] = leak_slice(services);
+
+    let data_dirs: Vec<&'static str> = raw.data_dirs.into_iter().map(leak_str).collect();
+    let config_paths: Vec<&'static str> = raw.config_paths.into_iter().map(leak_str).collect();
+    let default_ports: Vec<u16> = raw.default_ports;
+
+    let category = raw.category.unwrap_or_default();
+    let binary_name = raw.binary_name.unwrap_or_default();
+
+    Ok(PackageDescriptor {
+        id: leak_str(raw.id),
+        display_name: leak_str(raw.display_name),
+        probe_command: leak_str(raw.probe_command),
+        install_packages,
+        service_units,
+        data_dirs: leak_slice(data_dirs),
+        notes: raw.notes.map(leak_str),
+        supports_reload: raw.supports_reload,
+        // User extras can't declare vendor scripts — those need a
+        // separate audit path (would land Pier-X-supplied curl|sh
+        // execution behind user-controlled URLs).
+        vendor_script: None,
+        binary_name: leak_str(binary_name),
+        config_paths: leak_slice(config_paths),
+        default_ports: leak_slice(default_ports),
+        version_variants: &[],
+        category: leak_str(category),
+    })
+}
+
+fn parse_manager_id(s: &str) -> Option<PackageManager> {
+    match s.to_ascii_lowercase().as_str() {
+        "apt" => Some(PackageManager::Apt),
+        "dnf" => Some(PackageManager::Dnf),
+        "yum" => Some(PackageManager::Yum),
+        "apk" => Some(PackageManager::Apk),
+        "pacman" => Some(PackageManager::Pacman),
+        "zypper" => Some(PackageManager::Zypper),
+        _ => None,
+    }
+}
+
+fn leak_str(s: String) -> &'static str {
+    Box::leak(s.into_boxed_str())
+}
+
+fn leak_slice<T>(v: Vec<T>) -> &'static [T] {
+    Box::leak(v.into_boxed_slice())
 }
 
 // ── Distro / package-manager detection ──────────────────────────────
@@ -676,15 +2209,33 @@ fn strip_os_release_quotes(value: &str) -> &str {
 }
 
 /// Map an `/etc/os-release` `ID=` to the package manager we drive.
+///
+/// Distro coverage notes:
+/// * apt: every Debian/Ubuntu derivative we've seen in the wild,
+///   including Chinese-localized Deepin and Linx (deepin/linx).
+/// * dnf: RHEL family + the openEuler / Anolis / OpenCloudOS / Kylin /
+///   UOS line which are technically RHEL-clone-adjacent but ship `dnf`
+///   as the default. Amazon Linux 2023 / Oracle Linux likewise.
+/// * yum is intentionally NOT a top-level pick — `dnf` provides a
+///   `yum` shim on every distro that still calls itself "yum"-based,
+///   and our install command falls back to yum syntax when needed.
 pub fn pick_package_manager(distro_id: &str) -> Option<PackageManager> {
     match distro_id {
-        "debian" | "ubuntu" | "linuxmint" | "raspbian" | "pop" | "elementary" | "kali" => {
-            Some(PackageManager::Apt)
-        }
-        "fedora" => Some(PackageManager::Dnf),
-        "rhel" | "centos" | "rocky" | "almalinux" | "ol" | "amzn" => Some(PackageManager::Dnf),
+        // Debian-family
+        "debian" | "ubuntu" | "linuxmint" | "raspbian" | "pop" | "elementary" | "kali"
+        | "deepin" | "linx" | "uos" => Some(PackageManager::Apt),
+        // RHEL-family + Chinese RHEL clones (openEuler, Kylin server,
+        // OpenCloudOS, TencentOS, Anolis, Asianux). All ship dnf as
+        // the default; the few that still default to yum (CentOS 7,
+        // RHEL 7) get auto-aliased by our install command.
+        "fedora" | "rhel" | "centos" | "rocky" | "almalinux" | "ol" | "amzn"
+        | "openeuler" | "kylin" | "anolis" | "opencloudos" | "tencentos"
+        | "asianux" | "circlelinux" => Some(PackageManager::Dnf),
+        // Alpine
         "alpine" => Some(PackageManager::Apk),
-        "arch" | "manjaro" | "endeavouros" => Some(PackageManager::Pacman),
+        // Arch-family
+        "arch" | "manjaro" | "endeavouros" | "garuda" | "artix" => Some(PackageManager::Pacman),
+        // SUSE-family
         "opensuse" | "opensuse-leap" | "opensuse-tumbleweed" | "sles" | "sled" => {
             Some(PackageManager::Zypper)
         }
@@ -783,13 +2334,24 @@ pub async fn install<F>(
     id: &str,
     enable_service: bool,
     version: Option<&str>,
+    variant_key: Option<&str>,
     on_line: F,
     cancel: Option<CancellationToken>,
 ) -> Result<InstallReport>
 where
     F: FnMut(&str),
 {
-    run_install_or_update(session, id, false, enable_service, version, on_line, cancel).await
+    run_install_or_update(
+        session,
+        id,
+        false,
+        enable_service,
+        version,
+        variant_key,
+        on_line,
+        cancel,
+    )
+    .await
 }
 
 /// Update (re-install / upgrade) a single package. Only meaningful for
@@ -805,13 +2367,24 @@ pub async fn update<F>(
     id: &str,
     enable_service: bool,
     version: Option<&str>,
+    variant_key: Option<&str>,
     on_line: F,
     cancel: Option<CancellationToken>,
 ) -> Result<InstallReport>
 where
     F: FnMut(&str),
 {
-    run_install_or_update(session, id, true, enable_service, version, on_line, cancel).await
+    run_install_or_update(
+        session,
+        id,
+        true,
+        enable_service,
+        version,
+        variant_key,
+        on_line,
+        cancel,
+    )
+    .await
 }
 
 /// List the package-manager-visible versions for a descriptor on the
@@ -831,6 +2404,7 @@ where
 pub async fn available_versions(
     session: &SshSession,
     id: &str,
+    variant_key: Option<&str>,
 ) -> Result<Vec<String>> {
     let descriptor = descriptor(id).ok_or_else(|| {
         SshError::InvalidConfig(format!("unknown package id: {id}"))
@@ -839,7 +2413,7 @@ pub async fn available_versions(
     let Some(manager) = env.package_manager else {
         return Ok(Vec::new());
     };
-    let Some(packages) = packages_for(descriptor, manager) else {
+    let Some(packages) = packages_for_with_variant(descriptor, manager, variant_key) else {
         return Ok(Vec::new());
     };
     let pkg = match packages.first().copied() {
@@ -933,13 +2507,22 @@ pub fn install_blocking<F>(
     id: &str,
     enable_service: bool,
     version: Option<&str>,
+    variant_key: Option<&str>,
     on_line: F,
     cancel: Option<CancellationToken>,
 ) -> Result<InstallReport>
 where
     F: FnMut(&str),
 {
-    crate::ssh::runtime::shared().block_on(install(session, id, enable_service, version, on_line, cancel))
+    crate::ssh::runtime::shared().block_on(install(
+        session,
+        id,
+        enable_service,
+        version,
+        variant_key,
+        on_line,
+        cancel,
+    ))
 }
 
 /// Blocking wrapper for [`update`].
@@ -948,13 +2531,22 @@ pub fn update_blocking<F>(
     id: &str,
     enable_service: bool,
     version: Option<&str>,
+    variant_key: Option<&str>,
     on_line: F,
     cancel: Option<CancellationToken>,
 ) -> Result<InstallReport>
 where
     F: FnMut(&str),
 {
-    crate::ssh::runtime::shared().block_on(update(session, id, enable_service, version, on_line, cancel))
+    crate::ssh::runtime::shared().block_on(update(
+        session,
+        id,
+        enable_service,
+        version,
+        variant_key,
+        on_line,
+        cancel,
+    ))
 }
 
 /// Blocking wrapper for [`available_versions`]. Tauri commands using
@@ -962,8 +2554,9 @@ where
 pub fn available_versions_blocking(
     session: &SshSession,
     id: &str,
+    variant_key: Option<&str>,
 ) -> Result<Vec<String>> {
-    crate::ssh::runtime::shared().block_on(available_versions(session, id))
+    crate::ssh::runtime::shared().block_on(available_versions(session, id, variant_key))
 }
 
 /// Uninstall a single package. Streams every output line through
@@ -1073,10 +2666,415 @@ pub fn journalctl_tail_blocking(
     crate::ssh::runtime::shared().block_on(journalctl_tail(session, descriptor, lines))
 }
 
+/// Synthesise the install command **without running it** so the
+/// frontend can offer a "copy to clipboard" path for users who prefer
+/// to vet the command before pasting it into their own shell. Honours
+/// the same `version_pin` / `variant_key` semantics as [`install`].
+///
+/// Returns:
+///   * the `sudo -n sh -c '...'` wrapper that pier-core would have
+///     run, with each interpolation already shell-escaped.
+///   * the inner command (without the sh -c wrapper) for users who
+///     want to copy just the meaningful bits.
+///
+/// Errors only on SSH-level failure — unsupported distro / unknown
+/// id surface as descriptive `Err` strings the panel can show.
+pub async fn install_command_preview(
+    session: &SshSession,
+    id: &str,
+    version: Option<&str>,
+    variant_key: Option<&str>,
+    is_update: bool,
+) -> Result<InstallCommandPreview> {
+    let descriptor = descriptor(id).ok_or_else(|| {
+        SshError::InvalidConfig(format!("unknown package id: {id}"))
+    })?;
+    let env = probe_host_env(session).await;
+    let manager = env.package_manager.ok_or_else(|| {
+        SshError::InvalidConfig(format!(
+            "host distro '{}' has no detected package manager",
+            env.distro_id
+        ))
+    })?;
+    let packages = packages_for_with_variant(descriptor, manager, variant_key)
+        .ok_or_else(|| {
+            SshError::InvalidConfig(format!(
+                "{id} has no install packages for {}",
+                manager.as_str()
+            ))
+        })?;
+    let inner = build_install_command(manager, packages, is_update, version);
+    let prefix = if env.is_root { "" } else { "sudo -n " };
+    let outer = format!(
+        "{prefix}sh -c {} 2>&1",
+        shell_single_quote(&inner)
+    );
+    Ok(InstallCommandPreview {
+        package_id: id.to_string(),
+        package_manager: manager.as_str().to_string(),
+        is_root: env.is_root,
+        inner_command: inner,
+        wrapped_command: outer,
+    })
+}
+
+/// Blocking wrapper for [`install_command_preview`].
+pub fn install_command_preview_blocking(
+    session: &SshSession,
+    id: &str,
+    version: Option<&str>,
+    variant_key: Option<&str>,
+    is_update: bool,
+) -> Result<InstallCommandPreview> {
+    crate::ssh::runtime::shared().block_on(install_command_preview(
+        session,
+        id,
+        version,
+        variant_key,
+        is_update,
+    ))
+}
+
+/// Result of [`install_command_preview`]. Both forms are returned so
+/// the UI can choose: the wrapped form pastes into any shell as-is;
+/// the inner form is what the user actually sees doing work.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct InstallCommandPreview {
+    /// Echoes the descriptor id.
+    pub package_id: String,
+    /// Resolved manager (`apt` / `dnf` / …).
+    pub package_manager: String,
+    /// Whether the host runs as root — drives whether the wrapper
+    /// has the `sudo -n` prefix.
+    pub is_root: bool,
+    /// Just the package-manager command (e.g.
+    /// `"apt-get update -qq && apt-get install -y nginx"`).
+    pub inner_command: String,
+    /// Full `sudo -n sh -c '...' 2>&1` wrapping that pier-core would
+    /// have run. Paste-able into any shell.
+    pub wrapped_command: String,
+}
+
+/// Lazy "expand a row" probe — returns install paths, existing config
+/// files, default + listening ports, candidate (latest) version, and
+/// per-variant install state. Only invoked from the panel when the
+/// user clicks the row's disclosure, so the slow apt-cache / dnf info
+/// queries never block the first paint.
+///
+/// Cost: roughly 4-5 extra SSH commands per call (binary probe, config
+/// existence test, `ss -ltn`, candidate-version, plus one per variant).
+/// All run sequentially on the existing session — no extra connections.
+pub async fn probe_details(session: &SshSession, id: &str) -> Result<PackageDetail> {
+    let descriptor = descriptor(id).ok_or_else(|| {
+        SshError::InvalidConfig(format!("unknown package id: {id}"))
+    })?;
+    let env = probe_host_env(session).await;
+    let pm = env.package_manager;
+
+    let status = probe_status(session, id).await;
+    let installed = status.as_ref().map(|s| s.installed).unwrap_or(false);
+    let installed_version = status.as_ref().and_then(|s| s.version.clone());
+
+    // Resolved binary path. Only meaningful when installed; skip the
+    // round-trip otherwise.
+    let bin = if descriptor.binary_name.is_empty() {
+        descriptor.id
+    } else {
+        descriptor.binary_name
+    };
+    let install_paths = if installed && !bin.is_empty() {
+        let inner = format!(
+            "p=$(command -v {} 2>/dev/null); if [ -n \"$p\" ]; then readlink -f \"$p\" 2>/dev/null || echo \"$p\"; fi",
+            shell_single_quote(bin)
+        );
+        let cmd = format!("sh -c {} 2>/dev/null", shell_single_quote(&inner));
+        match session.exec_command(&cmd).await {
+            Ok((_, stdout)) => stdout
+                .lines()
+                .map(|l| l.trim().to_string())
+                .filter(|l| !l.is_empty())
+                .collect(),
+            Err(_) => Vec::new(),
+        }
+    } else {
+        Vec::new()
+    };
+
+    // Existence check on each declared config path. We batch into one
+    // shell invocation so /tmp/sh round-trips don't multiply per path.
+    let config_paths = if !descriptor.config_paths.is_empty() {
+        let inner = descriptor
+            .config_paths
+            .iter()
+            .map(|p| {
+                let qp = shell_single_quote(p);
+                format!("[ -e {qp} ] && echo {qp}")
+            })
+            .collect::<Vec<_>>()
+            .join("; ");
+        let cmd = format!("sh -c {} 2>/dev/null || true", shell_single_quote(&inner));
+        match session.exec_command(&cmd).await {
+            Ok((_, stdout)) => stdout
+                .lines()
+                .map(|l| l.trim().to_string())
+                .filter(|l| !l.is_empty())
+                .collect(),
+            Err(_) => Vec::new(),
+        }
+    } else {
+        Vec::new()
+    };
+
+    // Listening-port probe — only run when the descriptor declares
+    // defaults. Filter `ss -ltn` output to the declared port set so the
+    // UI doesn't fan out into "everything listening on the host".
+    let (listening_ports, listen_probe_ok) = if !descriptor.default_ports.is_empty() {
+        match session.exec_command("ss -ltn 2>/dev/null").await {
+            Ok((0, stdout)) if !stdout.trim().is_empty() => {
+                let mut ports: Vec<u16> = Vec::new();
+                for line in stdout.lines().skip(1) {
+                    for tok in line.split_whitespace() {
+                        if let Some(idx) = tok.rfind(':') {
+                            if let Ok(p) = tok[idx + 1..].parse::<u16>() {
+                                if descriptor.default_ports.contains(&p) && !ports.contains(&p) {
+                                    ports.push(p);
+                                }
+                            }
+                        }
+                    }
+                }
+                (ports, true)
+            }
+            _ => (Vec::new(), false),
+        }
+    } else {
+        (Vec::new(), true)
+    };
+
+    // Candidate version — always queries the descriptor's default
+    // package list; per-variant queries belong to the variants block
+    // below.
+    let latest_version = if let Some(manager) = pm {
+        if let Some(packages) = packages_for(descriptor, manager) {
+            if let Some(pkg) = packages.first().copied() {
+                if let Some(cmd) = build_candidate_version_command(manager, pkg) {
+                    match session.exec_command(&cmd).await {
+                        Ok((_, stdout)) => stdout
+                            .lines()
+                            .map(|l| l.trim())
+                            .find(|l| !l.is_empty())
+                            .map(|s| s.to_string()),
+                        Err(_) => None,
+                    }
+                } else {
+                    None
+                }
+            } else {
+                None
+            }
+        } else {
+            None
+        }
+    } else {
+        None
+    };
+
+    // Per-variant probe — one rpm/dpkg/apk-info call per declared
+    // variant. Empty for single-version software.
+    let variants = if descriptor.version_variants.is_empty() {
+        Vec::new()
+    } else {
+        let mut out = Vec::with_capacity(descriptor.version_variants.len());
+        for v in descriptor.version_variants {
+            let installed_variant = if let Some(manager) = pm {
+                if let Some(pkgs) = packages_for_with_variant(descriptor, manager, Some(v.key)) {
+                    if let Some(pkg) = pkgs.first().copied() {
+                        let cmd = build_pkg_installed_check(manager, pkg);
+                        session
+                            .exec_command(&cmd)
+                            .await
+                            .ok()
+                            .map(|(c, _)| c == 0)
+                            .unwrap_or(false)
+                    } else {
+                        false
+                    }
+                } else {
+                    false
+                }
+            } else {
+                false
+            };
+            out.push(PackageVariantStatus {
+                key: v.key.to_string(),
+                label: v.label.to_string(),
+                installed: installed_variant,
+                installed_version: None,
+            });
+        }
+        out
+    };
+
+    let service_unit = pm
+        .and_then(|m| descriptor_service_unit(descriptor, m))
+        .map(|s| s.to_string());
+
+    Ok(PackageDetail {
+        package_id: id.to_string(),
+        installed,
+        install_paths,
+        config_paths,
+        default_ports: descriptor.default_ports.to_vec(),
+        listening_ports,
+        listen_probe_ok,
+        service_unit,
+        latest_version,
+        installed_version,
+        variants,
+    })
+}
+
+/// Blocking wrapper for [`probe_details`].
+pub fn probe_details_blocking(session: &SshSession, id: &str) -> Result<PackageDetail> {
+    crate::ssh::runtime::shared().block_on(probe_details(session, id))
+}
+
 // ── Internals ───────────────────────────────────────────────────────
 
 /// Vendor-script install path. Owns the `curl → stat → sh → rm`
 /// pipeline; see [`install_via_script`] for the sequence rationale.
+/// Two-phase upstream-source install path. Used when a vendor_script
+/// declares `setup_scripts` for the host's manager (PostgreSQL pgdg
+/// is the canonical case). Runs the setup snippet, then drives the
+/// descriptor's standard install path so the post-setup repo's
+/// packages get pulled in. The returned report carries the
+/// `vendor_script` view so the activity log credits the upstream
+/// source instead of the default apt/dnf path.
+async fn run_setup_then_install<F>(
+    session: &SshSession,
+    id: &str,
+    setup_inner: &str,
+    enable_service: bool,
+    mut on_line: F,
+    cancel: Option<CancellationToken>,
+    env: HostPackageEnv,
+    used_view: VendorScriptUsedView,
+) -> Result<InstallReport>
+where
+    F: FnMut(&str),
+{
+    let prefix = if env.is_root { "" } else { "sudo -n " };
+    let setup_command = format!(
+        "{prefix}sh -c {} 2>&1",
+        shell_single_quote(setup_inner)
+    );
+
+    let mut tail_lines: Vec<String> = Vec::new();
+    let push_tail = |line: &str, tail: &mut Vec<String>| {
+        tail.push(line.to_string());
+        if tail.len() > 80 {
+            tail.drain(0..tail.len() - 60);
+        }
+    };
+
+    let setup_exit = match session
+        .exec_command_streaming(
+            &setup_command,
+            |line| {
+                on_line(line);
+                push_tail(line, &mut tail_lines);
+            },
+            cancel.clone(),
+        )
+        .await
+    {
+        Ok((code, _)) => code,
+        Err(e) => return Err(e),
+    };
+    let setup_tail = tail_lines.join("\n");
+
+    if setup_exit == CANCELLED_EXIT_CODE
+        || cancel.as_ref().is_some_and(|t| t.is_cancelled())
+    {
+        return Ok(InstallReport {
+            package_id: id.to_string(),
+            status: InstallStatus::Cancelled,
+            distro_id: env.distro_id,
+            package_manager: env
+                .package_manager
+                .map(|m| m.as_str().to_string())
+                .unwrap_or_default(),
+            command: setup_command,
+            exit_code: setup_exit,
+            output_tail: setup_tail,
+            installed_version: None,
+            service_active: None,
+            vendor_script: Some(used_view),
+        });
+    }
+
+    if !env.is_root && looks_like_sudo_password_prompt(&setup_tail) {
+        return Ok(InstallReport {
+            package_id: id.to_string(),
+            status: InstallStatus::SudoRequiresPassword,
+            distro_id: env.distro_id,
+            package_manager: env
+                .package_manager
+                .map(|m| m.as_str().to_string())
+                .unwrap_or_default(),
+            command: setup_command,
+            exit_code: setup_exit,
+            output_tail: setup_tail,
+            installed_version: None,
+            service_active: None,
+            vendor_script: Some(used_view),
+        });
+    }
+
+    if setup_exit != 0 {
+        return Ok(InstallReport {
+            package_id: id.to_string(),
+            // Reuse VendorScriptFailed since the setup step is
+            // morally an extended version of "the upstream installer
+            // didn't work" — same UI affordance.
+            status: InstallStatus::VendorScriptFailed,
+            distro_id: env.distro_id,
+            package_manager: env
+                .package_manager
+                .map(|m| m.as_str().to_string())
+                .unwrap_or_default(),
+            command: setup_command,
+            exit_code: setup_exit,
+            output_tail: setup_tail,
+            installed_version: None,
+            service_active: None,
+            vendor_script: Some(used_view),
+        });
+    }
+
+    // Setup succeeded — fall through to the normal install path.
+    // The descriptor's install_packages now resolve against the
+    // freshly-added upstream source.
+    let install_report = run_install_or_update(
+        session,
+        id,
+        false,
+        enable_service,
+        None,
+        None,
+        on_line,
+        cancel,
+    )
+    .await?;
+    // Tag the report with the vendor view so the UI says "via
+    // PostgreSQL 官方源" instead of "via apt".
+    Ok(InstallReport {
+        vendor_script: Some(used_view),
+        ..install_report
+    })
+}
+
 async fn run_install_via_script<F>(
     session: &SshSession,
     id: &str,
@@ -1097,10 +3095,54 @@ where
     };
 
     let env = probe_host_env(session).await;
+    // Pick the per-manager URL when the descriptor declares a
+    // matrix; fall back to the generic `url` so existing entries
+    // (Docker → get.docker.com, rustup → sh.rustup.rs) keep their
+    // behaviour without an `urls` row.
+    let chosen_url = env
+        .package_manager
+        .and_then(|pm| {
+            vendor
+                .urls
+                .iter()
+                .find_map(|(m, u)| (*m == pm).then_some(*u))
+        })
+        .unwrap_or(vendor.url);
     let used_view = VendorScriptUsedView {
         label: vendor.label.to_string(),
-        url: vendor.url.to_string(),
+        url: chosen_url.to_string(),
     };
+
+    // ── setup_scripts branch ─────────────────────────────────────
+    //
+    // PostgreSQL-style upstream sources do their setup in multiple
+    // shell steps (GPG key + sources.list + apt-get update); the
+    // download-and-execute pattern doesn't fit. When the descriptor
+    // declares a setup_script for the resolved manager, run that
+    // snippet first under sudo, then fall through to the regular
+    // package-manager install path so the new repo's packages get
+    // pulled in. The returned report is tagged with the same
+    // `vendor_script` view so the activity log says "via PostgreSQL
+    // 官方源" instead of pointing at the default apt path.
+    if let Some(manager) = env.package_manager {
+        if let Some(setup) = vendor
+            .setup_scripts
+            .iter()
+            .find_map(|(m, s)| (*m == manager).then_some(*s))
+        {
+            return run_setup_then_install(
+                session,
+                id,
+                setup,
+                enable_service,
+                on_line,
+                cancel,
+                env,
+                used_view,
+            )
+            .await;
+        }
+    }
 
     // Helper: build a Cancelled report from any state we have in hand.
     // Used by both the post-download and post-execute cancel checks so
@@ -1124,7 +3166,7 @@ where
 
     // --- Step 1+2: download ---
     let script_path = format!("/tmp/pier-x-installer-{}.sh", descriptor.id);
-    let download_inner = build_vendor_download_command(vendor.url, &script_path);
+    let download_inner = build_vendor_download_command(chosen_url, &script_path);
     // Download itself doesn't need root — `/tmp` is world-writable. We
     // only escalate for the script execution step. Keeping these as two
     // separate exec invocations means a download failure surfaces with a
@@ -1354,6 +3396,7 @@ async fn run_install_or_update<F>(
     is_update: bool,
     enable_service: bool,
     version: Option<&str>,
+    variant_key: Option<&str>,
     mut on_line: F,
     cancel: Option<CancellationToken>,
 ) -> Result<InstallReport>
@@ -1381,7 +3424,7 @@ where
         });
     };
 
-    let Some(packages) = packages_for(descriptor, manager) else {
+    let Some(packages) = packages_for_with_variant(descriptor, manager, variant_key) else {
         return Ok(InstallReport {
             package_id: id.to_string(),
             status: InstallStatus::UnsupportedDistro,
@@ -1577,7 +3620,19 @@ where
     }
 
     let service_unit = descriptor_service_unit(descriptor, manager);
-    let inner = build_uninstall_command(manager, packages, descriptor.data_dirs, opts, service_unit);
+    let cleanup_script = descriptor.vendor_script.and_then(|v| {
+        v.cleanup_scripts
+            .iter()
+            .find_map(|(m, s)| (*m == manager).then_some(*s))
+    });
+    let inner = build_uninstall_command_inner(
+        manager,
+        packages,
+        descriptor.data_dirs,
+        opts,
+        service_unit,
+        cleanup_script,
+    );
     let prefix = if env.is_root { "" } else { "sudo -n " };
     let command = format!("{prefix}sh -c {} 2>&1", shell_single_quote(&inner));
 
@@ -1802,6 +3857,27 @@ fn packages_for(
         .find_map(|(m, pkgs)| (*m == manager).then_some(*pkgs))
 }
 
+/// Pick the package list, honouring an optional variant override.
+/// Falls back to the descriptor's defaults when `variant_key` is `None`
+/// or unknown — the latter case shouldn't happen in practice (the
+/// frontend hands back the same key that came from the registry) but
+/// we don't error so a stale registry never blocks an install.
+fn packages_for_with_variant(
+    descriptor: &PackageDescriptor,
+    manager: PackageManager,
+    variant_key: Option<&str>,
+) -> Option<&'static [&'static str]> {
+    if let Some(key) = variant_key {
+        if let Some(variant) = descriptor.version_variants.iter().find(|v| v.key == key) {
+            return variant
+                .install_packages
+                .iter()
+                .find_map(|(m, pkgs)| (*m == manager).then_some(*pkgs));
+        }
+    }
+    packages_for(descriptor, manager)
+}
+
 /// Pick the service unit name for a manager.
 fn descriptor_service_unit(
     descriptor: &PackageDescriptor,
@@ -1959,12 +4035,32 @@ fn build_install_command(
 /// (purge), `-Rns` (both). zypper folds autoremove into
 /// `--clean-deps`. apk silently ignores both flags. dnf and yum
 /// each get their own `autoremove` follow-up command.
+/// Test-only convenience wrapper around [`build_uninstall_command_inner`]
+/// without the `cleanup_script` arg. Production callers always go
+/// through the inner form so the cleanup chain is plumbed through;
+/// the wrapper keeps the existing test fixtures readable.
+#[cfg(test)]
 fn build_uninstall_command(
     manager: PackageManager,
     packages: &[&str],
     data_dirs: &[&str],
     opts: &UninstallOptions,
     service_unit: Option<&str>,
+) -> String {
+    build_uninstall_command_inner(manager, packages, data_dirs, opts, service_unit, None)
+}
+
+/// Internal: same as [`build_uninstall_command`] but threads through
+/// the descriptor's `vendor_script.cleanup_scripts` snippet so the
+/// runtime call site can tack it onto the chain. Tests stay on the
+/// public 5-arg form to keep their fixtures readable.
+fn build_uninstall_command_inner(
+    manager: PackageManager,
+    packages: &[&str],
+    data_dirs: &[&str],
+    opts: &UninstallOptions,
+    service_unit: Option<&str>,
+    cleanup_script: Option<&str>,
 ) -> String {
     let pkgs = packages.join(" ");
 
@@ -2038,8 +4134,67 @@ fn build_uninstall_command(
         chain.push_str(" && ");
         chain.push_str(&s);
     }
+    // Upstream-source cleanup is best-effort: chain with `; ` so
+    // even if the package-manager remove step exited non-zero (e.g.
+    // dependency held back) we still try to drop the pgdg.list / repo
+    // package the user asked us to remove. We gate this on the user
+    // option; the descriptor's data is consulted at the call site.
+    if opts.remove_upstream_source {
+        if let Some(snippet) = cleanup_script {
+            chain.push_str("; ");
+            chain.push_str(snippet);
+        }
+    }
 
     format!("{service_step}{chain}")
+}
+
+/// Build the per-manager "what is the latest installable version of
+/// `package`" remote command. Returns the candidate / "Version" line
+/// from the package manager's metadata cache. Distinct from
+/// [`build_versions_command`], which enumerates every visible version —
+/// here we just want the single most-recent line for the row's
+/// "最新版" hint.
+fn build_candidate_version_command(manager: PackageManager, package: &str) -> Option<String> {
+    let pkg = shell_single_quote(package);
+    Some(match manager {
+        PackageManager::Apt => format!(
+            "apt-cache policy {pkg} 2>/dev/null | awk '/Candidate:/ {{print $2; exit}}'"
+        ),
+        PackageManager::Dnf => format!(
+            "dnf info --available {pkg} -q 2>/dev/null | awk -F': *' '/^Version/ {{print $2; exit}}'"
+        ),
+        PackageManager::Yum => format!(
+            "yum info {pkg} -q 2>/dev/null | awk -F': *' '/^Version/ {{print $2; exit}}'"
+        ),
+        PackageManager::Apk => format!(
+            "apk policy {pkg} 2>/dev/null | awk 'NR==2 {{gsub(/[ \\t]+/, \"\"); print; exit}}'"
+        ),
+        PackageManager::Pacman => format!(
+            "pacman -Si {pkg} 2>/dev/null | awk -F': *' '/^Version/ {{print $2; exit}}'"
+        ),
+        PackageManager::Zypper => format!(
+            "zypper info {pkg} 2>/dev/null | awk -F': *' '/^Version/ {{print $2; exit}}'"
+        ),
+    })
+}
+
+/// Per-manager "is `package` installed" check. Used by the variants
+/// probe so we can distinguish "Java is installed" (descriptor's
+/// generic probe) from "OpenJDK 17 specifically is installed". Always
+/// exits 0 or 1; we treat exit 0 as "yes".
+fn build_pkg_installed_check(manager: PackageManager, package: &str) -> String {
+    let qpkg = shell_single_quote(package);
+    match manager {
+        PackageManager::Apt => format!(
+            "dpkg -l {qpkg} 2>/dev/null | awk 'BEGIN {{f=1}} /^ii/ {{f=0}} END {{exit f}}'"
+        ),
+        PackageManager::Dnf | PackageManager::Yum | PackageManager::Zypper => {
+            format!("rpm -q {qpkg} >/dev/null 2>&1")
+        }
+        PackageManager::Apk => format!("apk info -e {qpkg} >/dev/null 2>&1"),
+        PackageManager::Pacman => format!("pacman -Q {qpkg} >/dev/null 2>&1"),
+    }
 }
 
 /// Heuristic: is this output from `sudo -n` bailing for a password?
@@ -2154,9 +4309,334 @@ mod tests {
     }
 
     #[test]
+    fn pick_package_manager_chinese_rhel_clones_route_to_dnf() {
+        // openEuler / Kylin / Anolis / OpenCloudOS / TencentOS are all
+        // RHEL-clone-adjacent and ship dnf. Coverage here is the
+        // load-bearing test for the v2.2 distro expansion.
+        for id in ["openeuler", "kylin", "anolis", "opencloudos", "tencentos"] {
+            assert_eq!(
+                pick_package_manager(id),
+                Some(PackageManager::Dnf),
+                "expected {id} to route to dnf",
+            );
+        }
+    }
+
+    #[test]
+    fn pick_package_manager_deepin_uos_route_to_apt() {
+        // Deepin (`deepin`) and UOS (`uos`) are Debian-derived even
+        // though their docs read like RHEL clones; same matrix as
+        // Ubuntu for install commands.
+        assert_eq!(pick_package_manager("deepin"), Some(PackageManager::Apt));
+        assert_eq!(pick_package_manager("uos"), Some(PackageManager::Apt));
+    }
+
+    #[test]
     fn pick_package_manager_unknown_returns_none() {
         assert!(pick_package_manager("solaris").is_none());
         assert!(pick_package_manager("").is_none());
+    }
+
+    // ── User-extras parsing ─────────────────────────────────────
+
+    #[test]
+    fn user_extras_minimal_entry_parses() {
+        let json = r#"[{
+            "id": "redis-stack",
+            "displayName": "Redis Stack",
+            "probeCommand": "command -v redis-stack-server >/dev/null 2>&1 && redis-stack-server --version 2>&1",
+            "installPackages": { "apt": ["redis-stack-server"] }
+        }]"#;
+        let parsed: Vec<UserPackageJson> = serde_json::from_str(json).unwrap();
+        assert_eq!(parsed.len(), 1);
+        let leaked = validate_and_leak(parsed.into_iter().next().unwrap()).unwrap();
+        assert_eq!(leaked.id, "redis-stack");
+        assert_eq!(leaked.display_name, "Redis Stack");
+        // Manager set should be exactly the one apt entry.
+        assert_eq!(leaked.install_packages.len(), 1);
+        assert_eq!(leaked.install_packages[0].0, PackageManager::Apt);
+        assert_eq!(leaked.install_packages[0].1, &["redis-stack-server"]);
+        // Defaults
+        assert_eq!(leaked.category, "");
+        assert!(leaked.config_paths.is_empty());
+        assert!(leaked.version_variants.is_empty());
+        assert!(leaked.vendor_script.is_none());
+    }
+
+    #[test]
+    fn user_extras_full_entry_parses() {
+        let json = r#"{
+            "id": "fail2ban-pro",
+            "displayName": "Fail2Ban Pro",
+            "category": "system",
+            "binaryName": "fail2ban-pro",
+            "probeCommand": "command -v fail2ban-pro >/dev/null && fail2ban-pro -V",
+            "installPackages": {
+                "apt": ["fail2ban-pro"],
+                "dnf": ["fail2ban-pro"]
+            },
+            "serviceUnits": { "apt": "fail2ban-pro" },
+            "supportsReload": true,
+            "configPaths": ["/etc/fail2ban-pro/jail.conf"],
+            "defaultPorts": [],
+            "dataDirs": ["/var/lib/fail2ban-pro"],
+            "notes": "third-party fork"
+        }"#;
+        let raw: UserPackageJson = serde_json::from_str(json).unwrap();
+        let leaked = validate_and_leak(raw).unwrap();
+        assert_eq!(leaked.category, "system");
+        assert!(leaked.supports_reload);
+        assert_eq!(leaked.service_units.len(), 1);
+        assert_eq!(leaked.config_paths, &["/etc/fail2ban-pro/jail.conf"]);
+        assert_eq!(leaked.data_dirs, &["/var/lib/fail2ban-pro"]);
+        assert_eq!(leaked.notes, Some("third-party fork"));
+    }
+
+    #[test]
+    fn user_extras_missing_id_rejected() {
+        let raw = UserPackageJson {
+            id: String::new(),
+            display_name: "X".into(),
+            probe_command: "true".into(),
+            install_packages: [("apt".into(), vec!["x".into()])].into_iter().collect(),
+            notes: None,
+            binary_name: None,
+            config_paths: vec![],
+            default_ports: vec![],
+            data_dirs: vec![],
+            service_units: Default::default(),
+            supports_reload: false,
+            category: None,
+        };
+        assert!(validate_and_leak(raw).is_err());
+    }
+
+    #[test]
+    fn user_extras_unknown_manager_rejected() {
+        let raw = UserPackageJson {
+            id: "x".into(),
+            display_name: "X".into(),
+            probe_command: "true".into(),
+            install_packages: [("brew".into(), vec!["x".into()])].into_iter().collect(),
+            notes: None,
+            binary_name: None,
+            config_paths: vec![],
+            default_ports: vec![],
+            data_dirs: vec![],
+            service_units: Default::default(),
+            supports_reload: false,
+            category: None,
+        };
+        let err = validate_and_leak(raw).unwrap_err();
+        assert!(err.contains("brew"));
+    }
+
+    #[test]
+    fn user_extras_empty_package_list_rejected() {
+        let raw = UserPackageJson {
+            id: "x".into(),
+            display_name: "X".into(),
+            probe_command: "true".into(),
+            install_packages: [("apt".into(), vec![])].into_iter().collect(),
+            notes: None,
+            binary_name: None,
+            config_paths: vec![],
+            default_ports: vec![],
+            data_dirs: vec![],
+            service_units: Default::default(),
+            supports_reload: false,
+            category: None,
+        };
+        assert!(validate_and_leak(raw).is_err());
+    }
+
+    #[test]
+    fn build_uninstall_appends_cleanup_when_requested() {
+        let opts = UninstallOptions {
+            purge_config: false,
+            autoremove: false,
+            remove_data_dirs: false,
+            remove_upstream_source: true,
+        };
+        let s = build_uninstall_command_inner(
+            PackageManager::Apt,
+            &["postgresql"],
+            &[],
+            &opts,
+            None,
+            Some("rm -f /etc/apt/sources.list.d/pgdg.list"),
+        );
+        assert!(s.contains("apt-get remove -y postgresql"));
+        assert!(s.contains("rm -f /etc/apt/sources.list.d/pgdg.list"));
+        // Chained with `;` so a failed remove doesn't stop the cleanup.
+        assert!(s.contains("postgresql; rm -f"));
+    }
+
+    #[test]
+    fn build_uninstall_skips_cleanup_when_option_unset() {
+        let opts = UninstallOptions::default();
+        let s = build_uninstall_command_inner(
+            PackageManager::Apt,
+            &["postgresql"],
+            &[],
+            &opts,
+            None,
+            Some("rm -f /etc/apt/sources.list.d/pgdg.list"),
+        );
+        assert!(!s.contains("pgdg.list"));
+    }
+
+    #[test]
+    fn postgres_cleanup_scripts_cover_apt_and_dnf() {
+        let postgres = descriptor("postgres").expect("postgres in registry");
+        let vendor = postgres.vendor_script.expect("postgres vendor_script");
+        let managers: std::collections::HashSet<PackageManager> =
+            vendor.cleanup_scripts.iter().map(|(m, _)| *m).collect();
+        assert!(managers.contains(&PackageManager::Apt));
+        assert!(managers.contains(&PackageManager::Dnf));
+        let apt = vendor
+            .cleanup_scripts
+            .iter()
+            .find(|(m, _)| *m == PackageManager::Apt)
+            .map(|(_, s)| *s)
+            .unwrap();
+        assert!(apt.contains("/etc/apt/sources.list.d/pgdg.list"));
+    }
+
+    #[test]
+    fn postgres_setup_scripts_cover_apt_and_dnf() {
+        let postgres = descriptor("postgres").expect("postgres in registry");
+        let vendor = postgres.vendor_script.expect("postgres vendor_script");
+        let managers: std::collections::HashSet<PackageManager> = vendor
+            .setup_scripts
+            .iter()
+            .map(|(m, _)| *m)
+            .collect();
+        assert!(
+            managers.contains(&PackageManager::Apt),
+            "postgres setup_scripts missing apt entry"
+        );
+        assert!(
+            managers.contains(&PackageManager::Dnf),
+            "postgres setup_scripts missing dnf entry"
+        );
+        // The apt snippet should write the canonical pgdg list path.
+        let apt_script = vendor
+            .setup_scripts
+            .iter()
+            .find(|(m, _)| *m == PackageManager::Apt)
+            .map(|(_, s)| *s)
+            .unwrap();
+        assert!(apt_script.contains("/etc/apt/sources.list.d/pgdg.list"));
+        assert!(apt_script.contains("apt.postgresql.org"));
+    }
+
+    #[test]
+    fn bundles_have_unique_ids() {
+        let mut seen = std::collections::HashSet::new();
+        for b in bundles() {
+            assert!(seen.insert(b.id), "duplicate bundle id: {}", b.id);
+        }
+    }
+
+    #[test]
+    fn bundles_only_reference_built_in_descriptors() {
+        // User extras can be referenced too in production, but the
+        // built-in bundles should only point at the static REGISTRY
+        // so a fresh install with no extras file still wires up.
+        let ids: std::collections::HashSet<&str> =
+            REGISTRY.iter().map(|d| d.id).collect();
+        for b in bundles() {
+            for pkg in b.package_ids {
+                assert!(
+                    ids.contains(pkg),
+                    "bundle {} references unknown id {}",
+                    b.id,
+                    pkg,
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn parse_user_extras_legacy_array() {
+        let json = br#"[{
+            "id": "tool",
+            "displayName": "Tool",
+            "probeCommand": "true",
+            "installPackages": { "apt": ["tool"] }
+        }]"#;
+        let parsed = parse_user_extras_bytes(json).unwrap();
+        assert_eq!(parsed.packages.len(), 1);
+        assert_eq!(parsed.bundles.len(), 0);
+    }
+
+    #[test]
+    fn parse_user_extras_wrapper_object() {
+        let json = br#"{
+            "packages": [{
+                "id": "tool",
+                "displayName": "Tool",
+                "probeCommand": "true",
+                "installPackages": { "apt": ["tool"] }
+            }],
+            "bundles": [{
+                "id": "my-stack",
+                "displayName": "My Stack",
+                "description": "personal favourites",
+                "packageIds": ["tool", "git"]
+            }]
+        }"#;
+        let parsed = parse_user_extras_bytes(json).unwrap();
+        assert_eq!(parsed.packages.len(), 1);
+        assert_eq!(parsed.bundles.len(), 1);
+        assert_eq!(parsed.bundles[0].id, "my-stack");
+        assert_eq!(parsed.bundles[0].package_ids.len(), 2);
+    }
+
+    #[test]
+    fn parse_user_extras_wrapper_packages_optional() {
+        let json = br#"{
+            "bundles": [{
+                "id": "b1",
+                "displayName": "B1",
+                "packageIds": ["git"]
+            }]
+        }"#;
+        let parsed = parse_user_extras_bytes(json).unwrap();
+        assert!(parsed.packages.is_empty());
+        assert_eq!(parsed.bundles.len(), 1);
+    }
+
+    #[test]
+    fn validate_bundle_rejects_empty_package_ids() {
+        let raw = UserBundleJson {
+            id: "x".into(),
+            display_name: "X".into(),
+            description: String::new(),
+            package_ids: vec![],
+        };
+        assert!(validate_and_leak_bundle(raw).is_err());
+    }
+
+    #[test]
+    fn validate_bundle_rejects_missing_id() {
+        let raw = UserBundleJson {
+            id: String::new(),
+            display_name: "X".into(),
+            description: String::new(),
+            package_ids: vec!["git".into()],
+        };
+        assert!(validate_and_leak_bundle(raw).is_err());
+    }
+
+    #[test]
+    fn parse_manager_id_known_lowercase() {
+        assert_eq!(parse_manager_id("apt"), Some(PackageManager::Apt));
+        assert_eq!(parse_manager_id("APT"), Some(PackageManager::Apt));
+        assert_eq!(parse_manager_id("dnf"), Some(PackageManager::Dnf));
+        assert_eq!(parse_manager_id("brew"), None);
+        assert_eq!(parse_manager_id(""), None);
     }
 
     #[test]
@@ -2722,12 +5202,14 @@ mod tests {
     }
 
     #[test]
-    fn supports_reload_set_only_for_nginx_in_v1_registry() {
+    fn supports_reload_set_only_for_zero_downtime_daemons() {
         // Reload semantics are software-specific — most daemons we
-        // ship would effectively restart on `reload`. nginx is the
-        // one v1 entry that genuinely supports zero-downtime reload.
+        // ship would effectively restart on `reload`. The whitelist
+        // is the small set of daemons that genuinely support
+        // zero-downtime reload (nginx config, fail2ban jail rules).
+        const RELOAD_OK: &[&str] = &["nginx", "fail2ban"];
         for d in registry() {
-            let expected = d.id == "nginx";
+            let expected = RELOAD_OK.contains(&d.id);
             assert_eq!(
                 d.supports_reload, expected,
                 "{} supports_reload should be {}",
@@ -2748,17 +5230,22 @@ mod tests {
     }
 
     #[test]
-    fn vendor_script_only_on_docker_for_v2() {
-        // v2 ships docker only; stricter assertion catches an
-        // accidental copy-paste leaving vendor_script populated on a
-        // package whose script path hasn't been audited.
+    fn vendor_script_whitelist() {
+        // Vendor scripts run third-party shell with sudo (or as the
+        // user). Whitelist the set so a typo doesn't accidentally
+        // wire one onto an unaudited entry.
+        const SCRIPT_OK: &[&str] = &["docker", "rust", "node", "postgres"];
         for d in registry() {
-            if d.id == "docker" {
-                assert!(d.vendor_script.is_some(), "docker must have vendor_script");
+            if SCRIPT_OK.contains(&d.id) {
+                assert!(
+                    d.vendor_script.is_some(),
+                    "{} must have vendor_script",
+                    d.id,
+                );
             } else {
                 assert!(
                     d.vendor_script.is_none(),
-                    "{} should not have a vendor_script in v2",
+                    "{} should not have a vendor_script",
                     d.id,
                 );
             }

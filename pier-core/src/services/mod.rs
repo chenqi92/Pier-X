@@ -41,6 +41,7 @@ pub mod local_exec;
 pub mod mysql;
 pub mod nginx;
 pub mod package_manager;
+pub mod package_mirror;
 pub mod postgres;
 pub mod redis;
 pub mod search;

@@ -123,6 +123,18 @@ export default function TerminalPanel({ tab, isActive, onEditConnection }: Props
   const setStatusTerminalSize = useStatusStore((s) => s.setTerminalSize);
   const [scrollbackOffset, setScrollbackOffset] = useState(0);
   const [visualBellActive, setVisualBellActive] = useState(false);
+  // Brief gate after `isActive` flips on. While the panel was
+  // display:none, the viewport had no box and the ResizeObserver
+  // didn't measure it; the moment we re-show it the observer fires,
+  // `terminalSize` updates, a SIGWINCH ships off, and the snapshot
+  // re-flows to the new row count. Because the viewport is
+  // bottom-anchored (`justify-content: flex-end`), the existing
+  // grid visibly slides up while the new (taller) snapshot fills in
+  // — that's the "上一个 tab 的内容从底部瞬间上去" the user reported.
+  // We hide the screen for the first paint after activation so the
+  // reflow happens behind the curtain.
+  const [activating, setActivating] = useState(false);
+  const wasActiveRef = useRef(isActive);
   const [ctxMenu, setCtxMenu] = useState<{ x: number; y: number } | null>(null);
   const viewportRef = useRef<HTMLDivElement | null>(null);
   const measureRef = useRef<HTMLSpanElement | null>(null);
@@ -132,6 +144,15 @@ export default function TerminalPanel({ tab, isActive, onEditConnection }: Props
   const pendingResizeRef = useRef(false);
   const latestSizeRef = useRef(terminalSize);
   latestSizeRef.current = terminalSize;
+  // Guards against concurrent session-creation. The create-effect's
+  // backend call is async; before this ref existed, a `terminalSize`
+  // update from the first ResizeObserver tick would re-fire the
+  // effect while the first `terminalCreate*` was still in flight —
+  // `session` was still null so the early-return didn't catch it,
+  // and we'd open two SSH sessions back-to-back. The second one
+  // injected the smart-mode bash hook a second time, which the user
+  // saw as a duplicate `__pierx_osc7` line in the terminal.
+  const sessionCreatingRef = useRef(false);
 
   // Mirror of the user's currently-being-typed line so we can
   // recognize `ssh user@host` and resync the right sidebar to that
@@ -402,23 +423,32 @@ export default function TerminalPanel({ tab, isActive, onEditConnection }: Props
 
   useEffect(() => {
     if (session) return;
+    if (sessionCreatingRef.current) return;
     let cancelled = false;
+    sessionCreatingRef.current = true;
 
     async function create() {
       try {
+        // Read the size from the ref so a ResizeObserver tick that
+        // arrives mid-flight doesn't re-fire this effect (terminalSize
+        // is no longer in the deps array — see comment on
+        // sessionCreatingRef above). The session is created at
+        // whatever size we have at call time; a follow-up SIGWINCH
+        // from the resize effect adjusts once the session settles.
+        const size = latestSizeRef.current;
         let next: TerminalSessionInfo;
         if (tab.backend === "ssh") {
           if (tab.sshSavedConnectionIndex !== null) {
             // Saved connection — backend resolves password from secure store
             next = await cmd.terminalCreateSshSaved(
-              terminalSize.cols,
-              terminalSize.rows,
+              size.cols,
+              size.rows,
               tab.sshSavedConnectionIndex,
             );
           } else {
             next = await cmd.terminalCreateSsh({
-              cols: terminalSize.cols,
-              rows: terminalSize.rows,
+              cols: size.cols,
+              rows: size.rows,
               host: tab.sshHost,
               port: tab.sshPort,
               user: tab.sshUser,
@@ -434,8 +464,8 @@ export default function TerminalPanel({ tab, isActive, onEditConnection }: Props
           // emulator's prompt-zone tracking would silently no-op. Per
           // PRODUCT-SPEC §4.2.1 this is opt-in via Settings.
           next = await cmd.terminalCreate(
-            terminalSize.cols,
-            terminalSize.rows,
+            size.cols,
+            size.rows,
             undefined,
             smartMode,
           );
@@ -444,12 +474,20 @@ export default function TerminalPanel({ tab, isActive, onEditConnection }: Props
           setSession(next);
           setError("");
           setNeedsPasswordRecovery(false);
+        } else {
+          // The component / tab credentials changed before our backend
+          // call returned — we own a live session that nobody is going
+          // to consume. Close it so we don't leak a PTY (and, for SSH,
+          // a shell channel) per cancelled attempt.
+          cmd.terminalClose(next.sessionId).catch(() => {});
         }
       } catch (e) {
         if (!cancelled) {
           setError(formatError(e));
           if (isMissingKeychainError(e)) setNeedsPasswordRecovery(true);
         }
+      } finally {
+        sessionCreatingRef.current = false;
       }
     }
 
@@ -461,7 +499,7 @@ export default function TerminalPanel({ tab, isActive, onEditConnection }: Props
     // via the recovery dialog (App.tsx propagates the new password
     // into matching tabs and nulls `terminalSessionId`, which we
     // mirror into local `session` state below).
-  }, [session, terminalSize.cols, terminalSize.rows, tab.backend, tab.sshHost, tab.sshPassword]);
+  }, [session, tab.backend, tab.sshHost, tab.sshPassword]);
 
   // When App.tsx clears `tab.terminalSessionId` (e.g. as part of
   // the post-recovery propagation), drop the local session state
@@ -477,6 +515,33 @@ export default function TerminalPanel({ tab, isActive, onEditConnection }: Props
     setError("");
     setNeedsPasswordRecovery(false);
   }, [tab.terminalSessionId, session]);
+
+  // Mask the slide-up reflow on tab activation. When `isActive` flips
+  // false → true: set `activating`, let the layout/resize-observer
+  // settle, then clear it on the second animation frame. Two frames is
+  // enough for the ResizeObserver tick + the SIGWINCH-driven snapshot
+  // refresh to land before the screen becomes visible again.
+  useEffect(() => {
+    const wasActive = wasActiveRef.current;
+    wasActiveRef.current = isActive;
+    if (!isActive || wasActive) {
+      // Going inactive (or steady-state active) — nothing to mask.
+      if (activating) setActivating(false);
+      return;
+    }
+    setActivating(true);
+    let raf2 = 0;
+    const raf1 = window.requestAnimationFrame(() => {
+      raf2 = window.requestAnimationFrame(() => setActivating(false));
+    });
+    return () => {
+      window.cancelAnimationFrame(raf1);
+      if (raf2) window.cancelAnimationFrame(raf2);
+    };
+    // `activating` is intentionally not a dep — it would loop the
+    // effect; we only react to the isActive edge.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [isActive]);
 
   // Pull keyboard focus onto the terminal viewport the moment the
   // session is ready, and again whenever the tab becomes visible.
@@ -2085,7 +2150,11 @@ export default function TerminalPanel({ tab, isActive, onEditConnection }: Props
           setCtxMenu({ x: e.clientX, y: e.clientY });
         }}
         ref={viewportRef}
-        className={visualBellActive ? "terminal-viewport terminal-viewport--bell" : "terminal-viewport"}
+        className={[
+          "terminal-viewport",
+          visualBellActive ? "terminal-viewport--bell" : "",
+          activating ? "terminal-viewport--activating" : "",
+        ].filter(Boolean).join(" ")}
         style={{ background: termTheme.bg }}
         tabIndex={0}
       >

@@ -81,7 +81,10 @@ pub fn complete(line: &str, cursor: usize, cwd: Option<&Path>) -> Vec<Completion
 /// to build path-completion rows.
 #[derive(Debug, Clone)]
 pub struct DirReadEntry {
+    /// Entry's basename (no path separator, no trailing slash).
     pub name: String,
+    /// `true` for directories — used to render the trailing `/` and
+    /// to keep directories sorted ahead of files.
     pub is_dir: bool,
 }
 
@@ -472,9 +475,7 @@ fn complete_file_with(
         cwd.map(|c| c.to_path_buf())
             .unwrap_or_else(|| PathBuf::from("."))
     } else if dir_part == "~" || dir_part.starts_with("~/") {
-        let home = std::env::var_os("HOME")
-            .map(PathBuf::from)
-            .unwrap_or_default();
+        let home = home_dir().unwrap_or_default();
         if dir_part == "~" {
             home
         } else {
@@ -505,18 +506,22 @@ fn complete_file_with(
         let is_dir = entry.is_dir;
 
         // Reattach the user's typed dir prefix so inserting `value`
-        // into the line preserves what they had. Trailing `/` for
-        // directories so the next Tab drills in.
+        // into the line preserves what they had. We mirror whichever
+        // separator the user already typed — on Windows that may be
+        // `\` instead of `/`, and we don't want to mix the two in a
+        // single path. Trailing separator for directories so the next
+        // Tab drills in.
+        let user_sep = preferred_separator(&dir_part);
         let mut value = String::new();
         if !dir_part.is_empty() {
             value.push_str(&dir_part);
-            if !dir_part.ends_with('/') {
-                value.push('/');
+            if !dir_part.ends_with(['/', '\\']) {
+                value.push(user_sep);
             }
         }
         value.push_str(&name);
         if is_dir {
-            value.push('/');
+            value.push(user_sep);
         }
 
         let completion = Completion {
@@ -546,18 +551,78 @@ fn complete_file_with(
     dirs
 }
 
-/// Split `prefix` into a `(dir, base)` pair using the last `/`. For
-/// `foo/bar/baz` → (`foo/bar`, `baz`). For `~/proj/x` → (`~/proj`,
-/// `x`). For a bare basename without slashes → (``, `prefix`).
+/// Split `prefix` into a `(dir, base)` pair using the last path
+/// separator. Splits on `/` everywhere; on Windows also on `\` so the
+/// user can type either form. Examples: `foo/bar/baz` → (`foo/bar`,
+/// `baz`); `~/proj/x` → (`~/proj`, `x`); `/etc/p` → (`/`, `p`)
+/// (root-level paths preserve the leading `/`); on Windows
+/// `C:\Users\al` → (`C:\Users`, `al`); a bare basename without
+/// separators → (``, `prefix`).
 fn split_path_prefix(prefix: &str) -> (String, String) {
-    if let Some(idx) = prefix.rfind('/') {
-        (
-            prefix[..idx + 1].trim_end_matches('/').to_string(),
-            prefix[idx + 1..].to_string(),
-        )
+    let sep_idx = prefix.rfind(|c: char| c == '/' || (cfg!(windows) && c == '\\'));
+    let Some(idx) = sep_idx else {
+        return (String::new(), prefix.to_string());
+    };
+    // Length of the separator char (1 byte for `/` and `\`, both ASCII).
+    let after = idx + 1;
+    let raw_dir = &prefix[..after];
+    // Special-case the root directory: trimming all trailing
+    // separators would collapse `/` into `""`, losing absolute-path
+    // semantics. Same for Windows `C:\`.
+    let dir = if raw_dir == "/" || (cfg!(windows) && (raw_dir == "\\" || is_windows_drive_root(raw_dir))) {
+        raw_dir.to_string()
     } else {
-        (String::new(), prefix.to_string())
+        raw_dir
+            .trim_end_matches(|c: char| c == '/' || (cfg!(windows) && c == '\\'))
+            .to_string()
+    };
+    (dir, prefix[after..].to_string())
+}
+
+/// Pick the separator to round-trip back into the line. If the user
+/// already typed one, mirror it; otherwise default to `/` because it
+/// works on every platform Pier-X targets (Windows accepts forward
+/// slashes in most APIs and SSH targets are always POSIX).
+fn preferred_separator(dir_part: &str) -> char {
+    if cfg!(windows) && dir_part.contains('\\') && !dir_part.contains('/') {
+        '\\'
+    } else {
+        '/'
     }
+}
+
+/// `true` for Windows roots like `C:\`, `D:\`, `\\server\share\`.
+/// We only need the drive-letter form here — UNC support can come
+/// later when SSH file completion grows that capability.
+fn is_windows_drive_root(s: &str) -> bool {
+    let bytes = s.as_bytes();
+    bytes.len() == 3
+        && bytes[0].is_ascii_alphabetic()
+        && bytes[1] == b':'
+        && (bytes[2] == b'\\' || bytes[2] == b'/')
+}
+
+/// Resolve the user's home directory across platforms. POSIX always
+/// honours `HOME`; Windows historically does not set it, so fall
+/// back to `USERPROFILE` (the Win32 documented home location).
+fn home_dir() -> Option<PathBuf> {
+    if let Some(h) = std::env::var_os("HOME") {
+        return Some(PathBuf::from(h));
+    }
+    #[cfg(windows)]
+    {
+        if let Some(h) = std::env::var_os("USERPROFILE") {
+            return Some(PathBuf::from(h));
+        }
+        if let (Some(drive), Some(path)) =
+            (std::env::var_os("HOMEDRIVE"), std::env::var_os("HOMEPATH"))
+        {
+            let mut p = PathBuf::from(drive);
+            p.push(path);
+            return Some(p);
+        }
+    }
+    None
 }
 
 fn resolve_cwd(supplied: Option<&Path>) -> Option<PathBuf> {
@@ -693,6 +758,48 @@ mod tests {
             split_path_prefix("~/proj/x"),
             ("~/proj".to_string(), "x".to_string()),
         );
+    }
+
+    #[test]
+    fn split_path_prefix_preserves_root_directory() {
+        // Regression: the trim_end_matches('/') step used to collapse
+        // "/" → "" and lose absolute-path semantics, so `cd /et<Tab>`
+        // was looking in cwd instead of `/`.
+        assert_eq!(
+            split_path_prefix("/etc"),
+            ("/".to_string(), "etc".to_string()),
+        );
+        assert_eq!(
+            split_path_prefix("/"),
+            ("/".to_string(), String::new()),
+        );
+        assert_eq!(
+            split_path_prefix("/usr/lo"),
+            ("/usr".to_string(), "lo".to_string()),
+        );
+    }
+
+    #[test]
+    #[cfg(windows)]
+    fn split_path_prefix_supports_windows_backslash() {
+        assert_eq!(
+            split_path_prefix("Users\\al"),
+            ("Users".to_string(), "al".to_string()),
+        );
+        assert_eq!(
+            split_path_prefix("C:\\Users\\al"),
+            ("C:\\Users".to_string(), "al".to_string()),
+        );
+        assert_eq!(
+            split_path_prefix("C:\\"),
+            ("C:\\".to_string(), String::new()),
+        );
+    }
+
+    #[test]
+    fn home_dir_resolves_via_known_env_vars() {
+        // Always returns *something* in test environments.
+        assert!(home_dir().is_some(), "expected HOME or USERPROFILE to be set");
     }
 
     #[test]

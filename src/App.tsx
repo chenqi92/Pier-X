@@ -3,6 +3,7 @@
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
+  Activity,
   ArrowDownToLine,
   ArrowUpFromLine,
   FileText as FileTextIcon,
@@ -18,6 +19,7 @@ import { openUrl, openPath, revealItemInDir } from "@tauri-apps/plugin-opener";
 import { getLogFilePath } from "./lib/logger";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import { I18nContext, makeI18n } from "./i18n/useI18n";
+import { initDesktopNotifications, desktopNotify } from "./lib/notify";
 import { isBrowsableRepoPath } from "./lib/browserPath";
 import * as cmd from "./lib/commands";
 import { RIGHT_TOOL_META } from "./lib/rightToolMeta";
@@ -31,6 +33,7 @@ import ToastStack from "./components/ToastStack";
 import { withTask } from "./stores/useTaskStore";
 import type { MenuDef } from "./components/TitlebarMenu";
 import TerminalPanel from "./panels/TerminalPanel";
+import HostsHealthPanel from "./panels/HostsHealthPanel";
 import CommandPalette, { type PaletteCommand } from "./shell/CommandPalette";
 import NewConnectionDialog from "./shell/NewConnectionDialog";
 import TopBar from "./shell/TopBar";
@@ -152,7 +155,70 @@ function App() {
       })
       .catch(() => {});
     useConnectionStore.getState().refresh();
+    // Ask for desktop-notification permission once per session so
+    // webhook-failure / host-offline alerts can fire without
+    // re-prompting later. Failure (or unsupported webview) just
+    // means we fall back to in-app toasts — see notify.ts.
+    void initDesktopNotifications();
   }, []);
+
+  // Subscribe to webhook-failed events emitted by the install /
+  // uninstall command paths. The frontend turns each into a
+  // toast + (when permission granted) a system-level desktop
+  // notification so the user sees it even when Pier-X is in the
+  // background. Subscription lives for the entire app lifetime;
+  // cleanup happens automatically when the window closes.
+  useEffect(() => {
+    let unlisten: (() => void) | null = null;
+    void (async () => {
+      const { listen } = await import("@tauri-apps/api/event");
+      try {
+        const off = await listen<{
+          url: string;
+          label: string;
+          error: string;
+          attempts: number;
+          packageId: string;
+          event: string;
+        }>("pier-x://webhook-failed", (evt) => {
+          const p = evt.payload;
+          // Use the label when present (`Slack #ops`); fall back
+          // to the URL host so anonymous webhooks still read.
+          const target = p.label || (() => {
+            try {
+              return new URL(p.url).hostname;
+            } catch {
+              return p.url;
+            }
+          })();
+          desktopNotify(
+            "error",
+            i18n.t("Webhook failed: {target}", { target }),
+            i18n.t(
+              "{event} {pkg} · {error}",
+              { event: p.event, pkg: p.packageId, error: p.error },
+            ),
+            // Inline action: jump to the Webhooks dialog's
+            // Failures tab so the user can replay or dismiss the
+            // entry without hunting through the Software panel
+            // header. Stored in a UI-actions counter that
+            // SoftwarePanel listens to.
+            {
+              label: i18n.t("Open Failures"),
+              onClick: () =>
+                useUiActionsStore.getState().openWebhookFailures(),
+            },
+          );
+        });
+        unlisten = off;
+      } catch {
+        /* listen() failed — silent no-op, alerts simply won't fire */
+      }
+    })();
+    return () => {
+      if (unlisten) unlisten();
+    };
+  }, [i18n]);
 
   // Persist pane widths to localStorage — debounced so a single drag
   // (fires dozens of mousemove → setState events per second) produces at
@@ -303,6 +369,25 @@ function App() {
     },
     [addTab, i18n],
   );
+
+  // Top-level "host health" dashboard. We open it as a tab — same
+  // treatment local terminals get — so the user can switch back and
+  // forth without losing context. Multiple identical hosts-health
+  // tabs are allowed but pointless; the addTab call doesn't dedupe
+  // and we don't want to: if the user genuinely wants two instances
+  // (e.g. one filtered to a group, one global) that's their call.
+  const openHostsHealth = useCallback(() => {
+    const tabs = useTabStore.getState().tabs;
+    const existing = tabs.find((t) => t.backend === "hosts-health");
+    if (existing) {
+      useTabStore.getState().setActiveTab(existing.id);
+      return;
+    }
+    addTab({
+      backend: "hosts-health",
+      title: i18n.t("Host health"),
+    });
+  }, [addTab, i18n]);
 
   const openSshTab = useCallback(
     (params: {
@@ -460,6 +545,7 @@ function App() {
     () => [
       { section: i18n.t("Session"), icon: SquareTerminal, title: i18n.t("New local terminal"), shortcut: `${mod}T`, action: () => openLocalTerminal() },
       { section: i18n.t("Session"), icon: Server, title: i18n.t("New SSH connection"), shortcut: `${mod}N`, action: openNewConnectionDialog },
+      { section: i18n.t("Session"), icon: Activity, title: i18n.t("Open host health dashboard"), action: openHostsHealth },
       { section: i18n.t("Session"), icon: X, title: i18n.t("Close tab"), shortcut: `${mod}W`, action: () => { if (activeTabId) closeTab(activeTabId); } },
       ...profiles.map((profile) => ({
         section: i18n.t("Terminal profiles"),
@@ -532,7 +618,7 @@ function App() {
         s.setMode(s.resolvedDark ? "light" : "dark");
       } },
     ],
-    [activeTabId, browserPath, closeTab, connections, i18n, mod, openLocalTerminal, openNewConnectionDialog, openProfileTerminal, openSshSaved, profiles, tabs, handleToolChange],
+    [activeTabId, browserPath, closeTab, connections, i18n, mod, openLocalTerminal, openNewConnectionDialog, openProfileTerminal, openSshSaved, profiles, tabs, handleToolChange, openHostsHealth],
   );
 
   // ── Titlebar menus (Windows / Linux only) ─────────────────────
@@ -593,6 +679,7 @@ function App() {
         items: [
           { label: i18n.t("New local terminal"), shortcut: "Ctrl+T", action: () => openLocalTerminal() },
           { label: i18n.t("New SSH connection"), shortcut: "Ctrl+N", action: openNewConnectionDialog },
+          { label: i18n.t("Open host health dashboard"), action: openHostsHealth },
           { divider: true },
           { label: i18n.t("Close tab"), shortcut: "Ctrl+W", disabled: !activeTabId, action: () => { if (activeTabId) closeTab(activeTabId); } },
         ],
@@ -641,7 +728,7 @@ function App() {
         ],
       },
     ];
-  }, [activeTabId, closeTab, coreInfo?.version, i18n, rightCollapsed, openLocalTerminal, openNewConnectionDialog, runUpdateCheck]);
+  }, [activeTabId, closeTab, coreInfo?.version, i18n, rightCollapsed, openLocalTerminal, openNewConnectionDialog, runUpdateCheck, openHostsHealth]);
 
   // ── Keyboard shortcuts ──────────────────────────────────────
 
@@ -756,18 +843,30 @@ function App() {
                 onOpenProfile={openProfileTerminal}
                 onSettings={() => setSettingsOpen(true)}
                 onCommandPalette={() => setPaletteOpen(true)}
+                onHostsHealth={openHostsHealth}
                 version={coreInfo?.version}
                 workspaceRoot={coreInfo?.workspaceRoot}
               />
             ) : (
-              tabs.map((tab) => (
-                <TerminalPanel
-                  key={tab.id}
-                  tab={tab}
-                  isActive={tab.id === activeTabId}
-                  onEditConnection={openEditConnectionDialog}
-                />
-              ))
+              tabs.map((tab) =>
+                tab.backend === "hosts-health" ? (
+                  <HostsHealthPanel
+                    key={tab.id}
+                    tab={tab}
+                    isActive={tab.id === activeTabId}
+                    onConnectSaved={openSshSaved}
+                    onEditConnection={openEditConnectionDialog}
+                    onNewConnection={openNewConnectionDialog}
+                  />
+                ) : (
+                  <TerminalPanel
+                    key={tab.id}
+                    tab={tab}
+                    isActive={tab.id === activeTabId}
+                    onEditConnection={openEditConnectionDialog}
+                  />
+                ),
+              )
             )}
           </div>
 

@@ -3,7 +3,7 @@
 // interval), keyboard I/O, scrollback, and session lifecycle management.
 
 import { KeyRound, SquareTerminal } from "lucide-react";
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useLayoutEffect, useRef, useState } from "react";
 import { listen, type UnlistenFn } from "@tauri-apps/api/event";
 import * as cmd from "../lib/commands";
 import { controlKeyMap } from "../lib/commands";
@@ -123,6 +123,7 @@ export default function TerminalPanel({ tab, isActive, onEditConnection }: Props
   const setStatusTerminalSize = useStatusStore((s) => s.setTerminalSize);
   const [scrollbackOffset, setScrollbackOffset] = useState(0);
   const [visualBellActive, setVisualBellActive] = useState(false);
+  const [selectingInTerminal, setSelectingInTerminal] = useState(false);
   // Brief gate after `isActive` flips on. While the panel was
   // display:none, the viewport had no box and the ResizeObserver
   // didn't measure it; the moment we re-show it the observer fires,
@@ -135,6 +136,9 @@ export default function TerminalPanel({ tab, isActive, onEditConnection }: Props
   // reflow happens behind the curtain.
   const [activating, setActivating] = useState(false);
   const wasActiveRef = useRef(isActive);
+  // Snapshot present when activation masking starts. We keep the mask
+  // until a different snapshot arrives at the post-resize row count.
+  const activationSnapshotRef = useRef<TerminalSnapshot | null>(null);
   const [ctxMenu, setCtxMenu] = useState<{ x: number; y: number } | null>(null);
   const viewportRef = useRef<HTMLDivElement | null>(null);
   const measureRef = useRef<HTMLSpanElement | null>(null);
@@ -395,6 +399,8 @@ export default function TerminalPanel({ tab, isActive, onEditConnection }: Props
     if (!viewport || !measure) return;
 
     const recalculate = () => {
+      if (!isActive) return;
+      if (viewport.clientWidth <= 0 || viewport.clientHeight <= 0) return;
       const measureBox = measure.getBoundingClientRect();
       const charWidth = measureBox.width / 10 || 7.8;
       // Match the px row height used by the renderer (--terminal-row-h is set
@@ -423,7 +429,7 @@ export default function TerminalPanel({ tab, isActive, onEditConnection }: Props
     const observer = new ResizeObserver(recalculate);
     observer.observe(viewport);
     return () => observer.disconnect();
-  }, [terminalFontSize, monoFont]);
+  }, [isActive, terminalFontSize, monoFont]);
 
   // ── Create session ──────────────────────────────────────────
 
@@ -518,32 +524,32 @@ export default function TerminalPanel({ tab, isActive, onEditConnection }: Props
     setNeedsPasswordRecovery(false);
   }, [tab.terminalSessionId, session]);
 
-  // Mask the slide-up reflow on tab activation. When `isActive` flips
-  // false → true: set `activating`, let the layout/resize-observer
-  // settle, then clear it on the second animation frame. Two frames is
-  // enough for the ResizeObserver tick + the SIGWINCH-driven snapshot
-  // refresh to land before the screen becomes visible again.
-  useEffect(() => {
+  // Mask activation until the resize round-trip has produced a fresh snapshot.
+  // A fixed two-frame wait can still expose the old, bottom-anchored grid.
+  useLayoutEffect(() => {
     const wasActive = wasActiveRef.current;
     wasActiveRef.current = isActive;
     if (!isActive || wasActive) {
-      // Going inactive (or steady-state active) — nothing to mask.
       if (activating) setActivating(false);
       return;
     }
+    activationSnapshotRef.current = snapshot;
     setActivating(true);
-    let raf2 = 0;
-    const raf1 = window.requestAnimationFrame(() => {
-      raf2 = window.requestAnimationFrame(() => setActivating(false));
-    });
-    return () => {
-      window.cancelAnimationFrame(raf1);
-      if (raf2) window.cancelAnimationFrame(raf2);
-    };
-    // `activating` is intentionally not a dep — it would loop the
-    // effect; we only react to the isActive edge.
+    const timeout = window.setTimeout(() => setActivating(false), 600);
+    return () => window.clearTimeout(timeout);
+    // `activating` and `snapshot` are intentionally not deps — we only react
+    // to the isActive edge; the unmask effect below watches the snapshot.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [isActive]);
+
+  useEffect(() => {
+    if (!activating) return;
+    if (!snapshot) return;
+    if (snapshot === activationSnapshotRef.current) return;
+    if (snapshot.rows !== terminalSize.rows) return;
+    const raf = window.requestAnimationFrame(() => setActivating(false));
+    return () => window.cancelAnimationFrame(raf);
+  }, [activating, snapshot, terminalSize.rows]);
 
   // Pull keyboard focus onto the terminal viewport the moment the
   // session is ready, and again whenever the tab becomes visible.
@@ -569,6 +575,36 @@ export default function TerminalPanel({ tab, isActive, onEditConnection }: Props
     return () => window.cancelAnimationFrame(raf);
   }, [session, isActive]);
 
+  useEffect(() => {
+    if (!isActive) {
+      setSelectingInTerminal(false);
+      return;
+    }
+
+    const updateSelectionState = () => {
+      const viewport = viewportRef.current;
+      const selection = window.getSelection?.();
+      if (!viewport || !selection || selection.isCollapsed || selection.rangeCount === 0) {
+        setSelectingInTerminal(false);
+        return;
+      }
+
+      const anchorInside =
+        selection.anchorNode instanceof Node && viewport.contains(selection.anchorNode);
+      const focusInside =
+        selection.focusNode instanceof Node && viewport.contains(selection.focusNode);
+      setSelectingInTerminal(anchorInside || focusInside);
+    };
+
+    document.addEventListener("selectionchange", updateSelectionState);
+    window.addEventListener("mouseup", updateSelectionState);
+    updateSelectionState();
+    return () => {
+      document.removeEventListener("selectionchange", updateSelectionState);
+      window.removeEventListener("mouseup", updateSelectionState);
+    };
+  }, [isActive]);
+
   // ── Resize session (trigger-based) ──────────────────────────
   //
   // Dragging a resize handle compresses the terminal viewport many
@@ -584,6 +620,7 @@ export default function TerminalPanel({ tab, isActive, onEditConnection }: Props
   // with the final size.
   useEffect(() => {
     if (!session) return;
+    if (!isActive) return;
     if (document.body.classList.contains("is-resizing")) {
       pendingResizeRef.current = true;
       return;
@@ -592,10 +629,11 @@ export default function TerminalPanel({ tab, isActive, onEditConnection }: Props
     cmd.terminalResize(session.sessionId, terminalSize.cols, terminalSize.rows).catch((e) =>
       setError(formatError(e)),
     );
-  }, [session, terminalSize.cols, terminalSize.rows]);
+  }, [session, isActive, terminalSize.cols, terminalSize.rows]);
 
   useEffect(() => {
     if (!session) return;
+    if (!isActive) return;
     const onMouseUp = () => {
       if (!pendingResizeRef.current) return;
       // ResizeHandle clears the is-resizing class in its own mouseup
@@ -613,7 +651,7 @@ export default function TerminalPanel({ tab, isActive, onEditConnection }: Props
     };
     window.addEventListener("mouseup", onMouseUp);
     return () => window.removeEventListener("mouseup", onMouseUp);
-  }, [session]);
+  }, [session, isActive]);
 
   // Copy-on-select (iTerm-style). Listen for mouseup on the viewport
   // and, if the resulting selection lives inside it and is non-empty,
@@ -2156,6 +2194,7 @@ export default function TerminalPanel({ tab, isActive, onEditConnection }: Props
           "terminal-viewport",
           visualBellActive ? "terminal-viewport--bell" : "",
           activating ? "terminal-viewport--activating" : "",
+          selectingInTerminal ? "terminal-viewport--selecting" : "",
         ].filter(Boolean).join(" ")}
         style={{ background: termTheme.bg }}
         tabIndex={0}

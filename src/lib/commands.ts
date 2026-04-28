@@ -372,6 +372,62 @@ export const gitConflictMarkResolved = (path: string | null, filePath: string, h
 export const sshConnectionsList = () =>
   invoke<SavedSshConnection[]>("ssh_connections_list");
 
+/** One row of the host-health dashboard. Mirrors
+ *  `pier_core::services::host_health::HostHealthReport`. The probe
+ *  is TCP-only — `status === "online"` means the SSH port accepted
+ *  a TCP handshake, NOT that authentication would succeed. */
+export type HostHealthReport = {
+  savedConnectionIndex: number;
+  status: "online" | "offline" | "timeout" | "error";
+  latencyMs: number | null;
+  errorMessage: string;
+  /** Unix epoch seconds when the probe finished. */
+  checkedAt: number;
+};
+
+/** Probe each saved connection in `indices` in parallel and return
+ *  one report per index in input order. `timeoutMs` is clamped to
+ *  [200, 30000] inside the backend. The command itself only errors
+ *  when the connection store can't be loaded; per-host failures
+ *  surface inside the row. */
+export const hostHealthProbe = (params: {
+  indices: number[];
+  timeoutMs: number;
+}) =>
+  invoke<HostHealthReport[]>("host_health_probe", {
+    indices: params.indices,
+    timeoutMs: params.timeoutMs,
+  });
+
+/** Result of a host-health deep probe over a CACHED SSH session.
+ *  All fields are best-effort — a parser miss leaves the field
+ *  null rather than raising an error. */
+export type HostDeepProbeReport = {
+  savedConnectionIndex: number;
+  /** "5 days,  3:42" — human-readable uptime portion. */
+  uptime: string | null;
+  /** "0.12, 0.34, 0.45" — load average triplet. */
+  loadAvg: string | null;
+  /** "78%" — root filesystem use percentage. */
+  diskRootUse: string | null;
+  /** "12G" — root filesystem available space. */
+  diskRootAvail: string | null;
+  /** "Ubuntu 22.04.4 LTS" — `/etc/os-release` PRETTY_NAME. */
+  distro: string | null;
+  checkedAt: number;
+};
+
+/** Run uptime / disk / distro lookup over the cached SSH session
+ *  for `savedConnectionIndex`. Returns `null` when there's no
+ *  cached session (the user hasn't opened a panel for the host in
+ *  this Pier-X session yet). Never authenticates — the deep
+ *  probe is meant to ride on existing connections, not start new
+ *  ones. */
+export const hostHealthDeepProbe = (savedConnectionIndex: number) =>
+  invoke<HostDeepProbeReport | null>("host_health_deep_probe", {
+    savedConnectionIndex,
+  });
+
 export const sshConnectionSave = (params: {
   name: string;
   host: string;
@@ -1119,6 +1175,15 @@ export type SoftwareInstallReport = {
   serviceActive: boolean | null;
   /** Non-null iff the install ran via the v2 vendor-script channel. */
   vendorScript: VendorScriptUsed | null;
+  /** Stale / unreachable third-party repos (Docker focal pulled, PPA
+   *  dormant, internal mirror moved, …) detected in the install
+   *  output. The backend now decouples `apt-get update` from
+   *  `apt-get install` (and passes `--setopt=skip_if_unavailable=True`
+   *  to dnf/yum) so a single broken repo no longer fails the whole
+   *  install — but the user should still be told *which* repo to
+   *  clean up. Each entry is `"<manager>: <url-or-id>"`.
+   *  Omitted on the wire when empty (legacy clients keep parsing). */
+  repoWarnings?: string[];
 };
 
 /** Streaming event payload for `software-install`. The frontend filters
@@ -1278,6 +1343,121 @@ export const softwareBundles = () =>
  *  for `id`. Empty list = no curated recommendations. */
 export const softwareCoInstallSuggestions = (id: string) =>
   invoke<string[]>("software_co_install_suggestions", { id });
+
+/** Topologically sort `ids` so co-install anchors come before their
+ *  companions. Pure-CPU lookup — no SSH. Used by `runBundle` to
+ *  reorder a manually-curated bundle into "install docker before
+ *  compose" order regardless of how the user wrote the JSON. */
+export const softwareBundleInstallOrder = (ids: string[]) =>
+  invoke<string[]>("software_bundle_install_order", { ids });
+
+// ── Post-install webhooks (v2.14) ───────────────────────────────
+
+export type WebhookEventKindLabel = "install" | "update" | "uninstall";
+
+export type WebhookEntry = {
+  url: string;
+  label: string;
+  /** Subset of `["install","update","uninstall"]`. Empty = fire on all. */
+  events: WebhookEventKindLabel[];
+  disabled: boolean;
+  /** Optional body template — when non-empty the rendered string
+   *  is sent verbatim as the request body. Placeholders use
+   *  `{{name}}` syntax: `event`, `status`, `packageId`, `host`,
+   *  `packageManager`, `version`, `firedAt`, `text`. Empty falls
+   *  back to the default Slack-shaped payload. */
+  bodyTemplate?: string;
+  /** Retry attempts after the first failure (0–5, capped backend-
+   *  side). 0 = one shot. Failures that exhaust retries land in
+   *  the persistent failure log. */
+  maxRetries?: number;
+  /** Base seconds for exponential backoff between retries. 0 =
+   *  use the backend default (5s, doubling each attempt). */
+  retryBackoffSecs?: number;
+};
+
+export type WebhookConfig = {
+  entries: WebhookEntry[];
+};
+
+export type WebhookFireReport = {
+  url: string;
+  /** 0 when the request never completed (DNS / TLS / connect fail). */
+  statusCode: number;
+  latencyMs: number;
+  /** Empty on success; failure message otherwise. */
+  error: string;
+  /** Total attempts that ran (1 = first attempt only, 2+ = retries). */
+  attempts: number;
+};
+
+/** One row of the persistent webhook failure log. Returned newest-
+ *  first by `softwareWebhooksFailuresList`. */
+export type WebhookFailureRecord = {
+  id: string;
+  url: string;
+  label: string;
+  statusCode: number;
+  error: string;
+  attempts: number;
+  /** Body that was sent on the last attempt — replayable verbatim. */
+  body: string;
+  event: string;
+  packageId: string;
+  host: string;
+  failedAt: number;
+};
+
+export const softwareWebhooksLoad = () =>
+  invoke<WebhookConfig>("software_webhooks_load");
+
+export const softwareWebhooksSave = (config: WebhookConfig) =>
+  invoke<void>("software_webhooks_save", { config });
+
+export const softwareWebhooksTestFire = (params: {
+  url: string;
+  bodyTemplate?: string;
+}) =>
+  invoke<WebhookFireReport>("software_webhooks_test_fire", {
+    url: params.url,
+    bodyTemplate: params.bodyTemplate ?? null,
+  });
+
+/** Render a body template against a synthetic install payload —
+ *  used by the settings dialog's preview pane so users can verify
+ *  their template's wire shape without firing an actual HTTP
+ *  request. Pure-CPU on the backend. */
+export const softwareWebhooksPreviewBody = (bodyTemplate: string) =>
+  invoke<string>("software_webhooks_preview_body", { bodyTemplate });
+
+export const softwareWebhooksPath = () =>
+  invoke<string | null>("software_webhooks_path");
+
+/** Read the persistent failure log. Newest entries first. */
+export const softwareWebhooksFailuresList = () =>
+  invoke<WebhookFailureRecord[]>("software_webhooks_failures_list");
+
+/** Drop one record by id. Returns `true` when the record existed.
+ *  Idempotent — a missing id is reported as `false`, never errors. */
+export const softwareWebhooksFailuresDismiss = (id: string) =>
+  invoke<boolean>("software_webhooks_failures_dismiss", { id });
+
+/** Wipe the entire log file. */
+export const softwareWebhooksFailuresClear = () =>
+  invoke<void>("software_webhooks_failures_clear");
+
+/** Single-shot replay of a failed fire. The body is sent verbatim,
+ *  no retry loop — the user already saw the original chain fail
+ *  and will dismiss the record manually if this attempt
+ *  succeeds. */
+export const softwareWebhooksReplay = (params: {
+  url: string;
+  body: string;
+}) =>
+  invoke<WebhookFireReport>("software_webhooks_replay", {
+    url: params.url,
+    body: params.body,
+  });
 
 /** One row in a system-package search result. */
 export type SoftwareSearchHit = {
@@ -1506,6 +1686,72 @@ export const softwareComposeApply = (
 export const softwareComposeDown = (
   params: SshParams & { templateId: string },
 ) => invoke<PostgresActionReport>("software_compose_down", params);
+
+/** Result of converting a Compose template to a multi-document
+ *  Kubernetes manifest. The conversion runs entirely client-side
+ *  (no SSH) — covers Deployments, Services and PersistentVolume
+ *  Claims for the templates we ship. Anything Compose-specific
+ *  that doesn't translate (bind mounts, depends_on, healthchecks)
+ *  is flagged in `warnings` and inline `# NOTE:` comments. */
+export type ComposeK8sExport = {
+  /** The original Compose YAML, echoed for the dialog's source pane. */
+  composeYaml: string;
+  /** Multi-document YAML with `---` separators — paste into
+   *  `kubectl apply -f -`. */
+  k8sYaml: string;
+  deploymentCount: number;
+  serviceCount: number;
+  pvcCount: number;
+  /** 0 or 1 — the converter emits at most one combined Ingress
+   *  per template. */
+  ingressCount: number;
+  /** ConfigMap resources emitted — both from lifted bind mounts
+   *  (when `liftBindMounts` was on) AND from top-level Compose
+   *  `configs:` declarations. */
+  configmapCount: number;
+  /** Secret resources emitted from top-level Compose `secrets:`
+   *  declarations. */
+  secretCount: number;
+  /** NetworkPolicy resources emitted from top-level Compose
+   *  `networks:` declarations. */
+  networkpolicyCount: number;
+  /** Items the converter flagged for manual attention. Each entry
+   *  is a short human sentence (e.g. "bind mount `./www:/foo`
+   *  was dropped"). */
+  warnings: string[];
+};
+
+/** Convert one Compose template into a Kubernetes manifest. The
+ *  command requires no SSH context — pass an optional `namespace`
+ *  to target a specific cluster namespace, or omit for the
+ *  cluster default.
+ *
+ *  Ingress: when `ingressHost` is non-empty, an Ingress resource
+ *  is emitted that routes `host:` traffic to each HTTP-ish service
+ *  via path prefixes. Non-HTTP services (Postgres / Redis) are
+ *  skipped automatically. `ingressClass` and `ingressTlsSecret`
+ *  are optional refinements. */
+export const softwareComposeExportK8s = (params: {
+  templateId: string;
+  namespace?: string;
+  ingressHost?: string;
+  ingressClass?: string;
+  ingressTlsSecret?: string;
+  /** When true, Compose bind mounts (`./local:/in/container`) are
+   *  lifted into placeholder `ConfigMap` resources instead of
+   *  being dropped with a `# NOTE:` warning. The user is expected
+   *  to populate the ConfigMap data with real file content via
+   *  `kubectl create configmap … --from-file=` before applying. */
+  liftBindMounts?: boolean;
+}) =>
+  invoke<ComposeK8sExport>("software_compose_export_k8s", {
+    templateId: params.templateId,
+    namespace: params.namespace ?? null,
+    ingressHost: params.ingressHost ?? null,
+    ingressClass: params.ingressClass ?? null,
+    ingressTlsSecret: params.ingressTlsSecret ?? null,
+    liftBindMounts: params.liftBindMounts ?? null,
+  });
 
 // ── Cross-host clone (v2.12) ────────────────────────────────────
 
@@ -1862,6 +2108,166 @@ export const nginxToggleSite = (
 export const nginxCreateFile = (
   params: SshParams & { path: string; content: string },
 ) => invoke<NginxValidateResult>("nginx_create_file", params);
+
+// ── Web server detection (multi-product) ─────────────────────────
+
+export type WebServerKind = "nginx" | "apache" | "caddy";
+export type WebServerRunState = "active" | "inactive" | "unknown";
+
+export type WebServerInfo = {
+  kind: WebServerKind;
+  binary: string;
+  version: string;
+  configRoot: string;
+  modulesSummary: string;
+  running: WebServerRunState;
+};
+
+export type WebServerDetection = {
+  detected: WebServerInfo[];
+};
+
+export type WebServerActionResult = {
+  ok: boolean;
+  exitCode: number;
+  output: string;
+};
+
+export const webServerDetect = (params: SshParams) =>
+  invoke<WebServerDetection>("web_server_detect", params);
+
+export const webServerValidate = (
+  params: SshParams & { kind: WebServerKind },
+) => invoke<WebServerActionResult>("web_server_validate", params);
+
+export const webServerReload = (
+  params: SshParams & { kind: WebServerKind },
+) => invoke<WebServerActionResult>("web_server_reload", params);
+
+export type WebServerFileKind =
+  | { kind: "main" }
+  | { kind: "conf-d" }
+  | { kind: "site-available"; enabled: boolean }
+  | { kind: "other" };
+
+export type WebServerFile = {
+  path: string;
+  label: string;
+  kind: WebServerFileKind;
+  sizeBytes: number;
+};
+
+export type WebServerLayout = {
+  kind: WebServerKind;
+  binary: string;
+  version: string;
+  configRoot: string;
+  installed: boolean;
+  isRoot: boolean;
+  files: WebServerFile[];
+};
+
+export type WebServerSaveResult = {
+  validate: WebServerActionResult;
+  reloaded: boolean;
+  reloadOutput: string;
+  restored: boolean;
+  restoreError: string | null;
+  backupPath: string;
+};
+
+export const webServerLayout = (
+  params: SshParams & { kind: WebServerKind },
+) => invoke<WebServerLayout>("web_server_layout", params);
+
+export const webServerReadFile = (
+  params: SshParams & { kind: WebServerKind; path: string },
+) => invoke<string>("web_server_read_file", params);
+
+export const webServerSaveFile = (
+  params: SshParams & { kind: WebServerKind; path: string; content: string },
+) => invoke<WebServerSaveResult>("web_server_save_file", params);
+
+export const webServerToggleSite = (
+  params: SshParams & {
+    kind: WebServerKind;
+    siteName: string;
+    enable: boolean;
+  },
+) => invoke<WebServerActionResult>("web_server_toggle_site", params);
+
+export type CreateSiteResult = {
+  path: string;
+  enabled: boolean;
+  enableOutput: string;
+};
+
+export const webServerCreateSite = (
+  params: SshParams & {
+    kind: WebServerKind;
+    leafName: string;
+    content: string;
+    enableAfter: boolean;
+  },
+) => invoke<CreateSiteResult>("web_server_create_site", params);
+
+// ── Caddy AST (parser + renderer) ────────────────────────────────
+
+export type CaddyNode =
+  | {
+      kind: "directive";
+      name: string;
+      args: string[];
+      leadingComments: string[];
+      leadingBlanks: number;
+      inlineComment: string | null;
+      block: CaddyNode[] | null;
+    }
+  | {
+      kind: "comment";
+      text: string;
+      leadingBlanks: number;
+    };
+
+export type CaddyParseResult = {
+  nodes: CaddyNode[];
+  errors: string[];
+};
+
+export const caddyParse = (content: string) =>
+  invoke<CaddyParseResult>("caddy_parse", { content });
+
+export const caddyRender = (nodes: CaddyNode[]) =>
+  invoke<string>("caddy_render", { nodes });
+
+// ── Apache AST (parser + renderer) ───────────────────────────────
+
+export type ApacheNode =
+  | {
+      kind: "directive";
+      name: string;
+      args: string[];
+      leadingComments: string[];
+      leadingBlanks: number;
+      inlineComment: string | null;
+      section: ApacheNode[] | null;
+    }
+  | {
+      kind: "comment";
+      text: string;
+      leadingBlanks: number;
+    };
+
+export type ApacheParseResult = {
+  nodes: ApacheNode[];
+  errors: string[];
+};
+
+export const apacheParse = (content: string) =>
+  invoke<ApacheParseResult>("apache_parse", { content });
+
+export const apacheRender = (nodes: ApacheNode[]) =>
+  invoke<string>("apache_render", { nodes });
 
 /** Last-known shell working directory, if the remote shell has
  *  emitted an OSC 7 sequence (most distros' default bash/zsh

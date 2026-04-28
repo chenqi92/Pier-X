@@ -18,6 +18,21 @@ log = "0.4"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 
+# YAML parser/emitter — used by `services::compose_k8s` to read a
+# Compose template into a typed struct and emit a Kubernetes-shaped
+# manifest the user can `kubectl apply -f -`. `serde_yml` is the
+# maintained fork of the abandoned `serde_yaml`; same API, no extra
+# bridge crate needed.
+serde_yml = "0.0.12"
+
+# HTTP client used by `services::webhook` for the post-install /
+# post-uninstall webhook fan-out (Slack / Discord / Teams / custom
+# monitoring). `ureq` is blocking + tiny; `rustls` keeps the TLS
+# story portable (no system OpenSSL on Windows / older glibc).
+# Stays inside a `spawn_blocking` task so the calling tokio
+# runtime never blocks waiting on a webhook timeout.
+ureq = { version = "2", default-features = false, features = ["tls", "json"] }
+
 # Cross-platform credential storage
 keyring = "3"
 

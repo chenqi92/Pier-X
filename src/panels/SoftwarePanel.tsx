@@ -1,4 +1,5 @@
 import {
+  BellRing,
   Check,
   ChevronDown,
   ChevronRight,
@@ -42,6 +43,7 @@ import type {
   UninstallOptions,
 } from "../lib/commands";
 import { describeInstallOutcome } from "../lib/softwareInstall";
+import { buildRepoCleanupCommand } from "../lib/repoCleanup";
 import { writeClipboardText } from "../lib/clipboard";
 import { effectiveSshTarget, type TabState } from "../lib/types";
 import { useI18n } from "../i18n/useI18n";
@@ -53,6 +55,7 @@ import {
   useSoftwareStore,
   type SoftwareActivityKind,
 } from "../stores/useSoftwareStore";
+import { useUiActionsStore } from "../stores/useUiActionsStore";
 import Dialog from "../components/Dialog";
 import PanelSkeleton, { useDeferredMount } from "../components/PanelSkeleton";
 import Popover from "../components/Popover";
@@ -208,6 +211,28 @@ function SoftwarePanelBody({ tab }: Props) {
   const [multiHostOpen, setMultiHostOpen] = useState(false);
   /** History dialog open flag. */
   const [historyOpen, setHistoryOpen] = useState(false);
+  /** Webhooks settings dialog open flag. */
+  const [webhooksOpen, setWebhooksOpen] = useState(false);
+  /** When non-null, the Webhooks dialog opens with this initial
+   *  tab. Cleared as soon as the dialog reads it (next mount /
+   *  open) so the user's later manual tab-switching isn't
+   *  overridden. */
+  const [webhooksInitialTab, setWebhooksInitialTab] = useState<
+    "endpoints" | "failures" | null
+  >(null);
+  // Listen for the App-level "open failures tab" signal so a
+  // webhook-failed toast's Open Failures button works regardless
+  // of where in the app the SoftwarePanel was last interacted
+  // with. Counter-based pattern (same as recoveryRequestSeq) so a
+  // single subscription captures every fire.
+  const openFailuresSeq = useUiActionsStore(
+    (s) => s.openWebhookFailuresSeq,
+  );
+  useEffect(() => {
+    if (openFailuresSeq === 0) return;
+    setWebhooksInitialTab("failures");
+    setWebhooksOpen(true);
+  }, [openFailuresSeq]);
   /** PostgreSQL quick-config dialog target descriptor (or null). */
   const [pgQuickTarget, setPgQuickTarget] = useState<SoftwareDescriptor | null>(null);
   /** MySQL/MariaDB quick-config dialog target. */
@@ -247,6 +272,38 @@ function SoftwarePanelBody({ tab }: Props) {
    *  card shows a spinner + the per-package activity arrives via
    *  the existing per-row event channel. */
   const [bundleRunning, setBundleRunning] = useState<string | null>(null);
+  /** Live progress of the currently-running bundle. `null` when no
+   *  bundle is in flight. The "skipped" counter advances when
+   *  runBundle's loop sees an already-installed entry — so the
+   *  banner shows e.g. `2/5 (1 skipped)` rather than only the
+   *  literal-step count, which would make 5-package bundles that
+   *  are mostly already installed look like they finished
+   *  half-way. */
+  const [bundleProgress, setBundleProgress] = useState<{
+    current: number;
+    total: number;
+    skipped: number;
+    packageId: string | null;
+    /** `"installing"` for runBundle, `"uninstalling"` for the
+     *  reverse path. Drives banner copy. */
+    mode: "installing" | "uninstalling";
+  } | null>(null);
+  /** Pause / skip / abort flags for the in-flight bundle. Refs
+   *  rather than state because the loop reads them on each
+   *  iteration without needing a re-render — we only `setState`
+   *  when the user-facing status text needs to change. */
+  const bundlePauseRef = useRef(false);
+  const bundleSkipRef = useRef(false);
+  const bundleAbortRef = useRef(false);
+  /** Mirror of the pause flag for banner copy + button state.
+   *  Kept as a separate piece of state so the banner re-renders
+   *  the moment "暂停" is clicked, not on the next iteration. */
+  const [bundlePaused, setBundlePaused] = useState(false);
+  /** The installId of the package currently in flight inside a
+   *  bundle run. Populated each iteration so the "跳过此包" /
+   *  "停止整条链" buttons can call `software_install_cancel`
+   *  against the right id. */
+  const bundleCurrentInstallIdRef = useRef<string | null>(null);
   /** Detected mirror state for this host. `null` = not loaded yet. */
   const [mirrorState, setMirrorState] = useState<MirrorState | null>(null);
   const [mirrorCatalog, setMirrorCatalog] = useState<MirrorChoice[]>([]);
@@ -668,6 +725,7 @@ function SoftwarePanelBody({ tab }: Props) {
         descriptor.id,
         report.status === "installed" ? "" : localized,
         nextStatus,
+        report.repoWarnings ?? [],
       );
       // Append to the history journal. We log every terminal
       // outcome (success / failure) so the user can scan the dialog
@@ -895,34 +953,196 @@ function SoftwarePanelBody({ tab }: Props) {
     await writeClipboardText(`cd '${safe}'`);
   }
 
+  /** Inject a "disable this stale third-party repo" command into the
+   *  current SSH terminal tab. Unlike `sendCdToTerminal` this does
+   *  NOT append `\n` — the user reviews the command (it touches
+   *  /etc/apt/... or runs `dnf config-manager --set-disabled`) and
+   *  presses Enter themselves. Falls back to clipboard when no
+   *  terminal session is attached.
+   *
+   *  Per the user's "问题只在当前终端中解决" rule we never auto-execute,
+   *  never modify the host on their behalf — we just hand them the
+   *  one-liner so the friction of retyping it from the advisory is
+   *  zero. */
+  async function sendRepoCleanupToTerminal(warning: string) {
+    const snippet = buildRepoCleanupCommand(warning);
+    if (!snippet) {
+      await writeClipboardText(warning);
+      return;
+    }
+    const sessionId = tab?.terminalSessionId ?? null;
+    if (sessionId) {
+      try {
+        // Leading space + no trailing \n: the space keeps the line
+        // out of `HISTCONTROL=ignorespace` shell histories (matches
+        // the OSC 7 / 133 init payload's convention) so a snippet
+        // the user decides not to run doesn't pollute history.
+        await cmd.terminalWrite(sessionId, ` ${snippet}`);
+        return;
+      } catch {
+        // Fall through to clipboard.
+      }
+    }
+    await writeClipboardText(snippet);
+  }
+
   /** Install all packages in `bundle` sequentially. Skips ones
    *  that are already installed (so re-running a bundle on a
    *  partially-set-up host is fast). Per-package progress flows
-   *  through the existing per-row activity log. */
+   *  through the existing per-row activity log.
+   *
+   *  Topological reorder: before iterating we pass the bundle's
+   *  declared `packageIds` through the backend's
+   *  `softwareBundleInstallOrder`, which uses the static co-install
+   *  map (e.g. docker → compose) as a "anchor before companion"
+   *  constraint. This keeps install logs reading top-to-bottom
+   *  even when the bundle JSON listed `compose` ahead of `docker`,
+   *  and matches what the user expects when they read the panel's
+   *  per-row activity stream. The reorder is best-effort — if the
+   *  command fails for any reason we fall back to declared order
+   *  rather than block the install. */
   async function runBundle(bundle: SoftwareBundle) {
     if (!sshParams || !swKey || bundleRunning) return;
     setBundleRunning(bundle.id);
+    setBundleProgress({
+      current: 0,
+      total: bundle.packageIds.length,
+      skipped: 0,
+      packageId: null,
+      mode: "installing",
+    });
+    bundlePauseRef.current = false;
+    bundleSkipRef.current = false;
+    bundleAbortRef.current = false;
+    setBundlePaused(false);
     try {
-      for (const pkgId of bundle.packageIds) {
-        const descriptor = registry.find((d) => d.id === pkgId);
-        if (!descriptor) continue;
-        const cur = statuses[pkgId];
-        if (cur?.installed) continue;
-        // Reuse the per-row install path so the activity log,
-        // cancel button, and outcome handling stay consistent.
+      let order = bundle.packageIds;
+      try {
+        order = await cmd.softwareBundleInstallOrder(bundle.packageIds);
+      } catch {
+        // Reorder is a nicety — fall back to declared order so a
+        // backend hiccup doesn't block the install entirely.
+      }
+      for (let i = 0; i < order.length; i++) {
+        // Pause gate — block the loop until the user clicks
+        // "继续". Polled at 200ms because we don't have a tokio-
+        // style notify in the browser; a missed wake-up just
+        // delays the resume by one tick. Abort during pause
+        // exits the loop without running the next package.
         // eslint-disable-next-line no-await-in-loop
-        await runInstall(descriptor, "install");
-        // Bail out early if the user cancelled mid-bundle.
+        while (bundlePauseRef.current && !bundleAbortRef.current) {
+          // eslint-disable-next-line no-await-in-loop
+          await new Promise((r) => setTimeout(r, 200));
+        }
+        if (bundleAbortRef.current) break;
+
+        const pkgId = order[i];
+        const descriptor = registry.find((d) => d.id === pkgId);
+        if (!descriptor) {
+          setBundleProgress((p) =>
+            p ? { ...p, current: i + 1, skipped: p.skipped + 1 } : p,
+          );
+          continue;
+        }
+        const cur = statuses[pkgId];
+        if (cur?.installed) {
+          setBundleProgress((p) =>
+            p
+              ? { ...p, current: i + 1, skipped: p.skipped + 1, packageId: pkgId }
+              : p,
+          );
+          continue;
+        }
+        setBundleProgress((p) =>
+          p ? { ...p, current: i + 1, packageId: pkgId } : p,
+        );
+        bundleSkipRef.current = false;
+        // Stash the activity's installId so the skip / abort
+        // buttons can call softwareInstallCancel with the right
+        // id. We read it from the store right after runInstall
+        // creates the activity — there's a tiny window before
+        // that where the buttons can't act, but it's <1 frame.
+        // (We can't pre-allocate the id here because runInstall
+        // generates its own.)
+        // eslint-disable-next-line no-await-in-loop
+        const installPromise = runInstall(descriptor, "install");
+        // Capture the activity's installId once it's been
+        // populated by runInstall's startActivity call.
+        const captureId = () => {
+          const live =
+            useSoftwareStore.getState().get(swKey).activity[pkgId];
+          if (live?.installId) {
+            bundleCurrentInstallIdRef.current = live.installId;
+          }
+        };
+        // First tick after the microtask queue drains.
+        queueMicrotask(captureId);
+        // Re-check shortly after — startActivity is sync but the
+        // event listener subscribe path isn't, so a 50ms grace
+        // catches the late case without slowing the happy path.
+        const captureTimer = window.setTimeout(captureId, 50);
+        // eslint-disable-next-line no-await-in-loop
+        await installPromise;
+        window.clearTimeout(captureTimer);
+        bundleCurrentInstallIdRef.current = null;
         const after = useSoftwareStore.getState().get(swKey).statuses[pkgId];
         if (!after?.installed) {
-          // Surface as a warning in the panel: the bundle stops
-          // at the first failure so the user can react before
-          // the next package's apt cycle.
+          if (bundleSkipRef.current) {
+            // User skipped this specific package — keep going.
+            bundleSkipRef.current = false;
+            continue;
+          }
+          // Real failure or unsolicited cancellation — bail out.
           break;
         }
       }
     } finally {
       setBundleRunning(null);
+      setBundleProgress(null);
+      bundlePauseRef.current = false;
+      bundleSkipRef.current = false;
+      bundleAbortRef.current = false;
+      bundleCurrentInstallIdRef.current = null;
+      setBundlePaused(false);
+    }
+  }
+
+  /** Toggle the bundle's pause flag. The next iteration of the
+   *  loop blocks at the pause gate until the flag clears; the
+   *  current package keeps running to completion (a half-cancelled
+   *  apt is worse than waiting one more `apt-get install`). */
+  function togglePauseBundle() {
+    bundlePauseRef.current = !bundlePauseRef.current;
+    setBundlePaused(bundlePauseRef.current);
+  }
+
+  /** Cancel the in-flight package's install and continue with the
+   *  next one. Different from the per-row Cancel button: that one
+   *  stops the entire bundle (the loop sees the cancelled status
+   *  and breaks). This sets a sticky flag the loop checks so the
+   *  cancellation doesn't propagate as a fail. */
+  function skipCurrentBundlePackage() {
+    const id = bundleCurrentInstallIdRef.current;
+    if (!id) return;
+    bundleSkipRef.current = true;
+    void cmd.softwareInstallCancel(id).catch(() => {
+      // Same fallback as cancelRow — IPC failure resets the flag
+      // so the user can retry.
+      bundleSkipRef.current = false;
+    });
+  }
+
+  /** Abort the entire bundle: cancel the in-flight package AND
+   *  set the abort flag so the loop exits at the next gate. */
+  function abortBundle() {
+    bundleAbortRef.current = true;
+    bundlePauseRef.current = false;
+    setBundlePaused(false);
+    const id = bundleCurrentInstallIdRef.current;
+    if (id) {
+      void cmd.softwareInstallCancel(id).catch(() => {
+        /* see above */
+      });
     }
   }
 
@@ -930,33 +1150,102 @@ function SoftwarePanelBody({ tab }: Props) {
    *  reverse install order (services first, then their deps).
    *  Skips members that aren't installed. Uses safe defaults
    *  (no purge / no autoremove / no data-dir wipe / no upstream
-   *  cleanup) so accidental clicks can't nuke postgres data. */
+   *  cleanup) so accidental clicks can't nuke postgres data.
+   *
+   *  Same topo reorder as `runBundle`, then reverse: companions
+   *  come down BEFORE their anchors so e.g. compose stops before
+   *  docker (avoids "stop daemon used by N containers" warnings
+   *  on the way out). Falls back to reverse declared order on
+   *  reorder failure for the same reason as the install path. */
   async function runBundleUninstall(bundle: SoftwareBundle) {
     if (!sshParams || !swKey || bundleRunning) return;
     setBundleRunning(bundle.id);
+    setBundleProgress({
+      current: 0,
+      total: bundle.packageIds.length,
+      skipped: 0,
+      packageId: null,
+      mode: "uninstalling",
+    });
+    bundlePauseRef.current = false;
+    bundleSkipRef.current = false;
+    bundleAbortRef.current = false;
+    setBundlePaused(false);
     try {
-      // Reverse-iterate so daemons go down before their CLI deps.
-      for (let i = bundle.packageIds.length - 1; i >= 0; i--) {
-        const pkgId = bundle.packageIds[i];
-        const descriptor = registry.find((d) => d.id === pkgId);
-        if (!descriptor) continue;
-        const cur = statuses[pkgId];
-        if (!cur?.installed) continue;
+      let baseOrder = bundle.packageIds;
+      try {
+        baseOrder = await cmd.softwareBundleInstallOrder(bundle.packageIds);
+      } catch {
+        // Same fallback contract as runBundle.
+      }
+      const reversed = [...baseOrder].reverse();
+      for (let i = 0; i < reversed.length; i++) {
+        // Same pause gate as runBundle.
         // eslint-disable-next-line no-await-in-loop
-        await runUninstall(descriptor, {
+        while (bundlePauseRef.current && !bundleAbortRef.current) {
+          // eslint-disable-next-line no-await-in-loop
+          await new Promise((r) => setTimeout(r, 200));
+        }
+        if (bundleAbortRef.current) break;
+
+        const pkgId = reversed[i];
+        const descriptor = registry.find((d) => d.id === pkgId);
+        if (!descriptor) {
+          setBundleProgress((p) =>
+            p ? { ...p, current: i + 1, skipped: p.skipped + 1 } : p,
+          );
+          continue;
+        }
+        const cur = statuses[pkgId];
+        if (!cur?.installed) {
+          setBundleProgress((p) =>
+            p
+              ? { ...p, current: i + 1, skipped: p.skipped + 1, packageId: pkgId }
+              : p,
+          );
+          continue;
+        }
+        setBundleProgress((p) =>
+          p ? { ...p, current: i + 1, packageId: pkgId } : p,
+        );
+        bundleSkipRef.current = false;
+        // eslint-disable-next-line no-await-in-loop
+        const uninstallPromise = runUninstall(descriptor, {
           purgeConfig: false,
           autoremove: false,
           removeDataDirs: false,
           removeUpstreamSource: false,
         });
+        const captureId = () => {
+          const live =
+            useSoftwareStore.getState().get(swKey).activity[pkgId];
+          if (live?.installId) {
+            bundleCurrentInstallIdRef.current = live.installId;
+          }
+        };
+        queueMicrotask(captureId);
+        const captureTimer = window.setTimeout(captureId, 50);
+        // eslint-disable-next-line no-await-in-loop
+        await uninstallPromise;
+        window.clearTimeout(captureTimer);
+        bundleCurrentInstallIdRef.current = null;
         const after = useSoftwareStore.getState().get(swKey).statuses[pkgId];
         if (after?.installed) {
-          // Stop on first failure — same reasoning as runBundle.
+          if (bundleSkipRef.current) {
+            bundleSkipRef.current = false;
+            continue;
+          }
           break;
         }
       }
     } finally {
       setBundleRunning(null);
+      setBundleProgress(null);
+      bundlePauseRef.current = false;
+      bundleSkipRef.current = false;
+      bundleAbortRef.current = false;
+      bundleCurrentInstallIdRef.current = null;
+      setBundlePaused(false);
     }
   }
 
@@ -1366,6 +1655,7 @@ function SoftwarePanelBody({ tab }: Props) {
         onVendorPick={() => setVendorTarget(descriptor)}
         onAction={(action) => void runInstall(descriptor, action)}
         onCdToPath={(p) => void sendCdToTerminal(p)}
+        onCleanupRepo={(w) => void sendRepoCleanupToTerminal(w)}
         hasLiveTerminal={!!tab?.terminalSessionId}
         metrics={metricsCache[descriptor.id] ?? null}
         pulse={graphHighlight === descriptor.id}
@@ -1469,6 +1759,16 @@ function SoftwarePanelBody({ tab }: Props) {
         <button
           type="button"
           className="btn is-ghost is-compact"
+          onClick={() => setWebhooksOpen(true)}
+          title={t(
+            "Configure HTTP webhooks fired after each install / update / uninstall.",
+          )}
+        >
+          <BellRing size={10} /> {t("Webhooks")}
+        </button>
+        <button
+          type="button"
+          className="btn is-ghost is-compact"
           onClick={() => void probe()}
           disabled={probing}
           title={t("Re-probe host")}
@@ -1512,8 +1812,8 @@ function SoftwarePanelBody({ tab }: Props) {
               const total = b.packageIds.length;
               const running = bundleRunning === b.id;
               return (
+                <div key={b.id} className="sw-panel__bundle-card-wrap">
                 <button
-                  key={b.id}
                   type="button"
                   className="sw-panel__bundle-card"
                   disabled={!!bundleRunning || !!busyPackageId}
@@ -1534,10 +1834,115 @@ function SoftwarePanelBody({ tab }: Props) {
                   {running && (
                     <div className="sw-panel__bundle-card-running mono">
                       <Loader size={10} className="sw-row__spin" />{" "}
-                      {t("Installing bundle...")}
+                      {bundleProgress
+                        ? bundleProgress.mode === "installing"
+                          ? bundleProgress.packageId
+                            ? t(
+                                "Installing {cur}/{total}: {pkg}",
+                                {
+                                  cur: bundleProgress.current,
+                                  total: bundleProgress.total,
+                                  pkg: bundleProgress.packageId,
+                                },
+                              )
+                            : t("Resolving order…")
+                          : bundleProgress.packageId
+                            ? t(
+                                "Uninstalling {cur}/{total}: {pkg}",
+                                {
+                                  cur: bundleProgress.current,
+                                  total: bundleProgress.total,
+                                  pkg: bundleProgress.packageId,
+                                },
+                              )
+                            : t("Resolving order…")
+                        : t("Installing bundle...")}
+                      {bundleProgress && bundleProgress.skipped > 0 && (
+                        <span className="muted">
+                          {" "}
+                          ·{" "}
+                          {t("{n} already installed", {
+                            n: bundleProgress.skipped,
+                          })}
+                        </span>
+                      )}
+                    </div>
+                  )}
+                  {running && bundleProgress && bundleProgress.total > 0 && (
+                    <div
+                      className={
+                        "sw-panel__bundle-card-progress" +
+                        (bundlePaused
+                          ? " sw-panel__bundle-card-progress--paused"
+                          : "")
+                      }
+                      role="progressbar"
+                      aria-valuemin={0}
+                      aria-valuemax={bundleProgress.total}
+                      aria-valuenow={bundleProgress.current}
+                    >
+                      <div
+                        className="sw-panel__bundle-card-progress-fill"
+                        style={{
+                          width: `${Math.min(
+                            100,
+                            (bundleProgress.current / bundleProgress.total) *
+                              100,
+                          )}%`,
+                        }}
+                      />
+                      {bundlePaused && (
+                        <span
+                          className="sw-panel__bundle-card-progress-badge"
+                          aria-label={t("Paused")}
+                        >
+                          {t("PAUSED")}
+                        </span>
+                      )}
                     </div>
                   )}
                 </button>
+                {running && (
+                  <div className="sw-panel__bundle-card-controls">
+                    <button
+                      type="button"
+                      className="mini-button"
+                      onClick={togglePauseBundle}
+                      title={
+                        bundlePaused
+                          ? t(
+                              "Resume the bundle — the next package will start as soon as the current one returns.",
+                            )
+                          : t(
+                              "Pause after the current package finishes. Click again to resume.",
+                            )
+                      }
+                    >
+                      {bundlePaused ? t("Resume") : t("Pause")}
+                    </button>
+                    <button
+                      type="button"
+                      className="mini-button"
+                      onClick={skipCurrentBundlePackage}
+                      title={t(
+                        "Cancel the in-flight package and continue with the next one.",
+                      )}
+                    >
+                      {t("Skip current")}
+                    </button>
+                    <button
+                      type="button"
+                      className="mini-button mini-button--destructive"
+                      onClick={abortBundle}
+                      title={t(
+                        "Cancel the in-flight package and stop the entire bundle.",
+                      )}
+                    >
+                      {t("Stop")}
+                    </button>
+                  </div>
+                )}
+                </div>
               );
             })}
           </div>
@@ -1682,6 +2087,14 @@ function SoftwarePanelBody({ tab }: Props) {
         onClose={() => setHistoryOpen(false)}
         onUndo={async (entry, onProgress) => {
           await runHistoryUndo(entry, onProgress);
+        }}
+      />
+      <WebhooksDialog
+        open={webhooksOpen}
+        initialTab={webhooksInitialTab}
+        onClose={() => {
+          setWebhooksOpen(false);
+          setWebhooksInitialTab(null);
         }}
       />
       <PgQuickConfigDialog
@@ -2235,6 +2648,7 @@ function SoftwareRow({
   onCancel,
   onVendorPick,
   onCdToPath,
+  onCleanupRepo,
   hasLiveTerminal,
   onPgQuickConfig,
   quickConfigLabel,
@@ -2256,6 +2670,7 @@ function SoftwareRow({
         error: string;
         busy: boolean;
         cancelling: boolean;
+        repoWarnings: string[];
       }
     | null;
   disabledOtherBusy: boolean;
@@ -2319,6 +2734,10 @@ function SoftwareRow({
   /** Inject `cd <path>` into the tab's terminal (or copy to
    *  clipboard when no terminal session is attached). */
   onCdToPath: (path: string) => void;
+  /** Inject a "disable this stale repo" one-liner into the tab's
+   *  terminal (or clipboard when no live terminal). Called from the
+   *  advisory banner's per-row action button. */
+  onCleanupRepo: (warning: string) => void;
   /** `true` when this tab has a live terminal session — the
    *  details pane uses this to label the cd-button as
    *  "→ 终端" vs "复制 cd 命令". */
@@ -2853,20 +3272,67 @@ function SoftwareRow({
             </button>
           </div>
         )}
-      {activity && (activity.busy || activity.log.length > 0 || activity.error) && (
-        <>
-          {activity.error && (
-            <div className="status-note status-note--error mono sw-row__error">
-              {activity.error}
-            </div>
-          )}
-          {activity.log.length > 0 && (
-            <pre ref={logRef} className="install-log mono sw-row__log">
-              {activity.log.join("\n")}
-            </pre>
-          )}
-        </>
-      )}
+      {activity &&
+        (activity.busy ||
+          activity.log.length > 0 ||
+          activity.error ||
+          activity.repoWarnings.length > 0) && (
+          <>
+            {activity.error && (
+              <div className="status-note status-note--error mono sw-row__error">
+                {activity.error}
+              </div>
+            )}
+            {activity.repoWarnings.length > 0 && (
+              <div className="status-note status-note--warn mono sw-row__warn">
+                <div className="sw-row__warn-title">
+                  {t(
+                    "Stale third-party repos detected — install proceeded against the cached index. Clean these up on the host to silence the warnings:",
+                  )}
+                </div>
+                <ul className="sw-row__warn-list">
+                  {activity.repoWarnings.map((w) => {
+                    const cleanable =
+                      buildRepoCleanupCommand(w).length > 0;
+                    return (
+                      <li key={w}>
+                        <span className="sw-row__warn-ident">{w}</span>
+                        {cleanable && (
+                          <button
+                            type="button"
+                            className="mini-button sw-row__warn-action"
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              onCleanupRepo(w);
+                            }}
+                            title={
+                              hasLiveTerminal
+                                ? t(
+                                    "Inject a disable command into the active terminal — review then press Enter to run.",
+                                  )
+                                : t(
+                                    "Copy a disable command to the clipboard — paste into a terminal, review, then run.",
+                                  )
+                            }
+                          >
+                            {hasLiveTerminal
+                              ? t("Disable in terminal")
+                              : t("Copy disable command")}
+                          </button>
+                        )}
+                      </li>
+                    );
+                  })}
+                </ul>
+              </div>
+            )}
+            {activity.log.length > 0 && (
+              <pre ref={logRef} className="install-log mono sw-row__log">
+                {activity.log.join("\n")}
+              </pre>
+            )}
+          </>
+        )}
       {expanded && (
         <SoftwareRowDetails
           descriptor={descriptor}
@@ -3747,11 +4213,33 @@ function ComposeTemplatesDialog({
   const [busy, setBusy] = useState<string | null>(null);
   const [message, setMessage] = useState("");
   const [previewId, setPreviewId] = useState<string | null>(null);
+  // Per-card K8s export state. We hold the most recent conversion
+  // result keyed by template id so a user can flip back and forth
+  // between cards without re-running the converter (it's ~free
+  // either way, but skipping the round-trip keeps the UI snappy).
+  const [k8sExportId, setK8sExportId] = useState<string | null>(null);
+  const [k8sExports, setK8sExports] = useState<
+    Record<string, cmd.ComposeK8sExport>
+  >({});
+  const [k8sNamespace, setK8sNamespace] = useState("");
+  const [k8sIngressHost, setK8sIngressHost] = useState("");
+  const [k8sIngressClass, setK8sIngressClass] = useState("");
+  const [k8sIngressTls, setK8sIngressTls] = useState("");
+  const [k8sLiftBindMounts, setK8sLiftBindMounts] = useState(false);
+  const [k8sBusyId, setK8sBusyId] = useState<string | null>(null);
 
   useEffect(() => {
     if (!target) return;
     setMessage("");
     setPreviewId(null);
+    setK8sExportId(null);
+    setK8sExports({});
+    setK8sNamespace("");
+    setK8sIngressHost("");
+    setK8sIngressClass("");
+    setK8sIngressTls("");
+    setK8sLiftBindMounts(false);
+    setK8sBusyId(null);
     void cmd.softwareComposeTemplates().then(setTemplates).catch(() => setTemplates([]));
   }, [target?.id]);
 
@@ -3771,6 +4259,84 @@ function ComposeTemplatesDialog({
       setMessage(e instanceof Error ? e.message : String(e));
     } finally {
       setBusy(null);
+    }
+  }
+
+  /** Toggle the K8s export pane for a template card. First open
+   *  fires the conversion (cached on success); subsequent toggles
+   *  just flip visibility without re-running. The namespace box at
+   *  the top of the pane re-runs the conversion in place when
+   *  edited so the user can see the namespace woven into each
+   *  manifest's metadata without leaving the dialog. */
+  function exportArgs(templateId: string) {
+    return {
+      templateId,
+      namespace: k8sNamespace.trim() || undefined,
+      ingressHost: k8sIngressHost.trim() || undefined,
+      ingressClass: k8sIngressClass.trim() || undefined,
+      ingressTlsSecret: k8sIngressTls.trim() || undefined,
+      liftBindMounts: k8sLiftBindMounts,
+    };
+  }
+
+  async function toggleK8sExport(templateId: string) {
+    if (k8sExportId === templateId) {
+      setK8sExportId(null);
+      return;
+    }
+    if (k8sBusyId === templateId) return;
+    if (k8sExports[templateId]) {
+      setK8sExportId(templateId);
+      return;
+    }
+    setK8sBusyId(templateId);
+    try {
+      const exp = await cmd.softwareComposeExportK8s(exportArgs(templateId));
+      setK8sExports((prev) => ({ ...prev, [templateId]: exp }));
+      setK8sExportId(templateId);
+    } catch (e) {
+      setMessage(e instanceof Error ? e.message : String(e));
+    } finally {
+      setK8sBusyId(null);
+    }
+  }
+
+  /** Re-run the conversion with the current namespace + ingress
+   *  settings. Wired to each input's blur / Enter handler so a
+   *  typo doesn't fire dozens of round-trips per keystroke. */
+  async function refreshK8sExport(templateId: string) {
+    setK8sBusyId(templateId);
+    try {
+      const exp = await cmd.softwareComposeExportK8s(exportArgs(templateId));
+      setK8sExports((prev) => ({ ...prev, [templateId]: exp }));
+    } catch (e) {
+      setMessage(e instanceof Error ? e.message : String(e));
+    } finally {
+      setK8sBusyId(null);
+    }
+  }
+
+  async function copyK8sYaml(templateId: string) {
+    const exp = k8sExports[templateId];
+    if (!exp) return;
+    await writeClipboardText(exp.k8sYaml);
+    setMessage(t("Kubernetes manifest copied to clipboard."));
+  }
+
+  async function saveK8sYaml(templateId: string) {
+    const exp = k8sExports[templateId];
+    if (!exp) return;
+    try {
+      const dialog = await import("@tauri-apps/plugin-dialog");
+      const picked = await dialog.save({
+        defaultPath: `${templateId}-k8s.yaml`,
+        filters: [{ name: "YAML", extensions: ["yaml", "yml"] }],
+      });
+      if (typeof picked !== "string") return;
+      await cmd.localWriteTextFile(picked, exp.k8sYaml);
+      setMessage(t("Saved manifest to {path}", { path: picked }));
+    } catch (e) {
+      setMessage(e instanceof Error ? e.message : String(e));
     }
   }
 
@@ -3816,6 +4382,18 @@ function ComposeTemplatesDialog({
                   <button
                     type="button"
                     className="btn is-ghost is-compact"
+                    onClick={() => void toggleK8sExport(tpl.id)}
+                    disabled={k8sBusyId === tpl.id}
+                  >
+                    {k8sBusyId === tpl.id
+                      ? t("Converting...")
+                      : k8sExportId === tpl.id
+                        ? t("Hide K8s YAML")
+                        : t("Export K8s YAML")}
+                  </button>
+                  <button
+                    type="button"
+                    className="btn is-ghost is-compact"
                     onClick={() => void run("down", tpl.id)}
                     disabled={!!busy}
                   >
@@ -3832,6 +4410,140 @@ function ComposeTemplatesDialog({
                 </div>
                 {previewing && (
                   <pre className="sw-compose__yaml mono">{tpl.yaml}</pre>
+                )}
+                {k8sExportId === tpl.id && k8sExports[tpl.id] && (
+                  <div className="sw-compose__k8s">
+                    <div className="sw-compose__k8s-toolbar">
+                      <label className="sw-compose__k8s-ns">
+                        <span>{t("Namespace")}</span>
+                        <input
+                          type="text"
+                          value={k8sNamespace}
+                          onChange={(e) => setK8sNamespace(e.target.value)}
+                          onBlur={() => void refreshK8sExport(tpl.id)}
+                          onKeyDown={(e) => {
+                            if (e.key === "Enter") {
+                              e.preventDefault();
+                              void refreshK8sExport(tpl.id);
+                            }
+                          }}
+                          placeholder={t("(cluster default)")}
+                          disabled={k8sBusyId === tpl.id}
+                        />
+                      </label>
+                      <span className="sw-compose__k8s-summary mono muted">
+                        {t(
+                          "{deps} Deployments · {svcs} Services · {pvcs} PVCs · {ings} Ingress · {cms} ConfigMaps · {secs} Secrets · {nps} NetworkPolicies",
+                          {
+                            deps: k8sExports[tpl.id].deploymentCount,
+                            svcs: k8sExports[tpl.id].serviceCount,
+                            pvcs: k8sExports[tpl.id].pvcCount,
+                            ings: k8sExports[tpl.id].ingressCount,
+                            cms: k8sExports[tpl.id].configmapCount,
+                            secs: k8sExports[tpl.id].secretCount,
+                            nps: k8sExports[tpl.id].networkpolicyCount,
+                          },
+                        )}
+                      </span>
+                      <div className="sw-compose__k8s-actions">
+                        <button
+                          type="button"
+                          className="btn is-ghost is-compact"
+                          onClick={() => void copyK8sYaml(tpl.id)}
+                        >
+                          {t("Copy")}
+                        </button>
+                        <button
+                          type="button"
+                          className="btn is-ghost is-compact"
+                          onClick={() => void saveK8sYaml(tpl.id)}
+                        >
+                          {t("Save as…")}
+                        </button>
+                      </div>
+                    </div>
+                    <div className="sw-compose__k8s-ingress">
+                      <label className="sw-compose__k8s-ns">
+                        <span>{t("Ingress host")}</span>
+                        <input
+                          type="text"
+                          value={k8sIngressHost}
+                          onChange={(e) =>
+                            setK8sIngressHost(e.target.value)
+                          }
+                          onBlur={() => void refreshK8sExport(tpl.id)}
+                          onKeyDown={(e) => {
+                            if (e.key === "Enter") {
+                              e.preventDefault();
+                              void refreshK8sExport(tpl.id);
+                            }
+                          }}
+                          placeholder={t("(skip Ingress)")}
+                          disabled={k8sBusyId === tpl.id}
+                        />
+                      </label>
+                      <label className="sw-compose__k8s-ns">
+                        <span>{t("Ingress class")}</span>
+                        <input
+                          type="text"
+                          value={k8sIngressClass}
+                          onChange={(e) =>
+                            setK8sIngressClass(e.target.value)
+                          }
+                          onBlur={() => void refreshK8sExport(tpl.id)}
+                          placeholder={t("nginx, traefik, …")}
+                          disabled={k8sBusyId === tpl.id}
+                        />
+                      </label>
+                      <label className="sw-compose__k8s-ns">
+                        <span>{t("TLS secret")}</span>
+                        <input
+                          type="text"
+                          value={k8sIngressTls}
+                          onChange={(e) =>
+                            setK8sIngressTls(e.target.value)
+                          }
+                          onBlur={() => void refreshK8sExport(tpl.id)}
+                          placeholder={t("(plain HTTP)")}
+                          disabled={k8sBusyId === tpl.id}
+                        />
+                      </label>
+                      <label
+                        className="sw-compose__k8s-lift"
+                        title={t(
+                          "Convert Compose bind mounts (./local:/in) into placeholder ConfigMap resources so the manifest applies cleanly.",
+                        )}
+                      >
+                        <input
+                          type="checkbox"
+                          checked={k8sLiftBindMounts}
+                          onChange={(e) => {
+                            setK8sLiftBindMounts(e.target.checked);
+                            void refreshK8sExport(tpl.id);
+                          }}
+                          disabled={k8sBusyId === tpl.id}
+                        />
+                        <span>{t("Lift bind mounts → ConfigMap")}</span>
+                      </label>
+                    </div>
+                    {k8sExports[tpl.id].warnings.length > 0 && (
+                      <div className="status-note status-note--warn mono sw-compose__k8s-warn">
+                        <div className="sw-compose__k8s-warn-title">
+                          {t(
+                            "Some Compose features can't translate cleanly — review before applying:",
+                          )}
+                        </div>
+                        <ul>
+                          {k8sExports[tpl.id].warnings.map((w, i) => (
+                            <li key={i}>{w}</li>
+                          ))}
+                        </ul>
+                      </div>
+                    )}
+                    <pre className="sw-compose__yaml mono">
+                      {k8sExports[tpl.id].k8sYaml}
+                    </pre>
+                  </div>
                 )}
               </div>
             );
@@ -4727,6 +5439,675 @@ function MultiHostDialog({
               : t("Run on {n} host(s)", { n: selected.size })}
           </button>
         </div>
+      </div>
+    </Dialog>
+  );
+}
+
+/** Webhook settings dialog. Lists, edits, saves, and test-fires
+ *  user-configured HTTP webhooks. Persisted to
+ *  `<app_config_dir>/webhooks.json` via the backend; new entries
+ *  take effect immediately for the next install/uninstall in the
+ *  current session (no restart required, unlike software-extras). */
+function WebhooksDialog({
+  open,
+  initialTab,
+  onClose,
+}: {
+  open: boolean;
+  /** When set on open, jumps the dialog to this tab instead of
+   *  the default "endpoints". Used by the failure-toast CTA so
+   *  the user lands on the Failures viewer directly. */
+  initialTab: "endpoints" | "failures" | null;
+  onClose: () => void;
+}) {
+  const { t } = useI18n();
+  const [entries, setEntries] = useState<cmd.WebhookEntry[]>([]);
+  const [path, setPath] = useState<string | null>(null);
+  const [busy, setBusy] = useState(false);
+  const [message, setMessage] = useState("");
+  const [testing, setTesting] = useState<number | null>(null);
+  const [lastTest, setLastTest] = useState<{
+    index: number;
+    report: cmd.WebhookFireReport;
+  } | null>(null);
+  // Two tabs in the dialog: "Endpoints" (the existing config grid)
+  // and "Failures" (a viewer for `webhook-failures.jsonl`). The
+  // tab badge shows the failure count so a user with a fresh
+  // failure spotting it from across the room is the goal.
+  const [activeTab, setActiveTab] = useState<"endpoints" | "failures">(
+    "endpoints",
+  );
+  const [failures, setFailures] = useState<cmd.WebhookFailureRecord[]>([]);
+  const [failureBusy, setFailureBusy] = useState(false);
+  const [replayingId, setReplayingId] = useState<string | null>(null);
+  const [replayResult, setReplayResult] = useState<{
+    id: string;
+    report: cmd.WebhookFireReport;
+  } | null>(null);
+
+  async function refreshFailures() {
+    setFailureBusy(true);
+    try {
+      const list = await cmd.softwareWebhooksFailuresList();
+      setFailures(list);
+    } catch (e) {
+      setMessage(e instanceof Error ? e.message : String(e));
+    } finally {
+      setFailureBusy(false);
+    }
+  }
+
+  async function dismissFailure(id: string) {
+    try {
+      await cmd.softwareWebhooksFailuresDismiss(id);
+      setFailures((prev) => prev.filter((f) => f.id !== id));
+    } catch (e) {
+      setMessage(e instanceof Error ? e.message : String(e));
+    }
+  }
+
+  async function clearFailures() {
+    try {
+      await cmd.softwareWebhooksFailuresClear();
+      setFailures([]);
+    } catch (e) {
+      setMessage(e instanceof Error ? e.message : String(e));
+    }
+  }
+
+  async function replayFailure(rec: cmd.WebhookFailureRecord) {
+    setReplayingId(rec.id);
+    setReplayResult(null);
+    try {
+      const report = await cmd.softwareWebhooksReplay({
+        url: rec.url,
+        body: rec.body,
+      });
+      setReplayResult({ id: rec.id, report });
+      // Auto-dismiss on success — the record is no longer
+      // representative once the replay landed.
+      if (report.error === "") {
+        setFailures((prev) => prev.filter((f) => f.id !== rec.id));
+        await cmd
+          .softwareWebhooksFailuresDismiss(rec.id)
+          .catch(() => {});
+      }
+    } catch (e) {
+      setReplayResult({
+        id: rec.id,
+        report: {
+          url: rec.url,
+          statusCode: 0,
+          latencyMs: 0,
+          error: e instanceof Error ? e.message : String(e),
+          attempts: 1,
+        },
+      });
+    } finally {
+      setReplayingId(null);
+    }
+  }
+
+  useEffect(() => {
+    if (!open) return;
+    setMessage("");
+    setLastTest(null);
+    setReplayResult(null);
+    // Honour the caller's initial tab on each open. The CTA from
+    // the failure toast sets `initialTab="failures"`; manual
+    // header-button clicks pass `null` and we default to the
+    // last-seen tab (sticks during the session, resets on
+    // remount).
+    if (initialTab) setActiveTab(initialTab);
+    void refreshFailures();
+    void cmd
+      .softwareWebhooksLoad()
+      .then((cfg) => setEntries(cfg.entries))
+      .catch((e) => setMessage(e instanceof Error ? e.message : String(e)));
+    void cmd.softwareWebhooksPath().then(setPath).catch(() => setPath(null));
+  }, [open, initialTab]);
+
+  function updateEntry(idx: number, patch: Partial<cmd.WebhookEntry>) {
+    setEntries((prev) =>
+      prev.map((e, i) => (i === idx ? { ...e, ...patch } : e)),
+    );
+  }
+
+  function toggleEvent(idx: number, kind: cmd.WebhookEventKindLabel) {
+    setEntries((prev) =>
+      prev.map((e, i) => {
+        if (i !== idx) return e;
+        const has = e.events.includes(kind);
+        return {
+          ...e,
+          events: has
+            ? e.events.filter((k) => k !== kind)
+            : [...e.events, kind],
+        };
+      }),
+    );
+  }
+
+  function addEntry() {
+    setEntries((prev) => [
+      ...prev,
+      {
+        url: "",
+        label: "",
+        events: [],
+        disabled: false,
+        bodyTemplate: "",
+        maxRetries: 0,
+        retryBackoffSecs: 0,
+      },
+    ]);
+  }
+
+  /** Curated body-template snippets keyed by destination. The
+   *  Slack default is empty (the backend's default payload IS
+   *  Slack-shaped). Discord and Teams want different top-level
+   *  fields; the snippets just cover the minimum each platform
+   *  needs to render the message. */
+  const TEMPLATE_PRESETS: Array<{ id: string; label: string; template: string }> = [
+    { id: "default", label: t("Default (Slack)"), template: "" },
+    {
+      id: "discord",
+      label: t("Discord"),
+      template: '{"content":"{{text}}"}',
+    },
+    {
+      id: "teams",
+      label: t("Microsoft Teams"),
+      template:
+        '{"@type":"MessageCard","@context":"https://schema.org/extensions","summary":"Pier-X","text":"{{text}}"}',
+    },
+    {
+      id: "minimal",
+      label: t("Minimal JSON"),
+      template:
+        '{"event":"{{event}}","package":"{{packageId}}","host":"{{host}}","status":"{{status}}","version":"{{version}}","firedAt":{{firedAt}}}',
+    },
+  ];
+
+  function removeEntry(idx: number) {
+    setEntries((prev) => prev.filter((_, i) => i !== idx));
+  }
+
+  async function save() {
+    setBusy(true);
+    setMessage("");
+    try {
+      // Trim url + label so an accidental trailing space doesn't
+      // produce a "URL doesn't start with http://" error at fire-
+      // time. Drop fully-empty rows so a user can clear a row by
+      // emptying the URL instead of having to click the × button.
+      const cleaned = entries
+        .map((e) => ({ ...e, url: e.url.trim(), label: e.label.trim() }))
+        .filter((e) => e.url.length > 0);
+      await cmd.softwareWebhooksSave({ entries: cleaned });
+      setEntries(cleaned);
+      setMessage(t("Webhook configuration saved."));
+    } catch (e) {
+      setMessage(e instanceof Error ? e.message : String(e));
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function testFire(idx: number) {
+    const entry = entries[idx];
+    if (!entry || !entry.url.trim()) return;
+    setTesting(idx);
+    setLastTest(null);
+    try {
+      const report = await cmd.softwareWebhooksTestFire({
+        url: entry.url.trim(),
+        bodyTemplate: entry.bodyTemplate ?? "",
+      });
+      setLastTest({ index: idx, report });
+    } catch (e) {
+      setLastTest({
+        index: idx,
+        report: {
+          url: entry.url,
+          statusCode: 0,
+          latencyMs: 0,
+          error: e instanceof Error ? e.message : String(e),
+          attempts: 1,
+        },
+      });
+    } finally {
+      setTesting(null);
+    }
+  }
+
+  /** Track the preview pane's open/closed state per row + the
+   *  rendered body the backend produced for the most recent
+   *  template. Re-renders on template change so the user sees the
+   *  wire shape live. Pure-CPU backend call — round-trip is
+   *  microseconds. */
+  const [previewOpen, setPreviewOpen] = useState<number | null>(null);
+  const [previewBody, setPreviewBody] = useState<string>("");
+  const [previewBusy, setPreviewBusy] = useState(false);
+
+  async function refreshPreview(idx: number) {
+    const entry = entries[idx];
+    if (!entry) return;
+    setPreviewBusy(true);
+    try {
+      const body = await cmd.softwareWebhooksPreviewBody(
+        entry.bodyTemplate ?? "",
+      );
+      setPreviewBody(body);
+    } catch (e) {
+      setPreviewBody(e instanceof Error ? e.message : String(e));
+    } finally {
+      setPreviewBusy(false);
+    }
+  }
+
+  async function togglePreview(idx: number) {
+    if (previewOpen === idx) {
+      setPreviewOpen(null);
+      return;
+    }
+    setPreviewOpen(idx);
+    await refreshPreview(idx);
+  }
+
+  return (
+    <Dialog
+      open={open}
+      title={t("Webhooks")}
+      subtitle={t(
+        "Fire an HTTP POST after each install / update / uninstall — Slack, Discord, Teams, or your own monitoring inbox.",
+      )}
+      size="md"
+      onClose={onClose}
+    >
+      <div className="sw-webhooks">
+        <div className="sw-webhooks__tabs" role="tablist">
+          <button
+            type="button"
+            role="tab"
+            aria-selected={activeTab === "endpoints"}
+            className={`sw-webhooks__tab ${
+              activeTab === "endpoints" ? "sw-webhooks__tab--active" : ""
+            }`}
+            onClick={() => setActiveTab("endpoints")}
+          >
+            {t("Endpoints")}
+          </button>
+          <button
+            type="button"
+            role="tab"
+            aria-selected={activeTab === "failures"}
+            className={`sw-webhooks__tab ${
+              activeTab === "failures" ? "sw-webhooks__tab--active" : ""
+            }`}
+            onClick={() => {
+              setActiveTab("failures");
+              void refreshFailures();
+            }}
+          >
+            {t("Failures")}
+            {failures.length > 0 && (
+              <span className="sw-webhooks__tab-badge">{failures.length}</span>
+            )}
+          </button>
+        </div>
+        {activeTab === "failures" ? (
+          <div className="sw-webhooks__failures">
+            <div className="sw-webhooks__failures-toolbar">
+              <span className="muted mono">
+                {t("{n} stored", { n: failures.length })}
+              </span>
+              <div className="sw-webhooks__failures-actions">
+                <button
+                  type="button"
+                  className="btn is-ghost is-compact"
+                  onClick={() => void refreshFailures()}
+                  disabled={failureBusy}
+                >
+                  {failureBusy ? t("Refreshing…") : t("Refresh")}
+                </button>
+                <button
+                  type="button"
+                  className="btn is-ghost is-compact"
+                  onClick={() => void clearFailures()}
+                  disabled={failures.length === 0}
+                >
+                  {t("Clear all")}
+                </button>
+              </div>
+            </div>
+            {failures.length === 0 ? (
+              <div className="sw-webhooks__empty">
+                {t("No webhook failures recorded.")}
+              </div>
+            ) : (
+              <ul className="sw-webhooks__failure-list">
+                {failures.map((f) => {
+                  const date = new Date(f.failedAt * 1000);
+                  return (
+                    <li key={f.id} className="sw-webhooks__failure">
+                      <div className="sw-webhooks__failure-head">
+                        <span className="sw-webhooks__failure-event mono">
+                          {f.event}
+                        </span>
+                        <span className="sw-webhooks__failure-pkg mono">
+                          {f.packageId}
+                        </span>
+                        {f.host && (
+                          <span className="muted mono">{f.host}</span>
+                        )}
+                        <span className="muted mono sw-webhooks__failure-when">
+                          {date.toLocaleString()}
+                        </span>
+                      </div>
+                      <div className="sw-webhooks__failure-url mono">
+                        {f.label && (
+                          <span className="sw-webhooks__failure-label">
+                            {f.label}
+                          </span>
+                        )}
+                        <span>{f.url}</span>
+                      </div>
+                      <div className="status-note status-note--error mono">
+                        {t("attempt {n}: {err}", {
+                          n: f.attempts,
+                          err: f.error,
+                        })}
+                      </div>
+                      {replayResult && replayResult.id === f.id && (
+                        <div
+                          className={`mono sw-webhooks__test-result ${
+                            replayResult.report.error
+                              ? "sw-webhooks__test-result--error"
+                              : "sw-webhooks__test-result--ok"
+                          }`}
+                        >
+                          {replayResult.report.error
+                            ? `✗ ${replayResult.report.statusCode || "?"} · ${replayResult.report.error}`
+                            : `✓ ${replayResult.report.statusCode} · ${replayResult.report.latencyMs} ms`}
+                        </div>
+                      )}
+                      <div className="sw-webhooks__failure-actions">
+                        <button
+                          type="button"
+                          className="btn is-ghost is-compact"
+                          onClick={() => void replayFailure(f)}
+                          disabled={replayingId === f.id}
+                        >
+                          {replayingId === f.id ? t("Replaying…") : t("Replay")}
+                        </button>
+                        <button
+                          type="button"
+                          className="btn is-ghost is-compact"
+                          onClick={() => void dismissFailure(f.id)}
+                        >
+                          {t("Dismiss")}
+                        </button>
+                      </div>
+                    </li>
+                  );
+                })}
+              </ul>
+            )}
+          </div>
+        ) : entries.length === 0 ? (
+          <div className="sw-webhooks__empty">
+            {t("No webhooks configured.")}
+          </div>
+        ) : (
+          <ul className="sw-webhooks__list">
+            {entries.map((e, idx) => (
+              <li key={idx} className="sw-webhooks__row">
+                <div className="sw-webhooks__row-main">
+                  <input
+                    type="text"
+                    className="sw-webhooks__input"
+                    placeholder={t("https://hooks.slack.com/services/...")}
+                    value={e.url}
+                    onChange={(ev) =>
+                      updateEntry(idx, { url: ev.target.value })
+                    }
+                  />
+                  <input
+                    type="text"
+                    className="sw-webhooks__input sw-webhooks__input--label"
+                    placeholder={t("Label (optional)")}
+                    value={e.label}
+                    onChange={(ev) =>
+                      updateEntry(idx, { label: ev.target.value })
+                    }
+                  />
+                </div>
+                <div className="sw-webhooks__row-meta">
+                  <span className="muted">{t("Events:")}</span>
+                  {(["install", "update", "uninstall"] as const).map((k) => (
+                    <label key={k} className="sw-webhooks__chip">
+                      <input
+                        type="checkbox"
+                        checked={
+                          e.events.length === 0 || e.events.includes(k)
+                        }
+                        onChange={() => {
+                          // First explicit click on a chip seeds
+                          // the events array with just that kind;
+                          // an empty events array meant "all
+                          // events" and we want the toggle to feel
+                          // intuitive. Subsequent clicks toggle
+                          // membership normally.
+                          if (e.events.length === 0) {
+                            updateEntry(idx, {
+                              events: ["install", "update", "uninstall"]
+                                .filter((kk) => kk !== k) as cmd.WebhookEventKindLabel[],
+                            });
+                          } else {
+                            toggleEvent(idx, k);
+                          }
+                        }}
+                      />
+                      <span>{t(k.charAt(0).toUpperCase() + k.slice(1))}</span>
+                    </label>
+                  ))}
+                  <label className="sw-webhooks__chip">
+                    <input
+                      type="checkbox"
+                      checked={e.disabled}
+                      onChange={(ev) =>
+                        updateEntry(idx, { disabled: ev.target.checked })
+                      }
+                    />
+                    <span>{t("Disabled")}</span>
+                  </label>
+                  <label
+                    className="sw-webhooks__chip sw-webhooks__chip--num"
+                    title={t(
+                      "Retry attempts after the first failure. Capped at 5; 0 disables retries.",
+                    )}
+                  >
+                    <span className="muted">{t("Retries")}</span>
+                    <input
+                      type="number"
+                      min={0}
+                      max={5}
+                      value={e.maxRetries ?? 0}
+                      onChange={(ev) => {
+                        const n = Math.max(
+                          0,
+                          Math.min(5, Number(ev.target.value) || 0),
+                        );
+                        updateEntry(idx, { maxRetries: n });
+                      }}
+                    />
+                  </label>
+                  <label
+                    className="sw-webhooks__chip sw-webhooks__chip--num"
+                    title={t(
+                      "Base seconds for exponential backoff. 0 = use the default (5s, doubling).",
+                    )}
+                  >
+                    <span className="muted">{t("Backoff")}</span>
+                    <input
+                      type="number"
+                      min={0}
+                      max={60}
+                      value={e.retryBackoffSecs ?? 0}
+                      onChange={(ev) => {
+                        const n = Math.max(
+                          0,
+                          Math.min(60, Number(ev.target.value) || 0),
+                        );
+                        updateEntry(idx, { retryBackoffSecs: n });
+                      }}
+                    />
+                    <span className="muted">{t("s")}</span>
+                  </label>
+                  <div className="sw-webhooks__row-actions">
+                    <button
+                      type="button"
+                      className="btn is-ghost is-compact"
+                      onClick={() => void testFire(idx)}
+                      disabled={!e.url.trim() || testing !== null}
+                    >
+                      {testing === idx ? t("Sending…") : t("Send test")}
+                    </button>
+                    <button
+                      type="button"
+                      className="btn is-ghost is-compact"
+                      onClick={() => removeEntry(idx)}
+                    >
+                      <X size={10} /> {t("Remove")}
+                    </button>
+                  </div>
+                </div>
+                <div className="sw-webhooks__row-template">
+                  <label className="sw-webhooks__template-label">
+                    <span className="muted">{t("Body template")}</span>
+                    <select
+                      className="sw-webhooks__preset"
+                      value=""
+                      onChange={(ev) => {
+                        const preset = TEMPLATE_PRESETS.find(
+                          (p) => p.id === ev.target.value,
+                        );
+                        if (preset) {
+                          updateEntry(idx, {
+                            bodyTemplate: preset.template,
+                          });
+                          if (previewOpen === idx) {
+                            void refreshPreview(idx);
+                          }
+                        }
+                      }}
+                    >
+                      <option value="">{t("Apply preset…")}</option>
+                      {TEMPLATE_PRESETS.map((p) => (
+                        <option key={p.id} value={p.id}>
+                          {p.label}
+                        </option>
+                      ))}
+                    </select>
+                    <button
+                      type="button"
+                      className="btn is-ghost is-compact"
+                      onClick={() => void togglePreview(idx)}
+                    >
+                      {previewOpen === idx ? t("Hide preview") : t("Preview")}
+                    </button>
+                  </label>
+                  <textarea
+                    className="sw-webhooks__template"
+                    placeholder={t(
+                      'Empty = default Slack-shaped JSON. Custom example: {"content":"{{text}}"}',
+                    )}
+                    value={e.bodyTemplate ?? ""}
+                    onChange={(ev) => {
+                      updateEntry(idx, { bodyTemplate: ev.target.value });
+                    }}
+                    onBlur={() => {
+                      if (previewOpen === idx) void refreshPreview(idx);
+                    }}
+                    rows={3}
+                    spellCheck={false}
+                  />
+                  {previewOpen === idx && (
+                    <pre className="sw-webhooks__preview mono">
+                      {previewBusy ? t("Rendering…") : previewBody}
+                    </pre>
+                  )}
+                </div>
+                {lastTest && lastTest.index === idx && (
+                  <div
+                    className={`mono sw-webhooks__test-result ${
+                      lastTest.report.error
+                        ? "sw-webhooks__test-result--error"
+                        : "sw-webhooks__test-result--ok"
+                    }`}
+                  >
+                    {lastTest.report.error
+                      ? `✗ ${lastTest.report.statusCode || "?"} · ${lastTest.report.error}`
+                      : `✓ ${lastTest.report.statusCode} · ${lastTest.report.latencyMs} ms`}
+                  </div>
+                )}
+              </li>
+            ))}
+          </ul>
+        )}
+
+        {activeTab === "endpoints" && (
+          <div className="sw-webhooks__actions">
+            <button
+              type="button"
+              className="btn is-ghost is-compact"
+              onClick={addEntry}
+            >
+              + {t("Add webhook")}
+            </button>
+            <div className="sw-webhooks__actions-right">
+              <button
+                type="button"
+                className="btn is-ghost is-compact"
+                onClick={onClose}
+                disabled={busy}
+              >
+                {t("Close")}
+              </button>
+              <button
+                type="button"
+                className="btn is-primary is-compact"
+                onClick={() => void save()}
+                disabled={busy}
+              >
+                {busy ? t("Saving…") : t("Save")}
+              </button>
+            </div>
+          </div>
+        )}
+        {activeTab === "failures" && (
+          <div className="sw-webhooks__actions">
+            <span />
+            <div className="sw-webhooks__actions-right">
+              <button
+                type="button"
+                className="btn is-ghost is-compact"
+                onClick={onClose}
+              >
+                {t("Close")}
+              </button>
+            </div>
+          </div>
+        )}
+
+        {message && <div className="sw-pg-form__msg mono">{message}</div>}
+        {path && (
+          <div className="sw-webhooks__path muted mono">
+            {t("Stored at {path}", { path })}
+          </div>
+        )}
       </div>
     </Dialog>
   );

@@ -7,7 +7,10 @@ use pier_core::services::docker;
 use pier_core::services::firewall;
 use pier_core::services::git::{CommitInfo, GitClient, StashEntry, UnpushedCommit};
 use pier_core::services::mysql::{self as mysql_service, MysqlClient, MysqlConfig};
+use pier_core::services::apache;
+use pier_core::services::caddy;
 use pier_core::services::nginx;
+use pier_core::services::web_server;
 use pier_core::services::postgres::{PostgresClient, PostgresConfig};
 use pier_core::services::redis::{RedisClient, RedisConfig};
 use pier_core::services::package_manager;
@@ -22,7 +25,7 @@ use pier_core::ssh::{
     AuthMethod, ExecStream, HostKeyVerifier, SftpClient, SshConfig, SshSession, Tunnel,
 };
 use pier_core::terminal::{Cell, Color, NotifyEvent, NotifyFn, PierTerminal};
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::ffi::c_void;
 use std::fs;
@@ -3036,6 +3039,138 @@ fn ssh_connections_list() -> Result<Vec<SavedSshConnection>, String> {
         .enumerate()
         .map(|(index, config)| map_saved_connection(index, config))
         .collect())
+}
+
+// ── Host health dashboard (v2.13) ─────────────────────────────────
+//
+// Thin Tauri-command wrapper around
+// `pier_core::services::host_health`. The actual TCP probe lives in
+// pier-core so the frontend gets a UI-agnostic implementation that
+// can be exercised by `cargo test` without spinning up Tauri.
+
+/// Quick reachability probe across saved SSH connections.
+///
+/// `indices` lists which entries of the persisted connection list to
+/// probe; each is checked in parallel with a TCP connect bounded by
+/// `timeout_ms`. Returns one report per index in input order. The
+/// command itself only errors when the connection store can't be
+/// loaded — per-host failures surface inside the report rows.
+#[tauri::command]
+async fn host_health_probe(
+    indices: Vec<usize>,
+    timeout_ms: u32,
+) -> Result<Vec<package_manager_host_health_alias::HostHealthReport>, String> {
+    let store = tauri::async_runtime::spawn_blocking(ConnectionStore::load_default)
+        .await
+        .map_err(|e| format!("host_health_probe join: {e}"))?
+        .map_err(|e| e.to_string())?;
+
+    // Snapshot endpoint info while we still hold the loaded store —
+    // pier-core never sees credentials or auth state.
+    let targets: Vec<_> = indices
+        .into_iter()
+        .map(|index| {
+            let (host, port) = match store.connections.get(index) {
+                Some(c) => (c.host.clone(), c.port),
+                None => (String::new(), 0),
+            };
+            package_manager_host_health_alias::HostHealthTarget {
+                saved_connection_index: index,
+                host,
+                port,
+            }
+        })
+        .collect();
+
+    let reports = tauri::async_runtime::spawn_blocking(move || {
+        package_manager_host_health_alias::probe_many_blocking(targets, timeout_ms)
+    })
+    .await
+    .map_err(|e| format!("host_health_probe join: {e}"))?;
+    Ok(reports)
+}
+
+/// Local re-export alias — keeps the use-line at the top of `lib.rs`
+/// minimal while still pulling in just the host-health bits.
+mod package_manager_host_health_alias {
+    pub use pier_core::services::host_health::{
+        probe_many_blocking, HostDeepProbeReport, HostHealthReport, HostHealthTarget,
+    };
+}
+
+/// Look up a cached SSH session for `(host, port, user)` regardless
+/// of which auth_mode was originally used to open it. The deep
+/// probe deliberately does NOT authenticate — if the user hasn't
+/// already opened a session via some other panel, we want to tell
+/// them so rather than silently start a fresh handshake.
+fn peek_cached_ssh_session_any_auth(
+    state: &tauri::State<'_, AppState>,
+    host: &str,
+    port: u16,
+    user: &str,
+) -> Option<Arc<SshSession>> {
+    let cache = state.sftp_sessions.lock().ok()?;
+    // Try every plausible auth-mode label — the cache key is built
+    // from one of these, but the dashboard caller doesn't know
+    // which the saved-connection profile picked at connect time.
+    for auth in ["agent", "key", "password", "auto"] {
+        let key = sftp_cache_key(host, port, user, auth);
+        if let Some(session) = cache.get(&key) {
+            return Some(Arc::clone(session));
+        }
+    }
+    None
+}
+
+/// Run the host-health deep probe — uptime / disk / distro — over
+/// the cached SSH session for the saved connection. Returns
+/// `Ok(None)` when no cached session exists; the frontend treats
+/// that as "open a panel for this host first, then come back".
+#[tauri::command]
+async fn host_health_deep_probe(
+    app: tauri::AppHandle,
+    saved_connection_index: usize,
+) -> Result<Option<package_manager_host_health_alias::HostDeepProbeReport>, String> {
+    // Snapshot the saved connection up-front so the join below
+    // never holds a mutex across an .await.
+    let store = tauri::async_runtime::spawn_blocking(ConnectionStore::load_default)
+        .await
+        .map_err(|e| format!("host_health_deep_probe join: {e}"))?
+        .map_err(|e| e.to_string())?;
+    let conn = match store.connections.get(saved_connection_index).cloned() {
+        Some(c) => c,
+        None => return Err(format!("unknown saved connection {saved_connection_index}")),
+    };
+
+    // Look up cached session via the same map every right-side
+    // panel uses; if there isn't one, surface `None` so the UI
+    // tells the user to open a tab/panel to populate the cache.
+    let session = {
+        let state: tauri::State<'_, AppState> = app.state();
+        match peek_cached_ssh_session_any_auth(
+            &state,
+            &conn.host,
+            conn.port,
+            &conn.user,
+        ) {
+            Some(s) => s,
+            None => return Ok(None),
+        }
+    };
+
+    let report = tauri::async_runtime::spawn_blocking(move || {
+        // pier-core's deep_probe is async; bridge through the
+        // shared runtime the same way `connect_blocking` does.
+        let rt = pier_core::ssh::runtime::shared();
+        rt.block_on(pier_core::services::host_health::deep_probe(
+            saved_connection_index,
+            &session,
+        ))
+    })
+    .await
+    .map_err(|e| format!("host_health_deep_probe join: {e}"))?;
+
+    Ok(Some(report))
 }
 
 #[tauri::command]
@@ -6399,6 +6534,189 @@ async fn software_probe_remote(
 /// the v2 channel is install-only; updates always use the default
 /// package-manager path because the official installers (e.g.
 /// get.docker.com) are idempotent installers, not upgrade scripts.
+/// Tauri event channel used to notify the frontend whenever a
+/// webhook fan-out attempt fails after exhausting its retries.
+/// Frontend (App.tsx) listens once at startup and fans out to a
+/// toast + desktop notification.
+const WEBHOOK_FAILED_EVENT: &str = "pier-x://webhook-failed";
+
+#[derive(Serialize, Clone)]
+#[serde(rename_all = "camelCase")]
+struct WebhookFailedEvent {
+    /// URL that failed. Frontend uses this as the notification
+    /// body so the user can tell which destination is broken.
+    url: String,
+    /// Optional friendly label (`entry.label`); empty when none.
+    label: String,
+    /// Final attempt's error string (e.g. `"HTTP 500: ..."`).
+    error: String,
+    /// Total attempts that ran before giving up.
+    attempts: u8,
+    /// Echoes the install report's package_id so the toast can
+    /// say "redis install on host X failed to notify Slack".
+    package_id: String,
+    /// Mirrors `WebhookEventKind` ("install" / "update" /
+    /// "uninstall" / "test").
+    event: String,
+}
+
+/// Fire configured webhooks for an install / update terminal
+/// outcome. Synchronous-shaped (called from inside `spawn_blocking`)
+/// so we can use `ureq` without an extra runtime hop. Best-effort:
+/// any per-URL failure is logged but never propagated up the
+/// command path.
+fn fire_software_webhook(
+    app: &tauri::AppHandle,
+    view: &SoftwareInstallReportView,
+    host: &str,
+    port: u16,
+    user: &str,
+    event_kind: pier_core::services::webhook::WebhookEventKind,
+) {
+    let cfg = match pier_core::services::webhook::load() {
+        Ok(c) if !c.entries.is_empty() => c,
+        _ => return,
+    };
+    let host_str = if host.is_empty() {
+        String::new()
+    } else {
+        format!("{user}@{host}:{port}")
+    };
+    let text = pier_core::services::webhook::render_install_text(
+        event_kind,
+        &view.package_id,
+        &host_str,
+        &view.status,
+        &view.package_manager,
+        view.installed_version.as_deref(),
+    );
+    let payload = pier_core::services::webhook::WebhookPayload {
+        text,
+        event: match event_kind {
+            pier_core::services::webhook::WebhookEventKind::Install => "install",
+            pier_core::services::webhook::WebhookEventKind::Update => "update",
+            pier_core::services::webhook::WebhookEventKind::Uninstall => "uninstall",
+            pier_core::services::webhook::WebhookEventKind::Test => "test",
+        },
+        status: view.status.clone(),
+        package_id: view.package_id.clone(),
+        host: host_str,
+        package_manager: view.package_manager.clone(),
+        version: view.installed_version.clone(),
+        fired_at: SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .map(|d| d.as_secs())
+            .unwrap_or(0),
+    };
+    let reports = pier_core::services::webhook::fire_event_blocking(
+        &cfg,
+        &payload,
+        std::time::Duration::from_secs(5),
+    );
+    for r in reports {
+        if !r.error.is_empty() {
+            pier_core::logging::write_event(
+                "WARN",
+                "webhook",
+                &format!("{} → {}", r.url, r.error),
+            );
+            // Look up the matching entry's label for the toast —
+            // the load() call above already gave us `cfg.entries`.
+            // O(N) on a tiny list; not worth caching.
+            let label = cfg
+                .entries
+                .iter()
+                .find(|e| e.url == r.url)
+                .map(|e| e.label.clone())
+                .unwrap_or_default();
+            let _ = app.emit(
+                WEBHOOK_FAILED_EVENT,
+                WebhookFailedEvent {
+                    url: r.url.clone(),
+                    label,
+                    error: r.error.clone(),
+                    attempts: r.attempts,
+                    package_id: payload.package_id.clone(),
+                    event: payload.event.to_string(),
+                },
+            );
+        }
+    }
+}
+
+/// Mirror of [`fire_software_webhook`] on the uninstall side. The
+/// `SoftwareUninstallReportView` carries no `installed_version` so
+/// we report the descriptor id only.
+fn fire_uninstall_webhook(
+    app: &tauri::AppHandle,
+    view: &SoftwareUninstallReportView,
+    host: &str,
+    port: u16,
+    user: &str,
+) {
+    let cfg = match pier_core::services::webhook::load() {
+        Ok(c) if !c.entries.is_empty() => c,
+        _ => return,
+    };
+    let host_str = if host.is_empty() {
+        String::new()
+    } else {
+        format!("{user}@{host}:{port}")
+    };
+    let text = pier_core::services::webhook::render_install_text(
+        pier_core::services::webhook::WebhookEventKind::Uninstall,
+        &view.package_id,
+        &host_str,
+        &view.status,
+        &view.package_manager,
+        None,
+    );
+    let payload = pier_core::services::webhook::WebhookPayload {
+        text,
+        event: "uninstall",
+        status: view.status.clone(),
+        package_id: view.package_id.clone(),
+        host: host_str,
+        package_manager: view.package_manager.clone(),
+        version: None,
+        fired_at: SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .map(|d| d.as_secs())
+            .unwrap_or(0),
+    };
+    let reports = pier_core::services::webhook::fire_event_blocking(
+        &cfg,
+        &payload,
+        std::time::Duration::from_secs(5),
+    );
+    for r in reports {
+        if !r.error.is_empty() {
+            pier_core::logging::write_event(
+                "WARN",
+                "webhook",
+                &format!("{} → {}", r.url, r.error),
+            );
+            let label = cfg
+                .entries
+                .iter()
+                .find(|e| e.url == r.url)
+                .map(|e| e.label.clone())
+                .unwrap_or_default();
+            let _ = app.emit(
+                WEBHOOK_FAILED_EVENT,
+                WebhookFailedEvent {
+                    url: r.url.clone(),
+                    label,
+                    error: r.error.clone(),
+                    attempts: r.attempts,
+                    package_id: payload.package_id.clone(),
+                    event: payload.event.to_string(),
+                },
+            );
+        }
+    }
+}
+
 async fn software_install_or_update_inner(
     app: tauri::AppHandle,
     host: String,
@@ -6500,6 +6818,19 @@ async fn software_install_or_update_inner(
                 message: None,
             },
         );
+        // Fire configured webhooks. Best-effort — failures here
+        // never affect the install outcome the user just got.
+        // Skipped on cancellation since "the user bailed mid-run"
+        // isn't a deploy event worth notifying a Slack channel
+        // about; if they cancel they already know.
+        if view.status != "cancelled" {
+            let event_kind = if is_update {
+                pier_core::services::webhook::WebhookEventKind::Update
+            } else {
+                pier_core::services::webhook::WebhookEventKind::Install
+            };
+            fire_software_webhook(&app, &view, &host, port, &user, event_kind);
+        }
         Ok::<_, String>(view)
     })
     .await;
@@ -6740,6 +7071,296 @@ fn software_co_install_suggestions(id: String) -> Vec<String> {
         .iter()
         .map(|s| (*s).to_string())
         .collect()
+}
+
+/// Topologically sort a bundle's package ids so anchors install
+/// before their co-install companions. Pure CPU work over the
+/// static recommendation map — no SSH, no host probe. The
+/// frontend's runBundle loop calls this once per bundle to
+/// reorder before the per-row install loop fires.
+#[tauri::command]
+fn software_bundle_install_order(ids: Vec<String>) -> Vec<String> {
+    let refs: Vec<&str> = ids.iter().map(|s| s.as_str()).collect();
+    package_manager::topo_sort_bundle(&refs)
+}
+
+// ── Webhooks (v2.14) ─────────────────────────────────────────────
+
+#[derive(Serialize, Deserialize, Clone)]
+#[serde(rename_all = "camelCase")]
+struct WebhookEntryView {
+    url: String,
+    label: String,
+    /// Subset of `["install","update","uninstall"]`. Empty = all.
+    events: Vec<String>,
+    disabled: bool,
+    /// Optional body template. Empty = default Slack-shaped JSON.
+    /// See `pier_core::services::webhook` for placeholder syntax.
+    #[serde(default)]
+    body_template: String,
+    /// Retry attempts after the first failure. Capped at 5 in pier-core.
+    #[serde(default)]
+    max_retries: u8,
+    /// Base seconds for exponential backoff. 0 = use default (5s).
+    #[serde(default)]
+    retry_backoff_secs: u8,
+}
+
+#[derive(Serialize, Deserialize, Clone, Default)]
+struct WebhookConfigView {
+    entries: Vec<WebhookEntryView>,
+}
+
+fn webhook_view_to_core(view: &WebhookConfigView) -> pier_core::services::webhook::WebhookConfig {
+    pier_core::services::webhook::WebhookConfig {
+        entries: view
+            .entries
+            .iter()
+            .map(|e| pier_core::services::webhook::WebhookEntry {
+                url: e.url.clone(),
+                label: e.label.clone(),
+                events: e
+                    .events
+                    .iter()
+                    .filter_map(|s| match s.as_str() {
+                        "install" => {
+                            Some(pier_core::services::webhook::WebhookEventKind::Install)
+                        }
+                        "update" => {
+                            Some(pier_core::services::webhook::WebhookEventKind::Update)
+                        }
+                        "uninstall" => {
+                            Some(pier_core::services::webhook::WebhookEventKind::Uninstall)
+                        }
+                        _ => None,
+                    })
+                    .collect(),
+                disabled: e.disabled,
+                body_template: e.body_template.clone(),
+                max_retries: e.max_retries,
+                retry_backoff_secs: e.retry_backoff_secs,
+            })
+            .collect(),
+    }
+}
+
+fn webhook_core_to_view(
+    cfg: &pier_core::services::webhook::WebhookConfig,
+) -> WebhookConfigView {
+    WebhookConfigView {
+        entries: cfg
+            .entries
+            .iter()
+            .map(|e| WebhookEntryView {
+                url: e.url.clone(),
+                label: e.label.clone(),
+                events: e
+                    .events
+                    .iter()
+                    .map(|k| match k {
+                        pier_core::services::webhook::WebhookEventKind::Install => {
+                            "install".to_string()
+                        }
+                        pier_core::services::webhook::WebhookEventKind::Update => {
+                            "update".to_string()
+                        }
+                        pier_core::services::webhook::WebhookEventKind::Uninstall => {
+                            "uninstall".to_string()
+                        }
+                        pier_core::services::webhook::WebhookEventKind::Test => {
+                            "test".to_string()
+                        }
+                    })
+                    .collect(),
+                disabled: e.disabled,
+                body_template: e.body_template.clone(),
+                max_retries: e.max_retries,
+                retry_backoff_secs: e.retry_backoff_secs,
+            })
+            .collect(),
+    }
+}
+
+#[tauri::command]
+async fn software_webhooks_load() -> Result<WebhookConfigView, String> {
+    tauri::async_runtime::spawn_blocking(|| {
+        pier_core::services::webhook::load().map(|c| webhook_core_to_view(&c))
+    })
+    .await
+    .map_err(|e| format!("webhooks_load join: {e}"))?
+}
+
+#[tauri::command]
+async fn software_webhooks_save(config: WebhookConfigView) -> Result<(), String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        let core = webhook_view_to_core(&config);
+        pier_core::services::webhook::save(&core)
+    })
+    .await
+    .map_err(|e| format!("webhooks_save join: {e}"))?
+}
+
+#[derive(Serialize, Clone)]
+#[serde(rename_all = "camelCase")]
+struct WebhookFireReportView {
+    url: String,
+    status_code: u16,
+    latency_ms: u64,
+    error: String,
+    attempts: u8,
+}
+
+#[derive(Serialize, Clone)]
+#[serde(rename_all = "camelCase")]
+struct WebhookFailureRecordView {
+    id: String,
+    url: String,
+    label: String,
+    status_code: u16,
+    error: String,
+    attempts: u8,
+    body: String,
+    event: String,
+    package_id: String,
+    host: String,
+    failed_at: u64,
+}
+
+fn webhook_failure_to_view(
+    r: pier_core::services::webhook::WebhookFailureRecord,
+) -> WebhookFailureRecordView {
+    WebhookFailureRecordView {
+        id: r.id,
+        url: r.url,
+        label: r.label,
+        status_code: r.status_code,
+        error: r.error,
+        attempts: r.attempts,
+        body: r.body,
+        event: r.event,
+        package_id: r.package_id,
+        host: r.host,
+        failed_at: r.failed_at,
+    }
+}
+
+#[tauri::command]
+async fn software_webhooks_failures_list() -> Result<Vec<WebhookFailureRecordView>, String> {
+    tauri::async_runtime::spawn_blocking(|| {
+        pier_core::services::webhook::list_failures()
+            .map(|v| v.into_iter().map(webhook_failure_to_view).collect())
+    })
+    .await
+    .map_err(|e| format!("webhooks_failures_list join: {e}"))?
+}
+
+#[tauri::command]
+async fn software_webhooks_failures_dismiss(id: String) -> Result<bool, String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        pier_core::services::webhook::dismiss_failure(&id)
+    })
+    .await
+    .map_err(|e| format!("webhooks_failures_dismiss join: {e}"))?
+}
+
+#[tauri::command]
+async fn software_webhooks_failures_clear() -> Result<(), String> {
+    tauri::async_runtime::spawn_blocking(pier_core::services::webhook::clear_failures)
+        .await
+        .map_err(|e| format!("webhooks_failures_clear join: {e}"))?
+}
+
+#[tauri::command]
+async fn software_webhooks_replay(
+    url: String,
+    body: String,
+) -> Result<WebhookFireReportView, String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        let r = pier_core::services::webhook::replay_blocking(
+            &url,
+            &body,
+            std::time::Duration::from_secs(5),
+        );
+        Ok::<_, String>(WebhookFireReportView {
+            url: r.url,
+            status_code: r.status_code,
+            latency_ms: r.latency_ms,
+            error: r.error,
+            attempts: r.attempts,
+        })
+    })
+    .await
+    .map_err(|e| format!("webhooks_replay join: {e}"))?
+}
+
+#[tauri::command]
+async fn software_webhooks_test_fire(
+    url: String,
+    body_template: Option<String>,
+) -> Result<WebhookFireReportView, String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        let payload = pier_core::services::webhook::WebhookPayload {
+            text: "Pier-X webhook test — if you see this, the URL is wired up correctly."
+                .to_string(),
+            event: "test",
+            status: "test".to_string(),
+            package_id: "pier-x-test".to_string(),
+            host: String::new(),
+            package_manager: String::new(),
+            version: None,
+            fired_at: SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .map(|d| d.as_secs())
+                .unwrap_or(0),
+        };
+        let r = match body_template {
+            Some(tpl) if !tpl.is_empty() => {
+                pier_core::services::webhook::fire_one_with_template_blocking(
+                    &url,
+                    &payload,
+                    &tpl,
+                    std::time::Duration::from_secs(5),
+                )
+            }
+            _ => pier_core::services::webhook::fire_one_blocking(
+                &url,
+                &payload,
+                std::time::Duration::from_secs(5),
+            ),
+        };
+        Ok::<_, String>(WebhookFireReportView {
+            url: r.url,
+            status_code: r.status_code,
+            latency_ms: r.latency_ms,
+            error: r.error,
+            attempts: r.attempts,
+        })
+    })
+    .await
+    .map_err(|e| format!("webhooks_test_fire join: {e}"))?
+}
+
+/// Render a webhook body template against a synthetic payload so
+/// the settings dialog can preview the wire shape without firing
+/// an actual HTTP request. Pure-CPU; never errors.
+#[tauri::command]
+fn software_webhooks_preview_body(body_template: String) -> String {
+    let payload = pier_core::services::webhook::WebhookPayload {
+        text: "Pier-X · install · redis on root@10.0.0.5:22: installed".to_string(),
+        event: "install",
+        status: "installed".to_string(),
+        package_id: "redis".to_string(),
+        host: "root@10.0.0.5:22".to_string(),
+        package_manager: "apt".to_string(),
+        version: Some("7:7.0.4-2".to_string()),
+        fired_at: 1_700_000_000,
+    };
+    pier_core::services::webhook::render_body(&payload, &body_template)
+}
+
+#[tauri::command]
+fn software_webhooks_path() -> Option<String> {
+    pier_core::services::webhook::config_path().map(|p| p.display().to_string())
 }
 
 /// Static catalog of curated bundles. Same shape every call; the
@@ -7106,6 +7727,65 @@ async fn software_compose_apply(
     })
     .await
     .map_err(|e| format!("software_compose_apply join: {e}"))?
+}
+
+/// Convert a Compose template into a multi-document Kubernetes
+/// manifest. Pure CPU work — no SSH, no host probe. Runs on the
+/// blocking pool only because the converter parses YAML which
+/// could be a few hundred KB for user-generated templates.
+#[tauri::command]
+async fn software_compose_export_k8s(
+    template_id: String,
+    namespace: Option<String>,
+    ingress_host: Option<String>,
+    ingress_class: Option<String>,
+    ingress_tls_secret: Option<String>,
+    lift_bind_mounts: Option<bool>,
+) -> Result<ComposeK8sExportView, String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        let tmpl = package_manager::compose_template_by_id(&template_id)
+            .ok_or_else(|| format!("unknown compose template: {template_id}"))?;
+        let ns = namespace.as_deref();
+        let opts = pier_core::services::compose_k8s::IngressOptions {
+            host: ingress_host.unwrap_or_default(),
+            ingress_class: ingress_class.unwrap_or_default(),
+            tls_secret: ingress_tls_secret.unwrap_or_default(),
+            lift_bind_mounts: lift_bind_mounts.unwrap_or(false),
+        };
+        let summary = pier_core::services::compose_k8s::convert_with_summary_and_options(
+            tmpl.yaml, ns, &opts,
+        )
+        .map_err(|e| e)?;
+        Ok::<_, String>(ComposeK8sExportView {
+            compose_yaml: summary.compose_yaml,
+            k8s_yaml: summary.k8s_yaml,
+            deployment_count: summary.deployment_count,
+            service_count: summary.service_count,
+            pvc_count: summary.pvc_count,
+            ingress_count: summary.ingress_count,
+            configmap_count: summary.configmap_count,
+            secret_count: summary.secret_count,
+            networkpolicy_count: summary.networkpolicy_count,
+            warnings: summary.warnings,
+        })
+    })
+    .await
+    .map_err(|e| format!("software_compose_export_k8s join: {e}"))?
+}
+
+#[derive(Serialize, Clone)]
+#[serde(rename_all = "camelCase")]
+struct ComposeK8sExportView {
+    compose_yaml: String,
+    k8s_yaml: String,
+    deployment_count: usize,
+    service_count: usize,
+    pvc_count: usize,
+    ingress_count: usize,
+    configmap_count: usize,
+    secret_count: usize,
+    networkpolicy_count: usize,
+    warnings: Vec<String>,
 }
 
 #[tauri::command]
@@ -8069,6 +8749,12 @@ async fn software_uninstall_remote(
                 message: None,
             },
         );
+        // Webhook fan-out for the uninstall side. Skip cancelled
+        // for the same reason install does — user-initiated bail
+        // isn't a deploy event.
+        if view.status != "cancelled" {
+            fire_uninstall_webhook(&app, &view, &host, port, &user);
+        }
         Ok::<_, String>(view)
     })
     .await;
@@ -8561,6 +9247,283 @@ async fn nginx_toggle_site(
     })
     .await
     .map_err(|e| format!("nginx_toggle_site join: {e}"))?
+}
+
+// ── Web Server (multi-product detection + generic validate/reload) ──
+
+#[tauri::command]
+async fn web_server_detect(
+    app: tauri::AppHandle,
+    host: String,
+    port: u16,
+    user: String,
+    auth_mode: String,
+    password: String,
+    key_path: String,
+    saved_connection_index: Option<usize>,
+) -> Result<web_server::WebServerDetection, String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        let state: tauri::State<'_, AppState> = app.state();
+        let session = get_or_open_ssh_session(
+            &state,
+            &host,
+            port,
+            &user,
+            &auth_mode,
+            &password,
+            &key_path,
+            saved_connection_index,
+        )?;
+        web_server::detect_blocking(&session).map_err(|e| e.to_string())
+    })
+    .await
+    .map_err(|e| format!("web_server_detect join: {e}"))?
+}
+
+#[tauri::command]
+async fn web_server_validate(
+    app: tauri::AppHandle,
+    host: String,
+    port: u16,
+    user: String,
+    auth_mode: String,
+    password: String,
+    key_path: String,
+    saved_connection_index: Option<usize>,
+    kind: web_server::WebServerKind,
+) -> Result<web_server::WebServerActionResult, String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        let state: tauri::State<'_, AppState> = app.state();
+        let session = get_or_open_ssh_session(
+            &state,
+            &host,
+            port,
+            &user,
+            &auth_mode,
+            &password,
+            &key_path,
+            saved_connection_index,
+        )?;
+        web_server::validate_blocking(&session, kind).map_err(|e| e.to_string())
+    })
+    .await
+    .map_err(|e| format!("web_server_validate join: {e}"))?
+}
+
+#[tauri::command]
+async fn web_server_layout(
+    app: tauri::AppHandle,
+    host: String,
+    port: u16,
+    user: String,
+    auth_mode: String,
+    password: String,
+    key_path: String,
+    saved_connection_index: Option<usize>,
+    kind: web_server::WebServerKind,
+) -> Result<web_server::WebServerLayout, String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        let state: tauri::State<'_, AppState> = app.state();
+        let session = get_or_open_ssh_session(
+            &state,
+            &host,
+            port,
+            &user,
+            &auth_mode,
+            &password,
+            &key_path,
+            saved_connection_index,
+        )?;
+        web_server::list_layout_blocking(&session, kind).map_err(|e| e.to_string())
+    })
+    .await
+    .map_err(|e| format!("web_server_layout join: {e}"))?
+}
+
+#[tauri::command]
+async fn web_server_read_file(
+    app: tauri::AppHandle,
+    host: String,
+    port: u16,
+    user: String,
+    auth_mode: String,
+    password: String,
+    key_path: String,
+    saved_connection_index: Option<usize>,
+    kind: web_server::WebServerKind,
+    path: String,
+) -> Result<String, String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        let state: tauri::State<'_, AppState> = app.state();
+        let session = get_or_open_ssh_session(
+            &state,
+            &host,
+            port,
+            &user,
+            &auth_mode,
+            &password,
+            &key_path,
+            saved_connection_index,
+        )?;
+        web_server::read_file_blocking(&session, kind, &path).map_err(|e| e.to_string())
+    })
+    .await
+    .map_err(|e| format!("web_server_read_file join: {e}"))?
+}
+
+#[tauri::command]
+async fn web_server_save_file(
+    app: tauri::AppHandle,
+    host: String,
+    port: u16,
+    user: String,
+    auth_mode: String,
+    password: String,
+    key_path: String,
+    saved_connection_index: Option<usize>,
+    kind: web_server::WebServerKind,
+    path: String,
+    content: String,
+) -> Result<web_server::WebServerSaveResult, String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        let state: tauri::State<'_, AppState> = app.state();
+        let session = get_or_open_ssh_session(
+            &state,
+            &host,
+            port,
+            &user,
+            &auth_mode,
+            &password,
+            &key_path,
+            saved_connection_index,
+        )?;
+        web_server::save_file_validate_reload_blocking(&session, kind, &path, &content)
+            .map_err(|e| e.to_string())
+    })
+    .await
+    .map_err(|e| format!("web_server_save_file join: {e}"))?
+}
+
+#[tauri::command]
+async fn web_server_toggle_site(
+    app: tauri::AppHandle,
+    host: String,
+    port: u16,
+    user: String,
+    auth_mode: String,
+    password: String,
+    key_path: String,
+    saved_connection_index: Option<usize>,
+    kind: web_server::WebServerKind,
+    site_name: String,
+    enable: bool,
+) -> Result<web_server::WebServerActionResult, String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        let state: tauri::State<'_, AppState> = app.state();
+        let session = get_or_open_ssh_session(
+            &state,
+            &host,
+            port,
+            &user,
+            &auth_mode,
+            &password,
+            &key_path,
+            saved_connection_index,
+        )?;
+        web_server::toggle_site_blocking(&session, kind, &site_name, enable)
+            .map_err(|e| e.to_string())
+    })
+    .await
+    .map_err(|e| format!("web_server_toggle_site join: {e}"))?
+}
+
+#[tauri::command]
+async fn web_server_create_site(
+    app: tauri::AppHandle,
+    host: String,
+    port: u16,
+    user: String,
+    auth_mode: String,
+    password: String,
+    key_path: String,
+    saved_connection_index: Option<usize>,
+    kind: web_server::WebServerKind,
+    leaf_name: String,
+    content: String,
+    enable_after: bool,
+) -> Result<web_server::CreateSiteResult, String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        let state: tauri::State<'_, AppState> = app.state();
+        let session = get_or_open_ssh_session(
+            &state,
+            &host,
+            port,
+            &user,
+            &auth_mode,
+            &password,
+            &key_path,
+            saved_connection_index,
+        )?;
+        web_server::create_site_file_blocking(&session, kind, &leaf_name, &content, enable_after)
+            .map_err(|e| e.to_string())
+    })
+    .await
+    .map_err(|e| format!("web_server_create_site join: {e}"))?
+}
+
+/// Pure parse — no SSH. The frontend already has the Caddyfile text
+/// in its editor buffer; this just turns it into an AST so the panel
+/// can render a structured tree view.
+#[tauri::command]
+fn caddy_parse(content: String) -> caddy::CaddyParseResult {
+    caddy::parse(&content)
+}
+
+/// Inverse of `caddy_parse` — render an AST back to Caddyfile text.
+/// Frontend uses this when committing a structured edit.
+#[tauri::command]
+fn caddy_render(nodes: Vec<caddy::CaddyNode>) -> String {
+    caddy::render(&nodes)
+}
+
+#[tauri::command]
+fn apache_parse(content: String) -> apache::ApacheParseResult {
+    apache::parse(&content)
+}
+
+#[tauri::command]
+fn apache_render(nodes: Vec<apache::ApacheNode>) -> String {
+    apache::render(&nodes)
+}
+
+#[tauri::command]
+async fn web_server_reload(
+    app: tauri::AppHandle,
+    host: String,
+    port: u16,
+    user: String,
+    auth_mode: String,
+    password: String,
+    key_path: String,
+    saved_connection_index: Option<usize>,
+    kind: web_server::WebServerKind,
+) -> Result<web_server::WebServerActionResult, String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        let state: tauri::State<'_, AppState> = app.state();
+        let session = get_or_open_ssh_session(
+            &state,
+            &host,
+            port,
+            &user,
+            &auth_mode,
+            &password,
+            &key_path,
+            saved_connection_index,
+        )?;
+        web_server::reload_blocking(&session, kind).map_err(|e| e.to_string())
+    })
+    .await
+    .map_err(|e| format!("web_server_reload join: {e}"))?
 }
 
 /// Bundles the read content with its parsed AST so the frontend gets
@@ -11055,6 +12018,13 @@ pub fn run() {
                     );
                 }
                 let _ = package_manager::set_user_extras_path(extras);
+                // Webhook config sits next to the extras file in
+                // the same app-config dir — keeps every "software
+                // panel ancillary" persisted together so a single
+                // app-data backup grabs both. Failure is silent
+                // (no webhooks fire that session).
+                let webhooks = config_dir.join("webhooks.json");
+                let _ = pier_core::services::webhook::set_config_path(webhooks);
             }
 
             // Initialise the ssh-mux wrapper + auto-generated config.
@@ -11208,6 +12178,8 @@ pub fn run() {
             redis_rename_key,
             redis_delete_key,
             ssh_connections_list,
+            host_health_probe,
+            host_health_deep_probe,
             ssh_connection_save,
             ssh_connection_delete,
             ssh_connection_resolve_password,
@@ -11279,6 +12251,16 @@ pub fn run() {
             software_install_arbitrary,
             software_bundles,
             software_co_install_suggestions,
+            software_bundle_install_order,
+            software_webhooks_load,
+            software_webhooks_save,
+            software_webhooks_test_fire,
+            software_webhooks_preview_body,
+            software_webhooks_path,
+            software_webhooks_failures_list,
+            software_webhooks_failures_dismiss,
+            software_webhooks_failures_clear,
+            software_webhooks_replay,
             software_mirror_catalog,
             software_mirror_get,
             software_mirror_set,
@@ -11303,6 +12285,7 @@ pub fn run() {
             redis_open_remote_remote,
             software_compose_templates,
             software_compose_apply,
+            software_compose_export_k8s,
             software_compose_down,
             software_clone_plan,
             software_db_metrics,
@@ -11316,6 +12299,18 @@ pub fn run() {
             nginx_reload,
             nginx_toggle_site,
             nginx_create_file,
+            web_server_detect,
+            web_server_validate,
+            web_server_reload,
+            web_server_layout,
+            web_server_read_file,
+            web_server_save_file,
+            web_server_toggle_site,
+            web_server_create_site,
+            caddy_parse,
+            caddy_render,
+            apache_parse,
+            apache_render,
             sqlite_find_in_dir,
             docker_inspect,
             docker_remove_image,

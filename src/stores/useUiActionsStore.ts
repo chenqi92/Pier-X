@@ -27,6 +27,14 @@ type Store = {
   /** Fire a "user wants to re-enter the password for saved
    *  connection N" event. App.tsx opens the edit dialog. */
   requestEditConnection: (savedIndex: number) => void;
+  /** Bumped every time a "open the Webhooks dialog and jump to
+   *  the Failures tab" request fires — used by the failure-toast
+   *  CTA so the user goes straight to the replay UI without
+   *  having to navigate manually. */
+  openWebhookFailuresSeq: number;
+  /** Fire the open-failures-tab request. SoftwarePanel listens
+   *  and opens the dialog with `activeTab = "failures"`. */
+  openWebhookFailures: () => void;
 };
 
 export const useUiActionsStore = create<Store>((set) => ({
@@ -36,5 +44,10 @@ export const useUiActionsStore = create<Store>((set) => ({
     set((state) => ({
       recoveryRequestSeq: state.recoveryRequestSeq + 1,
       recoveryRequestIndex: savedIndex,
+    })),
+  openWebhookFailuresSeq: 0,
+  openWebhookFailures: () =>
+    set((state) => ({
+      openWebhookFailuresSeq: state.openWebhookFailuresSeq + 1,
     })),
 }));

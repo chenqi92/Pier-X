@@ -65,7 +65,34 @@ export default function ToastStack() {
             }}
           >
             <Icon size={14} color={meta.accent} style={{ marginTop: 2, flexShrink: 0 }} />
-            <div style={{ flex: 1, lineHeight: 1.45, wordBreak: "break-word" }}>{t.message}</div>
+            <div style={{ flex: 1, lineHeight: 1.45, wordBreak: "break-word" }}>
+              {t.message}
+              {t.action && (
+                <button
+                  type="button"
+                  className="mini-button"
+                  style={{
+                    marginLeft: "var(--sp-2)",
+                    borderColor: meta.accent,
+                    color: meta.accent,
+                  }}
+                  onClick={() => {
+                    // Dismiss BEFORE running the callback so the
+                    // toast disappears even if `onClick` opens a
+                    // modal that traps focus and then errors out
+                    // — better UX than leaving an orphan banner.
+                    dismiss(t.id);
+                    try {
+                      t.action!.onClick();
+                    } catch {
+                      /* user-supplied callback */
+                    }
+                  }}
+                >
+                  {t.action.label}
+                </button>
+              )}
+            </div>
             <button
               type="button"
               aria-label="Dismiss"

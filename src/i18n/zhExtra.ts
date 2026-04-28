@@ -1568,6 +1568,242 @@ export const zhExtra: Record<string, string> = {
   "Web Server": "Web 服务器",
   "Manage the web server on a saved host — currently nginx (Apache and Caddy support is planned).":
     "管理远端主机上的 Web 服务器 —— 当前支持 nginx（Apache、Caddy 计划中）。",
+  "Open an SSH tab to manage the web server.": "打开 SSH 终端后再管理 Web 服务器。",
+  "This tab has no SSH context — web server management is remote-only.":
+    "当前终端未连接 SSH，Web 服务器管理仅在远端可用。",
+  "Detecting web servers…": "正在探测 Web 服务器…",
+  "No web server detected": "未检测到 Web 服务器",
+  "Install nginx, Apache, or Caddy via the Software panel — Pier-X will pick it up automatically.":
+    "请在「软件管理」面板里安装 nginx、Apache 或 Caddy —— Pier-X 会自动识别。",
+  "Apache": "Apache",
+  "Running": "运行中",
+  "Stopped": "已停止",
+  "Run config syntax check": "执行配置语法检查",
+  "Reload the daemon": "重载守护进程",
+  "Structured editing for {product} is not implemented yet — use SFTP to edit config files directly. Validate and Reload run on the host.":
+    "{product} 的结构化编辑尚未实现 —— 请通过 SFTP 直接编辑配置文件。「校验」和「重载」会在远端执行。",
+  "Config root": "配置根目录",
+  "Loaded modules": "已加载模块",
+  "Save → validate → reload (with auto-restore on fail)":
+    "保存 → 校验 → 重载（失败自动回滚）",
+  "Saving…": "保存中…",
+  "Main": "主配置",
+  "Includes": "包含文件",
+  "Sites": "站点",
+  "Discard unsaved changes to {file}?": "放弃 {file} 中未保存的修改？",
+  "(no config files discovered)": "（未发现配置文件）",
+  "Not installed on this host.": "此主机未安装。",
+  "Save aborted — validation failed; original restored.":
+    "保存已中止 —— 校验失败，原文件已回滚。",
+  "Save aborted — validation failed AND restore failed.":
+    "保存已中止 —— 校验失败，且回滚也失败。",
+  "Create a new site config": "创建一个新的站点配置",
+  "New site": "新建站点",
+  "New Apache vhost": "新建 Apache vhost",
+  "New Caddy site": "新建 Caddy 站点",
+  "File name": "文件名",
+  "File name is required.": "文件名必填。",
+  "ServerName": "ServerName",
+  "ServerName is required.": "ServerName 必填。",
+  "ServerAlias (optional)": "ServerAlias（可选）",
+  "DocumentRoot": "DocumentRoot",
+  "Enable SSL (mod_ssl)": "启用 SSL（mod_ssl）",
+  "SSL certificate path": "SSL 证书路径",
+  "SSL private key path": "SSL 私钥路径",
+  "Enable site after creation (a2ensite)": "创建后启用站点（a2ensite）",
+  "Address is required (e.g. example.com or :443).":
+    "地址必填（如 example.com 或 :443）。",
+  "Hostname (auto-HTTPS) or :port for HTTP-only":
+    "域名（自动 HTTPS）或 :port（仅 HTTP）",
+  "Mode": "模式",
+  "Static file server": "静态文件服务",
+  "Upstream": "上游",
+  "Upstream is required for reverse proxy mode.": "反向代理模式需要填写上游。",
+  "Document root": "文档根目录",
+  "Enable gzip + zstd compression": "启用 gzip + zstd 压缩",
+  "Show import-line reminder after creation":
+    "创建后显示 import 行提示",
+  "Creating…": "创建中…",
+  "Create site": "创建站点",
+  "Raw text editor": "原文编辑器",
+  "Structured tree view (read-only)": "结构化树形视图（只读）",
+  "Parsing Caddyfile…": "正在解析 Caddyfile…",
+  "Parsing Apache config…": "正在解析 Apache 配置…",
+  "(empty config)": "（配置为空）",
+  "(empty section)": "（空 section）",
+  "Workspace": "工作区",
+  "Host overview": "主机概览",
+  "Files & logs": "文件与日志",
+  "Services": "服务",
+  "Preview diff against the on-disk version": "对比磁盘上的版本",
+  "Undo last AST edit (feature toggle / tree edit)":
+    "撤销最近一次结构化编辑（功能切换 / 树形编辑）",
+  "Redo": "重做",
+  "(empty Caddyfile)": "（空 Caddyfile）",
+  "(global options)": "（全局配置）",
+  "(empty block)": "（空块）",
+  "(read-only view)": "（只读视图）",
+  "(editable — changes update the buffer)": "（可编辑 —— 改动会写入草稿）",
+  "(unsaved — tree shows draft)": "（未保存 —— 树视图基于草稿）",
+  "Add top-level directive": "添加顶级指令",
+  "Add child": "添加子项",
+  "Edit address / args": "编辑地址 / 参数",
+  "Edit directive": "编辑指令",
+  "Remove this node?": "删除这个节点？",
+  "name (e.g. example.com or reverse_proxy)":
+    "名称（如 example.com 或 reverse_proxy）",
+  "Toggle common Caddy features (reverse_proxy, file_server, …)":
+    "切换常用 Caddy 功能（reverse_proxy、file_server 等）",
+  "Applying…": "应用中…",
+  "(unsaved — toggle to commit to buffer)": "（未保存 —— 切换会写入草稿）",
+  "(no editable scope in this file — add a site block first)":
+    "（此文件没有可编辑的作用域 —— 请先添加站点块）",
+  "Site": "站点",
+  "Snippet": "片段",
+  "Forward incoming requests to an upstream backend.":
+    "把请求转发给上游后端服务。",
+  "Static files": "静态文件",
+  "Serve files from a directory.": "从目录中提供文件服务。",
+  "Enable directory browse": "启用目录浏览",
+  "Compress responses with gzip / zstd.": "使用 gzip / zstd 压缩响应。",
+  "Algorithms (space-separated)": "算法（用空格分隔）",
+  "Format": "格式",
+  "default (single-line)": "默认（单行）",
+  "json": "json",
+  "Routing": "路由",
+  "Redirect": "重定向",
+  "Send requests to a different URL.": "将请求重定向到其他 URL。",
+  "Target URL": "目标 URL",
+  "301 (permanent)": "301（永久）",
+  "302 (temporary)": "302（临时）",
+  "html (browser-side)": "html（浏览器端）",
+  "Toggle common Apache features (SSL, Rewrite, headers, …)":
+    "切换常用 Apache 功能（SSL、Rewrite、安全头等）",
+  "VirtualHost": "VirtualHost",
+  "(no features apply to this scope — open a <VirtualHost> to edit)":
+    "（当前作用域无可用功能 —— 打开一个 <VirtualHost> 进行编辑）",
+  "Server identity": "服务器标识",
+  "URL rewriting": "URL 重写",
+  "Directory access": "目录访问",
+  "ServerName + DocumentRoot": "ServerName + DocumentRoot",
+  "The hostname this vhost answers for and the directory it serves.":
+    "该 vhost 响应的主机名及其服务目录。",
+  "ServerAlias (space-separated, optional)":
+    "ServerAlias（用空格分隔，可选）",
+  "Serve over TLS with mod_ssl. Requires `<VirtualHost *:443>` (or similar).":
+    "通过 mod_ssl 启用 TLS。通常需要 `<VirtualHost *:443>` 之类的监听端口。",
+  "SSLCertificateFile": "SSLCertificateFile",
+  "SSLCertificateKeyFile": "SSLCertificateKeyFile",
+  "SSLProtocol": "SSLProtocol",
+  "Rewrite engine": "Rewrite 引擎",
+  "Enable mod_rewrite. Add rules below; one per line.":
+    "启用 mod_rewrite。在下方按 `;` 分隔添加规则。",
+  "RewriteRule (one rule per `;`-separated entry)":
+    "RewriteRule（用 `;` 分隔多条规则）",
+  "Add X-Frame-Options, X-Content-Type-Options, and HSTS via mod_headers.":
+    "通过 mod_headers 添加 X-Frame-Options、X-Content-Type-Options 与 HSTS。",
+  "HSTS (max-age=31536000)": "HSTS（max-age=31536000）",
+  "Add a `<Directory>` block with the standard `Require all granted` (or denied) policy.":
+    "添加 `<Directory>` 块，配置 `Require all granted` 或 `denied` 等策略。",
+  "Directory path": "目录路径",
+  "Access policy": "访问策略",
+  "Require all granted": "Require all granted",
+  "Require all denied": "Require all denied",
+  "AllowOverride All": "AllowOverride All",
+
+  // Apache extra features (proxy, alias, basic auth, logging)
+  "Aliases": "别名",
+  "Reverse proxy (mod_proxy)": "反向代理（mod_proxy）",
+  "Forward requests under a path prefix to an upstream backend.":
+    "把指定路径前缀的请求转发到上游后端。",
+  "Local path": "本地路径",
+  "Upstream URL": "上游 URL",
+  "ProxyPreserveHost on": "ProxyPreserveHost on",
+  "Path alias (mod_alias)": "路径别名（mod_alias）",
+  "Map a URL path to a local filesystem directory outside DocumentRoot.":
+    "把 URL 路径映射到 DocumentRoot 之外的本地目录。",
+  "URL prefix": "URL 前缀",
+  "Basic authentication": "基础认证",
+  "Require an htpasswd login at the vhost root. Generates a `<Location />` block.":
+    "在 vhost 根目录要求 htpasswd 登录。会生成一个 `<Location />` 块。",
+  "Realm": "Realm",
+  "AuthUserFile": "AuthUserFile",
+  "Protect path": "保护路径",
+  "Access & error logs": "访问与错误日志",
+  "Where this vhost writes its diagnostic and request logs.":
+    "vhost 诊断日志与请求日志的写入位置。",
+  "ErrorLog": "ErrorLog",
+  "CustomLog path": "CustomLog 路径",
+  "Access log format": "访问日志格式",
+  "combined": "combined",
+  "common": "common",
+
+  // Caddy extra features (tls, basicauth, headers, rewrite)
+  "TLS": "TLS",
+  "Configure HTTPS. Caddy auto-issues certs when you give an email; use a cert/key pair for manual control or `internal` for the dev CA.":
+    "配置 HTTPS。提供邮箱时 Caddy 自动签发证书；使用证书/密钥对手动指定，或 `internal` 使用 Caddy 的开发 CA。",
+  "Auto (with email)": "自动（基于邮箱）",
+  "Manual cert + key": "手动证书 + 密钥",
+  "Internal (Caddy CA)": "内部（Caddy 开发 CA）",
+  "ACME contact email": "ACME 联系邮箱",
+  "Basic auth": "基础认证",
+  "HTTP basic authentication. Generate a hash with `caddy hash-password` and paste it below.":
+    "HTTP 基础认证。用 `caddy hash-password` 生成哈希后粘贴到下方。",
+  "Username": "用户名",
+  "Bcrypt hash": "Bcrypt 哈希",
+  "Add common security headers via the `header` block.":
+    "通过 `header` 块添加常用安全响应头。",
+  "Strict-Transport-Security (HSTS)": "Strict-Transport-Security（HSTS）",
+  "Referrer-Policy: strict-origin-when-cross-origin":
+    "Referrer-Policy: strict-origin-when-cross-origin",
+  "Rewrite (server-side)": "Rewrite（服务端内部重写）",
+  "Internally rewrite a URL path before routing. Use `redir` for client-visible redirects.":
+    "在路由前对 URL 进行内部重写。客户端可见的跳转请用 `redir`。",
+  "Path or matcher": "路径或匹配器",
+  "Rewrite target": "重写目标",
+
+  // Apache extras (listen, tuning, body limit, deflate)
+  "Listen ports": "监听端口",
+  "Which TCP ports + addresses Apache binds to. Multiple `Listen` directives allowed; one per line.":
+    "Apache 绑定的 TCP 端口与地址。可配置多条 `Listen` 指令，每条一行。",
+  "Listen entries (`;`-separated)": "Listen 条目（用 `;` 分隔）",
+  "Connection tuning": "连接调优",
+  "Timeout / KeepAlive / KeepAliveTimeout / MaxKeepAliveRequests. Override defaults per host or per vhost.":
+    "Timeout / KeepAlive / KeepAliveTimeout / MaxKeepAliveRequests。可在主机或 vhost 级别覆盖默认值。",
+  "Timeout (s)": "Timeout（秒）",
+  "KeepAlive on": "KeepAlive on",
+  "KeepAliveTimeout (s)": "KeepAliveTimeout（秒）",
+  "MaxKeepAliveRequests": "MaxKeepAliveRequests",
+  "Maximum size of a client request body in bytes. Common for upload endpoints / big POST bodies.":
+    "客户端请求体的字节上限。文件上传 / 大 POST 体场景常用。",
+  "LimitRequestBody (bytes; 0 = unlimited)": "LimitRequestBody（字节；0 = 不限）",
+  "Compression (mod_deflate)": "压缩（mod_deflate）",
+  "Compress text-like responses with mod_deflate. Adds `AddOutputFilterByType DEFLATE …` for the listed MIME types.":
+    "通过 mod_deflate 压缩文本类响应。会为指定 MIME 类型添加 `AddOutputFilterByType DEFLATE …`。",
+
+  // Caddy extras (try_files, php_fastcgi, respond, ACME defaults)
+  "Global options": "全局选项",
+  "PHP": "PHP",
+  "SPA fallback (try_files)": "SPA 兜底（try_files）",
+  "Try a list of paths in order; fall back to the last one. Standard SPA pattern: `try_files {path} /index.html`.":
+    "依序尝试一组路径，最后一个作为兜底。SPA 标准做法：`try_files {path} /index.html`。",
+  "Paths (space-separated; first match wins)":
+    "路径列表（用空格分隔；首个匹配的胜出）",
+  "PHP via FastCGI": "PHP via FastCGI",
+  "Hand requests off to PHP-FPM. Use a Unix socket (`unix//run/php/php-fpm.sock`) or `host:port`.":
+    "把请求转交给 PHP-FPM。可用 Unix 套接字（`unix//run/php/php-fpm.sock`）或 `host:port`。",
+  "FPM upstream": "FPM 上游",
+  "Fixed response (respond)": "固定响应（respond）",
+  "Return a static body + status. Common for health-check endpoints: `respond /health \"OK\" 200`.":
+    "返回固定的响应体与状态码。常用于健康检查端点：`respond /health \"OK\" 200`。",
+  "Path / matcher (optional)": "路径或匹配器（可选）",
+  "Response body": "响应体",
+  "HTTP status": "HTTP 状态码",
+  "ACME defaults": "ACME 默认值",
+  "Set global ACME contact email and toggle debug logging. Lives at the very top of Caddyfile inside a `{ … }` global block.":
+    "设置全局 ACME 联系邮箱并切换 debug 日志。位于 Caddyfile 顶部的全局 `{ … }` 块内。",
+  "Default ACME email": "默认 ACME 邮箱",
+  "Enable debug logging": "启用 debug 日志",
   "nginx not installed": "未安装 nginx",
   "nginx is not installed on this host. Use the Software panel to install it.":
     "此主机未安装 nginx。请在「软件管理」面板里安装。",
@@ -1684,6 +1920,164 @@ export const zhExtra: Record<string, string> = {
   "Installing sqlite3...": "正在安装 sqlite3…",
   "Installed sqlite3 v{version} via {pm}": "已通过 {pm} 安装 sqlite3 v{version}",
   "Install failed via {pm} (exit {code})": "通过 {pm} 安装失败（退出码 {code}）",
+  "Stale third-party repos detected — install proceeded against the cached index. Clean these up on the host to silence the warnings:":
+    "检测到失效的第三方仓库——已基于本地索引继续安装。建议在远端清理以下仓库以消除警告：",
+  "Disable in terminal": "在终端中禁用",
+  "Export K8s YAML": "导出 K8s YAML",
+  "Hide K8s YAML": "隐藏 K8s YAML",
+  "Converting...": "转换中…",
+  "Namespace": "命名空间",
+  "(cluster default)": "（集群默认）",
+  "{deps} Deployments · {svcs} Services · {pvcs} PVCs":
+    "{deps} 个 Deployment · {svcs} 个 Service · {pvcs} 个 PVC",
+  "{deps} Deployments · {svcs} Services · {pvcs} PVCs · {ings} Ingress":
+    "{deps} 个 Deployment · {svcs} 个 Service · {pvcs} 个 PVC · {ings} 个 Ingress",
+  "{deps} Deployments · {svcs} Services · {pvcs} PVCs · {ings} Ingress · {cms} ConfigMaps":
+    "{deps} 个 Deployment · {svcs} 个 Service · {pvcs} 个 PVC · {ings} 个 Ingress · {cms} 个 ConfigMap",
+  "{deps} Deployments · {svcs} Services · {pvcs} PVCs · {ings} Ingress · {cms} ConfigMaps · {secs} Secrets":
+    "{deps} 个 Deployment · {svcs} 个 Service · {pvcs} 个 PVC · {ings} 个 Ingress · {cms} 个 ConfigMap · {secs} 个 Secret",
+  "{deps} Deployments · {svcs} Services · {pvcs} PVCs · {ings} Ingress · {cms} ConfigMaps · {secs} Secrets · {nps} NetworkPolicies":
+    "{deps} 个 Deployment · {svcs} 个 Service · {pvcs} 个 PVC · {ings} 个 Ingress · {cms} 个 ConfigMap · {secs} 个 Secret · {nps} 个 NetworkPolicy",
+  "Lift bind mounts → ConfigMap": "把 bind mount 转换为 ConfigMap",
+  "Convert Compose bind mounts (./local:/in) into placeholder ConfigMap resources so the manifest applies cleanly.":
+    "把 Compose 的 bind mount（./local:/in）转换为占位 ConfigMap，让清单可以直接 apply。",
+  "Ingress host": "Ingress 主机",
+  "Ingress class": "Ingress 类",
+  "TLS secret": "TLS 密钥",
+  "(skip Ingress)": "（不生成 Ingress）",
+  "nginx, traefik, …": "nginx, traefik, …",
+  "(plain HTTP)": "（明文 HTTP）",
+  "Save as…": "另存为…",
+  "Saved manifest to {path}": "已将清单保存到 {path}",
+  "Kubernetes manifest copied to clipboard.": "Kubernetes 清单已复制到剪贴板。",
+  "Some Compose features can't translate cleanly — review before applying:":
+    "部分 Compose 字段无法直接转换，请检查后再 kubectl apply：",
+  "Webhooks": "Webhook",
+  "Configure HTTP webhooks fired after each install / update / uninstall.":
+    "配置在每次安装 / 更新 / 卸载完成后触发的 HTTP Webhook。",
+  "Fire an HTTP POST after each install / update / uninstall — Slack, Discord, Teams, or your own monitoring inbox.":
+    "在每次安装 / 更新 / 卸载完成后发起 HTTP POST——可对接 Slack / Discord / Teams 或自有监控收件箱。",
+  "No webhooks configured.": "尚未配置任何 Webhook。",
+  "https://hooks.slack.com/services/...": "https://hooks.slack.com/services/...",
+  "Label (optional)": "标签（可选）",
+  "Events:": "触发事件：",
+  "Disabled": "已禁用",
+  "Send test": "发送测试",
+  "Sending…": "发送中…",
+  "Remove": "移除",
+  "Add webhook": "添加 Webhook",
+  "Webhook configuration saved.": "Webhook 配置已保存。",
+  "Stored at {path}": "存储位置：{path}",
+  "Body template": "请求体模板",
+  "Apply preset…": "应用预设…",
+  "Default (Slack)": "默认（Slack）",
+  "Discord": "Discord",
+  "Microsoft Teams": "Microsoft Teams",
+  "Minimal JSON": "极简 JSON",
+  "Hide preview": "隐藏预览",
+  "Preview": "预览",
+  "Rendering…": "渲染中…",
+  "Empty = default Slack-shaped JSON. Custom example: {\"content\":\"{{text}}\"}":
+    "为空时使用默认 Slack 格式。自定义示例：{\"content\":\"{{text}}\"}",
+  "Retries": "重试次数",
+  "Backoff": "退避",
+  "s": "秒",
+  "Retry attempts after the first failure. Capped at 5; 0 disables retries.":
+    "首次失败后的重试次数。最多 5 次；0 表示不重试。",
+  "Base seconds for exponential backoff. 0 = use the default (5s, doubling).":
+    "指数退避的基准秒数。0 表示使用默认值（5 秒，每次翻倍）。",
+  "Endpoints": "终结点",
+  "Failures": "失败记录",
+  "{n} stored": "已存储 {n} 条",
+  "Refreshing…": "刷新中…",
+  "No webhook failures recorded.": "尚无失败记录。",
+  "attempt {n}: {err}": "第 {n} 次尝试：{err}",
+  "Replaying…": "重放中…",
+  "Replay": "重放",
+  "Switch to a flat list — show all hosts ungrouped":
+    "切换为平铺列表——所有主机不分组显示",
+  "Switch to grouped view — bucket by saved group label":
+    "切换为分组视图——按已保存的分组标签归类",
+  "Flat list": "平铺列表",
+  "Group by label": "按标签分组",
+  "Re-probe group": "重新探测此分组",
+  "Expand group": "展开分组",
+  "Collapse group": "折叠分组",
+  "(ungrouped)": "（未分组）",
+  "Installing {cur}/{total}: {pkg}": "正在安装 {cur}/{total}：{pkg}",
+  "Uninstalling {cur}/{total}: {pkg}": "正在卸载 {cur}/{total}：{pkg}",
+  "Resolving order…": "正在解析安装顺序…",
+  "{n} already installed": "{n} 个已安装，已跳过",
+  "Skip current": "跳过此包",
+  "Pause after the current package finishes. Click again to resume.":
+    "当前包结束后暂停 bundle，再点一次继续。",
+  "Resume the bundle — the next package will start as soon as the current one returns.":
+    "继续运行 bundle——当前包返回后立即进入下一个。",
+  "Cancel the in-flight package and continue with the next one.":
+    "取消当前正在装的包，跳过它继续装下一个。",
+  "Cancel the in-flight package and stop the entire bundle.":
+    "取消当前包并停止整个 bundle。",
+  "Paused": "已暂停",
+  "PAUSED": "已暂停",
+  "Webhook failed: {target}": "Webhook 失败：{target}",
+  "Open Failures": "打开失败列表",
+  "{event} {pkg} · {error}": "{event} {pkg} · {error}",
+  "Host went offline: {target}": "主机离线：{target}",
+  "TCP probe failed.": "TCP 探测失败。",
+  "Switch to bus view — dense one-line-per-host table for 50+ hosts":
+    "切换为 Bus 视图——50+ 主机时的紧凑表格视图",
+  "Bus view": "Bus 视图",
+  "Latency": "延迟",
+  "Auth": "鉴权",
+  "Actions": "操作",
+  "ok": "ok",
+  "down": "宕机",
+  "t/o": "超时",
+  "err": "异常",
+  "Deep probe": "深度探测",
+  "Pull uptime / disk / distro over the cached SSH session, when one exists.":
+    "通过已缓存的 SSH 会话拉取 uptime / 磁盘 / 发行版信息。",
+  "Deep probe needs an existing SSH session — open a panel for this host first.":
+    "深度探测需要已建立的 SSH 会话——请先为此主机打开一个面板。",
+  "up {u}": "uptime {u}",
+  "load {l}": "负载 {l}",
+  "/ {use} ({avail} free)": "/ {use}（剩 {avail}）",
+  "Host health": "主机健康",
+  "Open host health dashboard": "打开主机健康面板",
+  "TCP-only reachability across saved SSH connections":
+    "对所有已保存的 SSH 连接进行 TCP 可达性检查",
+  "Online {n}": "在线 {n}",
+  "Offline {n}": "离线 {n}",
+  "Unknown {n}": "未知 {n}",
+  "/ {total} total": "/ 共 {total} 台",
+  "Re-probe all saved connections now": "立即重新探测所有已保存连接",
+  "Re-probe just this host": "仅重新探测此主机",
+  "New connection": "新建连接",
+  "Add a new SSH connection to the saved list": "向已保存列表添加新的 SSH 连接",
+  "Filter by name, host, user, group…": "按名称、主机、用户或分组筛选…",
+  "No saved SSH connections yet": "尚未保存任何 SSH 连接",
+  "Add hosts from the sidebar or via 新建连接 to populate this dashboard.":
+    "请通过侧边栏或顶部的「新建连接」添加主机后回到此面板。",
+  "No saved connections match your filter.": "没有与筛选条件匹配的连接。",
+  "Edit this saved connection": "编辑此已保存连接",
+  "Open a new terminal tab against this host": "为此主机打开新的终端标签",
+  "Probing…": "探测中…",
+  "Online · {ms} ms": "在线 · {ms} ms",
+  "Online": "在线",
+  "Offline": "离线",
+  "Timeout": "超时",
+  "Error": "错误",
+  "Password": "密码",
+  "Checked just now": "刚刚检查",
+  "Checked {n}s ago": "{n} 秒前检查",
+  "Checked {n}m ago": "{n} 分钟前检查",
+  "Checked {n}h ago": "{n} 小时前检查",
+  "reachability across saved hosts": "已保存主机的可达性",
+  "Copy disable command": "复制禁用命令",
+  "Inject a disable command into the active terminal — review then press Enter to run.":
+    "将禁用命令注入当前终端——请先查看再按回车执行。",
+  "Copy a disable command to the clipboard — paste into a terminal, review, then run.":
+    "将禁用命令复制到剪贴板——粘贴到终端、查看后再执行。",
   "This distro ({id}) is not in the auto-install list — please install sqlite3 manually.":
     "未识别此发行版（{id}），请手动在远端安装 sqlite3。",
   "sudo requires a password — connect as root or configure passwordless sudo.":

@@ -18,24 +18,54 @@ import type { RightTool } from "./types";
 
 export type LucideIcon = ComponentType<SVGProps<SVGSVGElement> & { size?: number | string }>;
 
+/** Logical grouping for the right-side ToolStrip. The strip renders
+ *  a thin divider between categories so related tools cluster
+ *  visually without needing horizontal space for text labels. */
+export type RightToolCategory =
+  | "workspace"  // markdown, git
+  | "host"       // monitor, firewall
+  | "files"      // sftp, log
+  | "containers" // docker
+  | "database"   // mysql, postgres, redis, sqlite
+  | "service";   // webserver, software
+
+export const CATEGORY_LABELS: Record<RightToolCategory, string> = {
+  workspace: "Workspace",
+  host: "Host overview",
+  files: "Files & logs",
+  containers: "Containers",
+  database: "Databases",
+  service: "Services",
+};
+
 export type RightToolMeta = {
   label: string;
   icon: LucideIcon;
+  category: RightToolCategory;
   remoteOnly?: boolean;
+  /** Deprecated — use `category` so dividers come from category
+   *  boundaries automatically. Kept for any callers that still read it. */
   dividerAfter?: boolean;
   tintVar?: string;
   splashTitle?: string;
   splashSubtitle?: string;
 };
 
-// Remote-tool ordering after the divider: monitor first (broad server
-// vitals apply to every host), then firewall (the security/exposure view
-// pairs naturally with monitor — both are read-mostly host overviews),
-// then sftp (filesystem access is the most-used lever on any box), then
-// log tail (paired with sftp since both deal with files on the host),
-// then docker, then the database stack, with sqlite at the tail since
-// it's not remote-only.
-// Markdown + git stay above the divider as local-workspace tools.
+// Tool ordering — the strip groups by `category` and renders a thin
+// divider on each category change. The category order itself encodes
+// "outermost layer first":
+//
+//   workspace  → markdown / git           (purely local files, every tab)
+//   host       → monitor / firewall       (read-mostly OS-level overviews)
+//   files      → sftp / log               (filesystem + log tails)
+//   containers → docker
+//   database   → mysql / postgres / redis / sqlite
+//   service    → webserver / software     (host-level service management)
+//
+// Within a category, items are ordered by frequency-of-use among the
+// tools that share that category. SQLite is in `database` despite not
+// being SSH-bound — it's a database client first; its local-only nature
+// is just an implementation detail.
 export const RIGHT_TOOL_ORDER: RightTool[] = [
   "markdown",
   "git",
@@ -70,23 +100,53 @@ export const SERVICE_CHIP_TOOLS: RightTool[] = [
 export const RIGHT_TOOL_META: Record<RightTool, RightToolMeta> = {
   markdown: {
     label: "Markdown",
+    category: "workspace",
     icon: FileText,
   },
   git: {
     label: "Git",
+    category: "workspace",
     icon: GitBranch,
-    dividerAfter: true,
   },
   monitor: {
     label: "Server Monitor",
+    category: "host",
     icon: ChartNoAxesCombined,
     remoteOnly: true,
     tintVar: "var(--svc-monitor)",
     splashTitle: "Server Monitor",
     splashSubtitle: "Open a saved server to see live CPU, memory, disks, and top processes.",
   },
+  firewall: {
+    label: "Firewall",
+    category: "host",
+    icon: Shield,
+    remoteOnly: true,
+    tintVar: "var(--svc-firewall)",
+    splashTitle: "Firewall",
+    splashSubtitle: "Open a saved server to view firewall rules, listening ports, and per-interface traffic.",
+  },
+  sftp: {
+    label: "SFTP",
+    category: "files",
+    icon: FolderSync,
+    remoteOnly: true,
+    tintVar: "var(--svc-sftp)",
+    splashTitle: "SFTP",
+    splashSubtitle: "Browse a remote filesystem, preview files, and transfer in either direction.",
+  },
+  log: {
+    label: "Logs",
+    category: "files",
+    icon: LogIcon,
+    remoteOnly: true,
+    tintVar: "var(--svc-log)",
+    splashTitle: "Log Viewer",
+    splashSubtitle: "Stream journal, nginx, or custom log tails from a saved server.",
+  },
   docker: {
     label: "Docker",
+    category: "containers",
     icon: DockerIcon,
     remoteOnly: true,
     tintVar: "var(--svc-docker)",
@@ -95,6 +155,7 @@ export const RIGHT_TOOL_META: Record<RightTool, RightToolMeta> = {
   },
   mysql: {
     label: "MySQL",
+    category: "database",
     icon: MySqlIcon,
     remoteOnly: true,
     tintVar: "var(--svc-mysql)",
@@ -103,6 +164,7 @@ export const RIGHT_TOOL_META: Record<RightTool, RightToolMeta> = {
   },
   postgres: {
     label: "PostgreSQL",
+    category: "database",
     icon: PostgresIcon,
     remoteOnly: true,
     tintVar: "var(--svc-postgres)",
@@ -111,43 +173,22 @@ export const RIGHT_TOOL_META: Record<RightTool, RightToolMeta> = {
   },
   redis: {
     label: "Redis",
+    category: "database",
     icon: RedisIcon,
     remoteOnly: true,
     tintVar: "var(--svc-redis)",
     splashTitle: "Redis",
     splashSubtitle: "Tunnel into a host to browse keyspaces, inspect values, and tail keys.",
   },
-  log: {
-    label: "Logs",
-    icon: LogIcon,
-    remoteOnly: true,
-    tintVar: "var(--svc-log)",
-    splashTitle: "Log Viewer",
-    splashSubtitle: "Stream journal, nginx, or custom log tails from a saved server.",
-  },
-  sftp: {
-    label: "SFTP",
-    icon: FolderSync,
-    remoteOnly: true,
-    tintVar: "var(--svc-sftp)",
-    splashTitle: "SFTP",
-    splashSubtitle: "Browse a remote filesystem, preview files, and transfer in either direction.",
-  },
   sqlite: {
     label: "SQLite",
+    category: "database",
     icon: SqliteIcon,
     tintVar: "var(--svc-sqlite)",
   },
-  firewall: {
-    label: "Firewall",
-    icon: Shield,
-    remoteOnly: true,
-    tintVar: "var(--svc-firewall)",
-    splashTitle: "Firewall",
-    splashSubtitle: "Open a saved server to view firewall rules, listening ports, and per-interface traffic.",
-  },
   webserver: {
     label: "Web Server",
+    category: "service",
     icon: Globe,
     remoteOnly: true,
     tintVar: "var(--svc-webserver)",
@@ -157,6 +198,7 @@ export const RIGHT_TOOL_META: Record<RightTool, RightToolMeta> = {
   },
   software: {
     label: "Software",
+    category: "service",
     icon: Package,
     remoteOnly: true,
     tintVar: "var(--svc-software)",

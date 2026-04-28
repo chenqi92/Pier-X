@@ -542,6 +542,14 @@ pub struct InstallReport {
     /// once the report arrives. `None` for the default apt / dnf / …
     /// path.
     pub vendor_script: Option<VendorScriptUsedView>,
+    /// Stale / unreachable third-party repos detected during install.
+    /// Populated by [`detect_broken_repo_warnings`] from the merged
+    /// install output. **Empty when nothing was flagged**, so the
+    /// frontend can `len() > 0` to decide whether to render the
+    /// "host has stale APT/DNF sources" advisory banner. Skipped on
+    /// the wire when empty so legacy clients keep parsing the report.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub repo_warnings: Vec<String>,
 }
 
 /// Echo-back of the vendor script that produced an install — kept on
@@ -2490,6 +2498,94 @@ pub fn compose_down_blocking(
 //     dependencies (compose for docker — that's already linked
 //     through the bundle catalog, separately).
 
+/// Topologically sort a bundle's package ids so anchors install
+/// before their co-install companions.
+///
+/// Semantics: an edge `anchor → companion` exists iff
+/// `co_install_suggestions(anchor)` lists `companion` AND both are
+/// in the input. Anchors install first, companions follow.
+///
+/// Concretely this means a bundle that mixes `docker` and
+/// `compose` in arbitrary user order always gets reordered so
+/// docker installs first — the apt resolver doesn't strictly need
+/// it (compose is its own package), but the result is much closer
+/// to what a user reads top-to-bottom in install logs.
+///
+/// Stability: items not connected by any edge keep their original
+/// input position (Kahn's algorithm with input-order tie-break).
+/// Cycles — which the static `co_install_suggestions` map should
+/// never produce, but defensive code is cheap — fall back to
+/// appending in input order so we never lose a package id.
+///
+/// This function operates on the static recommendation map only.
+/// It does NOT consult the host's actual installed-package
+/// dependency graph (apt-cache depends/ rdepends, etc.); that's
+/// per-host work and lives downstream of the Tauri command layer.
+pub fn topo_sort_bundle(ids: &[&str]) -> Vec<String> {
+    use std::collections::{HashMap, HashSet};
+
+    let id_set: HashSet<&str> = ids.iter().copied().collect();
+
+    // Pre-seed indegree with every input id so the find() loop
+    // below sees a value even for nodes that have no predecessors.
+    let mut indegree: HashMap<&str, usize> =
+        ids.iter().map(|&s| (s, 0_usize)).collect();
+    let mut succs: HashMap<&str, Vec<&str>> = HashMap::new();
+
+    for &id in ids {
+        for &companion in co_install_suggestions(id) {
+            if companion != id && id_set.contains(companion) {
+                // Skip duplicate edges that would over-count
+                // indegree if the same companion appears twice in
+                // the static list (it shouldn't, but defensive).
+                let entry = succs.entry(id).or_default();
+                if !entry.contains(&companion) {
+                    entry.push(companion);
+                    *indegree.entry(companion).or_insert(0) += 1;
+                }
+            }
+        }
+    }
+
+    let mut output: Vec<String> = Vec::with_capacity(ids.len());
+    let mut placed: HashSet<&str> = HashSet::new();
+
+    loop {
+        // Pick the FIRST unplaced node in input order whose
+        // indegree has dropped to zero. This is Kahn's with
+        // explicit input-order priority — equivalent to a stable
+        // topological sort.
+        let candidate = ids
+            .iter()
+            .copied()
+            .find(|id| !placed.contains(id) && indegree.get(id).copied() == Some(0));
+        let Some(id) = candidate else { break };
+        output.push(id.to_string());
+        placed.insert(id);
+        if let Some(children) = succs.get(id) {
+            for &child in children {
+                if let Some(d) = indegree.get_mut(child) {
+                    if *d > 0 {
+                        *d -= 1;
+                    }
+                }
+            }
+        }
+    }
+
+    // Cycle fallback: a true cycle would leave some nodes
+    // perpetually with indegree > 0 and the loop above exits with
+    // them unplaced. Append in input order so the bundle still
+    // installs every requested package, just without the
+    // ordering guarantee for the cyclic subset.
+    for &id in ids {
+        if !placed.contains(id) {
+            output.push(id.to_string());
+        }
+    }
+    output
+}
+
 /// Look up what to suggest installing alongside `installed_id`.
 /// Returns descriptor ids in display order; empty when the id has
 /// no curated recommendations.
@@ -4329,6 +4425,7 @@ where
     if setup_exit == CANCELLED_EXIT_CODE
         || cancel.as_ref().is_some_and(|t| t.is_cancelled())
     {
+        let repo_warnings = detect_broken_repo_warnings(&setup_tail);
         return Ok(InstallReport {
             package_id: id.to_string(),
             status: InstallStatus::Cancelled,
@@ -4343,10 +4440,12 @@ where
             installed_version: None,
             service_active: None,
             vendor_script: Some(used_view),
+            repo_warnings,
         });
     }
 
     if !env.is_root && looks_like_sudo_password_prompt(&setup_tail) {
+        let repo_warnings = detect_broken_repo_warnings(&setup_tail);
         return Ok(InstallReport {
             package_id: id.to_string(),
             status: InstallStatus::SudoRequiresPassword,
@@ -4361,10 +4460,12 @@ where
             installed_version: None,
             service_active: None,
             vendor_script: Some(used_view),
+            repo_warnings,
         });
     }
 
     if setup_exit != 0 {
+        let repo_warnings = detect_broken_repo_warnings(&setup_tail);
         return Ok(InstallReport {
             package_id: id.to_string(),
             // Reuse VendorScriptFailed since the setup step is
@@ -4382,6 +4483,7 @@ where
             installed_version: None,
             service_active: None,
             vendor_script: Some(used_view),
+            repo_warnings,
         });
     }
 
@@ -4436,6 +4538,7 @@ where
             installed_version: None,
             service_active: None,
             vendor_script: None,
+            repo_warnings: Vec::new(),
         });
     };
 
@@ -4470,6 +4573,7 @@ where
     if exit_code == CANCELLED_EXIT_CODE
         || cancel.as_ref().is_some_and(|t| t.is_cancelled())
     {
+        let repo_warnings = detect_broken_repo_warnings(&output_tail);
         return Ok(InstallReport {
             package_id: package_name.to_string(),
             status: InstallStatus::Cancelled,
@@ -4481,10 +4585,12 @@ where
             installed_version: None,
             service_active: None,
             vendor_script: None,
+            repo_warnings,
         });
     }
 
     if !env.is_root && looks_like_sudo_password_prompt(&output_tail) {
+        let repo_warnings = detect_broken_repo_warnings(&output_tail);
         return Ok(InstallReport {
             package_id: package_name.to_string(),
             status: InstallStatus::SudoRequiresPassword,
@@ -4496,6 +4602,7 @@ where
             installed_version: None,
             service_active: None,
             vendor_script: None,
+            repo_warnings,
         });
     }
 
@@ -4506,6 +4613,7 @@ where
     } else {
         InstallStatus::PackageManagerFailed
     };
+    let repo_warnings = detect_broken_repo_warnings(&output_tail);
     Ok(InstallReport {
         package_id: package_name.to_string(),
         status,
@@ -4517,6 +4625,7 @@ where
         installed_version: None,
         service_active: None,
         vendor_script: None,
+        repo_warnings,
     })
 }
 
@@ -4718,20 +4827,24 @@ where
     // Used by both the post-download and post-execute cancel checks so
     // we never run later steps (sh exec / re-probe / service-enable)
     // after the user has bailed.
-    let cancelled_report = |command: String, exit_code: i32, output_tail: String| InstallReport {
-        package_id: id.to_string(),
-        status: InstallStatus::Cancelled,
-        distro_id: env.distro_id.clone(),
-        package_manager: env
-            .package_manager
-            .map(|m| m.as_str().to_string())
-            .unwrap_or_default(),
-        command,
-        exit_code,
-        output_tail,
-        installed_version: None,
-        service_active: None,
-        vendor_script: Some(used_view.clone()),
+    let cancelled_report = |command: String, exit_code: i32, output_tail: String| {
+        let repo_warnings = detect_broken_repo_warnings(&output_tail);
+        InstallReport {
+            package_id: id.to_string(),
+            status: InstallStatus::Cancelled,
+            distro_id: env.distro_id.clone(),
+            package_manager: env
+                .package_manager
+                .map(|m| m.as_str().to_string())
+                .unwrap_or_default(),
+            command,
+            exit_code,
+            output_tail,
+            installed_version: None,
+            service_active: None,
+            vendor_script: Some(used_view.clone()),
+            repo_warnings,
+        }
     };
 
     // --- Step 1+2: download ---
@@ -4784,6 +4897,7 @@ where
         // `cleanup_vendor_temp` is best-effort; ignore its result.
         cleanup_vendor_temp(session, &script_path).await;
         let output_tail = tail_lines.join("\n");
+        let repo_warnings = detect_broken_repo_warnings(&output_tail);
         return Ok(InstallReport {
             package_id: id.to_string(),
             status: InstallStatus::VendorScriptDownloadFailed,
@@ -4798,6 +4912,7 @@ where
             installed_version: None,
             service_active: None,
             vendor_script: Some(used_view),
+            repo_warnings,
         });
     }
 
@@ -4843,6 +4958,7 @@ where
 
     if !env.is_root && looks_like_sudo_password_prompt(&output_tail) {
         cleanup_vendor_temp(session, &script_path).await;
+        let repo_warnings = detect_broken_repo_warnings(&output_tail);
         return Ok(InstallReport {
             package_id: id.to_string(),
             status: InstallStatus::SudoRequiresPassword,
@@ -4857,6 +4973,7 @@ where
             installed_version: None,
             service_active: None,
             vendor_script: Some(used_view),
+            repo_warnings,
         });
     }
 
@@ -4902,6 +5019,7 @@ where
         None
     };
 
+    let repo_warnings = detect_broken_repo_warnings(&output_tail);
     Ok(InstallReport {
         package_id: id.to_string(),
         status,
@@ -4916,6 +5034,7 @@ where
         installed_version,
         service_active,
         vendor_script: Some(used_view),
+        repo_warnings,
     })
 }
 
@@ -4991,6 +5110,7 @@ where
             installed_version: None,
             service_active: None,
             vendor_script: None,
+            repo_warnings: Vec::new(),
         });
     };
 
@@ -5006,6 +5126,7 @@ where
             installed_version: None,
             service_active: None,
             vendor_script: None,
+            repo_warnings: Vec::new(),
         });
     };
 
@@ -5041,6 +5162,7 @@ where
     if exit_code == CANCELLED_EXIT_CODE
         || cancel.as_ref().is_some_and(|t| t.is_cancelled())
     {
+        let repo_warnings = detect_broken_repo_warnings(&output_tail);
         return Ok(InstallReport {
             package_id: id.to_string(),
             status: InstallStatus::Cancelled,
@@ -5052,10 +5174,12 @@ where
             installed_version: None,
             service_active: None,
             vendor_script: None,
+            repo_warnings,
         });
     }
 
     if !env.is_root && looks_like_sudo_password_prompt(&output_tail) {
+        let repo_warnings = detect_broken_repo_warnings(&output_tail);
         return Ok(InstallReport {
             package_id: id.to_string(),
             status: InstallStatus::SudoRequiresPassword,
@@ -5067,6 +5191,7 @@ where
             installed_version: None,
             service_active: None,
             vendor_script: None,
+            repo_warnings,
         });
     }
 
@@ -5112,6 +5237,7 @@ where
         None
     };
 
+    let repo_warnings = detect_broken_repo_warnings(&output_tail);
     Ok(InstallReport {
         package_id: id.to_string(),
         status,
@@ -5123,6 +5249,7 @@ where
         installed_version,
         service_active,
         vendor_script: None,
+        repo_warnings,
     })
 }
 
@@ -5547,6 +5674,34 @@ fn parse_versions_output(stdout: &str) -> Vec<String> {
 /// manager's pin syntax: `pkg=ver` for apt/apk/zypper, `pkg-ver` for
 /// dnf/yum. pacman ignores `version` because Arch repos don't carry
 /// historical versions; the panel hides the dropdown there.
+///
+/// ## Tolerance to broken third-party repos
+///
+/// A common failure mode in the wild: the host has some
+/// `/etc/apt/sources.list.d/<vendor>.list` line pointing at a repo that
+/// the upstream has since taken down (Docker dropping Ubuntu focal,
+/// PPAs going dormant, internal mirrors moving). With a strict
+/// `apt-get update && apt-get install` chain, that one stale line
+/// returns exit 100 and **every** install attempt fails — even for
+/// packages that live in the perfectly-healthy main archive.
+///
+/// We deliberately decouple the steps so the same scenario degrades
+/// gracefully without touching the host's source list:
+///
+/// * **apt** — `update; install` (sequential, not `&&`). The refresh
+///   stderr still streams to the UI so the user sees *which* repo
+///   broke; install proceeds against the existing
+///   `/var/lib/apt/lists/` cache. If install genuinely needs a fresh
+///   index for a package not in cache, it will surface its own
+///   "Unable to locate package" error — which is more actionable than
+///   "exit 100".
+/// * **dnf / yum** — `--setopt=skip_if_unavailable=True` makes a
+///   single broken repo a per-repo warning instead of a global abort,
+///   matching apt's new behaviour.
+/// * **apk / pacman / zypper** — these don't have a separate
+///   pre-install refresh step in our flow (apk's cache is per-call,
+///   pacman/zypper read the existing DB), so the broken-third-party
+///   pattern doesn't apply. Left unchanged.
 fn build_install_command(
     manager: PackageManager,
     packages: &[&str],
@@ -5556,17 +5711,25 @@ fn build_install_command(
     let pkgs = format_packages_with_version(manager, packages, version);
     match (manager, is_update) {
         (PackageManager::Apt, false) => format!(
-            "DEBIAN_FRONTEND=noninteractive apt-get update -qq \
-             && DEBIAN_FRONTEND=noninteractive apt-get install -y {pkgs}"
+            "DEBIAN_FRONTEND=noninteractive apt-get update -qq; \
+             DEBIAN_FRONTEND=noninteractive apt-get install -y {pkgs}"
         ),
         (PackageManager::Apt, true) => format!(
-            "DEBIAN_FRONTEND=noninteractive apt-get update -qq \
-             && DEBIAN_FRONTEND=noninteractive apt-get install -y --only-upgrade {pkgs}"
+            "DEBIAN_FRONTEND=noninteractive apt-get update -qq; \
+             DEBIAN_FRONTEND=noninteractive apt-get install -y --only-upgrade {pkgs}"
         ),
-        (PackageManager::Dnf, false) => format!("dnf install -y {pkgs}"),
-        (PackageManager::Dnf, true) => format!("dnf upgrade -y {pkgs}"),
-        (PackageManager::Yum, false) => format!("yum install -y {pkgs}"),
-        (PackageManager::Yum, true) => format!("yum update -y {pkgs}"),
+        (PackageManager::Dnf, false) => {
+            format!("dnf install -y --setopt=skip_if_unavailable=True {pkgs}")
+        }
+        (PackageManager::Dnf, true) => {
+            format!("dnf upgrade -y --setopt=skip_if_unavailable=True {pkgs}")
+        }
+        (PackageManager::Yum, false) => {
+            format!("yum install -y --setopt=skip_if_unavailable=True {pkgs}")
+        }
+        (PackageManager::Yum, true) => {
+            format!("yum update -y --setopt=skip_if_unavailable=True {pkgs}")
+        }
         (PackageManager::Apk, false) => format!("apk add --no-cache {pkgs}"),
         (PackageManager::Apk, true) => format!("apk add --no-cache --upgrade {pkgs}"),
         (PackageManager::Pacman, false) => format!("pacman -S --noconfirm {pkgs}"),
@@ -5579,6 +5742,116 @@ fn build_install_command(
         (PackageManager::Zypper, true) => {
             format!("zypper --non-interactive update {pkgs}")
         }
+    }
+}
+
+/// Scan a chunk of merged install output for "broken third-party repo"
+/// patterns that we proactively skipped past. Returns the offending
+/// repo URLs / hostnames, deduped and trimmed for the UI banner.
+///
+/// Pattern coverage (kept lenient on purpose — the same human-readable
+/// wording shows up across distros and locales):
+///
+///  * apt: `不再含有 Release` / `no longer has a Release file`
+///         `Failed to fetch ... 404`
+///  * dnf/yum: `Failed to download metadata for repo '<id>'`
+///             `Cannot download repomd.xml`
+///             `skipping unavailable repo '<id>'`
+///  * zypper: `Repository '<id>' is invalid`
+///
+/// Always returns warnings keyed by the repository URL or repo id —
+/// good enough for the banner; the user can still scroll through the
+/// full output for the verbatim apt/dnf/zypper diagnostic.
+pub fn detect_broken_repo_warnings(output: &str) -> Vec<String> {
+    let mut warnings: Vec<String> = Vec::new();
+    let mut push_unique = |s: String| {
+        if !s.trim().is_empty() && !warnings.contains(&s) {
+            warnings.push(s);
+        }
+    };
+
+    for raw in output.lines() {
+        let line = raw.trim();
+        if line.is_empty() {
+            continue;
+        }
+
+        // ── apt ──────────────────────────────────────────────────
+        // Localised forms: en, zh-CN. Both flag the same scenario:
+        // a previously-cached repo dropped its Release file upstream.
+        let apt_release_marker = line.contains("no longer has a Release file")
+            || line.contains("不再含有 Release")
+            || line.contains("不再包含 Release");
+        let apt_404_marker = line.starts_with("E:") && line.contains("Failed to fetch")
+            || line.contains("404 Not Found")
+            || line.contains("404  Not Found");
+        if apt_release_marker || apt_404_marker {
+            // Pull the URL out of `仓库 "<url>" 不再含有 Release 文件` /
+            // `Repository '<url>' no longer has a Release file`.
+            // Fall back to the whole line trimmed of the leading
+            // diagnostic prefix when no quoted URL is present.
+            let url = extract_quoted_url(line)
+                .or_else(|| extract_url_token(line))
+                .unwrap_or_else(|| line.trim_start_matches("E: ").to_string());
+            push_unique(format!("apt: {url}"));
+            continue;
+        }
+
+        // ── dnf / yum ────────────────────────────────────────────
+        if line.contains("Failed to download metadata for repo")
+            || line.contains("Cannot download repomd.xml")
+            || line.contains("skipping unavailable repo")
+            || line.contains("Errors during downloading metadata")
+        {
+            let id = extract_quoted_url(line).unwrap_or_else(|| line.to_string());
+            push_unique(format!("dnf/yum: {id}"));
+            continue;
+        }
+
+        // ── zypper ───────────────────────────────────────────────
+        if line.contains("Repository") && line.contains("is invalid") {
+            let id = extract_quoted_url(line).unwrap_or_else(|| line.to_string());
+            push_unique(format!("zypper: {id}"));
+            continue;
+        }
+    }
+    warnings
+}
+
+/// Pull the first single- or double-quoted token out of `line`. Used
+/// by [`detect_broken_repo_warnings`] to extract a repo URL or repo id
+/// from diagnostic lines like `仓库 "https://download.docker.com/..."
+/// 不再含有 Release 文件`.
+fn extract_quoted_url(line: &str) -> Option<String> {
+    for (open, close) in [('"', '"'), ('\'', '\''), ('“', '”')] {
+        if let Some(i) = line.find(open) {
+            if let Some(j) = line[i + open.len_utf8()..].find(close) {
+                let start = i + open.len_utf8();
+                let end = start + j;
+                let inner = line[start..end].trim();
+                if !inner.is_empty() {
+                    return Some(inner.to_string());
+                }
+            }
+        }
+    }
+    None
+}
+
+/// Pull the first `http[s]://` token out of `line` when no quotes
+/// surrounded the URL (some apt locales emit `Failed to fetch
+/// http://example/...`).
+fn extract_url_token(line: &str) -> Option<String> {
+    let i = line.find("http").or_else(|| line.find("https"))?;
+    let tail = &line[i..];
+    let end = tail
+        .find(|c: char| c.is_whitespace())
+        .unwrap_or(tail.len());
+    let url = tail[..end].trim_end_matches(|c: char| matches!(c, ',' | '.' | ';' | ')' | ']'));
+    if url.starts_with("http") && url.len() > "http://".len() {
+        Some(url.to_string())
+    } else {
+        None
     }
 }
 
@@ -6160,6 +6433,69 @@ mod tests {
     }
 
     #[test]
+    fn topo_sort_pushes_anchor_before_companion() {
+        // co_install_suggestions("docker") includes "compose" and
+        // "git". A user-supplied bundle in the wrong order should
+        // come back with docker first, compose/git after.
+        let sorted = topo_sort_bundle(&["compose", "docker", "git"]);
+        let pos = |id: &str| sorted.iter().position(|s| s == id).unwrap();
+        assert!(pos("docker") < pos("compose"));
+        assert!(pos("docker") < pos("git"));
+    }
+
+    #[test]
+    fn topo_sort_preserves_input_order_when_no_edges() {
+        // None of these ids share a co-install edge — order should
+        // come out as input.
+        let sorted = topo_sort_bundle(&["sqlite3", "ripgrep", "lsof"]);
+        assert_eq!(sorted, vec!["sqlite3", "ripgrep", "lsof"]);
+    }
+
+    #[test]
+    fn topo_sort_keeps_unrelated_anchors_in_input_order() {
+        // Two independent anchors with companions. The two
+        // anchor→companion edges should both be respected, and
+        // the two anchors should keep their input order relative
+        // to each other.
+        let sorted = topo_sort_bundle(&["nginx", "compose", "docker", "fail2ban"]);
+        let pos = |id: &str| sorted.iter().position(|s| s == id).unwrap();
+        assert!(pos("nginx") < pos("fail2ban"));
+        assert!(pos("docker") < pos("compose"));
+        // nginx came before docker in the input — that ordering
+        // should survive since neither has an edge to the other.
+        assert!(pos("nginx") < pos("docker"));
+    }
+
+    #[test]
+    fn topo_sort_returns_every_input_even_under_cycle() {
+        // Build a synthetic cycle by abusing two ids that DO point
+        // at each other (vim ↔ tmux in the static map). Both end
+        // up in the cycle fallback — but the function still
+        // returns every input id exactly once.
+        let sorted = topo_sort_bundle(&["vim", "tmux"]);
+        assert_eq!(sorted.len(), 2);
+        let mut s = sorted.clone();
+        s.sort();
+        assert_eq!(s, vec!["tmux".to_string(), "vim".to_string()]);
+    }
+
+    #[test]
+    fn topo_sort_handles_empty_input() {
+        assert!(topo_sort_bundle(&[]).is_empty());
+    }
+
+    #[test]
+    fn topo_sort_passes_through_unknown_ids() {
+        // Unknown ids have no co-install entry — they should
+        // survive intact in input order.
+        let sorted = topo_sort_bundle(&["docker", "unknown-pkg", "compose"]);
+        assert!(sorted.iter().any(|s| s == "unknown-pkg"));
+        assert_eq!(sorted.len(), 3);
+        let pos = |id: &str| sorted.iter().position(|s| s == id).unwrap();
+        assert!(pos("docker") < pos("compose"));
+    }
+
+    #[test]
     fn bundles_have_unique_ids() {
         let mut seen = std::collections::HashSet::new();
         for b in bundles() {
@@ -6347,13 +6683,81 @@ mod tests {
     fn build_install_command_dnf_version_pin_uses_dash() {
         let cmd =
             build_install_command(PackageManager::Dnf, &["docker"], false, Some("27.5.1-1.fc40"));
-        assert!(cmd.contains("dnf install -y docker-27.5.1-1.fc40"));
+        assert!(cmd.starts_with("dnf install -y"));
+        assert!(cmd.contains("docker-27.5.1-1.fc40"));
     }
 
     #[test]
     fn build_install_command_yum_version_pin_uses_dash() {
         let cmd = build_install_command(PackageManager::Yum, &["redis"], false, Some("7.2.4-1"));
-        assert!(cmd.contains("yum install -y redis-7.2.4-1"));
+        assert!(cmd.starts_with("yum install -y"));
+        assert!(cmd.contains("redis-7.2.4-1"));
+    }
+
+    #[test]
+    fn build_install_command_apt_decouples_update_and_install() {
+        // Regression: a stale third-party repo (Docker pulling Ubuntu
+        // focal, dormant PPA, etc.) must not gate every install. We
+        // run update + install sequentially with `;` so a non-zero
+        // update exit lets install still try against the cached
+        // package list.
+        let cmd = build_install_command(PackageManager::Apt, &["redis-server"], false, None);
+        assert!(cmd.contains("apt-get update"));
+        assert!(cmd.contains("apt-get install -y redis-server"));
+        assert!(
+            !cmd.contains("&&"),
+            "apt install chain must not gate install on update success: {cmd}"
+        );
+    }
+
+    #[test]
+    fn build_install_command_dnf_skips_unavailable_repo() {
+        // Mirror of the apt fix on the rpm side. With
+        // `skip_if_unavailable=True`, a single unreachable repo in
+        // /etc/yum.repos.d turns into a per-repo warning instead of
+        // a global abort.
+        let cmd = build_install_command(PackageManager::Dnf, &["redis"], false, None);
+        assert!(cmd.contains("--setopt=skip_if_unavailable=True"));
+    }
+
+    #[test]
+    fn detect_broken_repo_warnings_picks_up_apt_release_loss() {
+        let out = "命中:1 https://archive.ubuntu.com/ubuntu focal InRelease\n\
+                   忽略:2 https://download.docker.com/linux/ubuntu focal InRelease\n\
+                   错误:3 仓库 \"https://download.docker.com/linux/ubuntu focal Release\" 不再含有 Release 文件\n\
+                   E: 仓库 \"https://download.docker.com/linux/ubuntu focal Release\" 不再含有 Release 文件";
+        let warnings = detect_broken_repo_warnings(out);
+        assert!(!warnings.is_empty());
+        assert!(
+            warnings.iter().any(|w| w.contains("download.docker.com")),
+            "expected docker repo to be flagged: {warnings:?}"
+        );
+    }
+
+    #[test]
+    fn detect_broken_repo_warnings_picks_up_apt_404() {
+        let out =
+            "E: Failed to fetch https://example.invalid/repo/dists/focal/InRelease 404 Not Found";
+        let warnings = detect_broken_repo_warnings(out);
+        assert!(!warnings.is_empty());
+        assert!(warnings.iter().any(|w| w.contains("example.invalid")));
+    }
+
+    #[test]
+    fn detect_broken_repo_warnings_picks_up_dnf_repo_metadata() {
+        let out = "Failed to download metadata for repo 'docker-ce-stable': \
+                   Cannot download repomd.xml: All mirrors were tried";
+        let warnings = detect_broken_repo_warnings(out);
+        assert!(!warnings.is_empty());
+        assert!(warnings.iter().any(|w| w.starts_with("dnf/yum:")));
+    }
+
+    #[test]
+    fn detect_broken_repo_warnings_returns_empty_on_clean_output() {
+        let out = "Reading package lists... Done\n\
+                   Building dependency tree... Done\n\
+                   The following NEW packages will be installed:\n  redis-server";
+        assert!(detect_broken_repo_warnings(out).is_empty());
     }
 
     #[test]

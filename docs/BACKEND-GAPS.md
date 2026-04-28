@@ -33,6 +33,7 @@ header on merge and drop rows once they're confirmed shipped.
 | `feat/sql-explain-format` | EXPLAIN + Format SQL buttons across MySQL/PG/SQLite |
 | `feat/result-grid-json-pretty` | Result grid: JSONB / array pretty-print on hover |
 | `feat/terminal-history-persistence` | Smart Mode terminal: per-shell history persisted to `~/.pier-x/terminal-history-<shell>.jsonl` |
+| `feat/web-server-unify` | Web Server panel consolidates nginx/Apache/Caddy under one `rightTool: "webserver"`. Detection (`web_server_detect`), generic validate/reload (`web_server_validate`/`_reload`), shared layout/read/save pipeline (`web_server_layout`/`_read_file`/`_save_file`), Apache site toggle (`web_server_toggle_site`), new-site wizard (`web_server_create_site`), Caddy parser/renderer (`caddy_parse`/`_render`, 5 tests), Apache parser/renderer (`apache_parse`/`_render`, 7 tests). Apache catalog 9 features, Caddy catalog 9 features. |
 
 ## MySQL panel
 
@@ -133,6 +134,25 @@ layout and is out of scope for the port.
 | Streaming rate chip ("42 l/s") | shipped | `feat/log-viewer-cluster` — 30/70 EMA driven from drain cadence; idle decay so quiet streams fall to zero |
 | Search — prev/next hit navigation + hit count | shipped | LogViewerDialog already had `nextHit` / `prevHit` / `{n}/{total}` chip / scroll-into-view |
 | Dialog form factor | Full-screen modal with left rail + main + detail | hidden | Out of scope: the right-panel docking is the canonical home for logs; revisit only if we grow a detachable log window |
+
+## Web Server panel (nginx / Apache / Caddy)
+
+Detection, raw editing, save→validate→reload, site toggle, new-site
+wizard, parsers, and feature catalogs all shipped via
+`feat/web-server-unify`. Outstanding items:
+
+| Area | Status | Notes |
+|---|---|---|
+| Apache structured tree view | hidden | `apache_parse` ships a working AST (7 tests); needs an `ApacheTreeView.tsx` mirror of `CaddyTreeView`. ~200 LOC. |
+| Caddy editable tree mode | partial | Tree currently re-parses on every edit but cards are click-to-expand only — no add/remove/rename ops on AST nodes. ~400 LOC. |
+| Apache feature catalog beyond 9 | partial | Shipped: identity / TLS / proxy / alias / rewrite / headers / auth / directory / logging. Not yet: `<IfModule>` conditional editor, `LimitRequestBody`, `Timeout`/`KeepAlive`, MPM tuning (StartServers / MaxRequestWorkers), `<RequireAll>` / `<RequireAny>`, `mod_deflate`, `mod_expires`, `Listen`, `ServerTokens` / `ServerSignature`. Each ~60-80 LOC. |
+| Caddy feature catalog beyond 9 | partial | Shipped: tls / reverse_proxy / file_server / encode / headers / basicauth / rewrite / redir / log. Not yet: `handle_path` / `handle` route grouping, `rate_limit`, named matchers (`@matcher`) editor, `import` smart manager, `php_fastcgi`, `try_files`, `templates`, global options block (acme_dns / debug / admin / order). |
+| Diff preview before save | hidden | Show backup → new diff in a `<details>` before the user commits, so prod edits get a sanity-check window. Reuse existing diff infrastructure. |
+| Multi-file batch validate | hidden | Apache vhost edits land in separate `sites-enabled/*` files but `apachectl configtest` covers the whole tree — show a per-file dirty-set + one-shot save-and-validate-all flow. |
+| Lint / health hints | hidden | Run `apachectl -S` / `caddy adapt --pretty` after save to surface server-detected warnings inside the panel (e.g. duplicate ServerName, fall-through routes). |
+| Open in external editor | hidden | Cross-product feature: temp-file download → spawn user's `$EDITOR` → watch for save → upload-back. Reuse the SFTP panel's existing watcher. |
+| Undo/redo on feature toggles | hidden | Card toggles have no undo — accidental clicks need Raw mode to reverse. Add a stack of dirty-buffer snapshots scoped to the panel session. |
+| Sidebar grouping ("Web Server" / "Database" / "Shell" sections) | blocked-by-spec | Earlier proposal to fold the sidebar into category sections is a cross-cutting UX refactor; PRODUCT-SPEC §4 (right-side ToolStrip ordering) would need to revisit before the implementation lands. |
 
 ## Docker panel — Compose
 

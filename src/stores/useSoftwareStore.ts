@@ -72,6 +72,14 @@ export type SoftwareActivity = {
    *  backend, but the second one's `cancelled` event would re-flash
    *  the row state). */
   cancelling: boolean;
+  /** Stale third-party repos detected in the install/update output —
+   *  populated by `finishActivity` from the backend's
+   *  `repoWarnings` field. The row's banner surfaces these as a
+   *  yellow advisory regardless of install success/failure: install
+   *  succeeds → "we ignored a broken repo, you should clean it up";
+   *  install fails → "and here are the repos that may have caused it".
+   *  Empty array when nothing was flagged. */
+  repoWarnings: string[];
 };
 
 export function softwareKeyForTab(tab: TabState): Key | null {
@@ -124,6 +132,7 @@ type SoftwareStoreState = {
     packageId: string,
     error: string,
     nextStatus: SoftwarePackageStatus | null,
+    repoWarnings?: string[],
   ) => void;
   /** Mirror a freshly-fetched version list into the per-package
    *  cache. Stamped with `Date.now()` for the TTL check below. */
@@ -197,6 +206,7 @@ export const useSoftwareStore = create<SoftwareStoreState>((set, get) => ({
                 error: "",
                 busy: true,
                 cancelling: false,
+                repoWarnings: [],
               },
             },
           },
@@ -224,7 +234,7 @@ export const useSoftwareStore = create<SoftwareStoreState>((set, get) => ({
       };
     }),
 
-  finishActivity: (key, packageId, error, nextStatus) =>
+  finishActivity: (key, packageId, error, nextStatus, repoWarnings) =>
     set((s) => {
       const prev = s.snapshots[key];
       if (!prev) return s;
@@ -236,6 +246,12 @@ export const useSoftwareStore = create<SoftwareStoreState>((set, get) => ({
           busy: false,
           cancelling: false,
           error,
+          // Carry the warnings forward when caller supplied them; if
+          // omitted (e.g. cancel/error path with no report), preserve
+          // whatever was already there so a partial-then-failed run
+          // still shows the broken-repo notice the partial output
+          // surfaced.
+          repoWarnings: repoWarnings ?? a.repoWarnings,
         };
       }
       const nextStatuses = nextStatus

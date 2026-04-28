@@ -34,9 +34,13 @@
 //! The handle types are always `Send + Sync` so the shell can
 //! move them across worker boundaries safely.
 
+pub mod apache;
+pub mod caddy;
+pub mod compose_k8s;
 pub mod docker;
 pub mod firewall;
 pub mod git;
+pub mod host_health;
 pub mod local_exec;
 pub mod mysql;
 pub mod nginx;
@@ -48,3 +52,5 @@ pub mod search;
 pub mod server_monitor;
 pub mod sqlite;
 pub mod sqlite_remote;
+pub mod web_server;
+pub mod webhook;

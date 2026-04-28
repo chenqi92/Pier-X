@@ -1378,7 +1378,7 @@ fn escape_double_quoted(s: &str) -> String {
 // ── Helpers ─────────────────────────────────────────────────────────
 
 /// POSIX-safe single-quote escape.
-fn shell_single_quote(s: &str) -> String {
+pub(crate) fn shell_single_quote(s: &str) -> String {
     let mut out = String::with_capacity(s.len() + 2);
     out.push('\'');
     for ch in s.chars() {
@@ -1396,11 +1396,11 @@ fn shell_single_quote(s: &str) -> String {
 /// once per save and the inputs are small (KB-range config files), so
 /// pulling in the `base64` crate would be overkill. Standard alphabet,
 /// no line breaks, no URL-safe variant.
-fn base64_writer(out: &mut String) -> Base64Writer<'_> {
+pub(crate) fn base64_writer(out: &mut String) -> Base64Writer<'_> {
     Base64Writer { out, buf: 0, bits: 0 }
 }
 
-struct Base64Writer<'a> {
+pub(crate) struct Base64Writer<'a> {
     out: &'a mut String,
     buf: u32,
     bits: u32,

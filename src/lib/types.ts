@@ -1006,7 +1006,7 @@ export type TabState = {
   id: string;
   title: string;
   tabColor: number; // -1 = none, 0..7 = color index
-  backend: "local" | "ssh" | "sftp" | "markdown";
+  backend: "local" | "ssh" | "sftp" | "markdown" | "hosts-health";
   // SSH credentials
   sshHost: string;
   sshPort: number;

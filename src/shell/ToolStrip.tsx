@@ -1,6 +1,10 @@
 import { PanelRightClose, PanelRightOpen } from "lucide-react";
 import type { RightTool } from "../lib/types";
-import { RIGHT_TOOL_META, RIGHT_TOOL_ORDER } from "../lib/rightToolMeta";
+import {
+  CATEGORY_LABELS,
+  RIGHT_TOOL_META,
+  RIGHT_TOOL_ORDER,
+} from "../lib/rightToolMeta";
 import { useI18n } from "../i18n/useI18n";
 import ToolStripItem from "../components/ToolStripItem";
 
@@ -26,14 +30,27 @@ export default function ToolStrip({
   const { t } = useI18n();
   const collapseTitle = collapsed ? t("Show right panel") : t("Hide right panel");
 
+  // Insert a thin divider between adjacent items whose `category`
+  // changes. This visually clusters related tools (workspace ·
+  // host · files · containers · database · service) without needing
+  // text labels in the narrow strip.
   return (
     <div className="toolstrip">
-      {TOOLS.map((entry) => {
+      {TOOLS.map((entry, i) => {
         const isActive = activeTool === entry.tool;
         const dim = entry.remoteOnly && !hasRemoteContext;
         const detected = detectedTools?.has(entry.tool) ?? false;
+        const prevCategory = i > 0 ? TOOLS[i - 1].category : null;
+        const showDivider =
+          prevCategory !== null && prevCategory !== entry.category;
         return (
           <div key={entry.tool} style={{ display: "contents" }}>
+            {showDivider && (
+              <div
+                className="ts-divider"
+                title={t(CATEGORY_LABELS[entry.category])}
+              />
+            )}
             <ToolStripItem
               icon={entry.icon}
               label={t(entry.label)}
@@ -45,7 +62,6 @@ export default function ToolStrip({
                 onSelectTool(entry.tool);
               }}
             />
-            {entry.dividerAfter && <div className="ts-divider" />}
           </div>
         );
       })}

@@ -6607,6 +6607,7 @@ fn fire_software_webhook(
             .duration_since(UNIX_EPOCH)
             .map(|d| d.as_secs())
             .unwrap_or(0),
+        output_tail: view.output_tail.clone(),
     };
     let reports = pier_core::services::webhook::fire_event_blocking(
         &cfg,
@@ -6683,6 +6684,7 @@ fn fire_uninstall_webhook(
             .duration_since(UNIX_EPOCH)
             .map(|d| d.as_secs())
             .unwrap_or(0),
+        output_tail: view.output_tail.clone(),
     };
     let reports = pier_core::services::webhook::fire_event_blocking(
         &cfg,
@@ -7293,6 +7295,67 @@ async fn software_webhooks_replay(
     .map_err(|e| format!("webhooks_replay join: {e}"))?
 }
 
+/// Result row for the batch-replay command. Mirrors the per-id
+/// replay report and adds the original failure id so the UI can
+/// match results back to the rows it submitted.
+#[derive(Serialize, Clone)]
+#[serde(rename_all = "camelCase")]
+struct WebhookBatchReplayRow {
+    /// Original failure-record id. Lets the UI dismiss only the
+    /// replays that landed (`error == ""`) without losing track
+    /// of the rest.
+    id: String,
+    url: String,
+    status_code: u16,
+    latency_ms: u64,
+    error: String,
+}
+
+/// Replay the N most-recent failures sequentially. Sequential
+/// (not concurrent) on purpose: a flapping webhook getting hit
+/// 50 times in 5 seconds is what got these failures recorded in
+/// the first place. One-shot per row — callers see the same
+/// "user already saw it fail; replay is just a manual retry"
+/// contract as the per-row replay button.
+///
+/// `limit` clamps to [1, 50] inside the command.  The list is
+/// drained newest-first (matching `list_failures` order) so the
+/// most recently-failed row is also the first to retry.
+#[tauri::command]
+async fn software_webhooks_replay_batch(
+    limit: u32,
+) -> Result<Vec<WebhookBatchReplayRow>, String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        let n = limit.clamp(1, 50) as usize;
+        let failures = pier_core::services::webhook::list_failures()
+            .map_err(|e| e)?;
+        let mut out = Vec::with_capacity(n.min(failures.len()));
+        for f in failures.into_iter().take(n) {
+            let r = pier_core::services::webhook::replay_blocking(
+                &f.url,
+                &f.body,
+                std::time::Duration::from_secs(5),
+            );
+            // Drop the failure record from the persistent log
+            // when the replay landed — keeps the Failures tab
+            // tidy after a successful "Retry recent" click.
+            if r.error.is_empty() {
+                let _ = pier_core::services::webhook::dismiss_failure(&f.id);
+            }
+            out.push(WebhookBatchReplayRow {
+                id: f.id,
+                url: r.url,
+                status_code: r.status_code,
+                latency_ms: r.latency_ms,
+                error: r.error,
+            });
+        }
+        Ok::<_, String>(out)
+    })
+    .await
+    .map_err(|e| format!("webhooks_replay_batch join: {e}"))?
+}
+
 #[tauri::command]
 async fn software_webhooks_test_fire(
     url: String,
@@ -7312,6 +7375,10 @@ async fn software_webhooks_test_fire(
                 .duration_since(UNIX_EPOCH)
                 .map(|d| d.as_secs())
                 .unwrap_or(0),
+            // Synthetic stand-in so users can preview a template
+            // that references {{outputTail}} without having to
+            // trigger a real failing install first.
+            output_tail: "Reading package lists... Done\nE: Unable to locate package fake-pkg".to_string(),
         };
         let r = match body_template {
             Some(tpl) if !tpl.is_empty() => {
@@ -7354,6 +7421,9 @@ fn software_webhooks_preview_body(body_template: String) -> String {
         package_manager: "apt".to_string(),
         version: Some("7:7.0.4-2".to_string()),
         fired_at: 1_700_000_000,
+        output_tail:
+            "Setting up redis-server (5:7.0.4-2) ...\nredis-server.service: enabled\nDone."
+                .to_string(),
     };
     pier_core::services::webhook::render_body(&payload, &body_template)
 }
@@ -11681,7 +11751,7 @@ fn local_system_info(include_disks: bool) -> Result<ServerSnapshotView, String> 
             block_devices: Vec::new(),
         })
     }
-    #[cfg(not(target_os = "macos"))]
+    #[cfg(target_os = "linux")]
     {
         // Linux fallback
         let uptime = fs::read_to_string("/proc/uptime").unwrap_or_default();
@@ -11791,6 +11861,147 @@ fn local_system_info(include_disks: bool) -> Result<ServerSnapshotView, String> 
                     mountpoint: b.mountpoint,
                 })
                 .collect(),
+        })
+    }
+    #[cfg(target_os = "windows")]
+    {
+        // Windows local probe — shells out to PowerShell once per call
+        // and parses a tagged-line protocol. Cheaper than spinning up
+        // multiple WMIC processes, and Get-CimInstance ships with every
+        // supported Windows release. CPU% / per-process tables are left
+        // empty (matching the macOS branch); the gauge falls back to
+        // its placeholder tone when cpu_pct < 0.
+        use std::os::windows::process::CommandExt;
+        const CREATE_NO_WINDOW: u32 = 0x0800_0000;
+
+        let want_disks = if include_disks { "1" } else { "0" };
+        let script = format!(
+            r#"$ErrorActionPreference='SilentlyContinue'
+$os = Get-CimInstance Win32_OperatingSystem
+$totalKB = [int64]$os.TotalVisibleMemorySize
+$freeKB = [int64]$os.FreePhysicalMemory
+$uptime = [int64]((Get-Date) - $os.LastBootUpTime).TotalSeconds
+$cores = (Get-CimInstance Win32_Processor | Measure-Object -Property NumberOfLogicalProcessors -Sum).Sum
+$procs = (Get-Process).Count
+Write-Output "MEM_KB $totalKB $freeKB"
+Write-Output "UPTIME $uptime"
+Write-Output "CORES $cores"
+Write-Output "PROCS $procs"
+Write-Output "OS $($os.Caption) $($os.Version)"
+if ('{}' -eq '1') {{
+  Get-CimInstance Win32_LogicalDisk -Filter "DriveType=3" | ForEach-Object {{
+    $size = [int64]$_.Size
+    $free = [int64]$_.FreeSpace
+    if ($size -lt 1) {{ return }}
+    $used = $size - $free
+    $pct = [math]::Round(($used * 100.0)/$size, 1)
+    $fs = if ($_.FileSystem) {{ $_.FileSystem }} else {{ 'unknown' }}
+    Write-Output "DISK $($_.DeviceID) $size $used $free $pct $fs"
+  }}
+}}
+"#,
+            want_disks,
+        );
+
+        let mut command = std::process::Command::new("powershell.exe");
+        command
+            .args(["-NoProfile", "-NonInteractive", "-Command", &script])
+            .creation_flags(CREATE_NO_WINDOW);
+        let output = command
+            .output()
+            .map_err(|e| format!("powershell spawn failed: {e}"))?;
+        let stdout = String::from_utf8_lossy(&output.stdout).to_string();
+
+        let mut mem_total_mb = 0.0_f64;
+        let mut mem_free_mb = 0.0_f64;
+        let mut uptime_secs: u64 = 0;
+        let mut cpu_count: u32 = 0;
+        let mut proc_count: u32 = 0;
+        let mut os_label = String::new();
+        let mut disks: Vec<DiskEntryView> = Vec::new();
+        let mut total_disk: u64 = 0;
+        let mut used_disk: u64 = 0;
+        let mut avail_disk: u64 = 0;
+
+        for line in stdout.lines() {
+            if let Some(rest) = line.strip_prefix("MEM_KB ") {
+                let parts: Vec<&str> = rest.split_whitespace().collect();
+                if parts.len() == 2 {
+                    let total = parts[0].parse::<f64>().unwrap_or(0.0);
+                    let free = parts[1].parse::<f64>().unwrap_or(0.0);
+                    mem_total_mb = total / 1024.0;
+                    mem_free_mb = free / 1024.0;
+                }
+            } else if let Some(rest) = line.strip_prefix("UPTIME ") {
+                uptime_secs = rest.trim().parse::<u64>().unwrap_or(0);
+            } else if let Some(rest) = line.strip_prefix("CORES ") {
+                cpu_count = rest.trim().parse::<u32>().unwrap_or(0);
+            } else if let Some(rest) = line.strip_prefix("PROCS ") {
+                proc_count = rest.trim().parse::<u32>().unwrap_or(0);
+            } else if let Some(rest) = line.strip_prefix("OS ") {
+                os_label = rest.trim().to_string();
+            } else if let Some(rest) = line.strip_prefix("DISK ") {
+                let parts: Vec<&str> = rest.split_whitespace().collect();
+                if parts.len() >= 6 {
+                    let dev = parts[0].to_string();
+                    let size_b = parts[1].parse::<u64>().unwrap_or(0);
+                    let used_b = parts[2].parse::<u64>().unwrap_or(0);
+                    let avail_b = parts[3].parse::<u64>().unwrap_or(0);
+                    let pct = parts[4].parse::<f64>().unwrap_or(0.0);
+                    let fs = parts[5].to_string();
+                    total_disk = total_disk.saturating_add(size_b);
+                    used_disk = used_disk.saturating_add(used_b);
+                    avail_disk = avail_disk.saturating_add(avail_b);
+                    disks.push(DiskEntryView {
+                        filesystem: dev.clone(),
+                        fs_type: fs,
+                        total: format_size(size_b),
+                        used: format_size(used_b),
+                        avail: format_size(avail_b),
+                        use_pct: pct,
+                        mountpoint: dev,
+                    });
+                }
+            }
+        }
+
+        let disk_use_pct = if include_disks && total_disk > 0 {
+            ((used_disk as f64) * 100.0) / (total_disk as f64)
+        } else {
+            -1.0
+        };
+        let have_disks = include_disks && total_disk > 0;
+
+        Ok(ServerSnapshotView {
+            uptime: format!("{}s", uptime_secs),
+            // Windows has no Unix-style 1/5/15 load averages. The
+            // gauges already special-case negative values as "—".
+            load_1: -1.0,
+            load_5: -1.0,
+            load_15: -1.0,
+            mem_total_mb,
+            mem_used_mb: mem_total_mb - mem_free_mb,
+            mem_free_mb,
+            // Windows pagefile is reported separately via Win32_PageFileUsage;
+            // not currently surfaced. Leave at 0 so the swap row hides.
+            swap_total_mb: 0.0,
+            swap_used_mb: 0.0,
+            disk_total: if have_disks { format_size(total_disk) } else { String::new() },
+            disk_used: if have_disks { format_size(used_disk) } else { String::new() },
+            disk_avail: if have_disks { format_size(avail_disk) } else { String::new() },
+            disk_use_pct,
+            cpu_pct: -1.0,
+            cpu_count,
+            proc_count,
+            os_label,
+            net_rx_bps: -1.0,
+            net_tx_bps: -1.0,
+            top_processes: Vec::new(),
+            top_processes_mem: Vec::new(),
+            disks,
+            // No lsblk-equivalent; leave empty so the BLOCK DEVICES
+            // section auto-hides on the frontend.
+            block_devices: Vec::new(),
         })
     }
 }
@@ -12261,6 +12472,7 @@ pub fn run() {
             software_webhooks_failures_dismiss,
             software_webhooks_failures_clear,
             software_webhooks_replay,
+            software_webhooks_replay_batch,
             software_mirror_catalog,
             software_mirror_get,
             software_mirror_set,

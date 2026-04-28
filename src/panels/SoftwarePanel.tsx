@@ -284,6 +284,11 @@ function SoftwarePanelBody({ tab }: Props) {
     total: number;
     skipped: number;
     packageId: string | null;
+    /** Next not-yet-installed package id in the current order, or
+     *  `null` when the iterator has nothing left to do. Surfaced
+     *  in the bundle card during pause so the user can decide
+     *  whether to resume or stop based on what's about to run. */
+    nextPackageId: string | null;
     /** `"installing"` for runBundle, `"uninstalling"` for the
      *  reverse path. Drives banner copy. */
     mode: "installing" | "uninstalling";
@@ -1009,6 +1014,7 @@ function SoftwarePanelBody({ tab }: Props) {
       total: bundle.packageIds.length,
       skipped: 0,
       packageId: null,
+      nextPackageId: null,
       mode: "installing",
     });
     bundlePauseRef.current = false;
@@ -1037,10 +1043,27 @@ function SoftwarePanelBody({ tab }: Props) {
         if (bundleAbortRef.current) break;
 
         const pkgId = order[i];
+        // Look ahead to the next package the loop will actually
+        // try to install — skip past entries that are already
+        // installed or have no descriptor in the registry, since
+        // those don't materialise a fresh install attempt. Used
+        // only for the pause-state preview banner.
+        const nextPkgId = (() => {
+          for (let j = i + 1; j < order.length; j++) {
+            const id = order[j];
+            const desc = registry.find((d) => d.id === id);
+            if (!desc) continue;
+            if (statuses[id]?.installed) continue;
+            return id;
+          }
+          return null;
+        })();
         const descriptor = registry.find((d) => d.id === pkgId);
         if (!descriptor) {
           setBundleProgress((p) =>
-            p ? { ...p, current: i + 1, skipped: p.skipped + 1 } : p,
+            p
+              ? { ...p, current: i + 1, skipped: p.skipped + 1, nextPackageId: nextPkgId }
+              : p,
           );
           continue;
         }
@@ -1048,13 +1071,21 @@ function SoftwarePanelBody({ tab }: Props) {
         if (cur?.installed) {
           setBundleProgress((p) =>
             p
-              ? { ...p, current: i + 1, skipped: p.skipped + 1, packageId: pkgId }
+              ? {
+                  ...p,
+                  current: i + 1,
+                  skipped: p.skipped + 1,
+                  packageId: pkgId,
+                  nextPackageId: nextPkgId,
+                }
               : p,
           );
           continue;
         }
         setBundleProgress((p) =>
-          p ? { ...p, current: i + 1, packageId: pkgId } : p,
+          p
+            ? { ...p, current: i + 1, packageId: pkgId, nextPackageId: nextPkgId }
+            : p,
         );
         bundleSkipRef.current = false;
         // Stash the activity's installId so the skip / abort
@@ -1165,6 +1196,7 @@ function SoftwarePanelBody({ tab }: Props) {
       total: bundle.packageIds.length,
       skipped: 0,
       packageId: null,
+      nextPackageId: null,
       mode: "uninstalling",
     });
     bundlePauseRef.current = false;
@@ -1189,10 +1221,26 @@ function SoftwarePanelBody({ tab }: Props) {
         if (bundleAbortRef.current) break;
 
         const pkgId = reversed[i];
+        // Mirror image of the install-side lookahead: skip past
+        // entries that aren't installed (no work to do) so the
+        // preview shows the next package that'll actually be
+        // touched.
+        const nextPkgId = (() => {
+          for (let j = i + 1; j < reversed.length; j++) {
+            const id = reversed[j];
+            const desc = registry.find((d) => d.id === id);
+            if (!desc) continue;
+            if (!statuses[id]?.installed) continue;
+            return id;
+          }
+          return null;
+        })();
         const descriptor = registry.find((d) => d.id === pkgId);
         if (!descriptor) {
           setBundleProgress((p) =>
-            p ? { ...p, current: i + 1, skipped: p.skipped + 1 } : p,
+            p
+              ? { ...p, current: i + 1, skipped: p.skipped + 1, nextPackageId: nextPkgId }
+              : p,
           );
           continue;
         }
@@ -1200,13 +1248,21 @@ function SoftwarePanelBody({ tab }: Props) {
         if (!cur?.installed) {
           setBundleProgress((p) =>
             p
-              ? { ...p, current: i + 1, skipped: p.skipped + 1, packageId: pkgId }
+              ? {
+                  ...p,
+                  current: i + 1,
+                  skipped: p.skipped + 1,
+                  packageId: pkgId,
+                  nextPackageId: nextPkgId,
+                }
               : p,
           );
           continue;
         }
         setBundleProgress((p) =>
-          p ? { ...p, current: i + 1, packageId: pkgId } : p,
+          p
+            ? { ...p, current: i + 1, packageId: pkgId, nextPackageId: nextPkgId }
+            : p,
         );
         bundleSkipRef.current = false;
         // eslint-disable-next-line no-await-in-loop
@@ -1616,6 +1672,12 @@ function SoftwarePanelBody({ tab }: Props) {
         descriptor={descriptor}
         status={statuses[descriptor.id] ?? null}
         activity={activity[descriptor.id] ?? null}
+        // PAUSED pill on the row the bundle currently points at —
+        // matches the bundle card's badge so the user sees the
+        // pause state on whichever row their eye lands on first.
+        bundlePausedHere={
+          bundlePaused && bundleProgress?.packageId === descriptor.id
+        }
         disabledOtherBusy={!!busyPackageId && busyPackageId !== descriptor.id}
         canManage={canManage}
         enableService={enableService}
@@ -1863,6 +1925,13 @@ function SoftwarePanelBody({ tab }: Props) {
                           ·{" "}
                           {t("{n} already installed", {
                             n: bundleProgress.skipped,
+                          })}
+                        </span>
+                      )}
+                      {bundlePaused && bundleProgress?.nextPackageId && (
+                        <span className="sw-panel__bundle-next mono">
+                          {t("Next: {pkg}", {
+                            pkg: bundleProgress.nextPackageId,
                           })}
                         </span>
                       )}
@@ -2625,6 +2694,7 @@ function SoftwareRow({
   descriptor,
   status,
   activity,
+  bundlePausedHere,
   disabledOtherBusy,
   canManage,
   enableService: _enableService,
@@ -2673,6 +2743,12 @@ function SoftwareRow({
         repoWarnings: string[];
       }
     | null;
+  /** `true` when the parent bundle is paused AND this row is the
+   *  package the bundle's progress pointer last touched. Drives a
+   *  small PAUSED pill at the top of the activity area so the
+   *  user spots the pause without having to scroll back to the
+   *  bundle card. */
+  bundlePausedHere: boolean;
   disabledOtherBusy: boolean;
   canManage: boolean;
   enableService: boolean;
@@ -3278,6 +3354,16 @@ function SoftwareRow({
           activity.error ||
           activity.repoWarnings.length > 0) && (
           <>
+            {bundlePausedHere && (
+              <div className="sw-row__paused mono">
+                <span className="sw-row__paused-pill">{t("PAUSED")}</span>
+                <span className="muted">
+                  {t(
+                    "Bundle is paused — current package will start as soon as you click Resume.",
+                  )}
+                </span>
+              </div>
+            )}
             {activity.error && (
               <div className="status-note status-note--error mono sw-row__error">
                 {activity.error}
@@ -5516,6 +5602,41 @@ function WebhooksDialog({
     }
   }
 
+  /** Number of most-recent failures the batch-replay button will
+   *  retry on click. 10 is a sweet spot: covers the common case
+   *  of "a Slack outage just resolved" without sleeping the user
+   *  for minutes if every replay times out. Backend caps at 50
+   *  regardless. */
+  const BATCH_REPLAY_LIMIT = 10;
+  const [batchReplaying, setBatchReplaying] = useState(false);
+
+  async function replayRecent() {
+    if (failures.length === 0 || batchReplaying) return;
+    setBatchReplaying(true);
+    setMessage("");
+    try {
+      const rows = await cmd.softwareWebhooksReplayBatch(BATCH_REPLAY_LIMIT);
+      // Backend already auto-dismisses the rows whose replay
+      // landed; refresh from disk so the UI mirrors the new
+      // truth (rather than us mutating the local list and
+      // potentially diverging on a partial transport failure).
+      await refreshFailures();
+      const ok = rows.filter((r) => r.error === "").length;
+      const fail = rows.length - ok;
+      setMessage(
+        t("Replayed {tried}: {ok} ok, {fail} still failing", {
+          tried: rows.length,
+          ok,
+          fail,
+        }),
+      );
+    } catch (e) {
+      setMessage(e instanceof Error ? e.message : String(e));
+    } finally {
+      setBatchReplaying(false);
+    }
+  }
+
   async function replayFailure(rec: cmd.WebhookFailureRecord) {
     setReplayingId(rec.id);
     setReplayResult(null);
@@ -5627,6 +5748,15 @@ function WebhooksDialog({
       label: t("Minimal JSON"),
       template:
         '{"event":"{{event}}","package":"{{packageId}}","host":"{{host}}","status":"{{status}}","version":"{{version}}","firedAt":{{firedAt}}}',
+    },
+    {
+      // Slack-shaped body that includes the install/uninstall
+      // command's last ~60 lines of stdout+stderr so triage
+      // happens in-channel without an SSH round-trip.
+      id: "slack-with-tail",
+      label: t("Slack with output tail"),
+      template:
+        '{"text":"{{text}}\\n```\\n{{outputTail}}\\n```"}',
     },
   ];
 
@@ -5771,6 +5901,20 @@ function WebhooksDialog({
                   disabled={failureBusy}
                 >
                   {failureBusy ? t("Refreshing…") : t("Refresh")}
+                </button>
+                <button
+                  type="button"
+                  className="btn is-ghost is-compact"
+                  onClick={() => void replayRecent()}
+                  disabled={failures.length === 0 || batchReplaying}
+                  title={t(
+                    "Re-fire the {n} most recent failures sequentially. Successful replays auto-dismiss.",
+                    { n: BATCH_REPLAY_LIMIT },
+                  )}
+                >
+                  {batchReplaying
+                    ? t("Replaying…")
+                    : t("Replay last {n}", { n: BATCH_REPLAY_LIMIT })}
                 </button>
                 <button
                   type="button"

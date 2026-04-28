@@ -160,6 +160,13 @@ pub struct WebhookPayload {
     pub version: Option<String>,
     /// Unix epoch seconds at the moment the event was generated.
     pub fired_at: u64,
+    /// Last ~60 lines of the install/uninstall command's merged
+    /// stdout+stderr. Empty for `Test` events. Surfaced to body
+    /// templates via `{{outputTail}}` / `{{output_tail}}` so
+    /// users can post the actual error a Slack channel needs to
+    /// triage the install.
+    #[serde(default)]
+    pub output_tail: String,
 }
 
 /// Per-URL fire result — surfaced back to the UI for the
@@ -621,6 +628,8 @@ pub fn render_body(payload: &WebhookPayload, template: &str) -> String {
         ("fired_at", fired_at.as_str(), false),
         ("firedAt", fired_at.as_str(), false),
         ("text", payload.text.as_str(), true),
+        ("output_tail", payload.output_tail.as_str(), true),
+        ("outputTail", payload.output_tail.as_str(), true),
     ];
     let mut out = template.to_string();
     for (key, value, escape) in pairs {
@@ -803,6 +812,7 @@ mod tests {
             package_manager: "apt".to_string(),
             version: Some("7:7.0.4-2".to_string()),
             fired_at: 0,
+            output_tail: String::new(),
         }
     }
 
@@ -937,6 +947,37 @@ mod tests {
         );
         assert_eq!(body_snake, body_camel);
         assert!(body_snake.contains("redis"));
+    }
+
+    #[test]
+    fn template_substitutes_output_tail() {
+        let mut payload = sample_payload("install");
+        payload.output_tail = "Reading package lists...\nE: Unable to locate".to_string();
+        let body = render_body(
+            &payload,
+            "{\"content\":\"```\\n{{outputTail}}\\n```\"}",
+        );
+        // JSON-escape should turn the newline into \n (literal
+        // backslash + n in the JSON string), so re-parsing back
+        // round-trips the original text.
+        let parsed: serde_json::Value =
+            serde_json::from_str(&body).expect("re-parse");
+        assert!(
+            parsed["content"]
+                .as_str()
+                .unwrap_or("")
+                .contains("Unable to locate")
+        );
+    }
+
+    #[test]
+    fn template_supports_snake_and_camel_for_output_tail() {
+        let mut payload = sample_payload("install");
+        payload.output_tail = "hello".to_string();
+        let snake = render_body(&payload, "{{output_tail}}");
+        let camel = render_body(&payload, "{{outputTail}}");
+        assert_eq!(snake, camel);
+        assert_eq!(snake, "hello");
     }
 
     #[test]

@@ -63,9 +63,10 @@ export type RightToolMeta = {
 //   service    → webserver / software     (host-level service management)
 //
 // Within a category, items are ordered by frequency-of-use among the
-// tools that share that category. SQLite is in `database` despite not
-// being SSH-bound — it's a database client first; its local-only nature
-// is just an implementation detail.
+// tools that share that category. SQLite, like the other DB clients,
+// targets the *server* — it scans the connected host for `.db` /
+// `.sqlite` files. Without a remote context the strip button is dim,
+// matching mysql / postgres / redis.
 export const RIGHT_TOOL_ORDER: RightTool[] = [
   "markdown",
   "git",
@@ -112,10 +113,14 @@ export const RIGHT_TOOL_META: Record<RightTool, RightToolMeta> = {
     label: "Server Monitor",
     category: "host",
     icon: ChartNoAxesCombined,
-    remoteOnly: true,
+    // Local-capable: the panel switches to `local_system_info` when
+    // the active tab has no SSH target, so the strip button stays
+    // enabled on plain local terminals too. This is also the
+    // designated fallback when a tab's persisted rightTool is no
+    // longer reachable (e.g. local tab restored with rightTool="mysql").
     tintVar: "var(--svc-monitor)",
     splashTitle: "Server Monitor",
-    splashSubtitle: "Open a saved server to see live CPU, memory, disks, and top processes.",
+    splashSubtitle: "Live CPU, memory, disks, and top processes for the active host (local or SSH).",
   },
   firewall: {
     label: "Firewall",
@@ -184,7 +189,10 @@ export const RIGHT_TOOL_META: Record<RightTool, RightToolMeta> = {
     label: "SQLite",
     category: "database",
     icon: SqliteIcon,
+    remoteOnly: true,
     tintVar: "var(--svc-sqlite)",
+    splashTitle: "SQLite",
+    splashSubtitle: "Connect through SSH to scan a host for .db / .sqlite files and read or edit them.",
   },
   webserver: {
     label: "Web Server",

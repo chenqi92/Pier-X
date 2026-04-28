@@ -403,13 +403,24 @@ export default function TerminalPanel({ tab, isActive, onEditConnection }: Props
       if (viewport.clientWidth <= 0 || viewport.clientHeight <= 0) return;
       const measureBox = measure.getBoundingClientRect();
       const charWidth = measureBox.width / 10 || 7.8;
+      const style = window.getComputedStyle(viewport);
+      const horizontalPadding =
+        Number.parseFloat(style.paddingLeft) + Number.parseFloat(style.paddingRight);
+      const verticalPadding =
+        Number.parseFloat(style.paddingTop) + Number.parseFloat(style.paddingBottom);
       // Match the px row height used by the renderer (--terminal-row-h is set
       // via Math.ceil(fontSize * 1.45) inline). Using the fractional measured
       // height here would let `rows × ceil_row_h` exceed the viewport, clipping
       // the bottom of the cursor row under `overflow: hidden`.
       const rowH = Math.ceil(terminalFontSize * 1.45);
-      const cols = Math.max(48, Math.min(220, Math.floor((viewport.clientWidth - 24) / charWidth)));
-      const rows = Math.max(14, Math.min(72, Math.floor((viewport.clientHeight - 20) / rowH)));
+      const cols = Math.max(
+        48,
+        Math.min(220, Math.floor((viewport.clientWidth - horizontalPadding) / charWidth)),
+      );
+      const rows = Math.max(
+        14,
+        Math.min(72, Math.floor((viewport.clientHeight - verticalPadding) / rowH)),
+      );
       setTerminalSize((prev) =>
         prev.cols === cols && prev.rows === rows ? prev : { cols, rows },
       );

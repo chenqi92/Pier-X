@@ -3,7 +3,7 @@ import * as cmd from "../lib/commands";
 import { translate } from "../i18n/useI18n";
 import { useSettingsStore } from "./useSettingsStore";
 import type { RightTool, TabState } from "../lib/types";
-import { DEFAULT_LOG_SOURCE } from "../lib/types";
+import { DEFAULT_LOG_SOURCE, resolveReachableTool } from "../lib/types";
 
 type TabStore = {
   tabs: TabState[];
@@ -77,19 +77,27 @@ function scrubRuntimeFields(tab: TabState): TabState {
   // connection the user explicitly opened). Keep those so the
   // backend can re-establish the session via the saved profile +
   // keychain on reconnect.
-  if (tab.backend === "local") {
-    return {
-      ...base,
-      sshHost: "",
-      sshPort: 22,
-      sshUser: "",
-      sshAuthMode: "password",
-      sshKeyPath: "",
-      sshSavedConnectionIndex: null,
-    };
-  }
+  const cleaned = tab.backend === "local"
+    ? {
+        ...base,
+        sshHost: "",
+        sshPort: 22,
+        sshUser: "",
+        sshAuthMode: "password" as const,
+        sshKeyPath: "",
+        sshSavedConnectionIndex: null,
+      }
+    : base;
 
-  return base;
+  // Fallback to monitor when the persisted `rightTool` can no longer
+  // be reached from the cleaned tab — e.g. a local tab that was
+  // restored with `rightTool="mysql"` after the SSH overlay was
+  // wiped above. Monitor is the universal landing target because it
+  // works against the local machine via `local_system_info` too.
+  return {
+    ...cleaned,
+    rightTool: resolveReachableTool(cleaned.rightTool, cleaned),
+  };
 }
 
 function loadPersisted(): PersistedShape {

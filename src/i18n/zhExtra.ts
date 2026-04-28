@@ -1974,6 +1974,7 @@ export const zhExtra: Record<string, string> = {
   "Discord": "Discord",
   "Microsoft Teams": "Microsoft Teams",
   "Minimal JSON": "极简 JSON",
+  "Slack with output tail": "Slack（含命令尾部输出）",
   "Hide preview": "隐藏预览",
   "Preview": "预览",
   "Rendering…": "渲染中…",
@@ -1994,6 +1995,11 @@ export const zhExtra: Record<string, string> = {
   "attempt {n}: {err}": "第 {n} 次尝试：{err}",
   "Replaying…": "重放中…",
   "Replay": "重放",
+  "Replay last {n}": "重放最近 {n} 条",
+  "Re-fire the {n} most recent failures sequentially. Successful replays auto-dismiss.":
+    "依次重新触发最近 {n} 条失败；成功的会自动从列表移除。",
+  "Replayed {tried}: {ok} ok, {fail} still failing":
+    "已重放 {tried} 条：{ok} 成功，{fail} 仍失败",
   "Switch to a flat list — show all hosts ungrouped":
     "切换为平铺列表——所有主机不分组显示",
   "Switch to grouped view — bucket by saved group label":
@@ -2019,11 +2025,21 @@ export const zhExtra: Record<string, string> = {
     "取消当前包并停止整个 bundle。",
   "Paused": "已暂停",
   "PAUSED": "已暂停",
+  "Bundle is paused — current package will start as soon as you click Resume.":
+    "Bundle 已暂停——下一包会在点击「继续」后立即开始。",
+  "Next: {pkg}": "下一个：{pkg}",
   "Webhook failed: {target}": "Webhook 失败：{target}",
   "Open Failures": "打开失败列表",
   "{event} {pkg} · {error}": "{event} {pkg} · {error}",
   "Host went offline: {target}": "主机离线：{target}",
   "TCP probe failed.": "TCP 探测失败。",
+  "Copy SSH command": "复制 SSH 命令",
+  "Copied: {cmd}": "已复制：{cmd}",
+  "Select": "选择",
+  "Re-probe selected": "重新探测已选",
+  "Re-probe all selected hosts": "重新探测所有已选主机",
+  "Connect to {n}": "连接 {n} 台",
+  "Open one new SSH tab for each selected host": "为每台已选主机各开一个 SSH 标签页",
   "Switch to bus view — dense one-line-per-host table for 50+ hosts":
     "切换为 Bus 视图——50+ 主机时的紧凑表格视图",
   "Bus view": "Bus 视图",

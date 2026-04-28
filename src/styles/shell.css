@@ -2137,7 +2137,7 @@ button,
   position: relative;
   flex: 1;
   min-height: 0;
-  padding: 10px 12px;
+  padding: var(--sp-1) var(--sp-3) var(--sp-2);
   overflow: hidden;
   outline: none;
   background: var(--bg);
@@ -6464,6 +6464,24 @@ button,
 .sw-row__error {
   margin-top: var(--sp-1);
 }
+.sw-row__paused {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--sp-2);
+  margin-top: var(--sp-1);
+  font-size: var(--size-micro);
+}
+.sw-row__paused-pill {
+  display: inline-block;
+  padding: 1px var(--sp-1);
+  border-radius: var(--radius-sm);
+  background: var(--warn);
+  color: var(--accent-ink, #fff);
+  font-family: var(--mono);
+  font-size: 9px;
+  letter-spacing: 0.08em;
+  animation: sw-bundle-paused-pulse 1.6s var(--easing) infinite;
+}
 .sw-row__warn {
   margin-top: var(--sp-1);
   padding: var(--sp-2);
@@ -7712,6 +7730,16 @@ button,
 @keyframes sw-bundle-paused-pulse {
   0%, 100% { opacity: 0.55; }
   50%      { opacity: 0.95; }
+}
+.sw-panel__bundle-next {
+  display: inline-block;
+  margin-left: var(--sp-1);
+  padding: 0 var(--sp-1);
+  border-radius: var(--radius-sm);
+  background: var(--surface-2);
+  border: 1px solid var(--line-2);
+  color: var(--ink-2);
+  font-size: var(--size-micro);
 }
 .sw-panel__bundle-card-progress-badge {
   position: absolute;
@@ -9115,6 +9143,32 @@ button,
   text-align: right;
 }
 .hosts-health-bus__empty { padding: var(--sp-3) var(--sp-2); text-align: center; }
+.hosts-health-bus__select-cell {
+  width: 24px;
+  text-align: center;
+  padding: 0 var(--sp-1) !important;
+  cursor: default;
+}
+.hosts-health-bus__select-cell input[type="checkbox"] { margin: 0; }
+.hosts-health-bus__row--selected td {
+  background: var(--accent-subtle, var(--surface-2));
+}
+.hosts-health-bus__selectionbar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--sp-2);
+  padding: var(--sp-1) var(--sp-2);
+  background: var(--surface-2);
+  border-bottom: 1px solid var(--line);
+  position: sticky;
+  top: 0;
+  z-index: 2;
+}
+.hosts-health-bus__selectionbar-actions {
+  display: inline-flex;
+  gap: var(--sp-1);
+}
 
 .hosts-health-row__actions {
   display: flex;

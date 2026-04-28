@@ -1459,6 +1459,27 @@ export const softwareWebhooksReplay = (params: {
     body: params.body,
   });
 
+/** One row of the batch-replay result. `id` echoes the original
+ *  failure record id so the UI can mark only the rows whose
+ *  replay succeeded — those are auto-dismissed on the backend
+ *  side too. */
+export type WebhookBatchReplayRow = {
+  id: string;
+  url: string;
+  statusCode: number;
+  latencyMs: number;
+  error: string;
+};
+
+/** Replay the N most-recent failures sequentially. `limit` is
+ *  clamped to [1, 50] backend-side. Returns one row per replay
+ *  attempt, in newest-first order. Successful replays are
+ *  auto-dismissed from the persistent log. */
+export const softwareWebhooksReplayBatch = (limit: number) =>
+  invoke<WebhookBatchReplayRow[]>("software_webhooks_replay_batch", {
+    limit,
+  });
+
 /** One row in a system-package search result. */
 export type SoftwareSearchHit = {
   name: string;

@@ -1119,6 +1119,44 @@ export function isSshTargetReady(target: NestedSshTarget | null): target is Nest
   return true;
 }
 
+/** Tools that require SSH addressing on the active tab to be functional.
+ *  When a tab has no SSH context (plain local terminal) the strip dims
+ *  these buttons; if a persisted `rightTool` lands on one of them, the
+ *  shell downgrades it to `"monitor"` (which is local-capable). Kept
+ *  here, not in `rightToolMeta.ts`, so types.ts stays the canonical
+ *  reference for tab-state semantics. */
+export const REMOTE_ONLY_TOOLS: ReadonlySet<RightTool> = new Set<RightTool>([
+  "firewall",
+  "sftp",
+  "log",
+  "docker",
+  "mysql",
+  "postgres",
+  "redis",
+  "sqlite",
+  "webserver",
+  "software",
+]);
+
+/** Returns `true` when the given tool is reachable for the given tab.
+ *  Local tabs (no SSH context) cannot reach SSH-only tools. `null` tab
+ *  means no active session — only purely local tools (markdown / git)
+ *  and the universally-capable monitor are reachable. */
+export function isToolReachable(tool: RightTool, tab: TabState | null): boolean {
+  if (!REMOTE_ONLY_TOOLS.has(tool)) return true;
+  if (!tab) return false;
+  return effectiveSshTarget(tab) !== null;
+}
+
+/** Resolve the right tool to actually display for a tab, downgrading
+ *  to `"monitor"` when the persisted choice can't be reached. Used by
+ *  `useTabStore.scrubRuntimeFields` (restart path) and by App.tsx
+ *  (tab-switch path) so the right panel never lands on a splash that
+ *  the user can't act on from the current context. */
+export function resolveReachableTool(tool: RightTool, tab: TabState | null): RightTool {
+  return isToolReachable(tool, tab) ? tool : "monitor";
+}
+
 export const DEFAULT_LOG_SOURCE: LogSource = {
   mode: "system",
   filePath: "",

@@ -24,6 +24,7 @@ import { isBrowsableRepoPath } from "./lib/browserPath";
 import * as cmd from "./lib/commands";
 import { RIGHT_TOOL_META } from "./lib/rightToolMeta";
 import type { CoreInfo, FileEntry, RightTool, SavedSshConnection } from "./lib/types";
+import { isToolReachable, resolveReachableTool } from "./lib/types";
 import PortForwardDialog from "./components/PortForwardDialog";
 import ResizeHandle from "./components/ResizeHandle";
 import SettingsDialog from "./components/SettingsDialog";
@@ -142,7 +143,29 @@ function App() {
   const i18n = useMemo(() => makeI18n(locale), [locale]);
 
   const activeTab = tabs.find((t) => t.id === activeTabId) ?? null;
-  const activeRightTool = activeTab?.rightTool ?? fallbackRightTool;
+  // Resolve the displayed right tool to one the active tab can
+  // actually reach. The persisted value on the tab can become stale
+  // when an SSH overlay disappears (nested `exit`, key changes) — we
+  // don't want the splash for an unreachable tool to take over the
+  // right pane. Persisted state on the tab gets reconciled by the
+  // effect below; render path uses the resolved value immediately so
+  // there's no flicker of the unreachable splash.
+  const persistedRightTool = activeTab?.rightTool ?? fallbackRightTool;
+  const activeRightTool = activeTab
+    ? resolveReachableTool(persistedRightTool, activeTab)
+    : persistedRightTool;
+
+  // Reconcile the persisted `rightTool` on the active tab when it
+  // points at something the tab can no longer reach. Triggered by
+  // tab switches and by SSH-overlay changes (e.g. nested `ssh exit`
+  // clearing `nestedSshTarget`, or sshHost being scrubbed). Skipped
+  // when the persisted tool is already reachable so we don't churn
+  // the store.
+  useEffect(() => {
+    if (!activeTab) return;
+    if (isToolReachable(activeTab.rightTool, activeTab)) return;
+    useTabStore.getState().setTabRightTool(activeTab.id, "monitor");
+  }, [activeTab]);
 
   const isDev = import.meta.env.DEV;
 

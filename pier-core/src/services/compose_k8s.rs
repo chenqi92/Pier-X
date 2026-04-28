@@ -286,6 +286,12 @@ struct ComposeDeploy {
     /// produce an unscheduled stack.
     #[serde(default)]
     replicas: Option<u32>,
+    /// Compose `deploy.restart_policy.condition` mirrors the
+    /// service-level `restart:` field but lives under `deploy:`.
+    /// We honour both, with `deploy.restart_policy.condition`
+    /// winning when set (Compose's documented precedence).
+    #[serde(default)]
+    restart_policy: Option<ComposeRestartPolicy>,
     /// Compose `healthcheck` block — translated to a K8s
     /// `livenessProbe`. The shape mirrors the Compose spec:
     ///
@@ -303,6 +309,19 @@ struct ComposeDeploy {
     /// `periodSeconds`, retries → `failureThreshold`, etc.).
     #[serde(default)]
     healthcheck: Option<ComposeHealthcheck>,
+}
+
+#[derive(Debug, Default, Deserialize)]
+#[serde(rename_all = "snake_case")]
+struct ComposeRestartPolicy {
+    /// `none` / `on-failure` / `any`. Maps onto the same K8s
+    /// `restartPolicy` enum the service-level `restart:` field
+    /// already targets:
+    ///   * `none` → `Never`
+    ///   * `on-failure` → `OnFailure`
+    ///   * `any` (default) → `Always` (omitted, K8s default)
+    #[serde(default)]
+    condition: Option<String>,
 }
 
 #[derive(Debug, Default, Deserialize)]
@@ -417,16 +436,27 @@ fn render_deployment(
     }
     s.push_str("    spec:\n");
 
-    // restartPolicy mapping. Compose's `unless-stopped` / `always`
-    // map to Kubernetes' Always (the default for Deployments
-    // anyway); `no` maps to Never; `on-failure` maps to OnFailure.
-    // We emit the field only for non-defaults so the manifest stays
-    // tight.
-    if let Some(restart) = svc.restart.as_deref() {
+    // restartPolicy mapping. Compose has TWO sources for this:
+    //   * `restart:` at the service level (legacy; values:
+    //     `no` / `always` / `on-failure` / `unless-stopped`)
+    //   * `deploy.restart_policy.condition:` (newer Swarm-mode
+    //     spec; values: `none` / `on-failure` / `any`)
+    // Per the Compose spec `deploy.restart_policy` wins when
+    // both are set. Mapping → K8s:
+    //   * `no` / `none` / `false` → Never
+    //   * `on-failure` → OnFailure
+    //   * everything else → omit (Always is K8s default)
+    let restart_value = svc
+        .deploy
+        .as_ref()
+        .and_then(|d| d.restart_policy.as_ref())
+        .and_then(|rp| rp.condition.as_deref())
+        .or(svc.restart.as_deref());
+    if let Some(restart) = restart_value {
         let rp = match restart.trim() {
-            "no" | "false" => Some("Never"),
+            "no" | "false" | "none" => Some("Never"),
             "on-failure" => Some("OnFailure"),
-            _ => None, // always/unless-stopped → omit (Always is default)
+            _ => None,
         };
         if let Some(rp) = rp {
             s.push_str(&format!("      restartPolicy: {rp}\n"));
@@ -1312,13 +1342,25 @@ struct ParsedVolumes {
 fn parse_volumes(values: &[serde_yml::Value]) -> ParsedVolumes {
     let mut out = ParsedVolumes::default();
     for v in values {
+        // Long-form: `{ type, source, target, read_only }` — when
+        // we can extract the four canonical fields the long form
+        // is no harder to translate than the short form. Falls
+        // through to the legacy "shaped string" path otherwise.
+        if let serde_yml::Value::Mapping(m) = v {
+            if let Some(parsed) = parse_long_form_volume(m) {
+                push_parsed_long_form(&mut out, parsed);
+                continue;
+            }
+            // Mapping that didn't have the canonical fields —
+            // surface it so the user knows we punted instead of
+            // silently dropping.
+            out.warnings.push("long-form volume (unrecognised shape)".to_string());
+            continue;
+        }
         let raw = match v {
             serde_yml::Value::String(s) => s.clone(),
-            // Long-form `{ type: volume, source: x, target: y }` —
-            // not currently used by our templates; flag for now so
-            // the user knows we punted.
             _ => {
-                out.warnings.push("long-form volume entry".to_string());
+                out.warnings.push("non-string volume entry".to_string());
                 continue;
             }
         };
@@ -1362,6 +1404,112 @@ fn parse_volumes(values: &[serde_yml::Value]) -> ParsedVolumes {
         });
     }
     out
+}
+
+/// Decoded long-form volume — exactly one of the two variants
+/// per entry. Kept private to this module; the caller routes
+/// each variant into the existing `ParsedVolumes` buckets so the
+/// rest of the renderer stays untouched.
+enum ParsedLongFormVolume {
+    Named { volume: String, mount_path: String, read_only: bool },
+    Bind { source: String, mount_path: String, read_only: bool },
+    /// Long form with `type:` we don't translate (`tmpfs` /
+    /// `npipe` / `cluster`). We surface a warning string the
+    /// caller pushes onto `ParsedVolumes.warnings`.
+    Unsupported(String),
+}
+
+/// Long-form volume parser. Returns `None` if the mapping is
+/// missing the canonical `target:` field (without it we can't
+/// place anything inside the container and there's nothing useful
+/// to do). The `type:` field defaults to `"volume"` per the
+/// Compose spec; `read_only:` defaults to false.
+fn parse_long_form_volume(m: &serde_yml::Mapping) -> Option<ParsedLongFormVolume> {
+    let target = m
+        .get(serde_yml::Value::String("target".into()))
+        .and_then(|v| v.as_str())
+        .map(|s| s.to_string())?;
+    let kind = m
+        .get(serde_yml::Value::String("type".into()))
+        .and_then(|v| v.as_str())
+        .unwrap_or("volume")
+        .to_string();
+    let source = m
+        .get(serde_yml::Value::String("source".into()))
+        .and_then(|v| v.as_str())
+        .map(|s| s.to_string())
+        .unwrap_or_default();
+    let read_only = m
+        .get(serde_yml::Value::String("read_only".into()))
+        .and_then(|v| v.as_bool())
+        .unwrap_or(false);
+    Some(match kind.as_str() {
+        "volume" => {
+            // `source:` for named volumes is the volume name;
+            // when missing the volume is anonymous (we still
+            // need a name to mount it, so we synthesise one
+            // from the target path so the manifest applies).
+            let volume = if source.is_empty() {
+                bind_mount_configmap_name("vol", &target)
+            } else {
+                source
+            };
+            ParsedLongFormVolume::Named {
+                volume,
+                mount_path: target,
+                read_only,
+            }
+        }
+        "bind" => ParsedLongFormVolume::Bind {
+            source: if source.is_empty() {
+                ".".to_string()
+            } else {
+                source
+            },
+            mount_path: target,
+            read_only,
+        },
+        other => ParsedLongFormVolume::Unsupported(format!(
+            "long-form volume type '{other}' not translated"
+        )),
+    })
+}
+
+fn push_parsed_long_form(out: &mut ParsedVolumes, parsed: ParsedLongFormVolume) {
+    match parsed {
+        ParsedLongFormVolume::Named {
+            volume,
+            mount_path,
+            read_only,
+        } => out.named_mounts.push(NamedMount {
+            volume,
+            mount_path,
+            read_only,
+        }),
+        ParsedLongFormVolume::Bind {
+            source,
+            mount_path,
+            read_only,
+        } => {
+            out.bind_mounts.push(BindMount {
+                source: source.clone(),
+                mount_path: mount_path.clone(),
+                read_only,
+            });
+            // Same parallel warning as the short-form bind mount
+            // so the legacy `lift_bind_mounts: false` path keeps
+            // surfacing the # NOTE about hostPath / ConfigMap.
+            out.warnings.push(format!(
+                "{}:{}{}",
+                source,
+                mount_path,
+                if read_only { ":ro" } else { "" }
+            ));
+        }
+        ParsedLongFormVolume::Unsupported(msg) => {
+            out.warnings.push(msg);
+        }
+    }
 }
 
 fn parse_environment(value: &Option<serde_yml::Value>) -> Vec<(String, String)> {
@@ -2007,6 +2155,144 @@ services:
         let summary = convert_with_summary(yaml, None).expect("convert");
         assert_eq!(summary.secret_count, 1);
         assert_eq!(summary.configmap_count, 1);
+    }
+
+    #[test]
+    fn deploy_restart_policy_overrides_service_level_restart() {
+        // `restart: always` → omit (K8s default Always); but
+        // `deploy.restart_policy.condition: on-failure` should
+        // win and emit `restartPolicy: OnFailure`.
+        let yaml = r#"services:
+  api:
+    image: alpine:3
+    restart: always
+    deploy:
+      restart_policy:
+        condition: on-failure
+"#;
+        let out = convert(yaml, None).expect("convert");
+        assert!(out.contains("restartPolicy: OnFailure"));
+    }
+
+    #[test]
+    fn deploy_restart_policy_none_maps_to_never() {
+        let yaml = r#"services:
+  api:
+    image: alpine:3
+    deploy:
+      restart_policy:
+        condition: none
+"#;
+        let out = convert(yaml, None).expect("convert");
+        assert!(out.contains("restartPolicy: Never"));
+    }
+
+    #[test]
+    fn deploy_restart_policy_any_omits_field() {
+        // `any` is Compose's default — maps to K8s default
+        // `Always`, which we omit to keep manifests tight.
+        let yaml = r#"services:
+  api:
+    image: alpine:3
+    deploy:
+      restart_policy:
+        condition: any
+"#;
+        let out = convert(yaml, None).expect("convert");
+        assert!(!out.contains("restartPolicy:"));
+    }
+
+    #[test]
+    fn long_form_volume_named_translates_like_short_form() {
+        let yaml = r#"services:
+  app:
+    image: alpine:3
+    volumes:
+      - type: volume
+        source: pg-data
+        target: /var/lib/postgresql/data
+        read_only: false
+volumes:
+  pg-data:
+"#;
+        let out = convert(yaml, None).expect("convert");
+        // Same shape as the short form: PVC + Pod volume +
+        // volumeMount.
+        assert!(out.contains("kind: PersistentVolumeClaim"));
+        assert!(out.contains("name: pg-data"));
+        assert!(out.contains("mountPath: /var/lib/postgresql/data"));
+        assert!(out.contains("claimName: pg-data"));
+    }
+
+    #[test]
+    fn long_form_volume_read_only_propagates() {
+        let yaml = r#"services:
+  app:
+    image: alpine:3
+    volumes:
+      - type: volume
+        source: cfg
+        target: /etc/app
+        read_only: true
+volumes:
+  cfg:
+"#;
+        let out = convert(yaml, None).expect("convert");
+        // The mount should pick up the `read_only: true` field.
+        assert!(out.contains("readOnly: true"));
+    }
+
+    #[test]
+    fn long_form_volume_bind_routes_to_bind_mount_path() {
+        let yaml = r#"services:
+  app:
+    image: alpine:3
+    volumes:
+      - type: bind
+        source: ./www
+        target: /usr/share/nginx/html
+        read_only: true
+"#;
+        let out = convert(yaml, None).expect("convert");
+        // Same legacy behaviour as the short form `./www:/foo:ro`.
+        assert!(out.contains("# NOTE: bind mount"));
+        assert!(out.contains("./www:/usr/share/nginx/html:ro"));
+    }
+
+    #[test]
+    fn long_form_volume_bind_lifts_to_configmap_when_opted_in() {
+        let yaml = r#"services:
+  app:
+    image: alpine:3
+    volumes:
+      - type: bind
+        source: ./www
+        target: /usr/share/nginx/html
+"#;
+        let opts = IngressOptions {
+            host: String::new(),
+            ingress_class: String::new(),
+            tls_secret: String::new(),
+            lift_bind_mounts: true,
+        };
+        let out = convert_with_options(yaml, None, &opts).expect("convert");
+        assert!(out.contains("kind: ConfigMap"));
+        assert!(out.contains("mountPath: /usr/share/nginx/html"));
+    }
+
+    #[test]
+    fn long_form_volume_unsupported_type_warns() {
+        let yaml = r#"services:
+  app:
+    image: alpine:3
+    volumes:
+      - type: tmpfs
+        target: /tmp
+"#;
+        let out = convert(yaml, None).expect("convert");
+        // We can't usefully translate tmpfs; surface a NOTE.
+        assert!(out.contains("# NOTE:"));
+        assert!(out.contains("tmpfs"));
     }
 
     #[test]

@@ -20,8 +20,11 @@ import {
 } from "lucide-react";
 
 import { useI18n } from "../i18n/useI18n";
+import ContextMenu, { type ContextMenuItem } from "../components/ContextMenu";
+import { writeClipboardText } from "../lib/clipboard";
 import * as cmd from "../lib/commands";
 import { desktopNotify } from "../lib/notify";
+import { toast } from "../stores/useToastStore";
 import { useConnectionStore } from "../stores/useConnectionStore";
 import type { SavedSshConnection, TabState } from "../lib/types";
 
@@ -98,10 +101,53 @@ export default function HostsHealthPanel({
   // unsorted → asc → desc → unsorted. We treat "unsorted" as
   // input order (i.e. the same order `filtered` produces) so
   // users always have a path back to the natural list.
+  //
+  // Persists to sessionStorage so re-opening the dashboard tab
+  // (or the user briefly switching to flat/grouped and back)
+  // keeps the sort the user picked. We deliberately use session
+  // (not local) storage: a fresh launch shouldn't inherit a
+  // session-specific sort that was useful for triaging one
+  // incident.
+  const BUS_SORT_KEY = "pier-x.hosts-health.bus-sort";
   const [busSort, setBusSort] = useState<{
     column: "name" | "host" | "latency" | "status" | "auth" | "group";
     dir: "asc" | "desc";
-  } | null>(null);
+  } | null>(() => {
+    try {
+      const raw = window.sessionStorage.getItem(BUS_SORT_KEY);
+      if (!raw) return null;
+      const parsed = JSON.parse(raw);
+      const validCols = ["name", "host", "latency", "status", "auth", "group"];
+      if (
+        parsed &&
+        typeof parsed === "object" &&
+        validCols.includes(parsed.column) &&
+        (parsed.dir === "asc" || parsed.dir === "desc")
+      ) {
+        return parsed;
+      }
+    } catch {
+      // Storage disabled (private browsing, custom CSP) →
+      // silently fall through to default. Same fallback if the
+      // value got hand-edited into something invalid.
+    }
+    return null;
+  });
+  // Mirror every change to sessionStorage. Skipping `null` would
+  // leave a stale entry behind after the user clears the sort,
+  // so we always write — `removeItem` for null, `setItem` for
+  // a real value.
+  useEffect(() => {
+    try {
+      if (busSort === null) {
+        window.sessionStorage.removeItem(BUS_SORT_KEY);
+      } else {
+        window.sessionStorage.setItem(BUS_SORT_KEY, JSON.stringify(busSort));
+      }
+    } catch {
+      /* see read-side fallback */
+    }
+  }, [busSort]);
   function cycleBusSort(
     column:
       | "name"
@@ -124,6 +170,119 @@ export default function HostsHealthPanel({
   const [collapsedGroups, setCollapsedGroups] = useState<Set<string>>(
     () => new Set(),
   );
+  /** Right-click context menu anchor + target connection.
+   *  `null` = closed. Single-instance is fine because we never
+   *  show two menus at once. */
+  const [ctxMenu, setCtxMenu] = useState<{
+    x: number;
+    y: number;
+    conn: SavedSshConnection;
+  } | null>(null);
+
+  /** Multi-select state for the Bus view. Set of saved-connection
+   *  indices. We only enable selection in the Bus view because
+   *  that's where it makes sense visually (table row + checkbox);
+   *  flat / grouped lists already crowd their rows.
+   *
+   *  The set is cleared when the user switches away from Bus view
+   *  to avoid invisible state — rejoining the view starts fresh. */
+  const [busSelected, setBusSelected] = useState<Set<number>>(
+    () => new Set(),
+  );
+  useEffect(() => {
+    if (viewMode !== "bus") setBusSelected(new Set());
+  }, [viewMode]);
+
+  /** Toggle a single host's selection bit. */
+  function toggleBusSelected(idx: number) {
+    setBusSelected((prev) => {
+      const next = new Set(prev);
+      if (next.has(idx)) next.delete(idx);
+      else next.add(idx);
+      return next;
+    });
+  }
+
+  /** Select / clear all currently-filtered Bus rows. The
+   *  filtered subset (not the full saved list) is the pragmatic
+   *  target — a user typing a filter and clicking "select all"
+   *  expects to grab only the matches they're looking at. */
+  function toggleBusSelectAll() {
+    setBusSelected((prev) => {
+      // If every filtered row is already selected, clear; else
+      // select them all. Preserves any already-selected rows
+      // that are filtered OUT (rare but defensive).
+      const filteredIds = filtered.map((c) => c.index);
+      const allSelected = filteredIds.every((i) => prev.has(i));
+      const next = new Set(prev);
+      if (allSelected) {
+        for (const i of filteredIds) next.delete(i);
+      } else {
+        for (const i of filteredIds) next.add(i);
+      }
+      return next;
+    });
+  }
+
+  /** Connect to every selected host — opens one SSH tab per
+   *  index. Sequential calls so the existing SSH session cache
+   *  has a chance to dedupe (`get_or_open_ssh_session`); also
+   *  avoids hammering sshd's `MaxStartups` on a fleet-wide
+   *  click. Clears the selection on completion so a second
+   *  click doesn't unintentionally re-open the same set. */
+  function connectAllSelected() {
+    if (busSelected.size === 0) return;
+    // Snapshot before clearing so React's state batching can't
+    // race the iteration.
+    const ids = Array.from(busSelected);
+    setBusSelected(new Set());
+    for (const i of ids) onConnectSaved(i);
+  }
+
+  function openHostMenu(
+    e: React.MouseEvent,
+    conn: SavedSshConnection,
+  ) {
+    e.preventDefault();
+    e.stopPropagation();
+    setCtxMenu({ x: e.clientX, y: e.clientY, conn });
+  }
+
+  function buildHostMenu(conn: SavedSshConnection): ContextMenuItem[] {
+    // ssh user@host[:port] — port appears only when non-default
+    // so the copied command runs as-is from a default OpenSSH
+    // config. Keeps the canonical short form for the common case.
+    const portPart = conn.port && conn.port !== 22 ? ` -p ${conn.port}` : "";
+    const sshCmd = `ssh${portPart} ${conn.user}@${conn.host}`;
+    return [
+      {
+        label: t("Connect"),
+        action: () => onConnectSaved(conn.index),
+      },
+      {
+        label: t("Re-probe"),
+        action: () => void probe([conn.index]),
+        disabled: busy,
+      },
+      {
+        label: t("Deep probe"),
+        action: () => void runDeepProbe(conn.index),
+      },
+      { divider: true },
+      {
+        label: t("Edit"),
+        action: () => onEditConnection(conn.index),
+      },
+      {
+        label: t("Copy SSH command"),
+        action: () => {
+          void writeClipboardText(sshCmd).then(() =>
+            toast.info(t("Copied: {cmd}", { cmd: sshCmd })),
+          );
+        },
+      },
+    ];
+  }
 
   function toggleGroup(key: string) {
     setCollapsedGroups((prev) => {
@@ -424,9 +583,58 @@ export default function HostsHealthPanel({
         </div>
       ) : viewMode === "bus" ? (
         <div className="hosts-health-bus">
+          {busSelected.size > 0 && (
+            <div className="hosts-health-bus__selectionbar">
+              <span className="mono muted">
+                {t("{n} selected", { n: busSelected.size })}
+              </span>
+              <div className="hosts-health-bus__selectionbar-actions">
+                <button
+                  type="button"
+                  className="mini-button"
+                  onClick={() => setBusSelected(new Set())}
+                >
+                  {t("Clear")}
+                </button>
+                <button
+                  type="button"
+                  className="mini-button"
+                  onClick={() => void probe(Array.from(busSelected))}
+                  disabled={busy}
+                  title={t("Re-probe all selected hosts")}
+                >
+                  {t("Re-probe selected")}
+                </button>
+                <button
+                  type="button"
+                  className="mini-button mini-button--primary"
+                  onClick={connectAllSelected}
+                  title={t(
+                    "Open one new SSH tab for each selected host",
+                  )}
+                >
+                  {t("Connect to {n}", { n: busSelected.size })}
+                </button>
+              </div>
+            </div>
+          )}
           <table className="hosts-health-bus__table">
             <thead>
               <tr>
+                <th
+                  aria-label={t("Select all")}
+                  className="hosts-health-bus__th hosts-health-bus__select-cell"
+                >
+                  <input
+                    type="checkbox"
+                    aria-label={t("Select all")}
+                    checked={
+                      filtered.length > 0 &&
+                      filtered.every((c) => busSelected.has(c.index))
+                    }
+                    onChange={toggleBusSelectAll}
+                  />
+                </th>
                 <BusHeader
                   column="status"
                   label=""
@@ -491,7 +699,24 @@ export default function HostsHealthPanel({
                   }
                 }
                 return (
-                  <tr key={c.index} className="hosts-health-bus__row">
+                  <tr
+                    key={c.index}
+                    className={
+                      "hosts-health-bus__row" +
+                      (busSelected.has(c.index)
+                        ? " hosts-health-bus__row--selected"
+                        : "")
+                    }
+                    onContextMenu={(e) => openHostMenu(e, c)}
+                  >
+                    <td className="hosts-health-bus__select-cell">
+                      <input
+                        type="checkbox"
+                        aria-label={t("Select")}
+                        checked={busSelected.has(c.index)}
+                        onChange={() => toggleBusSelected(c.index)}
+                      />
+                    </td>
                     <td>
                       <span
                         className={`hosts-health-dot ${dotClass}`}
@@ -533,7 +758,7 @@ export default function HostsHealthPanel({
               })}
               {filtered.length === 0 && filter && (
                 <tr>
-                  <td colSpan={7} className="hosts-health-bus__empty muted">
+                  <td colSpan={8} className="hosts-health-bus__empty muted">
                     {t("No saved connections match your filter.")}
                   </td>
                 </tr>
@@ -553,6 +778,7 @@ export default function HostsHealthPanel({
               onEdit={() => onEditConnection(c.index)}
               onRecheck={() => void probe([c.index])}
               onDeepProbe={() => void runDeepProbe(c.index)}
+              onContextMenu={(e) => openHostMenu(e, c)}
               busy={busy}
             />
           ))}
@@ -642,6 +868,7 @@ export default function HostsHealthPanel({
                         onEdit={() => onEditConnection(c.index)}
                         onRecheck={() => void probe([c.index])}
                         onDeepProbe={() => void runDeepProbe(c.index)}
+                        onContextMenu={(e) => openHostMenu(e, c)}
                         busy={busy}
                       />
                     ))}
@@ -656,6 +883,14 @@ export default function HostsHealthPanel({
             </li>
           )}
         </ul>
+      )}
+      {ctxMenu && (
+        <ContextMenu
+          x={ctxMenu.x}
+          y={ctxMenu.y}
+          items={buildHostMenu(ctxMenu.conn)}
+          onClose={() => setCtxMenu(null)}
+        />
       )}
     </section>
   );
@@ -771,6 +1006,7 @@ function HostRow({
   onEdit,
   onRecheck,
   onDeepProbe,
+  onContextMenu,
   busy,
 }: {
   conn: SavedSshConnection;
@@ -783,6 +1019,11 @@ function HostRow({
   onEdit: () => void;
   onRecheck: () => void;
   onDeepProbe: () => void;
+  /** Right-click handler — opens the panel-level context menu
+   *  with Connect / Edit / Re-probe / Copy SSH command. The
+   *  panel owns the menu state so we don't end up with one
+   *  menu instance per row. */
+  onContextMenu: (e: React.MouseEvent) => void;
   busy: boolean;
 }) {
   const { t } = useI18n();
@@ -815,7 +1056,7 @@ function HostRow({
   const checkedRel = report ? formatChecked(report.checkedAt, t) : "";
 
   return (
-    <li className="hosts-health-row">
+    <li className="hosts-health-row" onContextMenu={onContextMenu}>
       <div className="hosts-health-row__status">
         <span
           className={`hosts-health-dot ${statusClass}`}

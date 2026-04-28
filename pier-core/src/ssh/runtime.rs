@@ -21,12 +21,15 @@
 //!
 //! ## Sizing
 //!
-//! Two worker threads by default. SSH is I/O-bound — a single
-//! thread would work for most users, but two gives us headroom
-//! for parallel `tcpip-forward` tunnels + channels without
-//! tuning. When pier-core grows more async subsystems (git,
-//! database clients) they can reuse this same runtime rather
-//! than each spawning their own pool.
+//! Worker count = `available_parallelism().clamp(4, 16)`. SSH is
+//! I/O-bound but we have multiple panels (Docker container list,
+//! Software panel polls, Git status watchers, …) all driving
+//! concurrent commands; with too few workers the russh handshake
+//! for a freshly-opened terminal queues behind in-flight SSH
+//! traffic and the user sees "正在启动终端" stalls. The clamp
+//! keeps single-core VMs from collapsing to 1 worker (which
+//! recreates the original symptom) and capped at 16 so a 64-core
+//! host doesn't waste threads on idle pools.
 
 use std::sync::OnceLock;
 use tokio::runtime::{Builder, Runtime};
@@ -42,8 +45,16 @@ use tokio::runtime::{Builder, Runtime};
 pub fn shared() -> &'static Runtime {
     static RT: OnceLock<Runtime> = OnceLock::new();
     RT.get_or_init(|| {
+        // Pull cpu count, clamp to [4, 16]. `available_parallelism`
+        // returns NonZeroUsize so we get at least 1; the clamp
+        // floor of 4 makes sure single-core VMs don't recreate the
+        // 2-worker stall symptom.
+        let workers = std::thread::available_parallelism()
+            .map(|n| n.get())
+            .unwrap_or(4)
+            .clamp(4, 16);
         Builder::new_multi_thread()
-            .worker_threads(2)
+            .worker_threads(workers)
             .thread_name("pier-async")
             .enable_io()
             .enable_time()

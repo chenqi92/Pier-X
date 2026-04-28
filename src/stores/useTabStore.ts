@@ -35,6 +35,10 @@ type PersistedShape = {
 function scrubRuntimeFields(tab: TabState): TabState {
   const base: TabState = {
     ...tab,
+    rightTool:
+      (tab.rightTool as string) === "nginx"
+        ? "webserver"
+        : tab.rightTool,
     terminalSessionId: null,
     sshPassword: "",
     // Nested-ssh state is purely runtime — set by the SSH watcher

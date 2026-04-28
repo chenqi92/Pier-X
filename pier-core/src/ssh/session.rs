@@ -137,7 +137,22 @@ impl SshSession {
         let mut session = Self {
             handle: Arc::new(handle),
         };
-        session.authenticate(config).await?;
+
+        // Apply the same connect timeout to authentication. Without
+        // it, an unresponsive agent (Windows OpenSSH agent that's
+        // started but not answering) or a remote sshd that accepts
+        // the kex but stalls during userauth — both of which can
+        // happen on a hosts under load — leaves us blocked forever
+        // and the UI shows "Launching shell..." with no recourse.
+        if config.connect_timeout_secs > 0 {
+            let timeout = Duration::from_secs(config.connect_timeout_secs);
+            match tokio::time::timeout(timeout, session.authenticate(config)).await {
+                Ok(inner) => inner?,
+                Err(_) => return Err(SshError::Timeout(timeout)),
+            }
+        } else {
+            session.authenticate(config).await?;
+        }
         Ok(session)
     }
 

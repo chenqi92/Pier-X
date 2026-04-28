@@ -15,6 +15,7 @@ import {
   RotateCw,
   Save,
   ShieldCheck,
+  ToggleRight,
   X,
 } from "lucide-react";
 import { useEffect, useMemo, useRef, useState } from "react";
@@ -29,6 +30,12 @@ import type {
   NginxValidateResult,
 } from "../lib/commands";
 import NginxIcon from "../components/icons/NginxIcon";
+import FeatureCatalog from "./NginxFeatureCatalog";
+import {
+  COMMON_DIRECTIVES,
+  newBlockDirective,
+  newDirective,
+} from "./nginxFeatures";
 import PanelHeader from "../components/PanelHeader";
 import PanelSkeleton, { useDeferredMount } from "../components/PanelSkeleton";
 import { useI18n } from "../i18n/useI18n";
@@ -98,10 +105,13 @@ function NginxPanelBody({ tab }: Props) {
   const [reloadResult, setReloadResult] =
     useState<NginxValidateResult | null>(null);
   const [reloadBusy, setReloadBusy] = useState(false);
-  /** "structured" → directive cards; "raw" → plain textarea editing
-   *  the file content. Round-trips structured ↔ raw rebuild content
-   *  through the AST so a save from either mode is well-formed. */
-  const [editMode, setEditMode] = useState<"structured" | "raw">("structured");
+  /** "features" → curated feature catalog (toggle gzip/HSTS/HTTP2/etc.);
+   *  "structured" → directive cards; "raw" → plain textarea editing the
+   *  file content. All three round-trip through the AST so a save from
+   *  any mode is well-formed. */
+  const [editMode, setEditMode] = useState<"features" | "structured" | "raw">(
+    "features",
+  );
   /** Standalone-comment cards default off — heavy banner comments
    *  in stock nginx.conf (`##\n# Basic Settings\n##`) push the real
    *  directives off-screen otherwise. Comments are still preserved
@@ -734,8 +744,8 @@ function Editor({
   file: NginxReadFileResult;
   dirtyContent: string | null;
   setDirtyContent: (s: string | null) => void;
-  editMode: "structured" | "raw";
-  setEditMode: (m: "structured" | "raw") => void;
+  editMode: "features" | "structured" | "raw";
+  setEditMode: (m: "features" | "structured" | "raw") => void;
   showComments: boolean;
   setShowComments: (b: boolean) => void;
   onNodesChange: (nodes: NginxNode[]) => void;
@@ -752,6 +762,14 @@ function Editor({
           {dirty && <span className="ngx-editor__dirty"> · {t("modified")}</span>}
         </div>
         <div className="ngx-editor__modes">
+          <button
+            type="button"
+            className={`btn is-compact ${editMode === "features" ? "is-primary" : "is-ghost"}`}
+            onClick={() => setEditMode("features")}
+            title={t("Toggle common features (TLS, HSTS, gzip, …)")}
+          >
+            <ToggleRight size={10} /> {t("Features")}
+          </button>
           <button
             type="button"
             className={`btn is-compact ${editMode === "structured" ? "is-primary" : "is-ghost"}`}
@@ -802,7 +820,12 @@ function Editor({
         </div>
       )}
 
-      {editMode === "structured" ? (
+      {editMode === "features" ? (
+        <FeatureCatalog
+          nodes={file.parse.nodes}
+          onChange={onNodesChange}
+        />
+      ) : editMode === "structured" ? (
         <StructuredEditor
           nodes={file.parse.nodes}
           showComments={showComments}
@@ -872,16 +895,127 @@ function StructuredEditor({
           t={t}
         />
       ))}
-      {nodes.length === 0 && (
-        <div className="status-note mono">
-          {t("(empty file — switch to Raw to add directives)")}
-        </div>
-      )}
       {nodes.length > 0 && visible.length === 0 && (
         <div className="status-note mono">
           {t("(only comments in this file — toggle Comments to show)")}
         </div>
       )}
+      <AddDirectiveBar
+        onAdd={(d) => onChange([...nodes, d])}
+        t={t}
+      />
+    </div>
+  );
+}
+
+function AddDirectiveBar({
+  onAdd,
+  t,
+}: {
+  onAdd: (d: NginxNode) => void;
+  t: ReturnType<typeof useI18n>["t"];
+}) {
+  const [open, setOpen] = useState(false);
+  const [name, setName] = useState("");
+  const [args, setArgs] = useState("");
+  const [block, setBlock] = useState(false);
+  const [blockTouched, setBlockTouched] = useState(false);
+
+  const reset = () => {
+    setName("");
+    setArgs("");
+    setBlock(false);
+    setBlockTouched(false);
+  };
+  const cancel = () => {
+    reset();
+    setOpen(false);
+  };
+  const submit = () => {
+    const n = name.trim();
+    if (!n) return;
+    const a = splitArgs(args);
+    onAdd(block ? newBlockDirective(n, a) : newDirective(n, a));
+    reset();
+    setOpen(false);
+  };
+  const onPickName = (next: string) => {
+    setName(next);
+    if (!blockTouched) {
+      const known = COMMON_DIRECTIVES.find((d) => d.name === next);
+      if (known) setBlock(known.block);
+    }
+  };
+
+  if (!open) {
+    return (
+      <button
+        type="button"
+        className="ngx-add-directive__btn"
+        onClick={() => setOpen(true)}
+      >
+        <Plus size={11} /> {t("Add directive")}
+      </button>
+    );
+  }
+
+  return (
+    <div className="ngx-add-directive">
+      <input
+        className="ngx-input mono ngx-add-directive__name"
+        list="ngx-common-directives"
+        value={name}
+        spellCheck={false}
+        autoFocus
+        placeholder={t("name (e.g. listen)")}
+        onChange={(e) => onPickName(e.target.value)}
+        onKeyDown={(e) => {
+          if (e.key === "Enter") submit();
+          else if (e.key === "Escape") cancel();
+        }}
+      />
+      <datalist id="ngx-common-directives">
+        {COMMON_DIRECTIVES.map((d) => (
+          <option key={d.name} value={d.name} />
+        ))}
+      </datalist>
+      <input
+        className="ngx-input mono ngx-add-directive__args"
+        value={args}
+        spellCheck={false}
+        placeholder={t("args (space-separated)")}
+        onChange={(e) => setArgs(e.target.value)}
+        onKeyDown={(e) => {
+          if (e.key === "Enter") submit();
+          else if (e.key === "Escape") cancel();
+        }}
+      />
+      <label className="ngx-add-directive__flag">
+        <input
+          type="checkbox"
+          checked={block}
+          onChange={(e) => {
+            setBlock(e.target.checked);
+            setBlockTouched(true);
+          }}
+        />
+        {t("block")}
+      </label>
+      <button
+        type="button"
+        className="ngx-add-directive__ok"
+        onClick={submit}
+        disabled={!name.trim()}
+      >
+        {t("Add")}
+      </button>
+      <button
+        type="button"
+        className="ngx-add-directive__cancel"
+        onClick={cancel}
+      >
+        {t("Cancel")}
+      </button>
     </div>
   );
 }
@@ -1034,11 +1168,10 @@ function DirectiveCard({
                     t={t}
                   />
                 ))}
-              {node.block.length === 0 && (
-                <div className="status-note mono">
-                  {t("(empty block — edit in Raw to add directives)")}
-                </div>
-              )}
+              <AddDirectiveBar
+                onAdd={(d) => updateBlock([...node.block!, d])}
+                t={t}
+              />
             </div>
           )}
         </div>

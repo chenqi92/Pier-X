@@ -783,7 +783,53 @@ const REGISTRY: &[PackageDescriptor] = &[
             "/var/lib/pgsql/data/postgresql.conf",
         ],
         default_ports: &[5432],
-        version_variants: &[],
+        // pgdg ships parallel `postgresql-16` / `postgresql-17` /
+        // etc. packages — pick a variant only after using the
+        // PostgreSQL 官方源 channel; on a stock distro repo these
+        // package names won't resolve and the install will fail
+        // cleanly. The dialog labels this constraint.
+        version_variants: &[
+            VersionVariant {
+                key: "pg-15",
+                label: "PostgreSQL 15 (pgdg)",
+                install_packages: &[
+                    (PackageManager::Apt, &["postgresql-15"]),
+                    (PackageManager::Dnf, &["postgresql15-server"]),
+                    (PackageManager::Yum, &["postgresql15-server"]),
+                ],
+                probe_command: None,
+            },
+            VersionVariant {
+                key: "pg-16",
+                label: "PostgreSQL 16 (pgdg)",
+                install_packages: &[
+                    (PackageManager::Apt, &["postgresql-16"]),
+                    (PackageManager::Dnf, &["postgresql16-server"]),
+                    (PackageManager::Yum, &["postgresql16-server"]),
+                ],
+                probe_command: None,
+            },
+            VersionVariant {
+                key: "pg-17",
+                label: "PostgreSQL 17 (pgdg)",
+                install_packages: &[
+                    (PackageManager::Apt, &["postgresql-17"]),
+                    (PackageManager::Dnf, &["postgresql17-server"]),
+                    (PackageManager::Yum, &["postgresql17-server"]),
+                ],
+                probe_command: None,
+            },
+            VersionVariant {
+                key: "pg-18",
+                label: "PostgreSQL 18 (pgdg)",
+                install_packages: &[
+                    (PackageManager::Apt, &["postgresql-18"]),
+                    (PackageManager::Dnf, &["postgresql18-server"]),
+                    (PackageManager::Yum, &["postgresql18-server"]),
+                ],
+                probe_command: None,
+            },
+        ],
         category: "database",
     },
     PackageDescriptor {
@@ -1816,6 +1862,30 @@ const BUNDLES: &[SoftwareBundle] = &[
         description: "lsof + strace + net-tools + less — 排查线上问题常用",
         package_ids: &["lsof", "strace", "net-tools", "less"],
     },
+    SoftwareBundle {
+        id: "python-dev",
+        display_name: "Python 开发",
+        description: "Python 3 + git + curl + vim + tmux + ripgrep — 后端 / 数据脚本工作机",
+        package_ids: &["python3", "git", "curl", "vim", "tmux", "ripgrep"],
+    },
+    SoftwareBundle {
+        id: "node-dev",
+        display_name: "Node.js 开发",
+        description: "Node.js + git + curl + vim + tmux — JS 服务端工作机",
+        package_ids: &["node", "git", "curl", "vim", "tmux"],
+    },
+    SoftwareBundle {
+        id: "web-admin",
+        display_name: "Web 管理员",
+        description: "nginx + fail2ban + openssl + curl — 起一个对外 HTTPS 站点的最小集合",
+        package_ids: &["nginx", "fail2ban", "openssl", "curl"],
+    },
+    SoftwareBundle {
+        id: "monitoring",
+        display_name: "运维诊断扩展",
+        description: "htop + lsof + strace + net-tools + tcpdump 替代品 less + ripgrep — 完整的 troubleshooting 套件",
+        package_ids: &["htop", "lsof", "strace", "net-tools", "less", "ripgrep"],
+    },
 ];
 
 /// Public bundle catalog. Built-in BUNDLES merged with user-extras
@@ -1823,6 +1893,630 @@ const BUNDLES: &[SoftwareBundle] = &[
 /// built-in first, then user extras in declaration order.
 pub fn bundles() -> &'static [SoftwareBundle] {
     merged_bundles()
+}
+
+// ── Database metrics (v2.13) ───────────────────────────────────────
+//
+// Light-weight "is the daemon alive + how busy is it" probes for
+// the three DBs we orchestrate. Returns a few numeric fields the
+// panel renders as inline mini-stats. Probes are best-effort —
+// permission failures / unreachable daemons surface as `None`,
+// not errors.
+
+/// One snapshot of database metrics. Field semantics depend on
+/// the engine — see comments. `None` = the probe couldn't read
+/// that metric (auth missing / wrong daemon state / no support).
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct DbMetrics {
+    /// `"postgres"` / `"mariadb"` / `"redis"`.
+    pub kind: String,
+    /// Active client connections / sessions.
+    pub connections: Option<u32>,
+    /// Resident memory in MiB (from `ps -o rss`).
+    pub memory_mib: Option<u32>,
+    /// Engine-specific extra. For postgres: backend count by state;
+    /// for redis: total commands processed; for mysql: queries
+    /// per second (Questions delta — but we only have one snapshot
+    /// so it's the cumulative count). Free-form string the panel
+    /// renders verbatim.
+    pub extra: Option<String>,
+    /// `true` when the probe ran without auth/connectivity errors.
+    /// `false` = the numbers above are unreliable (UI shows "—").
+    pub probe_ok: bool,
+}
+
+/// Probe PostgreSQL metrics via `psql -tAc`. Runs as the postgres
+/// system user via `sudo` (same auth path as `postgres_create_user`).
+pub async fn postgres_metrics(session: &SshSession) -> Result<DbMetrics> {
+    let env = probe_host_env(session).await;
+    let prefix = if env.is_root { "" } else { "sudo -n " };
+    let inner = "su - postgres -c 'psql -tAF\"|\" -c \"\
+      SELECT \
+        (SELECT count(*) FROM pg_stat_activity), \
+        (SELECT pg_size_pretty(sum(pg_database_size(datname))) FROM pg_database)\"' 2>&1";
+    let cmd = format!("{prefix}sh -c {} 2>&1", shell_single_quote(inner));
+    let (code, stdout) = session.exec_command(&cmd).await?;
+    if code != 0 {
+        return Ok(DbMetrics {
+            kind: "postgres".to_string(),
+            connections: None,
+            memory_mib: None,
+            extra: None,
+            probe_ok: false,
+        });
+    }
+    let line = stdout.lines().find(|l| !l.trim().is_empty()).unwrap_or("");
+    let parts: Vec<&str> = line.split('|').collect();
+    let connections = parts.first().and_then(|s| s.trim().parse().ok());
+    let total_size = parts.get(1).map(|s| s.trim().to_string());
+    let memory_mib = read_process_rss_mib(session, "postgres").await;
+    Ok(DbMetrics {
+        kind: "postgres".to_string(),
+        connections,
+        memory_mib,
+        extra: total_size.map(|s| format!("data: {s}")),
+        probe_ok: true,
+    })
+}
+
+/// Probe MySQL/MariaDB metrics via `SHOW STATUS`. Uses
+/// `auth_socket` first (sudo mysql); accepts an optional root
+/// password for distros where root requires one.
+pub async fn mysql_metrics(
+    session: &SshSession,
+    root_password: Option<&str>,
+) -> Result<DbMetrics> {
+    let env = probe_host_env(session).await;
+    let prefix = if env.is_root { "" } else { "sudo -n " };
+    let pwd_env = match root_password {
+        Some(p) if !p.is_empty() => format!("MYSQL_PWD={} ", shell_single_quote(p)),
+        _ => String::new(),
+    };
+    let sql = "SHOW STATUS WHERE Variable_name IN ('Threads_connected','Questions','Uptime');";
+    let inner = format!(
+        "{pwd_env}mysql -u root -B -e {} 2>&1",
+        shell_single_quote(sql),
+    );
+    let cmd = format!("{prefix}sh -c {} 2>&1", shell_single_quote(&inner));
+    let (code, stdout) = session.exec_command(&cmd).await?;
+    if code != 0 {
+        return Ok(DbMetrics {
+            kind: "mariadb".to_string(),
+            connections: None,
+            memory_mib: None,
+            extra: None,
+            probe_ok: false,
+        });
+    }
+    // Two-column output, tab-separated, header line first.
+    let mut conns: Option<u32> = None;
+    let mut questions: Option<u64> = None;
+    for line in stdout.lines().skip(1) {
+        let mut it = line.split('\t');
+        if let (Some(name), Some(val)) = (it.next(), it.next()) {
+            let v = val.trim();
+            match name.trim() {
+                "Threads_connected" => conns = v.parse().ok(),
+                "Questions" => questions = v.parse().ok(),
+                _ => {}
+            }
+        }
+    }
+    let memory_mib = read_process_rss_mib(session, "mysqld").await
+        .or(read_process_rss_mib(session, "mariadbd").await);
+    Ok(DbMetrics {
+        kind: "mariadb".to_string(),
+        connections: conns,
+        memory_mib,
+        extra: questions.map(|q| format!("queries: {q}")),
+        probe_ok: true,
+    })
+}
+
+/// Probe Redis metrics via `redis-cli INFO clients` + `INFO memory`.
+pub async fn redis_metrics(session: &SshSession) -> Result<DbMetrics> {
+    let env = probe_host_env(session).await;
+    let prefix = if env.is_root { "" } else { "sudo -n " };
+    let inner = "redis-cli INFO clients 2>&1; redis-cli INFO memory 2>&1; redis-cli INFO stats 2>&1";
+    let cmd = format!("{prefix}sh -c {} 2>&1", shell_single_quote(inner));
+    let (code, stdout) = session.exec_command(&cmd).await?;
+    if code != 0 || stdout.contains("Could not connect") {
+        return Ok(DbMetrics {
+            kind: "redis".to_string(),
+            connections: None,
+            memory_mib: None,
+            extra: None,
+            probe_ok: false,
+        });
+    }
+    let mut conns: Option<u32> = None;
+    let mut mem_human: Option<String> = None;
+    let mut commands: Option<u64> = None;
+    for line in stdout.lines() {
+        let line = line.trim().trim_end_matches('\r');
+        if let Some(rest) = line.strip_prefix("connected_clients:") {
+            conns = rest.trim().parse().ok();
+        } else if let Some(rest) = line.strip_prefix("used_memory_human:") {
+            mem_human = Some(rest.trim().to_string());
+        } else if let Some(rest) = line.strip_prefix("total_commands_processed:") {
+            commands = rest.trim().parse().ok();
+        }
+    }
+    let memory_mib = read_process_rss_mib(session, "redis-server").await;
+    let extra = match (mem_human, commands) {
+        (Some(m), Some(c)) => Some(format!("used: {m} · cmds: {c}")),
+        (Some(m), None) => Some(format!("used: {m}")),
+        (None, Some(c)) => Some(format!("cmds: {c}")),
+        _ => None,
+    };
+    Ok(DbMetrics {
+        kind: "redis".to_string(),
+        connections: conns,
+        memory_mib,
+        extra,
+        probe_ok: true,
+    })
+}
+
+/// Helper — read the resident memory of a process by name in MiB.
+/// `ps` prints "rss" in KiB; convert to MiB. Returns `None` when
+/// no matching process is running.
+async fn read_process_rss_mib(session: &SshSession, name: &str) -> Option<u32> {
+    let cmd = format!(
+        "ps -C {} -o rss= 2>/dev/null | awk '{{s+=$1}} END {{print s}}'",
+        shell_single_quote(name),
+    );
+    match session.exec_command(&cmd).await {
+        Ok((_, stdout)) => stdout
+            .trim()
+            .parse::<u64>()
+            .ok()
+            .and_then(|kib| (kib > 0).then_some((kib / 1024) as u32)),
+        Err(_) => None,
+    }
+}
+
+/// Blocking wrappers.
+pub fn postgres_metrics_blocking(session: &SshSession) -> Result<DbMetrics> {
+    crate::ssh::runtime::shared().block_on(postgres_metrics(session))
+}
+/// Blocking wrapper for [`mysql_metrics`].
+pub fn mysql_metrics_blocking(
+    session: &SshSession,
+    root_password: Option<&str>,
+) -> Result<DbMetrics> {
+    crate::ssh::runtime::shared().block_on(mysql_metrics(session, root_password))
+}
+/// Blocking wrapper for [`redis_metrics`].
+pub fn redis_metrics_blocking(session: &SshSession) -> Result<DbMetrics> {
+    crate::ssh::runtime::shared().block_on(redis_metrics(session))
+}
+
+// ── Cross-host package clone (v2.12) ───────────────────────────────
+//
+// List all explicitly-installed (not pulled in as a transitive
+// dependency) packages on a host. Per-manager:
+//   * apt → `apt-mark showmanual`
+//   * dnf/yum → `dnf history userinstalled` (RHEL 8+) or fallback
+//   * apk → `apk info -e $(cat /etc/apk/world)` is impractical;
+//     use `cat /etc/apk/world` directly (it's the user-pinned set)
+//   * pacman → `pacman -Qe`
+//   * zypper → `zypper search -i --installed-only -t package` parsed
+//
+// The frontend cross-references this list with the registry to
+// surface only entries we know how to install on the target host.
+
+/// List packages the user has explicitly installed (not auto deps).
+/// Returns raw package names — no descriptor lookup yet, the
+/// frontend filters / displays.
+pub async fn list_user_installed(session: &SshSession) -> Result<Vec<String>> {
+    let env = probe_host_env(session).await;
+    let Some(manager) = env.package_manager else {
+        return Ok(Vec::new());
+    };
+    let cmd = match manager {
+        PackageManager::Apt => "apt-mark showmanual 2>/dev/null".to_string(),
+        PackageManager::Dnf => {
+            // `dnf history userinstalled` on RHEL 8+; fall back
+            // to dnf list installed otherwise.
+            "dnf history userinstalled 2>/dev/null | tail -n +2 || \
+             dnf list installed 2>/dev/null | awk 'NR>1 {print $1}' | sed 's/\\..*//'"
+                .to_string()
+        }
+        PackageManager::Yum => {
+            "yum list installed 2>/dev/null | awk 'NR>1 {print $1}' | sed 's/\\..*//'"
+                .to_string()
+        }
+        PackageManager::Apk => "cat /etc/apk/world 2>/dev/null".to_string(),
+        PackageManager::Pacman => "pacman -Qeq 2>/dev/null".to_string(),
+        PackageManager::Zypper => {
+            "zypper search -i --installed-only -t package 2>/dev/null \
+             | awk -F'|' 'NR>4 {gsub(/ /, \"\", $2); print $2}'"
+                .to_string()
+        }
+    };
+    let (_code, stdout) = session.exec_command(&cmd).await?;
+    let mut out: Vec<String> = stdout
+        .lines()
+        .map(|s| s.trim().to_string())
+        .filter(|s| !s.is_empty())
+        .collect();
+    out.sort();
+    out.dedup();
+    Ok(out)
+}
+
+/// Blocking wrapper for [`list_user_installed`].
+pub fn list_user_installed_blocking(session: &SshSession) -> Result<Vec<String>> {
+    crate::ssh::runtime::shared().block_on(list_user_installed(session))
+}
+
+/// Resolve an arbitrary package-manager name back to a registry
+/// descriptor id when possible. The reverse map is per-manager —
+/// `redis-server` (apt) and `redis` (dnf) both resolve to the
+/// `redis` descriptor.
+///
+/// Returns the descriptor id when one matches; `None` when the
+/// name isn't anywhere in the registry's `install_packages` matrix.
+pub fn resolve_descriptor_for_package(
+    package_name: &str,
+    manager: PackageManager,
+) -> Option<&'static str> {
+    for d in registry() {
+        if let Some(pkgs) = packages_for(d, manager) {
+            if pkgs.iter().any(|p| *p == package_name) {
+                return Some(d.id);
+            }
+        }
+        // Also check version variants — useful for Java OpenJDK 21.
+        for v in d.version_variants {
+            if let Some(pkgs) = v
+                .install_packages
+                .iter()
+                .find_map(|(m, ps)| (*m == manager).then_some(*ps))
+            {
+                if pkgs.iter().any(|p| *p == package_name) {
+                    return Some(d.id);
+                }
+            }
+        }
+    }
+    None
+}
+
+// ── Docker Compose templates (v2.11) ───────────────────────────────
+//
+// Curated single-file `docker-compose.yml` snippets the user can
+// stamp out in one click after installing Docker. Each template
+// gets a unique stack id so multiple stacks can coexist in
+// `~/pier-x-stacks/<stack-id>/docker-compose.yml`.
+//
+// Security: templates are static literals — no user input flows
+// into the YAML. Defaults pick safe-but-changeable passwords;
+// the dialog warns the user to change them before exposing the
+// stack to the internet.
+
+/// One Compose stack template.
+#[derive(Debug, Clone, Copy)]
+pub struct ComposeTemplate {
+    /// Stable id (also the directory name under `~/pier-x-stacks`).
+    pub id: &'static str,
+    /// Human label.
+    pub display_name: &'static str,
+    /// One-line description.
+    pub description: &'static str,
+    /// Verbatim `docker-compose.yml` text. Single-quoted on the
+    /// remote when written to disk.
+    pub yaml: &'static str,
+    /// Default ports the stack publishes — surfaced in the dialog
+    /// as a heads-up before the user clicks apply.
+    pub published_ports: &'static [u16],
+}
+
+const COMPOSE_TEMPLATES: &[ComposeTemplate] = &[
+    ComposeTemplate {
+        id: "postgres",
+        display_name: "PostgreSQL 17",
+        description: "PostgreSQL 17 with persistent volume; default password = piertest. Change it!",
+        yaml: r#"services:
+  postgres:
+    image: postgres:17
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: piertest
+      POSTGRES_PASSWORD: piertest
+      POSTGRES_DB: app
+    ports:
+      - "5432:5432"
+    volumes:
+      - pg-data:/var/lib/postgresql/data
+
+volumes:
+  pg-data:
+"#,
+        published_ports: &[5432],
+    },
+    ComposeTemplate {
+        id: "redis",
+        display_name: "Redis 7",
+        description: "Redis 7 with appendonly persistence; no password by default.",
+        yaml: r#"services:
+  redis:
+    image: redis:7-alpine
+    restart: unless-stopped
+    command: redis-server --appendonly yes
+    ports:
+      - "6379:6379"
+    volumes:
+      - redis-data:/data
+
+volumes:
+  redis-data:
+"#,
+        published_ports: &[6379],
+    },
+    ComposeTemplate {
+        id: "nginx",
+        display_name: "nginx (static site)",
+        description: "nginx serving /srv/www. Drop static files into ./www on the host.",
+        yaml: r#"services:
+  nginx:
+    image: nginx:alpine
+    restart: unless-stopped
+    ports:
+      - "80:80"
+    volumes:
+      - ./www:/usr/share/nginx/html:ro
+"#,
+        published_ports: &[80],
+    },
+    ComposeTemplate {
+        id: "grafana",
+        display_name: "Grafana + Prometheus",
+        description: "Monitoring stack. Grafana on :3000 (admin/admin), Prometheus on :9090.",
+        yaml: r#"services:
+  prometheus:
+    image: prom/prometheus:latest
+    restart: unless-stopped
+    ports:
+      - "9090:9090"
+    volumes:
+      - prom-data:/prometheus
+  grafana:
+    image: grafana/grafana:latest
+    restart: unless-stopped
+    depends_on: [prometheus]
+    ports:
+      - "3000:3000"
+    environment:
+      GF_SECURITY_ADMIN_USER: admin
+      GF_SECURITY_ADMIN_PASSWORD: admin
+    volumes:
+      - grafana-data:/var/lib/grafana
+
+volumes:
+  prom-data:
+  grafana-data:
+"#,
+        published_ports: &[3000, 9090],
+    },
+    ComposeTemplate {
+        id: "registry",
+        display_name: "Docker Registry",
+        description: "Local Docker image registry on :5000 with persistent storage.",
+        yaml: r#"services:
+  registry:
+    image: registry:2
+    restart: unless-stopped
+    ports:
+      - "5000:5000"
+    volumes:
+      - registry-data:/var/lib/registry
+
+volumes:
+  registry-data:
+"#,
+        published_ports: &[5000],
+    },
+    ComposeTemplate {
+        id: "elasticsearch",
+        display_name: "Elasticsearch + Kibana",
+        description: "ES 8 single-node + Kibana on :5601. Disables xpack security for local dev.",
+        yaml: r#"services:
+  elasticsearch:
+    image: docker.elastic.co/elasticsearch/elasticsearch:8.13.0
+    restart: unless-stopped
+    environment:
+      discovery.type: single-node
+      xpack.security.enabled: "false"
+      ES_JAVA_OPTS: "-Xms512m -Xmx512m"
+    ports:
+      - "9200:9200"
+    volumes:
+      - es-data:/usr/share/elasticsearch/data
+  kibana:
+    image: docker.elastic.co/kibana/kibana:8.13.0
+    restart: unless-stopped
+    depends_on: [elasticsearch]
+    ports:
+      - "5601:5601"
+    environment:
+      ELASTICSEARCH_HOSTS: "http://elasticsearch:9200"
+
+volumes:
+  es-data:
+"#,
+        published_ports: &[5601, 9200],
+    },
+];
+
+/// Public accessor for the catalog.
+pub fn compose_templates() -> &'static [ComposeTemplate] {
+    COMPOSE_TEMPLATES
+}
+
+/// Look up a compose template by id.
+pub fn compose_template_by_id(id: &str) -> Option<&'static ComposeTemplate> {
+    COMPOSE_TEMPLATES.iter().find(|t| t.id == id)
+}
+
+/// Apply a compose template to a remote host: write the YAML to
+/// `~/pier-x-stacks/<id>/docker-compose.yml` and run `docker
+/// compose up -d`. Returns the same report shape as the install
+/// path so the panel reuses the outcome formatter.
+pub async fn compose_apply(
+    session: &SshSession,
+    template_id: &str,
+) -> Result<PostgresActionReport> {
+    let tmpl = compose_template_by_id(template_id).ok_or_else(|| {
+        SshError::InvalidConfig(format!("unknown compose template: {template_id}"))
+    })?;
+    let env = probe_host_env(session).await;
+    let prefix = if env.is_root { "" } else { "sudo -n " };
+    // Use a heredoc so we don't have to escape $ / quotes inside
+    // the YAML. The marker is constant so the heredoc body is
+    // verbatim from the const literal.
+    let heredoc = "PIERX_COMPOSE_EOF";
+    let inner = format!(
+        "set -e; \
+         dir=\"$HOME/pier-x-stacks/{id}\"; \
+         mkdir -p \"$dir\"; \
+         cat > \"$dir/docker-compose.yml\" <<'{heredoc}'\n{yaml}{heredoc}\n; \
+         cd \"$dir\"; \
+         docker compose up -d 2>&1",
+        id = tmpl.id,
+        yaml = tmpl.yaml,
+    );
+    let command = format!("{prefix}sh -c {} 2>&1", shell_single_quote(&inner));
+    let (exit_code, stdout) = session.exec_command(&command).await?;
+    let output_tail = stdout
+        .lines()
+        .rev()
+        .take(40)
+        .collect::<Vec<_>>()
+        .into_iter()
+        .rev()
+        .collect::<Vec<_>>()
+        .join("\n");
+    let status = if exit_code == 0 {
+        "ok"
+    } else if !env.is_root && looks_like_sudo_password_prompt(&output_tail) {
+        "sudo-requires-password"
+    } else {
+        "failed"
+    };
+    Ok(PostgresActionReport {
+        status: status.to_string(),
+        command,
+        exit_code,
+        output_tail,
+    })
+}
+
+/// Tear down a previously-applied template via `docker compose
+/// down`. Doesn't delete the YAML file — re-run `compose_apply`
+/// or rm the directory manually to fully remove.
+pub async fn compose_down(
+    session: &SshSession,
+    template_id: &str,
+) -> Result<PostgresActionReport> {
+    let tmpl = compose_template_by_id(template_id).ok_or_else(|| {
+        SshError::InvalidConfig(format!("unknown compose template: {template_id}"))
+    })?;
+    let env = probe_host_env(session).await;
+    let prefix = if env.is_root { "" } else { "sudo -n " };
+    let inner = format!(
+        "set -e; \
+         dir=\"$HOME/pier-x-stacks/{id}\"; \
+         [ -e \"$dir/docker-compose.yml\" ] || {{ echo 'stack not found'; exit 1; }}; \
+         cd \"$dir\"; \
+         docker compose down 2>&1",
+        id = tmpl.id,
+    );
+    let command = format!("{prefix}sh -c {} 2>&1", shell_single_quote(&inner));
+    let (exit_code, stdout) = session.exec_command(&command).await?;
+    let output_tail = stdout
+        .lines()
+        .rev()
+        .take(40)
+        .collect::<Vec<_>>()
+        .into_iter()
+        .rev()
+        .collect::<Vec<_>>()
+        .join("\n");
+    let status = if exit_code == 0 {
+        "ok"
+    } else if !env.is_root && looks_like_sudo_password_prompt(&output_tail) {
+        "sudo-requires-password"
+    } else {
+        "failed"
+    };
+    Ok(PostgresActionReport {
+        status: status.to_string(),
+        command,
+        exit_code,
+        output_tail,
+    })
+}
+
+/// Blocking wrappers.
+pub fn compose_apply_blocking(
+    session: &SshSession,
+    template_id: &str,
+) -> Result<PostgresActionReport> {
+    crate::ssh::runtime::shared().block_on(compose_apply(session, template_id))
+}
+
+/// Blocking wrapper for [`compose_down`].
+pub fn compose_down_blocking(
+    session: &SshSession,
+    template_id: &str,
+) -> Result<PostgresActionReport> {
+    crate::ssh::runtime::shared().block_on(compose_down(session, template_id))
+}
+
+// ── Co-install recommendations (v2.10) ─────────────────────────────
+//
+// Static "X is commonly installed alongside Y" map. After a
+// successful install, the panel checks this list and surfaces
+// any unmet recommendations as a chip strip below the row.
+//
+// Curation rules:
+//   * Suggest only descriptors already in the registry — pointing
+//     users at things we can install with one click.
+//   * Keep lists short (3-5 items). Long lists become noise.
+//   * Don't recommend the same id back at itself or its
+//     dependencies (compose for docker — that's already linked
+//     through the bundle catalog, separately).
+
+/// Look up what to suggest installing alongside `installed_id`.
+/// Returns descriptor ids in display order; empty when the id has
+/// no curated recommendations.
+pub fn co_install_suggestions(installed_id: &str) -> &'static [&'static str] {
+    match installed_id {
+        // Server daemons
+        "nginx" => &["fail2ban", "openssl", "curl", "rsync"],
+        "redis" => &["openssl", "curl"],
+        "postgres" => &["openssl", "curl", "rsync"],
+        "mariadb" => &["openssl", "curl", "rsync"],
+        // Runtimes
+        "java" => &["maven", "gradle", "git"],
+        "node" => &["git", "vim", "curl"],
+        "python3" => &["git", "vim", "curl", "ripgrep"],
+        "go" => &["git", "gcc", "make"],
+        "rust" => &["git", "gcc", "make"],
+        "php" => &["git", "curl", "openssl"],
+        // Container ecosystem
+        "docker" => &["compose", "git", "curl"],
+        // Utility families that pull each other in
+        "vim" => &["tmux", "ripgrep"],
+        "tmux" => &["vim", "htop"],
+        "git" => &["vim", "curl"],
+        // Diagnostic tools naturally bundle
+        "htop" => &["lsof", "strace", "net-tools"],
+        _ => &[],
+    }
 }
 
 // ── User-extras catalog ─────────────────────────────────────────────
@@ -2455,13 +3149,14 @@ pub async fn install_via_script<F>(
     session: &SshSession,
     id: &str,
     enable_service: bool,
+    variant_key: Option<&str>,
     on_line: F,
     cancel: Option<CancellationToken>,
 ) -> Result<InstallReport>
 where
     F: FnMut(&str),
 {
-    run_install_via_script(session, id, enable_service, on_line, cancel).await
+    run_install_via_script(session, id, enable_service, variant_key, on_line, cancel).await
 }
 
 /// Blocking wrapper for [`install_via_script`]. Accepts the same
@@ -2473,6 +3168,7 @@ pub fn install_via_script_blocking<F>(
     session: &SshSession,
     id: &str,
     enable_service: bool,
+    variant_key: Option<&str>,
     on_line: F,
     cancel: Option<CancellationToken>,
 ) -> Result<InstallReport>
@@ -2483,6 +3179,7 @@ where
         session,
         id,
         enable_service,
+        variant_key,
         on_line,
         cancel,
     ))
@@ -2664,6 +3361,639 @@ pub fn journalctl_tail_blocking(
     lines: usize,
 ) -> Result<Vec<String>> {
     crate::ssh::runtime::shared().block_on(journalctl_tail(session, descriptor, lines))
+}
+
+// ── Service-level orchestration (v2.8) ─────────────────────────────
+//
+// Software-specific post-install helpers — the kind of thing users
+// run after `apt install postgresql` to actually make the daemon
+// useful. Currently only PostgreSQL has these; other DB packages
+// (MySQL/MariaDB/Redis) can plug in here later.
+
+/// Result of a [`postgres_create_user`] / [`postgres_create_db`] /
+/// [`postgres_open_remote`] action. Mirrors install-report shape so
+/// the panel can reuse the same outcome formatter.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct PostgresActionReport {
+    /// `"ok"` / `"sudo-requires-password"` / `"failed"`.
+    pub status: String,
+    /// Exact shell command that ran on the remote.
+    pub command: String,
+    /// Exit code from the remote shell.
+    pub exit_code: i32,
+    /// Last ~40 lines of merged stdout+stderr.
+    pub output_tail: String,
+}
+
+/// Run a one-liner `psql` command as the `postgres` system user.
+/// Used by every PostgreSQL helper below — keeps the sudo +
+/// `-u postgres` boilerplate in one place.
+async fn run_pg_psql(session: &SshSession, sql: &str) -> Result<PostgresActionReport> {
+    let env = probe_host_env(session).await;
+    let prefix = if env.is_root { "" } else { "sudo -n " };
+    let inner = format!(
+        "su - postgres -c {} 2>&1",
+        shell_single_quote(&format!("psql -tAc {}", shell_single_quote(sql))),
+    );
+    let command = format!("{prefix}sh -c {} 2>&1", shell_single_quote(&inner));
+    let (exit_code, stdout) = session.exec_command(&command).await?;
+    let output_tail = stdout
+        .lines()
+        .rev()
+        .take(40)
+        .collect::<Vec<_>>()
+        .into_iter()
+        .rev()
+        .collect::<Vec<_>>()
+        .join("\n");
+    let status = if exit_code == 0 {
+        "ok"
+    } else if !env.is_root && looks_like_sudo_password_prompt(&output_tail) {
+        "sudo-requires-password"
+    } else {
+        "failed"
+    };
+    Ok(PostgresActionReport {
+        status: status.to_string(),
+        command,
+        exit_code,
+        output_tail,
+    })
+}
+
+/// Create a PostgreSQL role with a password. Idempotent: skips
+/// when a role with that name already exists. The username and
+/// password are interpolated into a `DO $$ ... $$` block so the
+/// PL/pgSQL block handles the "already exists" branch — avoids a
+/// failure-to-create error when re-run.
+pub async fn postgres_create_user(
+    session: &SshSession,
+    username: &str,
+    password: &str,
+    is_superuser: bool,
+) -> Result<PostgresActionReport> {
+    if username.trim().is_empty() {
+        return Err(SshError::InvalidConfig("username empty".into()));
+    }
+    let escaped_user = pg_quote_ident(username);
+    let escaped_pass = pg_quote_literal(password);
+    let extra = if is_superuser { "SUPERUSER" } else { "LOGIN" };
+    let sql = format!(
+        "DO $$ BEGIN \
+           IF NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname = lower('{u_lit}')) THEN \
+             EXECUTE format('CREATE ROLE %I WITH {extra} PASSWORD %L', '{u}', '{p_inner}'); \
+           ELSE \
+             EXECUTE format('ALTER ROLE %I WITH {extra} PASSWORD %L', '{u}', '{p_inner}'); \
+           END IF; \
+         END $$;",
+        u_lit = pg_quote_literal_inner(username),
+        u = username.replace('\'', "''"),
+        p_inner = password.replace('\'', "''"),
+        extra = extra,
+    );
+    // Suppress the gigantic SQL from the report. We still send it
+    // verbatim; the report's `command` shows the wrapper.
+    let _ = (escaped_user, escaped_pass);
+    run_pg_psql(session, &sql).await
+}
+
+/// Create a database owned by `owner`. Idempotent — skips when
+/// the database exists.
+pub async fn postgres_create_db(
+    session: &SshSession,
+    db_name: &str,
+    owner: &str,
+) -> Result<PostgresActionReport> {
+    if db_name.trim().is_empty() || owner.trim().is_empty() {
+        return Err(SshError::InvalidConfig("db_name / owner empty".into()));
+    }
+    let sql = format!(
+        "SELECT 'CREATE DATABASE \"{db}\" OWNER \"{ow}\"' \
+         WHERE NOT EXISTS (SELECT FROM pg_database WHERE datname = '{db_lit}')\\gexec",
+        db = db_name.replace('"', "\"\""),
+        ow = owner.replace('"', "\"\""),
+        db_lit = db_name.replace('\'', "''"),
+    );
+    run_pg_psql(session, &sql).await
+}
+
+/// Allow remote TCP connections by:
+///   1. Setting `listen_addresses = '*'` in `postgresql.conf`.
+///   2. Appending `host all all 0.0.0.0/0 md5` to `pg_hba.conf`
+///      if no equivalent line is already present.
+///   3. Reloading the server (`pg_ctl reload`) — this is enough
+///      for hba changes; listen_addresses needs a restart, which
+///      we report so the user can opt in.
+///
+/// Path discovery is per-distro: we ask postgres for SHOW
+/// hba_file / config_file via psql so we don't hardcode
+/// `/etc/postgresql/X/main/...`.
+pub async fn postgres_open_remote(
+    session: &SshSession,
+) -> Result<PostgresActionReport> {
+    let env = probe_host_env(session).await;
+    let prefix = if env.is_root { "" } else { "sudo -n " };
+    // Sequence:
+    //   1. discover paths via psql (-tA strips formatting)
+    //   2. append/replace listen_addresses
+    //   3. ensure md5 host line in pg_hba.conf
+    //   4. systemctl reload (best-effort)
+    let inner = "set -e; \
+      conf=$(su - postgres -c 'psql -tAc \"SHOW config_file\"' 2>&1 | tail -1); \
+      hba=$(su - postgres -c 'psql -tAc \"SHOW hba_file\"' 2>&1 | tail -1); \
+      [ -n \"$conf\" ] && [ -n \"$hba\" ] || { echo 'cannot discover postgres paths'; exit 1; }; \
+      if grep -qE \"^[[:space:]]*listen_addresses\" \"$conf\"; then \
+        sed -i -E \"s|^[[:space:]]*listen_addresses.*|listen_addresses = '*'|\" \"$conf\"; \
+      else \
+        echo \"listen_addresses = '*'\" >> \"$conf\"; \
+      fi; \
+      if ! grep -qE \"^host[[:space:]]+all[[:space:]]+all[[:space:]]+0\\.0\\.0\\.0/0\" \"$hba\"; then \
+        echo 'host all all 0.0.0.0/0 md5' >> \"$hba\"; \
+      fi; \
+      systemctl reload postgresql 2>&1 || systemctl restart postgresql 2>&1 || true; \
+      echo OK";
+    let command = format!("{prefix}sh -c {} 2>&1", shell_single_quote(inner));
+    let (exit_code, stdout) = session.exec_command(&command).await?;
+    let output_tail = stdout
+        .lines()
+        .rev()
+        .take(40)
+        .collect::<Vec<_>>()
+        .into_iter()
+        .rev()
+        .collect::<Vec<_>>()
+        .join("\n");
+    let status = if exit_code == 0 {
+        "ok"
+    } else if !env.is_root && looks_like_sudo_password_prompt(&output_tail) {
+        "sudo-requires-password"
+    } else {
+        "failed"
+    };
+    Ok(PostgresActionReport {
+        status: status.to_string(),
+        command,
+        exit_code,
+        output_tail,
+    })
+}
+
+/// Blocking wrappers.
+pub fn postgres_create_user_blocking(
+    session: &SshSession,
+    username: &str,
+    password: &str,
+    is_superuser: bool,
+) -> Result<PostgresActionReport> {
+    crate::ssh::runtime::shared().block_on(postgres_create_user(
+        session,
+        username,
+        password,
+        is_superuser,
+    ))
+}
+
+/// Blocking wrapper for [`postgres_create_db`].
+pub fn postgres_create_db_blocking(
+    session: &SshSession,
+    db_name: &str,
+    owner: &str,
+) -> Result<PostgresActionReport> {
+    crate::ssh::runtime::shared()
+        .block_on(postgres_create_db(session, db_name, owner))
+}
+
+/// Blocking wrapper for [`postgres_open_remote`].
+pub fn postgres_open_remote_blocking(session: &SshSession) -> Result<PostgresActionReport> {
+    crate::ssh::runtime::shared().block_on(postgres_open_remote(session))
+}
+
+// ── MySQL / MariaDB service-level orchestration (v2.9) ───────────
+
+/// Run a one-liner `mysql` command. Tries with no password first
+/// (fresh installs on Ubuntu use `auth_socket` for root, so
+/// `sudo mysql` works without a password). If `root_password` is
+/// set we pass it via `MYSQL_PWD` so it doesn't leak into ps.
+async fn run_mysql(
+    session: &SshSession,
+    sql: &str,
+    root_password: Option<&str>,
+) -> Result<PostgresActionReport> {
+    let env = probe_host_env(session).await;
+    let prefix = if env.is_root { "" } else { "sudo -n " };
+    let pwd_env = match root_password {
+        Some(p) if !p.is_empty() => format!(
+            "MYSQL_PWD={} ",
+            shell_single_quote(p)
+        ),
+        _ => String::new(),
+    };
+    let inner = format!(
+        "{pwd_env}mysql -u root -e {} 2>&1",
+        shell_single_quote(sql),
+    );
+    let command = format!("{prefix}sh -c {} 2>&1", shell_single_quote(&inner));
+    let (exit_code, stdout) = session.exec_command(&command).await?;
+    let output_tail = stdout
+        .lines()
+        .rev()
+        .take(40)
+        .collect::<Vec<_>>()
+        .into_iter()
+        .rev()
+        .collect::<Vec<_>>()
+        .join("\n");
+    let status = if exit_code == 0 {
+        "ok"
+    } else if !env.is_root && looks_like_sudo_password_prompt(&output_tail) {
+        "sudo-requires-password"
+    } else {
+        "failed"
+    };
+    Ok(PostgresActionReport {
+        status: status.to_string(),
+        command,
+        exit_code,
+        output_tail,
+    })
+}
+
+/// Create a MySQL user with full DB privileges. Idempotent —
+/// `CREATE USER IF NOT EXISTS` + `ALTER USER` sequence resets the
+/// password every time so re-running fixes a forgotten password.
+pub async fn mysql_create_user(
+    session: &SshSession,
+    username: &str,
+    password: &str,
+    db_name: &str,
+    root_password: Option<&str>,
+) -> Result<PostgresActionReport> {
+    if username.trim().is_empty() {
+        return Err(SshError::InvalidConfig("username empty".into()));
+    }
+    let safe_user = username.replace('\'', "");
+    let safe_pass = password.replace('\'', "");
+    let safe_db = db_name.replace('`', "");
+    // Allow connections from anywhere (`%`); GRANT is db-scoped
+    // when db_name is non-empty, otherwise global.
+    let grant_target = if safe_db.is_empty() {
+        "*.*".to_string()
+    } else {
+        format!("`{safe_db}`.*")
+    };
+    let sql = format!(
+        "CREATE USER IF NOT EXISTS '{safe_user}'@'%' IDENTIFIED BY '{safe_pass}'; \
+         ALTER USER '{safe_user}'@'%' IDENTIFIED BY '{safe_pass}'; \
+         GRANT ALL PRIVILEGES ON {grant_target} TO '{safe_user}'@'%'; \
+         FLUSH PRIVILEGES;"
+    );
+    run_mysql(session, &sql, root_password).await
+}
+
+/// Create a MySQL database. Idempotent via `CREATE DATABASE IF NOT EXISTS`.
+pub async fn mysql_create_db(
+    session: &SshSession,
+    db_name: &str,
+    root_password: Option<&str>,
+) -> Result<PostgresActionReport> {
+    if db_name.trim().is_empty() {
+        return Err(SshError::InvalidConfig("db_name empty".into()));
+    }
+    let safe_db = db_name.replace('`', "");
+    let sql = format!(
+        "CREATE DATABASE IF NOT EXISTS `{safe_db}` \
+         CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;"
+    );
+    run_mysql(session, &sql, root_password).await
+}
+
+/// Allow remote TCP connections to MySQL/MariaDB by setting
+/// `bind-address = 0.0.0.0` in the daemon config and restarting.
+/// Walks every `mysqld.cnf` / `my.cnf` fragment that ships across
+/// the apt/dnf packaging variants. Best-effort restart at the end.
+pub async fn mysql_open_remote(
+    session: &SshSession,
+) -> Result<PostgresActionReport> {
+    let env = probe_host_env(session).await;
+    let prefix = if env.is_root { "" } else { "sudo -n " };
+    // Targets:
+    //   apt MariaDB  → /etc/mysql/mariadb.conf.d/50-server.cnf
+    //   apt MySQL    → /etc/mysql/mysql.conf.d/mysqld.cnf
+    //   dnf/yum      → /etc/my.cnf or /etc/my.cnf.d/*.cnf
+    //
+    // We sed over every file matching the pattern; absent files
+    // fail with "no such file" but `|| true` keeps the chain
+    // moving. `bind-address` rewrite lands on whichever file
+    // already declared it.
+    let inner = "set -e; \
+      changed=0; \
+      for f in /etc/mysql/mariadb.conf.d/*.cnf /etc/mysql/mysql.conf.d/*.cnf /etc/my.cnf /etc/my.cnf.d/*.cnf; do \
+        [ -e \"$f\" ] || continue; \
+        if grep -qE '^[[:space:]]*bind-address' \"$f\"; then \
+          sed -i -E 's|^[[:space:]]*bind-address.*|bind-address = 0.0.0.0|' \"$f\"; \
+          changed=1; \
+        fi; \
+      done; \
+      if [ \"$changed\" -eq 0 ]; then \
+        for f in /etc/mysql/mariadb.conf.d/50-server.cnf /etc/mysql/mysql.conf.d/mysqld.cnf /etc/my.cnf; do \
+          if [ -e \"$f\" ]; then \
+            printf '\\n[mysqld]\\nbind-address = 0.0.0.0\\n' >> \"$f\"; \
+            changed=1; break; \
+          fi; \
+        done; \
+      fi; \
+      systemctl restart mariadb 2>&1 || systemctl restart mysql 2>&1 || systemctl restart mysqld 2>&1 || true; \
+      [ \"$changed\" -eq 1 ] && echo OK || { echo 'no mysql config file found'; exit 1; }";
+    let command = format!("{prefix}sh -c {} 2>&1", shell_single_quote(inner));
+    let (exit_code, stdout) = session.exec_command(&command).await?;
+    let output_tail = stdout
+        .lines()
+        .rev()
+        .take(40)
+        .collect::<Vec<_>>()
+        .into_iter()
+        .rev()
+        .collect::<Vec<_>>()
+        .join("\n");
+    let status = if exit_code == 0 {
+        "ok"
+    } else if !env.is_root && looks_like_sudo_password_prompt(&output_tail) {
+        "sudo-requires-password"
+    } else {
+        "failed"
+    };
+    Ok(PostgresActionReport {
+        status: status.to_string(),
+        command,
+        exit_code,
+        output_tail,
+    })
+}
+
+/// Blocking wrappers for the three MySQL helpers.
+pub fn mysql_create_user_blocking(
+    session: &SshSession,
+    username: &str,
+    password: &str,
+    db_name: &str,
+    root_password: Option<&str>,
+) -> Result<PostgresActionReport> {
+    crate::ssh::runtime::shared().block_on(mysql_create_user(
+        session,
+        username,
+        password,
+        db_name,
+        root_password,
+    ))
+}
+
+/// Blocking wrapper for [`mysql_create_db`].
+pub fn mysql_create_db_blocking(
+    session: &SshSession,
+    db_name: &str,
+    root_password: Option<&str>,
+) -> Result<PostgresActionReport> {
+    crate::ssh::runtime::shared().block_on(mysql_create_db(session, db_name, root_password))
+}
+
+/// Blocking wrapper for [`mysql_open_remote`].
+pub fn mysql_open_remote_blocking(session: &SshSession) -> Result<PostgresActionReport> {
+    crate::ssh::runtime::shared().block_on(mysql_open_remote(session))
+}
+
+// ── Redis service-level orchestration (v2.9) ────────────────────
+
+/// Set Redis `requirepass`. Walks the standard config locations
+/// (`/etc/redis/redis.conf` for apt, `/etc/redis.conf` for dnf),
+/// rewrites the `requirepass` line in place (or appends one when
+/// none exists), then restarts the service.
+pub async fn redis_set_password(
+    session: &SshSession,
+    password: &str,
+) -> Result<PostgresActionReport> {
+    if password.trim().is_empty() {
+        return Err(SshError::InvalidConfig("password empty".into()));
+    }
+    let env = probe_host_env(session).await;
+    let prefix = if env.is_root { "" } else { "sudo -n " };
+    // The password is single-quoted into the sed expression after
+    // we shell-escape it; defence-in-depth against passwords with
+    // `'` or `&` (the latter is sed's match-back reference).
+    let escaped_for_sed = password.replace('&', "\\&").replace('/', "\\/");
+    let inner = format!(
+        "set -e; \
+         conf=''; \
+         for f in /etc/redis/redis.conf /etc/redis.conf; do \
+           [ -e \"$f\" ] && conf=\"$f\" && break; \
+         done; \
+         [ -n \"$conf\" ] || {{ echo 'redis.conf not found'; exit 1; }}; \
+         if grep -qE '^[[:space:]]*requirepass[[:space:]]' \"$conf\"; then \
+           sed -i -E 's/^[[:space:]]*requirepass[[:space:]].*/requirepass {esc}/' \"$conf\"; \
+         else \
+           printf '\\nrequirepass {esc}\\n' >> \"$conf\"; \
+         fi; \
+         systemctl restart redis-server 2>&1 || systemctl restart redis 2>&1 || true; \
+         echo OK",
+        esc = escaped_for_sed,
+    );
+    let command = format!("{prefix}sh -c {} 2>&1", shell_single_quote(&inner));
+    let (exit_code, stdout) = session.exec_command(&command).await?;
+    let output_tail = stdout
+        .lines()
+        .rev()
+        .take(40)
+        .collect::<Vec<_>>()
+        .into_iter()
+        .rev()
+        .collect::<Vec<_>>()
+        .join("\n");
+    let status = if exit_code == 0 {
+        "ok"
+    } else if !env.is_root && looks_like_sudo_password_prompt(&output_tail) {
+        "sudo-requires-password"
+    } else {
+        "failed"
+    };
+    Ok(PostgresActionReport {
+        status: status.to_string(),
+        command,
+        exit_code,
+        output_tail,
+    })
+}
+
+/// Allow remote Redis connections by:
+///   1. Replacing `bind 127.0.0.1` with `bind 0.0.0.0`.
+///   2. Setting `protected-mode no` (Redis refuses external
+///      connections in protected-mode unless a password is set
+///      AND we're using the password — for the simple case we
+///      drop protected-mode; the user should also call
+///      [`redis_set_password`] for a sane setup).
+pub async fn redis_open_remote(
+    session: &SshSession,
+) -> Result<PostgresActionReport> {
+    let env = probe_host_env(session).await;
+    let prefix = if env.is_root { "" } else { "sudo -n " };
+    let inner = "set -e; \
+      conf=''; \
+      for f in /etc/redis/redis.conf /etc/redis.conf; do \
+        [ -e \"$f\" ] && conf=\"$f\" && break; \
+      done; \
+      [ -n \"$conf\" ] || { echo 'redis.conf not found'; exit 1; }; \
+      sed -i -E 's/^[[:space:]]*bind[[:space:]].*/bind 0.0.0.0/' \"$conf\"; \
+      if grep -qE '^[[:space:]]*protected-mode[[:space:]]' \"$conf\"; then \
+        sed -i -E 's/^[[:space:]]*protected-mode[[:space:]].*/protected-mode no/' \"$conf\"; \
+      else \
+        printf '\\nprotected-mode no\\n' >> \"$conf\"; \
+      fi; \
+      systemctl restart redis-server 2>&1 || systemctl restart redis 2>&1 || true; \
+      echo OK";
+    let command = format!("{prefix}sh -c {} 2>&1", shell_single_quote(inner));
+    let (exit_code, stdout) = session.exec_command(&command).await?;
+    let output_tail = stdout
+        .lines()
+        .rev()
+        .take(40)
+        .collect::<Vec<_>>()
+        .into_iter()
+        .rev()
+        .collect::<Vec<_>>()
+        .join("\n");
+    let status = if exit_code == 0 {
+        "ok"
+    } else if !env.is_root && looks_like_sudo_password_prompt(&output_tail) {
+        "sudo-requires-password"
+    } else {
+        "failed"
+    };
+    Ok(PostgresActionReport {
+        status: status.to_string(),
+        command,
+        exit_code,
+        output_tail,
+    })
+}
+
+/// Blocking wrapper for [`redis_set_password`].
+pub fn redis_set_password_blocking(
+    session: &SshSession,
+    password: &str,
+) -> Result<PostgresActionReport> {
+    crate::ssh::runtime::shared().block_on(redis_set_password(session, password))
+}
+
+/// Blocking wrapper for [`redis_open_remote`].
+pub fn redis_open_remote_blocking(session: &SshSession) -> Result<PostgresActionReport> {
+    crate::ssh::runtime::shared().block_on(redis_open_remote(session))
+}
+
+/// Quote an SQL identifier (`"..."`) — escaping internal `"`.
+fn pg_quote_ident(s: &str) -> String {
+    format!("\"{}\"", s.replace('"', "\"\""))
+}
+
+/// Quote an SQL literal (`'...'`) — escaping internal `'`.
+fn pg_quote_literal(s: &str) -> String {
+    format!("'{}'", s.replace('\'', "''"))
+}
+
+/// Same as [`pg_quote_literal`] but returns just the inner content
+/// (no surrounding quotes) — used when the surrounding quotes are
+/// added by the caller's format string.
+fn pg_quote_literal_inner(s: &str) -> String {
+    s.replace('\'', "''")
+}
+
+/// One row in a system-wide package search result. Returns the
+/// raw package name + a one-line summary; the panel renders these
+/// underneath the registry section as "搜索系统仓库".
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct SearchHit {
+    /// Package name as the manager reports it (e.g. `"redis-server"`).
+    pub name: String,
+    /// One-line summary the manager prints alongside the name.
+    /// Empty string when the manager's output didn't include one.
+    pub summary: String,
+}
+
+/// Search the host's package manager catalog for `query`. Maps to:
+///   * apt → `apt-cache search`
+///   * dnf → `dnf search -q`
+///   * yum → `yum search -q`
+///   * apk → `apk search -d`
+///   * pacman → `pacman -Ss`
+///   * zypper → `zypper search`
+///
+/// Returns up to `limit` hits parsed from the manager's stdout.
+/// `query` is single-quoted before interpolation so spaces /
+/// shell metacharacters can't break the command.
+pub async fn search_remote(
+    session: &SshSession,
+    query: &str,
+    limit: usize,
+) -> Result<Vec<SearchHit>> {
+    let env = probe_host_env(session).await;
+    let Some(manager) = env.package_manager else {
+        return Ok(Vec::new());
+    };
+    let q = shell_single_quote(query);
+    let inner = match manager {
+        PackageManager::Apt => format!("apt-cache search {q} 2>/dev/null"),
+        PackageManager::Dnf => format!("dnf search {q} -q 2>/dev/null"),
+        PackageManager::Yum => format!("yum search {q} -q 2>/dev/null"),
+        PackageManager::Apk => format!("apk search -d {q} 2>/dev/null"),
+        PackageManager::Pacman => format!("pacman -Ss {q} 2>/dev/null"),
+        PackageManager::Zypper => format!("zypper --non-interactive search {q} 2>/dev/null"),
+    };
+    let cmd = format!("sh -c {} 2>&1 | head -{}", shell_single_quote(&inner), limit * 4);
+    let (_code, stdout) = session.exec_command(&cmd).await?;
+    Ok(parse_search_output(manager, &stdout, limit))
+}
+
+/// Blocking wrapper for [`search_remote`].
+pub fn search_remote_blocking(
+    session: &SshSession,
+    query: &str,
+    limit: usize,
+) -> Result<Vec<SearchHit>> {
+    crate::ssh::runtime::shared().block_on(search_remote(session, query, limit))
+}
+
+/// Install a package not in the registry — i.e. one the user found
+/// via [`search_remote`]. Same code path as [`install`] but the
+/// caller supplies the package name directly instead of a
+/// descriptor id.
+///
+/// We deliberately don't fold this into [`install`] because the
+/// descriptor lookup carries metadata (config_paths / data_dirs /
+/// service_units) the registry needs; ad-hoc installs have none of
+/// that, and pretending they do would mean writing fake registry
+/// entries.
+pub async fn install_arbitrary<F>(
+    session: &SshSession,
+    package_name: &str,
+    on_line: F,
+    cancel: Option<CancellationToken>,
+) -> Result<InstallReport>
+where
+    F: FnMut(&str),
+{
+    run_install_arbitrary(session, package_name, on_line, cancel).await
+}
+
+/// Blocking wrapper for [`install_arbitrary`].
+pub fn install_arbitrary_blocking<F>(
+    session: &SshSession,
+    package_name: &str,
+    on_line: F,
+    cancel: Option<CancellationToken>,
+) -> Result<InstallReport>
+where
+    F: FnMut(&str),
+{
+    crate::ssh::runtime::shared().block_on(install_arbitrary(session, package_name, on_line, cancel))
 }
 
 /// Synthesise the install command **without running it** so the
@@ -2956,6 +4286,8 @@ async fn run_setup_then_install<F>(
     id: &str,
     setup_inner: &str,
     enable_service: bool,
+    version: Option<&str>,
+    variant_key: Option<&str>,
     mut on_line: F,
     cancel: Option<CancellationToken>,
     env: HostPackageEnv,
@@ -3054,15 +4386,15 @@ where
     }
 
     // Setup succeeded — fall through to the normal install path.
-    // The descriptor's install_packages now resolve against the
-    // freshly-added upstream source.
+    // The descriptor's install_packages (or the picked variant's)
+    // resolve against the freshly-added upstream source.
     let install_report = run_install_or_update(
         session,
         id,
         false,
         enable_service,
-        None,
-        None,
+        version,
+        variant_key,
         on_line,
         cancel,
     )
@@ -3075,10 +4407,246 @@ where
     })
 }
 
+/// Ad-hoc install path — same shell synthesis as
+/// [`run_install_or_update`] but with a caller-supplied package
+/// name (no descriptor lookup, no service-unit handling, no
+/// version pin / variant).
+async fn run_install_arbitrary<F>(
+    session: &SshSession,
+    package_name: &str,
+    mut on_line: F,
+    cancel: Option<CancellationToken>,
+) -> Result<InstallReport>
+where
+    F: FnMut(&str),
+{
+    if package_name.trim().is_empty() {
+        return Err(SshError::InvalidConfig("empty package name".into()));
+    }
+    let env = probe_host_env(session).await;
+    let Some(manager) = env.package_manager else {
+        return Ok(InstallReport {
+            package_id: package_name.to_string(),
+            status: InstallStatus::UnsupportedDistro,
+            distro_id: env.distro_id,
+            package_manager: String::new(),
+            command: String::new(),
+            exit_code: 0,
+            output_tail: String::new(),
+            installed_version: None,
+            service_active: None,
+            vendor_script: None,
+        });
+    };
+
+    // Each package_name is a single token — apt/dnf/etc. don't
+    // need it shell-quoted (their package names are
+    // alphanumeric+dash). But quote anyway for defence-in-depth
+    // since this string may originate in a search result the user
+    // could have manipulated.
+    let install_inner = build_install_command(manager, &[package_name], false, None);
+    let prefix = if env.is_root { "" } else { "sudo -n " };
+    let command = format!(
+        "{prefix}sh -c {} 2>&1",
+        shell_single_quote(&install_inner)
+    );
+
+    let mut tail_lines: Vec<String> = Vec::new();
+    let (exit_code, _full) = session
+        .exec_command_streaming(
+            &command,
+            |line| {
+                on_line(line);
+                tail_lines.push(line.to_string());
+                if tail_lines.len() > 80 {
+                    tail_lines.drain(0..tail_lines.len() - 60);
+                }
+            },
+            cancel.clone(),
+        )
+        .await?;
+    let output_tail = tail_lines.join("\n");
+
+    if exit_code == CANCELLED_EXIT_CODE
+        || cancel.as_ref().is_some_and(|t| t.is_cancelled())
+    {
+        return Ok(InstallReport {
+            package_id: package_name.to_string(),
+            status: InstallStatus::Cancelled,
+            distro_id: env.distro_id,
+            package_manager: manager.as_str().to_string(),
+            command,
+            exit_code,
+            output_tail,
+            installed_version: None,
+            service_active: None,
+            vendor_script: None,
+        });
+    }
+
+    if !env.is_root && looks_like_sudo_password_prompt(&output_tail) {
+        return Ok(InstallReport {
+            package_id: package_name.to_string(),
+            status: InstallStatus::SudoRequiresPassword,
+            distro_id: env.distro_id,
+            package_manager: manager.as_str().to_string(),
+            command,
+            exit_code,
+            output_tail,
+            installed_version: None,
+            service_active: None,
+            vendor_script: None,
+        });
+    }
+
+    // No descriptor → no probe to confirm install. Trust the
+    // package manager's exit code.
+    let status = if exit_code == 0 {
+        InstallStatus::Installed
+    } else {
+        InstallStatus::PackageManagerFailed
+    };
+    Ok(InstallReport {
+        package_id: package_name.to_string(),
+        status,
+        distro_id: env.distro_id,
+        package_manager: manager.as_str().to_string(),
+        command,
+        exit_code,
+        output_tail,
+        installed_version: None,
+        service_active: None,
+        vendor_script: None,
+    })
+}
+
+/// Per-manager search-result parser. apt's "name - summary" format
+/// and dnf's "name.arch : summary" format need separate handling;
+/// pacman/zypper output is two-line per result. apk uses
+/// "name-version description" on one line.
+fn parse_search_output(manager: PackageManager, raw: &str, limit: usize) -> Vec<SearchHit> {
+    let mut out: Vec<SearchHit> = Vec::new();
+    match manager {
+        PackageManager::Apt => {
+            for line in raw.lines() {
+                if let Some((name, summary)) = line.split_once(" - ") {
+                    let name = name.trim();
+                    let summary = summary.trim();
+                    if !name.is_empty() {
+                        out.push(SearchHit {
+                            name: name.to_string(),
+                            summary: summary.to_string(),
+                        });
+                    }
+                }
+                if out.len() >= limit {
+                    break;
+                }
+            }
+        }
+        PackageManager::Dnf | PackageManager::Yum => {
+            for line in raw.lines() {
+                // Format: "name.arch : summary"
+                let s = line.trim();
+                if s.starts_with("===")
+                    || s.starts_with("Last metadata")
+                    || s.is_empty()
+                {
+                    continue;
+                }
+                if let Some((left, summary)) = s.split_once(" : ") {
+                    let name = left.split('.').next().unwrap_or(left).trim();
+                    if !name.is_empty() {
+                        out.push(SearchHit {
+                            name: name.to_string(),
+                            summary: summary.trim().to_string(),
+                        });
+                    }
+                }
+                if out.len() >= limit {
+                    break;
+                }
+            }
+        }
+        PackageManager::Apk => {
+            for line in raw.lines() {
+                let s = line.trim();
+                if s.is_empty() {
+                    continue;
+                }
+                // "name-version description" — split on first space.
+                if let Some((name_ver, summary)) = s.split_once(' ') {
+                    // Trim version tail off `name-1.2.3-r0` → `name`.
+                    let name = name_ver
+                        .rsplitn(3, '-')
+                        .last()
+                        .unwrap_or(name_ver)
+                        .to_string();
+                    out.push(SearchHit {
+                        name,
+                        summary: summary.trim().to_string(),
+                    });
+                }
+                if out.len() >= limit {
+                    break;
+                }
+            }
+        }
+        PackageManager::Pacman => {
+            // Two-line repeating format:
+            //   "repo/name version [installed]"
+            //   "    Description text"
+            let mut iter = raw.lines();
+            while let Some(head) = iter.next() {
+                if head.starts_with("    ") || head.is_empty() {
+                    continue;
+                }
+                let summary = iter.next().unwrap_or("").trim();
+                let name = head.split_whitespace().next().unwrap_or(head);
+                let name = name.split('/').nth(1).unwrap_or(name);
+                if !name.is_empty() {
+                    out.push(SearchHit {
+                        name: name.to_string(),
+                        summary: summary.to_string(),
+                    });
+                }
+                if out.len() >= limit {
+                    break;
+                }
+            }
+        }
+        PackageManager::Zypper => {
+            // `|`-separated columns: "S | Name | Type | Version | Arch | Repository"
+            for line in raw.lines() {
+                if !line.contains('|') || line.starts_with("---") {
+                    continue;
+                }
+                let cols: Vec<&str> = line.split('|').map(|s| s.trim()).collect();
+                if cols.len() < 2 {
+                    continue;
+                }
+                let name = cols.get(1).copied().unwrap_or("");
+                if name.is_empty() || name == "Name" {
+                    continue;
+                }
+                out.push(SearchHit {
+                    name: name.to_string(),
+                    summary: cols.get(5).copied().unwrap_or("").to_string(),
+                });
+                if out.len() >= limit {
+                    break;
+                }
+            }
+        }
+    }
+    out
+}
+
 async fn run_install_via_script<F>(
     session: &SshSession,
     id: &str,
     enable_service: bool,
+    variant_key: Option<&str>,
     mut on_line: F,
     cancel: Option<CancellationToken>,
 ) -> Result<InstallReport>
@@ -3135,6 +4703,8 @@ where
                 id,
                 setup,
                 enable_service,
+                None, // no version pin from this entrypoint
+                variant_key,
                 on_line,
                 cancel,
                 env,
@@ -4504,6 +6074,40 @@ mod tests {
     }
 
     #[test]
+    fn postgres_variants_only_cover_pgdg_managers() {
+        // pgdg ships parallel postgresql-N packages for apt / dnf /
+        // yum only. The variants intentionally do NOT declare
+        // packages for apk / pacman / zypper — picking a variant
+        // there would surface as a clean install failure (which is
+        // fine; the dialog tells the user pgdg only covers those
+        // three families).
+        let postgres = descriptor("postgres").expect("postgres in registry");
+        assert!(!postgres.version_variants.is_empty());
+        for v in postgres.version_variants {
+            for m in [PackageManager::Apt, PackageManager::Dnf, PackageManager::Yum] {
+                assert!(
+                    v.install_packages.iter().any(|(mm, _)| *mm == m),
+                    "postgres variant {} missing install_packages for {:?}",
+                    v.key,
+                    m
+                );
+            }
+            for m in [
+                PackageManager::Apk,
+                PackageManager::Pacman,
+                PackageManager::Zypper,
+            ] {
+                assert!(
+                    !v.install_packages.iter().any(|(mm, _)| *mm == m),
+                    "postgres variant {} unexpectedly has install_packages for {:?}",
+                    v.key,
+                    m,
+                );
+            }
+        }
+    }
+
+    #[test]
     fn postgres_setup_scripts_cover_apt_and_dnf() {
         let postgres = descriptor("postgres").expect("postgres in registry");
         let vendor = postgres.vendor_script.expect("postgres vendor_script");
@@ -4532,6 +6136,30 @@ mod tests {
     }
 
     #[test]
+    fn co_install_suggestions_only_reference_built_in_ids() {
+        // Suggesting an id that doesn't exist would surface a dead
+        // chip in the UI. Catch typos at test time.
+        let ids: std::collections::HashSet<&str> =
+            REGISTRY.iter().map(|d| d.id).collect();
+        for d in REGISTRY {
+            for sugg in co_install_suggestions(d.id) {
+                assert!(
+                    ids.contains(sugg),
+                    "co_install_suggestions for {} references unknown id {}",
+                    d.id,
+                    sugg,
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn co_install_suggestions_unknown_returns_empty() {
+        assert!(co_install_suggestions("not-real").is_empty());
+        assert!(co_install_suggestions("").is_empty());
+    }
+
+    #[test]
     fn bundles_have_unique_ids() {
         let mut seen = std::collections::HashSet::new();
         for b in bundles() {
@@ -4556,6 +6184,49 @@ mod tests {
                 );
             }
         }
+    }
+
+    #[test]
+    fn parse_search_output_apt() {
+        let raw = "redis-server - Persistent key-value database\nredis-tools - Persistent key-value database (client tools)\n";
+        let hits = parse_search_output(PackageManager::Apt, raw, 10);
+        assert_eq!(hits.len(), 2);
+        assert_eq!(hits[0].name, "redis-server");
+        assert_eq!(hits[0].summary, "Persistent key-value database");
+        assert_eq!(hits[1].name, "redis-tools");
+    }
+
+    #[test]
+    fn parse_search_output_apt_respects_limit() {
+        let raw = "a - 1\nb - 2\nc - 3\nd - 4\n";
+        let hits = parse_search_output(PackageManager::Apt, raw, 2);
+        assert_eq!(hits.len(), 2);
+    }
+
+    #[test]
+    fn parse_search_output_dnf_strips_arch_and_skips_headers() {
+        let raw = "Last metadata expiration check ...\n=== Name & Summary ===\nredis.x86_64 : Fast key-value store\nredis-debuginfo.x86_64 : Debuginfo for redis\n";
+        let hits = parse_search_output(PackageManager::Dnf, raw, 10);
+        assert_eq!(hits.len(), 2);
+        assert_eq!(hits[0].name, "redis");
+        assert_eq!(hits[0].summary, "Fast key-value store");
+    }
+
+    #[test]
+    fn parse_search_output_pacman_two_line_format() {
+        let raw = "extra/redis 7.4.0-1\n    A persistent key-value database\nextra/redis-cli 1.0-1\n    CLI for redis\n";
+        let hits = parse_search_output(PackageManager::Pacman, raw, 10);
+        assert_eq!(hits.len(), 2);
+        assert_eq!(hits[0].name, "redis");
+        assert_eq!(hits[0].summary, "A persistent key-value database");
+    }
+
+    #[test]
+    fn parse_search_output_apk_strips_version_tail() {
+        let raw = "redis-7.0.15-r0 Persistent key-value db\n";
+        let hits = parse_search_output(PackageManager::Apk, raw, 10);
+        assert_eq!(hits.len(), 1);
+        assert_eq!(hits[0].name, "redis");
     }
 
     #[test]

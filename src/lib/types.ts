@@ -977,7 +977,7 @@ export type RightTool =
   | "postgres"
   | "markdown"
   | "firewall"
-  | "nginx"
+  | "webserver"
   | "software";
 
 // ── Tab Model (matches Qt Main.qml tab schema) ─────────────────

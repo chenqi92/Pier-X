@@ -1307,6 +1307,8 @@ export const zhExtra: Record<string, string> = {
   "Install {variant}": "安装 {variant}",
   "Update {variant}": "更新到 {variant}",
   "Filter by name, id, or category...": "按名称、ID 或分类筛选…",
+  "System packages": "系统仓库",
+  "Searching system catalog...": "正在搜索系统仓库…",
   "Switch package source mirror": "切换软件源镜像",
   "Mirror": "软件源",
   "Package source mirror": "软件源镜像",
@@ -1324,6 +1326,16 @@ export const zhExtra: Record<string, string> = {
   "Mirror switch failed (exit {code})": "镜像切换失败（退出码 {code}）",
   "Restore failed (exit {code})": "还原失败（退出码 {code}）",
   "last used": "上次选择",
+  "recommended": "推荐",
+  "unreachable": "无法连接",
+  "Benchmark from host": "主机测速",
+  "Benchmark from client": "本机测速",
+  "Probing mirrors...": "正在测速…",
+  "Probing from this machine...": "从本机测速中…",
+  "Probe each mirror's latency from this host": "从该 SSH 主机测试每个镜像的延迟",
+  "Probe each mirror from this Pier-X process": "从 Pier-X 客户端进程测试每个镜像（不依赖 SSH 主机）",
+  "No mirror reachable from this host.": "该主机无法访问任何镜像。",
+  "Fastest: {id} · {ms} ms": "最快：{id} · {ms} ms",
   "Copy install command": "复制安装命令",
   "Copy update command": "复制更新命令",
   "cd into this path in the terminal": "在终端 cd 到此路径",
@@ -1331,11 +1343,153 @@ export const zhExtra: Record<string, string> = {
   "Quick bundles": "常用组合",
   "Installing bundle...": "正在安装组合…",
   "Install bundle: {name}": "安装组合：{name}",
+  "Uninstall bundle: {name}": "卸载组合：{name}",
   "Install bundle": "安装组合",
+  "Uninstall bundle": "卸载组合",
   "Will install {n} package(s) sequentially.": "将依次安装 {n} 个软件包。",
+  "Will uninstall {n} package(s) in reverse order. Configs and data dirs are kept.":
+    "将按反序卸载 {n} 个软件包。配置文件和数据目录会保留。",
   "Nothing to install — every member is already on this host.":
     "无需安装 — 组合中所有软件都已存在。",
+  "Nothing to uninstall — none of these are installed.":
+    "无需卸载 — 组合中没有已安装的软件。",
   "Add custom entries by editing": "可在以下文件中追加自定义条目：",
+  "Open extras editor": "打开自定义条目编辑器",
+  "software-extras.json": "software-extras.json",
+  "Changes take effect on the next Pier-X restart.": "改动会在 Pier-X 重启后生效。",
+  "Paste or type JSON here. Click 'Insert template' for a starter.":
+    "在这里粘贴或编写 JSON。点击\"插入模板\"载入起始示例。",
+  "Insert template": "插入模板",
+  "Delete file": "删除文件",
+  "Empty file → deletes the extras file": "内容为空 → 将删除 software-extras.json",
+  "Saved. Restart Pier-X to apply changes.": "已保存。重启 Pier-X 后生效。",
+  "JSON parse error: {err}": "JSON 解析错误：{err}",
+  "Batch hosts": "批量主机",
+  "Run a batch action across multiple hosts": "对多台主机执行批量操作",
+  "Apply a mirror switch or a bundle install across multiple saved SSH connections.":
+    "对多个已保存的 SSH 连接执行切换镜像或安装组合。",
+  "Switch mirror": "切换镜像",
+  "Select all ({n})": "全选（{n}）",
+  "No saved SSH connections.": "暂无已保存的 SSH 连接。",
+  "Run on {n} host(s)": "在 {n} 台主机上执行",
+  "Override the action for just this host": "为该主机单独指定动作",
+  "(default)": "（默认）",
+  "Action history": "操作历史",
+  "Recent software-panel actions": "最近的软件管理操作记录",
+  "Last {n} entries.": "共 {n} 条记录。",
+  "Last 24 hours": "最近 24 小时",
+  "All time": "全部",
+  "Clear all": "清空",
+  "No history entries.": "暂无操作记录。",
+  "Undo": "撤销",
+  "Run the inverse action": "执行反向操作",
+  "Undo unavailable for this entry": "该条目不支持撤销",
+  "Undo unavailable: no saved-connection index for this entry.":
+    "无法撤销：该条目记录时未保存连接索引。",
+  "Undo unavailable: saved connection no longer exists.":
+    "无法撤销：原保存连接已被删除。",
+  "Undo not supported for action: {a}": "动作 {a} 不支持撤销",
+  "Undo: uninstall {pkg} → {status}": "撤销：卸载 {pkg} → {status}",
+  "Undo: install {pkg} → {status}": "撤销：安装 {pkg} → {status}",
+  "Undo: restore mirror → {status}": "撤销：还原镜像 → {status}",
+  "Record bundle": "录制为组合",
+  "Parse a paste-in install command into a custom bundle":
+    "把粘贴的安装命令解析成自定义组合",
+  "Record install command as bundle": "把安装命令录制为组合",
+  "Paste a one-shot install command. Pier-X extracts the package names and writes a bundle entry to software-extras.json.":
+    "粘贴一条整套安装命令，Pier-X 会提取出包名并写入 software-extras.json 的 bundles 段。",
+  "Parsed packages will appear here.": "解析出来的包会出现在这里。",
+  "Parsed:": "解析得到：",
+  "bundle id (e.g. my-stack)": "组合 id（如 my-stack）",
+  "display name": "显示名",
+  "description (optional)": "描述（可选）",
+  "Save bundle": "保存组合",
+  "Bundle saved. Restart Pier-X to see it in the cards.":
+    "已保存。重启 Pier-X 后将出现在组合卡片中。",
+  "PostgreSQL quick config...": "PostgreSQL 快速配置…",
+  "MySQL/MariaDB quick config...": "MySQL / MariaDB 快速配置…",
+  "MySQL/MariaDB quick config": "MySQL / MariaDB 快速配置",
+  "Run common post-install setup tasks against the local MySQL/MariaDB cluster.":
+    "对本机 MySQL / MariaDB 实例执行常见的安装后配置任务。",
+  "Root authentication": "Root 鉴权",
+  "Fresh apt installs use auth_socket for root — sudo connects without a password. If you've set a root password, type it here.":
+    "全新 apt 装的 root 默认用 auth_socket，sudo 连接无需密码。已经设过 root 密码就在这里填。",
+  "root password (optional)": "root 密码（可选）",
+  "Create user + grant on database": "创建用户并授权",
+  "database (granted)": "授权范围（数据库）",
+  "Sets bind-address = 0.0.0.0 in mysqld.cnf / my.cnf and restarts the daemon. Make sure you have an account that grants from '%' before opening up.":
+    "在 mysqld.cnf / my.cnf 设置 bind-address = 0.0.0.0 并重启服务。开放前请先确保有 '%' 来源的账号可登录。",
+  "Open to 0.0.0.0": "对外开放",
+  "Redis quick config...": "Redis 快速配置…",
+  "Redis quick config": "Redis 快速配置",
+  "Set requirepass and toggle remote-network listen.":
+    "设置 requirepass 并切换是否监听外网。",
+  "Set password (requirepass)": "设置密码（requirepass）",
+  "Set password": "设置密码",
+  "Sets bind 0.0.0.0 and protected-mode no in redis.conf. Use after setting a password.":
+    "在 redis.conf 设置 bind 0.0.0.0 和 protected-mode no。建议先设置密码再开放。",
+  "Quick config...": "快速配置…",
+  "Compose templates...": "Compose 模板…",
+  "Docker Compose templates": "Docker Compose 模板",
+  "One-click stacks. Each writes ~/pier-x-stacks/<id>/docker-compose.yml and runs docker compose up -d.":
+    "一键栈。每个会写入 ~/pier-x-stacks/<id>/docker-compose.yml 并执行 docker compose up -d。",
+  "Show YAML": "查看 YAML",
+  "Hide YAML": "收起 YAML",
+  "Applying...": "应用中…",
+  "Down": "停止",
+  "Dep graph": "依赖图",
+  "Visualize co-install relationships": "查看常一起安装的关系",
+  "Co-install dependency graph": "Co-install 依赖图",
+  "Curated 'commonly installed alongside' edges. Click a node to jump to its row.":
+    "策划好的\"常一起安装\"关系图。点击节点跳转到对应行。",
+  "No co-install relationships found.": "暂无 co-install 关系。",
+  "Clone hosts": "克隆主机",
+  "Replicate one host's package set onto others": "把一台主机的软件集合复制到其它主机",
+  "Clone packages across hosts": "跨主机克隆软件",
+  "Replicate one host's manually-installed package set onto one or more targets. Only registry-known packages are cloned.":
+    "把一台主机的手动安装软件复制到一台或多台目标主机。只克隆 Pier-X 注册表里的条目。",
+  "Source host": "源主机",
+  "(select)": "（选择）",
+  "Inspect": "检视",
+  "{n} explicitly installed; {k} known to Pier-X registry.":
+    "共 {n} 个手动安装的软件；Pier-X 注册表识别 {k} 个。",
+  "Show known only": "仅显示已识别",
+  "Show all": "显示全部",
+  "(not in registry)": "（注册表外）",
+  "Target hosts": "目标主机",
+  "Probing target...": "检测目标…",
+  "Already complete.": "目标已经齐了。",
+  "{ok}/{n} installed": "已装 {ok}/{n}",
+  "Clone {k} package(s) to {n} host(s)": "把 {k} 个软件克隆到 {n} 台主机",
+  "Commonly installed alongside:": "常一起安装的：",
+  "Live metrics": "实时指标",
+  "conns: {n}": "连接 {n}",
+  "mem: {n} MiB": "内存 {n} MiB",
+  "(probe failed — daemon down or auth required)":
+    "（探测失败 — 服务未启动或需要凭据）",
+  "Install all": "全装",
+  "Dismiss suggestions": "忽略推荐",
+  "PostgreSQL quick config": "PostgreSQL 快速配置",
+  "Run common post-install setup tasks against the local cluster.":
+    "对本机数据库实例执行常见的安装后配置任务。",
+  "Create role": "创建角色",
+  "Create database": "创建数据库",
+  "Create / update": "创建 / 更新",
+  "Allow remote connections": "允许远端连接",
+  "Open to 0.0.0.0/0": "对 0.0.0.0/0 开放",
+  "Done.": "完成。",
+  "Failed (exit {code}). {tail}": "失败（退出码 {code}）。{tail}",
+  "username": "用户名",
+  "password": "密码",
+  "superuser": "超级用户",
+  "database name": "数据库名",
+  "owner role": "owner 角色",
+  "Sets listen_addresses = '*' in postgresql.conf and appends 'host all all 0.0.0.0/0 md5' to pg_hba.conf, then reloads. Restart may be required for listen_addresses.":
+    "在 postgresql.conf 设置 listen_addresses='*'，向 pg_hba.conf 追加 'host all all 0.0.0.0/0 md5'，然后重载。listen_addresses 改动可能需要重启服务才生效。",
+  "Mirror set": "镜像已切换",
+  "Already installed": "已全部安装",
+  "{n} installed": "已安装 {n} 项",
+  "{pkg}: {status}": "{pkg}：{status}",
   "No software matches \"{query}\"": "没有匹配 “{query}” 的软件",
   "Databases": "数据库",
   "Web servers": "Web 服务",
@@ -1411,6 +1565,9 @@ export const zhExtra: Record<string, string> = {
     "当前终端未连接 SSH，Nginx 管理仅在远端可用。",
   "Browse and edit nginx config on a saved server, validate with `nginx -t`, then reload.":
     "在远端浏览和编辑 nginx 配置，先 `nginx -t` 校验后再 reload。",
+  "Web Server": "Web 服务器",
+  "Manage the web server on a saved host — currently nginx (Apache and Caddy support is planned).":
+    "管理远端主机上的 Web 服务器 —— 当前支持 nginx（Apache、Caddy 计划中）。",
   "nginx not installed": "未安装 nginx",
   "nginx is not installed on this host. Use the Software panel to install it.":
     "此主机未安装 nginx。请在「软件管理」面板里安装。",
@@ -1434,6 +1591,53 @@ export const zhExtra: Record<string, string> = {
   "Structured": "结构化",
   "Edit raw text": "编辑原文",
   "Raw": "原文",
+  "Toggle common features (TLS, HSTS, gzip, …)":
+    "勾选常用功能（TLS、HSTS、gzip 等）",
+  "Features": "功能",
+  "Target server": "目标 server 块",
+  "(no server block in this file — switch to Structured or Raw to add one)":
+    "（此文件没有 server 块 —— 在「结构化」或「原文」模式下添加）",
+  "TLS / HTTPS": "TLS / HTTPS",
+  "Security headers": "安全响应头",
+  "Performance": "性能",
+  "Logging": "日志",
+  "Reverse proxy": "反向代理",
+  "Real client IP": "真实客户端 IP",
+  "Rate limiting": "限流",
+  "Worker tuning": "Worker 调优",
+  "HTTPS / TLS": "HTTPS / TLS",
+  "Serve over TLS using a certificate + private key.":
+    "用证书与私钥提供 HTTPS。",
+  "Certificate path": "证书路径",
+  "Private key path": "私钥路径",
+  "HTTPS port": "HTTPS 端口",
+  "HTTP/2": "HTTP/2",
+  "Add the http2 flag to the SSL listen line.":
+    "在启用 SSL 的 listen 行加上 http2 标志。",
+  "HSTS (Strict-Transport-Security)": "HSTS（Strict-Transport-Security）",
+  "Force browsers to use HTTPS for the configured duration.":
+    "在 max-age 期间内强制浏览器走 HTTPS。",
+  "max-age (seconds)": "max-age（秒）",
+  "Gzip compression": "Gzip 压缩",
+  "Compress text responses to reduce bandwidth.":
+    "压缩文本响应以节省带宽。",
+  "MIME types": "MIME 类型",
+  "X-Frame-Options: SAMEORIGIN": "X-Frame-Options: SAMEORIGIN",
+  "Disallow rendering the site inside an iframe on a different origin.":
+    "禁止跨源 iframe 嵌入本站。",
+  "X-Content-Type-Options: nosniff": "X-Content-Type-Options: nosniff",
+  "Tell browsers not to MIME-sniff away from the declared Content-Type.":
+    "禁止浏览器对响应做 MIME 嗅探。",
+  "Referrer-Policy": "Referrer-Policy",
+  "Control how much of the URL is leaked in the Referer header.":
+    "控制 Referer 头泄露多少 URL 信息。",
+  "Policy": "策略",
+  "Hide nginx version": "隐藏 nginx 版本",
+  "Set server_tokens off so error pages and headers don't leak the version string.":
+    "设置 server_tokens off，避免错误页与响应头泄露版本号。",
+  "Click to enable": "点击启用",
+  "Click to disable": "点击禁用",
+  "Enable HTTPS first.": "请先启用 HTTPS。",
   "Backup → write → nginx -t → reload": "备份 → 写入 → nginx -t → reload",
   "Parse warnings:": "解析警告：",
   "(empty file — switch to Raw to add directives)":
@@ -1598,4 +1802,126 @@ export const zhExtra: Record<string, string> = {
   "Opening editor…": "正在打开编辑器…",
   "Opening…": "打开中…",
   "Stop watching and close this dialog. The file may remain open in your system editor.": "停止监听并关闭此对话框。文件仍可能在系统编辑器中打开。",
+
+  // Nginx feature catalog — scope bar
+  "Scope": "作用域",
+  "Top-level": "顶层",
+  "(no editable scope in this file)": "（此文件没有可编辑的作用域）",
+  "(no features apply to this scope)": "（当前作用域无可用功能）",
+
+  // Nginx feature catalog — directive composer
+  "Add directive": "添加指令",
+  "name (e.g. listen)": "指令名（如 listen）",
+  "args (space-separated)": "参数（用空格分隔）",
+  "block": "块",
+
+  // Nginx features — TLS
+  "TLS protocols & ciphers": "TLS 协议与加密套件",
+  "Pick which TLS versions and cipher suites the server will negotiate.":
+    "选择服务端可协商的 TLS 版本与加密套件。",
+  "ssl_protocols": "ssl_protocols",
+  "ssl_ciphers": "ssl_ciphers",
+  "Prefer server ciphers": "优先使用服务端套件",
+  "TLS session cache": "TLS 会话缓存",
+  "Reuse TLS handshakes across connections to cut per-connect cost.":
+    "在连接之间复用 TLS 握手，降低单连接握手成本。",
+  "ssl_session_cache": "ssl_session_cache",
+  "ssl_session_timeout": "ssl_session_timeout",
+  "OCSP stapling": "OCSP Stapling",
+  "Server fetches certificate revocation status so clients don't have to.":
+    "服务端代为拉取证书吊销状态，免除客户端开销。",
+
+  // Nginx features — security headers
+  "Content-Security-Policy": "Content-Security-Policy",
+  "Whitelist origins for scripts, styles, images, etc. — strong XSS mitigation.":
+    "为脚本、样式、图片等设定来源白名单 —— 防御 XSS 的关键手段。",
+  "Permissions-Policy": "Permissions-Policy",
+  "Restrict which browser features (camera, geolocation, …) the page can use.":
+    "限制页面可使用的浏览器特性（摄像头、定位等）。",
+
+  // Nginx features — performance & limits
+  "Upload size limit": "上传大小限制",
+  "Maximum size of the client request body (file uploads, JSON POST, …).":
+    "客户端请求体的最大体积（文件上传、JSON POST 等）。",
+  "client_max_body_size": "client_max_body_size",
+  "Keep-alive": "Keep-alive",
+  "How long and how many requests an idle TCP connection is reused.":
+    "空闲 TCP 连接的复用时长与请求数上限。",
+  "keepalive_timeout": "keepalive_timeout",
+  "keepalive_requests": "keepalive_requests",
+  "sendfile / TCP tuning": "sendfile / TCP 调优",
+  "Zero-copy file send and TCP-level batching tweaks for high-throughput setups.":
+    "面向高吞吐场景的零拷贝发送与 TCP 批量化优化。",
+  "sendfile on": "sendfile on",
+  "tcp_nopush on": "tcp_nopush on",
+  "tcp_nodelay on": "tcp_nodelay on",
+  "Min length (bytes)": "最小长度（字节）",
+  "Compression level (1-9)": "压缩级别（1-9）",
+  "Open file cache": "open_file_cache",
+  "Cache file descriptors / metadata to skip repeated stat() calls under load.":
+    "缓存文件描述符 / 元数据，避免高负载下重复 stat()。",
+  "max": "max",
+  "inactive": "inactive",
+  "Static asset cache (expires)": "静态资源缓存（expires）",
+  "Tell clients to cache responses for the chosen duration. Apply inside a location for finer control.":
+    "通过 expires 指示客户端缓存响应；放入 location 块可做精细控制。",
+  "expires": "expires",
+
+  // Nginx features — logging
+  "Access log": "访问日志",
+  "Where access requests are written. Toggle off to skip logging entirely.":
+    "访问请求的写入位置；关闭后将完全不记录。",
+  "Disable (access_log off)": "关闭（access_log off）",
+  "Log path": "日志路径",
+  "Error log": "错误日志",
+  "Where nginx writes its own diagnostics, and at what level.":
+    "nginx 自身的诊断日志位置及等级。",
+  "Level": "等级",
+
+  // Nginx features — proxy
+  "Proxy timeouts": "代理超时",
+  "How long to wait when nginx is talking to an upstream (proxy_pass target).":
+    "nginx 与上游（proxy_pass 目标）通信的等待时长。",
+  "proxy_connect_timeout": "proxy_connect_timeout",
+  "proxy_read_timeout": "proxy_read_timeout",
+  "proxy_send_timeout": "proxy_send_timeout",
+  "Proxy buffering": "代理缓冲",
+  "Buffer upstream responses before forwarding to the client. Disable for streaming / SSE.":
+    "在转发给客户端前缓冲上游响应；面向流式 / SSE 场景应关闭。",
+  "proxy_buffering on": "proxy_buffering on",
+  "Forward client headers": "转发客户端信息",
+  "Pass client info to the upstream via X-Real-IP / X-Forwarded-* headers.":
+    "通过 X-Real-IP / X-Forwarded-* 等头部，将客户端信息传给上游。",
+  "Host": "Host",
+  "X-Real-IP": "X-Real-IP",
+  "X-Forwarded-For": "X-Forwarded-For",
+  "X-Forwarded-Proto": "X-Forwarded-Proto",
+  "Trust proxy chain (real IP)": "信任代理链（真实 IP）",
+  "If nginx sits behind a CDN/LB, recover the client's real IP from a forwarded header.":
+    "若 nginx 位于 CDN / 负载均衡之后，从转发头中恢复客户端真实 IP。",
+  "set_real_ip_from (one CIDR per line)": "set_real_ip_from（每行一个 CIDR）",
+  "real_ip_header": "real_ip_header",
+  "real_ip_recursive on": "real_ip_recursive on",
+
+  // Nginx features — rate limiting
+  "Rate limit zone": "限流区域",
+  "Define a shared memory zone for rate limiting. Apply per location with `limit_req`.":
+    "定义用于限流的共享内存区，再在 location 中以 limit_req 应用。",
+  "Zone name": "区域名称",
+  "Key": "键",
+  "Rate": "速率",
+
+  // Nginx features — worker tuning
+  "Worker processes": "Worker 进程",
+  "How many worker processes nginx spawns. `auto` matches the CPU core count.":
+    "nginx 启动多少个 worker 进程；`auto` 与 CPU 核心数对齐。",
+  "worker_processes": "worker_processes",
+  "Worker file limit": "Worker 文件描述符上限",
+  "Raise the per-worker file-descriptor cap (matches your OS ulimit).":
+    "提升单个 worker 的文件描述符上限（需与系统 ulimit 匹配）。",
+  "worker_rlimit_nofile": "worker_rlimit_nofile",
+
+  // Nginx features — common labels
+  "includeSubDomains": "includeSubDomains",
+  "preload": "preload",
 };

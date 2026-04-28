@@ -3,6 +3,7 @@ import {
   FileText,
   FolderSync,
   GitBranch,
+  Globe,
   Package,
   Shield,
 } from "lucide-react";
@@ -10,7 +11,6 @@ import type { ComponentType, SVGProps } from "react";
 import DockerIcon from "../components/icons/DockerIcon";
 import LogIcon from "../components/icons/LogIcon";
 import MySqlIcon from "../components/icons/MySqlIcon";
-import NginxIcon from "../components/icons/NginxIcon";
 import PostgresIcon from "../components/icons/PostgresIcon";
 import RedisIcon from "../components/icons/RedisIcon";
 import SqliteIcon from "../components/icons/SqliteIcon";
@@ -48,7 +48,7 @@ export const RIGHT_TOOL_ORDER: RightTool[] = [
   "postgres",
   "redis",
   "sqlite",
-  "nginx",
+  "webserver",
   "software",
 ];
 
@@ -146,14 +146,14 @@ export const RIGHT_TOOL_META: Record<RightTool, RightToolMeta> = {
     splashTitle: "Firewall",
     splashSubtitle: "Open a saved server to view firewall rules, listening ports, and per-interface traffic.",
   },
-  nginx: {
-    label: "Nginx",
-    icon: NginxIcon,
+  webserver: {
+    label: "Web Server",
+    icon: Globe,
     remoteOnly: true,
-    tintVar: "var(--svc-nginx)",
-    splashTitle: "Nginx",
+    tintVar: "var(--svc-webserver)",
+    splashTitle: "Web Server",
     splashSubtitle:
-      "Browse and edit nginx config on a saved server, validate with `nginx -t`, then reload.",
+      "Manage the web server on a saved host — currently nginx (Apache and Caddy support is planned).",
   },
   software: {
     label: "Software",

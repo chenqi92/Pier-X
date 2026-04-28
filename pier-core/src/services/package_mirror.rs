@@ -372,6 +372,134 @@ pub fn restore_mirror_blocking(
     crate::ssh::runtime::shared().block_on(restore_mirror(session, manager))
 }
 
+/// Per-mirror latency probe result. `latency_ms` = `None` when the
+/// HEAD request failed (DNS resolution failed, timeout, refused
+/// connection, …) so the UI can mark the row "unreachable".
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct MirrorLatency {
+    /// Mirror id (lowercase string — same as [`MirrorId::as_str`]).
+    pub mirror_id: String,
+    /// Hostname that was probed (manager-specific — see
+    /// [`benchmark_mirrors`] for the routing).
+    pub host: String,
+    /// `curl` `time_total` in milliseconds. `None` when the probe
+    /// returned a non-zero exit code (timeout / DNS failure /
+    /// connection refused).
+    pub latency_ms: Option<u32>,
+}
+
+/// Probe every mirror's hostname over the SSH session by running
+/// curl HEAD requests in parallel (one shell `&` per host, then
+/// `wait`). Returns latencies in `MIRRORS` order so the UI can
+/// merge with the catalog by index.
+///
+/// Implementation notes:
+/// * Uses `curl -fsI -o /dev/null -m 5 -w "%{http_code} %{time_total}\n"`
+///   so a slow-to-first-byte server doesn't block the whole probe.
+/// * The mirror host depends on the package manager (apt vs dnf vs
+///   pacman use different paths) — pass `manager` so we pick the
+///   right one. apk-only / pacman-only / zypper-only mirrors that
+///   don't carry the active manager fall back to apt_host so the
+///   user can still gauge baseline reachability.
+/// * Output is single-line per mirror: `<id> <http_code> <time_s>`.
+pub async fn benchmark_mirrors(
+    session: &SshSession,
+    manager: PackageManager,
+) -> Result<Vec<MirrorLatency>> {
+    // Build the parallel curl pipeline. Each mirror's id is passed
+    // through to the output line so we can correlate without relying
+    // on result ordering.
+    let mut snippets: Vec<String> = Vec::with_capacity(MIRRORS.len());
+    for m in MIRRORS {
+        let host = host_for_manager(m, manager);
+        let qid = shell_single_quote(m.id.as_str());
+        let qhost = shell_single_quote(host);
+        snippets.push(format!(
+            "( code=$(curl -fsI -o /dev/null -m 5 -w '%{{http_code}} %{{time_total}}' \
+             https://{host}/ 2>/dev/null || echo '000 0'); echo {qid} \"$code\" ) &",
+            host = host,
+            qid = qid,
+        ));
+        // qhost is unused above — keep `host` in the URL literal so
+        // the user-readable command shows the bare hostname.
+        let _ = qhost;
+    }
+    let inner = format!("{}\nwait", snippets.join("\n"));
+    let cmd = format!("sh -c {} 2>/dev/null", shell_single_quote(&inner));
+    let (_code, stdout) = session.exec_command(&cmd).await?;
+    Ok(parse_benchmark_output(&stdout, manager))
+}
+
+fn host_for_manager(m: &MirrorChoice, manager: PackageManager) -> &'static str {
+    match manager {
+        PackageManager::Apt => m.apt_host,
+        PackageManager::Dnf | PackageManager::Yum => m.dnf_host,
+        PackageManager::Apk => m.apk_host.unwrap_or(m.apt_host),
+        PackageManager::Pacman => {
+            // Strip the URL prefix down to the bare hostname so the
+            // benchmark probes the same DNS target as the catalog.
+            // `https://mirrors.aliyun.com/archlinux` → `mirrors.aliyun.com`.
+            m.pacman_url
+                .and_then(|u| u.split("://").nth(1))
+                .and_then(|rest| rest.split('/').next())
+                .unwrap_or(m.apt_host)
+        }
+        PackageManager::Zypper => m.zypper_host.unwrap_or(m.apt_host),
+    }
+}
+
+fn parse_benchmark_output(stdout: &str, manager: PackageManager) -> Vec<MirrorLatency> {
+    use std::collections::HashMap;
+    // Map id → (http_code, time_total).
+    let mut by_id: HashMap<&str, (u32, f64)> = HashMap::new();
+    for line in stdout.lines() {
+        let mut parts = line.split_whitespace();
+        let id = match parts.next() {
+            Some(s) => s,
+            None => continue,
+        };
+        let code: u32 = parts.next().and_then(|s| s.parse().ok()).unwrap_or(0);
+        let secs: f64 = parts.next().and_then(|s| s.parse().ok()).unwrap_or(0.0);
+        // Find the canonical id from MIRRORS — guard against typos
+        // / extra junk on the line.
+        let canonical = MIRRORS
+            .iter()
+            .find(|m| m.id.as_str() == id)
+            .map(|m| m.id.as_str());
+        if let Some(c) = canonical {
+            by_id.insert(c, (code, secs));
+        }
+    }
+    MIRRORS
+        .iter()
+        .map(|m| {
+            let host = host_for_manager(m, manager).to_string();
+            let (code, secs) = by_id.get(m.id.as_str()).copied().unwrap_or((0, 0.0));
+            // 2xx / 3xx HEAD responses count as reachable; everything
+            // else (000 from curl exit, 4xx, 5xx) → None.
+            let latency_ms = if (200..400).contains(&code) {
+                Some((secs * 1000.0).round() as u32)
+            } else {
+                None
+            };
+            MirrorLatency {
+                mirror_id: m.id.as_str().to_string(),
+                host,
+                latency_ms,
+            }
+        })
+        .collect()
+}
+
+/// Blocking wrapper for [`benchmark_mirrors`].
+pub fn benchmark_mirrors_blocking(
+    session: &SshSession,
+    manager: PackageManager,
+) -> Result<Vec<MirrorLatency>> {
+    crate::ssh::runtime::shared().block_on(benchmark_mirrors(session, manager))
+}
+
 // ── apt ─────────────────────────────────────────────────────────────
 
 const APT_LIST: &str = "/etc/apt/sources.list";
@@ -882,6 +1010,46 @@ mod tests {
     fn known_zypper_hosts_includes_opensuse_upstream() {
         let hosts = known_zypper_hosts();
         assert!(hosts.contains(&"download.opensuse.org"));
+    }
+
+    #[test]
+    fn host_for_manager_routes_per_manager() {
+        let aliyun = mirror_by_id(MirrorId::Aliyun).unwrap();
+        assert_eq!(host_for_manager(aliyun, PackageManager::Apt), "mirrors.aliyun.com");
+        assert_eq!(host_for_manager(aliyun, PackageManager::Dnf), "mirrors.aliyun.com");
+        assert_eq!(host_for_manager(aliyun, PackageManager::Apk), "mirrors.aliyun.com");
+        // pacman url strips down to bare hostname.
+        assert_eq!(
+            host_for_manager(aliyun, PackageManager::Pacman),
+            "mirrors.aliyun.com"
+        );
+    }
+
+    #[test]
+    fn parse_benchmark_output_parses_lines() {
+        let raw = "aliyun 200 0.123\ntsinghua 200 0.456\nustc 000 0\nhuawei 301 0.789\ntencent 200 1.500\n";
+        let parsed = parse_benchmark_output(raw, PackageManager::Apt);
+        assert_eq!(parsed.len(), 5);
+        // Lookup by id (order matches MIRRORS).
+        let map: std::collections::HashMap<_, _> =
+            parsed.iter().map(|l| (l.mirror_id.clone(), l.latency_ms)).collect();
+        assert_eq!(map.get("aliyun"), Some(&Some(123)));
+        assert_eq!(map.get("tsinghua"), Some(&Some(456)));
+        assert_eq!(map.get("ustc"), Some(&None));
+        // 301 still counts as reachable (3xx).
+        assert_eq!(map.get("huawei"), Some(&Some(789)));
+        assert_eq!(map.get("tencent"), Some(&Some(1500)));
+    }
+
+    #[test]
+    fn parse_benchmark_output_missing_lines_become_none() {
+        let parsed = parse_benchmark_output("aliyun 200 0.100", PackageManager::Apt);
+        let map: std::collections::HashMap<_, _> =
+            parsed.iter().map(|l| (l.mirror_id.clone(), l.latency_ms)).collect();
+        assert_eq!(map.get("aliyun"), Some(&Some(100)));
+        // Other mirrors weren't in the output: latency_ms = None.
+        assert_eq!(map.get("tsinghua"), Some(&None));
+        assert_eq!(map.get("ustc"), Some(&None));
     }
 
     #[test]

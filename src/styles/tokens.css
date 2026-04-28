@@ -86,7 +86,7 @@
   --svc-sftp: #8aa0b8;
   --svc-sqlite: #8aa0b8;
   --svc-firewall: #daa45f;
-  --svc-nginx: #2bbd76;
+  --svc-webserver: #2bbd76;
   --svc-software: #c49eff;
 
   /* ── Legacy aliases (Phase A/B/C compat) ─────────────────── */

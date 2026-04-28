@@ -2276,16 +2276,19 @@ fn create_ssh_terminal_from_config(
     let resolved_cols = cols.max(40);
     let resolved_rows = rows.max(12);
     let shell = format!("ssh:{}@{}:{}", config.user, config.host, config.port);
-    let session = SshSession::connect_blocking(&config, HostKeyVerifier::default())
-        .map_err(|error| error.to_string())?;
 
-    // Seed the SFTP cache with the freshly-authenticated connection.
-    // `SshSession` is `Arc`-backed (`#[derive(Clone)]`) so the clone
-    // just bumps a refcount; the right-side SFTP panel can then
-    // reuse the live channel instead of re-handshaking (and avoid
-    // the "InvalidConfig" error when the tab has a key/agent auth
-    // or a password that's already been consumed). Key format must
-    // match `sftp_cache_key`.
+    // Reuse a cached SSH session when one already exists for this
+    // target — opening a new terminal tab against a host that an
+    // SFTP / Docker / Software panel already authenticated to should
+    // NOT trigger a second russh handshake. Doing so:
+    //   * doubles handshake CPU + network round-trips
+    //   * races with sshd's MaxStartups limit (default 10:30:100),
+    //     which on a busy host throttles new auth attempts and made
+    //     the new terminal stall on "Launching shell..."
+    //   * pointlessly invalidates the per-target singleflight gate
+    //     in `get_or_open_ssh_session`
+    //
+    // Key format must match `sftp_cache_key`.
     let auth_mode_key = match &config.auth {
         AuthMethod::Agent => "agent",
         AuthMethod::Auto | AuthMethod::AutoChain { .. } => "auto",
@@ -2293,9 +2296,26 @@ fn create_ssh_terminal_from_config(
         _ => "password",
     };
     let cache_key = sftp_cache_key(&config.host, config.port, &config.user, auth_mode_key);
-    if let Ok(mut cache) = state.sftp_sessions.lock() {
-        cache.insert(cache_key, Arc::new(session.clone()));
-    }
+    let cached = {
+        state
+            .sftp_sessions
+            .lock()
+            .ok()
+            .and_then(|cache| cache.get(&cache_key).cloned())
+    };
+    let session: SshSession = if let Some(arc) = cached {
+        // Clone yields a second Arc-handle to the same russh
+        // connection; the cache keeps the original alive so closing
+        // this terminal tab won't drop the panel-side session.
+        SshSession::clone(&*arc)
+    } else {
+        let fresh = SshSession::connect_blocking(&config, HostKeyVerifier::default())
+            .map_err(|error| error.to_string())?;
+        if let Ok(mut cache) = state.sftp_sessions.lock() {
+            cache.insert(cache_key, Arc::new(fresh.clone()));
+        }
+        fresh
+    };
 
     let (session_id, mut notify_ctx) = allocate_notify_context(&state, app);
     let user_data = &mut *notify_ctx as *mut NotifyContext as *mut c_void;
@@ -6443,6 +6463,7 @@ async fn software_install_or_update_inner(
                 &session,
                 &package_id,
                 enable_service,
+                variant_ref,
                 on_line,
                 Some(token_for_task.clone()),
             )
@@ -6710,6 +6731,17 @@ struct SoftwareBundleView {
     package_ids: Vec<String>,
 }
 
+/// Look up co-install suggestions for `id`. Static data — no
+/// remote call needed; the panel uses this to render the chip
+/// strip after a successful install.
+#[tauri::command]
+fn software_co_install_suggestions(id: String) -> Vec<String> {
+    package_manager::co_install_suggestions(&id)
+        .iter()
+        .map(|s| (*s).to_string())
+        .collect()
+}
+
 /// Static catalog of curated bundles. Same shape every call; the
 /// frontend renders these as one-click cards above the registry list.
 #[tauri::command]
@@ -6788,6 +6820,607 @@ async fn software_install_preview(
     .map_err(|e| format!("software_install_preview join: {e}"))?
 }
 
+// ── PostgreSQL service-level orchestration (v2.8) ──────────────────
+
+#[derive(Serialize, Clone)]
+#[serde(rename_all = "camelCase")]
+struct PostgresActionReportView {
+    status: String,
+    command: String,
+    exit_code: i32,
+    output_tail: String,
+}
+
+fn pg_report_to_view(r: package_manager::PostgresActionReport) -> PostgresActionReportView {
+    PostgresActionReportView {
+        status: r.status,
+        command: r.command,
+        exit_code: r.exit_code,
+        output_tail: r.output_tail,
+    }
+}
+
+#[tauri::command]
+async fn postgres_create_user_remote(
+    app: tauri::AppHandle,
+    host: String,
+    port: u16,
+    user: String,
+    auth_mode: String,
+    password: String,
+    key_path: String,
+    saved_connection_index: Option<usize>,
+    pg_username: String,
+    pg_password: String,
+    is_superuser: bool,
+) -> Result<PostgresActionReportView, String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        let state: tauri::State<'_, AppState> = app.state();
+        let session = get_or_open_ssh_session(
+            &state, &host, port, &user, &auth_mode, &password, &key_path,
+            saved_connection_index,
+        )?;
+        let report = package_manager::postgres_create_user_blocking(
+            &session,
+            &pg_username,
+            &pg_password,
+            is_superuser,
+        )
+        .map_err(|e| e.to_string())?;
+        Ok::<_, String>(pg_report_to_view(report))
+    })
+    .await
+    .map_err(|e| format!("postgres_create_user_remote join: {e}"))?
+}
+
+#[tauri::command]
+async fn postgres_create_db_remote(
+    app: tauri::AppHandle,
+    host: String,
+    port: u16,
+    user: String,
+    auth_mode: String,
+    password: String,
+    key_path: String,
+    saved_connection_index: Option<usize>,
+    db_name: String,
+    owner: String,
+) -> Result<PostgresActionReportView, String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        let state: tauri::State<'_, AppState> = app.state();
+        let session = get_or_open_ssh_session(
+            &state, &host, port, &user, &auth_mode, &password, &key_path,
+            saved_connection_index,
+        )?;
+        let report = package_manager::postgres_create_db_blocking(&session, &db_name, &owner)
+            .map_err(|e| e.to_string())?;
+        Ok::<_, String>(pg_report_to_view(report))
+    })
+    .await
+    .map_err(|e| format!("postgres_create_db_remote join: {e}"))?
+}
+
+#[tauri::command]
+async fn postgres_open_remote_remote(
+    app: tauri::AppHandle,
+    host: String,
+    port: u16,
+    user: String,
+    auth_mode: String,
+    password: String,
+    key_path: String,
+    saved_connection_index: Option<usize>,
+) -> Result<PostgresActionReportView, String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        let state: tauri::State<'_, AppState> = app.state();
+        let session = get_or_open_ssh_session(
+            &state, &host, port, &user, &auth_mode, &password, &key_path,
+            saved_connection_index,
+        )?;
+        let report = package_manager::postgres_open_remote_blocking(&session)
+            .map_err(|e| e.to_string())?;
+        Ok::<_, String>(pg_report_to_view(report))
+    })
+    .await
+    .map_err(|e| format!("postgres_open_remote_remote join: {e}"))?
+}
+
+// ── DB metrics (v2.13) ───────────────────────────────────────────
+
+#[derive(Serialize, Clone)]
+#[serde(rename_all = "camelCase")]
+struct DbMetricsView {
+    kind: String,
+    connections: Option<u32>,
+    memory_mib: Option<u32>,
+    extra: Option<String>,
+    probe_ok: bool,
+}
+
+fn db_metrics_to_view(m: package_manager::DbMetrics) -> DbMetricsView {
+    DbMetricsView {
+        kind: m.kind,
+        connections: m.connections,
+        memory_mib: m.memory_mib,
+        extra: m.extra,
+        probe_ok: m.probe_ok,
+    }
+}
+
+#[tauri::command]
+async fn software_db_metrics(
+    app: tauri::AppHandle,
+    host: String,
+    port: u16,
+    user: String,
+    auth_mode: String,
+    password: String,
+    key_path: String,
+    saved_connection_index: Option<usize>,
+    package_id: String,
+    root_password: Option<String>,
+) -> Result<DbMetricsView, String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        let state: tauri::State<'_, AppState> = app.state();
+        let session = get_or_open_ssh_session(
+            &state, &host, port, &user, &auth_mode, &password, &key_path,
+            saved_connection_index,
+        )?;
+        let metrics = match package_id.as_str() {
+            "postgres" => package_manager::postgres_metrics_blocking(&session),
+            "mariadb" => package_manager::mysql_metrics_blocking(
+                &session,
+                root_password.as_deref(),
+            ),
+            "redis" => package_manager::redis_metrics_blocking(&session),
+            _ => return Err(format!("no metrics for package {package_id}")),
+        }
+        .map_err(|e| e.to_string())?;
+        Ok::<_, String>(db_metrics_to_view(metrics))
+    })
+    .await
+    .map_err(|e| format!("software_db_metrics join: {e}"))?
+}
+
+// ── Cross-host clone (v2.12) ─────────────────────────────────────
+
+#[derive(Serialize, Clone)]
+#[serde(rename_all = "camelCase")]
+struct ClonePlanEntry {
+    /// Raw package name from the source host's manager.
+    package: String,
+    /// Descriptor id when we recognise the package, else `None`.
+    /// The frontend hides un-resolvable rows by default since
+    /// installing them on the target requires the same manager
+    /// and might not exist there.
+    descriptor_id: Option<String>,
+}
+
+#[derive(Serialize, Clone)]
+#[serde(rename_all = "camelCase")]
+struct ClonePlanView {
+    /// Resolved manager on the source host (`apt` / `dnf` / …).
+    package_manager: String,
+    /// All explicitly-installed packages.
+    entries: Vec<ClonePlanEntry>,
+}
+
+/// List the source host's explicitly-installed packages and
+/// resolve each to a registry descriptor where possible. The
+/// frontend then renders these as a checklist and feeds the
+/// chosen subset into per-host install loops on the target side.
+#[tauri::command]
+async fn software_clone_plan(
+    app: tauri::AppHandle,
+    host: String,
+    port: u16,
+    user: String,
+    auth_mode: String,
+    password: String,
+    key_path: String,
+    saved_connection_index: Option<usize>,
+) -> Result<ClonePlanView, String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        let state: tauri::State<'_, AppState> = app.state();
+        let session = get_or_open_ssh_session(
+            &state, &host, port, &user, &auth_mode, &password, &key_path,
+            saved_connection_index,
+        )?;
+        let env = package_manager::probe_host_env_blocking(&session);
+        let Some(manager) = env.package_manager else {
+            return Ok::<_, String>(ClonePlanView {
+                package_manager: String::new(),
+                entries: Vec::new(),
+            });
+        };
+        let names = package_manager::list_user_installed_blocking(&session)
+            .map_err(|e| e.to_string())?;
+        let entries = names
+            .into_iter()
+            .map(|p| {
+                let descriptor_id =
+                    package_manager::resolve_descriptor_for_package(&p, manager)
+                        .map(|s| s.to_string());
+                ClonePlanEntry {
+                    package: p,
+                    descriptor_id,
+                }
+            })
+            .collect();
+        Ok::<_, String>(ClonePlanView {
+            package_manager: manager.as_str().to_string(),
+            entries,
+        })
+    })
+    .await
+    .map_err(|e| format!("software_clone_plan join: {e}"))?
+}
+
+// ── Docker Compose templates (v2.11) ─────────────────────────────
+
+#[derive(Serialize, Clone)]
+#[serde(rename_all = "camelCase")]
+struct ComposeTemplateView {
+    id: String,
+    display_name: String,
+    description: String,
+    yaml: String,
+    published_ports: Vec<u16>,
+}
+
+#[tauri::command]
+fn software_compose_templates() -> Vec<ComposeTemplateView> {
+    package_manager::compose_templates()
+        .iter()
+        .map(|t| ComposeTemplateView {
+            id: t.id.to_string(),
+            display_name: t.display_name.to_string(),
+            description: t.description.to_string(),
+            yaml: t.yaml.to_string(),
+            published_ports: t.published_ports.to_vec(),
+        })
+        .collect()
+}
+
+#[tauri::command]
+async fn software_compose_apply(
+    app: tauri::AppHandle,
+    host: String,
+    port: u16,
+    user: String,
+    auth_mode: String,
+    password: String,
+    key_path: String,
+    saved_connection_index: Option<usize>,
+    template_id: String,
+) -> Result<PostgresActionReportView, String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        let state: tauri::State<'_, AppState> = app.state();
+        let session = get_or_open_ssh_session(
+            &state, &host, port, &user, &auth_mode, &password, &key_path,
+            saved_connection_index,
+        )?;
+        let report = package_manager::compose_apply_blocking(&session, &template_id)
+            .map_err(|e| e.to_string())?;
+        Ok::<_, String>(pg_report_to_view(report))
+    })
+    .await
+    .map_err(|e| format!("software_compose_apply join: {e}"))?
+}
+
+#[tauri::command]
+async fn software_compose_down(
+    app: tauri::AppHandle,
+    host: String,
+    port: u16,
+    user: String,
+    auth_mode: String,
+    password: String,
+    key_path: String,
+    saved_connection_index: Option<usize>,
+    template_id: String,
+) -> Result<PostgresActionReportView, String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        let state: tauri::State<'_, AppState> = app.state();
+        let session = get_or_open_ssh_session(
+            &state, &host, port, &user, &auth_mode, &password, &key_path,
+            saved_connection_index,
+        )?;
+        let report = package_manager::compose_down_blocking(&session, &template_id)
+            .map_err(|e| e.to_string())?;
+        Ok::<_, String>(pg_report_to_view(report))
+    })
+    .await
+    .map_err(|e| format!("software_compose_down join: {e}"))?
+}
+
+// ── MySQL / Redis service-level orchestration (v2.9) ─────────────
+
+#[tauri::command]
+async fn mysql_create_user_remote(
+    app: tauri::AppHandle,
+    host: String,
+    port: u16,
+    user: String,
+    auth_mode: String,
+    password: String,
+    key_path: String,
+    saved_connection_index: Option<usize>,
+    db_username: String,
+    db_password: String,
+    db_name: String,
+    root_password: Option<String>,
+) -> Result<PostgresActionReportView, String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        let state: tauri::State<'_, AppState> = app.state();
+        let session = get_or_open_ssh_session(
+            &state, &host, port, &user, &auth_mode, &password, &key_path,
+            saved_connection_index,
+        )?;
+        let report = package_manager::mysql_create_user_blocking(
+            &session,
+            &db_username,
+            &db_password,
+            &db_name,
+            root_password.as_deref(),
+        )
+        .map_err(|e| e.to_string())?;
+        Ok::<_, String>(pg_report_to_view(report))
+    })
+    .await
+    .map_err(|e| format!("mysql_create_user_remote join: {e}"))?
+}
+
+#[tauri::command]
+async fn mysql_create_db_remote(
+    app: tauri::AppHandle,
+    host: String,
+    port: u16,
+    user: String,
+    auth_mode: String,
+    password: String,
+    key_path: String,
+    saved_connection_index: Option<usize>,
+    db_name: String,
+    root_password: Option<String>,
+) -> Result<PostgresActionReportView, String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        let state: tauri::State<'_, AppState> = app.state();
+        let session = get_or_open_ssh_session(
+            &state, &host, port, &user, &auth_mode, &password, &key_path,
+            saved_connection_index,
+        )?;
+        let report = package_manager::mysql_create_db_blocking(
+            &session,
+            &db_name,
+            root_password.as_deref(),
+        )
+        .map_err(|e| e.to_string())?;
+        Ok::<_, String>(pg_report_to_view(report))
+    })
+    .await
+    .map_err(|e| format!("mysql_create_db_remote join: {e}"))?
+}
+
+#[tauri::command]
+async fn mysql_open_remote_remote(
+    app: tauri::AppHandle,
+    host: String,
+    port: u16,
+    user: String,
+    auth_mode: String,
+    password: String,
+    key_path: String,
+    saved_connection_index: Option<usize>,
+) -> Result<PostgresActionReportView, String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        let state: tauri::State<'_, AppState> = app.state();
+        let session = get_or_open_ssh_session(
+            &state, &host, port, &user, &auth_mode, &password, &key_path,
+            saved_connection_index,
+        )?;
+        let report = package_manager::mysql_open_remote_blocking(&session)
+            .map_err(|e| e.to_string())?;
+        Ok::<_, String>(pg_report_to_view(report))
+    })
+    .await
+    .map_err(|e| format!("mysql_open_remote_remote join: {e}"))?
+}
+
+#[tauri::command]
+async fn redis_set_password_remote(
+    app: tauri::AppHandle,
+    host: String,
+    port: u16,
+    user: String,
+    auth_mode: String,
+    password: String,
+    key_path: String,
+    saved_connection_index: Option<usize>,
+    redis_password: String,
+) -> Result<PostgresActionReportView, String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        let state: tauri::State<'_, AppState> = app.state();
+        let session = get_or_open_ssh_session(
+            &state, &host, port, &user, &auth_mode, &password, &key_path,
+            saved_connection_index,
+        )?;
+        let report = package_manager::redis_set_password_blocking(&session, &redis_password)
+            .map_err(|e| e.to_string())?;
+        Ok::<_, String>(pg_report_to_view(report))
+    })
+    .await
+    .map_err(|e| format!("redis_set_password_remote join: {e}"))?
+}
+
+#[tauri::command]
+async fn redis_open_remote_remote(
+    app: tauri::AppHandle,
+    host: String,
+    port: u16,
+    user: String,
+    auth_mode: String,
+    password: String,
+    key_path: String,
+    saved_connection_index: Option<usize>,
+) -> Result<PostgresActionReportView, String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        let state: tauri::State<'_, AppState> = app.state();
+        let session = get_or_open_ssh_session(
+            &state, &host, port, &user, &auth_mode, &password, &key_path,
+            saved_connection_index,
+        )?;
+        let report = package_manager::redis_open_remote_blocking(&session)
+            .map_err(|e| e.to_string())?;
+        Ok::<_, String>(pg_report_to_view(report))
+    })
+    .await
+    .map_err(|e| format!("redis_open_remote_remote join: {e}"))?
+}
+
+// ── System search + ad-hoc install (v2.7) ──────────────────────────
+
+#[derive(Serialize, Clone)]
+#[serde(rename_all = "camelCase")]
+struct SearchHitView {
+    name: String,
+    summary: String,
+}
+
+/// Search the host's system package catalog (apt-cache search /
+/// dnf search / …). Frontend calls this with the same string the
+/// user types in the panel's search box once the registry has no
+/// hits.
+#[tauri::command]
+async fn software_search_remote(
+    app: tauri::AppHandle,
+    host: String,
+    port: u16,
+    user: String,
+    auth_mode: String,
+    password: String,
+    key_path: String,
+    saved_connection_index: Option<usize>,
+    query: String,
+    limit: Option<usize>,
+) -> Result<Vec<SearchHitView>, String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        let state: tauri::State<'_, AppState> = app.state();
+        let session = get_or_open_ssh_session(
+            &state,
+            &host,
+            port,
+            &user,
+            &auth_mode,
+            &password,
+            &key_path,
+            saved_connection_index,
+        )?;
+        let limit = limit.unwrap_or(20).min(100);
+        let hits = package_manager::search_remote_blocking(&session, &query, limit)
+            .map_err(|e| e.to_string())?;
+        Ok::<_, String>(
+            hits.into_iter()
+                .map(|h| SearchHitView {
+                    name: h.name,
+                    summary: h.summary,
+                })
+                .collect(),
+        )
+    })
+    .await
+    .map_err(|e| format!("software_search_remote join: {e}"))?
+}
+
+/// Install a package not in the registry — used by the search
+/// section's "Install" button. Streams output via the same
+/// SOFTWARE_INSTALL_EVENT channel as the regular install path so
+/// the activity log + cancel button reuse existing infrastructure.
+#[tauri::command]
+async fn software_install_arbitrary(
+    app: tauri::AppHandle,
+    host: String,
+    port: u16,
+    user: String,
+    auth_mode: String,
+    password: String,
+    key_path: String,
+    saved_connection_index: Option<usize>,
+    package_name: String,
+    install_id: String,
+) -> Result<SoftwareInstallReportView, String> {
+    let app_for_failure = app.clone();
+    let install_id_for_failure = install_id.clone();
+    let token = register_software_cancel(&app, &install_id);
+    let token_for_task = token.clone();
+    let join = tauri::async_runtime::spawn_blocking(move || {
+        let state: tauri::State<'_, AppState> = app.state();
+        let session = get_or_open_ssh_session(
+            &state,
+            &host,
+            port,
+            &user,
+            &auth_mode,
+            &password,
+            &key_path,
+            saved_connection_index,
+        )?;
+        let app_for_lines = app.clone();
+        let install_id_for_lines = install_id.clone();
+        let on_line = move |line: &str| {
+            let _ = app_for_lines.emit(
+                SOFTWARE_INSTALL_EVENT,
+                SoftwareInstallEvent {
+                    install_id: install_id_for_lines.clone(),
+                    kind: "line".to_string(),
+                    text: Some(line.to_string()),
+                    report: None,
+                    message: None,
+                },
+            );
+        };
+        let report = package_manager::install_arbitrary_blocking(
+            &session,
+            &package_name,
+            on_line,
+            Some(token_for_task.clone()),
+        )
+        .map_err(|e| e.to_string())?;
+        let view = report_to_view(report);
+        let kind = if view.status == "cancelled" { "cancelled" } else { "done" };
+        let _ = app.emit(
+            SOFTWARE_INSTALL_EVENT,
+            SoftwareInstallEvent {
+                install_id: install_id.clone(),
+                kind: kind.to_string(),
+                text: None,
+                report: Some(view.clone()),
+                message: None,
+            },
+        );
+        Ok::<_, String>(view)
+    })
+    .await;
+    unregister_software_cancel(&app_for_failure, &install_id_for_failure);
+    match join {
+        Ok(inner) => inner,
+        Err(e) => {
+            let msg = format!("software_install_arbitrary join: {e}");
+            let _ = app_for_failure.emit(
+                SOFTWARE_INSTALL_EVENT,
+                SoftwareInstallEvent {
+                    install_id: install_id_for_failure,
+                    kind: "failed".to_string(),
+                    text: None,
+                    report: None,
+                    message: Some(msg.clone()),
+                },
+            );
+            Err(msg)
+        }
+    }
+}
+
 // ── Mirror switching (v2.3) ────────────────────────────────────────
 
 #[derive(Serialize, Clone)]
@@ -6859,6 +7492,178 @@ fn mirror_action_to_view(r: package_mirror::MirrorActionReport) -> MirrorActionR
 #[tauri::command]
 fn software_user_extras_path() -> Option<String> {
     package_manager::user_extras_path().map(|p| p.display().to_string())
+}
+
+/// Read the user-extras JSON file into a string for the editor.
+/// Returns an empty string when the file doesn't exist (so the
+/// editor opens with a blank canvas instead of an error). Any
+/// other read error surfaces verbatim.
+#[tauri::command]
+fn software_user_extras_read() -> Result<String, String> {
+    let Some(path) = package_manager::user_extras_path() else {
+        return Err("user_extras_path not initialised".to_string());
+    };
+    match std::fs::read_to_string(path) {
+        Ok(s) => Ok(s),
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(String::new()),
+        Err(e) => Err(format!("read {}: {e}", path.display())),
+    }
+}
+
+/// Validate-and-write the user-extras file. The frontend pre-
+/// validates (it parses the textarea before letting the user save),
+/// but we re-parse here so a hand-edited tab-key submission can't
+/// land an invalid JSON blob on disk. Empty input clears the file.
+///
+/// **Caller MUST surface the "restart Pier-X to apply" notice** —
+/// the registry's OnceLock memo means the running process keeps
+/// the catalog it built at startup.
+#[tauri::command]
+fn software_user_extras_write(content: String) -> Result<(), String> {
+    let Some(path) = package_manager::user_extras_path() else {
+        return Err("user_extras_path not initialised".to_string());
+    };
+    let trimmed = content.trim();
+    if trimmed.is_empty() {
+        // Clearing the file is a valid action — drop it so the
+        // next startup just uses the built-in catalog.
+        return match std::fs::remove_file(path) {
+            Ok(()) => Ok(()),
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(()),
+            Err(e) => Err(format!("remove {}: {e}", path.display())),
+        };
+    }
+    // Round-trip parse to surface JSON / schema errors before we
+    // overwrite the user's previous file.
+    let _: serde_json::Value =
+        serde_json::from_str(trimmed).map_err(|e| format!("invalid JSON: {e}"))?;
+    if let Some(parent) = path.parent() {
+        let _ = std::fs::create_dir_all(parent);
+    }
+    std::fs::write(path, content).map_err(|e| format!("write {}: {e}", path.display()))?;
+    Ok(())
+}
+
+// ── Operation history (v2.8) ──────────────────────────────────────
+//
+// Append-only JSONL journal of significant software-panel actions
+// (install, uninstall, mirror-set, mirror-restore, bundle-install).
+// One file per Pier-X profile, lives next to software-prefs.json.
+// Append-only so concurrent writes from multiple installs in flight
+// never trample each other.
+
+#[derive(serde::Serialize, serde::Deserialize, Debug, Clone)]
+#[serde(rename_all = "camelCase")]
+struct SoftwareHistoryEntry {
+    /// Unix epoch seconds (UTC).
+    ts: i64,
+    /// `"install"` / `"uninstall"` / `"mirror-set"` / `"mirror-restore"` /
+    /// `"bundle-install"` / `"install-arbitrary"`.
+    action: String,
+    /// User-readable target (`"nginx"` / `"aliyun"` / etc.).
+    target: String,
+    /// Resolved host the action ran against (`user@host:port`).
+    host: String,
+    /// `"ok"` / `"failed"` / `"cancelled"` / status string from the
+    /// underlying report.
+    outcome: String,
+    /// Free-form note (e.g. localized error message). Empty for
+    /// successful runs unless the caller adds one.
+    note: String,
+    /// Optional saved-connection index — populated by callers that
+    /// have one in scope so the rollback flow can reach the host
+    /// without re-prompting for credentials. `None` = the row's
+    /// "undo" button stays disabled.
+    #[serde(default)]
+    saved_connection_index: Option<usize>,
+}
+
+fn software_history_path(app: &tauri::AppHandle) -> Option<std::path::PathBuf> {
+    let dir = app.path().app_config_dir().ok()?;
+    let _ = std::fs::create_dir_all(&dir);
+    Some(dir.join("software-history.jsonl"))
+}
+
+#[tauri::command]
+fn software_history_log(
+    app: tauri::AppHandle,
+    action: String,
+    target: String,
+    host: String,
+    outcome: String,
+    note: String,
+    saved_connection_index: Option<usize>,
+) -> Result<(), String> {
+    use std::io::Write;
+    let Some(path) = software_history_path(&app) else {
+        return Err("history path unavailable".to_string());
+    };
+    let entry = SoftwareHistoryEntry {
+        ts: std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_secs() as i64)
+            .unwrap_or(0),
+        action,
+        target,
+        host,
+        outcome,
+        note,
+        saved_connection_index,
+    };
+    let line = serde_json::to_string(&entry).map_err(|e| e.to_string())?;
+    let mut f = std::fs::OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(&path)
+        .map_err(|e| format!("open {}: {e}", path.display()))?;
+    writeln!(f, "{line}").map_err(|e| e.to_string())?;
+    Ok(())
+}
+
+/// List the most-recent N history entries (newest first). Empty
+/// when the file doesn't exist or is unreadable. `since_ts` filters
+/// entries whose `ts` is older than that epoch second — pass 0 to
+/// disable filtering.
+#[tauri::command]
+fn software_history_list(
+    app: tauri::AppHandle,
+    since_ts: Option<i64>,
+    limit: Option<usize>,
+) -> Vec<SoftwareHistoryEntry> {
+    let Some(path) = software_history_path(&app) else {
+        return Vec::new();
+    };
+    let Ok(text) = std::fs::read_to_string(&path) else {
+        return Vec::new();
+    };
+    let cutoff = since_ts.unwrap_or(0);
+    let cap = limit.unwrap_or(200).min(2000);
+    let mut all: Vec<SoftwareHistoryEntry> = text
+        .lines()
+        .filter_map(|line| {
+            let trimmed = line.trim();
+            if trimmed.is_empty() {
+                return None;
+            }
+            serde_json::from_str::<SoftwareHistoryEntry>(trimmed).ok()
+        })
+        .filter(|e| e.ts >= cutoff)
+        .collect();
+    all.sort_by(|a, b| b.ts.cmp(&a.ts));
+    all.truncate(cap);
+    all
+}
+
+#[tauri::command]
+fn software_history_clear(app: tauri::AppHandle) -> Result<(), String> {
+    let Some(path) = software_history_path(&app) else {
+        return Err("history path unavailable".to_string());
+    };
+    match std::fs::remove_file(&path) {
+        Ok(()) => Ok(()),
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(()),
+        Err(e) => Err(format!("remove {}: {e}", path.display())),
+    }
 }
 
 /// Software-panel preferences persisted in the app config dir.
@@ -7026,6 +7831,133 @@ async fn software_mirror_set(
         }
     }
     result
+}
+
+#[derive(Serialize, Clone)]
+#[serde(rename_all = "camelCase")]
+struct MirrorLatencyView {
+    mirror_id: String,
+    host: String,
+    latency_ms: Option<u32>,
+}
+
+/// Client-side TCP probe of every mirror's hostname:443 — runs from
+/// **this machine**, not over SSH. Useful when:
+///  * the SSH host is offline / unreachable from the user's network
+///    (so we can still suggest a mirror to pre-pick)
+///  * the user wants to spot-check that the mirrors themselves are
+///    healthy, independent of the remote box's network
+///
+/// Implementation: `std::net::TcpStream::connect_timeout` with a 4s
+/// budget per host. Doesn't speak TLS — pure connect-time. Returns
+/// the same view shape as the SSH-side benchmark so the dialog can
+/// merge results.
+#[tauri::command]
+async fn software_mirror_benchmark_client() -> Result<Vec<MirrorLatencyView>, String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        use std::net::ToSocketAddrs;
+        use std::time::{Duration, Instant};
+        let mirrors = package_mirror::supported_mirrors();
+        let mut threads = Vec::with_capacity(mirrors.len());
+        for m in mirrors {
+            // Probe each mirror's apt_host (the most universal one;
+            // every mirror in our catalog declares this field as
+            // non-Option). 443 = HTTPS — the same port apt/dnf
+            // would speak to fetch metadata.
+            let id = m.id.as_str().to_string();
+            let host = m.apt_host.to_string();
+            threads.push(std::thread::spawn(move || {
+                let started = Instant::now();
+                let addr_iter = match (host.as_str(), 443u16).to_socket_addrs() {
+                    Ok(it) => it,
+                    Err(_) => {
+                        return MirrorLatencyView {
+                            mirror_id: id,
+                            host,
+                            latency_ms: None,
+                        };
+                    }
+                };
+                // Try the first resolved address only — pier-x just
+                // needs a reachability gauge, not a full ranking.
+                let mut latency_ms: Option<u32> = None;
+                for addr in addr_iter {
+                    if let Ok(_stream) =
+                        std::net::TcpStream::connect_timeout(&addr, Duration::from_secs(4))
+                    {
+                        let elapsed = started.elapsed();
+                        latency_ms = Some(elapsed.as_millis() as u32);
+                        break;
+                    }
+                }
+                MirrorLatencyView {
+                    mirror_id: id,
+                    host,
+                    latency_ms,
+                }
+            }));
+        }
+        Ok::<_, String>(
+            threads
+                .into_iter()
+                .map(|h| h.join().unwrap_or_else(|_| MirrorLatencyView {
+                    mirror_id: String::new(),
+                    host: String::new(),
+                    latency_ms: None,
+                }))
+                .collect(),
+        )
+    })
+    .await
+    .map_err(|e| format!("software_mirror_benchmark_client join: {e}"))?
+}
+
+/// Probe each mirror's reachability + latency over the SSH session.
+/// Slow mirrors / unreachable mirrors come back with `latency_ms =
+/// null`; the dialog sorts ascending and labels the fastest one as
+/// "推荐".
+#[tauri::command]
+async fn software_mirror_benchmark(
+    app: tauri::AppHandle,
+    host: String,
+    port: u16,
+    user: String,
+    auth_mode: String,
+    password: String,
+    key_path: String,
+    saved_connection_index: Option<usize>,
+) -> Result<Vec<MirrorLatencyView>, String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        let state: tauri::State<'_, AppState> = app.state();
+        let session = get_or_open_ssh_session(
+            &state,
+            &host,
+            port,
+            &user,
+            &auth_mode,
+            &password,
+            &key_path,
+            saved_connection_index,
+        )?;
+        let env = package_manager::probe_host_env_blocking(&session);
+        let manager = env
+            .package_manager
+            .ok_or_else(|| "host has no detected package manager".to_string())?;
+        let results = package_mirror::benchmark_mirrors_blocking(&session, manager)
+            .map_err(|e| e.to_string())?;
+        Ok::<_, String>(
+            results
+                .into_iter()
+                .map(|r| MirrorLatencyView {
+                    mirror_id: r.mirror_id,
+                    host: r.host,
+                    latency_ms: r.latency_ms,
+                })
+                .collect(),
+        )
+    })
+    .await
+    .map_err(|e| format!("software_mirror_benchmark join: {e}"))?
 }
 
 /// Restore the original sources from `.pier-bak`. No-op when no
@@ -10343,14 +11275,37 @@ pub fn run() {
             software_versions_remote,
             software_details_remote,
             software_install_preview,
+            software_search_remote,
+            software_install_arbitrary,
             software_bundles,
+            software_co_install_suggestions,
             software_mirror_catalog,
             software_mirror_get,
             software_mirror_set,
             software_mirror_restore,
+            software_mirror_benchmark,
+            software_mirror_benchmark_client,
             software_user_extras_path,
+            software_user_extras_read,
+            software_user_extras_write,
             software_preferences_get,
             software_preferences_set_mirror,
+            software_history_log,
+            software_history_list,
+            software_history_clear,
+            postgres_create_user_remote,
+            postgres_create_db_remote,
+            postgres_open_remote_remote,
+            mysql_create_user_remote,
+            mysql_create_db_remote,
+            mysql_open_remote_remote,
+            redis_set_password_remote,
+            redis_open_remote_remote,
+            software_compose_templates,
+            software_compose_apply,
+            software_compose_down,
+            software_clone_plan,
+            software_db_metrics,
             software_service_action_remote,
             software_service_logs_remote,
             software_install_cancel,

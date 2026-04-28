@@ -1274,6 +1274,31 @@ export type SoftwareBundle = {
 export const softwareBundles = () =>
   invoke<SoftwareBundle[]>("software_bundles");
 
+/** Look up curated "X is commonly installed alongside Y" suggestions
+ *  for `id`. Empty list = no curated recommendations. */
+export const softwareCoInstallSuggestions = (id: string) =>
+  invoke<string[]>("software_co_install_suggestions", { id });
+
+/** One row in a system-package search result. */
+export type SoftwareSearchHit = {
+  name: string;
+  summary: string;
+};
+
+/** Search the host's package manager catalog. Returns up to
+ *  `limit` hits parsed from `apt-cache search` / `dnf search` /
+ *  `pacman -Ss` / `apk search -d` / `zypper search`. */
+export const softwareSearchRemote = (
+  params: SshParams & { query: string; limit?: number },
+) => invoke<SoftwareSearchHit[]>("software_search_remote", params);
+
+/** Install a package by name (no descriptor lookup). Streams to
+ *  the SOFTWARE_INSTALL_EVENT channel so the existing event
+ *  listener wiring works unchanged. */
+export const softwareInstallArbitrary = (
+  params: SshParams & { packageName: string; installId: string },
+) => invoke<SoftwareInstallReport>("software_install_arbitrary", params);
+
 // ── Mirror switching (v2.3) ─────────────────────────────────────
 
 /** Stable id of one curated mirror — must match the backend enum. */
@@ -1335,6 +1360,18 @@ export const softwareMirrorCatalog = () =>
 export const softwareUserExtrasPath = () =>
   invoke<string | null>("software_user_extras_path");
 
+/** Read the raw user-extras JSON contents. Empty string when the
+ *  file doesn't exist yet. */
+export const softwareUserExtrasRead = () =>
+  invoke<string>("software_user_extras_read");
+
+/** Write the user-extras file. Validates that the input parses
+ *  as JSON before overwriting; an empty string deletes the file.
+ *  **Caller surfaces the restart notice** — the running process
+ *  keeps the catalog it built at startup. */
+export const softwareUserExtrasWrite = (content: string) =>
+  invoke<void>("software_user_extras_write", { content });
+
 /** Persistent software-panel preferences. Stored in the app config
  *  dir as `software-prefs.json`. */
 export type SoftwarePreferences = {
@@ -1347,6 +1384,162 @@ export const softwarePreferencesGet = () =>
 export const softwarePreferencesSetMirror = (mirrorId: MirrorId | null) =>
   invoke<SoftwarePreferences>("software_preferences_set_mirror", { mirrorId });
 
+/** One row in the software-action history JSONL journal. Written
+ *  by helpers around install / uninstall / mirror-set actions; read
+ *  by the panel's history dialog. */
+export type SoftwareHistoryEntry = {
+  ts: number;
+  action: string;
+  target: string;
+  host: string;
+  outcome: string;
+  note: string;
+  /** Saved-connection index when the original logger had one in
+   *  scope. The history dialog uses this to re-resolve credentials
+   *  for "undo" — when null the undo button stays disabled. */
+  savedConnectionIndex: number | null;
+};
+
+export const softwareHistoryLog = (params: {
+  action: string;
+  target: string;
+  host: string;
+  outcome: string;
+  note?: string;
+  savedConnectionIndex?: number | null;
+}) =>
+  invoke<void>("software_history_log", {
+    action: params.action,
+    target: params.target,
+    host: params.host,
+    outcome: params.outcome,
+    note: params.note ?? "",
+    savedConnectionIndex: params.savedConnectionIndex ?? null,
+  });
+
+export const softwareHistoryList = (params: {
+  sinceTs?: number;
+  limit?: number;
+} = {}) => invoke<SoftwareHistoryEntry[]>("software_history_list", params);
+
+export const softwareHistoryClear = () =>
+  invoke<void>("software_history_clear");
+
+/** Outcome of a PostgreSQL helper action (create user / create
+ *  db / open remote). Mirrors the install-report shape so the
+ *  panel can reuse the same outcome formatter. */
+export type PostgresActionReport = {
+  status: "ok" | "sudo-requires-password" | "failed";
+  command: string;
+  exitCode: number;
+  outputTail: string;
+};
+
+export const postgresCreateUserRemote = (
+  params: SshParams & {
+    pgUsername: string;
+    pgPassword: string;
+    isSuperuser: boolean;
+  },
+) =>
+  invoke<PostgresActionReport>("postgres_create_user_remote", params);
+
+export const postgresCreateDbRemote = (
+  params: SshParams & { dbName: string; owner: string },
+) => invoke<PostgresActionReport>("postgres_create_db_remote", params);
+
+export const postgresOpenRemote = (params: SshParams) =>
+  invoke<PostgresActionReport>("postgres_open_remote_remote", params);
+
+// ── MySQL / MariaDB helpers (v2.9) ──────────────────────────────
+
+export const mysqlCreateUserRemote = (
+  params: SshParams & {
+    dbUsername: string;
+    dbPassword: string;
+    dbName: string;
+    rootPassword?: string | null;
+  },
+) =>
+  invoke<PostgresActionReport>("mysql_create_user_remote", {
+    ...params,
+    rootPassword: params.rootPassword ?? null,
+  });
+
+export const mysqlCreateDbRemote = (
+  params: SshParams & { dbName: string; rootPassword?: string | null },
+) =>
+  invoke<PostgresActionReport>("mysql_create_db_remote", {
+    ...params,
+    rootPassword: params.rootPassword ?? null,
+  });
+
+export const mysqlOpenRemote = (params: SshParams) =>
+  invoke<PostgresActionReport>("mysql_open_remote_remote", params);
+
+// ── Redis helpers (v2.9) ────────────────────────────────────────
+
+export const redisSetPasswordRemote = (
+  params: SshParams & { redisPassword: string },
+) => invoke<PostgresActionReport>("redis_set_password_remote", params);
+
+export const redisOpenRemote = (params: SshParams) =>
+  invoke<PostgresActionReport>("redis_open_remote_remote", params);
+
+// ── Docker Compose templates (v2.11) ────────────────────────────
+
+export type ComposeTemplate = {
+  id: string;
+  displayName: string;
+  description: string;
+  yaml: string;
+  publishedPorts: number[];
+};
+
+export const softwareComposeTemplates = () =>
+  invoke<ComposeTemplate[]>("software_compose_templates");
+
+export const softwareComposeApply = (
+  params: SshParams & { templateId: string },
+) => invoke<PostgresActionReport>("software_compose_apply", params);
+
+export const softwareComposeDown = (
+  params: SshParams & { templateId: string },
+) => invoke<PostgresActionReport>("software_compose_down", params);
+
+// ── Cross-host clone (v2.12) ────────────────────────────────────
+
+export type ClonePlanEntry = {
+  package: string;
+  descriptorId: string | null;
+};
+
+export type ClonePlan = {
+  packageManager: string;
+  entries: ClonePlanEntry[];
+};
+
+export const softwareClonePlan = (params: SshParams) =>
+  invoke<ClonePlan>("software_clone_plan", params);
+
+// ── DB metrics polling (v2.13) ──────────────────────────────────
+
+export type DbMetrics = {
+  kind: string;
+  connections: number | null;
+  memoryMib: number | null;
+  extra: string | null;
+  probeOk: boolean;
+};
+
+export const softwareDbMetrics = (
+  params: SshParams & { packageId: string; rootPassword?: string | null },
+) =>
+  invoke<DbMetrics>("software_db_metrics", {
+    ...params,
+    rootPassword: params.rootPassword ?? null,
+  });
+
 export const softwareMirrorGet = (params: SshParams) =>
   invoke<MirrorState>("software_mirror_get", params);
 
@@ -1356,6 +1549,24 @@ export const softwareMirrorSet = (
 
 export const softwareMirrorRestore = (params: SshParams) =>
   invoke<MirrorActionReport>("software_mirror_restore", params);
+
+/** Per-mirror probe result. `latencyMs = null` = the host couldn't
+ *  reach this mirror (DNS fail / timeout / non-2xx HTTP HEAD). */
+export type MirrorLatency = {
+  mirrorId: MirrorId;
+  host: string;
+  latencyMs: number | null;
+};
+
+export const softwareMirrorBenchmark = (params: SshParams) =>
+  invoke<MirrorLatency[]>("software_mirror_benchmark", params);
+
+/** Client-side TCP probe — runs from the local Pier-X process,
+ *  not over SSH. Useful when the remote host is unreachable and
+ *  the user wants a fallback recommendation based on their own
+ *  network's view of the mirror set. */
+export const softwareMirrorBenchmarkClient = () =>
+  invoke<MirrorLatency[]>("software_mirror_benchmark_client");
 
 /** Subscribe to streaming install/update output. Returns the unlisten
  *  fn — call it on unmount. The handler is invoked with the typed

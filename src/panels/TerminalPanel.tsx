@@ -144,15 +144,21 @@ export default function TerminalPanel({ tab, isActive, onEditConnection }: Props
   const pendingResizeRef = useRef(false);
   const latestSizeRef = useRef(terminalSize);
   latestSizeRef.current = terminalSize;
-  // Guards against concurrent session-creation. The create-effect's
-  // backend call is async; before this ref existed, a `terminalSize`
-  // update from the first ResizeObserver tick would re-fire the
-  // effect while the first `terminalCreate*` was still in flight —
-  // `session` was still null so the early-return didn't catch it,
-  // and we'd open two SSH sessions back-to-back. The second one
-  // injected the smart-mode bash hook a second time, which the user
-  // saw as a duplicate `__pierx_osc7` line in the terminal.
-  const sessionCreatingRef = useRef(false);
+  // The original duplicate-create concern (ResizeObserver re-firing
+  // the effect mid-handshake and double-injecting the smart-mode
+  // hook) is solved by keeping `terminalSize` out of the create
+  // effect's dep array — see the comment on that effect below. We
+  // intentionally do NOT add a `sessionCreatingRef` guard here: an
+  // earlier version did, and it deadlocked the panel on
+  // "Launching shell..." whenever React 19's strict-mode double
+  // mount fired (or any of the actual deps changed mid-flight) —
+  // cleanup set the local `cancelled` flag, the next effect run
+  // bailed on `ref.current === true`, the in-flight create's
+  // finally cleared the ref but nothing re-triggered React, and
+  // `session` stayed null forever. The `cancelled` closure flag
+  // is enough on its own — when it fires for an in-flight create,
+  // the resolved session is closed via `terminalClose` instead of
+  // setSession'd, so we don't leak handles.
 
   // Mirror of the user's currently-being-typed line so we can
   // recognize `ssh user@host` and resync the right sidebar to that
@@ -423,17 +429,15 @@ export default function TerminalPanel({ tab, isActive, onEditConnection }: Props
 
   useEffect(() => {
     if (session) return;
-    if (sessionCreatingRef.current) return;
     let cancelled = false;
-    sessionCreatingRef.current = true;
 
     async function create() {
       try {
         // Read the size from the ref so a ResizeObserver tick that
         // arrives mid-flight doesn't re-fire this effect (terminalSize
-        // is no longer in the deps array — see comment on
-        // sessionCreatingRef above). The session is created at
-        // whatever size we have at call time; a follow-up SIGWINCH
+        // is intentionally not a dep — that's what kept us from
+        // double-creating sessions originally). The session is created
+        // at whatever size we have at call time; a follow-up SIGWINCH
         // from the resize effect adjusts once the session settles.
         const size = latestSizeRef.current;
         let next: TerminalSessionInfo;
@@ -486,8 +490,6 @@ export default function TerminalPanel({ tab, isActive, onEditConnection }: Props
           setError(formatError(e));
           if (isMissingKeychainError(e)) setNeedsPasswordRecovery(true);
         }
-      } finally {
-        sessionCreatingRef.current = false;
       }
     }
 

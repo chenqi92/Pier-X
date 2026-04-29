@@ -9,6 +9,7 @@ import {
   Activity,
   ChevronDown,
   ChevronRight,
+  Download,
   KeyRound,
   Loader2,
   Pencil,
@@ -287,6 +288,87 @@ export default function HostsHealthPanel({
    *  single toast announces the batch so the user has feedback
    *  while the new tabs spool up — opening 30 SSH tabs without
    *  acknowledgement feels broken. */
+  /** Export the current saved-connection dashboard to CSV — latest
+   *  probe + a small summary of the rolling latency window. Lives at
+   *  the panel level rather than `lib/commands.ts` so we can lean on
+   *  the in-memory `probes` and `latencyHistory` maps without a
+   *  round-trip. CSV format follows the same RFC-4180 quoting as
+   *  `queryResultToCsv` (CRLF + quoted-on-special-char). */
+  async function exportHostsCsv() {
+    if (connections.length === 0) return;
+    try {
+      const dialog = await import("@tauri-apps/plugin-dialog");
+      const picked = await dialog.save({
+        title: t("Export hosts dashboard"),
+        defaultPath: "pier-x-hosts.csv",
+        filters: [{ name: "CSV", extensions: ["csv"] }],
+      });
+      if (typeof picked !== "string") return;
+      const escape = (v: string): string =>
+        /[,"\r\n]/.test(v) ? `"${v.replace(/"/g, '""')}"` : v;
+      const header = [
+        "name",
+        "user",
+        "host",
+        "port",
+        "group",
+        "envTag",
+        "status",
+        "latency_ms",
+        "checked_at",
+        "samples",
+        "min_ms",
+        "max_ms",
+        "avg_ms",
+        "fail_count",
+      ];
+      const rows: string[] = [header.join(",")];
+      for (const c of connections) {
+        const r = probes[c.index];
+        const series = latencyHistory[c.index] ?? [];
+        const numeric = series.filter(
+          (v): v is number => v != null && Number.isFinite(v),
+        );
+        const min = numeric.length > 0 ? Math.min(...numeric) : "";
+        const max = numeric.length > 0 ? Math.max(...numeric) : "";
+        const avg =
+          numeric.length > 0
+            ? Math.round(
+                numeric.reduce((a, b) => a + b, 0) / numeric.length,
+              )
+            : "";
+        const fails = series.filter((v) => v == null).length;
+        const cells = [
+          c.name || `${c.user}@${c.host}`,
+          c.user,
+          c.host,
+          String(c.port),
+          c.group ?? "",
+          c.envTag ?? "",
+          r?.status ?? "",
+          r?.latencyMs != null ? String(r.latencyMs) : "",
+          r?.checkedAt ? new Date(r.checkedAt * 1000).toISOString() : "",
+          String(series.length),
+          String(min),
+          String(max),
+          String(avg),
+          String(fails),
+        ];
+        rows.push(cells.map(escape).join(","));
+      }
+      const blob = rows.join("\r\n");
+      await cmd.localWriteTextFile(picked, blob);
+      toast.info(
+        t("Exported {n} host(s) to {path}", {
+          n: connections.length,
+          path: picked,
+        }),
+      );
+    } catch (e) {
+      toast.warn(e instanceof Error ? e.message : String(e));
+    }
+  }
+
   function connectAllSelected() {
     if (busSelected.size === 0) return;
     // Snapshot before clearing so React's state batching can't
@@ -671,6 +753,17 @@ export default function HostsHealthPanel({
               <RefreshCw size={12} />
             )}
             <span>{t("Refresh")}</span>
+          </button>
+          <button
+            type="button"
+            className="mini-button"
+            onClick={() => void exportHostsCsv()}
+            disabled={connections.length === 0}
+            title={t(
+              "Export the current dashboard (latest probe + recent latency stats) to a CSV file.",
+            )}
+          >
+            <Download size={12} /> <span>{t("Export CSV")}</span>
           </button>
           <button
             type="button"

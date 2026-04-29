@@ -22,6 +22,10 @@
 //! rest of the line / file as raw text so round-trip stays loss-free
 //! for the common case.
 
+// AST nodes mirror the Caddyfile grammar described above; per-field
+// doc comments would restate Caddy's own spec.
+#![allow(missing_docs)]
+
 use serde::{Deserialize, Serialize};
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]

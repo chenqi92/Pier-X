@@ -2390,6 +2390,15 @@ export const zhExtra: Record<string, string> = {
   "Last run: {when}": "上次运行：{when}",
   "Bundle not found": "Bundle 未找到",
 
+  // Bundle dry-run
+  "Dry run": "干跑预览",
+  "Resolve the install commands without running them, copy as a shell script.":
+    "解析安装命令但不执行，复制为 shell 脚本以便审查。",
+  "Nothing to dry-run — every package is already installed.":
+    "无可干跑 —— 所有包都已安装。",
+  "Copied dry-run script for {n} package(s). Paste into a remote shell to review before running.":
+    "已复制 {n} 个包的干跑脚本。粘贴到远程 shell 中先审查再执行。",
+
   // Bundle rollback
   "Bundle failed after installing {n} package(s). Roll back?":
     "Bundle 在已安装 {n} 个包后失败。是否回滚？",
@@ -2438,6 +2447,17 @@ export const zhExtra: Record<string, string> = {
   "Command body": "命令内容",
   "Add snippet": "新增片段",
 
+  // Hosts dashboard CSV export
+  "Export CSV": "导出 CSV",
+  "Export the current dashboard (latest probe + recent latency stats) to a CSV file.":
+    "把当前 dashboard（最新探测 + 近期延迟统计）导出为 CSV 文件。",
+  "Export hosts dashboard": "导出主机 dashboard",
+  "Exported {n} host(s) to {path}": "已导出 {n} 台主机到 {path}",
+
+  // SFTP filename filter
+  "Filter by name…": "按名称过滤…",
+  "{shown}/{total}": "{shown}/{total}",
+
   // SFTP remote→remote copy
   "Copy to other host…": "复制到其他主机…",
   "Copy to other host": "复制到其他主机",
@@ -2449,10 +2469,20 @@ export const zhExtra: Record<string, string> = {
   "Target is the same as the source.": "目标与源是同一主机。",
   "Copied {name} to {host}.": "已将 {name} 复制到 {host}。",
 
-  // SQL history search
+  // DB result file export
+  "Save CSV": "保存为 CSV",
+  "Save TSV": "保存为 TSV",
+  "Save result as CSV": "保存查询结果为 CSV",
+  "Save result as TSV": "保存查询结果为 TSV",
+  "Save the current result set to a file": "把当前结果集保存到文件",
+  "Saved {n} row(s) to {path}": "已保存 {n} 行到 {path}",
+
+  // SQL history / favorites search
   "Filter history…": "搜索历史…",
   "No history entries match this filter.": "没有匹配此过滤条件的历史记录。",
   "(no history yet)": "（暂无历史）",
+  "Filter favorites…": "搜索收藏…",
+  "No favorites match this filter.": "没有匹配此过滤条件的收藏。",
 
   // Terminal broadcast
   "Broadcast to terminals…": "广播到终端…",
@@ -2550,6 +2580,14 @@ export const zhExtra: Record<string, string> = {
   // Webhook template lint
   "Invalid JSON: {err}": "JSON 不合法：{err}",
   "Unknown placeholders: {names}": "未知占位符：{names}",
+
+  // Process kill
+  "Send SIGTERM (graceful)": "发送 SIGTERM（优雅终止）",
+  "Send SIGKILL (force)": "发送 SIGKILL（强制终止）",
+  "Invalid PID: {pid}": "PID 无效：{pid}",
+  "force-kill (SIGKILL)": "强制终止（SIGKILL）",
+  "terminate (SIGTERM)": "终止（SIGTERM）",
+  "Really {verb} {target}?": "确定要{verb} {target} 吗？",
 
   // Web Server lint
   "Lint": "深检",

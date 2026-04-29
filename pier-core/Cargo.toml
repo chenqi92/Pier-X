@@ -129,7 +129,11 @@ tokio-util = { version = "0.7", default-features = false }
 # APIs on Windows — we disable its disk/network/component probes
 # (we only need processes + their cmdline) to keep the refresh
 # cheap and predictable.
-sysinfo = { version = "0.33", default-features = false, features = ["system"] }
+sysinfo = { version = "0.33", default-features = false, features = [
+    "system",
+    "disk",
+    "network",
+] }
 
 # Unix PTY — forkpty + ioctl wrappers live in libc. Only pulled in on
 # Unix targets; Windows uses the ConPTY-backed implementation below.

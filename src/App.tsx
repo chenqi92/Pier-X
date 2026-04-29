@@ -23,6 +23,23 @@ import { initDesktopNotifications, desktopNotify } from "./lib/notify";
 import { isBrowsableRepoPath } from "./lib/browserPath";
 import * as cmd from "./lib/commands";
 import { RIGHT_TOOL_META } from "./lib/rightToolMeta";
+
+/** Cmd+Alt+1..9 mapping for the active tab's right-side tool. Order
+ *  is the most-used 9 tools — markdown / git / firewall / software
+ *  intentionally excluded so the map stays at exactly 9 slots and
+ *  the user can `1..9` without thinking. The standalone Git
+ *  shortcut (Cmd+Shift+G) covers the missing piece. */
+const RIGHT_TOOL_KEY_MAP: RightTool[] = [
+  "monitor",
+  "sftp",
+  "log",
+  "docker",
+  "mysql",
+  "postgres",
+  "redis",
+  "sqlite",
+  "webserver",
+];
 import type { CoreInfo, FileEntry, RightTool, SavedSshConnection } from "./lib/types";
 import { isToolReachable, resolveReachableTool } from "./lib/types";
 import PortForwardDialog from "./components/PortForwardDialog";
@@ -812,6 +829,20 @@ function App() {
         if (target) {
           e.preventDefault();
           store.setActiveTab(target.id);
+        }
+        return;
+      }
+      // Cmd+Alt+1..9 — Switch the active tab's RIGHT-side tool.
+      // Mapping: 1→monitor, 2→sftp, 3→log, 4→docker, 5→mysql,
+      //          6→postgres, 7→redis, 8→sqlite, 9→webserver.
+      // The `handleToolChange` path already enforces reachability,
+      // so a tool that doesn't apply to the current tab no-ops.
+      if (mod && e.altKey && !e.shiftKey && /^[1-9]$/.test(e.key)) {
+        const idx = Number.parseInt(e.key, 10) - 1;
+        const tool = RIGHT_TOOL_KEY_MAP[idx];
+        if (tool) {
+          e.preventDefault();
+          handleToolChange(tool);
         }
         return;
       }

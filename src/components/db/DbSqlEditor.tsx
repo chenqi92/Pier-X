@@ -134,6 +134,7 @@ export default function DbSqlEditor({
   const tokens = useMemo(() => renderSqlTokens(sql), [sql]);
   const [histOpen, setHistOpen] = useState(false);
   const [histFilter, setHistFilter] = useState("");
+  const [favFilter, setFavFilter] = useState("");
   const [favOpen, setFavOpen] = useState(false);
   const favoritesEnabled = !!favorites && !!onAddFavorite;
   const activeTabName =
@@ -380,6 +381,25 @@ export default function DbSqlEditor({
                 <X size={10} />
               </button>
             </div>
+            <div className="sq-hist-search">
+              <input
+                className="sq-hist-search-input mono"
+                placeholder={t("Filter favorites…")}
+                value={favFilter}
+                onChange={(e) => setFavFilter(e.currentTarget.value)}
+                spellCheck={false}
+              />
+              {favFilter && (
+                <button
+                  type="button"
+                  className="mini-button mini-button--ghost"
+                  onClick={() => setFavFilter("")}
+                  title={t("Clear")}
+                >
+                  <X size={9} />
+                </button>
+              )}
+            </div>
             <div className="sq-hist-list">
               {favorites.length === 0 && (
                 <div
@@ -389,39 +409,60 @@ export default function DbSqlEditor({
                   {t("No pinned queries yet.")}
                 </div>
               )}
-              {favorites.map((f) => (
-                <div key={f.id} className="sq-fav-row">
-                  <button
-                    type="button"
-                    className="sq-fav-pick"
-                    onClick={() => onPickFavorite?.(f)}
-                    title={f.sql}
-                  >
-                    <span className="sq-hist-ic">
-                      <Star size={9} fill="currentColor" />
-                    </span>
-                    <div className="sq-hist-body">
-                      <div className="sq-hist-sql"><b>{f.name}</b></div>
-                      <div className="sq-hist-meta">
-                        <span>{f.sql}</span>
-                      </div>
+              {(() => {
+                const q = favFilter.trim().toLowerCase();
+                // Search both the user-defined name and the SQL body
+                // — names like "weekly retention" would otherwise be
+                // unsearchable when the user remembers the label but
+                // not the query itself.
+                const filtered = q
+                  ? favorites.filter(
+                      (f) =>
+                        f.name.toLowerCase().includes(q) ||
+                        f.sql.toLowerCase().includes(q),
+                    )
+                  : favorites;
+                if (favorites.length > 0 && filtered.length === 0) {
+                  return (
+                    <div className="sq-hist-empty mono">
+                      {t("No favorites match this filter.")}
                     </div>
-                  </button>
-                  {onRemoveFavorite && (
+                  );
+                }
+                return filtered.map((f) => (
+                  <div key={f.id} className="sq-fav-row">
                     <button
                       type="button"
-                      className="sq-fav-remove"
-                      onClick={(e) => {
-                        e.stopPropagation();
-                        onRemoveFavorite(f.id);
-                      }}
-                      title={t("Unpin")}
+                      className="sq-fav-pick"
+                      onClick={() => onPickFavorite?.(f)}
+                      title={f.sql}
                     >
-                      <X size={10} />
+                      <span className="sq-hist-ic">
+                        <Star size={9} fill="currentColor" />
+                      </span>
+                      <div className="sq-hist-body">
+                        <div className="sq-hist-sql"><b>{f.name}</b></div>
+                        <div className="sq-hist-meta">
+                          <span>{f.sql}</span>
+                        </div>
+                      </div>
                     </button>
-                  )}
-                </div>
-              ))}
+                    {onRemoveFavorite && (
+                      <button
+                        type="button"
+                        className="sq-fav-remove"
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          onRemoveFavorite(f.id);
+                        }}
+                        title={t("Unpin")}
+                      >
+                        <X size={10} />
+                      </button>
+                    )}
+                  </div>
+                ));
+              })()}
             </div>
           </div>
         )}

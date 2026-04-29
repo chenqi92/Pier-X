@@ -11,6 +11,13 @@
 //! placeholder buttons. nginx still goes through `services::nginx::*`
 //! because its panel needs the richer save-and-reload pipeline.
 
+// The struct/enum/function bodies in this module are deliberately
+// thin (parse / shell-out / serialise) and the rationale lives in the
+// module-level docs above + comments next to the shell commands.
+// Forcing per-field doc comments would add noise without actually
+// teaching the reader anything new.
+#![allow(missing_docs)]
+
 use serde::{Deserialize, Serialize};
 
 use crate::ssh::error::Result;

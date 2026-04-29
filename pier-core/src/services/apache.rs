@@ -19,6 +19,11 @@
 //! with a name + args + optional `section` body. Round-tripping
 //! preserves comments, blank lines, and quoted-arg styles.
 
+// AST node fields are 1:1 with Apache's documented grammar — see
+// the module docs above for the shape — so per-field doc comments
+// would just rename the upstream concepts without adding signal.
+#![allow(missing_docs)]
+
 use serde::{Deserialize, Serialize};
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]

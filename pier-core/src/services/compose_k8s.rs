@@ -31,6 +31,13 @@
 //! drops / sysctls / network specs / secrets, they should run
 //! `kompose convert` themselves. The dialog tells them so.
 
+// The Compose / K8s shape mirrors well-known YAML schemas — every
+// field is documented in the upstream specs and the rendering rules
+// live in module-level docs above. Per-field doc comments would
+// just restate "matches Compose `services.<name>.image`" without
+// adding signal.
+#![allow(missing_docs)]
+
 use std::collections::BTreeMap;
 
 use serde::{Deserialize, Serialize};
@@ -300,23 +307,11 @@ struct ComposeDeploy {
     /// platforms accept the same string forms.
     #[serde(default)]
     resources: Option<ComposeResources>,
-    /// Compose `healthcheck` block — translated to a K8s
-    /// `livenessProbe`. The shape mirrors the Compose spec:
-    ///
-    /// ```yaml
-    /// healthcheck:
-    ///   test: ["CMD", "curl", "-f", "http://localhost:80"]
-    ///   interval: 30s
-    ///   timeout: 5s
-    ///   retries: 3
-    ///   start_period: 5s
-    /// ```
-    ///
-    /// `test:` is the only required field for translation; the
-    /// rest map directly onto K8s probe knobs (interval →
-    /// `periodSeconds`, retries → `failureThreshold`, etc.).
-    #[serde(default)]
-    healthcheck: Option<ComposeHealthcheck>,
+    // No `healthcheck:` field here — Compose places healthchecks at
+    // the service level (`ComposeService.healthcheck`), not under
+    // `deploy:`. A previous draft mirrored both spots, but the
+    // catalog never actually wrote one and the field warned dead.
+    // If a user does paste `deploy.healthcheck` we just ignore it.
 }
 
 #[derive(Debug, Default, Deserialize)]

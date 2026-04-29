@@ -176,6 +176,11 @@ pub struct ProcessRow {
     pub mem_pct: String,
     /// Elapsed wall-clock runtime column (`etime`), e.g. `"01:23:45"`.
     pub elapsed: String,
+    /// Full command line (argv joined by spaces). Empty when the
+    /// remote `ps` couldn't supply it or the source didn't capture
+    /// it. Surfaced in the UI as a hover tooltip / detail expand.
+    #[serde(default)]
+    pub cmd_line: String,
 }
 
 /// Run a combined probe and return a single snapshot.
@@ -553,6 +558,11 @@ fn parse_top_processes(text: &str) -> Vec<ProcessRow> {
             cpu_pct,
             mem_pct,
             elapsed,
+            // The legacy `ps -o pid,comm,...` format used here doesn't
+            // carry `args` — adding it would change the column count
+            // and break this parser. Cmdline stays empty for SSH
+            // probes; local sysinfo path fills it in.
+            cmd_line: String::new(),
         });
     }
     out

@@ -106,7 +106,12 @@ pub struct WebhookEntry {
 /// are ignored at fire-time.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct WebhookHeader {
+    /// Header name (e.g. `Authorization`, `X-Tenant-Id`). Trimmed
+    /// at fire-time; empty / `Content-Type` are dropped to keep the
+    /// JSON content negotiation owned by Pier-X.
     pub name: String,
+    /// Header value, sent unmodified. Bearer / Basic prefixes are
+    /// the user's responsibility.
     pub value: String,
 }
 

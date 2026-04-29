@@ -1801,6 +1801,14 @@ button,
   letter-spacing: 0.08em;
   color: var(--muted);
   text-transform: uppercase;
+  width: 100%;
+}
+.mon-gauge-spark {
+  display: inline-flex;
+  align-items: center;
+  margin-left: auto;
+  color: var(--accent);
+  opacity: 0.85;
 }
 .mon-gauge-label svg { color: var(--muted); flex: none; }
 .mon-gauge-value {
@@ -1935,6 +1943,19 @@ button,
 .mon-table tr:hover td { background: var(--panel-2); }
 .mon-cell-right { text-align: right; }
 .mon-cell-muted { color: var(--muted); }
+.mon-cell-actions {
+  display: flex;
+  gap: 2px;
+  justify-content: flex-end;
+  align-items: center;
+  padding-right: 0;
+}
+.mon-cell-actions .mini-button {
+  padding: 1px 4px;
+}
+.mon-cell-actions .mini-button:hover {
+  color: var(--neg);
+}
 .mon-cell-warn { color: var(--warn); }
 /* Disk + process tables are dense: tighten the cell padding so the
  * columns fit inside a collapsed right panel without clipping, and
@@ -5318,6 +5339,29 @@ button,
   flex: none;
 }
 .ftp-quickrow .field-input { flex: 1; min-width: 0; }
+
+.ftp-filter {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-1);
+  padding: var(--sp-1) var(--sp-2);
+  border-bottom: 1px solid var(--line);
+  background: var(--surface-2);
+}
+.ftp-filter-icon { color: var(--muted); flex: 0 0 auto; }
+.ftp-filter-input {
+  flex: 1;
+  background: var(--surface);
+  color: var(--ink);
+  border: 1px solid var(--line);
+  border-radius: var(--radius-xs);
+  padding: 1px var(--sp-2);
+  font-size: var(--ui-fs-sm);
+}
+.ftp-filter-count {
+  font-size: var(--size-micro);
+  white-space: nowrap;
+}
 
 .ftp-col-head {
   display: grid;

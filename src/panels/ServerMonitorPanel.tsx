@@ -1,4 +1,4 @@
-import { Cpu, HardDrive, KeyRound, MemoryStick, Network, RefreshCw } from "lucide-react";
+import { Cpu, HardDrive, KeyRound, MemoryStick, Network, RefreshCw, Square, X } from "lucide-react";
 import { useEffect, useMemo, useRef, useState } from "react";
 import type { ReactNode } from "react";
 import * as cmd from "../lib/commands";
@@ -9,6 +9,7 @@ import { useI18n } from "../i18n/useI18n";
 import { isMissingKeychainError, localizeError } from "../i18n/localizeMessage";
 import DbConnRow from "../components/DbConnRow";
 import DismissibleNote from "../components/DismissibleNote";
+import Sparkline from "../components/Sparkline";
 import StatusDot from "../components/StatusDot";
 import { useUiActionsStore } from "../stores/useUiActionsStore";
 import { logEvent } from "../lib/logger";
@@ -42,6 +43,100 @@ function formatRate(bps: number): { value: string; unit: string } | null {
 
 type GaugeTone = "accent" | "pos" | "warn" | "off";
 
+/** Per-scope rolling sample windows for CPU% / memory% / disk% /
+ *  network rate. `null` entries mark probes that didn't carry the
+ *  metric (e.g. fast-tier ticks skip disk) — Sparkline renders them
+ *  as gaps. Capped at MONITOR_HISTORY_CAP so localStorage stays
+ *  small even for users who leave the panel open for hours. */
+type MonitorScopeHistory = {
+  cpu: (number | null)[];
+  mem: (number | null)[];
+  disk: (number | null)[];
+  net: (number | null)[];
+};
+type MonitorHistory = Record<string, MonitorScopeHistory>;
+
+const MONITOR_HISTORY_KEY = "pier-x:monitor-history-v1";
+const MONITOR_HISTORY_CAP = 60;
+
+function loadMonitorHistory(): MonitorHistory {
+  try {
+    const raw = localStorage.getItem(MONITOR_HISTORY_KEY);
+    if (!raw) return {};
+    const parsed = JSON.parse(raw);
+    if (!parsed || typeof parsed !== "object") return {};
+    const out: MonitorHistory = {};
+    for (const [scope, value] of Object.entries(parsed)) {
+      if (!value || typeof value !== "object") continue;
+      const v = value as Partial<MonitorScopeHistory>;
+      const sanitize = (arr: unknown): (number | null)[] => {
+        if (!Array.isArray(arr)) return [];
+        return arr
+          .filter(
+            (x) =>
+              x === null || (typeof x === "number" && Number.isFinite(x)),
+          )
+          .slice(-MONITOR_HISTORY_CAP) as (number | null)[];
+      };
+      out[scope] = {
+        cpu: sanitize(v.cpu),
+        mem: sanitize(v.mem),
+        disk: sanitize(v.disk),
+        net: sanitize(v.net),
+      };
+    }
+    return out;
+  } catch {
+    return {};
+  }
+}
+
+function saveMonitorHistory(h: MonitorHistory): void {
+  try {
+    if (Object.keys(h).length === 0) {
+      localStorage.removeItem(MONITOR_HISTORY_KEY);
+    } else {
+      localStorage.setItem(MONITOR_HISTORY_KEY, JSON.stringify(h));
+    }
+  } catch {
+    /* localStorage full — best-effort, history is non-critical */
+  }
+}
+
+/** Build a scope key for the active probe target. We can't use
+ *  `tab.id` because the same logical host can show up under
+ *  different tabs (e.g. user opens a second SSH tab against the
+ *  same prod box) and we want the sparkline trail to follow the
+ *  HOST, not the tab. Saved-connection index is the most stable
+ *  identifier; for ad-hoc SSH (no saved index) we fall back to
+ *  `user@host:port`. Local always shares one bucket. */
+function monitorScopeKey(args: {
+  isLocal: boolean;
+  savedConnectionIndex: number | null;
+  host: string;
+  port: number;
+  user: string;
+}): string {
+  if (args.isLocal) return "local";
+  if (args.savedConnectionIndex !== null) {
+    return `saved:${args.savedConnectionIndex}`;
+  }
+  return `ssh:${args.user}@${args.host}:${args.port}`;
+}
+
+/** Append `sample` to `series`, trim to MONITOR_HISTORY_CAP. Pure —
+ *  callers spread into a new state object. */
+function pushSample(
+  series: (number | null)[] | undefined,
+  sample: number | null,
+): (number | null)[] {
+  const next = series ? [...series, sample] : [sample];
+  if (next.length > MONITOR_HISTORY_CAP) {
+    return next.slice(next.length - MONITOR_HISTORY_CAP);
+  }
+  return next;
+}
+
 function Gauge({
   icon: Icon,
   label,
@@ -49,6 +144,7 @@ function Gauge({
   sub,
   pct,
   tone = "accent",
+  history,
 }: {
   icon: ReactNode;
   label: string;
@@ -56,6 +152,10 @@ function Gauge({
   sub: string;
   pct: number;
   tone?: GaugeTone;
+  /** Recent samples for the inline sparkline. `null` entries become
+   *  gaps in the line (used for "no data yet" probes). When omitted
+   *  the gauge renders without a trail — same as the legacy layout. */
+  history?: (number | null)[];
 }) {
   // "off" is the placeholder tone used before the first probe lands —
   // the bar renders empty and the fill color falls back to the muted
@@ -71,6 +171,11 @@ function Gauge({
       <div className="mon-gauge-label">
         {Icon}
         <span>{label}</span>
+        {history && history.length >= 2 && (
+          <span className="mon-gauge-spark">
+            <Sparkline values={history} width={48} height={14} />
+          </span>
+        )}
       </div>
       <div className="mon-gauge-value">{value}</div>
       <div className="mon-gauge-bar">
@@ -256,6 +361,18 @@ function ServerMonitorPanelBody({ tab, onEditConnection, isActive = true }: Prop
   const formatError = (error: unknown) => localizeError(error, t);
   const [snap, setSnap] = useState<ServerSnapshotView | null>(null);
   const [busy, setBusy] = useState(false);
+  // Rolling-window history for the gauges' inline sparklines. Keyed
+  // by the same identity the polling effect uses (local / saved-conn
+  // index / nested ssh target), so switching tabs or hosts gets a
+  // fresh trail instead of being misinterpreted as the same machine
+  // continuing. Persisted to localStorage under the same scope so a
+  // restart picks up where the user left off.
+  const [history, setHistory] = useState<MonitorHistory>(() =>
+    loadMonitorHistory(),
+  );
+  useEffect(() => {
+    saveMonitorHistory(history);
+  }, [history]);
   // Which metric the top-processes table is sorted by. The backend
   // returns two separate top-8 lists (one per metric) so this flip
   // is a free render swap, no extra probe fired.
@@ -284,6 +401,16 @@ function ServerMonitorPanelBody({ tab, onEditConnection, isActive = true }: Prop
   // Only treat the tab as "local probe" when there is no SSH target
   // overlay; otherwise the SSH path takes priority.
   const isLocal = tab.backend === "local" && !hasSsh;
+  // Identity bucket for the gauge sparklines — host-scoped, not
+  // tab-scoped, so the same prod host shows a continuous trail
+  // even when reopened in a fresh tab.
+  const scopeKey = monitorScopeKey({
+    isLocal,
+    savedConnectionIndex: sshTarget?.savedConnectionIndex ?? null,
+    host: sshTarget?.host ?? "",
+    port: sshTarget?.port ?? 0,
+    user: sshTarget?.user ?? "",
+  });
 
   // The probe runs in two cadences:
   //   • fast (5 s)  — CPU, memory, network, processes, uptime/load
@@ -345,6 +472,37 @@ function ServerMonitorPanelBody({ tab, onEditConnection, isActive = true }: Prop
           blockDevices: prev.blockDevices,
         };
       });
+      // Push samples into the rolling history window. Disk goes in
+      // only on full ticks so the trail reflects real readings; CPU,
+      // memory, and net rate are sampled every tick. Net rate uses
+      // total bytes/sec across rx+tx, capped to >= 0 so a "warming
+      // up" -1 reading shows as a gap.
+      const cpuSample = s.cpuPct >= 0 ? s.cpuPct : null;
+      const memSample =
+        s.memTotalMb > 0 ? (s.memUsedMb / s.memTotalMb) * 100 : null;
+      const diskSample = includeDisks
+        ? s.diskUsePct >= 0
+          ? s.diskUsePct
+          : null
+        : undefined;
+      const netSample =
+        s.netRxBps >= 0 && s.netTxBps >= 0 ? s.netRxBps + s.netTxBps : null;
+      setHistory((prev) => {
+        const cur = prev[scopeKey] ?? {
+          cpu: [],
+          mem: [],
+          disk: [],
+          net: [],
+        };
+        const next: MonitorScopeHistory = {
+          cpu: pushSample(cur.cpu, cpuSample),
+          mem: pushSample(cur.mem, memSample),
+          disk:
+            diskSample !== undefined ? pushSample(cur.disk, diskSample) : cur.disk,
+          net: pushSample(cur.net, netSample),
+        };
+        return { ...prev, [scopeKey]: next };
+      });
       setLastProbed(Date.now());
       const elapsed = Date.now() - started;
       const degraded =
@@ -363,6 +521,55 @@ function ServerMonitorPanelBody({ tab, onEditConnection, isActive = true }: Prop
       logEvent("ERROR", "monitor.panel", `tab=${tab.id} probe failed: ${msg}`);
     } finally {
       setBusy(false);
+    }
+  }
+
+  /** Kill a process from the top-N table. Local tabs route through
+   *  `local_process_kill` (sysinfo, no shell-out); SSH tabs go through
+   *  `kill <pid>` over the existing session. Always confirm with the
+   *  user first — accidentally clicking Force-Kill on systemd-1 has
+   *  consequences. After a successful kill we trigger an immediate
+   *  full probe so the table refreshes without waiting for the next
+   *  5 s tick. */
+  async function killProcess(
+    row: { pid: string; command: string },
+    force: boolean,
+  ) {
+    const pidNum = Number.parseInt(row.pid, 10);
+    if (!Number.isFinite(pidNum) || pidNum <= 0) {
+      setError(t("Invalid PID: {pid}", { pid: row.pid }));
+      return;
+    }
+    const cmdLabel = row.command || `pid ${pidNum}`;
+    const verb = force ? t("force-kill (SIGKILL)") : t("terminate (SIGTERM)");
+    const ok = window.confirm(
+      t("Really {verb} {target}?", { verb, target: cmdLabel }),
+    );
+    if (!ok) return;
+    try {
+      if (isLocal) {
+        await cmd.localProcessKill(pidNum, force);
+      } else if (sshTarget) {
+        await cmd.serverMonitorProcessKill({
+          host: sshTarget.host,
+          port: sshTarget.port,
+          user: sshTarget.user,
+          authMode: sshTarget.authMode,
+          password: sshTarget.password,
+          keyPath: sshTarget.keyPath,
+          savedConnectionIndex: sshTarget.savedConnectionIndex,
+          pid: pidNum,
+          force,
+        });
+      } else {
+        setError(t("No connection available."));
+        return;
+      }
+      // Refresh so the kill is visible — `ps` / sysinfo may take a
+      // moment to drop the row, so we re-probe with a small delay.
+      window.setTimeout(() => void runProbe(false), 250);
+    } catch (e) {
+      setError(formatError(e));
     }
   }
 
@@ -418,6 +625,10 @@ function ServerMonitorPanelBody({ tab, onEditConnection, isActive = true }: Prop
     if (!isActive) return;
     // First probe is full so the disk gauges populate immediately;
     // subsequent ticks split into 5 s fast (no disks) and 30 s full.
+    // Same cadence for local and SSH — the local path now goes
+    // through `pier_core::services::local_monitor` (sysinfo, no
+    // subprocess), so the previous 15 s throttle that worked around
+    // PowerShell-startup-induced typing stutter is no longer needed.
     void runProbe(true);
     let lastFullAt = Date.now();
     const tick = window.setInterval(() => {
@@ -553,6 +764,7 @@ function ServerMonitorPanelBody({ tab, onEditConnection, isActive = true }: Prop
               : "—"}
             pct={snap ? cpuPct : 0}
             tone={snap ? toneFromPct(cpuPct) : "off"}
+            history={history[scopeKey]?.cpu}
           />
           <Gauge
             icon={<MemoryStick size={10} />}
@@ -563,6 +775,7 @@ function ServerMonitorPanelBody({ tab, onEditConnection, isActive = true }: Prop
               : "—"}
             pct={snap ? memPct : 0}
             tone={snap ? toneFromPct(memPct) : "off"}
+            history={history[scopeKey]?.mem}
           />
           <Gauge
             icon={<HardDrive size={10} />}
@@ -577,6 +790,7 @@ function ServerMonitorPanelBody({ tab, onEditConnection, isActive = true }: Prop
               : "—"}
             pct={snap ? diskPct : 0}
             tone={snap ? toneFromPct(diskPct) : "off"}
+            history={history[scopeKey]?.disk}
           />
           <Gauge
             icon={<Network size={10} />}
@@ -587,6 +801,7 @@ function ServerMonitorPanelBody({ tab, onEditConnection, isActive = true }: Prop
               : t("warming up...")}
             pct={netPct}
             tone={netRate ? "pos" : "off"}
+            history={history[scopeKey]?.net}
           />
         </div>
 
@@ -725,24 +940,50 @@ function ServerMonitorPanelBody({ tab, onEditConnection, isActive = true }: Prop
                 <th>{t("COMMAND")}</th>
                 <th style={{ width: 48, textAlign: "right" }}>{t("CPU%")}</th>
                 <th style={{ width: 48, textAlign: "right" }}>{t("MEM%")}</th>
+                <th style={{ width: 36 }} aria-label={t("Actions")} />
               </tr>
             </thead>
             <tbody>
               {snap && procRows.length > 0 ? (
-                procRows.map((row, i) => (
-                  <tr
-                    key={`${row.pid}-${i}`}
-                    title={`${row.command} · PID ${row.pid} · ${t("elapsed")} ${row.elapsed}`}
-                  >
-                    <td className="mono mon-cell-muted">{row.pid}</td>
-                    <td className="mono mon-cell-trunc">{row.command}</td>
-                    <td className="mono mon-cell-right">{row.cpuPct}</td>
-                    <td className="mono mon-cell-right">{row.memPct}</td>
-                  </tr>
-                ))
+                procRows.map((row, i) => {
+                  // Build the hover tooltip from cmd_line when we have
+                  // it (local sysinfo path); else fall back to the
+                  // truncated `comm` from `ps`.
+                  const tooltip = row.cmdLine
+                    ? `${row.cmdLine}\nPID ${row.pid} · ${t("elapsed")} ${row.elapsed}`
+                    : `${row.command} · PID ${row.pid} · ${t("elapsed")} ${row.elapsed}`;
+                  return (
+                    <tr key={`${row.pid}-${i}`} title={tooltip}>
+                      <td className="mono mon-cell-muted">{row.pid}</td>
+                      <td className="mono mon-cell-trunc">{row.command}</td>
+                      <td className="mono mon-cell-right">{row.cpuPct}</td>
+                      <td className="mono mon-cell-right">{row.memPct}</td>
+                      <td className="mono mon-cell-actions">
+                        <button
+                          type="button"
+                          className="mini-button mini-button--ghost"
+                          onClick={() => void killProcess(row, false)}
+                          title={t("Send SIGTERM (graceful)")}
+                          aria-label={t("Send SIGTERM (graceful)")}
+                        >
+                          <Square size={9} />
+                        </button>
+                        <button
+                          type="button"
+                          className="mini-button mini-button--ghost"
+                          onClick={() => void killProcess(row, true)}
+                          title={t("Send SIGKILL (force)")}
+                          aria-label={t("Send SIGKILL (force)")}
+                        >
+                          <X size={9} />
+                        </button>
+                      </td>
+                    </tr>
+                  );
+                })
               ) : (
                 <tr>
-                  <td colSpan={4} className="mon-empty mono">
+                  <td colSpan={5} className="mon-empty mono">
                     {snap ? t("(no process data)") : "—"}
                   </td>
                 </tr>

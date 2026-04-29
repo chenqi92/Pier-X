@@ -2769,6 +2769,17 @@ export const localDockerAction = (containerId: string, action: string) =>
 export const localSystemInfo = (includeDisks: boolean) =>
   invoke<ServerSnapshotView>("local_system_info", { includeDisks });
 
+/** Send a termination signal to a local process. `force=false` is
+ *  the polite SIGTERM (the process can clean up); `force=true` is
+ *  SIGKILL (immediate, no handler). Cross-platform via sysinfo. */
+export const localProcessKill = (pid: number, force: boolean) =>
+  invoke<void>("local_process_kill", { pid, force });
+
+/** Send `kill <pid>` (or `kill -9 <pid>` when `force`) over SSH. */
+export const serverMonitorProcessKill = (
+  params: SshParams & { pid: number; force: boolean },
+) => invoke<void>("server_monitor_process_kill", params);
+
 // ── Utility Functions ───────────────────────────────────────────
 
 const readOnlySqlKeywords = new Set([
@@ -2810,6 +2821,25 @@ export function queryResultToTsv(result: QueryExecutionResult): string {
     row.map(normalizeCell).join("\t"),
   );
   return [header, ...rows].join("\n");
+}
+
+/**
+ * RFC-4180 CSV serialisation. Cells get quoted only when they contain
+ * a comma, double-quote, or newline; embedded quotes are escaped by
+ * doubling. Saved as CRLF-joined so Excel on Windows opens it cleanly
+ * — modern tools accept LF too, but spreadsheets are still where
+ * this file ends up most often.
+ */
+export function queryResultToCsv(result: QueryExecutionResult): string {
+  const escapeCell = (value: string): string => {
+    if (/[,"\r\n]/.test(value)) {
+      return `"${value.replace(/"/g, '""')}"`;
+    }
+    return value;
+  };
+  const header = result.columns.map(escapeCell).join(",");
+  const rows = result.rows.map((row) => row.map(escapeCell).join(","));
+  return [header, ...rows].join("\r\n");
 }
 
 export function quoteCommandArg(value: string): string {

@@ -48,7 +48,7 @@ import { useI18n } from "../i18n/useI18n";
 import { localizeError } from "../i18n/localizeMessage";
 import { writeClipboardText } from "../lib/clipboard";
 import * as cmd from "../lib/commands";
-import { isReadOnlySql, queryResultToTsv } from "../lib/commands";
+import { isReadOnlySql, queryResultToCsv, queryResultToTsv } from "../lib/commands";
 import type {
   PostgresBrowserState,
   QueryExecutionResult,
@@ -266,6 +266,47 @@ function PostgresPanelBody({ tab }: Props) {
       setQueryError(formatError(e));
     } finally {
       setQueryBusy(false);
+    }
+  }
+
+  /** Save the current query result to a CSV / TSV file. Mirrors
+   *  the same flow as MySqlPanel — see that copy for the rationale. */
+  async function saveResultAs(format: "csv" | "tsv") {
+    if (!queryResult) return;
+    try {
+      const dialog = await import("@tauri-apps/plugin-dialog");
+      const ext = format;
+      const base =
+        state?.tableName && state.tableName.trim().length > 0
+          ? state.tableName.trim()
+          : "query";
+      const picked = await dialog.save({
+        title:
+          format === "csv"
+            ? t("Save result as CSV")
+            : t("Save result as TSV"),
+        defaultPath: `${base}.${ext}`,
+        filters: [
+          {
+            name: format === "csv" ? "CSV" : "TSV",
+            extensions: [ext],
+          },
+        ],
+      });
+      if (typeof picked !== "string") return;
+      const blob =
+        format === "csv"
+          ? queryResultToCsv(queryResult)
+          : queryResultToTsv(queryResult);
+      await cmd.localWriteTextFile(picked, blob);
+      setNotice(
+        t("Saved {n} row(s) to {path}", {
+          n: queryResult.rows.length,
+          path: picked,
+        }),
+      );
+    } catch (e) {
+      setQueryError(formatError(e));
     }
   }
 
@@ -922,16 +963,33 @@ function PostgresPanelBody({ tab }: Props) {
   const resultToolbar = (
     <>
       {queryResult && (
-        <button
-          type="button"
-          className="btn is-ghost is-compact"
-          onClick={() => {
-            void writeClipboardText(queryResultToTsv(queryResult));
-            setNotice(t("Copied TSV"));
-          }}
-        >
-          {t("Copy TSV")}
-        </button>
+        <>
+          <button
+            type="button"
+            className="btn is-ghost is-compact"
+            onClick={() => {
+              void writeClipboardText(queryResultToTsv(queryResult));
+              setNotice(t("Copied TSV"));
+            }}
+          >
+            {t("Copy TSV")}
+          </button>
+          <button
+            type="button"
+            className="btn is-ghost is-compact"
+            onClick={() => void saveResultAs("csv")}
+            title={t("Save the current result set to a file")}
+          >
+            {t("Save CSV")}
+          </button>
+          <button
+            type="button"
+            className="btn is-ghost is-compact"
+            onClick={() => void saveResultAs("tsv")}
+          >
+            {t("Save TSV")}
+          </button>
+        </>
       )}
       {flow.hasSsh && (
         <DbTunnelChip

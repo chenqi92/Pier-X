@@ -820,6 +820,10 @@ export type ProcessRowView = {
   cpuPct: string;
   memPct: string;
   elapsed: string;
+  /** Full argv joined by spaces. Empty when the source `ps` didn't
+   *  carry it (current SSH path) or sysinfo couldn't read
+   *  `/proc/<pid>/cmdline`. UI shows this as a hover tooltip. */
+  cmdLine: string;
 };
 
 export type DetectedServiceView = {

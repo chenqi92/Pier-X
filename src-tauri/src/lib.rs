@@ -894,6 +894,10 @@ struct ProcessRowView {
     cpu_pct: String,
     mem_pct: String,
     elapsed: String,
+    /// Full argv joined by spaces. Empty when the source `ps`
+    /// didn't carry it (current SSH path) or sysinfo couldn't read
+    /// `/proc/<pid>/cmdline`. UI shows it as a hover tooltip.
+    cmd_line: String,
 }
 
 #[derive(Serialize)]
@@ -5687,7 +5691,17 @@ fn server_monitor_probe(
         }
     };
 
-    Ok(ServerSnapshotView {
+    Ok(server_snapshot_to_view(snap))
+}
+
+/// Map the pier-core `ServerSnapshot` shape onto the Tauri-serialized
+/// view. Two call sites (SSH probe + local sysinfo probe) share this
+/// — kept here so the field list lives in one place and the two
+/// paths can never drift on shape.
+fn server_snapshot_to_view(
+    snap: pier_core::services::server_monitor::ServerSnapshot,
+) -> ServerSnapshotView {
+    ServerSnapshotView {
         uptime: snap.uptime,
         load_1: snap.load_1,
         load_5: snap.load_5,
@@ -5716,6 +5730,7 @@ fn server_monitor_probe(
                 cpu_pct: p.cpu_pct,
                 mem_pct: p.mem_pct,
                 elapsed: p.elapsed,
+                cmd_line: p.cmd_line,
             })
             .collect(),
         top_processes_mem: snap
@@ -5727,6 +5742,7 @@ fn server_monitor_probe(
                 cpu_pct: p.cpu_pct,
                 mem_pct: p.mem_pct,
                 elapsed: p.elapsed,
+                cmd_line: p.cmd_line,
             })
             .collect(),
         disks: snap
@@ -5758,7 +5774,7 @@ fn server_monitor_probe(
                 mountpoint: b.mountpoint,
             })
             .collect(),
-    })
+    }
 }
 
 // ── Firewall ──────────────────────────────────────────────────────
@@ -11994,463 +12010,97 @@ async fn local_docker_action(container_id: String, action: String) -> Result<Str
 // disk parts so the fast-tier poll doesn't `df` (and `lsblk` on Linux)
 // every 5 s. The previous full snapshot's disks/blockDevices are
 // retained on the frontend in between full polls.
+//
+// **Important**: this command is `async` + `spawn_blocking`-wrapped so
+// the heavy work (PowerShell startup + WMI on Windows, multiple
+// process spawns on macOS / Linux) cannot stall the Tauri IPC
+// dispatcher. Without that wrapper, a 300–800 ms PowerShell probe
+// would block frontend `terminal_write` / `terminal_snapshot` calls
+// arriving in the same window — the user perceived this as the
+// terminal "locking up" every 5 s when the Monitor panel was open.
 #[tauri::command]
-fn local_system_info(include_disks: bool) -> Result<ServerSnapshotView, String> {
-    #[cfg(target_os = "macos")]
-    {
-        let uptime = std::process::Command::new("uptime")
-            .output()
-            .map(|o| String::from_utf8_lossy(&o.stdout).trim().to_string())
-            .unwrap_or_default();
-        let vm_stat = std::process::Command::new("vm_stat")
-            .output()
-            .map(|o| String::from_utf8_lossy(&o.stdout).to_string())
-            .unwrap_or_default();
-        let sysctl = std::process::Command::new("sysctl")
-            .args(["-n", "hw.memsize"])
-            .output()
-            .map(|o| {
-                String::from_utf8_lossy(&o.stdout)
-                    .trim()
-                    .parse::<f64>()
-                    .unwrap_or(0.0)
-            })
-            .unwrap_or(0.0);
-        let mem_total_mb = sysctl / (1024.0 * 1024.0);
-        // Parse free pages from vm_stat
-        let free_pages: f64 = vm_stat
-            .lines()
-            .find(|l| l.starts_with("Pages free"))
-            .and_then(|l| l.split_whitespace().last())
-            .and_then(|v| v.trim_end_matches('.').parse::<f64>().ok())
-            .unwrap_or(0.0);
-        let page_size = 16384.0_f64; // Apple Silicon default
-        let mem_free_mb = free_pages * page_size / (1024.0 * 1024.0);
-        let mem_used_mb = mem_total_mb - mem_free_mb;
-        // Disk — parse the full `df -hT` so the per-mount breakdown
-        // shows up alongside the root-fs gauge. Skipped on fast-tier
-        // polls; the frontend keeps the prior full snapshot's disks.
-        let mut df_snap = server_monitor::ServerSnapshot::default();
-        if include_disks {
-            let df_full = std::process::Command::new("df")
-                .args(["-hT"])
-                .output()
-                .map(|o| String::from_utf8_lossy(&o.stdout).to_string())
-                .unwrap_or_default();
-            server_monitor::parse_df(&df_full, &mut df_snap);
-        }
-        let disk_total = df_snap.disk_total.clone();
-        let disk_used = df_snap.disk_used.clone();
-        let disk_avail = df_snap.disk_avail.clone();
-        let disk_use_pct = if !include_disks
-            || (df_snap.disk_use_pct == 0.0 && disk_total.is_empty())
-        {
-            -1.0
-        } else {
-            df_snap.disk_use_pct
-        };
-        // Load
-        let load_parts: Vec<f64> = uptime
-            .rsplit("load averages:")
-            .next()
-            .or_else(|| uptime.rsplit("load average:").next())
-            .unwrap_or("")
-            .split(|c: char| c == ',' || c == ' ')
-            .filter_map(|s| s.trim().parse::<f64>().ok())
-            .collect();
-        Ok(ServerSnapshotView {
-            uptime,
-            load_1: *load_parts.first().unwrap_or(&-1.0),
-            load_5: *load_parts.get(1).unwrap_or(&-1.0),
-            load_15: *load_parts.get(2).unwrap_or(&-1.0),
-            mem_total_mb,
-            mem_used_mb,
-            mem_free_mb,
-            swap_total_mb: 0.0,
-            swap_used_mb: 0.0,
-            disk_total,
-            disk_used,
-            disk_avail,
-            disk_use_pct,
-            cpu_pct: -1.0,
-            cpu_count: 0,
-            proc_count: 0,
-            os_label: String::new(),
-            net_rx_bps: -1.0,
-            net_tx_bps: -1.0,
-            top_processes: Vec::new(),
-            top_processes_mem: Vec::new(),
-            disks: df_snap
-                .disks
-                .into_iter()
-                .map(|d| DiskEntryView {
-                    filesystem: d.filesystem,
-                    fs_type: d.fs_type,
-                    total: d.total,
-                    used: d.used,
-                    avail: d.avail,
-                    use_pct: d.use_pct,
-                    mountpoint: d.mountpoint,
-                })
-                .collect(),
-            // macOS local probe: lsblk doesn't exist; the BLOCK DEVICES
-            // section stays empty and the UI hides itself accordingly.
-            block_devices: Vec::new(),
-        })
-    }
-    #[cfg(target_os = "linux")]
-    {
-        // Linux fallback
-        let uptime = fs::read_to_string("/proc/uptime").unwrap_or_default();
-        let loadavg = fs::read_to_string("/proc/loadavg").unwrap_or_default();
-        let meminfo = fs::read_to_string("/proc/meminfo").unwrap_or_default();
-        fn parse_meminfo(info: &str, key: &str) -> f64 {
-            info.lines()
-                .find(|l| l.starts_with(key))
-                .and_then(|l| l.split_whitespace().nth(1))
-                .and_then(|v| v.parse::<f64>().ok())
-                .unwrap_or(0.0)
-                / 1024.0
-        }
-        let mem_total_mb = parse_meminfo(&meminfo, "MemTotal");
-        let mem_free_mb =
-            parse_meminfo(&meminfo, "MemAvailable").max(parse_meminfo(&meminfo, "MemFree"));
-        let swap_total_mb = parse_meminfo(&meminfo, "SwapTotal");
-        let swap_free = parse_meminfo(&meminfo, "SwapFree");
-        let loads: Vec<f64> = loadavg
-            .split_whitespace()
-            .take(3)
-            .filter_map(|s| s.parse().ok())
-            .collect();
-        let mut df_snap = server_monitor::ServerSnapshot::default();
-        let mut block_devices: Vec<server_monitor::BlockDeviceEntry> = Vec::new();
-        if include_disks {
-            let df_full = std::process::Command::new("df")
-                .args(["-hPT"])
-                .output()
-                .map(|o| String::from_utf8_lossy(&o.stdout).to_string())
-                .unwrap_or_default();
-            server_monitor::parse_df(&df_full, &mut df_snap);
-            // Local Linux probe: pull the same lsblk topology the SSH
-            // path does so the BLOCK DEVICES UI works the same way for
-            // a "Local Monitor" tab on a Linux desktop.
-            let lsblk_out = std::process::Command::new("lsblk")
-                .args([
-                    "-P", "-b", "-o",
-                    "NAME,KNAME,PKNAME,TYPE,SIZE,ROTA,TRAN,MODEL,FSTYPE,MOUNTPOINT",
-                ])
-                .output()
-                .map(|o| String::from_utf8_lossy(&o.stdout).to_string())
-                .unwrap_or_default();
-            block_devices = server_monitor::parse_lsblk(&lsblk_out);
-        }
-        Ok(ServerSnapshotView {
-            uptime: format!(
-                "{:.0}s",
-                uptime
-                    .split_whitespace()
-                    .next()
-                    .unwrap_or("0")
-                    .parse::<f64>()
-                    .unwrap_or(0.0)
-            ),
-            load_1: *loads.first().unwrap_or(&-1.0),
-            load_5: *loads.get(1).unwrap_or(&-1.0),
-            load_15: *loads.get(2).unwrap_or(&-1.0),
-            mem_total_mb,
-            mem_used_mb: mem_total_mb - mem_free_mb,
-            mem_free_mb,
-            swap_total_mb,
-            swap_used_mb: swap_total_mb - swap_free,
-            disk_total: df_snap.disk_total.clone(),
-            disk_used: df_snap.disk_used.clone(),
-            disk_avail: df_snap.disk_avail.clone(),
-            disk_use_pct: if !include_disks
-                || (df_snap.disk_use_pct == 0.0 && df_snap.disk_total.is_empty())
-            {
-                -1.0
-            } else {
-                df_snap.disk_use_pct
-            },
-            cpu_pct: -1.0,
-            cpu_count: 0,
-            proc_count: 0,
-            os_label: String::new(),
-            net_rx_bps: -1.0,
-            net_tx_bps: -1.0,
-            top_processes: Vec::new(),
-            top_processes_mem: Vec::new(),
-            disks: df_snap
-                .disks
-                .into_iter()
-                .map(|d| DiskEntryView {
-                    filesystem: d.filesystem,
-                    fs_type: d.fs_type,
-                    total: d.total,
-                    used: d.used,
-                    avail: d.avail,
-                    use_pct: d.use_pct,
-                    mountpoint: d.mountpoint,
-                })
-                .collect(),
-            block_devices: block_devices
-                .into_iter()
-                .map(|b| BlockDeviceEntryView {
-                    name: b.name,
-                    kname: b.kname,
-                    pkname: b.pkname,
-                    dev_type: b.dev_type,
-                    size_bytes: b.size_bytes,
-                    rota: b.rota,
-                    tran: b.tran,
-                    model: b.model,
-                    fs_type: b.fs_type,
-                    mountpoint: b.mountpoint,
-                })
-                .collect(),
-        })
-    }
-    #[cfg(target_os = "windows")]
-    {
-        // Windows local probe — shells out to PowerShell once per call
-        // and parses a tagged-line protocol. Cheaper than spinning up
-        // multiple WMIC processes, and Get-CimInstance ships with every
-        // supported Windows release.
-        //
-        // The script forces UTF-8 output so non-ASCII characters in
-        // OS captions and process names (e.g. the Chinese build labels
-        // in `Win32_OperatingSystem.Caption`) survive the round-trip
-        // through the stdout pipe — without this the default OEM code
-        // page (936/GBK on zh-CN Windows) gets re-decoded as UTF-8
-        // and the panel displays mojibake.
-        //
-        // CPU% comes from `Win32_Processor.LoadPercentage` (instantaneous
-        // sample, no extra cost). Per-process CPU% is derived from
-        // cumulative CPU time over the process lifetime — Windows
-        // doesn't expose a cheap instantaneous per-process counter
-        // through CIM, and `Get-Counter '\Process(*)\% Processor Time'`
-        // would dominate the probe latency. The lifetime average is a
-        // reasonable signal for "what's burning the box right now"
-        // on long-lived processes.
-        use std::os::windows::process::CommandExt;
-        const CREATE_NO_WINDOW: u32 = 0x0800_0000;
-
-        let want_disks = if include_disks { "1" } else { "0" };
-        let script = format!(
-            r#"
-[Console]::OutputEncoding = [System.Text.Encoding]::UTF8
-$OutputEncoding = [System.Text.Encoding]::UTF8
-$ErrorActionPreference='SilentlyContinue'
-$os = Get-CimInstance Win32_OperatingSystem
-$totalKB = [int64]$os.TotalVisibleMemorySize
-$freeKB = [int64]$os.FreePhysicalMemory
-$totalBytes = [int64]$totalKB * 1024
-$uptime = [int64]((Get-Date) - $os.LastBootUpTime).TotalSeconds
-$cores = (Get-CimInstance Win32_Processor | Measure-Object -Property NumberOfLogicalProcessors -Sum).Sum
-$cpuLoad = (Get-CimInstance Win32_Processor | Measure-Object -Property LoadPercentage -Average).Average
-if ($null -eq $cpuLoad) {{ $cpuLoad = -1 }}
-$procs = (Get-Process).Count
-Write-Output "MEM_KB $totalKB $freeKB"
-Write-Output "UPTIME $uptime"
-Write-Output "CORES $cores"
-Write-Output "PROCS $procs"
-Write-Output "CPU_PCT $cpuLoad"
-Write-Output "OS $($os.Caption) $($os.Version)"
-
-$rawCpu = Get-Process | Where-Object {{ $_.Id -ne 0 -and $_.CPU -ne $null }} | Sort-Object CPU -Descending | Select-Object -First 12
-foreach ($p in $rawCpu) {{
-  $cpuSec = if ($p.CPU) {{ [math]::Round($p.CPU, 2) }} else {{ 0 }}
-  $memBytes = [int64]$p.WorkingSet64
-  $memPct = if ($totalBytes -gt 0) {{ [math]::Round(($memBytes * 100.0)/$totalBytes, 1) }} else {{ 0 }}
-  $started = if ($p.StartTime) {{ [int64]((Get-Date) - $p.StartTime).TotalSeconds }} else {{ 0 }}
-  Write-Output "PROC_CPU $($p.Id)`t$cpuSec`t$memPct`t$started`t$($p.ProcessName)"
-}}
-$rawMem = Get-Process | Where-Object {{ $_.Id -ne 0 }} | Sort-Object WorkingSet64 -Descending | Select-Object -First 12
-foreach ($p in $rawMem) {{
-  $cpuSec = if ($p.CPU) {{ [math]::Round($p.CPU, 2) }} else {{ 0 }}
-  $memBytes = [int64]$p.WorkingSet64
-  $memPct = if ($totalBytes -gt 0) {{ [math]::Round(($memBytes * 100.0)/$totalBytes, 1) }} else {{ 0 }}
-  $started = if ($p.StartTime) {{ [int64]((Get-Date) - $p.StartTime).TotalSeconds }} else {{ 0 }}
-  Write-Output "PROC_MEM $($p.Id)`t$cpuSec`t$memPct`t$started`t$($p.ProcessName)"
-}}
-
-if ('{}' -eq '1') {{
-  Get-CimInstance Win32_LogicalDisk -Filter "DriveType=3" | ForEach-Object {{
-    $size = [int64]$_.Size
-    $free = [int64]$_.FreeSpace
-    if ($size -lt 1) {{ return }}
-    $used = $size - $free
-    $pct = [math]::Round(($used * 100.0)/$size, 1)
-    $fs = if ($_.FileSystem) {{ $_.FileSystem }} else {{ 'unknown' }}
-    Write-Output "DISK $($_.DeviceID) $size $used $free $pct $fs"
-  }}
-}}
-"#,
-            want_disks,
-        );
-
-        let mut command = std::process::Command::new("powershell.exe");
-        command
-            .args(["-NoProfile", "-NonInteractive", "-Command", &script])
-            .creation_flags(CREATE_NO_WINDOW);
-        let output = command
-            .output()
-            .map_err(|e| format!("powershell spawn failed: {e}"))?;
-        // Stdout is UTF-8 because the script sets `[Console]::OutputEncoding`
-        // before any `Write-Output` runs. `from_utf8_lossy` is a safety
-        // net for the unlikely case where the script aborts before
-        // that line lands.
-        let stdout = String::from_utf8_lossy(&output.stdout).to_string();
-
-        let mut mem_total_mb = 0.0_f64;
-        let mut mem_free_mb = 0.0_f64;
-        let mut uptime_secs: u64 = 0;
-        let mut cpu_count: u32 = 0;
-        let mut proc_count: u32 = 0;
-        let mut cpu_pct = -1.0_f64;
-        let mut os_label = String::new();
-        let mut disks: Vec<DiskEntryView> = Vec::new();
-        let mut total_disk: u64 = 0;
-        let mut used_disk: u64 = 0;
-        let mut avail_disk: u64 = 0;
-        let mut top_cpu: Vec<ProcessRowView> = Vec::new();
-        let mut top_mem: Vec<ProcessRowView> = Vec::new();
-
-        // Format an elapsed-seconds count to the same `D-HH:MM:SS` /
-        // `HH:MM:SS` shape `ps -eo etime` produces, so the per-process
-        // tables read identically across SSH and local probes.
-        fn fmt_elapsed(secs: u64) -> String {
-            let days = secs / 86_400;
-            let rem = secs % 86_400;
-            let h = rem / 3600;
-            let m = (rem % 3600) / 60;
-            let s = rem % 60;
-            if days > 0 {
-                format!("{}-{:02}:{:02}:{:02}", days, h, m, s)
-            } else {
-                format!("{:02}:{:02}:{:02}", h, m, s)
-            }
-        }
-
-        for line in stdout.lines() {
-            if let Some(rest) = line.strip_prefix("MEM_KB ") {
-                let parts: Vec<&str> = rest.split_whitespace().collect();
-                if parts.len() == 2 {
-                    let total = parts[0].parse::<f64>().unwrap_or(0.0);
-                    let free = parts[1].parse::<f64>().unwrap_or(0.0);
-                    mem_total_mb = total / 1024.0;
-                    mem_free_mb = free / 1024.0;
-                }
-            } else if let Some(rest) = line.strip_prefix("UPTIME ") {
-                uptime_secs = rest.trim().parse::<u64>().unwrap_or(0);
-            } else if let Some(rest) = line.strip_prefix("CORES ") {
-                cpu_count = rest.trim().parse::<u32>().unwrap_or(0);
-            } else if let Some(rest) = line.strip_prefix("PROCS ") {
-                proc_count = rest.trim().parse::<u32>().unwrap_or(0);
-            } else if let Some(rest) = line.strip_prefix("CPU_PCT ") {
-                cpu_pct = rest.trim().parse::<f64>().unwrap_or(-1.0);
-            } else if let Some(rest) = line.strip_prefix("OS ") {
-                os_label = rest.trim().to_string();
-            } else if line.starts_with("PROC_CPU ") || line.starts_with("PROC_MEM ") {
-                let is_cpu = line.starts_with("PROC_CPU ");
-                let rest = &line[9..];
-                // tab-separated: pid \t cpuSec \t memPct \t startedSec \t name
-                let parts: Vec<&str> = rest.splitn(5, '\t').collect();
-                if parts.len() == 5 {
-                    let pid = parts[0].trim().to_string();
-                    let cpu_sec = parts[1].trim().parse::<f64>().unwrap_or(0.0);
-                    let mem_pct = parts[2].trim().parse::<f64>().unwrap_or(0.0);
-                    let started = parts[3].trim().parse::<u64>().unwrap_or(0);
-                    let name = parts[4].trim().to_string();
-                    // Lifetime CPU% across all logical cores. Mirrors
-                    // top's "lifetime average" semantics; the panel
-                    // header carries an authoritative aggregate gauge.
-                    let denom = (started.max(1) as f64) * (cpu_count.max(1) as f64);
-                    let pct = if denom > 0.0 {
-                        (cpu_sec * 100.0) / denom
-                    } else {
-                        0.0
-                    };
-                    let row = ProcessRowView {
-                        pid,
-                        command: name,
-                        cpu_pct: format!("{:.1}", pct),
-                        mem_pct: format!("{:.1}", mem_pct),
-                        elapsed: fmt_elapsed(started),
-                    };
-                    if is_cpu {
-                        if top_cpu.len() < 8 {
-                            top_cpu.push(row);
-                        }
-                    } else if top_mem.len() < 8 {
-                        top_mem.push(row);
-                    }
-                }
-            } else if let Some(rest) = line.strip_prefix("DISK ") {
-                let parts: Vec<&str> = rest.split_whitespace().collect();
-                if parts.len() >= 6 {
-                    let dev = parts[0].to_string();
-                    let size_b = parts[1].parse::<u64>().unwrap_or(0);
-                    let used_b = parts[2].parse::<u64>().unwrap_or(0);
-                    let avail_b = parts[3].parse::<u64>().unwrap_or(0);
-                    let pct = parts[4].parse::<f64>().unwrap_or(0.0);
-                    let fs = parts[5].to_string();
-                    total_disk = total_disk.saturating_add(size_b);
-                    used_disk = used_disk.saturating_add(used_b);
-                    avail_disk = avail_disk.saturating_add(avail_b);
-                    disks.push(DiskEntryView {
-                        filesystem: dev.clone(),
-                        fs_type: fs,
-                        total: format_size(size_b),
-                        used: format_size(used_b),
-                        avail: format_size(avail_b),
-                        use_pct: pct,
-                        mountpoint: dev,
-                    });
-                }
-            }
-        }
-
-        let disk_use_pct = if include_disks && total_disk > 0 {
-            ((used_disk as f64) * 100.0) / (total_disk as f64)
-        } else {
-            -1.0
-        };
-        let have_disks = include_disks && total_disk > 0;
-
-        Ok(ServerSnapshotView {
-            uptime: format!("{}s", uptime_secs),
-            // Windows has no Unix-style 1/5/15 load averages. The
-            // gauges already special-case negative values as "—".
-            load_1: -1.0,
-            load_5: -1.0,
-            load_15: -1.0,
-            mem_total_mb,
-            mem_used_mb: mem_total_mb - mem_free_mb,
-            mem_free_mb,
-            // Windows pagefile is reported separately via Win32_PageFileUsage;
-            // not currently surfaced. Leave at 0 so the swap row hides.
-            swap_total_mb: 0.0,
-            swap_used_mb: 0.0,
-            disk_total: if have_disks { format_size(total_disk) } else { String::new() },
-            disk_used: if have_disks { format_size(used_disk) } else { String::new() },
-            disk_avail: if have_disks { format_size(avail_disk) } else { String::new() },
-            disk_use_pct,
-            cpu_pct,
-            cpu_count,
-            proc_count,
-            os_label,
-            net_rx_bps: -1.0,
-            net_tx_bps: -1.0,
-            top_processes: top_cpu,
-            top_processes_mem: top_mem,
-            disks,
-            // No lsblk-equivalent; leave empty so the BLOCK DEVICES
-            // section auto-hides on the frontend.
-            block_devices: Vec::new(),
-        })
-    }
+async fn local_system_info(include_disks: bool) -> Result<ServerSnapshotView, String> {
+    tauri::async_runtime::spawn_blocking(move || local_system_info_blocking(include_disks))
+        .await
+        .map_err(|e| format!("local_system_info join: {e}"))?
 }
+
+fn local_system_info_blocking(include_disks: bool) -> Result<ServerSnapshotView, String> {
+    // Single sysinfo-backed implementation, cross-platform. Replaces
+    // the per-OS shell-out path that used to spawn PowerShell on
+    // Windows / vm_stat+sysctl+df on macOS / df+lsblk on Linux —
+    // see pier_core::services::local_monitor for the rationale.
+    let snap = pier_core::services::local_monitor::collect_snapshot(include_disks);
+    Ok(server_snapshot_to_view(snap))
+}
+
+/// Send a termination signal to a local process. `force=false` is
+/// the polite SIGTERM-equivalent (gives the process a chance to
+/// clean up); `force=true` is SIGKILL. Both routes go through
+/// `pier_core::services::local_monitor::kill_local_process` so the
+/// behaviour matches across Linux / macOS / Windows.
+#[tauri::command]
+async fn local_process_kill(pid: u32, force: bool) -> Result<(), String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        pier_core::services::local_monitor::kill_local_process(pid, force)
+    })
+    .await
+    .map_err(|e| format!("local_process_kill join: {e}"))?
+}
+
+/// Send `kill <pid>` (or `kill -9 <pid>` when `force`) over the
+/// existing SSH session. The shell handles signal semantics, so on
+/// systemd hosts this respects `KillSignal=` etc. configured on the
+/// service unit. Errors surface verbatim from the remote shell so a
+/// permission-denied surfaces as `kill: ...: Operation not permitted`
+/// in the toast.
+#[tauri::command]
+async fn server_monitor_process_kill(
+    app: tauri::AppHandle,
+    host: String,
+    port: u16,
+    user: String,
+    auth_mode: String,
+    password: String,
+    key_path: String,
+    saved_connection_index: Option<usize>,
+    pid: u32,
+    force: bool,
+) -> Result<(), String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        let state: tauri::State<'_, AppState> = app.state();
+        let session = get_or_open_ssh_session(
+            &state,
+            &host,
+            port,
+            &user,
+            &auth_mode,
+            &password,
+            &key_path,
+            saved_connection_index,
+        )?;
+        // The shell-side `kill` returns non-zero on permission /
+        // already-exited / unknown-pid; surface its stderr verbatim
+        // so the user sees actual context rather than "ssh exit 1".
+        let cmd = if force {
+            format!("kill -9 {pid} 2>&1")
+        } else {
+            format!("kill {pid} 2>&1")
+        };
+        let runtime = pier_core::ssh::runtime::shared();
+        let (code, output) = runtime
+            .block_on(session.exec_command(&cmd))
+            .map_err(|e| e.to_string())?;
+        if code == 0 {
+            Ok(())
+        } else {
+            Err(output.trim().to_string())
+        }
+    })
+    .await
+    .map_err(|e| format!("server_monitor_process_kill join: {e}"))?
+}
+
 
 /// Append a single line to the shared file logger. Called from the
 /// frontend's console-capture wrapper so browser-side diagnostics land
@@ -13013,6 +12663,8 @@ pub fn run() {
             local_docker_volume_files,
             local_docker_pull_image,
             local_system_info,
+            local_process_kill,
+            server_monitor_process_kill,
             log_write,
             log_file_path,
             log_read_tail,

@@ -11,6 +11,7 @@ import {
   Home,
   Plus,
   RefreshCw,
+  Search,
   Server,
   Star,
   Terminal as TerminalIcon,
@@ -323,6 +324,11 @@ function SftpPanelBody({ tab }: Props) {
   const addBookmark = useSftpBookmarksStore((s) => s.add);
   const removeBookmark = useSftpBookmarksStore((s) => s.remove);
   const [bookmarksOpen, setBookmarksOpen] = useState(false);
+  // Local filename filter — substring match against the displayed
+  // entries. Cleared automatically when the user navigates to a
+  // different directory so a stale filter doesn't make the new
+  // listing look empty by accident.
+  const [nameFilter, setNameFilter] = useState("");
   const currentIsBookmarked = useMemo(
     () => bookmarks.some((b) => b.path === (state?.currentPath || path || "/")),
     [bookmarks, state?.currentPath, path],
@@ -1066,14 +1072,25 @@ function SftpPanelBody({ tab }: Props) {
   // followed by all entries. Memoized because `entries` is the usual
   // thousands-item case and we don't want to copy the array on every
   // render. Empty list when we're not connected / haven't browsed yet.
+  // Reset the filter on directory change — the filter is only
+  // useful for the directory the user can see; carrying it across
+  // navigation would silently hide the new listing.
+  useEffect(() => {
+    setNameFilter("");
+  }, [currentRemotePath]);
+
   const listRows = useMemo<FtpListRow[]>(() => {
     const rows: FtpListRow[] = [];
     if (state && currentRemotePath !== "/") rows.push({ kind: "parent" });
     if (state) {
-      for (const entry of state.entries) rows.push({ kind: "entry", entry });
+      const q = nameFilter.trim().toLowerCase();
+      const entries = q
+        ? state.entries.filter((e) => e.name.toLowerCase().includes(q))
+        : state.entries;
+      for (const entry of entries) rows.push({ kind: "entry", entry });
     }
     return rows;
-  }, [state, currentRemotePath]);
+  }, [state, currentRemotePath, nameFilter]);
 
   const renderListRow = (row: FtpListRow) => {
     if (row.kind === "parent") {
@@ -1483,6 +1500,41 @@ function SftpPanelBody({ tab }: Props) {
             <RefreshCw size={12} className={busy ? "ftp-spin" : ""} />
           </button>
         </div>
+
+        {state && state.entries.length > 0 && (
+          <div className="ftp-filter">
+            <Search size={11} className="ftp-filter-icon" />
+            <input
+              className="ftp-filter-input mono"
+              placeholder={t("Filter by name…")}
+              value={nameFilter}
+              onChange={(e) => setNameFilter(e.currentTarget.value)}
+              spellCheck={false}
+            />
+            {nameFilter && (
+              <>
+                <span className="ftp-filter-count muted mono">
+                  {t("{shown}/{total}", {
+                    shown: state.entries.filter((e) =>
+                      e.name
+                        .toLowerCase()
+                        .includes(nameFilter.trim().toLowerCase()),
+                    ).length,
+                    total: state.entries.length,
+                  })}
+                </span>
+                <button
+                  type="button"
+                  className="lg-ic"
+                  onClick={() => setNameFilter("")}
+                  title={t("Clear")}
+                >
+                  <X size={11} />
+                </button>
+              </>
+            )}
+          </div>
+        )}
 
         <div className="ftp-col-head">
           <span>{t("NAME")}</span>

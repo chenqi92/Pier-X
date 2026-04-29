@@ -42,6 +42,7 @@ pub mod firewall;
 pub mod git;
 pub mod host_health;
 pub mod local_exec;
+pub mod local_monitor;
 pub mod mysql;
 pub mod nginx;
 pub mod package_manager;

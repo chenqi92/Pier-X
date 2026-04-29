@@ -2435,13 +2435,40 @@ button,
   z-index: 1;
 }
 .terminal-segment--filler { color: transparent; }
-.terminal-segment--cursor { background: var(--accent); color: var(--accent-ink); }
-.terminal-segment--cursor-beam { border-left: 2px solid var(--accent); }
-.terminal-segment--cursor-underline { border-bottom: 2px solid var(--accent); }
+/* Cursor visuals are painted via ::before so the blink animation only
+ * fades the cursor block, not the character on top — otherwise the
+ * underlying glyph fades together with the cursor and the cell appears
+ * to "blink with" the next character. */
+.terminal-segment--cursor { color: var(--accent-ink); }
+.terminal-segment--cursor::before {
+  content: "";
+  position: absolute;
+  inset: 0;
+  background: var(--accent);
+  z-index: -1;
+  pointer-events: none;
+}
+.terminal-segment--cursor-beam::before {
+  content: "";
+  position: absolute;
+  inset: 0;
+  border-left: 2px solid var(--accent);
+  pointer-events: none;
+}
+.terminal-segment--cursor-underline::before {
+  content: "";
+  position: absolute;
+  inset: 0;
+  border-bottom: 2px solid var(--accent);
+  pointer-events: none;
+}
+.terminal-segment--cursor-blink::before {
+  animation: cursor-blink 1s step-end infinite;
+}
 
 @keyframes cursor-blink {
-  0%, 100% { opacity: 1; }
-  50% { opacity: 0; }
+  0%, 49% { opacity: 1; }
+  50%, 100% { opacity: 0; }
 }
 
 .terminal-placeholder {

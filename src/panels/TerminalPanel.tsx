@@ -1011,10 +1011,29 @@ export default function TerminalPanel({ tab, isActive, onEditConnection }: Props
     setSmartLineBufferText("");
   }, [smartActive, promptEndKey]);
 
+  // True when the snapshot's caret sits at the end of the mirrored
+  // line buffer, accounting for line wrap. We gate the live
+  // autosuggestion (display + ArrowRight accept) on this so backing
+  // up mid-line with ←/→ — or click-positioning the caret — never
+  // dangles a misleading gray ghost past the cursor that ArrowRight
+  // would inject into the PTY and overwrite later content.
+  const cursorAtBufferEnd = (() => {
+    if (!snapshot || !snapshot.promptEnd) return false;
+    const [startRow, startCol] = snapshot.promptEnd;
+    const cols = snapshot.cols || 1;
+    const totalCols = startCol + smartLineBufferText.length;
+    const endRow = startRow + Math.floor(totalCols / cols);
+    const endCol = totalCols % cols;
+    return snapshot.cursorY === endRow && snapshot.cursorX === endCol;
+  })();
+  const cursorAtBufferEndRef = useRef(false);
+  cursorAtBufferEndRef.current = cursorAtBufferEnd;
+
   // M5: compute the autosuggestion suffix on every render where
   // smart mode is active. Cheap — `suggestFromHistory` is an O(n)
-  // walk of at most 500 strings.
-  const suggestionSuffix = smartActive
+  // walk of at most 500 strings. Suppressed when the caret isn't
+  // at end-of-line so a mid-line edit doesn't see ghost text.
+  const suggestionSuffix = smartActive && cursorAtBufferEnd
     ? suggestFromHistory(historyRing, smartLineBufferText)
     : "";
   suggestionSuffixRef.current = suggestionSuffix;
@@ -1154,20 +1173,33 @@ export default function TerminalPanel({ tab, isActive, onEditConnection }: Props
         continue;
       }
       if (code === ESC) {
-        // Escape sequence: reset the buffer and consume the rest.
-        // Two shapes are emitted by handleKeyDown today:
-        //   CSI: ESC [ <params> <final letter A-Z, a-z, ~>
-        //   SS3: ESC O <letter>
-        commandBufferRef.current = "";
+        // Escape sequence: consume the whole CSI / SS3 then decide
+        // whether to drop the buffer. Cursor-left / cursor-right just
+        // move the caret without rewriting the line, so we preserve
+        // the in-progress capture across them — otherwise click-to-
+        // position and ←/→ edits would invalidate the ssh-command
+        // detection buffer for any line the user edits before Enter.
         const next = data[i + 1];
         if (next === "[") {
-          i += 1;
-          while (i + 1 < data.length) {
-            i += 1;
-            if (/[A-Za-z~]/.test(data[i])) break;
+          let j = i + 2;
+          while (j < data.length) {
+            if (/[A-Za-z~]/.test(data[j])) break;
+            j += 1;
           }
+          const final = j < data.length ? data[j] : "";
+          if (final !== "C" && final !== "D") {
+            commandBufferRef.current = "";
+          }
+          i = j;
         } else if (next === "O") {
-          i += 2;
+          const j = i + 2;
+          const final = j < data.length ? data[j] : "";
+          if (final !== "C" && final !== "D") {
+            commandBufferRef.current = "";
+          }
+          i = j;
+        } else {
+          commandBufferRef.current = "";
         }
         continue;
       }
@@ -1233,20 +1265,35 @@ export default function TerminalPanel({ tab, isActive, onEditConnection }: Props
         continue;
       }
       if (code === ESC) {
-        // M1 doesn't model arrow-key navigation inside the mirror —
-        // any escape sequence resets, matching the SSH-capture
-        // buffer's conservative stance. M4+ will need richer
-        // line-editor semantics to cover Ctrl+W, Ctrl+A, etc.
-        buf = "";
+        // We don't fully model arrow-key navigation inside the mirror,
+        // but cursor-left / cursor-right just move the caret without
+        // changing line content — preserving the buffer keeps the
+        // syntax overlay & autosuggest stable when the user backs up
+        // to fix a typo. Any other escape sequence (history nav,
+        // function keys, …) still resets, matching the previous
+        // conservative stance.
         const next = data[i + 1];
         if (next === "[") {
-          i += 1;
-          while (i + 1 < data.length) {
-            i += 1;
-            if (/[A-Za-z~]/.test(data[i])) break;
+          let j = i + 2;
+          while (j < data.length) {
+            if (/[A-Za-z~]/.test(data[j])) break;
+            j += 1;
           }
+          const final = j < data.length ? data[j] : "";
+          if (final !== "C" && final !== "D") {
+            buf = "";
+          }
+          i = j;
         } else if (next === "O") {
-          i += 2;
+          // SS3: cursor keys can also arrive as ESC O C / ESC O D.
+          const j = i + 2;
+          const final = j < data.length ? data[j] : "";
+          if (final !== "C" && final !== "D") {
+            buf = "";
+          }
+          i = j;
+        } else {
+          buf = "";
         }
         continue;
       }
@@ -2050,7 +2097,18 @@ export default function TerminalPanel({ tab, isActive, onEditConnection }: Props
     // zsh-autosuggestions. Both fall through when there's no
     // suggestion to accept, so the underlying shell readline still
     // receives them as cursor / end-of-line.
-    if (smartActiveRef.current && suggestionSuffixRef.current) {
+    //
+    // We additionally require the caret to actually be at end-of-line
+    // (`cursorAtBufferEndRef`). Without this, a user who used ←/→ to
+    // step back into the line and intends ArrowRight as "move caret
+    // right" would instead inject the gray ghost text into the PTY at
+    // the mid-line position — overwriting whatever they typed past
+    // that point. Caret mid-line ⇒ pass through as cursor movement.
+    if (
+      smartActiveRef.current
+      && suggestionSuffixRef.current
+      && cursorAtBufferEndRef.current
+    ) {
       const isAccept =
         event.key === "ArrowRight" ||
         (event.ctrlKey &&
@@ -2127,6 +2185,76 @@ export default function TerminalPanel({ tab, isActive, onEditConnection }: Props
         ? Math.min(prev + step, snapshot.scrollbackLen)
         : Math.max(prev - step, 0),
     );
+  }
+
+  /**
+   * Click-to-position-cursor on the current input line. Translates
+   * the click into a cell delta and emits enough cursor-left /
+   * cursor-right escapes to land readline / fish / zsh on the chosen
+   * column — sparing the user the "hold ←/→ to walk back" dance.
+   *
+   * Works whether OSC 133 prompt-end has been emitted yet or not
+   * (russh sessions and shells whose first prompt has not yet drawn
+   * are common cases). Bails inside TUI alt-screens so vim / htop /
+   * less still own the mouse, and bails on a non-empty selection so
+   * drag-to-copy still ships text to the clipboard untouched.
+   */
+  function handleScreenClick(event: React.MouseEvent<HTMLDivElement>) {
+    if (event.button !== 0) return;
+    if (event.shiftKey || event.metaKey || event.ctrlKey || event.altKey) return;
+    if (!snapshot) return;
+    // TUI alt-screens (vim, htop, less) own mouse events themselves —
+    // don't synthesize keystrokes that would compete with their input.
+    if (snapshot.altScreen) return;
+    const selectionText = window.getSelection?.()?.toString() ?? "";
+    if (selectionText.length > 0) return;
+
+    const screen = event.currentTarget;
+    const rect = screen.getBoundingClientRect();
+    const x = event.clientX - rect.left;
+    const y = event.clientY - rect.top;
+
+    const { charWidth, rowHeight } = cellMetrics;
+    if (charWidth <= 0 || rowHeight <= 0) return;
+
+    // Round to the nearest cell boundary so a click between two glyphs
+    // lands on the closer one (matches the IME / native textfield feel).
+    const targetCol = Math.max(0, Math.round(x / charWidth));
+    const targetRow = Math.floor(y / rowHeight);
+
+    const cols = snapshot.cols || 1;
+
+    // Two paths:
+    //   * Precise — OSC 133;B told us where input begins, so we can
+    //     map any cell on the input row(s) back to a buffer offset
+    //     and handle wrapped multi-row prompts.
+    //   * Fallback — no prompt-end (russh, shells without smart-mode
+    //     rcfile, fresh prompt before first OSC 133;B fires). Honour
+    //     clicks on the same row as the live cursor and use cursorX
+    //     as the anchor; readline clamps overshoot at the prompt
+    //     boundary so we don't have to know exactly where input begins.
+    let delta: number;
+    if (snapshot.promptEnd) {
+      const [startRow, startCol] = snapshot.promptEnd;
+      if (targetRow < startRow) return;
+      if (targetRow === startRow && targetCol < startCol) return;
+      const targetOff = targetRow === startRow
+        ? targetCol - startCol
+        : (cols - startCol) + (targetRow - startRow - 1) * cols + targetCol;
+      const currentOff = snapshot.cursorY === startRow
+        ? Math.max(0, snapshot.cursorX - startCol)
+        : (cols - startCol) + (snapshot.cursorY - startRow - 1) * cols + snapshot.cursorX;
+      delta = targetOff - currentOff;
+    } else {
+      if (targetRow !== snapshot.cursorY) return;
+      delta = targetCol - snapshot.cursorX;
+    }
+
+    if (delta === 0) return;
+
+    event.preventDefault();
+    const seq = delta > 0 ? "\u001b[C".repeat(delta) : "\u001b[D".repeat(-delta);
+    void sendInput(seq);
   }
 
   async function restartTerminal() {
@@ -2284,6 +2412,7 @@ export default function TerminalPanel({ tab, isActive, onEditConnection }: Props
         ) : snapshot ? (
           <div
             className={rowSeparators ? "terminal-screen terminal-screen--ruled" : "terminal-screen"}
+            onClick={handleScreenClick}
             style={{
               fontFamily: `"${monoFont}", monospace`,
               fontSize: `${terminalFontSize}px`,
@@ -2300,14 +2429,20 @@ export default function TerminalPanel({ tab, isActive, onEditConnection }: Props
                 <div className="terminal-row" key={`line-${i}`} style={{ color: termTheme.fg }}>
                   {line.segments.map((seg, j) => {
                     const isCursor = seg.cursor;
-                    // Cursor style: 0=block (default), 1=beam, 2=underline
-                    const cursorClass = isCursor
+                    // Cursor style: 0=block (default), 1=beam, 2=underline.
+                    // Blink lives on a ::before overlay (see shell.css) so
+                    // the animation fades only the cursor block, not the
+                    // glyph underneath.
+                    const baseCursorClass = isCursor
                       ? cursorStyle === 1
                         ? "terminal-segment terminal-segment--cursor-beam"
                         : cursorStyle === 2
                           ? "terminal-segment terminal-segment--cursor-underline"
                           : "terminal-segment terminal-segment--cursor"
                       : "terminal-segment";
+                    const cursorClass = isCursor && cursorBlink
+                      ? `${baseCursorClass} terminal-segment--cursor-blink`
+                      : baseCursorClass;
                     const segBg = isCursor
                       ? undefined
                       : resolveTerminalColor(seg.bg, termTheme.ansi);
@@ -2323,7 +2458,6 @@ export default function TerminalPanel({ tab, isActive, onEditConnection }: Props
                           color: segFg,
                           fontWeight: seg.bold ? 510 : 400,
                           textDecoration: seg.underline ? "underline" : "none",
-                          animation: isCursor && cursorBlink ? "cursor-blink 1s step-end infinite" : undefined,
                         }}
                       >
                         {seg.text}
